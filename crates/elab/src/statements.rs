@@ -12,9 +12,7 @@ use heather_kernel::term::{Term, Type};
 use heather_syntax::{Block, Expr, ExprKind, LamBinder, Pat, Span, Stmt, Ty};
 
 use crate::inductive::Inductive;
-use crate::{
-    Alias, Cx, DictBinder, R, Skel, err, skel_of_lam_binders, skel_of_ty,
-};
+use crate::{Alias, Cx, DictBinder, R, Skel, err, skel_of_lam_binders, skel_of_ty};
 
 /// Recursive expression and registry services required by ordinary statements.
 pub(crate) trait StatementElab {
@@ -29,8 +27,7 @@ pub(crate) trait StatementElab {
         skeleton: Option<&Skel>,
     ) -> R<Term>;
 
-    fn infer_statement_expression(&self, cx: &Cx, expression: &Expr)
-        -> R<(Term, Type, Level)>;
+    fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
 
     fn infer_let_lambda(
         &self,
@@ -75,11 +72,7 @@ pub(crate) trait BlockCheckingElab: StatementElab {
 }
 
 /// Extend a clone of `cx` with the aliases introduced by `statements`.
-pub(crate) fn elaborate(
-    elab: &impl StatementElab,
-    cx: &Cx,
-    statements: &[Stmt],
-) -> R<Cx> {
+pub(crate) fn elaborate(elab: &impl StatementElab, cx: &Cx, statements: &[Stmt]) -> R<Cx> {
     let mut cx = cx.clone();
     for statement in statements {
         match statement {
@@ -144,15 +137,19 @@ fn elaborate_let(
         Some(annotation) => {
             let (ty, level) = elab.lower_let_annotation(cx, annotation)?;
             let skeleton = skel_of_ty(annotation);
-            let term =
-                elab.check_let_value(cx, expression, &ty, &level, skeleton.as_deref())?;
+            let term = elab.check_let_value(cx, expression, &ty, &level, skeleton.as_deref())?;
             (term, ty, level, skeleton)
         }
         None => {
             let (term, ty, level, skeleton) = match &expression.kind {
                 ExprKind::Lam { binders, body } => {
                     let inferred = elab.infer_let_lambda(cx, binders, body)?;
-                    (inferred.0, inferred.1, inferred.2, skel_of_lam_binders(binders))
+                    (
+                        inferred.0,
+                        inferred.1,
+                        inferred.2,
+                        skel_of_lam_binders(binders),
+                    )
                 }
                 _ => {
                     let inferred = elab.infer_statement_expression(cx, expression)?;
@@ -201,7 +198,10 @@ fn elaborate_record_let(
         };
         if selected[index].replace(field).is_some() {
             return err(
-                format!("field `{}` appears twice in this record pattern", field.name),
+                format!(
+                    "field `{}` appears twice in this record pattern",
+                    field.name
+                ),
                 field.span,
             );
         }
@@ -211,7 +211,11 @@ fn elaborate_record_let(
     // order is presentation only.
     for (index, field) in selected.into_iter().enumerate() {
         let Some(field) = field else { continue };
-        let Pat::Var { name, span: pattern_span } = &field.pat else {
+        let Pat::Var {
+            name,
+            span: pattern_span,
+        } = &field.pat
+        else {
             return err(
                 "a record `let` field is irrefutable: its right side must be a \
                  name or `_`; use `match` or `if let` for a constructor pattern",
@@ -333,13 +337,22 @@ mod tests {
             Stmt::Let {
                 name: "x".into(),
                 ty: None,
-                expr: Expr { kind: ExprKind::Num(1), span: SPAN },
+                expr: Expr {
+                    kind: ExprKind::Num(1),
+                    span: SPAN,
+                },
                 span: SPAN,
             },
             Stmt::Let {
                 name: "y".into(),
-                ty: Some(Ty { kind: TyKind::Nat, span: SPAN }),
-                expr: Expr { kind: ExprKind::Var("x".into()), span: SPAN },
+                ty: Some(Ty {
+                    kind: TyKind::Nat,
+                    span: SPAN,
+                }),
+                expr: Expr {
+                    kind: ExprKind::Var("x".into()),
+                    span: SPAN,
+                },
                 span: SPAN,
             },
             Stmt::Let {
@@ -349,11 +362,17 @@ mod tests {
                     kind: ExprKind::Lam {
                         binders: vec![LamBinder {
                             name: "A".into(),
-                            ty: Some(Ty { kind: TyKind::Nat, span: SPAN }),
+                            ty: Some(Ty {
+                                kind: TyKind::Nat,
+                                span: SPAN,
+                            }),
                             implicit: true,
                             span: SPAN,
                         }],
-                        body: Box::new(Expr { kind: ExprKind::Num(0), span: SPAN }),
+                        body: Box::new(Expr {
+                            kind: ExprKind::Num(0),
+                            span: SPAN,
+                        }),
                     },
                     span: SPAN,
                 },
@@ -362,18 +381,28 @@ mod tests {
         ];
 
         let cx = elaborate(&fake, &Cx::empty(), &statements).unwrap();
-        assert_eq!(cx.aliases.iter().map(|alias| alias.name.as_str()).collect::<Vec<_>>(), [
-            "x", "y", "f"
-        ]);
+        assert_eq!(
+            cx.aliases
+                .iter()
+                .map(|alias| alias.name.as_str())
+                .collect::<Vec<_>>(),
+            ["x", "y", "f"]
+        );
         assert!(cx.aliases[2].skel.is_some());
-        assert_eq!((fake.lowered.get(), fake.checked.get(), fake.harvested.get()), (1, 1, 1));
+        assert_eq!(
+            (fake.lowered.get(), fake.checked.get(), fake.harvested.get()),
+            (1, 1, 1)
+        );
     }
 
     #[test]
     fn program_statements_refuse_meta_let_code_locally() {
         let statement = Stmt::LetCode {
             name: "code".into(),
-            expr: Expr { kind: ExprKind::Num(0), span: SPAN },
+            expr: Expr {
+                kind: ExprKind::Num(0),
+                span: SPAN,
+            },
             span: SPAN,
         };
         assert!(elaborate(&Fake::default(), &Cx::empty(), &[statement]).is_err());

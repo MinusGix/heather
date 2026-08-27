@@ -112,7 +112,11 @@ impl fmt::Display for Mismatch {
         if self.path.is_empty() {
             write!(f, "nowhere — they differ at the root, ")?;
         } else {
-            write!(f, "down through `{}`, and differ under it ", self.path.join(" ▸ "))?;
+            write!(
+                f,
+                "down through `{}`, and differ under it ",
+                self.path.join(" ▸ ")
+            )?;
         }
         write!(f, "at `{}` against `{}`", self.sides.0, self.sides.1)
     }
@@ -139,7 +143,12 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
         }
         return Ok(x.shift_local(1));
     }
-    let mut lgg = Lgg { s: s.clone(), t: t.clone(), witness: Vec::new(), path: Vec::new() };
+    let mut lgg = Lgg {
+        s: s.clone(),
+        t: t.clone(),
+        witness: Vec::new(),
+        path: Vec::new(),
+    };
     // Both sides are weakened into `Γ, z` *first*, so every subterm the walk
     // meets is already in the body's scope and the pieces it keeps need no
     // renumbering. The witness for depth `k` is correspondingly `s` weakened
@@ -229,7 +238,8 @@ impl Lgg {
     fn is_hole(&mut self, x: &Term, y: &Term, k: u32) -> bool {
         while self.witness.len() as u32 <= k {
             let i = self.witness.len() as u32;
-            self.witness.push((self.s.shift_local(i + 1), self.t.shift_local(i + 1)));
+            self.witness
+                .push((self.s.shift_local(i + 1), self.t.shift_local(i + 1)));
         }
         let (sw, tw) = &self.witness[k as usize];
         x == sw && y == tw
@@ -299,8 +309,18 @@ impl Lgg {
         match (x, y) {
             (Term::Succ(a), Term::Succ(b)) => Ok(Term::Succ(Rc::new(self.tm(a, b, k)?))),
             (
-                Term::TmPi { dom_level: dl1, cod_level: cl1, dom: d1, cod: c1 },
-                Term::TmPi { dom_level: dl2, cod_level: cl2, dom: d2, cod: c2 },
+                Term::TmPi {
+                    dom_level: dl1,
+                    cod_level: cl1,
+                    dom: d1,
+                    cod: c1,
+                },
+                Term::TmPi {
+                    dom_level: dl2,
+                    cod_level: cl2,
+                    dom: d2,
+                    cod: c2,
+                },
             ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::TmPi {
                 dom_level: dl1.clone(),
                 cod_level: cl1.clone(),
@@ -308,8 +328,18 @@ impl Lgg {
                 cod: Rc::new(self.tm(c1, c2, k + 1)?),
             }),
             (
-                Term::TmSigma { fst_level: fl1, snd_level: sl1, fst: f1, snd: s1 },
-                Term::TmSigma { fst_level: fl2, snd_level: sl2, fst: f2, snd: s2 },
+                Term::TmSigma {
+                    fst_level: fl1,
+                    snd_level: sl1,
+                    fst: f1,
+                    snd: s1,
+                },
+                Term::TmSigma {
+                    fst_level: fl2,
+                    snd_level: sl2,
+                    fst: f2,
+                    snd: s2,
+                },
             ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::TmSigma {
                 fst_level: fl1.clone(),
                 snd_level: sl1.clone(),
@@ -317,8 +347,18 @@ impl Lgg {
                 snd: Rc::new(self.tm(s1, s2, k + 1)?),
             }),
             (
-                Term::TmW { shape_level: sl1, pos_level: pl1, shape: s1, pos: p1 },
-                Term::TmW { shape_level: sl2, pos_level: pl2, shape: s2, pos: p2 },
+                Term::TmW {
+                    shape_level: sl1,
+                    pos_level: pl1,
+                    shape: s1,
+                    pos: p1,
+                },
+                Term::TmW {
+                    shape_level: sl2,
+                    pos_level: pl2,
+                    shape: s2,
+                    pos: p2,
+                },
             ) if sl1 == sl2 && pl1 == pl2 => Ok(Term::TmW {
                 shape_level: sl1.clone(),
                 pos_level: pl1.clone(),
@@ -326,8 +366,18 @@ impl Lgg {
                 pos: Rc::new(self.tm(p1, p2, k + 1)?),
             }),
             (
-                Term::TmId { level: l1, ty: t1, lhs: a1, rhs: b1 },
-                Term::TmId { level: l2, ty: t2, lhs: a2, rhs: b2 },
+                Term::TmId {
+                    level: l1,
+                    ty: t1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Term::TmId {
+                    level: l2,
+                    ty: t2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if l1 == l2 => Ok(Term::TmId {
                 level: l1.clone(),
                 ty: Rc::new(self.tm(t1, t2, k)?),
@@ -335,8 +385,18 @@ impl Lgg {
                 rhs: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Term::TmSEq { level: l1, ty: t1, lhs: a1, rhs: b1 },
-                Term::TmSEq { level: l2, ty: t2, lhs: a2, rhs: b2 },
+                Term::TmSEq {
+                    level: l1,
+                    ty: t1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Term::TmSEq {
+                    level: l2,
+                    ty: t2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if l1 == l2 => Ok(Term::TmSEq {
                 level: l1.clone(),
                 ty: Rc::new(self.tm(t1, t2, k)?),
@@ -344,8 +404,18 @@ impl Lgg {
                 rhs: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Term::TmSum { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1 },
-                Term::TmSum { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2 },
+                Term::TmSum {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Term::TmSum {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::TmSum {
                 lhs_level: ll1.clone(),
                 rhs_level: rl1.clone(),
@@ -353,19 +423,35 @@ impl Lgg {
                 rhs: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Term::TmVec { level: l1, elem: e1, len: n1 },
-                Term::TmVec { level: l2, elem: e2, len: n2 },
+                Term::TmVec {
+                    level: l1,
+                    elem: e1,
+                    len: n1,
+                },
+                Term::TmVec {
+                    level: l2,
+                    elem: e2,
+                    len: n2,
+                },
             ) if l1 == l2 => Ok(Term::TmVec {
                 level: l1.clone(),
                 elem: Rc::new(self.tm(e1, e2, k)?),
                 len: Rc::new(self.tm(n1, n2, k)?),
             }),
-            (Term::TmFin { len: n1 }, Term::TmFin { len: n2 }) => {
-                Ok(Term::TmFin { len: Rc::new(self.tm(n1, n2, k)?) })
-            }
+            (Term::TmFin { len: n1 }, Term::TmFin { len: n2 }) => Ok(Term::TmFin {
+                len: Rc::new(self.tm(n1, n2, k)?),
+            }),
             (
-                Term::TmWf { level: l1, shape: s1, arity: a1 },
-                Term::TmWf { level: l2, shape: s2, arity: a2 },
+                Term::TmWf {
+                    level: l1,
+                    shape: s1,
+                    arity: a1,
+                },
+                Term::TmWf {
+                    level: l2,
+                    shape: s2,
+                    arity: a2,
+                },
             ) if l1 == l2 => Ok(Term::TmWf {
                 level: l1.clone(),
                 shape: Rc::new(self.tm(s1, s2, k)?),
@@ -373,8 +459,20 @@ impl Lgg {
                 arity: Rc::new(self.tm(a1, a2, k + 1)?),
             }),
             (
-                Term::ElimNat { level: l1, motive: m1, base: b1, step: s1, scrut: t1 },
-                Term::ElimNat { level: l2, motive: m2, base: b2, step: s2, scrut: t2 },
+                Term::ElimNat {
+                    level: l1,
+                    motive: m1,
+                    base: b1,
+                    step: s1,
+                    scrut: t1,
+                },
+                Term::ElimNat {
+                    level: l2,
+                    motive: m2,
+                    base: b2,
+                    step: s2,
+                    scrut: t2,
+                },
             ) if l1 == l2 => Ok(Term::ElimNat {
                 level: l1.clone(),
                 motive: Rc::new(self.ty(m1, m2, k + 1)?),
@@ -384,16 +482,32 @@ impl Lgg {
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
             (
-                Term::Refl { level: l1, ty: t1, tm: a1 },
-                Term::Refl { level: l2, ty: t2, tm: a2 },
+                Term::Refl {
+                    level: l1,
+                    ty: t1,
+                    tm: a1,
+                },
+                Term::Refl {
+                    level: l2,
+                    ty: t2,
+                    tm: a2,
+                },
             ) if l1 == l2 => Ok(Term::Refl {
                 level: l1.clone(),
                 ty: Rc::new(self.ty(t1, t2, k)?),
                 tm: Rc::new(self.tm(a1, a2, k)?),
             }),
             (
-                Term::SRefl { level: l1, ty: t1, tm: a1 },
-                Term::SRefl { level: l2, ty: t2, tm: a2 },
+                Term::SRefl {
+                    level: l1,
+                    ty: t1,
+                    tm: a1,
+                },
+                Term::SRefl {
+                    level: l2,
+                    ty: t2,
+                    tm: a2,
+                },
             ) if l1 == l2 => Ok(Term::SRefl {
                 level: l1.clone(),
                 ty: Rc::new(self.ty(t1, t2, k)?),
@@ -463,8 +577,18 @@ impl Lgg {
                 tm: Rc::new(self.tm(u1, u2, k)?),
             }),
             (
-                Term::ElimSEmpty { level: l1, scrut_level: sl1, motive: m1, scrut: t1 },
-                Term::ElimSEmpty { level: l2, scrut_level: sl2, motive: m2, scrut: t2 },
+                Term::ElimSEmpty {
+                    level: l1,
+                    scrut_level: sl1,
+                    motive: m1,
+                    scrut: t1,
+                },
+                Term::ElimSEmpty {
+                    level: l2,
+                    scrut_level: sl2,
+                    motive: m2,
+                    scrut: t2,
+                },
             ) if l1 == l2 && sl1 == sl2 => Ok(Term::ElimSEmpty {
                 level: l1.clone(),
                 scrut_level: sl1.clone(),
@@ -472,8 +596,18 @@ impl Lgg {
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
             (
-                Term::ElimEmpty { level: l1, scrut_level: sl1, motive: m1, scrut: t1 },
-                Term::ElimEmpty { level: l2, scrut_level: sl2, motive: m2, scrut: t2 },
+                Term::ElimEmpty {
+                    level: l1,
+                    scrut_level: sl1,
+                    motive: m1,
+                    scrut: t1,
+                },
+                Term::ElimEmpty {
+                    level: l2,
+                    scrut_level: sl2,
+                    motive: m2,
+                    scrut: t2,
+                },
             ) if l1 == l2 && sl1 == sl2 => Ok(Term::ElimEmpty {
                 level: l1.clone(),
                 scrut_level: sl1.clone(),
@@ -506,8 +640,20 @@ impl Lgg {
                 snd: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Term::Fst { fst_level: fl1, snd_level: sl1, fst_ty: ft1, snd_ty: st1, pair: p1 },
-                Term::Fst { fst_level: fl2, snd_level: sl2, fst_ty: ft2, snd_ty: st2, pair: p2 },
+                Term::Fst {
+                    fst_level: fl1,
+                    snd_level: sl1,
+                    fst_ty: ft1,
+                    snd_ty: st1,
+                    pair: p1,
+                },
+                Term::Fst {
+                    fst_level: fl2,
+                    snd_level: sl2,
+                    fst_ty: ft2,
+                    snd_ty: st2,
+                    pair: p2,
+                },
             ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::Fst {
                 fst_level: fl1.clone(),
                 snd_level: sl1.clone(),
@@ -516,8 +662,20 @@ impl Lgg {
                 pair: Rc::new(self.tm(p1, p2, k)?),
             }),
             (
-                Term::Snd { fst_level: fl1, snd_level: sl1, fst_ty: ft1, snd_ty: st1, pair: p1 },
-                Term::Snd { fst_level: fl2, snd_level: sl2, fst_ty: ft2, snd_ty: st2, pair: p2 },
+                Term::Snd {
+                    fst_level: fl1,
+                    snd_level: sl1,
+                    fst_ty: ft1,
+                    snd_ty: st1,
+                    pair: p1,
+                },
+                Term::Snd {
+                    fst_level: fl2,
+                    snd_level: sl2,
+                    fst_ty: ft2,
+                    snd_ty: st2,
+                    pair: p2,
+                },
             ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::Snd {
                 fst_level: fl1.clone(),
                 snd_level: sl1.clone(),
@@ -526,8 +684,20 @@ impl Lgg {
                 pair: Rc::new(self.tm(p1, p2, k)?),
             }),
             (
-                Term::Inl { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1, val: v1 },
-                Term::Inl { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2, val: v2 },
+                Term::Inl {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    lhs: a1,
+                    rhs: b1,
+                    val: v1,
+                },
+                Term::Inl {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    lhs: a2,
+                    rhs: b2,
+                    val: v2,
+                },
             ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::Inl {
                 lhs_level: ll1.clone(),
                 rhs_level: rl1.clone(),
@@ -536,8 +706,20 @@ impl Lgg {
                 val: Rc::new(self.tm(v1, v2, k)?),
             }),
             (
-                Term::Inr { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1, val: v1 },
-                Term::Inr { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2, val: v2 },
+                Term::Inr {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    lhs: a1,
+                    rhs: b1,
+                    val: v1,
+                },
+                Term::Inr {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    lhs: a2,
+                    rhs: b2,
+                    val: v2,
+                },
             ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::Inr {
                 lhs_level: ll1.clone(),
                 rhs_level: rl1.clone(),
@@ -637,8 +819,20 @@ impl Lgg {
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
             (
-                Term::Supf { level: l1, shape: s1, arity: n1, label: a1, children: c1 },
-                Term::Supf { level: l2, shape: s2, arity: n2, label: a2, children: c2 },
+                Term::Supf {
+                    level: l1,
+                    shape: s1,
+                    arity: n1,
+                    label: a1,
+                    children: c1,
+                },
+                Term::Supf {
+                    level: l2,
+                    shape: s2,
+                    arity: n2,
+                    label: a2,
+                    children: c2,
+                },
             ) if l1 == l2 => Ok(Term::Supf {
                 level: l1.clone(),
                 shape: Rc::new(self.ty(s1, s2, k)?),
@@ -676,8 +870,18 @@ impl Lgg {
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
             (
-                Term::Lam { dom_level: dl1, cod_level: cl1, dom: d1, body: b1 },
-                Term::Lam { dom_level: dl2, cod_level: cl2, dom: d2, body: b2 },
+                Term::Lam {
+                    dom_level: dl1,
+                    cod_level: cl1,
+                    dom: d1,
+                    body: b1,
+                },
+                Term::Lam {
+                    dom_level: dl2,
+                    cod_level: cl2,
+                    dom: d2,
+                    body: b2,
+                },
             ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::Lam {
                 dom_level: dl1.clone(),
                 cod_level: cl1.clone(),
@@ -685,8 +889,22 @@ impl Lgg {
                 body: Rc::new(self.tm(b1, b2, k + 1)?),
             }),
             (
-                Term::App { fun: f1, dom_level: dl1, cod_level: cl1, dom: d1, cod: c1, arg: a1 },
-                Term::App { fun: f2, dom_level: dl2, cod_level: cl2, dom: d2, cod: c2, arg: a2 },
+                Term::App {
+                    fun: f1,
+                    dom_level: dl1,
+                    cod_level: cl1,
+                    dom: d1,
+                    cod: c1,
+                    arg: a1,
+                },
+                Term::App {
+                    fun: f2,
+                    dom_level: dl2,
+                    cod_level: cl2,
+                    dom: d2,
+                    cod: c2,
+                    arg: a2,
+                },
             ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::App {
                 fun: Rc::new(self.tm(f1, f2, k)?),
                 dom_level: dl1.clone(),
@@ -711,8 +929,18 @@ impl Lgg {
         }
         match (x, y) {
             (
-                Type::Pi { dom_level: dl1, cod_level: cl1, dom: d1, cod: c1 },
-                Type::Pi { dom_level: dl2, cod_level: cl2, dom: d2, cod: c2 },
+                Type::Pi {
+                    dom_level: dl1,
+                    cod_level: cl1,
+                    dom: d1,
+                    cod: c1,
+                },
+                Type::Pi {
+                    dom_level: dl2,
+                    cod_level: cl2,
+                    dom: d2,
+                    cod: c2,
+                },
             ) if dl1 == dl2 && cl1 == cl2 => Ok(Type::Pi {
                 dom_level: dl1.clone(),
                 cod_level: cl1.clone(),
@@ -720,8 +948,18 @@ impl Lgg {
                 cod: Rc::new(self.ty(c1, c2, k + 1)?),
             }),
             (
-                Type::Sigma { fst_level: fl1, snd_level: sl1, fst: f1, snd: s1 },
-                Type::Sigma { fst_level: fl2, snd_level: sl2, fst: f2, snd: s2 },
+                Type::Sigma {
+                    fst_level: fl1,
+                    snd_level: sl1,
+                    fst: f1,
+                    snd: s1,
+                },
+                Type::Sigma {
+                    fst_level: fl2,
+                    snd_level: sl2,
+                    fst: f2,
+                    snd: s2,
+                },
             ) if fl1 == fl2 && sl1 == sl2 => Ok(Type::Sigma {
                 fst_level: fl1.clone(),
                 snd_level: sl1.clone(),
@@ -729,8 +967,18 @@ impl Lgg {
                 snd: Rc::new(self.ty(s1, s2, k + 1)?),
             }),
             (
-                Type::W { shape_level: sl1, pos_level: pl1, shape: s1, pos: p1 },
-                Type::W { shape_level: sl2, pos_level: pl2, shape: s2, pos: p2 },
+                Type::W {
+                    shape_level: sl1,
+                    pos_level: pl1,
+                    shape: s1,
+                    pos: p1,
+                },
+                Type::W {
+                    shape_level: sl2,
+                    pos_level: pl2,
+                    shape: s2,
+                    pos: p2,
+                },
             ) if sl1 == sl2 && pl1 == pl2 => Ok(Type::W {
                 shape_level: sl1.clone(),
                 pos_level: pl1.clone(),
@@ -738,11 +986,24 @@ impl Lgg {
                 pos: Rc::new(self.ty(p1, p2, k + 1)?),
             }),
             (Type::El { level: l1, tm: t1 }, Type::El { level: l2, tm: t2 }) if l1 == l2 => {
-                Ok(Type::El { level: l1.clone(), tm: Rc::new(self.tm(t1, t2, k)?) })
+                Ok(Type::El {
+                    level: l1.clone(),
+                    tm: Rc::new(self.tm(t1, t2, k)?),
+                })
             }
             (
-                Type::Id { level: l1, ty: t1, lhs: a1, rhs: b1 },
-                Type::Id { level: l2, ty: t2, lhs: a2, rhs: b2 },
+                Type::Id {
+                    level: l1,
+                    ty: t1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Type::Id {
+                    level: l2,
+                    ty: t2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if l1 == l2 => Ok(Type::Id {
                 level: l1.clone(),
                 ty: Rc::new(self.ty(t1, t2, k)?),
@@ -750,8 +1011,18 @@ impl Lgg {
                 rhs: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Type::SEq { level: l1, ty: t1, lhs: a1, rhs: b1 },
-                Type::SEq { level: l2, ty: t2, lhs: a2, rhs: b2 },
+                Type::SEq {
+                    level: l1,
+                    ty: t1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Type::SEq {
+                    level: l2,
+                    ty: t2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if l1 == l2 => Ok(Type::SEq {
                 level: l1.clone(),
                 ty: Rc::new(self.ty(t1, t2, k)?),
@@ -759,8 +1030,18 @@ impl Lgg {
                 rhs: Rc::new(self.tm(b1, b2, k)?),
             }),
             (
-                Type::Sum { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1 },
-                Type::Sum { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2 },
+                Type::Sum {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    lhs: a1,
+                    rhs: b1,
+                },
+                Type::Sum {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    lhs: a2,
+                    rhs: b2,
+                },
             ) if ll1 == ll2 && rl1 == rl2 => Ok(Type::Sum {
                 lhs_level: ll1.clone(),
                 rhs_level: rl1.clone(),
@@ -768,19 +1049,35 @@ impl Lgg {
                 rhs: Rc::new(self.ty(b1, b2, k)?),
             }),
             (
-                Type::Vec { level: l1, elem: e1, len: n1 },
-                Type::Vec { level: l2, elem: e2, len: n2 },
+                Type::Vec {
+                    level: l1,
+                    elem: e1,
+                    len: n1,
+                },
+                Type::Vec {
+                    level: l2,
+                    elem: e2,
+                    len: n2,
+                },
             ) if l1 == l2 => Ok(Type::Vec {
                 level: l1.clone(),
                 elem: Rc::new(self.ty(e1, e2, k)?),
                 len: Rc::new(self.tm(n1, n2, k)?),
             }),
-            (Type::Fin { len: n1 }, Type::Fin { len: n2 }) => {
-                Ok(Type::Fin { len: Rc::new(self.tm(n1, n2, k)?) })
-            }
+            (Type::Fin { len: n1 }, Type::Fin { len: n2 }) => Ok(Type::Fin {
+                len: Rc::new(self.tm(n1, n2, k)?),
+            }),
             (
-                Type::Wf { level: l1, shape: s1, arity: n1 },
-                Type::Wf { level: l2, shape: s2, arity: n2 },
+                Type::Wf {
+                    level: l1,
+                    shape: s1,
+                    arity: n1,
+                },
+                Type::Wf {
+                    level: l2,
+                    shape: s2,
+                    arity: n2,
+                },
             ) if l1 == l2 => Ok(Type::Wf {
                 level: l1.clone(),
                 shape: Rc::new(self.ty(s1, s2, k)?),

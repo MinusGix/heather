@@ -11,8 +11,8 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, ExprKind, MatchForm, Span};
 
-use crate::surface::walk_expr;
 use crate::recursion::{Guard, GuardKind};
+use crate::surface::walk_expr;
 use crate::{Cx, Elaborator, R, embed, err};
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
@@ -98,11 +98,20 @@ impl Elaborator {
         // pass is idempotent and its fast path is every `match` written
         // before it existed, so calling it here *and* at the two direct
         // `elab_infer` entry points costs nothing.
-        let result = motive
-            .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
+        let result =
+            motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
         let independent = motive == result.shift_local(1);
         let prepared = self.prepare_arms(
-            cx, form, generated, arms, &scrut_t, scrut_ty, scrut_lvl, &result, independent, &mlvl,
+            cx,
+            form,
+            generated,
+            arms,
+            &scrut_t,
+            scrut_ty,
+            scrut_lvl,
+            &result,
+            independent,
+            &mlvl,
             span,
         )?;
         let (cx, arms) = match &prepared {
@@ -128,10 +137,9 @@ impl Elaborator {
                 .elab_match_indexed(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
         }
         if let Some(ind) = self.tag_of(&head) {
-            return self
-                .elab_match_data(
-                    cx, form, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span,
-                );
+            return self.elab_match_data(
+                cx, form, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span,
+            );
         }
         // `Fin(n)` (docs/surface-fin-indexing-design.md §4.2). Tested on the
         // **raw** scrutinee type for the same reason `indexed_of_at` is: the
@@ -147,8 +155,7 @@ impl Elaborator {
                 // below, unchanged (§1.1 finding 1). Nothing to write here.
                 Term::Zero => {}
                 Term::Succ(k) => {
-                    return self
-                        .elab_match_fin(cx, form, arms, scrut_t, k, motive, mlvl, span);
+                    return self.elab_match_fin(cx, form, arms, scrut_t, k, motive, mlvl, span);
                 }
                 // Permanent, not a gap: `Fin` has no eliminator of its own
                 // (§1.2), so at an open length there is no canonical form to
@@ -228,9 +235,7 @@ impl Elaborator {
             let slot = match a.ctor.as_str() {
                 "Zero" => &mut zero,
                 "Succ" => &mut succ,
-                other => {
-                    return err(format!("`{other}` is not a constructor of `Nat`"), a.span)
-                }
+                other => return err(format!("`{other}` is not a constructor of `Nat`"), a.span),
             };
             if slot.replace(a).is_some() {
                 return err(format!("duplicate arm for `{}`", a.ctor), a.span);
@@ -238,7 +243,10 @@ impl Elaborator {
         }
         let (Some(zero), Some(succ)) = (zero, succ) else {
             return err(
-                format!("`{}` on `Nat` needs both a `Zero` and a `Succ(k)` arm", form.keyword()),
+                format!(
+                    "`{}` on `Nat` needs both a `Zero` and a `Succ(k)` arm",
+                    form.keyword()
+                ),
                 span,
             );
         };
@@ -289,7 +297,13 @@ impl Elaborator {
             None => (cov_ty(&comps_z, &mlvl), mlvl.clone()),
             Some(c) => {
                 let carried = cov_ty(
-                    &cov_comps(&cx.gamma, &c.motive, c.d, 1, &c.anchor(Term::Var(LocalVar(0)))),
+                    &cov_comps(
+                        &cx.gamma,
+                        &c.motive,
+                        c.d,
+                        1,
+                        &c.anchor(Term::Var(LocalVar(0))),
+                    ),
                     &c.lvl,
                 );
                 (
@@ -306,8 +320,7 @@ impl Elaborator {
         // base : M[Zero/z] — under the convoy binder where there is one, and
         // tupled where `d > 1`, since every component of F(0) is at the same
         // `Zero` (`pred 0` is `0`).
-        let base_ty =
-            motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)));
+        let base_ty = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)));
         let base = match &convoy {
             None => self.elab_check(cx, zero, &base_ty, &mlvl)?,
             Some(c) => {
@@ -328,27 +341,33 @@ impl Elaborator {
         // step context: Γ, k : Nat, ih : rec_motive[k/z].
         let mut scx = cx.clone();
         scx.push(k.clone(), Type::Nat, Level::Zero);
-        let ih_ty = rec_motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))));
+        let ih_ty =
+            rec_motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))));
         // The unified arm `Succ(k)` binds the ih anyway — the recursor demands
         // it — but under a name the surface cannot spell, because it is
         // reached by a guarded self-call instead.
-        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, rec_lvl.clone());
+        scx.push(
+            ih.clone().unwrap_or_else(|| "#ih".into()),
+            ih_ty,
+            rec_lvl.clone(),
+        );
         // The window this arm carries, scoped in Γ, k, ih: the ih itself at
         // `d = 1`, its projections above that.
         let comps_ih: Vec<Type> = comps_z
             .iter()
-            .map(|c| {
-                c.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(Term::Var(LocalVar(1)))))
-            })
+            .map(|c| c.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(Term::Var(LocalVar(1))))))
             .collect();
         let ih_at = |i: usize| {
-            (cov_proj(&comps_ih, &mlvl, Term::Var(LocalVar(0)), i), comps_ih[i].clone(), mlvl.clone())
+            (
+                cov_proj(&comps_ih, &mlvl, Term::Var(LocalVar(0)), i),
+                comps_ih[i].clone(),
+                mlvl.clone(),
+            )
         };
         // step : M[Succ k/z] in Γ, k, ih (+ the convoy binder) — the arm the
         // writer wrote, whatever the recursor is carrying underneath it.
         let step_ty = motive.apply_local(
-            &embed(&cx.gamma, 2)
-                .extended(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))),
+            &embed(&cx.gamma, 2).extended(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))),
         );
         let step = match &convoy {
             Some(c) => {
@@ -444,7 +463,9 @@ impl Elaborator {
                 cod_level: mlvl.clone(),
                 dom: Rc::new(cov_ty(&comps, &c.lvl)),
                 cod: Rc::new(
-                    motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(scrut_t.shift_local(1)))),
+                    motive.apply_local(
+                        &embed(&cx.gamma, 1).extended(Rc::new(scrut_t.shift_local(1))),
+                    ),
                 ),
                 arg: Rc::new(c.tuple.clone()),
             });
@@ -471,7 +492,16 @@ impl Elaborator {
     /// term it always did.
     fn chain_convoy(&self, cx: &Cx, scrut: &Term) -> Option<Convoy> {
         let g = cx.guard.clone()?;
-        let GuardKind::Nat { preds, depth, tuple, comps, mlvl, motive, gamma } = &g.kind else {
+        let GuardKind::Nat {
+            preds,
+            depth,
+            tuple,
+            comps,
+            mlvl,
+            motive,
+            gamma,
+        } = &g.kind
+        else {
             return None;
         };
         // Nothing below the chain's end is carried: this is the ordinary
@@ -481,7 +511,9 @@ impl Elaborator {
         }
         // By *binder*, never by name: an inner `k` that shadows the arm's own
         // is a different variable and does not continue the chain.
-        let Term::Var(LocalVar(i)) = scrut else { return None };
+        let Term::Var(LocalVar(i)) = scrut else {
+            return None;
+        };
         if cx.names.len() - 1 - *i as usize != *preds.last()? {
             return None;
         }
@@ -491,9 +523,8 @@ impl Elaborator {
             preds: preds.clone(),
             d: comps.len(),
             lvl: mlvl.clone(),
-            motive: motive.apply_local(
-                &embed(gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
-            ),
+            motive: motive
+                .apply_local(&embed(gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0))))),
             outer_motive: Rc::clone(motive),
             gamma: gamma.clone(),
             tuple: tuple.shift_local(by),
@@ -513,7 +544,9 @@ impl Elaborator {
     /// reads. What a call *lowers to* is decided by [`Self::elab_self_call`]
     /// comparing binder positions, which no spelling can fool.
     pub(crate) fn cov_depth(&self, cx: &Cx, body: &Expr, k: &str, dec: usize) -> usize {
-        let Some(s) = cx.selfref.as_ref() else { return 1 };
+        let Some(s) = cx.selfref.as_ref() else {
+            return 1;
+        };
         // name of a chain predecessor -> its depth, `k` being depth 1.
         let mut chain: Vec<(String, usize)> = vec![(k.to_string(), 1)];
         let mut found = 1usize;
@@ -542,7 +575,16 @@ impl Elaborator {
             // the termination guard reads), so a declaration that carries one
             // never reaches a kernel term. Skipping it here can only make this
             // analysis less informative, never wrongly permissive.
-            let ExprKind::App { head, args, explicit, named: _, .. } = &e.kind else { return };
+            let ExprKind::App {
+                head,
+                args,
+                explicit,
+                named: _,
+                ..
+            } = &e.kind
+            else {
+                return;
+            };
             let head = match &head.kind {
                 ExprKind::TyApp { head, .. } => head,
                 _ => head,
@@ -553,7 +595,9 @@ impl Elaborator {
             let positions: Vec<usize> = (s.n_tyvars..s.params.len())
                 .filter(|&j| *explicit || !s.params[j].1)
                 .collect();
-            let Some(slot) = positions.iter().position(|&j| j == dec) else { return };
+            let Some(slot) = positions.iter().position(|&j| j == dec) else {
+                return;
+            };
             let Some(arg) = args.get(slot) else { return };
             if let ExprKind::Var(n) = &arg.kind
                 && let Some((_, at)) = chain.iter().find(|(m, _)| m == n)
@@ -590,9 +634,7 @@ impl Elaborator {
             let slot = match a.ctor.as_str() {
                 "FZ" => &mut fz,
                 "FS" => &mut fs,
-                other => {
-                    return err(format!("`{other}` is not an index of a `Fin`"), a.span)
-                }
+                other => return err(format!("`{other}` is not an index of a `Fin`"), a.span),
             };
             if slot.replace(a).is_some() {
                 return err(format!("duplicate arm for `{}`", a.ctor), a.span);
@@ -611,10 +653,16 @@ impl Elaborator {
             return err("`FZ` binds no fields", fz.span);
         }
         let [j] = fs.binders.as_slice() else {
-            return err("`FS` binds exactly one field, the predecessor index", fs.span)
+            return err(
+                "`FS` binds exactly one field, the predecessor index",
+                fs.span,
+            );
         };
         let j = j.name().to_string();
-        let (lhs, rhs) = (Type::Unit { level: Level::Zero }, Type::Fin { len: Rc::clone(k) });
+        let (lhs, rhs) = (
+            Type::Unit { level: Level::Zero },
+            Type::Fin { len: Rc::clone(k) },
+        );
         // The two arm types, as the kernel's `Case` rule states them:
         // `M[inl x/z]` in `Γ, x : Unit⁰` and `M[inr y/z]` in `Γ, y : Fin(k)`.
         let injected = |left: bool| {
@@ -622,9 +670,21 @@ impl Elaborator {
             let val = Rc::new(Term::Var(LocalVar(0)));
             let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
             if left {
-                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inl {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             } else {
-                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inr {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             }
         };
         // The `FZ` arm binds nothing at the surface but the kernel's `case_l`
@@ -633,13 +693,11 @@ impl Elaborator {
         // out of the goal listing.
         let mut lcx = cx.clone();
         lcx.push("#fz".to_string(), lhs.clone(), Level::Zero);
-        let left_ty =
-            motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(true))));
+        let left_ty = motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(true))));
         let case_l = self.elab_check(&lcx, &fz.body, &left_ty, &mlvl)?;
         let mut rcx = cx.clone();
         rcx.push(j.clone(), rhs.clone(), Level::Zero);
-        let right_ty =
-            motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(false))));
+        let right_ty = motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(false))));
         let case_r = self.elab_check(&rcx, &fs.body, &right_ty, &mlvl)?;
         Ok(Term::Case {
             lhs_level: Level::Zero,
@@ -653,7 +711,6 @@ impl Elaborator {
             scrut: Rc::new(scrut_t),
         })
     }
-
 }
 
 /// `pred(t)`, as the kernel spells it: `elim_Nat(λ _. Nat; 0; λ k ih. k; t)`.
@@ -692,13 +749,17 @@ fn cov_comps(gamma: &LocalCtx, motive: &Type, d: usize, extra: u32, at: &Term) -
 /// the recursor carries. One component is the motive itself, so the ordinary
 /// recursion emits no `Σ` at all.
 fn cov_ty(comps: &[Type], lvl: &Level) -> Type {
-    let (last, rest) = comps.split_last().expect("a tuple has at least one component");
-    rest.iter().rev().fold(last.clone(), |snd, fst| Type::Sigma {
-        fst_level: lvl.clone(),
-        snd_level: lvl.clone(),
-        fst: Rc::new(fst.clone()),
-        snd: Rc::new(snd.shift_local(1)),
-    })
+    let (last, rest) = comps
+        .split_last()
+        .expect("a tuple has at least one component");
+    rest.iter()
+        .rev()
+        .fold(last.clone(), |snd, fst| Type::Sigma {
+            fst_level: lvl.clone(),
+            snd_level: lvl.clone(),
+            fst: Rc::new(fst.clone()),
+            snd: Rc::new(snd.shift_local(1)),
+        })
 }
 
 /// The tuple of `vals` at [`cov_ty`]'s type.
@@ -723,7 +784,10 @@ fn cov_tuple(comps: &[Type], lvl: &Level, vals: Vec<Term>) -> Term {
 /// last, which the nesting leaves bare.
 pub(crate) fn cov_proj(comps: &[Type], lvl: &Level, p: Term, i: usize) -> Term {
     let ann = |at: usize| {
-        (Rc::new(comps[at].clone()), Rc::new(cov_ty(&comps[at + 1..], lvl).shift_local(1)))
+        (
+            Rc::new(comps[at].clone()),
+            Rc::new(cov_ty(&comps[at + 1..], lvl).shift_local(1)),
+        )
     };
     let mut cur = p;
     for at in 0..i {

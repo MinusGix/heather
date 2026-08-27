@@ -25,14 +25,20 @@ pub(crate) struct Carrier {
 
 impl Carrier {
     fn of_ind(ind: &Inductive) -> Self {
-        Carrier { written: ind.name.clone(), key: crate::names::qkey(&ind.scope.module, &ind.name) }
+        Carrier {
+            written: ind.name.clone(),
+            key: crate::names::qkey(&ind.scope.module, &ind.name),
+        }
     }
 
     /// A carrier the language declares itself — `Nat`. Written and key are the
     /// same string, and that is not a spelling escaping into a key: nothing
     /// can declare a second one (see [`Elaborator::carrier_key`]).
     fn constant(name: &str) -> Self {
-        Carrier { written: name.to_string(), key: name.to_string() }
+        Carrier {
+            written: name.to_string(),
+            key: name.to_string(),
+        }
     }
 }
 
@@ -47,10 +53,7 @@ impl Elaborator {
         // (`inductive.rs`'s claim, issues/true-prop-trivial-hypotheses.md). A
         // file that declares its own `True` is answered by `lookup_inductive`
         // first, exactly as the claim itself is.
-        self.lookup_inductive(name).is_some()
-            || name == "Nat"
-            || name == "Type"
-            || name == "True"
+        self.lookup_inductive(name).is_some() || name == "Nat" || name == "Type" || name == "True"
     }
 
     /// Does this name refer to a **type former** — a global whose result, after
@@ -71,7 +74,9 @@ impl Elaborator {
     /// that is only a sentence when `Le` is something a proposition can be *of*.
     /// A global returning `Nat` is not, and still refuses here.
     fn names_a_type_former(&self, name: &str) -> bool {
-        let Some(info) = self.lookup_global(name) else { return false };
+        let Some(info) = self.lookup_global(name) else {
+            return false;
+        };
         let GlobalBinding::Tm { ty, .. } = &self.psi.bindings[info.abs as usize] else {
             return false;
         };
@@ -133,5 +138,4 @@ impl Elaborator {
         }
         self.tag_of(&head).map(|ind| Carrier::of_ind(&ind))
     }
-
 }

@@ -27,8 +27,8 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, MatchForm, Span, Ty, TyKind};
 
-use crate::names::{qkey, NameKind, Scope};
-use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
+use crate::names::{NameKind, Scope, qkey};
+use crate::{Alias, Cx, Elaborator, R, TyVar, embed, err};
 
 type Equation = (Term, Type, Level, Rc<Term>, Rc<Term>);
 type CtorEquation = (
@@ -134,8 +134,14 @@ impl IdxTy {
     pub fn ctors(&self) -> Vec<IdxCtor> {
         match self {
             IdxTy::Nat => vec![
-                IdxCtor { name: "Zero".into(), rec: vec![] },
-                IdxCtor { name: "Succ".into(), rec: vec![true] },
+                IdxCtor {
+                    name: "Zero".into(),
+                    rec: vec![],
+                },
+                IdxCtor {
+                    name: "Succ".into(),
+                    rec: vec![true],
+                },
             ],
             IdxTy::Decl(i) => i
                 .ctors
@@ -164,7 +170,10 @@ impl Inductive {
         if !self.is_record {
             return None;
         }
-        self.ctors[0].fields.iter().position(|(n, _)| n.as_deref() == Some(name))
+        self.ctors[0]
+            .fields
+            .iter()
+            .position(|(n, _)| n.as_deref() == Some(name))
     }
 }
 
@@ -177,7 +186,10 @@ fn arm_field_skels(ind: &Inductive, j: usize) -> Vec<Option<Rc<crate::Skel>>> {
     if ctor.kind.iter().any(|k| k.is_child()) {
         return Vec::new();
     }
-    ctor.fields.iter().map(|(_, t)| crate::skel_of_ty(t)).collect()
+    ctor.fields
+        .iter()
+        .map(|(_, t)| crate::skel_of_ty(t))
+        .collect()
 }
 
 pub(crate) struct Ctor {
@@ -467,7 +479,12 @@ pub(crate) fn tag_value(t: &Type) -> Term {
     // pair is needed — which the kernel rejects as `NotConvertible` for every
     // declaration whose tag is not 0 (docs/types-as-expressions.md).
     match &*decoded(t) {
-        Type::Sigma { fst_level, snd_level, fst, snd } => Term::Pair {
+        Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } => Term::Pair {
             fst_level: fst_level.clone(),
             snd_level: snd_level.clone(),
             fst_ty: Rc::clone(fst),
@@ -543,7 +560,9 @@ impl Elaborator {
             // above — `as` adds no identifier, it adds a second *role* for the
             // one the binder already has.
             if let Some(sym) = &p.symbol
-                && d.valparams[..i].iter().any(|o| o.symbol.as_deref() == Some(sym.as_str()))
+                && d.valparams[..i]
+                    .iter()
+                    .any(|o| o.symbol.as_deref() == Some(sym.as_str()))
             {
                 return err(
                     format!(
@@ -555,7 +574,11 @@ impl Elaborator {
             }
             // A field shadows a value parameter of the same name in the later
             // field types, which is legal but never what anyone means.
-            if d.ctors[0].fields.iter().any(|f| f.name.as_deref() == Some(p.name.as_str())) {
+            if d.ctors[0]
+                .fields
+                .iter()
+                .any(|f| f.name.as_deref() == Some(p.name.as_str()))
+            {
                 return err(
                     format!(
                         "`{}` is both a value parameter and a field of `{}`: the field \
@@ -573,7 +596,13 @@ impl Elaborator {
         let (index, index_ty) = match &d.index {
             None => (None, None),
             Some(ty) => {
-                let TyKind::Fn { binder: Some(n), implicit, dom, cod } = &ty.kind else {
+                let TyKind::Fn {
+                    binder: Some(n),
+                    implicit,
+                    dom,
+                    cod,
+                } = &ty.kind
+                else {
                     return err(
                         "an indexed declaration's head is `: (n: I) -> Type` \
                          (docs/inductive-indexed-lowering.md §2)",
@@ -635,9 +664,7 @@ impl Elaborator {
             // each declare a `Cons`, and a use picks by uniqueness, by
             // `List::Cons`, or errors. Within one module a constructor name
             // still belongs to one type.
-            if let Some((other, _)) =
-                self.types.constructor(&qkey(self.names.module(), &c.name))
-            {
+            if let Some((other, _)) = self.types.constructor(&qkey(self.names.module(), &c.name)) {
                 return err(
                     format!("`{}` is already a constructor of `{}`", c.name, other.name),
                     c.span,
@@ -756,7 +783,11 @@ impl Elaborator {
             scope: Rc::new(self.names.scope().clone()),
             tag: first_tag + u32::from(skel.is_some()),
             params: d.params.clone(),
-            valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+            valparams: d
+                .valparams
+                .iter()
+                .map(|p| (p.name.clone(), p.ty.clone()))
+                .collect(),
             op_symbols: d
                 .valparams
                 .iter()
@@ -922,8 +953,16 @@ impl Elaborator {
                 format!(
                     "`{name}` takes {} value argument(s): write `{name}{}({})`",
                     ind.valparams.len(),
-                    if ind.params.is_empty() { String::new() } else { "<…>".into() },
-                    ind.valparams.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                    if ind.params.is_empty() {
+                        String::new()
+                    } else {
+                        "<…>".into()
+                    },
+                    ind.valparams
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 span,
             );
@@ -950,9 +989,15 @@ impl Elaborator {
         e: &Expr,
         span: Span,
     ) -> R<Option<(Type, Level)>> {
-        let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
-        let Some((name, targs)) = named_head(head) else { return Ok(None) };
-        let Some(ind) = self.lookup_inductive(name).cloned() else { return Ok(None) };
+        let ExprKind::App { head, args, .. } = &e.kind else {
+            return Ok(None);
+        };
+        let Some((name, targs)) = named_head(head) else {
+            return Ok(None);
+        };
+        let Some(ind) = self.lookup_inductive(name).cloned() else {
+            return Ok(None);
+        };
         if ind.valparams.is_empty() {
             return Ok(None);
         }
@@ -982,7 +1027,8 @@ impl Elaborator {
             lowered
         };
         let vargs = self.valparam_args(cx, &ind, &lowered, args, span)?;
-        self.lower_instance(cx, &ind, &lowered, &vargs, span).map(Some)
+        self.lower_instance(cx, &ind, &lowered, &vargs, span)
+            .map(Some)
     }
 
     /// The type arguments of `D(v̄)`, recovered from the value arguments'
@@ -1012,7 +1058,9 @@ impl Elaborator {
     ) -> R<Vec<(Type, Level)>> {
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
         for ((_, decl), arg) in ind.valparams.iter().zip(args) {
-            let Ok((_, ty, lvl)) = self.elab_infer(cx, arg) else { continue };
+            let Ok((_, ty, lvl)) = self.elab_infer(cx, arg) else {
+                continue;
+            };
             match_targs(decl, &ty, &lvl, &ind.params, &mut sols);
         }
         let mut out = Vec::with_capacity(sols.len());
@@ -1024,7 +1072,11 @@ impl Elaborator {
                          argument's type determines it. Write it: `{}<…>({})`",
                         ind.name,
                         ind.name,
-                        ind.valparams.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                        ind.valparams
+                            .iter()
+                            .map(|(n, _)| n.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                     span,
                 );
@@ -1068,12 +1120,17 @@ impl Elaborator {
         }
         let mut tcx = cx.clone();
         let depth = cx.names.len();
-        tcx.tyvars.extend(ind.params.iter().zip(targs).map(|(name, (ty, level))| TyVar {
-            name: name.clone(),
-            ty: ty.clone(),
-            level: level.clone(),
-            depth,
-        }));
+        tcx.tyvars.extend(
+            ind.params
+                .iter()
+                .zip(targs)
+                .map(|(name, (ty, level))| TyVar {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    level: level.clone(),
+                    depth,
+                }),
+        );
         // The declared types are the declaration's own source, so they are read
         // under the declaration's own body spellings and never the use site's:
         // a `∙` in this telescope is the head's `as`, or nothing
@@ -1087,7 +1144,8 @@ impl Elaborator {
                 self.elab_ty(&tcx, pty)?
             };
             let tm = self.elab_check(cx, arg, &ty, &level)?;
-            tcx.aliases.push(Rc::new(Alias { skel: None,
+            tcx.aliases.push(Rc::new(Alias {
+                skel: None,
                 name: pname.clone(),
                 depth,
                 term: Rc::new(tm.clone()),
@@ -1135,7 +1193,11 @@ impl Elaborator {
         xcx.push("#shape".into(), shape.clone(), level.clone());
         let arity = self.lower_arity(&xcx, ind, &shape, &level, span)?;
         Ok((
-            Type::Wf { level: level.clone(), shape: Rc::new(shape), arity: Rc::new(arity) },
+            Type::Wf {
+                level: level.clone(),
+                shape: Rc::new(shape),
+                arity: Rc::new(arity),
+            },
             level,
         ))
     }
@@ -1282,7 +1344,8 @@ impl Elaborator {
         // test 9, §H risk 3). The observers are therefore propositional, in
         // `crates/elab/tests/value_parameters.rs`, not merely structural.
         for ((name, _), (tm, ty, level)) in ind.valparams.iter().zip(vargs) {
-            fcx.aliases.push(Rc::new(Alias { skel: None,
+            fcx.aliases.push(Rc::new(Alias {
+                skel: None,
                 name: name.clone(),
                 depth,
                 term: Rc::new(tm.clone()),
@@ -1308,7 +1371,10 @@ impl Elaborator {
             if let Type::Ty(level) = t {
                 fcx.tyvars.push(TyVar {
                     name: fname,
-                    ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                    ty: Type::El {
+                        level: level.clone(),
+                        tm: Rc::new(Term::Var(LocalVar(0))),
+                    },
                     level,
                     depth: fcx.names.len(),
                 });
@@ -1357,8 +1423,17 @@ impl Elaborator {
             // is rebound.
             let step = {
                 let d = decoded(&cur);
-                let Type::Sum { lhs_level, rhs_level, lhs, rhs } = &*d else {
-                    return err("internal: malformed inductive encoding (expected a `+`)", span);
+                let Type::Sum {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                } = &*d
+                else {
+                    return err(
+                        "internal: malformed inductive encoding (expected a `+`)",
+                        span,
+                    );
                 };
                 ctors.push((Rc::clone(lhs), lhs_level.clone()));
                 tails.push((Rc::clone(rhs), rhs_level.clone()));
@@ -1384,7 +1459,10 @@ impl Elaborator {
                 })
                 .collect()
         };
-        Spine { ctors: re(&spine.ctors), tails: re(&spine.tails) }
+        Spine {
+            ctors: re(&spine.ctors),
+            tails: re(&spine.tails),
+        }
     }
 
     /// Which declaration a lowered type belongs to, by its nominal tag: walk
@@ -1409,7 +1487,8 @@ impl Elaborator {
             Type::Wf { shape, .. } => &**shape,
             _ => ty,
         };
-        self.unspell_shape_here(shape).unwrap_or_else(|| shape.clone())
+        self.unspell_shape_here(shape)
+            .unwrap_or_else(|| shape.clone())
     }
 
     /// The declaration at the head of a displayable inductive type, including
@@ -1443,7 +1522,11 @@ impl Elaborator {
         // the declaration. Keep a fixed ceiling on that work in a diagnostic.
         const MAX_RECOVERY_FIELDS: usize = 64;
         let size = ind.ctors.len()
-            + ind.ctors.iter().map(|ctor| ctor.fields.len()).sum::<usize>();
+            + ind
+                .ctors
+                .iter()
+                .map(|ctor| ctor.fields.len())
+                .sum::<usize>();
         if size > MAX_RECOVERY_FIELDS {
             return None;
         }
@@ -1454,7 +1537,9 @@ impl Elaborator {
         for (i, ctor) in ind.ctors.iter().enumerate() {
             let ctor_ty = if i + 1 < ind.ctors.len() {
                 let d = decoded(&summand);
-                let Type::Sum { lhs, rhs, .. } = &*d else { return None };
+                let Type::Sum { lhs, rhs, .. } = &*d else {
+                    return None;
+                };
                 let out = Rc::clone(lhs);
                 summand = Rc::clone(rhs);
                 out
@@ -1465,12 +1550,22 @@ impl Elaborator {
             // Entry zero is the nominal tag. Every following Sigma entry is
             // one payload field; recursive children are absent from the shape.
             let d = decoded(&ctor_ty);
-            let Type::Sigma { snd, .. } = &*d else { return None };
+            let Type::Sigma { snd, .. } = &*d else {
+                return None;
+            };
             let mut fields = Rc::clone(snd);
             let mut crossed = 1u32;
             for (_, (_, written)) in ctor.payload() {
                 let d = decoded(&fields);
-                let Type::Sigma { fst_level, fst, snd, .. } = &*d else { return None };
+                let Type::Sigma {
+                    fst_level,
+                    fst,
+                    snd,
+                    ..
+                } = &*d
+                else {
+                    return None;
+                };
                 if let TyKind::Named { name, args } = &written.kind
                     && args.is_empty()
                     && let Some(p) = ind.params.iter().position(|param| param == name)
@@ -1541,7 +1636,13 @@ impl Elaborator {
         let mut lvl = expected_lvl.clone();
         for k in 0..missing {
             let head = self.whnf(&cx, &ty, span)?;
-            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = head
+            else {
                 // Not enough arrows to absorb the missing fields. Diagnosed
                 // here rather than left to `build_ctor`'s arity message, which
                 // would count the arguments the user wrote and not the ones
@@ -1563,7 +1664,10 @@ impl Elaborator {
             // goal listing.
             let name = format!("#arg{k}");
             cx.push(name.clone(), (*dom).clone(), dom_level.clone());
-            args.push(Expr { kind: ExprKind::Var(name), span });
+            args.push(Expr {
+                kind: ExprKind::Var(name),
+                span,
+            });
             // The codomain is scoped under the binder just pushed, which is
             // what makes a *dependent* expected type work.
             ty = (*cod).clone();
@@ -1572,7 +1676,12 @@ impl Elaborator {
         }
         let mut t = self.build_ctor(&cx, ind, i, &args, &ty, &lvl, span)?;
         for (dom_level, cod_level, dom) in peeled.into_iter().rev() {
-            t = Term::Lam { dom_level, cod_level, dom, body: Rc::new(t) };
+            t = Term::Lam {
+                dom_level,
+                cod_level,
+                dom,
+                body: Rc::new(t),
+            };
         }
         Ok(t)
     }
@@ -1622,7 +1731,7 @@ impl Elaborator {
                         ctor.name, ind.name
                     ),
                     span,
-                )
+                );
             }
         }
         let spine = self.spine(&expected, expected_lvl, ind.ctors.len(), span)?;
@@ -1684,8 +1793,16 @@ impl Elaborator {
         // `val` is the label `ℓᵢ : S`; wrap it in `sup_f` with the children
         // (§5). Shape and arity are read off the type being built, never
         // rebuilt — the same discipline as the injections just above.
-        let Type::Wf { level, shape, arity } = &expected else {
-            return err("internal: a recursive declaration did not lower to a `Wf`", span);
+        let Type::Wf {
+            level,
+            shape,
+            arity,
+        } = &expected
+        else {
+            return err(
+                "internal: a recursive declaration did not lower to a `Wf`",
+                span,
+            );
         };
         // …and the `sup_f`'s own two slots take their **references**
         // (`docs/wf-shape-code-design.md` §3.1). This is the value site the
@@ -1747,7 +1864,13 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let head = self.whnf(cx, ctor_ty, span)?;
-        let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+        let Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } = head
+        else {
             // The Unit terminator (§3.1): every field consumed. `Unit` is
             // level-indexed (docs/unit-empty-level-indexing.md), so match at
             // *any* level and take the inhabitant's level from the type —
@@ -1756,7 +1879,9 @@ impl Elaborator {
             if let Type::Unit { level } = &head
                 && args.is_empty()
             {
-                return Ok(Term::Triv { level: level.clone() });
+                return Ok(Term::Triv {
+                    level: level.clone(),
+                });
             }
             return err("internal: malformed constructor encoding", span);
         };
@@ -1765,9 +1890,10 @@ impl Elaborator {
         let (value, rest, skels_rest) = if tag {
             (tag_value(&fst), args, skels)
         } else {
-            let (arg, rest) = args
-                .split_first()
-                .ok_or(crate::ElabError::Elab { msg: "too few arguments".into(), span })?;
+            let (arg, rest) = args.split_first().ok_or(crate::ElabError::Elab {
+                msg: "too few arguments".into(),
+                span,
+            })?;
             let skel = skels.first().and_then(|s| s.as_deref());
             (
                 self.elab_check_skel(cx, arg, &fst, &fst_level, None, skel)?,
@@ -1891,13 +2017,15 @@ impl Elaborator {
                 span,
             );
         }
-        let arms: Vec<&Arm> = ordered.into_iter().map(|a| a.expect("checked above")).collect();
+        let arms: Vec<&Arm> = ordered
+            .into_iter()
+            .map(|a| a.expect("checked above"))
+            .collect();
         if ind.recursive {
             // Tier 1: one `elim_Wf`, not a case tree over the scrutinee
             // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
             // surface bookkeeping and is shared.
-            return self
-                .elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+            return self.elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
         // The tier-0 twin of `wf.rs`'s motive respell
@@ -1918,7 +2046,17 @@ impl Elaborator {
         // every `Case` and every injection, and a payload type embeds its
         // fields' lowerings verbatim.
         let spine_e = self.respell_spine(cx, &spine);
-        self.case_tree(cx, ind, &arms, &spine, &spine_e, 0, motive, &mlvl, Rc::new(scrut))
+        self.case_tree(
+            cx,
+            ind,
+            &arms,
+            &spine,
+            &spine_e,
+            0,
+            motive,
+            &mlvl,
+            Rc::new(scrut),
+        )
     }
 
     /// The nested-`Case` recursion of §5.2. At depth `j` the context is `cx` —
@@ -1962,7 +2100,11 @@ impl Elaborator {
         let tail_ty = Rc::new(spine_e.tails[j].0.shift_local(d));
         // case_l: binder `x : ⟦c_j⟧` over Γ_j, body at `M_j[inl x/z]`.
         let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), spine.ctors[j].0.shift_local(d), ctor_lvl.clone());
+        lcx.push(
+            "#scrut".into(),
+            spine.ctors[j].0.shift_local(d),
+            ctor_lvl.clone(),
+        );
         // The injection's own summand annotations are scoped in the *original*
         // `\u{393}`, so they carry the shift of whatever context the injection
         // is being placed in — which is **not** always `d + 1`. `l_expected`
@@ -1976,21 +2118,36 @@ impl Elaborator {
         // *non-dependent* motive `z` never occurs, so the bad annotations are
         // substituted away before the kernel sees them.
         let injected = |val: Term, inl: bool, sh: u32| {
-            let (lhs, rhs) =
-                (spine_e.ctors[j].0.shift_local(sh), spine_e.tails[j].0.shift_local(sh));
+            let (lhs, rhs) = (
+                spine_e.ctors[j].0.shift_local(sh),
+                spine_e.tails[j].0.shift_local(sh),
+            );
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
             if inl {
-                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inl {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             } else {
-                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inr {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             }
         };
-        let l_expected = motive.apply_local(
-            &embed(&cx.gamma, 1)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, d + 1))),
-        );
+        let l_expected = motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(
+            Term::Var(LocalVar(0)),
+            true,
+            d + 1,
+        ))));
         let l_skels = arm_field_skels(ind, j);
         let case_l = self.elab_arm(
             &lcx,
@@ -2004,11 +2161,16 @@ impl Elaborator {
         // case_r: binder `y : R_{j+1}` over Γ_j; inside it, the next `Case` on
         // `y`, whose motive is `M_j` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
-        rcx.push("#rest".into(), spine.tails[j].0.shift_local(d), tail_lvl.clone());
-        let inner_motive = motive.apply_local(
-            &embed(&cx.gamma, 2)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, d + 2))),
+        rcx.push(
+            "#rest".into(),
+            spine.tails[j].0.shift_local(d),
+            tail_lvl.clone(),
         );
+        let inner_motive = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(injected(
+            Term::Var(LocalVar(0)),
+            false,
+            d + 2,
+        ))));
         let case_r = self.case_tree(
             &rcx,
             ind,
@@ -2063,7 +2225,13 @@ impl Elaborator {
         let mut first = true;
         loop {
             let head = self.whnf(&acx, &cur, arm.span)?;
-            let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+            let Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } = head
+            else {
                 break;
             };
             let proj = Rc::new(Term::Fst {
@@ -2138,7 +2306,13 @@ impl Elaborator {
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
         for step in 0..=idx + 1 {
             let head = self.whnf(cx, &cur, span)?;
-            let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+            let Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } = head
+            else {
                 return err(
                     format!(
                         "internal: `{}` has no field spine entry {step} \
@@ -2179,9 +2353,7 @@ impl Elaborator {
             });
             cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&proj)));
             if cur_emit.is_some() {
-                cur_emit = Some(
-                    snd_e.apply_local(&LocalSubst::id(&cx.gamma).extended(proj)),
-                );
+                cur_emit = Some(snd_e.apply_local(&LocalSubst::id(&cx.gamma).extended(proj)));
             }
             pair = rest;
         }
@@ -2239,9 +2411,11 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
         if let TyKind::Vec { elem, len } = &f.ty.kind
             && classify_field(elem.as_ref(), name, params, &c.name)?
         {
-            if let Some((prev, _)) = kinds.iter().enumerate().find(|(_, k)| {
-                matches!(k, FieldKind::Container { .. })
-            }) {
+            if let Some((prev, _)) = kinds
+                .iter()
+                .enumerate()
+                .find(|(_, k)| matches!(k, FieldKind::Container { .. }))
+            {
                 let _ = prev;
                 return err(
                     format!(
@@ -2279,7 +2453,10 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
             continue;
         }
         if classify_field(&f.ty, name, params, &c.name)? {
-            if kinds.iter().any(|k| matches!(k, FieldKind::Container { .. })) {
+            if kinds
+                .iter()
+                .any(|k| matches!(k, FieldKind::Container { .. }))
+            {
                 return err(
                     format!(
                         "a recursive field of `{}` may not follow a container field: \
@@ -2326,9 +2503,10 @@ fn parse_result_index<'a>(
         match &e.kind {
             ExprKind::Var(v) => icts.iter().position(|k| k.name == *v).map(|i| (i, &[][..])),
             ExprKind::App { head, args, .. } => match &head.kind {
-                ExprKind::Var(v) => {
-                    icts.iter().position(|k| k.name == *v).map(|i| (i, args.as_slice()))
-                }
+                ExprKind::Var(v) => icts
+                    .iter()
+                    .position(|k| k.name == *v)
+                    .map(|i| (i, args.as_slice())),
                 _ => None,
             },
             _ => None,
@@ -2340,12 +2518,14 @@ fn parse_result_index<'a>(
         return decl_index_pattern(c, idx, ity, k, iargs);
     }
     match &idx.kind {
-        ExprKind::Num(0) if matches!(ity, IdxTy::Nat) => {
-            Ok(IdxPat { ctor: 0, vars: vec![] })
-        }
-        ExprKind::Var(v) if v == "Zero" && matches!(ity, IdxTy::Nat) => {
-            Ok(IdxPat { ctor: 0, vars: vec![] })
-        }
+        ExprKind::Num(0) if matches!(ity, IdxTy::Nat) => Ok(IdxPat {
+            ctor: 0,
+            vars: vec![],
+        }),
+        ExprKind::Var(v) if v == "Zero" && matches!(ity, IdxTy::Nat) => Ok(IdxPat {
+            ctor: 0,
+            vars: vec![],
+        }),
         ExprKind::App { head, args, .. }
             if matches!(ity, IdxTy::Nat)
                 && matches!(&head.kind, ExprKind::Var(s) if s == "Succ") =>
@@ -2385,7 +2565,10 @@ fn parse_result_index<'a>(
                     arg.span,
                 );
             }
-            Ok(IdxPat { ctor: 1, vars: vec![field] })
+            Ok(IdxPat {
+                ctor: 1,
+                vars: vec![field],
+            })
         }
         ExprKind::Num(_) if matches!(ity, IdxTy::Nat) => err(
             format!(
@@ -2446,12 +2629,7 @@ fn parse_result_index<'a>(
 /// the type must be the declaration at its own parameters, and what comes back
 /// is the single index expression. Route 1 then insists it is a pattern; route
 /// 2b does not constrain it at all (fording doc §2).
-fn parse_result_head<'a>(
-    c: &CtorDecl,
-    r: &'a Expr,
-    name: &str,
-    params: &[String],
-) -> R<&'a Expr> {
+fn parse_result_head<'a>(c: &CtorDecl, r: &'a Expr, name: &str, params: &[String]) -> R<&'a Expr> {
     let ExprKind::App { head, args, .. } = &r.kind else {
         return err(
             format!(
@@ -2472,7 +2650,10 @@ fn parse_result_head<'a>(
     };
     if rname != name {
         return err(
-            format!("`{}` is a constructor of `{name}`, so its result must be `{name}`", c.name),
+            format!(
+                "`{}` is a constructor of `{name}`, so its result must be `{name}`",
+                c.name
+            ),
             r.span,
         );
     }
@@ -2560,8 +2741,10 @@ fn decl_index_pattern(
                 arg.span,
             );
         };
-        let Some(field) =
-            c.fields.iter().position(|f| f.name.as_deref() == Some(v.as_str()))
+        let Some(field) = c
+            .fields
+            .iter()
+            .position(|f| f.name.as_deref() == Some(v.as_str()))
         else {
             return err(
                 format!(
@@ -2659,7 +2842,12 @@ fn classify_fields_indexed(
             }
             // Which pattern variable this field sits at, if any.
             let at = match args.as_slice() {
-                [Expr { kind: ExprKind::Var(v), .. }] => c
+                [
+                    Expr {
+                        kind: ExprKind::Var(v),
+                        ..
+                    },
+                ] => c
                     .fields
                     .iter()
                     .position(|g| g.name.as_deref() == Some(v.as_str()))
@@ -2686,11 +2874,7 @@ fn classify_fields_indexed(
             // expressible rather than merely rejected — say that by shape.
             if !ict.rec[a] {
                 let what = if ict.rec.iter().any(|r| *r) {
-                    format!(
-                        "argument {} of `{}` is not recursive",
-                        a + 1,
-                        ict.name
-                    )
+                    format!("argument {} of `{}` is not recursive", a + 1, ict.name)
                 } else {
                     format!(
                         "`{}` has no recursive argument, so at the index `{}` there is \
@@ -2771,12 +2955,9 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     let mut r1_fail = None;
     for c in &d.ctors {
         let r = c.result.as_ref().expect("checked just above");
-        let attempt = parse_result_index(c, r, &d.name, &d.params, &d.ctors, ity).and_then(
-            |pat| {
-                classify_fields_indexed(c, &d.name, &d.params, &pat, ity)
-                    .map(|(k, ra)| (pat, k, ra))
-            },
-        );
+        let attempt = parse_result_index(c, r, &d.name, &d.params, &d.ctors, ity).and_then(|pat| {
+            classify_fields_indexed(c, &d.name, &d.params, &pat, ity).map(|(k, ra)| (pat, k, ra))
+        });
         match attempt {
             Ok(v) => rows.push(v),
             Err(e) => {
@@ -2785,7 +2966,9 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
             }
         }
     }
-    let Some((c1, e1)) = r1_fail else { return Ok(IdxRoute::One(rows)) };
+    let Some((c1, e1)) = r1_fail else {
+        return Ok(IdxRoute::One(rows));
+    };
     // §3.3 row 1: a *uniform* bare-variable index is a parameter wearing an
     // index's spelling. Route 2b would happily generate it, so the route-1
     // message has to win here rather than be tried after.
@@ -2801,10 +2984,10 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
                 // saying only one reason is what sends a user in a circle. Both
                 // are named whether one constructor failed both routes or two
                 // constructors failed one each.
-                let (crate::ElabError::Elab { msg: m1, .. }, crate::ElabError::Elab {
-                    msg: m2,
-                    span,
-                }) = (&e1, &e2)
+                let (
+                    crate::ElabError::Elab { msg: m1, .. },
+                    crate::ElabError::Elab { msg: m2, span },
+                ) = (&e1, &e2)
                 else {
                     return Err(e2);
                 };
@@ -2878,7 +3061,12 @@ fn classify_forded(
             }
             // (F1) a child's index is a bare variable naming a field.
             let bare = match args.as_slice() {
-                [Expr { kind: ExprKind::Var(v), .. }] => Some(v.clone()),
+                [
+                    Expr {
+                        kind: ExprKind::Var(v),
+                        ..
+                    },
+                ] => Some(v.clone()),
                 _ => None,
             };
             let Some(v) = bare else {
@@ -2895,8 +3083,10 @@ fn classify_forded(
                     f.ty.span,
                 );
             };
-            let Some(fk) =
-                c.fields.iter().position(|g| g.name.as_deref() == Some(v.as_str()))
+            let Some(fk) = c
+                .fields
+                .iter()
+                .position(|g| g.name.as_deref() == Some(v.as_str()))
             else {
                 return err(
                     format!(
@@ -3046,8 +3236,13 @@ fn check_index_expr(c: &CtorDecl, e: &Expr, ity: &IdxTy) -> R<()> {
             if !ict.rec[a] {
                 continue;
             }
-            let ExprKind::Var(v) = &arg.kind else { continue };
-            let Some(f) = c.fields.iter().position(|g| g.name.as_deref() == Some(v.as_str()))
+            let ExprKind::Var(v) = &arg.kind else {
+                continue;
+            };
+            let Some(f) = c
+                .fields
+                .iter()
+                .position(|g| g.name.as_deref() == Some(v.as_str()))
             else {
                 continue;
             };
@@ -3116,7 +3311,10 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
                 .params
                 .iter()
                 .map(|p| Ty {
-                    kind: TyKind::Named { name: p.clone(), args: vec![] },
+                    kind: TyKind::Named {
+                        name: p.clone(),
+                        args: vec![],
+                    },
                     span: d.span,
                 })
                 .collect(),
@@ -3201,10 +3399,22 @@ pub(crate) fn arm_ctor_index(ind: &Inductive, written: &str) -> Option<usize> {
 fn all_bare_var_indices(ctors: &[CtorDecl], ity: &IdxTy) -> bool {
     let icts = ity.ctors();
     ctors.iter().all(|c| {
-        let Some(Expr { kind: ExprKind::App { args, .. }, .. }) = &c.result else {
+        let Some(Expr {
+            kind: ExprKind::App { args, .. },
+            ..
+        }) = &c.result
+        else {
             return false;
         };
-        let [Expr { kind: ExprKind::Var(v), .. }] = args.as_slice() else { return false };
+        let [
+            Expr {
+                kind: ExprKind::Var(v),
+                ..
+            },
+        ] = args.as_slice()
+        else {
+            return false;
+        };
         !icts.iter().any(|ic| ic.name == *v)
     })
 }
@@ -3282,7 +3492,9 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         | ExprKind::AutoRefl
         | ExprKind::Hole(_)
         | ExprKind::Univ { .. } => false,
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             expr_mentions(head, name)
                 || args.iter().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
@@ -3292,21 +3504,27 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         }
         ExprKind::Lam { body, binders } => {
             expr_mentions(body, name)
-                || binders.iter().any(|b| b.ty.as_ref().is_some_and(|t| occurs(t, name).is_some()))
+                || binders
+                    .iter()
+                    .any(|b| b.ty.as_ref().is_some_and(|t| occurs(t, name).is_some()))
         }
         ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
         // A motive body in type syntax: read it as the type it is.
         ExprKind::TyLit(t) => occurs(t, name).is_some(),
         ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
-        ExprKind::Index { recv, idx } => {
-            expr_mentions(recv, name) || expr_mentions(idx, name)
-        }
-        ExprKind::Dot { recv, args, named, .. } => {
+        ExprKind::Index { recv, idx } => expr_mentions(recv, name) || expr_mentions(idx, name),
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
             expr_mentions(recv, name)
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
-        ExprKind::RecordLit { name: n, tyargs, fields } => {
+        ExprKind::RecordLit {
+            name: n,
+            tyargs,
+            fields,
+        } => {
             n == name
                 || tyargs.iter().any(|t| occurs(t, name).is_some())
                 || fields.iter().any(|f| expr_mentions(&f.expr, name))
@@ -3418,7 +3636,6 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
     Ok(())
 }
 
-
 // -- no-confusion (§6) ------------------------------------------------------
 
 /// Which branch body a constant-motive case tree puts at each constructor.
@@ -3437,7 +3654,11 @@ pub(crate) enum ConstBody {
     /// §6.2: the `k`-th *payload* field projection at constructor `i`, and a
     /// default term (the left-hand side's own field value) elsewhere, so that
     /// the projection is total on `⟦D⟧`.
-    Field { i: usize, k: usize, default: Rc<Term> },
+    Field {
+        i: usize,
+        k: usize,
+        default: Rc<Term>,
+    },
 }
 
 impl Elaborator {
@@ -3547,9 +3768,11 @@ impl Elaborator {
                 }
                 Ok(acc)
             }
-            ConstBody::TagCode(i) => {
-                Ok(if j == *i { Term::TmUnit { level: Level::Zero } } else { Term::TmEmpty { level: Level::Zero } })
-            }
+            ConstBody::TagCode(i) => Ok(if j == *i {
+                Term::TmUnit { level: Level::Zero }
+            } else {
+                Term::TmEmpty { level: Level::Zero }
+            }),
             ConstBody::Field { i, k, default } => {
                 if j != *i {
                     return Ok(default.shift_local(d));
@@ -3576,7 +3799,13 @@ impl Elaborator {
         // Component 0 is the tag, so field `k` is component `k+1`.
         for step in 0..=k + 1 {
             let head = self.whnf(cx, &cur, span)?;
-            let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+            let Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } = head
+            else {
                 return err("internal: constructor encoding is too short", span);
             };
             // The **emitted** `Fst`/`Snd` annotations take the reference
@@ -3641,7 +3870,9 @@ impl Elaborator {
         // Tier 1: the injections are in the *label*, and the fields are split
         // between the label's Σ spine and the children tuple (tier 1 §7).
         let (label, children) = match t {
-            Term::Supf { label, children, .. } => (&**label, Some(&**children)),
+            Term::Supf {
+                label, children, ..
+            } => (&**label, Some(&**children)),
             _ => (t, None),
         };
         let n = ind.ctors.len();
@@ -3685,7 +3916,9 @@ impl Elaborator {
             // payload nor a *plain* child, so the two no longer partition the
             // fields (docs/container-fields.md §3.1).
             for _ in 0..ctor.payload().count() {
-                let Term::Pair { fst, snd, .. } = &**p else { return Ok(None) };
+                let Term::Pair { fst, snd, .. } = &**p else {
+                    return Ok(None);
+                };
                 payload.push(Rc::clone(fst));
                 p = snd;
             }
@@ -3697,8 +3930,7 @@ impl Elaborator {
             // needed.
             let value = Rc::new(cur.clone());
             for k in 0..ctor.payload().count() {
-                let (field, _, _) =
-                    self.projection(cx, &spine.ctors[i].0, &value, k, span)?;
+                let (field, _, _) = self.projection(cx, &spine.ctors[i].0, &value, k, span)?;
                 payload.push(field);
             }
         }
@@ -3707,7 +3939,9 @@ impl Elaborator {
         if let Some(children) = children {
             let mut c = children;
             for _ in 0..ctor.arity() {
-                let Term::Pair { fst, snd, .. } = c else { return Ok(None) };
+                let Term::Pair { fst, snd, .. } = c else {
+                    return Ok(None);
+                };
                 kids.push(Rc::clone(fst));
                 c = snd;
             }
@@ -3744,13 +3978,25 @@ impl Elaborator {
     /// inductive (issues/absurd-at-nat-numerals.md).
     fn equation(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
         let (proof, proof_ty, _) = self.elab_infer(cx, e)?;
-        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &proof_ty, e.span)? else {
-            return err(format!("`{who}` needs a proof of an `=` between constructors"), e.span);
+        let Type::Id {
+            level,
+            ty,
+            lhs,
+            rhs,
+        } = self.whnf(cx, &proof_ty, e.span)?
+        else {
+            return err(
+                format!("`{who}` needs a proof of an `=` between constructors"),
+                e.span,
+            );
         };
         let sty = self.whnf(cx, &ty, e.span)?;
         // A constructor equation may be reached by computation. No-confusion
         // is about the reduced endpoints rather than their source spelling.
-        let (lhs, rhs) = (self.whnf_tm(cx, &lhs, e.span)?, self.whnf_tm(cx, &rhs, e.span)?);
+        let (lhs, rhs) = (
+            self.whnf_tm(cx, &lhs, e.span)?,
+            self.whnf_tm(cx, &rhs, e.span)?,
+        );
         Ok((proof, sty, level, lhs, rhs))
     }
 
@@ -3776,9 +4022,7 @@ impl Elaborator {
             self.read_ctor(cx, &ind, &spine, &rhs, read_fields, span)?,
         ) else {
             return err(
-                format!(
-                    "`{who}` needs both sides of the equation to be constructor applications"
-                ),
+                format!("`{who}` needs both sides of the equation to be constructor applications"),
                 span,
             );
         };
@@ -3825,7 +4069,11 @@ impl Elaborator {
     fn nat_tag(n: Term, unit_at_zero: bool) -> Term {
         let unit = Term::TmUnit { level: Level::Zero };
         let empty = Term::TmEmpty { level: Level::Zero };
-        let (base, step) = if unit_at_zero { (unit, empty) } else { (empty, unit) };
+        let (base, step) = if unit_at_zero {
+            (unit, empty)
+        } else {
+            (empty, unit)
+        };
         Term::ElimNat {
             level: Level::succ(Level::Zero),
             motive: Rc::new(Type::Ty(Level::Zero)),
@@ -3925,8 +4173,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         if ind.recursive {
-            return self
-                .const_elim_wf(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, 2, span);
+            return self.const_elim_wf(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, 2, span);
         }
         self.const_case_tree(
             mcx,
@@ -3957,9 +4204,7 @@ impl Elaborator {
         let equation = self.equation(cx, arg, "absurd")?;
         if matches!(equation.1, Type::Nat) {
             let (proof, _, _, lhs, rhs) = equation;
-            return self.build_nat_absurd(
-                cx, proof, lhs, rhs, expected, expected_lvl, span,
-            );
+            return self.build_nat_absurd(cx, proof, lhs, rhs, expected, expected_lvl, span);
         }
         let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
             self.declared_equation(cx, equation, "absurd", false, arg.span)?;
@@ -3998,7 +4243,10 @@ impl Elaborator {
             &ConstBody::TagCode(i),
             span,
         )?;
-        let motive = Type::El { level: Level::Zero, tm: Rc::new(pred) };
+        let motive = Type::El {
+            level: Level::Zero,
+            tm: Rc::new(pred),
+        };
         let absurd = Term::J {
             ty_level: slvl.clone(),
             motive_level: Level::Zero,
@@ -4052,7 +4300,10 @@ impl Elaborator {
         let arity = ind.ctors[i].fields.len();
         if k >= arity {
             return err(
-                format!("`{}` has {arity} field(s), so there is no field {k}", ind.ctors[i].name),
+                format!(
+                    "`{}` has {arity} field(s), so there is no field {k}",
+                    ind.ctors[i].name
+                ),
                 span,
             );
         }
@@ -4086,7 +4337,10 @@ impl Elaborator {
             // projection through `child_projection` below.
             (None, sty.clone(), slvl.clone())
         } else {
-            let p = ind.ctors[i].kind[..k].iter().filter(|f| !f.is_child()).count();
+            let p = ind.ctors[i].kind[..k]
+                .iter()
+                .filter(|f| !f.is_child())
+                .count();
             // The field type at each side. They differ exactly when the
             // field's type depends on an earlier field of the same
             // constructor.
@@ -4110,7 +4364,15 @@ impl Elaborator {
                     span,
                 );
             }
-            (Some(ConstBody::Field { i, k: p, default: Rc::clone(&la[k]) }), lty, llvl)
+            (
+                Some(ConstBody::Field {
+                    i,
+                    k: p,
+                    default: Rc::clone(&la[k]),
+                }),
+                lty,
+                llvl,
+            )
         };
         // The J motive, over `y` and `p : lhs = y`: `a_k = proj y`.
         let mut mcx = cx.clone();
@@ -4143,7 +4405,10 @@ impl Elaborator {
             // stuck on a variable — so this one generalizes `cs` in the case
             // motive exactly as `match` does, and shares the code that does.
             None => {
-                let t = ind.ctors[i].kind[..k].iter().filter(|f| **f == FieldKind::Plain).count();
+                let t = ind.ctors[i].kind[..k]
+                    .iter()
+                    .filter(|f| **f == FieldKind::Plain)
+                    .count();
                 self.child_projection(
                     &mcx,
                     &ind,
@@ -4215,7 +4480,12 @@ fn match_targs(
             }
         }
         TyKind::Fn { dom, .. } => {
-            if let Type::Pi { dom_level, dom: adom, .. } = actual {
+            if let Type::Pi {
+                dom_level,
+                dom: adom,
+                ..
+            } = actual
+            {
                 match_targs(dom, adom, dom_level, params, sols);
             }
         }

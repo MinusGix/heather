@@ -24,10 +24,9 @@ use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 mod surface;
 pub(crate) use surface::{
-    SurfaceVecElab, elab_cons, elab_container_ih, elab_fold, elab_head_tail, elab_map,
-    elab_nth, method_arity_error,
+    SurfaceVecElab, elab_cons, elab_container_ih, elab_fold, elab_head_tail, elab_map, elab_nth,
+    method_arity_error,
 };
-
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -35,7 +34,11 @@ fn var(i: u32) -> Rc<Term> {
 
 /// `Vec^l(A; k)` with `A` shifted by `d`.
 fn vec(level: &Level, elem: &Type, d: u32, len: Rc<Term>) -> Type {
-    Type::Vec { level: level.clone(), elem: Rc::new(elem.shift_local(d)), len }
+    Type::Vec {
+        level: level.clone(),
+        elem: Rc::new(elem.shift_local(d)),
+        len,
+    }
 }
 
 /// Is `t` — scoped over `(gamma, z)` — independent of `z`? If so, return it
@@ -273,12 +276,7 @@ pub(crate) fn fold(
 /// `B` must not depend on the index, which is the phase-2 restriction on the
 /// motive (§4.3): a dependent one would need the result to be a Σ or a
 /// pointwise predicate, not a `Vec`.
-pub(crate) fn tabulate(
-    bl: &Level,
-    b_ty: &Type,
-    len: &Rc<Term>,
-    f: Rc<Term>,
-) -> Term {
+pub(crate) fn tabulate(bl: &Level, b_ty: &Type, len: &Rc<Term>, f: Rc<Term>) -> Term {
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
     let fin = |k: Rc<Term>| Rc::new(Type::Fin { len: k });
     // `Π(i : Fin k̂). B` at ambient depth `d`. `B` does not depend on `i`, but
@@ -401,14 +399,7 @@ fn idx_fun(al: &Level, a_ty: &Type, d: u32, k: Rc<Term>) -> Type {
 }
 
 /// `fv i` for `fv : Π(i : Fin k). A`, everything at depth `d`.
-fn idx_app(
-    al: &Level,
-    a_ty: &Type,
-    d: u32,
-    k: Rc<Term>,
-    fv: Rc<Term>,
-    i: Rc<Term>,
-) -> Term {
+fn idx_app(al: &Level, a_ty: &Type, d: u32, k: Rc<Term>, fv: Rc<Term>, i: Rc<Term>) -> Term {
     Term::App {
         fun: fv,
         dom_level: Level::Zero,
@@ -426,9 +417,21 @@ fn pw_cod(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>, gv: &Rc<
         level: al.clone(),
         ty: Rc::new(a_ty.shift_local(d + 1)),
         lhs: Rc::new(idx_app(
-            al, a_ty, d + 1, Rc::clone(&k1), Rc::new(fv.shift_local(1)), var(0),
+            al,
+            a_ty,
+            d + 1,
+            Rc::clone(&k1),
+            Rc::new(fv.shift_local(1)),
+            var(0),
         )),
-        rhs: Rc::new(idx_app(al, a_ty, d + 1, k1, Rc::new(gv.shift_local(1)), var(0))),
+        rhs: Rc::new(idx_app(
+            al,
+            a_ty,
+            d + 1,
+            k1,
+            Rc::new(gv.shift_local(1)),
+            var(0),
+        )),
     }
 }
 
@@ -465,7 +468,10 @@ fn m_from_h(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>, gv: &R
         cod_level: al.clone(),
         dom: Rc::new(pointwise(al, a_ty, d, k, fv, gv)),
         cod: Rc::new(concl(
-            al, a_ty, d + 1, &k1,
+            al,
+            a_ty,
+            d + 1,
+            &k1,
             Rc::new(fv.shift_local(1)),
             Rc::new(gv.shift_local(1)),
         )),
@@ -480,7 +486,12 @@ fn m_from_g(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>) -> Typ
         cod_level: al.clone(),
         dom: Rc::new(idx_fun(al, a_ty, d, Rc::clone(k))),
         cod: Rc::new(m_from_h(
-            al, a_ty, d + 1, &k1, &Rc::new(fv.shift_local(1)), &var(0),
+            al,
+            a_ty,
+            d + 1,
+            &k1,
+            &Rc::new(fv.shift_local(1)),
+            &var(0),
         )),
     }
 }
@@ -589,9 +600,7 @@ pub(crate) fn tab_cong(
                 dom_level: Level::Zero,
                 cod_level: al.clone(),
                 dom: fin(Rc::clone(&k)),
-                body: Rc::new(idx_app(
-                    al, a_ty, 6, Rc::clone(&sk6), fv, Rc::clone(&inr_j),
-                )),
+                body: Rc::new(idx_app(al, a_ty, 6, Rc::clone(&sk6), fv, Rc::clone(&inr_j))),
             })
         };
         let (f_tl, g_tl) = (shifted(var(3)), shifted(var(2)));
@@ -612,10 +621,22 @@ pub(crate) fn tab_cong(
             }),
         });
         // The two heads and the two tails.
-        let head_f =
-            Rc::new(idx_app(al, a_ty, 5, Rc::clone(&sk), var(2), Rc::clone(&zero_idx)));
-        let head_g =
-            Rc::new(idx_app(al, a_ty, 5, Rc::clone(&sk), var(1), Rc::clone(&zero_idx)));
+        let head_f = Rc::new(idx_app(
+            al,
+            a_ty,
+            5,
+            Rc::clone(&sk),
+            var(2),
+            Rc::clone(&zero_idx),
+        ));
+        let head_g = Rc::new(idx_app(
+            al,
+            a_ty,
+            5,
+            Rc::clone(&sk),
+            var(1),
+            Rc::clone(&zero_idx),
+        ));
         let tail_f = Rc::new(tabulate(al, &a5, &k, Rc::clone(&f_tl)));
         let tail_g = Rc::new(tabulate(al, &a5, &k, Rc::clone(&g_tl)));
         // p : Id(A; f ι₀; g ι₀), from the hypothesis at index 0.
@@ -644,7 +665,12 @@ pub(crate) fn tab_cong(
                 cod_level: al.clone(),
                 dom: Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
                 cod: Rc::new(m_from_h(
-                    al, a_ty, 6, &k1, &Rc::new(f_tl.shift_local(1)), &var(0),
+                    al,
+                    a_ty,
+                    6,
+                    &k1,
+                    &Rc::new(f_tl.shift_local(1)),
+                    &var(0),
                 )),
                 arg: Rc::clone(&g_tl),
             };
@@ -654,7 +680,10 @@ pub(crate) fn tab_cong(
                 cod_level: al.clone(),
                 dom: Rc::new(pointwise(al, a_ty, 5, &k, &f_tl, &g_tl)),
                 cod: Rc::new(concl(
-                    al, a_ty, 6, &k1,
+                    al,
+                    a_ty,
+                    6,
+                    &k1,
                     Rc::new(f_tl.shift_local(1)),
                     Rc::new(g_tl.shift_local(1)),
                 )),
@@ -700,7 +729,11 @@ pub(crate) fn tab_cong(
             motive: Rc::new(Type::Id {
                 level: al.clone(),
                 ty: vec_sk(7),
-                lhs: pair(7, Rc::new(head_f.shift_local(2)), Rc::new(tail_f.shift_local(2))),
+                lhs: pair(
+                    7,
+                    Rc::new(head_f.shift_local(2)),
+                    Rc::new(tail_f.shift_local(2)),
+                ),
                 rhs: pair(7, Rc::new(head_f.shift_local(2)), var(1)),
             }),
             case: Rc::new(Term::Refl {
@@ -721,7 +754,11 @@ pub(crate) fn tab_cong(
             motive: Rc::new(Type::Id {
                 level: al.clone(),
                 ty: vec_sk(7),
-                lhs: pair(7, Rc::new(head_f.shift_local(2)), Rc::new(tail_f.shift_local(2))),
+                lhs: pair(
+                    7,
+                    Rc::new(head_f.shift_local(2)),
+                    Rc::new(tail_f.shift_local(2)),
+                ),
                 rhs: pair(7, var(1), Rc::new(tail_g.shift_local(2))),
             }),
             case: e1,
@@ -740,7 +777,9 @@ pub(crate) fn tab_cong(
                     dom_level: al.clone(),
                     cod_level: al.clone(),
                     dom: Rc::new(pointwise(
-                        al, a_ty, 4,
+                        al,
+                        a_ty,
+                        4,
                         &Rc::new(Term::Succ(var(3))),
                         &var(1),
                         &var(0),
@@ -772,7 +811,14 @@ pub(crate) fn tab_cong(
         dom_level: al.clone(),
         cod_level: al.clone(),
         dom: Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
-        cod: Rc::new(m_from_h(al, a_ty, 1, &len1, &Rc::new(f.shift_local(1)), &var(0))),
+        cod: Rc::new(m_from_h(
+            al,
+            a_ty,
+            1,
+            &len1,
+            &Rc::new(f.shift_local(1)),
+            &var(0),
+        )),
         arg: Rc::clone(&g),
     };
     Term::App {
@@ -781,7 +827,10 @@ pub(crate) fn tab_cong(
         cod_level: al.clone(),
         dom: Rc::new(pointwise(al, a_ty, 0, len, &f, &g)),
         cod: Rc::new(concl(
-            al, a_ty, 1, &len1,
+            al,
+            a_ty,
+            1,
+            &len1,
             Rc::new(f.shift_local(1)),
             Rc::new(g.shift_local(1)),
         )),
@@ -800,7 +849,7 @@ mod tests {
     use heather_kernel::conv::conv_term;
     use heather_kernel::layer::Layer;
     use heather_kernel::term::{CtxEntry, GlobalCtx};
-    use heather_kernel::typing::{check_term, DEFAULT_FUEL as FUEL};
+    use heather_kernel::typing::{DEFAULT_FUEL as FUEL, check_term};
     use heather_syntax::{Expr, Span};
 
     use crate::slots::{Ingredient, Slot};
@@ -812,11 +861,7 @@ mod tests {
     }
 
     impl SurfaceVecElab for FakeSurfaceVec {
-        fn infer_vector_expr(
-            &self,
-            _cx: &Cx,
-            _expression: &Expr,
-        ) -> R<(Term, Type, Level)> {
+        fn infer_vector_expr(&self, _cx: &Cx, _expression: &Expr) -> R<(Term, Type, Level)> {
             Ok((Term::Zero, self.receiver_type.clone(), Level::Zero))
         }
 
@@ -862,7 +907,10 @@ mod tests {
             },
             normalized_length: Rc::clone(&length),
         };
-        let expression = Expr { kind: heather_syntax::ExprKind::Num(0), span: SPAN };
+        let expression = Expr {
+            kind: heather_syntax::ExprKind::Num(0),
+            span: SPAN,
+        };
 
         let (_, head_type, _) =
             elab_head_tail(&fake, &Cx::empty(), &expression, true, SPAN).expect("head");
@@ -892,23 +940,48 @@ mod tests {
     fn ctx(tys: &[Type]) -> LocalCtx {
         let mut g = LocalCtx::nil();
         for t in tys {
-            g.entries.push(CtxEntry { ty: Rc::new(t.clone()), level: Level::Zero });
+            g.entries.push(CtxEntry {
+                ty: Rc::new(t.clone()),
+                level: Level::Zero,
+            });
         }
         g
     }
 
     fn ck(g: &LocalCtx, t: &Term, ty: &Type) {
-        check_term(&GlobalCtx::default(), 0, Layer::Prog, g, t, ty, &Level::Zero, FUEL)
-            .unwrap_or_else(|e| panic!("does not check: {e:?}"));
+        check_term(
+            &GlobalCtx::default(),
+            0,
+            Layer::Prog,
+            g,
+            t,
+            ty,
+            &Level::Zero,
+            FUEL,
+        )
+        .unwrap_or_else(|e| panic!("does not check: {e:?}"));
     }
 
     fn conv(g: &LocalCtx, a: &Term, b: &Term, ty: &Type) {
-        conv_term(&GlobalCtx::default(), g, Layer::Prog, a, b, ty, &Level::Zero, FUEL)
-            .unwrap_or_else(|e| panic!("not convertible: {e:?}"));
+        conv_term(
+            &GlobalCtx::default(),
+            g,
+            Layer::Prog,
+            a,
+            b,
+            ty,
+            &Level::Zero,
+            FUEL,
+        )
+        .unwrap_or_else(|e| panic!("not convertible: {e:?}"));
     }
 
     fn nat_vec(k: Rc<Term>) -> Type {
-        Type::Vec { level: Level::Zero, elem: Rc::new(Type::Nat), len: k }
+        Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(Type::Nat),
+            len: k,
+        }
     }
 
     /// `λ(n : Nat). Succ n`.
@@ -945,10 +1018,22 @@ mod tests {
     fn map_checks_and_computes() {
         let g = ctx(&[]);
         let xs = pair_vec(nat_lit(1), nat_lit(2));
-        let t = map(&Level::Zero, &Level::Zero, &Type::Nat, &Type::Nat,
-                    &nat_lit(2), succ_fn(), xs);
+        let t = map(
+            &Level::Zero,
+            &Level::Zero,
+            &Type::Nat,
+            &Type::Nat,
+            &nat_lit(2),
+            succ_fn(),
+            xs,
+        );
         ck(&g, &t, &nat_vec(nat_lit(2)));
-        conv(&g, &t, &pair_vec(nat_lit(2), nat_lit(3)), &nat_vec(nat_lit(2)));
+        conv(
+            &g,
+            &t,
+            &pair_vec(nat_lit(2), nat_lit(3)),
+            &nat_vec(nat_lit(2)),
+        );
     }
 
     #[test]
@@ -957,8 +1042,15 @@ mod tests {
         // typecheck, because that is the situation inside every `match` arm
         // over a container field.
         let g = ctx(&[Type::Nat, nat_vec(var(0))]);
-        let t = map(&Level::Zero, &Level::Zero, &Type::Nat, &Type::Nat,
-                    &var(1), succ_fn(), var(0));
+        let t = map(
+            &Level::Zero,
+            &Level::Zero,
+            &Type::Nat,
+            &Type::Nat,
+            &var(1),
+            succ_fn(),
+            var(0),
+        );
         ck(&g, &t, &nat_vec(var(1)));
     }
 
@@ -978,8 +1070,16 @@ mod tests {
             }),
         });
         let xs = pair_vec(nat_lit(7), nat_lit(8));
-        let t = fold(&Level::Zero, &Level::Zero, &Type::Nat, &Type::Nat,
-                     &nat_lit(2), nat_lit(0), count, xs);
+        let t = fold(
+            &Level::Zero,
+            &Level::Zero,
+            &Type::Nat,
+            &Type::Nat,
+            &nat_lit(2),
+            nat_lit(0),
+            count,
+            xs,
+        );
         ck(&g, &t, &Type::Nat);
         conv(&g, &t, &nat_lit(2), &Type::Nat);
     }
@@ -998,8 +1098,16 @@ mod tests {
                 body: var(1),
             }),
         });
-        let t = fold(&Level::Zero, &Level::Zero, &Type::Nat, &Type::Nat,
-                     &var(1), nat_lit(0), keep, var(0));
+        let t = fold(
+            &Level::Zero,
+            &Level::Zero,
+            &Type::Nat,
+            &Type::Nat,
+            &var(1),
+            nat_lit(0),
+            keep,
+            var(0),
+        );
         ck(&g, &t, &Type::Nat);
     }
 
@@ -1015,7 +1123,12 @@ mod tests {
         });
         let t = tabulate(&Level::Zero, &Type::Nat, &nat_lit(2), f);
         ck(&g, &t, &nat_vec(nat_lit(2)));
-        conv(&g, &t, &pair_vec(nat_lit(5), nat_lit(5)), &nat_vec(nat_lit(2)));
+        conv(
+            &g,
+            &t,
+            &pair_vec(nat_lit(5), nat_lit(5)),
+            &nat_vec(nat_lit(2)),
+        );
     }
 
     #[test]
@@ -1050,11 +1163,15 @@ mod tests {
         };
         let g = ctx(&[Type::Nat, Type::Nat, idx_fun]);
         let t = tabulate(&Level::Zero, &b(0), &var(1), var(0));
-        ck(&g, &t, &Type::Vec {
-            level: Level::Zero,
-            elem: Rc::new(b(0)),
-            len: var(1),
-        });
+        ck(
+            &g,
+            &t,
+            &Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(b(0)),
+                len: var(1),
+            },
+        );
     }
 
     /// The same open-element-type control for `map` and `fold`, so the shift
@@ -1064,11 +1181,15 @@ mod tests {
         // Γ = (m : Nat, n : Nat, xs : Vec(Vec(Nat; m); n)); `xs`'s own type is
         // scoped in (m, n), so there m = var 1 and n = var 0.
         let b = |d: u32| nat_vec(var(2 + d));
-        let g = ctx(&[Type::Nat, Type::Nat, Type::Vec {
-            level: Level::Zero,
-            elem: Rc::new(nat_vec(var(1))),
-            len: var(0),
-        }]);
+        let g = ctx(&[
+            Type::Nat,
+            Type::Nat,
+            Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(nat_vec(var(1))),
+                len: var(0),
+            },
+        ]);
         // id : Vec(Nat; m) → Vec(Nat; m).
         let id_fn = Rc::new(Term::Lam {
             dom_level: Level::Zero,
@@ -1076,8 +1197,24 @@ mod tests {
             dom: Rc::new(b(0)),
             body: var(0),
         });
-        let t = map(&Level::Zero, &Level::Zero, &b(0), &b(0), &var(1), id_fn, var(0));
-        ck(&g, &t, &Type::Vec { level: Level::Zero, elem: Rc::new(b(0)), len: var(1) });
+        let t = map(
+            &Level::Zero,
+            &Level::Zero,
+            &b(0),
+            &b(0),
+            &var(1),
+            id_fn,
+            var(0),
+        );
+        ck(
+            &g,
+            &t,
+            &Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(b(0)),
+                len: var(1),
+            },
+        );
 
         // fold at an open *result* type: λ(a : Vec(Nat;m)). λ(b : Vec(Nat;m)). b.
         let keep = Rc::new(Term::Lam {
@@ -1104,7 +1241,16 @@ mod tests {
                 body: nat_lit(0),
             }),
         ));
-        let t = fold(&Level::Zero, &Level::Zero, &b(0), &b(0), &var(1), zeros, keep, var(0));
+        let t = fold(
+            &Level::Zero,
+            &Level::Zero,
+            &b(0),
+            &b(0),
+            &var(1),
+            zeros,
+            keep,
+            var(0),
+        );
         ck(&g, &t, &b(0));
     }
 
@@ -1131,7 +1277,14 @@ mod tests {
                 tm: nat_lit(5),
             }),
         });
-        let t = tab_cong(&Level::Zero, &Type::Nat, &nat_lit(2), const_fn(5), const_fn(5), h);
+        let t = tab_cong(
+            &Level::Zero,
+            &Type::Nat,
+            &nat_lit(2),
+            const_fn(5),
+            const_fn(5),
+            h,
+        );
         let ty = Type::Id {
             level: Level::Zero,
             ty: Rc::new(nat_vec(nat_lit(2))),
@@ -1185,12 +1338,16 @@ mod tests {
         let g = ctx(&[Type::Nat, idx_fun(0), idx_fun(1), pw]);
         // In the full Γ: n = 3, f = 2, g = 1, h = 0.
         let t = tab_cong(&Level::Zero, &Type::Nat, &var(3), var(2), var(1), var(0));
-        ck(&g, &t, &Type::Id {
-            level: Level::Zero,
-            ty: Rc::new(nat_vec(var(3))),
-            lhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(2))),
-            rhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(1))),
-        });
+        ck(
+            &g,
+            &t,
+            &Type::Id {
+                level: Level::Zero,
+                ty: Rc::new(nat_vec(var(3))),
+                lhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(2))),
+                rhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(1))),
+            },
+        );
     }
 
     /// …and with an **open element type**, the control that caught the live
@@ -1234,21 +1391,27 @@ mod tests {
         let g = ctx(&[Type::Nat, Type::Nat, idx_fun(0, 2), idx_fun(1, 3), pw]);
         // The context and the schema must agree about what `h` proves before
         // the schema can be blamed for anything.
-        ck(&g, &Term::Var(LocalVar(0)), &pointwise(
-            &Level::Zero, &b(0), 0, &var(3), &var(2), &var(1),
-        ));
+        ck(
+            &g,
+            &Term::Var(LocalVar(0)),
+            &pointwise(&Level::Zero, &b(0), 0, &var(3), &var(2), &var(1)),
+        );
         // Full Γ: m = 4, n = 3, f = 2, g = 1, h = 0.
         let t = tab_cong(&Level::Zero, &b(0), &var(3), var(2), var(1), var(0));
-        ck(&g, &t, &Type::Id {
-            level: Level::Zero,
-            ty: Rc::new(Type::Vec {
+        ck(
+            &g,
+            &t,
+            &Type::Id {
                 level: Level::Zero,
-                elem: Rc::new(b(0)),
-                len: var(3),
-            }),
-            lhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(2))),
-            rhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(1))),
-        });
+                ty: Rc::new(Type::Vec {
+                    level: Level::Zero,
+                    elem: Rc::new(b(0)),
+                    len: var(3),
+                }),
+                lhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(2))),
+                rhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(1))),
+            },
+        );
     }
 
     #[test]

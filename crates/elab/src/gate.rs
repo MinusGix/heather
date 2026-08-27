@@ -68,7 +68,11 @@ impl GateItem<'_> {
             layer: self.layer,
             ty: Rc::new(self.ty.clone()),
             level: self.level.clone(),
-            body: if self.opaque { None } else { Some(Rc::new(self.body.clone())) },
+            body: if self.opaque {
+                None
+            } else {
+                Some(Rc::new(self.body.clone()))
+            },
         }
     }
 }

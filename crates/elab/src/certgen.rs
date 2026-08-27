@@ -124,11 +124,7 @@ impl GenCtx {
 /// `Nat` (and `None` for K = 2, which `lib/ir_v1.hthr` already declares);
 /// `CompileNatK{T}` otherwise — "`CompileTK` records per signature until
 /// bundled records exist" (docs/certifying-generator-design.md §8 item 2).
-fn compile_record(
-    arity: usize,
-    pts: &[Option<ParamTy>],
-    res: &ResTy,
-) -> Option<(String, String)> {
+fn compile_record(arity: usize, pts: &[Option<ParamTy>], res: &ResTy) -> Option<(String, String)> {
     let all_nat_params = pts.iter().all(|p| p.is_none());
     if arity == 2 && res.is_nat() && all_nat_params {
         return None;
@@ -208,7 +204,10 @@ struct Sl {
 
 impl Sl {
     fn nat(spec: impl Into<String>) -> Sl {
-        Sl { spec: spec.into(), embed: "embed_nat".to_string() }
+        Sl {
+            spec: spec.into(),
+            embed: "embed_nat".to_string(),
+        }
     }
     fn val(&self) -> String {
         format!("{}({})", self.embed, self.spec)
@@ -260,7 +259,10 @@ fn monomorph_of(e: &Elaborator, name: &str, args: &[Ty]) -> Result<Option<String
 /// The applied spelling of a type, as generated source writes it.
 fn spell_applied(name: &str, args: &[Ty]) -> Result<String, String> {
     let t = Ty {
-        kind: TyKind::Named { name: name.to_string(), args: args.to_vec() },
+        kind: TyKind::Named {
+            name: name.to_string(),
+            args: args.to_vec(),
+        },
         span: heather_syntax::Span { start: 0, end: 0 },
     };
     crate::datarepr::spell_ty(&t).ok_or_else(|| format!("`{name}`'s arguments cannot be spelled"))
@@ -274,7 +276,11 @@ fn subst_of<'a>(
     args: &[Ty],
 ) -> Result<std::collections::HashMap<&'a str, String>, String> {
     if params.len() != args.len() {
-        return Err(format!("takes {} type argument(s), not {}", params.len(), args.len()));
+        return Err(format!(
+            "takes {} type argument(s), not {}",
+            params.len(),
+            args.len()
+        ));
     }
     let mut m = std::collections::HashMap::new();
     for (p, a) in params.iter().zip(args) {
@@ -307,7 +313,10 @@ impl ResTy {
 
     /// This type's embedding of `spec`.
     fn at(&self, spec: impl Into<String>) -> Sl {
-        Sl { spec: spec.into(), embed: self.embed.clone() }
+        Sl {
+            spec: spec.into(),
+            embed: self.embed.clone(),
+        }
     }
 
     fn record_name(&self, arity: usize) -> String {
@@ -322,10 +331,12 @@ impl ResTy {
     /// is the *spelling* boundary — a tag this type cannot name is a
     /// certificate the renderer cannot write, so it declines (§7).
     fn ctor_spec(&self, tag: u64, args: &[Sl]) -> Result<String, String> {
-        let (name, fields) = self
-            .ctors
-            .get(tag as usize)
-            .ok_or_else(|| format!("constructor tag {tag} is not a constructor of `{}`", self.name))?;
+        let (name, fields) = self.ctors.get(tag as usize).ok_or_else(|| {
+            format!(
+                "constructor tag {tag} is not a constructor of `{}`",
+                self.name
+            )
+        })?;
         if *fields != args.len() {
             return Err(format!(
                 "constructor tag {tag} takes {fields} argument(s), not {}",
@@ -503,7 +514,10 @@ struct ParamTy {
 impl ParamTy {
     /// This type's embedding of `spec`.
     fn at(&self, spec: impl Into<String>) -> Sl {
-        Sl { spec: spec.into(), embed: self.embed.clone() }
+        Sl {
+            spec: spec.into(),
+            embed: self.embed.clone(),
+        }
     }
 
     /// Resolve parameter `i`'s declared type: `None` for `Nat`, a `ParamTy`
@@ -576,7 +590,7 @@ impl ParamTy {
                                     "`{name}`'s constructor `{}` has a payload field that \
                                      is not a `Nat`",
                                     c.name
-                                ))
+                                ));
                             }
                             FieldKind::Plain => fs.push(PF::Slf),
                             _ => {
@@ -584,7 +598,7 @@ impl ParamTy {
                                     "`{name}`'s constructor `{}` has a container or index \
                                      field — outside the fragment",
                                     c.name
-                                ))
+                                ));
                             }
                         }
                     }
@@ -614,16 +628,13 @@ impl ParamTy {
     /// The kids bitmask the certificate fold decodes (little-endian: bit `i`
     /// set iff constructor `i` has a recursive field).
     fn kids_mask(&self) -> u64 {
-        self.ctors
-            .iter()
-            .enumerate()
-            .fold(0, |m, (i, (_, fs))| {
-                if fs.iter().any(|f| *f == PF::Slf) {
-                    m | (1 << i)
-                } else {
-                    m
-                }
-            })
+        self.ctors.iter().enumerate().fold(0, |m, (i, (_, fs))| {
+            if fs.iter().any(|f| *f == PF::Slf) {
+                m | (1 << i)
+            } else {
+                m
+            }
+        })
     }
 
     /// `{C}(gf0, …, gf{k-1})`, or the bare name at zero fields — the arm
@@ -693,7 +704,10 @@ impl ParamTy {
             .iter()
             .position(|(_, fs)| fs.iter().all(|f| *f == PF::Nat))
             .expect("ParamTy::of checked a base constructor exists");
-        let spine = self.ctors.iter().position(|(_, fs)| fs.iter().any(|f| *f == PF::Slf));
+        let spine = self
+            .ctors
+            .iter()
+            .position(|(_, fs)| fs.iter().any(|f| *f == PF::Slf));
         let leaf = self.ctor_literal(base, None);
         match spine {
             None => leaf,
@@ -726,7 +740,13 @@ impl ParamTy {
         } else {
             format!("{name}({})", texts.join(", "))
         };
-        (text, V { tag: i as u64, fields: vals })
+        (
+            text,
+            V {
+                tag: i as u64,
+                fields: vals,
+            },
+        )
     }
 }
 
@@ -769,7 +789,10 @@ fn surface_params(d: &Decl) -> Result<Vec<&str>, String> {
             && p.name.len() > 2
             && p.name[2..].chars().all(|c| c.is_ascii_digit());
         if RESERVED.contains(&p.name.as_str()) || is_gf {
-            return Err(format!("parameter `{}` collides with an emitted binder", p.name));
+            return Err(format!(
+                "parameter `{}` collides with an emitted binder",
+                p.name
+            ));
         }
     }
     Ok(d.params.iter().map(|p| p.name.as_str()).collect())
@@ -845,7 +868,10 @@ fn render_chain(instrs: &[Instr], from: usize, ret_dist: usize, closure: &[Strin
         s = match i {
             Instr::Con { tag, dists } => format!("LetCon({tag}, {}, {s})", refs(dists)),
             Instr::Call { callee, dists } => {
-                let idx = closure.iter().position(|c| c == callee).expect("callee in closure");
+                let idx = closure
+                    .iter()
+                    .position(|c| c == callee)
+                    .expect("callee in closure");
                 format!("LetCall({idx}, {}, {s})", refs(dists))
             }
         };
@@ -884,9 +910,15 @@ struct V {
 
 impl V {
     fn nat(n: u64) -> V {
-        let mut v = V { tag: 0, fields: vec![] };
+        let mut v = V {
+            tag: 0,
+            fields: vec![],
+        };
         for _ in 0..n {
-            v = V { tag: 1, fields: vec![v] };
+            v = V {
+                tag: 1,
+                fields: vec![v],
+            };
         }
         v
     }
@@ -898,7 +930,11 @@ struct Evaluator<'a> {
 
 impl<'a> Evaluator<'a> {
     fn run_fn(&self, name: &str, args: &[V]) -> (V, usize) {
-        let (_, f) = self.fns.iter().find(|(n, _)| *n == name).expect("fn in closure");
+        let (_, f) = self
+            .fns
+            .iter()
+            .find(|(n, _)| *n == name)
+            .expect("fn in closure");
         match &f.kind {
             FnIrKind::Plain(c) => self.run_chain(c, args.to_vec()),
             FnIrKind::Rec(r) => {
@@ -935,7 +971,10 @@ impl<'a> Evaluator<'a> {
         }
         match &c.instrs[from] {
             Instr::Con { tag, dists } => {
-                let v = V { tag: *tag, fields: dists.iter().map(|&d| env[d].clone()).collect() };
+                let v = V {
+                    tag: *tag,
+                    fields: dists.iter().map(|&d| env[d].clone()).collect(),
+                };
                 env.insert(0, v);
                 let (out, n) = self.run_from(c, from + 1, env);
                 (out, 1 + n)
@@ -1026,7 +1065,11 @@ fn cert_app(name: &str, model: &FnIr, arg_specs: &[String]) -> String {
             let r_idx = *rec_idx;
             let mut args: Vec<String> = vec![arg_specs[r_idx].clone()];
             args.extend(
-                arg_specs.iter().enumerate().filter(|(i, _)| *i != r_idx).map(|(_, s)| s.clone()),
+                arg_specs
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != r_idx)
+                    .map(|(_, s)| s.clone()),
             );
             args.push("VNil".into());
             format!("{name}({})", args.join(", "))
@@ -1038,7 +1081,9 @@ fn cert_app(name: &str, model: &FnIr, arg_specs: &[String]) -> String {
 /// reads past its environment is one this readback cannot name, which is the
 /// shape a wrong fold takes when it drops an instruction.
 fn slot(env: &[Sl], d: usize) -> Result<Sl, String> {
-    env.get(d).cloned().ok_or_else(|| "a certificate reading past the environment".to_string())
+    env.get(d)
+        .cloned()
+        .ok_or_else(|| "a certificate reading past the environment".to_string())
 }
 
 fn slots(env: &[Sl], dists: &[usize]) -> Result<Vec<Sl>, String> {
@@ -1086,14 +1131,19 @@ impl ProofCx<'_> {
                 format!("LetCon({tag}, {}, {})", refs(args), self.cert_ir(hr)?)
             }
             RCert::Ih { args, hr } => {
-                format!("LetCall({}, {}, {})", self.self_idx, refs(args), self.cert_ir(hr)?)
+                format!(
+                    "LetCall({}, {}, {})",
+                    self.self_idx,
+                    refs(args),
+                    self.cert_ir(hr)?
+                )
             }
             RCert::Call { callee, args, hr } => {
                 let idx = self.callee_idx(callee)?;
                 format!("LetCall({idx}, {}, {})", refs(args), self.cert_ir(hr)?)
             }
             RCert::Match { .. } => {
-                return Err("a `letmatch_conv` inside a straight-line region".into())
+                return Err("a `letmatch_conv` inside a straight-line region".into());
             }
         })
     }
@@ -1105,7 +1155,9 @@ impl ProofCx<'_> {
     fn ret_spec(&self, c: &RCert, env: &[Sl]) -> Result<Sl, String> {
         match c {
             RCert::Ret { rs } => {
-                let [d] = rs[..] else { return Err("a `Ret` with other than one output".into()) };
+                let [d] = rs[..] else {
+                    return Err("a `Ret` with other than one output".into());
+                };
                 let sl = slot(env, d)?;
                 // The value a region returns has the function's result type.
                 // For an all-`Nat` signature this is vacuous; for any other it
@@ -1178,8 +1230,7 @@ fn render_cert(
         }
         RCert::Ih { args, hr } | RCert::Call { args, hr, .. } => {
             let arg_slots = slots(env_exprs, args)?;
-            let arg_exprs: Vec<String> =
-                arg_slots.iter().map(|s| s.spec.clone()).collect();
+            let arg_exprs: Vec<String> = arg_slots.iter().map(|s| s.spec.clone()).collect();
             let (idx, name, hc, rt) = match c {
                 RCert::Call { callee, .. } => {
                     let cal = cx
@@ -1225,9 +1276,9 @@ fn render_cert(
                     // recurses on; for a tier-1 induction the invariant's own
                     // over-applied self-call at the child
                     // (docs/certgen-tier1-source-types-design.md §1).
-                    let rec_idx = cx
-                        .self_rec_idx
-                        .ok_or("a certificate consumes an induction hypothesis outside an induction")?;
+                    let rec_idx = cx.self_rec_idx.ok_or(
+                        "a certificate consumes an induction hypothesis outside an induction",
+                    )?;
                     let mut others: Vec<String> = arg_exprs
                         .iter()
                         .enumerate()
@@ -1268,7 +1319,12 @@ fn render_cert(
                 refs(args)
             )
         }
-        RCert::Match { scrut, ctag, ha, hr } => {
+        RCert::Match {
+            scrut,
+            ctag,
+            ha,
+            hr,
+        } => {
             // The arm-chain and the field list are the two arguments the
             // library cannot spell: the arms are named by their *generated*
             // definitions, and the fields are the emitted induction's binders
@@ -1364,7 +1420,11 @@ fn emit_with_model(
     // Emit.
     let mut text = String::new();
     let w = &mut text;
-    writeln!(w, "// GENERATED by certgen v2 for `{f}` (docs/certifying-generator-design.md).").unwrap();
+    writeln!(
+        w,
+        "// GENERATED by certgen v2 for `{f}` (docs/certifying-generator-design.md)."
+    )
+    .unwrap();
     writeln!(w).unwrap();
 
     let ir_body = emit_ir(w, f, &model, &closure);
@@ -1567,7 +1627,12 @@ fn emit_fixtures(
     writeln!(w, "{{ refl }}").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "theorem {f}_gen_fix_short():").unwrap();
-    writeln!(w, "    eval({}, {f}_gen_prog(), {env}, {f}_gen_body())", fuel - 1).unwrap();
+    writeln!(
+        w,
+        "    eval({}, {f}_gen_prog(), {env}, {f}_gen_body())",
+        fuel - 1
+    )
+    .unwrap();
     writeln!(w, "    = OutOfFuel").unwrap();
     writeln!(w, "{{ refl }}").unwrap();
     writeln!(w).unwrap();
@@ -1680,7 +1745,13 @@ fn emit_invariant(
                 let names: Vec<String> = params
                     .iter()
                     .enumerate()
-                    .map(|(i, p)| if i == r.rec_idx { rec.to_string() } else { p.clone() })
+                    .map(|(i, p)| {
+                        if i == r.rec_idx {
+                            rec.to_string()
+                        } else {
+                            p.clone()
+                        }
+                    })
                     .collect();
                 // The recursion parameter of a `Nat` induction is a `Nat`;
                 // the OTHERS keep their own types — a tier-1 parameter may
@@ -1717,8 +1788,7 @@ fn emit_invariant(
             // application is the certificate's own root (`CMatch`); what the
             // arm supplies is the environment the scrutinee is spelled into.
             let arm_proof = |ctor_tag: u64, c: &RCert| -> Result<String, String> {
-                let (entry_exprs, _, call) =
-                    spell(if ctor_tag == 0 { "Zero" } else { "Succ(gk)" });
+                let (entry_exprs, _, call) = spell(if ctor_tag == 0 { "Zero" } else { "Succ(gk)" });
                 render_cert(&cx, c, &entry_exprs, "tail", &call)
             };
 
@@ -1726,13 +1796,23 @@ fn emit_invariant(
             writeln!(w, "    {other_binders}(tail: Val)").unwrap();
             writeln!(w, "    -> Converges({prog},").unwrap();
             writeln!(w, "                 {env_rec},").unwrap();
-            writeln!(w, "                 {m}_gen_body(), {})", out_text(&call_rec)).unwrap();
+            writeln!(
+                w,
+                "                 {m}_gen_body(), {})",
+                out_text(&call_rec)
+            )
+            .unwrap();
             writeln!(w, "{{").unwrap();
             writeln!(w, "    match {rec_name} as λ gz =>").unwrap();
             writeln!(w, "        {other_binders}(tail: Val)").unwrap();
             writeln!(w, "        -> Converges({prog},").unwrap();
             writeln!(w, "                     {env_z},").unwrap();
-            writeln!(w, "                     {m}_gen_body(), {}) {{", out_text(&call_z)).unwrap();
+            writeln!(
+                w,
+                "                     {m}_gen_body(), {}) {{",
+                out_text(&call_z)
+            )
+            .unwrap();
             writeln!(w, "        Zero => λ {other_lams}tail =>").unwrap();
             writeln!(w, "        {},", arm_proof(0, zero)?).unwrap();
             writeln!(w, "        Succ(gk, gih) => λ {other_lams}tail =>").unwrap();
@@ -1821,7 +1901,12 @@ fn emit_invariant(
             writeln!(w, "    {other_binders}(tail: Val)").unwrap();
             writeln!(w, "    -> Converges({prog},").unwrap();
             writeln!(w, "                 {env_rec},").unwrap();
-            writeln!(w, "                 {m}_gen_body(), {})", out_text(&call_rec)).unwrap();
+            writeln!(
+                w,
+                "                 {m}_gen_body(), {})",
+                out_text(&call_rec)
+            )
+            .unwrap();
             writeln!(w, "{{").unwrap();
             writeln!(w, "    match {rec_name} {{").unwrap();
             for (i, arm_cert) in arms.iter().enumerate() {
@@ -1838,7 +1923,7 @@ fn emit_invariant(
         _ => {
             return Err(format!(
                 "the certificate fold and the transcription model disagree about `{m}`'s shape"
-            ))
+            ));
         }
     }
     Ok(())
@@ -1853,8 +1938,11 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
     // position — the record's field type says what each binder's type is — so
     // the annotations the older spelling carried were the type spelled twice.
     // A nullary signature has no binder and the λ disappears entirely.
-    let lams =
-        if params.is_empty() { String::new() } else { format!("λ {} => ", params.join(" ")) };
+    let lams = if params.is_empty() {
+        String::new()
+    } else {
+        format!("λ {} => ", params.join(" "))
+    };
     let cert = cert_app(&format!("{f}_gen_conv"), model, params);
     writeln!(w, "fn {f}_gen_instance() -> {record}({f}) {{").unwrap();
     writeln!(w, "    {record} {{").unwrap();
@@ -1890,8 +1978,8 @@ use heather_kernel::term::{
 };
 use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val, ValueArena};
 
-use crate::slots::Slot;
 use crate::Elaborator;
+use crate::slots::Slot;
 
 /// Fuel for **one force** of the analyzer's value graph — the kernel's own
 /// default, deliberately not a bespoke larger one.
@@ -2113,7 +2201,9 @@ impl MarkCx<'_> {
             // tier-1 (`Wf`) domain keeps its decline: a tier-1-parameter
             // callee has no marker.
             if !matches!(&**dom, Type::Nat | Type::Sum { .. } | Type::Sigma { .. }) {
-                return Err(format!("callee `{name}`'s signature is outside the fragment"));
+                return Err(format!(
+                    "callee `{name}`'s signature is outside the fragment"
+                ));
             }
             arity += 1;
             ty = cod;
@@ -2222,7 +2312,11 @@ fn mark(
                         inner = val;
                     }
                     Term::Inl { val, .. } if matches!(&**val, Term::Triv { .. }) => break,
-                    _ => return Err("the induction hypothesis is applied to a non-literal index".into()),
+                    _ => {
+                        return Err(
+                            "the induction hypothesis is applied to a non-literal index".into()
+                        );
+                    }
                 }
             }
             let Some(&surface) = a.ctor.rec_surface.get(t_ord as usize) else {
@@ -2253,7 +2347,13 @@ fn mark(
         // The fragment's one eliminator. Its motive must be `Nat` on the nose:
         // a motive that mentioned the scrutinee would put a *type* in the
         // walk's way, and this slice analyses terms (design doc §3).
-        Term::ElimNat { level, motive, base, step, scrut } => {
+        Term::ElimNat {
+            level,
+            motive,
+            base,
+            step,
+            scrut,
+        } => {
             if wfarm.is_some() {
                 return Err("a nested `match` is outside the fragment".into());
             }
@@ -2281,8 +2381,17 @@ fn mark(
         // built from (convention 4 of `lib/certgen_code.hthr`). Type
         // annotations are carried through untouched: they are closed in the
         // fragment, and the walker binds and ignores them.
-        Term::Triv { level } => Term::Triv { level: level.clone() },
-        Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
+        Term::Triv { level } => Term::Triv {
+            level: level.clone(),
+        },
+        Term::Pair {
+            fst_level,
+            snd_level,
+            fst_ty,
+            snd_ty,
+            fst,
+            snd,
+        } => Term::Pair {
             fst_level: fst_level.clone(),
             snd_level: snd_level.clone(),
             fst_ty: Rc::clone(fst_ty),
@@ -2290,14 +2399,26 @@ fn mark(
             fst: Rc::new(mark(fst, depth, cx, wfarm)?),
             snd: Rc::new(mark(snd, depth, cx, wfarm)?),
         },
-        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Term::Inl {
+        Term::Inl {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+            val,
+        } => Term::Inl {
             lhs_level: lhs_level.clone(),
             rhs_level: rhs_level.clone(),
             lhs: Rc::clone(lhs),
             rhs: Rc::clone(rhs),
             val: Rc::new(mark(val, depth, cx, wfarm)?),
         },
-        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Term::Inr {
+        Term::Inr {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+            val,
+        } => Term::Inr {
             lhs_level: lhs_level.clone(),
             rhs_level: rhs_level.clone(),
             lhs: Rc::clone(lhs),
@@ -2313,16 +2434,21 @@ fn mark(
             let (tag, arity) = cx.callee(*var)?;
             callee_marker(tag, arity)
         }
-        Term::App { fun, dom_level, cod_level, dom, cod, arg } if global_head(t) => {
-            Term::App {
-                fun: Rc::new(mark(fun, depth, cx, wfarm)?),
-                dom_level: dom_level.clone(),
-                cod_level: cod_level.clone(),
-                dom: Rc::clone(dom),
-                cod: Rc::clone(cod),
-                arg: Rc::new(mark(arg, depth, cx, wfarm)?),
-            }
-        }
+        Term::App {
+            fun,
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            arg,
+        } if global_head(t) => Term::App {
+            fun: Rc::new(mark(fun, depth, cx, wfarm)?),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg: Rc::new(mark(arg, depth, cx, wfarm)?),
+        },
         other => return Err(format!("`{other:?}` is outside the in-language fragment")),
     })
 }
@@ -2338,7 +2464,16 @@ fn mark(
 /// is that same marker. Ill-typed as a term and never re-checked: marked
 /// code is a coordinate system, not a program.
 fn mark_elim_wf(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, String> {
-    let Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } = t else {
+    let Term::ElimWf {
+        level,
+        motive_level,
+        shape,
+        arity,
+        motive,
+        step,
+        scrut,
+    } = t
+    else {
         unreachable!("caller matched ElimWf");
     };
     let Some(wf) = &cx.wf else {
@@ -2355,10 +2490,20 @@ fn mark_elim_wf(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, Strin
     }
     let param_marker = marker(wf_level);
     // The step: `app(app(⟨case tree⟩; cs); ih)` in context (…, a, cs, ih).
-    let Term::App { fun: outer, arg: ih_arg, .. } = &**step else {
+    let Term::App {
+        fun: outer,
+        arg: ih_arg,
+        ..
+    } = &**step
+    else {
         return Err("a tier-1 eliminator step without the cs/ih applications".into());
     };
-    let Term::App { fun: tree, arg: cs_arg, .. } = &**outer else {
+    let Term::App {
+        fun: tree,
+        arg: cs_arg,
+        ..
+    } = &**outer
+    else {
         return Err("a tier-1 eliminator step without the cs/ih applications".into());
     };
     if !matches!(&**ih_arg, Term::Var(LocalVar(0))) || !matches!(&**cs_arg, Term::Var(LocalVar(1)))
@@ -2576,7 +2721,11 @@ fn mark_t0_tree(
 /// declines through the tier-1 arms' own checks.
 fn mark_t0_arm(arm: &Term, depth: u32, cx: &mut MarkCx<'_>, ys: u32) -> Result<Term, String> {
     let skel = ys + 1;
-    let ctor = WfCtor { fields: 0, payload_surface: Vec::new(), rec_surface: Vec::new() };
+    let ctor = WfCtor {
+        fields: 0,
+        payload_surface: Vec::new(),
+        rec_surface: Vec::new(),
+    };
     let armcx = WfArmCx { skel, ctor: &ctor };
     let marked = mark(arm, depth + skel, cx, Some(&armcx))?;
     // The header: `App((λλλλ. z) ⌜0⌝, arm)` — field count 0, always.
@@ -2652,7 +2801,7 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
             _ => {
                 return Err(format!(
                     "parameter {arity} of `{name}` is not `Nat` or a tier-0 enumeration"
-                ))
+                ));
             }
         }
         arity += 1;
@@ -2670,7 +2819,7 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
         _ => {
             return Err(format!(
                 "`{name}`'s result type is not `Nat` or a tier-0 enumeration"
-            ))
+            ));
         }
     };
     if arity == 0 {
@@ -2716,19 +2865,27 @@ pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> 
             .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
         let mut ty: &Type = unspelled.as_ref().unwrap_or(&ty);
         for p in 0..arity {
-            let Type::Pi { dom, cod, .. } = ty else { unreachable!("peeled above") };
+            let Type::Pi { dom, cod, .. } = ty else {
+                unreachable!("peeled above")
+            };
             match &**dom {
                 Type::Wf { .. } if wf_pos == Some(p) => {
                     let ind = e.tag_of(dom).ok_or_else(|| {
                         format!("`{name}`'s tier-1 parameter names no declaration")
                     })?;
-                    wf = Some(WfParam { level: p as u32, ctors: wf_ctor_table(&ind)? });
+                    wf = Some(WfParam {
+                        level: p as u32,
+                        ctors: wf_ctor_table(&ind)?,
+                    });
                 }
                 Type::Sum { .. } | Type::Sigma { .. } => {
                     let ind = e.tag_of(dom).ok_or_else(|| {
                         format!("a tier-0 parameter of `{name}` names no declaration")
                     })?;
-                    t0.push(T0Param { level: p as u32, ctors: ind.ctors.len() });
+                    t0.push(T0Param {
+                        level: p as u32,
+                        ctors: ind.ctors.len(),
+                    });
                 }
                 _ => {}
             }
@@ -2738,9 +2895,19 @@ pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> 
     let caller_abs = e
         .global_abs(name)
         .ok_or_else(|| format!("`{name}` is not a declared global"))?;
-    let mut cx = MarkCx { e, caller_abs, callees: Vec::new(), wf, t0 };
+    let mut cx = MarkCx {
+        e,
+        caller_abs,
+        callees: Vec::new(),
+        wf,
+        t0,
+    };
     let marked = mark(&body, arity as u32, &mut cx, None)?;
-    Ok(BodyCode { arity, callees: cx.callees, code: Term::BoxTm(Rc::new(marked)) })
+    Ok(BodyCode {
+        arity,
+        callees: cx.callees,
+        code: Term::BoxTm(Rc::new(marked)),
+    })
 }
 
 /// The marking table for a tier-1 declaration: per constructor, the surface
@@ -2763,7 +2930,7 @@ fn wf_ctor_table(ind: &crate::inductive::Inductive) -> Result<Vec<WfCtor>, Strin
                             "`{}`'s constructor `{}` has a container or index field — \
                              outside the fragment",
                             ind.name, c.name
-                        ))
+                        ));
                     }
                 }
             }
@@ -2799,9 +2966,21 @@ fn wf_ctor_table(ind: &crate::inductive::Inductive) -> Result<Vec<WfCtor>, Strin
 #[derive(Debug)]
 enum RIr {
     Ret(Vec<u64>),
-    LetCon { tag: u64, args: Vec<u64>, rest: Box<RIr> },
-    LetMatch { scrut: u64, arms: Vec<RIr>, rest: Box<RIr> },
-    LetCall { callee: u64, args: Vec<u64>, rest: Box<RIr> },
+    LetCon {
+        tag: u64,
+        args: Vec<u64>,
+        rest: Box<RIr>,
+    },
+    LetMatch {
+        scrut: u64,
+        arms: Vec<RIr>,
+        rest: Box<RIr>,
+    },
+    LetCall {
+        callee: u64,
+        args: Vec<u64>,
+        rest: Box<RIr>,
+    },
 }
 
 /// The reader walks the analyzer's answer in the kernel's **value domain**:
@@ -2831,10 +3010,7 @@ struct Reader<'a, 'v> {
 const READ_BUDGET: u32 = 4096;
 
 impl<'a, 'v> Reader<'a, 'v> {
-    fn new(
-        psi: &'a heather_kernel::term::GlobalCtx,
-        arena: &'v ValueArena<'v>,
-    ) -> Reader<'a, 'v> {
+    fn new(psi: &'a heather_kernel::term::GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
         Reader {
             psi,
             arena,
@@ -2849,7 +3025,8 @@ impl<'v> Reader<'_, 'v> {
     /// starts from. The empty environment is the identity environment of the
     /// empty Γ, which is the context every analyzer application is built at.
     fn root(&self, t: Term) -> &'v TmClo<'v> {
-        self.arena.tm(TmClo::syn(Env::empty(self.arena), Rc::new(t)))
+        self.arena
+            .tm(TmClo::syn(Env::empty(self.arena), Rc::new(t)))
     }
 
     /// The δ-transparent weak head **value** of a sub-structure.
@@ -2879,7 +3056,9 @@ impl<'v> Reader<'_, 'v> {
     ) -> Result<(usize, Vec<&'v TmClo<'v>>, Vec<&'v TmClo<'v>>), String> {
         let w = self.force(c)?;
         let (label, children) = match &*w {
-            Val::Supf { label, children, .. } => (*label, self.spine(children)?),
+            Val::Supf {
+                label, children, ..
+            } => (*label, self.spine(children)?),
             // A non-recursive inductive is the bare tier-0 value.
             _ => (self.arena.tm(TmClo::val(Rc::clone(&w))), vec![]),
         };
@@ -2973,7 +3152,11 @@ impl<'v> Reader<'_, 'v> {
         self.budget.set(left - 1);
         let (idx, fields, children) = self.ctor(t, 8)?;
         let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
-        let c = |i: usize| children.get(i).ok_or_else(|| "a missing sub-Ir".to_string());
+        let c = |i: usize| {
+            children
+                .get(i)
+                .ok_or_else(|| "a missing sub-Ir".to_string())
+        };
         match idx {
             0 => Ok(RIr::Ret(self.refs(f(0)?)?)),
             1 => Ok(RIr::LetCon {
@@ -3020,21 +3203,46 @@ impl<'v> Reader<'_, 'v> {
 
 #[derive(Clone, Debug)]
 enum RCert {
-    Ret { rs: Vec<usize> },
-    Con { tag: u64, args: Vec<usize>, hr: Box<RCert> },
+    Ret {
+        rs: Vec<usize>,
+    },
+    Con {
+        tag: u64,
+        args: Vec<usize>,
+        hr: Box<RCert>,
+    },
     /// A self-call, whose certificate is the induction hypothesis.
-    Ih { args: Vec<usize>, hr: Box<RCert> },
-    Call { callee: String, args: Vec<usize>, hr: Box<RCert> },
-    Match { scrut: usize, ctag: u64, ha: Box<RCert>, hr: Box<RCert> },
+    Ih {
+        args: Vec<usize>,
+        hr: Box<RCert>,
+    },
+    Call {
+        callee: String,
+        args: Vec<usize>,
+        hr: Box<RCert>,
+    },
+    Match {
+        scrut: usize,
+        ctag: u64,
+        ha: Box<RCert>,
+        hr: Box<RCert>,
+    },
 }
 
 #[derive(Clone, Debug)]
 enum RCertOut {
     Plain(RCert),
-    Rec { scrut: usize, zero: RCert, succ: RCert },
+    Rec {
+        scrut: usize,
+        zero: RCert,
+        succ: RCert,
+    },
     /// A tier-1 induction: one `CMatch` certificate per constructor, in
     /// declaration order (docs/certgen-tier1-source-types-design.md §6).
-    RecT { scrut: usize, arms: Vec<RCert> },
+    RecT {
+        scrut: usize,
+        arms: Vec<RCert>,
+    },
 }
 
 impl<'v> Reader<'_, 'v> {
@@ -3049,13 +3257,19 @@ impl<'v> Reader<'_, 'v> {
         self.budget.set(left - 1);
         let (idx, fields, children) = self.ctor(t, 6)?;
         let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
-        let c = |i: usize| children.get(i).ok_or_else(|| "a missing sub-certificate".to_string());
+        let c = |i: usize| {
+            children
+                .get(i)
+                .ok_or_else(|| "a missing sub-certificate".to_string())
+        };
         let dists = |rs: Vec<u64>| rs.into_iter().map(|d| d as usize).collect::<Vec<usize>>();
         match idx {
             // `CStuck`: the fold's decline, and the only one it makes. The
             // reasons live here, at the rim, as they do for `TNo`/`SigNo`.
             0 => Err("the in-language certificate fold declined this IR".into()),
-            1 => Ok(RCert::Ret { rs: dists(self.refs(f(0)?)?) }),
+            1 => Ok(RCert::Ret {
+                rs: dists(self.refs(f(0)?)?),
+            }),
             2 => Ok(RCert::Con {
                 tag: self.nat(f(0)?)?,
                 args: dists(self.refs(f(1)?)?),
@@ -3114,9 +3328,12 @@ impl<'v> Reader<'_, 'v> {
         match idx {
             0 => Ok(vec![]),
             1 => {
-                let head = self.cert(fields.first().ok_or("a `CACons` without its arm")?, callees)?;
-                let mut rest =
-                    self.cert_arms(children.first().ok_or("a `CACons` without its tail")?, callees)?;
+                let head =
+                    self.cert(fields.first().ok_or("a `CACons` without its arm")?, callees)?;
+                let mut rest = self.cert_arms(
+                    children.first().ok_or("a `CACons` without its tail")?,
+                    callees,
+                )?;
                 rest.insert(0, head);
                 Ok(rest)
             }
@@ -3133,12 +3350,7 @@ impl<'v> Reader<'_, 'v> {
 /// what analyzer registration buys: whole-signature convertibility fixes the Π
 /// order, so this code does not consult the template's own signature at all
 /// (docs/meta-def-registration-design.md, analyzer extension).
-fn analyzer_app(
-    e: &Elaborator,
-    slot: Slot,
-    path: &str,
-    args: Vec<Term>,
-) -> Result<Term, String> {
+fn analyzer_app(e: &Elaborator, slot: Slot, path: &str, args: Vec<Term>) -> Result<Term, String> {
     let md = e
         .analyzer_def(slot)
         .ok_or_else(|| format!("no `meta fn … for {path}` is registered"))?;
@@ -3149,15 +3361,28 @@ fn analyzer_app(
     // calls to library globals, so every one of them is affected.
     let (md_term, md_stmt) = md.at(e.psi().bindings.len());
     let Type::CtxPi { body, .. } = &*md_stmt else {
-        return Err(format!("the `{path}` analyzer does not open with a `Ctx` binder"));
+        return Err(format!(
+            "the `{path}` analyzer does not open with a `Ctx` binder"
+        ));
     };
     let mut ty = body.apply_global(&GlobalSubst {
         entries: vec![GlobalEntry::Ctx(empty.clone())],
     });
-    let mut term = Term::CtxApp { fun: md_term, ctx: empty.clone() };
+    let mut term = Term::CtxApp {
+        fun: md_term,
+        ctx: empty.clone(),
+    };
     for arg in args {
-        let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
-            return Err(format!("the `{path}` analyzer's signature ran out of parameters"));
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = ty
+        else {
+            return Err(format!(
+                "the `{path}` analyzer's signature ran out of parameters"
+            ));
         };
         let arg = Rc::new(arg);
         term = Term::App {
@@ -3168,7 +3393,9 @@ fn analyzer_app(
             cod: Rc::clone(&cod),
             arg: Rc::clone(&arg),
         };
-        ty = (*cod).clone().apply_local(&LocalSubst::id(&empty).extended(arg));
+        ty = (*cod)
+            .clone()
+            .apply_local(&LocalSubst::id(&empty).extended(arg));
     }
     Ok(term)
 }
@@ -3229,9 +3456,9 @@ fn global_app<'v>(
     args: Vec<&'v TmClo<'v>>,
     arena: &'v ValueArena<'v>,
 ) -> Result<&'v TmClo<'v>, String> {
-    let abs = e
-        .global_abs(name)
-        .ok_or_else(|| format!("`{name}` is not declared — the certificate fold is a library file"))?;
+    let abs = e.global_abs(name).ok_or_else(|| {
+        format!("`{name}` is not declared — the certificate fold is a library file")
+    })?;
     let GlobalBinding::Tm { ty, .. } = &e.psi().bindings[abs] else {
         return Err(format!("`{name}` is not a term-level global"));
     };
@@ -3244,7 +3471,13 @@ fn global_app<'v>(
     };
     let mut out = arena.tm(TmClo::syn(Env::empty(arena), Rc::new(head)));
     for arg in args {
-        let Type::Pi { dom_level, cod_level, dom, cod } = &ty else {
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = &ty
+        else {
             return Err(format!("`{name}`'s signature ran out of parameters"));
         };
         let elim = Elim::App {
@@ -3331,7 +3564,11 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String
         1 => Ok((
             r.nat(fields.first().ok_or("`SigYes` without its arity")?)?,
             r.nat(fields.get(1).ok_or("`SigYes` without its result kind")?)?,
-            r.nat(fields.get(2).ok_or("`SigYes` without its tier-1 position")?)?,
+            r.nat(
+                fields
+                    .get(2)
+                    .ok_or("`SigYes` without its tier-1 position")?,
+            )?,
         )),
         _ => Err("the signature checker's answer is not a `SigOut`".into()),
     }
@@ -3371,7 +3608,11 @@ fn chain_from_rir(
                 let [d] = rs[..] else {
                     return Err("a `Ret` with other than one output".into());
                 };
-                return Ok(Chain { instrs, ret_dist: inrange(d, depth)?, has_self_call });
+                return Ok(Chain {
+                    instrs,
+                    ret_dist: inrange(d, depth)?,
+                    has_self_call,
+                });
             }
             RIr::LetCon { tag, args, rest } => {
                 // Which type's constructor this tag names is the positional
@@ -3382,13 +3623,17 @@ fn chain_from_rir(
                 // arguments — is a certificate the renderer could not spell.
                 // For an all-`Nat` signature this is exactly the `0 | 1`
                 // check it replaces.
-                let rt = if rir_ret_dist(rest) == Some(0) { res } else { &nat };
-                let (_, fields) = rt
-                    .ctors
-                    .get(*tag as usize)
-                    .ok_or_else(|| {
-                        format!("constructor tag {tag} is not a constructor of `{}`", rt.name)
-                    })?;
+                let rt = if rir_ret_dist(rest) == Some(0) {
+                    res
+                } else {
+                    &nat
+                };
+                let (_, fields) = rt.ctors.get(*tag as usize).ok_or_else(|| {
+                    format!(
+                        "constructor tag {tag} is not a constructor of `{}`",
+                        rt.name
+                    )
+                })?;
                 if *fields != args.len() {
                     return Err(format!(
                         "constructor tag {tag} takes {fields} argument(s), not {}",
@@ -3430,7 +3675,10 @@ fn chain_from_rir(
                     .map(|d| inrange(*d, depth))
                     .collect::<Result<_, _>>()?;
                 has_self_call |= *callee == 0;
-                instrs.push(Instr::Call { callee: cname.to_string(), dists });
+                instrs.push(Instr::Call {
+                    callee: cname.to_string(),
+                    dists,
+                });
                 depth += 1;
                 cur = rest;
             }
@@ -3475,8 +3723,7 @@ fn fn_ir_from_rir(
     match ir {
         RIr::LetMatch { scrut, arms, rest } => {
             if !matches!(&**rest, RIr::Ret(rs) if rs[..] == [0]) {
-                return Err("a `LetMatch` whose continuation is not the rebinding `Ret`"
-                    .into());
+                return Err("a `LetMatch` whose continuation is not the rebinding `Ret`".into());
             }
             // The scrutinized parameter's declared type decides which
             // induction this is — the `Ir` alone deliberately cannot
@@ -3504,12 +3751,14 @@ fn fn_ir_from_rir(
                 }
                 return Ok(FnIr {
                     params,
-                    kind: FnIrKind::RecT(RecTIr { rec_idx: *scrut as usize, arms: chains }),
+                    kind: FnIrKind::RecT(RecTIr {
+                        rec_idx: *scrut as usize,
+                        arms: chains,
+                    }),
                 });
             }
             let [zero, succ] = &arms[..] else {
-                return Err("a `LetMatch` with other than two arms is not a `Nat` match"
-                    .into());
+                return Err("a `LetMatch` with other than two arms is not a `Nat` match".into());
             };
             let zc = chain_from_rir(zero, name, res, callees, params.len())?;
             if zc.has_self_call {
@@ -3518,7 +3767,11 @@ fn fn_ir_from_rir(
             let sc = chain_from_rir(succ, name, res, callees, params.len() + 1)?;
             Ok(FnIr {
                 params,
-                kind: FnIrKind::Rec(RecIr { rec_idx: *scrut as usize, zero: zc, succ: sc }),
+                kind: FnIrKind::Rec(RecIr {
+                    rec_idx: *scrut as usize,
+                    zero: zc,
+                    succ: sc,
+                }),
             })
         }
         _ => {
@@ -3526,7 +3779,10 @@ fn fn_ir_from_rir(
             if c.has_self_call {
                 return Err("a self-call outside a match is outside the fragment".into());
             }
-            Ok(FnIr { params, kind: FnIrKind::Plain(c) })
+            Ok(FnIr {
+                params,
+                kind: FnIrKind::Plain(c),
+            })
         }
     }
 }
@@ -3539,11 +3795,7 @@ fn fn_ir_from_rir(
 /// `d` must already be elaborated into `e` (it is an ordinary declaration) —
 /// the analysis reads Ψ, not the AST, and a fn the elaborator has not seen has
 /// nothing to analyse. Every failure is a decline.
-pub fn generate_in_language(
-    e: &Elaborator,
-    d: &Decl,
-    ctx: &GenCtx,
-) -> Result<Emission, String> {
+pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Emission, String> {
     // The signature DECISION is in-language (docs/fn-signature-reflection-
     // design.md §4), consulted before [`surface_params`]'s name checks so a
     // signature decline is the checker's — and compared against the Rust
@@ -3570,10 +3822,10 @@ pub fn generate_in_language(
     // parameter only; tier-0 enumeration parameters carry no position — the
     // rim resolves every index itself (docs/certgen-tier0-params-design.md
     // §§5, 7) — so the agreement compares the recursive residue alone.
-    let rim_wf = pts
-        .as_ref()
-        .ok()
-        .and_then(|v| v.iter().position(|p| p.as_ref().is_some_and(|t| t.recursive)));
+    let rim_wf = pts.as_ref().ok().and_then(|v| {
+        v.iter()
+            .position(|p| p.as_ref().is_some_and(|t| t.recursive))
+    });
     let (arity, res, pts) = match (&sig, &peel, res, pts) {
         (Ok((k, r, w)), Ok((a, is_nat, wf_pos, _)), Ok(res), Ok(pts))
             if *k as usize == *a
@@ -3596,7 +3848,7 @@ pub fn generate_in_language(
         // type. The *decision* is in-language, so its wording is what the
         // caller sees.
         (Err(reason), Err(_), _, _) | (Err(reason), _, Err(_), _) | (Err(reason), _, _, Err(_)) => {
-            return Err(reason.clone())
+            return Err(reason.clone());
         }
         // The checker accepts a shape whose name the rim cannot spell (a
         // monomorphized `Option<Nat>` result or `List<Tok>` parameter, say).

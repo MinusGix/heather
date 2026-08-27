@@ -28,13 +28,11 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use heather_kernel::term::{
-    CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type,
-};
+use heather_kernel::term::{CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
 
-use crate::inductive::nat_value;
 use crate::diagnostics::DISPLAY_DECODE_STEPS;
-use crate::{dress_true, show_level, Cx, Elaborator};
+use crate::inductive::nat_value;
+use crate::{Cx, Elaborator, dress_true, show_level};
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
 /// spelled node is a handful of characters where a raw one is a record.
@@ -193,7 +191,10 @@ impl Speller<'_> {
     fn dependent(&self, body: &Type, d: u32) -> bool {
         let m = self.cx.gamma.entries.len() as u32 + d;
         let tail = match self.cx.gamma.base {
-            CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
+            CtxBase::Nil => SubstTail::Empty {
+                len: m,
+                base: CtxBase::Nil,
+            },
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
         let terms = (0..m)
@@ -346,9 +347,12 @@ impl Speller<'_> {
     /// line up exactly declines, so the worst case is the raw form.
     fn ctor_value(&self, t: &Term, d: u32) -> Option<String> {
         let (label, children, ind) = match t {
-            Term::Supf { shape, label, children, .. } => {
-                (&**label, Some(&**children), self.el.display_tag_of(shape)?)
-            }
+            Term::Supf {
+                shape,
+                label,
+                children,
+                ..
+            } => (&**label, Some(&**children), self.el.display_tag_of(shape)?),
             // Tier 0: the value *is* the injection, and either summand type
             // carries the nominal tag.
             Term::Inl { lhs, .. } => (t, None, self.el.tag_of(lhs)?),
@@ -396,7 +400,9 @@ impl Speller<'_> {
         let mut payload: Vec<&Rc<Term>> = Vec::new();
         let mut p = snd;
         for _ in 0..ctor.payload().count() {
-            let Term::Pair { fst, snd, .. } = &**p else { return None };
+            let Term::Pair { fst, snd, .. } = &**p else {
+                return None;
+            };
             payload.push(fst);
             p = snd;
         }
@@ -404,7 +410,9 @@ impl Speller<'_> {
         if let Some(children) = children {
             let mut c = children;
             for _ in 0..ctor.arity() {
-                let Term::Pair { fst, snd, .. } = c else { return None };
+                let Term::Pair { fst, snd, .. } = c else {
+                    return None;
+                };
                 kids.push(fst);
                 c = snd;
             }

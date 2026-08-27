@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use heather_syntax::Span;
 
-use crate::{goals::GoalArena, OperatorFallbackUse};
+use crate::{OperatorFallbackUse, goals::GoalArena};
 
 /// Scratch state for an ordinary declaration.
 ///

@@ -37,14 +37,14 @@ use std::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{nth, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type, nth};
 use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 
 use crate::gendefs::GenDef;
-use crate::inductive::{inject, nat_lit, FieldKind, IdxTy, Inductive, Spine};
-use crate::wf::{Branches, Tel};
+use crate::inductive::{FieldKind, IdxTy, Inductive, Spine, inject, nat_lit};
 use crate::recursion::{Guard, GuardKind};
-use crate::{code, err, Alias, Cx, Elaborator, R};
+use crate::wf::{Branches, Tel};
+use crate::{Alias, Cx, Elaborator, R, code, err};
 
 /// A type in **family form**: `El^l` of the index type's eliminator at motive
 /// `Ty l`, read back into its parts. This is the indexed analogue of `tag_of`
@@ -66,14 +66,28 @@ pub(crate) struct IndexedFam {
 /// tail binders, so this is still one rewrite.
 pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
     Some(match t {
-        Term::ElimNat { level, motive, base, step, .. } => Term::ElimNat {
+        Term::ElimNat {
+            level,
+            motive,
+            base,
+            step,
+            ..
+        } => Term::ElimNat {
             level: level.clone(),
             motive: Rc::clone(motive),
             base: Rc::clone(base),
             step: Rc::clone(step),
             scrut,
         },
-        Term::ElimWf { level, motive_level, shape, arity, motive, step, .. } => Term::ElimWf {
+        Term::ElimWf {
+            level,
+            motive_level,
+            shape,
+            arity,
+            motive,
+            step,
+            ..
+        } => Term::ElimWf {
             level: level.clone(),
             motive_level: motive_level.clone(),
             shape: Rc::clone(shape),
@@ -82,37 +96,48 @@ pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
             step: Rc::clone(step),
             scrut,
         },
-        Term::Case { lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r, .. } => {
-            Term::Case {
-                lhs_level: lhs_level.clone(),
-                rhs_level: rhs_level.clone(),
-                motive_level: motive_level.clone(),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
-                motive: Rc::clone(motive),
-                case_l: Rc::clone(case_l),
-                case_r: Rc::clone(case_r),
-                scrut,
-            }
-        }
+        Term::Case {
+            lhs_level,
+            rhs_level,
+            motive_level,
+            lhs,
+            rhs,
+            motive,
+            case_l,
+            case_r,
+            ..
+        } => Term::Case {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            motive_level: motive_level.clone(),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+            motive: Rc::clone(motive),
+            case_l: Rc::clone(case_l),
+            case_r: Rc::clone(case_r),
+            scrut,
+        },
         // A **definition applied to its scrutinee** — `μ_D^δ s`, since
         // `issues/generated-term-defs.md` routed the generator's artifacts
         // through Ψ. The argument is the slot. Restricted to a global head so
         // that no ordinary application is mistaken for a family node; which
         // global it is, is checked by the recognizer that asked
         // (`forded_of`, via `is_gen_ref`).
-        Term::App { fun, dom_level, cod_level, dom, cod, .. }
-            if matches!(&**fun, Term::GlobalTm { .. }) =>
-        {
-            Term::App {
-                fun: Rc::clone(fun),
-                dom_level: dom_level.clone(),
-                cod_level: cod_level.clone(),
-                dom: Rc::clone(dom),
-                cod: Rc::clone(cod),
-                arg: scrut,
-            }
-        }
+        Term::App {
+            fun,
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            ..
+        } if matches!(&**fun, Term::GlobalTm { .. }) => Term::App {
+            fun: Rc::clone(fun),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg: scrut,
+        },
         _ => return None,
     })
 }
@@ -137,7 +162,10 @@ impl IndexedFam {
     }
 
     pub fn el_at(&self, idx: Term, by: u32) -> Type {
-        Type::El { level: self.level.clone(), tm: Rc::new(self.at(idx, by)) }
+        Type::El {
+            level: self.level.clone(),
+            tm: Rc::new(self.at(idx, by)),
+        }
     }
 }
 
@@ -169,7 +197,9 @@ fn read_tag_code(t: &Term) -> Option<u32> {
     while let Term::TmSum { lhs, .. } = cur {
         cur = lhs;
     }
-    let Term::TmSigma { fst, .. } = cur else { return None };
+    let Term::TmSigma { fst, .. } = cur else {
+        return None;
+    };
     digits(fst)
 }
 
@@ -207,7 +237,10 @@ fn tag_in(t: &Term, fuel: u32) -> Option<u32> {
 fn classes(ind: &Inductive, n_idx: usize) -> Vec<Vec<usize>> {
     let mut out = vec![Vec::new(); n_idx];
     for (i, c) in ind.ctors.iter().enumerate() {
-        let pat = c.res.as_ref().expect("an indexed declaration's ctors all carry a pattern");
+        let pat = c
+            .res
+            .as_ref()
+            .expect("an indexed declaration's ctors all carry a pattern");
         out[pat.ctor].push(i);
     }
     out
@@ -275,7 +308,9 @@ impl IdxArmEnv {
     fn mot_at(&self, gamma: &LocalCtx, h: Term, z: Term, extra: u32) -> Type {
         let base = gamma.prefix(self.gamma_len);
         self.motive.apply_local(
-            &crate::embed(&base, extra).extended(Rc::new(h)).extended(Rc::new(z)),
+            &crate::embed(&base, extra)
+                .extended(Rc::new(h))
+                .extended(Rc::new(z)),
         )
     }
 }
@@ -290,20 +325,22 @@ impl IdxArmEnv {
 /// the stored child. One formula, because it is one device.
 pub(crate) fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
     let len = Rc::new(nat_lit(m));
-    let cod = tel.motive.apply_local(
-        &crate::embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
+    let cod = tel
+        .motive
+        .apply_local(&crate::embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
             &tel.level,
             &Rc::new(tel.d_ty.shift_local(d_body + 1)),
             &len,
             Rc::new(Term::Var(LocalVar(2))),
             Rc::new(Term::Var(LocalVar(0))),
-        ))),
-    );
+        ))));
     Term::App {
         fun: Rc::new(Term::Var(LocalVar(0))),
         dom_level: Level::Zero,
         cod_level: tel.mlvl.clone(),
-        dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
+        dom: Rc::new(Type::Fin {
+            len: Rc::clone(&len),
+        }),
         cod: Rc::new(cod),
         arg: Rc::new(crate::wf::fin_index(t, m, &Term::Zero)),
     }
@@ -315,7 +352,9 @@ impl Elaborator {
     /// family *reduced* at a constructor-headed index, which has lost its
     /// index and is diagnosed by the consumers that need it.
     pub(crate) fn indexed_of(&self, ty: &Type) -> Option<(Rc<Inductive>, IndexedFam)> {
-        let Type::El { level, tm } = ty else { return None };
+        let Type::El { level, tm } = ty else {
+            return None;
+        };
         // The nominal read (`docs/family-type-code-defs-design.md` §6): where
         // the declaration has a family function, its occurrences are `El l
         // (D#fam^δ i)` and the declaration is identified by *being* that
@@ -328,7 +367,9 @@ impl Elaborator {
         if let Term::App { fun, arg, .. } = &**tm
             && let Term::GlobalTm { var, .. } = &**fun
         {
-            let GenDef::Fam(tag) = self.gen_def_of(*var)? else { return None };
+            let GenDef::Fam(tag) = self.gen_def_of(*var)? else {
+                return None;
+            };
             let ind = self.types.by_tag(tag)?;
             ind.index.as_ref()?;
             return Some((
@@ -357,7 +398,11 @@ impl Elaborator {
         let node = set_scrut(tm, Rc::new(Term::Zero))?;
         Some((
             Rc::clone(ind),
-            IndexedFam { level: level.clone(), node: Rc::new(node), idx },
+            IndexedFam {
+                level: level.clone(),
+                node: Rc::new(node),
+                idx,
+            },
         ))
     }
 
@@ -377,19 +422,20 @@ impl Elaborator {
     ///
     /// As with [`Self::record_of_at`], the structural read comes first and
     /// unchanged, so nothing that resolved before pays anything new.
-    pub(crate) fn indexed_of_at(
-        &self,
-        cx: &Cx,
-        ty: &Type,
-    ) -> Option<(Rc<Inductive>, IndexedFam)> {
+    pub(crate) fn indexed_of_at(&self, cx: &Cx, ty: &Type) -> Option<(Rc<Inductive>, IndexedFam)> {
         if let Some(r) = self.indexed_of(ty) {
             return Some(r);
         }
-        let Type::El { level, tm } = ty else { return None };
+        let Type::El { level, tm } = ty else {
+            return None;
+        };
         let oracle = self.semantic_oracle();
         for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
             let tm = Rc::new(tm);
-            let cand = Type::El { level: level.clone(), tm: Rc::clone(&tm) };
+            let cand = Type::El {
+                level: level.clone(),
+                tm: Rc::clone(&tm),
+            };
             if let Some(r) = self.indexed_of(&cand) {
                 return Some(r);
             }
@@ -398,13 +444,12 @@ impl Elaborator {
     }
 
     /// `⟦I⟧` for a declaration's index type (§2, §8.2), scoped in `cx`.
-    pub(crate) fn index_type_of(
-        &self,
-        cx: &Cx,
-        ind: &Inductive,
-        span: Span,
-    ) -> R<(Type, Level)> {
-        match ind.index_ty.as_ref().expect("an indexed declaration has an index type") {
+    pub(crate) fn index_type_of(&self, cx: &Cx, ind: &Inductive, span: Span) -> R<(Type, Level)> {
+        match ind
+            .index_ty
+            .as_ref()
+            .expect("an indexed declaration has an index type")
+        {
             IdxTy::Nat => Ok((Type::Nat, Level::Zero)),
             IdxTy::Decl(i) => self.lower_instance(cx, i, &[], &[], span),
         }
@@ -424,7 +469,11 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let pat = ind.ctors[i].res.as_ref().expect("indexed ctor");
-        match ind.index_ty.as_ref().expect("an indexed declaration has an index type") {
+        match ind
+            .index_ty
+            .as_ref()
+            .expect("an indexed declaration has an index type")
+        {
             IdxTy::Nat => {
                 let t = match pat.vars.first() {
                     None => Term::Zero,
@@ -450,17 +499,16 @@ impl Elaborator {
     /// delivers it as an *expression* (an applied type is never called, so
     /// the call is the index application); this recognizes the shape before
     /// `OfExpr`'s generic infer-and-decode path would try to call `D`.
-    pub(crate) fn try_indexed_ty(
-        &self,
-        cx: &Cx,
-        e: &Expr,
-        span: Span,
-    ) -> R<Option<(Type, Level)>> {
-        let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
+    pub(crate) fn try_indexed_ty(&self, cx: &Cx, e: &Expr, span: Span) -> R<Option<(Type, Level)>> {
+        let ExprKind::App { head, args, .. } = &e.kind else {
+            return Ok(None);
+        };
         let Some((name, targs)) = crate::inductive::named_head(head) else {
             return Ok(None);
         };
-        let Some(ind) = self.lookup_inductive(name).cloned() else { return Ok(None) };
+        let Some(ind) = self.lookup_inductive(name).cloned() else {
+            return Ok(None);
+        };
         if ind.index.is_none() {
             return Ok(None);
         }
@@ -487,9 +535,12 @@ impl Elaborator {
         // (docs/inductive-fording-lowering.md §6); the classifier decided which
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
-            return self.lower_forded_instance(cx, &ind, &lowered, idx_t, span).map(Some);
+            return self
+                .lower_forded_instance(cx, &ind, &lowered, idx_t, span)
+                .map(Some);
         }
-        self.lower_indexed_instance(cx, &ind, &lowered, idx_t, span).map(Some)
+        self.lower_indexed_instance(cx, &ind, &lowered, idx_t, span)
+            .map(Some)
     }
 
     /// `⟦D<ā>(e)⟧ = El^l (fam ⟦e⟧)` (§4). Two passes: the whole family is
@@ -520,7 +571,13 @@ impl Elaborator {
         // the index reaches none of them.
         let (_, l) = self.build_family(cx, ind, args, &Level::Zero, Term::Zero, span)?;
         let (fam, _) = self.build_family(cx, ind, args, &l, idx, span)?;
-        Ok((Type::El { level: l.clone(), tm: Rc::new(fam) }, l))
+        Ok((
+            Type::El {
+                level: l.clone(),
+                tm: Rc::new(fam),
+            },
+            l,
+        ))
     }
 
     /// The family term (§4), at a given level, applied at `idx`. Also returns
@@ -536,7 +593,10 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Level)> {
         let _scope = self.use_inductive_scope(ind);
-        let ity = ind.index_ty.as_ref().expect("an indexed declaration has an index type");
+        let ity = ind
+            .index_ty
+            .as_ref()
+            .expect("an indexed declaration has an index type");
         let icts = ity.ctors();
         let classes = classes(ind, icts.len());
         let gamma_len = cx.names.len();
@@ -561,7 +621,14 @@ impl Elaborator {
 
         let fam = match ity {
             IdxTy::Nat => {
-                let base = class_code(cx, 0, &IdxBranch { pat: vec![], rec: vec![] })?;
+                let base = class_code(
+                    cx,
+                    0,
+                    &IdxBranch {
+                        pat: vec![],
+                        rec: vec![],
+                    },
+                )?;
                 let mut bcx = cx.clone();
                 bcx.push("#idx".into(), Type::Nat, Level::Zero);
                 bcx.push("#rec".into(), Type::Ty(l.clone()), Level::succ(l.clone()));
@@ -688,7 +755,12 @@ impl Elaborator {
                     rec.push(None);
                     p += 1;
                 }
-                _ => return err("internal: an index type has no container or index field", span),
+                _ => {
+                    return err(
+                        "internal: an index type has no container or index field",
+                        span,
+                    );
+                }
             }
         }
         Ok(IdxBranch { pat, rec })
@@ -768,7 +840,11 @@ impl Elaborator {
         let pat = ctor.res.as_ref().expect("indexed ctor");
         let bdepth = bcx.names.len();
         let mut entries = vec![(crate::inductive::tag_type(ind.tag), Level::Zero)];
-        fcx.push("#tag".into(), crate::inductive::tag_type(ind.tag), Level::Zero);
+        fcx.push(
+            "#tag".into(),
+            crate::inductive::tag_type(ind.tag),
+            Level::Zero,
+        );
         for (k, (name, ty)) in ctor.fields.iter().enumerate() {
             match ctor.kind[k] {
                 FieldKind::IndexVar => {
@@ -783,7 +859,8 @@ impl Elaborator {
                         .position(|&f| f == k)
                         .expect("an IndexVar field fills an argument of the pattern");
                     let (term, ty, level) = branch.pat[a].clone();
-                    fcx.aliases.push(Rc::new(Alias { skel: None,
+                    fcx.aliases.push(Rc::new(Alias {
+                        skel: None,
                         name: name.clone().expect("a pattern variable is a named field"),
                         depth: bdepth,
                         term,
@@ -797,9 +874,16 @@ impl Elaborator {
                         .as_ref()
                         .expect("a recursive field sits at a recursive argument");
                     let by = (fcx.names.len() - bdepth) as u32;
-                    let el = Type::El { level: l.clone(), tm: Rc::new(code.shift_local(by)) };
+                    let el = Type::El {
+                        level: l.clone(),
+                        tm: Rc::new(code.shift_local(by)),
+                    };
                     entries.push((el.clone(), l.clone()));
-                    fcx.push(name.clone().unwrap_or_else(|| "#field".into()), el, l.clone());
+                    fcx.push(
+                        name.clone().unwrap_or_else(|| "#field".into()),
+                        el,
+                        l.clone(),
+                    );
                 }
                 FieldKind::Container { .. } => {
                     unreachable!("indexed classification never emits a container")
@@ -885,19 +969,17 @@ impl Elaborator {
         // must convert with the family's. This is the whole index check — the
         // value itself stores nothing index-shaped.
         let (target, ity, ilvl) = self.indexed_ctor_index(cx, ind, i, args, span)?;
-        if self.committed_oracle().convert_term(
-            &cx.gamma,
-            Layer::Prog,
-            &target,
-            &fam.idx,
-            &ity,
-            &ilvl,
-        )
-        .is_err()
+        if self
+            .committed_oracle()
+            .convert_term(&cx.gamma, Layer::Prog, &target, &fam.idx, &ity, &ilvl)
+            .is_err()
         {
             let pat = ctor.res.as_ref().expect("indexed ctor");
-            let icts =
-                ind.index_ty.as_ref().expect("an indexed declaration has an index type").ctors();
+            let icts = ind
+                .index_ty
+                .as_ref()
+                .expect("an indexed declaration has an index type")
+                .ctors();
             let spelling = if pat.vars.is_empty() {
                 icts[pat.ctor].name.clone()
             } else {
@@ -921,11 +1003,17 @@ impl Elaborator {
             );
         }
         let head = self.whnf(cx, expected, span)?;
-        let icts =
-            ind.index_ty.as_ref().expect("an indexed declaration has an index type").ctors();
-        let class = classes(ind, icts.len())
-            .swap_remove(ctor.res.as_ref().expect("indexed ctor").ctor);
-        let pos = class.iter().position(|&j| j == i).expect("member of its own class");
+        let icts = ind
+            .index_ty
+            .as_ref()
+            .expect("an indexed declaration has an index type")
+            .ctors();
+        let class =
+            classes(ind, icts.len()).swap_remove(ctor.res.as_ref().expect("indexed ctor").ctor);
+        let pos = class
+            .iter()
+            .position(|&j| j == i)
+            .expect("member of its own class");
         let spine = self.spine(&head, expected_lvl, class.len(), span)?;
         let stored: Vec<Expr> = args
             .iter()
@@ -967,7 +1055,10 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let l = fam.level.clone();
-        let ity = ind.index_ty.as_ref().expect("an indexed declaration has an index type");
+        let ity = ind
+            .index_ty
+            .as_ref()
+            .expect("an indexed declaration has an index type");
         let icts = ity.ctors();
         // Surface bookkeeping, as in `elab_match_data`: declaration order,
         // duplicates, arity (the binder list includes the pattern variables —
@@ -1022,7 +1113,10 @@ impl Elaborator {
         let idx_param = match (&dec, &*fam.idx) {
             (Some(_), Term::Var(LocalVar(i))) => {
                 let pos = cx.names.len() - 1 - *i as usize;
-                cx.selfref.as_ref().filter(|s| pos < s.params.len()).map(|_| pos)
+                cx.selfref
+                    .as_ref()
+                    .filter(|s| pos < s.params.len())
+                    .map(|_| pos)
             }
             _ => None,
         };
@@ -1057,8 +1151,19 @@ impl Elaborator {
                 let mut vcx = cx.clone();
                 vcx.push("#payload".into(), fam.el_at(Term::Zero, 0), l.clone());
                 let base_body = self.indexed_class_body(
-                    &vcx, ind, fam, &classes[0], &arm_of, &Term::Zero, 1, &gamma, &motive,
-                    &mlvl, &l, None, span,
+                    &vcx,
+                    ind,
+                    fam,
+                    &classes[0],
+                    &arm_of,
+                    &Term::Zero,
+                    1,
+                    &gamma,
+                    &motive,
+                    &mlvl,
+                    &l,
+                    None,
+                    span,
                 )?;
                 let base = Term::Lam {
                     dom_level: l.clone(),
@@ -1128,7 +1233,13 @@ impl Elaborator {
                 let (ity_ty, ity_lvl) = self.lower_instance(cx, iind, &[], &[], span)?;
                 let spine = self.spine(&ity_ty, &ity_lvl, iind.ctors.len(), span)?;
                 let body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, exp: &Type| -> R<Term> {
-                    let Type::Pi { dom_level, cod_level, dom, .. } = exp else {
+                    let Type::Pi {
+                        dom_level,
+                        cod_level,
+                        dom,
+                        ..
+                    } = exp
+                    else {
                         return err("internal: an indexed branch obligation is not a Π", span);
                     };
                     let mut vcx = bcx.clone();
@@ -1197,7 +1308,13 @@ impl Elaborator {
                             d_body: u32,
                             exp: &Type|
                  -> R<Term> {
-                    let Type::Pi { dom_level, cod_level, dom, .. } = exp else {
+                    let Type::Pi {
+                        dom_level,
+                        cod_level,
+                        dom,
+                        ..
+                    } = exp
+                    else {
                         return err("internal: an indexed branch obligation is not a Π", span);
                     };
                     let branch = self.wf_branch_env(bcx, iind, tel, k, value, d_body, span)?;
@@ -1207,7 +1324,11 @@ impl Elaborator {
                     // rebuilt from the branch's own binders. Its identity with
                     // the declared constructor is `Unit` η, twice (§8.2 fact 2)
                     // — which conversion pays, so nothing here has to.
-                    let Type::Wf { level, shape, arity } = tel.d_ty.shift_local(d_body + 1)
+                    let Type::Wf {
+                        level,
+                        shape,
+                        arity,
+                    } = tel.d_ty.shift_local(d_body + 1)
                     else {
                         return err("internal: a recursive index did not lower to a `Wf`", span);
                     };
@@ -1237,9 +1358,8 @@ impl Elaborator {
                             .iter()
                             .zip(&branch.pat)
                             .map(|(r, (p, _, _))| {
-                                r.as_ref().map(|f| {
-                                    (Rc::new(f.shift_local(1)), Rc::new(p.shift_local(1)))
-                                })
+                                r.as_ref()
+                                    .map(|f| (Rc::new(f.shift_local(1)), Rc::new(p.shift_local(1))))
                             })
                             .collect(),
                         depth: vcx.names.len(),
@@ -1294,7 +1414,12 @@ impl Elaborator {
             dom_level: l,
             cod_level: mlvl,
             dom: Rc::new(fam.el_at((*fam.idx).clone(), 0)),
-            cod: Rc::new(msub(&gamma, 1, fam.idx.shift_local(1), Term::Var(LocalVar(0)))),
+            cod: Rc::new(msub(
+                &gamma,
+                1,
+                fam.idx.shift_local(1),
+                Term::Var(LocalVar(0)),
+            )),
             arg: Rc::new(scrut),
         })
     }
@@ -1380,31 +1505,54 @@ impl Elaborator {
         let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
         let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
         let injected = |val: Term, inl: bool, by: u32| {
-            let (lhs, rhs) =
-                (spine.ctors[j].0.shift_local(d + by), spine.tails[j].0.shift_local(d + by));
+            let (lhs, rhs) = (
+                spine.ctors[j].0.shift_local(d + by),
+                spine.tails[j].0.shift_local(d + by),
+            );
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
             if inl {
-                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inl {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             } else {
-                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inr {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             }
         };
         let mut lcx = cx.clone();
         lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let l_expected = motive.apply_local(
-            &crate::embed(&cx.gamma, 1)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, 1))),
-        );
-        let case_l =
-            body(&lcx, j, &Rc::new(Term::Var(LocalVar(0))), d + 1, &l_expected)?;
+        let l_expected =
+            motive.apply_local(&crate::embed(&cx.gamma, 1).extended(Rc::new(injected(
+                Term::Var(LocalVar(0)),
+                true,
+                1,
+            ))));
+        let case_l = body(
+            &lcx,
+            j,
+            &Rc::new(Term::Var(LocalVar(0))),
+            d + 1,
+            &l_expected,
+        )?;
         let mut rcx = cx.clone();
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let inner_motive = motive.apply_local(
-            &crate::embed(&cx.gamma, 2)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, 2))),
-        );
+        let inner_motive =
+            motive.apply_local(&crate::embed(&cx.gamma, 2).extended(Rc::new(injected(
+                Term::Var(LocalVar(0)),
+                false,
+                2,
+            ))));
         let case_r = self.idx_case_tree(
             &rcx,
             spine,
@@ -1450,8 +1598,8 @@ impl Elaborator {
         let n = arms.len();
         let d = j as u32;
         if j + 1 == n {
-            let expected = motive
-                .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
+            let expected =
+                motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
             let ctor_ty = spine.ctors[j].0.shift_local(d);
             return self.elab_indexed_arm(cx, ind, arms[j], &ctor_ty, &scrut, &expected, mlvl, env);
         }
@@ -1460,23 +1608,39 @@ impl Elaborator {
         let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
         let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
         let injected = |val: Term, inl: bool, by: u32| {
-            let (lhs, rhs) =
-                (spine.ctors[j].0.shift_local(d + by), spine.tails[j].0.shift_local(d + by));
+            let (lhs, rhs) = (
+                spine.ctors[j].0.shift_local(d + by),
+                spine.tails[j].0.shift_local(d + by),
+            );
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
             if inl {
-                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inl {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             } else {
-                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                Term::Inr {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val,
+                }
             }
         };
         let mut lcx = cx.clone();
         lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let l_expected = motive.apply_local(
-            &crate::embed(&cx.gamma, 1)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, 1))),
-        );
+        let l_expected =
+            motive.apply_local(&crate::embed(&cx.gamma, 1).extended(Rc::new(injected(
+                Term::Var(LocalVar(0)),
+                true,
+                1,
+            ))));
         let case_l = self.elab_indexed_arm(
             &lcx,
             ind,
@@ -1489,10 +1653,12 @@ impl Elaborator {
         )?;
         let mut rcx = cx.clone();
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let inner_motive = motive.apply_local(
-            &crate::embed(&cx.gamma, 2)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, 2))),
-        );
+        let inner_motive =
+            motive.apply_local(&crate::embed(&cx.gamma, 2).extended(Rc::new(injected(
+                Term::Var(LocalVar(0)),
+                false,
+                2,
+            ))));
         let case_r = self.indexed_case_tree(
             &rcx,
             ind,
@@ -1541,8 +1707,12 @@ impl Elaborator {
         let mut cur = ctor_ty.clone();
         let mut pair = Rc::clone(value);
         // The tag (spine entry 0): step past it, bind nothing.
-        let Type::Sigma { fst_level, snd_level, fst, snd } =
-            self.whnf(&acx, &cur, arm.span)?
+        let Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } = self.whnf(&acx, &cur, arm.span)?
         else {
             return err("internal: malformed indexed constructor encoding", arm.span);
         };
@@ -1577,7 +1747,8 @@ impl Elaborator {
                     .position(|&f| f == k)
                     .expect("an IndexVar field fills an argument of the pattern");
                 let (term, ty, level) = &env.pat[a];
-                acx.aliases.push(Rc::new(Alias { skel: None,
+                acx.aliases.push(Rc::new(Alias {
+                    skel: None,
                     name: name.clone(),
                     depth: cur_len,
                     term: Rc::new(term.shift_local(by(env))),
@@ -1586,8 +1757,12 @@ impl Elaborator {
                 }));
                 continue;
             }
-            let Type::Sigma { fst_level, snd_level, fst, snd } =
-                self.whnf(&acx, &cur, arm.span)?
+            let Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } = self.whnf(&acx, &cur, arm.span)?
             else {
                 return err("internal: malformed indexed constructor encoding", arm.span);
             };
@@ -1630,12 +1805,12 @@ impl Elaborator {
                     )),
                     arg: Rc::clone(&proj),
                 };
-                let ih_ty =
-                    env.mot_at(&acx.gamma, (*at).clone(), (*proj).clone(), extra(env));
+                let ih_ty = env.mot_at(&acx.gamma, (*at).clone(), (*proj).clone(), extra(env));
                 children.push((Rc::clone(&proj), Rc::new(ih), ih_ty, env.mlvl.clone()));
                 rebind.push(at);
             }
-            acx.aliases.push(Rc::new(Alias { skel: None,
+            acx.aliases.push(Rc::new(Alias {
+                skel: None,
                 name: name.clone(),
                 depth: acx.names.len(),
                 term: proj,
@@ -1718,23 +1893,45 @@ inductive W : (n: Nat) -> Type {
     fn two() -> Two {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SRC).expect("two indexed families elaborate");
-        let v = Rc::clone(el.types.inductive(&crate::names::qkey("main", "V")).expect("declared"));
-        let w = Rc::clone(el.types.inductive(&crate::names::qkey("main", "W")).expect("declared"));
-        Two { el, v, w, cx: Cx::empty() }
+        let v = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "V"))
+                .expect("declared"),
+        );
+        let w = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "W"))
+                .expect("declared"),
+        );
+        Two {
+            el,
+            v,
+            w,
+            cx: Cx::empty(),
+        }
     }
 
     /// `V`'s family type as the generator emits it, taken apart.
     fn occurrence(t: &Two, ind: &Inductive, idx: Term) -> (Type, Level) {
-        t.el
-            .lower_indexed_instance(&t.cx, ind, &[], idx, SPAN)
+        t.el.lower_indexed_instance(&t.cx, ind, &[], idx, SPAN)
             .expect("the family lowers")
     }
 
     /// The emitted occurrence with another term in the *head* position — the
     /// forgery constructor, everything else `V`'s own.
     fn with_head(ty: &Type, head: Term) -> Type {
-        let Type::El { level, tm } = ty else { panic!("a route-1 family is an El") };
-        let Term::App { dom_level, cod_level, dom, cod, arg, .. } = (**tm).clone() else {
+        let Type::El { level, tm } = ty else {
+            panic!("a route-1 family is an El")
+        };
+        let Term::App {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            arg,
+            ..
+        } = (**tm).clone()
+        else {
             panic!("the occurrence is the family function applied to the index")
         };
         Type::El {
@@ -1756,8 +1953,12 @@ inductive W : (n: Nat) -> Type {
         let (ty, l) = occurrence(&t, &t.v, Term::Zero);
         // The occurrence is `El l (V#fam^δ 0)` and nothing else — one node
         // where the whole `elim_Nat` used to be.
-        let Type::El { tm, .. } = &ty else { panic!("a route-1 family is an El") };
-        let Term::App { fun, .. } = &**tm else { panic!("…of the family function") };
+        let Type::El { tm, .. } = &ty else {
+            panic!("a route-1 family is an El")
+        };
+        let Term::App { fun, .. } = &**tm else {
+            panic!("…of the family function")
+        };
         assert!(t.el.is_gen_ref(fun, GenDef::Fam(t.v.tag)));
         // A `Type`-valued field puts it above level 0, which is where a
         // dropped join would show (§10.5).
@@ -1768,7 +1969,10 @@ inductive W : (n: Nat) -> Type {
         let (ind, fam) = t.el.indexed_of(&ty).expect("reads back as a family");
         assert_eq!(ind.tag, t.v.tag);
         assert_eq!(fam.level, l);
-        assert!(matches!(fam.at(Term::Succ(Rc::new(Term::Zero)), 0), Term::App { .. }));
+        assert!(matches!(
+            fam.at(Term::Succ(Rc::new(Term::Zero)), 0),
+            Term::App { .. }
+        ));
     }
 
     #[test]
@@ -1781,8 +1985,12 @@ inductive W : (n: Nat) -> Type {
         // declaration the *name* says — and therefore not as `V`, which is
         // what every consumer's `found.tag != ind.tag` check turns into a
         // rejection.
-        let w_fam = t.el.gen_ref(&t.cx, GenDef::Fam(t.w.tag)).expect("W has a family definition");
-        let (ind, _) = t.el.indexed_of(&with_head(&ty, w_fam)).expect("it is W's family");
+        let w_fam =
+            t.el.gen_ref(&t.cx, GenDef::Fam(t.w.tag))
+                .expect("W has a family definition");
+        let (ind, _) =
+            t.el.indexed_of(&with_head(&ty, w_fam))
+                .expect("it is W's family");
         assert_eq!(ind.tag, t.w.tag);
         assert_ne!(ind.tag, t.v.tag);
     }
@@ -1794,8 +2002,12 @@ inductive W : (n: Nat) -> Type {
         // The very binding `V#fam` is, pushed a second time outside the
         // registry the way a user `fn` is: identity is the Ψ index, not the
         // body, so the copy is not `V`.
-        let r = t.el.gen_ref(&t.cx, GenDef::Fam(t.v.tag)).expect("V has a family definition");
-        let Term::GlobalTm { var, .. } = &r else { panic!("a reference is a global") };
+        let r =
+            t.el.gen_ref(&t.cx, GenDef::Fam(t.v.tag))
+                .expect("V has a family definition");
+        let Term::GlobalTm { var, .. } = &r else {
+            panic!("a reference is a global")
+        };
         let len = t.el.psi.bindings.len() as u32;
         let abs = len + t.el.attempt.goal_arena.base() - var.0 - 1;
         let binding = t.el.psi.bindings[abs as usize].clone();
@@ -1806,7 +2018,10 @@ inductive W : (n: Nat) -> Type {
         let dup = Term::GlobalTm {
             var: GlobalVar(t.el.attempt.goal_arena.base()),
             subst: LocalSubst {
-                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                tail: SubstTail::Empty {
+                    len: 0,
+                    base: CtxBase::Nil,
+                },
                 terms: vec![],
             },
         };
@@ -1827,19 +2042,31 @@ inductive Pv<A> : (n: Nat) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
-        let v = Rc::clone(el.types.inductive(&crate::names::qkey("main", "V")).expect("declared"));
-        let p = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Pv")).expect("declared"));
+        let v = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "V"))
+                .expect("declared"),
+        );
+        let p = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "Pv"))
+                .expect("declared"),
+        );
         let cx = Cx::empty();
         assert!(el.gen_ref(&cx, GenDef::Fam(p.tag)).is_none());
         let (pty, _) = el
             .lower_indexed_instance(&cx, &p, &[(Type::Nat, Level::Zero)], Term::Zero, SPAN)
             .expect("the parameterized family lowers");
-        let Type::El { tm, .. } = &pty else { panic!("a route-1 family is an El") };
+        let Type::El { tm, .. } = &pty else {
+            panic!("a route-1 family is an El")
+        };
         assert!(!matches!(&**tm, Term::App { .. }));
         let (ind, _) = el.indexed_of(&pty).expect("reads back structurally");
         assert_eq!(ind.tag, p.tag);
         // …and `V`'s reference is `V`, never `Pv`.
-        let (vty, _) = el.lower_indexed_instance(&cx, &v, &[], Term::Zero, SPAN).expect("lowers");
+        let (vty, _) = el
+            .lower_indexed_instance(&cx, &v, &[], Term::Zero, SPAN)
+            .expect("lowers");
         let (ind, _) = el.indexed_of(&vty).expect("reads back nominally");
         assert_eq!(ind.tag, v.tag);
         assert_ne!(ind.tag, p.tag);
@@ -1868,17 +2095,30 @@ inductive Bal : (s: Shape) -> Type {
         let cx = Cx::empty();
         for (name, iname) in [("Tg", "Col"), ("Bal", "Shape")] {
             let ind = Rc::clone(
-                el.types.inductive(&crate::names::qkey("main", name)).expect("declared"),
+                el.types
+                    .inductive(&crate::names::qkey("main", name))
+                    .expect("declared"),
             );
             let iind = Rc::clone(
-                el.types.inductive(&crate::names::qkey("main", iname)).expect("declared"),
+                el.types
+                    .inductive(&crate::names::qkey("main", iname))
+                    .expect("declared"),
             );
-            let (ity, ilvl) = el.lower_instance(&cx, &iind, &[], &[], SPAN).expect("lowers");
-            let idx = el.build_ctor(&cx, &iind, 0, &[], &ity, &ilvl, SPAN).expect("builds");
-            let (ty, _) =
-                el.lower_indexed_instance(&cx, &ind, &[], idx, SPAN).expect("the family lowers");
-            let Type::El { tm, .. } = &ty else { panic!("a route-1 family is an El") };
-            let Term::App { fun, dom, .. } = &**tm else { panic!("…of the family function") };
+            let (ity, ilvl) = el
+                .lower_instance(&cx, &iind, &[], &[], SPAN)
+                .expect("lowers");
+            let idx = el
+                .build_ctor(&cx, &iind, 0, &[], &ity, &ilvl, SPAN)
+                .expect("builds");
+            let (ty, _) = el
+                .lower_indexed_instance(&cx, &ind, &[], idx, SPAN)
+                .expect("the family lowers");
+            let Type::El { tm, .. } = &ty else {
+                panic!("a route-1 family is an El")
+            };
+            let Term::App { fun, dom, .. } = &**tm else {
+                panic!("…of the family function")
+            };
             assert!(el.is_gen_ref(fun, GenDef::Fam(ind.tag)));
             let Type::El { tm: dcode, .. } = &**dom else {
                 panic!("the domain is the index type's code reference")
@@ -1901,26 +2141,25 @@ inductive Bal : (s: Shape) -> Type {
         let mut cx = Cx::empty();
         cx.push("n".into(), Type::Nat, Level::Zero);
         let idx = Term::Var(LocalVar(0));
-        let (ty, l) = t
-            .el
-            .lower_indexed_instance(&cx, &t.v, &[], idx.clone(), SPAN)
-            .expect("the family lowers");
+        let (ty, l) =
+            t.el.lower_indexed_instance(&cx, &t.v, &[], idx.clone(), SPAN)
+                .expect("the family lowers");
         // The unfold by hand: the generator's own two passes, which is what δ
         // plus β plus decode of the reference arrives at.
-        let (_, l2) = t
-            .el
-            .build_family(&cx, &t.v, &[], &Level::Zero, idx.clone(), SPAN)
-            .expect("the level pass");
-        let (fam, _) = t
-            .el
-            .build_family(&cx, &t.v, &[], &l2, idx, SPAN)
-            .expect("the family builds");
+        let (_, l2) =
+            t.el.build_family(&cx, &t.v, &[], &Level::Zero, idx.clone(), SPAN)
+                .expect("the level pass");
+        let (fam, _) =
+            t.el.build_family(&cx, &t.v, &[], &l2, idx, SPAN)
+                .expect("the family builds");
         assert_eq!(l, l2);
-        let inline = Type::El { level: l2, tm: Rc::new(fam) };
-        let (ind, refam) = t
-            .el
-            .indexed_of(&inline)
-            .expect("the pre-unfolded spelling still reads back");
+        let inline = Type::El {
+            level: l2,
+            tm: Rc::new(fam),
+        };
+        let (ind, refam) =
+            t.el.indexed_of(&inline)
+                .expect("the pre-unfolded spelling still reads back");
         assert_eq!(ind.tag, t.v.tag);
         assert!(matches!(refam.at(Term::Zero, 0), Term::ElimNat { .. }));
         heather_kernel::conv::conv_type(

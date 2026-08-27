@@ -62,7 +62,10 @@ pub(crate) struct Scope {
 
 impl Scope {
     pub fn new(module: impl Into<String>) -> Self {
-        Scope { module: module.into(), imports: Vec::new() }
+        Scope {
+            module: module.into(),
+            imports: Vec::new(),
+        }
     }
 
     /// Every module a *reference* here may reach, own module first. The
@@ -137,7 +140,10 @@ pub(crate) struct ResolutionScope<'a> {
 
 impl Drop for ResolutionScope<'_> {
     fn drop(&mut self) {
-        self.stack.borrow_mut().pop().expect("a resolution scope was installed");
+        self.stack
+            .borrow_mut()
+            .pop()
+            .expect("a resolution scope was installed");
     }
 }
 
@@ -189,7 +195,10 @@ impl NameIndex {
         self.by_name
             .entry(name.to_string())
             .or_default()
-            .push(NameEntry { module: module.to_string(), kind });
+            .push(NameEntry {
+                module: module.to_string(),
+                kind,
+            });
     }
 
     pub fn entries(&self, name: &str) -> &[NameEntry] {
@@ -203,7 +212,9 @@ impl NameIndex {
 
     /// Is `name` declared in `module` as one of `kinds`?
     pub fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
-        self.entries(name).iter().any(|e| e.module == module && kinds.contains(&e.kind))
+        self.entries(name)
+            .iter()
+            .any(|e| e.module == module && kinds.contains(&e.kind))
     }
 }
 
@@ -238,25 +249,23 @@ impl Names {
     }
 
     pub(crate) fn enter_scope(&mut self, scope: Scope) {
-        self.module_scopes.insert(scope.module.clone(), scope.clone());
+        self.module_scopes
+            .insert(scope.module.clone(), scope.clone());
         self.scope = scope;
     }
 
     pub(crate) fn use_scope(&self, scope: Rc<Scope>) -> ResolutionScope<'_> {
         self.resolution_scopes.borrow_mut().push(scope);
-        ResolutionScope { stack: &self.resolution_scopes }
+        ResolutionScope {
+            stack: &self.resolution_scopes,
+        }
     }
 
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
         self.index.declares(module, name)
     }
 
-    pub(crate) fn declares_as(
-        &self,
-        module: &str,
-        name: &str,
-        kinds: &[NameKind],
-    ) -> bool {
+    pub(crate) fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
         self.index.declares_as(module, name, kinds)
     }
 
@@ -308,10 +317,17 @@ impl Names {
     }
 
     pub(crate) fn commit_global(&mut self, abs: u32, reg: GlobalRegistration) {
-        let GlobalRegistration { name, key, params, member_base, surface } = reg;
+        let GlobalRegistration {
+            name,
+            key,
+            params,
+            member_base,
+            surface,
+        } = reg;
         debug_assert!(!self.globals.contains_key(&key));
         debug_assert!(!self.by_abs.contains_key(&abs));
-        self.index.insert(&self.scope.module, &name, NameKind::Global);
+        self.index
+            .insert(&self.scope.module, &name, NameKind::Global);
         self.by_abs.insert(abs, key.clone());
         self.globals.insert(key, GlobalInfo { abs, params });
         if let Some(base) = member_base {
@@ -370,9 +386,8 @@ fn resolve_kinds(
     // `nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
     // this file never imported.
-    let visible_module = qual == scope.module
-        || scope.imports_module(qual)
-        || qual == PRELUDE_MODULE;
+    let visible_module =
+        qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
     if visible_module && index.declares(qual, base) {
         return NameRes::Found(qual.to_string());
     }
@@ -405,12 +420,7 @@ fn resolve_bare(index: &NameIndex, scope: &Scope, name: &str) -> NameRes {
     resolve_bare_kinds(index, scope, name, ANY_KIND)
 }
 
-fn resolve_bare_kinds(
-    index: &NameIndex,
-    scope: &Scope,
-    name: &str,
-    kinds: &[NameKind],
-) -> NameRes {
+fn resolve_bare_kinds(index: &NameIndex, scope: &Scope, name: &str, kinds: &[NameKind]) -> NameRes {
     // The filter is applied at each use rather than collected once: this
     // function is on the hot path of every name in every file, and an
     // allocation per resolution is not worth saving three predicate calls.
@@ -441,7 +451,10 @@ fn resolve_bare_kinds(
     }
     // Locals beat unlisted imports: the file you are reading beats the file
     // you are not. This is the one precedence in the system.
-    if entries.iter().any(|e| e.module == scope.module && of_kind(e)) {
+    if entries
+        .iter()
+        .any(|e| e.module == scope.module && of_kind(e))
+    {
         return NameRes::Found(scope.module.clone());
     }
     let mut hits: Vec<String> = Vec::new();
@@ -460,7 +473,11 @@ fn resolve_bare_kinds(
 
 /// The ambiguity message: both origins named, and the fix spelled out.
 pub(crate) fn ambiguity_msg(name: &str, origins: &[String]) -> String {
-    let list = origins.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(" and ");
+    let list = origins
+        .iter()
+        .map(|m| format!("`{m}`"))
+        .collect::<Vec<_>>()
+        .join(" and ");
     let first = origins.first().map(String::as_str).unwrap_or("m");
     format!(
         "`{name}` is ambiguous: it is declared in {list} — qualify it (`{first}::{name}`) \

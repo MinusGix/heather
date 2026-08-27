@@ -82,7 +82,10 @@ enum ITy {
     /// `s -> t`, non-dependent.
     Arrow(&'static ITy, &'static ITy),
     /// `[a; k]`.
-    Vec { elem: &'static str, len: &'static str },
+    Vec {
+        elem: &'static str,
+        len: &'static str,
+    },
 }
 
 impl ITy {
@@ -133,24 +136,66 @@ static SLOTS: &[SlotSpec] = &[
         slot: Slot::VecMap,
         path: ("vec", "map"),
         ingredients: &[
-            Ingr { name: "A", ty: ITy::Univ },
-            Ingr { name: "B", ty: ITy::Univ },
-            Ingr { name: "f", ty: ITy::Arrow(&EL_A, &EL_B) },
-            Ingr { name: "k", ty: ITy::Nat },
-            Ingr { name: "v", ty: ITy::Vec { elem: "A", len: "k" } },
+            Ingr {
+                name: "A",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "B",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "f",
+                ty: ITy::Arrow(&EL_A, &EL_B),
+            },
+            Ingr {
+                name: "k",
+                ty: ITy::Nat,
+            },
+            Ingr {
+                name: "v",
+                ty: ITy::Vec {
+                    elem: "A",
+                    len: "k",
+                },
+            },
         ],
-        result: ITy::Vec { elem: "B", len: "k" },
+        result: ITy::Vec {
+            elem: "B",
+            len: "k",
+        },
     },
     SlotSpec {
         slot: Slot::VecFold,
         path: ("vec", "fold"),
         ingredients: &[
-            Ingr { name: "A", ty: ITy::Univ },
-            Ingr { name: "B", ty: ITy::Univ },
-            Ingr { name: "z", ty: ITy::Elem("B") },
-            Ingr { name: "f", ty: ITy::Arrow(&EL_A, &B_TO_B) },
-            Ingr { name: "k", ty: ITy::Nat },
-            Ingr { name: "v", ty: ITy::Vec { elem: "A", len: "k" } },
+            Ingr {
+                name: "A",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "B",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "z",
+                ty: ITy::Elem("B"),
+            },
+            Ingr {
+                name: "f",
+                ty: ITy::Arrow(&EL_A, &B_TO_B),
+            },
+            Ingr {
+                name: "k",
+                ty: ITy::Nat,
+            },
+            Ingr {
+                name: "v",
+                ty: ITy::Vec {
+                    elem: "A",
+                    len: "k",
+                },
+            },
         ],
         result: ITy::Elem("B"),
     },
@@ -158,20 +203,47 @@ static SLOTS: &[SlotSpec] = &[
         slot: Slot::VecTabulate,
         path: ("vec", "tabulate"),
         ingredients: &[
-            Ingr { name: "B", ty: ITy::Univ },
-            Ingr { name: "k", ty: ITy::Nat },
-            Ingr { name: "f", ty: ITy::Arrow(&FIN_K, &EL_B) },
+            Ingr {
+                name: "B",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "k",
+                ty: ITy::Nat,
+            },
+            Ingr {
+                name: "f",
+                ty: ITy::Arrow(&FIN_K, &EL_B),
+            },
         ],
-        result: ITy::Vec { elem: "B", len: "k" },
+        result: ITy::Vec {
+            elem: "B",
+            len: "k",
+        },
     },
     SlotSpec {
         slot: Slot::VecNth,
         path: ("vec", "nth"),
         ingredients: &[
-            Ingr { name: "A", ty: ITy::Univ },
-            Ingr { name: "k", ty: ITy::Nat },
-            Ingr { name: "v", ty: ITy::Vec { elem: "A", len: "k" } },
-            Ingr { name: "i", ty: ITy::Fin("k") },
+            Ingr {
+                name: "A",
+                ty: ITy::Univ,
+            },
+            Ingr {
+                name: "k",
+                ty: ITy::Nat,
+            },
+            Ingr {
+                name: "v",
+                ty: ITy::Vec {
+                    elem: "A",
+                    len: "k",
+                },
+            },
+            Ingr {
+                name: "i",
+                ty: ITy::Fin("k"),
+            },
         ],
         result: ITy::Elem("A"),
     },
@@ -226,7 +298,9 @@ static ANALYZERS: &[AnalyzerSpec] = &[
 
 /// The analyzer slot a `for family.name` clause names, if it is one.
 pub(crate) fn lookup_analyzer(path: &SlotPath) -> Option<&'static AnalyzerSpec> {
-    ANALYZERS.iter().find(|s| s.path == (path.family.as_str(), path.name.as_str()))
+    ANALYZERS
+        .iter()
+        .find(|s| s.path == (path.family.as_str(), path.name.as_str()))
 }
 
 impl AnalyzerSpec {
@@ -237,11 +311,16 @@ impl AnalyzerSpec {
 
 /// The slot a `for family.name` clause names, if it is one.
 pub(crate) fn lookup(path: &SlotPath) -> Option<&'static SlotSpec> {
-    SLOTS.iter().find(|s| s.path == (path.family.as_str(), path.name.as_str()))
+    SLOTS
+        .iter()
+        .find(|s| s.path == (path.family.as_str(), path.name.as_str()))
 }
 
 pub(crate) fn spec(slot: Slot) -> &'static SlotSpec {
-    SLOTS.iter().find(|s| s.slot == slot).expect("every slot has a spec")
+    SLOTS
+        .iter()
+        .find(|s| s.slot == slot)
+        .expect("every slot has a spec")
 }
 
 /// Every slot's path, for the unknown-slot diagnostic.
@@ -249,7 +328,11 @@ pub(crate) fn known_paths() -> String {
     SLOTS
         .iter()
         .map(|s| format!("`{}.{}`", s.path.0, s.path.1))
-        .chain(ANALYZERS.iter().map(|s| format!("`{}.{}`", s.path.0, s.path.1)))
+        .chain(
+            ANALYZERS
+                .iter()
+                .map(|s| format!("`{}.{}`", s.path.0, s.path.1)),
+        )
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -313,9 +396,13 @@ impl SlotSpec {
         match ity {
             ITy::Univ => (Type::Ty(Level::Zero), Level::succ(Level::Zero)),
             ITy::Nat => (Type::Nat, Level::Zero),
-            ITy::Elem(name) => {
-                (Type::El { level: Level::Zero, tm: var(name) }, Level::Zero)
-            }
+            ITy::Elem(name) => (
+                Type::El {
+                    level: Level::Zero,
+                    tm: var(name),
+                },
+                Level::Zero,
+            ),
             ITy::Fin(name) => (Type::Fin { len: var(name) }, Level::Zero),
             ITy::Arrow(dom, cod) => {
                 let (dom_t, dom_level) = self.build(dom, order, depth);
@@ -333,7 +420,10 @@ impl SlotSpec {
             ITy::Vec { elem, len } => (
                 Type::Vec {
                     level: Level::Zero,
-                    elem: Rc::new(Type::El { level: Level::Zero, tm: var(elem) }),
+                    elem: Rc::new(Type::El {
+                        level: Level::Zero,
+                        tm: var(elem),
+                    }),
                     len: var(len),
                 },
                 Level::Zero,

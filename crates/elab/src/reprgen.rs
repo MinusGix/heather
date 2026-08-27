@@ -41,10 +41,10 @@ use std::rc::Rc;
 
 use heather_syntax::{Decl, Expr, ExprKind};
 
-use crate::datarepr::{
-    appc, impl_record_name, lams, params_src, spec_rec_name, spell_ty, CtorView,
-};
 use crate::Elaborator;
+use crate::datarepr::{
+    CtorView, appc, impl_record_name, lams, params_src, spec_rec_name, spell_ty,
+};
 
 /// One transfer: the surface source, plus what a caller needs to key it.
 pub struct ReprEmission {
@@ -265,7 +265,9 @@ impl Elaborator {
             .surface_decl(op)
             .ok_or_else(|| format!("`{op}` is not a declared function here"))?;
         if !f.tyvars.is_empty() {
-            return Err(format!("`{op}` is polymorphic: v1 transfers monomorphic operations"));
+            return Err(format!(
+                "`{op}` is polymorphic: v1 transfers monomorphic operations"
+            ));
         }
         // -- phase 1: eligibility (which runs first — §3.1's as-landed
         //    interleave: the callee set is only known once the arms are
@@ -286,7 +288,9 @@ impl Elaborator {
                 if name == op || callees.contains_key(&name) {
                     continue;
                 }
-                let Some(d) = self.names.surface_decl(&name) else { continue };
+                let Some(d) = self.names.surface_decl(&name) else {
+                    continue;
+                };
                 if !touches(d, &rp.written) {
                     continue;
                 }
@@ -330,7 +334,11 @@ impl Elaborator {
         // pushed through the image spine rather than the spec fn's recursor
         // unfolding (§3.3, as-landed).
         let res_is_spec = frag.result == *s;
-        let b = if res_is_spec { c.clone() } else { frag.result.clone() };
+        let b = if res_is_spec {
+            c.clone()
+        } else {
+            frag.result.clone()
+        };
         let b = &b;
 
         let mut steps: Vec<String> = Vec::new();
@@ -346,7 +354,11 @@ impl Elaborator {
             for (i, fld) in arm.ctor.fields.iter().enumerate() {
                 bs.push((
                     arm.binders[i].clone(),
-                    if fld.rec { c.clone() } else { fld.spell.clone() },
+                    if fld.rec {
+                        c.clone()
+                    } else {
+                        fld.spell.clone()
+                    },
                 ));
                 sbs.push((arm.binders[i].clone(), fld.spell.clone()));
             }
@@ -366,7 +378,10 @@ impl Elaborator {
                 sbs.push((format!("b{k}"), b.clone()));
             }
             let slot = |child: &str| {
-                let k = recs.iter().position(|r| *r == child).expect("checked in `fragment`");
+                let k = recs
+                    .iter()
+                    .position(|r| *r == child)
+                    .expect("checked in `fragment`");
                 format!("b{k}")
             };
             let sp_ctx = Spelling {
@@ -380,7 +395,9 @@ impl Elaborator {
                 // two closing lemmas walk it as an image spine: constructor
                 // nodes and resolved callees down to the recursion's own
                 // results. Anything else is outside the fragment.
-                let sp = rd.spine(arm.body).ok_or_else(|| rd.reason(op, &arm.ctor.name, s))?;
+                let sp = rd
+                    .spine(arm.body)
+                    .ok_or_else(|| rd.reason(op, &arm.ctor.name, s))?;
                 (sp_ctx.repr(&sp), Some(sp), Vec::new())
             } else {
                 let mut sites: Vec<Site> = Vec::new();
@@ -427,7 +444,13 @@ impl Elaborator {
             let a: Vec<String> = frag
                 .params
                 .iter()
-                .map(|(n, _)| if *n == frag.rec_param { x.to_string() } else { n.clone() })
+                .map(|(n, _)| {
+                    if *n == frag.rec_param {
+                        x.to_string()
+                    } else {
+                        n.clone()
+                    }
+                })
                 .collect();
             format!("{op}({})", a.join(", "))
         };
@@ -455,8 +478,11 @@ impl Elaborator {
         // the spec value it inducts on.
         let mut lem_params: Vec<(String, String)> = frag.others.clone();
         lem_params.push(("x".to_string(), s.clone()));
-        let lem_params_src =
-            lem_params.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ");
+        let lem_params_src = lem_params
+            .iter()
+            .map(|(n, t)| format!("{n}: {t}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let lem_at = |name: &str, x: &str| {
             let mut a: Vec<String> = frag.others.iter().map(|(n, _)| n.clone()).collect();
             a.push(x.to_string());
@@ -481,8 +507,12 @@ impl Elaborator {
         let inv_pres = format!("{op}_inv_pres");
         let abs_alg = format!("{op}_abs_alg");
         let acc_repr = |child: &str| spec_rec_at(child);
-        let sp_ctx =
-            Spelling { ctors: rp.ctors.as_slice(), rec, abs: &abs, acc: &acc_repr };
+        let sp_ctx = Spelling {
+            ctors: rp.ctors.as_slice(),
+            rec,
+            abs: &abs,
+            acc: &acc_repr,
+        };
         let acc_inv = |child: &str| lem_at(&inv_pres, child);
         let acc_abs = |child: &str| lem_at(&abs_alg, child);
         let acc_spec = |child: &str| plain_call(child);
@@ -601,7 +631,13 @@ impl Elaborator {
             appc(&inv, &["y".to_string()]),
             lem_at(&inv_pres, &appc(&abs, &[frag.rec_param.clone()]))
         ));
-        *target = Target::at(out.len(), &derived, &refines, Some(&refines_inv), &frag.rec_param);
+        *target = Target::at(
+            out.len(),
+            &derived,
+            &refines,
+            Some(&refines_inv),
+            &frag.rec_param,
+        );
         out.push_str(&format!(
             "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n    \
              refines_inv := {refines_inv},\n}}\n"
@@ -624,7 +660,10 @@ impl Elaborator {
         let mut at_s = Vec::new();
         for p in &d.params {
             let Some(t) = spell_ty(&p.ty) else {
-                return Err(format!("`{name}`'s parameter `{}` has an unspellable type", p.name));
+                return Err(format!(
+                    "`{name}`'s parameter `{}` has an unspellable type",
+                    p.name
+                ));
             };
             at_s.push(t == s);
         }
@@ -672,7 +711,10 @@ impl Elaborator {
         let mut params = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let Some(t) = spell_ty(&p.ty) else {
-                return Err(format!("`{op}`'s parameter `{}` has an unspellable type", p.name));
+                return Err(format!(
+                    "`{op}`'s parameter `{}` has an unspellable type",
+                    p.name
+                ));
             };
             params.push((p.name.clone(), t.clone()));
             if t == s {
@@ -688,7 +730,9 @@ impl Elaborator {
             }
         }
         let Some((rec_param, rec_ix)) = rec_param else {
-            return Err(format!("`{op}` takes no parameter at `{s}`: nothing to transfer"));
+            return Err(format!(
+                "`{op}` takes no parameter at `{s}`: nothing to transfer"
+            ));
         };
         // The body must be a bare case analysis on the recursion parameter.
         //
@@ -744,8 +788,9 @@ impl Elaborator {
                     ctor.fields.len()
                 ));
             }
-            let body = arm_body(arm)
-                .ok_or_else(|| format!("`{op}`'s `{name}` arm has a body this round cannot read"))?;
+            let body = arm_body(arm).ok_or_else(|| {
+                format!("`{op}`'s `{name}` arm has a body this round cannot read")
+            })?;
             // Every self-call descends on a recursive child of *this* arm and
             // passes the other parameters through unchanged; anything else is
             // a recursion the fold cannot express.
@@ -791,9 +836,20 @@ impl Elaborator {
                     ));
                 }
             }
-            out.push(Arm { ctor, binders, body });
+            out.push(Arm {
+                ctor,
+                binders,
+                body,
+            });
         }
-        Ok(Fragment { rec_param, rec_ix, others, params, result, arms: out })
+        Ok(Fragment {
+            rec_param,
+            rec_ix,
+            others,
+            params,
+            result,
+            arms: out,
+        })
     }
 }
 
@@ -977,7 +1033,11 @@ impl Read<'_> {
         }
         let mut out = Vec::new();
         for (at, a) in c.at_s.iter().zip(args) {
-            out.push(if *at { SArg::Rec(self.spine(a)?) } else { SArg::NonRec(self.data(a)?) });
+            out.push(if *at {
+                SArg::Rec(self.spine(a)?)
+            } else {
+                SArg::NonRec(self.data(a)?)
+            });
         }
         Some(out)
     }
@@ -1051,7 +1111,7 @@ impl Read<'_> {
                 return self.no(format!(
                     "`{}` has an arm built from a form this round does not spell",
                     self.op
-                ))
+                ));
             }
         })
     }
@@ -1060,7 +1120,9 @@ impl Read<'_> {
 /// Does this declaration mention the repr'd type anywhere in its signature?
 /// A callee that does needs its own `Impl` to close a certificate step.
 fn touches(d: &Decl, s: &str) -> bool {
-    d.params.iter().any(|p| spell_ty(&p.ty).as_deref() == Some(s))
+    d.params
+        .iter()
+        .any(|p| spell_ty(&p.ty).as_deref() == Some(s))
         || spell_ty(&d.result).as_deref() == Some(s)
 }
 
@@ -1102,7 +1164,9 @@ fn self_call_children(e: &Expr, op: &str, rec_ix: usize) -> Vec<String> {
 fn walk(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     match &e.kind {
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             walk(head, f);
             for a in args {
                 walk(a, f);
@@ -1171,7 +1235,10 @@ impl Spelling<'_> {
         match sp {
             Spine::Acc(child) => (self.acc)(child),
             Spine::Node(k, args) => {
-                let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+                let a: Vec<String> = args
+                    .iter()
+                    .map(|x| self.arg(x, &|sp| self.repr(sp)))
+                    .collect();
                 appc(&self.image(k), &a)
             }
         }
@@ -1183,8 +1250,10 @@ impl Spelling<'_> {
         match sp {
             Spine::Acc(child) => acc_spec(child),
             Spine::Node(k, args) => {
-                let a: Vec<String> =
-                    args.iter().map(|x| self.arg(x, &|sp| self.spec(sp, acc_spec))).collect();
+                let a: Vec<String> = args
+                    .iter()
+                    .map(|x| self.arg(x, &|sp| self.spec(sp, acc_spec)))
+                    .collect();
                 self.spec_app(k, &a)
             }
         }
@@ -1207,8 +1276,10 @@ impl Spelling<'_> {
             Spine::Node(k, args) => {
                 // One argument list, in the law's own binder order: the image's
                 // arguments, then one `inv` proof per repr-typed one.
-                let mut a: Vec<String> =
-                    args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+                let mut a: Vec<String> = args
+                    .iter()
+                    .map(|x| self.arg(x, &|sp| self.repr(sp)))
+                    .collect();
                 for sp in rec_args(args) {
                     a.push(self.inv_proof(sp, acc_inv));
                 }
@@ -1238,7 +1309,10 @@ impl Spelling<'_> {
             Spine::Acc(child) => return acc_abs(child),
             Spine::Node(k, args) => (k, args),
         };
-        let mut a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+        let mut a: Vec<String> = args
+            .iter()
+            .map(|x| self.arg(x, &|sp| self.repr(sp)))
+            .collect();
         let recs = rec_args(args);
         for sp in &recs {
             a.push(self.inv_proof(sp, acc_inv));
@@ -1280,7 +1354,13 @@ impl Spelling<'_> {
 
 fn rec_args(args: &[SArg]) -> Vec<&Spine> {
     args.iter()
-        .filter_map(|a| if let SArg::Rec(sp) = a { Some(sp) } else { None })
+        .filter_map(|a| {
+            if let SArg::Rec(sp) = a {
+                Some(sp)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -1391,7 +1471,9 @@ fn vars_outside_self_calls(e: &Expr, op: &str, rec_ix: usize) -> Vec<String> {
     fn go(e: &Expr, op: &str, rec_ix: usize, out: &mut Vec<String>) {
         match &e.kind {
             ExprKind::Var(v) => out.push(v.clone()),
-            ExprKind::App { head, args, named, .. } => {
+            ExprKind::App {
+                head, args, named, ..
+            } => {
                 if matches!(&head.kind, ExprKind::Var(h) if h == op) {
                     // The recursion argument is the one position a recursive
                     // child legitimately appears in.

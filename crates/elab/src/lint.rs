@@ -7,10 +7,10 @@
 //! path. Semantic lints may still be raised where their analysis lives, but
 //! use the same [`Lint`] identity.
 
-use heather_syntax::lexer::{lex, Tok, TokKind};
+use heather_syntax::lexer::{Tok, TokKind, lex};
 use heather_syntax::{
-    Block, ClassRef, DatareprBody, Decl, DeclKind, Expr, ExprKind, FieldDecl, InstanceBody, Item, Param,
-    MatchForm, Span, Stmt, Ty, TyKind,
+    Block, ClassRef, DatareprBody, Decl, DeclKind, Expr, ExprKind, FieldDecl, InstanceBody, Item,
+    MatchForm, Param, Span, Stmt, Ty, TyKind,
 };
 
 /// Which project-specific source conventions should accompany the general
@@ -82,7 +82,11 @@ impl<'a> Source<'a> {
         // `Source` is built only after `parse_file` succeeded, so lexing the
         // exact same bytes cannot fail.
         let toks = lex(text).expect("parsed source must lex");
-        Self { text, toks, profile }
+        Self {
+            text,
+            toks,
+            profile,
+        }
     }
 
     fn written(&self, span: Span) -> &'a str {
@@ -107,7 +111,10 @@ impl<'a> Source<'a> {
             .toks
             .iter()
             .find(|t| t.span.start >= partial.end && matches!(t.kind, TokKind::LBrace))?;
-        Some(Span { start: partial.start, end: brace.span.start })
+        Some(Span {
+            start: partial.start,
+            end: brace.span.start,
+        })
     }
 }
 
@@ -122,8 +129,11 @@ type SourceLint = fn(&Item, &Source<'_>, &mut Vec<Finding>);
 /// The registry. A source-expression lint is one function and one row; the
 /// shared total walker supplies nesting, item ownership, and deterministic
 /// source order.
-const EXPR_LINTS: &[ExprLint] =
-    &[match_function_application, nested_call, unused_pattern_binders];
+const EXPR_LINTS: &[ExprLint] = &[
+    match_function_application,
+    nested_call,
+    unused_pattern_binders,
+];
 const SOURCE_LINTS: &[SourceLint] = &[tight_negation_spacing, stdlib_unicode_spelling];
 
 pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
@@ -200,7 +210,11 @@ fn datarepr_body(body: &DatareprBody, out: &mut Vec<Finding>) {
 fn block(b: &Block, out: &mut Vec<Finding>) {
     for s in &b.stmts {
         match s {
-            Stmt::Let { ty: ann, expr: value, .. } => {
+            Stmt::Let {
+                ty: ann,
+                expr: value,
+                ..
+            } => {
                 if let Some(t) = ann {
                     ty(t, out);
                 }
@@ -264,7 +278,9 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::AutoRefl
         | ExprKind::Hole(_) => {}
         ExprKind::TyLit(t) => ty(t, out),
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             expr_with_context(head, ExprContext { is_app_head: true }, out);
             args.iter().for_each(|a| expr(a, out));
             named.iter().for_each(|a| expr(&a.expr, out));
@@ -274,7 +290,10 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
             args.iter().for_each(|a| ty(a, out));
         }
         ExprKind::Lam { binders, body } => {
-            binders.iter().filter_map(|b| b.ty.as_ref()).for_each(|t| ty(t, out));
+            binders
+                .iter()
+                .filter_map(|b| b.ty.as_ref())
+                .for_each(|t| ty(t, out));
             expr(body, out);
         }
         ExprKind::VecLit(xs) => xs.iter().for_each(|x| expr(x, out)),
@@ -282,17 +301,28 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
             expr(a, out);
             expr(b, out);
         }
-        ExprKind::Match { scrut, motive, arms, .. } => {
+        ExprKind::Match {
+            scrut,
+            motive,
+            arms,
+            ..
+        } => {
             expr(scrut, out);
             motive.iter().for_each(|m| expr(m, out));
             arms.iter().for_each(|a| expr(&a.body, out));
         }
-        ExprKind::MatchCode { scrut, motive, arms } => {
+        ExprKind::MatchCode {
+            scrut,
+            motive,
+            arms,
+        } => {
             expr(scrut, out);
             ty(motive, out);
             arms.iter().for_each(|a| expr(&a.body, out));
         }
-        ExprKind::Dot { recv, args, named, .. } => {
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
             expr(recv, out);
             args.iter().flatten().for_each(|a| expr(a, out));
             named.iter().for_each(|a| expr(&a.expr, out));
@@ -303,7 +333,11 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         }
         ExprKind::Block(b) => block(b, out),
         ExprKind::Quote(x) | ExprKind::Splice(x) => expr(x, out),
-        ExprKind::J { proof, motive, case } => {
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+        } => {
             expr(proof, out);
             expr(motive, out);
             expr(case, out);
@@ -312,25 +346,52 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
 }
 
 fn match_function_application(e: &Expr, _context: ExprContext, out: &mut Vec<Finding>) {
-    let ExprKind::Lam { binders, body } = &e.kind else { return };
-    let ExprKind::App { head, args, named, explicit, .. } = &body.kind else { return };
+    let ExprKind::Lam { binders, body } = &e.kind else {
+        return;
+    };
+    let ExprKind::App {
+        head,
+        args,
+        named,
+        explicit,
+        ..
+    } = &body.kind
+    else {
+        return;
+    };
     if *explicit || !named.is_empty() || args.is_empty() || args.len() > binders.len() {
         return;
     }
-    let ExprKind::Match { motive: Some(motive), generated: false, .. } = &head.kind else {
+    let ExprKind::Match {
+        motive: Some(motive),
+        generated: false,
+        ..
+    } = &head.kind
+    else {
         return;
     };
-    let ExprKind::Lam { body: motive_body, .. } = &motive.kind else { return };
+    let ExprKind::Lam {
+        body: motive_body, ..
+    } = &motive.kind
+    else {
+        return;
+    };
     if !matches!(&motive_body.kind, ExprKind::TyLit(t) if matches!(t.kind, TyKind::Fn { .. })) {
         return;
     }
     let tail = &binders[binders.len() - args.len()..];
-    if !tail.iter().zip(args).all(|(binder, arg)| {
-        matches!(&arg.kind, ExprKind::Var(name) if name == &binder.name)
-    }) {
+    if !tail
+        .iter()
+        .zip(args)
+        .all(|(binder, arg)| matches!(&arg.kind, ExprKind::Var(name) if name == &binder.name))
+    {
         return;
     }
-    let names = tail.iter().map(|b| format!("`{}`", b.name)).collect::<Vec<_>>().join(", ");
+    let names = tail
+        .iter()
+        .map(|b| format!("`{}`", b.name))
+        .collect::<Vec<_>>()
+        .join(", ");
     out.push(Finding {
         lint: Lint::MatchFunctionApplication,
         msg: format!(
@@ -348,7 +409,16 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
     if context.is_app_head {
         return;
     }
-    let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return };
+    let ExprKind::App {
+        head,
+        args,
+        named,
+        explicit,
+        ..
+    } = &e.kind
+    else {
+        return;
+    };
     if *explicit || args.is_empty() || !named.is_empty() {
         return;
     }
@@ -383,7 +453,16 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
 }
 
 fn unused_pattern_binders(e: &Expr, _context: ExprContext, out: &mut Vec<Finding>) {
-    let ExprKind::Match { form, generated: false, arms, eqbind, .. } = &e.kind else { return };
+    let ExprKind::Match {
+        form,
+        generated: false,
+        arms,
+        eqbind,
+        ..
+    } = &e.kind
+    else {
+        return;
+    };
     if !matches!(form, MatchForm::Match | MatchForm::Split) {
         return;
     }
@@ -512,7 +591,9 @@ impl BinderUses {
                 self.ty(elem);
                 self.expr(len);
             }
-            TyKind::Fn { binder, dom, cod, .. } => {
+            TyKind::Fn {
+                binder, dom, cod, ..
+            } => {
                 self.ty(dom);
                 self.scoped(|this| {
                     if let Some(name) = binder {
@@ -569,7 +650,9 @@ impl BinderUses {
             | ExprKind::AutoRefl
             | ExprKind::Hole(_) => {}
             ExprKind::TyLit(t) => self.ty(t),
-            ExprKind::App { head, args, named, .. } => {
+            ExprKind::App {
+                head, args, named, ..
+            } => {
                 self.expr(head);
                 args.iter().for_each(|a| self.expr(a));
                 named.iter().for_each(|a| self.expr(&a.expr));
@@ -590,13 +673,21 @@ impl BinderUses {
                 self.expr(a);
                 self.expr(b);
             }
-            ExprKind::Match { scrut, motive, arms, eqbind, .. } => {
+            ExprKind::Match {
+                scrut,
+                motive,
+                arms,
+                eqbind,
+                ..
+            } => {
                 self.expr(scrut);
                 motive.iter().for_each(|m| self.expr(m));
                 for arm in arms {
                     self.scoped(|this| {
                         let mut ignored = Vec::new();
-                        arm.binders.iter().for_each(|p| this.bind_pattern(p, &mut ignored, false));
+                        arm.binders
+                            .iter()
+                            .for_each(|p| this.bind_pattern(p, &mut ignored, false));
                         if let Some(name) = eqbind {
                             this.bind_shadow(name);
                         }
@@ -604,7 +695,11 @@ impl BinderUses {
                     });
                 }
             }
-            ExprKind::MatchCode { scrut, motive, arms } => {
+            ExprKind::MatchCode {
+                scrut,
+                motive,
+                arms,
+            } => {
                 self.expr(scrut);
                 self.ty(motive);
                 for arm in arms {
@@ -617,7 +712,9 @@ impl BinderUses {
                     });
                 }
             }
-            ExprKind::Dot { recv, args, named, .. } => {
+            ExprKind::Dot {
+                recv, args, named, ..
+            } => {
                 self.expr(recv);
                 args.iter().flatten().for_each(|a| self.expr(a));
                 named.iter().for_each(|a| self.expr(&a.expr));
@@ -628,7 +725,11 @@ impl BinderUses {
             }
             ExprKind::Block(b) => self.block(b),
             ExprKind::Quote(x) | ExprKind::Splice(x) => self.expr(x),
-            ExprKind::J { proof, motive, case } => {
+            ExprKind::J {
+                proof,
+                motive,
+                case,
+            } => {
                 self.expr(proof);
                 self.expr(motive);
                 self.expr(case);
@@ -659,9 +760,15 @@ fn tight_negation_spacing(item: &Item, source: &Source<'_>, out: &mut Vec<Findin
             out.push(Finding {
                 lint: Lint::TightNegationSpacing,
                 msg: "prefix negation is written tightly; remove the space after `¬`".into(),
-                span: Span { start: neg.span.start, end: next.span.start },
+                span: Span {
+                    start: neg.span.start,
+                    end: next.span.start,
+                },
                 fix: Some(crate::LintFix {
-                    span: Span { start: neg.span.end, end: next.span.start },
+                    span: Span {
+                        start: neg.span.end,
+                        end: next.span.start,
+                    },
                     replacement: String::new(),
                 }),
             });

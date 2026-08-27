@@ -65,7 +65,9 @@ impl Provenance {
             );
         }
         for dependency in &direct {
-            let Some(entry) = self.entries.get(dependency) else { continue };
+            let Some(entry) = self.entries.get(dependency) else {
+                continue;
+            };
             for inherited in entry.axioms.values() {
                 let mut candidate = Vec::with_capacity(inherited.path.len() + 1);
                 candidate.push(key.clone());
@@ -77,14 +79,22 @@ impl Provenance {
                 };
                 match axioms.get(&inherited.axiom) {
                     Some(old)
-                        if (old.path.len(), &old.path) <= (replacement.path.len(), &replacement.path) => {}
+                        if (old.path.len(), &old.path)
+                            <= (replacement.path.len(), &replacement.path) => {}
                     _ => {
                         axioms.insert(inherited.axiom.clone(), replacement);
                     }
                 }
             }
         }
-        self.entries.insert(key, Entry { is_axiom, direct, axioms });
+        self.entries.insert(
+            key,
+            Entry {
+                is_axiom,
+                direct,
+                axioms,
+            },
+        );
     }
 
     pub(crate) fn report(&self, key: &str) -> Option<AxiomReport> {

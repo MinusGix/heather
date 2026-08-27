@@ -22,8 +22,8 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
-use crate::inductive::{decoded, FieldKind};
-use crate::{err, Alias, Cx, Elaborator, R};
+use crate::inductive::{FieldKind, decoded};
+use crate::{Alias, Cx, Elaborator, R, err};
 
 /// One row of the matrix: a pattern per column, the body it selects, and the
 /// pattern variables the columns it has already been specialized *past* bound
@@ -151,9 +151,10 @@ impl Elaborator {
         // binder (issues/deep-pattern-ctor-needs-column-type.md).
         let has_deep = arms.iter().any(|a| {
             let cols = self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span);
-            a.binders.iter().enumerate().any(|(j, p)| {
-                self.pat_is_deep_at(p, cols.as_ref().and_then(|cs| cs.get(j)))
-            })
+            a.binders
+                .iter()
+                .enumerate()
+                .any(|(j, p)| self.pat_is_deep_at(p, cols.as_ref().and_then(|cs| cs.get(j))))
         });
         if !has_named && !arms.iter().any(|a| a.default) && !has_deep {
             return Ok(None);
@@ -175,9 +176,7 @@ impl Elaborator {
                     a.binders
                         .iter()
                         .enumerate()
-                        .map(|(j, p)| {
-                            self.reclassify_at(p, cols.as_ref().and_then(|cs| cs.get(j)))
-                        })
+                        .map(|(j, p)| self.reclassify_at(p, cols.as_ref().and_then(|cs| cs.get(j))))
                         .collect()
                 },
                 ..a.clone()
@@ -214,7 +213,8 @@ impl Elaborator {
             binding: vec![false; arms.len()],
         };
         let out = self.emit_top(&mut st, &arms, rows, ctors, span)?;
-        self.settle(cx, &arms, out, &st, result, independent, mlvl).map(Some)
+        self.settle(cx, &arms, out, &st, result, independent, mlvl)
+            .map(Some)
     }
 
     // -- validation (§4, §6, §7) --------------------------------------------
@@ -263,7 +263,9 @@ impl Elaborator {
         // elaborates (a bare self-reference is already an error).
         if let Some(dec) = crate::recursion::descends_on_param(cx, scrut_t)
             && let Some(s) = cx.selfref.as_ref()
-            && arms.iter().any(|a| crate::inductive::expr_mentions(&a.body, &s.name))
+            && arms
+                .iter()
+                .any(|a| crate::inductive::expr_mentions(&a.body, &s.name))
         {
             return err(
                 format!(
@@ -287,7 +289,9 @@ impl Elaborator {
             .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(i, _)| i));
         let Some(ind) = fam else { return Ok(()) };
         for a in arms {
-            let Some(i) = crate::inductive::arm_ctor_index(&ind, &a.ctor) else { continue };
+            let Some(i) = crate::inductive::arm_ctor_index(&ind, &a.ctor) else {
+                continue;
+            };
             for (k, p) in a.binders.iter().enumerate() {
                 if p.is_deep() && matches!(ind.ctors[i].kind.get(k), Some(FieldKind::IndexVar)) {
                     return err(
@@ -441,14 +445,23 @@ impl Elaborator {
                 let body = self.compile(st, arms, &cols, sub, span)?;
                 let binders = cols
                     .iter()
-                    .map(|c| Pat::Var { name: c.clone(), span })
+                    .map(|c| Pat::Var {
+                        name: c.clone(),
+                        span,
+                    })
                     .collect();
                 (binders, body)
             };
             // The arm's span is its *first* source row's, so an arity or
             // duplicate diagnostic still lands where the user wrote it.
             let aspan = group.first().map(|r| r.span).unwrap_or(span);
-            out.push(Arm { ctor: name, default: false, binders, body, span: aspan });
+            out.push(Arm {
+                ctor: name,
+                default: false,
+                binders,
+                body,
+                span: aspan,
+            });
         }
         Ok(out)
     }
@@ -533,7 +546,10 @@ impl Elaborator {
                 default: false,
                 binders: sub_cols
                     .iter()
-                    .map(|c| Pat::Var { name: c.clone(), span })
+                    .map(|c| Pat::Var {
+                        name: c.clone(),
+                        span,
+                    })
                     .collect(),
                 body,
                 span,
@@ -659,7 +675,8 @@ impl Elaborator {
                         // §5.2: elaborate once, park it in an alias, and let
                         // alias resolution do the per-arm weakening.
                         let t = self.elab_check(&cx2, &a.body, result, mlvl)?;
-                        cx2.aliases.push(Rc::new(Alias { skel: None,
+                        cx2.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name: slot(i),
                             depth: cx2.names.len(),
                             term: Rc::new(t),
@@ -710,15 +727,18 @@ impl Elaborator {
                         .is_some()
                 }) =>
             {
-                Pat::Ctor { name: name.clone(), args: vec![], span: *span }
+                Pat::Ctor {
+                    name: name.clone(),
+                    args: vec![],
+                    span: *span,
+                }
             }
             Pat::Var { .. } => p.clone(),
             Pat::Ctor { name, args, span } => Pat::Ctor {
                 name: name.clone(),
                 args: {
-                    let cols = col.and_then(|c| {
-                        self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span)
-                    });
+                    let cols =
+                        col.and_then(|c| self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span));
                     args.iter()
                         .enumerate()
                         .map(|(j, a)| self.reclassify_at(a, cols.as_ref().and_then(|cs| cs.get(j))))
@@ -738,7 +758,8 @@ impl Elaborator {
         match p {
             Pat::Ctor { .. } => true,
             Pat::Var { name, span } => col.is_some_and(|c| {
-                self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span).is_some()
+                self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span)
+                    .is_some()
             }),
             Pat::Named { pat, .. } => self.pat_is_deep_at(pat, col),
         }
@@ -778,7 +799,11 @@ impl Elaborator {
         if matches!(head, Type::Nat) {
             return match ctor_name {
                 "Zero" => Some(vec![]),
-                "Succ" => Some(vec![PatCol { cx: cx.clone(), ty: Type::Nat, lvl: Level::Zero }]),
+                "Succ" => Some(vec![PatCol {
+                    cx: cx.clone(),
+                    ty: Type::Nat,
+                    lvl: Level::Zero,
+                }]),
                 _ => None,
             };
         }
@@ -791,7 +816,13 @@ impl Elaborator {
         let mut payloads = Vec::new();
         let mut first = true;
         loop {
-            let Type::Sigma { fst_level, snd, fst, .. } = self.whnf(&pcx, &cur, span).ok()? else {
+            let Type::Sigma {
+                fst_level,
+                snd,
+                fst,
+                ..
+            } = self.whnf(&pcx, &cur, span).ok()?
+            else {
                 break;
             };
             if !first {
@@ -805,7 +836,11 @@ impl Elaborator {
             let next = snd.apply_local(
                 &crate::embed(&pcx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))),
             );
-            pcx.push(format!("#pat{}", pcx.names.len()), (*fst).clone(), fst_level);
+            pcx.push(
+                format!("#pat{}", pcx.names.len()),
+                (*fst).clone(),
+                fst_level,
+            );
             cur = next;
         }
         if payloads.len() != ctor.payload().count() {
@@ -875,9 +910,11 @@ impl Elaborator {
                 out.push(arm.clone());
                 continue;
             };
-            let binders =
-                self.normalize_pat_args(&arm.ctor, &arm.binders, &ind.ctors[i].fields)?;
-            out.push(Arm { binders, ..arm.clone() });
+            let binders = self.normalize_pat_args(&arm.ctor, &arm.binders, &ind.ctors[i].fields)?;
+            out.push(Arm {
+                binders,
+                ..arm.clone()
+            });
         }
         Ok(out)
     }
@@ -887,7 +924,9 @@ impl Elaborator {
             Pat::Var { .. } => Ok(p.clone()),
             Pat::Named { .. } => unreachable!("a named pattern is normalized with its siblings"),
             Pat::Ctor { name, args, span } => {
-                let fields = self.ctor_of(name).map(|(ind, i)| ind.ctors[i].fields.clone());
+                let fields = self
+                    .ctor_of(name)
+                    .map(|(ind, i)| ind.ctors[i].fields.clone());
                 let args = match fields {
                     Some(fields) => self.normalize_pat_args(name, args, &fields)?,
                     None if args.iter().any(Pat::has_named) => {
@@ -896,11 +935,18 @@ impl Elaborator {
                                 "`{name}` has positional-only pattern fields; write its binders by position"
                             ),
                             *span,
-                        )
+                        );
                     }
-                    None => args.iter().map(|a| self.normalize_pat(a)).collect::<R<_>>()?,
+                    None => args
+                        .iter()
+                        .map(|a| self.normalize_pat(a))
+                        .collect::<R<_>>()?,
                 };
-                Ok(Pat::Ctor { name: name.clone(), args, span: *span })
+                Ok(Pat::Ctor {
+                    name: name.clone(),
+                    args,
+                    span: *span,
+                })
             }
         }
     }
@@ -937,7 +983,9 @@ impl Elaborator {
         let mut out: Vec<Pat> = fields.iter().map(|_| wild(args[0].span())).collect();
         let mut used = vec![false; fields.len()];
         for arg in args {
-            let Pat::Named { field, pat, span } = arg else { unreachable!() };
+            let Pat::Named { field, pat, span } = arg else {
+                unreachable!()
+            };
             let Some(i) = fields.iter().position(|(n, _)| n.as_deref() == Some(field)) else {
                 return err(format!("`{ctor}` has no field `{field}`"), *span);
             };
@@ -976,7 +1024,10 @@ impl Elaborator {
     /// so: a `_` must expand to exactly the arms that dispatch will demand.
     fn ctors_at(&self, cx: &Cx, scrut_ty: &Type, span: Span) -> Option<Vec<(String, usize)>> {
         let named = |ind: &crate::inductive::Inductive| {
-            ind.ctors.iter().map(|c| (c.name.clone(), c.fields.len())).collect::<Vec<_>>()
+            ind.ctors
+                .iter()
+                .map(|c| (c.name.clone(), c.fields.len()))
+                .collect::<Vec<_>>()
         };
         if let Some((ind, _)) = self.forded_of_at(cx, scrut_ty) {
             return Some(named(&ind));
@@ -1017,18 +1068,27 @@ fn pat_names(ps: &[Pat], f: &mut impl FnMut(&str)) {
 }
 
 fn wild(span: Span) -> Pat {
-    Pat::Var { name: "_".to_string(), span }
+    Pat::Var {
+        name: "_".to_string(),
+        span,
+    }
 }
 
 fn placeholder(body: usize, span: Span) -> Expr {
-    Expr { kind: ExprKind::Var(slot(body)), span }
+    Expr {
+        kind: ExprKind::Var(slot(body)),
+        span,
+    }
 }
 
 fn let_alias(name: &str, col: &str, span: Span) -> Stmt {
     Stmt::Let {
         name: name.to_string(),
         ty: None,
-        expr: Expr { kind: ExprKind::Var(col.to_string()), span },
+        expr: Expr {
+            kind: ExprKind::Var(col.to_string()),
+            span,
+        },
         span,
     }
 }
@@ -1037,7 +1097,10 @@ fn let_alias(name: &str, col: &str, span: Span) -> Stmt {
 /// this module generates are walked — a placeholder cannot occur anywhere
 /// else, since its name is unspellable.
 fn fill_arm(a: Arm, bodies: &[Option<Expr>]) -> Arm {
-    Arm { body: fill(a.body, bodies), ..a }
+    Arm {
+        body: fill(a.body, bodies),
+        ..a
+    }
 }
 
 fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
@@ -1054,7 +1117,12 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
             }
         }
         ExprKind::Block(b) => {
-            let Block { stmts, result, ons, span } = *b;
+            let Block {
+                stmts,
+                result,
+                ons,
+                span,
+            } = *b;
             Expr {
                 kind: ExprKind::Block(Box::new(Block {
                     stmts,
@@ -1065,7 +1133,14 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
                 span: e.span,
             }
         }
-        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => Expr {
+        ExprKind::Match {
+            form,
+            generated,
+            scrut,
+            eqbind,
+            motive,
+            arms,
+        } => Expr {
             kind: ExprKind::Match {
                 form,
                 generated,

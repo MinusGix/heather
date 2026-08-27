@@ -21,13 +21,11 @@ use std::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{
-    GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
-};
+use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
 use heather_kernel::typing;
 use heather_syntax::{Expr, ExprKind, Span};
 
-use crate::{stats, Cx, ElabError, Elaborator};
+use crate::{Cx, ElabError, Elaborator, stats};
 
 /// How deep backchaining may go before it refuses. Declaration-time
 /// structural decrease (design §6) is what makes this unreachable; the cap is
@@ -48,7 +46,11 @@ pub struct TraceLine {
 }
 
 fn line(depth: usize, key: &'static str, value: impl Into<String>) -> TraceLine {
-    TraceLine { depth, key, value: value.into() }
+    TraceLine {
+        depth,
+        key,
+        value: value.into(),
+    }
 }
 
 /// Render a trace as one `key: value` line per record, indented by depth.
@@ -124,7 +126,11 @@ impl Elaborator {
         let depth = self.resolve_depth.get();
         tr.push(line(depth, "goal", display.to_string()));
         if depth >= MAX_DEPTH {
-            tr.push(line(depth, "depth", format!("gave up at {MAX_DEPTH} nested subgoals")));
+            tr.push(line(
+                depth,
+                "depth",
+                format!("gave up at {MAX_DEPTH} nested subgoals"),
+            ));
             return None;
         }
 
@@ -168,7 +174,10 @@ impl Elaborator {
         tr.push(line(
             depth,
             "scope",
-            format!("{} binder(s) consulted, none of the goal type", cx.names.len()),
+            format!(
+                "{} binder(s) consulted, none of the goal type",
+                cx.names.len()
+            ),
         ));
 
         // 2. The registry. Only a *class* has one: an `:= infer` goal at an
@@ -179,14 +188,21 @@ impl Elaborator {
             return None;
         };
         let Some(ckey) = self.key_of(&ind.name) else {
-            tr.push(line(depth, "no-class", format!("`{}` does not resolve here", ind.name)));
+            tr.push(line(
+                depth,
+                "no-class",
+                format!("`{}` does not resolve here", ind.name),
+            ));
             return None;
         };
         if !self.traits.has_class(&ckey) {
             tr.push(line(
                 depth,
                 "no-class",
-                format!("`{}` is a record, not a class, so it has no instances", ind.name),
+                format!(
+                    "`{}` is a record, not a class, so it has no instances",
+                    ind.name
+                ),
             ));
             return None;
         }
@@ -194,10 +210,18 @@ impl Elaborator {
         // declaration order and never `HashMap` order (design §3.1).
         let cands = self.traits.candidates(&ckey);
         if cands.is_empty() {
-            tr.push(line(depth, "no-instance", format!("`{}` has no instances", ind.name)));
+            tr.push(line(
+                depth,
+                "no-instance",
+                format!("`{}` has no instances", ind.name),
+            ));
             return None;
         }
-        tr.push(line(depth, "class", format!("{} ({} instance(s))", ind.name, cands.len())));
+        tr.push(line(
+            depth,
+            "class",
+            format!("{} ({} instance(s))", ind.name, cands.len()),
+        ));
         for (g, parameterized, index) in cands {
             // Candidate construction elaborates a real global reference, but
             // a rejected candidate is search state rather than part of the
@@ -210,7 +234,11 @@ impl Elaborator {
             tr.push(line(
                 depth,
                 "candidate",
-                if index.is_empty() { g.clone() } else { format!("{g} (index `{index}`)") },
+                if index.is_empty() {
+                    g.clone()
+                } else {
+                    format!("{g} (index `{index}`)")
+                },
             ));
             self.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
@@ -269,7 +297,10 @@ impl Elaborator {
         lvl: &Level,
         span: Span,
     ) -> Result<Term, ElabError> {
-        let e = Expr { kind: ExprKind::Var(global.to_string()), span };
+        let e = Expr {
+            kind: ExprKind::Var(global.to_string()),
+            span,
+        };
         self.elab_check(cx, &e, goal, lvl)
     }
 
@@ -320,8 +351,7 @@ impl Elaborator {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             let t = (*a.term).shift_local(by);
-            if let Some(u) =
-                self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &a.level, span)
+            if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &a.level, span)
             {
                 return Some((
                     u,
@@ -366,7 +396,11 @@ impl Elaborator {
         let dinfo = self.traits.class(&dkey)?;
         // `ancestors` is already transitive and deduped (layer 1 §2), so a
         // grandparent is one membership test and never a chain walk.
-        if !dinfo.ancestors.iter().any(|r| self.key_of(&r.name).as_deref() == Some(ckey)) {
+        if !dinfo
+            .ancestors
+            .iter()
+            .any(|r| self.key_of(&r.name).as_deref() == Some(ckey))
+        {
             return None;
         }
         let mut tcx = cx.clone();
@@ -382,7 +416,10 @@ impl Elaborator {
         for (n, _) in &cind.ctors[0].fields {
             args.push(Expr {
                 kind: ExprKind::Dot {
-                    recv: Box::new(Expr { kind: ExprKind::Var("#dict".into()), span }),
+                    recv: Box::new(Expr {
+                        kind: ExprKind::Var("#dict".into()),
+                        span,
+                    }),
                     name: n.clone()?,
                     args: None,
                     named: Vec::new(),
@@ -390,7 +427,9 @@ impl Elaborator {
                 span,
             });
         }
-        let t = self.build_ctor(&tcx, cind, 0, &args, goal, lvl, span).ok()?;
+        let t = self
+            .build_ctor(&tcx, cind, 0, &args, goal, lvl, span)
+            .ok()?;
         // The gate every proposal passes (design §4.4). A mismatch in the
         // class's *arguments* — `C<Nat>` from a `D<Bool>` — is caught here and
         // by `build_ctor` before it, and either way the answer is "not it".
@@ -442,7 +481,10 @@ impl Elaborator {
     /// substitution is the empty map out of the current Γ.
     fn derived_ref(&self, cx: &Cx, abs: u32) -> Term {
         if let Some(key) = self.names.global_name_at(abs) {
-            self.attempt.direct_dependencies.borrow_mut().insert(key.to_string());
+            self.attempt
+                .direct_dependencies
+                .borrow_mut()
+                .insert(key.to_string());
         }
         let len = self.psi.bindings.len() as u32;
         let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base());
@@ -489,8 +531,16 @@ impl Elaborator {
     /// honest test, and the one the mint has to pass anyway.
     fn type_is_closed(&self, goal: &Type, lvl: &Level) -> bool {
         stats::time_kernel(|| {
-            typing::check_type(&self.psi, 0, Layer::Prog, &LocalCtx::nil(), goal, lvl, self.fuel)
-                .is_ok()
+            typing::check_type(
+                &self.psi,
+                0,
+                Layer::Prog,
+                &LocalCtx::nil(),
+                goal,
+                lvl,
+                self.fuel,
+            )
+            .is_ok()
         })
     }
 

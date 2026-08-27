@@ -10,7 +10,7 @@ use std::rc::Rc;
 use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 
 use super::{ParamMeta, Skel};
-use crate::{mentions_binder, Cx, Elaborator, GlobalInfo};
+use crate::{Cx, Elaborator, GlobalInfo, mentions_binder};
 
 impl Elaborator {
     // -- application (explicit + implicit spines) ---------------------------
@@ -50,7 +50,6 @@ impl Elaborator {
             None => Rc::new(Vec::new()),
         }
     }
-
 
     /// Does a bare `name` in this context resolve to a **committed global**
     /// with a non-empty *leading implicit prefix* in its parameter list — the
@@ -150,7 +149,9 @@ impl Elaborator {
         {
             return false;
         }
-        let Some(info) = self.lookup_global(name) else { return false };
+        let Some(info) = self.lookup_global(name) else {
+            return false;
+        };
         let params = Rc::clone(&info.params);
         // Spill: the over-applied argument is evidence this test cannot see.
         if n_args > params.iter().filter(|p| !p.implicit).count() {
@@ -187,7 +188,9 @@ impl Elaborator {
         let mut doms: Vec<Type> = Vec::with_capacity(params.len());
         let mut cur: Type = ty.as_ref().clone();
         for _ in 0..params.len() {
-            let Type::Pi { dom, cod, .. } = cur else { return false };
+            let Type::Pi { dom, cod, .. } = cur else {
+                return false;
+            };
             doms.push((*dom).clone());
             cur = (*cod).clone();
         }
@@ -195,10 +198,8 @@ impl Elaborator {
             p.implicit
                 && p.solver.is_none()
                 && !params.iter().enumerate().skip(i + 1).any(|(j, q)| {
-                    !q.implicit
-                        && mentions_binder(&doms[j], j as u32, (j - 1 - i) as u32)
+                    !q.implicit && mentions_binder(&doms[j], j as u32, (j - 1 - i) as u32)
                 })
         })
     }
-
 }

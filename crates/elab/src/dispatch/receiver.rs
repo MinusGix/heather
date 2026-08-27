@@ -10,8 +10,7 @@ use heather_syntax::{Expr, Span};
 
 use crate::inductive::Inductive;
 use crate::{
-    err, resolve, skel_of_ty, traits, Cx, DotResolution, ElabError, Elaborator,
-    R, Upcast,
+    Cx, DotResolution, ElabError, Elaborator, R, Upcast, err, resolve, skel_of_ty, traits,
 };
 
 impl Elaborator {
@@ -59,8 +58,11 @@ impl Elaborator {
         // and it leaves two *unrelated* declaring classes ambiguous, which is
         // the case §4 rule 3 exists for.
         let with_field = self.declaring_classes(name);
-        let cands: Vec<(String, Rc<traits::ClassInfo>)> =
-            with_field.iter().filter(|(_, i)| i.params.len() == 1).cloned().collect();
+        let cands: Vec<(String, Rc<traits::ClassInfo>)> = with_field
+            .iter()
+            .filter(|(_, i)| i.params.len() == 1)
+            .cloned()
+            .collect();
         if cands.is_empty() {
             // A multi-parameter class is refused *by name* rather than
             // mis-dispatched (§2.1): the receiver fixes the carrier and
@@ -95,7 +97,9 @@ impl Elaborator {
         let mut tried: Vec<String> = Vec::new();
         let mut unpinned: Option<ElabError> = None;
         for (_, info) in &cands {
-            let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
+            let Some(ind) = self.lookup_inductive(&info.name).cloned() else {
+                continue;
+            };
             let targs = [(rty.clone(), rlvl.clone())];
             // An indexed class's goal has a value slot, and the ladder's step 2
             // is what fills it here (§5.1): scope, then refuse by name.
@@ -120,8 +124,7 @@ impl Elaborator {
             // goal is answered from a child dictionary, the child is what the
             // projection below reads from.
             let mut up = None;
-            let found =
-                self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up);
+            let found = self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up);
             match found {
                 Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
@@ -227,12 +230,15 @@ impl Elaborator {
         // Reported by returning the input, not asserted: a child whose
         // flattened list has lost the field would mean the flattening and the
         // resolver disagree, and the identity is the answer that still checks.
-        let Some((child_dict, child_ty)) = up else { return (ind, goal, dict) };
-        let Some(child) = self.tag_of(&child_ty) else { return (ind, goal, dict) };
+        let Some((child_dict, child_ty)) = up else {
+            return (ind, goal, dict);
+        };
+        let Some(child) = self.tag_of(&child_ty) else {
+            return (ind, goal, dict);
+        };
         if child.field_index(name).is_none() {
             return (ind, goal, dict);
         }
         (child, child_ty, child_dict)
     }
-
 }

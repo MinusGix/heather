@@ -25,7 +25,9 @@ pub(crate) trait SelfCallElab: ExplicitArgElab {
 /// recursion descends on.
 pub(crate) fn descends_on_param(cx: &Cx, scrut: &Term) -> Option<usize> {
     let s = cx.selfref.as_ref()?;
-    let Term::Var(LocalVar(i)) = scrut else { return None };
+    let Term::Var(LocalVar(i)) = scrut else {
+        return None;
+    };
     let pos = cx.names.len() - 1 - *i as usize;
     (pos < s.params.len()).then_some(pos)
 }
@@ -39,7 +41,10 @@ pub(crate) fn descends_on_param(cx: &Cx, scrut: &Term) -> Option<usize> {
 pub(crate) fn check_self_tyargs(cx: &Cx, tyargs: &[Ty], span: Span) -> R<()> {
     let s = cx.selfref.as_ref().expect("checked by the caller");
     let name = &s.name;
-    let own: Vec<&str> = s.params[..s.n_tyvars].iter().map(|(n, _)| n.as_str()).collect();
+    let own: Vec<&str> = s.params[..s.n_tyvars]
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
     if tyargs.len() != s.n_tyvars {
         return err(
             if s.n_tyvars == 0 {
@@ -96,7 +101,11 @@ pub(crate) fn elab_self_call(
     explicit: bool,
     span: Span,
 ) -> R<(Term, Type, Level)> {
-    let self_ref = Rc::clone(cx.selfref.as_ref().expect("self-call outside a declaration"));
+    let self_ref = Rc::clone(
+        cx.selfref
+            .as_ref()
+            .expect("self-call outside a declaration"),
+    );
     let name = &self_ref.name;
     let Some(guard) = cx.guard.clone() else {
         return err(
@@ -153,7 +162,10 @@ pub(crate) fn elab_self_call(
             (GuardKind::Nat { preds, comps, .. }, true) => match argument_term {
                 Term::Var(LocalVar(index)) => {
                     let absolute = cx.names.len() - 1 - index as usize;
-                    match preds.iter().position(|&predecessor| predecessor == absolute) {
+                    match preds
+                        .iter()
+                        .position(|&predecessor| predecessor == absolute)
+                    {
                         Some(depth) if depth < comps.len() => {
                             cov_at = depth;
                             true
@@ -163,7 +175,12 @@ pub(crate) fn elab_self_call(
                 }
                 _ => false,
             },
-            (GuardKind::Wf { depth, children, .. }, true) => {
+            (
+                GuardKind::Wf {
+                    depth, children, ..
+                },
+                true,
+            ) => {
                 let shift = (cx.names.len() - depth) as u32;
                 match children
                     .iter()
@@ -223,10 +240,7 @@ pub(crate) fn elab_self_call(
                         )
                     } else {
                         (
-                            format!(
-                                "one of {}, the predecessors bound by",
-                                names.join(", ")
-                            ),
+                            format!("one of {}, the predecessors bound by", names.join(", ")),
                             format!(
                                 ". The recursion carries its last {usable} values, so \
                                  those are the subterms it can descend to; anything else \
@@ -267,7 +281,13 @@ pub(crate) fn elab_self_call(
     }
 
     let (term, ty, level) = match &guard.kind {
-        GuardKind::Nat { tuple, comps, mlvl, depth, .. } => {
+        GuardKind::Nat {
+            tuple,
+            comps,
+            mlvl,
+            depth,
+            ..
+        } => {
             let shift = (cx.names.len() - depth) as u32;
             let term = matching::cov_proj(comps, mlvl, tuple.clone(), cov_at);
             (
@@ -276,10 +296,16 @@ pub(crate) fn elab_self_call(
                 mlvl.clone(),
             )
         }
-        GuardKind::Wf { depth, children, .. } => {
+        GuardKind::Wf {
+            depth, children, ..
+        } => {
             let shift = (cx.names.len() - depth) as u32;
             let (_, ih, ty, level) = &children[descendant];
-            ((**ih).shift_local(shift), ty.shift_local(shift), level.clone())
+            (
+                (**ih).shift_local(shift),
+                ty.shift_local(shift),
+                level.clone(),
+            )
         }
     };
     if spill.is_empty() {
@@ -474,11 +500,7 @@ mod tests {
     }
 
     impl SelfCallElab for FakeSelfCall {
-        fn infer_self_call_argument(
-            &self,
-            cx: &Cx,
-            argument: &Expr,
-        ) -> R<(Term, Type, Level)> {
+        fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
             let term = match &argument.kind {
                 heather_syntax::ExprKind::Var(name) => {
                     let position = cx
@@ -579,7 +601,10 @@ mod tests {
                 kind: heather_syntax::ExprKind::Var("predecessor".into()),
                 span: SPAN,
             },
-            Expr { kind: heather_syntax::ExprKind::Num(0), span: SPAN },
+            Expr {
+                kind: heather_syntax::ExprKind::Num(0),
+                span: SPAN,
+            },
         ];
         let (term, ty, level) =
             elab_self_call(&FakeSelfCall, &cx, &args, false, SPAN).expect("spilled call");

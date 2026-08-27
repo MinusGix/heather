@@ -15,14 +15,14 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use heather_syntax::{
-    Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, DesignationDecl, Expr, ExprKind, FieldDecl,
-    InductiveDecl, InstanceBody, InstanceDecl, InstanceField, LamBinder, OpFixity, Param,
-    RecordLitField, Span, Stmt, Ty, TyKind,
+    Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, DesignationDecl, Expr, ExprKind,
+    FieldDecl, InductiveDecl, InstanceBody, InstanceDecl, InstanceField, LamBinder, OpFixity,
+    Param, RecordLitField, Span, Stmt, Ty, TyKind,
 };
 
 use crate::names::qkey;
 use crate::resolve::DerivedInst;
-use crate::{err, ElabError, Elaborator, R};
+use crate::{ElabError, Elaborator, R, err};
 
 /// A declared class: the record it is, plus what `extends` and the instance
 /// assembler need to know about it.
@@ -152,7 +152,11 @@ pub(crate) type InstKey = (String, String, String);
 /// `head_key` is the carrier head **resolved** — [`Elaborator::carrier_key`],
 /// never `head_name`'s raw string.
 pub(crate) fn instance_key(class_key: &str, head_key: &str, index: &str) -> InstKey {
-    (class_key.to_string(), head_key.to_string(), index.to_string())
+    (
+        class_key.to_string(),
+        head_key.to_string(),
+        index.to_string(),
+    )
 }
 
 /// Committed class, instance, designation, and derived-dictionary state.
@@ -191,17 +195,16 @@ impl Traits {
     }
 
     pub(crate) fn classes_declaring(&self, name: &str) -> Vec<(String, Rc<ClassInfo>)> {
-        let mut out: Vec<_> = self
-            .classes
-            .iter()
-            .filter(|(_, info)| {
-                info.fields
-                    .iter()
-                    .zip(&info.owner)
-                    .any(|(field, owner)| field.name.as_deref() == Some(name) && owner.is_none())
-            })
-            .map(|(key, info)| (key.clone(), Rc::clone(info)))
-            .collect();
+        let mut out: Vec<_> =
+            self.classes
+                .iter()
+                .filter(|(_, info)| {
+                    info.fields.iter().zip(&info.owner).any(|(field, owner)| {
+                        field.name.as_deref() == Some(name) && owner.is_none()
+                    })
+                })
+                .map(|(key, info)| (key.clone(), Rc::clone(info)))
+                .collect();
         out.sort_by(|left, right| left.0.cmp(&right.0));
         out
     }
@@ -224,9 +227,7 @@ impl Traits {
             .instances
             .iter()
             .filter(|((class, _, _), _)| class == class_key)
-            .map(|(_, info)| {
-                (info.global.clone(), info.parameterized, info.index.clone())
-            })
+            .map(|(_, info)| (info.global.clone(), info.parameterized, info.index.clone()))
             .collect();
         out.sort();
         out
@@ -373,7 +374,10 @@ pub(crate) fn render_ty(t: &Ty) -> String {
         TyKind::Univ { level } => format!("Type<{level}>"),
         TyKind::Named { name, args } if args.is_empty() => name.clone(),
         TyKind::Named { name, args } => {
-            format!("{name}<{}>", args.iter().map(render_ty).collect::<Vec<_>>().join(", "))
+            format!(
+                "{name}<{}>",
+                args.iter().map(render_ty).collect::<Vec<_>>().join(", ")
+            )
         }
         TyKind::Fn { dom, cod, .. } => format!("{} -> {}", render_ty(dom), render_ty(cod)),
         // A goal may be an ordinary proposition (`p: n = n := infer`), and
@@ -394,7 +398,10 @@ pub(crate) fn render_ty(t: &Ty) -> String {
                     ),
                     _ => render_expr(head),
                 };
-                format!("{h}({})", args.iter().map(render_expr).collect::<Vec<_>>().join(", "))
+                format!(
+                    "{h}({})",
+                    args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
+                )
             }
             _ => render_expr(e),
         },
@@ -415,12 +422,25 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         // still present. In particular, do not inspect an elaborated `Pi`
         // ending in `False`: an arbitrary function into `False` is not
         // necessarily an inequality.
-        ExprKind::App { head, args, named, explicit: false, .. }
-            if matches!(&head.kind, ExprKind::Var(name) if name == "Not")
-                && named.is_empty()
-                && matches!(args.as_slice(), [Expr { kind: ExprKind::Eq(..), .. }]) =>
+        ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            ..
+        } if matches!(&head.kind, ExprKind::Var(name) if name == "Not")
+            && named.is_empty()
+            && matches!(
+                args.as_slice(),
+                [Expr {
+                    kind: ExprKind::Eq(..),
+                    ..
+                }]
+            ) =>
         {
-            let ExprKind::Eq(lhs, rhs) = &args[0].kind else { unreachable!() };
+            let ExprKind::Eq(lhs, rhs) = &args[0].kind else {
+                unreachable!()
+            };
             format!("{} ≠ {}", render_expr(lhs), render_expr(rhs))
         }
         // An operator application renders as what was **written**
@@ -430,15 +450,26 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         ExprKind::App { head, args, .. }
             if matches!(
                 head.kind,
-                ExprKind::OpSymbol { fixity: OpFixity::Infix, .. }
+                ExprKind::OpSymbol {
+                    fixity: OpFixity::Infix,
+                    ..
+                }
             ) && args.len() == 2 =>
         {
-            format!("{} {} {}", render_expr(&args[0]), render_expr(head), render_expr(&args[1]))
+            format!(
+                "{} {} {}",
+                render_expr(&args[0]),
+                render_expr(head),
+                render_expr(&args[1])
+            )
         }
         ExprKind::App { head, args, .. }
             if matches!(
                 head.kind,
-                ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+                ExprKind::OpSymbol {
+                    fixity: OpFixity::Prefix,
+                    ..
+                }
             ) && args.len() == 1 =>
         {
             format!("{}{}", render_expr(head), render_expr(&args[0]))
@@ -446,12 +477,18 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         // A named argument renders as it was **written**, `x := e`, for the
         // same reason an operator application renders as `a + b`
         // (issues/diagnostics-name-the-written-form.md).
-        ExprKind::App { head, args, named, .. } => format!(
+        ExprKind::App {
+            head, args, named, ..
+        } => format!(
             "{}({})",
             render_expr(head),
             args.iter()
                 .map(render_expr)
-                .chain(named.iter().map(|a| format!("{} := {}", a.name, render_expr(&a.expr))))
+                .chain(
+                    named
+                        .iter()
+                        .map(|a| format!("{} := {}", a.name, render_expr(&a.expr)))
+                )
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -465,7 +502,10 @@ mod inequality_render_tests {
     use super::*;
 
     fn expr(kind: ExprKind) -> Expr {
-        Expr { kind, span: Span { start: 0, end: 0 } }
+        Expr {
+            kind,
+            span: Span { start: 0, end: 0 },
+        }
     }
 
     #[test]
@@ -490,12 +530,22 @@ mod inequality_render_tests {
 }
 
 pub(crate) fn class_ref_written(r: &ClassRef) -> String {
-    let head =
-        format!("{}<{}>", r.name, r.args.iter().map(render_ty).collect::<Vec<_>>().join(", "));
+    let head = format!(
+        "{}<{}>",
+        r.name,
+        r.args.iter().map(render_ty).collect::<Vec<_>>().join(", ")
+    );
     if r.index.is_empty() {
         return head;
     }
-    format!("{head}({})", r.index.iter().map(render_expr).collect::<Vec<_>>().join(", "))
+    format!(
+        "{head}({})",
+        r.index
+            .iter()
+            .map(render_expr)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn span_expr(kind: ExprKind, span: Span) -> Expr {
@@ -561,9 +611,7 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
         TyKind::Nat => TyKind::Nat,
         TyKind::Univ { level } => TyKind::Univ { level: *level },
         TyKind::Ctx => TyKind::Ctx,
-        TyKind::Eq(a, b) => {
-            TyKind::Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b)))
-        }
+        TyKind::Eq(a, b) => TyKind::Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyKind::OfExpr(e) => TyKind::OfExpr(Box::new(rename_expr(m, e))),
         TyKind::Named { name, args } => TyKind::Named {
             name: ren(m, name),
@@ -575,16 +623,22 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
         },
         TyKind::Fin(e) => TyKind::Fin(Box::new(rename_expr(m, e))),
         TyKind::Squash(inner) => TyKind::Squash(Box::new(rename_ty(m, inner))),
-        TyKind::Fn { binder, implicit, dom, cod } => TyKind::Fn {
+        TyKind::Fn {
+            binder,
+            implicit,
+            dom,
+            cod,
+        } => TyKind::Fn {
             binder: binder.clone(),
             implicit: *implicit,
             dom: Box::new(rename_ty(m, dom)),
             cod: Box::new(rename_ty(m, cod)),
         },
         TyKind::TyCode { ctx } => TyKind::TyCode { ctx: ctx.clone() },
-        TyKind::Code { ctx, ty } => {
-            TyKind::Code { ctx: ctx.clone(), ty: Box::new(rename_ty(m, ty)) }
-        }
+        TyKind::Code { ctx, ty } => TyKind::Code {
+            ctx: ctx.clone(),
+            ty: Box::new(rename_ty(m, ty)),
+        },
         TyKind::Splice { name } => TyKind::Splice { name: name.clone() },
     };
     Ty { kind, span: t.span }
@@ -596,14 +650,23 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Var(n) => Var(ren(m, n)),
         // A symbol is never renamed: it names nothing in the telescope a
         // parent instantiation renames.
-        OpSymbol { symbol, fixity } => OpSymbol { symbol: symbol.clone(), fixity: *fixity },
+        OpSymbol { symbol, fixity } => OpSymbol {
+            symbol: symbol.clone(),
+            fixity: *fixity,
+        },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(*n),
         ArgSlot(index) => ArgSlot(*index),
         Refl => Refl,
         AutoRefl => AutoRefl,
         Hole(n) => Hole(n.clone()),
-        App { head, args, named, explicit, goal_oriented } => App {
+        App {
+            head,
+            args,
+            named,
+            explicit,
+            goal_oriented,
+        } => App {
             head: Box::new(rename_expr(m, head)),
             args: args.iter().map(|a| rename_expr(m, a)).collect(),
             // A named argument's *name* is the callee's parameter name, which
@@ -639,7 +702,14 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         VecLit(es) => VecLit(es.iter().map(|x| rename_expr(m, x)).collect()),
         Eq(a, b) => Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyLit(t) => TyLit(Box::new(rename_ty(m, t))),
-        Match { form, generated, scrut, eqbind, motive, arms } => Match {
+        Match {
+            form,
+            generated,
+            scrut,
+            eqbind,
+            motive,
+            arms,
+        } => Match {
             form: *form,
             generated: *generated,
             scrut: Box::new(rename_expr(m, scrut)),
@@ -660,7 +730,11 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         // walks program-layer declarations and `match code` is layer-m only —
         // but a walk that silently dropped a form would rename the wrong
         // thing, so it recurses like every other binder-carrying node.
-        MatchCode { scrut, motive, arms } => MatchCode {
+        MatchCode {
+            scrut,
+            motive,
+            arms,
+        } => MatchCode {
             scrut: Box::new(rename_expr(m, scrut)),
             motive: Box::new(rename_ty(m, motive)),
             arms: arms
@@ -674,10 +748,17 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                 })
                 .collect(),
         },
-        Dot { recv, name, args, named } => Dot {
+        Dot {
+            recv,
+            name,
+            args,
+            named,
+        } => Dot {
             recv: Box::new(rename_expr(m, recv)),
             name: name.clone(),
-            args: args.as_ref().map(|v| v.iter().map(|a| rename_expr(m, a)).collect()),
+            args: args
+                .as_ref()
+                .map(|v| v.iter().map(|a| rename_expr(m, a)).collect()),
             named: named
                 .iter()
                 .map(|na| heather_syntax::NamedArg {
@@ -692,7 +773,11 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             recv: Box::new(rename_expr(m, recv)),
             idx: Box::new(rename_expr(m, idx)),
         },
-        RecordLit { name, tyargs, fields } => RecordLit {
+        RecordLit {
+            name,
+            tyargs,
+            fields,
+        } => RecordLit {
             name: ren(m, name),
             tyargs: tyargs.iter().map(|t| rename_ty(m, t)).collect(),
             fields: fields
@@ -707,7 +792,11 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Block(b) => Block(Box::new(rename_block(m, b))),
         Quote(x) => Quote(Box::new(rename_expr(m, x))),
         Splice(x) => Splice(Box::new(rename_expr(m, x))),
-        J { proof, motive, case } => J {
+        J {
+            proof,
+            motive,
+            case,
+        } => J {
             proof: Box::new(rename_expr(m, proof)),
             motive: Box::new(rename_expr(m, motive)),
             case: Box::new(rename_expr(m, case)),
@@ -722,7 +811,12 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
             .stmts
             .iter()
             .map(|s| match s {
-                Stmt::Let { name, ty, expr, span } => Stmt::Let {
+                Stmt::Let {
+                    name,
+                    ty,
+                    expr,
+                    span,
+                } => Stmt::Let {
                     name: name.clone(),
                     ty: ty.as_ref().map(|t| rename_ty(m, t)),
                     expr: rename_expr(m, expr),
@@ -746,19 +840,19 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
             .iter()
             .map(|o| heather_syntax::OnStmt {
                 target: match &o.target {
-                    heather_syntax::OnTarget::Name(n) => {
-                        heather_syntax::OnTarget::Name(n.clone())
-                    }
+                    heather_syntax::OnTarget::Name(n) => heather_syntax::OnTarget::Name(n.clone()),
                     heather_syntax::OnTarget::Stmt(t) => {
                         heather_syntax::OnTarget::Stmt(rename_ty(m, t))
                     }
-                    heather_syntax::OnTarget::Ctor { ctor, binders, default } => {
-                        heather_syntax::OnTarget::Ctor {
-                            ctor: ctor.clone(),
-                            binders: binders.clone(),
-                            default: *default,
-                        }
-                    }
+                    heather_syntax::OnTarget::Ctor {
+                        ctor,
+                        binders,
+                        default,
+                    } => heather_syntax::OnTarget::Ctor {
+                        ctor: ctor.clone(),
+                        binders: binders.clone(),
+                        default: *default,
+                    },
                 },
                 expr: rename_expr(m, &o.expr),
                 span: o.span,
@@ -785,7 +879,12 @@ fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
             name: name.clone(),
             args: args.iter().map(|a| subst_ty(m, a)).collect(),
         },
-        TyKind::Fn { binder, implicit, dom, cod } => TyKind::Fn {
+        TyKind::Fn {
+            binder,
+            implicit,
+            dom,
+            cod,
+        } => TyKind::Fn {
             binder: binder.clone(),
             implicit: *implicit,
             dom: Box::new(subst_ty(m, dom)),
@@ -819,7 +918,9 @@ fn ty_mentions(t: &Ty, name: &str) -> bool {
 fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             expr_mentions(head, name)
                 || args.iter().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
@@ -827,7 +928,9 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::TyApp { head, args } => {
             expr_mentions(head, name) || args.iter().any(|a| ty_mentions(a, name))
         }
-        ExprKind::Dot { recv, args, named, .. } => {
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
             expr_mentions(recv, name)
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
@@ -866,14 +969,14 @@ fn ty_size(t: &Ty) -> usize {
 /// are measured on one scale and a mixed carrier cannot game the comparison.
 fn expr_size(e: &Expr) -> usize {
     match &e.kind {
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             expr_size(head)
                 + args.iter().map(expr_size).sum::<usize>()
                 + named.iter().map(|a| expr_size(&a.expr)).sum::<usize>()
         }
-        ExprKind::TyApp { head, args } => {
-            expr_size(head) + args.iter().map(ty_size).sum::<usize>()
-        }
+        ExprKind::TyApp { head, args } => expr_size(head) + args.iter().map(ty_size).sum::<usize>(),
         _ => 1,
     }
 }
@@ -905,10 +1008,15 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
         // one of the carrier's variables, so in practice this adds zero; if it
         // ever did not, a higher count on the *subgoal* side is the direction
         // that refuses, which is the safe way to be wrong.
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             expr_var_count(head, v)
                 + args.iter().map(|a| expr_var_count(a, v)).sum::<usize>()
-                + named.iter().map(|a| expr_var_count(&a.expr, v)).sum::<usize>()
+                + named
+                    .iter()
+                    .map(|a| expr_var_count(&a.expr, v))
+                    .sum::<usize>()
         }
         ExprKind::TyApp { head, args } => {
             expr_var_count(head, v) + args.iter().map(|a| ty_var_count(a, v)).sum::<usize>()
@@ -941,14 +1049,23 @@ fn index_var_count(c: &ClassRef, v: &str) -> usize {
 /// happen: a solver parameter's type is a class type, and no binder's type is
 /// written in terms of a dictionary.
 fn instance_params(d: &InstanceDecl) -> Vec<Param> {
-    d.valparams.iter().cloned().chain(d.requires.iter().cloned()).collect()
+    d.valparams
+        .iter()
+        .cloned()
+        .chain(d.requires.iter().cloned())
+        .collect()
 }
 
 /// A block whose result is `e` and which binds nothing — every synthesized
 /// declaration's body.
 fn body_of(e: Expr) -> Block {
     let span = e.span;
-    Block { stmts: Vec::new(), result: Box::new(e), ons: Vec::new(), span }
+    Block {
+        stmts: Vec::new(),
+        result: Box::new(e),
+        ons: Vec::new(),
+        span,
+    }
 }
 
 impl Elaborator {
@@ -1060,7 +1177,8 @@ impl Elaborator {
             ancestors,
             owner,
         };
-        self.traits.commit_class(qkey(self.names.module(), &d.name), info);
+        self.traits
+            .commit_class(qkey(self.names.module(), &d.name), info);
         Ok(())
     }
 
@@ -1168,7 +1286,7 @@ impl Elaborator {
                             render_ty(a)
                         ),
                         a.span,
-                    )
+                    );
                 }
             };
             rename.insert(p.clone(), arg);
@@ -1187,7 +1305,11 @@ impl Elaborator {
                     info.valparams.len(),
                     parent.index.len(),
                     parent.name,
-                    info.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    info.valparams
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 parent.span,
             );
@@ -1201,7 +1323,11 @@ impl Elaborator {
                          and a parent at a *computed* index is the diamond \
                          (docs/operation-indexed-classes-design.md §8), not this form",
                         d.name,
-                        d.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "),
+                        d.valparams
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         render_expr(a)
                     ),
                     a.span,
@@ -1213,7 +1339,11 @@ impl Elaborator {
                         "`{n}` is not a value parameter of `{}`: an `extends` index must be \
                          one of the child's own (`{}`)",
                         d.name,
-                        d.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                        d.valparams
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                     a.span,
                 );
@@ -1258,7 +1388,9 @@ impl Elaborator {
                 span: t.span,
             }),
             TyKind::OfExpr(e) => {
-                let ExprKind::App { head, args, .. } = &e.kind else { return None };
+                let ExprKind::App { head, args, .. } = &e.kind else {
+                    return None;
+                };
                 let (name, targs) = crate::inductive::named_head(head)?;
                 self.lookup_class(name)?;
                 Some(ClassRef {
@@ -1292,7 +1424,11 @@ impl Elaborator {
         let mut refs: Vec<Option<ClassRef>> = Vec::with_capacity(decl.params.len());
         let mut indexed = false;
         for p in &decl.params {
-            let r = p.solver.is_some().then(|| self.class_ref_of_ty(&p.ty)).flatten();
+            let r = p
+                .solver
+                .is_some()
+                .then(|| self.class_ref_of_ty(&p.ty))
+                .flatten();
             indexed |= r
                 .as_ref()
                 .and_then(|r| self.lookup_class(&r.name))
@@ -1321,7 +1457,9 @@ impl Elaborator {
         // entries shadow earlier ones, which is `Cx::op_locals`'s rule.
         let mut symbols: Vec<(String, String)> = Vec::new();
         for c in &repeated {
-            let Some(class) = self.lookup_class(c) else { continue };
+            let Some(class) = self.lookup_class(c) else {
+                continue;
+            };
             let at = refs
                 .iter()
                 .flatten()
@@ -1377,12 +1515,20 @@ impl Elaborator {
                 // meaning for the whole declaration. A mixed list
                 // (`Semiring<A>(+, mul)`) is per-slot, because there is
                 // nothing to gain from refusing it.
-                if !r.index.iter().any(|a| matches!(a.kind, ExprKind::OpSymbol { .. })) {
+                if !r
+                    .index
+                    .iter()
+                    .any(|a| matches!(a.kind, ExprKind::OpSymbol { .. }))
+                {
                     out.push(p.clone());
                     continue;
                 }
-                let sub: HashMap<String, Ty> =
-                    class.params.iter().cloned().zip(r.args.iter().cloned()).collect();
+                let sub: HashMap<String, Ty> = class
+                    .params
+                    .iter()
+                    .cloned()
+                    .zip(r.args.iter().cloned())
+                    .collect();
                 let mut index: Vec<Expr> = Vec::new();
                 for (k, (v, a)) in class.valparams.iter().zip(r.index.iter()).enumerate() {
                     let ExprKind::OpSymbol { symbol: sym, .. } = &a.kind else {
@@ -1436,12 +1582,20 @@ impl Elaborator {
                 continue;
             }
             // EMPTY: the index binders, then the instance binder over them.
-            let sub: HashMap<String, Ty> =
-                class.params.iter().cloned().zip(r.args.iter().cloned()).collect();
+            let sub: HashMap<String, Ty> = class
+                .params
+                .iter()
+                .cloned()
+                .zip(r.args.iter().cloned())
+                .collect();
             let mut index: Vec<Expr> = Vec::new();
             for (k, v) in class.valparams.iter().enumerate() {
                 let bare = !repeated.contains(&r.name);
-                let name = if bare { v.name.clone() } else { format!("#index{i}_{k}") };
+                let name = if bare {
+                    v.name.clone()
+                } else {
+                    format!("#index{i}_{k}")
+                };
                 if bare
                     && (decl.params.iter().any(|q| q.name == name)
                         || decl.tyvars.iter().any(|q| q.name == name))
@@ -1477,7 +1631,11 @@ impl Elaborator {
             out.push(p);
         }
         self.float_linked(decl, &mut out)?;
-        Ok(Some(Expanded { params: out, ambiguous, symbols }))
+        Ok(Some(Expanded {
+            params: out,
+            ambiguous,
+            symbols,
+        }))
     }
 
     /// The linked slot's float (§4.1): a constraint binder moves to just after
@@ -1492,7 +1650,9 @@ impl Elaborator {
             if p.solver.is_none() {
                 continue;
             }
-            let Some(r) = self.class_ref_of_ty(&p.ty) else { continue };
+            let Some(r) = self.class_ref_of_ty(&p.ty) else {
+                continue;
+            };
             let mut want = i * 2;
             for a in &r.index {
                 let ExprKind::Var(n) = &a.kind else { continue };
@@ -1577,7 +1737,9 @@ impl Elaborator {
         // The applied spelling (`<A: Monoid(op)>`) is already a class reference
         // by construction — nothing else parses into it — so only the bare one
         // can name a non-class.
-        let TyKind::Named { name, .. } = &p.ty.kind else { return Ok(()) };
+        let TyKind::Named { name, .. } = &p.ty.kind else {
+            return Ok(());
+        };
         if self.lookup_class(name).is_some() {
             return Ok(());
         }
@@ -1660,7 +1822,11 @@ impl Elaborator {
         let op = self.key_of(op.as_str()).unwrap_or_else(|| op.clone());
         let written = format!(
             "designation {}{} at {} := {}",
-            if d.fixity == OpFixity::Prefix { "prefix " } else { "" },
+            if d.fixity == OpFixity::Prefix {
+                "prefix "
+            } else {
+                ""
+            },
             d.symbol,
             render_ty(&d.carrier),
             render_expr(&d.op)
@@ -1687,7 +1853,14 @@ impl Elaborator {
                 d.span,
             );
         }
-        self.traits.commit_designation(key, DesignationInfo { op, written, carrier: head });
+        self.traits.commit_designation(
+            key,
+            DesignationInfo {
+                op,
+                written,
+                carrier: head,
+            },
+        );
         Ok(())
     }
 
@@ -1699,13 +1872,10 @@ impl Elaborator {
     /// [`Elaborator::carrier_key`] (a name the writer spelled), so that a
     /// lookup lands on the key the declaration registered even where two
     /// modules declare the head's name.
-    pub(crate) fn designated(
-        &self,
-        sym: &str,
-        fixity: OpFixity,
-        head_key: &str,
-    ) -> Option<String> {
-        self.traits.designated(fixity, sym, head_key).map(str::to_string)
+    pub(crate) fn designated(&self, sym: &str, fixity: OpFixity, head_key: &str) -> Option<String> {
+        self.traits
+            .designated(fixity, sym, head_key)
+            .map(str::to_string)
     }
 
     /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
@@ -1822,7 +1992,12 @@ impl Elaborator {
                     d.class.index.len(),
                     class.name,
                     render_ty(carrier),
-                    class.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    class
+                        .valparams
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 d.class.span,
             );
@@ -1836,7 +2011,11 @@ impl Elaborator {
             // the canonical name carries the index. `#` never begins an
             // identifier, so the suffix is unwritable and `Bool::Monoid(or)`
             // — the `T::C(args)` spelling of §5.1 — is how it is reached.
-            format!("{head}::{}{equality_suffix}#{}", class.name, name_suffix(&index))
+            format!(
+                "{head}::{}{equality_suffix}#{}",
+                class.name,
+                name_suffix(&index)
+            )
         };
         // The carrier as the registry keys it: the *declaration* the head
         // names, not the head's spelling
@@ -1895,7 +2074,11 @@ impl Elaborator {
                         m.span,
                     );
                 }
-                if class.fields.iter().all(|f| f.name.as_deref() != Some(m.name.as_str())) {
+                if class
+                    .fields
+                    .iter()
+                    .all(|f| f.name.as_deref() != Some(m.name.as_str()))
+                {
                     return err(
                         format!(
                             "`{}` is not a field of `{}`: an instance's members are its \
@@ -1928,8 +2111,16 @@ impl Elaborator {
                     is_meta: m.is_meta,
                     elaborates: m.elaborates.clone(),
                     name: full,
-                    tyvars: d.tyvars.iter().cloned().chain(m.tyvars.iter().cloned()).collect(),
-                    params: instance_params(d).into_iter().chain(m.params.iter().cloned()).collect(),
+                    tyvars: d
+                        .tyvars
+                        .iter()
+                        .cloned()
+                        .chain(m.tyvars.iter().cloned())
+                        .collect(),
+                    params: instance_params(d)
+                        .into_iter()
+                        .chain(m.params.iter().cloned())
+                        .collect(),
                     result: m.result.clone(),
                     body: m.body.clone(),
                     span: m.span,
@@ -1939,14 +2130,14 @@ impl Elaborator {
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
                 member_names.push(m.name.clone());
-                self.instance_scope.push((m.name.clone(), format!("{prefix}::{}", m.name)));
+                self.instance_scope
+                    .push((m.name.clone(), format!("{prefix}::{}", m.name)));
             }
         }
         // The scope is a block-local device and must not survive the block.
         // On the failure path the whole snapshot is restored, which clears it
         // too.
-        let r =
-            self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
+        let r = self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
         self.instance_scope.clear();
         r?;
         self.traits.commit_instance(
@@ -1994,7 +2185,13 @@ impl Elaborator {
         let tyargs: Vec<Ty> = d
             .tyvars
             .iter()
-            .map(|t| Ty { kind: TyKind::Named { name: t.name.clone(), args: vec![] }, span })
+            .map(|t| Ty {
+                kind: TyKind::Named {
+                    name: t.name.clone(),
+                    args: vec![],
+                },
+                span,
+            })
             .collect();
         let member_ref = |name: &str| -> Expr {
             let full = format!("{prefix}::{name}");
@@ -2002,7 +2199,10 @@ impl Elaborator {
                 var(&full, span)
             } else {
                 span_expr(
-                    ExprKind::TyApp { head: Box::new(var(&full, span)), args: tyargs.clone() },
+                    ExprKind::TyApp {
+                        head: Box::new(var(&full, span)),
+                        args: tyargs.clone(),
+                    },
                     span,
                 )
             }
@@ -2017,8 +2217,17 @@ impl Elaborator {
                 }
             }
             InstanceBody::Literal(fields) => {
-                for InstanceField { name, expr, span: fspan } in fields {
-                    if class.fields.iter().all(|f| f.name.as_deref() != Some(name.as_str())) {
+                for InstanceField {
+                    name,
+                    expr,
+                    span: fspan,
+                } in fields
+                {
+                    if class
+                        .fields
+                        .iter()
+                        .all(|f| f.name.as_deref() != Some(name.as_str()))
+                    {
                         return err(
                             format!("`{name}` is not a field of `{}`", class.name),
                             *fspan,
@@ -2080,10 +2289,17 @@ impl Elaborator {
         // partner (§4.5).
         let mut registered: Vec<(String, Rc<ClassInfo>, String)> = Vec::new();
         for a in &class.ancestors {
-            let Some(akey) = self.key_of(&a.name) else { continue };
-            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
+            let Some(akey) = self.key_of(&a.name) else {
+                continue;
+            };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else {
+                continue;
+            };
             let aindex = self.index_spelling(&anc_ref(a), &ainfo)?;
-            let Some(inst) = self.traits.instance(&instance_key(&akey, head_key, &aindex)) else {
+            let Some(inst) = self
+                .traits
+                .instance(&instance_key(&akey, head_key, &aindex))
+            else {
                 continue;
             };
             // A *parameterized* canonical parent (a generic instance, or one
@@ -2097,7 +2313,9 @@ impl Elaborator {
                 continue;
             }
             let g = inst.global.clone();
-            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else {
+                continue;
+            };
             registered.push((a.name.clone(), ainfo, g));
         }
 
@@ -2106,12 +2324,16 @@ impl Elaborator {
         let mut agreements: Vec<(String, Expr, Expr, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
         for f in &class.fields {
-            let Some(fname) = f.name.clone() else { continue };
+            let Some(fname) = f.name.clone() else {
+                continue;
+            };
             // The ancestor that canonically holds this field, if any.
             let from_parent = registered
                 .iter()
                 .find(|(_, info, _)| {
-                    info.fields.iter().any(|g| g.name.as_deref() == Some(fname.as_str()))
+                    info.fields
+                        .iter()
+                        .any(|g| g.name.as_deref() == Some(fname.as_str()))
                 })
                 .map(|(aname, _, g)| {
                     (
@@ -2132,14 +2354,22 @@ impl Elaborator {
                     // An override of a field a canonical value already holds
                     // owes agreement (design §4.5).
                     agreements.push((fname.clone(), e.clone(), pe, aname));
-                    lit_fields.push(RecordLitField { name: fname, expr: e.clone(), span });
+                    lit_fields.push(RecordLitField {
+                        name: fname,
+                        expr: e.clone(),
+                        span,
+                    });
                 }
-                (Some(e), None) => {
-                    lit_fields.push(RecordLitField { name: fname, expr: e.clone(), span })
-                }
-                (None, Some((_, pe))) => {
-                    lit_fields.push(RecordLitField { name: fname, expr: pe, span })
-                }
+                (Some(e), None) => lit_fields.push(RecordLitField {
+                    name: fname,
+                    expr: e.clone(),
+                    span,
+                }),
+                (None, Some((_, pe))) => lit_fields.push(RecordLitField {
+                    name: fname,
+                    expr: pe,
+                    span,
+                }),
                 (None, None) => missing.push(fname),
             }
         }
@@ -2147,7 +2377,11 @@ impl Elaborator {
             return err(
                 format!(
                     "`instance {written}` is missing {}: {}",
-                    if missing.len() == 1 { "a field" } else { "fields" },
+                    if missing.len() == 1 {
+                        "a field"
+                    } else {
+                        "fields"
+                    },
                     missing.join(", ")
                 ),
                 span,
@@ -2175,11 +2409,14 @@ impl Elaborator {
         // 4. Override agreements — kernel-checked convertibility, as a real
         // certificate rather than a side-effect (design §4.5).
         for (fname, over, parent, aname) in agreements {
-            let stmt = Ty { kind: TyKind::Eq(Box::new(over), Box::new(parent)), span };
+            let stmt = Ty {
+                kind: TyKind::Eq(Box::new(over), Box::new(parent)),
+                span,
+            };
             let name = format!("{prefix}::{fname}#agrees");
             let proof = span_expr(ExprKind::Refl, span);
-            self.synth_decl(DeclKind::Theorem, &name, d, stmt, proof, span).map_err(|e| {
-                ElabError::Elab {
+            self.synth_decl(DeclKind::Theorem, &name, d, stmt, proof, span)
+                .map_err(|e| ElabError::Elab {
                     msg: format!(
                         "`instance {written}` overrides `{fname}`, which the canonical \
                          `{aname}` at `{head}` already holds, and the two are not \
@@ -2188,8 +2425,7 @@ impl Elaborator {
                         e
                     ),
                     span,
-                }
-            })?;
+                })?;
         }
 
         // 5. Canonical parents not yet registered — synthesized as this
@@ -2201,10 +2437,15 @@ impl Elaborator {
             let Some(akey) = self.key_of(&a.name) else {
                 return err(format!("`{}` is not a class in scope", a.name), span);
             };
-            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else {
+                continue;
+            };
             let aref = anc_ref(&a);
             let aindex = self.index_spelling(&aref, &ainfo)?;
-            if self.traits.has_instance(&instance_key(&akey, head_key, &aindex)) {
+            if self
+                .traits
+                .has_instance(&instance_key(&akey, head_key, &aindex))
+            {
                 continue;
             }
             let aname = if aindex.is_empty() {
@@ -2213,12 +2454,8 @@ impl Elaborator {
                 format!("{head}::{}#{}", ainfo.name, name_suffix(&aindex))
             };
             let aargs = anc_args(&a);
-            let aty = heather_syntax::class_ty(
-                a.name.clone(),
-                aargs.clone(),
-                aref.index.clone(),
-                span,
-            );
+            let aty =
+                heather_syntax::class_ty(a.name.clone(), aargs.clone(), aref.index.clone(), span);
             // Every field of a flattened ancestor is one of the child's, by
             // construction (design §3) — so the parent's value is literally
             // built from the child's own field expressions, which is what makes
@@ -2237,14 +2474,18 @@ impl Elaborator {
                                 class.name, ainfo.name
                             ),
                             span,
-                        )
+                        );
                     }
                 }
             }
             let alit = span_expr(
                 ExprKind::RecordLit {
                     name: ainfo.name.clone(),
-                    tyargs: if ainfo.valparams.is_empty() { aargs.clone() } else { Vec::new() },
+                    tyargs: if ainfo.valparams.is_empty() {
+                        aargs.clone()
+                    } else {
+                        Vec::new()
+                    },
                     fields: afields,
                 },
                 span,
@@ -2383,7 +2624,9 @@ impl Elaborator {
             // `instance<A: Mag> …` — the inline form's class is checked here,
             // the first place the instance head is known to be one.
             self.check_constraint_param(p)?;
-            let TyKind::Named { name, args } = &p.ty.kind else { continue };
+            let TyKind::Named { name, args } = &p.ty.kind else {
+                continue;
+            };
             if args.is_empty() || self.lookup_class(name).is_none() {
                 continue;
             }

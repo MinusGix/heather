@@ -21,12 +21,12 @@
 use std::rc::Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{nth, wf_step_telescope, LocalCtx, LocalVar, Term, Type};
+use heather_kernel::term::{LocalCtx, LocalVar, Term, Type, nth, wf_step_telescope};
 use heather_syntax::{Arm, Expr, Span};
 
-use crate::inductive::{inject, ConstBody, FieldKind, Inductive, Spine};
+use crate::inductive::{ConstBody, FieldKind, Inductive, Spine, inject};
 use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind};
-use crate::{embed, err, Alias, Cx, Elaborator, R};
+use crate::{Alias, Cx, Elaborator, R, embed, err};
 
 /// The pieces every part of the lowering needs, gathered once so that the
 /// recursion below carries one reference instead of eight arguments.
@@ -144,7 +144,11 @@ pub(crate) enum Branches<'a> {
     /// through the generalization too — reading a child out of `cs` needs the
     /// *literal* arity, and outside a tag branch that arity is stuck on a
     /// variable.
-    Child { i: usize, t: usize, default: Rc<Term> },
+    Child {
+        i: usize,
+        t: usize,
+        default: Rc<Term>,
+    },
 }
 
 impl Elaborator {
@@ -176,7 +180,9 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let _ = span;
-        let emit = self.ty_type_ref(cx, tag, d_ty).unwrap_or_else(|| d_ty.clone());
+        let emit = self
+            .ty_type_ref(cx, tag, d_ty)
+            .unwrap_or_else(|| d_ty.clone());
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
         // so the two are one code path (docs/container-fields.md §3.4).
@@ -196,7 +202,12 @@ impl Elaborator {
                 };
                 (self.elab_check(cx, arg, &vec_ty, level)?, (**len).clone())
             }
-            None => (Term::Triv { level: level.clone() }, Term::Zero),
+            None => (
+                Term::Triv {
+                    level: level.clone(),
+                },
+                Term::Zero,
+            ),
         };
         for arg in args.iter().rev() {
             let child = self.elab_check(cx, arg, d_ty, level)?;
@@ -346,8 +357,16 @@ impl Elaborator {
         dec: Option<usize>,
         span: Span,
     ) -> R<Term> {
-        let Type::Wf { level, shape, arity } = scrut_ty else {
-            return err("internal: a recursive declaration did not lower to a `Wf`", span);
+        let Type::Wf {
+            level,
+            shape,
+            arity,
+        } = scrut_ty
+        else {
+            return err(
+                "internal: a recursive declaration did not lower to a `Wf`",
+                span,
+            );
         };
         // The *motive* is `⟦D'⟧` for whatever the arms return, and it is the
         // single largest occurrence site of all: it is instantiated once per
@@ -390,7 +409,13 @@ impl Elaborator {
             None => (Rc::clone(shape), Rc::clone(arity)),
         };
         let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
-            &cx.gamma, level, &mlvl, shape, arity, &motive, &d_emit,
+            &cx.gamma,
+            level,
+            &mlvl,
+            shape,
+            arity,
+            &motive,
+            &d_emit,
             Some((&shape_e, &arity_e)),
         );
         let spine = self.spine(scrut_ty, level, ind.ctors.len(), span)?;
@@ -420,12 +445,17 @@ impl Elaborator {
         // its ends, twice.
         let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
         let (p_cs, p_ih, p_step) = {
-            let cs = tel.cs_ty.apply_local(&embed(tel.gamma0, 4).extended(var(0)));
-            let ih = tel.ih_ty.apply_local(
-                &embed(tel.gamma0, 5).extended(var(1)).extended(var(0)),
-            );
+            let cs = tel
+                .cs_ty
+                .apply_local(&embed(tel.gamma0, 4).extended(var(0)));
+            let ih = tel
+                .ih_ty
+                .apply_local(&embed(tel.gamma0, 5).extended(var(1)).extended(var(0)));
             let step = tel.step_ty.apply_local(
-                &embed(tel.gamma0, 6).extended(var(2)).extended(var(1)).extended(var(0)),
+                &embed(tel.gamma0, 6)
+                    .extended(var(2))
+                    .extended(var(1))
+                    .extended(var(0)),
             );
             (cs, ih, step)
         };
@@ -443,7 +473,17 @@ impl Elaborator {
         let plvl = Level::max(tel.level.clone(), tel.mlvl.clone());
 
         let cased = self.wf_case_tree(
-            &cx3, ind, branches, &tel, dec, 0, p_motive, &plvl, var(2), 3, span,
+            &cx3,
+            ind,
+            branches,
+            &tel,
+            dec,
+            0,
+            p_motive,
+            &plvl,
+            var(2),
+            3,
+            span,
         )?;
         let step = self.apply_cs_ih(&tel, cased);
 
@@ -479,14 +519,22 @@ impl Elaborator {
                     .apply_local(&embed(g, 4).extended(var(3)).extended(var(0))),
             ),
             // …and its own cod, over (Γ₃, cs'', ih''): a = 4, cs = 1, ih = 0.
-            cod: Rc::new(tel.step_ty.apply_local(
-                &embed(g, 5).extended(var(4)).extended(var(1)).extended(var(0)),
-            )),
+            cod: Rc::new(
+                tel.step_ty.apply_local(
+                    &embed(g, 5)
+                        .extended(var(4))
+                        .extended(var(1))
+                        .extended(var(0)),
+                ),
+            ),
         };
         // Second `cod`, over (Γ₃, ih''): a = 3, cs = 2 (the *real* one, since
         // the first application already consumed it), ih = ih'' = 0.
         let cod2 = tel.step_ty.apply_local(
-            &embed(g, 4).extended(var(3)).extended(var(2)).extended(var(0)),
+            &embed(g, 4)
+                .extended(var(3))
+                .extended(var(2))
+                .extended(var(0)),
         );
         let at_cs = Term::App {
             fun: Rc::new(cased),
@@ -631,7 +679,13 @@ impl Elaborator {
         // `a` stands for in this branch.
         // The injection's own `Inl`/`Inr` annotations are emitted, so they take
         // the emission spine — the same choice `build_ctor` makes at a value.
-        let inj = Rc::new(inject(&tel.spine_emit, i, ind.ctors.len(), (*value).clone(), d));
+        let inj = Rc::new(inject(
+            &tel.spine_emit,
+            i,
+            ind.ctors.len(),
+            (*value).clone(),
+            d,
+        ));
         let (cs_dom, ih_dom, body_ty) = tel.at(&inj, d);
 
         let mut bcx = cx.clone();
@@ -668,8 +722,7 @@ impl Elaborator {
                 // container field at an *open* element type
                 // (`Rose<A>`) to make the index escape, which is axis 2 of
                 // docs/testing-generated-terms.md, again.
-                let (len, _, _) =
-                    self.projection(&bcx, &ctor_ty_here, &value_here, p, span)?;
+                let (len, _, _) = self.projection(&bcx, &ctor_ty_here, &value_here, p, span)?;
                 Some(len)
             }
             None => None,
@@ -683,8 +736,16 @@ impl Elaborator {
         // The `t`-th child, `nth^l(⟦D⟧; m; cs'; ι_t)`. At a literal `m` this
         // β-reduces to the projections of `cs'` even though `cs'` is a
         // variable, which is what makes an arm binder behave like a field.
-        let child =
-            |t: usize| Rc::new(nth_child(&tel.level, &d_ty_here, m, t, Rc::clone(&cs_var), &base));
+        let child = |t: usize| {
+            Rc::new(nth_child(
+                &tel.level,
+                &d_ty_here,
+                m,
+                t,
+                Rc::clone(&cs_var),
+                &base,
+            ))
+        };
 
         let body = match branches {
             Branches::Custom(f) => f(&bcx, tel, i, &value_here, d_body, &body_ty)?,
@@ -732,7 +793,8 @@ impl Elaborator {
                                 pair: term,
                             });
                         }
-                        acx.aliases.push(Rc::new(Alias { skel: None,
+                        acx.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: Rc::clone(&term),
@@ -763,26 +825,32 @@ impl Elaborator {
                         // (docs/record-type-values.md §6).
                         let motive = self.motive_head(tel);
                         let eq = match (&result, &*motive) {
-                            (None, Type::Id { level, ty, lhs, rhs }) => {
-                                crate::vec::strengthen(ty, tel.gamma0).map(|a| {
-                                    let sigma = crate::embed(tel.gamma0, d_body + 1)
-                                        .extended(Rc::new(Term::Var(LocalVar(0))));
-                                    let lam = |t: &Rc<Term>| {
-                                        Rc::new(Term::Lam {
-                                            dom_level: tel.level.clone(),
-                                            cod_level: level.clone(),
-                                            dom: Rc::clone(&d_ty_here),
-                                            body: Rc::new(t.apply_local(&sigma)),
-                                        })
-                                    };
-                                    EqSplit {
-                                        level: level.clone(),
-                                        ty: a.shift_local(d_body),
-                                        lhs: lam(lhs),
-                                        rhs: lam(rhs),
-                                    }
-                                })
-                            }
+                            (
+                                None,
+                                Type::Id {
+                                    level,
+                                    ty,
+                                    lhs,
+                                    rhs,
+                                },
+                            ) => crate::vec::strengthen(ty, tel.gamma0).map(|a| {
+                                let sigma = crate::embed(tel.gamma0, d_body + 1)
+                                    .extended(Rc::new(Term::Var(LocalVar(0))));
+                                let lam = |t: &Rc<Term>| {
+                                    Rc::new(Term::Lam {
+                                        dom_level: tel.level.clone(),
+                                        cod_level: level.clone(),
+                                        dom: Rc::clone(&d_ty_here),
+                                        body: Rc::new(t.apply_local(&sigma)),
+                                    })
+                                };
+                                EqSplit {
+                                    level: level.clone(),
+                                    ty: a.shift_local(d_body),
+                                    lhs: lam(lhs),
+                                    rhs: lam(rhs),
+                                }
+                            }),
                             _ => None,
                         };
                         container_ih = Some(ContainerIh {
@@ -815,27 +883,30 @@ impl Elaborator {
                         // out of the label with one, so a missing shift here is
                         // invisible until a container constructor carries a
                         // plain child through a proof.
-                        let cod = tel.motive.apply_local(
-                            &embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
+                        let cod = tel
+                            .motive
+                            .apply_local(&embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
                                 &tel.level,
                                 &Rc::new(tel.d_emit.shift_local(d_body + 1)),
                                 &Rc::new(len.shift_local(1)),
                                 Rc::new(Term::Var(LocalVar(2))),
                                 Rc::new(Term::Var(LocalVar(0))),
-                            ))),
-                        );
+                            ))));
                         let ih_at = Rc::new(Term::App {
                             fun: Rc::new(Term::Var(LocalVar(0))),
                             dom_level: Level::Zero,
                             cod_level: tel.mlvl.clone(),
-                            dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
+                            dom: Rc::new(Type::Fin {
+                                len: Rc::clone(&len),
+                            }),
                             cod: Rc::new(cod),
                             arg: Rc::new(fin_index(rec_t, m, &base)),
                         });
                         let ih_ty = tel
                             .motive
                             .apply_local(&embed(tel.gamma0, d_body).extended(Rc::clone(&c)));
-                        acx.aliases.push(Rc::new(Alias { skel: None,
+                        acx.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: Rc::clone(&c),
@@ -847,7 +918,8 @@ impl Elaborator {
                     } else {
                         let (proj, ty, level) =
                             self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?;
-                        acx.aliases.push(Rc::new(Alias { skel: None,
+                        acx.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: proj,
@@ -919,8 +991,16 @@ impl Elaborator {
         d0: u32,
         span: Span,
     ) -> R<Term> {
-        let Type::Wf { level, shape, arity } = d_ty.shift_local(d0) else {
-            return err("internal: a recursive declaration did not lower to a `Wf`", span);
+        let Type::Wf {
+            level,
+            shape,
+            arity,
+        } = d_ty.shift_local(d0)
+        else {
+            return err(
+                "internal: a recursive declaration did not lower to a `Wf`",
+                span,
+            );
         };
         // The motive binds `z` and ignores it; the telescope needs it anyway,
         // since `ih_ty` and `step_ty` are stated in terms of it.
@@ -998,7 +1078,11 @@ fn succ_n(k: usize, base: &Term) -> Term {
 /// what a goal reads back as.
 pub(crate) fn fin_index(t: usize, m: usize, base: &Term) -> Term {
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
-    let fin = |k: usize| Rc::new(Type::Fin { len: Rc::new(succ_n(k, base)) });
+    let fin = |k: usize| {
+        Rc::new(Type::Fin {
+            len: Rc::new(succ_n(k, base)),
+        })
+    };
     let mut v = Term::Inl {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
@@ -1039,9 +1123,7 @@ mod tycode {
 
     use super::*;
     use crate::gendefs::GenDef;
-    use heather_kernel::term::{
-        CtxBase, GlobalBinding, GlobalVar, LocalSubst, SubstTail,
-    };
+    use heather_kernel::term::{CtxBase, GlobalBinding, GlobalVar, LocalSubst, SubstTail};
 
     const SPAN: Span = Span { start: 0, end: 0 };
 
@@ -1065,7 +1147,10 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
     fn env() -> Env {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SRC).expect("the declarations elaborate");
-        Env { el, cx: Cx::empty() }
+        Env {
+            el,
+            cx: Cx::empty(),
+        }
     }
 
     impl Env {
@@ -1098,15 +1183,22 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         }
         // §14.12's boundary, verbatim: `⟦Box<A>⟧` is monomorphized per
         // instantiation, so there is no one closed type to name.
-        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+        assert!(
+            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag))
+                .is_none()
+        );
     }
 
     #[test]
     fn the_reference_is_el_of_the_declarations_own_code() {
         let e = env();
         let (t_ty, l) = e.lowered("T");
-        let r = e.el.respell_ty(&e.cx, &t_ty).expect("T's lowering respells");
-        let Type::El { level, tm } = &r else { panic!("the spelling is `El` of a code") };
+        let r =
+            e.el.respell_ty(&e.cx, &t_ty)
+                .expect("T's lowering respells");
+        let Type::El { level, tm } = &r else {
+            panic!("the spelling is `El` of a code")
+        };
         assert_eq!(*level, l);
         assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
         // Idempotent: `tag_of` goes through `decoded`, which leaves an `El` of
@@ -1131,7 +1223,9 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         // different type: not a rejection, a *wrong annotation*, which is the
         // failure mode this module's doctrine exists to prevent.
         let (t_ty, l) = e.lowered("T");
-        let Type::Wf { shape, .. } = &t_ty else { panic!("T is recursive") };
+        let Type::Wf { shape, .. } = &t_ty else {
+            panic!("T is recursive")
+        };
         let Type::Sum { lhs, lhs_level, .. } = &**shape else {
             panic!("a tier-1 shape is a sum-of-Σs")
         };
@@ -1156,11 +1250,13 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         // that differs from `T` only in its tags — offered where `T`'s
         // lowering is expected.
         let (_, l) = e.lowered("T");
-        let u_code = e
-            .el
-            .gen_ref(&e.cx, GenDef::TyCode(e.ind("U").tag))
-            .expect("U has a code");
-        let forged = Type::El { level: l, tm: Rc::new(u_code) };
+        let u_code =
+            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("U").tag))
+                .expect("U has a code");
+        let forged = Type::El {
+            level: l,
+            tm: Rc::new(u_code),
+        };
         // Neither by tag…
         assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
         // …nor by the structural read, which does not follow a neutral code.
@@ -1187,15 +1283,21 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         let dup = Term::GlobalTm {
             var: GlobalVar(e.el.attempt.goal_arena.base()),
             subst: LocalSubst {
-                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                tail: SubstTail::Empty {
+                    len: 0,
+                    base: CtxBase::Nil,
+                },
                 terms: vec![],
             },
         };
-        assert!(e
-            .el
-            .gen_def_of(GlobalVar(e.el.attempt.goal_arena.base()))
-            .is_none());
-        let forged = Type::El { level: l, tm: Rc::new(dup) };
+        assert!(
+            e.el.gen_def_of(GlobalVar(e.el.attempt.goal_arena.base()))
+                .is_none()
+        );
+        let forged = Type::El {
+            level: l,
+            tm: Rc::new(dup),
+        };
         assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());
     }
@@ -1208,16 +1310,22 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
     fn a_tier1_match_emits_the_reference_in_its_motive() {
         let mut e = env();
         let before = e.el.psi.bindings.len();
-        e.el
-            .elab_source("fn drop2(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => r } }")
-            .expect("elaborates");
-        let GlobalBinding::Tm { body: Some(body), .. } =
-            e.el.psi.bindings.last().expect("a binding")
+        e.el.elab_source(
+            "fn drop2(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => r } }",
+        )
+        .expect("elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
         else {
             panic!("a `fn` is a bodied term binding")
         };
-        let Term::Lam { body, .. } = &**body else { panic!("one parameter, one λ") };
-        let Term::ElimWf { motive, .. } = &**body else { panic!("tier 1 lowers to `elim_Wf`") };
+        let Term::Lam { body, .. } = &**body else {
+            panic!("one parameter, one λ")
+        };
+        let Term::ElimWf { motive, .. } = &**body else {
+            panic!("tier 1 lowers to `elim_Wf`")
+        };
         let Type::El { tm, .. } = &**motive else {
             panic!("the motive is the reference, not the inline `Wf`")
         };
@@ -1258,16 +1366,18 @@ theorem depth_computes(): depth(T1(1, T2(2, T0))) = 2 { refl }
     #[test]
     fn a_parameterized_declaration_still_lowers_inline() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 fn blen<A>(b: Box<A>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(blen(r)) } }
 fn bnat(b: Box<Nat>) -> Nat { match b { BNil => 7, BCons(a, r) => a } }
 theorem bnat_computes(): bnat(BCons(4, BNil)) = 4 { refl }
 ",
-            )
-            .expect("a parameterized declaration keeps its inline lowering");
-        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+        )
+        .expect("a parameterized declaration keeps its inline lowering");
+        assert!(
+            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag))
+                .is_none()
+        );
     }
 
     /// The tier-0 twin: a **non-recursive** declaration's `match` goes through
@@ -1278,17 +1388,16 @@ theorem bnat_computes(): bnat(BCons(4, BNil)) = 4 { refl }
     #[test]
     fn the_tier0_motive_respell_checks_and_computes() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 fn fnext(f: Flat) -> Flat { match f { FA => FB(1), FB(n) => FC(n, n), FC(m, k) => FA } }
 fn tflat(t: T) -> Flat { match t { T0 => FA, T1(x, r) => FB(x), T2(y, r) => FC(y, y) } }
 theorem fnext_computes(): fnext(FB(2)) = FC(2, 2) { refl }
 theorem tflat_computes(): tflat(T1(5, T0)) = FB(5) { refl }
 theorem tflat_neutral(): tflat(T0) = FA { refl }
 ",
-            )
-            .expect("the tier-0 motive respell checks and computes");
+        )
+        .expect("the tier-0 motive respell checks and computes");
     }
 
     /// The Ψ-numbering regression this round found: a `meta fn`'s `Ctx`
@@ -1299,12 +1408,11 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
     #[test]
     fn a_reference_emitted_inside_a_meta_body_is_numbered_past_the_ctx_binder() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "meta fn mwalk(g: Ctx, t: T) -> Nat \
+        e.el.elab_source(
+            "meta fn mwalk(g: Ctx, t: T) -> Nat \
                  { match t { T0 => 0, T1(x, r) => 1, T2(y, r) => 2 } }",
-            )
-            .expect("a meta body's `match` on a coded declaration checks at layer m");
+        )
+        .expect("a meta body's `match` on a coded declaration checks at layer m");
     }
 
     // -- the component respell (docs/annotation-component-respell-design.md) --
@@ -1324,10 +1432,18 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
             dom: Rc::new(t_ty.clone()),
             cod: Rc::new(f_ty.clone()),
         };
-        let r = e.el.respell_ty_deep(&e.cx, &pi, 0).expect("both components respell");
-        let Type::Pi { dom, cod, .. } = &r else { panic!("the Π shell survives") };
-        let Type::El { tm: dtm, .. } = &**dom else { panic!("dom is a reference") };
-        let Type::El { tm: ctm, .. } = &**cod else { panic!("cod is a reference") };
+        let r =
+            e.el.respell_ty_deep(&e.cx, &pi, 0)
+                .expect("both components respell");
+        let Type::Pi { dom, cod, .. } = &r else {
+            panic!("the Π shell survives")
+        };
+        let Type::El { tm: dtm, .. } = &**dom else {
+            panic!("dom is a reference")
+        };
+        let Type::El { tm: ctm, .. } = &**cod else {
+            panic!("cod is a reference")
+        };
         assert!(e.el.is_gen_ref(dtm, GenDef::TyCode(e.ind("T").tag)));
         assert!(e.el.is_gen_ref(ctm, GenDef::TyCode(e.ind("Flat").tag)));
         // The respelled Π still converts with the inline one — component
@@ -1350,27 +1466,38 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
     #[test]
     fn a_statement_respells_and_calls_inherit_it() {
         let mut e = env();
-        e.el.elab_source("fn tid(t: T) -> T { t }").expect("elaborates");
+        e.el.elab_source("fn tid(t: T) -> T { t }")
+            .expect("elaborates");
         let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.last().expect("a binding") else {
             panic!("a `fn` is a term binding")
         };
-        let Type::Pi { dom, cod, .. } = &**ty else { panic!("one parameter, one Π") };
+        let Type::Pi { dom, cod, .. } = &**ty else {
+            panic!("one parameter, one Π")
+        };
         let Type::El { tm, .. } = &**dom else {
             panic!("the statement's dom is the reference, not the inline `Wf`")
         };
         assert!(e.el.is_gen_ref(&tm.shift_global(1), GenDef::TyCode(e.ind("T").tag)));
-        let Type::El { .. } = &**cod else { panic!("the result respells too") };
+        let Type::El { .. } = &**cod else {
+            panic!("the result respells too")
+        };
         // The cascade: a later declaration's call reads its `App` annotations
         // off that statement.
         let before = e.el.psi.bindings.len();
-        e.el.elab_source("fn call_it(t: T) -> T { tid(t) }").expect("elaborates");
-        let GlobalBinding::Tm { body: Some(body), .. } =
-            e.el.psi.bindings.last().expect("a binding")
+        e.el.elab_source("fn call_it(t: T) -> T { tid(t) }")
+            .expect("elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
         else {
             panic!("a `fn` keeps its body")
         };
-        let Term::Lam { body, .. } = &**body else { panic!("one λ") };
-        let Term::App { dom, .. } = &**body else { panic!("the body is the call") };
+        let Term::Lam { body, .. } = &**body else {
+            panic!("one λ")
+        };
+        let Term::App { dom, .. } = &**body else {
+            panic!("the body is the call")
+        };
         let Type::El { tm, .. } = &**dom else {
             panic!("the call's dom annotation is the reference — the cascade")
         };
@@ -1386,20 +1513,18 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
     #[test]
     fn field_projections_and_values_respell_and_still_compute() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 inductive P { MkP(t: T, n: Nat), NoP }
 fn getp(p: P) -> T { match p { MkP(t, n) => t, NoP => T0 } }
 fn wrap(t: T) -> P { MkP(t, 7) }
 theorem getp_computes(): getp(MkP(T1(1, T0), 2)) = T1(1, T0) { refl }
 theorem roundtrip(t: T): getp(wrap(t)) = t { refl }
 ",
-            )
-            .expect("field projections and values respell and still compute");
-        let r = e.el.elab_source(
-            "theorem wrong_field(): getp(MkP(T1(1, T0), 2)) = T0 { refl }",
-        );
+        )
+        .expect("field projections and values respell and still compute");
+        let r =
+            e.el.elab_source("theorem wrong_field(): getp(MkP(T1(1, T0), 2)) = T0 { refl }");
         assert!(r.is_err(), "a false field equation must still be refused");
     }
 
@@ -1410,14 +1535,13 @@ theorem roundtrip(t: T): getp(wrap(t)) = t { refl }
     #[test]
     fn a_monomorphized_container_of_a_coded_declaration_respells_inside() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 fn bt_head(b: Box<T>) -> T { match b { BNil => T0, BCons(a, r) => a } }
 theorem bt_computes(): bt_head(BCons(T1(3, T0), BNil)) = T1(3, T0) { refl }
 ",
-            )
-            .expect("a Box<T> match elaborates with component references");
+        )
+        .expect("a Box<T> match elaborates with component references");
     }
 
     /// The regression this round's respell surfaced (and whose fix lives in
@@ -1431,14 +1555,13 @@ theorem bt_computes(): bt_head(BCons(T1(3, T0), BNil)) = T1(3, T0) { refl }
     #[test]
     fn an_auto_refl_hole_solves_at_a_respelled_result_type() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 fn tz(t: T) -> T { T0 }
 theorem tz_computes(t: T): tz(t) = T0 { {} }
 ",
-            )
-            .expect("a `{}` hole converts at the `El`-spelled Id component");
+        )
+        .expect("a `{}` hole converts at the `El`-spelled Id component");
     }
 
     /// The negative control the four axes ask for: a wrong arm is still a
@@ -1476,10 +1599,19 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             );
         }
         // No `Wf`, no slots — `Flat` keeps its `#tycode` and nothing else.
-        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Flat").tag)).is_none());
-        assert!(e.el.gen_ref(&e.cx, GenDef::ArityFn(e.ind("Flat").tag)).is_none());
+        assert!(
+            e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Flat").tag))
+                .is_none()
+        );
+        assert!(
+            e.el.gen_ref(&e.cx, GenDef::ArityFn(e.ind("Flat").tag))
+                .is_none()
+        );
         // …and the monomorphization boundary is `TyCode`'s, inherited.
-        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Box").tag)).is_none());
+        assert!(
+            e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Box").tag))
+                .is_none()
+        );
     }
 
     /// What the two references *are*, structurally, and that the `Wf` rebuilt
@@ -1489,12 +1621,15 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     fn the_slot_references_are_the_shape_code_and_an_application_of_the_arity() {
         let e = env();
         let (t_ty, l) = e.lowered("T");
-        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
-        let (sref, aref) = e
-            .el
-            .wf_slot_refs(&e.cx, shape, arity)
-            .expect("T's slots respell");
-        let Type::El { tm, .. } = &sref else { panic!("a shape slot takes `El` of a code") };
+        let Type::Wf { shape, arity, .. } = &t_ty else {
+            panic!("T is recursive")
+        };
+        let (sref, aref) =
+            e.el.wf_slot_refs(&e.cx, shape, arity)
+                .expect("T's slots respell");
+        let Type::El { tm, .. } = &sref else {
+            panic!("a shape slot takes `El` of a code")
+        };
         assert!(e.el.is_gen_ref(tm, GenDef::ShapeCode(e.ind("T").tag)));
         // The arity is an *application* to the shape's own binder, because the
         // slot is read one binder deep — §2.1's asymmetry, pinned.
@@ -1520,16 +1655,17 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     fn the_decoded_shape_spelling_respells_too() {
         let e = env();
         let (t_ty, l) = e.lowered("T");
-        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
+        let Type::Wf { shape, arity, .. } = &t_ty else {
+            panic!("T is recursive")
+        };
         let decoded_shape = Type::El {
             level: l.clone(),
             tm: Rc::new(crate::code::code_of(shape).expect("a shape has a code")),
         };
         // It really is the kernel's own reduct, not a hand-built look-alike.
-        let whole = e
-            .el
-            .respell_ty(&e.cx, &t_ty)
-            .expect("T's lowering respells");
+        let whole =
+            e.el.respell_ty(&e.cx, &t_ty)
+                .expect("T's lowering respells");
         let stepped = heather_kernel::reduce::whnf_type_delta(
             &whole,
             &e.cx.gamma,
@@ -1537,7 +1673,9 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             e.el.fuel,
         )
         .expect("the reference reduces");
-        let Type::Wf { shape: s2, .. } = &stepped else { panic!("it reduces to a `Wf`") };
+        let Type::Wf { shape: s2, .. } = &stepped else {
+            panic!("it reduces to a `Wf`")
+        };
         assert_eq!(**s2, decoded_shape);
         assert!(e.el.wf_slot_refs(&e.cx, &decoded_shape, arity).is_some());
     }
@@ -1550,13 +1688,17 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     fn a_wf_with_the_wrong_arity_declines() {
         let e = env();
         let (t_ty, _) = e.lowered("T");
-        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
+        let Type::Wf { shape, arity, .. } = &t_ty else {
+            panic!("T is recursive")
+        };
         // Every label gets one more child than it should.
         let bumped = Term::Succ(Rc::clone(arity));
         assert!(e.el.wf_slot_refs(&e.cx, shape, &bumped).is_none());
         // …and the mirror: `U`'s shape with `T`'s arity is not `U`'s pair.
         let (u_ty, _) = e.lowered("U");
-        let Type::Wf { shape: ushape, .. } = &u_ty else { panic!("U is recursive") };
+        let Type::Wf { shape: ushape, .. } = &u_ty else {
+            panic!("U is recursive")
+        };
         assert!(e.el.wf_slot_refs(&e.cx, ushape, arity).is_none());
     }
 
@@ -1567,9 +1709,11 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     fn a_constructor_value_carries_the_slot_references() {
         let mut e = env();
         let before = e.el.psi.bindings.len();
-        e.el.elab_source("fn mk() -> T { T1(1, T0) }").expect("elaborates");
-        let GlobalBinding::Tm { body: Some(body), .. } =
-            e.el.psi.bindings.last().expect("a binding")
+        e.el.elab_source("fn mk() -> T { T1(1, T0) }")
+            .expect("elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
         else {
             panic!("a `fn` keeps its body")
         };
@@ -1577,7 +1721,9 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("a tier-1 value is a `sup_f`")
         };
         let grew = (e.el.psi.bindings.len() - before) as u32;
-        let Type::El { tm, .. } = &**shape else { panic!("the shape slot is the reference") };
+        let Type::El { tm, .. } = &**shape else {
+            panic!("the shape slot is the reference")
+        };
         assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
         let Term::App { fun, .. } = &**arity else {
             panic!("the arity slot is the application")
@@ -1591,22 +1737,30 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     fn a_match_carries_the_slot_references_in_its_elim() {
         let mut e = env();
         let before = e.el.psi.bindings.len();
-        e.el
-            .elab_source("fn depth2(t: T) -> Nat { match t { T0 => 0, T1(x, r) => 1, T2(y, r) => 2 } }")
-            .expect("elaborates");
-        let GlobalBinding::Tm { body: Some(body), .. } =
-            e.el.psi.bindings.last().expect("a binding")
+        e.el.elab_source(
+            "fn depth2(t: T) -> Nat { match t { T0 => 0, T1(x, r) => 1, T2(y, r) => 2 } }",
+        )
+        .expect("elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
         else {
             panic!("a `fn` keeps its body")
         };
-        let Term::Lam { body, .. } = &**body else { panic!("one parameter, one λ") };
+        let Term::Lam { body, .. } = &**body else {
+            panic!("one parameter, one λ")
+        };
         let Term::ElimWf { shape, arity, .. } = &**body else {
             panic!("tier 1 lowers to `elim_Wf`")
         };
         let grew = (e.el.psi.bindings.len() - before) as u32;
-        let Type::El { tm, .. } = &**shape else { panic!("the shape slot is the reference") };
+        let Type::El { tm, .. } = &**shape else {
+            panic!("the shape slot is the reference")
+        };
         assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
-        let Term::App { fun, .. } = &**arity else { panic!("the arity slot is an application") };
+        let Term::App { fun, .. } = &**arity else {
+            panic!("the arity slot is an application")
+        };
         assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
     }
 
@@ -1618,9 +1772,8 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     #[test]
     fn the_slot_spelling_checks_and_computes_across_the_axes() {
         let mut e = env();
-        e.el
-            .elab_source(
-                "
+        e.el.elab_source(
+            "
 inductive Rose { RNode(label: Nat, len: Nat, kids: [Rose; len]) }
 fn rlabel(r: Rose) -> Nat { match r { RNode(label, len, kids) => label } }
 fn rmk(n: Nat) -> Rose { RNode(n, 0, []) }
@@ -1629,9 +1782,10 @@ theorem rlabel_nonzero(): rlabel(RNode(4, 1, [RNode(1, 0, [])])) = 4 { refl }
 theorem rlabel_neutral(n: Nat): rlabel(RNode(n, 0, [])) = n { refl }
 theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
 ",
-            )
-            .expect("a container declaration elaborates with slot references");
-        let r = e.el.elab_source("theorem rlabel_wrong(): rlabel(RNode(4, 0, [])) = 5 { refl }");
+        )
+        .expect("a container declaration elaborates with slot references");
+        let r =
+            e.el.elab_source("theorem rlabel_wrong(): rlabel(RNode(4, 0, [])) = 5 { refl }");
         assert!(r.is_err(), "a false equation must still be refused");
     }
 }

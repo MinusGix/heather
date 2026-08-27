@@ -13,9 +13,7 @@ use heather_syntax::{Expr, ExprKind, NamedArg, RecordLitField, Span, Ty, TyKind}
 
 use crate::inductive::{self, Inductive};
 use crate::names::NameKind;
-use crate::{
-    application, err, has_implicit_mark, Cx, Elaborator, R, IMPLICIT_MARK_REFUSED,
-};
+use crate::{Cx, Elaborator, IMPLICIT_MARK_REFUSED, R, application, err, has_implicit_mark};
 
 impl Elaborator {
     /// A record literal (§6): permute the written fields into declaration
@@ -41,13 +39,17 @@ impl Elaborator {
                 span,
             );
         }
-        let decl: Vec<&str> =
-            ind.ctors[0].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
-        let written: Vec<(&str, &Expr, Span)> =
-            fields.iter().map(|f| (f.name.as_str(), &f.expr, f.span)).collect();
+        let decl: Vec<&str> = ind.ctors[0]
+            .fields
+            .iter()
+            .map(|(n, _)| n.as_deref().unwrap_or("_"))
+            .collect();
+        let written: Vec<(&str, &Expr, Span)> = fields
+            .iter()
+            .map(|f| (f.name.as_str(), &f.expr, f.span))
+            .collect();
         application::permute_by_name(name, "field", &decl, &[], &written, span)
     }
-
 
     /// The constructor this name refers to *here* — `None` when it is not a
     /// constructor, or when a local binder or `let` alias shadows it.
@@ -161,7 +163,8 @@ impl Elaborator {
         // type name has a universe type and cannot check there; dropping that
         // reading is therefore a shrink, while a `Global` or `Meta` may return
         // the expected type and must still make this route stand down.
-        self.names.visible_entries_are(name, &[NameKind::Ctor, NameKind::Inductive])
+        self.names
+            .visible_entries_are(name, &[NameKind::Ctor, NameKind::Inductive])
     }
 
     /// A constructor applied to its arguments, however the surface
@@ -181,7 +184,16 @@ impl Elaborator {
         cx: &Cx,
         e: &Expr,
     ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
-        let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return None };
+        let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit,
+            ..
+        } = &e.kind
+        else {
+            return None;
+        };
         if *explicit {
             return None;
         }
@@ -211,7 +223,16 @@ impl Elaborator {
         e: &Expr,
         expected: &Type,
     ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
-        let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return None };
+        let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit,
+            ..
+        } = &e.kind
+        else {
+            return None;
+        };
         if *explicit {
             return None;
         }
@@ -270,11 +291,15 @@ impl Elaborator {
         }
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
         for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
-            let TyKind::Named { name, args: targs } = &f.kind else { continue };
+            let TyKind::Named { name, args: targs } = &f.kind else {
+                continue;
+            };
             if !targs.is_empty() {
                 continue;
             }
-            let Some(p) = ind.params.iter().position(|p| p == name) else { continue };
+            let Some(p) = ind.params.iter().position(|p| p == name) else {
+                continue;
+            };
             if sols[p].is_none() {
                 let (_, ty, lvl) = self.elab_infer(cx, arg)?;
                 sols[p] = Some((ty, lvl));
@@ -305,10 +330,7 @@ impl Elaborator {
                          checking position (a `fn`/`theorem` body whose declared result \
                          is `{}<…>(…)`, or an argument of a declaration that expects \
                          one), or write the type argument (`{}<…>(…)`)",
-                        ind.name,
-                        ind.ctors[i].name,
-                        ind.name,
-                        ind.ctors[i].name
+                        ind.name, ind.ctors[i].name, ind.name, ind.ctors[i].name
                     ),
                     span,
                 );
@@ -356,7 +378,10 @@ impl Elaborator {
         if ind.index.is_none() || args.len() != ind.ctors[i].fields.len() {
             return None;
         }
-        let k = ind.ctors[i].kind.iter().position(|f| *f == inductive::FieldKind::Plain)?;
+        let k = ind.ctors[i]
+            .kind
+            .iter()
+            .position(|f| *f == inductive::FieldKind::Plain)?;
         let (_, cty, _) = self.elab_infer(cx, &args[k]).ok()?;
         let (ty, lvl) = if ind.skel.is_some() {
             let (found, fam) = self.forded_of_at(cx, &cty)?;
@@ -400,7 +425,9 @@ impl Elaborator {
         args: &[Expr],
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
-        let ExprKind::Var(name) = &callee.kind else { return None };
+        let ExprKind::Var(name) = &callee.kind else {
+            return None;
+        };
         let (ind, i) = self.ctor_here(cx, name)?;
         Some((|| {
             if tyargs.len() != ind.params.len() {
@@ -474,5 +501,4 @@ impl Elaborator {
             Ok((t, ty, lvl))
         })())
     }
-
 }

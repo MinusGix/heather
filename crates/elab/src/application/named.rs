@@ -61,7 +61,14 @@ pub(crate) fn resolve_named(
     let over_applied = rest.next().is_some();
     for na in named {
         let Some(pi) = params.iter().position(|p| p.name == na.name) else {
-            return Err(no_such_param(callee, value_head, params, param_offset, mask, na));
+            return Err(no_such_param(
+                callee,
+                value_head,
+                params,
+                param_offset,
+                mask,
+                na,
+            ));
         };
         let p = &params[pi];
         if p.is_type {
@@ -132,9 +139,10 @@ pub(crate) fn resolve_named(
             Some(e) => out.push(e),
             None if newmask[mi] => {}
             None => {
-                let what = params
-                    .get(mi + param_offset)
-                    .map_or_else(|| format!("parameter {}", mi + 1), |p| format!("`{}`", p.name));
+                let what = params.get(mi + param_offset).map_or_else(
+                    || format!("parameter {}", mi + 1),
+                    |p| format!("`{}`", p.name),
+                );
                 return err(
                     format!(
                         "`{callee}` is applied to too few arguments: {what} has none. A call \
@@ -177,9 +185,7 @@ fn no_such_param(
              argument positionally, or annotate the binder — `(x: T) -> …`"
         )
     } else if nameable.is_empty() {
-        format!(
-            "`{callee}` has no named parameters to fill: write the arguments positionally"
-        )
+        format!("`{callee}` has no named parameters to fill: write the arguments positionally")
     } else {
         format!(
             "`{callee}` has no parameter named `{}` (it has: {})",
@@ -187,7 +193,10 @@ fn no_such_param(
             nameable.join(", ")
         )
     };
-    ElabError::Elab { msg, span: na.name_span }
+    ElabError::Elab {
+        msg,
+        span: na.name_span,
+    }
 }
 
 /// The refusal for a named argument at a head that has no parameter table
@@ -225,10 +234,15 @@ pub(crate) fn resolve_constructor_arguments(
         return Ok(None);
     }
     let cname = ind.ctors[i].name.clone();
-    let decl: Vec<&str> =
-        ind.ctors[i].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
-    let written: Vec<(&str, &Expr, Span)> =
-        named.iter().map(|na| (na.name.as_str(), &na.expr, na.name_span)).collect();
+    let decl: Vec<&str> = ind.ctors[i]
+        .fields
+        .iter()
+        .map(|(n, _)| n.as_deref().unwrap_or("_"))
+        .collect();
+    let written: Vec<(&str, &Expr, Span)> = named
+        .iter()
+        .map(|na| (na.name.as_str(), &na.expr, na.name_span))
+        .collect();
     permute_by_name(&cname, "field", &decl, args, &written, span).map(Some)
 }
 
@@ -271,7 +285,10 @@ pub(crate) fn permute_by_name(
             // unmatchable, which is right: a positional-only constructor
             // gains nothing here and must not pretend to.
             return err(
-                format!("`{owner}` has no {noun} `{name}` (it has: {})", decl.join(", ")),
+                format!(
+                    "`{owner}` has no {noun} `{name}` (it has: {})",
+                    decl.join(", ")
+                ),
                 *nsp,
             );
         };
@@ -292,7 +309,10 @@ pub(crate) fn permute_by_name(
             span,
         );
     }
-    Ok(slots.into_iter().map(|s| s.expect("checked above").clone()).collect())
+    Ok(slots
+        .into_iter()
+        .map(|s| s.expect("checked above").clone())
+        .collect())
 }
 
 #[cfg(test)]
@@ -303,7 +323,10 @@ mod tests {
     const SPAN: Span = Span { start: 0, end: 1 };
 
     fn expression(value: u64) -> Expr {
-        Expr { kind: ExprKind::Num(value), span: SPAN }
+        Expr {
+            kind: ExprKind::Num(value),
+            span: SPAN,
+        }
     }
 
     fn parameter(name: &str, implicit: bool) -> ParamMeta {
@@ -321,9 +344,18 @@ mod tests {
     fn an_unnamed_call_is_a_zero_allocation_decline() {
         let params = [parameter("x", false)];
         assert!(
-            resolve_named("f", false, &params, 0, &[false], &[expression(0)], &[], SPAN)
-                .expect("unnamed call")
-                .is_none()
+            resolve_named(
+                "f",
+                false,
+                &params,
+                0,
+                &[false],
+                &[expression(0)],
+                &[],
+                SPAN
+            )
+            .expect("unnamed call")
+            .is_none()
         );
     }
 
@@ -371,15 +403,8 @@ mod tests {
         let first = expression(1);
         let second = expression(2);
         let written = [("right", &second, SPAN), ("left", &first, SPAN)];
-        let ordered = permute_by_name(
-            "Pair",
-            "field",
-            &["left", "right"],
-            &[],
-            &written,
-            SPAN,
-        )
-        .expect("field permutation");
+        let ordered = permute_by_name("Pair", "field", &["left", "right"], &[], &written, SPAN)
+            .expect("field permutation");
         assert!(matches!(ordered[0].kind, ExprKind::Num(1)));
         assert!(matches!(ordered[1].kind, ExprKind::Num(2)));
     }

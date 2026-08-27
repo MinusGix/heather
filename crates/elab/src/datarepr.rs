@@ -19,9 +19,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use heather_syntax::{parse_file, DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, LamBinder, Pat, Span, Stmt, Ty, TyKind};
+use heather_syntax::{
+    DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, LamBinder, Pat, Span, Stmt,
+    Ty, TyKind, parse_file,
+};
 
-use crate::{err, Elaborator, R};
+use crate::{Elaborator, R, err};
 
 /// A registered repr. Keyed per design §4: the spec inductive's elaborated
 /// declaration identity (its nominal tag — the thing that changes when the
@@ -81,7 +84,12 @@ struct SpecView {
 impl SpecView {
     /// The indices of this constructor's recursive fields, in order.
     fn rec_of(c: &CtorView) -> Vec<usize> {
-        c.fields.iter().enumerate().filter(|(_, f)| f.rec).map(|(i, _)| i).collect()
+        c.fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.rec)
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 
@@ -126,7 +134,11 @@ impl Splices {
         self.n += 1;
         self.by_key.insert(
             key.clone(),
-            Spliced { clause: clause.to_string(), span, expr: expr.clone() },
+            Spliced {
+                clause: clause.to_string(),
+                span,
+                expr: expr.clone(),
+            },
         );
         key
     }
@@ -254,10 +266,20 @@ pub(crate) fn spell_ty(t: &Ty) -> Option<String> {
             let a: Option<Vec<String>> = args.iter().map(spell_ty).collect();
             format!("{name}<{}>", a?.join(", "))
         }
-        TyKind::Fn { binder: None, implicit: false, dom, cod } => {
+        TyKind::Fn {
+            binder: None,
+            implicit: false,
+            dom,
+            cod,
+        } => {
             format!("({} -> {})", spell_ty(dom)?, spell_ty(cod)?)
         }
-        TyKind::Fn { binder: Some(b), implicit: false, dom, cod } => {
+        TyKind::Fn {
+            binder: Some(b),
+            implicit: false,
+            dom,
+            cod,
+        } => {
             format!("(({b}: {}) -> {})", spell_ty(dom)?, spell_ty(cod)?)
         }
         _ => return None,
@@ -282,7 +304,10 @@ impl Elaborator {
             return Ok(SpecView {
                 spell,
                 ctors: vec![
-                    CtorView { name: "Zero".into(), fields: Vec::new() },
+                    CtorView {
+                        name: "Zero".into(),
+                        fields: Vec::new(),
+                    },
                     CtorView {
                         name: "Succ".into(),
                         fields: vec![FieldView {
@@ -298,8 +323,10 @@ impl Elaborator {
         }
         let TyKind::Named { name, args } = &spec.kind else {
             return err(
-                format!("`{spell}` is not a declared inductive, so it has no constructors to \
-                         represent"),
+                format!(
+                    "`{spell}` is not a declared inductive, so it has no constructors to \
+                         represent"
+                ),
                 span,
             );
         };
@@ -350,11 +377,22 @@ impl Elaborator {
                         span,
                     );
                 };
-                fields.push(FieldView { binder: format!("a{i}"), rec: s == spell, spell: s });
+                fields.push(FieldView {
+                    binder: format!("a{i}"),
+                    rec: s == spell,
+                    spell: s,
+                });
             }
-            ctors.push(CtorView { name: c.name.clone(), fields });
+            ctors.push(CtorView {
+                name: c.name.clone(),
+                fields,
+            });
         }
-        let argkey = args.iter().filter_map(spell_ty).collect::<Vec<_>>().join(",");
+        let argkey = args
+            .iter()
+            .filter_map(spell_ty)
+            .collect::<Vec<_>>()
+            .join(",");
         Ok(SpecView {
             key: (Some(ind.tag), argkey.clone()),
             monomorph: (!args.is_empty()).then_some((ind.tag, argkey)),
@@ -493,8 +531,11 @@ impl Elaborator {
                     f.span,
                 );
             }
-            let key =
-                if f.is_mk { format!("mk {}", f.name) } else { f.name.clone() };
+            let key = if f.is_mk {
+                format!("mk {}", f.name)
+            } else {
+                f.name.clone()
+            };
             if by_name.contains_key(&key) {
                 return err(format!("duplicate clause `{key}`"), f.span);
             }
@@ -573,9 +614,7 @@ impl Elaborator {
             by_name.insert(key, (placeholder, f.span));
         }
         let mut missing = Vec::new();
-        let take = |k: &str, by: &mut HashMap<String, (String, Span)>| {
-            by.remove(k).map(|(t, _)| t)
-        };
+        let take = |k: &str, by: &mut HashMap<String, (String, Span)>| by.remove(k).map(|(t, _)| t);
         let req = |k: &str, by: &mut HashMap<String, (String, Span)>, missing: &mut Vec<String>| {
             take(k, by).unwrap_or_else(|| {
                 missing.push(k.to_string());
@@ -633,20 +672,24 @@ impl Elaborator {
                 *span,
             );
         }
-        Ok(Clauses { carrier, abs, inv, mks, laws, fold, fold_law, prov, inv_trivial })
+        Ok(Clauses {
+            carrier,
+            abs,
+            inv,
+            mks,
+            laws,
+            fold,
+            fold_law,
+            prov,
+            inv_trivial,
+        })
     }
 
     /// Parse and elaborate generated source in the *current* module and scope.
     /// A failure here is a failure of the `datarepr` declaration, reported
     /// against it — the generated text is an implementation detail, so it is
     /// named in the message rather than shown.
-    fn elab_generated(
-        &mut self,
-        src: &str,
-        what: &str,
-        span: Span,
-        sp: &Splices,
-    ) -> R<()> {
+    fn elab_generated(&mut self, src: &str, what: &str, span: Span, sp: &Splices) -> R<()> {
         // Generated mode: inside it the minted names *are* the surface, which
         // is what the emission spells (`docs/repr-access-spellings-design.md`
         // §6). A mode and not a property of the text, so that a generator that
@@ -654,20 +697,17 @@ impl Elaborator {
         self.generated_mode(|me| me.elab_generated_at(src, what, span, sp))
     }
 
-    fn elab_generated_at(
-        &mut self,
-        src: &str,
-        what: &str,
-        span: Span,
-        sp: &Splices,
-    ) -> R<()> {
+    fn elab_generated_at(&mut self, src: &str, what: &str, span: Span, sp: &Splices) -> R<()> {
         let mut file = match parse_file(src) {
             Ok(f) => f,
             Err(e) => {
                 return err(
-                    format!("`datarepr {what}` generated source that does not parse: {}", e.msg),
+                    format!(
+                        "`datarepr {what}` generated source that does not parse: {}",
+                        e.msg
+                    ),
                     span,
-                )
+                );
             }
         };
         // The splice (§4.2): a generated body that is exactly a placeholder
@@ -731,7 +771,11 @@ impl Elaborator {
     /// (§1.4 item 2). The consumer is certgen's rim.
     pub fn monomorph_name(&self, name: &str, args: &[Ty]) -> Option<&str> {
         let ind = self.lookup_inductive(name)?;
-        let argkey = args.iter().filter_map(spell_ty).collect::<Vec<_>>().join(",");
+        let argkey = args
+            .iter()
+            .filter_map(spell_ty)
+            .collect::<Vec<_>>()
+            .join(",");
         self.representations.monomorph(ind.tag, &argkey)
     }
 }
@@ -789,7 +833,13 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
                 let args: Vec<&str> = c.fields.iter().map(|f| f.binder.as_str()).collect();
                 format!("{}({})", c.name, args.join(", "))
             };
-            lams(&c.fields.iter().map(|f| (f.binder.clone(), f.spell.clone())).collect::<Vec<_>>(), &body)
+            lams(
+                &c.fields
+                    .iter()
+                    .map(|f| (f.binder.clone(), f.spell.clone()))
+                    .collect::<Vec<_>>(),
+                &body,
+            )
         })
         .collect();
     Clauses {
@@ -814,7 +864,10 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
             }
             bs.push(("r".to_string(), s.clone()));
             let args: Vec<String> = (0..spec.ctors.len()).map(|j| format!("s{j}")).collect();
-            lams(&bs, &format!("{}(B, {}, r)", spec_rec_name(name), args.join(", ")))
+            lams(
+                &bs,
+                &format!("{}(B, {}, r)", spec_rec_name(name), args.join(", ")),
+            )
         }),
         fold_law: None,
         prov: HashMap::new(),
@@ -837,9 +890,9 @@ fn is_naive_call(e: &Expr) -> bool {
         // `named.is_empty()` too: `repr::naive(x := 1)` has no *positional*
         // arguments and would otherwise read as `repr::naive()`
         // (docs/named-arguments-design.md §8.2).
-        ExprKind::App { head, args, named, .. } => {
-            args.is_empty() && named.is_empty() && is_naive_call(head)
-        }
+        ExprKind::App {
+            head, args, named, ..
+        } => args.is_empty() && named.is_empty() && is_naive_call(head),
         ExprKind::Var(n) => n == "repr::naive",
         _ => false,
     }
@@ -859,7 +912,9 @@ pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
     Some(match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Num(n) => n.to_string(),
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             // Named arguments are a decline, not a spelling: this renderer's
             // output is *re-parsed* as generated source, and a permutation
             // that resolves at one callee need not resolve at another.
@@ -878,7 +933,9 @@ pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
             let a: Option<Vec<String>> = args.iter().map(spell_ty).collect();
             format!("{}<{}>", spell_expr(head)?, a?.join(", "))
         }
-        ExprKind::Dot { recv, name, named, .. } if named.is_empty() => {
+        ExprKind::Dot {
+            recv, name, named, ..
+        } if named.is_empty() => {
             format!("{}.{name}", spell_expr(recv)?)
         }
         _ => return None,
@@ -936,7 +993,10 @@ pub(crate) fn pis(bs: &[(String, String)], cod: &str) -> String {
 /// `x: T, y: U` — a declaration's parameter list, the shape the transfer
 /// generator's lemmas are declared with (`pis` is the same binders as a type).
 pub(crate) fn params_src(bs: &[(String, String)]) -> String {
-    bs.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ")
+    bs.iter()
+        .map(|(n, t)| format!("{n}: {t}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `f(a, b)` — n-ary application, the **idiomatic** spelling
@@ -963,7 +1023,14 @@ pub(crate) fn appc(head: &str, args: &[String]) -> String {
 fn step_ty(c: &CtorView, at: &str, b: &str) -> String {
     let mut bs = Vec::new();
     for f in &c.fields {
-        bs.push((f.binder.clone(), if f.rec { at.to_string() } else { f.spell.clone() }));
+        bs.push((
+            f.binder.clone(),
+            if f.rec {
+                at.to_string()
+            } else {
+                f.spell.clone()
+            },
+        ));
     }
     for (k, _) in SpecView::rec_of(c).iter().enumerate() {
         bs.push((format!("b{k}"), b.to_string()));
@@ -977,7 +1044,14 @@ fn step_ty(c: &CtorView, at: &str, b: &str) -> String {
 fn adapt(c: &CtorView, carrier: &str, s: &str, abs: &str) -> String {
     let mut bs = Vec::new();
     for f in &c.fields {
-        bs.push((f.binder.clone(), if f.rec { carrier.to_string() } else { f.spell.clone() }));
+        bs.push((
+            f.binder.clone(),
+            if f.rec {
+                carrier.to_string()
+            } else {
+                f.spell.clone()
+            },
+        ));
     }
     let recs = SpecView::rec_of(c);
     for (k, _) in recs.iter().enumerate() {
@@ -986,7 +1060,13 @@ fn adapt(c: &CtorView, carrier: &str, s: &str, abs: &str) -> String {
     let mut args: Vec<String> = c
         .fields
         .iter()
-        .map(|f| if f.rec { appc(abs, &[f.binder.clone()]) } else { f.binder.clone() })
+        .map(|f| {
+            if f.rec {
+                appc(abs, &[f.binder.clone()])
+            } else {
+                f.binder.clone()
+            }
+        })
         .collect();
     for (k, _) in recs.iter().enumerate() {
         args.push(format!("b{k}"));
@@ -1024,8 +1104,7 @@ fn generate(
             ps.push((format!("s{j}"), step_ty(ct, s, "B")));
         }
         ps.push(("x".to_string(), s.clone()));
-        let params: Vec<String> =
-            ps.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+        let params: Vec<String> = ps.iter().map(|(n, t)| format!("{n}: {t}")).collect();
         let mut arms = String::new();
         for (j, ct) in spec.ctors.iter().enumerate() {
             let pat = if ct.fields.is_empty() {
@@ -1034,8 +1113,7 @@ fn generate(
                 let bs: Vec<&str> = ct.fields.iter().map(|f| f.binder.as_str()).collect();
                 format!("{}({})", ct.name, bs.join(", "))
             };
-            let mut args: Vec<String> =
-                ct.fields.iter().map(|f| f.binder.clone()).collect();
+            let mut args: Vec<String> = ct.fields.iter().map(|f| f.binder.clone()).collect();
             for i in SpecView::rec_of(ct) {
                 args.push(format!(
                     "{sr}(B, {}, {})",
@@ -1043,7 +1121,10 @@ fn generate(
                     ct.fields[i].binder
                 ));
             }
-            arms.push_str(&format!("        {pat} => {},\n", appc(&format!("s{j}"), &args)));
+            arms.push_str(&format!(
+                "        {pat} => {},\n",
+                appc(&format!("s{j}"), &args)
+            ));
         }
         out.push_str(&format!(
             "fn {sr}({}) -> B {{\n    match x {{\n{arms}    }}\n}}\n\n",
@@ -1063,8 +1144,16 @@ fn generate(
             fs.push(format!("    mk_{}: {}", ct.name, mk_ty(ct, "R")));
         }
         for ct in &spec.ctors {
-            fs.push(format!("    {}_abs: {}", ct.name, abs_law_ty(ct, "R", "abs", "inv", &mk_field(ct))));
-            fs.push(format!("    {}_inv: {}", ct.name, inv_law_ty(ct, "R", "inv", &mk_field(ct))));
+            fs.push(format!(
+                "    {}_abs: {}",
+                ct.name,
+                abs_law_ty(ct, "R", "abs", "inv", &mk_field(ct))
+            ));
+            fs.push(format!(
+                "    {}_inv: {}",
+                ct.name,
+                inv_law_ty(ct, "R", "inv", &mk_field(ct))
+            ));
         }
         let mut fb = vec![("B".to_string(), "Type".to_string())];
         for (j, ct) in spec.ctors.iter().enumerate() {
@@ -1072,7 +1161,10 @@ fn generate(
         }
         fb.push(("r".to_string(), "R".to_string()));
         fs.push(format!("    fold: {}", pis(&fb, "B")));
-        fs.push(format!("    fold_law: {}", fold_law_ty(spec, "R", "abs", "inv", "fold", &sr)));
+        fs.push(format!(
+            "    fold_law: {}",
+            fold_law_ty(spec, "R", "abs", "inv", "fold", &sr)
+        ));
         out.push_str(&format!("record {rec} {{\n{}\n}}\n\n", fs.join(",\n")));
     }
 
@@ -1080,8 +1172,14 @@ fn generate(
     //    field's type. Each is 0-ary and the clause is its whole body, so a
     //    written clause is checked against its obligation and nothing else —
     //    and a failure names the field.
-    out.push_str(&format!("fn {rec}::abs() -> (r: {c}) -> {s} {{ {} }}\n", cl.abs));
-    out.push_str(&format!("fn {rec}::inv() -> (r: {c}) -> Type {{ {} }}\n", cl.inv));
+    out.push_str(&format!(
+        "fn {rec}::abs() -> (r: {c}) -> {s} {{ {} }}\n",
+        cl.abs
+    ));
+    out.push_str(&format!(
+        "fn {rec}::inv() -> (r: {c}) -> Type {{ {} }}\n",
+        cl.inv
+    ));
     for (ct, mk) in spec.ctors.iter().zip(cl.mks.iter()) {
         out.push_str(&format!(
             "fn {rec}::mk_{}() -> {} {{ {mk} }}\n",
@@ -1104,12 +1202,20 @@ fn generate(
             owner: owner.to_string(),
             path: format!("{name}::{field}"),
             state: if written { "supplied" } else { "defaulted" },
-            provenance: if written { cl.prov.get(&field).copied() } else { None },
+            provenance: if written {
+                cl.prov.get(&field).copied()
+            } else {
+                None
+            },
             field,
             statement: statement.to_string(),
         });
     };
-    note("inv".to_string(), &format!("(r: {c}) -> Type"), cl.prov.contains_key("inv"));
+    note(
+        "inv".to_string(),
+        &format!("(r: {c}) -> Type"),
+        cl.prov.contains_key("inv"),
+    );
     for (ct, (la, li)) in spec.ctors.iter().zip(cl.laws.iter()) {
         let ty = abs_law_ty(ct, c, &abs, &inv, &mkg(ct));
         note(format!("{}_abs", ct.name), &ty, la.is_some());
@@ -1123,7 +1229,8 @@ fn generate(
         out.push_str(&format!(
             "theorem {rec}::{}_inv(): {ty} {{ {} }}\n",
             ct.name,
-            li.clone().unwrap_or_else(|| closer_under(ct, c, &inv, cl.inv_trivial))
+            li.clone()
+                .unwrap_or_else(|| closer_under(ct, c, &inv, cl.inv_trivial))
         ));
     }
     // The via-abs default (`issues/repr-fold-via-abs-default.md`): the fold the
@@ -1144,7 +1251,9 @@ fn generate(
     fb.push(("r".to_string(), c.clone()));
     let fold_ty = pis(&fb, "B");
     note("fold".to_string(), &fold_ty, cl.prov.contains_key("fold"));
-    out.push_str(&format!("fn {rec}::fold() -> {fold_ty} {{ {fold_body} }}\n"));
+    out.push_str(&format!(
+        "fn {rec}::fold() -> {fold_ty} {{ {fold_body} }}\n"
+    ));
     {
         let ty = fold_law_ty(spec, c, &abs, &inv, &format!("{rec}::fold()"), &sr);
         note("fold_law".to_string(), &ty, cl.fold_law.is_some());
@@ -1165,7 +1274,10 @@ fn generate(
                     let mut args = vec!["B".to_string()];
                     args.extend((0..spec.ctors.len()).map(|j| format!("s{j}")));
                     args.push(appc(&abs, &["r".to_string()]));
-                    lams(&bs, &format!("{}({})", via_abs_law_name(name), args.join(", ")))
+                    lams(
+                        &bs,
+                        &format!("{}({})", via_abs_law_name(name), args.join(", ")),
+                    )
                 }
             }
         });
@@ -1202,7 +1314,16 @@ fn mk_ty(c: &CtorView, at: &str) -> String {
     let bs: Vec<(String, String)> = c
         .fields
         .iter()
-        .map(|f| (f.binder.clone(), if f.rec { at.to_string() } else { f.spell.clone() }))
+        .map(|f| {
+            (
+                f.binder.clone(),
+                if f.rec {
+                    at.to_string()
+                } else {
+                    f.spell.clone()
+                },
+            )
+        })
         .collect();
     pis(&bs, at)
 }
@@ -1218,7 +1339,16 @@ fn law_binders(c: &CtorView, at: &str, inv: &str) -> Vec<(String, String)> {
     let mut bs: Vec<(String, String)> = c
         .fields
         .iter()
-        .map(|f| (f.binder.clone(), if f.rec { at.to_string() } else { f.spell.clone() }))
+        .map(|f| {
+            (
+                f.binder.clone(),
+                if f.rec {
+                    at.to_string()
+                } else {
+                    f.spell.clone()
+                },
+            )
+        })
         .collect();
     for (k, i) in SpecView::rec_of(c).iter().enumerate() {
         bs.push((format!("h{k}"), appc(inv, &[c.fields[*i].binder.clone()])));
@@ -1235,7 +1365,13 @@ fn abs_law_ty(c: &CtorView, at: &str, abs: &str, inv: &str, mk: &str) -> String 
     let spec_args: Vec<String> = c
         .fields
         .iter()
-        .map(|f| if f.rec { appc(abs, &[f.binder.clone()]) } else { f.binder.clone() })
+        .map(|f| {
+            if f.rec {
+                appc(abs, &[f.binder.clone()])
+            } else {
+                f.binder.clone()
+            }
+        })
         .collect();
     let rhs = if spec_args.is_empty() {
         c.name.clone()
@@ -1258,15 +1394,17 @@ fn inv_law_ty(c: &CtorView, at: &str, inv: &str, mk: &str) -> String {
 /// so the applied clause form's scope cannot drift from the statements; the
 /// type spellings are placeholders, since only the names are wanted.
 fn law_statement_binder_names(spec: &SpecView) -> HashMap<String, Vec<String>> {
-    let names =
-        |bs: Vec<(String, String)>| bs.into_iter().map(|(n, _)| n).collect::<Vec<String>>();
+    let names = |bs: Vec<(String, String)>| bs.into_iter().map(|(n, _)| n).collect::<Vec<String>>();
     let mut m = HashMap::new();
     for c in &spec.ctors {
         let ns = names(law_binders(c, "R", "inv"));
         m.insert(format!("{}_abs", c.name), ns.clone());
         m.insert(format!("{}_inv", c.name), ns);
     }
-    m.insert("fold_law".to_string(), names(fold_law_binders(spec, "R", "inv")));
+    m.insert(
+        "fold_law".to_string(),
+        names(fold_law_binders(spec, "R", "inv")),
+    );
     m
 }
 
@@ -1291,7 +1429,9 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
         | ExprKind::Refl
         | ExprKind::AutoRefl
         | ExprKind::Hole(_) => false,
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             mentions_free(head, names, bound)
                 || args.iter().any(|a| mentions_free(a, names, bound))
                 || named.iter().any(|a| mentions_free(&a.expr, names, bound))
@@ -1301,10 +1441,10 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
                 || args.iter().any(|t| mentions_free_ty(t, names, bound))
         }
         ExprKind::Lam { binders, body } => {
-            if binders
-                .iter()
-                .any(|b| b.ty.as_ref().is_some_and(|t| mentions_free_ty(t, names, bound)))
-            {
+            if binders.iter().any(|b| {
+                b.ty.as_ref()
+                    .is_some_and(|t| mentions_free_ty(t, names, bound))
+            }) {
                 return true;
             }
             let n0 = bound.len();
@@ -1314,13 +1454,20 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
             found
         }
         ExprKind::VecLit(es) => es.iter().any(|a| mentions_free(a, names, bound)),
-        ExprKind::Eq(a, b) => {
-            mentions_free(a, names, bound) || mentions_free(b, names, bound)
-        }
+        ExprKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
         ExprKind::TyLit(t) => mentions_free_ty(t, names, bound),
-        ExprKind::Match { scrut, eqbind, motive, arms, form: _, generated: _ } => {
+        ExprKind::Match {
+            scrut,
+            eqbind,
+            motive,
+            arms,
+            form: _,
+            generated: _,
+        } => {
             if mentions_free(scrut, names, bound)
-                || motive.as_ref().is_some_and(|m| mentions_free(m, names, bound))
+                || motive
+                    .as_ref()
+                    .is_some_and(|m| mentions_free(m, names, bound))
             {
                 return true;
             }
@@ -1337,7 +1484,11 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
                 found
             })
         }
-        ExprKind::MatchCode { scrut, motive, arms } => {
+        ExprKind::MatchCode {
+            scrut,
+            motive,
+            arms,
+        } => {
             if mentions_free(scrut, names, bound) || mentions_free_ty(motive, names, bound) {
                 return true;
             }
@@ -1353,7 +1504,10 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
         }
         ExprKind::Dot { recv, args, .. } => {
             mentions_free(recv, names, bound)
-                || args.iter().flatten().any(|a| mentions_free(a, names, bound))
+                || args
+                    .iter()
+                    .flatten()
+                    .any(|a| mentions_free(a, names, bound))
         }
         ExprKind::Index { recv, idx } => {
             mentions_free(recv, names, bound) || mentions_free(idx, names, bound)
@@ -1368,7 +1522,9 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
             for s in &b.stmts {
                 match s {
                     Stmt::Let { name, ty, expr, .. } => {
-                        found = ty.as_ref().is_some_and(|t| mentions_free_ty(t, names, bound))
+                        found = ty
+                            .as_ref()
+                            .is_some_and(|t| mentions_free_ty(t, names, bound))
                             || mentions_free(expr, names, bound);
                         if found {
                             break;
@@ -1400,7 +1556,11 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
             found
         }
         ExprKind::Quote(inner) | ExprKind::Splice(inner) => mentions_free(inner, names, bound),
-        ExprKind::J { proof, motive, case } => {
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+        } => {
             mentions_free(proof, names, bound)
                 || mentions_free(motive, names, bound)
                 || mentions_free(case, names, bound)
@@ -1415,9 +1575,7 @@ fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
         | TyKind::Ctx
         | TyKind::TyCode { .. }
         | TyKind::Splice { .. } => false,
-        TyKind::Eq(a, b) => {
-            mentions_free(a, names, bound) || mentions_free(b, names, bound)
-        }
+        TyKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
         TyKind::OfExpr(e) => mentions_free(e, names, bound),
         // A `Named`'s head is a *type* name; the statement's binders are
         // values, so only the arguments can mention one.
@@ -1427,7 +1585,9 @@ fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
         }
         TyKind::Fin(e) => mentions_free(e, names, bound),
         TyKind::Squash(inner) => mentions_free_ty(inner, names, bound),
-        TyKind::Fn { binder, dom, cod, .. } => {
+        TyKind::Fn {
+            binder, dom, cod, ..
+        } => {
             if mentions_free_ty(dom, names, bound) {
                 return true;
             }
@@ -1463,7 +1623,9 @@ fn pat_names(p: &Pat, out: &mut Vec<String>) {
 /// happened to put it, since a lambda body at a `Type`-valued result is a
 /// term-position type and both readings occur.
 fn lam_body_is_true(e: &Expr) -> bool {
-    let ExprKind::Lam { body, .. } = &e.kind else { return false };
+    let ExprKind::Lam { body, .. } = &e.kind else {
+        return false;
+    };
     match &body.kind {
         ExprKind::Var(n) => n == "True",
         ExprKind::TyLit(t) => matches!(&t.kind, TyKind::Named { name, args }
@@ -1481,7 +1643,10 @@ fn refl_under(c: &CtorView, at: &str, inv: &str) -> String {
 /// every other — the definitional case each of the two is
 /// (`issues/true-prop-trivial-hypotheses.md`).
 fn closer_under(c: &CtorView, at: &str, inv: &str, trivial: bool) -> String {
-    lams(&law_binders(c, at, inv), if trivial { "trivial" } else { "refl" })
+    lams(
+        &law_binders(c, at, inv),
+        if trivial { "trivial" } else { "refl" },
+    )
 }
 
 /// The binder list the fold anchor quantifies over: `B`, one spec step per
@@ -1511,7 +1676,11 @@ fn fold_law_ty(spec: &SpecView, at: &str, abs: &str, inv: &str, fold: &str, sr: 
     fargs.push("r".to_string());
     let lhs = appc(fold, &fargs);
     let steps: Vec<String> = (0..spec.ctors.len()).map(|j| format!("s{j}")).collect();
-    let rhs = format!("{sr}(B, {}, {})", steps.join(", "), appc(abs, &["r".to_string()]));
+    let rhs = format!(
+        "{sr}(B, {}, {})",
+        steps.join(", "),
+        appc(abs, &["r".to_string()])
+    );
     pis(&bs, &format!("{lhs} = {rhs}"))
 }
 
@@ -1562,7 +1731,13 @@ fn ctor_at(c: &CtorView, args: &[String]) -> String {
 }
 
 fn ctor_pat(c: &CtorView) -> String {
-    ctor_at(c, &c.fields.iter().map(|f| f.binder.clone()).collect::<Vec<_>>())
+    ctor_at(
+        c,
+        &c.fields
+            .iter()
+            .map(|f| f.binder.clone())
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// A chain of one-position rewrites, `trans`-composed. Each link is an explicit
@@ -1581,7 +1756,10 @@ fn rewrite_chain(
         let lhs = render(&cur);
         let mut mot = cur.clone();
         mot[*i] = "y".to_string();
-        links.push(format!("j({p}, \u{3bb} y q => {lhs} = {}, refl)", render(&mot)));
+        links.push(format!(
+            "j({p}, \u{3bb} y q => {lhs} = {}, refl)",
+            render(&mot)
+        ));
         cur[*i] = to.clone();
     }
     let mut it = links.into_iter().rev();
@@ -1630,8 +1808,11 @@ fn emb_decls(
     // The embedding itself.
     let mut steps = Vec::new();
     for ct in &spec.ctors {
-        let mut bs: Vec<(String, String)> =
-            ct.fields.iter().map(|f| (f.binder.clone(), f.spell.clone())).collect();
+        let mut bs: Vec<(String, String)> = ct
+            .fields
+            .iter()
+            .map(|f| (f.binder.clone(), f.spell.clone()))
+            .collect();
         for (k, _) in SpecView::rec_of(ct).iter().enumerate() {
             bs.push((format!("b{k}"), c.to_string()));
         }
@@ -1720,8 +1901,11 @@ fn via_abs_fold(name: &str, spec: &SpecView, c: &str, sr: &str, abs: &str) -> St
 fn spec_steps(spec: &SpecView, at_rec: &dyn Fn(usize, &str) -> String) -> Vec<String> {
     let mut out = Vec::new();
     for (j, ct) in spec.ctors.iter().enumerate() {
-        let mut bs: Vec<(String, String)> =
-            ct.fields.iter().map(|f| (f.binder.clone(), f.spell.clone())).collect();
+        let mut bs: Vec<(String, String)> = ct
+            .fields
+            .iter()
+            .map(|f| (f.binder.clone(), f.spell.clone()))
+            .collect();
         let recs = SpecView::rec_of(ct);
         for (k, _) in recs.iter().enumerate() {
             bs.push((format!("b{k}"), "B".to_string()));
@@ -1815,14 +1999,25 @@ pub(crate) fn subst_ty(t: &Ty, m: &HashMap<&str, String>) -> Ty {
             // The substituted type is re-parsed from its spelling rather than
             // cloned: the argument is a `Ty` from the declaration site and its
             // spans belong to that file.
-            Some(s) => TyKind::Named { name: s.clone(), args: Vec::new() },
-            None => TyKind::Named { name: name.clone(), args: Vec::new() },
+            Some(s) => TyKind::Named {
+                name: s.clone(),
+                args: Vec::new(),
+            },
+            None => TyKind::Named {
+                name: name.clone(),
+                args: Vec::new(),
+            },
         },
         TyKind::Named { name, args } => TyKind::Named {
             name: name.clone(),
             args: args.iter().map(|a| subst_ty(a, m)).collect(),
         },
-        TyKind::Fn { binder, implicit, dom, cod } => TyKind::Fn {
+        TyKind::Fn {
+            binder,
+            implicit,
+            dom,
+            cod,
+        } => TyKind::Fn {
             binder: binder.clone(),
             implicit: *implicit,
             dom: Box::new(subst_ty(dom, m)),
@@ -1901,7 +2096,11 @@ impl ImplSchema {
     /// `abs(call) = f(⟦x̄⟧)` at a repr-typed result, `call = f(⟦x̄⟧)` otherwise.
     pub fn refines_concl(&self, call: &str) -> String {
         if self.res_is_spec {
-            format!("{} = {}", appc(&self.abs, &[call.to_string()]), self.spec_call())
+            format!(
+                "{} = {}",
+                appc(&self.abs, &[call.to_string()]),
+                self.spec_call()
+            )
         } else {
             format!("{call} = {}", self.spec_call())
         }
@@ -2004,10 +2203,7 @@ impl Elaborator {
 
     fn elab_impl_inner(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
         let Some(rp) = self.representations.named(&d.repr).cloned() else {
-            return err(
-                format!("`{}` is not a `datarepr` in scope", d.repr),
-                d.span,
-            );
+            return err(format!("`{}` is not a `datarepr` in scope", d.repr), d.span);
         };
         let Some(f) = self.names.surface_decl(&d.op).cloned() else {
             return err(
@@ -2113,15 +2309,24 @@ impl Elaborator {
                     Provenance::Inline
                 },
             );
-            by.insert(cl.name.clone(), (sp.add(&cl.name, cl.span, &cl.expr), cl.span));
+            by.insert(
+                cl.name.clone(),
+                (sp.add(&cl.name, cl.span, &cl.expr), cl.span),
+            );
         }
         let Some((body, _)) = by.remove("body") else {
-            return err(format!("`impl {} for {}` needs a `body`", d.op, d.repr), d.span);
+            return err(
+                format!("`impl {} for {}` needs a `body`", d.op, d.repr),
+                d.span,
+            );
         };
         let refines = by.remove("refines").map(|(t, _)| t);
         if refines.is_none() && via.is_none() {
             return err(
-                format!("`impl {} for {}` needs a `refines` (design §1.2)", d.op, d.repr),
+                format!(
+                    "`impl {} for {}` needs a `refines` (design §1.2)",
+                    d.op, d.repr
+                ),
                 d.span,
             );
         }
@@ -2151,8 +2356,10 @@ impl Elaborator {
         }
         if let Some((k, (_, span))) = by.iter().next() {
             return err(
-                format!("`{k}` is not a clause of an `Impl`: the clauses are `body`, \
-                         `refines` and (at a repr-typed result) `refines_inv`"),
+                format!(
+                    "`{k}` is not a clause of an `Impl`: the clauses are `body`, \
+                         `refines` and (at a repr-typed result) `refines_inv`"
+                ),
                 *span,
             );
         }
@@ -2171,10 +2378,25 @@ impl Elaborator {
         // A route that wrote the whole declaration (`derive()`) owns every
         // field's provenance; otherwise it is per clause.
         let route = self.impl_provenance;
-        let mut obs =
-            vec![obligation_row(&owner, &sch, &d.repr, "refines", &refines_ty, &prov, route)];
+        let mut obs = vec![obligation_row(
+            &owner,
+            &sch,
+            &d.repr,
+            "refines",
+            &refines_ty,
+            &prov,
+            route,
+        )];
         if res_is_spec {
-            obs.push(obligation_row(&owner, &sch, &d.repr, "refines_inv", &inv_ty, &prov, route));
+            obs.push(obligation_row(
+                &owner,
+                &sch,
+                &d.repr,
+                "refines_inv",
+                &inv_ty,
+                &prov,
+                route,
+            ));
         }
         for o in &mut obs {
             o.statement = self.display_paths(&o.statement);
@@ -2208,7 +2430,7 @@ impl Elaborator {
                                 d.op, d.repr
                             ),
                             *span,
-                        )
+                        );
                     }
                 };
                 // The derived artifacts WITHOUT the transfer's own `impl`
@@ -2233,12 +2455,19 @@ impl Elaborator {
                     },
                 );
                 let obg = format!("{rec}::via_derived_obligation()");
-                src.push_str(&format!("theorem {obg}: {obl} {{ {} }}\n", sp.add("refines", *span, arg)));
+                src.push_str(&format!(
+                    "theorem {obg}: {obl} {{ {} }}\n",
+                    sp.add("refines", *span, arg)
+                ));
                 // The derived certificate quantifies over ONE `inv`
                 // hypothesis, at the parameter the transfer recursed on; the
                 // schema's hypotheses are one per repr-typed parameter, so the
                 // right one is found by name and not by position.
-                let k = sch.at_repr.iter().position(|x| *x == em.rec_param).unwrap_or(0);
+                let k = sch
+                    .at_repr
+                    .iter()
+                    .position(|x| *x == em.rec_param)
+                    .unwrap_or(0);
                 let mut dargs = sch.args();
                 dargs.push(sch.hyps[k].0.clone());
                 let law = sch.law_binders();
@@ -2248,7 +2477,10 @@ impl Elaborator {
                         &law,
                         &format!(
                             "trans({}, {}({}))",
-                            appc(&obg, &law.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()),
+                            appc(
+                                &obg,
+                                &law.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+                            ),
                             em.refines,
                             dargs.join(", ")
                         )
@@ -2262,11 +2494,16 @@ impl Elaborator {
             format!("refines: {rec}::refines()"),
         ];
         if let Some(ri) = &refines_inv {
-            src.push_str(&format!("theorem {rec}::refines_inv(): {inv_ty} {{ {ri} }}\n"));
+            src.push_str(&format!(
+                "theorem {rec}::refines_inv(): {inv_ty} {{ {ri} }}\n"
+            ));
             lit.push(format!("refines_inv: {rec}::refines_inv()"));
         }
         let global = format!("{}_{}_impl", d.repr, d.op);
-        src.push_str(&format!("\nfn {global}() -> {rec} {{ {rec} {{ {} }} }}\n", lit.join(", ")));
+        src.push_str(&format!(
+            "\nfn {global}() -> {rec} {{ {rec} {{ {} }} }}\n",
+            lit.join(", ")
+        ));
         self.elab_generated(&src, &owner, d.span, &sp)?;
         let provenance = self.impl_provenance.unwrap_or(provenance);
         self.representations.commit_impl(
@@ -2304,7 +2541,7 @@ impl Elaborator {
                 return err(
                     format!("`impl {} for {} := derive()` declines: {why}", d.op, d.repr),
                     d.span,
-                )
+                );
             }
         };
         let owner = format!("impl {} for {}", d.op, d.repr);
@@ -2321,14 +2558,18 @@ impl Elaborator {
     /// are the transfer generator and the compiler walk; nothing in the
     /// surface path reads it.
     pub fn impl_global(&self, repr: &str, op: &str) -> Option<&str> {
-        self.representations.impl_entry(repr, op).map(|entry| entry.global.as_str())
+        self.representations
+            .impl_entry(repr, op)
+            .map(|entry| entry.global.as_str())
     }
 
     /// How that `Impl` came to be (§4.4). For humans and tools only — the Q2
     /// verdict's "distinguish provenance on inspection"; no certificate and no
     /// resolution consults it.
     pub fn impl_provenance_of(&self, repr: &str, op: &str) -> Option<Provenance> {
-        self.representations.impl_entry(repr, op).map(|entry| entry.provenance)
+        self.representations
+            .impl_entry(repr, op)
+            .map(|entry| entry.provenance)
     }
 
     /// Every obligation of every obligation-bearing declaration elaborated so

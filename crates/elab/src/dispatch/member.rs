@@ -8,8 +8,7 @@ use std::rc::Rc;
 use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 
 use crate::{
-    err, skel_of_ty, Cx, DotResolution, ElabError, Elaborator, NameRes, R,
-    BUILTIN_METHODS,
+    BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, err, skel_of_ty,
 };
 
 impl Elaborator {
@@ -66,8 +65,7 @@ impl Elaborator {
                 && let Some(ind) = self.record_of_at(cx, &ty, span)
                 && let Some(idx) = ind.field_index(name)
             {
-                let (t, fty, flvl) =
-                    self.project_field(cx, &ind, &ty, Rc::new(t), idx, span)?;
+                let (t, fty, flvl) = self.project_field(cx, &ind, &ty, Rc::new(t), idx, span)?;
                 let _ = lvl;
                 let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
                 return Ok(DotResolution::Project(t, fty, flvl, skel));
@@ -89,8 +87,10 @@ impl Elaborator {
                 // a carrier with no instance is the spelling that produces one
                 // (docs/traits-type-projection-design.md §5).
                 Err(e @ ElabError::Resolution { .. }) => return Err(e),
-                Err(_) => format!("no field `{name}` here (and the receiver's type \
-                                   could not be inferred)"),
+                Err(_) => format!(
+                    "no field `{name}` here (and the receiver's type \
+                                   could not be inferred)"
+                ),
             };
             return err(what, span);
         };
@@ -158,7 +158,10 @@ impl Elaborator {
         }
         let at = at.min(args.len());
         args.insert(at, recv.clone());
-        let head = Expr { kind: ExprKind::Var(name.to_string()), span };
+        let head = Expr {
+            kind: ExprKind::Var(name.to_string()),
+            span,
+        };
         Ok(DotResolution::Method(Expr {
             kind: ExprKind::App {
                 head: Box::new(head),
@@ -200,15 +203,13 @@ impl Elaborator {
             // regime's ambiguity, reported here rather than fallen back out
             // of — a receiver that *did* find candidates and cannot choose is
             // not a receiver that found none.
-            NameRes::Ambiguous(_) => {
-                return Err(self.name_miss(&qualified, String::new(), span))
-            }
+            NameRes::Ambiguous(_) => return Err(self.name_miss(&qualified, String::new(), span)),
             // A restricted name falls back exactly as a missing one does: the
             // receiver's namespace is not where a generated member is
             // reached, and the field route above already ran
             // (docs/repr-access-spellings-design.md §3.2).
             NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {
-                return Ok(name.to_string())
+                return Ok(name.to_string());
             }
         }
         if self.shadowed(cx, name) {
@@ -224,5 +225,4 @@ impl Elaborator {
         }
         Ok(qualified)
     }
-
 }

@@ -17,18 +17,18 @@
 
 use std::rc::Rc;
 
+use heather_kernel::layer::Layer;
+use heather_kernel::level::Level;
+use heather_kernel::rec;
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
 };
-use heather_kernel::rec;
-use heather_kernel::layer::Layer;
-use heather_kernel::level::Level;
 use heather_kernel::typing;
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, TyKind};
 
-use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
 use crate::names::NameKind;
-use crate::{err, Alias, Cx, ElabError, Elaborator, MetaDef, R};
+use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
+use crate::{Alias, Cx, ElabError, Elaborator, MetaDef, R, err};
 
 /// One binder of a `meta fn`'s signature, in written order.
 ///
@@ -74,7 +74,11 @@ pub(crate) enum MetaBinder {
     /// A letbox-bound code global, pushed during quote assembly for one
     /// hoisted `$name` splice. (Its context is the quote's own — enforced at
     /// hoisting — so only the type needs carrying.)
-    Code { name: String, ty: Rc<Type>, level: Level },
+    Code {
+        name: String,
+        ty: Rc<Type>,
+        level: Level,
+    },
 }
 
 impl MetaEnv {
@@ -107,10 +111,16 @@ impl MetaEnv {
 /// payload's current context (base `g`, `gamma.entries.len()` binders).
 fn wk_to_base(gamma: &LocalCtx, span: Span) -> R<LocalSubst> {
     let CtxBase::Var(g) = gamma.base else {
-        return err("a splice needs a quote context headed by a `Ctx` binder", span);
+        return err(
+            "a splice needs a quote context headed by a `Ctx` binder",
+            span,
+        );
     };
     Ok(LocalSubst {
-        tail: SubstTail::Wk { len: gamma.entries.len() as u32, ctx_var: g },
+        tail: SubstTail::Wk {
+            len: gamma.entries.len() as u32,
+            ctx_var: g,
+        },
         terms: vec![],
     })
 }
@@ -144,7 +154,10 @@ impl Elaborator {
         let mut seen_local = false;
         for p in &decl.params {
             if p.implicit || p.is_self {
-                return err("a `meta fn` parameter is neither implicit nor `self`", p.span);
+                return err(
+                    "a `meta fn` parameter is neither implicit nor `self`",
+                    p.span,
+                );
             }
             if decl.params.iter().filter(|q| q.name == p.name).count() > 1 {
                 return err(format!("duplicate parameter `{}`", p.name), p.span);
@@ -158,7 +171,9 @@ impl Elaborator {
                     );
                 }
                 TyKind::Ctx => {
-                    menv.pushed.push(MetaBinder::Ctx { name: p.name.clone() });
+                    menv.pushed.push(MetaBinder::Ctx {
+                        name: p.name.clone(),
+                    });
                     self.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
                     sig.push(Sig::Ctx);
                 }
@@ -175,15 +190,24 @@ impl Elaborator {
                 TyKind::TyCode { ctx } => {
                     seen_local = true;
                     let g = menv.ctx_ref(ctx, p.span)?;
-                    let ty = Type::CodeTy { ctx: g, level: Level::Zero };
+                    let ty = Type::CodeTy {
+                        ctx: g,
+                        level: Level::Zero,
+                    };
                     cx.push(p.name.clone(), ty.clone(), Level::Zero);
-                    sig.push(Sig::Local { ty, level: Level::Zero });
+                    sig.push(Sig::Local {
+                        ty,
+                        level: Level::Zero,
+                    });
                 }
                 TyKind::Code { ctx, ty } => {
                     seen_local = true;
                     let code_ty = self.elab_code_ty(&cx, &menv, ctx, ty, p.span)?;
                     cx.push(p.name.clone(), code_ty.clone(), Level::Zero);
-                    sig.push(Sig::Local { ty: code_ty, level: Level::Zero });
+                    sig.push(Sig::Local {
+                        ty: code_ty,
+                        level: Level::Zero,
+                    });
                 }
                 _ => {
                     seen_local = true;
@@ -227,7 +251,10 @@ impl Elaborator {
                     lvl = Level::max(level.clone(), lvl);
                 }
                 Sig::Ctx => {
-                    stmt = Type::CtxPi { level: lvl.clone(), body: Rc::new(stmt) };
+                    stmt = Type::CtxPi {
+                        level: lvl.clone(),
+                        body: Rc::new(stmt),
+                    };
                 }
             }
         }
@@ -250,7 +277,10 @@ impl Elaborator {
                     lvl = Level::max(level.clone(), lvl);
                 }
                 Sig::Ctx => {
-                    term = Term::CtxLam { level: lvl.clone(), body: Rc::new(term) };
+                    term = Term::CtxLam {
+                        level: lvl.clone(),
+                        body: Rc::new(term),
+                    };
                 }
             }
         }
@@ -283,20 +313,26 @@ impl Elaborator {
         for stmt in &decl.body.stmts {
             let (name, expr) = match stmt {
                 Stmt::LetCode { name, expr, .. } => (name, expr),
-                Stmt::Let { name, ty: None, expr, .. } => (name, expr),
+                Stmt::Let {
+                    name,
+                    ty: None,
+                    expr,
+                    ..
+                } => (name, expr),
                 Stmt::Let { span, .. } => {
                     return err(
                         "an annotated `let` is not part of the meta slice yet; \
                          `let code x = …;` and `let x = …;` are",
                         *span,
-                    )
+                    );
                 }
                 Stmt::LetRecord { span, .. } => {
-                    return err("`let { … }` is not part of the meta slice", *span)
+                    return err("`let { … }` is not part of the meta slice", *span);
                 }
             };
             let (term, ty, level) = self.elab_infer(&cx, expr)?;
-            cx.aliases.push(Rc::new(Alias { skel: None,
+            cx.aliases.push(Rc::new(Alias {
+                skel: None,
                 name: name.clone(),
                 depth: cx.names.len(),
                 term: Rc::new(term),
@@ -326,20 +362,28 @@ impl Elaborator {
                 layer: Layer::Meta,
                 lands_in_psi: false,
             };
-            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+            if !self
+                .gate
+                .as_ref()
+                .is_some_and(|g| g.admits(&self.psi, &item))
+            {
                 crate::stats::time_kernel(|| {
                     self.kernel_check_type(&self.psi, Layer::Meta, &empty, &stmt, &lvl)
                 })
                 .map_err(|e| ElabError::Kernel {
-                    decl: decl.name.clone(), span: decl.span, err: e, note: None,
+                    decl: decl.name.clone(),
+                    span: decl.span,
+                    err: e,
+                    note: None,
                 })?;
                 crate::stats::time_kernel(|| {
-                    self.kernel_check_term(
-                        &self.psi, Layer::Meta, &empty, &term, &stmt, &lvl,
-                    )
+                    self.kernel_check_term(&self.psi, Layer::Meta, &empty, &term, &stmt, &lvl)
                 })
                 .map_err(|e| ElabError::Kernel {
-                    decl: decl.name.clone(), span: decl.span, err: e, note: None,
+                    decl: decl.name.clone(),
+                    span: decl.span,
+                    err: e,
+                    note: None,
                 })?;
                 if let Some(g) = self.gate.as_ref() {
                     g.accepted(&self.psi, &item);
@@ -421,8 +465,8 @@ impl Elaborator {
         // built in Rust: an inductive is *inlined*, not a Ψ global, so there is
         // no global for a Rust-built type to reference — and a name that the
         // declaring file has not declared has to fail loudly, right here.
-        let file = heather_syntax::parse_file(spec.signature)
-            .expect("a slot's expected signature parses");
+        let file =
+            heather_syntax::parse_file(spec.signature).expect("a slot's expected signature parses");
         let [heather_syntax::ast::Item::Decl(sig_decl)] = &file.items[..] else {
             unreachable!("a slot's expected signature is one declaration")
         };
@@ -533,7 +577,13 @@ impl Elaborator {
         let mut rest: &Ty = payload;
         let mut order: Vec<usize> = Vec::new();
         for n in 0..spec.ingredients.len() {
-            let TyKind::Fn { binder, implicit, dom, cod } = &rest.kind else {
+            let TyKind::Fn {
+                binder,
+                implicit,
+                dom,
+                cod,
+            } = &rest.kind
+            else {
                 return err(
                     format!(
                         "`{}` binds {n} of the slot's {} ingredients ({}): a template \
@@ -590,7 +640,12 @@ impl Elaborator {
         let Type::CtxPi { body, .. } = stmt else {
             unreachable!("a template's statement was closed over its `Ctx` binder")
         };
-        let Type::CodeTm { ctx, ty: got, level } = &**body else {
+        let Type::CodeTm {
+            ctx,
+            ty: got,
+            level,
+        } = &**body
+        else {
             unreachable!("a `meta fn`'s statement is a code type")
         };
         if level.normalize() != want_level.normalize() {
@@ -605,15 +660,15 @@ impl Elaborator {
         }
         self.semantic_oracle()
             .convert_type(ctx, Layer::Prog, got, &want, level)
-        .map_err(|_| ElabError::Elab {
-            msg: format!(
-                "this template does not have `{}`'s type. The slot's payload is\n  \
+            .map_err(|_| ElabError::Elab {
+                msg: format!(
+                    "this template does not have `{}`'s type. The slot's payload is\n  \
                  {want:?}\nand this one is\n  {got:?}\n(the binder *names* fix the \
                  order, so a permutation is fine — a different shape is not)",
-                spec.path_str()
-            ),
-            span: decl.result.span,
-        })?;
+                    spec.path_str()
+                ),
+                span: decl.result.span,
+            })?;
         Ok((spec, order))
     }
 
@@ -641,7 +696,11 @@ impl Elaborator {
         // the payload type's own level is whatever it computes to — a generic
         // template quantifying over `Type<0>` genuinely lives at level 1.
         let _ = cx;
-        Ok(Type::CodeTm { ctx: ctx_lc, ty: Rc::new(t), level: lvl })
+        Ok(Type::CodeTm {
+            ctx: ctx_lc,
+            ty: Rc::new(t),
+            level: lvl,
+        })
     }
 
     /// A `code { … }` quote against an expected `Code(g |- T)`
@@ -663,7 +722,12 @@ impl Elaborator {
             );
         };
         let head = self.whnf(cx, expected, span)?;
-        let Type::CodeTm { ctx: qctx, ty: qty, level: qlvl } = head else {
+        let Type::CodeTm {
+            ctx: qctx,
+            ty: qty,
+            level: qlvl,
+        } = head
+        else {
             return err(
                 format!("a quote needs an expected `Code(g |- T)` type, found `{expected:?}`"),
                 span,
@@ -685,9 +749,14 @@ impl Elaborator {
             level: Level,
         }
         let mut hoists: Vec<Hoist> = Vec::new();
-        let mut inner = MetaEnv { pushed: menv.pushed.clone() };
+        let mut inner = MetaEnv {
+            pushed: menv.pushed.clone(),
+        };
         for (name, nspan) in &names {
-            let var = Expr { kind: ExprKind::Var(name.clone()), span: *nspan };
+            let var = Expr {
+                kind: ExprKind::Var(name.clone()),
+                span: *nspan,
+            };
             let (t, t_ty, _) = self.elab_infer(cx, &var)?;
             let Type::CodeTm { ctx, ty, level } = self.whnf(cx, &t_ty, *nspan)? else {
                 return err(
@@ -712,7 +781,12 @@ impl Elaborator {
             let i = hoists.len() as u32;
             let ctx_i = ctx.shift_global(i);
             let ty_i = Rc::new((*ty).clone().shift_global(i));
-            hoists.push(Hoist { term: t, ctx: ctx.clone(), ty: Rc::clone(&ty), level: level.clone() });
+            hoists.push(Hoist {
+                term: t,
+                ctx: ctx.clone(),
+                ty: Rc::clone(&ty),
+                level: level.clone(),
+            });
             inner.pushed.push(MetaBinder::Code {
                 name: name.clone(),
                 ty: Rc::clone(&ty_i),
@@ -789,7 +863,10 @@ impl Elaborator {
                 // it by `idx + 1` (the kernel's own `GlobalTy`-rule shift).
                 let ty_here = (**ty).clone().shift_global(idx + 1).apply_local(&delta);
                 Ok((
-                    Term::GlobalTm { var: GlobalVar(idx), subst: delta },
+                    Term::GlobalTm {
+                        var: GlobalVar(idx),
+                        subst: delta,
+                    },
                     ty_here,
                     level.clone(),
                 ))
@@ -854,7 +931,10 @@ impl Elaborator {
         for &pos in &md.order {
             let iname = spec.ingredients[pos].name;
             let Some((_, ing)) = args.iter().find(|(n, _)| *n == iname) else {
-                unreachable!("`{iname}` is an ingredient of `{}` with no argument", spec.path_str())
+                unreachable!(
+                    "`{iname}` is an ingredient of `{}` with no argument",
+                    spec.path_str()
+                )
             };
             match ing {
                 Ingredient::Term(t) => {
@@ -881,7 +961,10 @@ impl Elaborator {
         // template is rescoped to the Ψ of *this* use site: it was elaborated
         // against a shorter one (`MetaDef::psi_len`).
         let (md_term, _) = md.at(self.psi.bindings.len());
-        let applied = Term::CtxApp { fun: md_term, ctx: cx.gamma.clone() };
+        let applied = Term::CtxApp {
+            fun: md_term,
+            ctx: cx.gamma.clone(),
+        };
         let evaluated = self.whnf_tm(cx, &applied, span)?;
         let Term::BoxTm(payload) = &*evaluated else {
             return err(
@@ -914,7 +997,13 @@ impl Elaborator {
         })?;
         let mut term = (**payload).clone();
         for arg in applied_args {
-            let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty, span)? else {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = self.whnf(cx, &ty, span)?
+            else {
                 return err(
                     format!(
                         "`{name}`'s payload ran out of parameters — the template's shape \
@@ -976,8 +1065,15 @@ impl Elaborator {
         // which motive the conclusion instantiates, and a constant motive
         // erases the second difference.
         enum Scrutinee {
-            Tm { ctx: heather_kernel::term::LocalCtx, ty: Rc<Type>, level: Level },
-            Ty { ctx: heather_kernel::term::LocalCtx, level: Level },
+            Tm {
+                ctx: heather_kernel::term::LocalCtx,
+                ty: Rc<Type>,
+                level: Level,
+            },
+            Ty {
+                ctx: heather_kernel::term::LocalCtx,
+                level: Level,
+            },
         }
         let scrutinee = match self.whnf(cx, &scrut_ty, span)? {
             Type::CodeTm { ctx, ty, level } => Scrutinee::Tm { ctx, ty, level },
@@ -1078,7 +1174,9 @@ impl Elaborator {
             // The telescope's globals go into the oracle padding for the arm's
             // elaboration: nothing can *name* them, but every ambient global an
             // arm body does name is that many indices further out.
-            self.meta_pushed.borrow_mut().extend(shape.globals.iter().cloned());
+            self.meta_pushed
+                .borrow_mut()
+                .extend(shape.globals.iter().cloned());
             let arm_t = self.elab_check(&acx, &arm.body, &shape.ty, &shape.level);
             {
                 let mut mp = self.meta_pushed.borrow_mut();
@@ -1088,8 +1186,7 @@ impl Elaborator {
             terms[idx] = Rc::new(arm_t?);
         }
 
-        let branches: [Rc<Term>; 56] =
-            terms.try_into().expect("one term per branch name");
+        let branches: [Rc<Term>; 56] = terms.try_into().expect("one term per branch name");
         let branches = Rc::new(rec::branches_from(branches));
         let term = match scrutinee {
             Scrutinee::Tm { ctx, ty, level } => Term::ElimCodeTm {
@@ -1114,14 +1211,20 @@ impl Elaborator {
         };
         Ok((term, m_ty, m_lvl))
     }
-
 }
 
 /// The branch names an arm may use, for the unknown-branch diagnostic. Every
 /// name in the kernel's table is legal; the six the fragment transcriber needs
 /// lead, because they are the ones anyone writes.
 fn writable_branches() -> String {
-    let lead = ["tm_zero", "tm_succ", "tm_var", "tm_lam", "tm_app", "tm_elim_nat"];
+    let lead = [
+        "tm_zero",
+        "tm_succ",
+        "tm_var",
+        "tm_lam",
+        "tm_app",
+        "tm_elim_nat",
+    ];
     let rest = rec::BRANCH_NAMES.len() - lead.len();
     format!(
         "{} (and {rest} more, all of `heather_kernel::rec::BRANCH_NAMES`)",
@@ -1169,9 +1272,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 scan_splices(b, menv, out)
             }
             TyKind::OfExpr(e) => scan_splices(e, menv, out),
-            TyKind::Named { args, .. } => {
-                args.iter().try_for_each(|a| walk_ty(a, menv, out))
-            }
+            TyKind::Named { args, .. } => args.iter().try_for_each(|a| walk_ty(a, menv, out)),
             TyKind::Vec { elem, len } => {
                 walk_ty(elem, menv, out)?;
                 scan_splices(len, menv, out)
@@ -1233,11 +1334,15 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(b, menv, out)
         }
         ExprKind::TyLit(t) => walk_ty(t, menv, out),
-        ExprKind::App { head, args, named, .. } => {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
             scan_splices(head, menv, out)?;
             args.iter().try_for_each(|a| scan_splices(a, menv, out))?;
             // A splice inside a named argument is still a splice.
-            named.iter().try_for_each(|a| scan_splices(&a.expr, menv, out))
+            named
+                .iter()
+                .try_for_each(|a| scan_splices(&a.expr, menv, out))
         }
         ExprKind::TyApp { head, args } => {
             scan_splices(head, menv, out)?;
@@ -1258,23 +1363,43 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(idx, menv, out)
         }
         // `eqbind` is a binding *name*, so there is nothing in it to splice.
-        ExprKind::Match { scrut, motive, arms, eqbind: _, form: _, generated: _ } => {
+        ExprKind::Match {
+            scrut,
+            motive,
+            arms,
+            eqbind: _,
+            form: _,
+            generated: _,
+        } => {
             scan_splices(scrut, menv, out)?;
             if let Some(m) = motive {
                 scan_splices(m, menv, out)?;
             }
-            arms.iter().try_for_each(|a| scan_splices(&a.body, menv, out))
+            arms.iter()
+                .try_for_each(|a| scan_splices(&a.body, menv, out))
         }
-        ExprKind::Dot { recv, args, named, .. } => {
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
             scan_splices(recv, menv, out)?;
-            args.iter().flatten().try_for_each(|a| scan_splices(a, menv, out))?;
-            named.iter().try_for_each(|a| scan_splices(&a.expr, menv, out))
+            args.iter()
+                .flatten()
+                .try_for_each(|a| scan_splices(a, menv, out))?;
+            named
+                .iter()
+                .try_for_each(|a| scan_splices(&a.expr, menv, out))
         }
         ExprKind::RecordLit { tyargs, fields, .. } => {
             tyargs.iter().try_for_each(|t| walk_ty(t, menv, out))?;
-            fields.iter().try_for_each(|f| scan_splices(&f.expr, menv, out))
+            fields
+                .iter()
+                .try_for_each(|f| scan_splices(&f.expr, menv, out))
         }
-        ExprKind::J { proof, motive, case } => {
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+        } => {
             scan_splices(proof, menv, out)?;
             scan_splices(motive, menv, out)?;
             scan_splices(case, menv, out)

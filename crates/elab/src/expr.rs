@@ -222,14 +222,15 @@ impl<'a> ExprElab<'a> {
                 elab.check_type_endpoint(cx, len, &Type::Nat, &Level::Zero)
                     .map(|len| (Type::Fin { len: Rc::new(len) }, Level::Zero)),
             ),
-            TyKind::Squash(inner) => Some(
-                elab.lower_type(cx, inner).map(|(ty, level)| {
-                    (
-                        Type::Squash { level: level.clone(), ty: Rc::new(ty) },
-                        level,
-                    )
-                }),
-            ),
+            TyKind::Squash(inner) => Some(elab.lower_type(cx, inner).map(|(ty, level)| {
+                (
+                    Type::Squash {
+                        level: level.clone(),
+                        ty: Rc::new(ty),
+                    },
+                    level,
+                )
+            })),
             TyKind::Fn {
                 binder, dom, cod, ..
             } => Some((|| {
@@ -335,7 +336,13 @@ impl<'a> ExprElab<'a> {
                 span,
             );
         };
-        Ok((Type::El { level: level.clone(), tm: Rc::new(term) }, level))
+        Ok((
+            Type::El {
+                level: level.clone(),
+                tm: Rc::new(term),
+            },
+            level,
+        ))
     }
 
     /// Check an expression where the expected type is `Type<want>`.
@@ -395,12 +402,7 @@ impl<'a> ExprElab<'a> {
         }))
     }
 
-    fn quote_type_at(
-        elaborated: &Type,
-        level: &Level,
-        want: &Level,
-        span: Span,
-    ) -> R<Term> {
+    fn quote_type_at(elaborated: &Type, level: &Level, want: &Level, span: Span) -> R<Term> {
         if !level.equiv(want) {
             return err(
                 format!(
@@ -450,9 +452,7 @@ impl<'a> ExprElab<'a> {
                  or write the call fully explicitly (`@f(a, b, ?p)`)",
                 e.span,
             )),
-            ExprKind::Num(n) => {
-                Some(Ok((Self::natural_literal(*n), Type::Nat, Level::Zero)))
-            }
+            ExprKind::Num(n) => Some(Ok((Self::natural_literal(*n), Type::Nat, Level::Zero))),
             // A type in term position is its kernel code at the next universe.
             ExprKind::Eq(..) | ExprKind::TyLit(..) => Some((|| {
                 let ty = expression_as_type(e).expect("classified as type syntax");
@@ -551,9 +551,7 @@ impl<'a> ExprElab<'a> {
             ExprKind::Var(name) if name == "FZ" => {
                 Some(self.check_fin_index(elab, cx, None, expected, e.span))
             }
-            ExprKind::App { args, .. }
-                if matches!(e.as_named(), Some(("FS", _, false))) =>
-            {
+            ExprKind::App { args, .. } if matches!(e.as_named(), Some(("FS", _, false))) => {
                 Some(match args.as_slice() {
                     [index] => self.check_fin_index(elab, cx, Some(index), expected, e.span),
                     _ => err("`FS` takes exactly one argument, an index", e.span),
@@ -698,7 +696,7 @@ impl<'a> ExprElab<'a> {
                          type spells this parameter explicit — the two must agree \
                          position by position",
                         binder.span,
-                    )
+                    );
                 }
                 None => {
                     return err(
@@ -707,7 +705,7 @@ impl<'a> ExprElab<'a> {
                          not written, and a computed type offers no implicit \
                          insertion (issues/implicit-binders-in-function-types.md)",
                         binder.span,
-                    )
+                    );
                 }
             }
         }
@@ -734,16 +732,7 @@ impl<'a> ExprElab<'a> {
             elab.check_expression(&inner, body, &cod, &cod_level)?
         } else {
             let rest_skel = skel_at.map(|positions| positions.get(1..).unwrap_or(&[]));
-            self.check_lambda_at(
-                elab,
-                &inner,
-                rest,
-                body,
-                &cod,
-                &cod_level,
-                rest_skel,
-                span,
-            )?
+            self.check_lambda_at(elab, &inner, rest, body, &cod, &cod_level, rest_skel, span)?
         };
         Ok(Term::Lam {
             dom_level,
@@ -783,13 +772,8 @@ impl<'a> ExprElab<'a> {
             );
         };
         let (dom, dom_level) = elab.lower_lambda_annotation(cx, annotation)?;
-        let inner = Self::extend_lambda_context(
-            cx,
-            binder,
-            &dom,
-            &dom_level,
-            skel_of_ty(annotation),
-        );
+        let inner =
+            Self::extend_lambda_context(cx, binder, &dom, &dom_level, skel_of_ty(annotation));
         let (body, cod, cod_level) = self.infer_lambda(elab, &inner, rest, body, mode)?;
         Ok((
             Term::Lam {
@@ -921,7 +905,9 @@ impl<'a> ExprElab<'a> {
                 span,
             );
         }
-        let mut acc = Term::Triv { level: level.clone() };
+        let mut acc = Term::Triv {
+            level: level.clone(),
+        };
         for (j, element) in elems.iter().enumerate().rev() {
             let element = elab.check_expression(cx, element, &elem, &level)?;
             acc = Term::Pair {
@@ -985,11 +971,9 @@ mod tests {
                     self.inferred_numerals.borrow_mut().push(*n);
                     Ok((Term::Zero, Type::Nat, Level::Zero))
                 }
-                ExprKind::Var(name) if name == "code" => Ok((
-                    Term::TmNat,
-                    Type::Ty(Level::Zero),
-                    Level::constant(1),
-                )),
+                ExprKind::Var(name) if name == "code" => {
+                    Ok((Term::TmNat, Type::Ty(Level::Zero), Level::constant(1)))
+                }
                 _ => panic!("the fixture only infers numerals and `code`"),
             }
         }
@@ -1140,12 +1124,18 @@ mod tests {
         assert!(matches!(term, Term::Succ(_)));
         assert_eq!((ty, level), (Type::Nat, Level::Zero));
 
-        let trivial = Expr { kind: ExprKind::Var("trivial".into()), span: SPAN };
+        let trivial = Expr {
+            kind: ExprKind::Var("trivial".into()),
+            span: SPAN,
+        };
         assert!(matches!(
             expr.infer_form(&fake, &cx, &trivial).unwrap().unwrap(),
             (Term::Triv { .. }, Type::Unit { .. }, Level::Zero)
         ));
-        let fz = Expr { kind: ExprKind::Var("FZ".into()), span: SPAN };
+        let fz = Expr {
+            kind: ExprKind::Var("FZ".into()),
+            span: SPAN,
+        };
         assert!(expr.infer_form(&fake, &cx, &fz).unwrap().is_err());
 
         let hole = Expr {
@@ -1267,14 +1257,20 @@ mod tests {
         let fake = StructuralFake::default();
         let cx = Cx::empty();
 
-        let code = Expr { kind: ExprKind::Var("code".into()), span: SPAN };
+        let code = Expr {
+            kind: ExprKind::Var("code".into()),
+            span: SPAN,
+        };
         assert!(matches!(
             expr.lower_expression_type(&fake, &cx, &code, SPAN).unwrap(),
             (Type::El { tm, .. }, Level::Zero) if matches!(&*tm, Term::TmNat)
         ));
 
         let nat = Expr {
-            kind: ExprKind::TyLit(Box::new(Ty { kind: TyKind::Nat, span: SPAN })),
+            kind: ExprKind::TyLit(Box::new(Ty {
+                kind: TyKind::Nat,
+                span: SPAN,
+            })),
             span: SPAN,
         };
         assert!(matches!(
@@ -1282,11 +1278,15 @@ mod tests {
                 .unwrap(),
             Term::TmNat
         ));
-        assert!(expr
-            .check_at_universe(&fake, &cx, &nat, &Level::constant(1), SPAN)
-            .is_err());
+        assert!(
+            expr.check_at_universe(&fake, &cx, &nat, &Level::constant(1), SPAN)
+                .is_err()
+        );
 
-        let numeral = Expr { kind: ExprKind::Num(7), span: SPAN };
+        let numeral = Expr {
+            kind: ExprKind::Num(7),
+            span: SPAN,
+        };
         assert!(matches!(
             expr.check_at_universe(&fake, &cx, &numeral, &Level::Zero, SPAN)
                 .unwrap(),
@@ -1295,7 +1295,10 @@ mod tests {
 
         let plain_application = Expr {
             kind: ExprKind::App {
-                head: Box::new(Expr { kind: ExprKind::Var("Plain".into()), span: SPAN }),
+                head: Box::new(Expr {
+                    kind: ExprKind::Var("Plain".into()),
+                    span: SPAN,
+                }),
                 args: vec![numeral],
                 named: Vec::new(),
                 explicit: false,
@@ -1366,8 +1369,14 @@ mod tests {
         };
         let literal = Expr {
             kind: ExprKind::VecLit(vec![
-                Expr { kind: ExprKind::Num(3), span: SPAN },
-                Expr { kind: ExprKind::Num(4), span: SPAN },
+                Expr {
+                    kind: ExprKind::Num(3),
+                    span: SPAN,
+                },
+                Expr {
+                    kind: ExprKind::Num(4),
+                    span: SPAN,
+                },
             ]),
             span: SPAN,
         };
@@ -1379,7 +1388,10 @@ mod tests {
         ));
         assert_eq!(*fake.checked_numerals.borrow(), [4, 3]);
 
-        let fz = Expr { kind: ExprKind::Var("FZ".into()), span: SPAN };
+        let fz = Expr {
+            kind: ExprKind::Var("FZ".into()),
+            span: SPAN,
+        };
         let fin_ty = Type::Fin {
             len: Rc::new(Term::Succ(Rc::new(Term::Zero))),
         };
@@ -1430,11 +1442,17 @@ mod tests {
         let fake = StructuralFake::default();
         let binder = LamBinder {
             name: "x".into(),
-            ty: Some(Ty { kind: TyKind::Nat, span: SPAN }),
+            ty: Some(Ty {
+                kind: TyKind::Nat,
+                span: SPAN,
+            }),
             implicit: false,
             span: SPAN,
         };
-        let body = Expr { kind: ExprKind::Num(4), span: SPAN };
+        let body = Expr {
+            kind: ExprKind::Num(4),
+            span: SPAN,
+        };
         let expected = Type::Pi {
             dom_level: Level::Zero,
             cod_level: Level::Zero,
@@ -1467,20 +1485,27 @@ mod tests {
         let fake = StructuralFake::default();
         let binder = LamBinder {
             name: "A".into(),
-            ty: Some(Ty { kind: TyKind::Univ { level: 0 }, span: SPAN }),
+            ty: Some(Ty {
+                kind: TyKind::Univ { level: 0 },
+                span: SPAN,
+            }),
             implicit: true,
             span: SPAN,
         };
-        let body = Expr { kind: ExprKind::Num(1), span: SPAN };
-        assert!(expr
-            .infer_lambda(
+        let body = Expr {
+            kind: ExprKind::Num(1),
+            span: SPAN,
+        };
+        assert!(
+            expr.infer_lambda(
                 &fake,
                 &Cx::empty(),
                 std::slice::from_ref(&binder),
                 &body,
                 LambdaInferenceMode::Ordinary,
             )
-            .is_err());
+            .is_err()
+        );
         let (_, ty, _) = expr
             .infer_lambda(
                 &fake,

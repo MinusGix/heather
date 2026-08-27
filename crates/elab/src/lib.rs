@@ -65,14 +65,13 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::subst::GlobalSubst;
 use heather_kernel::term::{
-    GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
-    SubstTail, Term, Type,
+    GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
-use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
+use heather_kernel::typing::{self, DEFAULT_FUEL, TypeError};
 use heather_kernel::value::{ValueArena, ValueMetrics, ValueMetricsSnapshot};
 use heather_syntax::{
-    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm,
-    OnStmt, OnTarget, NamedArg, ParseError, Span, Ty, TyKind,
+    Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm, NamedArg,
+    OnStmt, OnTarget, ParseError, Span, Ty, TyKind, parse_file,
 };
 
 mod access;
@@ -82,27 +81,27 @@ pub mod omega;
 mod omega_cert;
 pub use omega_cert::{OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
-pub mod gate;
-pub mod stats;
 mod code;
-mod context;
 mod constructor;
+mod context;
 mod datarepr;
 mod diagnostics;
 mod dispatch;
 mod display;
 mod expr;
+pub mod gate;
+pub mod stats;
 pub use datarepr::{Obligation, Provenance};
-pub mod reprgen;
 mod names;
 mod oracle;
 mod patterns;
 mod provenance;
+pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod forded;
 mod gendefs;
-mod goals;
 mod goal_combinators;
+mod goals;
 mod indexed;
 mod inductive;
 mod lgg;
@@ -112,8 +111,8 @@ mod matching;
 mod metaprograms;
 mod quote;
 mod recursion;
-pub mod resolve;
 mod representations;
+pub mod resolve;
 mod session;
 mod slots;
 mod statements;
@@ -124,20 +123,21 @@ mod unification;
 mod vec;
 mod wf;
 
-use attempt::DeclAttempt;
 pub(crate) use application::{
     ParamMeta, Skel, has_implicit_mark, skel_of_lam_binders, skel_of_ty, skel_params,
 };
+use attempt::DeclAttempt;
+pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use inductive::Inductive;
 use metaprograms::{MetaDef, MetaPrograms};
 use names::{
-    miss_msg, qkey, split_qual, GlobalInfo, GlobalRegistration, ImportSpec,
-    NameKind, NameRes, Names, Scope, DEFAULT_MODULE,
+    DEFAULT_MODULE, GlobalInfo, GlobalRegistration, ImportSpec, NameKind, NameRes, Names, Scope,
+    miss_msg, qkey, split_qual,
 };
-pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
-use representations::Representations;
 use recursion::SelfRef;
+use representations::Representations;
 use slots::{Ingredient, Slot};
+pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
 use surface::{
     expression_as_type, expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
@@ -145,7 +145,6 @@ use surface::{
 use traits::Traits;
 use types::Types;
 use unification::{ResolveOb, Sol, unify_ty, zonked, zonked_tm};
-pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
@@ -159,9 +158,7 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 
-pub use diagnostics::{
-    ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning,
-};
+pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning};
 
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
@@ -176,9 +173,9 @@ impl ElabError {
     pub(crate) fn message(&self) -> String {
         match self {
             ElabError::Elab { msg, .. } => msg.clone(),
-            ElabError::ArgSlotEscape { .. } =>
-                "an argument slot needs an enclosing checking position with a function type"
-                    .into(),
+            ElabError::ArgSlotEscape { .. } => {
+                "an argument slot needs an enclosing checking position with a function type".into()
+            }
             other => other.to_string(),
         }
     }
@@ -250,7 +247,10 @@ impl ElabError {
 /// word is the only thing that can differ between them.
 fn headed(severity: &str, msg: &str, span: Span, src: &str, file: &str) -> String {
     let (line, col) = line_col(src, span.start);
-    format!("{severity}: {msg}\n  --> {file}:{line}:{col}\n{}", snippet(src, span))
+    format!(
+        "{severity}: {msg}\n  --> {file}:{line}:{col}\n{}",
+        snippet(src, span)
+    )
 }
 
 /// The quoted source line with a caret run under `span` — the body of a
@@ -265,7 +265,9 @@ fn snippet(src: &str, span: Span) -> String {
     let (line, _) = line_col(src, span.start);
     let col = src[line_start..offset].chars().count();
     let line_rest = text.chars().count().saturating_sub(col);
-    let span_chars = src[offset..span.end.clamp(offset, src.len())].chars().count();
+    let span_chars = src[offset..span.end.clamp(offset, src.len())]
+        .chars()
+        .count();
     let width = span_chars.clamp(1, line_rest.max(1));
     let num = line.to_string();
     let pad = " ".repeat(num.len());
@@ -309,7 +311,9 @@ impl std::fmt::Display for ElabError {
                 "no instance for `{goal}` — the search:{}",
                 resolve::render_trace(trace)
             ),
-            ElabError::Kernel { decl, err, note, .. } => {
+            ElabError::Kernel {
+                decl, err, note, ..
+            } => {
                 write!(f, "the kernel rejected `{decl}`: {err:?}")?;
                 if let Some(note) = note {
                     write!(f, ". {note}")?;
@@ -332,14 +336,20 @@ impl std::fmt::Display for ElabError {
 fn line_col(src: &str, offset: usize) -> (usize, usize) {
     let upto = &src[..offset.min(src.len())];
     let line = upto.matches('\n').count() + 1;
-    let col = upto.rfind('\n').map_or(upto.len(), |nl| upto.len() - nl - 1) + 1;
+    let col = upto
+        .rfind('\n')
+        .map_or(upto.len(), |nl| upto.len() - nl - 1)
+        + 1;
     (line, col)
 }
 
 type R<T> = Result<T, ElabError>;
 
 fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
-    Err(ElabError::Elab { msg: msg.into(), span })
+    Err(ElabError::Elab {
+        msg: msg.into(),
+        span,
+    })
 }
 
 /// What to call a type projection's subject in a diagnostic: the text that
@@ -396,8 +406,7 @@ fn dress_true(s: &str) -> String {
 /// The §3.4 shared refusal: an implicit mark whose skeleton would have no
 /// consumer must not be silently erased — the writer believes call sites
 /// will infer, and they will not (docs/implicit-binders-design.md §3.4).
-pub(crate) const IMPLICIT_MARK_REFUSED: &str =
-    "implicit binders take effect in parameter types, `let` annotations, field \
+pub(crate) const IMPLICIT_MARK_REFUSED: &str = "implicit binders take effect in parameter types, `let` annotations, field \
      types, and lambdas; this position cannot use one — see \
      issues/implicit-binders-in-function-types.md";
 
@@ -407,8 +416,9 @@ pub(crate) const IMPLICIT_MARK_REFUSED: &str =
 /// which needs to know whether a call *had* another reading before it claims
 /// one — a class field named `map` must make `xs.map(f)` ambiguous, never
 /// silently the class's.
-const BUILTIN_METHODS: [&str; 8] =
-    ["map", "fold", "head", "tail", "cons", "cong", "inj", "absurd"];
+const BUILTIN_METHODS: [&str; 8] = [
+    "map", "fold", "head", "tail", "cons", "cong", "inj", "absurd",
+];
 
 /// Where a resolved dictionary came from, when it came by **upcast**: the
 /// *child* dictionary and its class type ([`Elaborator::resolve_goal_from`],
@@ -706,11 +716,7 @@ impl statements::StatementElab for Elaborator {
         self.elab_check_skel(cx, expression, expected, level, None, skeleton)
     }
 
-    fn infer_statement_expression(
-        &self,
-        cx: &Cx,
-        expression: &Expr,
-    ) -> R<(Term, Type, Level)> {
+    fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, expression)
     }
 
@@ -775,15 +781,7 @@ impl statements::BlockCheckingElab for Elaborator {
         skeleton: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
-        self.elab_check_skel_slots(
-            cx,
-            result,
-            expected,
-            level,
-            hint,
-            skeleton,
-            capture_slots,
-        )
+        self.elab_check_skel_slots(cx, result, expected, level, hint, skeleton, capture_slots)
     }
 }
 
@@ -994,7 +992,9 @@ impl application::ImplicitApplicationElab for Elaborator {
             // A blocked indexed goal first consults the matching dictionary
             // binder, then an operator designation. Either may fill an index
             // slot without yet solving this obligation.
-            let written = params.get(obligation.param).and_then(|p| p.solver.as_deref());
+            let written = params
+                .get(obligation.param)
+                .and_then(|p| p.solver.as_deref());
             let changed = self.fill_index_from_scope(cx, written, params, slot_param, sols)
                 || self.fill_index_from_designation(
                     cx, written, params, slot_param, sols, meta_doms, n, span,
@@ -1011,19 +1011,16 @@ impl application::ImplicitApplicationElab for Elaborator {
             .map(traits::render_ty)
             .unwrap_or_else(|| "a solver parameter".to_string());
         let mut trace = Vec::new();
-        match self.resolve_goal(
-            cx,
-            &goal,
-            &obligation.dom_level,
-            &display,
-            span,
-            &mut trace,
-        ) {
+        match self.resolve_goal(cx, &goal, &obligation.dom_level, &display, span, &mut trace) {
             Some(term) => {
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 Ok(application::ObligationProgress::Solved)
             }
-            None => Err(ElabError::Resolution { goal: display, span, trace }),
+            None => Err(ElabError::Resolution {
+                goal: display,
+                span,
+                trace,
+            }),
         }
     }
 
@@ -1044,7 +1041,11 @@ impl application::ImplicitApplicationElab for Elaborator {
             .enumerate()
             .filter_map(|(slot, sol)| matches!(sol, Sol::Unsolved).then_some(slot))
             .collect();
-        match self.attempt.goal_arena.reserve_promoted(promoted.len() as u32) {
+        match self
+            .attempt
+            .goal_arena
+            .reserve_promoted(promoted.len() as u32)
+        {
             goals::PromotionCapacity::Disabled => return Ok(()),
             goals::PromotionCapacity::Ready => {}
             goals::PromotionCapacity::Restart => {
@@ -1058,9 +1059,14 @@ impl application::ImplicitApplicationElab for Elaborator {
             // Telescope order means earlier implicit parameters have already
             // been inferred or promoted. A remaining blocked domain belongs
             // to a solver/deferred value and is left for its own diagnostic.
-            let Some(dom) = zonked(&meta_doms[slot], n, sols) else { continue };
+            let Some(dom) = zonked(&meta_doms[slot], n, sols) else {
+                continue;
+            };
             let parameter = slot_param[slot];
-            let param = params.get(parameter).map(|p| p.name.as_str()).unwrap_or("?");
+            let param = params
+                .get(parameter)
+                .map(|p| p.name.as_str())
+                .unwrap_or("?");
             let key = format!("apply:{name}:{parameter}");
             let goal = self.new_goal_key(
                 cx,
@@ -1183,7 +1189,9 @@ impl Elaborator {
     }
 
     pub fn value_metrics(&self) -> Option<ValueMetricsSnapshot> {
-        self.value_metrics.as_ref().map(|metrics| metrics.snapshot())
+        self.value_metrics
+            .as_ref()
+            .map(|metrics| metrics.snapshot())
     }
 
     pub(crate) fn record_omega_failure_report(&self, report: OmegaReport) {
@@ -1217,9 +1225,9 @@ impl Elaborator {
         level: &Level,
     ) -> Result<(), TypeError> {
         match self.value_metrics.as_deref() {
-            Some(metrics) => typing::check_type_profiled(
-                psi, 0, layer, gamma, ty, level, self.fuel, metrics,
-            ),
+            Some(metrics) => {
+                typing::check_type_profiled(psi, 0, layer, gamma, ty, level, self.fuel, metrics)
+            }
             None => typing::check_type(psi, 0, layer, gamma, ty, level, self.fuel),
         }
     }
@@ -1321,13 +1329,19 @@ impl Elaborator {
         // first's imports and may add to them. Duplicate declarations already
         // error one layer down; two distinct *files* claiming one module name
         // is a loader concern, where the paths are known.
-        let mut scope =
-            self.names.module_scope(module).cloned().unwrap_or_else(|| Scope::new(module));
+        let mut scope = self
+            .names
+            .module_scope(module)
+            .cloned()
+            .unwrap_or_else(|| Scope::new(module));
         let mut written: Vec<&str> = Vec::new();
         for item in &file.items {
             let Item::Import(imp) = item else { continue };
             if imp.module == module {
-                return err(format!("a module cannot import itself (`{module}`)"), imp.span);
+                return err(
+                    format!("a module cannot import itself (`{module}`)"),
+                    imp.span,
+                );
             }
             if imp.module != PRELUDE_MODULE && !self.names.has_module(&imp.module) {
                 return err(
@@ -1346,10 +1360,7 @@ impl Elaborator {
             written.push(&imp.module);
             for (n, nspan) in &imp.listed {
                 if !self.names.declares(&imp.module, n) {
-                    return err(
-                        format!("`{}` declares no `{n}`", imp.module),
-                        *nspan,
-                    );
+                    return err(format!("`{}` declares no `{n}`", imp.module), *nspan);
                 }
                 if let Some(other) = scope
                     .imports
@@ -1373,7 +1384,10 @@ impl Elaborator {
             let listed: Vec<String> = imp.listed.iter().map(|(n, _)| n.clone()).collect();
             match scope.imports.iter_mut().find(|i| i.module == imp.module) {
                 Some(existing) => existing.listed.extend(listed),
-                None => scope.imports.push(ImportSpec { module: imp.module.clone(), listed }),
+                None => scope.imports.push(ImportSpec {
+                    module: imp.module.clone(),
+                    listed,
+                }),
             }
         }
         self.names.enter_scope(scope);
@@ -1417,10 +1431,7 @@ impl Elaborator {
 
     /// Install the declaration scope for one read of stored inductive syntax.
     /// The guard restores the caller's scope on every return path.
-    fn use_inductive_scope<'a>(
-        &'a self,
-        ind: &inductive::Inductive,
-    ) -> names::ResolutionScope<'a> {
+    fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> names::ResolutionScope<'a> {
         self.names.use_scope(Rc::clone(&ind.scope))
     }
 
@@ -1493,7 +1504,12 @@ impl Elaborator {
         if self.instance_scope.is_empty() {
             return name;
         }
-        match self.instance_scope.iter().rev().find(|(base, _)| base == name) {
+        match self
+            .instance_scope
+            .iter()
+            .rev()
+            .find(|(base, _)| base == name)
+        {
             Some((_, full)) => full,
             None => name,
         }
@@ -1508,14 +1524,17 @@ impl Elaborator {
     /// dropping it is a shrink rather than a choice
     /// (issues/false-collides-with-bools-constructor.md).
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
-        self.types.inductive(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+        self.types
+            .inductive(&self.key_of_kinds(name, &[NameKind::Inductive])?)
     }
 
     pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
         // `Option::None` resolves through the *type*, so the key is the
         // constructor's own name in the type's module.
         let key = self.key_of(name)?;
-        self.types.constructor(&key).map(|(i, k)| (Rc::clone(i), *k))
+        self.types
+            .constructor(&key)
+            .map(|(i, k)| (Rc::clone(i), *k))
     }
 
     /// The error for a name that did not resolve. An ambiguous name must
@@ -1576,7 +1595,6 @@ impl Elaborator {
         Ok(())
     }
 
-
     /// Check a whole file, recovering per declaration: a failed declaration
     /// registers nothing (globals and Ψ are touched only after the kernel
     /// gate), so the rest of the file still checks against everything that
@@ -1634,7 +1652,12 @@ impl Elaborator {
         if warnings.iter().any(|w| w.lint == lint && w.span == span) {
             return;
         }
-        warnings.push(Warning { lint, msg: msg.into(), span, fix });
+        warnings.push(Warning {
+            lint,
+            msg: msg.into(),
+            span,
+            fix,
+        });
     }
 
     fn run_source_lints(&self, item: &Item, source: &lint::Source<'_>) {
@@ -1723,7 +1746,11 @@ impl Elaborator {
     /// (docs/traits-layer2-design.md §8) — one per *derivation*, not per use
     /// site, which is the coherence invariant this table is.
     pub fn derived_instances(&self) -> Vec<&str> {
-        self.traits.derived().iter().map(|d| d.name.as_str()).collect()
+        self.traits
+            .derived()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect()
     }
 
     /// Assumptions reachable from one declaration, resolved by the same name
@@ -1749,9 +1776,11 @@ impl Elaborator {
     pub(crate) fn global_body(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
         let info = self.lookup_global(name)?;
         match &self.psi.bindings[info.abs as usize] {
-            GlobalBinding::Tm { ty, body: Some(body), .. } => {
-                Some((Rc::clone(ty), Rc::clone(body)))
-            }
+            GlobalBinding::Tm {
+                ty,
+                body: Some(body),
+                ..
+            } => Some((Rc::clone(ty), Rc::clone(body))),
             _ => None,
         }
     }
@@ -1850,7 +1879,9 @@ impl Elaborator {
     /// The parameter table of the binding at absolute Ψ index `abs`, empty for
     /// a binding that has none. The by-index companion of [`Self::params_of`].
     pub(crate) fn params_at(&self, abs: usize) -> Rc<Vec<ParamMeta>> {
-        self.names.params_at(abs as u32).unwrap_or_else(|| Rc::new(Vec::new()))
+        self.names
+            .params_at(abs as u32)
+            .unwrap_or_else(|| Rc::new(Vec::new()))
     }
 
     /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
@@ -1858,7 +1889,9 @@ impl Elaborator {
     /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the
     /// honest decline every caller falls back from: no template claimed it.
     pub(crate) fn analyzer_def(&self, slot: Slot) -> Option<&MetaDef> {
-        self.meta_programs.for_slot(slot).map(|(_, definition)| definition)
+        self.meta_programs
+            .for_slot(slot)
+            .map(|(_, definition)| definition)
     }
 
     /// The accumulated global context (theorem statements).
@@ -1876,7 +1909,11 @@ impl Elaborator {
         };
         let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
-        Some(if ind.skel.is_some() { IndexedRoute::Forded } else { IndexedRoute::One })
+        Some(if ind.skel.is_some() {
+            IndexedRoute::Forded
+        } else {
+            IndexedRoute::One
+        })
     }
 
     // -- declarations -------------------------------------------------------
@@ -1946,7 +1983,12 @@ impl Elaborator {
     /// become visible to later source unless `check_decl` returned a complete
     /// value after the kernel gate.
     fn commit_decl(&mut self, pending: PendingDecl) {
-        let PendingDecl { binding, registration, is_axiom, direct_dependencies } = pending;
+        let PendingDecl {
+            binding,
+            registration,
+            is_axiom,
+            direct_dependencies,
+        } = pending;
         let key = registration.key.clone();
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
@@ -1971,7 +2013,11 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{}`", tv.name), tv.span);
             }
             let level = Level::constant(tv.level);
-            cx.push(tv.name.clone(), Type::Ty(level.clone()), Level::constant(tv.level + 1));
+            cx.push(
+                tv.name.clone(),
+                Type::Ty(level.clone()),
+                Level::constant(tv.level + 1),
+            );
             cx.tyvars.push(TyVar {
                 name: tv.name.clone(),
                 ty: Type::El {
@@ -2014,7 +2060,10 @@ impl Elaborator {
         let (decl, ambiguous, symbols) = match self.expand_constraints(decl)? {
             None => (decl, Vec::new(), Vec::new()),
             Some(x) => {
-                expanded = Decl { params: x.params, ..decl.clone() };
+                expanded = Decl {
+                    params: x.params,
+                    ..decl.clone()
+                };
                 (&expanded, x.ambiguous, x.symbols)
             }
         };
@@ -2058,7 +2107,9 @@ impl Elaborator {
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
-        self.attempt.goal_arena.configure(count_holes(decl), reserved_goals);
+        self.attempt
+            .goal_arena
+            .configure(count_holes(decl), reserved_goals);
         self.refresh_delta_psi();
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
@@ -2085,7 +2136,10 @@ impl Elaborator {
             }
             if decl.params.iter().any(|p| p.name == *name) {
                 return err(
-                    format!("`{name}` is both a type parameter and a parameter of `{}`", decl.name),
+                    format!(
+                        "`{name}` is both a type parameter and a parameter of `{}`",
+                        decl.name
+                    ),
                     decl.span,
                 );
             }
@@ -2101,7 +2155,10 @@ impl Elaborator {
             // deeper — the device `Alias` and the inductive `TyVar` both use.
             cx.tyvars.push(TyVar {
                 name: name.clone(),
-                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                ty: Type::El {
+                    level: level.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
                 level,
                 depth: cx.names.len(),
             });
@@ -2150,7 +2207,10 @@ impl Elaborator {
             if let Type::Ty(level) = &ty {
                 cx.tyvars.push(TyVar {
                     name: p.name.clone(),
-                    ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                    ty: Type::El {
+                        level: level.clone(),
+                        tm: Rc::new(Term::Var(LocalVar(0))),
+                    },
                     level: level.clone(),
                     depth: cx.names.len(),
                 });
@@ -2272,17 +2332,17 @@ impl Elaborator {
                 layer: Layer::Code,
                 lands_in_psi: true,
             };
-            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+            if !self
+                .gate
+                .as_ref()
+                .is_some_and(|g| g.admits(&self.psi, &item))
+            {
                 stats::time_kernel(|| {
-                    self.kernel_check_type(
-                        &self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl,
-                    )
+                    self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 stats::time_kernel(|| {
-                    self.kernel_check_term(
-                        &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
-                    )
+                    self.kernel_check_term(&self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl)
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 if let Some(g) = self.gate.as_ref() {
@@ -2383,16 +2443,9 @@ impl Elaborator {
         key: Option<&str>,
         promoted_parameter: Option<usize>,
     ) -> R<Term> {
-        self.attempt.goal_arena.allocate(
-            cx,
-            name,
-            hint,
-            ty,
-            level,
-            span,
-            key,
-            promoted_parameter,
-        )
+        self.attempt
+            .goal_arena
+            .allocate(cx, name, hint, ty, level, span, key, promoted_parameter)
     }
 
     /// Run the block's `on` statements, then require that every goal is
@@ -2451,7 +2504,7 @@ impl Elaborator {
                     return err(
                         format!("internal: `on {ctor}(…)` reached the elaborator"),
                         on.span,
-                    )
+                    );
                 }
             }
         }
@@ -2462,7 +2515,10 @@ impl Elaborator {
         if unsolved.is_empty() {
             Ok(())
         } else {
-            Err(ElabError::UnsolvedGoals { decl: decl.to_string(), goals: unsolved })
+            Err(ElabError::UnsolvedGoals {
+                decl: decl.to_string(),
+                goals: unsolved,
+            })
         }
     }
 
@@ -2578,8 +2634,7 @@ impl Elaborator {
                     // Every slot found a smaller function-typed checking
                     // position. Repeat on the real elaborator; the probe's
                     // state is deliberately discarded.
-                    return self
-                        .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false);
+                    return self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false);
                 }
                 Err(ElabError::ArgSlotEscape { span }) => {
                     if !matches!(self.whnf(cx, expected, span)?, Type::Pi { .. }) {
@@ -2606,9 +2661,8 @@ impl Elaborator {
                     let profile = slot_profile(e, &nested)?
                         .expect("an escaping slot remains after nested captures");
                     let lowered = lower_argument_slots(e, profile, &nested);
-                    return self.elab_check_skel_slots(
-                        cx, &lowered, expected, lvl, hint, skel, false,
-                    );
+                    return self
+                        .elab_check_skel_slots(cx, &lowered, expected, lvl, hint, skel, false);
                 }
                 Err(other) => return Err(other),
             }
@@ -2628,25 +2682,27 @@ impl Elaborator {
         } = &e.kind
         {
             let mut omitted = e.clone();
-            let ExprKind::Match { motive: omitted_motive, .. } = &mut omitted.kind else {
+            let ExprKind::Match {
+                motive: omitted_motive,
+                ..
+            } = &mut omitted.kind
+            else {
                 unreachable!()
             };
             *omitted_motive = None;
             let probe = self.clone();
-            if let Ok(term) = probe.elab_check_skel_slots(
-                    cx,
-                    &omitted,
-                    expected,
-                    lvl,
-                    hint,
-                    skel,
-                    capture_slots,
-                )
+            if let Ok(term) =
+                probe.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
                 && probe
                     .kernel_check_term(
-                        &probe.goal_psi(), Layer::Prog, &cx.gamma, &term, expected, lvl,
+                        &probe.goal_psi(),
+                        Layer::Prog,
+                        &cx.gamma,
+                        &term,
+                        expected,
+                        lvl,
                     )
-                .is_ok()
+                    .is_ok()
             {
                 self.emit_lint_with_fix(
                     Lint::RedundantMatchMotive,
@@ -2681,7 +2737,13 @@ impl Elaborator {
                 capture_slots,
             );
         }
-        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
             && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
             && args.len() == 1
             && named.is_empty()
@@ -2690,7 +2752,11 @@ impl Elaborator {
             let head_ty = self.whnf(cx, expected, e.span)?;
             if let Type::Squash { level, ty } = head_ty {
                 let payload = self.elab_check(cx, &args[0], &ty, &level)?;
-                return Ok(Term::Squash { level, ty, tm: Rc::new(payload) });
+                return Ok(Term::Squash {
+                    level,
+                    ty,
+                    tm: Rc::new(payload),
+                });
             }
         }
         match &e.kind {
@@ -2712,15 +2778,7 @@ impl Elaborator {
                     return err("internal `all_goals` form has the wrong arity", e.span);
                 };
                 let split = goal_combinators::split_all(self, cx, body, e.span);
-                self.elab_check_skel_slots(
-                    cx,
-                    &split,
-                    expected,
-                    lvl,
-                    hint,
-                    skel,
-                    capture_slots,
-                )
+                self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
@@ -2735,17 +2793,17 @@ impl Elaborator {
             // changes behaviour.
             ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_skel_slots(
                 cx,
-                &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
+                &Expr {
+                    kind: ExprKind::Var("refl".to_string()),
+                    span: e.span,
+                },
                 expected,
                 lvl,
                 hint,
                 skel,
                 capture_slots,
             ),
-            ExprKind::ArgSlot(_)
-            | ExprKind::Hole(_)
-            | ExprKind::Refl
-            | ExprKind::AutoRefl => self
+            ExprKind::ArgSlot(_) | ExprKind::Hole(_) | ExprKind::Refl | ExprKind::AutoRefl => self
                 .expr_elab()
                 .check_form(self, cx, e, expected, lvl, hint)
                 .expect("classified as an ExprElab checking form"),
@@ -2756,20 +2814,20 @@ impl Elaborator {
             // (docs/let-and-blocks-design.md §4.4). The hint travels with it,
             // so a hole in the result of a block in argument position still
             // reports the callee and parameter it belongs to.
-            ExprKind::Block(block) => statements::check_block(
-                self,
-                cx,
-                block,
-                expected,
-                lvl,
-                hint,
-                skel,
-                capture_slots,
-            ),
+            ExprKind::Block(block) => {
+                statements::check_block(self, cx, block, expected, lvl, hint, skel, capture_slots)
+            }
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
-            ExprKind::Match { form, motive: None, scrut, arms, eqbind, generated } => {
+            ExprKind::Match {
+                form,
+                motive: None,
+                scrut,
+                arms,
+                eqbind,
+                generated,
+            } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
                 // docs/goal-motive-synthesis-design.md): abstract the
                 // scrutinee out of the expected type so the motive is
@@ -2779,18 +2837,20 @@ impl Elaborator {
                     .elab_infer(cx, scrut)
                     .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
                 let motive = matching::synthesize_motive(
-                    self,
-                    cx,
-                    &scrut_t,
-                    &scrut_ty,
-                    &scrut_lvl,
-                    expected,
-                    e.span,
+                    self, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span,
                 );
                 let Some(h) = eqbind else {
                     return self.elab_match(
-                        cx, *form, *generated, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
-                        lvl.clone(), e.span,
+                        cx,
+                        *form,
+                        *generated,
+                        arms,
+                        scrut_t,
+                        &scrut_ty,
+                        &scrut_lvl,
+                        motive,
+                        lvl.clone(),
+                        e.span,
                     );
                 };
                 self.elab_convoy(
@@ -2871,12 +2931,14 @@ impl Elaborator {
                     expected,
                     name != "__omega_diseq_branch",
                     name != "__omega_connective_branch",
-                ).map_err(|detail| ElabError::Elab {
-                        msg: format!("`omega` got stuck: {detail}"),
-                        span: e.span,
-                    })?;
-                let term = self.elab_check(cx, &cert.expr, expected, lvl).map_err(|error|
-                    ElabError::Elab {
+                )
+                .map_err(|detail| ElabError::Elab {
+                    msg: format!("`omega` got stuck: {detail}"),
+                    span: e.span,
+                })?;
+                let term = self
+                    .elab_check(cx, &cert.expr, expected, lvl)
+                    .map_err(|error| ElabError::Elab {
                         msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
                         span: e.span,
                     })?;
@@ -2908,16 +2970,18 @@ impl Elaborator {
             // matches the type it is checked against. A written annotation is
             // a readability aid and must be convertible with it
             // (docs/surface-function-types.md §5.2).
-            ExprKind::Lam { binders, body } => {
-                self.expr_elab()
-                    .check_lambda(self, cx, binders, body, expected, lvl, skel, e.span)
-            }
+            ExprKind::Lam { binders, body } => self
+                .expr_elab()
+                .check_lambda(self, cx, binders, body, expected, lvl, skel, e.span),
             // A universe as the expected type: a *type* has been written where
             // a term is expected, so read it as one and quote it
             // (docs/surface-universe.md §4).
             _ if matches!(expected, Type::Ty(_)) => {
-                let Type::Ty(want) = expected else { unreachable!() };
-                self.expr_elab().check_at_universe(self, cx, e, want, e.span)
+                let Type::Ty(want) = expected else {
+                    unreachable!()
+                };
+                self.expr_elab()
+                    .check_at_universe(self, cx, e, want, e.span)
             }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
@@ -2928,16 +2992,17 @@ impl Elaborator {
             // ([`Self::ctor_here_expected`]), so a bare constructor the name
             // layer left ambiguous is settled by the type that is checking it.
             ExprKind::Var(name) if self.ctor_here_expected(cx, name, expected).is_some() => {
-                let (ind, i) =
-                    self.ctor_here_expected(cx, name, expected).expect("just checked");
+                let (ind, i) = self
+                    .ctor_here_expected(cx, name, expected)
+                    .expect("just checked");
                 self.build_ctor_value(cx, &ind, i, &[], expected, lvl, e.span)
             }
             ExprKind::App { .. } if self.ctor_spine_expected(cx, e, expected).is_some() => {
-                let (ind, i, args, named) =
-                    self.ctor_spine_expected(cx, e, expected).expect("just checked");
-                let permuted = application::resolve_constructor_arguments(
-                    &ind, i, &args, &named, e.span,
-                )?;
+                let (ind, i, args, named) = self
+                    .ctor_spine_expected(cx, e, expected)
+                    .expect("just checked");
+                let permuted =
+                    application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
@@ -2946,7 +3011,11 @@ impl Elaborator {
             // constructor path — which is what lets the expected type supply
             // the instantiation and no annotation be written
             // (docs/surface-records.md §6).
-            ExprKind::RecordLit { name, tyargs, fields } if tyargs.is_empty() => {
+            ExprKind::RecordLit {
+                name,
+                tyargs,
+                fields,
+            } if tyargs.is_empty() => {
                 let args = self.record_lit_args(name, fields, e.span)?;
                 let Some(ind) = self.lookup_inductive(name).cloned() else {
                     return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));
@@ -2956,7 +3025,12 @@ impl Elaborator {
             // `.f` resolution has to exist in *both* modes: a projection
             // synthesizes, but the method fallback may be checking-only
             // (`p.absurd()`), and routing it through inference would break it.
-            ExprKind::Dot { recv, name, args, named } => {
+            ExprKind::Dot {
+                recv,
+                name,
+                args,
+                named,
+            } => {
                 match self.resolve_dot(cx, recv, name, args, named, e.span)? {
                     DotResolution::Project(t, ty, l, fskel) => match args {
                         // A bare skeletal projection in checking position:
@@ -3032,15 +3106,7 @@ impl Elaborator {
                         Ok(t)
                     }
                     DotResolution::Method(m) => {
-                        self.elab_check_skel_slots(
-                            cx,
-                            &m,
-                            expected,
-                            lvl,
-                            hint,
-                            skel,
-                            capture_slots,
-                        )
+                        self.elab_check_skel_slots(cx, &m, expected, lvl, hint, skel, capture_slots)
                     }
                 }
             }
@@ -3056,7 +3122,9 @@ impl Elaborator {
                 // type by shape.
                 let head = self.whnf(cx, expected, e.span)?;
                 if let Type::Ty(want) = &head {
-                    return self.expr_elab().check_at_universe(self, cx, e, want, e.span);
+                    return self
+                        .expr_elab()
+                        .check_at_universe(self, cx, e, want, e.span);
                 }
                 // Inference is the fallback, but the expected type is *not*
                 // discarded on the way: an implicit-inserting call (or a bare
@@ -3120,14 +3188,7 @@ impl Elaborator {
     /// — the gate has a fresh budget and may well succeed, and a message about
     /// two types that might yet convert is worse than no message. Only
     /// `NotConvertible`, which is the decided answer, is reported.
-    fn note_check_mismatch(
-        &self,
-        cx: &Cx,
-        got: &Type,
-        expected: &Type,
-        lvl: &Level,
-        span: Span,
-    ) {
+    fn note_check_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) {
         if self
             .goal_oracle()
             .convert_type(&cx.gamma, Layer::Prog, got, expected, lvl)
@@ -3144,8 +3205,12 @@ impl Elaborator {
         // `And<…>` against `And<…>`, whose type arguments are the whole
         // difference ([[display-inductive-type-arguments]]). Both filters are
         // silence, not error: the declaration is still rejected, by the gate.
-        let Some(got_s) = self.display_type_clean(cx, got) else { return };
-        let Some(want_s) = self.display_type_clean(cx, expected) else { return };
+        let Some(got_s) = self.display_type_clean(cx, got) else {
+            return;
+        };
+        let Some(want_s) = self.display_type_clean(cx, expected) else {
+            return;
+        };
         if got_s == want_s {
             return;
         }
@@ -3174,15 +3239,16 @@ impl Elaborator {
         motive: &Expr,
         case: &Expr,
     ) -> R<(Term, Type, Level)> {
-        let (mbinders, mbody) = matching::motive_lam(
-            motive,
-            1,
-            "write `squash_ind(q, λ z => B, λ x => b)`",
-        )?;
+        let (mbinders, mbody) =
+            matching::motive_lam(motive, 1, "write `squash_ind(q, λ z => B, λ x => b)`")?;
         let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
         let head = self.whnf(cx, &scrut_ty, scrut.span)?;
         let squash_ty = head.clone();
-        let Type::Squash { level: src_level, ty: src_ty } = head else {
+        let Type::Squash {
+            level: src_level,
+            ty: src_ty,
+        } = head
+        else {
             return err("`squash_ind` needs a scrutinee of type `∥A∥`", scrut.span);
         };
         let mut mcx = cx.clone();
@@ -3190,7 +3256,10 @@ impl Elaborator {
         let (motive_t, dst_level) = self.elab_ty(&mcx, &mbody)?;
 
         let ExprKind::Lam { binders, body } = &case.kind else {
-            return err("the `squash_ind` case is a lambda: write `λ x => b`", case.span);
+            return err(
+                "the `squash_ind` case is a lambda: write `λ x => b`",
+                case.span,
+            );
         };
         if binders.len() != 1 || binders[0].ty.is_some() {
             return err(
@@ -3199,22 +3268,30 @@ impl Elaborator {
             );
         }
         let mut bcx = cx.clone();
-        bcx.push(binders[0].name.clone(), (*src_ty).clone(), src_level.clone());
+        bcx.push(
+            binders[0].name.clone(),
+            (*src_ty).clone(),
+            src_level.clone(),
+        );
         let packed = Rc::new(Term::Squash {
             level: src_level.clone(),
             ty: Rc::new(src_ty.shift_local(1)),
             tm: Rc::new(Term::Var(LocalVar(0))),
         });
-        let inner = motive_t.apply_local(
-            &LocalSubst::id(&cx.gamma).shift_local(1).extended(packed),
-        );
-        let branch_ty = Type::Squash { level: dst_level.clone(), ty: Rc::new(inner) };
+        let inner =
+            motive_t.apply_local(&LocalSubst::id(&cx.gamma).shift_local(1).extended(packed));
+        let branch_ty = Type::Squash {
+            level: dst_level.clone(),
+            ty: Rc::new(inner),
+        };
         let case_t = self.elab_check(&bcx, body, &branch_ty, &dst_level)?;
         let scrut_t = Rc::new(scrut_t);
-        let result_inner = motive_t.apply_local(
-            &LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut_t)),
-        );
-        let result = Type::Squash { level: dst_level.clone(), ty: Rc::new(result_inner) };
+        let result_inner =
+            motive_t.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut_t)));
+        let result = Type::Squash {
+            level: dst_level.clone(),
+            ty: Rc::new(result_inner),
+        };
         Ok((
             Term::ElimSquash {
                 src_level,
@@ -3239,12 +3316,7 @@ impl Elaborator {
     /// that the information is in the expected type and nowhere else. Every
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
-    fn elab_infer_at(
-        &self,
-        cx: &Cx,
-        e: &Expr,
-        expected: Option<&Type>,
-    ) -> R<(Term, Type, Level)> {
+    fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).
@@ -3259,7 +3331,13 @@ impl Elaborator {
         if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
-        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
             && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
             && args.len() == 1
             && named.is_empty()
@@ -3272,11 +3350,20 @@ impl Elaborator {
                     ty: Rc::new(ty.clone()),
                     tm: Rc::new(tm),
                 },
-                Type::Squash { level: level.clone(), ty: Rc::new(ty) },
+                Type::Squash {
+                    level: level.clone(),
+                    ty: Rc::new(ty),
+                },
                 level,
             ));
         }
-        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
             && matches!(&head.kind, ExprKind::Var(name) if name == "squash_ind")
             && args.len() == 3
             && named.is_empty()
@@ -3304,9 +3391,11 @@ impl Elaborator {
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
             // (docs/certgen-transcriber-in-language-design.md §3).
-            ExprKind::MatchCode { scrut, motive, arms } => {
-                self.elab_match_code(cx, scrut, motive, arms, e.span)
-            }
+            ExprKind::MatchCode {
+                scrut,
+                motive,
+                arms,
+            } => self.elab_match_code(cx, scrut, motive, arms, e.span),
             // `FZ` cannot infer: it inhabits `Fin(Succ k)` for every `k`
             // (docs/surface-fin-indexing-design.md §3.1). Said only where the
             // name is neither shadowed nor some declaration's constructor.
@@ -3363,7 +3452,8 @@ impl Elaborator {
                     None
                 };
                 let value_skel = if expected.is_some() && global_prefix.is_none() {
-                    self.value_skel(cx, name).filter(|s| s.leading_implicit() > 0)
+                    self.value_skel(cx, name)
+                        .filter(|s| s.leading_implicit() > 0)
                 } else {
                     None
                 };
@@ -3430,25 +3520,30 @@ impl Elaborator {
             // `xs[i]` — infers, since the element type comes off the receiver
             // (docs/surface-fin-indexing-design.md §5.2).
             ExprKind::Index { recv, idx } => vec::elab_nth(self, cx, recv, idx, e.span),
-            ExprKind::Dot { recv, name, args, named } => {
-                match self.resolve_dot(cx, recv, name, args, named, e.span)? {
-                    DotResolution::Project(t, ty, l, fskel) => match args {
-                        None => Ok((t, ty, l)),
-                        Some(args) => self.apply_projection(
-                            cx, name, t, ty, l, fskel, args, named, expected, e.span,
-                        ),
-                    },
-                    DotResolution::Dispatch(t, ty, l, fskel, dargs) => self.apply_projection(
-                        cx, name, t, ty, l, fskel, &dargs, named, expected, e.span,
-                    ),
-                    DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
-                }
-            }
+            ExprKind::Dot {
+                recv,
+                name,
+                args,
+                named,
+            } => match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+                DotResolution::Project(t, ty, l, fskel) => match args {
+                    None => Ok((t, ty, l)),
+                    Some(args) => self
+                        .apply_projection(cx, name, t, ty, l, fskel, args, named, expected, e.span),
+                },
+                DotResolution::Dispatch(t, ty, l, fskel, dargs) => self
+                    .apply_projection(cx, name, t, ty, l, fskel, &dargs, named, expected, e.span),
+                DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
+            },
             // A record literal in inference position: the fields are permuted
             // into declaration order and the instantiation is recovered from
             // them, exactly as for any constructor application
             // (docs/inductive-tier0-lowering.md §2).
-            ExprKind::RecordLit { name, tyargs, fields } => {
+            ExprKind::RecordLit {
+                name,
+                tyargs,
+                fields,
+            } => {
                 let args = self.record_lit_args(name, fields, e.span)?;
                 let Some(ind) = self.lookup_inductive(name).cloned() else {
                     return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));
@@ -3456,10 +3551,12 @@ impl Elaborator {
                 if tyargs.is_empty() {
                     self.infer_ctor(cx, &ind, 0, &args, e.span)
                 } else {
-                    let head = Expr { kind: ExprKind::Var(name.clone()), span: e.span };
-                    self.ctor_at(cx, &head, tyargs, &args, e.span).unwrap_or_else(|| {
-                        err(format!("unknown type `{name}`"), e.span)
-                    })
+                    let head = Expr {
+                        kind: ExprKind::Var(name.clone()),
+                        span: e.span,
+                    };
+                    self.ctor_at(cx, &head, tyargs, &args, e.span)
+                        .unwrap_or_else(|| err(format!("unknown type `{name}`"), e.span))
                 }
             }
             // A lambda in inference position needs every binder annotated:
@@ -3493,8 +3590,11 @@ impl Elaborator {
                 // before this round changes shape.
                 let params = self.params_of(&name);
                 let prefix = mask.iter().take_while(|&&b| b).count();
-                let solver_here = (0..prefix)
-                    .any(|k| params.get(args.len() + k).is_some_and(|p| p.solver.is_some()));
+                let solver_here = (0..prefix).any(|k| {
+                    params
+                        .get(args.len() + k)
+                        .is_some_and(|p| p.solver.is_some())
+                });
                 if expected.is_some() && solver_here {
                     return application::apply_implicit(
                         self,
@@ -3520,10 +3620,18 @@ impl Elaborator {
             // applied first; what happens to the remaining `{}`-implicits is
             // `@`'s business and not `<…>`'s — the two are orthogonal knobs
             // (issues/at-and-type-arguments.md).
-            ExprKind::App { head, args, named, explicit, goal_oriented }
-                if matches!(head.kind, ExprKind::TyApp { .. }) =>
-            {
-                let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit,
+                goal_oriented,
+            } if matches!(head.kind, ExprKind::TyApp { .. }) => {
+                let ExprKind::TyApp {
+                    head: callee,
+                    args: tyargs,
+                } = &head.kind
+                else {
                     unreachable!("just matched")
                 };
                 // `Cons<Nat>(1, xs)` — a constructor at a written
@@ -3534,9 +3642,8 @@ impl Elaborator {
                 if let ExprKind::Var(cn) = &callee.kind
                     && let Some((ind, ci)) = self.ctor_here(cx, cn)
                 {
-                    let permuted = application::resolve_constructor_arguments(
-                        &ind, ci, args, named, e.span,
-                    )?;
+                    let permuted =
+                        application::resolve_constructor_arguments(&ind, ci, args, named, e.span)?;
                     let args = permuted.as_deref().unwrap_or(args);
                     if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
                         return r;
@@ -3560,8 +3667,7 @@ impl Elaborator {
                     )?;
                     return recursion::elab_self_call(self, cx, args, *explicit, e.span);
                 }
-                let (name, t, ty, lvl, mask) =
-                    self.elab_ty_app(cx, callee, tyargs, head.span)?;
+                let (name, t, ty, lvl, mask) = self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 let params = self.params_of(&name);
                 let flat;
                 let full = if !*explicit && mask.iter().any(|&b| b) {
@@ -3571,7 +3677,14 @@ impl Elaborator {
                     &flat[..]
                 };
                 let r = application::resolve_named(
-                    &name, false, &params, tyargs.len(), full, args, named, e.span,
+                    &name,
+                    false,
+                    &params,
+                    tyargs.len(),
+                    full,
+                    args,
+                    named,
+                    e.span,
                 )?;
                 let (args, mask): (&[Expr], &[bool]) = match &r {
                     Some((a, m)) => (&a[..], &m[..]),
@@ -3618,15 +3731,20 @@ impl Elaborator {
             // the whole spine does (docs/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
-                let permuted = application::resolve_constructor_arguments(
-                    &ind, i, &args, &named, e.span,
-                )?;
+                let permuted =
+                    application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
                 self.infer_ctor(cx, &ind, i, &args, e.span)
             }
             // An application whose head is *not* a name: no parameter
             // metadata exists for it, so it is always explicit.
-            ExprKind::App { head, args, named, explicit, .. } if e.as_named().is_none() => {
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit,
+                ..
+            } if e.as_named().is_none() => {
                 application::refuse_named(
                     "a call whose head is an expression",
                     "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/named-arguments-design.md §7)",
@@ -3652,7 +3770,13 @@ impl Elaborator {
                     args,
                 )
             }
-            ExprKind::App { args, named, explicit, goal_oriented, .. } => {
+            ExprKind::App {
+                args,
+                named,
+                explicit,
+                goal_oriented,
+                ..
+            } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
                 let name = &name.to_string();
                 // Named arguments (docs/named-arguments-design.md §8.2). Only
@@ -3725,10 +3849,7 @@ impl Elaborator {
                 // term names one (§3.1). Said only where `FS` is not some
                 // other declaration's constructor and is not shadowed, so a
                 // user `FS` still resolves.
-                if name == "FS"
-                    && !self.shadowed(cx, name)
-                    && self.ctor_here(cx, name).is_none()
-                {
+                if name == "FS" && !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none() {
                     return err(
                         "`FS` needs an expected `Fin` type (checking position, or an \
                          annotated `let`)",
@@ -3757,7 +3878,12 @@ impl Elaborator {
                 if (name == "head" || name == "tail") && !self.shadowed(cx, name) {
                     let [v] = args.as_slice() else {
                         return vec::method_arity_error(
-                            self, cx, args, name, "no arguments", e.span,
+                            self,
+                            cx,
+                            args,
+                            name,
+                            "no arguments",
+                            e.span,
                         );
                     };
                     return vec::elab_head_tail(self, cx, v, name == "head", e.span);
@@ -3789,7 +3915,12 @@ impl Elaborator {
                 if name == "fold" && !self.shadowed(cx, name) {
                     let [xs, z, f] = args.as_slice() else {
                         return vec::method_arity_error(
-                            self, cx, args, name, "`(init, f)`", e.span,
+                            self,
+                            cx,
+                            args,
+                            name,
+                            "`(init, f)`",
+                            e.span,
                         );
                     };
                     return vec::elab_fold(self, cx, z, f, xs, e.span);
@@ -3819,9 +3950,8 @@ impl Elaborator {
                     );
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
-                    let permuted = application::resolve_constructor_arguments(
-                        &ind, i, args, named, e.span,
-                    )?;
+                    let permuted =
+                        application::resolve_constructor_arguments(&ind, i, args, named, e.span)?;
                     let args = permuted.as_deref().unwrap_or(args);
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
@@ -3840,12 +3970,13 @@ impl Elaborator {
                 // a same-named *global*'s mask or hint table, which is the
                 // §4.2 params-passed-not-recovered rule (a local `f` must
                 // not borrow a global `f`'s metadata).
-                if cx.names.iter().any(|n| n == name)
-                    || cx.aliases.iter().any(|a| a.name == *name)
+                if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name)
                 {
                     let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                     let skel = self.value_skel(cx, name);
-                    let params = skel.as_deref().map_or_else(|| Rc::new(Vec::new()), skel_params);
+                    let params = skel
+                        .as_deref()
+                        .map_or_else(|| Rc::new(Vec::new()), skel_params);
                     let implicit = skel
                         .as_deref()
                         .filter(|s| !*explicit && s.params.iter().any(|b| b.implicit));
@@ -3877,8 +4008,20 @@ impl Elaborator {
                     };
                     return application::apply_implicit(
                         self,
-                        cx, name, params, true, 0, false, head, ty, lvl, args, mask,
-                        expected, *goal_oriented, e.span,
+                        cx,
+                        name,
+                        params,
+                        true,
+                        0,
+                        false,
+                        head,
+                        ty,
+                        lvl,
+                        args,
+                        mask,
+                        expected,
+                        *goal_oriented,
+                        e.span,
                     );
                 }
                 let mask = self.implicit_mask(name);
@@ -3924,12 +4067,31 @@ impl Elaborator {
                 } else {
                     application::apply_implicit(
                         self,
-                        cx, name, params, false, 0, false, head, ty, lvl, args, mask, expected,
-                        *goal_oriented, e.span,
+                        cx,
+                        name,
+                        params,
+                        false,
+                        0,
+                        false,
+                        head,
+                        ty,
+                        lvl,
+                        args,
+                        mask,
+                        expected,
+                        *goal_oriented,
+                        e.span,
                     )
                 }
             }
-            ExprKind::Match { form, motive: Some(m), scrut, arms, eqbind, generated } => {
+            ExprKind::Match {
+                form,
+                motive: Some(m),
+                scrut,
+                arms,
+                eqbind,
+                generated,
+            } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
@@ -3970,7 +4132,15 @@ impl Elaborator {
                         None => (cx, arms.as_slice()),
                     };
                     let t = self.elab_match_forded(
-                        acx, *form, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx,
+                        *form,
+                        &ind,
+                        &fam,
+                        arms,
+                        scrut_t,
+                        motive2,
+                        mlvl.clone(),
+                        e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
@@ -4004,18 +4174,24 @@ impl Elaborator {
                         None => (cx, arms.as_slice()),
                     };
                     let t = self.elab_match_indexed(
-                        acx, *form, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx,
+                        *form,
+                        &ind,
+                        &fam,
+                        arms,
+                        scrut_t,
+                        motive2,
+                        mlvl.clone(),
+                        e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
-                let (binders, body) =
-                    matching::motive_lam(m, 1, "write `as \u{3bb} z => T`")?;
+                let (binders, body) = matching::motive_lam(m, 1, "write `as \u{3bb} z => T`")?;
                 let mut mcx = cx.clone();
                 mcx.push(binders[0].clone(), scrut_ty.clone(), scrut_lvl.clone());
                 let (motive, mlvl) = self.elab_ty(&mcx, &body)?;
-                let result = motive.apply_local(
-                    &LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())),
-                );
+                let result = motive
+                    .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
                 // `match h : e as \u{3bb} z => M { … }`: the equation decorates the
                 // *user's* motive rather than replacing it, and the result type
                 // is unchanged — the convoy is type-transparent
@@ -4028,8 +4204,16 @@ impl Elaborator {
                     return Ok((t, result, mlvl));
                 }
                 let t = self.elab_match(
-                    cx, *form, *generated, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
-                    mlvl.clone(), e.span,
+                    cx,
+                    *form,
+                    *generated,
+                    arms,
+                    scrut_t,
+                    &scrut_ty,
+                    &scrut_lvl,
+                    motive,
+                    mlvl.clone(),
+                    e.span,
                 )?;
                 Ok((t, result, mlvl))
             }
@@ -4038,7 +4222,14 @@ impl Elaborator {
             // constant (issues/match-arg-of-polymorphic-callee-needs-motive.md).
             // Tried before the message below, and only ever *replaced* by it —
             // a synthesis that does not go through leaves no trace.
-            ExprKind::Match { form, motive: None, scrut, arms, eqbind: None, generated } => {
+            ExprKind::Match {
+                form,
+                motive: None,
+                scrut,
+                arms,
+                eqbind: None,
+                generated,
+            } => {
                 if *form == MatchForm::If {
                     match matching::infer_if_constant_motive(
                         self, cx, scrut, arms, *generated, e.span,
@@ -4062,9 +4253,11 @@ impl Elaborator {
                         match form {
                             MatchForm::Match => "match e as \u{3bb} z => T { … }",
                             MatchForm::Split => "split e as \u{3bb} z => T;",
-                            MatchForm::If => "give the `if` an expected result type, for \
+                            MatchForm::If =>
+                                "give the `if` an expected result type, for \
                                               example with an annotated `let`",
-                            MatchForm::IfLet => "give the `if let` an expected result type, for \
+                            MatchForm::IfLet =>
+                                "give the `if let` an expected result type, for \
                                                  example with an annotated `let`",
                         }
                     ),
@@ -4074,31 +4267,42 @@ impl Elaborator {
             // Both the form and the *suggested spelling* are the written
             // one: `match e as \u{3bb} z => T { … }` is not a thing a writer who
             // typed `split` can paste (issues/diagnostics-name-the-written-form.md).
-            ExprKind::Match { form, motive: None, .. } => err(
+            ExprKind::Match {
+                form, motive: None, ..
+            } => err(
                 format!(
                     "`{}` in inference position needs a motive: `{}`",
                     form.keyword(),
                     match form {
                         MatchForm::Match => "match e as \u{3bb} z => T { … }",
                         MatchForm::Split => "split e as \u{3bb} z => T;",
-                        MatchForm::If => "give the `if` an expected result type, for \
+                        MatchForm::If =>
+                            "give the `if` an expected result type, for \
                                           example with an annotated `let`",
-                        MatchForm::IfLet => "give the `if let` an expected result type, for \
+                        MatchForm::IfLet =>
+                            "give the `if let` an expected result type, for \
                                              example with an annotated `let`",
                     }
                 ),
                 e.span,
             ),
-            ExprKind::J { proof, motive, case } => {
-                let (mbinders, mbody) = matching::motive_lam(
-                    motive,
-                    2,
-                    "write `j(p, \u{3bb} y q => T, case)`",
-                )?;
+            ExprKind::J {
+                proof,
+                motive,
+                case,
+            } => {
+                let (mbinders, mbody) =
+                    matching::motive_lam(motive, 2, "write `j(p, \u{3bb} y q => T, case)`")?;
                 let (y, p) = (&mbinders[0], &mbinders[1]);
                 let (proof_t, proof_ty, _) = self.elab_infer(cx, proof)?;
                 let head = self.whnf(cx, &proof_ty, proof.span)?;
-                let Type::Id { level, ty, lhs, rhs } = head else {
+                let Type::Id {
+                    level,
+                    ty,
+                    lhs,
+                    rhs,
+                } = head
+                else {
                     return err("`j` needs a proof of an `=` type", proof.span);
                 };
                 // Motive context: Γ, y : S, p : Id(S, a, y).
@@ -4147,7 +4351,10 @@ impl Elaborator {
             // binding, and only an unbound one is the form.
             ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_infer(
                 cx,
-                &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
+                &Expr {
+                    kind: ExprKind::Var("refl".to_string()),
+                    span: e.span,
+                },
             ),
             ExprKind::Refl => err(
                 "`refl` needs an expected type (checking position or `as` motive)",
@@ -4235,15 +4442,7 @@ impl Elaborator {
                 span,
             );
         }
-        let plan = matching::plan_convoy(
-            h,
-            arms,
-            &scrut_t,
-            scrut_ty,
-            scrut_lvl,
-            &motive,
-            mlvl,
-        );
+        let plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
         let elim = self.elab_match(
             cx,
             form,
@@ -4257,12 +4456,7 @@ impl Elaborator {
             span,
         )?;
         Ok(matching::finish_convoy(
-            elim,
-            scrut_t,
-            scrut_ty,
-            scrut_lvl,
-            mlvl,
-            result,
+            elim, scrut_t, scrut_ty, scrut_lvl, mlvl, result,
         ))
     }
 
@@ -4295,15 +4489,13 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) = self.resolve_goal(
-                cx,
-                &goal,
-                &goal_level,
-                &display,
-                span,
-                &mut trace,
-            ) else {
-                return Err(ElabError::Resolution { goal: display, span, trace });
+            let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, span, &mut trace)
+            else {
+                return Err(ElabError::Resolution {
+                    goal: display,
+                    span,
+                    trace,
+                });
             };
             let (embed, embed_ty, embed_level) =
                 self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
@@ -4334,9 +4526,12 @@ impl Elaborator {
     fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
         let idx = (cx.names.len() - 1 - pos) as u32;
         let entry = &cx.gamma.entries[pos];
-        (Term::Var(LocalVar(idx)), entry.ty.shift_local(idx + 1), entry.level.clone())
+        (
+            Term::Var(LocalVar(idx)),
+            entry.ty.shift_local(idx + 1),
+            entry.level.clone(),
+        )
     }
-
 
     fn operator_fallback_note(&self) -> Option<String> {
         let notes = self.attempt.op_fallback_notes.borrow();
@@ -4382,11 +4577,15 @@ impl Elaborator {
     /// about what actually happened, so this appends the spelling that works.
     /// Pass-through for every other failure.
     fn let_ty_hint(&self, cx: &Cx, t: &Ty, e: ElabError) -> ElabError {
-        let TyKind::Named { name, args } = &t.kind else { return e };
+        let TyKind::Named { name, args } = &t.kind else {
+            return e;
+        };
         if !args.is_empty() || !self.shadowed(cx, name) {
             return e;
         }
-        let ElabError::Elab { msg, span } = e else { return e };
+        let ElabError::Elab { msg, span } = e else {
+            return e;
+        };
         ElabError::Elab {
             msg: format!(
                 "{msg} — `{name}` is a term, not a type. If this annotation was meant \
@@ -4434,37 +4633,24 @@ impl Elaborator {
             Some(skel) if skel.params.iter().any(|b| b.implicit) => {
                 let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
                 let params = skel_params(&skel);
-                let r = application::resolve_named(
-                    name, true, &params, 0, &mask, args, named, span,
-                )?;
+                let r =
+                    application::resolve_named(name, true, &params, 0, &mask, args, named, span)?;
                 let (args, mask): (&[Expr], &[bool]) = match &r {
                     Some((a, m)) => (&a[..], &m[..]),
                     None => (args, &mask[..]),
                 };
                 application::apply_implicit(
-                    self,
-                    cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected, false,
-                    span,
+                    self, cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected,
+                    false, span,
                 )
             }
             Some(skel) => {
                 let params = skel_params(&skel);
                 let flat = vec![false; params.len()];
-                let r = application::resolve_named(
-                    name, true, &params, 0, &flat, args, named, span,
-                )?;
+                let r =
+                    application::resolve_named(name, true, &params, 0, &flat, args, named, span)?;
                 let args = r.as_ref().map_or(args, |(a, _)| &a[..]);
-                application::apply_explicit(
-                    self,
-                    cx,
-                    Some(name),
-                    params,
-                    0,
-                    t,
-                    ty,
-                    lvl,
-                    args,
-                )
+                application::apply_explicit(self, cx, Some(name), params, 0, t, ty, lvl, args)
             }
             None => {
                 application::refuse_named(
@@ -4553,7 +4739,13 @@ impl Elaborator {
                 return err("this type cannot be a type argument", a.span);
             };
             let head = self.whnf(cx, &ty, span)?;
-            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = head
+            else {
                 return err(
                     format!("internal: `{name}`'s type parameter is not a `Π`"),
                     span,
@@ -4562,7 +4754,14 @@ impl Elaborator {
             let arg = Rc::new(c);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
             lvl = cod_level.clone();
-            t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg };
+            t = Term::App {
+                fun: Rc::new(t),
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+                arg,
+            };
         }
         let mask = params.iter().skip(n_ty).map(|p| p.implicit).collect();
         Ok((name.clone(), t, ty, lvl, mask))
@@ -4616,9 +4815,10 @@ impl Elaborator {
             // where its resolution is decidable, so at a meta-bearing domain it
             // waits for one, and the per-argument deferral is what hands it the
             // carrier a later argument produced.
-            ExprKind::OpSymbol { symbol: sym, fixity } => {
-                self.symbol_needs_a_carrier(cx, sym, *fixity)
-            }
+            ExprKind::OpSymbol {
+                symbol: sym,
+                fixity,
+            } => self.symbol_needs_a_carrier(cx, sym, *fixity),
             ExprKind::Refl => !self.shadowed(cx, "refl"),
             ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.is_none()),
             ExprKind::Var(name) => {
@@ -4646,9 +4846,7 @@ impl Elaborator {
                 // of this set, and the only one that can still elaborate if
                 // deferral does not pay off — which is why it, alone, carries
                 // the inference fallback in [`application::apply_implicit`].
-                Some((n, args, false)) => {
-                    self.call_defers_for_result_only(cx, n, args.len())
-                }
+                Some((n, args, false)) => self.call_defers_for_result_only(cx, n, args.len()),
                 _ => false,
             },
             _ => false,
@@ -4782,15 +4980,27 @@ impl Elaborator {
     ) -> R<()> {
         // The LGG trigger, read off the scratch-world result type.
         let flex = (|| {
-            let Type::Id { lhs, rhs, .. } = result_ty else { return None };
+            let Type::Id { lhs, rhs, .. } = result_ty else {
+                return None;
+            };
             let (
-                Term::App { fun: f_lhs, arg: s_raw, .. },
-                Term::App { fun: f_rhs, arg: t_raw, .. },
+                Term::App {
+                    fun: f_lhs,
+                    arg: s_raw,
+                    ..
+                },
+                Term::App {
+                    fun: f_rhs,
+                    arg: t_raw,
+                    ..
+                },
             ) = (&**lhs, &**rhs)
             else {
                 return None;
             };
-            let Term::GlobalTm { var, subst } = &**f_lhs else { return None };
+            let Term::GlobalTm { var, subst } = &**f_lhs else {
+                return None;
+            };
             // Unsolved, one of *this* call's metas, the same on both sides,
             // and at the identity substitution — a solution is scoped in Γ,
             // so anything else is not ours to solve.
@@ -4831,8 +5041,16 @@ impl Elaborator {
         // by construction of the trigger (a meta that is applied), and its
         // own metas are solved by now or the call could not have got here.
         let dom_ty = &meta_doms[m];
-        let Some(dom_ty) = zonked(dom_ty, n, sols) else { return Ok(()) };
-        let Type::Pi { dom_level, cod_level, dom, .. } = self.whnf(cx, &dom_ty, span)? else {
+        let Some(dom_ty) = zonked(dom_ty, n, sols) else {
+            return Ok(());
+        };
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            ..
+        } = self.whnf(cx, &dom_ty, span)?
+        else {
             return Ok(());
         };
         // Two attempts, in this order, and no more
@@ -4996,7 +5214,11 @@ impl Elaborator {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
                 let by = (cx.names.len() - a.depth) as u32;
-                return Ok(((*a.term).shift_local(by), a.ty.shift_local(by), a.level.clone()));
+                return Ok((
+                    (*a.term).shift_local(by),
+                    a.ty.shift_local(by),
+                    a.level.clone(),
+                ));
             }
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
@@ -5029,12 +5251,8 @@ impl Elaborator {
                 // The two paddings never combine: goals are refused inside a
                 // `meta fn`.
                 let meta_off = self.meta_pushed.borrow().len() as u32;
-                let var = GlobalVar(
-                    len - 1 - abs + self.attempt.goal_arena.base() + meta_off,
-                );
-                let GlobalBinding::Tm { ty, level, .. } =
-                    &self.psi.bindings[*abs as usize]
-                else {
+                let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base() + meta_off);
+                let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");
                 };
                 // Stored scoped in its prefix of Ψ; rescope to the full Ψ
@@ -5088,11 +5306,7 @@ impl Elaborator {
     /// Semantic operations in the expression world's δ context, including
     /// any dynamic meta binders currently in scope.
     fn semantic_oracle(&self) -> oracle::SemanticOracle {
-        oracle::SemanticOracle::with_dynamic(
-            &self.delta_psi,
-            &self.meta_pushed.borrow(),
-            self.fuel,
-        )
+        oracle::SemanticOracle::with_dynamic(&self.delta_psi, &self.meta_pushed.borrow(), self.fuel)
     }
 
     /// Semantic operations in the real goal-statement world.
@@ -5120,7 +5334,10 @@ impl Elaborator {
         self.expr_elab()
             .whnf_term(cx, t)
             .map(Rc::new)
-            .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a term".into(), span })
+            .map_err(|_| ElabError::Elab {
+                msg: "out of fuel reducing a term".into(),
+                span,
+            })
     }
 
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
@@ -5142,7 +5359,10 @@ impl Elaborator {
         }
         self.expr_elab()
             .whnf_type(cx, ty)
-            .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
+            .map_err(|_| ElabError::Elab {
+                msg: "out of fuel reducing a type".into(),
+                span,
+            })
     }
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.

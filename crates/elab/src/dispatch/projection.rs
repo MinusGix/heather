@@ -11,9 +11,8 @@ use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::inductive::Inductive;
 use crate::{
-    err, expression_as_type, names, resolve, skel_of_ty, subject_text, traits,
-    Cx, DotResolution, ElabError, Elaborator, NameRes, R, Upcast,
-    BUILTIN_METHODS,
+    BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, Upcast, err,
+    expression_as_type, names, resolve, skel_of_ty, subject_text, traits,
 };
 
 impl Elaborator {
@@ -50,8 +49,16 @@ impl Elaborator {
     pub(crate) fn type_subject(&self, cx: &Cx, recv: &Expr, span: Span) -> Option<(Type, Level)> {
         match self.elab_infer(cx, recv) {
             Ok((tm, ty, _)) => {
-                let Type::Ty(level) = self.whnf(cx, &ty, span).ok()? else { return None };
-                Some((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
+                let Type::Ty(level) = self.whnf(cx, &ty, span).ok()? else {
+                    return None;
+                };
+                Some((
+                    Type::El {
+                        level: level.clone(),
+                        tm: Rc::new(tm),
+                    },
+                    level,
+                ))
             }
             Err(_) => self.elab_ty(cx, &expression_as_type(recv)?).ok(),
         }
@@ -90,8 +97,11 @@ impl Elaborator {
         let ns = self.type_namespace(cx, &carrier, span);
         let other = self.other_reading_of_a_type_subject(cx, &ns, name, args, span);
         let with_field = self.declaring_classes(name);
-        let cands: Vec<(String, Rc<traits::ClassInfo>)> =
-            with_field.iter().filter(|(_, i)| i.params.len() == 1).cloned().collect();
+        let cands: Vec<(String, Rc<traits::ClassInfo>)> = with_field
+            .iter()
+            .filter(|(_, i)| i.params.len() == 1)
+            .cloned()
+            .collect();
         if cands.is_empty() {
             // The multi-parameter refusal, verbatim from receiver dispatch
             // (§4 rule 7) and for the same reason: the subject fixes the
@@ -115,13 +125,17 @@ impl Elaborator {
         }
         // What the trace calls the subject: the text that was written, since
         // an open carrier has no nominal tag to name (layer 2 §7).
-        let subject = subject_text(recv).or_else(|| ns.clone()).unwrap_or_else(|| "_".into());
+        let subject = subject_text(recv)
+            .or_else(|| ns.clone())
+            .unwrap_or_else(|| "_".into());
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
         let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
         let mut unpinned: Option<ElabError> = None;
         for (_, info) in &cands {
-            let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
+            let Some(ind) = self.lookup_inductive(&info.name).cloned() else {
+                continue;
+            };
             let targs = [(carrier.clone(), clvl.clone())];
             let vargs = match self.index_vargs(cx, info, &ind, &targs, &subject, span) {
                 Ok(Some(v)) => v,
@@ -146,8 +160,11 @@ impl Elaborator {
             }
         }
         if hits.len() > 1 {
-            let list =
-                hits.iter().map(|(_, _, _, d, _)| format!("`{d}`")).collect::<Vec<_>>().join(" and ");
+            let list = hits
+                .iter()
+                .map(|(_, _, _, d, _)| format!("`{d}`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
             return err(
                 format!(
                     "`{name}` at `{subject}` is declared by {list}, and each has an instance \
@@ -164,7 +181,11 @@ impl Elaborator {
             if let Some(e) = unpinned {
                 return Err(e);
             }
-            return Err(ElabError::Resolution { goal: tried.join("` or `"), span, trace });
+            return Err(ElabError::Resolution {
+                goal: tried.join("` or `"),
+                span,
+                trace,
+            });
         };
         if let Some((desc, fix)) = other {
             return err(
@@ -181,7 +202,10 @@ impl Elaborator {
         // (docs/traits-named-upcast-design.md §2).
         let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
         let Some(idx) = ind.field_index(name) else {
-            return err(format!("internal: `{}` has no field `{name}` after all", ind.name), span);
+            return err(
+                format!("internal: `{}` has no field `{name}` after all", ind.name),
+                span,
+            );
         };
         let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
         let (t, fty, flvl) = self.project_field(cx, &ind, &goal, Rc::new(dict), idx, span)?;
@@ -233,7 +257,10 @@ impl Elaborator {
             });
         }
         BUILTIN_METHODS.contains(&name).then(|| {
-            (format!("`{name}`, a built-in method"), format!("the bare call `{name}(…)`"))
+            (
+                format!("`{name}`, a built-in method"),
+                format!("the bare call `{name}(…)`"),
+            )
         })
     }
 
@@ -250,7 +277,9 @@ impl Elaborator {
         let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
         let resolved = self.resolve(cx, name, span);
         *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
-        let Ok((_, ty, _)) = resolved else { return true };
+        let Ok((_, ty, _)) = resolved else {
+            return true;
+        };
         let params = self.params_of(name);
         // Where the subject lands in *declaration* order. `subject_index`
         // counts explicit non-type parameters only, and the Π-telescope has
@@ -312,8 +341,14 @@ impl Elaborator {
             return None;
         }
         let ind = self.lookup_inductive(&info.name).cloned()?;
-        let kind =
-            if subject == "Nat" { TyKind::Nat } else { TyKind::Named { name: subject.into(), args: vec![] } };
+        let kind = if subject == "Nat" {
+            TyKind::Nat
+        } else {
+            TyKind::Named {
+                name: subject.into(),
+                args: vec![],
+            }
+        };
         let (carrier, clvl) = self.elab_ty(cx, &Ty { kind, span }).ok()?;
         let targs = [(carrier, clvl)];
         // `Bool::Mon(+)` — the designation reference as a dictionary spelling
@@ -331,9 +366,10 @@ impl Elaborator {
             match &a.kind {
                 ExprKind::OpSymbol { symbol: s, fixity } => {
                     match self.designated(s, *fixity, &subject_key) {
-                        Some(op) => {
-                            written.push(Expr { kind: ExprKind::Var(op), span: a.span })
-                        }
+                        Some(op) => written.push(Expr {
+                            kind: ExprKind::Var(op),
+                            span: a.span,
+                        }),
                         None => written.push(a.clone()),
                     }
                 }
@@ -351,14 +387,24 @@ impl Elaborator {
             if index.is_empty() {
                 String::new()
             } else {
-                format!("({})", index.iter().map(traits::render_expr).collect::<Vec<_>>().join(", "))
+                format!(
+                    "({})",
+                    index
+                        .iter()
+                        .map(traits::render_expr)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
         );
         let mut tr = Vec::new();
         match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
             Some(t) => Some(Ok((t, goal, glvl))),
-            None => Some(Err(ElabError::Resolution { goal: display, span, trace: tr })),
+            None => Some(Err(ElabError::Resolution {
+                goal: display,
+                span,
+                trace: tr,
+            })),
         }
     }
-
 }

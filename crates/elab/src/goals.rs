@@ -16,7 +16,7 @@ use heather_kernel::term::{
 };
 use heather_syntax::Span;
 
-use crate::{err, Cx, GoalReport, GoalSource, R};
+use crate::{Cx, GoalReport, GoalSource, R, err};
 
 /// Whether an application may turn its remaining implicit slots into goals.
 pub(super) enum PromotionCapacity {

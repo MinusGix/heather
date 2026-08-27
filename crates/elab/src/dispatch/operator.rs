@@ -9,9 +9,7 @@ use heather_kernel::term::Type;
 use heather_syntax::{Expr, ExprKind, OpFixity, Span};
 
 use super::Carrier;
-use crate::{
-    err, expression_left_leaf_is_numeral, traits, Cx, Elaborator, OperatorFallbackUse, R,
-};
+use crate::{Cx, Elaborator, OperatorFallbackUse, R, err, expression_left_leaf_is_numeral, traits};
 
 impl Elaborator {
     // -- operator symbols ---------------------------------------------------
@@ -50,8 +48,14 @@ impl Elaborator {
     /// binder keeps the name it would have had, which is the whole design — so
     /// the identifier half is the parameter-list checks that were already
     /// there, unchanged.
-    pub(crate) fn check_symbol_free(installed: &[(String, String)], sym: &str, span: Span) -> R<()> {
-        let Some((_, prev)) = installed.iter().find(|(s, _)| s == sym) else { return Ok(()) };
+    pub(crate) fn check_symbol_free(
+        installed: &[(String, String)],
+        sym: &str,
+        span: Span,
+    ) -> R<()> {
+        let Some((_, prev)) = installed.iter().find(|(s, _)| s == sym) else {
+            return Ok(());
+        };
         // A constraint slot's binder is `#op∙@0_0` and unspellable, so it is
         // named by what wrote it rather than by the generated name.
         let by = match traits::op_index_symbol(prev) {
@@ -148,7 +152,8 @@ impl Elaborator {
                     .and_then(|t| self.expected_carrier_head(cx, t, span))
                     .map(|h| (h, Self::FROM_EXPECTED))
             } else {
-                self.op_carrier_head(cx, args, span).map(|h| (h, Self::FROM_OPERAND))
+                self.op_carrier_head(cx, args, span)
+                    .map(|h| (h, Self::FROM_OPERAND))
             };
             if let Some((head, from)) = probed {
                 // The carrier the probe found is a *declaration*, and the
@@ -222,7 +227,10 @@ impl Elaborator {
         };
         let tried = match &uncovered_carrier {
             Some((head, from)) => {
-                format!("nothing designates `{sym}` at `{}` — {from} —", head.written)
+                format!(
+                    "nothing designates `{sym}` at `{}` — {from} —",
+                    head.written
+                )
             }
             None => format!("no `{designation_form}` covers this carrier,"),
         };
@@ -263,7 +271,9 @@ impl Elaborator {
     fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
         let mut leaf = args.first()?;
         loop {
-            let ExprKind::App { head, args, .. } = &leaf.kind else { break };
+            let ExprKind::App { head, args, .. } = &leaf.kind else {
+                break;
+            };
             if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
                 break;
             }
@@ -297,7 +307,9 @@ impl Elaborator {
     /// that still mentions an implicit needs no separate meta test, and the
     /// ladder simply goes on to the fallback rung.
     fn expected_carrier_head(&self, cx: &Cx, expected: &Type, span: Span) -> Option<Carrier> {
-        let Type::Pi { dom, .. } = self.whnf(cx, expected, span).ok()? else { return None };
+        let Type::Pi { dom, .. } = self.whnf(cx, expected, span).ok()? else {
+            return None;
+        };
         self.carrier_of_ty(cx, &dom, span)
     }
 
@@ -319,14 +331,23 @@ impl Elaborator {
     pub(crate) fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
         let (sym, args, explicit, goal_oriented) = match &e.kind {
             ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false, false),
-            ExprKind::App { head, args, named, explicit, goal_oriented } => match &head.kind {
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit,
+                goal_oriented,
+            } => match &head.kind {
                 // An operator application carries the named arguments it was
                 // written with — `a.op(x := 1)` reaches here after `.`
                 // resolution — so the rewrite preserves them rather than
                 // rewriting them away.
-                ExprKind::OpSymbol { symbol, fixity } => {
-                    ((symbol, fixity), Some((args, named)), *explicit, *goal_oriented)
-                }
+                ExprKind::OpSymbol { symbol, fixity } => (
+                    (symbol, fixity),
+                    Some((args, named)),
+                    *explicit,
+                    *goal_oriented,
+                ),
                 _ => return Ok(None),
             },
             _ => return Ok(None),
@@ -339,7 +360,10 @@ impl Elaborator {
             expected,
             e.span,
         )?;
-        let head = Expr { kind: ExprKind::Var(name), span: e.span };
+        let head = Expr {
+            kind: ExprKind::Var(name),
+            span: e.span,
+        };
         Ok(Some(match args {
             None => head,
             Some((args, named)) => Expr {
@@ -375,5 +399,4 @@ impl Elaborator {
         (fixity != OpFixity::Infix || !cx.op_locals.iter().any(|(s, _)| s == sym))
             && self.traits.has_designation_for(fixity, sym)
     }
-
 }

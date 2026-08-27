@@ -57,11 +57,16 @@ impl Elaborator {
     /// minted name becomes unspellable in user source at the same moment.
     pub(crate) fn designate_access(&mut self, designed: &str, minted: &str) {
         let access = self.representations.access_mut();
-        access.alias.insert(designed.to_string(), minted.to_string());
         access
-            .restricted
-            .insert(minted.to_string(), Restriction::Designed(designed.to_string()));
-        access.display.push((minted.to_string(), designed.to_string()));
+            .alias
+            .insert(designed.to_string(), minted.to_string());
+        access.restricted.insert(
+            minted.to_string(),
+            Restriction::Designed(designed.to_string()),
+        );
+        access
+            .display
+            .push((minted.to_string(), designed.to_string()));
         access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
         if let Some((owner, member)) = designed.rsplit_once("::") {
             access
@@ -82,7 +87,11 @@ impl Elaborator {
 
     /// The declaration a designed path names, if this is one.
     pub(crate) fn access_alias<'a>(&'a self, name: &str) -> Option<&'a str> {
-        self.representations.access().alias.get(name).map(String::as_str)
+        self.representations
+            .access()
+            .alias
+            .get(name)
+            .map(String::as_str)
     }
 
     /// The refusal for a name written in user source, if it is one. `None` in
@@ -119,7 +128,11 @@ impl Elaborator {
         // complain about the qualifier (which is a repr's name, and is not a
         // module and not a type).
         if let Some(members) = access.owners.get(owner) {
-            let list = members.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(", ");
+            let list = members
+                .iter()
+                .map(|m| format!("`{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
             return Some(format!(
                 "`{owner}` has no member `{member}`: its access points are {list} \
                  (docs/repr-access-spellings-design.md §3.1)"
@@ -130,13 +143,17 @@ impl Elaborator {
         }
         let (head, args) = owner.split_once('(')?;
         let args: Vec<&str> = args.trim_end_matches(')').split(", ").collect();
-        if head == "Impl" && let [op, repr] = args.as_slice() {
+        if head == "Impl"
+            && let [op, repr] = args.as_slice()
+        {
             return Some(format!(
                 "no `impl {op} for {repr}` is declared, so `{name}` names nothing \
                  (`{member}` is a member of an `Impl`'s namespace)"
             ));
         }
-        Some(format!("`{owner}` is not an owner with members, so `{name}` names nothing"))
+        Some(format!(
+            "`{owner}` is not an owner with members, so `{name}` names nothing"
+        ))
     }
 
     /// A statement, path or type as it should be *printed*: every minted name
@@ -200,10 +217,7 @@ impl Elaborator {
     /// for reasons the writer cannot see.
     pub(crate) fn register_fold_default_access(&mut self, name: &str) {
         for suffix in ["emb", "emb_inv", "emb_abs", "fold_via_abs"] {
-            self.designate_access(
-                &format!("{name}::{suffix}"),
-                &format!("{name}_{suffix}"),
-            );
+            self.designate_access(&format!("{name}::{suffix}"), &format!("{name}_{suffix}"));
         }
     }
 

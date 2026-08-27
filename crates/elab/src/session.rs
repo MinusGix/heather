@@ -8,8 +8,8 @@
 
 use heather_kernel::term::GlobalCtx;
 
-use crate::{Elaborator, MetaPrograms, Names, Representations, Traits, Types, R};
 use crate::provenance::Provenance;
+use crate::{Elaborator, MetaPrograms, Names, R, Representations, Traits, Types};
 
 /// A complete snapshot of facts committed by successful declarations.
 ///

@@ -289,7 +289,9 @@ impl Elaborator {
         let Ok((ity, ilvl)) = self.lower_instance(&cx, iind, &[], &[], span) else {
             return;
         };
-        let Some(body) = crate::code::code_of(&ity) else { return };
+        let Some(body) = crate::code::code_of(&ity) else {
+            return;
+        };
         let ty = Type::Ty(ilvl.clone());
         // A term of type `Ty l` lives at `1 + l` (the Tarski formation rule).
         let _ = self.push_gen_def(key, &iind.name, ty, Level::succ(ilvl), body, span);
@@ -308,12 +310,16 @@ impl Elaborator {
         if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
-        let Some(skel) = ind.skel.as_ref() else { return };
+        let Some(skel) = ind.skel.as_ref() else {
+            return;
+        };
         let cx = Cx::empty();
         let Ok((skel_ty, l)) = self.lower_instance(&cx, skel, &[], &[], span) else {
             return;
         };
-        let Some(body) = crate::code::code_of(&skel_ty) else { return };
+        let Some(body) = crate::code::code_of(&skel_ty) else {
+            return;
+        };
         let ty = Type::Ty(l.clone());
         let _ = self.push_gen_def(key, &ind.name, ty, Level::succ(l), body, span);
     }
@@ -364,7 +370,9 @@ impl Elaborator {
         if self.tag_of(&d_ty).map(|i| i.tag) != Some(ind.tag) {
             return;
         }
-        let Some(body) = crate::code::code_of(&d_ty) else { return };
+        let Some(body) = crate::code::code_of(&d_ty) else {
+            return;
+        };
         let ty = Type::Ty(l.clone());
         if self
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
@@ -417,7 +425,11 @@ impl Elaborator {
         }
         let nfields = ind.ctors[0].fields.len();
         if nfields == 0
-            || self.types.gdefs().by_key.contains_key(&GenDef::RecProj(ind.tag, 0))
+            || self
+                .types
+                .gdefs()
+                .by_key
+                .contains_key(&GenDef::RecProj(ind.tag, 0))
         {
             return;
         }
@@ -445,7 +457,12 @@ impl Elaborator {
         // Entry 0 of the Σ spine is the nominal tag (docs/surface-records.md
         // §3.3), so field `j` is entry `j + 1`.
         for step in 0..=nfields {
-            let Ok(Type::Sigma { fst_level, snd_level, fst, snd }) = self.whnf(&vcx, &cur, span)
+            let Ok(Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            }) = self.whnf(&vcx, &cur, span)
             else {
                 return;
             };
@@ -458,8 +475,7 @@ impl Elaborator {
             // every reference it meets, once per entry of the spine.
             let Some(tail_fam) = self.push_tail_fam(
                 ind, step, &d_ty, &l, &fst, &fst_level, &snd, &snd_level, &vcx, span,
-            )
-            else {
+            ) else {
                 return;
             };
             d_ty = Rc::new(d_ty.shift_global(1));
@@ -561,9 +577,8 @@ impl Elaborator {
         span: Span,
     ) -> bool {
         let mut cur = record_ty.clone();
-        let probe = |t: &Rc<Type>, x: Term| {
-            t.apply_local(&LocalSubst::id(&vcx.gamma).extended(Rc::new(x)))
-        };
+        let probe =
+            |t: &Rc<Type>, x: Term| t.apply_local(&LocalSubst::id(&vcx.gamma).extended(Rc::new(x)));
         for _ in 0..=nfields {
             let Ok(Type::Sigma { snd, .. }) = self.whnf(vcx, &cur, span) else {
                 // Not a spine this walk understands: leave it to the walk that
@@ -632,7 +647,8 @@ impl Elaborator {
             }),
         };
         let level = Level::max(l.clone(), inner_level.clone());
-        self.push_gen_def(key, &ind.name, ty, level, body, span).ok()?;
+        self.push_gen_def(key, &ind.name, ty, level, body, span)
+            .ok()?;
         // The occurrence, scoped in `·, v, x` — one binder past `vcx`, which
         // is where the Σ's tail lives.
         let mut xcx = vcx.clone();
@@ -695,7 +711,8 @@ impl Elaborator {
             body: Rc::clone(node),
         };
         let level = Level::max(dom_level.clone(), cod_level.clone());
-        self.push_gen_def(key, &ind.name, ty, level, body, span).ok()?;
+        self.push_gen_def(key, &ind.name, ty, level, body, span)
+            .ok()?;
         let fun = self.gen_ref(vcx, key)?;
         Some(Rc::new(Term::App {
             fun: Rc::new(fun),
@@ -726,12 +743,20 @@ impl Elaborator {
         // Ψ it was built in, and every declaration since has moved them. The
         // reference's own variable gives the rescoping, exactly as it does for
         // a binding's type in `typing.rs` (`shift_global(v + 1)`).
-        let Term::GlobalTm { var, .. } = &fun else { return None };
+        let Term::GlobalTm { var, .. } = &fun else {
+            return None;
+        };
         let abs = *self.types.gdefs().by_key.get(&key)? as usize;
         let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
-        let Type::Pi { dom_level, cod_level, dom, cod } = ty.shift_global(var.0 + 1) else {
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = ty.shift_global(var.0 + 1)
+        else {
             return None;
         };
         let tm = Term::App {
@@ -769,7 +794,9 @@ impl Elaborator {
         {
             return;
         }
-        let Some(scode) = crate::code::code_of(shape) else { return };
+        let Some(scode) = crate::code::code_of(shape) else {
+            return;
+        };
         if self
             .push_gen_def(
                 skey,
@@ -787,7 +814,9 @@ impl Elaborator {
         // definition is the one place where writing the shape out again would
         // undo half of what this pair buys.
         let cx = Cx::empty();
-        let Some(sref) = self.gen_type_ref(&cx, skey, l) else { return };
+        let Some(sref) = self.gen_type_ref(&cx, skey, l) else {
+            return;
+        };
         let ty = Type::Pi {
             dom_level: l.clone(),
             cod_level: Level::Zero,
@@ -837,9 +866,7 @@ impl Elaborator {
         let ind = self.tag_of(shape)?;
         let slots = self.types.gdefs().wf_slots.get(&ind.tag)?;
         let l = &slots.level;
-        if (*slots.shape != *shape && *slots.shape_decoded != *shape)
-            || *slots.arity != *arity
-        {
+        if (*slots.shape != *shape && *slots.shape_decoded != *shape) || *slots.arity != *arity {
             return None;
         }
         let sref = self.gen_type_ref(cx, GenDef::ShapeCode(ind.tag), l)?;
@@ -855,7 +882,6 @@ impl Elaborator {
         };
         Some((sref, aref))
     }
-
 
     /// `El l (D#tycode^δ)` for `inline`, if and only if `inline` **is** the
     /// lowering `D#tycode` was minted from (design §1.3 + the guard note on
@@ -922,7 +948,12 @@ impl Elaborator {
             None => Rc::clone(orig),
         };
         match ty {
-            Type::Pi { dom_level, cod_level, dom, cod } => {
+            Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } => {
                 let ndom = self.respell_deep_at(cx, dom, d);
                 let ncod = self.respell_deep_at(cx, cod, d + 1);
                 if ndom.is_none() && ncod.is_none() {
@@ -935,7 +966,12 @@ impl Elaborator {
                     cod: or(cod, ncod),
                 })
             }
-            Type::Sigma { fst_level, snd_level, fst, snd } => {
+            Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } => {
                 let nfst = self.respell_deep_at(cx, fst, d);
                 let nsnd = self.respell_deep_at(cx, snd, d + 1);
                 if nfst.is_none() && nsnd.is_none() {
@@ -948,7 +984,12 @@ impl Elaborator {
                     snd: or(snd, nsnd),
                 })
             }
-            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+            Type::Sum {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+            } => {
                 let nl = self.respell_deep_at(cx, lhs, d);
                 let nr = self.respell_deep_at(cx, rhs, d);
                 if nl.is_none() && nr.is_none() {
@@ -969,7 +1010,11 @@ impl Elaborator {
                     len: Rc::clone(len),
                 })
             }
-            Type::Wf { level, shape, arity } => {
+            Type::Wf {
+                level,
+                shape,
+                arity,
+            } => {
                 // Reached only for a lowering the registry does not name
                 // (parameterized, hence monomorphized — `Box<Ir>`), whose
                 // *components* may still be registered lowerings.
@@ -980,7 +1025,12 @@ impl Elaborator {
                     arity: Rc::clone(arity),
                 })
             }
-            Type::Id { level, ty, lhs, rhs } => {
+            Type::Id {
+                level,
+                ty,
+                lhs,
+                rhs,
+            } => {
                 let nt = self.respell_deep_at(cx, ty, d)?;
                 Some(Type::Id {
                     level: level.clone(),
@@ -989,7 +1039,12 @@ impl Elaborator {
                     rhs: Rc::clone(rhs),
                 })
             }
-            Type::SEq { level, ty, lhs, rhs } => {
+            Type::SEq {
+                level,
+                ty,
+                lhs,
+                rhs,
+            } => {
                 let nt = self.respell_deep_at(cx, ty, d)?;
                 Some(Type::SEq {
                     level: level.clone(),
@@ -1018,9 +1073,17 @@ impl Elaborator {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
-        let Term::GlobalTm { var, .. } = &**tm else { return None };
-        let GenDef::TyCode(tag) = self.gen_def_of(*var)? else { return None };
-        self.types.gdefs().ty_code.get(&tag).map(|(inline, _)| (**inline).clone())
+        let Term::GlobalTm { var, .. } = &**tm else {
+            return None;
+        };
+        let GenDef::TyCode(tag) = self.gen_def_of(*var)? else {
+            return None;
+        };
+        self.types
+            .gdefs()
+            .ty_code
+            .get(&tag)
+            .map(|(inline, _)| (**inline).clone())
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive
@@ -1033,9 +1096,17 @@ impl Elaborator {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
-        let Term::GlobalTm { var, .. } = &**tm else { return None };
-        let GenDef::ShapeCode(tag) = self.gen_def_of(*var)? else { return None };
-        self.types.gdefs().wf_slots.get(&tag).map(|slots| (*slots.shape).clone())
+        let Term::GlobalTm { var, .. } = &**tm else {
+            return None;
+        };
+        let GenDef::ShapeCode(tag) = self.gen_def_of(*var)? else {
+            return None;
+        };
+        self.types
+            .gdefs()
+            .wf_slots
+            .get(&tag)
+            .map(|slots| (*slots.shape).clone())
     }
 
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
@@ -1076,7 +1147,12 @@ impl Elaborator {
             None => Rc::clone(orig),
         };
         match ty {
-            Type::Pi { dom_level, cod_level, dom, cod } => {
+            Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } => {
                 let ndom = self.unspell_ty_deep(len_at, dom);
                 let ncod = self.unspell_ty_deep(len_at, cod);
                 if ndom.is_none() && ncod.is_none() {
@@ -1089,7 +1165,12 @@ impl Elaborator {
                     cod: or(cod, ncod),
                 })
             }
-            Type::Sigma { fst_level, snd_level, fst, snd } => {
+            Type::Sigma {
+                fst_level,
+                snd_level,
+                fst,
+                snd,
+            } => {
                 let nfst = self.unspell_ty_deep(len_at, fst);
                 let nsnd = self.unspell_ty_deep(len_at, snd);
                 if nfst.is_none() && nsnd.is_none() {
@@ -1102,7 +1183,12 @@ impl Elaborator {
                     snd: or(snd, nsnd),
                 })
             }
-            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+            Type::Sum {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+            } => {
                 let nl = self.unspell_ty_deep(len_at, lhs);
                 let nr = self.unspell_ty_deep(len_at, rhs);
                 if nl.is_none() && nr.is_none() {
@@ -1123,7 +1209,11 @@ impl Elaborator {
                     len: Rc::clone(len),
                 })
             }
-            Type::Wf { level, shape, arity } => {
+            Type::Wf {
+                level,
+                shape,
+                arity,
+            } => {
                 let ns = self.unspell_ty_deep(len_at, shape)?;
                 Some(Type::Wf {
                     level: level.clone(),
@@ -1131,7 +1221,12 @@ impl Elaborator {
                     arity: Rc::clone(arity),
                 })
             }
-            Type::Id { level, ty, lhs, rhs } => {
+            Type::Id {
+                level,
+                ty,
+                lhs,
+                rhs,
+            } => {
                 let nt = self.unspell_ty_deep(len_at, ty)?;
                 Some(Type::Id {
                     level: level.clone(),
@@ -1140,7 +1235,12 @@ impl Elaborator {
                     rhs: Rc::clone(rhs),
                 })
             }
-            Type::SEq { level, ty, lhs, rhs } => {
+            Type::SEq {
+                level,
+                ty,
+                lhs,
+                rhs,
+            } => {
                 let nt = self.unspell_ty_deep(len_at, ty)?;
                 Some(Type::SEq {
                     level: level.clone(),
@@ -1165,8 +1265,13 @@ impl Elaborator {
         if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
-        let Ok((ty, level, body, l, ilvl)) = self.fam_def(ind, span) else { return };
-        if self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok() {
+        let Ok((ty, level, body, l, ilvl)) = self.fam_def(ind, span) else {
+            return;
+        };
+        if self
+            .push_gen_def(key, &ind.name, ty, level, body, span)
+            .is_ok()
+        {
             self.types.gdefs_mut().fam_lvl.insert(ind.tag, (l, ilvl));
         }
     }
@@ -1240,7 +1345,11 @@ impl Elaborator {
                 layer: Layer::Code,
                 lands_in_psi: true,
             };
-            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+            if !self
+                .gate
+                .as_ref()
+                .is_some_and(|g| g.admits(&self.psi, &item))
+            {
                 // `stats::time_kernel`, as at the `elab_decl_inner` gate
                 // (lib.rs) and the `Layer::Meta` one (quote.rs): the frontend
                 // suite's `kernel` phase covers *every* finished declaration,
@@ -1256,12 +1365,13 @@ impl Elaborator {
                     note: None,
                 })?;
                 crate::stats::time_kernel(|| {
-                    self.kernel_check_term(
-                        &self.psi, Layer::Code, &empty, &body, &ty, &level,
-                    )
+                    self.kernel_check_term(&self.psi, Layer::Code, &empty, &body, &ty, &level)
                 })
                 .map_err(|err| crate::ElabError::Kernel {
-                    decl: name.clone(), span, err, note: None,
+                    decl: name.clone(),
+                    span,
+                    err,
+                    note: None,
                 })?;
                 if let Some(g) = self.gate.as_ref() {
                     g.accepted(&self.psi, &item);
@@ -1306,9 +1416,7 @@ impl Elaborator {
         // symptom was a kernel `WrongGlobalBinding` naming the context binder
         // (`crates/elab/tests/certgen_route1_spike.rs`'s meta walk over `Ir`).
         // The two paddings never combine: goals are refused inside a `meta fn`.
-        let var = GlobalVar(
-            len - 1 - abs + self.attempt.goal_arena.base() + self.meta_offset(),
-        );
+        let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base() + self.meta_offset());
         Some(Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -1327,8 +1435,10 @@ impl Elaborator {
     /// the coded type's own level (`El l ν` with `ν : Ty l`). `None` when the
     /// definition was not registered — every emission site's cue to inline.
     pub(crate) fn gen_type_ref(&self, cx: &Cx, key: GenDef, level: &Level) -> Option<Type> {
-        self.gen_ref(cx, key)
-            .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) })
+        self.gen_ref(cx, key).map(|tm| Type::El {
+            level: level.clone(),
+            tm: Rc::new(tm),
+        })
     }
 
     /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,
@@ -1351,7 +1461,6 @@ impl Elaborator {
     fn meta_offset(&self) -> u32 {
         self.meta_pushed.borrow().len() as u32
     }
-
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
     /// the recognizers use.
@@ -1396,10 +1505,16 @@ impl Elaborator {
     /// today's inlined `μ` verbatim.
     fn mu_def(&self, ind: &Rc<Inductive>, span: Span) -> R<(Type, Level, Term)> {
         if !ind.params.is_empty() || !ind.valparams.is_empty() {
-            return crate::err("internal: a parameterized forded family keeps its inlined μ", span);
+            return crate::err(
+                "internal: a parameterized forded family keeps its inlined μ",
+                span,
+            );
         }
         let cx = Cx::empty();
-        let skel = ind.skel.as_ref().expect("a forded declaration has a skeleton");
+        let skel = ind
+            .skel
+            .as_ref()
+            .expect("a forded declaration has a skeleton");
         let (skel_ty, l) = self.lower_instance(&cx, skel, &[], &[], span)?;
         let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
         let node = self.build_mu(&cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?;
@@ -1408,16 +1523,11 @@ impl Elaborator {
             cod_level: ilvl.clone(),
             dom: Rc::new(skel_ty.clone()),
             body: Rc::new(
-                crate::indexed::set_scrut(
-                    &node.shift_local(1),
-                    Rc::new(Term::Var(LocalVar(0))),
-                )
-                .ok_or_else(|| {
-                    crate::ElabError::Elab {
+                crate::indexed::set_scrut(&node.shift_local(1), Rc::new(Term::Var(LocalVar(0))))
+                    .ok_or_else(|| crate::ElabError::Elab {
                         msg: "internal: a μ node has a scrutinee slot".into(),
                         span,
-                    }
-                })?,
+                    })?,
             ),
         };
         let ty = Type::Pi {
@@ -1494,17 +1604,18 @@ impl Elaborator {
             &Type::Ty(l.clone()),
             idx.clone(),
         );
-        Some((Type::El { level: l.clone(), tm: Rc::new(tm) }, l))
+        Some((
+            Type::El {
+                level: l.clone(),
+                tm: Rc::new(tm),
+            },
+            l,
+        ))
     }
 
     /// `is_k = λ(z : I). Case-on-tag(z) { c_k ↦ ⌜Unit⌝ ; _ ↦ ⌜Empty⌝ }` (§7.1),
     /// at type `I → Type⁰`.
-    fn tag_pred_def(
-        &self,
-        iind: &Rc<Inductive>,
-        k: usize,
-        span: Span,
-    ) -> R<(Type, Level, Term)> {
+    fn tag_pred_def(&self, iind: &Rc<Inductive>, k: usize, span: Span) -> R<(Type, Level, Term)> {
         let cx = Cx::empty();
         let (ity, ilvl) = self.lower_instance(&cx, iind, &[], &[], span)?;
         let spine = self.spine(&ity, &ilvl, iind.ctors.len(), span)?;
@@ -1623,7 +1734,10 @@ impl Elaborator {
 /// A type scoped in `·`, seen in `Γ`.
 fn weaken(ty: &Type, gamma: &LocalCtx) -> Type {
     ty.apply_local(&LocalSubst {
-        tail: SubstTail::Empty { len: gamma.entries.len() as u32, base: gamma.base },
+        tail: SubstTail::Empty {
+            len: gamma.entries.len() as u32,
+            base: gamma.base,
+        },
         terms: vec![],
     })
 }
@@ -1632,7 +1746,10 @@ fn weaken(ty: &Type, gamma: &LocalCtx) -> Type {
 /// for a *dependent* codomain.
 fn under_binder(ty: &Type, gamma: &LocalCtx) -> Type {
     ty.apply_local(&LocalSubst {
-        tail: SubstTail::Empty { len: gamma.entries.len() as u32 + 1, base: gamma.base },
+        tail: SubstTail::Empty {
+            len: gamma.entries.len() as u32 + 1,
+            base: gamma.base,
+        },
         terms: vec![Rc::new(Term::Var(LocalVar(0)))],
     })
 }
@@ -1647,7 +1764,10 @@ fn instantiate_fam(fam: &Rc<Type>, arg: &Rc<Term>, gamma: &LocalCtx) -> Type {
 /// A type scoped in `·, x`, instantiated at `arg` in `Γ`.
 fn instantiate(ty: &Type, arg: Rc<Term>, gamma: &LocalCtx) -> Type {
     ty.apply_local(&LocalSubst {
-        tail: SubstTail::Empty { len: gamma.entries.len() as u32, base: gamma.base },
+        tail: SubstTail::Empty {
+            len: gamma.entries.len() as u32,
+            base: gamma.base,
+        },
         terms: vec![arg],
     })
 }

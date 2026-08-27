@@ -36,12 +36,10 @@ use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 
 use crate::gendefs::GenDef;
 use crate::indexed::{set_scrut, wf_ih_at};
-use crate::inductive::{
-    inject, nat_lit, tag_value, ConstBody, FieldKind, IdxTy, Inductive, Spine,
-};
-use crate::wf::{fin_index, nth_child, Branches, Tel};
+use crate::inductive::{ConstBody, FieldKind, IdxTy, Inductive, Spine, inject, nat_lit, tag_value};
 use crate::recursion::{Guard, GuardKind};
-use crate::{embed, err, Alias, Cx, Elaborator, R};
+use crate::wf::{Branches, Tel, fin_index, nth_child};
+use crate::{Alias, Cx, Elaborator, R, embed, err};
 
 /// A type in **forded form** (§6.3), read back into its parts: a `Type::Sigma`
 /// whose `snd` is a `Type::SEq` whose `lhs` is the `μ` node applied at the Σ
@@ -94,7 +92,10 @@ impl FordedFam {
     /// structure is read from `skel_ty`; the reference exists only in what
     /// gets emitted).
     pub fn skel_emit(&self, by: u32) -> Type {
-        self.skel_ref.as_ref().unwrap_or(&self.skel_ty).shift_local(by)
+        self.skel_ref
+            .as_ref()
+            .unwrap_or(&self.skel_ty)
+            .shift_local(by)
     }
 
     /// `I` as emitted at `by`, same contract as [`Self::skel_emit`].
@@ -128,16 +129,18 @@ impl FordedFam {
             fst_level: self.level.clone(),
             snd_level: self.ilvl.clone(),
             fst: Rc::new(self.skel_emit(by)),
-            snd: Rc::new(self.eq_at(
-                Term::Var(LocalVar(0)),
-                m.shift_local(1),
-                by + 1,
-            )),
+            snd: Rc::new(self.eq_at(Term::Var(LocalVar(0)), m.shift_local(1), by + 1)),
         }
     }
 
     fn parts_at(&self, m: Term, by: u32) -> (Level, Level, Rc<Type>, Rc<Type>) {
-        let Type::Sigma { fst_level, snd_level, fst, snd } = self.ty_at(m, by) else {
+        let Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } = self.ty_at(m, by)
+        else {
             unreachable!("ty_at builds a Σ")
         };
         (fst_level, snd_level, fst, snd)
@@ -145,12 +148,24 @@ impl FordedFam {
 
     pub fn fst_at(&self, m: Term, x: Term, by: u32) -> Term {
         let (fst_level, snd_level, fst_ty, snd_ty) = self.parts_at(m, by);
-        Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair: Rc::new(x) }
+        Term::Fst {
+            fst_level,
+            snd_level,
+            fst_ty,
+            snd_ty,
+            pair: Rc::new(x),
+        }
     }
 
     pub fn snd_at(&self, m: Term, x: Term, by: u32) -> Term {
         let (fst_level, snd_level, fst_ty, snd_ty) = self.parts_at(m, by);
-        Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair: Rc::new(x) }
+        Term::Snd {
+            fst_level,
+            snd_level,
+            fst_ty,
+            snd_ty,
+            pair: Rc::new(x),
+        }
     }
 
     pub fn pair_at(&self, m: Term, s: Term, e: Term, by: u32) -> Term {
@@ -206,7 +221,13 @@ fn nat_elim(motive: Type, level: Level, base: Term, step: Term, scrut: Term) -> 
 }
 
 fn pred(n: Term) -> Term {
-    nat_elim(Type::Nat, Level::constant(0), Term::Zero, Term::Var(LocalVar(1)), n)
+    nat_elim(
+        Type::Nat,
+        Level::constant(0),
+        Term::Zero,
+        Term::Var(LocalVar(1)),
+        n,
+    )
 }
 
 /// `⌜Unit⌝` at `0`, `⌜Empty⌝` at `S _` — and the mirror image.
@@ -214,7 +235,13 @@ fn tag_pred(n: Term, unit_at_zero: bool) -> Term {
     let u = Term::TmUnit { level: Level::Zero };
     let e = Term::TmEmpty { level: Level::Zero };
     let (base, step) = if unit_at_zero { (u, e) } else { (e, u) };
-    nat_elim(Type::Ty(Level::constant(0)), Level::constant(1), base, step, n)
+    nat_elim(
+        Type::Ty(Level::constant(0)),
+        Level::constant(1),
+        base,
+        step,
+        n,
+    )
 }
 
 impl Elaborator {
@@ -223,13 +250,33 @@ impl Elaborator {
     /// Read a type back as a forded family. `None` for everything else.
     pub(crate) fn forded_of(&self, cx: &Cx, ty: &Type) -> Option<(Rc<Inductive>, FordedFam)> {
         let d = crate::inductive::decoded(ty);
-        let Type::Sigma { fst_level, fst, snd, .. } = &*d else { return None };
+        let Type::Sigma {
+            fst_level,
+            fst,
+            snd,
+            ..
+        } = &*d
+        else {
+            return None;
+        };
         let (fst_level, fst, snd) = (fst_level.clone(), Rc::clone(fst), Rc::clone(snd));
         drop(d);
         let sd = crate::inductive::decoded(&snd);
-        let Type::SEq { level, ty: ity, lhs, rhs } = &*sd else { return None };
-        let (ilvl, ity, lhs, rhs) =
-            (level.clone(), (**ity).clone(), Rc::clone(lhs), Rc::clone(rhs));
+        let Type::SEq {
+            level,
+            ty: ity,
+            lhs,
+            rhs,
+        } = &*sd
+        else {
+            return None;
+        };
+        let (ilvl, ity, lhs, rhs) = (
+            level.clone(),
+            (**ity).clone(),
+            Rc::clone(lhs),
+            Rc::clone(rhs),
+        );
         drop(sd);
         // The Σ's first component is either the inline skeleton — the tag
         // comes out of it, where `tag_of` already looks — or, since
@@ -242,7 +289,9 @@ impl Elaborator {
         // discipline extended to types (design §3.1, §4).
         let referenced = |t: &Type| -> Option<GenDef> {
             let Type::El { tm, .. } = t else { return None };
-            let Term::GlobalTm { var, .. } = &**tm else { return None };
+            let Term::GlobalTm { var, .. } = &**tm else {
+                return None;
+            };
             self.gen_def_of(*var)
         };
         let el_of_global = |t: &Type| -> bool {
@@ -250,7 +299,9 @@ impl Elaborator {
         };
         let fst_is_ref = el_of_global(&fst);
         let ind = if fst_is_ref {
-            let GenDef::SkelCode(tag) = referenced(&fst)? else { return None };
+            let GenDef::SkelCode(tag) = referenced(&fst)? else {
+                return None;
+            };
             Rc::clone(self.types.by_tag(tag)?)
         } else {
             let skel = self.tag_of(&fst)?;
@@ -263,8 +314,12 @@ impl Elaborator {
         // rule, extended.
         let ity_is_ref = el_of_global(&ity);
         if ity_is_ref {
-            let GenDef::IdxCode(itag) = referenced(&ity)? else { return None };
-            let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() else { return None };
+            let GenDef::IdxCode(itag) = referenced(&ity)? else {
+                return None;
+            };
+            let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() else {
+                return None;
+            };
             if iind.tag != itag {
                 return None;
             }
@@ -278,7 +333,9 @@ impl Elaborator {
         // the old structural read stands, unchanged.
         let key = GenDef::Mu(ind.tag);
         if self.gen_ref(cx, key).is_some() {
-            let Term::App { fun, .. } = &*lhs else { return None };
+            let Term::App { fun, .. } = &*lhs else {
+                return None;
+            };
             if !self.is_gen_ref(fun, key) {
                 return None;
             }
@@ -307,9 +364,7 @@ impl Elaborator {
         // reference spellings for whatever it *emits*, when the defs exist.
         let skel_ref = self.gen_type_ref(cx, GenDef::SkelCode(ind.tag), &fst_level);
         let ity_ref = match ind.index_ty.as_ref() {
-            Some(IdxTy::Decl(iind)) => {
-                self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl)
-            }
+            Some(IdxTy::Decl(iind)) => self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl),
             _ => None,
         };
         Some((
@@ -332,19 +387,20 @@ impl Elaborator {
     /// first and unchanged, so nothing that resolved before pays anything new;
     /// unlike route 1's, over-reduction is harmless here, because a Σ *is* a
     /// whnf and the read succeeds the moment the wrapper is peeled (§14.3).
-    pub(crate) fn forded_of_at(
-        &self,
-        cx: &Cx,
-        ty: &Type,
-    ) -> Option<(Rc<Inductive>, FordedFam)> {
+    pub(crate) fn forded_of_at(&self, cx: &Cx, ty: &Type) -> Option<(Rc<Inductive>, FordedFam)> {
         if let Some(r) = self.forded_of(cx, ty) {
             return Some(r);
         }
-        let Type::El { level, tm } = ty else { return None };
+        let Type::El { level, tm } = ty else {
+            return None;
+        };
         let oracle = self.semantic_oracle();
         for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
             let tm = Rc::new(tm);
-            let cand = Type::El { level: level.clone(), tm: Rc::clone(&tm) };
+            let cand = Type::El {
+                level: level.clone(),
+                tm: Rc::clone(&tm),
+            };
             if let Some(r) = self.forded_of(cx, &cand) {
                 return Some(r);
             }
@@ -377,7 +433,10 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<FordedFam> {
-        let skel = ind.skel.as_ref().expect("a forded declaration has a skeleton");
+        let skel = ind
+            .skel
+            .as_ref()
+            .expect("a forded declaration has a skeleton");
         // §4.1: the skeleton takes the *ordinary* shape test — `Wf` when some
         // constructor has a child, tier 0's sum-of-Σs otherwise.
         let (skel_ty, l) = self.lower_instance(cx, skel, args, &[], span)?;
@@ -388,9 +447,7 @@ impl Elaborator {
         // means every emission site below falls back to the inline copy.
         let skel_ref = self.gen_type_ref(cx, GenDef::SkelCode(ind.tag), &l);
         let ity_ref = match ind.index_ty.as_ref() {
-            Some(IdxTy::Decl(iind)) => {
-                self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl)
-            }
+            Some(IdxTy::Decl(iind)) => self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl),
             _ => None,
         };
         // §14.2, closed: `μ` is a Ψ definition, referenced rather than written
@@ -455,8 +512,18 @@ impl Elaborator {
                         d_body: u32,
                         _e: &Type|
              -> R<Term> {
-                let acx =
-                    self.mu_branch_cx(bcx, ind, Some(tel), None, k, value, d_body, ity, ilvl, span)?;
+                let acx = self.mu_branch_cx(
+                    bcx,
+                    ind,
+                    Some(tel),
+                    None,
+                    k,
+                    value,
+                    d_body,
+                    ity,
+                    ilvl,
+                    span,
+                )?;
                 self.elab_check(&acx, self.res_expr(ind, k), &ity.shift_local(d_body), ilvl)
             };
             self.build_elim_wf(
@@ -496,7 +563,10 @@ impl Elaborator {
     /// The constructor's written result index (§2). Present on every
     /// constructor of a forded declaration, by construction.
     fn res_expr<'a>(&self, ind: &'a Inductive, k: usize) -> &'a Expr {
-        ind.ctors[k].res_expr.as_ref().expect("a forded ctor carries its result index")
+        ind.ctors[k]
+            .res_expr
+            .as_ref()
+            .expect("a forded ctor carries its result index")
     }
 
     /// One branch's context for `μ` (§5): the child-index variables bound to
@@ -529,7 +599,10 @@ impl Elaborator {
             (Some(tel), _) => tel.spine.ctors[k].0.shift_local(d_body),
             (None, Some(spine)) => spine.ctors[k].0.shift_local(d_body),
             (None, None) => {
-                return err("internal: a non-recursive skeleton branch has no spine", span)
+                return err(
+                    "internal: a non-recursive skeleton branch has no spine",
+                    span,
+                );
             }
         };
         let mut p = 0usize;
@@ -554,7 +627,8 @@ impl Elaborator {
                         .filter(|k| **k == FieldKind::Plain)
                         .count();
                     let tel = tel.expect("a child-index field only occurs at a `Wf` skeleton");
-                    acx.aliases.push(Rc::new(Alias { skel: None,
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
                         name,
                         depth,
                         term: Rc::new(wf_ih_at(tel, m, ct, d_body)),
@@ -564,7 +638,14 @@ impl Elaborator {
                 }
                 _ => {
                     let (term, ty, level) = self.projection(&acx, &ctor_ty, value, p, span)?;
-                    acx.aliases.push(Rc::new(Alias { skel: None, name, depth, term, ty, level }));
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
+                        name,
+                        depth,
+                        term,
+                        ty,
+                        level,
+                    }));
                     p += 1;
                 }
             }
@@ -643,7 +724,8 @@ impl Elaborator {
             match ctor.kind[k] {
                 FieldKind::IndexVar => {
                     let term = self.elab_check(cx, &args[k], ity, ilvl)?;
-                    acx.aliases.push(Rc::new(Alias { skel: None,
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
                         name,
                         depth,
                         term: Rc::new(term),
@@ -653,7 +735,8 @@ impl Elaborator {
                 }
                 FieldKind::Payload => {
                     if let Some((_, term, ty, level)) = pays.iter().find(|(j, ..)| *j == k) {
-                        acx.aliases.push(Rc::new(Alias { skel: None,
+                        acx.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name,
                             depth,
                             term: Rc::clone(term),
@@ -662,7 +745,8 @@ impl Elaborator {
                         }));
                     } else if crate::inductive::expr_mentions(e, &name) {
                         let (term, ty, level) = self.elab_infer(cx, &args[k])?;
-                        acx.aliases.push(Rc::new(Alias { skel: None,
+                        acx.aliases.push(Rc::new(Alias {
+                            skel: None,
                             name,
                             depth,
                             term: Rc::new(term),
@@ -751,10 +835,20 @@ impl Elaborator {
             kids.push(v);
         }
         let skel_tm = if skel.recursive {
-            let Type::Wf { level, shape, arity } = &fam.skel_ty else {
-                return err("internal: a recursive skeleton did not lower to a `Wf`", span);
+            let Type::Wf {
+                level,
+                shape,
+                arity,
+            } = &fam.skel_ty
+            else {
+                return err(
+                    "internal: a recursive skeleton did not lower to a `Wf`",
+                    span,
+                );
             };
-            let mut acc = Term::Triv { level: level.clone() };
+            let mut acc = Term::Triv {
+                level: level.clone(),
+            };
             let mut tail_len = Term::Zero;
             for (t, v) in kids.iter().enumerate().rev() {
                 let child = fam.fst_at(xs[t].clone(), v.clone(), 0);
@@ -789,15 +883,17 @@ impl Elaborator {
             let _scope = self.use_inductive_scope(ind);
             self.elab_check(&acx, self.res_expr(ind, i), &fam.ity, &fam.ilvl)?
         };
-        if self.committed_oracle().convert_term(
-            &cx.gamma,
-            Layer::Prog,
-            &target,
-            &fam.idx,
-            &fam.ity,
-            &fam.ilvl,
-        )
-        .is_err()
+        if self
+            .committed_oracle()
+            .convert_term(
+                &cx.gamma,
+                Layer::Prog,
+                &target,
+                &fam.idx,
+                &fam.ity,
+                &fam.ilvl,
+            )
+            .is_err()
         {
             return err(
                 format!(
@@ -829,9 +925,9 @@ impl Elaborator {
                     }
                     let ix = ctor.rec_at[k].expect("a child records its index variable");
                     let term = match seen.cmp(&t) {
-                        std::cmp::Ordering::Less => {
-                            Rc::new(fam.mu_at(fam.fst_at(xs[seen].clone(), kids[seen].clone(), 0), 0))
-                        }
+                        std::cmp::Ordering::Less => Rc::new(
+                            fam.mu_at(fam.fst_at(xs[seen].clone(), kids[seen].clone(), 0), 0),
+                        ),
                         std::cmp::Ordering::Equal => Rc::new(Term::Var(LocalVar(0))),
                         std::cmp::Ordering::Greater => Rc::new(xs[seen].clone()),
                     };
@@ -879,20 +975,32 @@ impl Elaborator {
         acx.selfref = None;
         acx.guard = None;
         for (k, term, ty, level) in binds {
-            let Some(name) = ctor.fields[*k].0.clone() else { continue };
+            let Some(name) = ctor.fields[*k].0.clone() else {
+                continue;
+            };
             // A bound `z` is already scoped in `zcx`; everything else is
             // scoped in `cx` and moves out by one.
             let bound = matches!(&**term, Term::Var(LocalVar(0)));
-            acx.aliases.push(Rc::new(Alias { skel: None,
+            acx.aliases.push(Rc::new(Alias {
+                skel: None,
                 name,
-                depth: if bound { zcx.names.len() } else { cx.names.len() },
+                depth: if bound {
+                    zcx.names.len()
+                } else {
+                    cx.names.len()
+                },
                 term: Rc::clone(term),
                 ty: ty.clone(),
                 level: level.clone(),
             }));
         }
         let _scope = self.use_inductive_scope(ind);
-        self.elab_check(&acx, self.res_expr(ind, i), &fam.ity.shift_local(1), &fam.ilvl)
+        self.elab_check(
+            &acx,
+            self.res_expr(ind, i),
+            &fam.ity.shift_local(1),
+            &fam.ilvl,
+        )
     }
 
     /// [`Elaborator::build_fields`], keeping each field's value: §7 needs the
@@ -908,20 +1016,29 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let head = self.whnf(cx, ctor_ty, span)?;
-        let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+        let Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } = head
+        else {
             if let Type::Unit { level } = &head
                 && args.is_empty()
             {
-                return Ok(Term::Triv { level: level.clone() });
+                return Ok(Term::Triv {
+                    level: level.clone(),
+                });
             }
             return err("internal: malformed constructor encoding", span);
         };
         let value = if tag {
             Rc::new(tag_value(&fst))
         } else {
-            let (arg, _) = args
-                .split_first()
-                .ok_or(crate::ElabError::Elab { msg: "too few arguments".into(), span })?;
+            let (arg, _) = args.split_first().ok_or(crate::ElabError::Elab {
+                msg: "too few arguments".into(),
+                span,
+            })?;
             let v = Rc::new(self.elab_check(cx, arg, &fst, &fst_level)?);
             out.push((Rc::clone(&v), (*fst).clone(), fst_level.clone()));
             v
@@ -1004,7 +1121,11 @@ impl Elaborator {
         let ql = Level::max(li.clone(), mlvl.clone());
         let gamma0 = cx.gamma.clone();
         let mot_at = |m: Term, z: Term, extra: u32| -> Type {
-            motive.apply_local(&embed(&gamma0, extra).extended(Rc::new(m)).extended(Rc::new(z)))
+            motive.apply_local(
+                &embed(&gamma0, extra)
+                    .extended(Rc::new(m))
+                    .extended(Rc::new(z)),
+            )
         };
 
         // Q(σ) = Π(m' : I). Π(e' : sEq(I; μ σ; m')). M[m', ⟨σ, e'⟩], over (Γ, σ).
@@ -1015,11 +1136,7 @@ impl Elaborator {
             cod: Rc::new(Type::Pi {
                 dom_level: li.clone(),
                 cod_level: mlvl.clone(),
-                dom: Rc::new(fam.eq_at(
-                    Term::Var(LocalVar(1)),
-                    Term::Var(LocalVar(0)),
-                    2,
-                )),
+                dom: Rc::new(fam.eq_at(Term::Var(LocalVar(1)), Term::Var(LocalVar(0)), 2)),
                 cod: Rc::new(mot_at(
                     Term::Var(LocalVar(1)),
                     fam.pair_at(
@@ -1036,7 +1153,10 @@ impl Elaborator {
         let idx_param = match (&dec, &*fam.idx) {
             (Some(_), Term::Var(LocalVar(i))) => {
                 let pos = cx.names.len() - 1 - *i as usize;
-                cx.selfref.as_ref().filter(|s| pos < s.params.len()).map(|_| pos)
+                cx.selfref
+                    .as_ref()
+                    .filter(|s| pos < s.params.len())
+                    .map(|_| pos)
             }
             _ => None,
         };
@@ -1064,8 +1184,16 @@ impl Elaborator {
                         d_body: u32,
                         _e: &Type|
              -> R<Term> {
-                let Type::Wf { level, shape, arity } = fam.skel_ty.shift_local(d_body) else {
-                    return err("internal: a recursive skeleton did not lower to a `Wf`", span);
+                let Type::Wf {
+                    level,
+                    shape,
+                    arity,
+                } = fam.skel_ty.shift_local(d_body)
+                else {
+                    return err(
+                        "internal: a recursive skeleton did not lower to a `Wf`",
+                        span,
+                    );
                 };
                 let sh = Term::Supf {
                     level,
@@ -1200,7 +1328,12 @@ impl Elaborator {
                 if kids == 1 && matches!(&head.kind, ExprKind::Var(s) if s == "Succ") =>
             {
                 match args.as_slice() {
-                    [Expr { kind: ExprKind::Var(v), .. }] => {
+                    [
+                        Expr {
+                            kind: ExprKind::Var(v),
+                            ..
+                        },
+                    ] => {
                         let at = ctor
                             .fields
                             .iter()
@@ -1264,8 +1397,13 @@ impl Elaborator {
         // variable, and a different one each time (§8.2's "distinct").
         let mut fills: Vec<usize> = Vec::with_capacity(args.len());
         for a in args {
-            let ExprKind::Var(v) = &a.kind else { return Form::B };
-            let Some(fi) = ctor.fields.iter().position(|(n, _)| n.as_deref() == Some(v.as_str()))
+            let ExprKind::Var(v) = &a.kind else {
+                return Form::B;
+            };
+            let Some(fi) = ctor
+                .fields
+                .iter()
+                .position(|(n, _)| n.as_deref() == Some(v.as_str()))
             else {
                 return Form::B;
             };
@@ -1281,10 +1419,15 @@ impl Elaborator {
                 continue;
             }
             let ix = ctor.rec_at[f].expect("a child records its index variable");
-            let Some(a) = fills.iter().position(|x| *x == ix) else { return Form::B };
+            let Some(a) = fills.iter().position(|x| *x == ix) else {
+                return Form::B;
+            };
             per_child.push(a);
         }
-        Form::ADecl { at, args: per_child }
+        Form::ADecl {
+            at,
+            args: per_child,
+        }
     }
 
     /// §8.3, the transp arm — the form available at any index.
@@ -1379,11 +1522,7 @@ impl Elaborator {
                     fun: Rc::new(transp),
                     dom_level: env.li.clone(),
                     cod_level: env.mlvl.clone(),
-                    dom: Rc::new(fam.eq_at(
-                        sh.shift_local(2),
-                        Term::Var(LocalVar(1)),
-                        d + 2,
-                    )),
+                    dom: Rc::new(fam.eq_at(sh.shift_local(2), Term::Var(LocalVar(1)), d + 2)),
                     cod: Rc::new(env.mot_at(
                         Term::Var(LocalVar(2)),
                         fam.pair_at(
@@ -1549,12 +1688,7 @@ impl Elaborator {
             } else {
                 let goal = env.mot_at(
                     Term::Zero,
-                    fam.pair_at(
-                        Term::Zero,
-                        sh.shift_local(2),
-                        Term::Var(LocalVar(0)),
-                        d + 2,
-                    ),
+                    fam.pair_at(Term::Zero, sh.shift_local(2), Term::Var(LocalVar(0)), d + 2),
                     d + 2,
                 );
                 absurd_branch(false, Term::Zero, 2, goal)
@@ -1706,7 +1840,12 @@ impl Elaborator {
              -> R<Term> {
                 // `dz` is the branch body's depth past Γ: `mcx` sits at `d+1`.
                 let dz = d + 1 + d_body;
-                let Type::Wf { level, shape, arity } = fam.ity.shift_local(dz) else {
+                let Type::Wf {
+                    level,
+                    shape,
+                    arity,
+                } = fam.ity.shift_local(dz)
+                else {
                     return err("internal: a recursive index did not lower to a `Wf`", span);
                 };
                 // ẑ_j = sup_f(ι_j(label); cs'_I), rebuilt from the branch's own
@@ -1864,22 +2003,22 @@ impl Elaborator {
                         )
                     }
                     None => self.child_projection(
-                    &zcx,
-                    iind,
-                    &fam.ity.shift_local(dz + 2),
-                    &fam.ilvl,
-                    jj,
-                    *a,
-                    // The default is reached at no index this arm ever sees —
-                    // `μ ŝ` and `ẑ` are both `I_at`-headed — so any term of
-                    // type `I` in scope will do, and the *bound* `z` is the
-                    // cheapest one there is. `μ ŝ` would also type, and costs a
-                    // whole inlined `μ` per off-branch of every projection of
-                    // every child (§14.2): measured as `OutOfFuel` on the very
-                    // first three-constructor index, not as a slow test.
-                    Rc::new(Term::Var(LocalVar(0))),
-                    Term::Var(LocalVar(0)),
-                    span,
+                        &zcx,
+                        iind,
+                        &fam.ity.shift_local(dz + 2),
+                        &fam.ilvl,
+                        jj,
+                        *a,
+                        // The default is reached at no index this arm ever sees —
+                        // `μ ŝ` and `ẑ` are both `I_at`-headed — so any term of
+                        // type `I` in scope will do, and the *bound* `z` is the
+                        // cheapest one there is. `μ ŝ` would also type, and costs a
+                        // whole inlined `μ` per off-branch of every projection of
+                        // every child (§14.2): measured as `OutOfFuel` on the very
+                        // first three-constructor index, not as a slow test.
+                        Rc::new(Term::Var(LocalVar(0))),
+                        Term::Var(LocalVar(0)),
+                        span,
                     )?,
                 };
                 inv.push((bind, proj));
@@ -2066,7 +2205,8 @@ impl Elaborator {
                         .iter()
                         .filter(|x| **x == FieldKind::Plain)
                         .count();
-                    acx.aliases.push(Rc::new(Alias { skel: None,
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
                         name: bname,
                         depth,
                         term: Rc::new(idx_of_child[ct].clone()),
@@ -2081,26 +2221,29 @@ impl Elaborator {
                     let val = fam.pair_at(at.clone(), child.clone(), pf.clone(), dd);
                     let ih = self.forded_ih(env, m, t, j, dd, at.clone(), pf);
                     let ih_ty = env.mot_at(at.clone(), val.clone(), dd);
-                    acx.aliases.push(Rc::new(Alias { skel: None,
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
                         name: bname,
                         depth,
                         term: Rc::new(val.clone()),
                         ty: fam.ty_at(at.clone(), dd),
                         level: fam.lvl(),
                     }));
-                    children.push((
-                        Rc::new(val),
-                        Rc::new(ih),
-                        ih_ty,
-                        env.mlvl.clone(),
-                    ));
+                    children.push((Rc::new(val), Rc::new(ih), ih_ty, env.mlvl.clone()));
                     rebind.push(Rc::new(at));
                     t += 1;
                 }
                 _ => {
                     let (term, ty, level) =
                         self.projection(&acx, &ctor_ty, &value_here, p, span)?;
-                    acx.aliases.push(Rc::new(Alias { skel: None, name: bname, depth, term, ty, level }));
+                    acx.aliases.push(Rc::new(Alias {
+                        skel: None,
+                        name: bname,
+                        depth,
+                        term,
+                        ty,
+                        level,
+                    }));
                     p += 1;
                 }
             }
@@ -2111,7 +2254,11 @@ impl Elaborator {
                 .map(|dec| {
                     Rc::new(Guard {
                         dec,
-                        kind: GuardKind::Wf { depth: acx.names.len(), children, container: None },
+                        kind: GuardKind::Wf {
+                            depth: acx.names.len(),
+                            children,
+                            container: None,
+                        },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                     })
                 })
@@ -2140,7 +2287,8 @@ impl Elaborator {
         let fam = env.fam;
         let len = Rc::new(nat_lit(m));
         let q_at = |x: Term, extra: u32| -> Type {
-            env.q.apply_local(&embed(env.gamma0, extra).extended(Rc::new(x)))
+            env.q
+                .apply_local(&embed(env.gamma0, extra).extended(Rc::new(x)))
         };
         let child_at = |extra: u32| -> Term {
             nth_child(
@@ -2158,7 +2306,9 @@ impl Elaborator {
             fun: Rc::new(Term::Var(LocalVar(j))),
             dom_level: Level::Zero,
             cod_level: env.ql.clone(),
-            dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
+            dom: Rc::new(Type::Fin {
+                len: Rc::clone(&len),
+            }),
             cod: Rc::new(q_at(
                 heather_kernel::term::nth(
                     &fam.level,
@@ -2233,8 +2383,11 @@ struct ArmEnv<'a> {
 impl ArmEnv<'_> {
     /// `M[m, z]`, with `m`/`z` scoped `extra` binders past Γ.
     fn mot_at(&self, m: Term, z: Term, extra: u32) -> Type {
-        self.motive
-            .apply_local(&embed(self.gamma0, extra).extended(Rc::new(m)).extended(Rc::new(z)))
+        self.motive.apply_local(
+            &embed(self.gamma0, extra)
+                .extended(Rc::new(m))
+                .extended(Rc::new(z)),
+        )
     }
 }
 
@@ -2275,7 +2428,10 @@ mod decl_inversion {
     const SHAPE: &str = "inductive Shape { SLeaf, SBud(s: Shape), SNode(l: Shape, r: Shape) }";
 
     fn var(name: &str) -> Expr {
-        Expr { kind: ExprKind::Var(name.into()), span: SPAN }
+        Expr {
+            kind: ExprKind::Var(name.into()),
+            span: SPAN,
+        }
     }
 
     struct Proto {
@@ -2290,16 +2446,30 @@ mod decl_inversion {
     /// `Γ = (a, b, l, r : Shape)` — every subject open.
     fn proto() -> Proto {
         let mut el = Elaborator::with_prelude().expect("prelude");
-        el.elab_source(SHAPE).expect("the index declaration elaborates");
-        let ind = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Shape")).expect("declared"));
+        el.elab_source(SHAPE)
+            .expect("the index declaration elaborates");
+        let ind = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "Shape"))
+                .expect("declared"),
+        );
         let cx0 = Cx::empty();
-        let (ity, ilvl) = el.lower_instance(&cx0, &ind, &[], &[], SPAN).expect("lowers");
+        let (ity, ilvl) = el
+            .lower_instance(&cx0, &ind, &[], &[], SPAN)
+            .expect("lowers");
         let spine = el.spine(&ity, &ilvl, ind.ctors.len(), SPAN).expect("spine");
         let mut cx = cx0;
         for n in ["a", "b", "l", "r"] {
             cx.push(n.into(), ity.clone(), ilvl.clone());
         }
-        Proto { el, ind, ity, ilvl, spine, cx }
+        Proto {
+            el,
+            ind,
+            ity,
+            ilvl,
+            spine,
+            cx,
+        }
     }
 
     impl Proto {
@@ -2331,8 +2501,17 @@ mod decl_inversion {
         }
 
         fn conv(&self, cx: &Cx, a: &Term, b: &Term, ty: &Type, level: &Level) {
-            conv_term(self.el.psi(), &cx.gamma, Layer::Prog, a, b, ty, level, self.el.fuel)
-                .unwrap_or_else(|e| panic!("not convertible: {e:?}"));
+            conv_term(
+                self.el.psi(),
+                &cx.gamma,
+                Layer::Prog,
+                a,
+                b,
+                ty,
+                level,
+                self.el.fuel,
+            )
+            .unwrap_or_else(|e| panic!("not convertible: {e:?}"));
         }
 
         fn seq(&self, lhs: Term, rhs: Term, by: u32) -> Type {
@@ -2362,9 +2541,8 @@ mod decl_inversion {
         // up. `SNode`'s subjects are open throughout.
         for k in 0..3usize {
             for (j, subject) in [(0usize, &leaf), (1, &bud), (2, &node)] {
-                let pred = p
-                    .el
-                    .idx_tag_pred(
+                let pred =
+                    p.el.idx_tag_pred(
                         &p.cx,
                         &p.ind,
                         &p.ity,
@@ -2388,9 +2566,8 @@ mod decl_inversion {
         let node = p.ctor(2, &[var("l"), var("r")]);
         let bud = p.ctor(1, &[var("a")]);
         for (t, want) in [(0usize, "l"), (1, "r")] {
-            let proj = p
-                .el
-                .child_projection(
+            let proj =
+                p.el.child_projection(
                     &p.cx,
                     &p.ind,
                     &p.ity,
@@ -2423,9 +2600,8 @@ mod decl_inversion {
             cx.push("#z".into(), p.ity.clone(), p.ilvl.clone());
             cx
         };
-        let tag = p
-            .el
-            .idx_tag_pred(
+        let tag =
+            p.el.idx_tag_pred(
                 &zcx,
                 &p.ind,
                 &p.ity,
@@ -2441,7 +2617,10 @@ mod decl_inversion {
             ty_level: p.ilvl.clone(),
             motive_level: Level::constant(0),
             ty: Rc::new(p.ity.shift_local(1)),
-            motive: Rc::new(Type::El { level: Level::constant(0), tm: Rc::new(tag) }),
+            motive: Rc::new(Type::El {
+                level: Level::constant(0),
+                tm: Rc::new(tag),
+            }),
             lhs: Rc::new(bud.shift_local(1)),
             rhs: Rc::new(node.shift_local(1)),
             proof: Rc::new(Term::Var(LocalVar(0))),
@@ -2473,9 +2652,8 @@ mod decl_inversion {
         zcx.push("#z".into(), p.ity.clone(), p.ilvl.clone());
         // In `ecx = (a, b, l, r, e)`: `a` is Var 4, `b` is 3, `l` is 2, `r` is 1.
         for (t, child, want) in [(0usize, 4u32, 2u32), (1, 3, 1)] {
-            let proj = p
-                .el
-                .child_projection(
+            let proj =
+                p.el.child_projection(
                     &zcx,
                     &p.ind,
                     &p.ity,
@@ -2566,9 +2744,22 @@ inductive G : (n: Nat) -> Type {
     fn two() -> Two {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SRC).expect("two forded families elaborate");
-        let f = Rc::clone(el.types.inductive(&crate::names::qkey("main", "F")).expect("declared"));
-        let g = Rc::clone(el.types.inductive(&crate::names::qkey("main", "G")).expect("declared"));
-        Two { el, f, g, cx: Cx::empty() }
+        let f = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "F"))
+                .expect("declared"),
+        );
+        let g = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "G"))
+                .expect("declared"),
+        );
+        Two {
+            el,
+            f,
+            g,
+            cx: Cx::empty(),
+        }
     }
 
     /// `F`'s type as the generator emits it, taken apart.
@@ -2582,36 +2773,81 @@ inductive G : (n: Nat) -> Type {
     }
 
     fn parts(t: &Two) -> Parts {
-        let (ty, _) = t
-            .el
-            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
-            .expect("the family lowers");
-        let Type::Sigma { fst_level, fst, snd, .. } = ty else {
+        let (ty, _) =
+            t.el.lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+                .expect("the family lowers");
+        let Type::Sigma {
+            fst_level,
+            fst,
+            snd,
+            ..
+        } = ty
+        else {
             panic!("a forded family is a Σ")
         };
-        let Type::SEq { level, ty: ity, lhs, rhs } = (*snd).clone() else {
+        let Type::SEq {
+            level,
+            ty: ity,
+            lhs,
+            rhs,
+        } = (*snd).clone()
+        else {
             panic!("a forded family's second component is an sEq")
         };
-        Parts { skel: (*fst).clone(), skel_level: fst_level, ity, ilvl: level, lhs, rhs }
+        Parts {
+            skel: (*fst).clone(),
+            skel_level: fst_level,
+            ity,
+            ilvl: level,
+            lhs,
+            rhs,
+        }
     }
 
     /// Rebuild the family type with `fst` in the skeleton slot, everything
     /// else `F`'s own — the forgery constructor for the El-headed negatives
     /// (design §4's look-alike direction).
     fn with_fst(t: &Two, fst: Type) -> Type {
-        let Parts { skel_level: fst_level, ity, ilvl, lhs, rhs, .. } = parts(t);
+        let Parts {
+            skel_level: fst_level,
+            ity,
+            ilvl,
+            lhs,
+            rhs,
+            ..
+        } = parts(t);
         Type::Sigma {
             fst_level,
             snd_level: ilvl.clone(),
             fst: Rc::new(fst),
-            snd: Rc::new(Type::SEq { level: ilvl, ty: ity, lhs, rhs }),
+            snd: Rc::new(Type::SEq {
+                level: ilvl,
+                ty: ity,
+                lhs,
+                rhs,
+            }),
         }
     }
 
     /// Rebuild the family type with `head` in the `μ` slot.
     fn with_head(t: &Two, head: Term) -> Type {
-        let Parts { skel, skel_level: fst_level, ity, ilvl, lhs, rhs } = parts(t);
-        let Term::App { dom_level, cod_level, dom, cod, arg, .. } = (*lhs).clone() else {
+        let Parts {
+            skel,
+            skel_level: fst_level,
+            ity,
+            ilvl,
+            lhs,
+            rhs,
+        } = parts(t);
+        let Term::App {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            arg,
+            ..
+        } = (*lhs).clone()
+        else {
             panic!("after `issues/generated-term-defs.md` the μ slot is an application")
         };
         Type::Sigma {
@@ -2637,14 +2873,15 @@ inductive G : (n: Nat) -> Type {
     #[test]
     fn the_family_is_recognized_through_its_mu_definition() {
         let t = two();
-        let (ty, _) = t
-            .el
-            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
-            .expect("the family lowers");
+        let (ty, _) =
+            t.el.lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+                .expect("the family lowers");
         // The positive: what the generator emits still reads back, and reads
         // back as `F` — the whole point of a re-key is that it does not cost
         // recognition.
-        let (ind, fam) = t.el.forded_of(&t.cx, &ty).expect("reads back as a forded family");
+        let (ind, fam) =
+            t.el.forded_of(&t.cx, &ty)
+                .expect("reads back as a forded family");
         assert_eq!(ind.tag, t.f.tag);
         // …and the μ node still fills at a scrutinee, which is what every
         // consumer downstream (`ty_at`, `eq_at`, the arm builders) needs.
@@ -2657,7 +2894,9 @@ inductive G : (n: Nat) -> Type {
         // inline `Wf` — and the recognizer handed back the *inline* copies
         // regardless, because every structural consumer downstream operates
         // on those (§3.1's line).
-        let Type::Sigma { fst, .. } = &ty else { panic!("a forded family is a Σ") };
+        let Type::Sigma { fst, .. } = &ty else {
+            panic!("a forded family is a Σ")
+        };
         let Type::El { tm, .. } = &**fst else {
             panic!("the skeleton slot is emitted as a code reference")
         };
@@ -2679,7 +2918,9 @@ inductive G : (n: Nat) -> Type {
         let mut scx = t.cx.clone();
         let p = parts(&t);
         scx.push("#s".into(), p.skel, p.skel_level);
-        let mu_g = t.el.gen_ref(&scx, GenDef::Mu(t.g.tag)).expect("G has a μ definition");
+        let mu_g =
+            t.el.gen_ref(&scx, GenDef::Mu(t.g.tag))
+                .expect("G has a μ definition");
         assert!(t.el.forded_of(&t.cx, &with_head(&t, mu_g)).is_none());
 
         // And a head that is no definition at all — the other half of "keyed
@@ -2708,14 +2949,16 @@ inductive G : (n: Nat) -> Type {
         // `μ_D`. The reference resolves through the registry — to *`G`'s*
         // `SkelCode` — so the components disagree nominally and the read
         // declines.
-        let g_code = t
-            .el
-            .gen_ref(&t.cx, GenDef::SkelCode(t.g.tag))
-            .expect("G has a code definition");
+        let g_code =
+            t.el.gen_ref(&t.cx, GenDef::SkelCode(t.g.tag))
+                .expect("G has a code definition");
         let p = parts(&t);
         let forged = with_fst(
             &t,
-            Type::El { level: p.skel_level, tm: Rc::new(g_code) },
+            Type::El {
+                level: p.skel_level,
+                tm: Rc::new(g_code),
+            },
         );
         assert!(t.el.forded_of(&t.cx, &forged).is_none());
     }
@@ -2728,19 +2971,19 @@ inductive G : (n: Nat) -> Type {
         // Identity is the Ψ index, not the body: it does not read back as
         // `F`.
         let skel = Rc::clone(t.f.skel.as_ref().expect("forded"));
-        let (skel_ty, l) = t
-            .el
-            .lower_instance(&t.cx, &skel, &[], &[], SPAN)
-            .expect("the skeleton lowers");
+        let (skel_ty, l) =
+            t.el.lower_instance(&t.cx, &skel, &[], &[], SPAN)
+                .expect("the skeleton lowers");
         let code = crate::code::code_of(&skel_ty).expect("the skeleton has a code");
         let empty = heather_kernel::term::LocalCtx::nil();
-        t.el.psi.push(heather_kernel::term::GlobalBinding::defined_tm(
-            empty,
-            Layer::Code,
-            Rc::new(Type::Ty(l.clone())),
-            Level::succ(l.clone()),
-            Rc::new(code),
-        ));
+        t.el.psi
+            .push(heather_kernel::term::GlobalBinding::defined_tm(
+                empty,
+                Layer::Code,
+                Rc::new(Type::Ty(l.clone())),
+                Level::succ(l.clone()),
+                Rc::new(code),
+            ));
         t.el.refresh_delta_psi();
         // `gen_ref`'s numbering for the binding just pushed: abs = len − 1,
         // so the variable is `goal_base` — in scope, resolvable, and not in
@@ -2755,7 +2998,13 @@ inductive G : (n: Nat) -> Type {
                 terms: vec![],
             },
         };
-        let forged = with_fst(&t, Type::El { level: l, tm: Rc::new(dup) });
+        let forged = with_fst(
+            &t,
+            Type::El {
+                level: l,
+                tm: Rc::new(dup),
+            },
+        );
         assert!(t.el.forded_of(&t.cx, &forged).is_none());
     }
 
@@ -2773,8 +3022,16 @@ inductive P<A> : (n: Nat) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
-        let f = Rc::clone(el.types.inductive(&crate::names::qkey("main", "F")).expect("declared"));
-        let p = Rc::clone(el.types.inductive(&crate::names::qkey("main", "P")).expect("declared"));
+        let f = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "F"))
+                .expect("declared"),
+        );
+        let p = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "P"))
+                .expect("declared"),
+        );
         let cx = Cx::empty();
         // `P<Nat>` has no code definition (§14.12's boundary), so its own
         // type is emitted inline and reads back structurally, with no
@@ -2789,7 +3046,13 @@ inductive P<A> : (n: Nat) -> Type {
         // not as `P` (a structural component is not a reference) and not as
         // `F` (the `μ` slot holds `P<Nat>`'s inlined measure, not `F`'s
         // `μ_D`).
-        let Type::Sigma { fst_level, snd_level, snd, .. } = pty else {
+        let Type::Sigma {
+            fst_level,
+            snd_level,
+            snd,
+            ..
+        } = pty
+        else {
             panic!("a forded family is a Σ")
         };
         let f_code = el
@@ -2798,7 +3061,10 @@ inductive P<A> : (n: Nat) -> Type {
         let forged = Type::Sigma {
             fst_level: fst_level.clone(),
             snd_level,
-            fst: Rc::new(Type::El { level: fst_level, tm: Rc::new(f_code) }),
+            fst: Rc::new(Type::El {
+                level: fst_level,
+                tm: Rc::new(f_code),
+            }),
             snd,
         };
         assert!(el.forded_of(&cx, &forged).is_none());
@@ -2812,10 +3078,9 @@ inductive P<A> : (n: Nat) -> Type {
     #[test]
     fn a_pre_unfolded_occurrence_still_reads_back_and_converts() {
         let t = two();
-        let (ty, lvl) = t
-            .el
-            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
-            .expect("the family lowers");
+        let (ty, lvl) =
+            t.el.lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+                .expect("the family lowers");
         let (_, fam) = t.el.forded_of(&t.cx, &ty).expect("reads back");
         // The unfold by hand: components at their inline types, the μ
         // reference intact (δ under `El` re-materializes the type; the μ
@@ -2831,10 +3096,9 @@ inductive P<A> : (n: Nat) -> Type {
                 rhs: Rc::new(fam.idx.shift_local(1)),
             }),
         };
-        let (ind, refam) = t
-            .el
-            .forded_of(&t.cx, &inline)
-            .expect("the pre-unfolded spelling still reads back");
+        let (ind, refam) =
+            t.el.forded_of(&t.cx, &inline)
+                .expect("the pre-unfolded spelling still reads back");
         assert_eq!(ind.tag, t.f.tag);
         // The structural read hands back the reference spellings for what it
         // will *emit* — the two-sided coexistence.
@@ -2866,14 +3130,32 @@ inductive H : (s: Shp) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(DSRC).expect("elaborates");
-        let h = Rc::clone(el.types.inductive(&crate::names::qkey("main", "H")).expect("declared"));
-        let shp = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Shp")).expect("declared"));
+        let h = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "H"))
+                .expect("declared"),
+        );
+        let shp = Rc::clone(
+            el.types
+                .inductive(&crate::names::qkey("main", "Shp"))
+                .expect("declared"),
+        );
         let cx = Cx::empty();
-        let (ity, ilvl) = el.lower_instance(&cx, &shp, &[], &[], SPAN).expect("lowers");
-        let sa = el.build_ctor(&cx, &shp, 0, &[], &ity, &ilvl, SPAN).expect("SA builds");
-        let (ty, _) = el.lower_forded_instance(&cx, &h, &[], sa, SPAN).expect("lowers");
-        let Type::Sigma { fst, snd, .. } = &ty else { panic!("a forded family is a Σ") };
-        let Type::El { tm, .. } = &**fst else { panic!("the skeleton slot is a reference") };
+        let (ity, ilvl) = el
+            .lower_instance(&cx, &shp, &[], &[], SPAN)
+            .expect("lowers");
+        let sa = el
+            .build_ctor(&cx, &shp, 0, &[], &ity, &ilvl, SPAN)
+            .expect("SA builds");
+        let (ty, _) = el
+            .lower_forded_instance(&cx, &h, &[], sa, SPAN)
+            .expect("lowers");
+        let Type::Sigma { fst, snd, .. } = &ty else {
+            panic!("a forded family is a Σ")
+        };
+        let Type::El { tm, .. } = &**fst else {
+            panic!("the skeleton slot is a reference")
+        };
         assert!(el.is_gen_ref(tm, GenDef::SkelCode(h.tag)));
         let Type::SEq { ty: seq_ty, .. } = &**snd else {
             panic!("a forded family's second component is an sEq")

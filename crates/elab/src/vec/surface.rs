@@ -101,7 +101,12 @@ pub(crate) fn elab_map(
     // and the length this reads off it — the same reason `elab_vec_lit`
     // decodes rather than normalizes.
     let xs_ty = &*crate::inductive::decoded(&xs_ty);
-    let Type::Vec { level: al, elem: a_ty, len } = xs_ty else {
+    let Type::Vec {
+        level: al,
+        elem: a_ty,
+        len,
+    } = xs_ty
+    else {
         return err("`map`'s receiver has to be a vector", span);
     };
     // The self-call form.
@@ -111,7 +116,13 @@ pub(crate) fn elab_map(
         return elab_container_ih(elab, cx, name, &xs_t, false, span);
     }
     let (f_t, f_ty, _) = elab.infer_vector_expr(cx, f)?;
-    let Type::Pi { cod_level: bl, dom, cod, .. } = elab.whnf_vector_type(cx, &f_ty, span)? else {
+    let Type::Pi {
+        cod_level: bl,
+        dom,
+        cod,
+        ..
+    } = elab.whnf_vector_type(cx, &f_ty, span)?
+    else {
         return err("`map`'s argument has to be a function", span);
     };
     let Some(b_ty) = strengthen(&cod, &cx.gamma) else {
@@ -134,8 +145,20 @@ pub(crate) fn elab_map(
         cx,
         Slot::VecMap,
         &[
-            ("A", Ingredient::Type { level: al, ty: a_ty }),
-            ("B", Ingredient::Type { level: &bl, ty: &b_ty }),
+            (
+                "A",
+                Ingredient::Type {
+                    level: al,
+                    ty: a_ty,
+                },
+            ),
+            (
+                "B",
+                Ingredient::Type {
+                    level: &bl,
+                    ty: &b_ty,
+                },
+            ),
             ("f", Ingredient::Term(f_t.clone())),
             ("k", Ingredient::Term((**len).clone())),
             ("v", Ingredient::Term(xs_t.clone())),
@@ -144,7 +167,11 @@ pub(crate) fn elab_map(
     )? {
         return Ok((
             t,
-            Type::Vec { level: bl.clone(), elem: Rc::new(b_ty), len: Rc::clone(len) },
+            Type::Vec {
+                level: bl.clone(),
+                elem: Rc::new(b_ty),
+                len: Rc::clone(len),
+            },
             bl,
         ));
     }
@@ -228,11 +255,20 @@ pub(crate) fn elab_head_tail(
 
 /// `cons(h, t)`: the pair of the same `Σ`, inferring from the tail (which
 /// carries both the element type and the length).
-pub(crate) fn elab_cons(elab: &impl SurfaceVecElab, cx: &Cx, h: &Expr, t: &Expr, span: Span) -> R<(Term, Type, Level)> {
+pub(crate) fn elab_cons(
+    elab: &impl SurfaceVecElab,
+    cx: &Cx,
+    h: &Expr,
+    t: &Expr,
+    span: Span,
+) -> R<(Term, Type, Level)> {
     let (t_t, t_ty, _) = elab.infer_vector_expr(cx, t)?;
     let t_ty = &*crate::inductive::decoded(&t_ty);
     let Type::Vec { level, elem, len } = t_ty else {
-        return err("`cons`'s second argument has to be a vector (the tail)", span);
+        return err(
+            "`cons`'s second argument has to be a vector (the tail)",
+            span,
+        );
     };
     let h_t = elab.check_vector_expr(cx, h, elem, level)?;
     let snd_ty = Rc::new(Type::Vec {
@@ -272,7 +308,12 @@ pub(crate) fn elab_fold(
     let (xs_t, xs_ty, _) = elab.infer_vector_expr(cx, xs)?;
     // As in `elab_map`: decode a coded `Vec`, and no further.
     let xs_ty = &*crate::inductive::decoded(&xs_ty);
-    let Type::Vec { level: al, elem: a_ty, len } = xs_ty else {
+    let Type::Vec {
+        level: al,
+        elem: a_ty,
+        len,
+    } = xs_ty
+    else {
         return err("`fold`'s receiver has to be a vector", span);
     };
     let (z_t, b_ty, bl) = elab.infer_vector_expr(cx, z)?;
@@ -296,8 +337,20 @@ pub(crate) fn elab_fold(
         cx,
         Slot::VecFold,
         &[
-            ("A", Ingredient::Type { level: al, ty: a_ty }),
-            ("B", Ingredient::Type { level: &bl, ty: &b_ty }),
+            (
+                "A",
+                Ingredient::Type {
+                    level: al,
+                    ty: a_ty,
+                },
+            ),
+            (
+                "B",
+                Ingredient::Type {
+                    level: &bl,
+                    ty: &b_ty,
+                },
+            ),
             ("z", Ingredient::Term(z_t.clone())),
             ("f", Ingredient::Term(f_t.clone())),
             ("k", Ingredient::Term((**len).clone())),
@@ -308,7 +361,16 @@ pub(crate) fn elab_fold(
         return Ok((t, b_ty, bl));
     }
     Ok((
-        fold(al, &bl, a_ty, &b_ty, len, Rc::new(z_t), Rc::new(f_t), Rc::new(xs_t)),
+        fold(
+            al,
+            &bl,
+            a_ty,
+            &b_ty,
+            len,
+            Rc::new(z_t),
+            Rc::new(f_t),
+            Rc::new(xs_t),
+        ),
         b_ty,
         bl,
     ))
@@ -332,11 +394,22 @@ pub(crate) fn elab_nth(
     let (xs_t, xs_ty, _) = elab.infer_vector_expr(cx, recv)?;
     // As in `elab_map`: decode a coded `Vec`, and no further.
     let xs_ty = &*crate::inductive::decoded(&xs_ty);
-    let Type::Vec { level: vl, elem, len } = xs_ty else {
+    let Type::Vec {
+        level: vl,
+        elem,
+        len,
+    } = xs_ty
+    else {
         return err("an index needs a vector receiver", span);
     };
-    let idx_t =
-        elab.check_vector_expr(cx, idx, &Type::Fin { len: Rc::clone(len) }, &Level::Zero)?;
+    let idx_t = elab.check_vector_expr(
+        cx,
+        idx,
+        &Type::Fin {
+            len: Rc::clone(len),
+        },
+        &Level::Zero,
+    )?;
     // The evaluation hook, as in `elab_map`/`elab_fold`:
     // `lib/vec_code.hthr`'s `nth_code` claims `vec.nth` when the lib is in
     // scope, and this declines silently when it is not. The kernel schema
@@ -345,7 +418,13 @@ pub(crate) fn elab_nth(
         cx,
         Slot::VecNth,
         &[
-            ("A", Ingredient::Type { level: vl, ty: elem }),
+            (
+                "A",
+                Ingredient::Type {
+                    level: vl,
+                    ty: elem,
+                },
+            ),
             ("k", Ingredient::Term((**len).clone())),
             ("v", Ingredient::Term(xs_t.clone())),
             ("i", Ingredient::Term(idx_t.clone())),
@@ -383,7 +462,12 @@ pub(crate) fn elab_container_ih(
             span,
         );
     };
-    let GuardKind::Wf { depth, container: Some(c), .. } = &g.kind else {
+    let GuardKind::Wf {
+        depth,
+        container: Some(c),
+        ..
+    } = &g.kind
+    else {
         return err(
             format!("the enclosing `match` arm of `{name}` has no container field"),
             span,
@@ -449,17 +533,26 @@ pub(crate) fn elab_container_ih(
             lhs_level: Level::Zero,
             rhs_level: Level::Zero,
             lhs: unit(),
-            rhs: Rc::new(Type::Fin { len: Rc::new(inner) }),
+            rhs: Rc::new(Type::Fin {
+                len: Rc::new(inner),
+            }),
             val: Rc::new(idx),
         };
     }
-    let Type::Pi { dom: ih_dom, cod: ih_cod, .. } = c.ih_ty.shift_local(by + 1) else {
+    let Type::Pi {
+        dom: ih_dom,
+        cod: ih_cod,
+        ..
+    } = c.ih_ty.shift_local(by + 1)
+    else {
         unreachable!("a `Wf` arm's ih is a Π over its index")
     };
     let h = Term::Lam {
         dom_level: Level::Zero,
         cod_level: c.mlvl.clone(),
-        dom: Rc::new(Type::Fin { len: Rc::clone(&len_rc) }),
+        dom: Rc::new(Type::Fin {
+            len: Rc::clone(&len_rc),
+        }),
         body: Rc::new(Term::App {
             fun: Rc::new(ih.shift_local(1)),
             dom_level: Level::Zero,
@@ -491,7 +584,13 @@ pub(crate) fn elab_container_ih(
             cx,
             Slot::VecTabulate,
             &[
-                ("B", Ingredient::Type { level: &c.mlvl, ty: &result }),
+                (
+                    "B",
+                    Ingredient::Type {
+                        level: &c.mlvl,
+                        ty: &result,
+                    },
+                ),
                 ("k", Ingredient::Term((*len_rc).clone())),
                 ("f", Ingredient::Term(h.clone())),
             ],
@@ -521,7 +620,9 @@ pub(crate) fn elab_container_ih(
         Rc::new(Term::Lam {
             dom_level: Level::Zero,
             cod_level: e.level.clone(),
-            dom: Rc::new(Type::Fin { len: Rc::clone(&len_rc) }),
+            dom: Rc::new(Type::Fin {
+                len: Rc::clone(&len_rc),
+            }),
             body: Rc::new(Term::App {
                 fun: Rc::new(f.shift_local(by + 1)),
                 dom_level: c.level.clone(),

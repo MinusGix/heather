@@ -11,7 +11,7 @@ use heather_syntax::{Expr, ExprKind, OpFixity, Span, Ty, TyKind};
 
 use super::Carrier;
 use crate::inductive::Inductive;
-use crate::{traits, zonked, Cx, ElabError, Elaborator, ParamMeta, Sol};
+use crate::{Cx, ElabError, Elaborator, ParamMeta, Sol, traits, zonked};
 
 impl Elaborator {
     /// The value-slot ladder's **step 2** at a goal the dot sugars are
@@ -33,8 +33,12 @@ impl Elaborator {
     ) -> Option<Vec<Expr>> {
         let tkey = self.key_of(target)?;
         for d in cx.dicts.iter().rev() {
-            let Some(dkey) = self.key_of(&d.class) else { continue };
-            let Some(dinfo) = self.traits.class(&dkey) else { continue };
+            let Some(dkey) = self.key_of(&d.class) else {
+                continue;
+            };
+            let Some(dinfo) = self.traits.class(&dkey) else {
+                continue;
+            };
             let index = if dkey == tkey {
                 d.index.clone()
             } else {
@@ -65,7 +69,9 @@ impl Elaborator {
             };
             // The carrier has to be *this* one: a second class binder at an
             // unrelated type is not an answer.
-            let Ok((dc, dlvl)) = self.elab_ty(cx, &d.carrier) else { continue };
+            let Ok((dc, dlvl)) = self.elab_ty(cx, &d.carrier) else {
+                continue;
+            };
             if !self.conv_types(cx, &dc, carrier, clvl) || dlvl != *clvl {
                 continue;
             }
@@ -123,23 +129,39 @@ impl Elaborator {
         slot_param: &[usize],
         sols: &mut [Sol],
     ) -> bool {
-        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else { return false };
+        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else {
+            return false;
+        };
         if r.index.is_empty() {
             return false;
         }
-        let Some(tkey) = self.key_of(&r.name) else { return false };
+        let Some(tkey) = self.key_of(&r.name) else {
+            return false;
+        };
         let mut filled = false;
         for a in &r.index {
             let ExprKind::Var(nm) = &a.kind else { continue };
-            let Some(pi) = params.iter().position(|p| p.name == *nm) else { continue };
-            let Some(slot) = slot_param.iter().position(|&s| s == pi) else { continue };
+            let Some(pi) = params.iter().position(|p| p.name == *nm) else {
+                continue;
+            };
+            let Some(slot) = slot_param.iter().position(|&s| s == pi) else {
+                continue;
+            };
             if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
                 continue;
             }
-            let Some(e) = self.scope_dict_index(cx, &tkey) else { continue };
-            let Some(idx) = r.index.iter().position(|x| std::ptr::eq(x, a)) else { continue };
-            let Some(e) = e.get(idx).cloned() else { continue };
-            let Ok((t, _, _)) = self.elab_infer(cx, &e) else { continue };
+            let Some(e) = self.scope_dict_index(cx, &tkey) else {
+                continue;
+            };
+            let Some(idx) = r.index.iter().position(|x| std::ptr::eq(x, a)) else {
+                continue;
+            };
+            let Some(e) = e.get(idx).cloned() else {
+                continue;
+            };
+            let Ok((t, _, _)) = self.elab_infer(cx, &e) else {
+                continue;
+            };
             sols[slot] = Sol::Solved(Rc::new(t));
             filled = true;
         }
@@ -171,7 +193,9 @@ impl Elaborator {
         n: u32,
         span: Span,
     ) -> bool {
-        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else { return false };
+        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else {
+            return false;
+        };
         if r.index.is_empty() {
             return false;
         }
@@ -190,13 +214,21 @@ impl Elaborator {
         let mut filled = false;
         for a in &r.index {
             let ExprKind::Var(nm) = &a.kind else { continue };
-            let Some(sym) = traits::op_index_symbol(nm) else { continue };
-            let Some(pi) = params.iter().position(|p| p.name == *nm) else { continue };
-            let Some(slot) = slot_param.iter().position(|&s| s == pi) else { continue };
+            let Some(sym) = traits::op_index_symbol(nm) else {
+                continue;
+            };
+            let Some(pi) = params.iter().position(|p| p.name == *nm) else {
+                continue;
+            };
+            let Some(slot) = slot_param.iter().position(|&s| s == pi) else {
+                continue;
+            };
             if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
                 continue;
             }
-            let Some(op) = self.designated(sym, OpFixity::Infix, &head.key) else { continue };
+            let Some(op) = self.designated(sym, OpFixity::Infix, &head.key) else {
+                continue;
+            };
             // **Checked** against the slot's own domain, not inferred: the
             // designated operation is emitted bare (§3.2), so a generic one
             // — `append` at `List<B>` — has an element type that only the
@@ -204,9 +236,16 @@ impl Elaborator {
             // at the carrier this call solved, which is meta-free exactly
             // when the carrier is, and a failure here is a rung that did not
             // fire rather than an error.
-            let Some(dom) = meta_doms.get(slot).and_then(|d| zonked(d, n, sols)) else { continue };
-            let e = Expr { kind: ExprKind::Var(op), span };
-            let Ok(t) = self.elab_check(cx, &e, &dom, &Level::Zero) else { continue };
+            let Some(dom) = meta_doms.get(slot).and_then(|d| zonked(d, n, sols)) else {
+                continue;
+            };
+            let e = Expr {
+                kind: ExprKind::Var(op),
+                span,
+            };
+            let Ok(t) = self.elab_check(cx, &e, &dom, &Level::Zero) else {
+                continue;
+            };
             sols[slot] = Sol::Solved(Rc::new(t));
             filled = true;
         }
@@ -231,7 +270,9 @@ impl Elaborator {
         sols: &[Sol],
         span: Span,
     ) -> Option<Carrier> {
-        let TyKind::Named { name, args } = &carrier?.kind else { return None };
+        let TyKind::Named { name, args } = &carrier?.kind else {
+            return None;
+        };
         if !args.is_empty() {
             return None;
         }
@@ -239,14 +280,18 @@ impl Elaborator {
         // it does need resolving, since the name is a *spelling* the callee's
         // module wrote and the table is keyed on declarations.
         if !params.iter().any(|p| p.name == *name) {
-            return self
-                .names_a_type(name)
-                .then(|| Carrier { written: name.clone(), key: self.carrier_key(name) });
+            return self.names_a_type(name).then(|| Carrier {
+                written: name.clone(),
+                key: self.carrier_key(name),
+            });
         }
         let pi = params.iter().position(|p| p.name == *name)?;
         let slot = slot_param.iter().position(|&s| s == pi)?;
         let code = sols[slot].solved()?;
-        let ty = Type::El { level: Level::Zero, tm: Rc::clone(code) };
+        let ty = Type::El {
+            level: Level::Zero,
+            tm: Rc::clone(code),
+        };
         self.carrier_of_ty(cx, &ty, span)
     }
 
@@ -254,13 +299,19 @@ impl Elaborator {
     /// of it, with its index expressed **at that class**.
     pub(crate) fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Expr>> {
         for d in cx.dicts.iter().rev() {
-            let Some(dkey) = self.key_of(&d.class) else { continue };
-            let Some(dinfo) = self.traits.class(&dkey) else { continue };
+            let Some(dkey) = self.key_of(&d.class) else {
+                continue;
+            };
+            let Some(dinfo) = self.traits.class(&dkey) else {
+                continue;
+            };
             if dkey == tkey {
                 return Some(d.index.clone());
             }
-            let Some(anc) =
-                dinfo.ancestors.iter().find(|r| self.key_of(&r.name).as_deref() == Some(tkey))
+            let Some(anc) = dinfo
+                .ancestors
+                .iter()
+                .find(|r| self.key_of(&r.name).as_deref() == Some(tkey))
             else {
                 continue;
             };
@@ -306,7 +357,10 @@ impl Elaborator {
         span: Span,
     ) -> ElabError {
         let Some(ckey) = self.key_of(&class.name) else {
-            return ElabError::Elab { msg: format!("`{}` is not in scope", class.name), span };
+            return ElabError::Elab {
+                msg: format!("`{}` is not in scope", class.name),
+                span,
+            };
         };
         // Both registries key the carrier by its *resolved* declaration
         // (docs/instance-resolved-key-design.md §3), and the carrier read off
@@ -333,7 +387,9 @@ impl Elaborator {
         // names no symbol, and choosing among the symbols at a carrier would
         // be the nomination this whole design deletes — but naming the ones
         // that exist tells the reader, in one line, the binder that works.
-        let desig = head.map(|h| self.designations_at(&h.key)).unwrap_or_default();
+        let desig = head
+            .map(|h| self.designations_at(&h.key))
+            .unwrap_or_default();
         let fix = if desig.is_empty() {
             String::new()
         } else {
@@ -358,11 +414,14 @@ impl Elaborator {
                  you meant (`{subject}::{}(⟨index⟩).⟨field⟩`) or take the class as a \
                  constraint",
                 class.name,
-                if listed.is_empty() { "no instances".into() } else { listed.join(", ") },
+                if listed.is_empty() {
+                    "no instances".into()
+                } else {
+                    listed.join(", ")
+                },
                 class.name
             ),
             span,
         }
     }
-
 }

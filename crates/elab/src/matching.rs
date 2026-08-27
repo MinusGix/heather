@@ -102,7 +102,11 @@ pub(crate) struct MatchRollback<'a, S: MatchSpeculationState + ?Sized> {
 
 impl<'a, S: MatchSpeculationState + ?Sized> MatchRollback<'a, S> {
     pub(crate) fn new(state: &'a S) -> Self {
-        Self { state, mark: state.mark_match_state(), committed: false }
+        Self {
+            state,
+            mark: state.mark_match_state(),
+            committed: false,
+        }
     }
 
     /// Restore the original mark while keeping the scope available for
@@ -158,23 +162,40 @@ pub(crate) fn if_resolution_error(
     if form != MatchForm::If {
         return error;
     }
-    let ExprKind::App { head, args, named, .. } = &scrutinee.kind else { return error };
+    let ExprKind::App {
+        head, args, named, ..
+    } = &scrutinee.kind
+    else {
+        return error;
+    };
     if !args.is_empty() || !named.is_empty() {
         return error;
     }
-    let ExprKind::TyApp { head, args } = &head.kind else { return error };
+    let ExprKind::TyApp { head, args } = &head.kind else {
+        return error;
+    };
     if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
         return error;
     }
-    let [condition] = args.as_slice() else { return error };
+    let [condition] = args.as_slice() else {
+        return error;
+    };
     let display = format!("Decide<{}>", crate::traits::render_ty(condition));
     match error {
-        ElabError::Resolution { span, mut trace, .. } => {
-            if let Some(goal) = trace.iter_mut().find(|line| line.depth == 0 && line.key == "goal")
+        ElabError::Resolution {
+            span, mut trace, ..
+        } => {
+            if let Some(goal) = trace
+                .iter_mut()
+                .find(|line| line.depth == 0 && line.key == "goal")
             {
                 goal.value.clone_from(&display);
             }
-            ElabError::Resolution { goal: display, span, trace }
+            ElabError::Resolution {
+                goal: display,
+                span,
+                trace,
+            }
         }
         other => other,
     }
@@ -256,7 +277,10 @@ pub(crate) fn infer_if_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
-    let ExprKind::App { head, args, named, .. } = &scrutinee.kind else {
+    let ExprKind::App {
+        head, args, named, ..
+    } = &scrutinee.kind
+    else {
         return MotiveInference::Declined;
     };
     if !args.is_empty() || !named.is_empty() {
@@ -288,25 +312,24 @@ pub(crate) fn infer_if_constant_motive(
         (&condition_type, &condition_level),
         (&negated_condition, &Level::Zero),
     ]) {
-        let [binder] = arm.binders.as_slice() else { continue };
+        let [binder] = arm.binders.as_slice() else {
+            continue;
+        };
         let mut arm_cx = cx.clone();
         arm_cx.push(
             binder.name().to_string(),
             evidence_type.clone(),
             evidence_level.clone(),
         );
-        let Ok((_, branch_type, branch_level)) =
-            elab.infer_motive_expr(&arm_cx, &arm.body)
-        else {
+        let Ok((_, branch_type, branch_level)) = elab.infer_motive_expr(&arm_cx, &arm.body) else {
             speculation.rollback();
             continue;
         };
         // Substitute an arbitrary disposable term for the evidence. Equality
         // with the re-weakened result is the syntactic proof that the type
         // actually lives in the caller's context.
-        let branch_type0 = branch_type.apply_local(
-            &LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)),
-        );
+        let branch_type0 =
+            branch_type.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)));
         if branch_type == branch_type0.shift_local(1) {
             inferred = Some((branch_type0, branch_level));
             break;
@@ -454,8 +477,10 @@ pub(crate) fn motive_lam(expression: &Expr, arity: usize, advice: &str) -> R<(Ve
         );
     }
     let names = binders.iter().map(|binder| binder.name.clone()).collect();
-    let ty = crate::surface::expression_as_type(body)
-        .unwrap_or_else(|| Ty { kind: TyKind::OfExpr(body.clone()), span: body.span });
+    let ty = crate::surface::expression_as_type(body).unwrap_or_else(|| Ty {
+        kind: TyKind::OfExpr(body.clone()),
+        span: body.span,
+    });
     Ok((names, ty))
 }
 
@@ -520,14 +545,14 @@ fn abstract_stuck(
     exposed.abstract_local_any(&hits)
 }
 
-fn expose(
-    elab: &impl MotiveSynthesisElab,
-    cx: &Cx,
-    ty: &Type,
-    span: Span,
-) -> Option<Type> {
+fn expose(elab: &impl MotiveSynthesisElab, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
     match elab.read_motive_type(cx, ty, span)? {
-        Type::Id { level, ty, lhs, rhs } => Some(Type::Id {
+        Type::Id {
+            level,
+            ty,
+            lhs,
+            rhs,
+        } => Some(Type::Id {
             level,
             ty,
             lhs: elab.read_motive_term(cx, &lhs, span)?,
@@ -537,7 +562,12 @@ fn expose(
             level,
             tm: elab.read_motive_term(cx, &tm, span)?,
         }),
-        Type::Pi { dom_level, cod_level, dom, cod } => Some(Type::Pi {
+        Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } => Some(Type::Pi {
             dom_level,
             cod_level,
             dom: Rc::new(expose(elab, cx, &dom, span)?),
@@ -589,7 +619,12 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
             stuck_scrutinees(fst, out, budget);
             stuck_scrutinees(snd, out, budget);
         }
-        Term::Sup { label, children, .. } | Term::Supf { label, children, .. } => {
+        Term::Sup {
+            label, children, ..
+        }
+        | Term::Supf {
+            label, children, ..
+        } => {
             stuck_scrutinees(label, out, budget);
             stuck_scrutinees(children, out, budget);
         }
@@ -601,11 +636,7 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
     }
 }
 
-fn abstract_scrut(
-    goal: &Type,
-    scrutinee: &Term,
-    rewrap: &Option<(Term, Term)>,
-) -> Option<Type> {
+fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Option<(Term, Term)>) -> Option<Type> {
     goal.abstract_local(scrutinee).or_else(|| {
         let (base, replacement) = rewrap.as_ref()?;
         goal.abstract_local_with(base, replacement)
@@ -613,7 +644,14 @@ fn abstract_scrut(
 }
 
 fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
-    let Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } = scrutinee else {
+    let Term::Fst {
+        fst_level,
+        snd_level,
+        fst_ty,
+        snd_ty,
+        pair,
+    } = scrutinee
+    else {
         return None;
     };
     let mut base = Rc::clone(pair);
@@ -631,7 +669,14 @@ fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
             pair: Rc::new(pair.shift_local(1)),
         }),
     };
-    while let Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } = &*base {
+    while let Term::Snd {
+        fst_level,
+        snd_level,
+        fst_ty,
+        snd_ty,
+        pair,
+    } = &*base
+    {
         let (fst_ty, snd_ty) = (
             Rc::new(fst_ty.shift_local(1)),
             Rc::new(snd_ty.shift_local(1)),
@@ -792,10 +837,16 @@ mod tests {
             ctor: "Zero".into(),
             default: false,
             binders: Vec::new(),
-            body: Expr { kind: ExprKind::Num(0), span: SPAN },
+            body: Expr {
+                kind: ExprKind::Num(0),
+                span: SPAN,
+            },
             span: SPAN,
         };
-        let scrutinee = Expr { kind: ExprKind::Num(0), span: SPAN };
+        let scrutinee = Expr {
+            kind: ExprKind::Num(0),
+            span: SPAN,
+        };
 
         let accepted = FakeSpeculation::default();
         assert!(matches!(
@@ -843,7 +894,10 @@ mod tests {
                             kind: ExprKind::Var("decide".into()),
                             span: SPAN,
                         }),
-                        args: vec![Ty { kind: TyKind::Nat, span: SPAN }],
+                        args: vec![Ty {
+                            kind: TyKind::Nat,
+                            span: SPAN,
+                        }],
                     },
                     span: SPAN,
                 }),
@@ -857,8 +911,14 @@ mod tests {
         let arm = Arm {
             ctor: "Left".into(),
             default: false,
-            binders: vec![Pat::Var { name: "evidence".into(), span: SPAN }],
-            body: Expr { kind: ExprKind::Num(0), span: SPAN },
+            binders: vec![Pat::Var {
+                name: "evidence".into(),
+                span: SPAN,
+            }],
+            body: Expr {
+                kind: ExprKind::Num(0),
+                span: SPAN,
+            },
             span: SPAN,
         };
         let state = FakeSpeculation::default();
@@ -917,7 +977,10 @@ mod tests {
             ctor: "Zero".into(),
             default: false,
             binders: Vec::new(),
-            body: Expr { kind: ExprKind::Num(0), span: SPAN },
+            body: Expr {
+                kind: ExprKind::Num(0),
+                span: SPAN,
+            },
             span: SPAN,
         };
         let plan = plan_convoy(
