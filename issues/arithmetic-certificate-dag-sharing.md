@@ -35,6 +35,9 @@ details, and every materialized proof still passes the ordinary kernel gate.
 - **[[omega-performance-telemetry]]** owns arithmetic scaling measurements.
 - **[[proof-scale-abbreviations]]** owns user-facing abbreviation syntax; this
   issue may use existing internal/local bindings without deciding that syntax.
+- **[[persistent-certified-fact-cache]]** owns persisting canonical sequents
+  across processes; this issue owns only sharing within one reconstructed
+  certificate.
 
 ## Log
 
