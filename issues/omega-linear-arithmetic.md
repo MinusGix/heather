@@ -50,9 +50,13 @@ because they occur in an arithmetic goal.
 
 The core representation is a signed linear combination
 `constant + sum(coeff[i] * atom[i])` and an interval constraint on a
-coefficient vector. Constraint insertion canonicalizes sign and GCD, rounds
-integer bounds in the sound direction, intersects duplicate vectors, records
-tight bounds as equalities, and detects crossed bounds as contradictions.
+coefficient vector. Constraint insertion canonicalizes sign and, in the pure
+search API, GCD; rounds integer bounds in the sound direction; intersects
+duplicate vectors; records tight bounds as equalities; and detects crossed
+bounds as contradictions. The certificate frontend currently disables GCD
+reduction: that preserves sound search and the real-shadow fragment while
+avoiding an unreconstructable floor/ceiling step until
+[[omega-div-mod-expansion]] supplies the required quotient laws.
 
 Equality processing first eliminates a variable with coefficient `+1` or
 `-1`. Hard equalities use Lean's balanced-remainder transformation and a fresh
@@ -172,3 +176,24 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   certified inequalities and integer antisymmetry. End-to-end rails cover
   exact-interval contradiction, substitution in both bound directions,
   reversed equality orientation, and a derived affine equality goal.
+- 2026-08-26: Broadened the certified frontend in four directions. First,
+  certificate search now explicitly retains non-primitive coefficient rows
+  instead of producing `DivideGcd` nodes whose rounded bounds cannot yet be
+  reconstructed; the pure solver keeps its GCD optimization. Second, negated
+  `Int`/`Nat` order facts, integer disequality, local conjunction/disjunction,
+  and conjunctive goals are reduced through ordinary standard-library
+  eliminators before arithmetic reflection. Disjunctive goals remain a
+  deliberate refusal because a one-certificate checking form cannot safely
+  guess a branch. Third, successful runs expose `OmegaReport` with atom and
+  assumption counts, reachable derivations, logical splits, solver statistics,
+  and the exact reconstruction lemmas used. Fourth, affine `Nat` constants,
+  atoms, addition, and literal scaling embed through `Int`; every shared Nat
+  atom contributes a certified non-negativity fact. Direct Nat `<=`, `<`, and
+  equality goals and negated Nat relations are kernel-checked end to end.
+  Compatibility was audited before retiring `arith`: its sole production
+  customer (`std/bitvec`'s carry threshold) still requires bounded Boolean
+  splitting and structural `twice` order reification, neither of which Omega
+  supersedes. `arith` therefore remains intentionally, with all nine of its
+  integration rails green alongside Omega's 28. Remaining Omega work is hard
+  equalities/balanced remainders, dark/grey shadows, richer stuck reports, and
+  the separately owned division/modulus frontend.

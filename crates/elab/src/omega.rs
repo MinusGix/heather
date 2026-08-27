@@ -447,11 +447,21 @@ pub struct Problem {
     pub dag: DerivationDag,
     stats: Stats,
     contradiction: Option<DerivationId>,
+    skip_gcd_reduction: bool,
 }
 
 impl Problem {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Keep coefficient rows integral but non-primitive. Certificate
+    /// frontends use this until they can reconstruct the floor/ceiling proof
+    /// required by [`Derivation::DivideGcd`]. Search remains sound and loses
+    /// no real-shadow contradictions; it may merely carry larger numbers.
+    pub fn without_gcd_reduction(mut self) -> Self {
+        self.skip_gcd_reduction = true;
+        self
     }
 
     pub fn assume(&mut self, coeffs: Vec<Z>, interval: Interval) -> R<()> {
@@ -614,15 +624,17 @@ impl Problem {
             self.stats.positivizations += 1;
         }
 
-        let divisor = fact.coeffs.coefficient_gcd()?;
-        if divisor > 1 {
-            fact.coeffs = fact.coeffs.exact_div(divisor)?;
-            fact.interval = fact.interval.divide(divisor)?;
-            fact.derivation = self.dag.push(Derivation::DivideGcd {
-                parent: fact.derivation,
-                divisor,
-            });
-            self.stats.gcd_divisions += 1;
+        if !self.skip_gcd_reduction {
+            let divisor = fact.coeffs.coefficient_gcd()?;
+            if divisor > 1 {
+                fact.coeffs = fact.coeffs.exact_div(divisor)?;
+                fact.interval = fact.interval.divide(divisor)?;
+                fact.derivation = self.dag.push(Derivation::DivideGcd {
+                    parent: fact.derivation,
+                    divisor,
+                });
+                self.stats.gcd_divisions += 1;
+            }
         }
         Ok(Some(fact))
     }

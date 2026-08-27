@@ -18,8 +18,68 @@ use crate::{Cx, Elaborator};
 pub(crate) struct Certificate {
     pub expr: Expr,
     pub source: String,
+    pub report: OmegaReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OmegaReport {
+    pub atoms: usize,
     pub assumptions: usize,
     pub reachable_derivations: usize,
+    pub logical_splits: usize,
+    pub stats: crate::omega::Stats,
+    pub used_lemmas: Vec<&'static str>,
+}
+
+fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
+    OmegaReport {
+        atoms: 0,
+        assumptions: 0,
+        reachable_derivations: 0,
+        logical_splits,
+        stats: crate::omega::Stats::default(),
+        used_lemmas: vec![lemma],
+    }
+}
+
+fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
+    const CANDIDATES: &[&str] = &[
+        "int::cong_ofnat",
+        "int::le_trans",
+        "int::negsucc_lt_of_lt",
+        "int::negsucc_lt_ofnat",
+        "int::not_lt_of_ge",
+        "int::zero_le_ofNat",
+        "omega::atom_nonnegative",
+        "omega::lower_combo",
+        "omega::lower_of_eq",
+        "omega::lower_to_negated_upper",
+        "omega::lower_upper_combo",
+        "omega::nat_le_of_not_lt",
+        "omega::nat_le_to_int",
+        "omega::nat_lt_of_not_le",
+        "omega::nat_lt_to_int",
+        "omega::normalize_add",
+        "omega::normalize_atom",
+        "omega::normalize_const",
+        "omega::normalize_nat_add",
+        "omega::normalize_nat_scale_left",
+        "omega::normalize_nat_scale_right",
+        "omega::normalize_neg",
+        "omega::normalize_scale",
+        "omega::normalize_scale_right",
+        "omega::normalized_eq_value",
+        "omega::normalized_le_upper",
+        "omega::upper_combo",
+        "omega::upper_lower_combo",
+        "omega::upper_of_eq",
+        "omega::upper_to_negated_lower",
+    ];
+    CANDIDATES
+        .iter()
+        .copied()
+        .filter(|lemma| source.contains(&format!("{lemma}(")))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -58,6 +118,19 @@ enum AffineSyntax {
     Neg {
         inner: Box<AffineSyntax>,
     },
+    NatAdd {
+        left_nat: String,
+        right_nat: String,
+        left: Box<AffineSyntax>,
+        right: Box<AffineSyntax>,
+    },
+    NatScale {
+        factor: Z,
+        factor_on_left: bool,
+        factor_nat: String,
+        inner_nat: String,
+        inner: Box<AffineSyntax>,
+    },
     Scale {
         factor: Z,
         factor_on_left: bool,
@@ -70,6 +143,12 @@ struct Normalized {
     linear: LinearExpr,
     row_source: String,
     proof: String,
+}
+
+struct ReflectedAtom {
+    term: Rc<Term>,
+    source: String,
+    nat_source: Option<String>,
 }
 
 #[derive(Clone)]
@@ -126,6 +205,31 @@ fn strict_relation_args<'a>(
     Some((left, right))
 }
 
+fn nat_relation_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "nat::Le")?;
+    let [left, right] = args.as_slice() else {
+        return None;
+    };
+    Some((left, right))
+}
+
+fn nat_strict_relation_args<'a>(
+    elab: &Elaborator,
+    ty: &'a Type,
+) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "nat::Lt")?;
+    let [left, right] = args.as_slice() else {
+        return None;
+    };
+    Some((left, right))
+}
+
 fn equality_args<'a>(
     elab: &Elaborator,
     cx: &Cx,
@@ -135,6 +239,36 @@ fn equality_args<'a>(
         return None;
     };
     (elab.display_type(cx, ty) == "Int").then_some((lhs, rhs))
+}
+
+fn nat_equality_args<'a>(
+    elab: &Elaborator,
+    cx: &Cx,
+    ty: &'a Type,
+) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::Id { ty, lhs, rhs, .. } = ty else {
+        return None;
+    };
+    (elab.display_type(cx, ty) == "Nat").then_some((lhs, rhs))
+}
+
+fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
+    if let Type::El { level, tm } = ty {
+        let args = named_args(elab, tm, "logic::Not")?;
+        let [domain] = args.as_slice() else {
+            return None;
+        };
+        return Some(Type::El {
+            level: level.clone(),
+            tm: Rc::clone(domain),
+        });
+    }
+    let Type::Pi { dom, .. } = ty else {
+        return None;
+    };
+    elab.display_type(cx, ty)
+        .ends_with(" -> False")
+        .then(|| (**dom).clone())
 }
 
 fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
@@ -325,11 +459,9 @@ fn affine_syntax(
     elab: &Elaborator,
     cx: &Cx,
     tm: &Rc<Term>,
-    atoms: &mut Vec<Rc<Term>>,
+    atoms: &mut Vec<ReflectedAtom>,
 ) -> Result<AffineSyntax, String> {
-    let source = elab
-        .spell_term_clean(cx, tm)
-        .ok_or("Omega could not spell an integer expression")?;
+    let source = int_term_source(elab, cx, tm)?;
     if let Some(value) = integer_source(&source) {
         if value == Z::MIN {
             return Err("Omega cannot reconstruct the minimum `i128` literal".into());
@@ -393,29 +525,140 @@ fn affine_syntax(
 
     let index = atoms
         .iter()
-        .position(|atom| {
-            **atom == **tm
-                || elab
-                    .spell_term_clean(cx, atom)
-                    .is_some_and(|atom_source| atom_source == source)
-        })
+        .position(|atom| *atom.term == **tm || atom.source == source)
         .unwrap_or_else(|| {
-            atoms.push(Rc::clone(tm));
+            atoms.push(ReflectedAtom {
+                term: Rc::clone(tm),
+                source: source.clone(),
+                nat_source: None,
+            });
             atoms.len() - 1
         });
     Ok(AffineSyntax::Atom { index, source })
 }
 
-fn atom_list_source(elab: &Elaborator, cx: &Cx, atoms: &[Rc<Term>]) -> Result<String, String> {
-    atoms
+fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
+    for (name, arity) in [
+        ("int::add", 2usize),
+        ("int::sub", 2),
+        ("int::mul", 2),
+        ("int::neg", 1),
+    ] {
+        if let Some(args) = named_args(elab, tm, name)
+            && args.len() == arity
+        {
+            let args = args
+                .into_iter()
+                .map(|arg| int_term_source(elab, cx, arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(format!("{}({})", name, args.join(", ")));
+        }
+    }
+    elab.spell_term_clean(cx, tm)
+        .ok_or_else(|| "Omega could not spell an integer expression".to_string())
+}
+
+fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
+    if let Some(args) = named_args(elab, tm, "nat::add")
+        && let [left, right] = args.as_slice()
+    {
+        return Ok(format!(
+            "nat::add({}, {})",
+            nat_term_source(elab, cx, left)?,
+            nat_term_source(elab, cx, right)?,
+        ));
+    }
+    if let Some(args) = named_args(elab, tm, "nat::mul")
+        && let [left, right] = args.as_slice()
+    {
+        return Ok(format!(
+            "nat::mul({}, {})",
+            nat_term_source(elab, cx, left)?,
+            nat_term_source(elab, cx, right)?,
+        ));
+    }
+    elab.spell_term_clean(cx, tm)
+        .ok_or_else(|| "Omega could not spell a natural expression".to_string())
+}
+
+fn nat_affine_syntax(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    atoms: &mut Vec<ReflectedAtom>,
+) -> Result<AffineSyntax, String> {
+    let nat_source = nat_term_source(elab, cx, tm)?;
+    if let Some(value) = integer_source(&nat_source).filter(|value| *value >= 0) {
+        return Ok(AffineSyntax::Const {
+            value,
+            source: int(value),
+        });
+    }
+    if let Some(args) = named_args(elab, tm, "nat::add") {
+        if let [left, right] = args.as_slice() {
+            let left_nat = nat_term_source(elab, cx, left)?;
+            let right_nat = nat_term_source(elab, cx, right)?;
+            return Ok(AffineSyntax::NatAdd {
+                left_nat,
+                right_nat,
+                left: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
+                right: Box::new(nat_affine_syntax(elab, cx, right, atoms)?),
+            });
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "nat::mul") {
+        if let [left, right] = args.as_slice() {
+            let left_source = nat_term_source(elab, cx, left).ok();
+            let right_source = nat_term_source(elab, cx, right).ok();
+            if let Some(factor) = left_source
+                .as_deref()
+                .and_then(integer_source)
+                .filter(|value| *value >= 0)
+            {
+                return Ok(AffineSyntax::NatScale {
+                    factor,
+                    factor_on_left: true,
+                    factor_nat: left_source.unwrap(),
+                    inner_nat: right_source
+                        .ok_or("Omega could not spell a natural multiplication operand")?,
+                    inner: Box::new(nat_affine_syntax(elab, cx, right, atoms)?),
+                });
+            }
+            if let Some(factor) = right_source
+                .as_deref()
+                .and_then(integer_source)
+                .filter(|value| *value >= 0)
+            {
+                return Ok(AffineSyntax::NatScale {
+                    factor,
+                    factor_on_left: false,
+                    factor_nat: right_source.unwrap(),
+                    inner_nat: left_source
+                        .ok_or("Omega could not spell a natural multiplication operand")?,
+                    inner: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
+                });
+            }
+        }
+    }
+    let source = format!("OfNat({nat_source})");
+    let index = atoms
         .iter()
-        .rev()
-        .try_fold("Nil".to_string(), |tail, atom| {
-            let source = elab
-                .spell_term_clean(cx, atom)
-                .ok_or("Omega could not spell an opaque arithmetic atom")?;
-            Ok(format!("Cons({source}, {tail})"))
-        })
+        .position(|atom| atom.nat_source.as_deref() == Some(nat_source.as_str()))
+        .unwrap_or_else(|| {
+            atoms.push(ReflectedAtom {
+                term: Rc::clone(tm),
+                source: source.clone(),
+                nat_source: Some(nat_source.clone()),
+            });
+            atoms.len() - 1
+        });
+    Ok(AffineSyntax::Atom { index, source })
+}
+
+fn atom_list_source(atoms: &[ReflectedAtom]) -> String {
+    atoms.iter().rev().fold("Nil".to_string(), |tail, atom| {
+        format!("Cons({}, {tail})", atom.source)
+    })
 }
 
 fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normalized, String> {
@@ -463,6 +706,41 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
             );
             Ok(Normalized {
                 source: format!("int::add({}, {})", left.source, right.source),
+                linear,
+                row_source,
+                proof,
+            })
+        }
+        AffineSyntax::NatAdd {
+            left_nat,
+            right_nat,
+            left,
+            right,
+        } => {
+            let left = normalize_syntax(left, atoms_source)?;
+            let right = normalize_syntax(right, atoms_source)?;
+            let linear = left
+                .linear
+                .checked_add(&right.linear)
+                .map_err(|failure| failure.to_string())?;
+            let row_source = format!(
+                "omega::add_coeffs({}, {})",
+                left.row_source, right.row_source
+            );
+            let proof = format!(
+                "omega::normalize_nat_add({}, {}, {}, {}, {}, {}, {}, {}, {})",
+                left_nat,
+                right_nat,
+                int(left.linear.constant),
+                int(right.linear.constant),
+                left.row_source,
+                right.row_source,
+                atoms_source,
+                left.proof,
+                right.proof,
+            );
+            Ok(Normalized {
+                source: format!("OfNat(nat::add({}, {}))", left_nat, right_nat),
                 linear,
                 row_source,
                 proof,
@@ -534,6 +812,52 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 proof,
             })
         }
+        AffineSyntax::NatScale {
+            factor,
+            factor_on_left,
+            factor_nat,
+            inner_nat,
+            inner,
+        } => {
+            let inner = normalize_syntax(inner, atoms_source)?;
+            let linear = inner
+                .linear
+                .checked_scale(*factor)
+                .map_err(|failure| failure.to_string())?;
+            let row_source = format!("omega::scale({}, {})", int(*factor), inner.row_source);
+            let lemma = if *factor_on_left {
+                "omega::normalize_nat_scale_left"
+            } else {
+                "omega::normalize_nat_scale_right"
+            };
+            let proof = format!(
+                "{lemma}({}, {}, {}, {}, {}, {})",
+                if *factor_on_left {
+                    factor_nat
+                } else {
+                    inner_nat
+                },
+                if *factor_on_left {
+                    inner_nat
+                } else {
+                    factor_nat
+                },
+                int(inner.linear.constant),
+                inner.row_source,
+                atoms_source,
+                inner.proof,
+            );
+            Ok(Normalized {
+                source: if *factor_on_left {
+                    format!("OfNat(nat::mul({}, {}))", factor_nat, inner_nat)
+                } else {
+                    format!("OfNat(nat::mul({}, {}))", inner_nat, factor_nat)
+                },
+                linear,
+                row_source,
+                proof,
+            })
+        }
     }
 }
 
@@ -545,7 +869,7 @@ fn reflect_ordinary(
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
         let (_, ty, _) = elab.local(cx, pos);
-        let (left, right, exact) = if let Some((left, right)) = relation_args(elab, &ty) {
+        let (left, right, exact, proof) = if let Some((left, right)) = relation_args(elab, &ty) {
             if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
                 return Ok(None);
             }
@@ -553,6 +877,7 @@ fn reflect_ordinary(
                 affine_syntax(elab, cx, left, &mut atoms)?,
                 affine_syntax(elab, cx, right, &mut atoms)?,
                 false,
+                cx.names[pos].clone(),
             )
         } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
             let left = AffineSyntax::Add {
@@ -562,24 +887,134 @@ fn reflect_ordinary(
                     source: int(1),
                 }),
             };
-            (left, affine_syntax(elab, cx, right, &mut atoms)?, false)
+            (
+                left,
+                affine_syntax(elab, cx, right, &mut atoms)?,
+                false,
+                cx.names[pos].clone(),
+            )
         } else if let Some((left, right)) = equality_args(elab, cx, &ty) {
             (
                 affine_syntax(elab, cx, left, &mut atoms)?,
                 affine_syntax(elab, cx, right, &mut atoms)?,
                 true,
+                cx.names[pos].clone(),
             )
+        } else if let Some((left, right)) = nat_relation_args(elab, &ty) {
+            let left_source = nat_term_source(elab, cx, left)?;
+            let right_source = nat_term_source(elab, cx, right)?;
+            (
+                nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                false,
+                format!(
+                    "omega::nat_le_to_int({}, {}, {})",
+                    left_source, right_source, cx.names[pos]
+                ),
+            )
+        } else if let Some((left, right)) = nat_strict_relation_args(elab, &ty) {
+            let left_source = nat_term_source(elab, cx, left)?;
+            let right_source = nat_term_source(elab, cx, right)?;
+            let left = AffineSyntax::Add {
+                left: Box::new(nat_affine_syntax(elab, cx, left, &mut atoms)?),
+                right: Box::new(AffineSyntax::Const {
+                    value: 1,
+                    source: int(1),
+                }),
+            };
+            (
+                left,
+                nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                false,
+                format!(
+                    "omega::nat_lt_to_int({}, {}, {})",
+                    left_source, right_source, cx.names[pos]
+                ),
+            )
+        } else if let Some((left, right)) = nat_equality_args(elab, cx, &ty) {
+            (
+                nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                true,
+                format!("int::cong_ofnat({})", cx.names[pos]),
+            )
+        } else if let Some(domain) = negated_domain(elab, cx, &ty) {
+            if let Some((left, right)) = relation_args(elab, &domain) {
+                let left_source = int_term_source(elab, cx, left)?;
+                let right_source = int_term_source(elab, cx, right)?;
+                let strict_left = AffineSyntax::Add {
+                    left: Box::new(affine_syntax(elab, cx, right, &mut atoms)?),
+                    right: Box::new(AffineSyntax::Const {
+                        value: 1,
+                        source: int(1),
+                    }),
+                };
+                (
+                    strict_left,
+                    affine_syntax(elab, cx, left, &mut atoms)?,
+                    false,
+                    format!(
+                        "int::lt_of_not_le({}, {}, {})",
+                        right_source, left_source, cx.names[pos]
+                    ),
+                )
+            } else if let Some((left, right)) = strict_relation_args(elab, &domain) {
+                let left_source = int_term_source(elab, cx, left)?;
+                let right_source = int_term_source(elab, cx, right)?;
+                (
+                    affine_syntax(elab, cx, right, &mut atoms)?,
+                    affine_syntax(elab, cx, left, &mut atoms)?,
+                    false,
+                    format!(
+                        "int::le_of_not_lt({}, {}, {})",
+                        left_source, right_source, cx.names[pos]
+                    ),
+                )
+            } else if let Some((left, right)) = nat_relation_args(elab, &domain) {
+                let left_source = nat_term_source(elab, cx, left)?;
+                let right_source = nat_term_source(elab, cx, right)?;
+                let strict_left = AffineSyntax::Add {
+                    left: Box::new(nat_affine_syntax(elab, cx, right, &mut atoms)?),
+                    right: Box::new(AffineSyntax::Const {
+                        value: 1,
+                        source: int(1),
+                    }),
+                };
+                (
+                    strict_left,
+                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                    false,
+                    format!(
+                        "omega::nat_lt_to_int({}, {}, omega::nat_lt_of_not_le({}, {}, {}))",
+                        right_source, left_source, left_source, right_source, cx.names[pos],
+                    ),
+                )
+            } else if let Some((left, right)) = nat_strict_relation_args(elab, &domain) {
+                let left_source = nat_term_source(elab, cx, left)?;
+                let right_source = nat_term_source(elab, cx, right)?;
+                (
+                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                    false,
+                    format!(
+                        "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
+                        right_source, left_source, left_source, right_source, cx.names[pos],
+                    ),
+                )
+            } else {
+                continue;
+            }
         } else {
             continue;
         };
-        relations.push((pos, left, right, exact));
+        relations.push((left, right, exact, proof));
     }
     if relations.is_empty() {
         return Ok(None);
     }
-    let atoms_source = atom_list_source(elab, cx, &atoms)?;
+    let atoms_source = atom_list_source(&atoms);
     let mut facts = Vec::with_capacity(relations.len());
-    for (pos, left, right, exact) in relations {
+    for (left, right, exact, relation_proof) in relations {
         let left = normalize_syntax(&left, &atoms_source)?;
         let right = normalize_syntax(&right, &atoms_source)?;
         let linear = left
@@ -607,7 +1042,7 @@ fn reflect_ordinary(
                 atoms_source,
                 left.proof,
                 right.proof,
-                cx.names[pos],
+                relation_proof,
             );
             facts.push(InitialAssumption {
                 coeffs: linear.coeffs,
@@ -640,7 +1075,7 @@ fn reflect_ordinary(
                 atoms_source,
                 left.proof,
                 right.proof,
-                cx.names[pos],
+                relation_proof,
             );
             facts.push(InitialAssumption {
                 coeffs: linear.coeffs,
@@ -650,6 +1085,22 @@ fn reflect_ordinary(
                 upper: Some(proof),
             });
         }
+    }
+    for (index, atom) in atoms.iter().enumerate() {
+        let Some(nat_source) = &atom.nat_source else {
+            continue;
+        };
+        let row_source = format!("omega::basis({index}, {atoms_source})");
+        facts.push(InitialAssumption {
+            coeffs: LinearExpr::atom(index).coeffs,
+            row_source: row_source.clone(),
+            interval: Interval::lower(0),
+            lower: Some(format!(
+                "omega::atom_nonnegative({}, {}, int::zero_le_ofNat({}))",
+                index, atoms_source, nat_source,
+            )),
+            upper: None,
+        });
     }
     Ok(Some((facts, atoms_source)))
 }
@@ -675,7 +1126,7 @@ fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
     }
     if lower >= 0 {
         return Ok(format!(
-            "int::ofNat_lt_iff({}, {}).mp(trivial)",
+            "omega::nat_lt_to_int({}, {}, trivial)",
             lower, upper
         ));
     }
@@ -709,18 +1160,102 @@ fn parent<'a>(
         .ok_or_else(|| format!("Omega certificate parent {id} was not reconstructed"))
 }
 
+fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    for pos in 0..cx.names.len() {
+        if cx.names[pos + 1..]
+            .iter()
+            .any(|name| name == &cx.names[pos])
+        {
+            continue;
+        }
+        let (_, ty, _) = elab.local(cx, pos);
+        let Some(domain) = negated_domain(elab, cx, &ty) else {
+            continue;
+        };
+        let decoded = crate::inductive::decoded(&domain);
+        let Some((left, right)) = equality_args(elab, cx, &decoded) else {
+            continue;
+        };
+        let left = int_term_source(elab, cx, left)?;
+        let right = int_term_source(elab, cx, right)?;
+        let disequality = &cx.names[pos];
+        let source = format!(
+            "omega::diseq_elim({}, {}, {disequality}, (__omega_diseq_left: {} < {}) ⊢ __omega_diseq_branch, (__omega_diseq_right: {} < {}) ⊢ __omega_diseq_branch)",
+            left, right, left, right, right, left,
+        );
+        return Ok(Some(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: OmegaReport {
+                atoms: 0,
+                assumptions: 0,
+                reachable_derivations: 0,
+                logical_splits: 1,
+                stats: crate::omega::Stats::default(),
+                used_lemmas: vec!["omega::diseq_elim"],
+            },
+        }));
+    }
+    Ok(None)
+}
+
+fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    for pos in 0..cx.names.len() {
+        let (_, ty, _) = elab.local(cx, pos);
+        let Some(tag) = elab.display_tag_of(&ty) else {
+            continue;
+        };
+        let source = match tag.name.as_str() {
+            "And" => format!(
+                "omega::and_elim_false({}, __omega_and_left __omega_and_right ⊢ __omega_connective_branch)",
+                cx.names[pos]
+            ),
+            "Or" => format!(
+                "omega::or_elim_false({}, __omega_or_left ⊢ __omega_connective_branch, __omega_or_right ⊢ __omega_connective_branch)",
+                cx.names[pos]
+            ),
+            _ => continue,
+        };
+        return Ok(Some(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: OmegaReport {
+                atoms: 0,
+                assumptions: 0,
+                reachable_derivations: 0,
+                logical_splits: 1,
+                stats: crate::omega::Stats::default(),
+                used_lemmas: vec![match tag.name.as_str() {
+                    "And" => "omega::and_elim_false",
+                    _ => "omega::or_elim_false",
+                }],
+            },
+        }));
+    }
+    Ok(None)
+}
+
 pub(crate) fn reconstruct(
     elab: &Elaborator,
     cx: &Cx,
     expected: &Type,
+    allow_disequality_split: bool,
+    allow_connective_split: bool,
 ) -> Result<Certificate, String> {
+    if elab
+        .display_tag_of(expected)
+        .is_some_and(|tag| tag.name == "And")
+    {
+        let source = "And(left := omega, right := omega)".to_string();
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("logic::And", 0),
+        });
+    }
     if let Some((left, right)) = equality_args(elab, cx, expected) {
-        let left = elab
-            .spell_term_clean(cx, left)
-            .ok_or("Omega could not spell the left side of its `Int` equality goal")?;
-        let right = elab
-            .spell_term_clean(cx, right)
-            .ok_or("Omega could not spell the right side of its `Int` equality goal")?;
+        let left = int_term_source(elab, cx, left)?;
+        let right = int_term_source(elab, cx, right)?;
         // Antisymmetry keeps equality goal closure inside the already
         // certified inequality frontend. Each recursive invocation builds and
         // kernel-checks its own contradiction under the opposite strict bound.
@@ -728,17 +1263,22 @@ pub(crate) fn reconstruct(
         return Ok(Certificate {
             expr: parse_generated_expr(&source)?,
             source,
-            assumptions: 0,
-            reachable_derivations: 0,
+            report: wrapper_report("int::le_antisym", 0),
+        });
+    }
+    if let Some((left, right)) = nat_equality_args(elab, cx, expected) {
+        let left = nat_term_source(elab, cx, left)?;
+        let right = nat_term_source(elab, cx, right)?;
+        let source = format!("nat::le_antisym({}, {}, omega, omega)", left, right);
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("nat::le_antisym", 0),
         });
     }
     if let Some((left, right)) = strict_relation_args(elab, expected) {
-        let left = elab
-            .spell_term_clean(cx, left)
-            .ok_or("Omega could not spell the left side of its `Int` strict goal")?;
-        let right = elab
-            .spell_term_clean(cx, right)
-            .ok_or("Omega could not spell the right side of its `Int` strict goal")?;
+        let left = int_term_source(elab, cx, left)?;
+        let right = int_term_source(elab, cx, right)?;
         let source = format!(
             "int::lt_of_not_le({}, {}, (__omega_negated_goal: {} <= {}) ⊢ omega)",
             left, right, right, left,
@@ -746,17 +1286,12 @@ pub(crate) fn reconstruct(
         return Ok(Certificate {
             expr: parse_generated_expr(&source)?,
             source,
-            assumptions: 0,
-            reachable_derivations: 0,
+            report: wrapper_report("int::lt_of_not_le", 0),
         });
     }
     if let Some((left, right)) = relation_args(elab, expected) {
-        let left = elab
-            .spell_term_clean(cx, left)
-            .ok_or("Omega could not spell the left side of its `Int` goal")?;
-        let right = elab
-            .spell_term_clean(cx, right)
-            .ok_or("Omega could not spell the right side of its `Int` goal")?;
+        let left = int_term_source(elab, cx, left)?;
+        let right = int_term_source(elab, cx, right)?;
         // `right < left` is definitionally `right + 1 <= left`. Writing the
         // latter lets the recursive `omega` invocation use the same affine
         // `Le` frontend as ordinary hypotheses.
@@ -767,13 +1302,38 @@ pub(crate) fn reconstruct(
         return Ok(Certificate {
             expr: parse_generated_expr(&source)?,
             source,
-            assumptions: 0,
-            reachable_derivations: 0,
+            report: wrapper_report("int::le_of_not_lt", 0),
+        });
+    }
+    if let Some((left, right)) = nat_strict_relation_args(elab, expected) {
+        let left = nat_term_source(elab, cx, left)?;
+        let right = nat_term_source(elab, cx, right)?;
+        let source = format!(
+            "omega::nat_lt_of_not_not_lt({}, {}, (__omega_negated_goal: ¬({} < {})) ⊢ omega)",
+            left, right, left, right,
+        );
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::nat_lt_of_not_not_lt", 0),
+        });
+    }
+    if let Some((left, right)) = nat_relation_args(elab, expected) {
+        let left = nat_term_source(elab, cx, left)?;
+        let right = nat_term_source(elab, cx, right)?;
+        let source = format!(
+            "omega::nat_le_of_not_not_le({}, {}, (__omega_negated_goal: ¬({} <= {})) ⊢ omega)",
+            left, right, left, right,
+        );
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::nat_le_of_not_not_le", 0),
         });
     }
     if elab.display_type(cx, expected) != "False" {
         return Err(format!(
-            "Omega currently expects `False` or an `Int` `<=` goal, got `{}`",
+            "Omega currently expects `False` or an affine `Int`/`Nat` relation goal, got `{}`",
             elab.display_type(cx, expected)
         ));
     }
@@ -788,7 +1348,22 @@ pub(crate) fn reconstruct(
             }
         }
         let Some(first) = explicit.first() else {
-            return Err("Omega found no integer constraints".into());
+            if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
+                return Ok(certificate);
+            }
+            if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
+                return Ok(certificate);
+            }
+            let locals = (0..cx.names.len())
+                .map(|pos| {
+                    let (_, ty, _) = elab.local(cx, pos);
+                    format!("{}: {}", cx.names[pos], elab.display_type(cx, &ty))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "Omega found no integer constraints among [{locals}]"
+            ));
         };
         if explicit.iter().any(|fact| *fact.atoms != *first.atoms) {
             return Err(
@@ -809,7 +1384,7 @@ pub(crate) fn reconstruct(
         (facts, atoms_source)
     };
 
-    let mut problem = Problem::new();
+    let mut problem = Problem::new().without_gcd_reduction();
     let reflected_debug = reflected
         .iter()
         .map(|fact| format!("{:?} {:?}", fact.coeffs, fact.interval))
@@ -824,12 +1399,24 @@ pub(crate) fn reconstruct(
     let Outcome::Contradiction {
         derivation,
         reachable_derivations,
-        ..
+        stats,
     } = &outcome
     else {
+        if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
+            return Ok(certificate);
+        }
+        if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
+            return Ok(certificate);
+        }
+        let local_types = (0..cx.names.len())
+            .map(|pos| {
+                let (_, ty, _) = elab.local(cx, pos);
+                format!("{}: {}", cx.names[pos], elab.display_type(cx, &ty))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(format!(
-            "Omega's real shadow found no contradiction: {outcome:?}; locals {:?}; reflected [{reflected_debug}]",
-            cx.names,
+            "Omega's real shadow found no contradiction: {outcome:?}; locals [{local_types}]; reflected [{reflected_debug}]",
         ));
     };
     let derivation = *derivation;
@@ -1285,11 +1872,18 @@ pub(crate) fn reconstruct(
     };
     let expr = parse_generated_expr(&source)
         .map_err(|error| format!("{error}\n  generated Omega source: {source}"))?;
+    let used_lemmas = reconstruction_lemmas(&source);
     Ok(Certificate {
         expr,
         source,
-        assumptions: reflected.len(),
-        reachable_derivations: reachable_derivations.len(),
+        report: OmegaReport {
+            atoms: atoms_source.matches("Cons(").count(),
+            assumptions: reflected.len(),
+            reachable_derivations: reachable_derivations.len(),
+            logical_splits: 0,
+            stats: *stats,
+            used_lemmas,
+        },
     })
 }
 

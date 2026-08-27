@@ -5,6 +5,8 @@
 
 import int;
 import list;
+import logic;
+import nat::{cong_nat};
 
 // Coefficient rows are deliberately ordinary lists. `dot` stops at the first
 // exhausted list, so generated certificates need no separate length witness;
@@ -66,17 +68,17 @@ fn nth0(index: Nat) → List<Int> → Int {
 
 // The four-term additive permutation used by `dot_add`. Keeping it here pays
 // the associativity/commutativity proof once for every generated certificate.
-theorem add_swap_middle(a, b, c, d: Int):
+theorem int_add_swap_middle(a, b, c, d: Int):
     (a + b) + (c + d) = (a + c) + (b + d)
 {
     apply trans;
-    give add_assoc(a, b, c + d);
+    give int::add_assoc(a, b, c + d);
     apply trans;
     give cong_int(λ (q: Int) => a + q,
-        trans(sym(add_assoc(b, c, d)),
-            trans(cong_int(λ (q: Int) => q + d, add_comm(b, c)),
-                add_assoc(c, b, d))));
-    sym(add_assoc(a, c, b + d))
+        trans(sym(int::add_assoc(b, c, d)),
+            trans(cong_int(λ (q: Int) => q + d, int::add_comm(b, c)),
+                int::add_assoc(c, b, d))));
+    sym(int::add_assoc(a, c, b + d))
 }
 
 theorem dot_scale(k: Int, coeffs: List<Int>): (atoms: List<Int>) →
@@ -92,8 +94,8 @@ theorem dot_scale(k: Int, coeffs: List<Int>): (atoms: List<Int>) →
                     dot_scale(k, cs, xs));
                 apply trans;
                 give cong_int(λ (q: Int) => q + k * dot(cs, xs),
-                    mul_assoc(k, c, x));
-                sym(mul_add_distr(k, c * x, dot(cs, xs))),
+                    int::mul_assoc(k, c, x));
+                sym(int::mul_add_distr(k, c * x, dot(cs, xs))),
         },
     }
 }
@@ -114,7 +116,7 @@ theorem dot_add(left: List<Int>): (right, atoms: List<Int>) →
                     apply trans;
                     give cong_int(λ (q: Int) => q + (dot(as, xs) + dot(bs, xs)),
                         add_mul_distr(a, b, x));
-                    add_swap_middle(a * x, b * x, dot(as, xs), dot(bs, xs)),
+                    int_add_swap_middle(a * x, b * x, dot(as, xs), dot(bs, xs)),
             },
         },
     }
@@ -193,8 +195,19 @@ theorem normalize_add(x, y, cx, cy: Int, left, right, atoms: List<Int>,
     apply trans;
     give cong_int(λ (q: Int) => (cx + dot(left, atoms)) + q, hy);
     apply trans;
-    give add_swap_middle(cx, dot(left, atoms), cy, dot(right, atoms));
+    give int_add_swap_middle(cx, dot(left, atoms), cy, dot(right, atoms));
     cong_int(λ (q: Int) => (cx + cy) + q, sym(dot_add(left, right, atoms)))
+}
+
+theorem normalize_nat_add(x, y: Nat, cx, cy: Int,
+    left, right, atoms: List<Int>,
+    hx: OfNat(x) = cx + dot(left, atoms),
+    hy: OfNat(y) = cy + dot(right, atoms)):
+    OfNat(nat::add(x, y)) = (cx + cy) + dot(add_coeffs(left, right), atoms)
+{
+    trans(int::ofNat_add(x, y),
+        normalize_add(OfNat(x), OfNat(y), cx, cy,
+            left, right, atoms, hx, hy))
 }
 
 theorem normalize_scale(k, x, c: Int, row, atoms: List<Int>,
@@ -204,7 +217,7 @@ theorem normalize_scale(k, x, c: Int, row, atoms: List<Int>,
     apply trans;
     give cong_int(λ (q: Int) => k * q, hx);
     apply trans;
-    give mul_add_distr(k, c, dot(row, atoms));
+    give int::mul_add_distr(k, c, dot(row, atoms));
     cong_int(λ (q: Int) => k * c + q, sym(dot_scale(k, row, atoms)))
 }
 
@@ -212,7 +225,58 @@ theorem normalize_scale_right(x, k, c: Int, row, atoms: List<Int>,
     hx: x = c + dot(row, atoms)):
     x * k = (k * c) + dot(scale(k, row), atoms)
 {
-    trans(mul_comm(x, k), normalize_scale(k, x, c, row, atoms, hx))
+    trans(int::mul_comm(x, k), normalize_scale(k, x, c, row, atoms, hx))
+}
+
+theorem normalize_nat_scale_left(k, x: Nat, c: Int, row, atoms: List<Int>,
+    hx: OfNat(x) = c + dot(row, atoms)):
+    OfNat(nat::mul(k, x)) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
+{
+    trans(int::ofNat_mul(k, x),
+        normalize_scale(OfNat(k), OfNat(x), c, row, atoms, hx))
+}
+
+theorem normalize_nat_scale_right(x, k: Nat, c: Int, row, atoms: List<Int>,
+    hx: OfNat(x) = c + dot(row, atoms)):
+    OfNat(nat::mul(x, k)) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
+{
+    trans(int::ofNat_mul(x, k),
+        normalize_scale_right(OfNat(x), OfNat(k), c, row, atoms, hx))
+}
+
+theorem nat_le_to_int(m, n: Nat, h: m <= n): OfNat(m) <= OfNat(n) { h }
+
+theorem nat_lt_to_int(m, n: Nat, h: m < n): OfNat(m) < OfNat(n) { h }
+
+theorem nat_lt_of_not_le(a, b: Nat, h: ¬(a <= b)): b < a {
+    match nat::lt_trichotomy(a, b) {
+        Inl(forward) => false_elim(h(nat::le_of_lt(a, b, forward))),
+        Inr(rest) => match rest {
+            Inl(eq) => false_elim(h(j(eq, λ y q => a <= y, nat::le_refl(a)))),
+            Inr(back) => back,
+        },
+    }
+}
+
+theorem nat_le_of_not_lt(a, b: Nat, h: ¬(a < b)): b <= a {
+    match nat::lt_trichotomy(a, b) {
+        Inl(forward) => false_elim(h(forward)),
+        Inr(rest) => match rest {
+            Inl(eq) => j(eq, λ y q => y <= a, nat::le_refl(a)),
+            Inr(back) => nat::le_of_lt(b, a, back),
+        },
+    }
+}
+
+theorem nat_le_of_not_not_le(a, b: Nat, h: ¬¬(a <= b)): a <= b {
+    match nat::le_dec(a, b) { Inl(proof) => proof, Inr(refute) => false_elim(h(refute)) }
+}
+
+theorem nat_lt_of_not_not_lt(a, b: Nat, h: ¬¬(a < b)): a < b {
+    match nat::le_dec(Succ(a), b) {
+        Inl(proof) => proof,
+        Inr(refute) => false_elim(h(refute)),
+    }
 }
 
 theorem normalize_neg(x, c: Int, row, atoms: List<Int>,
@@ -239,14 +303,14 @@ theorem le_transport(a, b, c, d: Int, left: a = b, right: c = d, h: a <= c):
 theorem sub_le_sub_constants(cx, dx, cy, dy: Int,
     h: cx + dx <= cy + dy): dx + (-dy) <= cy + (-cx)
 {
-    let shifted = add_le_mono_r(
+    let shifted = int::add_le_mono_r(
         cx + dx, cy + dy, (-cx) + (-dy), h);
     let left = trans(
-        add_swap_middle(cx, dx, -cx, -dy),
+        int_add_swap_middle(cx, dx, -cx, -dy),
         trans(cong_int(λ (q: Int) => q + (dx + (-dy)), add_neg(cx)),
             zero_add(dx + (-dy))));
     let right = trans(
-        add_swap_middle(cy, dy, -cx, -dy),
+        int_add_swap_middle(cy, dy, -cx, -dy),
         trans(cong_int(λ (q: Int) => (cy + (-cx)) + q, add_neg(dy)),
             add_zero(cy + (-cx))));
     le_transport(
@@ -280,11 +344,11 @@ theorem sub_eq_sub_constants(cx, dx, cy, dy: Int,
 {
     let shifted = cong_int(λ (q: Int) => q + ((-cx) + (-dy)), h);
     let left = trans(
-        add_swap_middle(cx, dx, -cx, -dy),
+        int_add_swap_middle(cx, dx, -cx, -dy),
         trans(cong_int(λ (q: Int) => q + (dx + (-dy)), add_neg(cx)),
             zero_add(dx + (-dy))));
     let right = trans(
-        add_swap_middle(cy, dy, -cx, -dy),
+        int_add_swap_middle(cy, dy, -cx, -dy),
         trans(cong_int(λ (q: Int) => (cy + (-cx)) + q, add_neg(dy)),
             add_zero(cy + (-cx))));
     trans(sym(left), trans(shifted, right))
@@ -303,13 +367,13 @@ theorem normalized_eq_value(x, y, cx, cy: Int, left, right, atoms: List<Int>,
 theorem lower_of_eq(row, atoms: List<Int>, value: Int,
     h: dot(row, atoms) = value): value <= dot(row, atoms)
 {
-    j(h, λ q p => q <= dot(row, atoms), le_refl(dot(row, atoms)))
+    j(h, λ q p => q <= dot(row, atoms), int::le_refl(dot(row, atoms)))
 }
 
 theorem upper_of_eq(row, atoms: List<Int>, value: Int,
     h: dot(row, atoms) = value): dot(row, atoms) <= value
 {
-    j(h, λ q p => dot(row, atoms) <= q, le_refl(dot(row, atoms)))
+    j(h, λ q p => dot(row, atoms) <= q, int::le_refl(dot(row, atoms)))
 }
 
 theorem normalized_le_upper(x, y, cx, cy: Int, left, right, atoms: List<Int>,
@@ -360,6 +424,14 @@ theorem lower_transport(coeffs, atoms: List<Int>, lower, value: Int,
     j(value_eq, λ q p => lower <= q, hvalue)
 }
 
+theorem atom_nonnegative(index: Nat, atoms: List<Int>,
+    h: OfNat(0) <= nth0(index, atoms)):
+    OfNat(0) <= dot(basis(index, atoms), atoms)
+{
+    lower_transport(basis(index, atoms), atoms, OfNat(0),
+        nth0(index, atoms), h, sym(dot_basis(index, atoms)))
+}
+
 theorem upper_transport(coeffs, atoms: List<Int>, upper, value: Int,
     hvalue: value <= upper, value_eq: value = dot(coeffs, atoms)):
     dot(coeffs, atoms) <= upper
@@ -372,21 +444,21 @@ theorem lower_scale(k, lower, value: Int,
     hk: OfNat(0) <= k, h: lower <= value):
     k * lower <= k * value
 {
-    mul_le_mono_l(lower, value, k, h, hk)
+    int::mul_le_mono_l(lower, value, k, h, hk)
 }
 
 theorem upper_scale(k, value, upper: Int,
     hk: OfNat(0) <= k, h: value <= upper):
     k * value <= k * upper
 {
-    mul_le_mono_l(value, upper, k, h, hk)
+    int::mul_le_mono_l(value, upper, k, h, hk)
 }
 
 theorem upper_neg_scale(k, value, upper: Int,
     hk: OfNat(0) <= k, h: value <= upper):
     (-k) * upper <= (-k) * value
 {
-    let scaled = mul_le_mono_l(value, upper, k, h, hk);
+    let scaled = int::mul_le_mono_l(value, upper, k, h, hk);
     le_transport(
         -(k * upper), (-k) * upper,
         -(k * value), (-k) * value,
@@ -399,7 +471,7 @@ theorem lower_neg_scale(k, lower, value: Int,
     hk: OfNat(0) <= k, h: lower <= value):
     (-k) * value <= (-k) * lower
 {
-    let scaled = mul_le_mono_l(lower, value, k, h, hk);
+    let scaled = int::mul_le_mono_l(lower, value, k, h, hk);
     le_transport(
         -(k * value), (-k) * value,
         -(k * lower), (-k) * lower,
@@ -416,7 +488,7 @@ theorem lower_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: l <= dot(left, atoms), hr: r <= dot(right, atoms)):
     a * l + b * r <= dot(combo(a, left, b, right), atoms)
 {
-    let summed = add_le_mono(
+    let summed = int::add_le_mono(
         a * l, a * dot(left, atoms),
         b * r, b * dot(right, atoms),
         lower_scale(a, l, dot(left, atoms), ha, hl),
@@ -430,7 +502,7 @@ theorem upper_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: dot(left, atoms) <= l, hr: dot(right, atoms) <= r):
     dot(combo(a, left, b, right), atoms) <= a * l + b * r
 {
-    let summed = add_le_mono(
+    let summed = int::add_le_mono(
         a * dot(left, atoms), a * l,
         b * dot(right, atoms), b * r,
         upper_scale(a, dot(left, atoms), l, ha, hl),
@@ -447,7 +519,7 @@ theorem lower_upper_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
     hl: l <= dot(left, atoms), hu: dot(right, atoms) <= u):
     a * l + (-b) * u <= dot(combo(a, left, -b, right), atoms)
 {
-    let summed = add_le_mono(
+    let summed = int::add_le_mono(
         a * l, a * dot(left, atoms),
         (-b) * u, (-b) * dot(right, atoms),
         lower_scale(a, l, dot(left, atoms), ha, hl),
@@ -461,11 +533,33 @@ theorem upper_lower_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
     hl: l <= dot(left, atoms), hu: dot(right, atoms) <= u):
     dot(combo(-a, left, b, right), atoms) <= (-a) * l + b * u
 {
-    let summed = add_le_mono(
+    let summed = int::add_le_mono(
         (-a) * dot(left, atoms), (-a) * l,
         b * dot(right, atoms), b * u,
         lower_neg_scale(a, l, dot(left, atoms), ha, hl),
         upper_scale(b, dot(right, atoms), u, hb, hu));
     j(sym(dot_combo(-a, left, b, right, atoms)),
         λ q p => q <= (-a) * l + b * u, summed)
+}
+
+theorem diseq_elim(x, y: Int, different: x ≠ y,
+    left: x < y → False, right: y < x → False): False
+{
+    match int::lt_trichotomy(x, y) {
+        Inl(h) => left(h),
+        Inr(rest) => match rest {
+            Inl(eq) => false_elim(different(eq)),
+            Inr(h) => right(h),
+        },
+    }
+}
+
+theorem and_elim_false<P, Q>(h: P ∧ Q, k: P → Q → False): False {
+    k(h.left, h.right)
+}
+
+theorem or_elim_false<P, Q>(h: P ∨ Q,
+    left: P → False, right: Q → False): False
+{
+    or_elim(h, left, right)
 }

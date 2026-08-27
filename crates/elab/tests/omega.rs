@@ -41,6 +41,7 @@ fn message(error: ElabError) -> String {
 
 const PREFIX: &str = r#"
 import int;
+import nat;
 import list;
 import logic;
 import omega;
@@ -63,6 +64,30 @@ theorem eliminated(x, y: Int,
     elaborator()
         .elab_module_source("probe", &source)
         .unwrap_or_else(|error| panic!("Omega certificate did not check: {}", message(error)));
+}
+
+#[test]
+fn exposes_a_structured_omega_audit_report() {
+    let source = format!(
+        r#"{PREFIX}
+theorem audited(x, y: Int,
+    lower: OfNat(3) <= x * OfNat(3) + y,
+    upper: x * OfNat(2) + y <= OfNat(2),
+    final_upper: x <= OfNat(0)):
+    False
+{{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("audited Omega did not check: {}", message(error)));
+    let reports = elab.take_omega_reports();
+    let report = reports.last().expect("one solver report");
+    assert_eq!(report.atoms, 2);
+    assert_eq!(report.assumptions, 3);
+    assert!(report.reachable_derivations >= 3);
+    assert!(report.stats.fourier_motzkin_eliminations >= 1);
+    assert!(report.used_lemmas.contains(&"omega::lower_upper_combo"));
 }
 
 #[test]
@@ -179,6 +204,185 @@ theorem reversed_exact(x: Int, eq: OfNat(1) = x, bad: x <= OfNat(0)): False
     elaborator()
         .elab_module_source("probe", &source)
         .unwrap_or_else(|error| panic!("reversed equality did not check: {}", message(error)));
+}
+
+#[test]
+fn nonprimitive_rows_do_not_require_a_gcd_certificate() {
+    let source = format!(
+        r#"{PREFIX}
+theorem nonprimitive(x: Int,
+    lower: OfNat(3) <= OfNat(2) * x,
+    upper: OfNat(2) * x <= OfNat(2)):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("nonprimitive row did not check: {}", message(error)));
+}
+
+#[test]
+fn reflects_a_negated_integer_relation() {
+    let source = format!(
+        r#"{PREFIX}
+theorem negated_relation(x, y: Int, negated: ¬(x <= y), bad: x <= y): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("negated relation did not check: {}", message(error)));
+}
+
+#[test]
+fn reflects_a_negated_strict_relation() {
+    let source = format!(
+        r#"{PREFIX}
+theorem negated_strict(x, y: Int, negated: ¬(x < y), bad: x < y): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| {
+            panic!("negated strict relation did not check: {}", message(error))
+        });
+}
+
+#[test]
+fn splits_integer_disequality_by_trichotomy() {
+    let source = format!(
+        r#"{PREFIX}
+theorem disequality(x, y: Int,
+    different: x ≠ y,
+    forward: x <= y,
+    backward: y <= x):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("disequality split did not check: {}", message(error)));
+}
+
+#[test]
+fn expands_a_conjunctive_hypothesis() {
+    let source = format!(
+        r#"{PREFIX}
+theorem conjunction(x: Int,
+    bounds: (OfNat(1) <= x) ∧ (x <= OfNat(0))): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("conjunction did not check: {}", message(error)));
+}
+
+#[test]
+fn splits_a_disjunctive_hypothesis() {
+    let source = format!(
+        r#"{PREFIX}
+theorem disjunction(x: Int,
+    cases: (x <= OfNat(0)) ∨ (OfNat(2) <= x),
+    lower: OfNat(1) <= x,
+    upper: x <= OfNat(1)):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("disjunction did not check: {}", message(error)));
+}
+
+#[test]
+fn constructs_a_conjunctive_goal() {
+    let source = format!(
+        r#"{PREFIX}
+theorem conjunction_goal(x, y: Int, equal: x = y): (x <= y) ∧ (y <= x)
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("conjunction goal did not check: {}", message(error)));
+}
+
+#[test]
+fn embeds_nat_atoms_with_nonnegativity() {
+    let source = format!(
+        r#"{PREFIX}
+theorem nat_nonnegative(n: Nat, bad: n < Zero): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("Nat nonnegativity did not check: {}", message(error)));
+}
+
+#[test]
+fn embeds_affine_nat_constraints() {
+    let source = format!(
+        r#"{PREFIX}
+theorem nat_nonprimitive(n: Nat,
+    lower: 3 <= 2 * n,
+    upper: 2 * n <= 2):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("affine Nat did not check: {}", message(error)));
+}
+
+#[test]
+fn proves_nat_order_goals() {
+    let source = format!(
+        r#"{PREFIX}
+theorem nat_le_goal(n: Nat, lower: 3 <= n): 2 <= n
+{{ omega }}
+
+theorem nat_lt_goal(n: Nat, lower: 3 <= n): 2 < n
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("Nat order goals did not check: {}", message(error)));
+}
+
+#[test]
+fn proves_a_nat_equality_goal() {
+    let source = format!(
+        r#"{PREFIX}
+theorem nat_equality_goal(n, m: Nat, forward: n <= m, backward: m <= n): n = m
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("Nat equality goal did not check: {}", message(error)));
+}
+
+#[test]
+fn reflects_negated_nat_relations() {
+    let source = format!(
+        r#"{PREFIX}
+theorem negated_nat_le(n, m: Nat, denied: ¬(n <= m), forward: n <= m): False
+{{ omega }}
+
+theorem negated_nat_lt(n, m: Nat, denied: ¬(n < m), forward: n < m): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("negated Nat relations did not check: {}", message(error)));
 }
 
 #[test]

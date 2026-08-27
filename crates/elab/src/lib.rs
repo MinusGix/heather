@@ -81,6 +81,7 @@ mod attempt;
 pub mod arith;
 pub mod omega;
 mod omega_cert;
+pub use omega_cert::OmegaReport;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -515,6 +516,9 @@ pub struct Elaborator {
     /// and the exact library lemmas it selected. Failed declarations truncate
     /// reports alongside warnings in [`Self::elab_module_source`].
     arith_reports: RefCell<Vec<arith::ArithReport>>,
+    /// Successful Omega reconstruction steps, including recursively generated
+    /// logical branches, in checking order.
+    omega_reports: RefCell<Vec<OmegaReport>>,
     /// Meta-layer definitions and the slots claimed by their `for` clauses
     /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
     /// enter Ψ; both lookup views commit together after validation.
@@ -1139,6 +1143,7 @@ impl Elaborator {
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             arith_reports: RefCell::new(Vec::new()),
+            omega_reports: RefCell::new(Vec::new()),
             meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -1185,6 +1190,11 @@ impl Elaborator {
     /// Drain the audit reports produced by successful `arith` uses.
     pub fn take_arith_reports(&self) -> Vec<arith::ArithReport> {
         self.arith_reports.borrow_mut().drain(..).collect()
+    }
+
+    /// Drain the audit reports produced by successful `omega` uses.
+    pub fn take_omega_reports(&self) -> Vec<OmegaReport> {
+        self.omega_reports.borrow_mut().drain(..).collect()
     }
 
     pub(crate) fn profiled_value_arena(&self) -> ValueArena<'_> {
@@ -1269,6 +1279,7 @@ impl Elaborator {
         for item in &file.items {
             let warn_mark = self.warnings.borrow().len();
             let arith_mark = self.arith_reports.borrow().len();
+            let omega_mark = self.omega_reports.borrow().len();
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
@@ -1287,6 +1298,7 @@ impl Elaborator {
                 self.pending_derived.borrow_mut().clear();
                 self.warnings.borrow_mut().truncate(warn_mark);
                 self.arith_reports.borrow_mut().truncate(arith_mark);
+                self.omega_reports.borrow_mut().truncate(omega_mark);
             } else {
                 self.mint_pending();
                 self.run_source_lints(item, &lint_source);
@@ -2909,21 +2921,29 @@ impl Elaborator {
             // expression and this recursive call checks it at the original
             // goal before the enclosing declaration reaches the kernel gate.
             ExprKind::Var(name)
-                if name == "omega"
+                if (name == "omega"
+                    || name == "__omega_diseq_branch"
+                    || name == "__omega_connective_branch")
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                let cert = omega_cert::reconstruct(self, cx, expected).map_err(|detail|
-                    ElabError::Elab {
+                let cert = omega_cert::reconstruct(
+                    self,
+                    cx,
+                    expected,
+                    name != "__omega_diseq_branch",
+                    name != "__omega_connective_branch",
+                ).map_err(|detail| ElabError::Elab {
                         msg: format!("`omega` got stuck: {detail}"),
                         span: e.span,
                     })?;
-                let _audit = (cert.assumptions, cert.reachable_derivations);
-                self.elab_check(cx, &cert.expr, expected, lvl).map_err(|error|
+                let term = self.elab_check(cx, &cert.expr, expected, lvl).map_err(|error|
                     ElabError::Elab {
                         msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
                         span: e.span,
-                    })
+                    })?;
+                self.omega_reports.borrow_mut().push(cert.report);
+                Ok(term)
             }
             // `arith` is an untrusted, checking-only proof reconstructor. It
             // reads the elaborated goal and produces an ordinary Heather
