@@ -48,3 +48,15 @@ not the integer-specific Cooper search.
   this issue owns the arithmetic theory module it may eventually call.
 - **[[omega-dark-grey-shadows]]** remains an optional measured fast-path
   extension, not a completeness dependency.
+
+## Log
+
+- 2026-08-27: Landed the substrate's representation boundary in
+  `crates/elab/src/arithmetic.rs`: checked affine arithmetic, deterministic atom
+  IDs/interning, reflected Nat/Int domains, binary relations, and a generic
+  reflected-constraint/evidence record. Omega now consumes those types and
+  re-exports its old public names; its division expansion, interval lowering,
+  derivations, and proof strings remain solver-local. Focused acceptance pins
+  the same nonlinear atom sharing and exact label order through the kernel-
+  gated frontend. Do not extract a generic search interface until the first
+  CutSat core supplies the second concrete consumer.

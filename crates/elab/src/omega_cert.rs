@@ -11,6 +11,7 @@ use std::rc::Rc;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, Item, parse_file};
 
+use crate::arithmetic::{AtomId, AtomTable, Domain, ReflectedConstraint, Relation};
 use crate::omega::{Coeffs, Derivation, DerivationId, Interval, LinearExpr, Outcome, Problem, Z};
 use crate::{Cx, Elaborator};
 
@@ -217,7 +218,7 @@ enum AffineSyntax {
         source: String,
     },
     Atom {
-        index: usize,
+        index: AtomId,
         source: String,
     },
     Mod {
@@ -630,7 +631,7 @@ fn affine_syntax(
     elab: &Elaborator,
     cx: &Cx,
     tm: &Rc<Term>,
-    atoms: &mut Vec<ReflectedAtom>,
+    atoms: &mut AtomTable<ReflectedAtom>,
 ) -> Result<AffineSyntax, String> {
     let source = int_term_source(elab, cx, tm)?;
     if let Some(value) = integer_source(&source) {
@@ -711,23 +712,20 @@ fn affine_syntax(
                 .checked_abs()
                 .ok_or("Omega cannot reflect division by the minimum `i128` literal")?;
             let quotient_source = format!("int::div({}, {})", dividend_source, int(divisor));
-            let quotient_index = atoms
-                .iter()
-                .position(|atom| atom.source == quotient_source)
-                .unwrap_or_else(|| {
-                    atoms.push(ReflectedAtom {
-                        term: Rc::clone(tm),
-                        source: quotient_source.clone(),
-                        nat_source: None,
-                        division: Some(DivisionAtom {
-                            dividend: dividend_syntax.clone(),
-                            dividend_source: dividend_source.clone(),
-                            divisor,
-                            natural: false,
-                        }),
-                    });
-                    atoms.len() - 1
-                });
+            let quotient_index = atoms.intern_by(
+                |atom| atom.source == quotient_source,
+                || ReflectedAtom {
+                    term: Rc::clone(tm),
+                    source: quotient_source.clone(),
+                    nat_source: None,
+                    division: Some(DivisionAtom {
+                        dividend: dividend_syntax.clone(),
+                        dividend_source: dividend_source.clone(),
+                        divisor,
+                        natural: false,
+                    }),
+                },
+            );
             let quotient = AffineSyntax::Atom {
                 index: quotient_index,
                 source: quotient_source,
@@ -766,39 +764,33 @@ fn affine_syntax(
             divisor
                 .checked_abs()
                 .ok_or("Omega cannot reflect division by the minimum `i128` literal")?;
-            let index = atoms
-                .iter()
-                .position(|atom| *atom.term == **tm || atom.source == source)
-                .unwrap_or_else(|| {
-                    atoms.push(ReflectedAtom {
-                        term: Rc::clone(tm),
-                        source: source.clone(),
-                        nat_source: None,
-                        division: Some(DivisionAtom {
-                            dividend: dividend_syntax,
-                            dividend_source,
-                            divisor,
-                            natural: false,
-                        }),
-                    });
-                    atoms.len() - 1
-                });
+            let index = atoms.intern_by(
+                |atom| *atom.term == **tm || atom.source == source,
+                || ReflectedAtom {
+                    term: Rc::clone(tm),
+                    source: source.clone(),
+                    nat_source: None,
+                    division: Some(DivisionAtom {
+                        dividend: dividend_syntax,
+                        dividend_source,
+                        divisor,
+                        natural: false,
+                    }),
+                },
+            );
             return Ok(AffineSyntax::Atom { index, source });
         }
     }
 
-    let index = atoms
-        .iter()
-        .position(|atom| *atom.term == **tm || atom.source == source)
-        .unwrap_or_else(|| {
-            atoms.push(ReflectedAtom {
-                term: Rc::clone(tm),
-                source: source.clone(),
-                nat_source: None,
-                division: None,
-            });
-            atoms.len() - 1
-        });
+    let index = atoms.intern_by(
+        |atom| *atom.term == **tm || atom.source == source,
+        || ReflectedAtom {
+            term: Rc::clone(tm),
+            source: source.clone(),
+            nat_source: None,
+            division: None,
+        },
+    );
     Ok(AffineSyntax::Atom { index, source })
 }
 
@@ -845,7 +837,7 @@ fn nat_affine_syntax(
     elab: &Elaborator,
     cx: &Cx,
     tm: &Rc<Term>,
-    atoms: &mut Vec<ReflectedAtom>,
+    atoms: &mut AtomTable<ReflectedAtom>,
 ) -> Result<AffineSyntax, String> {
     let nat_source = nat_term_source(elab, cx, tm)?;
     if let Some(value) = integer_source(&nat_source).filter(|value| *value >= 0) {
@@ -917,23 +909,20 @@ fn nat_affine_syntax(
             }
             let quotient_nat = format!("nat::div({}, {})", dividend_source, divisor_source);
             let quotient_source = format!("OfNat({quotient_nat})");
-            let quotient_index = atoms
-                .iter()
-                .position(|atom| atom.nat_source.as_deref() == Some(quotient_nat.as_str()))
-                .unwrap_or_else(|| {
-                    atoms.push(ReflectedAtom {
-                        term: Rc::clone(tm),
-                        source: quotient_source.clone(),
-                        nat_source: Some(quotient_nat.clone()),
-                        division: Some(DivisionAtom {
-                            dividend: dividend_syntax.clone(),
-                            dividend_source: dividend_source.clone(),
-                            divisor,
-                            natural: true,
-                        }),
-                    });
-                    atoms.len() - 1
-                });
+            let quotient_index = atoms.intern_by(
+                |atom| atom.nat_source.as_deref() == Some(quotient_nat.as_str()),
+                || ReflectedAtom {
+                    term: Rc::clone(tm),
+                    source: quotient_source.clone(),
+                    nat_source: Some(quotient_nat.clone()),
+                    division: Some(DivisionAtom {
+                        dividend: dividend_syntax.clone(),
+                        dividend_source: dividend_source.clone(),
+                        divisor,
+                        natural: true,
+                    }),
+                },
+            );
             let expanded = AffineSyntax::Add {
                 left: Box::new(dividend_syntax),
                 right: Box::new(AffineSyntax::Neg {
@@ -969,43 +958,37 @@ fn nat_affine_syntax(
                 });
             }
             let dividend_syntax = nat_affine_syntax(elab, cx, dividend, atoms)?;
-            let index = atoms
-                .iter()
-                .position(|atom| atom.nat_source.as_deref() == Some(nat_source.as_str()))
-                .unwrap_or_else(|| {
-                    atoms.push(ReflectedAtom {
-                        term: Rc::clone(tm),
-                        source: source.clone(),
-                        nat_source: Some(nat_source.clone()),
-                        division: Some(DivisionAtom {
-                            dividend: dividend_syntax,
-                            dividend_source,
-                            divisor,
-                            natural: true,
-                        }),
-                    });
-                    atoms.len() - 1
-                });
+            let index = atoms.intern_by(
+                |atom| atom.nat_source.as_deref() == Some(nat_source.as_str()),
+                || ReflectedAtom {
+                    term: Rc::clone(tm),
+                    source: source.clone(),
+                    nat_source: Some(nat_source.clone()),
+                    division: Some(DivisionAtom {
+                        dividend: dividend_syntax,
+                        dividend_source,
+                        divisor,
+                        natural: true,
+                    }),
+                },
+            );
             return Ok(AffineSyntax::Atom { index, source });
         }
     }
     let source = format!("OfNat({nat_source})");
-    let index = atoms
-        .iter()
-        .position(|atom| atom.nat_source.as_deref() == Some(nat_source.as_str()))
-        .unwrap_or_else(|| {
-            atoms.push(ReflectedAtom {
-                term: Rc::clone(tm),
-                source: source.clone(),
-                nat_source: Some(nat_source.clone()),
-                division: None,
-            });
-            atoms.len() - 1
-        });
+    let index = atoms.intern_by(
+        |atom| atom.nat_source.as_deref() == Some(nat_source.as_str()),
+        || ReflectedAtom {
+            term: Rc::clone(tm),
+            source: source.clone(),
+            nat_source: Some(nat_source.clone()),
+            division: None,
+        },
+    );
     Ok(AffineSyntax::Atom { index, source })
 }
 
-fn atom_list_source(atoms: &[ReflectedAtom]) -> String {
+fn atom_list_source(atoms: &AtomTable<ReflectedAtom>) -> String {
     atoms.iter().rev().fold("Nil".to_string(), |tail, atom| {
         format!("Cons({}, {tail})", atom.source)
     })
@@ -1023,10 +1006,11 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
             })
         }
         AffineSyntax::Atom { index, source } => {
+            let index = index.index();
             let row_source = format!("omega::basis({index}, {atoms_source})");
             Ok(Normalized {
                 source: source.clone(),
-                linear: LinearExpr::atom(*index),
+                linear: LinearExpr::atom(index),
                 proof: format!("omega::normalize_atom({index}, {atoms_source})"),
                 row_source,
             })
@@ -1333,167 +1317,183 @@ fn reflect_ordinary(
     elab: &Elaborator,
     cx: &Cx,
 ) -> Result<Option<(Vec<InitialAssumption>, String, Vec<String>)>, String> {
-    let mut atoms = Vec::new();
+    let mut atoms = AtomTable::default();
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
         let (_, ty, _) = elab.local(cx, pos);
         let decoded_ty = crate::inductive::decoded(&ty);
-        let (left, right, exact, proof) = if let Some((left, right)) = relation_args(elab, &ty) {
-            if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
-                return Ok(None);
-            }
-            (
-                affine_syntax(elab, cx, left, &mut atoms)?,
-                affine_syntax(elab, cx, right, &mut atoms)?,
-                false,
-                cx.names[pos].clone(),
-            )
-        } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
-            let left = AffineSyntax::Add {
-                left: Box::new(affine_syntax(elab, cx, left, &mut atoms)?),
-                right: Box::new(AffineSyntax::Const {
-                    value: 1,
-                    source: int(1),
-                }),
-            };
-            (
-                left,
-                affine_syntax(elab, cx, right, &mut atoms)?,
-                false,
-                cx.names[pos].clone(),
-            )
-        } else if let Some((left, right)) =
-            equality_args(elab, cx, &ty).or_else(|| equality_args(elab, cx, &decoded_ty))
-        {
-            (
-                affine_syntax(elab, cx, left, &mut atoms)?,
-                affine_syntax(elab, cx, right, &mut atoms)?,
-                true,
-                cx.names[pos].clone(),
-            )
-        } else if let Some((left, right)) = nat_relation_args(elab, &ty) {
-            let left_source = nat_term_source(elab, cx, left)?;
-            let right_source = nat_term_source(elab, cx, right)?;
-            (
-                nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                false,
-                format!(
-                    "omega::nat_le_to_int({}, {}, {})",
-                    left_source, right_source, cx.names[pos]
-                ),
-            )
-        } else if let Some((left, right)) = nat_strict_relation_args(elab, &ty) {
-            let left_source = nat_term_source(elab, cx, left)?;
-            let right_source = nat_term_source(elab, cx, right)?;
-            let left = AffineSyntax::Add {
-                left: Box::new(nat_affine_syntax(elab, cx, left, &mut atoms)?),
-                right: Box::new(AffineSyntax::Const {
-                    value: 1,
-                    source: int(1),
-                }),
-            };
-            (
-                left,
-                nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                false,
-                format!(
-                    "omega::nat_lt_to_int({}, {}, {})",
-                    left_source, right_source, cx.names[pos]
-                ),
-            )
-        } else if let Some((left, right)) =
-            nat_equality_args(elab, cx, &ty).or_else(|| nat_equality_args(elab, cx, &decoded_ty))
-        {
-            (
-                nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                true,
-                format!("int::cong_ofnat({})", cx.names[pos]),
-            )
-        } else if let Some(domain) = negated_domain(elab, cx, &ty) {
-            if let Some((left, right)) = relation_args(elab, &domain) {
-                let left_source = int_term_source(elab, cx, left)?;
-                let right_source = int_term_source(elab, cx, right)?;
-                let strict_left = AffineSyntax::Add {
-                    left: Box::new(affine_syntax(elab, cx, right, &mut atoms)?),
+        let (domain, left, right, relation, proof) =
+            if let Some((left, right)) = relation_args(elab, &ty) {
+                if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
+                    return Ok(None);
+                }
+                (
+                    Domain::Int,
+                    affine_syntax(elab, cx, left, &mut atoms)?,
+                    affine_syntax(elab, cx, right, &mut atoms)?,
+                    Relation::Le,
+                    cx.names[pos].clone(),
+                )
+            } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
+                let left = AffineSyntax::Add {
+                    left: Box::new(affine_syntax(elab, cx, left, &mut atoms)?),
                     right: Box::new(AffineSyntax::Const {
                         value: 1,
                         source: int(1),
                     }),
                 };
                 (
-                    strict_left,
-                    affine_syntax(elab, cx, left, &mut atoms)?,
-                    false,
-                    format!(
-                        "int::lt_of_not_le({}, {}, {})",
-                        right_source, left_source, cx.names[pos]
-                    ),
-                )
-            } else if let Some((left, right)) = strict_relation_args(elab, &domain) {
-                let left_source = int_term_source(elab, cx, left)?;
-                let right_source = int_term_source(elab, cx, right)?;
-                (
+                    Domain::Int,
+                    left,
                     affine_syntax(elab, cx, right, &mut atoms)?,
+                    Relation::Le,
+                    cx.names[pos].clone(),
+                )
+            } else if let Some((left, right)) =
+                equality_args(elab, cx, &ty).or_else(|| equality_args(elab, cx, &decoded_ty))
+            {
+                (
+                    Domain::Int,
                     affine_syntax(elab, cx, left, &mut atoms)?,
-                    false,
+                    affine_syntax(elab, cx, right, &mut atoms)?,
+                    Relation::Eq,
+                    cx.names[pos].clone(),
+                )
+            } else if let Some((left, right)) = nat_relation_args(elab, &ty) {
+                let left_source = nat_term_source(elab, cx, left)?;
+                let right_source = nat_term_source(elab, cx, right)?;
+                (
+                    Domain::NatEmbedded,
+                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                    Relation::Le,
                     format!(
-                        "int::le_of_not_lt({}, {}, {})",
+                        "omega::nat_le_to_int({}, {}, {})",
                         left_source, right_source, cx.names[pos]
                     ),
                 )
-            } else if let Some((left, right)) = nat_relation_args(elab, &domain) {
+            } else if let Some((left, right)) = nat_strict_relation_args(elab, &ty) {
                 let left_source = nat_term_source(elab, cx, left)?;
                 let right_source = nat_term_source(elab, cx, right)?;
-                let strict_left = AffineSyntax::Add {
-                    left: Box::new(nat_affine_syntax(elab, cx, right, &mut atoms)?),
+                let left = AffineSyntax::Add {
+                    left: Box::new(nat_affine_syntax(elab, cx, left, &mut atoms)?),
                     right: Box::new(AffineSyntax::Const {
                         value: 1,
                         source: int(1),
                     }),
                 };
                 (
-                    strict_left,
-                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                    false,
-                    format!(
-                        "omega::nat_lt_to_int({}, {}, omega::nat_lt_of_not_le({}, {}, {}))",
-                        right_source, left_source, left_source, right_source, cx.names[pos],
-                    ),
-                )
-            } else if let Some((left, right)) = nat_strict_relation_args(elab, &domain) {
-                let left_source = nat_term_source(elab, cx, left)?;
-                let right_source = nat_term_source(elab, cx, right)?;
-                (
+                    Domain::NatEmbedded,
+                    left,
                     nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                    false,
+                    Relation::Le,
                     format!(
-                        "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
-                        right_source, left_source, left_source, right_source, cx.names[pos],
+                        "omega::nat_lt_to_int({}, {}, {})",
+                        left_source, right_source, cx.names[pos]
                     ),
                 )
+            } else if let Some((left, right)) = nat_equality_args(elab, cx, &ty)
+                .or_else(|| nat_equality_args(elab, cx, &decoded_ty))
+            {
+                (
+                    Domain::NatEmbedded,
+                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                    Relation::Eq,
+                    format!("int::cong_ofnat({})", cx.names[pos]),
+                )
+            } else if let Some(domain) = negated_domain(elab, cx, &ty) {
+                if let Some((left, right)) = relation_args(elab, &domain) {
+                    let left_source = int_term_source(elab, cx, left)?;
+                    let right_source = int_term_source(elab, cx, right)?;
+                    let strict_left = AffineSyntax::Add {
+                        left: Box::new(affine_syntax(elab, cx, right, &mut atoms)?),
+                        right: Box::new(AffineSyntax::Const {
+                            value: 1,
+                            source: int(1),
+                        }),
+                    };
+                    (
+                        Domain::Int,
+                        strict_left,
+                        affine_syntax(elab, cx, left, &mut atoms)?,
+                        Relation::Le,
+                        format!(
+                            "int::lt_of_not_le({}, {}, {})",
+                            right_source, left_source, cx.names[pos]
+                        ),
+                    )
+                } else if let Some((left, right)) = strict_relation_args(elab, &domain) {
+                    let left_source = int_term_source(elab, cx, left)?;
+                    let right_source = int_term_source(elab, cx, right)?;
+                    (
+                        Domain::Int,
+                        affine_syntax(elab, cx, right, &mut atoms)?,
+                        affine_syntax(elab, cx, left, &mut atoms)?,
+                        Relation::Le,
+                        format!(
+                            "int::le_of_not_lt({}, {}, {})",
+                            left_source, right_source, cx.names[pos]
+                        ),
+                    )
+                } else if let Some((left, right)) = nat_relation_args(elab, &domain) {
+                    let left_source = nat_term_source(elab, cx, left)?;
+                    let right_source = nat_term_source(elab, cx, right)?;
+                    let strict_left = AffineSyntax::Add {
+                        left: Box::new(nat_affine_syntax(elab, cx, right, &mut atoms)?),
+                        right: Box::new(AffineSyntax::Const {
+                            value: 1,
+                            source: int(1),
+                        }),
+                    };
+                    (
+                        Domain::NatEmbedded,
+                        strict_left,
+                        nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                        Relation::Le,
+                        format!(
+                            "omega::nat_lt_to_int({}, {}, omega::nat_lt_of_not_le({}, {}, {}))",
+                            right_source, left_source, left_source, right_source, cx.names[pos],
+                        ),
+                    )
+                } else if let Some((left, right)) = nat_strict_relation_args(elab, &domain) {
+                    let left_source = nat_term_source(elab, cx, left)?;
+                    let right_source = nat_term_source(elab, cx, right)?;
+                    (
+                        Domain::NatEmbedded,
+                        nat_affine_syntax(elab, cx, right, &mut atoms)?,
+                        nat_affine_syntax(elab, cx, left, &mut atoms)?,
+                        Relation::Le,
+                        format!(
+                            "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
+                            right_source, left_source, left_source, right_source, cx.names[pos],
+                        ),
+                    )
+                } else {
+                    continue;
+                }
             } else {
                 continue;
-            }
-        } else {
-            continue;
-        };
-        relations.push((left, right, exact, proof));
+            };
+        relations.push(ReflectedConstraint {
+            domain,
+            lhs: left,
+            relation,
+            rhs: right,
+            evidence: proof,
+        });
     }
     if relations.is_empty() {
         return Ok(None);
     }
     let divisions = atoms
-        .iter()
-        .enumerate()
+        .iter_with_ids()
         .filter_map(|(index, atom)| atom.division.clone().map(|division| (index, division)))
         .collect::<Vec<_>>();
     for (index, division) in divisions {
         let quotient = AffineSyntax::Atom {
             index,
-            source: atoms[index].source.clone(),
+            source: atoms.get(index).source.clone(),
         };
         let product = AffineSyntax::Scale {
             factor: division.divisor,
@@ -1536,39 +1536,53 @@ fn reflect_ordinary(
                 ),
             )
         };
-        relations.push((
-            product.clone(),
-            division.dividend.clone(),
-            false,
-            lower_proof,
-        ));
-        relations.push((
-            AffineSyntax::Add {
+        let domain = if division.natural {
+            Domain::NatEmbedded
+        } else {
+            Domain::Int
+        };
+        relations.push(ReflectedConstraint {
+            domain,
+            lhs: product.clone(),
+            relation: Relation::Le,
+            rhs: division.dividend.clone(),
+            evidence: lower_proof,
+        });
+        relations.push(ReflectedConstraint {
+            domain,
+            lhs: AffineSyntax::Add {
                 left: Box::new(division.dividend),
                 right: Box::new(AffineSyntax::Const {
                     value: 1,
                     source: int(1),
                 }),
             },
-            AffineSyntax::Add {
+            rhs: AffineSyntax::Add {
                 left: Box::new(product),
                 right: Box::new(AffineSyntax::Const {
                     value: magnitude,
                     source: int(magnitude),
                 }),
             },
-            false,
-            upper_proof,
-        ));
+            relation: Relation::Le,
+            evidence: upper_proof,
+        });
     }
     let atoms_source = atom_list_source(&atoms);
     let mut facts = Vec::with_capacity(relations.len());
-    for (left, right, exact, relation_proof) in relations {
-        let left = normalize_syntax(&left, &atoms_source)?;
-        let right = normalize_syntax(&right, &atoms_source)?;
-        let linear = left
-            .linear
-            .checked_sub(&right.linear)
+    for reflected in relations {
+        let left = normalize_syntax(&reflected.lhs, &atoms_source)?;
+        let right = normalize_syntax(&reflected.rhs, &atoms_source)?;
+        let reflected = ReflectedConstraint {
+            domain: reflected.domain,
+            lhs: left.linear.clone(),
+            relation: reflected.relation,
+            rhs: right.linear.clone(),
+            evidence: reflected.evidence,
+        };
+        let linear = reflected
+            .lhs
+            .checked_sub(&reflected.rhs)
             .map_err(|failure| failure.to_string())?;
         let upper = right
             .linear
@@ -1579,7 +1593,7 @@ fn reflect_ordinary(
             "omega::sub_coeffs({}, {})",
             left.row_source, right.row_source
         );
-        if exact {
+        if reflected.relation == Relation::Eq {
             let equality = format!(
                 "omega::normalized_eq_value({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 left.source,
@@ -1591,7 +1605,7 @@ fn reflect_ordinary(
                 atoms_source,
                 left.proof,
                 right.proof,
-                relation_proof,
+                reflected.evidence,
             );
             facts.push(InitialAssumption {
                 coeffs: linear.coeffs,
@@ -1613,7 +1627,7 @@ fn reflect_ordinary(
                 )),
                 exact: Some(equality),
             });
-        } else {
+        } else if reflected.relation == Relation::Le {
             let proof = format!(
                 "omega::normalized_le_upper({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 left.source,
@@ -1625,7 +1639,7 @@ fn reflect_ordinary(
                 atoms_source,
                 left.proof,
                 right.proof,
-                relation_proof,
+                reflected.evidence,
             );
             facts.push(InitialAssumption {
                 coeffs: linear.coeffs,
@@ -1635,12 +1649,15 @@ fn reflect_ordinary(
                 upper: Some(proof),
                 exact: None,
             });
+        } else {
+            return Err("Omega reflected a non-canonical affine relation".into());
         }
     }
-    for (index, atom) in atoms.iter().enumerate() {
+    for (index, atom) in atoms.iter_with_ids() {
         let Some(nat_source) = &atom.nat_source else {
             continue;
         };
+        let index = index.index();
         let row_source = format!("omega::basis({index}, {atoms_source})");
         facts.push(InitialAssumption {
             coeffs: LinearExpr::atom(index).coeffs,

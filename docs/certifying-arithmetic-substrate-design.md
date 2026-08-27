@@ -195,6 +195,21 @@ Later consumers reuse narrower pieces:
 Each slice must keep deterministic stats, replayable generated failures,
 reachable-proof slicing, and the ordinary kernel gate.
 
+### Landed foundation
+
+The first representation extraction landed in `crates/elab/src/arithmetic.rs`:
+checked `Affine`/`Coeffs`, stable `AtomId`/`AtomTable`, `Domain`, `Relation`, and
+generic `ReflectedConstraint<A, E>`. Omega re-exports its old `LinearExpr`,
+`Coeffs`, `Relation`, `Failure`, and `Z` names, so this is an internal ownership
+change rather than a solver API break. Its frontend now uses the shared atom
+table and relation record while keeping division expansion, interval lowering,
+and proof evidence Omega-specific. Existing reports pin identical opaque-atom
+sharing and label order.
+
+The remaining work in slice 1 is to decide the smallest reusable source-
+evidence interface while implementing the first CutSat consumer. It should be
+extracted from an actual second use, not predicted as a generic solver trait.
+
 ## Why dark/grey shadows remain open
 
 Dark shadows may be a useful sufficient shortcut for exactly the thin regions

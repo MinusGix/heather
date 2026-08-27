@@ -76,6 +76,7 @@ use heather_syntax::{
 
 mod access;
 mod application;
+pub mod arithmetic;
 mod attempt;
 pub mod omega;
 mod omega_cert;

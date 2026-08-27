@@ -121,14 +121,19 @@ theorem negated_difference(x, y: Int,
 {{ omega }}
 "#
     );
-    elaborator()
-        .elab_module_source("probe", &source)
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
         .unwrap_or_else(|error| {
             panic!(
                 "nonlinear sharing/negation did not check: {}",
                 message(error)
             )
         });
+    let reports = elab.take_omega_reports();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].atoms, 1);
+    assert_eq!(reports[0].atom_labels, ["int::mul(x, x)"]);
+    assert_eq!(reports[1].atom_labels, ["x", "y"]);
 }
 
 #[test]
