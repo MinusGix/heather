@@ -1,6 +1,6 @@
 ---
 title: Extend Omega reflection through division, modulus, and divisibility
-status: open
+status: closed
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-26
@@ -76,3 +76,13 @@ frontend does not expand large unary divisions during reflection.
   witnesses. End-to-end rails cover natural quotient/remainder bounds,
   divisibility, disequality splitting, and rejection of false divisibility.
   The remaining acceptance item is an explicit large-literal scaling rail.
+- 2026-08-27: Closed with a dedicated large-literal scaling rail. Geometrically
+  identical `Int` and `Nat` quotient contradictions at divisors 16 and 512
+  produce exactly the same reflected atom count, assumptions, reachable
+  derivations, solver statistics, and reconstruction lemma set. Thus the
+  literal's unary kernel representation affects ordinary elaboration/checking
+  cost but does not expand Omega's reflected division problem or proof search.
+  A satisfiable remainder claim at divisor 512 is also refused. The rail owns
+  an independent resource envelope because checking a deeply unary literal is
+  intentionally real work; general large-numeral representation costs remain
+  separate from this now-complete frontend expansion.
