@@ -229,6 +229,47 @@ theorem nonprimitive(x: Int,
 }
 
 #[test]
+fn reconstructs_a_balanced_hard_equality() {
+    let source = format!(
+        r#"{PREFIX}
+theorem hard_equality(x, y: Int,
+    equation: OfNat(2) * x + OfNat(3) * y = NegSucc(0),
+    x_nonnegative: OfNat(0) <= x,
+    y_nonnegative: OfNat(0) <= y):
+    False
+{{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("hard equality did not check: {}", message(error)));
+    let reports = elab.take_omega_reports();
+    let report = reports.last().expect("Omega report");
+    assert_eq!(
+        report.atoms, 2,
+        "search-only variables stay out of reflection"
+    );
+    assert_eq!(report.stats.hard_equality_splits, 1);
+    assert_eq!(report.stats.fresh_variables, 1);
+    assert!(report.stats.equality_eliminations >= 1);
+    assert!(report.used_lemmas.contains(&"omega::exact_combo"));
+    drop(elab);
+
+    let mutation = format!(
+        r#"{PREFIX}
+theorem satisfiable_hard(x, y: Int,
+    equation: OfNat(2) * x + OfNat(3) * y = OfNat(1)):
+    False
+{{ omega }}
+"#
+    );
+    let error = elaborator()
+        .elab_module_source("mutation", &mutation)
+        .expect_err("a satisfiable hard equality must not produce a certificate");
+    assert!(message(error).contains("real shadow found no contradiction"));
+}
+
+#[test]
 fn reflects_a_negated_integer_relation() {
     let source = format!(
         r#"{PREFIX}

@@ -61,6 +61,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::atom_nonnegative",
         "omega::divide_lower",
         "omega::divide_upper",
+        "omega::eq_of_bounds",
+        "omega::exact_combo",
         "omega::impossible_constant_lower",
         "omega::impossible_constant_upper",
         "omega::lower_combo",
@@ -111,6 +113,7 @@ struct InitialAssumption {
     interval: Interval,
     lower: Option<String>,
     upper: Option<String>,
+    exact: Option<String>,
 }
 
 #[derive(Clone)]
@@ -169,6 +172,7 @@ struct BoundProof {
     interval: Interval,
     lower: Option<String>,
     upper: Option<String>,
+    exact: Option<String>,
 }
 
 fn named_args<'a>(elab: &Elaborator, t: &'a Term, wanted: &str) -> Option<Vec<&'a Rc<Term>>> {
@@ -1074,6 +1078,7 @@ fn reflect_ordinary(
                     int(upper),
                     equality,
                 )),
+                exact: Some(equality),
             });
         } else {
             let proof = format!(
@@ -1095,6 +1100,7 @@ fn reflect_ordinary(
                 interval: Interval::upper(upper),
                 lower: None,
                 upper: Some(proof),
+                exact: None,
             });
         }
     }
@@ -1112,6 +1118,7 @@ fn reflect_ordinary(
                 index, atoms_source, nat_source,
             )),
             upper: None,
+            exact: None,
         });
     }
     Ok(Some((facts, atoms_source)))
@@ -1401,6 +1408,7 @@ pub(crate) fn reconstruct(
                 interval: fact.interval,
                 lower: fact.interval.lower.map(|_| fact.name.clone()),
                 upper: fact.interval.upper.map(|_| fact.name),
+                exact: None,
             })
             .collect();
         (facts, atoms_source)
@@ -1447,17 +1455,49 @@ pub(crate) fn reconstruct(
     let mut proofs: Vec<Option<BoundProof>> = vec![None; problem.dag.nodes().len()];
     let mut bindings = Vec::new();
     for &id in &reachable_derivations {
-        let fact = problem.replay(id).map_err(|failure| failure.to_string())?;
-        let proof = match problem.dag.nodes()[id] {
+        let raw_fact = problem.replay(id).map_err(|failure| failure.to_string())?;
+        let fact = problem
+            .project_fact(&raw_fact)
+            .map_err(|failure| failure.to_string())?;
+        let mut proof = match problem.dag.nodes()[id] {
             Derivation::Assumption { index } => {
                 let source = reflected
                     .get(index)
                     .ok_or_else(|| format!("Omega assumption {index} was not reflected"))?;
+                let (lower, upper, exact) = if let Some(equality) = &source.exact {
+                    let value = fact
+                        .interval
+                        .lower
+                        .filter(|value| fact.interval.upper == Some(*value))
+                        .ok_or("Omega exact assumption lost its value")?;
+                    let name = format!("__omega_exact_{id}");
+                    bindings.push(format!("let {name} = {equality};"));
+                    (
+                        Some(format!(
+                            "omega::lower_of_eq({}, {}, {}, {})",
+                            source.row_source,
+                            atoms_source,
+                            int(value),
+                            name,
+                        )),
+                        Some(format!(
+                            "omega::upper_of_eq({}, {}, {}, {})",
+                            source.row_source,
+                            atoms_source,
+                            int(value),
+                            name,
+                        )),
+                        Some(name),
+                    )
+                } else {
+                    (source.lower.clone(), source.upper.clone(), None)
+                };
                 BoundProof {
                     row_source: source.row_source.clone(),
                     interval: fact.interval,
-                    lower: source.lower.clone(),
-                    upper: source.upper.clone(),
+                    lower,
+                    upper,
+                    exact,
                 }
             }
             Derivation::Positivize { parent: source } => {
@@ -1519,6 +1559,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower,
                     upper,
+                    exact: None,
                 }
             }
             Derivation::DivideGcd {
@@ -1587,7 +1628,22 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower,
                     upper,
+                    exact: None,
                 }
+            }
+            Derivation::Balanced { parent: source, .. } => {
+                let source_proof = parent(&proofs, source)?;
+                let source_fact = problem
+                    .replay(source)
+                    .and_then(|fact| problem.project_fact(&fact))
+                    .map_err(|failure| failure.to_string())?;
+                if source_fact.coeffs != fact.coeffs || source_fact.interval != fact.interval {
+                    return Err(format!(
+                        "Omega balanced projection did not erase to its parent: {:?} {:?} versus {:?} {:?}",
+                        source_fact.coeffs, source_fact.interval, fact.coeffs, fact.interval,
+                    ));
+                }
+                source_proof.clone()
             }
             Derivation::Intersect { left, right } => {
                 let left = parent(&proofs, left)?;
@@ -1613,6 +1669,78 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower,
                     upper,
+                    exact: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if fact.interval.is_exact() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let left_value = left
+                    .interval
+                    .lower
+                    .filter(|value| left.interval.upper == Some(*value))
+                    .ok_or("Omega exact combination has a non-exact left parent")?;
+                let right_value = right
+                    .interval
+                    .lower
+                    .filter(|value| right.interval.upper == Some(*value))
+                    .ok_or("Omega exact combination has a non-exact right parent")?;
+                let value = fact
+                    .interval
+                    .lower
+                    .ok_or("Omega exact combination lost its value")?;
+                let left_eq = left
+                    .exact
+                    .as_ref()
+                    .ok_or("Omega exact combination lost its left equality proof")?;
+                let right_eq = right
+                    .exact
+                    .as_ref()
+                    .ok_or("Omega exact combination lost its right equality proof")?;
+                let name = format!("__omega_exact_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let expression = format!(
+                    "omega::exact_combo({}, {}, {}, {}, {}, {}, {}, {}, {})",
+                    int(left_scale),
+                    int(right_scale),
+                    left.row_source,
+                    right.row_source,
+                    atoms_source,
+                    int(left_value),
+                    int(right_value),
+                    left_eq,
+                    right_eq,
+                );
+                bindings.push(format!("let {name} = {expression};"));
+                BoundProof {
+                    row_source: row_source.clone(),
+                    interval: fact.interval,
+                    lower: Some(format!(
+                        "omega::lower_of_eq({}, {}, {}, {})",
+                        row_source,
+                        atoms_source,
+                        int(value),
+                        name,
+                    )),
+                    upper: Some(format!(
+                        "omega::upper_of_eq({}, {}, {}, {})",
+                        row_source,
+                        atoms_source,
+                        int(value),
+                        name,
+                    )),
+                    exact: Some(name),
                 }
             }
             Derivation::Combo {
@@ -1670,6 +1798,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: Some(name),
                     upper: None,
+                    exact: None,
                 }
             }
             Derivation::Combo {
@@ -1730,6 +1859,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: Some(name),
                     upper: None,
+                    exact: None,
                 }
             }
             Derivation::Combo {
@@ -1787,6 +1917,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: None,
                     upper: Some(name),
+                    exact: None,
                 }
             }
             Derivation::Combo {
@@ -1841,6 +1972,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: Some(name),
                     upper: None,
+                    exact: None,
                 }
             }
             Derivation::Combo {
@@ -1895,6 +2027,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: None,
                     upper: Some(name),
+                    exact: None,
                 }
             }
             Derivation::Constant {
@@ -1907,6 +2040,7 @@ pub(crate) fn reconstruct(
                     interval: fact.interval,
                     lower: source.lower.clone(),
                     upper: source.upper.clone(),
+                    exact: source.exact.clone(),
                 }
             }
             ref unsupported => {
@@ -1915,6 +2049,28 @@ pub(crate) fn reconstruct(
                 ));
             }
         };
+        if proof.interval.is_exact() && proof.exact.is_none() {
+            let value = proof
+                .interval
+                .lower
+                .ok_or("Omega exact proof lost its value")?;
+            let name = format!("__omega_exact_{id}");
+            bindings.push(format!(
+                "let {name} = omega::eq_of_bounds({}, {}, {}, {}, {});",
+                proof.row_source,
+                atoms_source,
+                int(value),
+                proof
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega exact proof lost its lower bound")?,
+                proof
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega exact proof lost its upper bound")?,
+            ));
+            proof.exact = Some(name);
+        }
         proofs[id] = Some(proof);
     }
 

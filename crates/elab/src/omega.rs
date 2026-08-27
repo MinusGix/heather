@@ -79,6 +79,20 @@ fn ceil_div(a: Z, positive: Z) -> R<Z> {
     neg(floor_div(neg(a)?, positive))
 }
 
+/// Centered quotient/remainder with `a = remainder + modulus * quotient`.
+/// Ties are kept on the negative side, matching the balanced-remainder step
+/// that turns a coefficient of magnitude `modulus - 1` into `±1`.
+fn balanced_div_rem(a: Z, modulus: Z) -> R<(Z, Z)> {
+    debug_assert!(modulus > 0);
+    let quotient = a.div_euclid(modulus);
+    let remainder = a.rem_euclid(modulus);
+    if mul(2, remainder)? < modulus {
+        Ok((quotient, remainder))
+    } else {
+        Ok((add(quotient, 1)?, add(remainder, neg(modulus)?)?))
+    }
+}
+
 /// Dense signed coefficients, with trailing zeroes removed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Coeffs(Vec<Z>);
@@ -109,6 +123,52 @@ impl Coeffs {
 
     fn coefficient_gcd(&self) -> R<Z> {
         self.0.iter().try_fold(0, |out, &c| Ok(gcd(out, abs(c)?)))
+    }
+
+    fn min_abs(&self) -> R<Option<Z>> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|coefficient| *coefficient != 0)
+            .try_fold(None, |best, coefficient| {
+                let coefficient = abs(coefficient)?;
+                Ok(Some(
+                    best.map_or(coefficient, |old: Z| old.min(coefficient)),
+                ))
+            })
+    }
+
+    fn max_abs(&self) -> R<Option<Z>> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|coefficient| *coefficient != 0)
+            .try_fold(None, |best, coefficient| {
+                let coefficient = abs(coefficient)?;
+                Ok(Some(
+                    best.map_or(coefficient, |old: Z| old.max(coefficient)),
+                ))
+            })
+    }
+
+    fn balanced(&self, modulus: Z) -> R<(Self, Self)> {
+        let pairs = self
+            .0
+            .iter()
+            .copied()
+            .map(|coefficient| balanced_div_rem(coefficient, modulus))
+            .collect::<R<Vec<_>>>()?;
+        Ok((
+            Self::new(pairs.iter().map(|(_, remainder)| *remainder).collect()),
+            Self::new(pairs.iter().map(|(quotient, _)| *quotient).collect()),
+        ))
+    }
+
+    fn with_coefficient(&self, index: usize, coefficient: Z) -> Self {
+        let mut values = self.0.clone();
+        values.resize(index + 1, 0);
+        values[index] = coefficient;
+        Self::new(values)
     }
 
     fn scale(&self, k: Z) -> R<Self> {
@@ -299,6 +359,13 @@ impl Interval {
         })
     }
 
+    fn shift(self, amount: Z) -> R<Self> {
+        Ok(Self {
+            lower: self.lower.map(|value| add(value, amount)).transpose()?,
+            upper: self.upper.map(|value| add(value, amount)).transpose()?,
+        })
+    }
+
     fn combo(a: Z, x: Self, b: Z, y: Self) -> R<Self> {
         x.scale(a)?.add(y.scale(b)?)
     }
@@ -318,6 +385,11 @@ pub enum Derivation {
     DivideGcd {
         parent: DerivationId,
         divisor: Z,
+    },
+    Balanced {
+        parent: DerivationId,
+        modulus: Z,
+        fresh: usize,
     },
     Constant {
         parent: DerivationId,
@@ -362,6 +434,7 @@ impl DerivationDag {
                 Derivation::Assumption { .. } => {}
                 Derivation::Positivize { parent }
                 | Derivation::DivideGcd { parent, .. }
+                | Derivation::Balanced { parent, .. }
                 | Derivation::Constant { parent, .. } => visit(dag, parent, seen, out),
                 Derivation::Intersect { left, right } | Derivation::Combo { left, right, .. } => {
                     visit(dag, left, seen, out);
@@ -420,6 +493,8 @@ pub struct Stats {
     pub positivizations: usize,
     pub gcd_divisions: usize,
     pub equality_eliminations: usize,
+    pub hard_equality_splits: usize,
+    pub fresh_variables: usize,
     pub fourier_motzkin_eliminations: usize,
     pub exact_eliminations: usize,
     pub combinations: usize,
@@ -448,6 +523,9 @@ pub struct Problem {
     stats: Stats,
     contradiction: Option<DerivationId>,
     skip_gcd_reduction: bool,
+    num_vars: usize,
+    base_vars: Option<usize>,
+    fresh_projections: Vec<(Coeffs, Z)>,
 }
 
 impl Problem {
@@ -465,6 +543,7 @@ impl Problem {
 
     pub fn assume(&mut self, coeffs: Vec<Z>, interval: Interval) -> R<()> {
         let coeffs = Coeffs::new(coeffs);
+        self.num_vars = self.num_vars.max(coeffs.as_slice().len());
         let index = self.assumptions.len();
         self.assumptions.push((coeffs.clone(), interval));
         let fact = Fact::assumption(coeffs.0, interval, index, &mut self.dag);
@@ -496,6 +575,40 @@ impl Problem {
 
     pub fn constraints(&self) -> impl Iterator<Item = &Fact> {
         self.constraints.values()
+    }
+
+    fn project_coeffs(&self, coeffs: &Coeffs) -> R<(Coeffs, Z)> {
+        let Some(base_vars) = self.base_vars else {
+            return Ok((coeffs.clone(), 0));
+        };
+        if coeffs.as_slice().len() > base_vars + self.fresh_projections.len() {
+            return Err(Failure::InvalidConstraint {
+                detail: "coefficient row mentions an unrecorded fresh variable".into(),
+            });
+        }
+        let mut projected =
+            Coeffs::new(coeffs.as_slice()[..coeffs.as_slice().len().min(base_vars)].to_vec());
+        let mut constant = 0;
+        for (offset, (row, value)) in self.fresh_projections.iter().enumerate() {
+            let coefficient = coeffs.get(base_vars + offset);
+            if coefficient == 0 {
+                continue;
+            }
+            projected = Coeffs::combo(1, &projected, coefficient, row)?;
+            constant = add(constant, mul(coefficient, *value)?)?;
+        }
+        Ok((projected, constant))
+    }
+
+    /// Erase search-only fresh variables by substituting their recorded
+    /// affine definitions over the original reflected atoms.
+    pub fn project_fact(&self, fact: &Fact) -> R<Fact> {
+        let (coeffs, constant) = self.project_coeffs(&fact.coeffs)?;
+        Ok(Fact {
+            coeffs,
+            interval: fact.interval.shift(neg(constant)?)?,
+            derivation: fact.derivation,
+        })
     }
 
     /// Replay one derivation from the recorded assumptions.
@@ -542,6 +655,41 @@ impl Problem {
                     Fact {
                         coeffs: parent.coeffs.exact_div(divisor)?,
                         interval: parent.interval.divide(divisor)?,
+                        derivation: id,
+                    }
+                }
+                Derivation::Balanced {
+                    parent,
+                    modulus,
+                    fresh,
+                } => {
+                    if modulus <= 1 {
+                        return Err(Failure::InvalidConstraint {
+                            detail: format!(
+                                "derivation {id} has invalid balanced modulus {modulus}"
+                            ),
+                        });
+                    }
+                    let parent = replay_parent(&facts, parent, id)?;
+                    let Some(value) = parent
+                        .interval
+                        .lower
+                        .filter(|value| parent.interval.upper == Some(*value))
+                    else {
+                        return Err(Failure::InvalidConstraint {
+                            detail: format!("derivation {id} balances a non-exact constraint"),
+                        });
+                    };
+                    if fresh < parent.coeffs.as_slice().len() {
+                        return Err(Failure::InvalidConstraint {
+                            detail: format!("derivation {id} reuses existing variable {fresh}"),
+                        });
+                    }
+                    let (remainders, _) = parent.coeffs.balanced(modulus)?;
+                    let (_, remainder) = balanced_div_rem(value, modulus)?;
+                    Fact {
+                        coeffs: remainders.with_coefficient(fresh, modulus),
+                        interval: Interval::exact(remainder),
                         derivation: id,
                     }
                 }
@@ -705,8 +853,74 @@ impl Problem {
         Ok(true)
     }
 
+    fn select_hard_equality(&self) -> R<Option<Fact>> {
+        let mut best: Option<(Z, Z, Fact)> = None;
+        for fact in self
+            .constraints
+            .values()
+            .filter(|fact| fact.interval.is_exact())
+        {
+            let Some(minimum) = fact.coeffs.min_abs()? else {
+                continue;
+            };
+            if minimum == 1 {
+                continue;
+            }
+            let maximum = fact.coeffs.max_abs()?.unwrap_or(minimum);
+            if best
+                .as_ref()
+                .is_none_or(|(best_min, best_max, _)| (minimum, maximum) < (*best_min, *best_max))
+            {
+                best = Some((minimum, maximum, fact.clone()));
+            }
+        }
+        Ok(best.map(|(_, _, fact)| fact))
+    }
+
+    fn split_hard_equality(&mut self, equality: Fact) -> R<()> {
+        let minimum = equality
+            .coeffs
+            .min_abs()?
+            .ok_or(Failure::InvalidConstraint {
+                detail: "hard equality has no nonzero coefficient".into(),
+            })?;
+        let modulus = add(minimum, 1)?;
+        let (remainders, quotients) = equality.coeffs.balanced(modulus)?;
+        let value = equality.interval.lower.ok_or(Failure::InvalidConstraint {
+            detail: "hard equality lost its exact value".into(),
+        })?;
+        let (value_quotient, remainder) = balanced_div_rem(value, modulus)?;
+        let fresh = self.num_vars;
+        let base_vars = *self.base_vars.get_or_insert(self.num_vars);
+        debug_assert_eq!(fresh, base_vars + self.fresh_projections.len());
+        let (projection, projection_constant) = self.project_coeffs(&quotients)?;
+        self.fresh_projections
+            .push((projection, add(projection_constant, neg(value_quotient)?)?));
+        self.num_vars += 1;
+        let derivation = self.dag.push(Derivation::Balanced {
+            parent: equality.derivation,
+            modulus,
+            fresh,
+        });
+        self.stats.hard_equality_splits += 1;
+        self.stats.fresh_variables += 1;
+        self.insert(Fact {
+            coeffs: remainders.with_coefficient(fresh, modulus),
+            interval: Interval::exact(remainder),
+            derivation,
+        })
+    }
+
     fn solve_equalities(&mut self) -> R<()> {
-        while self.contradiction.is_none() && self.solve_easy_equality()? {}
+        while self.contradiction.is_none() {
+            if self.solve_easy_equality()? {
+                continue;
+            }
+            let Some(equality) = self.select_hard_equality()? else {
+                break;
+            };
+            self.split_hard_equality(equality)?;
+        }
         Ok(())
     }
 
@@ -917,6 +1131,87 @@ mod tests {
         };
         assert!(stats.equality_eliminations >= 1);
         assert!(!has_model(&facts, 4));
+    }
+
+    #[test]
+    fn hard_equality_uses_a_balanced_fresh_variable() {
+        // 2x + 3y = -1 is incompatible with x,y >= 0. Neither coefficient is
+        // a unit, so equality elimination must first balance the row.
+        let assumptions = vec![
+            (vec![2, 3], Interval::exact(-1)),
+            (vec![1, 0], Interval::lower(0)),
+            (vec![0, 1], Interval::lower(0)),
+        ];
+        let mut problem = Problem::new();
+        for (coeffs, interval) in &assumptions {
+            problem.assume(coeffs.clone(), *interval).unwrap();
+        }
+        let (problem, outcome) = problem.solve().unwrap();
+        let Outcome::Contradiction {
+            derivation, stats, ..
+        } = outcome
+        else {
+            panic!("hard equality should contradict nonnegative variables")
+        };
+        assert_eq!(stats.hard_equality_splits, 1);
+        assert_eq!(stats.fresh_variables, 1);
+        assert!(stats.equality_eliminations >= 1);
+        for (id, node) in problem.dag.nodes().iter().enumerate() {
+            if let Derivation::Balanced { parent, .. } = *node {
+                let child = problem.project_fact(&problem.replay(id).unwrap()).unwrap();
+                let parent = problem
+                    .project_fact(&problem.replay(parent).unwrap())
+                    .unwrap();
+                assert_eq!(child.coeffs, parent.coeffs);
+                assert_eq!(child.interval, parent.interval);
+            }
+        }
+        let replayed = problem.replay(derivation).unwrap();
+        assert!(replayed.interval.is_impossible());
+        assert!(!has_model(&assumptions, 4));
+    }
+
+    #[test]
+    fn satisfiable_hard_equality_remains_a_residual_not_a_verdict() {
+        let mut problem = Problem::new();
+        problem.assume(vec![2, 3], Interval::exact(1)).unwrap();
+        let (_, outcome) = problem.solve().unwrap();
+        let Outcome::NoContradiction { stats, .. } = outcome else {
+            panic!("2x + 3y = 1 has integer models")
+        };
+        assert!(stats.hard_equality_splits >= 1);
+        assert!(has_model(&[(vec![2, 3], Interval::exact(1))], 4));
+    }
+
+    #[test]
+    fn chained_hard_equalities_flatten_fresh_substitutions() {
+        // Eliminating x from the second row makes it mention the first search
+        // variable. A second balanced split must flatten that dependency back
+        // to the three original variables for certificate reconstruction.
+        let assumptions = vec![
+            (vec![2, 3, 0], Interval::exact(1)),
+            (vec![5, 0, 7], Interval::exact(2)),
+        ];
+        let mut problem = Problem::new();
+        for (coeffs, interval) in &assumptions {
+            problem.assume(coeffs.clone(), *interval).unwrap();
+        }
+        let (problem, outcome) = problem.solve().unwrap();
+        let Outcome::NoContradiction { stats, .. } = outcome else {
+            panic!("the chained system has model x=-1, y=1, z=1")
+        };
+        assert!(stats.hard_equality_splits >= 2);
+        for (id, node) in problem.dag.nodes().iter().enumerate() {
+            if let Derivation::Balanced { parent, .. } = *node {
+                let child = problem.project_fact(&problem.replay(id).unwrap()).unwrap();
+                let parent = problem
+                    .project_fact(&problem.replay(parent).unwrap())
+                    .unwrap();
+                assert_eq!(child.coeffs, parent.coeffs);
+                assert_eq!(child.interval, parent.interval);
+            }
+        }
+        assert!(has_model(&assumptions, 2));
     }
 
     #[test]

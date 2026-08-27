@@ -3,7 +3,7 @@ title: Certify linear Nat and Int arithmetic with an Omega-style solver
 status: open
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 Provide a certifying solver for quantifier-free linear arithmetic over `Nat`
@@ -209,3 +209,14 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   rounded-bound lemmas and reports the GCD derivations. This clears the
   prerequisite for balanced-remainder hard equalities independently of the
   user-facing division/modulus frontend.
+- 2026-08-27: Added hard-equality elimination using Lean's centered balanced-
+  remainder construction. Fresh quotient variables exist only in the Rust
+  search problem: each records a flattened affine projection onto the original
+  reflected atoms, and reconstruction validates that every balanced child
+  erases to its parent before reusing that parent's proof. Chained hard
+  equalities therefore add no runtime witness terms or certificate atoms.
+  Exact rows and exact linear combinations are named once and shared, avoiding
+  exponential equality-proof expansion. Kernel-gated rails cover a
+  contradictory hard equality and its satisfiable mutation; the pure replay
+  rail covers multiple dependent balanced splits and validates each flattened
+  projection.

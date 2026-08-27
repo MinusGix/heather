@@ -398,6 +398,28 @@ theorem upper_of_eq(row, atoms: List<Int>, value: Int,
     j(h, λ q p => dot(row, atoms) <= q, int::le_refl(dot(row, atoms)))
 }
 
+theorem eq_of_bounds(row, atoms: List<Int>, value: Int,
+    lower: value <= dot(row, atoms), upper: dot(row, atoms) <= value):
+    dot(row, atoms) = value
+{
+    int::le_antisym(dot(row, atoms), value, upper, lower)
+}
+
+theorem exact_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
+    left_eq: dot(left, atoms) = l, right_eq: dot(right, atoms) = r):
+    dot(combo(a, left, b, right), atoms) = a * l + b * r
+{
+    calc {
+        dot(combo(a, left, b, right), atoms)
+            = a * dot(left, atoms) + b * dot(right, atoms) :=
+                dot_combo(a, left, b, right, atoms),
+            = a * l + b * dot(right, atoms) :=
+                cong_int(λ (x: Int) => a * x + b * dot(right, atoms), left_eq),
+            = a * l + b * r :=
+                cong_int(λ (x: Int) => a * l + b * x, right_eq),
+    }
+}
+
 theorem normalized_le_upper(x, y, cx, cy: Int, left, right, atoms: List<Int>,
     hx: x = cx + dot(left, atoms), hy: y = cy + dot(right, atoms), h: x <= y):
     dot(sub_coeffs(left, right), atoms) <= cy + (-cx)
