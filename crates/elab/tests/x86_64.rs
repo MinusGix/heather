@@ -61,10 +61,28 @@ fn elaborated() -> Elaborator {
 #[test]
 fn x86_64_suite() {
     let base = elaborated();
+    if std::env::var_os("HEATHER_X86_BASE_ONLY").is_some() {
+        return;
+    }
+    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+    if report_metrics {
+        base.reset_value_metrics();
+    }
     register_and_execution_laws_check(&base);
+    if report_metrics {
+        eprintln!("x86_64 execution-law metrics: {:?}", base.value_metrics().unwrap());
+        base.reset_value_metrics();
+    }
     direct_decoder_agrees_with_reference_on_boundary_cases(&base);
+    if report_metrics {
+        eprintln!("x86_64 decoder-agreement metrics: {:?}", base.value_metrics().unwrap());
+        base.reset_value_metrics();
+    }
     invalid_decoded_lengths_are_refused(&base);
     unsupported_or_malformed_byte_spans_are_refused(&base);
+    if report_metrics {
+        eprintln!("x86_64 negative-control metrics: {:?}", base.value_metrics().unwrap());
+    }
 }
 
 fn register_and_execution_laws_check(base: &Elaborator) {

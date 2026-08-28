@@ -116,6 +116,29 @@ impl<'v> Env<'v> {
             }
     }
 
+    /// Pointwise object identity of two environment spines. Shared tails end
+    /// the walk immediately; otherwise every corresponding captured value
+    /// must be the same arena-owned closure. This is stronger than semantic
+    /// equality but cheaper than conversion, and is stable for the lifetime
+    /// of the query's arena.
+    pub fn values_ptr_eq(a: &Env<'v>, b: &Env<'v>) -> bool {
+        if a.len != b.len {
+            return false;
+        }
+        let (mut x, mut y) = (a, b);
+        loop {
+            match (x.node, y.node) {
+                (None, None) => return true,
+                (Some(nx), Some(ny)) if std::ptr::eq(nx, ny) => return true,
+                (Some(nx), Some(ny)) if std::ptr::eq(nx.val, ny.val) => {
+                    x = &nx.rest;
+                    y = &ny.rest;
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// `ρ, v` — one more binder, innermost.
     pub fn push(&self, val: &'v TmClo<'v>) -> Env<'v> {
         #[cfg(feature = "value-metrics")]
@@ -245,6 +268,11 @@ struct ValueMetricCells {
     type_cache_inserts: Cell<u64>,
     type_cache_evictions: Cell<u64>,
     type_cache_peak: Cell<u64>,
+    app_domain_checks: Cell<u64>,
+    app_domain_fast_hits: Cell<u64>,
+    app_codomain_checks: Cell<u64>,
+    app_codomain_fast_hits: Cell<u64>,
+    app_shared_body_env_hits: Cell<u64>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -266,6 +294,11 @@ pub struct ValueMetricsSnapshot {
     pub type_cache_inserts: u64,
     pub type_cache_evictions: u64,
     pub type_cache_peak: u64,
+    pub app_domain_checks: u64,
+    pub app_domain_fast_hits: u64,
+    pub app_codomain_checks: u64,
+    pub app_codomain_fast_hits: u64,
+    pub app_shared_body_env_hits: u64,
 }
 
 impl ValueMetrics {
@@ -285,6 +318,11 @@ impl ValueMetrics {
             type_cache_inserts: self.inner.type_cache_inserts.get(),
             type_cache_evictions: self.inner.type_cache_evictions.get(),
             type_cache_peak: self.inner.type_cache_peak.get(),
+            app_domain_checks: self.inner.app_domain_checks.get(),
+            app_domain_fast_hits: self.inner.app_domain_fast_hits.get(),
+            app_codomain_checks: self.inner.app_codomain_checks.get(),
+            app_codomain_fast_hits: self.inner.app_codomain_fast_hits.get(),
+            app_shared_body_env_hits: self.inner.app_shared_body_env_hits.get(),
         }
     }
 
@@ -304,6 +342,11 @@ impl ValueMetrics {
         self.inner.type_cache_inserts.set(zero.type_cache_inserts);
         self.inner.type_cache_evictions.set(zero.type_cache_evictions);
         self.inner.type_cache_peak.set(zero.type_cache_peak);
+        self.inner.app_domain_checks.set(zero.app_domain_checks);
+        self.inner.app_domain_fast_hits.set(zero.app_domain_fast_hits);
+        self.inner.app_codomain_checks.set(zero.app_codomain_checks);
+        self.inner.app_codomain_fast_hits.set(zero.app_codomain_fast_hits);
+        self.inner.app_shared_body_env_hits.set(zero.app_shared_body_env_hits);
     }
 
     #[cfg(feature = "value-metrics")]
@@ -361,6 +404,26 @@ impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
 }
 
 impl<'v> ValueArena<'v> {
+    pub(crate) fn record_app_annotation(&self, codomain: bool, fast: bool, env_hit: bool) {
+        #[cfg(feature = "value-metrics")]
+        if let Some(m) = self.metrics {
+            let (checks, hits) = if codomain {
+                (&m.inner.app_codomain_checks, &m.inner.app_codomain_fast_hits)
+            } else {
+                (&m.inner.app_domain_checks, &m.inner.app_domain_fast_hits)
+            };
+            ValueMetrics::bump(checks);
+            if fast {
+                ValueMetrics::bump(hits);
+            }
+            if env_hit {
+                ValueMetrics::bump(&m.inner.app_shared_body_env_hits);
+            }
+        }
+        #[cfg(not(feature = "value-metrics"))]
+        let _ = (codomain, fast, env_hit);
+    }
+
     pub fn new() -> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]
@@ -1347,6 +1410,21 @@ mod tests {
             clo = arena.tm(TmClo::val(Rc::new(Val::Succ(clo))));
         }
         assert!(arena.memo_tm(clo).is_some());
+    }
+
+    #[test]
+    fn environment_value_identity_ignores_nodes_but_not_captured_values() {
+        let arena = ValueArena::new();
+        let base = super::Env::empty(&arena);
+        let shared = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left = base.push(shared);
+        let right = base.push(shared);
+        assert!(!super::Env::ptr_eq(&left, &right));
+        assert!(super::Env::values_ptr_eq(&left, &right));
+
+        let separately_allocated = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let different = base.push(separately_allocated);
+        assert!(!super::Env::values_ptr_eq(&left, &different));
     }
 
     #[test]

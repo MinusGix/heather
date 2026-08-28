@@ -109,3 +109,10 @@ were also reverted.
   exact A/B measurement. The pragmatic follow-up is to reduce stored
   annotation representation/instantiation cost; a paired/common neutral type
   remains a possible theoretical redesign, not a prerequisite for correctness.
+- 2026-08-28: A follow-on metrics round retained the restored rule and added a
+  narrower identity win: equal annotation bodies captured over pointwise-
+  identical arena values are the same closure denotation even when their
+  environment nodes were rebuilt. This raises x86 base-module annotation fast
+  hits from 13.8% to 25.0% without helping—or bypassing—any fold/tabulate
+  comparison. The remaining cost is tracked by
+  [[application-annotation-sharing-cost]].

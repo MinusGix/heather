@@ -29,9 +29,13 @@
 
 use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
+#[cfg(feature = "value-metrics")]
+use heather_kernel::conv::conv_term_profiled;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
+#[cfg(feature = "value-metrics")]
+use heather_kernel::value::ValueMetrics;
 
 const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 
@@ -179,6 +183,16 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
         );
         assert!(ht != rt, "the hook declined entirely on:\n{fixture}");
         let empty = LocalCtx::nil();
+        #[cfg(feature = "value-metrics")]
+        if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
+            let metrics = ValueMetrics::default();
+            conv_term_profiled(
+                hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000, &metrics,
+            )
+            .unwrap_or_else(|e| panic!("hook and Rust `tabulate` disagree on:\n{fixture}\n{e:?}"));
+            eprintln!("tabulate oracle metrics: {:?}", metrics.snapshot());
+            continue;
+        }
         conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| panic!("hook and Rust `tabulate` disagree on:\n{fixture}\n{e:?}"));
     }

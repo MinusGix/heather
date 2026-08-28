@@ -596,6 +596,17 @@ pub(super) trait Dom<'v>: Sized {
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
     fn ty_eq_fast(a: &Self::TyC, b: &Self::TyC) -> bool;
+    /// Observe the fast-identity result for one stored application annotation.
+    /// The syntax oracle ignores this; the value domain exposes it only through
+    /// optional allocation/performance metrics.
+    fn app_annotation_fast(
+        _env: &Env<'v>,
+        a: &Self::TyC,
+        b: &Self::TyC,
+        _codomain: bool,
+    ) -> bool {
+        Self::ty_eq_fast(a, b)
+    }
     /// Scoped pointer identity of two term sub-structures, for the general
     /// reflexivity shortcut. Unlike [`Dom::tm_eq_fast`], this must imply that
     /// the two carriers denote the same term in their present scope.

@@ -1086,6 +1086,21 @@ impl<'v> Dom<'v> for Values {
                 })
     }
 
+    fn app_annotation_fast(env: &Env<'v>, a: &TyC<'v>, b: &TyC<'v>, codomain: bool) -> bool {
+        let ordinary = Self::ty_eq_fast(a, b);
+        let env_hit = !ordinary
+            && a.home == b.home
+            && a.sat == b.sat
+            && matches!(
+                (a.clo.as_syn(), b.clo.as_syn()),
+                (Some((e1, b1)), Some((e2, b2)))
+                    if Rc::ptr_eq(b1, b2) && value::Env::values_ptr_eq(e1, e2)
+            );
+        let fast = ordinary || env_hit;
+        env.rho.arena().record_app_annotation(codomain, fast, env_hit);
+        fast
+    }
+
     /// Scoped identity ([`Values::ty_eq_fast`]) for terms: one closure — or
     /// one (environment, body) denotation — opened with the same pending
     /// binders denotes the same term on both sides.

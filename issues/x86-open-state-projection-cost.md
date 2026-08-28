@@ -138,3 +138,9 @@ fuel or stack as the fix.
   issue's semantic forcing customers remain green; future performance work
   should retain the exact 60.40 s module / 31.15 s kernel measurement rather
   than reviving the incomplete inferred-Π rule.
+- 2026-08-28: Scoped environment-value identity recovers a measured portion of
+  the restored rule's cost without changing its judgments: base-module fast
+  annotation hits rise from 13.8% to 25.0%, and warmed module/kernel time moves
+  from 46.24/24.00 s to 43.13/22.49 s (confirmation 43.44/22.42 s). The full
+  consolidated suite remains green; residual annotation work is filed as
+  [[application-annotation-sharing-cost]].

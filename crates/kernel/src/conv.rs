@@ -173,6 +173,26 @@ pub fn conv_term(
     Conv::<Values>::new(fuel, psi).tm_root(&Env::new(&arena, psi, gamma, layer), a, b, ty, level)
 }
 
+/// [`conv_term`] with allocation/cache/application metrics collected in the
+/// same caller-owned region as profiled kernel typing.
+#[cfg(feature = "value-metrics")]
+#[allow(clippy::too_many_arguments)]
+pub fn conv_term_profiled(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Term,
+    b: &Term,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+    metrics: &ValueMetrics,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = ValueArena::profiled(metrics);
+    Conv::<Values>::new(fuel, psi).tm_root(&Env::new(&arena, psi, gamma, layer), a, b, ty, level)
+}
+
 /// `Ψ ⊢_i Γ ≈ Δ` — convertibility of local contexts.
 pub fn conv_local_ctx(
     psi: &GlobalCtx,
@@ -658,6 +678,26 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     fn ty(&mut self, env: &Env<'v>, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
         self.spend()?;
         if D::ty_eq_fast(a, b) {
+            return Ok(());
+        }
+        let mut wa = D::whnf_ty_opaque(self, env, a)?;
+        let mut wb = D::whnf_ty_opaque(self, env, b)?;
+        self.ty_w(env, &mut wa, &mut wb, l)
+    }
+
+    /// [`Conv::ty`] for an application's stored Π component, with the same
+    /// judgment and fuel accounting plus feature-gated fast-path metrics.
+    fn app_annotation_ty(
+        &mut self,
+        env: &Env<'v>,
+        a: &D::TyC,
+        b: &D::TyC,
+        l: &Level,
+        codomain: bool,
+    ) -> R {
+        self.spend()?;
+        let fast = D::app_annotation_fast(env, a, b, codomain);
+        if fast {
             return Ok(());
         }
         let mut wa = D::whnf_ty_opaque(self, env, a)?;
@@ -1839,9 +1879,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                self.ty(env, s1, s2, dl1)?;
+                self.app_annotation_ty(env, s1, s2, dl1, false)?;
                 let e_x = D::push_entry(env, s1, dl1);
-                self.ty(&e_x, t1, t2, cl1)?;
+                self.app_annotation_ty(&e_x, t1, t2, cl1, true)?;
                 // The inferred head type is redundant only after the stored Π
                 // annotations have been related. Besides checking the ch. 06
                 // premises, that comparison preserves the dependent spelling
