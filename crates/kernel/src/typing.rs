@@ -53,11 +53,17 @@
 //! **Fuel.** The checker's own recursion is structural, so it terminates
 //! without a budget; only conversion and weak-head normalization need one.
 //! `fuel` is granted *per conversion call / per normalization* (not shared
-//! globally): total work is bounded by `O(nodes · fuel)`. Exhaustion
-//! surfaces as [`TypeError::OutOfFuel`], distinct from a mismatch. On
-//! well-typed input it means the budget was too small; [`DEFAULT_FUEL`] is
-//! a generous default.
+//! globally): total work is bounded by `O(nodes · fuel)`. Within one public
+//! checking gate, a later byte-for-byte identical cross-head conversion may
+//! reuse an earlier success. Failures are never cached, and the gate has one
+//! fixed fuel value, so reuse cannot change a verdict. Exhaustion surfaces as
+//! [`TypeError::OutOfFuel`], distinct from a mismatch. On well-typed input it
+//! means the budget was too small; [`DEFAULT_FUEL`] is a generous default.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::mem::{discriminant, Discriminant};
 use std::rc::Rc;
 
 use crate::conv::ConvError;
@@ -71,8 +77,8 @@ use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi}
 use crate::reduce::{whnf_type_delta, Defs};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
-    LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
+    wf_step_telescope, CtxBase, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
+    GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 use crate::value::ValueMetrics;
 
@@ -132,7 +138,7 @@ impl From<ConvError> for TypeError {
 /// `⊢_L Ψ` — well-formedness of a global context under `univs` universe
 /// variables.
 pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
-    let tc = Tc { fuel };
+    let tc = Tc::new(fuel);
     for (i, b) in psi.bindings.iter().enumerate() {
         let prefix = GlobalCtx::new(psi.bindings[..i].to_vec());
         let env = Env {
@@ -194,7 +200,7 @@ pub fn check_local_ctx(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.ctx_wf(&env, layer, gamma)
+    Tc::new(fuel).ctx_wf(&env, layer, gamma)
 }
 
 /// `⊢_i T @ l` — the type `T` is well-formed at level `l`. Presupposes
@@ -213,7 +219,7 @@ pub fn check_type(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.ty_check(&env, ty, level)
+    Tc::new(fuel).ty_check(&env, ty, level)
 }
 
 /// [`check_type`] while accumulating value-machine activity in `metrics`.
@@ -234,7 +240,7 @@ pub fn check_type_profiled(
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
-    Tc { fuel }.ty_check(&env, ty, level)
+    Tc::new(fuel).ty_check(&env, ty, level)
 }
 
 /// `⊢_i T @ ?` — infer the canonical level of `T`. Presuppositions as
@@ -252,7 +258,7 @@ pub fn infer_type(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.ty_infer(&env, ty)
+    Tc::new(fuel).ty_infer(&env, ty)
 }
 
 /// `⊢_i t : T @ l`. Presupposes `⊢_L Ψ`, `⊢_typeof(i) Γ`, and
@@ -273,7 +279,7 @@ pub fn check_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.tm_check(&env, t, ty, level)
+    Tc::new(fuel).tm_check(&env, t, ty, level)
 }
 
 /// [`check_term`] while accumulating value-machine activity in `metrics`.
@@ -295,7 +301,7 @@ pub fn check_term_profiled(
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
-    Tc { fuel }.tm_check(&env, t, ty, level)
+    Tc::new(fuel).tm_check(&env, t, ty, level)
 }
 
 /// `⊢_i t : ? @ ?` — infer the canonical type and level of `t`.
@@ -314,7 +320,7 @@ pub fn infer_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.tm_infer(&env, t)
+    Tc::new(fuel).tm_infer(&env, t)
 }
 
 /// `⊢_i δ : Δ` — the local substitution `δ` maps `Δ` into `Γ`. Presupposes
@@ -336,7 +342,7 @@ pub fn check_local_subst(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc { fuel }.subst_ck(&env, delta, target)
+    Tc::new(fuel).subst_ck(&env, delta, target)
 }
 
 // ---------------------------------------------------------------------------
@@ -416,9 +422,80 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
 struct Tc {
     /// Per-conversion / per-normalization budget (see module docs).
     fuel: u64,
+    /// Successful conversions whose syntax has different outer constructors.
+    /// The cache lives for one public kernel gate; identity keys own every `Rc`
+    /// they identify, so allocator reuse cannot create an aliasing key.
+    conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
+    conv_memo_entries: Cell<usize>,
+}
+
+struct RcIdentity<T>(Rc<T>);
+
+impl<T> RcIdentity<T> {
+    fn new(value: Rc<T>) -> RcIdentity<T> {
+        RcIdentity(value)
+    }
+}
+
+impl<T> Clone for RcIdentity<T> {
+    fn clone(&self) -> Self {
+        RcIdentity(Rc::clone(&self.0))
+    }
+}
+
+impl<T> PartialEq for RcIdentity<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T> Eq for RcIdentity<T> {}
+
+impl<T> Hash for RcIdentity<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(Rc::as_ptr(&self.0), state);
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum TypeAnchor {
+    None,
+    Type(RcIdentity<Type>),
+    Term(RcIdentity<Term>),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ConvMemoBucket {
+    expected: Discriminant<Type>,
+    inferred: Discriminant<Type>,
+    expected_anchor: TypeAnchor,
+    inferred_anchor: TypeAnchor,
+    psi: RcIdentity<Vec<GlobalBinding>>,
+    gamma: CtxEntriesIdentity,
+    gamma_base: Option<u32>,
+    layer: Layer,
+    univs: u32,
+}
+
+struct ConvMemo {
+    psi: GlobalCtx,
+    gamma: LocalCtx,
+    layer: Layer,
+    univs: u32,
+    expected: Type,
+    inferred: Type,
+    level: Level,
 }
 
 impl Tc {
+    fn new(fuel: u64) -> Tc {
+        Tc {
+            fuel,
+            conv_memo: RefCell::new(HashMap::new()),
+            conv_memo_entries: Cell::new(0),
+        }
+    }
+
     // -- premise helpers ----------------------------------------------------
 
     /// `⊢_L l : Level` (rejects `ω` and out-of-scope variables).
@@ -433,6 +510,52 @@ impl Tc {
 
     /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`.
     fn conv_ty(&self, env: &Env, expected: &Type, inferred: &Type, l: &Level) -> R {
+        // `Conv::ty_root` spends one unit before the same syntactic
+        // reflexivity test. Preserve that exact zero-fuel boundary while
+        // avoiding an arena for the overwhelmingly common positive case.
+        if self.fuel > 0 && expected == inferred {
+            return Ok(());
+        }
+        // Cross-head conversions necessarily do semantic work before they can
+        // succeed and are the repeated family this cache is meant to serve.
+        // Same-head judgments are left alone: broad memoization makes large,
+        // mostly-distinct inference workloads pay for linear bucket searches.
+        let expected_head = discriminant(expected);
+        let inferred_head = discriminant(inferred);
+        let bucket_key = (expected_head != inferred_head).then(|| ConvMemoBucket {
+            expected: expected_head,
+            inferred: inferred_head,
+            expected_anchor: type_anchor(expected),
+            inferred_anchor: type_anchor(inferred),
+            psi: RcIdentity::new(Rc::clone(&env.psi.bindings)),
+            gamma: env.gamma.entries.identity(),
+            gamma_base: match env.gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            layer: env.layer,
+            univs: env.univs,
+        });
+        if bucket_key.as_ref().is_some_and(|bucket_key| {
+            self
+                .conv_memo
+                .borrow()
+                .get(bucket_key)
+                .is_some_and(|bucket| {
+                    bucket.iter().any(|entry| {
+                        entry.layer == env.layer
+                            && entry.univs == env.univs
+                            && entry.level == *l
+                            && Rc::ptr_eq(&entry.psi.bindings, &env.psi.bindings)
+                            && entry.gamma == env.gamma
+                            && entry.expected == *expected
+                            && entry.inferred == *inferred
+                    })
+                })
+        })
+        {
+            return Ok(());
+        }
         let at = env.layer.type_layer();
         #[cfg(feature = "value-metrics")]
         conv_type_with_metrics(
@@ -447,6 +570,28 @@ impl Tc {
         )?;
         #[cfg(not(feature = "value-metrics"))]
         conv_type(&env.psi, &env.gamma, at, expected, inferred, l, self.fuel)?;
+        // A gate-wide cap bounds adversarial all-distinct input. Once full,
+        // misses retain the ordinary checker behavior rather than evicting a
+        // potentially hot positive judgment.
+        if let Some(bucket_key) = bucket_key.filter(|_| self.conv_memo_entries.get() < 4096) {
+            let mut memo = self.conv_memo.borrow_mut();
+            let bucket = memo.entry(bucket_key).or_default();
+            // The anchors are deliberately shallow, so unrelated judgments
+            // can collide. Keep a miss bounded instead of letting an
+            // adversarial bucket turn conversion checking quadratic.
+            if bucket.len() < 4 {
+                bucket.push(ConvMemo {
+                    psi: env.psi.clone(),
+                    gamma: env.gamma.clone(),
+                    layer: env.layer,
+                    univs: env.univs,
+                    expected: expected.clone(),
+                    inferred: inferred.clone(),
+                    level: l.clone(),
+                });
+                self.conv_memo_entries.set(self.conv_memo_entries.get() + 1);
+            }
+        }
         Ok(())
     }
 
@@ -1915,5 +2060,101 @@ impl Tc {
             self.tm_check(&e, b, &spec.ty, &spec.level)?;
         }
         Ok(())
+    }
+}
+
+/// A cheap identity hint for partitioning the conversion memo. A mismatch is
+/// allowed to miss a structurally equal entry; a match is never trusted until
+/// the complete judgment has been compared. Cloning Heather syntax preserves
+/// these child `Rc`s, which distinguishes the mostly-fresh types produced by
+/// inference without recursively hashing them.
+fn type_anchor(ty: &Type) -> TypeAnchor {
+    match ty {
+        Type::Pi { dom, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(dom))),
+        Type::UPi { body, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(body))),
+        Type::El { tm, .. } => TypeAnchor::Term(RcIdentity::new(Rc::clone(tm))),
+        Type::Id { ty, .. } | Type::SEq { ty, .. } | Type::Squash { ty, .. } => {
+            TypeAnchor::Type(RcIdentity::new(Rc::clone(ty)))
+        }
+        Type::Sigma { fst, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(fst))),
+        Type::Sum { lhs, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(lhs))),
+        Type::W { shape, .. } | Type::Wf { shape, .. } => {
+            TypeAnchor::Type(RcIdentity::new(Rc::clone(shape)))
+        }
+        Type::Vec { elem, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(elem))),
+        Type::Fin { len } => TypeAnchor::Term(RcIdentity::new(Rc::clone(len))),
+        Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
+            TypeAnchor::Type(RcIdentity::new(Rc::clone(body)))
+        }
+        Type::CodeTm { ty, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(ty))),
+        Type::Nat
+        | Type::Ty(_)
+        | Type::SEmpty { .. }
+        | Type::Unit { .. }
+        | Type::Empty { .. }
+        | Type::GlobalTy { .. }
+        | Type::CodeTy { .. } => TypeAnchor::None,
+    }
+}
+
+#[cfg(test)]
+mod memo_tests {
+    use super::*;
+
+    fn env(psi: GlobalCtx) -> Env {
+        Env {
+            psi,
+            gamma: LocalCtx::nil(),
+            layer: Layer::Prog,
+            univs: 0,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
+        }
+    }
+
+    fn encoded_nat() -> Type {
+        Type::El { level: Level::Zero, tm: Rc::new(Term::TmNat) }
+    }
+
+    #[test]
+    fn positive_conversion_is_reused_only_in_the_same_world() {
+        let tc = Tc::new(DEFAULT_FUEL);
+        let first = env(GlobalCtx::default());
+        let encoded = encoded_nat();
+        tc.conv_ty(&first, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        assert_eq!(tc.conv_memo_entries.get(), 1);
+        tc.conv_ty(&first, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        assert_eq!(tc.conv_memo_entries.get(), 1, "the exact judgment is a hit");
+
+        let second = env(GlobalCtx::default());
+        tc.conv_ty(&second, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        assert_eq!(
+            tc.conv_memo_entries.get(),
+            2,
+            "a structurally equal but separately owned Psi is not reused",
+        );
+    }
+
+    #[test]
+    fn failures_are_not_memoized_and_reflexivity_keeps_its_fuel_boundary() {
+        let tc = Tc::new(DEFAULT_FUEL);
+        let e = env(GlobalCtx::default());
+        assert_eq!(
+            tc.conv_ty(
+                &e,
+                &encoded_nat(),
+                &Type::Unit { level: Level::Zero },
+                &Level::Zero,
+            ),
+            Err(TypeError::NotConvertible),
+        );
+        assert_eq!(tc.conv_memo_entries.get(), 0);
+
+        let empty = Tc::new(0);
+        assert_eq!(
+            empty.conv_ty(&e, &Type::Nat, &Type::Nat, &Level::Zero),
+            Err(TypeError::OutOfFuel),
+        );
+        Tc::new(1).conv_ty(&e, &Type::Nat, &Type::Nat, &Level::Zero).unwrap();
     }
 }

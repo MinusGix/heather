@@ -443,6 +443,21 @@ paper too).
   The recursor telescopes live once in `rec.rs`, shared by conversion and
   typing. Fuel is granted per conversion call / per weak-head normalization
   (the checker's own recursion is structural, hence total without fuel).
+  The typing seam handles syntactic reflexivity directly, preserving
+  conversion's one-unit zero-fuel boundary without allocating a value arena.
+  One public checking gate also retains a positive memo for repeated
+  **cross-head** type-conversion judgments. A hit requires the same Ψ object,
+  structurally equal Γ, layer, universe count, level, expected type, and
+  inferred type; shallow allocation identities only partition candidates and
+  never authorize a hit. Identity keys own the `Rc`s they identify, so an
+  address cannot be reused while its key exists. The address is observed only
+  transiently while hashing a live `Rc`, never stored as a bare pointer;
+  failures are not cached, buckets hold at most four exact judgments, and the
+  gate holds at most 4096. The restriction and bounds are performance safety
+  rails: broad same-head memoization made mostly-distinct nested inference pay
+  for large linear candidate scans. Fuel is constant across a gate, and only
+  a judgment already proved successful at that fuel is reused, so the memo
+  changes work but not the kernel verdict.
 
 ## Representation
 

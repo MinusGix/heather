@@ -15,6 +15,7 @@
 //! deliberate (ch. 04): annotations are sub-structures so the code recursors
 //! can recurse into them.
 
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::layer::Layer;
@@ -1078,6 +1079,43 @@ pub struct CtxEntry {
 #[derive(Clone)]
 pub struct CtxEntries(Option<Rc<CtxNode>>);
 
+/// An owning identity token for a persistent context spine.
+///
+/// Equality and hashing observe allocation identity, while the retained `Rc`
+/// makes that identity impossible for the allocator to reuse during the
+/// token's lifetime.
+pub(crate) struct CtxEntriesIdentity(Option<Rc<CtxNode>>);
+
+impl Clone for CtxEntriesIdentity {
+    fn clone(&self) -> Self {
+        CtxEntriesIdentity(self.0.clone())
+    }
+}
+
+impl PartialEq for CtxEntriesIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(lhs), Some(rhs)) => Rc::ptr_eq(lhs, rhs),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CtxEntriesIdentity {}
+
+impl Hash for CtxEntriesIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.0 {
+            None => 0u8.hash(state),
+            Some(node) => {
+                1u8.hash(state);
+                std::ptr::hash(Rc::as_ptr(node), state);
+            }
+        }
+    }
+}
+
 struct CtxNode {
     entry: CtxEntry,
     /// Length of the context ending *at* this node — `rest.len() + 1`.
@@ -1101,6 +1139,11 @@ impl CtxEntries {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_none()
+    }
+
+    /// An owning identity token for this persistent context spine.
+    pub(crate) fn identity(&self) -> CtxEntriesIdentity {
+        CtxEntriesIdentity(self.0.clone())
     }
 
     /// `self, entry` — O(1), sharing `self`.

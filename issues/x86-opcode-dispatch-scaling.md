@@ -75,3 +75,21 @@ both changes and are diagnostic measurements, not benchmark thresholds.
   the descriptor/classifier split above.  It leaves the unavoidable semantic
   proof linear once, but prevents every downstream theorem from paying for
   the classification table again.
+
+- 2026-08-28: A one-arm extraction showed that some of the semantic payload
+  cost was avoidable kernel repetition after all.  In a single gate,
+  `El`/`Sum` conversion at variables made 1,042 calls for only 98 exact
+  judgments (one repeated 48 times); `Sigma` projection families showed the
+  same effect.  [[kernel-gate-conversion-reuse]] landed conservative positive
+  reuse at the typing seam.  A same-session comparison against `e4c7c7c`
+  moved this module from 30.590 s to 28.372 s and its kernel phase from
+  23.004 s to 21.050 s.  Reflexivity alone measured 30.182/22.569 s, so the
+  reuse rather than arena avoidance owns most of the improvement.
+
+  The descriptor/classifier split remains worthwhile: the retained cache is
+  deliberately cross-head, shallow-keyed, gate-local, and bounded, while the
+  source design prevents downstream theorems from replaying the semantic
+  table at all.  Broad reuse was rejected after it exposed linear candidate
+  scans; the apparent frontend regression against the saved benchmark was a
+  stale baseline (an untouched same-session build took 41.96 ms in the deep
+  kernel case, versus 27.77 ms with memo lookup disabled).
