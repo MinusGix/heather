@@ -133,3 +133,10 @@ Acceptance has two parts:
   evaluator differential suites are green. This closes the open symbolic
   wrapper subproblem, but not this issue's original closed generated-carry and
   excessive-unary-arithmetic acceptance clauses.
+- 2026-08-28: Completeness correction: the inferred-Π application shortcut
+  above was reverted after it was bisected as the cause of three false
+  `NotConvertible` oracle controls. The original annotation-directed rule is
+  restored. The seven BitVec rails, including the open width-64 producers and
+  consumers, still pass under ordinary fuel; the tradeoff is time rather than
+  a return of the old fuel cliff. Further work should make stored annotation
+  comparison/instantiation cheaper without discarding its dependent spelling.

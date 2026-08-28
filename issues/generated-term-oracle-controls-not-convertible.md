@@ -1,6 +1,6 @@
 ---
 title: Generated-term oracle controls are not convertible on master
-status: open
+status: closed
 labels: [kernel,conversion,elaboration,testing,regression]
 created: 2026-08-28
 updated: 2026-08-28
@@ -85,3 +85,27 @@ were also reverted.
   not accepted by this investigation. The block control's Ψ was separately
   corrected to be the context that owns its terms; this is test hygiene and
   does not alter the reproduced failure.
+- 2026-08-28: Corrected the performance interpretation with exact-test phase
+  measurements. The unchanged inferred rule checks the x86 module in 42.80 s
+  (26.26 s measured kernel, 16.54 s frontend) and finishes the isolated module
+  test in 49.83 s. Restoring the original stored-annotation rule checks the
+  module in 62.40 s (32.61 s kernel, 29.79 s frontend) and finishes the test in
+  74.93 s: a real 46% module regression, but not an individually unusable
+  check. More importantly, the unchanged five-test x86 binary already reaches
+  the runner's 303-second test timeout after four tests pass. Its aggregate
+  rail repeats the entire dependency stack and x86 module five times under a
+  serializing mutex, so crossing that rail does not by itself reject the
+  correctness-restoring rule. Judge future candidates on exact consumers and
+  fix or split the aggregate harness independently.
+- 2026-08-28: **Fixed and closed.** Restored the ch. 06 annotation-directed
+  application rule, with no fallback, fuel change, or new trusted mechanism.
+  Fold, tabulate, and the block control pass, as do the sibling map (3) and nth
+  (5) suites, the kernel suite (299), BitVec (7), and the default-fuel IR rail.
+  The x86 harness now elaborates its dependency stack and module once, then
+  runs each formerly separate consumer against an isolated cheap clone of that
+  base. This preserves negative-test isolation and cuts the complete correct-
+  rule x86 suite from an incomplete 303-second aggregate to 146.34 s. Its base
+  module elaboration is 60.40 s (31.15 s measured kernel), consistent with the
+  exact A/B measurement. The pragmatic follow-up is to reduce stored
+  annotation representation/instantiation cost; a paired/common neutral type
+  remains a possible theoretical redesign, not a prerequisite for correctness.

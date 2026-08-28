@@ -21,10 +21,11 @@
 //!
 //! - **Neutral comparison is inference**: `tm_ne`/`ty_ne` return the type /
 //!   universe level of the left input (left-biased — sound by ch. 08); the
-//!   normal-form judgments are checking and application inference uses the
-//!   inferred Π spine instead of rechecking redundant annotations that
-//!   well-typedness already forces (the ch. 06 note below the application
-//!   rule). The judgment-level `l` inputs are threaded for rule
+//!   normal-form judgments are checking. Application inference compares its
+//!   stored Π annotations before comparing the function spine: although
+//!   well-typedness forces those annotations convertible, their coherent
+//!   dependent spelling is operationally necessary for generated terms. The
+//!   judgment-level `l` inputs are threaded for rule
 //!   fidelity but never branch the algorithm — every level the rules
 //!   actually check is an *annotation*, compared via [`Level::equiv`].
 //! - **η-directed** comparison at all four function types (`Π`, `ΠΠ`,
@@ -1822,37 +1823,32 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 TmView::App {
                     dom_level: dl1,
                     cod_level: cl1,
+                    dom: s1,
+                    cod: t1,
                     fun: f1,
                     arg: a1,
                 },
                 TmView::App {
                     dom_level: dl2,
                     cod_level: cl2,
+                    dom: s2,
+                    cod: t2,
                     fun: f2,
                     arg: a2,
                 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                // By the presupposition of conversion both applications are
-                // already well typed, so their stored Π annotations are
-                // convertible to the Π inferred for their functions (ch. 06,
-                // note below the application rule). Use that one Π spine for
-                // the argument and result instead of rechecking two copies at
-                // every curried application node. Besides being redundant,
-                // the latter duplicates dependent codomains exponentially.
-                let (fun_ty, _) = self.tm_nee_c(env, f1, f2)?;
-                let (fun_dl, fun_cl, fun_dom, fun_cod) = match D::view_ty(self, env, &fun_ty) {
-                    TyView::Pi { dom_level, cod_level, dom, cod } => {
-                        (dom_level.clone(), cod_level.clone(), dom, cod)
-                    }
-                    _ => return Err(NC),
-                };
-                self.tm(env, a1, a2, &fun_dom, &fun_dl)?;
-                Ok((
-                    D::inst_ty(self, env, env, &fun_cod, std::slice::from_ref(a1))?,
-                    fun_cl,
-                ))
+                self.ty(env, s1, s2, dl1)?;
+                let e_x = D::push_entry(env, s1, dl1);
+                self.ty(&e_x, t1, t2, cl1)?;
+                // The inferred head type is redundant only after the stored Π
+                // annotations have been related. Besides checking the ch. 06
+                // premises, that comparison preserves the dependent spelling
+                // needed by generated terms on the right.
+                self.tm_nee_c(env, f1, f2)?;
+                self.tm(env, a1, a2, s1, dl1)?;
+                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(a1))?, (*cl1).clone()))
             }
             // fst/snd neutral congruence (extension; mirrors App — the Σ
             // annotations forced by well-typedness are compared, the pair via

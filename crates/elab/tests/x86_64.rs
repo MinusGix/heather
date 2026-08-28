@@ -2,10 +2,7 @@
 //! memory preservation, and length-derived RIP fallthrough.
 
 use heather_elab::{stats, ElabError, Elaborator};
-use std::sync::Mutex;
 use std::time::Instant;
-
-static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -62,15 +59,16 @@ fn elaborated() -> Elaborator {
 }
 
 #[test]
-fn the_x86_64_module_checks() {
-    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    elaborated();
+fn x86_64_suite() {
+    let base = elaborated();
+    register_and_execution_laws_check(&base);
+    direct_decoder_agrees_with_reference_on_boundary_cases(&base);
+    invalid_decoded_lengths_are_refused(&base);
+    unsupported_or_malformed_byte_spans_are_refused(&base);
 }
 
-#[test]
-fn register_and_execution_laws_check() {
-    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut e = elaborated();
+fn register_and_execution_laws_check(base: &Elaborator) {
+    let mut e = base.clone();
     let src = r#"
 import x86_64;
 import bitvec;
@@ -390,10 +388,8 @@ theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
     }
 }
 
-#[test]
-fn direct_decoder_agrees_with_reference_on_boundary_cases() {
-    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut e = elaborated();
+fn direct_decoder_agrees_with_reference_on_boundary_cases(base: &Elaborator) {
+    let mut e = base.clone();
     let src = r#"
 import x86_64;
 import bitvec;
@@ -466,10 +462,8 @@ theorem malformed_inputs_agree():
     }
 }
 
-#[test]
-fn invalid_decoded_lengths_are_refused() {
-    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut e = elaborated();
+fn invalid_decoded_lengths_are_refused(base: &Elaborator) {
+    let mut e = base.clone();
     let src = r#"
 import x86_64;
 fn impossible() -> DecodedInstruction {
@@ -481,10 +475,7 @@ fn impossible() -> DecodedInstruction {
         "a zero-byte x86 instruction was accepted");
 }
 
-#[test]
-fn unsupported_or_malformed_byte_spans_are_refused() {
-    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let base = elaborated();
+fn unsupported_or_malformed_byte_spans_are_refused(base: &Elaborator) {
     let cases = [
         // Missing ModRM byte: exact-span decoding rejects truncation.
         r#"

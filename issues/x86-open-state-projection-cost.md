@@ -125,3 +125,16 @@ fuel or stack as the fix.
   from that investigation is retained. The correctness regression and the
   requirement to preserve this issue's performance win are tracked together
   by [[generated-term-oracle-controls-not-convertible]].
+- 2026-08-28: Exact phase measurements soften the aggregate-rail evidence.
+  The current rule checks the module in 42.80 s; the original annotation rule
+  takes 62.40 s. That 46% regression matters, but the unchanged five-test
+  binary itself already times out because every serialized test rebuilds the
+  dependency stack and module. The forcing customer is therefore the isolated
+  module check and its 26.26 s -> 32.61 s kernel increase, not whether five
+  redundant elaborations fit beneath one 303-second process timeout.
+- 2026-08-28: The correctness rule is restored. The x86 target now builds the
+  common module once and runs all consumers on isolated clones, passing in
+  146.34 s instead of timing out after five redundant module builds. This
+  issue's semantic forcing customers remain green; future performance work
+  should retain the exact 60.40 s module / 31.15 s kernel measurement rather
+  than reviving the incomplete inferred-Π rule.

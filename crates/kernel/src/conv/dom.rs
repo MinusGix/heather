@@ -211,6 +211,8 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     App {
         dom_level: &'a Level,
         cod_level: &'a Level,
+        dom: D::TyC,
+        cod: D::TyC,
         fun: D::TmC,
         arg: D::TmC,
     },
@@ -1077,9 +1079,11 @@ impl<'v> Dom<'v> for Syn {
                     tm: Rc::clone(tm),
                 }
             }
-            Term::App { fun, dom_level, cod_level, dom: _, cod: _, arg } => TmView::App {
+            Term::App { fun, dom_level, cod_level, dom, cod, arg } => TmView::App {
                 dom_level,
                 cod_level,
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
                 fun: Rc::clone(fun),
                 arg: Rc::clone(arg),
             },

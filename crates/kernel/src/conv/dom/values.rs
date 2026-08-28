@@ -1436,9 +1436,11 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
     };
     let head = TmC::value(env, spine_head(n));
     match last {
-        Elim::App { dom_level, cod_level, dom: _, cod: _, arg } => TmView::App {
+        Elim::App { dom_level, cod_level, dom, cod, arg } => TmView::App {
             dom_level,
             cod_level,
+            dom: TyC::here(env, *dom),
+            cod: TyC::under(env, *cod, 1),
             fun: head,
             arg: TmC::here(env, *arg),
         },
