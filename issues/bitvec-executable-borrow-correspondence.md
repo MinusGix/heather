@@ -1,6 +1,6 @@
 ---
 title: Prove the structural borrow bit agrees with arithmetic borrow
-status: open
+status: closed
 labels: [stdlib,mathematics,proofs,x86]
 created: 2026-08-28
 updated: 2026-08-28
@@ -34,3 +34,12 @@ normalizing an open comparison at width 64.
   linear and its closed borrow/no-borrow controls compute at widths 4 and 64.
   The architecture uses it for `CF` and the low-nibble instance for `AF`; the
   open arithmetic bridge remains deliberately explicit here.
+- 2026-08-28: Closed constructively at open width and operands.  The proof
+  strengthens the induction with an incoming borrow, normalizes the
+  bit-with-tail arithmetic on both sides, and uses the even/odd strict-order
+  laws now exposed by `std/nat`.  `borrow_sub_bit_true_iff` is the public
+  equivalence; `borrow_sub_of_bit_true` and `borrow_sub_bit_of_borrow` are its
+  forward and backward APIs.  Open-width tests exercise the equivalence and
+  both directions, including the width-64 specialization; the existing
+  closed yes/no controls remain computational controls rather than standing
+  in for the theorem.

@@ -310,6 +310,48 @@ theorem twice_le_succ_twice_iff(n, m: Nat):
     twice_le_succ_twice_iff_curried(n, m)
 }
 
+fn TwiceLtTwice(n, m: Nat) → Type { twice(n) < twice(m) }
+fn TwiceLtOdd(n, m: Nat) → Type { twice(n) < Succ(twice(m)) }
+
+theorem twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
+    Iff<TwiceLtTwice(n, m), Lt(n, m)>
+{
+    match n {
+        Zero => λ m => match m {
+            Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
+            Succ(_) => Iff(mp := λ h => trivial, mpr := λ h => trivial),
+        },
+        Succ(k, ih) => λ m => match m {
+            Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
+            Succ(l) => ih(l),
+        },
+    }
+}
+
+theorem twice_lt_twice_iff(n, m: Nat):
+    (twice(n) < twice(m)) ↔ (n < m)
+{
+    twice_lt_twice_iff_curried(n, m)
+}
+
+theorem twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
+    Iff<TwiceLtOdd(n, m), Le(n, m)>
+{
+    match n {
+        Zero => λ m => Iff(mp := λ h => zero_le(m), mpr := λ h => trivial),
+        Succ(k, ih) => λ m => match m {
+            Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
+            Succ(l) => ih(l),
+        },
+    }
+}
+
+theorem twice_lt_succ_twice_iff(n, m: Nat):
+    (twice(n) < Succ(twice(m))) ↔ (n <= m)
+{
+    twice_lt_succ_twice_iff_curried(n, m)
+}
+
 theorem le_refl(n: Nat): n <= n { match n { Zero => trivial, Succ(k) => le_refl(k) } }
 
 // The one absurdity, and it is not proved so much as *named*: `Le(Succ n, 0)`
@@ -328,6 +370,13 @@ theorem le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
 {
     j(left, λ y p => (a <= c) ↔ (y <= d),
       j(right, λ z q => (a <= c) ↔ (a <= z), iff_refl()))
+}
+
+theorem lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
+    (a < c) ↔ (b < d)
+{
+    j(left, λ y p => (a < c) ↔ (y < d),
+      j(right, λ z q => (a < c) ↔ (a < z), iff_refl()))
 }
 
 theorem le_succ_r(n: Nat): (m: Nat) → n <= m → n <= Succ(m) {

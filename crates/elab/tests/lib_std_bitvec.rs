@@ -198,6 +198,18 @@ theorem carry_forward(n: Nat, x, y: BitVec(n),
 theorem carry_backward64(x, y: BitVec(64), h: carry_add(64, x, y)):
     carry_add_bit(64, x, y) = True
 { carry_add_bit_of_carry(64, x, y, h) }
+
+theorem borrow_equiv(n: Nat, x, y: BitVec(n)):
+    (borrow_sub_bit(n, x, y) = True) ↔ borrow_sub(n, x, y)
+{ borrow_sub_bit_true_iff(n, x, y) }
+
+theorem borrow_forward(n: Nat, x, y: BitVec(n),
+    h: borrow_sub_bit(n, x, y) = True): borrow_sub(n, x, y)
+{ borrow_sub_of_bit_true(n, x, y, h) }
+
+theorem borrow_backward64(x, y: BitVec(64), h: borrow_sub(64, x, y)):
+    borrow_sub_bit(64, x, y) = True
+{ borrow_sub_bit_of_borrow(64, x, y, h) }
 "#);
     bad("theorem fake(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { refl }");
 }

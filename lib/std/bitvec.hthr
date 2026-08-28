@@ -472,6 +472,162 @@ fn borrow_sub_bit(n: Nat, a, b: BitVec(n)) → Bool {
     borrow_bits(n, a, b, False)
 }
 
+// ---------------------------------------------------------------------------
+// Structural borrow agrees with the unsigned arithmetic characterization.
+
+fn bit_with_tail(bit: Bool, tail: Nat) → Nat {
+    match bit { False => twice(tail), True => Succ(twice(tail)) }
+}
+
+theorem bit_with_tail_normalize(bit: Bool, tail: Nat):
+    bit_value(bit) + twice(tail) = bit_with_tail(bit, tail)
+{
+    match bit {
+        False => nat::add_left_zero(twice(tail)),
+        True => trans(nat::add_succ_left(0, twice(tail)),
+            cong_succ(nat::add_left_zero(twice(tail)))),
+    }
+}
+
+fn borrow_right_value(bit, borrow: Bool, tail: Nat) → Nat {
+    match bit {
+        False => match borrow {
+            False => twice(tail),
+            True => Succ(twice(tail)),
+        },
+        True => match borrow {
+            False => Succ(twice(tail)),
+            True => twice(Succ(tail)),
+        },
+    }
+}
+
+theorem borrow_right_normalize(bit, borrow: Bool, tail: Nat):
+    bit_value(bit) + twice(tail) + bit_value(borrow) =
+        borrow_right_value(bit, borrow, tail)
+{
+    match bit {
+        False => match borrow {
+            False => nat::add_left_zero(twice(tail)),
+            True => cong_succ(nat::add_left_zero(twice(tail))),
+        },
+        True => match borrow {
+            False => trans(nat::add_succ_left(0, twice(tail)),
+                cong_succ(nat::add_left_zero(twice(tail)))),
+            True => cong_succ(trans(nat::add_succ_left(0, twice(tail)),
+                cong_succ(nat::add_left_zero(twice(tail))))),
+        },
+    }
+}
+
+theorem borrow_threshold(a, b, borrow: Bool, left, right: Nat):
+    (bit_with_tail(a, left) < borrow_right_value(b, borrow, right)) ↔
+    (left < right + bit_value(borrow_next(a, b, borrow)))
+{
+    match a {
+        False => match b {
+            False => match borrow {
+                False => nat::twice_lt_twice_iff(left, right),
+                True => nat::twice_lt_succ_twice_iff(left, right),
+            },
+            True => match borrow {
+                False => nat::twice_lt_succ_twice_iff(left, right),
+                True => nat::twice_lt_twice_iff(left, Succ(right)),
+            },
+        },
+        True => match b {
+            False => match borrow {
+                False => nat::twice_le_twice_iff(Succ(left), right),
+                True => nat::twice_lt_twice_iff(left, right),
+            },
+            True => match borrow {
+                False => nat::twice_lt_twice_iff(left, right),
+                True => nat::twice_le_twice_iff(Succ(left), Succ(right)),
+            },
+        },
+    }
+}
+
+fn BorrowBitTrue(n: Nat, a, b: BitVec(n), borrow: Bool) → Type {
+    borrow_bits(n, a, b, borrow) = True
+}
+
+fn BorrowArithmetic(n: Nat, a, b: BitVec(n), borrow: Bool) → Type {
+    toNat(n, a) < toNat(n, b) + bit_value(borrow)
+}
+
+theorem borrow_bits_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
+    BorrowBitTrue(Succ(n), a, b, borrow) ↔
+    BorrowBitTrue(n, tail_bits(n, a), tail_bits(n, b),
+        borrow_next(head_bit(n, a), head_bit(n, b), borrow))
+{
+    match borrow_next(head_bit(n, a), head_bit(n, b), borrow)
+        as λ next =>
+            (borrow_bits_next(n, tail_bits(n, a), tail_bits(n, b), next,
+                borrow_bits(n)) = True) ↔
+            BorrowBitTrue(n, tail_bits(n, a), tail_bits(n, b), next)
+    {
+        False => Iff(mp := λ h => h, mpr := λ h => h),
+        True => Iff(mp := λ h => h, mpr := λ h => h),
+    }
+}
+
+theorem borrow_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
+    BorrowArithmetic(Succ(n), a, b, borrow) ↔
+    BorrowArithmetic(n, tail_bits(n, a), tail_bits(n, b),
+        borrow_next(head_bit(n, a), head_bit(n, b), borrow))
+{
+    let left = toNat(n, tail_bits(n, a));
+    let right = toNat(n, tail_bits(n, b));
+    iff_trans(
+        nat::lt_congr_iff(
+            toNat(Succ(n), a), bit_with_tail(head_bit(n, a), left),
+            toNat(Succ(n), b) + bit_value(borrow),
+            borrow_right_value(head_bit(n, b), borrow, right),
+            bit_with_tail_normalize(head_bit(n, a), left),
+            borrow_right_normalize(head_bit(n, b), borrow, right)),
+        borrow_threshold(head_bit(n, a), head_bit(n, b), borrow, left, right))
+}
+
+theorem borrow_bits_true_iff_arithmetic(n: Nat):
+    (a, b: BitVec(n)) → (borrow: Bool) →
+    Iff<BorrowBitTrue(n, a, b, borrow), BorrowArithmetic(n, a, b, borrow)>
+{
+    match n as λ k => (a, b: BitVec(k)) → (borrow: Bool) →
+        Iff<BorrowBitTrue(k, a, b, borrow), BorrowArithmetic(k, a, b, borrow)> {
+        Zero => λ a b borrow => match borrow {
+            False => Iff(
+                mp := λ bad => absurd(bad),
+                mpr := λ bad => false_elim(bad)),
+            True => Iff(mp := λ h => trivial, mpr := λ h => refl),
+        },
+        Succ(k, ih) => λ a b borrow => iff_trans(
+            borrow_bits_step(k, a, b, borrow),
+            iff_trans(
+                ih(tail_bits(k, a), tail_bits(k, b),
+                    borrow_next(head_bit(k, a), head_bit(k, b), borrow)),
+                iff_sym(borrow_arithmetic_step(k, a, b, borrow)))),
+    }
+}
+
+theorem borrow_sub_bit_true_iff(n: Nat, a, b: BitVec(n)):
+    (borrow_sub_bit(n, a, b) = True) ↔ borrow_sub(n, a, b)
+{
+    borrow_bits_true_iff_arithmetic(n, a, b, False)
+}
+
+theorem borrow_sub_of_bit_true(n: Nat, a, b: BitVec(n),
+    h: borrow_sub_bit(n, a, b) = True): borrow_sub(n, a, b)
+{
+    borrow_sub_bit_true_iff(n, a, b).mp(h)
+}
+
+theorem borrow_sub_bit_of_borrow(n: Nat, a, b: BitVec(n),
+    h: borrow_sub(n, a, b)): borrow_sub_bit(n, a, b) = True
+{
+    borrow_sub_bit_true_iff(n, a, b).mpr(h)
+}
+
 fn bool_eq(a, b: Bool) → Bool {
     match a { False => bool::not(b), True => b }
 }

@@ -1,8 +1,9 @@
 //! First x86-64 vertical slice: decoded register MOV/ADD/SUB/CMP/TEST, flags, opaque
 //! memory preservation, and length-derived RIP fallthrough.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{stats, ElabError, Elaborator};
 use std::sync::Mutex;
+use std::time::Instant;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
@@ -34,8 +35,23 @@ fn elaborated() -> Elaborator {
     if report_metrics {
         e.enable_value_metrics();
     }
+    let report_phases = std::env::var_os("HEATHER_X86_PHASES").is_some();
+    if report_phases {
+        stats::reset_kernel_ns();
+    }
+    let started = Instant::now();
     if let Err(err) = e.elab_module_source("x86_64", X86_64) {
         panic!("x86_64 did not check: {}", err.render(X86_64));
+    }
+    if report_phases {
+        let total_ns = started.elapsed().as_nanos() as u64;
+        let kernel_ns = stats::kernel_ns();
+        eprintln!(
+            "x86_64 phases: total={:.3}s kernel={:.3}s frontend={:.3}s",
+            total_ns as f64 / 1e9,
+            kernel_ns as f64 / 1e9,
+            total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
+        );
     }
     if report_metrics {
         eprintln!("x86_64 module value metrics: {:?}", e.value_metrics().unwrap());

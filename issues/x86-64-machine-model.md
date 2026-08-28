@@ -166,3 +166,12 @@ access; it does not claim x86 memory is total.
   opcode/extension/malformed boundary agreement checks. The focused consumer
   fell from about 41s to about 19s. [[x86-direct-bitfield-decoder]] retains the
   general completeness and exhaustive 256-pair agreement proof.
+- 2026-08-28: The subtraction borrow API now has its open-width constructive
+  correspondence to arithmetic borrow, closing
+  [[bitvec-executable-borrow-correspondence]].  Profiling the enlarged opcode
+  decoder also corrected [[x86-opcode-dispatch-scaling]]'s diagnosis: ordinary
+  and proof-carrying equality chains scale linearly and cheaply; the real
+  `ByteDecode` payload costs about a second per supported arm because each arm
+  checks concrete `DecodesInstruction`/`RrEncoding` evidence.  A finite opcode
+  descriptor is the next model-level boundary; no kernel or fuel change is
+  justified by these measurements.
