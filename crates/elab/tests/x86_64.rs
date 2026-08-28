@@ -1,4 +1,4 @@
-//! First x86-64 vertical slice: decoded register MOV/ADD, flags, opaque
+//! First x86-64 vertical slice: decoded register MOV/ADD/TEST, flags, opaque
 //! memory preservation, and length-derived RIP fallthrough.
 
 use heather_elab::{ElabError, Elaborator};
@@ -50,13 +50,15 @@ fn the_x86_64_module_checks() {
 }
 
 #[test]
-fn register_names_and_indices_compute() {
+fn register_and_execution_laws_check() {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut e = elaborated();
     let src = r#"
 import x86_64;
 import bitvec;
+import bool;
 import logic;
+import nat;
 
 theorem register_indices(): gpr_index(Rax) = 0 ∧ gpr_index(R15) = 15
 { And(refl, refl) }
@@ -74,6 +76,33 @@ theorem execution_advances_rip<M>(decoded: DecodedInstruction,
         next_rip(before.rip, decoded.length)
 {
     execute_normal_advances_rip(decoded, before)
+}
+
+theorem test_has_both_architectural_af_outcomes<M>(left, right: Gpr,
+    length: Nat, valid: ∥1 <= length ∧ length <= 15∥,
+    before: MachineState<M>):
+    Execute(
+        DecodedInstruction(instruction := TestRR(left, right),
+            length := length, valid_length := valid),
+        before, Returned(execute_test(left, right, length, before, False)))
+    ∧
+    Execute(
+        DecodedInstruction(instruction := TestRR(left, right),
+            length := length, valid_length := valid),
+        before, Returned(execute_test(left, right, length, before, True)))
+{
+    And(test_allows_af(left, right, length, valid, before, False),
+        test_allows_af(left, right, length, valid, before, True))
+}
+
+theorem test_preserves_the_frame<M>(left, right: Gpr, length: Nat,
+    before: MachineState<M>, af: Bool):
+    execute_test(left, right, length, before, af).gprs = before.gprs
+    ∧ execute_test(left, right, length, before, af).memory = before.memory
+    ∧ execute_test(left, right, length, before, af).rip =
+        next_rip(before.rip, length)
+{
+    execute_test_frames(left, right, length, before, af)
 }
 
 "#;

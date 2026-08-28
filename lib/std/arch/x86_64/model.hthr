@@ -4,9 +4,9 @@
 // before the byte-level machine step calls `execute`; the compiler's encoder
 // and a raw-binary decoder meet at that boundary.
 //
-// Scope: long-mode scalar register forms MOV r64,r64 and ADD r64,r64. There
-// are no memory operands or execution faults in this slice. Coverage remains
-// distinct from semantic outcomes through std/relation.
+// Scope: long-mode scalar register forms MOV r64,r64, ADD r64,r64, and
+// TEST r64,r64. There are no memory operands or execution faults in this
+// slice. Coverage remains distinct from semantic outcomes through std/relation.
 
 import logic;
 import bool;
@@ -94,6 +94,7 @@ record MachineState<M> {
 inductive Instruction {
     MovRR(destination: Gpr, source: Gpr),
     AddRR(destination: Gpr, source: Gpr),
+    TestRR(left: Gpr, right: Gpr),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -137,6 +138,21 @@ fn add_flags(left, right: BitVec(64)) → Flags {
     )
 }
 
+// TEST defines five arithmetic flags from the discarded AND result. AF is
+// architecturally undefined and is therefore supplied by the relation rather
+// than silently fixed by this helper.
+fn test_flags(left, right: BitVec(64), af: Bool) → Flags {
+    let result = band(64, left, right);
+    Flags(
+        cf := False,
+        pf := bool::not(xor_bits(8, take_low(8, 56, result))),
+        af := af,
+        zf := is_zero_bits(64, result),
+        sf := sign_bit(64, result),
+        of := False,
+    )
+}
+
 record RegisterEffect { gprs: Gprs, flags: Flags }
 
 fn execute_add(destination, source: Gpr, before: Gprs) → RegisterEffect
@@ -158,6 +174,12 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             flags := flags,
         ),
         AddRR(destination, source) => execute_add(destination, source, before),
+        // Canonical representative for functional clients. `Execute` below
+        // is authoritative and admits both values of undefined AF.
+        TestRR(left, right) => RegisterEffect(
+            gprs := before,
+            flags := test_flags(read_gpr(left, before), read_gpr(right, before), False),
+        ),
     }
 }
 
@@ -175,10 +197,72 @@ fn execute_normal<M>(decoded: DecodedInstruction, before: MachineState<M>) →
 
 inductive Exception { }
 
+fn execute_test<M>(left, right: Gpr, length: Nat, before: MachineState<M>,
+    af: Bool) → MachineState<M>
+{
+    MachineState<M>(
+        gprs := before.gprs,
+        flags := test_flags(read_gpr(left, before.gprs),
+            read_gpr(right, before.gprs), af),
+        rip := next_rip(before.rip, length),
+        memory := before.memory,
+    )
+}
+
 fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
     outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
 {
-    outcome = Returned(execute_normal(decoded, before))
+    match decoded.instruction {
+        MovRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        AddRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        TestRR(left, right) => ∃ af: Bool,
+            outcome = Returned(execute_test(left, right, decoded.length, before, af)),
+    }
+}
+
+theorem test_allows_af<M>(left, right: Gpr, length: Nat,
+    valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>, af: Bool):
+    Execute(
+        DecodedInstruction(instruction := TestRR(left, right),
+            length := length, valid_length := valid),
+        before, Returned(execute_test(left, right, length, before, af)))
+{
+    Exists(af, refl)
+}
+
+theorem test_flags_spec(left, right: BitVec(64), af: Bool):
+    test_flags(left, right, af) =
+        Flags(
+            cf := False,
+            pf := bool::not(xor_bits(8,
+                take_low(8, 56, band(64, left, right)))),
+            af := af,
+            zf := is_zero_bits(64, band(64, left, right)),
+            sf := sign_bit(64, band(64, left, right)),
+            of := False)
+{}
+
+theorem execute_test_frames<M>(left, right: Gpr, length: Nat,
+    before: MachineState<M>, af: Bool):
+    execute_test(left, right, length, before, af).gprs = before.gprs
+    ∧ execute_test(left, right, length, before, af).memory = before.memory
+    ∧ execute_test(left, right, length, before, af).rip =
+        next_rip(before.rip, length)
+{
+    And(refl, And(refl, refl))
+}
+
+theorem execute_normal_test_is_allowed<M>(left, right: Gpr, length: Nat,
+    valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>):
+    Execute(
+        DecodedInstruction(instruction := TestRR(left, right),
+            length := length, valid_length := valid),
+        before,
+        Returned(execute_normal(
+            DecodedInstruction(instruction := TestRR(left, right),
+                length := length, valid_length := valid), before)))
+{
+    Exists(False, refl)
 }
 
 inductive CoverageStatus { SemanticsDefined, SemanticsMissing }
@@ -207,5 +291,6 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
     match decoded.instruction {
         MovRR(_, _) => refl,
         AddRR(_, _) => refl,
+        TestRR(_, _) => refl,
     }
 }

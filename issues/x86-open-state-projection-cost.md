@@ -1,9 +1,9 @@
 ---
 title: Make open x86 state projections check without exhausting conversion resources
-status: open
+status: closed
 labels: [x86,elaboration,kernel,performance,proofs]
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 The first register-only x86 module checks, including generic `MOV` memory/flag
@@ -103,3 +103,15 @@ fuel or stack as the fix.
   decoded/open-state RIP theorem checks under ordinary fuel; the x86 suite and
   full kernel differential suites remain the acceptance gate. Relational
   `TEST` remains the next independent re-run before this issue can close.
+- 2026-08-27: Relational `TEST r64,r64` now lands on the unchanged ordinary
+  fuel rail, closing the issue. `Execute` is the authoritative semantics: it
+  existentially chooses AF while fixing CF/OF to false and deriving PF/ZF/SF
+  from the discarded 64-bit AND result. `execute_normal` deliberately chooses
+  AF=false only as a representative for functional clients, and a public
+  coherence law proves that representative is admitted by `Execute`. Public
+  laws pin the complete flag record, frame GPRs and memory, advance RIP by the
+  decoded length, and construct open witnesses for either AF value; the x86
+  consumer test packages both witnesses in one theorem. Thus every acceptance
+  customer named here now checks without a fuel or stack increase: open GPR
+  read-after-write, generic whole-state RIP projection, and ordinary
+  non-emptiness of both architectural TEST outcomes.
