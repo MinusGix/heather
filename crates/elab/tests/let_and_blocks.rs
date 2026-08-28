@@ -224,13 +224,14 @@ fn a_block_is_the_program_without_it() {
     let without = format!(
         "{ADD}fn probe(n: Nat) -> Nat {{ let y = add(n, n); add(y, 1) }}"
     );
-    let (a, aty, alvl) = last_body(&elab(&with_block));
+    let with_block = elab(&with_block);
+    let (a, aty, alvl) = last_body(&with_block);
     let (b, ..) = last_body(&elab(&without));
     // A `let` is an alias, not a binder, so the *identical* term is the
     // expected outcome and inequality would mean the block minted something.
     assert!(a == b, "a block emitted a different term than the hoisted `let`");
     let empty = LocalCtx::nil();
-    conv_term(Elaborator::with_prelude().expect("prelude").psi(), &empty, Layer::Prog,
+    conv_term(with_block.psi(), &empty, Layer::Prog,
               &a, &b, &aty, &alvl, 1_000_000)
         .expect("the two spellings must be convertible");
 }

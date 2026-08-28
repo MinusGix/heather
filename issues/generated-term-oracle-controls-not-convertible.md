@@ -6,8 +6,7 @@ created: 2026-08-28
 updated: 2026-08-28
 ---
 
-Three exact-term controls currently fail individually on `master` with
-`NotConvertible`:
+Three exact-term controls began failing individually with `NotConvertible`:
 
 ```text
 in_language_fold::hook_output_is_convertible_with_the_rust_oracle
@@ -26,8 +25,7 @@ That probe was reverted completely and all three failures reproduced. As an
 additional isolation check, disabling both additions in the recent gate-local
 conversion reuse path — positive memo hits and the syntactic-reflexivity fast
 path — did not change either the fold or block result; those temporary edits
-were also reverted. The cause is therefore not established and must not be
-assigned to either experiment.
+were also reverted.
 
 ## Acceptance
 
@@ -56,3 +54,34 @@ assigned to either experiment.
 - 2026-08-28: Filed after each failure reproduced in isolation with a clean
   elaborator/unifier diff. The current working x86 cleanup and generic lookup
   test do not touch any of the failing paths.
+- 2026-08-28: **Cause established; repair remains open.** Automated bisection
+  from the fold template's landing commit identified `dd923db` (`kernel: avoid
+  redundant open bitvector conversion`) as the first bad revision. That optimization
+  changed neutral application comparison from the annotation-directed rule to
+  a single Π inferred from the left function spine. The fast rule is sound on
+  its successful path, but incomplete: with the dependent substitutions
+  produced by the in-language fold/tabulate templates, its left-biased Π can
+  be stuck in a spelling that cannot check the right argument. The block test
+  supplies the minimal behavioral witness: its two root terms are structurally
+  identical, yet their applications reached the same refusal.
+
+  Restoring the original annotation-directed rule makes all three controls
+  pass, proving the regression is in that optimization rather than in the
+  generators. It is not an acceptable final repair: using stored codomains
+  throughout makes the complete x86 target exceed its existing 300-second
+  rail. A simple `NotConvertible` fallback also restores the controls and
+  preserves focused x86 performance, but failed probes consume enough fuel to
+  make `ir_pass_fuel` fail. Rolling back only that speculative fuel makes the
+  three controls and IR pass, but the complete x86 target then aborts after
+  85 seconds while requesting a 500 MiB allocation. The shallow scoped-type
+  identity predicate cannot select the safe route either: the bad tabulate
+  case is identity-equal until dependent instantiation exposes the spelling
+  difference.
+
+  No experimental kernel change is retained. A repair needs a canonical or
+  coherently respelled inferred Π result, or another way to preserve the
+  original application judgment without recursively expanding its stored
+  codomains. Backtracking/refunding inside the trusted checker is explicitly
+  not accepted by this investigation. The block control's Ψ was separately
+  corrected to be the context that owns its terms; this is test hygiene and
+  does not alter the reproduced failure.

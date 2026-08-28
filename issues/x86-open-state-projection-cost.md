@@ -115,3 +115,13 @@ fuel or stack as the fix.
   customer named here now checks without a fuel or stack increase: open GPR
   read-after-write, generic whole-state RIP projection, and ordinary
   non-emptiness of both architectural TEST outcomes.
+- 2026-08-28: Post-close completeness correction. The inferred-Π application
+  optimization from `dd923db` caused three older generated-term oracle
+  controls to be refused when the left-inferred dependent type was not a
+  usable spelling for the surrounding comparison. The obvious repairs all
+  regress this issue's forcing customer: restoring stored annotations makes
+  the complete x86 target exceed its 300-second rail, while a fuel-rollback
+  fallback aborts after 85 seconds on a 500 MiB allocation. No kernel change
+  from that investigation is retained. The correctness regression and the
+  requirement to preserve this issue's performance win are tracked together
+  by [[generated-term-oracle-controls-not-convertible]].
