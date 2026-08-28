@@ -3,7 +3,7 @@ title: Develop fixed-width bitvectors and their arithmetic proof kit
 status: closed
 labels: [stdlib,mathematics,design]
 created: 2026-08-25
-updated: 2026-08-26
+updated: 2026-08-28
 ---
 
 Heather has unbounded `Nat` and `Int`, kernel vectors and `Fin`, and useful
@@ -110,3 +110,7 @@ waiting for them.
   proposition at an open width, in both directions. The proof also replaced
   `toNat`'s open `2 * tail` spelling with propositionally equal structural
   doubling, giving binary proofs a reduction shape proportional to width.
+- 2026-08-28: The executable x86 decoder added `bitvec::eq_dec`, a structural
+  equality decision at an open width with positive and negative evidence. It
+  is called directly: registering `Decide<x = y>` cannot recover the width
+  binder from the instance head under the existing binder-occurrence rule.

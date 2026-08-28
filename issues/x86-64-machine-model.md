@@ -3,7 +3,7 @@ title: Define the canonical scoped x86-64 machine model
 status: open
 labels: [compiler,semantics,x86,design]
 created: 2026-08-25
-updated: 2026-08-26
+updated: 2026-08-28
 ---
 
 Define Heather's one canonical x86-64 architectural step relation for the
@@ -145,3 +145,10 @@ access; it does not claim x86 memory is total.
   Controls reject truncation, direction-opcode/ModRM disagreement, missing
   REX.W, memory-mode ModRM, and decoded-length disagreement. Executable decode
   and architectural fetch remain separate future layers.
+- 2026-08-27: Byte fixtures exposed two independent frontend readability gaps:
+  [[list-literal-syntax]] owns replacing nested `Cons` spines, and
+  [[radix-numeric-literals]] owns hexadecimal/binary spellings for byte values.
+- 2026-08-28: The proof-producing executable decoder uses bounded register-pair
+  search as its small reference algorithm. [[x86-direct-bitfield-decoder]] owns
+  replacing that search with scalable direct REX/ModRM field extraction while
+  retaining agreement and soundness proofs.

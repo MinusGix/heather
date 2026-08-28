@@ -1,6 +1,6 @@
 # X86-64 bytes, decoding, and typed execution
 
-Status: **encoding-normalizing register-byte boundary** (2026-08-27).
+Status: **executable encoding-normalizing register-byte boundary** (2026-08-28).
 
 Heather's x86-64 work serves two equal customers: certified compilation into
 machine code and proofs about machine code that already exists. Both routes
@@ -96,10 +96,20 @@ use the same relation. Both compose with the one `Execute` relation through
 `ExecuteAt`, and the consumed length is carried into RIP fallthrough by a
 separate theorem.
 
-This is deliberately not yet a total or executable decoder. Redundant and
-legacy prefixes, memory ModRM modes, truncation, trailing bytes, and other
-instructions have no `DecodedAt` proof in this slice. Nor does
-`InstructionBytes` claim that a read from architectural memory succeeded:
-fetch and its faults wait for the byte memory model. Invalid encoding,
-unsupported coverage, failed fetch, and architectural execution fault remain
-four different outcomes.
+`decode_bytes` is the executable view of this relation. A successful result is
+a `ByteDecode(bytes)` carrying both the normalized instruction and its
+`DecodesInstruction` witness, so soundness is enforced by construction;
+`decode_instruction` erases that evidence behind a conventional
+`Option<DecodedInstruction>` face. The initial reference algorithm checks the
+exact three-byte shape, reads the opcode, and performs a bounded search over
+the 16×16 register-pair space using evidence-producing bitvector/list equality.
+This prioritizes a small soundness surface. [[x86-direct-bitfield-decoder]] owns
+the scalable refinement to direct REX/ModRM bitfield extraction before larger
+encoding families rely on the decoder.
+
+This is deliberately not yet a total x86 decoder. Redundant and legacy
+prefixes, memory ModRM modes, truncation, trailing bytes, and other instructions
+have no `DecodedAt` proof in this slice. Nor does `InstructionBytes` claim that
+a read from architectural memory succeeded: fetch and its faults wait for the
+byte memory model. Invalid encoding, unsupported coverage, failed fetch, and
+architectural execution fault remain four different outcomes.

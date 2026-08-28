@@ -14,6 +14,7 @@ import bitvec;
 import relation;
 import location;
 import list;
+import option;
 
 inductive Gpr {
     Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
@@ -241,6 +242,207 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
     }
 }
 
+fn ByteListNonempty(bytes: List<BitVec(8)>) → Type {
+    match bytes { Nil => False, Cons(_, _) => True }
+}
+
+fn no_bytes() → List<BitVec(8)> { Nil }
+
+theorem byte_nil_ne_cons(head: BitVec(8), tail: List<BitVec(8)>):
+    no_bytes() ≠ Cons(head, tail)
+{
+    λ (bad: no_bytes() = Cons(head, tail)) =>
+        j(sym(bad), λ bytes q => ByteListNonempty(bytes), trivial)
+}
+
+theorem byte_cons_ne_nil(head: BitVec(8), tail: List<BitVec(8)>):
+    Cons(head, tail) ≠ no_bytes()
+{
+    λ (bad: Cons(head, tail) = no_bytes()) =>
+        byte_nil_ne_cons(head, tail, sym(bad))
+}
+
+fn byte_list_head(bytes: List<BitVec(8)>) → BitVec(8) {
+    match bytes { Nil => zero(8), Cons(head, _) => head }
+}
+
+fn byte_list_tail(bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    match bytes { Nil => Nil, Cons(_, tail) => tail }
+}
+
+theorem byte_cons_cong({left, right: BitVec(8)},
+    {left_tail, right_tail: List<BitVec(8)>}, head_eq: left = right,
+    tail_eq: left_tail = right_tail):
+    Cons(left, left_tail) = Cons(right, right_tail)
+{
+    j(head_eq, λ head q => Cons(left, left_tail) = Cons(head, right_tail),
+        list::cong_cons(left, tail_eq))
+}
+
+fn byte_list_eq_dec(left: List<BitVec(8)>) → (right: List<BitVec(8)>) →
+    left = right ∨ left ≠ right
+{
+    match left {
+        Nil => λ right => match right {
+            Nil => Inl(refl),
+            Cons(head, tail) => Inr(byte_nil_ne_cons(head, tail)),
+        },
+        Cons(head, tail) => λ right => match right {
+            Nil => Inr(byte_cons_ne_nil(head, tail)),
+            Cons(right_head, right_tail) =>
+                match bitvec::eq_dec(8, head, right_head) {
+                    Inl(head_eq) => match byte_list_eq_dec(tail, right_tail) {
+                        Inl(tail_eq) => Inl(byte_cons_cong(head_eq, tail_eq)),
+                        Inr(tail_ne) => Inr(λ (bad: Cons(head, tail) =
+                                Cons(right_head, right_tail)) =>
+                            tail_ne(j(bad,
+                                λ bytes q => tail = byte_list_tail(bytes), refl))),
+                    },
+                    Inr(head_ne) => Inr(λ (bad: Cons(head, tail) =
+                            Cons(right_head, right_tail)) =>
+                        head_ne(j(bad,
+                            λ bytes q => head = byte_list_head(bytes), refl))),
+                },
+        },
+    }
+}
+
+theorem rr_bytes_encoding(opcode: Nat, rm, reg: Gpr):
+    RrEncoding(rr_bytes(opcode, rm, reg), opcode, rm, reg)
+{
+    And(refl, And(refl, refl))
+}
+
+record DecodedOperands(bytes: List<BitVec(8)>, opcode: Nat) {
+    rm: Gpr,
+    reg: Gpr,
+    encoding: RrEncoding(bytes, opcode, rm, reg),
+}
+
+fn find_reg(bytes: List<BitVec(8)>, opcode: Nat, rm: Gpr,
+    registers: List<Gpr>) → Option<DecodedOperands(bytes, opcode)>
+{
+    match registers {
+        Nil => None,
+        Cons(reg, tail) =>
+            match byte_list_eq_dec(bytes, rr_bytes(opcode, rm, reg)) {
+                Inl(exact) => Some(DecodedOperands(
+                    rm := rm, reg := reg,
+                    encoding := j(sym(exact),
+                        λ actual q => RrEncoding(actual, opcode, rm, reg),
+                        rr_bytes_encoding(opcode, rm, reg)))),
+                Inr(_) => find_reg(bytes, opcode, rm, tail),
+            },
+    }
+}
+
+fn find_operands(bytes: List<BitVec(8)>, opcode: Nat, rms: List<Gpr>,
+    registers: List<Gpr>) → Option<DecodedOperands(bytes, opcode)>
+{
+    match rms {
+        Nil => None,
+        Cons(rm, tail) => match find_reg(bytes, opcode, rm, registers) {
+            None => find_operands(bytes, opcode, tail, registers),
+            Some(found) => Some(found),
+        },
+    }
+}
+
+fn all_gprs() → List<Gpr> {
+    Cons(Rax, Cons(Rcx, Cons(Rdx, Cons(Rbx,
+    Cons(Rsp, Cons(Rbp, Cons(Rsi, Cons(Rdi,
+    Cons(R8, Cons(R9, Cons(R10, Cons(R11,
+    Cons(R12, Cons(R13, Cons(R14, Cons(R15, Nil))))))))))))))))
+}
+
+record ByteDecode(bytes: List<BitVec(8)>) {
+    instruction: Instruction,
+    decoding: DecodesInstruction(bytes, instruction),
+}
+
+fn decode_opcode(bytes: List<BitVec(8)>, opcode: Nat) → Option<ByteDecode(bytes)> {
+    match find_operands(bytes, opcode, all_gprs(), all_gprs()) {
+        None => None,
+        Some(found) => match nat::eq_dec(opcode, 1) {
+            // 01 /r
+            Inl(exact) => Some(ByteDecode(
+                instruction := AddRR(found.rm, found.reg),
+                decoding := Inl(j(exact,
+                    λ op q => RrEncoding(bytes, op, found.rm, found.reg),
+                    found.encoding)))),
+            Inr(_) => match nat::eq_dec(opcode, 3) {
+                // 03 /r
+                Inl(exact) => Some(ByteDecode(
+                    instruction := AddRR(found.reg, found.rm),
+                    decoding := Inr(j(exact,
+                        λ op q => RrEncoding(bytes, op, found.rm, found.reg),
+                        found.encoding)))),
+                Inr(_) => match nat::eq_dec(opcode, 133) {
+                    // 85 /r
+                    Inl(exact) => Some(ByteDecode(
+                        instruction := TestRR(found.rm, found.reg),
+                        decoding := j(exact,
+                            λ op q => RrEncoding(bytes, op, found.rm, found.reg),
+                            found.encoding))),
+                    Inr(_) => match nat::eq_dec(opcode, 137) {
+                        // 89 /r
+                        Inl(exact) => Some(ByteDecode(
+                            instruction := MovRR(found.rm, found.reg),
+                            decoding := Inl(j(exact,
+                                λ op q => RrEncoding(bytes, op,
+                                    found.rm, found.reg), found.encoding)))),
+                        Inr(_) => match nat::eq_dec(opcode, 139) {
+                            // 8B /r
+                            Inl(exact) => Some(ByteDecode(
+                                instruction := MovRR(found.reg, found.rm),
+                                decoding := Inr(j(exact,
+                                    λ op q => RrEncoding(bytes, op,
+                                        found.rm, found.reg), found.encoding)))),
+                            Inr(_) => None,
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
+    match bytes as λ actual => Option<ByteDecode(actual)> {
+        Nil => None,
+        Cons(prefix, tail1) => match tail1 as λ rest =>
+                Option<ByteDecode(Cons(prefix, rest))> {
+            Nil => None,
+            Cons(opcode, tail2) => match tail2 as λ rest =>
+                    Option<ByteDecode(Cons(prefix, Cons(opcode, rest)))> {
+                Nil => None,
+                Cons(modrm, tail3) => match tail3 as λ rest =>
+                        Option<ByteDecode(Cons(prefix,
+                            Cons(opcode, Cons(modrm, rest))))> {
+                    Nil => decode_opcode(
+                        Cons(prefix, Cons(opcode, Cons(modrm, Nil))),
+                        toNat(8, opcode)),
+                    Cons(_, _) => None,
+                },
+            },
+        },
+    }
+}
+
+fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
+    match decode_bytes(bytes) {
+        None => None,
+        Some(result) => Some(decoded_rr(result.instruction)),
+    }
+}
+
+theorem decode_bytes_sound(bytes: List<BitVec(8)>, result: ByteDecode(bytes),
+    success: decode_bytes(bytes) = Some(result)):
+    DecodesInstruction(bytes, result.instruction)
+{
+    result.decoding
+}
+
 fn DecodedAt(span: InstructionBytes, decoded: DecodedInstruction) → Type {
     DecodesInstruction(span.bytes, decoded.instruction) ∧ decoded.length = 3
 }
@@ -265,6 +467,15 @@ theorem external_bytes_decode(span: InstructionBytes,
     length: decoded.length = 3): DecodedAt(span, decoded)
 {
     And(bytes_decode, length)
+}
+
+theorem decoded_byte_result_at(start: BitVec(64), bytes: List<BitVec(8)>,
+    result: ByteDecode(bytes)):
+    DecodedAt(
+        InstructionBytes(start := start, bytes := bytes),
+        decoded_rr(result.instruction))
+{
+    And(result.decoding, refl)
 }
 
 theorem decoded_at_bytes(span: InstructionBytes,
@@ -455,6 +666,17 @@ theorem canonical_encoding_executes<M>(instruction: Instruction,
 {
     And(refl, And(canonical_encoding_decodes(before.rip, instruction),
         canonical_execute_normal_is_allowed(instruction, before)))
+}
+
+theorem decoded_byte_result_executes<M>(bytes: List<BitVec(8)>,
+    result: ByteDecode(bytes), before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip, bytes := bytes),
+        decoded_rr(result.instruction), before,
+        Returned(execute_normal(decoded_rr(result.instruction), before)))
+{
+    And(refl, And(decoded_byte_result_at(before.rip, bytes, result),
+        canonical_execute_normal_is_allowed(result.instruction, before)))
 }
 
 theorem alternate_mov_encoding_executes<M>(destination, source: Gpr,

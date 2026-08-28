@@ -537,6 +537,25 @@ theorem extensionality(n: Nat): (x, y: BitVec(n)) →
     }
 }
 
+fn eq_dec(n: Nat) → (x, y: BitVec(n)) → x = y ∨ x ≠ y {
+    match n as λ k => (x, y: BitVec(k)) → x = y ∨ x ≠ y {
+        Zero => λ x y => Inl(refl),
+        Succ(k, ih) => λ x y =>
+            match bool::eq_dec(head_bit(k, x), head_bit(k, y)) {
+                Inl(head_eq) =>
+                    match ih(tail_bits(k, x), tail_bits(k, y)) {
+                        Inl(tail_eq) => Inl(cons_bit_cong(k, head_eq, tail_eq)),
+                        Inr(tail_ne) => Inr(λ (bad: x = y) =>
+                            tail_ne(j(bad,
+                                λ z q => tail_bits(k, x) = tail_bits(k, z), refl))),
+                    },
+                Inr(head_ne) => Inr(λ (bad: x = y) =>
+                    head_ne(j(bad,
+                        λ z q => head_bit(k, x) = head_bit(k, z), refl))),
+            },
+    }
+}
+
 theorem decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),
         tail_law: decrement(n, increment(n, x)) = x):
         decrement(Succ(n), increment(Succ(n), cons_bit(n, b, x))) = cons_bit(n, b, x) {

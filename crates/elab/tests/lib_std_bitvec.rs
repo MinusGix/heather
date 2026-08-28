@@ -106,6 +106,11 @@ theorem xor5(): bxor(3, five(), from_bits(3, [True, True, False])) =
                 from_bits(3, [False, True, True]) { refl }
 theorem wraps_construct(): toNat(8, ofNat(8, 300)) = 44 { refl }
 theorem signed_minus_one(): toInt(4, ofNat(4, 15)) = NegSucc(0) { refl }
+fn equal_byte(a, b: BitVec(8)) -> Bool {
+    match bitvec::eq_dec(8, a, b) { Inl(_) => True, Inr(_) => False }
+}
+theorem byte_eq_yes(): equal_byte(ofNat(8, 137), ofNat(8, 137)) = True { refl }
+theorem byte_eq_no(): equal_byte(ofNat(8, 137), ofNat(8, 139)) = False { refl }
 "#);
     bad("theorem wrong(): toNat(3, from_bits(3, [True, False, True])) = 6 { refl }");
 }
@@ -174,6 +179,9 @@ theorem sround(n, m: Nat, x: BitVec(Succ(n))):
     truncate(Succ(n), m, sign_extend(n, m, x)) = x { truncate_sign_extend(n, m, x) }
 theorem ext(n: Nat, x, y: BitVec(n), at: (i: Fin(n)) -> get(n, x, i) = get(n, y, i)):
     x = y { extensionality(n, x, y, at) }
+theorem equality_is_decidable(n: Nat, x, y: BitVec(n)): x = y ∨ x ≠ y {
+    bitvec::eq_dec(n, x, y)
+}
 
 theorem carry_equiv(n: Nat, x, y: BitVec(n)):
     (carry_add_bit(n, x, y) = True) ↔ carry_add(n, x, y)

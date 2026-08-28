@@ -59,6 +59,8 @@ import bitvec;
 import bool;
 import logic;
 import nat;
+import list;
+import option;
 
 theorem register_indices(): gpr_index(Rax) = 0 ∧ gpr_index(R15) = 15
 { And(refl, refl) }
@@ -188,6 +190,77 @@ theorem alternate_add_bytes_reach_execution<M>(destination, source: Gpr,
         Returned(execute_normal(decoded_rr(AddRR(destination, source)), before)))
 {
     alternate_add_encoding_executes(destination, source, before)
+}
+
+theorem executable_decoder_accepts_canonical_mov():
+    decode_instruction(canonical_bytes(MovRR(Rax, Rbx))) =
+        Some(decoded_rr(MovRR(Rax, Rbx)))
+{
+    refl
+}
+
+theorem executable_decoder_accepts_alternate_mov():
+    decode_instruction(alternate_mov_bytes(Rax, Rbx)) =
+        Some(decoded_rr(MovRR(Rax, Rbx)))
+{
+    refl
+}
+
+theorem executable_decoder_accepts_both_add_directions():
+    decode_instruction(canonical_bytes(AddRR(Rax, Rcx))) =
+        Some(decoded_rr(AddRR(Rax, Rcx)))
+    ∧ decode_instruction(alternate_add_bytes(Rax, Rcx)) =
+        Some(decoded_rr(AddRR(Rax, Rcx)))
+{
+    And(refl, refl)
+}
+
+theorem executable_decoder_accepts_test():
+    decode_instruction(canonical_bytes(TestRR(Rax, Rbx))) =
+        Some(decoded_rr(TestRR(Rax, Rbx)))
+{
+    refl
+}
+
+theorem executable_decoder_accepts_extended_registers():
+    decode_instruction(canonical_bytes(MovRR(Rax, R8))) =
+        Some(decoded_rr(MovRR(Rax, R8)))
+{
+    refl
+}
+
+theorem executable_decoder_rejects_bad_shape_and_opcode():
+    decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))) = None
+    ∧ decode_instruction(rr_bytes(144, Rax, Rbx)) = None
+{
+    And(refl, refl)
+}
+
+theorem executable_decoder_rejects_missing_rex_w_and_memory_modrm():
+    decode_instruction(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
+        Cons(ofNat(8, 216), Nil)))) = None
+    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+        Cons(ofNat(8, 24), Nil)))) = None
+{
+    And(refl, refl)
+}
+
+theorem executable_decoder_soundness_is_carried_by_result(
+    bytes: List<BitVec(8)>, result: ByteDecode(bytes),
+    success: decode_bytes(bytes) = Some(result)):
+    DecodesInstruction(bytes, result.instruction)
+{
+    decode_bytes_sound(bytes, result, success)
+}
+
+theorem executable_decoder_result_reaches_execution<M>(
+    bytes: List<BitVec(8)>, result: ByteDecode(bytes), before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip, bytes := bytes),
+        decoded_rr(result.instruction), before,
+        Returned(execute_normal(decoded_rr(result.instruction), before)))
+{
+    decoded_byte_result_executes(bytes, result, before)
 }
 
 theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
