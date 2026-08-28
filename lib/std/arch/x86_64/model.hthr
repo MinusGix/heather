@@ -108,8 +108,8 @@ record DecodedInstruction {
 // The byte boundary is intentionally a proposition over an exact span, not a
 // second instruction semantics. `start` is provenance: a raw-code proof names
 // where these bytes were fetched, while an encoder proof supplies the same
-// span directly. The first encoding slice admits only canonical three-byte
-// REX.W, ModRM-register forms.
+// span directly. The first encoding slice admits three-byte REX.W,
+// ModRM-register forms and normalizes alternate direction opcodes.
 record InstructionBytes {
     start: BitVec(64),
     bytes: List<BitVec(8)>,
@@ -160,21 +160,33 @@ fn modrm_rr(rm, reg: Gpr) → BitVec(8) {
     ofNat(8, modrm_reg_base(reg) + gpr_low3(rm))
 }
 
+fn rr_bytes(opcode: Nat, rm, reg: Gpr) → List<BitVec(8)> {
+    Cons(rex_w_rr(rm, reg), Cons(ofNat(8, opcode),
+        Cons(modrm_rr(rm, reg), Nil)))
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
         MovRR(destination, source) =>
-            Cons(rex_w_rr(destination, source), Cons(ofNat(8, 137),
-                Cons(modrm_rr(destination, source), Nil))),
+            rr_bytes(137, destination, source),
         // 01 /r: ADD r64 into r/m64.
         AddRR(destination, source) =>
-            Cons(rex_w_rr(destination, source), Cons(ofNat(8, 1),
-                Cons(modrm_rr(destination, source), Nil))),
+            rr_bytes(1, destination, source),
         // 85 /r: TEST r64 against r/m64.
         TestRR(left, right) =>
-            Cons(rex_w_rr(left, right), Cons(ofNat(8, 133),
-                Cons(modrm_rr(left, right), Nil))),
+            rr_bytes(133, left, right),
     }
+}
+
+fn alternate_mov_bytes(destination, source: Gpr) → List<BitVec(8)> {
+    // 8B /r names the destination in ModRM.reg and source in ModRM.r/m.
+    rr_bytes(139, source, destination)
+}
+
+fn alternate_add_bytes(destination, source: Gpr) → List<BitVec(8)> {
+    // 03 /r names the destination in ModRM.reg and source in ModRM.r/m.
+    rr_bytes(3, source, destination)
 }
 
 fn decoded_rr(instruction: Instruction) → DecodedInstruction {
@@ -182,11 +194,55 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
         valid_length := squash(And(trivial, trivial)))
 }
 
-// Exact equality excludes truncation, trailing bytes, alternate opcodes and
-// memory ModRM modes from this deliberately narrow relation. Those are
-// unsupported decoding coverage, not architectural execution failures.
+fn RexWRR(byte: BitVec(8), rm, reg: Gpr) → Type {
+    byte = rex_w_rr(rm, reg)
+}
+
+fn OpcodeByte(byte: BitVec(8), opcode: Nat) → Type {
+    byte = ofNat(8, opcode)
+}
+
+fn ModRMRR(byte: BitVec(8), rm, reg: Gpr) → Type {
+    byte = modrm_rr(rm, reg)
+}
+
+// Matching the list structurally makes exact consumption part of decoding:
+// truncation and trailing bytes reduce to `False`. ModRMRR only constructs
+// bytes with ModRM.mod = 11, so memory forms are outside decoding coverage.
+fn RrEncoding(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr) → Type {
+    match bytes {
+        Nil => False,
+        Cons(rex, tail1) => match tail1 {
+            Nil => False,
+            Cons(op, tail2) => match tail2 {
+                Nil => False,
+                Cons(modrm, tail3) => match tail3 {
+                    Nil => RexWRR(rex, rm, reg) ∧ OpcodeByte(op, opcode)
+                        ∧ ModRMRR(modrm, rm, reg),
+                    Cons(_, _) => False,
+                },
+            },
+        },
+    }
+}
+
+// Direction-opcode alternatives normalize into one semantic instruction.
+// Operand roles are reversed in the 8B/03 forms because ModRM.reg, rather than
+// ModRM.r/m, names the destination there.
+fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type {
+    match instruction {
+        MovRR(destination, source) =>
+            RrEncoding(bytes, 137, destination, source)
+            ∨ RrEncoding(bytes, 139, source, destination),
+        AddRR(destination, source) =>
+            RrEncoding(bytes, 1, destination, source)
+            ∨ RrEncoding(bytes, 3, source, destination),
+        TestRR(left, right) => RrEncoding(bytes, 133, left, right),
+    }
+}
+
 fn DecodedAt(span: InstructionBytes, decoded: DecodedInstruction) → Type {
-    span.bytes = canonical_bytes(decoded.instruction) ∧ decoded.length = 3
+    DecodesInstruction(span.bytes, decoded.instruction) ∧ decoded.length = 3
 }
 
 fn encoded_at(start: BitVec(64), instruction: Instruction) → InstructionBytes {
@@ -196,22 +252,46 @@ fn encoded_at(start: BitVec(64), instruction: Instruction) → InstructionBytes 
 theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
     DecodedAt(encoded_at(start, instruction), decoded_rr(instruction))
 {
-    And(refl, refl)
+    match instruction {
+        MovRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
+        AddRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
+        TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
+    }
 }
 
 theorem external_bytes_decode(span: InstructionBytes,
     decoded: DecodedInstruction,
-    exact: span.bytes = canonical_bytes(decoded.instruction),
+    bytes_decode: DecodesInstruction(span.bytes, decoded.instruction),
     length: decoded.length = 3): DecodedAt(span, decoded)
 {
-    And(exact, length)
+    And(bytes_decode, length)
 }
 
-theorem decoded_at_exact_bytes(span: InstructionBytes,
+theorem decoded_at_bytes(span: InstructionBytes,
     decoded: DecodedInstruction, evidence: DecodedAt(span, decoded)):
-    span.bytes = canonical_bytes(decoded.instruction)
+    DecodesInstruction(span.bytes, decoded.instruction)
 {
     evidence.left
+}
+
+theorem alternate_mov_encoding_decodes(start: BitVec(64),
+    destination, source: Gpr):
+    DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_mov_bytes(destination, source)),
+        decoded_rr(MovRR(destination, source)))
+{
+    And(Inr(And(refl, And(refl, refl))), refl)
+}
+
+theorem alternate_add_encoding_decodes(start: BitVec(64),
+    destination, source: Gpr):
+    DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_add_bytes(destination, source)),
+        decoded_rr(AddRR(destination, source)))
+{
+    And(Inr(And(refl, And(refl, refl))), refl)
 }
 
 theorem decoded_at_length(span: InstructionBytes,
@@ -375,6 +455,32 @@ theorem canonical_encoding_executes<M>(instruction: Instruction,
 {
     And(refl, And(canonical_encoding_decodes(before.rip, instruction),
         canonical_execute_normal_is_allowed(instruction, before)))
+}
+
+theorem alternate_mov_encoding_executes<M>(destination, source: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_mov_bytes(destination, source)),
+        decoded_rr(MovRR(destination, source)), before,
+        Returned(execute_normal(decoded_rr(MovRR(destination, source)), before)))
+{
+    And(refl, And(
+        alternate_mov_encoding_decodes(before.rip, destination, source),
+        canonical_execute_normal_is_allowed(MovRR(destination, source), before)))
+}
+
+theorem alternate_add_encoding_executes<M>(destination, source: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_add_bytes(destination, source)),
+        decoded_rr(AddRR(destination, source)), before,
+        Returned(execute_normal(decoded_rr(AddRR(destination, source)), before)))
+{
+    And(refl, And(
+        alternate_add_encoding_decodes(before.rip, destination, source),
+        canonical_execute_normal_is_allowed(AddRR(destination, source), before)))
 }
 
 theorem external_decoding_executes<M>(span: InstructionBytes,

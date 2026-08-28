@@ -137,3 +137,11 @@ access; it does not claim x86 memory is total.
   alternate unsupported opcode, and length disagreement. Architectural-memory
   fetch, alternate legal encodings, and an executable decoder remain future
   rounds rather than being conflated with execution faults.
+- 2026-08-27: Generalized `DecodedAt` beyond the canonical encoder graph.
+  `RrEncoding` structurally separates exact three-byte consumption, REX.W,
+  opcode, and register-mode ModRM evidence. The 89/8B `MOV` forms and 01/03
+  `ADD` forms reverse their ModRM operand roles and normalize to the same typed
+  instructions; both byte choices then reuse the existing `Execute` relation.
+  Controls reject truncation, direction-opcode/ModRM disagreement, missing
+  REX.W, memory-mode ModRM, and decoded-length disagreement. Executable decode
+  and architectural fetch remain separate future layers.

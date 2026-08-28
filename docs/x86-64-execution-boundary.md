@@ -1,6 +1,6 @@
 # X86-64 bytes, decoding, and typed execution
 
-Status: **canonical register-byte boundary** (2026-08-27).
+Status: **encoding-normalizing register-byte boundary** (2026-08-27).
 
 Heather's x86-64 work serves two equal customers: certified compilation into
 machine code and proofs about machine code that already exists. Both routes
@@ -84,18 +84,22 @@ library proves that result equivalent to its unsigned arithmetic condition
 an executable linear-width operation without weakening its mathematical
 characterization.
 
-The first byte-level round adds `InstructionBytes` and the declarative
-`DecodedAt` proposition for canonical three-byte REX.W register-register
-encodings of `MOV`, `ADD`, and `TEST`. The evidence retains the exact consumed
-bytes and start address. `canonical_encoding_decodes` puts compiler-produced
-bytes into the proposition; `external_bytes_decode` admits an independently
-established exact byte equality; both compose with the same `Execute` relation
-through `ExecuteAt`. The consumed length is carried into RIP fallthrough by a
+The byte boundary uses `InstructionBytes` and the declarative `DecodedAt`
+proposition for three-byte REX.W register-register encodings of `MOV`, `ADD`,
+and `TEST`. The evidence retains the exact consumed bytes and start address.
+Recognition is decomposed into exact list shape, REX.W extension bits, opcode,
+and register-mode ModRM propositions. `MOV` admits both 89 and 8B direction
+forms; `ADD` admits both 01 and 03. Their different ModRM operand roles
+normalize into the same typed instruction. `canonical_encoding_decodes` puts
+compiler-produced bytes into the broader proposition; independent byte proofs
+use the same relation. Both compose with the one `Execute` relation through
+`ExecuteAt`, and the consumed length is carried into RIP fallthrough by a
 separate theorem.
 
-This is deliberately not yet a total or executable decoder. Alternate legal
-encodings, prefixes, memory ModRM modes, truncation, and trailing bytes have no
-`DecodedAt` proof in this slice. Nor does `InstructionBytes` claim that a read
-from architectural memory succeeded: fetch and its faults wait for the byte
-memory model. Invalid encoding, unsupported coverage, failed fetch, and
-architectural execution fault remain four different outcomes.
+This is deliberately not yet a total or executable decoder. Redundant and
+legacy prefixes, memory ModRM modes, truncation, trailing bytes, and other
+instructions have no `DecodedAt` proof in this slice. Nor does
+`InstructionBytes` claim that a read from architectural memory succeeded:
+fetch and its faults wait for the byte memory model. Invalid encoding,
+unsupported coverage, failed fetch, and architectural execution fault remain
+four different outcomes.

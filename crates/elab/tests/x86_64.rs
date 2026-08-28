@@ -126,6 +126,32 @@ theorem canonical_test_extension_bytes():
     refl
 }
 
+theorem mov_direction_encodings_normalize(start: BitVec(64)):
+    DecodedAt(encoded_at(start, MovRR(Rax, Rbx)),
+        decoded_rr(MovRR(Rax, Rbx)))
+    ∧ DecodedAt(
+        InstructionBytes(start := start,
+            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 139),
+                Cons(ofNat(8, 195), Nil)))),
+        decoded_rr(MovRR(Rax, Rbx)))
+{
+    And(canonical_encoding_decodes(start, MovRR(Rax, Rbx)),
+        alternate_mov_encoding_decodes(start, Rax, Rbx))
+}
+
+theorem add_direction_encodings_normalize(start: BitVec(64)):
+    DecodedAt(encoded_at(start, AddRR(R9, R10)),
+        decoded_rr(AddRR(R9, R10)))
+    ∧ DecodedAt(
+        InstructionBytes(start := start,
+            bytes := Cons(ofNat(8, 77), Cons(ofNat(8, 3),
+                Cons(ofNat(8, 202), Nil)))),
+        decoded_rr(AddRR(R9, R10)))
+{
+    And(canonical_encoding_decodes(start, AddRR(R9, R10)),
+        alternate_add_encoding_decodes(start, R9, R10))
+}
+
 theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
     before: MachineState<M>):
     ExecuteAt(encoded_at(before.rip, instruction), decoded_rr(instruction), before,
@@ -142,6 +168,28 @@ theorem decoded_length_drives_fallthrough<M>(span: InstructionBytes,
     decoded_execution_advances_by_consumed_length(span, decoded, before, decoding)
 }
 
+theorem alternate_mov_bytes_reach_execution<M>(destination, source: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_mov_bytes(destination, source)),
+        decoded_rr(MovRR(destination, source)), before,
+        Returned(execute_normal(decoded_rr(MovRR(destination, source)), before)))
+{
+    alternate_mov_encoding_executes(destination, source, before)
+}
+
+theorem alternate_add_bytes_reach_execution<M>(destination, source: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_add_bytes(destination, source)),
+        decoded_rr(AddRR(destination, source)), before,
+        Returned(execute_normal(decoded_rr(AddRR(destination, source)), before)))
+{
+    alternate_add_encoding_executes(destination, source, before)
+}
+
 theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
     ExecuteAt(
         InstructionBytes(start := before.rip,
@@ -156,7 +204,7 @@ theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
                 Cons(ofNat(8, 216), Nil)))),
         decoded_rr(MovRR(Rax, Rbx)), before,
         Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)),
-        refl, And(refl, refl),
+        refl, And(Inl(And(refl, And(refl, refl))), refl),
         canonical_execute_normal_is_allowed(MovRR(Rax, Rbx), before))
 }
 
@@ -203,7 +251,7 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
     And(refl, refl)
 }
 "#,
-        // 8B is an alternate MOV direction opcode, outside this canonical slice.
+        // 8B reverses operand roles; keeping the 89 ModRM changes the instruction.
         r#"
 import x86_64;
 import bitvec;
@@ -215,6 +263,34 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
     decoded_rr(MovRR(Rax, Rbx)))
 {
     And(refl, refl)
+}
+"#,
+        // A three-byte shape without REX.W is not a 64-bit instruction here.
+        r#"
+import x86_64;
+import bitvec;
+import list;
+fn impossible(start: BitVec(64)) -> DecodedAt(
+    InstructionBytes(start := start,
+        bytes := Cons(ofNat(8, 64), Cons(ofNat(8, 137),
+            Cons(ofNat(8, 216), Nil)))),
+    decoded_rr(MovRR(Rax, Rbx)))
+{
+    And(Inl(And(refl, And(refl, refl))), refl)
+}
+"#,
+        // ModRM.mod = 00 is a memory form, not register-register coverage.
+        r#"
+import x86_64;
+import bitvec;
+import list;
+fn impossible(start: BitVec(64)) -> DecodedAt(
+    InstructionBytes(start := start,
+        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+            Cons(ofNat(8, 24), Nil)))),
+    decoded_rr(MovRR(Rax, Rbx)))
+{
+    And(Inl(And(refl, And(refl, refl))), refl)
 }
 "#,
         // Correct bytes cannot certify a decoded object with the wrong length.
