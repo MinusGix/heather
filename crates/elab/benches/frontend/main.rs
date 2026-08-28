@@ -278,6 +278,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("corpus/check-file", "lib/*.hthr end to end, with the phase split"),
         ("scale/declarations", "n independent fn+theorem pairs"),
         ("scale/wide-inductive", "an inductive with n constructors and its n-arm match"),
+        ("scale/certified-dispatch", "an n-row certified lookup and its proofs"),
         ("forded/computed-arms", "route 2b with n constructors — §14.2's μ multiplier"),
         ("forded/occurrences", "n uses of one forded family — the per-use cost"),
         ("forded/declared-index-tags", "form A swept along the index type — §14.9"),

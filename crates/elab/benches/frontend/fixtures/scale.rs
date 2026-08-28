@@ -10,13 +10,21 @@
 //! what they are for: real proofs, in `lib/`.
 
 use crate::harness::{Case, Family};
-use heather_elab::IndexedRoute;
+use heather_elab::{Elaborator, IndexedRoute};
 
 use super::{cloned_runner, prelude, validate, validate_route};
 
 pub fn families() -> Vec<Family> {
-    vec![declarations(), wide_inductive()]
+    vec![declarations(), wide_inductive(), certified_dispatch()]
 }
+
+const LOGIC: &str = include_str!("../../../../../lib/std/logic.hthr");
+const BOOL: &str = include_str!("../../../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../../../lib/std/nat.hthr");
+const OPTION: &str = include_str!("../../../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../../../lib/std/pair.hthr");
+const LIST: &str = include_str!("../../../../../lib/std/list.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../../../lib/std/certified_lookup.hthr");
 
 /// `n` independent declarations, each a small `fn` plus the `theorem` that
 /// runs it. Every one of them looks the same to the elaborator; what grows
@@ -83,6 +91,96 @@ fn wide_inductive() -> Family {
         expect_slope: Some((0.90, 1.60)),
         cases: sweep("scale/wide-inductive", &[4, 8, 16, 32], src),
     }
+}
+
+/// An n-row certified dispatch table, including its classifier soundness
+/// bridge, payload interpreter, and one completeness theorem covering every
+/// descriptor. This is the schema used by x86 opcode dispatch: adding an
+/// opcode should add a row and an arm, not another layer of dependent
+/// equality plumbing.
+fn certified_dispatch() -> Family {
+    let src = |n: u64| {
+        let ctors: Vec<String> = (0..n).map(|i| format!("K{i}")).collect();
+        let opcode_arms: Vec<String> = (0..n).map(|i| format!("        K{i} => {i},")).collect();
+        let interpret_arms: Vec<String> = (0..n).map(|i| format!("        K{i} => {i},")).collect();
+        let complete_arms: Vec<String> = (0..n).map(|i| format!("        K{i} => refl,")).collect();
+        let rows = (0..n).rev().fold(String::from("Nil"), |tail, i| {
+            format!("Cons(CertifiedEntry(key := {i}, value := K{i}, valid := refl), {tail})")
+        });
+        format!(
+            "import certified_lookup;\n\
+             import nat;\n\
+             import list;\n\
+             import option;\n\n\
+             inductive Opcode {{ {} }}\n\n\
+             fn opcode(form: Opcode) -> Nat {{\n    match form {{\n{}\n    }}\n}}\n\n\
+             fn Matches(byte: Nat, form: Opcode) -> Type {{ byte = opcode(form) }}\n\n\
+             fn rows() -> List<CertifiedEntry<Nat, Opcode>(Matches)> {{\n    {rows}\n}}\n\n\
+             fn classify(byte: Nat) -> Option<Opcode> {{\n    lookup(Matches, nat::eq_dec, byte, rows())\n}}\n\n\
+             theorem classify_sound(byte: Nat, form: Opcode,\n\
+                 success: classify(byte) = Some(form)): Matches(byte, form) {{\n\
+                 lookup_sound(Matches, nat::eq_dec, byte, rows(), form, success)\n}}\n\n\
+             fn interpret(form: Opcode) -> Nat {{\n    match form {{\n{}\n    }}\n}}\n\n\
+             theorem classify_complete(form: Opcode):\n\
+                 classify(opcode(form)) = Some(form) {{\n    match form {{\n{}\n    }}\n}}\n",
+            ctors.join(", "),
+            opcode_arms.join("\n"),
+            interpret_arms.join("\n"),
+            complete_arms.join("\n"),
+        )
+    };
+
+    let base = certified_lookup_base();
+    let sizes = [2, 4, 8, 16];
+    let sizes = if crate::harness::smoke() {
+        &sizes[..1]
+    } else {
+        &sizes[..]
+    };
+    let cases = sizes
+        .iter()
+        .map(|&n| {
+            let text = src(n);
+            let mut validation = base.clone();
+            let errors = validation.check_source(&text);
+            assert!(
+                errors.is_empty(),
+                "fixture `scale/certified-dispatch:{n}` does not check ({} error(s)); first:\n{}",
+                errors.len(),
+                errors[0].render(&text)
+            );
+            let (run, cell) = cloned_runner(base.clone(), text);
+            Case::new(n, 0, run).with_phases(cell)
+        })
+        .collect();
+
+    Family {
+        name: "scale/certified-dispatch",
+        what: "an n-row certified table with generic soundness and completeness",
+        unit: "rows",
+        // 2026-08-28: 1.31 over 2/4/8/16 rows. The +/-0.35 band uses the
+        // suite's ordinary definition of meaningful slope drift. This is a
+        // structural guard, deliberately not a host-time budget.
+        expect_slope: Some((0.95, 1.65)),
+        cases,
+    }
+}
+
+fn certified_lookup_base() -> Elaborator {
+    let mut e = prelude();
+    for (name, src) in [
+        ("logic", LOGIC),
+        ("bool", BOOL),
+        ("nat", NAT),
+        ("option", OPTION),
+        ("pair", PAIR),
+        ("list", LIST),
+        ("certified_lookup", CERTIFIED_LOOKUP),
+    ] {
+        e.elab_module_source(name, src)
+            .unwrap_or_else(|err| panic!("benchmark base module `{name}`: {}", err.render(src)));
+    }
+    e
 }
 
 /// Build one case per size: generate, validate, then hand the harness a

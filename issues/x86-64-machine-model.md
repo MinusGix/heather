@@ -175,3 +175,6 @@ access; it does not claim x86 memory is total.
   checks concrete `DecodesInstruction`/`RrEncoding` evidence.  A finite opcode
   descriptor is the next model-level boundary; no kernel or fuel change is
   justified by these measurements.
+- 2026-08-28: [[x86-opcode-dispatch-scaling]] closed with a generic certified
+  lookup and a nine-form descriptor/interpreter split; all direct-decoder
+  soundness, completeness, and malformed/unsupported boundaries are preserved.

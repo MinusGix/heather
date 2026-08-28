@@ -1,6 +1,6 @@
 ---
 title: Separate cheap opcode classification from expensive decoding evidence
-status: open
+status: closed
 labels: [x86,performance,proofs]
 created: 2026-08-28
 updated: 2026-08-28
@@ -93,3 +93,29 @@ both changes and are diagnostic measurements, not benchmark thresholds.
   scans; the apparent frontend regression against the saved benchmark was a
   stale baseline (an untouched same-session build took 41.96 ms in the deep
   kernel case, versus 27.77 ms with memo lookup disabled).
+
+- 2026-08-28: LANDED. `std/certified_lookup` now provides a reusable finite
+  table whose rows certify `Valid(key, value)`, a plain `Option` classifier,
+  and one generic `lookup_sound` theorem. The deliberately plain result is
+  important: a prototype returning a dependent proof-carrying result made the
+  two-opcode x86 module slower (31.700/23.202 s total/kernel), while separating
+  computation from the soundness theorem stayed near baseline
+  (29.434/21.105 s) and avoids transported-proof definitional-equality costs.
+
+  The x86 decoder now classifies through a nine-constructor `RrOpcode`
+  descriptor and one certified table, then interprets that descriptor into
+  `ByteDecode`. Nine opcode-specific decoder completeness theorems and nine
+  instruction completeness theorems collapsed to one match theorem at each
+  layer. The x86 model is 71 lines smaller overall. Repeated all-nine module
+  checks measured 29.584/18.942, 25.522/16.282, 32.331/21.015, and
+  30.208/19.302 s total/kernel versus the same-session pre-round baseline of
+  28.372/21.050 s. The robust claim is no kernel regression (with several
+  materially cheaper repeats), not a hard host-time speedup; frontend timing
+  remains noisy, and no fuel/cache limit changed.
+
+  `scale/certified-dispatch` is the requested host-independent growth guard.
+  It elaborates complete classifier/soundness/interpreter/completeness schemas
+  at 2/4/8/16 rows and measured slope 1.31; CI accepts 0.95--1.65, the
+  benchmark suite's ordinary +/-0.35 meaningful-drift band. The complete x86
+  suite and the standalone generic-library controls pass, including malformed
+  and unsupported byte boundaries.

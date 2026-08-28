@@ -18,6 +18,7 @@ const INT: &str = include_str!("../../../lib/std/int.hthr");
 const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
 const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
 const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
 const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/model.hthr");
 
 fn elaborated() -> Elaborator {
@@ -26,6 +27,7 @@ fn elaborated() -> Elaborator {
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
         ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
         ("bitvec", BITVEC), ("relation", RELATION), ("location", LOCATION),
+        ("certified_lookup", CERTIFIED_LOOKUP),
     ] {
         if let Err(err) = e.elab_module_source(name, src) {
             panic!("{name} did not check: {}", err.render(src));

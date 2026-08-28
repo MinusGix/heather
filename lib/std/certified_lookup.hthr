@@ -1,0 +1,68 @@
+// Certified finite lookup. Each row certifies its value at its stored key;
+// lookup computes an ordinary Option, and lookup_sound transports the row's
+// certificate once so consumers do not repeat dependent equality plumbing.
+
+import logic;
+import list;
+import option;
+
+record CertifiedEntry<K, V>(Valid: K → V → Type) {
+    key: K,
+    value: V,
+    valid: Valid(key, value),
+}
+
+fn lookup<K, V>(Valid: K → V → Type,
+    equal: (left, right: K) → left = right ∨ left ≠ right,
+    query: K, entries: List<CertifiedEntry<K, V>(Valid)>) →
+    Option<V>
+{
+    match entries {
+        Nil => None,
+        Cons(entry, tail) => match equal(query, entry.key) {
+            Inl(_) => Some(entry.value),
+            Inr(_) => lookup(Valid, equal, query, tail),
+        },
+    }
+}
+
+fn lookup_option_payload<A>(fallback: A, value: Option<A>) → A {
+    match value { None => fallback, Some(found) => found }
+}
+
+theorem lookup_some_injective<A>(left, right: A,
+    exact: Some(left) = Some(right)): left = right
+{
+    list::cong_fn(λ (value: Option<A>) => lookup_option_payload(left, value),
+        exact)
+}
+
+fn LookupOptionNonempty<A>(value: Option<A>) → Type {
+    match value { None => False, Some(_) => True }
+}
+
+theorem lookup_none_ne_some<A>(value: A): (None<A>) ≠ Some(value) {
+    λ (bad: (None<A>) = Some(value)) =>
+        j(sym(bad), λ actual q => LookupOptionNonempty(actual), trivial)
+}
+
+theorem lookup_sound<K, V>(Valid: K → V → Type,
+    equal: (left, right: K) → left = right ∨ left ≠ right,
+    query: K, entries: List<CertifiedEntry<K, V>(Valid)>, value: V):
+    lookup(Valid, equal, query, entries) = Some(value) → Valid(query, value)
+{
+    match entries as λ actual =>
+            lookup(Valid, equal, query, actual) = Some(value) →
+            Valid(query, value) {
+        Nil => λ success => false_elim(lookup_none_ne_some(value, success)),
+        Cons(entry, tail) => match equal(query, entry.key) {
+            Inl(key_exact) => λ success =>
+                j(lookup_some_injective(entry.value, value, success),
+                    λ actual q => Valid(query, actual),
+                    j(sym(key_exact),
+                        λ actual q => Valid(actual, entry.value), entry.valid)),
+            Inr(_) => λ success =>
+                lookup_sound(Valid, equal, query, tail, value, success),
+        },
+    }
+}
