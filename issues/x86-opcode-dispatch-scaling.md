@@ -119,3 +119,12 @@ both changes and are diagnostic measurements, not benchmark thresholds.
   benchmark suite's ordinary +/-0.35 meaningful-drift band. The complete x86
   suite and the standalone generic-library controls pass, including malformed
   and unsupported byte boundaries.
+
+- 2026-08-28: Post-landing cleanup replaced the classifier's hand-written
+  convoy with equation-bearing `match`. A generic probe also confirmed that
+  rigid abstract field types already infer values occurring only in the field;
+  the unsafe-looking residue was split precisely. Partial syntactic progress
+  suppressing a useful reduction retry is owned by
+  [[argument-type-reduction-after-partial-inference]], while nominal source
+  constructors hidden by shared kernel encodings are owned by
+  [[implicit-value-inference-through-constructor-fields]].

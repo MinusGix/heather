@@ -911,15 +911,12 @@ fn decode_opcode_from_operands(rex, opcode, modrm: BitVec(8),
 {
     match operands {
         None => None,
-        Some(found) => (match classify_rr_opcode(opcode) as λ actual =>
-                classify_rr_opcode(opcode) = actual →
-                Option<ByteDecode(Cons(rex,
-                    Cons(opcode, Cons(modrm, Nil))))> {
-            Some(form) => λ success => Some(interpret_rr_opcode(rex, opcode,
+        Some(found) => match success : classify_rr_opcode(opcode) {
+            Some(form) => Some(interpret_rr_opcode(rex, opcode,
                 modrm, found, form,
                 classify_rr_opcode_sound(opcode, form, success))),
-            None => λ _ => None,
-        })(refl),
+            None => None,
+        },
     }
 }
 

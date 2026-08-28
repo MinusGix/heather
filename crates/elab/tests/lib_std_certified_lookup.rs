@@ -40,6 +40,18 @@ fn rows() → List<CertifiedEntry<Nat, Nat>(IsSuccess)> {
         Cons(CertifiedEntry(key := 7, value := 7, valid := refl), Nil))
 }
 
+theorem retain_valid<K, V>(Valid: K → V → Type, {key: K}, {value: V},
+    valid: Valid(key, value)): Valid(key, value)
+{
+    valid
+}
+
+theorem field_type_infers_hidden_values<K, V>(Valid: K → V → Type,
+    entry: CertifiedEntry<K, V>(Valid)): Valid(entry.key, entry.value)
+{
+    retain_valid(Valid, entry.valid)
+}
+
 theorem finds_head():
     lookup(IsSuccess, nat::eq_dec, 3, rows()) = Some(3)
 {}
