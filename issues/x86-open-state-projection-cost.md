@@ -86,3 +86,20 @@ fuel or stack as the fix.
   The unusable TEST spike was again removed per this issue's acceptance rule.
   The residual is now demonstrably outside the transparent open-BitVec
   producer/consumer defect and remains owned here.
+- 2026-08-27: The RIP residual is fixed and public as
+  `execute_normal_advances_rip`. Minimization exonerated instruction matching,
+  the `DecodedInstruction` record, and sibling effect fields: direct
+  `MachineState` construction projected cheaply, while one transparent wrapper
+  around that construction exhausted fuel even for a fixed `MovRR`. After the
+  one-head delta fix, both sides correctly rendezvoused at `next_rip`, but the
+  same-head retry called the type-directed normal judgment. Since `BitVec(64)`
+  is a positive record type, that judgment applied Sigma eta before neutral
+  comparison, projected both `next_rip` applications, and forced their `add`
+  bodies. A delta-stuck defined head is already neutral regardless of its
+  result type, so the retry now compares the neutral spines directly and only
+  unfolds on a genuine spine mismatch. A kernel rail uses a Sigma-returning
+  definition behind forty beta steps: it passes with 16 fuel now and, under a
+  mutation restoring the eta-first call, fails with `OutOfFuel`. The generic
+  decoded/open-state RIP theorem checks under ordinary fuel; the x86 suite and
+  full kernel differential suites remain the acceptance gate. Relational
+  `TEST` remains the next independent re-run before this issue can close.

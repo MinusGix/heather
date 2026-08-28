@@ -198,3 +198,14 @@ theorem mov_preserves_memory<M>(destination, source: Gpr, length: Nat,
         DecodedInstruction(instruction := MovRR(destination, source),
             length := length, valid_length := valid), before).memory = before.memory
 {}
+
+theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
+    before: MachineState<M>):
+    execute_normal(decoded, before).rip =
+        next_rip(before.rip, decoded.length)
+{
+    match decoded.instruction {
+        MovRR(_, _) => refl,
+        AddRR(_, _) => refl,
+    }
+}

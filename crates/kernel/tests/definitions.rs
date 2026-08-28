@@ -356,6 +356,56 @@ fn a_shared_definition_head_settles_on_its_spine() {
     );
 }
 
+#[test]
+fn a_shared_definition_head_at_a_sigma_compares_before_eta() {
+    // A defined neutral is still a neutral even when its result type has an
+    // eta rule. Comparing `slow_pair x` with itself must settle on the global
+    // application spine, not project both sides and force the body. The body
+    // has forty beta steps precisely so the old eta-first route exhausts the
+    // sixteen-unit rail below.
+    let sig = Type::Sigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rty(Type::Nat),
+        snd: rty(Type::Nat),
+    };
+    let pair = Term::Pair {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Nat),
+        snd_ty: rty(Type::Nat),
+        fst: rt(v(0)),
+        snd: rt(v(0)),
+    };
+    let mut body = pair;
+    for _ in 0..40 {
+        body = Term::App {
+            fun: rt(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: rty(sig.clone()),
+                body: rt(v(0)),
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rty(sig.clone()),
+            cod: rty(sig.clone()),
+            arg: rt(body),
+        };
+    }
+    let fun_ty = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        cod: rty(sig.clone()),
+    };
+    let p = psi(vec![binding(fun_ty, Some(lam(body)))]);
+    let g = nil_ctx(1);
+    let lhs = app(glob(0, 1), v(0));
+    let rhs = app(glob(0, 1), v(0));
+    assert_eq!(conv_term(&p, &g, Layer::Prog, &lhs, &rhs, &sig, &c(0), 16), Ok(()));
+}
+
 // -------------------------------------------------------------------------
 // (b) layer c: a global is syntax
 // -------------------------------------------------------------------------

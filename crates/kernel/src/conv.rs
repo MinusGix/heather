@@ -575,9 +575,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// The δ-lazy attempt: with both sides stuck at the *same* defined
-    /// global head, try the ordinary comparison first — `f a⃗ ≈ f a⃗`
-    /// settles on the spine, and `f`'s body is never materialized. Failure
-    /// means "unfold and retry", not "not convertible".
+    /// global head, try neutral-spine comparison first — `f a⃗ ≈ f a⃗`
+    /// settles on the spine, and neither `f`'s body nor a type-directed η
+    /// expansion is materialized. Failure means "unfold and retry", not
+    /// "not convertible".
     ///
     /// Guard semantics are [`Conv::strip`]'s, for the same reason: catch
     /// `NotConvertible`, propagate `OutOfFuel` (the shared budget is spent
@@ -1038,7 +1039,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let heads = (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb));
                 if let (Some(u1), Some(u2)) = heads
                     && u1 == u2
-                    && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, w, l))?.is_some()
+                    // A defined head is neutral even when its declared result
+                    // is a positive type. Compare that neutral spine directly:
+                    // routing through `tm_nf` would invoke type-directed η
+                    // first (for example, projecting every field of a
+                    // `BitVec`) and needlessly force the definition body.
+                    && self.delta_lazy(|c| c.tm_nee(env, &wa, &wb).map(drop))?.is_some()
                 {
                     return Ok(());
                 }

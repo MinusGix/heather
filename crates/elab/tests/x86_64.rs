@@ -68,6 +68,14 @@ theorem register_write_is_observable(register: Gpr, value: BitVec(64),
     read_gpr_after_write(register, value, registers)
 }
 
+theorem execution_advances_rip<M>(decoded: DecodedInstruction,
+    before: MachineState<M>):
+    execute_normal(decoded, before).rip =
+        next_rip(before.rip, decoded.length)
+{
+    execute_normal_advances_rip(decoded, before)
+}
+
 "#;
     if let Err(err) = e.elab_module_source("probe", src) {
         let msg = match err {
