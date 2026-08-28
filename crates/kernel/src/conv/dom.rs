@@ -211,8 +211,6 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     App {
         dom_level: &'a Level,
         cod_level: &'a Level,
-        dom: D::TyC,
-        cod: D::TyC,
         fun: D::TmC,
         arg: D::TmC,
     },
@@ -342,7 +340,9 @@ pub(super) trait Dom<'v>: Sized {
     /// `T ⇝* W` **without** δ: stops at a definition's spine.
     fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> R<Self::Ty>;
     fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
-    /// Resume δ-transparent reduction from a δ-opaque weak head normal form.
+    /// Advance exactly one defined head from a δ-opaque weak head normal
+    /// form, then resume non-δ reduction. Conversion can therefore retry a
+    /// newly exposed same-head spine before unfolding further.
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::Ty>;
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> R<Self::Tm>;
     /// The definition at the head of a δ-stuck spine, if any.
@@ -808,12 +808,21 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
         let defs = cv.defs(env);
-        step_ty(cv, env, w, |t, g| step_type_delta(t, g, defs))
+        let Some(first) = step_type_delta(w, &env.gamma, defs) else {
+            return Ok(w.clone());
+        };
+        cv.spend()?;
+        step_ty(cv, env, &first, step_type)
     }
 
     #[inline]
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> R<Rc<Term>> {
-        Self::whnf_tm(cv, env, w)
+        let defs = cv.defs(env);
+        let Some(first) = step_term_delta(w, &env.gamma, defs) else {
+            return Ok(Rc::clone(w));
+        };
+        cv.spend()?;
+        step_tm(cv, env, &Rc::new(first), step_term)
     }
 
     #[inline]
@@ -1068,11 +1077,9 @@ impl<'v> Dom<'v> for Syn {
                     tm: Rc::clone(tm),
                 }
             }
-            Term::App { fun, dom_level, cod_level, dom, cod, arg } => TmView::App {
+            Term::App { fun, dom_level, cod_level, dom: _, cod: _, arg } => TmView::App {
                 dom_level,
                 cod_level,
-                dom: Rc::clone(dom),
-                cod: Rc::clone(cod),
                 fun: Rc::clone(fun),
                 arg: Rc::clone(arg),
             },

@@ -94,3 +94,42 @@ Acceptance has two parts:
   retaining twice as many values buys no sharing and is not landed. The next
   lever is allocation/force shape or a smarter admission policy, guided by a
   minimized producer/consumer query, rather than a larger FIFO.
+- 2026-08-27: The x86 relational-`TEST` probe supplied that minimized query,
+  and corrected its initial attribution to state-record projection. Over open
+  operands, a transparent wrapper around `bitvec::band(n, left, right)` checks
+  at width 4 in about 43 ms but exhausts the ordinary 2^20 per-conversion fuel
+  at width 5. A structural zero consumer checks through width 6 in about 106
+  ms and exhausts fuel at width 8. Their composition checks at width 4 in
+  about 25 ms and width 5 in about 154 ms, then exhausts fuel at width 6.
+  Root-syntactic `band(64, a, b) = band(64, a, b)` remains about 5 ms, and a
+  wrapper which accepts but ignores width-64 operands is about 1.5 ms. Thus
+  neither the carrier annotation, record projection, nor the semantic linear
+  work explains the cliff: delta-unfolding a wrapper exposes a separately
+  built but extensionally identical structural producer/consumer expression,
+  whose conversion growth is pathological at single-digit widths.
+
+  The x86 amplification is separately useful. Whole `Flags` equality stays
+  opaque and checks over direct `BitVec(64)` operands (about 0.47 s), but the
+  same statement exhausts fuel when those operands arrive through
+  `read_gpr(r, before)`. Fieldwise constraints also force the generic cliff.
+  Permanent rails in `crates/elab/tests/lib_std_bitvec.rs` pin the cheap
+  syntactic/unused controls, the last passing producer and consumer widths,
+  and the first `OutOfFuel` widths. The next kernel investigation should start
+  from the width-5 producer wrapper, not the whole x86 state or closed carry.
+- 2026-08-27: The open producer/consumer cliff is fixed without raising the
+  2^20 budget. Conversion previously delta-normalized both mismatched heads to
+  completion, walking straight past a wrapper/body rendezvous. Term and type
+  delta now advance one defined head at a time, advancing only the newer head
+  when two differ (a body can mention only older globals), and retry structural
+  comparison whenever the heads meet. That removes the single-digit cliff.
+  A second cost then appeared at width 64: neutral application comparison
+  recursively rechecked both stored dependent Pi annotations at every curried
+  node, duplicating the same codomain tree. On conversion's required
+  well-typed inputs those annotations are already forced convertible by
+  typing, so the application rule now uses the Pi inferred from the recursively
+  compared function for its argument and result. The permanent rail now checks
+  both producer and consumer wrappers at width 64 under ordinary fuel; direct
+  and unused width-64 controls remain alongside it. Kernel conversion and
+  evaluator differential suites are green. This closes the open symbolic
+  wrapper subproblem, but not this issue's original closed generated-carry and
+  excessive-unary-arithmetic acceptance clauses.

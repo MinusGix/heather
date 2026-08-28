@@ -15,14 +15,16 @@
 //! | … with the type in WHNF       | [`Conv::tm_nee`]|
 //! | `Γ ⊢ δ ≈ δ' : Δ`              | [`Conv::subst`] |
 //!
-//! Shape of the algorithm (it **decides** ch. 06's relation; the relation
-//! itself is transcribed rule for rule in `reduce.rs`, per DESIGN.md):
+//! Shape of the algorithm (on its well-typed inputs it **decides** ch. 06's
+//! relation; the relation itself is transcribed rule for rule in `reduce.rs`,
+//! per DESIGN.md):
 //!
 //! - **Neutral comparison is inference**: `tm_ne`/`ty_ne` return the type /
 //!   universe level of the left input (left-biased — sound by ch. 08); the
-//!   normal-form judgments are checking and *ignore* redundant annotations
-//!   that well-typedness already forces (the ch. 06 note below the
-//!   application rule). The judgment-level `l` inputs are threaded for rule
+//!   normal-form judgments are checking and application inference uses the
+//!   inferred Π spine instead of rechecking redundant annotations that
+//!   well-typedness already forces (the ch. 06 note below the application
+//!   rule). The judgment-level `l` inputs are threaded for rule
 //!   fidelity but never branch the algorithm — every level the rules
 //!   actually check is an *annotation*, compared via [`Level::equiv`].
 //! - **η-directed** comparison at all four function types (`Π`, `ΠΠ`,
@@ -693,15 +695,27 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     #[inline]
     fn ty_w(&mut self, env: &Env<'v>, wa: &mut D::Ty, wb: &mut D::Ty, l: &Level) -> R {
         if self.has_defs {
-            if let (Some(u1), Some(u2)) =
-                (D::delta_head_ty(self, env, wa), D::delta_head_ty(self, env, wb))
-                && u1 == u2
-                && self.delta_lazy(|c| c.ty_nf(env, wa, wb, l))?.is_some()
-            {
-                return Ok(());
+            loop {
+                let heads =
+                    (D::delta_head_ty(self, env, wa), D::delta_head_ty(self, env, wb));
+                if let (Some(u1), Some(u2)) = heads
+                    && u1 == u2
+                    && self.delta_lazy(|c| c.ty_nf(env, wa, wb, l))?.is_some()
+                {
+                    return Ok(());
+                }
+                match heads {
+                    (None, None) => break,
+                    (Some(_), None) => *wa = D::delta_ty(self, env, wa)?,
+                    (None, Some(_)) => *wb = D::delta_ty(self, env, wb)?,
+                    (Some(u1), Some(u2)) if u1.0 < u2.0 => {
+                        *wa = D::delta_ty(self, env, wa)?;
+                    }
+                    (Some(_), Some(_)) => {
+                        *wb = D::delta_ty(self, env, wb)?;
+                    }
+                }
             }
-            *wa = D::delta_ty(self, env, wa)?;
-            *wb = D::delta_ty(self, env, wb)?;
         }
         self.ty_nf(env, wa, wb, l)
     }
@@ -1020,15 +1034,32 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // moves; the helper layering cost 1.35× on `conv/computed-numeral`
         // (`scripts/bench --check`, 2026-07-28).
         if self.has_defs {
-            if let (Some(u1), Some(u2)) =
-                (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb))
-                && u1 == u2
-                && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, w, l))?.is_some()
-            {
-                return Ok(());
+            loop {
+                let heads = (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb));
+                if let (Some(u1), Some(u2)) = heads
+                    && u1 == u2
+                    && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, w, l))?.is_some()
+                {
+                    return Ok(());
+                }
+                match heads {
+                    (None, None) => break,
+                    (Some(_), None) => wa = D::delta_tm(self, env, &wa)?,
+                    (None, Some(_)) => wb = D::delta_tm(self, env, &wb)?,
+                    // A body can mention only older globals. With de Bruijn
+                    // global indices, the newer declaration has the smaller
+                    // index in the current Ψ. Advance only that side: if it
+                    // is a transparent wrapper around the other head, the
+                    // next loop iteration meets there instead of unfolding
+                    // the other side past the rendezvous in lockstep.
+                    (Some(u1), Some(u2)) if u1.0 < u2.0 => {
+                        wa = D::delta_tm(self, env, &wa)?;
+                    }
+                    (Some(_), Some(_)) => {
+                        wb = D::delta_tm(self, env, &wb)?;
+                    }
+                }
             }
-            wa = D::delta_tm(self, env, &wa)?;
-            wb = D::delta_tm(self, env, &wb)?;
         }
         if D::is_transp(&wa) {
             wa = self.strip(wa, env)?;
@@ -1785,30 +1816,37 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 TmView::App {
                     dom_level: dl1,
                     cod_level: cl1,
-                    dom: s1,
-                    cod: t1,
                     fun: f1,
                     arg: a1,
                 },
                 TmView::App {
                     dom_level: dl2,
                     cod_level: cl2,
-                    dom: s2,
-                    cod: t2,
                     fun: f2,
                     arg: a2,
                 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                self.ty(env, s1, s2, dl1)?;
-                let e_x = D::push_entry(env, s1, dl1);
-                self.ty(&e_x, t1, t2, cl1)?;
-                // The type inferred for the heads is ignored (ch. 06: the
-                // annotations of well-typed applications are already forced).
-                self.tm_nee_c(env, f1, f2)?;
-                self.tm(env, a1, a2, s1, dl1)?;
-                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(a1))?, (*cl1).clone()))
+                // By the presupposition of conversion both applications are
+                // already well typed, so their stored Π annotations are
+                // convertible to the Π inferred for their functions (ch. 06,
+                // note below the application rule). Use that one Π spine for
+                // the argument and result instead of rechecking two copies at
+                // every curried application node. Besides being redundant,
+                // the latter duplicates dependent codomains exponentially.
+                let (fun_ty, _) = self.tm_nee_c(env, f1, f2)?;
+                let (fun_dl, fun_cl, fun_dom, fun_cod) = match D::view_ty(self, env, &fun_ty) {
+                    TyView::Pi { dom_level, cod_level, dom, cod } => {
+                        (dom_level.clone(), cod_level.clone(), dom, cod)
+                    }
+                    _ => return Err(NC),
+                };
+                self.tm(env, a1, a2, &fun_dom, &fun_dl)?;
+                Ok((
+                    D::inst_ty(self, env, env, &fun_cod, std::slice::from_ref(a1))?,
+                    fun_cl,
+                ))
             }
             // fst/snd neutral congruence (extension; mirrors App — the Σ
             // annotations forced by well-typedness are compared, the pair via

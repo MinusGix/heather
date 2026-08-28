@@ -430,12 +430,12 @@ impl<'v> Dom<'v> for Values {
 
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<VTy<'v>>) -> R<Rc<VTy<'v>>> {
         let w = Rc::clone(w);
-        run(cv, env, |ev| ev.delta_whnf_ty(w))
+        run(cv, env, |ev| ev.delta_step_ty(w))
     }
 
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Val<'v>>) -> R<Rc<Val<'v>>> {
         let w = Rc::clone(w);
-        run(cv, env, |ev| ev.delta_whnf(w))
+        run(cv, env, |ev| ev.delta_step(w))
     }
 
     fn delta_head(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &Rc<Val<'v>>) -> Option<GlobalVar> {
@@ -1436,11 +1436,9 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
     };
     let head = TmC::value(env, spine_head(n));
     match last {
-        Elim::App { dom_level, cod_level, dom, cod, arg } => TmView::App {
+        Elim::App { dom_level, cod_level, dom: _, cod: _, arg } => TmView::App {
             dom_level,
             cod_level,
-            dom: TyC::here(env, *dom),
-            cod: TyC::under(env, *cod, 1),
             fun: head,
             arg: TmC::here(env, *arg),
         },

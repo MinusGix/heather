@@ -61,6 +61,13 @@ import logic;
 theorem register_indices(): gpr_index(Rax) = 0 ∧ gpr_index(R15) = 15
 { And(refl, refl) }
 
+theorem register_write_is_observable(register: Gpr, value: BitVec(64),
+    registers: Gprs):
+    read_gpr(register, write_gpr(register, value, registers)) = value
+{
+    read_gpr_after_write(register, value, registers)
+}
+
 "#;
     if let Err(err) = e.elab_module_source("probe", src) {
         let msg = match err {

@@ -998,7 +998,9 @@ impl<'v> Val<'v> {
 
 /// One elimination of a neutral spine, with the eliminator's annotations
 /// evaluated (or held as closures) exactly as the corresponding [`Term`]
-/// carries them — conversion's neutral congruences compare them.
+/// carries them. Conversion compares them where required; for application it
+/// instead uses the Pi inferred from the function spine, since well-typedness
+/// already forces the stored annotations to agree.
 ///
 /// The four forms whose β needs to rebuild *syntax* (`ElimW`, `ElimWf`, and
 /// the two code recursors) carry the environment they were built in; the

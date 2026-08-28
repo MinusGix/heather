@@ -189,3 +189,32 @@ theorem carry_backward64(x, y: BitVec(64), h: carry_add(64, x, y)):
 "#);
     bad("theorem fake(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { refl }");
 }
+
+#[test]
+fn open_symbolic_bitvector_wrappers_stop_at_matching_definition_heads() {
+    // These transparent wrappers used to normalize their structural bodies
+    // completely before conversion compared them with the definition exposed
+    // after one delta step: producer failed at width 5, consumer at width 8.
+    // Both now rendezvous at the matching global head at machine width.
+    ok(r#"
+fn produce(n: Nat, left, right: BitVec(n)) -> BitVec(n) {
+    band(n, left, right)
+}
+fn is_zero(n: Nat) -> BitVec(n) -> Bool {
+    match n as λ k => BitVec(k) -> Bool {
+        Zero => λ x => True,
+        Succ(k, ih) => λ x => bool::not(head_bit(k, x)) && ih(tail_bits(k, x)),
+    }
+}
+fn consume(n: Nat, value: BitVec(n)) -> Bool { is_zero(n, value) }
+fn ignore(n: Nat, left, right: BitVec(n)) -> Bool { False }
+
+theorem direct(left, right: BitVec(64)):
+    band(64, left, right) = band(64, left, right) { refl }
+theorem unused(left, right: BitVec(64)): ignore(64, left, right) = False { refl }
+theorem producer_sixty_four(left, right: BitVec(64)):
+    produce(64, left, right) = band(64, left, right) { refl }
+theorem consumer_sixty_four(value: BitVec(64)):
+    consume(64, value) = is_zero(64, value) { refl }
+"#);
+}

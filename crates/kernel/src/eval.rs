@@ -335,6 +335,25 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     // -- δ ------------------------------------------------------------------
 
+    /// Force exactly one glued definition at the head, leaving a newly
+    /// exposed defined head glued. Conversion uses this to interleave
+    /// unfolding with spine comparison: a transparent wrapper may reveal the
+    /// same head as the other side without requiring either body to normalize
+    /// completely.
+    pub fn delta_step(&mut self, v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
+        let unfold = match &*v {
+            Val::Neutral(n) => n.unfold,
+            _ => None,
+        };
+        match unfold {
+            None => Ok(v),
+            Some(u) => {
+                self.spend()?;
+                self.force(u)
+            }
+        }
+    }
+
     /// Force the glued unfoldings at the head until the value is not a
     /// definition's spine — i.e. the δ-transparent weak head value.
     ///
@@ -343,62 +362,68 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the differential oracle's counterpart to `whnf_term_delta`.
     pub fn delta_whnf(&mut self, mut v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
         loop {
-            let unfold = match &*v {
-                Val::Neutral(n) => n.unfold,
-                _ => None,
-            };
-            match unfold {
-                None => return Ok(v),
-                Some(u) => {
-                    self.spend()?;
-                    v = self.force(u)?;
-                }
+            let next = self.delta_step(Rc::clone(&v))?;
+            if Rc::ptr_eq(&next, &v) {
+                return Ok(v);
             }
+            v = next;
         }
     }
 
-    /// [`Eval::delta_whnf`] for types: a type is δ-stuck only through `El`
-    /// (type-level globals carry no body) or through a `Vec`/`Fin` length.
-    pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+    /// [`Eval::delta_step`] for types: advance exactly one definition in the
+    /// term at which an `El`, `Vec`, or `Fin` is δ-stuck, then perform the
+    /// newly enabled non-δ type computation.
+    pub fn delta_step_ty(&mut self, v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
         enum Next<'v> {
             Done,
             El(Level, Rc<Val<'v>>),
             Vec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
             Fin(Rc<Val<'v>>),
         }
-        loop {
-            let next = match &*v {
-                VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), Rc::clone(tm)),
-                VTy::Vec { level, elem, len } => {
-                    Next::Vec(level.clone(), *elem, Rc::clone(len))
-                }
-                VTy::Fin { len } => Next::Fin(Rc::clone(len)),
-                _ => Next::Done,
-            };
-            match next {
-                Next::Done => return Ok(v),
-                Next::El(level, tm) => {
-                    let d = self.delta_whnf(Rc::clone(&tm))?;
-                    if Rc::ptr_eq(&d, &tm) {
-                        return Ok(v);
-                    }
-                    v = self.decode(&level, &d)?;
-                }
-                Next::Vec(level, elem, len) => {
-                    let d = self.delta_whnf(Rc::clone(&len))?;
-                    if Rc::ptr_eq(&d, &len) {
-                        return Ok(v);
-                    }
-                    v = self.vec_ty(&level, elem, &d)?;
-                }
-                Next::Fin(len) => {
-                    let d = self.delta_whnf(Rc::clone(&len))?;
-                    if Rc::ptr_eq(&d, &len) {
-                        return Ok(v);
-                    }
-                    v = self.fin_ty(&d)?;
+        let next = match &*v {
+            VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), Rc::clone(tm)),
+            VTy::Vec { level, elem, len } => Next::Vec(level.clone(), *elem, Rc::clone(len)),
+            VTy::Fin { len } => Next::Fin(Rc::clone(len)),
+            _ => Next::Done,
+        };
+        match next {
+            Next::Done => Ok(v),
+            Next::El(level, tm) => {
+                let d = self.delta_step(Rc::clone(&tm))?;
+                if Rc::ptr_eq(&d, &tm) {
+                    Ok(v)
+                } else {
+                    self.decode(&level, &d)
                 }
             }
+            Next::Vec(level, elem, len) => {
+                let d = self.delta_step(Rc::clone(&len))?;
+                if Rc::ptr_eq(&d, &len) {
+                    Ok(v)
+                } else {
+                    self.vec_ty(&level, elem, &d)
+                }
+            }
+            Next::Fin(len) => {
+                let d = self.delta_step(Rc::clone(&len))?;
+                if Rc::ptr_eq(&d, &len) {
+                    Ok(v)
+                } else {
+                    self.fin_ty(&d)
+                }
+            }
+        }
+    }
+
+    /// Force the glued unfoldings at a type's δ-stuck term until none
+    /// remains.
+    pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+        loop {
+            let next = self.delta_step_ty(Rc::clone(&v))?;
+            if Rc::ptr_eq(&next, &v) {
+                return Ok(v);
+            }
+            v = next;
         }
     }
 
