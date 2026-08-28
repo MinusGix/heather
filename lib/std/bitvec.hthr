@@ -444,6 +444,34 @@ theorem carry_add_bit_of_carry(n: Nat, a, b: BitVec(n),
 
 fn borrow_sub(n: Nat, a, b: BitVec(n)) → Type { toNat(n, a) < toNat(n, b) }
 
+// Executable ripple-borrow view for subtraction. Like `carry_add_bit`, this
+// runs over the vector structure rather than deciding an open Nat comparison.
+fn borrow_next(a, b, borrow: Bool) → Bool {
+    (bool::not(a) && b) || (bool::not(xor_bit(a, b)) && borrow)
+}
+
+fn borrow_bits_next(n: Nat, a, b: BitVec(n), borrow: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → Bool) → Bool
+{
+    match borrow {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
+fn borrow_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → Bool {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → Bool {
+        Zero => λ a b borrow => borrow,
+        Succ(k, ih) => λ a b borrow => borrow_bits_next(
+            k, tail_bits(k, a), tail_bits(k, b),
+            borrow_next(head_bit(k, a), head_bit(k, b), borrow), ih),
+    }
+}
+
+fn borrow_sub_bit(n: Nat, a, b: BitVec(n)) → Bool {
+    borrow_bits(n, a, b, False)
+}
+
 fn bool_eq(a, b: Bool) → Bool {
     match a { False => bool::not(b), True => b }
 }

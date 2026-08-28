@@ -91,6 +91,16 @@ access; it does not claim x86 memory is total.
 
 ## Log
 
+- 2026-08-28: Extended the register-register vertical slice with `SUB` and
+  `CMP`, including 29/2B and 39/3B direction encodings, direct and reference
+  decoding, canonical/alternate `DecodedAt` and execution composition, all six
+  subtraction flags, destination update for `SUB`, and the no-register/no-
+  memory frame for `CMP`. `CF` and `AF` use a new linear structural ripple-
+  borrow Boolean; [[bitvec-executable-borrow-correspondence]] owns its generic
+  open-width equivalence to the existing arithmetic borrow proposition.
+  [[x86-opcode-dispatch-scaling]] records the module-check cost exposed when
+  nine opcode branches and their completeness specializations were combined.
+
 - 2026-08-25: Filed after assembling the gitignored reference cache and
   identifying the five reusable library foundations above.  The first spike is
   intentionally allowed to begin before all five land: discovering a missing

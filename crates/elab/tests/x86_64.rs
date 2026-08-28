@@ -1,4 +1,4 @@
-//! First x86-64 vertical slice: decoded register MOV/ADD/TEST, flags, opaque
+//! First x86-64 vertical slice: decoded register MOV/ADD/SUB/CMP/TEST, flags, opaque
 //! memory preservation, and length-derived RIP fallthrough.
 
 use heather_elab::{ElabError, Elaborator};
@@ -121,6 +121,15 @@ theorem canonical_extended_register_bytes():
     refl
 }
 
+theorem canonical_sub_and_cmp_bytes():
+    canonical_bytes(SubRR(R9, R10)) =
+        Cons(ofNat(8, 77), Cons(ofNat(8, 41), Cons(ofNat(8, 209), Nil)))
+    ∧ canonical_bytes(CmpRR(Rax, Rbx)) =
+        Cons(ofNat(8, 72), Cons(ofNat(8, 57), Cons(ofNat(8, 216), Nil)))
+{
+    And(refl, refl)
+}
+
 theorem canonical_test_extension_bytes():
     canonical_bytes(TestRR(R15, Rax)) =
         Cons(ofNat(8, 73), Cons(ofNat(8, 133), Cons(ofNat(8, 199), Nil)))
@@ -152,6 +161,26 @@ theorem add_direction_encodings_normalize(start: BitVec(64)):
 {
     And(canonical_encoding_decodes(start, AddRR(R9, R10)),
         alternate_add_encoding_decodes(start, R9, R10))
+}
+
+theorem sub_and_cmp_direction_encodings_normalize(start: BitVec(64)):
+    DecodedAt(encoded_at(start, SubRR(R9, R10)),
+        decoded_rr(SubRR(R9, R10)))
+    ∧ DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_sub_bytes(R9, R10)),
+        decoded_rr(SubRR(R9, R10)))
+    ∧ DecodedAt(encoded_at(start, CmpRR(Rax, Rbx)),
+        decoded_rr(CmpRR(Rax, Rbx)))
+    ∧ DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_cmp_bytes(Rax, Rbx)),
+        decoded_rr(CmpRR(Rax, Rbx)))
+{
+    And(canonical_encoding_decodes(start, SubRR(R9, R10)),
+        And(alternate_sub_encoding_decodes(start, R9, R10),
+            And(canonical_encoding_decodes(start, CmpRR(Rax, Rbx)),
+                alternate_cmp_encoding_decodes(start, Rax, Rbx))))
 }
 
 theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
@@ -220,6 +249,58 @@ theorem executable_decoder_accepts_test():
         Some(decoded_rr(TestRR(Rax, Rbx)))
 {
     refl
+}
+
+theorem executable_decoder_accepts_both_sub_and_cmp_directions():
+    decode_instruction(canonical_bytes(SubRR(R9, R10))) =
+        Some(decoded_rr(SubRR(R9, R10)))
+    ∧ decode_instruction(alternate_sub_bytes(R9, R10)) =
+        Some(decoded_rr(SubRR(R9, R10)))
+    ∧ decode_instruction(canonical_bytes(CmpRR(Rax, Rbx))) =
+        Some(decoded_rr(CmpRR(Rax, Rbx)))
+    ∧ decode_instruction(alternate_cmp_bytes(Rax, Rbx)) =
+        Some(decoded_rr(CmpRR(Rax, Rbx)))
+{
+    And(refl, And(refl, And(refl, refl)))
+}
+
+theorem executable_decoder_is_complete(bytes: List<BitVec(8)>,
+    instruction: Instruction,
+    decoding: DecodesInstruction(bytes, instruction)):
+    decode_instruction(bytes) = Some(decoded_rr(instruction))
+{
+    decode_instruction_complete(bytes, instruction, decoding)
+}
+
+theorem direct_decoder_agrees_when_reference_succeeds(
+    bytes: List<BitVec(8)>, result: ByteDecode(bytes),
+    success: decode_bytes_reference(bytes) = Some(result)):
+    decode_instruction(bytes) = decode_instruction_reference(bytes)
+{
+    direct_agrees_with_successful_reference(bytes, result, success)
+}
+
+theorem subtraction_writes_the_difference(destination, source: Gpr,
+    before: Gprs):
+    read_gpr(destination, execute_sub(destination, source, before).gprs) =
+        bitvec::sub(64, read_gpr(destination, before),
+            read_gpr(source, before))
+{
+    execute_sub_writes_difference(destination, source, before)
+}
+
+theorem comparison_preserves_registers_and_memory<M>(left, right: Gpr,
+    length: Nat, valid: ∥1 <= length ∧ length <= 15∥,
+    before: MachineState<M>):
+    execute_normal(
+        DecodedInstruction(instruction := CmpRR(left, right),
+            length := length, valid_length := valid), before).gprs = before.gprs
+    ∧ execute_normal(
+        DecodedInstruction(instruction := CmpRR(left, right),
+            length := length, valid_length := valid), before).memory = before.memory
+{
+    And(execute_cmp_frames(left, right, length, valid, before).left,
+        execute_cmp_frames(left, right, length, valid, before).right.left)
 }
 
 theorem executable_decoder_accepts_extended_registers():
@@ -325,6 +406,19 @@ theorem rex_extension_combinations_agree():
         decode_instruction_reference(canonical_bytes(MovRR(Rax, R8)))
     ∧ decode_instruction(canonical_bytes(MovRR(R8, R9))) =
         decode_instruction_reference(canonical_bytes(MovRR(R8, R9)))
+{
+    And(refl, And(refl, And(refl, refl)))
+}
+
+theorem sub_and_cmp_opcodes_agree():
+    decode_instruction(canonical_bytes(SubRR(Rax, Rbx))) =
+        decode_instruction_reference(canonical_bytes(SubRR(Rax, Rbx)))
+    ∧ decode_instruction(alternate_sub_bytes(Rax, Rbx)) =
+        decode_instruction_reference(alternate_sub_bytes(Rax, Rbx))
+    ∧ decode_instruction(canonical_bytes(CmpRR(Rax, Rbx))) =
+        decode_instruction_reference(canonical_bytes(CmpRR(Rax, Rbx)))
+    ∧ decode_instruction(alternate_cmp_bytes(Rax, Rbx)) =
+        decode_instruction_reference(alternate_cmp_bytes(Rax, Rbx))
 {
     And(refl, And(refl, And(refl, refl)))
 }

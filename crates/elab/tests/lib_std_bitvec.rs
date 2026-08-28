@@ -135,6 +135,10 @@ theorem ov_sub(): signed_overflow_sub(4, ofNat(4, 8), ofNat(4, 1)) = True { refl
 theorem width_zero_add(): add(0, zero(0), zero(0)) = zero(0) { refl }
 theorem carry_bit_yes(): carry_add_bit(4, ofNat(4, 14), ofNat(4, 3)) = True { refl }
 theorem carry_bit_no(): carry_add_bit(4, ofNat(4, 1), ofNat(4, 1)) = False { refl }
+theorem borrow_bit_yes(): borrow_sub_bit(4, ofNat(4, 3), ofNat(4, 5)) = True { refl }
+theorem borrow_bit_no(): borrow_sub_bit(4, ofNat(4, 5), ofNat(4, 3)) = False { refl }
+theorem borrow_bit_machine_width():
+    borrow_sub_bit(64, zero(64), one(64)) = True { refl }
 theorem carry_bit_machine_width():
     carry_add_bit(64, all_ones(64), one(64)) = True { refl }
 "#);

@@ -40,6 +40,15 @@ shape that should scale to SIB, displacement, immediate, or prefix streams.
 
 ## Log
 
+- 2026-08-28: Added constructive, open-register completeness. Direct operand
+  recovery is proved from field round trips and equality-decision
+  contradictions, then lifted through exact `RrEncoding` spans to
+  `decode_instruction_complete`: every `DecodesInstruction` inhabitant is
+  accepted with the same normalized instruction. A second general theorem
+  shows every successful bounded-search reference result agrees with the
+  direct decoder. This avoids a hidden 256-case proof table. The issue stays
+  open only for exhaustive agreement on reference failures and malformed byte
+  classes; representative malformed REX/ModRM/shape controls still pass.
 - 2026-08-28: The direct path is now active. It rejects fixed REX.W/class and
   ModRM.mod bits before constructing operands, extracts REX.R/REX.B and the two
   three-bit register fields, then uses `BitVec` decidable equality to certify

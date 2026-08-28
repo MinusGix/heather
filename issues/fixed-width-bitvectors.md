@@ -114,3 +114,7 @@ waiting for them.
   equality decision at an open width with positive and negative evidence. It
   is called directly: registering `Decide<x = y>` cannot recover the width
   binder from the instance head under the existing binder-occurrence rule.
+- 2026-08-28: The x86 `SUB`/`CMP` customer added `borrow_sub_bit`, a linear
+  ripple-borrow Boolean parallel to `carry_add_bit`, with closed borrow and
+  no-borrow controls at widths 4 and 64. Its open arithmetic correspondence is
+  tracked by [[bitvec-executable-borrow-correspondence]].

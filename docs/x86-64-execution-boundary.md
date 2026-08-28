@@ -86,11 +86,13 @@ characterization.
 
 The byte boundary uses `InstructionBytes` and the declarative `DecodedAt`
 proposition for three-byte REX.W register-register encodings of `MOV`, `ADD`,
-and `TEST`. The evidence retains the exact consumed bytes and start address.
+`SUB`, `CMP`, and `TEST`. The evidence retains the exact consumed bytes and
+start address.
 Recognition is decomposed into exact list shape, REX.W extension bits, opcode,
 and register-mode ModRM propositions. `MOV` admits both 89 and 8B direction
 forms; `ADD` admits both 01 and 03. Their different ModRM operand roles
-normalize into the same typed instruction. `canonical_encoding_decodes` puts
+normalize into the same typed instruction. `SUB` similarly admits 29/2B and
+`CMP` admits 39/3B. `canonical_encoding_decodes` puts
 compiler-produced bytes into the broader proposition; independent byte proofs
 use the same relation. Both compose with the one `Execute` relation through
 `ExecuteAt`, and the consumed length is carried into RIP fallthrough by a
@@ -106,8 +108,11 @@ REX.R/REX.B and both three-bit ModRM register fields directly, and certifies
 the reconstructed REX and ModRM bytes with evidence-producing bitvector
 equality. The original bounded 16×16 register-pair search remains available as
 `decode_instruction_reference`; boundary tests compare it with the direct
-path. [[x86-direct-bitfield-decoder]] retains the general completeness and
-exhaustive-agreement obligation before larger encoding families rely on it.
+path. [[x86-direct-bitfield-decoder]] retains the exhaustive malformed-input
+agreement obligation before larger encoding families rely on it.
+`decode_instruction_complete` now proves acceptance for every inhabitant of
+`DecodesInstruction`, and successful reference results agree with the direct
+path generally rather than by register enumeration.
 
 This is deliberately not yet a total x86 decoder. Redundant and legacy
 prefixes, memory ModRM modes, truncation, trailing bytes, and other instructions

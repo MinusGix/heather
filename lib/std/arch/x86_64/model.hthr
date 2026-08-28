@@ -3,8 +3,8 @@
 // byte-level machine step calls `Execute`; the compiler's canonical encoder and
 // proofs about externally supplied bytes meet at that boundary.
 //
-// Scope: long-mode scalar register forms MOV r64,r64, ADD r64,r64, and
-// TEST r64,r64. There are no memory operands or execution faults in this
+// Scope: long-mode scalar register forms MOV, ADD, SUB, CMP, and TEST over
+// r64 operands. There are no memory operands or execution faults in this
 // slice. Coverage remains distinct from semantic outcomes through std/relation.
 
 import logic;
@@ -95,6 +95,8 @@ record MachineState<M> {
 inductive Instruction {
     MovRR(destination: Gpr, source: Gpr),
     AddRR(destination: Gpr, source: Gpr),
+    SubRR(destination: Gpr, source: Gpr),
+    CmpRR(left: Gpr, right: Gpr),
     TestRR(left: Gpr, right: Gpr),
 }
 
@@ -186,6 +188,18 @@ fn gpr_from_fields(bit0, bit1, bit2, extended: Bool) → Gpr {
     }
 }
 
+theorem gpr_fields_roundtrip(register: Gpr):
+    gpr_from_fields(gpr_bit0(register), gpr_bit1(register),
+        gpr_bit2(register), gpr_extended(register)) = register
+{
+    match register {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl,
+        Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl,
+        R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 fn byte_bit0(byte: BitVec(8)) → Bool { get(8, byte, FZ) }
 fn byte_bit1(byte: BitVec(8)) → Bool { get(8, byte, FS(FZ)) }
 fn byte_bit2(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FZ))) }
@@ -201,7 +215,7 @@ fn byte_from_fields(bit0, bit1, bit2, bit3, bit4, bit5, bit6, bit7: Bool) →
     from_bits(8, [bit0, bit1, bit2, bit3, bit4, bit5, bit6, bit7])
 }
 
-// In all three canonical forms the semantic left/destination operand occupies
+// In every canonical form the semantic left/destination operand occupies
 // ModRM.r/m and the right/source operand occupies ModRM.reg. REX.B therefore
 // extends `rm`, while REX.R extends `reg`.
 fn rex_from_extensions(rm_extended, reg_extended: Bool) → BitVec(8) {
@@ -240,6 +254,12 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         // 01 /r: ADD r64 into r/m64.
         AddRR(destination, source) =>
             rr_bytes(1, destination, source),
+        // 29 /r: SUB r64 from r/m64.
+        SubRR(destination, source) =>
+            rr_bytes(41, destination, source),
+        // 39 /r: CMP r64 with r/m64.
+        CmpRR(left, right) =>
+            rr_bytes(57, left, right),
         // 85 /r: TEST r64 against r/m64.
         TestRR(left, right) =>
             rr_bytes(133, left, right),
@@ -254,6 +274,16 @@ fn alternate_mov_bytes(destination, source: Gpr) → List<BitVec(8)> {
 fn alternate_add_bytes(destination, source: Gpr) → List<BitVec(8)> {
     // 03 /r names the destination in ModRM.reg and source in ModRM.r/m.
     rr_bytes(3, source, destination)
+}
+
+fn alternate_sub_bytes(destination, source: Gpr) → List<BitVec(8)> {
+    // 2B /r names the destination in ModRM.reg and source in ModRM.r/m.
+    rr_bytes(43, source, destination)
+}
+
+fn alternate_cmp_bytes(left, right: Gpr) → List<BitVec(8)> {
+    // 3B /r reverses the two comparison operand roles in ModRM.
+    rr_bytes(59, right, left)
 }
 
 fn decoded_rr(instruction: Instruction) → DecodedInstruction {
@@ -294,8 +324,8 @@ fn RrEncoding(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr) → Type {
 }
 
 // Direction-opcode alternatives normalize into one semantic instruction.
-// Operand roles are reversed in the 8B/03 forms because ModRM.reg, rather than
-// ModRM.r/m, names the destination there.
+// Operand roles are reversed in the 8B/03/2B/3B forms because ModRM.reg,
+// rather than ModRM.r/m, names the destination or left operand there.
 fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type {
     match instruction {
         MovRR(destination, source) =>
@@ -304,6 +334,12 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         AddRR(destination, source) =>
             RrEncoding(bytes, 1, destination, source)
             ∨ RrEncoding(bytes, 3, source, destination),
+        SubRR(destination, source) =>
+            RrEncoding(bytes, 41, destination, source)
+            ∨ RrEncoding(bytes, 43, source, destination),
+        CmpRR(left, right) =>
+            RrEncoding(bytes, 57, left, right)
+            ∨ RrEncoding(bytes, 59, right, left),
         TestRR(left, right) => RrEncoding(bytes, 133, left, right),
     }
 }
@@ -364,12 +400,70 @@ record DirectOperands(rex, modrm: BitVec(8)) {
     modrm_exact: ModRMRR(modrm, rm, reg),
 }
 
-fn decode_operands_direct(rex, modrm: BitVec(8)) →
+fn certify_direct_operands(rex, modrm: BitVec(8), rm, reg: Gpr) →
     Option<DirectOperands(rex, modrm)>
 {
-    match decode_rex_fields(rex) {
+    match bitvec::eq_dec(8, rex, rex_w_rr(rm, reg)) {
+        Inr(_) => None,
+        Inl(rex_exact) => match bitvec::eq_dec(8, modrm,
+                modrm_rr(rm, reg)) {
+            Inr(_) => None,
+            Inl(modrm_exact) => Some(DirectOperands(
+                rm := rm, reg := reg,
+                rex_exact := rex_exact,
+                modrm_exact := modrm_exact)),
+        },
+    }
+}
+
+fn CertifiesOperands(rex, modrm: BitVec(8),
+    result: Option<DirectOperands(rex, modrm)>,
+    rm, reg: Gpr) → Type
+{
+    match result {
+        None => False,
+        Some(found) => found.rm = rm ∧ found.reg = reg,
+    }
+}
+
+theorem certify_direct_operands_complete(rex, modrm: BitVec(8), rm, reg: Gpr,
+    rex_exact: RexWRR(rex, rm, reg),
+    modrm_exact: ModRMRR(modrm, rm, reg)):
+    CertifiesOperands(rex, modrm,
+        certify_direct_operands(rex, modrm, rm, reg), rm, reg)
+{
+    match bitvec::eq_dec(8, rex, rex_w_rr(rm, reg)) {
+        Inr(denied) => false_elim(denied(rex_exact)),
+        Inl(_) => match bitvec::eq_dec(8, modrm, modrm_rr(rm, reg)) {
+            Inr(denied) => false_elim(denied(modrm_exact)),
+            Inl(_) => And(refl, refl),
+        },
+    }
+}
+
+theorem certifies_operands_transport(rex, modrm: BitVec(8),
+    result: Option<DirectOperands(rex, modrm)>, rm0, reg0, rm, reg: Gpr,
+    certified: CertifiesOperands(rex, modrm, result, rm0, reg0),
+    rm_exact: rm0 = rm, reg_exact: reg0 = reg):
+    CertifiesOperands(rex, modrm, result, rm, reg)
+{
+    (match result as λ actual =>
+            CertifiesOperands(rex, modrm, actual, rm0, reg0) →
+            CertifiesOperands(rex, modrm, actual, rm, reg) {
+        None => λ impossible => false_elim(impossible),
+        Some(_) => λ found => And(trans(found.left, rm_exact),
+            trans(found.right, reg_exact)),
+    })(certified)
+}
+
+fn decode_operands_from_fields(rex, modrm: BitVec(8),
+    rex_result: Option<DecodedRexFields(rex)>,
+    modrm_result: Option<DecodedModrmFields(modrm)>) →
+    Option<DirectOperands(rex, modrm)>
+{
+    match rex_result {
         None => None,
-        Some(rex_fields) => match decode_modrm_fields(modrm) {
+        Some(rex_fields) => match modrm_result {
             None => None,
             Some(modrm_fields) => {
                 let rm = gpr_from_fields(modrm_fields.rm0, modrm_fields.rm1,
@@ -377,20 +471,97 @@ fn decode_operands_direct(rex, modrm: BitVec(8)) →
                 let reg = gpr_from_fields(modrm_fields.reg0,
                     modrm_fields.reg1, modrm_fields.reg2,
                     rex_fields.reg_extended);
-                match bitvec::eq_dec(8, rex, rex_w_rr(rm, reg)) {
-                    Inr(_) => None,
-                    Inl(rex_exact) => match bitvec::eq_dec(8, modrm,
-                            modrm_rr(rm, reg)) {
-                        Inr(_) => None,
-                        Inl(modrm_exact) => Some(DirectOperands(
-                            rm := rm, reg := reg,
-                            rex_exact := rex_exact,
-                            modrm_exact := modrm_exact)),
-                    },
-                }
+                certify_direct_operands(rex, modrm, rm, reg)
             },
         },
     }
+}
+
+fn decode_operands_direct(rex, modrm: BitVec(8)) →
+    Option<DirectOperands(rex, modrm)>
+{
+    decode_operands_from_fields(rex, modrm, decode_rex_fields(rex),
+        decode_modrm_fields(modrm))
+}
+
+fn encoded_rex_fields(rm, reg: Gpr) → DecodedRexFields(rex_w_rr(rm, reg)) {
+    DecodedRexFields(
+        rm_extended := gpr_extended(rm),
+        reg_extended := gpr_extended(reg))
+}
+
+fn encoded_modrm_fields(rm, reg: Gpr) →
+    DecodedModrmFields(modrm_rr(rm, reg))
+{
+    DecodedModrmFields(
+        rm0 := gpr_bit0(rm), rm1 := gpr_bit1(rm), rm2 := gpr_bit2(rm),
+        reg0 := gpr_bit0(reg), reg1 := gpr_bit1(reg), reg2 := gpr_bit2(reg))
+}
+
+theorem decode_rex_fields_encoded(rm, reg: Gpr):
+    decode_rex_fields(rex_w_rr(rm, reg)) = Some(encoded_rex_fields(rm, reg))
+{
+    refl
+}
+
+theorem decode_modrm_fields_encoded(rm, reg: Gpr):
+    decode_modrm_fields(modrm_rr(rm, reg)) =
+        Some(encoded_modrm_fields(rm, reg))
+{
+    refl
+}
+
+theorem decode_operands_direct_parses_encoded(rm, reg: Gpr):
+    decode_operands_direct(rex_w_rr(rm, reg), modrm_rr(rm, reg)) =
+        decode_operands_from_fields(rex_w_rr(rm, reg), modrm_rr(rm, reg),
+            Some(encoded_rex_fields(rm, reg)),
+            Some(encoded_modrm_fields(rm, reg)))
+{
+    apply trans;
+    give cong_fn(
+        λ (rex_result: Option<DecodedRexFields(rex_w_rr(rm, reg))>) =>
+            decode_operands_from_fields(rex_w_rr(rm, reg),
+            modrm_rr(rm, reg), rex_result,
+            decode_modrm_fields(modrm_rr(rm, reg))),
+        decode_rex_fields_encoded(rm, reg));
+    cong_fn(
+        λ (modrm_result: Option<DecodedModrmFields(modrm_rr(rm, reg))>) =>
+            decode_operands_from_fields(rex_w_rr(rm, reg),
+            modrm_rr(rm, reg), Some(encoded_rex_fields(rm, reg)),
+            modrm_result),
+        decode_modrm_fields_encoded(rm, reg))
+}
+
+theorem decode_operands_direct_complete(rm, reg: Gpr):
+    CertifiesOperands(rex_w_rr(rm, reg), modrm_rr(rm, reg),
+        decode_operands_direct(rex_w_rr(rm, reg), modrm_rr(rm, reg)),
+        rm, reg)
+{
+    let rm_decoded = gpr_from_fields(gpr_bit0(rm), gpr_bit1(rm),
+        gpr_bit2(rm), gpr_extended(rm));
+    let reg_decoded = gpr_from_fields(gpr_bit0(reg), gpr_bit1(reg),
+        gpr_bit2(reg), gpr_extended(reg));
+    let rm_exact = gpr_fields_roundtrip(rm);
+    let reg_exact = gpr_fields_roundtrip(reg);
+    let rex_exact = trans(
+        cong_fn(λ (decoded: Gpr) => rex_w_rr(decoded, reg), sym(rm_exact)),
+        cong_fn(rex_w_rr(rm_decoded), sym(reg_exact)));
+    let modrm_exact = trans(
+        cong_fn(λ (decoded: Gpr) => modrm_rr(decoded, reg), sym(rm_exact)),
+        cong_fn(modrm_rr(rm_decoded), sym(reg_exact)));
+    let fields_certified = certifies_operands_transport(
+        rex_w_rr(rm, reg), modrm_rr(rm, reg),
+        decode_operands_from_fields(rex_w_rr(rm, reg), modrm_rr(rm, reg),
+            Some(encoded_rex_fields(rm, reg)),
+            Some(encoded_modrm_fields(rm, reg))),
+        rm_decoded, reg_decoded, rm, reg,
+        certify_direct_operands_complete(
+            rex_w_rr(rm, reg), modrm_rr(rm, reg), rm_decoded, reg_decoded,
+            rex_exact, modrm_exact),
+        rm_exact, reg_exact);
+    j(sym(decode_operands_direct_parses_encoded(rm, reg)),
+        λ result q => CertifiesOperands(rex_w_rr(rm, reg),
+            modrm_rr(rm, reg), result, rm, reg), fields_certified)
 }
 
 fn ByteListNonempty(bytes: List<BitVec(8)>) → Type {
@@ -530,28 +701,66 @@ fn decode_opcode_reference(bytes: List<BitVec(8)>, opcode: Nat) →
                     decoding := Inr(j(exact,
                         λ op q => RrEncoding(bytes, op, found.rm, found.reg),
                         found.encoding)))),
-                Inr(_) => match nat::eq_dec(opcode, 133) {
-                    // 85 /r
+                Inr(_) => match nat::eq_dec(opcode, 41) {
+                    // 29 /r
                     Inl(exact) => Some(ByteDecode(
-                        instruction := TestRR(found.rm, found.reg),
-                        decoding := j(exact,
+                        instruction := SubRR(found.rm, found.reg),
+                        decoding := Inl(j(exact,
                             λ op q => RrEncoding(bytes, op, found.rm, found.reg),
-                            found.encoding))),
-                    Inr(_) => match nat::eq_dec(opcode, 137) {
-                        // 89 /r
+                            found.encoding)))),
+                    Inr(_) => match nat::eq_dec(opcode, 43) {
+                        // 2B /r
                         Inl(exact) => Some(ByteDecode(
-                            instruction := MovRR(found.rm, found.reg),
-                            decoding := Inl(j(exact,
-                                λ op q => RrEncoding(bytes, op,
-                                    found.rm, found.reg), found.encoding)))),
-                        Inr(_) => match nat::eq_dec(opcode, 139) {
-                            // 8B /r
+                            instruction := SubRR(found.reg, found.rm),
+                            decoding := Inr(j(exact,
+                                λ op q => RrEncoding(bytes, op, found.rm, found.reg),
+                                found.encoding)))),
+                        Inr(_) => match nat::eq_dec(opcode, 57) {
+                            // 39 /r
                             Inl(exact) => Some(ByteDecode(
-                                instruction := MovRR(found.reg, found.rm),
-                                decoding := Inr(j(exact,
+                                instruction := CmpRR(found.rm, found.reg),
+                                decoding := Inl(j(exact,
                                     λ op q => RrEncoding(bytes, op,
                                         found.rm, found.reg), found.encoding)))),
-                            Inr(_) => None,
+                            Inr(_) => match nat::eq_dec(opcode, 59) {
+                                // 3B /r
+                                Inl(exact) => Some(ByteDecode(
+                                    instruction := CmpRR(found.reg, found.rm),
+                                    decoding := Inr(j(exact,
+                                        λ op q => RrEncoding(bytes, op,
+                                            found.rm, found.reg),
+                                        found.encoding)))),
+                                Inr(_) => match nat::eq_dec(opcode, 133) {
+                                    // 85 /r
+                                    Inl(exact) => Some(ByteDecode(
+                                        instruction := TestRR(found.rm, found.reg),
+                                        decoding := j(exact,
+                                            λ op q => RrEncoding(bytes, op,
+                                                found.rm, found.reg),
+                                            found.encoding))),
+                                    Inr(_) => match nat::eq_dec(opcode, 137) {
+                                        // 89 /r
+                                        Inl(exact) => Some(ByteDecode(
+                                            instruction := MovRR(found.rm,
+                                                found.reg),
+                                            decoding := Inl(j(exact,
+                                                λ op q => RrEncoding(bytes, op,
+                                                    found.rm, found.reg),
+                                                found.encoding)))),
+                                        Inr(_) => match nat::eq_dec(opcode, 139) {
+                                            // 8B /r
+                                            Inl(exact) => Some(ByteDecode(
+                                                instruction := MovRR(found.reg,
+                                                    found.rm),
+                                                decoding := Inr(j(exact,
+                                                    λ op q => RrEncoding(bytes,
+                                                        op, found.rm, found.reg),
+                                                    found.encoding)))),
+                                            Inr(_) => None,
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -591,10 +800,11 @@ fn decode_instruction_reference(bytes: List<BitVec(8)>) →
     }
 }
 
-fn decode_opcode_direct(rex, opcode, modrm: BitVec(8)) →
+fn decode_opcode_from_operands(rex, opcode, modrm: BitVec(8),
+    operands: Option<DirectOperands(rex, modrm)>) →
     Option<ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))>
 {
-    match decode_operands_direct(rex, modrm) {
+    match operands {
         None => None,
         Some(found) => match bitvec::eq_dec(8, opcode, ofNat(8, 1)) {
             // 01 /r
@@ -608,32 +818,211 @@ fn decode_opcode_direct(rex, opcode, modrm: BitVec(8)) →
                     instruction := AddRR(found.reg, found.rm),
                     decoding := Inr(And(found.rex_exact,
                         And(opcode_exact, found.modrm_exact))))),
-                Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 133)) {
-                    // 85 /r
+                Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 41)) {
+                    // 29 /r
                     Inl(opcode_exact) => Some(ByteDecode(
-                        instruction := TestRR(found.rm, found.reg),
-                        decoding := And(found.rex_exact,
-                            And(opcode_exact, found.modrm_exact)))),
-                    Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 137)) {
-                        // 89 /r
+                        instruction := SubRR(found.rm, found.reg),
+                        decoding := Inl(And(found.rex_exact,
+                            And(opcode_exact, found.modrm_exact))))),
+                    Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 43)) {
+                        // 2B /r
                         Inl(opcode_exact) => Some(ByteDecode(
-                            instruction := MovRR(found.rm, found.reg),
-                            decoding := Inl(And(found.rex_exact,
+                            instruction := SubRR(found.reg, found.rm),
+                            decoding := Inr(And(found.rex_exact,
                                 And(opcode_exact, found.modrm_exact))))),
-                        Inr(_) => match bitvec::eq_dec(8, opcode,
-                                ofNat(8, 139)) {
-                            // 8B /r
+                        Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 57)) {
+                            // 39 /r
                             Inl(opcode_exact) => Some(ByteDecode(
-                                instruction := MovRR(found.reg, found.rm),
-                                decoding := Inr(And(found.rex_exact,
+                                instruction := CmpRR(found.rm, found.reg),
+                                decoding := Inl(And(found.rex_exact,
                                     And(opcode_exact, found.modrm_exact))))),
-                            Inr(_) => None,
+                            Inr(_) => match bitvec::eq_dec(8, opcode,
+                                    ofNat(8, 59)) {
+                                // 3B /r
+                                Inl(opcode_exact) => Some(ByteDecode(
+                                    instruction := CmpRR(found.reg, found.rm),
+                                    decoding := Inr(And(found.rex_exact,
+                                        And(opcode_exact, found.modrm_exact))))),
+                                Inr(_) => match bitvec::eq_dec(8, opcode,
+                                        ofNat(8, 133)) {
+                                    // 85 /r
+                                    Inl(opcode_exact) => Some(ByteDecode(
+                                        instruction := TestRR(found.rm, found.reg),
+                                        decoding := And(found.rex_exact,
+                                            And(opcode_exact,
+                                                found.modrm_exact)))),
+                                    Inr(_) => match bitvec::eq_dec(8, opcode,
+                                            ofNat(8, 137)) {
+                                        // 89 /r
+                                        Inl(opcode_exact) => Some(ByteDecode(
+                                            instruction := MovRR(found.rm,
+                                                found.reg),
+                                            decoding := Inl(And(found.rex_exact,
+                                                And(opcode_exact,
+                                                    found.modrm_exact))))),
+                                        Inr(_) => match bitvec::eq_dec(8, opcode,
+                                                ofNat(8, 139)) {
+                                            // 8B /r
+                                            Inl(opcode_exact) => Some(ByteDecode(
+                                                instruction := MovRR(found.reg,
+                                                    found.rm),
+                                                decoding := Inr(And(
+                                                    found.rex_exact,
+                                                    And(opcode_exact,
+                                                        found.modrm_exact))))),
+                                            Inr(_) => None,
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
             },
         },
     }
+}
+
+fn decode_opcode_direct(rex, opcode, modrm: BitVec(8)) →
+    Option<ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))>
+{
+    decode_opcode_from_operands(rex, opcode, modrm,
+        decode_operands_direct(rex, modrm))
+}
+
+fn erase_byte_decode(bytes: List<BitVec(8)>,
+    result: Option<ByteDecode(bytes)>) → Option<DecodedInstruction>
+{
+    match result {
+        None => None,
+        Some(found) => Some(decoded_rr(found.instruction)),
+    }
+}
+
+theorem decode_opcode_complete_for(rex, opcode, modrm: BitVec(8), rm, reg: Gpr,
+    meaning: Gpr → Gpr → Instruction,
+    certified: CertifiesOperands(rex, modrm,
+        decode_operands_direct(rex, modrm), rm, reg),
+    dispatch: (found: DirectOperands(rex, modrm)) →
+        erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+            decode_opcode_from_operands(rex, opcode, modrm, Some(found))) =
+        Some(decoded_rr(meaning(found.rm, found.reg)))):
+    erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+        decode_opcode_direct(rex, opcode, modrm)) =
+        Some(decoded_rr(meaning(rm, reg)))
+{
+    let operands = decode_operands_direct(rex, modrm);
+    (match operands as λ actual =>
+            CertifiesOperands(rex, modrm, actual, rm, reg) →
+            erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+                decode_opcode_from_operands(rex, opcode, modrm, actual)) =
+                Some(decoded_rr(meaning(rm, reg))) {
+        None => λ impossible => false_elim(impossible),
+        Some(found) => λ exact => trans(dispatch(found), cong_fn(
+            λ (instruction: Instruction) => Some(decoded_rr(instruction)),
+            trans(cong_fn(λ (left: Gpr) => meaning(left, found.reg),
+                    exact.left),
+                cong_fn(λ (right: Gpr) => meaning(rm, right), exact.right)))),
+    })(certified)
+}
+
+theorem decode_opcode_1_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(1, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 1),
+            modrm_rr(rm, reg))) = Some(decoded_rr(AddRR(rm, reg)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 1),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => AddRR(left, right),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_3_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(3, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 3),
+            modrm_rr(rm, reg))) = Some(decoded_rr(AddRR(reg, rm)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 3),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => AddRR(right, left),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_41_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(41, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 41),
+            modrm_rr(rm, reg))) = Some(decoded_rr(SubRR(rm, reg)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 41),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => SubRR(left, right),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_43_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(43, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 43),
+            modrm_rr(rm, reg))) = Some(decoded_rr(SubRR(reg, rm)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 43),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => SubRR(right, left),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_57_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(57, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 57),
+            modrm_rr(rm, reg))) = Some(decoded_rr(CmpRR(rm, reg)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 57),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => CmpRR(left, right),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_59_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(59, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 59),
+            modrm_rr(rm, reg))) = Some(decoded_rr(CmpRR(reg, rm)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 59),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => CmpRR(right, left),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_133_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(133, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 133),
+            modrm_rr(rm, reg))) = Some(decoded_rr(TestRR(rm, reg)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 133),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => TestRR(left, right),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_137_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(137, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 137),
+            modrm_rr(rm, reg))) = Some(decoded_rr(MovRR(rm, reg)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 137),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => MovRR(left, right),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
+}
+
+theorem decode_opcode_139_complete(rm, reg: Gpr):
+    erase_byte_decode(rr_bytes(139, rm, reg),
+        decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, 139),
+            modrm_rr(rm, reg))) = Some(decoded_rr(MovRR(reg, rm)))
+{
+    decode_opcode_complete_for(rex_w_rr(rm, reg), ofNat(8, 139),
+        modrm_rr(rm, reg), rm, reg,
+        λ left right => MovRR(right, left),
+        decode_operands_direct_complete(rm, reg), λ found => refl)
 }
 
 fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
@@ -663,6 +1052,205 @@ fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     }
 }
 
+theorem decode_instruction_rr_unfolds(opcode: Nat, rm, reg: Gpr):
+    decode_instruction(rr_bytes(opcode, rm, reg)) =
+        erase_byte_decode(rr_bytes(opcode, rm, reg),
+            decode_opcode_direct(rex_w_rr(rm, reg), ofNat(8, opcode),
+                modrm_rr(rm, reg)))
+{
+    refl
+}
+
+theorem decode_instruction_1_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(1, rm, reg)) =
+        Some(decoded_rr(AddRR(rm, reg)))
+{
+    trans(decode_instruction_rr_unfolds(1, rm, reg),
+        decode_opcode_1_complete(rm, reg))
+}
+
+theorem decode_instruction_3_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(3, rm, reg)) =
+        Some(decoded_rr(AddRR(reg, rm)))
+{
+    trans(decode_instruction_rr_unfolds(3, rm, reg),
+        decode_opcode_3_complete(rm, reg))
+}
+
+theorem decode_instruction_41_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(41, rm, reg)) =
+        Some(decoded_rr(SubRR(rm, reg)))
+{
+    trans(decode_instruction_rr_unfolds(41, rm, reg),
+        decode_opcode_41_complete(rm, reg))
+}
+
+theorem decode_instruction_43_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(43, rm, reg)) =
+        Some(decoded_rr(SubRR(reg, rm)))
+{
+    trans(decode_instruction_rr_unfolds(43, rm, reg),
+        decode_opcode_43_complete(rm, reg))
+}
+
+theorem decode_instruction_57_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(57, rm, reg)) =
+        Some(decoded_rr(CmpRR(rm, reg)))
+{
+    trans(decode_instruction_rr_unfolds(57, rm, reg),
+        decode_opcode_57_complete(rm, reg))
+}
+
+theorem decode_instruction_59_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(59, rm, reg)) =
+        Some(decoded_rr(CmpRR(reg, rm)))
+{
+    trans(decode_instruction_rr_unfolds(59, rm, reg),
+        decode_opcode_59_complete(rm, reg))
+}
+
+theorem decode_instruction_133_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(133, rm, reg)) =
+        Some(decoded_rr(TestRR(rm, reg)))
+{
+    trans(decode_instruction_rr_unfolds(133, rm, reg),
+        decode_opcode_133_complete(rm, reg))
+}
+
+theorem decode_instruction_137_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(137, rm, reg)) =
+        Some(decoded_rr(MovRR(rm, reg)))
+{
+    trans(decode_instruction_rr_unfolds(137, rm, reg),
+        decode_opcode_137_complete(rm, reg))
+}
+
+theorem decode_instruction_139_complete(rm, reg: Gpr):
+    decode_instruction(rr_bytes(139, rm, reg)) =
+        Some(decoded_rr(MovRR(reg, rm)))
+{
+    trans(decode_instruction_rr_unfolds(139, rm, reg),
+        decode_opcode_139_complete(rm, reg))
+}
+
+theorem rr_encoding_exact(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr,
+    encoding: RrEncoding(bytes, opcode, rm, reg)):
+    bytes = rr_bytes(opcode, rm, reg)
+{
+    (match bytes as λ actual => RrEncoding(actual, opcode, rm, reg) →
+            actual = rr_bytes(opcode, rm, reg) {
+        Nil => λ impossible => false_elim(impossible),
+        Cons(rex, tail1) => λ first =>
+            (match tail1 as λ rest =>
+                    RrEncoding(Cons(rex, rest), opcode, rm, reg) →
+                    Cons(rex, rest) = rr_bytes(opcode, rm, reg) {
+                Nil => λ impossible => false_elim(impossible),
+                Cons(op, tail2) => λ second =>
+                    (match tail2 as λ rest => RrEncoding(
+                            Cons(rex, Cons(op, rest)), opcode, rm, reg) →
+                            Cons(rex, Cons(op, rest)) =
+                                rr_bytes(opcode, rm, reg) {
+                        Nil => λ impossible => false_elim(impossible),
+                        Cons(modrm, tail3) => λ third =>
+                            (match tail3 as λ rest => RrEncoding(
+                                    Cons(rex, Cons(op, Cons(modrm, rest))),
+                                    opcode, rm, reg) →
+                                    Cons(rex, Cons(op, Cons(modrm, rest))) =
+                                        rr_bytes(opcode, rm, reg) {
+                                Nil => λ exact => @byte_cons_cong(
+                                    rex, rex_w_rr(rm, reg),
+                                    Cons(op, Cons(modrm, Nil)),
+                                    Cons(ofNat(8, opcode),
+                                        Cons(modrm_rr(rm, reg), Nil)),
+                                    exact.left,
+                                    @byte_cons_cong(
+                                        op, ofNat(8, opcode),
+                                        Cons(modrm, Nil),
+                                        Cons(modrm_rr(rm, reg), Nil),
+                                        exact.right.left,
+                                        @byte_cons_cong(
+                                            modrm, modrm_rr(rm, reg),
+                                            Nil, Nil, exact.right.right,
+                                            refl))),
+                                Cons(_, _) => λ impossible =>
+                                    false_elim(impossible),
+                            })(third),
+                    })(second),
+            })(first),
+    })(encoding)
+}
+
+theorem decode_instruction_of_rr_encoding(bytes: List<BitVec(8)>, opcode: Nat,
+    rm, reg: Gpr, instruction: Instruction,
+    encoding: RrEncoding(bytes, opcode, rm, reg),
+    generated: decode_instruction(rr_bytes(opcode, rm, reg)) =
+        Some(decoded_rr(instruction))):
+    decode_instruction(bytes) = Some(decoded_rr(instruction))
+{
+    j(sym(rr_encoding_exact(bytes, opcode, rm, reg, encoding)),
+        λ actual q => decode_instruction(actual) =
+            Some(decoded_rr(instruction)), generated)
+}
+
+theorem decode_instruction_complete(bytes: List<BitVec(8)>,
+    instruction: Instruction,
+    decoding: DecodesInstruction(bytes, instruction)):
+    decode_instruction(bytes) = Some(decoded_rr(instruction))
+{
+    match instruction as λ actual => DecodesInstruction(bytes, actual) →
+            decode_instruction(bytes) = Some(decoded_rr(actual)) {
+        MovRR(destination, source) => λ evidence => match evidence {
+            Inl(encoding) => decode_instruction_of_rr_encoding(bytes, 137,
+                destination, source, MovRR(destination, source), encoding,
+                decode_instruction_137_complete(destination, source)),
+            Inr(encoding) => decode_instruction_of_rr_encoding(bytes, 139,
+                source, destination, MovRR(destination, source), encoding,
+                decode_instruction_139_complete(source, destination)),
+        },
+        AddRR(destination, source) => λ evidence => match evidence {
+            Inl(encoding) => decode_instruction_of_rr_encoding(bytes, 1,
+                destination, source, AddRR(destination, source), encoding,
+                decode_instruction_1_complete(destination, source)),
+            Inr(encoding) => decode_instruction_of_rr_encoding(bytes, 3,
+                source, destination, AddRR(destination, source), encoding,
+                decode_instruction_3_complete(source, destination)),
+        },
+        SubRR(destination, source) => λ evidence => match evidence {
+            Inl(encoding) => decode_instruction_of_rr_encoding(bytes, 41,
+                destination, source, SubRR(destination, source), encoding,
+                decode_instruction_41_complete(destination, source)),
+            Inr(encoding) => decode_instruction_of_rr_encoding(bytes, 43,
+                source, destination, SubRR(destination, source), encoding,
+                decode_instruction_43_complete(source, destination)),
+        },
+        CmpRR(left, right) => λ evidence => match evidence {
+            Inl(encoding) => decode_instruction_of_rr_encoding(bytes, 57,
+                left, right, CmpRR(left, right), encoding,
+                decode_instruction_57_complete(left, right)),
+            Inr(encoding) => decode_instruction_of_rr_encoding(bytes, 59,
+                right, left, CmpRR(left, right), encoding,
+                decode_instruction_59_complete(right, left)),
+        },
+        TestRR(left, right) => λ encoding =>
+            decode_instruction_of_rr_encoding(bytes, 133, left, right,
+                TestRR(left, right), encoding,
+                decode_instruction_133_complete(left, right)),
+    }(decoding)
+}
+
+theorem direct_agrees_with_successful_reference(bytes: List<BitVec(8)>,
+    result: ByteDecode(bytes),
+    success: decode_bytes_reference(bytes) = Some(result)):
+    decode_instruction(bytes) = decode_instruction_reference(bytes)
+{
+    trans(decode_instruction_complete(bytes, result.instruction,
+            result.decoding),
+        sym(cong_fn(
+            λ (decoded: Option<ByteDecode(bytes)>) =>
+                erase_byte_decode(bytes, decoded),
+            success)))
+}
+
 theorem decode_bytes_sound(bytes: List<BitVec(8)>, result: ByteDecode(bytes),
     success: decode_bytes(bytes) = Some(result)):
     DecodesInstruction(bytes, result.instruction)
@@ -684,6 +1272,8 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
     match instruction {
         MovRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
         AddRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
+        SubRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
+        CmpRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
         TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
     }
 }
@@ -732,6 +1322,25 @@ theorem alternate_add_encoding_decodes(start: BitVec(64),
     And(Inr(And(refl, And(refl, refl))), refl)
 }
 
+theorem alternate_sub_encoding_decodes(start: BitVec(64),
+    destination, source: Gpr):
+    DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_sub_bytes(destination, source)),
+        decoded_rr(SubRR(destination, source)))
+{
+    And(Inr(And(refl, And(refl, refl))), refl)
+}
+
+theorem alternate_cmp_encoding_decodes(start: BitVec(64), left, right: Gpr):
+    DecodedAt(
+        InstructionBytes(start := start,
+            bytes := alternate_cmp_bytes(left, right)),
+        decoded_rr(CmpRR(left, right)))
+{
+    And(Inr(And(refl, And(refl, refl))), refl)
+}
+
 theorem decoded_at_length(span: InstructionBytes,
     decoded: DecodedInstruction, evidence: DecodedAt(span, decoded)):
     decoded.length = 3
@@ -745,6 +1354,8 @@ theorem canonical_bytes_length(instruction: Instruction):
     match instruction {
         MovRR(_, _) => refl,
         AddRR(_, _) => refl,
+        SubRR(_, _) => refl,
+        CmpRR(_, _) => refl,
         TestRR(_, _) => refl,
     }
 }
@@ -782,6 +1393,20 @@ fn add_flags(left, right: BitVec(64)) → Flags {
     )
 }
 
+fn sub_flags(left, right: BitVec(64)) → Flags {
+    let result = bitvec::sub(64, left, right);
+    let low_left = take_low(4, 60, left);
+    let low_right = take_low(4, 60, right);
+    Flags(
+        cf := borrow_sub_bit(64, left, right),
+        pf := bool::not(xor_bits(8, take_low(8, 56, result))),
+        af := borrow_sub_bit(4, low_left, low_right),
+        zf := is_zero_bits(64, result),
+        sf := sign_bit(64, result),
+        of := signed_overflow_sub(64, left, right),
+    )
+}
+
 // TEST defines five arithmetic flags from the discarded AND result. AF is
 // architecturally undefined and is therefore supplied by the relation rather
 // than silently fixed by this helper.
@@ -809,6 +1434,34 @@ fn execute_add(destination, source: Gpr, before: Gprs) → RegisterEffect
     )
 }
 
+fn execute_sub(destination, source: Gpr, before: Gprs) → RegisterEffect
+{
+    let left = read_gpr(destination, before);
+    let right = read_gpr(source, before);
+    RegisterEffect(
+        gprs := write_gpr(destination, bitvec::sub(64, left, right), before),
+        flags := sub_flags(left, right),
+    )
+}
+
+theorem execute_sub_writes_difference(destination, source: Gpr, before: Gprs):
+    read_gpr(destination, execute_sub(destination, source, before).gprs) =
+        bitvec::sub(64, read_gpr(destination, before),
+            read_gpr(source, before))
+{
+    read_gpr_after_write(destination,
+        bitvec::sub(64, read_gpr(destination, before),
+            read_gpr(source, before)), before)
+}
+
+fn execute_cmp(left, right: Gpr, before: Gprs) → RegisterEffect
+{
+    RegisterEffect(
+        gprs := before,
+        flags := sub_flags(read_gpr(left, before), read_gpr(right, before)),
+    )
+}
+
 fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
     RegisterEffect
 {
@@ -818,6 +1471,8 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             flags := flags,
         ),
         AddRR(destination, source) => execute_add(destination, source, before),
+        SubRR(destination, source) => execute_sub(destination, source, before),
+        CmpRR(left, right) => execute_cmp(left, right, before),
         // Canonical representative for functional clients. `Execute` below
         // is authoritative and admits both values of undefined AF.
         TestRR(left, right) => RegisterEffect(
@@ -859,6 +1514,8 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
     match decoded.instruction {
         MovRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
         AddRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        SubRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        CmpRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
         TestRR(left, right) => ∃ af: Bool,
             outcome = Returned(execute_test(left, right, decoded.length, before, af)),
     }
@@ -882,6 +1539,8 @@ theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
     match instruction {
         MovRR(_, _) => refl,
         AddRR(_, _) => refl,
+        SubRR(_, _) => refl,
+        CmpRR(_, _) => refl,
         TestRR(_, _) => Exists(False, refl),
     }
 }
@@ -932,6 +1591,31 @@ theorem alternate_add_encoding_executes<M>(destination, source: Gpr,
         canonical_execute_normal_is_allowed(AddRR(destination, source), before)))
 }
 
+theorem alternate_sub_encoding_executes<M>(destination, source: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_sub_bytes(destination, source)),
+        decoded_rr(SubRR(destination, source)), before,
+        Returned(execute_normal(decoded_rr(SubRR(destination, source)), before)))
+{
+    And(refl, And(
+        alternate_sub_encoding_decodes(before.rip, destination, source),
+        canonical_execute_normal_is_allowed(SubRR(destination, source), before)))
+}
+
+theorem alternate_cmp_encoding_executes<M>(left, right: Gpr,
+    before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := alternate_cmp_bytes(left, right)),
+        decoded_rr(CmpRR(left, right)), before,
+        Returned(execute_normal(decoded_rr(CmpRR(left, right)), before)))
+{
+    And(refl, And(alternate_cmp_encoding_decodes(before.rip, left, right),
+        canonical_execute_normal_is_allowed(CmpRR(left, right), before)))
+}
+
 theorem external_decoding_executes<M>(span: InstructionBytes,
     decoded: DecodedInstruction, before: MachineState<M>,
     outcome: SemanticOutcome<MachineState<M>, Exception>,
@@ -963,6 +1647,35 @@ theorem test_flags_spec(left, right: BitVec(64), af: Bool):
             sf := sign_bit(64, band(64, left, right)),
             of := False)
 {}
+
+theorem sub_flags_spec(left, right: BitVec(64)):
+    sub_flags(left, right) =
+        Flags(
+            cf := borrow_sub_bit(64, left, right),
+            pf := bool::not(xor_bits(8,
+                take_low(8, 56, bitvec::sub(64, left, right)))),
+            af := borrow_sub_bit(4, take_low(4, 60, left),
+                take_low(4, 60, right)),
+            zf := is_zero_bits(64, bitvec::sub(64, left, right)),
+            sf := sign_bit(64, bitvec::sub(64, left, right)),
+            of := signed_overflow_sub(64, left, right))
+{}
+
+theorem execute_cmp_frames<M>(left, right: Gpr, length: Nat,
+    valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>):
+    execute_normal(
+        DecodedInstruction(instruction := CmpRR(left, right),
+            length := length, valid_length := valid), before).gprs = before.gprs
+    ∧ execute_normal(
+        DecodedInstruction(instruction := CmpRR(left, right),
+            length := length, valid_length := valid), before).memory = before.memory
+    ∧ execute_normal(
+        DecodedInstruction(instruction := CmpRR(left, right),
+            length := length, valid_length := valid), before).rip =
+        next_rip(before.rip, length)
+{
+    And(refl, And(refl, refl))
+}
 
 theorem execute_test_frames<M>(left, right: Gpr, length: Nat,
     before: MachineState<M>, af: Bool):
@@ -1013,6 +1726,8 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
     match decoded.instruction {
         MovRR(_, _) => refl,
         AddRR(_, _) => refl,
+        SubRR(_, _) => refl,
+        CmpRR(_, _) => refl,
         TestRR(_, _) => refl,
     }
 }
