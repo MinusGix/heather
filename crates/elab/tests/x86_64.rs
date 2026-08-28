@@ -105,6 +105,61 @@ theorem test_preserves_the_frame<M>(left, right: Gpr, length: Nat,
     execute_test_frames(left, right, length, before, af)
 }
 
+theorem canonical_low_register_bytes():
+    canonical_bytes(MovRR(Rax, Rbx)) =
+        Cons(ofNat(8, 72), Cons(ofNat(8, 137), Cons(ofNat(8, 216), Nil)))
+{
+    refl
+}
+
+theorem canonical_extended_register_bytes():
+    canonical_bytes(AddRR(R9, R10)) =
+        Cons(ofNat(8, 77), Cons(ofNat(8, 1), Cons(ofNat(8, 209), Nil)))
+{
+    refl
+}
+
+theorem canonical_test_extension_bytes():
+    canonical_bytes(TestRR(R15, Rax)) =
+        Cons(ofNat(8, 73), Cons(ofNat(8, 133), Cons(ofNat(8, 199), Nil)))
+{
+    refl
+}
+
+theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
+    before: MachineState<M>):
+    ExecuteAt(encoded_at(before.rip, instruction), decoded_rr(instruction), before,
+        Returned(execute_normal(decoded_rr(instruction), before)))
+{
+    canonical_encoding_executes(instruction, before)
+}
+
+theorem decoded_length_drives_fallthrough<M>(span: InstructionBytes,
+    decoded: DecodedInstruction, before: MachineState<M>,
+    decoding: DecodedAt(span, decoded)):
+    execute_normal(decoded, before).rip = next_rip(before.rip, 3)
+{
+    decoded_execution_advances_by_consumed_length(span, decoded, before, decoding)
+}
+
+theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
+    ExecuteAt(
+        InstructionBytes(start := before.rip,
+            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+                Cons(ofNat(8, 216), Nil)))),
+        decoded_rr(MovRR(Rax, Rbx)), before,
+        Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)))
+{
+    external_decoding_executes(
+        InstructionBytes(start := before.rip,
+            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+                Cons(ofNat(8, 216), Nil)))),
+        decoded_rr(MovRR(Rax, Rbx)), before,
+        Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)),
+        refl, And(refl, refl),
+        canonical_execute_normal_is_allowed(MovRR(Rax, Rbx), before))
+}
+
 "#;
     if let Err(err) = e.elab_module_source("probe", src) {
         let msg = match err {
@@ -128,4 +183,60 @@ fn impossible() -> DecodedInstruction {
 "#;
     assert!(e.elab_module_source("bad", src).is_err(),
         "a zero-byte x86 instruction was accepted");
+}
+
+#[test]
+fn unsupported_or_malformed_byte_spans_are_refused() {
+    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let base = elaborated();
+    let cases = [
+        // Missing ModRM byte: exact-span decoding rejects truncation.
+        r#"
+import x86_64;
+import bitvec;
+import list;
+fn impossible(start: BitVec(64)) -> DecodedAt(
+    InstructionBytes(start := start,
+        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))),
+    decoded_rr(MovRR(Rax, Rbx)))
+{
+    And(refl, refl)
+}
+"#,
+        // 8B is an alternate MOV direction opcode, outside this canonical slice.
+        r#"
+import x86_64;
+import bitvec;
+import list;
+fn impossible(start: BitVec(64)) -> DecodedAt(
+    InstructionBytes(start := start,
+        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 139),
+            Cons(ofNat(8, 216), Nil)))),
+    decoded_rr(MovRR(Rax, Rbx)))
+{
+    And(refl, refl)
+}
+"#,
+        // Correct bytes cannot certify a decoded object with the wrong length.
+        r#"
+import x86_64;
+import bitvec;
+import list;
+fn impossible(start: BitVec(64)) -> DecodedAt(
+    InstructionBytes(start := start,
+        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+            Cons(ofNat(8, 216), Nil)))),
+    DecodedInstruction(instruction := MovRR(Rax, Rbx), length := 2,
+        valid_length := squash(And(trivial, trivial))))
+{
+    And(refl, refl)
+}
+"#,
+    ];
+
+    for src in cases {
+        let mut e = base.clone();
+        assert!(e.elab_module_source("bad_bytes", src).is_err(),
+            "an unsupported or malformed byte span was accepted:\n{src}");
+    }
 }

@@ -128,3 +128,12 @@ access; it does not claim x86 memory is total.
   compact typed instruction model opens so many short conversion regions.
   Re-measure after raw decoding or a second instruction family changes that
   shape; do not turn these dated counts into acceptance thresholds.
+- 2026-08-27: Added the first raw-byte boundary. `InstructionBytes` retains an
+  exact byte list and start address; `DecodedAt` relates canonical three-byte
+  REX.W register-register encodings of `MOV`, `ADD`, and `TEST` to the existing
+  typed decoded object. Compiler-produced and externally supplied bytes compose
+  with the one `Execute` relation through `ExecuteAt`, and the certified length
+  transports into RIP fallthrough. Negative controls reject truncation, an
+  alternate unsupported opcode, and length disagreement. Architectural-memory
+  fetch, alternate legal encodings, and an executable decoder remain future
+  rounds rather than being conflated with execution faults.

@@ -1,8 +1,7 @@
-// Initial x86-64 architectural execution slice. This module begins at the
-// decoded-instruction boundary: the typed object carries a well-formed length.
-// The eventual `DecodedAt` evidence ties that object to actual fetched bytes
-// before the byte-level machine step calls `execute`; the compiler's encoder
-// and a raw-binary decoder meet at that boundary.
+// Initial x86-64 architectural execution slice. `DecodedAt` ties a typed object
+// and its well-formed length to an exact byte span and fetch address before the
+// byte-level machine step calls `Execute`; the compiler's canonical encoder and
+// proofs about externally supplied bytes meet at that boundary.
 //
 // Scope: long-mode scalar register forms MOV r64,r64, ADD r64,r64, and
 // TEST r64,r64. There are no memory operands or execution faults in this
@@ -14,6 +13,7 @@ import nat;
 import bitvec;
 import relation;
 import location;
+import list;
 
 inductive Gpr {
     Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
@@ -103,6 +103,132 @@ record DecodedInstruction {
     instruction: Instruction,
     length: Nat,
     valid_length: ∥1 <= length ∧ length <= 15∥,
+}
+
+// The byte boundary is intentionally a proposition over an exact span, not a
+// second instruction semantics. `start` is provenance: a raw-code proof names
+// where these bytes were fetched, while an encoder proof supplies the same
+// span directly. The first encoding slice admits only canonical three-byte
+// REX.W, ModRM-register forms.
+record InstructionBytes {
+    start: BitVec(64),
+    bytes: List<BitVec(8)>,
+}
+
+fn gpr_low3(register: Gpr) → Nat {
+    match register {
+        Rax => 0, Rcx => 1, Rdx => 2, Rbx => 3,
+        Rsp => 4, Rbp => 5, Rsi => 6, Rdi => 7,
+        R8 => 0, R9 => 1, R10 => 2, R11 => 3,
+        R12 => 4, R13 => 5, R14 => 6, R15 => 7,
+    }
+}
+
+fn gpr_extended(register: Gpr) → Bool {
+    match register {
+        Rax => False, Rcx => False, Rdx => False, Rbx => False,
+        Rsp => False, Rbp => False, Rsi => False, Rdi => False,
+        R8 => True, R9 => True, R10 => True, R11 => True,
+        R12 => True, R13 => True, R14 => True, R15 => True,
+    }
+}
+
+// In all three canonical forms the semantic left/destination operand occupies
+// ModRM.r/m and the right/source operand occupies ModRM.reg. REX.B therefore
+// extends `rm`, while REX.R extends `reg`.
+fn rex_w_rr(rm, reg: Gpr) → BitVec(8) {
+    match gpr_extended(reg) {
+        False => match gpr_extended(rm) {
+            False => ofNat(8, 72), True => ofNat(8, 73),
+        },
+        True => match gpr_extended(rm) {
+            False => ofNat(8, 76), True => ofNat(8, 77),
+        },
+    }
+}
+
+fn modrm_reg_base(register: Gpr) → Nat {
+    match register {
+        Rax => 192, Rcx => 200, Rdx => 208, Rbx => 216,
+        Rsp => 224, Rbp => 232, Rsi => 240, Rdi => 248,
+        R8 => 192, R9 => 200, R10 => 208, R11 => 216,
+        R12 => 224, R13 => 232, R14 => 240, R15 => 248,
+    }
+}
+
+fn modrm_rr(rm, reg: Gpr) → BitVec(8) {
+    ofNat(8, modrm_reg_base(reg) + gpr_low3(rm))
+}
+
+fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
+    match instruction {
+        // 89 /r: MOV r64 into r/m64.
+        MovRR(destination, source) =>
+            Cons(rex_w_rr(destination, source), Cons(ofNat(8, 137),
+                Cons(modrm_rr(destination, source), Nil))),
+        // 01 /r: ADD r64 into r/m64.
+        AddRR(destination, source) =>
+            Cons(rex_w_rr(destination, source), Cons(ofNat(8, 1),
+                Cons(modrm_rr(destination, source), Nil))),
+        // 85 /r: TEST r64 against r/m64.
+        TestRR(left, right) =>
+            Cons(rex_w_rr(left, right), Cons(ofNat(8, 133),
+                Cons(modrm_rr(left, right), Nil))),
+    }
+}
+
+fn decoded_rr(instruction: Instruction) → DecodedInstruction {
+    DecodedInstruction(instruction := instruction, length := 3,
+        valid_length := squash(And(trivial, trivial)))
+}
+
+// Exact equality excludes truncation, trailing bytes, alternate opcodes and
+// memory ModRM modes from this deliberately narrow relation. Those are
+// unsupported decoding coverage, not architectural execution failures.
+fn DecodedAt(span: InstructionBytes, decoded: DecodedInstruction) → Type {
+    span.bytes = canonical_bytes(decoded.instruction) ∧ decoded.length = 3
+}
+
+fn encoded_at(start: BitVec(64), instruction: Instruction) → InstructionBytes {
+    InstructionBytes(start := start, bytes := canonical_bytes(instruction))
+}
+
+theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
+    DecodedAt(encoded_at(start, instruction), decoded_rr(instruction))
+{
+    And(refl, refl)
+}
+
+theorem external_bytes_decode(span: InstructionBytes,
+    decoded: DecodedInstruction,
+    exact: span.bytes = canonical_bytes(decoded.instruction),
+    length: decoded.length = 3): DecodedAt(span, decoded)
+{
+    And(exact, length)
+}
+
+theorem decoded_at_exact_bytes(span: InstructionBytes,
+    decoded: DecodedInstruction, evidence: DecodedAt(span, decoded)):
+    span.bytes = canonical_bytes(decoded.instruction)
+{
+    evidence.left
+}
+
+theorem decoded_at_length(span: InstructionBytes,
+    decoded: DecodedInstruction, evidence: DecodedAt(span, decoded)):
+    decoded.length = 3
+{
+    evidence.right
+}
+
+theorem canonical_bytes_length(instruction: Instruction):
+    canonical_bytes(instruction).len() = 3
+{
+    match instruction {
+        MovRR(_, _) => refl,
+        AddRR(_, _) => refl,
+        TestRR(_, _) => refl,
+    }
 }
 
 fn next_rip(current: BitVec(64), length: Nat) → BitVec(64) {
@@ -220,6 +346,47 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
     }
 }
 
+// This is the byte/typed execution composition for the current no-fetch-fault
+// slice. The start-address equality is kept explicit because `InstructionBytes`
+// is also useful for relocated compiler output before it is placed at RIP.
+fn ExecuteAt<M>(span: InstructionBytes, decoded: DecodedInstruction,
+    before: MachineState<M>, outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
+{
+    span.start = before.rip ∧ DecodedAt(span, decoded)
+        ∧ Execute(decoded, before, outcome)
+}
+
+theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
+    before: MachineState<M>):
+    Execute(decoded_rr(instruction), before,
+        Returned(execute_normal(decoded_rr(instruction), before)))
+{
+    match instruction {
+        MovRR(_, _) => refl,
+        AddRR(_, _) => refl,
+        TestRR(_, _) => Exists(False, refl),
+    }
+}
+
+theorem canonical_encoding_executes<M>(instruction: Instruction,
+    before: MachineState<M>):
+    ExecuteAt(encoded_at(before.rip, instruction), decoded_rr(instruction), before,
+        Returned(execute_normal(decoded_rr(instruction), before)))
+{
+    And(refl, And(canonical_encoding_decodes(before.rip, instruction),
+        canonical_execute_normal_is_allowed(instruction, before)))
+}
+
+theorem external_decoding_executes<M>(span: InstructionBytes,
+    decoded: DecodedInstruction, before: MachineState<M>,
+    outcome: SemanticOutcome<MachineState<M>, Exception>,
+    at_rip: span.start = before.rip, decoding: DecodedAt(span, decoded),
+    execution: Execute(decoded, before, outcome)):
+    ExecuteAt(span, decoded, before, outcome)
+{
+    And(at_rip, And(decoding, execution))
+}
+
 theorem test_allows_af<M>(left, right: Gpr, length: Nat,
     valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>, af: Bool):
     Execute(
@@ -293,4 +460,14 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         AddRR(_, _) => refl,
         TestRR(_, _) => refl,
     }
+}
+
+theorem decoded_execution_advances_by_consumed_length<M>(span: InstructionBytes,
+    decoded: DecodedInstruction, before: MachineState<M>,
+    decoding: DecodedAt(span, decoded)):
+    execute_normal(decoded, before).rip = next_rip(before.rip, 3)
+{
+    apply trans;
+    give execute_normal_advances_rip(decoded, before);
+    cong_fn(λ (length: Nat) => next_rip(before.rip, length), decoding.right)
 }
