@@ -40,6 +40,23 @@ shape that should scale to SIB, displacement, immediate, or prefix streams.
 
 ## Log
 
+- 2026-08-28: The direct path is now active. It rejects fixed REX.W/class and
+  ModRM.mod bits before constructing operands, extracts REX.R/REX.B and the two
+  three-bit register fields, then uses `BitVec` decidable equality to certify
+  the reconstructed REX and ModRM bytes. Successful results still carry the
+  original `DecodesInstruction` witness; the bounded search remains available
+  as `decode_instruction_reference`. Checked agreement covers every supported
+  opcode direction, all four REX extension combinations, missing REX.W,
+  memory-mode ModRM, and truncation. The focused consumer probe dropped from
+  about 41s to about 19s.
+- 2026-08-28: An initially proved open reconstruction route (`byte_eta`, field
+  congruence, and GPR inverse laws) checked but raised the module/consumer cost
+  enough to erase the direct decoder's gain (the consumer remained about 41s).
+  Rechecking reconstructed bytes after direct extraction is a smaller trusted
+  surface—the equality decision still returns ordinary kernel-checked
+  evidence—and avoids that open-term normalization tax. The issue remains open
+  for the general completeness theorem and exhaustive all-256-pair agreement;
+  representative computation is not being presented as that proof.
 - 2026-08-28: Filed from the first executable-decoder round. The bounded search
   made soundness by construction small and kernel-checkable, while also making
   the scaling boundary concrete before memory operands are added.

@@ -292,6 +292,69 @@ theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
 }
 
 #[test]
+fn direct_decoder_agrees_with_reference_on_boundary_cases() {
+    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut e = elaborated();
+    let src = r#"
+import x86_64;
+import bitvec;
+import list;
+import logic;
+
+theorem supported_opcodes_agree():
+    decode_instruction(canonical_bytes(MovRR(Rax, Rbx))) =
+        decode_instruction_reference(canonical_bytes(MovRR(Rax, Rbx)))
+    ∧ decode_instruction(alternate_mov_bytes(Rax, Rbx)) =
+        decode_instruction_reference(alternate_mov_bytes(Rax, Rbx))
+    ∧ decode_instruction(canonical_bytes(AddRR(Rax, Rcx))) =
+        decode_instruction_reference(canonical_bytes(AddRR(Rax, Rcx)))
+    ∧ decode_instruction(alternate_add_bytes(Rax, Rcx)) =
+        decode_instruction_reference(alternate_add_bytes(Rax, Rcx))
+    ∧ decode_instruction(canonical_bytes(TestRR(Rax, Rbx))) =
+        decode_instruction_reference(canonical_bytes(TestRR(Rax, Rbx)))
+{
+    And(refl, And(refl, And(refl, And(refl, refl))))
+}
+
+theorem rex_extension_combinations_agree():
+    decode_instruction(canonical_bytes(MovRR(Rax, Rbx))) =
+        decode_instruction_reference(canonical_bytes(MovRR(Rax, Rbx)))
+    ∧ decode_instruction(canonical_bytes(MovRR(R8, Rbx))) =
+        decode_instruction_reference(canonical_bytes(MovRR(R8, Rbx)))
+    ∧ decode_instruction(canonical_bytes(MovRR(Rax, R8))) =
+        decode_instruction_reference(canonical_bytes(MovRR(Rax, R8)))
+    ∧ decode_instruction(canonical_bytes(MovRR(R8, R9))) =
+        decode_instruction_reference(canonical_bytes(MovRR(R8, R9)))
+{
+    And(refl, And(refl, And(refl, refl)))
+}
+
+theorem malformed_inputs_agree():
+    decode_instruction(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
+        Cons(ofNat(8, 216), Nil)))) =
+        decode_instruction_reference(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
+            Cons(ofNat(8, 216), Nil))))
+    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+        Cons(ofNat(8, 24), Nil)))) =
+        decode_instruction_reference(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
+            Cons(ofNat(8, 24), Nil))))
+    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))) =
+        decode_instruction_reference(Cons(ofNat(8, 72),
+            Cons(ofNat(8, 137), Nil)))
+{
+    And(refl, And(refl, refl))
+}
+"#;
+    if let Err(err) = e.elab_module_source("decoder_agreement", src) {
+        let msg = match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        };
+        panic!("direct/reference decoder agreement did not check: {msg}");
+    }
+}
+
+#[test]
 fn invalid_decoded_lengths_are_refused() {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut e = elaborated();

@@ -148,7 +148,11 @@ access; it does not claim x86 memory is total.
 - 2026-08-27: Byte fixtures exposed two independent frontend readability gaps:
   [[list-literal-syntax]] owns replacing nested `Cons` spines, and
   [[radix-numeric-literals]] owns hexadecimal/binary spellings for byte values.
-- 2026-08-28: The proof-producing executable decoder uses bounded register-pair
-  search as its small reference algorithm. [[x86-direct-bitfield-decoder]] owns
-  replacing that search with scalable direct REX/ModRM field extraction while
-  retaining agreement and soundness proofs.
+- 2026-08-28: Replaced the active bounded register-pair search with direct
+  REX.R/REX.B and ModRM.reg/ModRM.r/m extraction. Fixed REX.W/class and
+  ModRM.mod bits are rejected first; reconstructed bytes are then certified by
+  decidable bitvector equality, preserving the proof-producing `ByteDecode`
+  boundary. The search implementation remains as a reference oracle, with
+  opcode/extension/malformed boundary agreement checks. The focused consumer
+  fell from about 41s to about 19s. [[x86-direct-bitfield-decoder]] retains the
+  general completeness and exhaustive 256-pair agreement proof.

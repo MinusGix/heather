@@ -100,12 +100,14 @@ separate theorem.
 a `ByteDecode(bytes)` carrying both the normalized instruction and its
 `DecodesInstruction` witness, so soundness is enforced by construction;
 `decode_instruction` erases that evidence behind a conventional
-`Option<DecodedInstruction>` face. The initial reference algorithm checks the
-exact three-byte shape, reads the opcode, and performs a bounded search over
-the 16×16 register-pair space using evidence-producing bitvector/list equality.
-This prioritizes a small soundness surface. [[x86-direct-bitfield-decoder]] owns
-the scalable refinement to direct REX/ModRM bitfield extraction before larger
-encoding families rely on the decoder.
+`Option<DecodedInstruction>` face. The active algorithm checks the exact
+three-byte shape, rejects non-REX.W and non-register ModRM forms, extracts
+REX.R/REX.B and both three-bit ModRM register fields directly, and certifies
+the reconstructed REX and ModRM bytes with evidence-producing bitvector
+equality. The original bounded 16×16 register-pair search remains available as
+`decode_instruction_reference`; boundary tests compare it with the direct
+path. [[x86-direct-bitfield-decoder]] retains the general completeness and
+exhaustive-agreement obligation before larger encoding families rely on it.
 
 This is deliberately not yet a total x86 decoder. Redundant and legacy
 prefixes, memory ModRM modes, truncation, trailing bytes, and other instructions

@@ -134,18 +134,83 @@ fn gpr_extended(register: Gpr) → Bool {
     }
 }
 
+fn gpr_bit0(register: Gpr) → Bool {
+    match register {
+        Rax => False, Rcx => True, Rdx => False, Rbx => True,
+        Rsp => False, Rbp => True, Rsi => False, Rdi => True,
+        R8 => False, R9 => True, R10 => False, R11 => True,
+        R12 => False, R13 => True, R14 => False, R15 => True,
+    }
+}
+
+fn gpr_bit1(register: Gpr) → Bool {
+    match register {
+        Rax => False, Rcx => False, Rdx => True, Rbx => True,
+        Rsp => False, Rbp => False, Rsi => True, Rdi => True,
+        R8 => False, R9 => False, R10 => True, R11 => True,
+        R12 => False, R13 => False, R14 => True, R15 => True,
+    }
+}
+
+fn gpr_bit2(register: Gpr) → Bool {
+    match register {
+        Rax => False, Rcx => False, Rdx => False, Rbx => False,
+        Rsp => True, Rbp => True, Rsi => True, Rdi => True,
+        R8 => False, R9 => False, R10 => False, R11 => False,
+        R12 => True, R13 => True, R14 => True, R15 => True,
+    }
+}
+
+fn gpr_from_fields(bit0, bit1, bit2, extended: Bool) → Gpr {
+    match extended {
+        False => match bit2 {
+            False => match bit1 {
+                False => match bit0 { False => Rax, True => Rcx },
+                True => match bit0 { False => Rdx, True => Rbx },
+            },
+            True => match bit1 {
+                False => match bit0 { False => Rsp, True => Rbp },
+                True => match bit0 { False => Rsi, True => Rdi },
+            },
+        },
+        True => match bit2 {
+            False => match bit1 {
+                False => match bit0 { False => R8, True => R9 },
+                True => match bit0 { False => R10, True => R11 },
+            },
+            True => match bit1 {
+                False => match bit0 { False => R12, True => R13 },
+                True => match bit0 { False => R14, True => R15 },
+            },
+        },
+    }
+}
+
+fn byte_bit0(byte: BitVec(8)) → Bool { get(8, byte, FZ) }
+fn byte_bit1(byte: BitVec(8)) → Bool { get(8, byte, FS(FZ)) }
+fn byte_bit2(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FZ))) }
+fn byte_bit3(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FS(FZ)))) }
+fn byte_bit4(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FS(FS(FZ))))) }
+fn byte_bit5(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FS(FS(FS(FZ)))))) }
+fn byte_bit6(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FS(FS(FS(FS(FZ))))))) }
+fn byte_bit7(byte: BitVec(8)) → Bool { get(8, byte, FS(FS(FS(FS(FS(FS(FS(FZ)))))))) }
+
+fn byte_from_fields(bit0, bit1, bit2, bit3, bit4, bit5, bit6, bit7: Bool) →
+    BitVec(8)
+{
+    from_bits(8, [bit0, bit1, bit2, bit3, bit4, bit5, bit6, bit7])
+}
+
 // In all three canonical forms the semantic left/destination operand occupies
 // ModRM.r/m and the right/source operand occupies ModRM.reg. REX.B therefore
 // extends `rm`, while REX.R extends `reg`.
+fn rex_from_extensions(rm_extended, reg_extended: Bool) → BitVec(8) {
+    byte_from_fields(rm_extended, False, reg_extended, True,
+        False, False, True, False)
+}
+
 fn rex_w_rr(rm, reg: Gpr) → BitVec(8) {
-    match gpr_extended(reg) {
-        False => match gpr_extended(rm) {
-            False => ofNat(8, 72), True => ofNat(8, 73),
-        },
-        True => match gpr_extended(rm) {
-            False => ofNat(8, 76), True => ofNat(8, 77),
-        },
-    }
+    rex_from_extensions(gpr_extended(rm), gpr_extended(reg))
 }
 
 fn modrm_reg_base(register: Gpr) → Nat {
@@ -158,7 +223,8 @@ fn modrm_reg_base(register: Gpr) → Nat {
 }
 
 fn modrm_rr(rm, reg: Gpr) → BitVec(8) {
-    ofNat(8, modrm_reg_base(reg) + gpr_low3(rm))
+    byte_from_fields(gpr_bit0(rm), gpr_bit1(rm), gpr_bit2(rm),
+        gpr_bit0(reg), gpr_bit1(reg), gpr_bit2(reg), True, True)
 }
 
 fn rr_bytes(opcode: Nat, rm, reg: Gpr) → List<BitVec(8)> {
@@ -239,6 +305,91 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
             RrEncoding(bytes, 1, destination, source)
             ∨ RrEncoding(bytes, 3, source, destination),
         TestRR(left, right) => RrEncoding(bytes, 133, left, right),
+    }
+}
+
+record DecodedRexFields(rex: BitVec(8)) {
+    rm_extended: Bool,
+    reg_extended: Bool,
+}
+
+fn decode_rex_fields(rex: BitVec(8)) → Option<DecodedRexFields(rex)> {
+    match bool::eq_dec(byte_bit1(rex), False) {
+        Inr(_) => None,
+        Inl(bit1_clear) => match bool::eq_dec(byte_bit3(rex), True) {
+            Inr(_) => None,
+            Inl(width_set) => match bool::eq_dec(byte_bit4(rex), False) {
+                Inr(_) => None,
+                Inl(bit4_clear) => match bool::eq_dec(byte_bit5(rex), False) {
+                    Inr(_) => None,
+                    Inl(bit5_clear) => match bool::eq_dec(byte_bit6(rex), True) {
+                        Inr(_) => None,
+                        Inl(rex_class) => match bool::eq_dec(byte_bit7(rex), False) {
+                            Inr(_) => None,
+                            Inl(bit7_clear) => Some(DecodedRexFields(
+                                rm_extended := byte_bit0(rex),
+                                reg_extended := byte_bit2(rex),
+                            )),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+record DecodedModrmFields(modrm: BitVec(8)) {
+    rm0: Bool, rm1: Bool, rm2: Bool,
+    reg0: Bool, reg1: Bool, reg2: Bool,
+}
+
+fn decode_modrm_fields(modrm: BitVec(8)) → Option<DecodedModrmFields(modrm)> {
+    match bool::eq_dec(byte_bit6(modrm), True) {
+        Inr(_) => None,
+        Inl(register_mode_low) => match bool::eq_dec(byte_bit7(modrm), True) {
+            Inr(_) => None,
+            Inl(register_mode_high) => Some(DecodedModrmFields(
+                rm0 := byte_bit0(modrm), rm1 := byte_bit1(modrm),
+                rm2 := byte_bit2(modrm), reg0 := byte_bit3(modrm),
+                reg1 := byte_bit4(modrm), reg2 := byte_bit5(modrm),
+            )),
+        },
+    }
+}
+
+record DirectOperands(rex, modrm: BitVec(8)) {
+    rm: Gpr,
+    reg: Gpr,
+    rex_exact: RexWRR(rex, rm, reg),
+    modrm_exact: ModRMRR(modrm, rm, reg),
+}
+
+fn decode_operands_direct(rex, modrm: BitVec(8)) →
+    Option<DirectOperands(rex, modrm)>
+{
+    match decode_rex_fields(rex) {
+        None => None,
+        Some(rex_fields) => match decode_modrm_fields(modrm) {
+            None => None,
+            Some(modrm_fields) => {
+                let rm = gpr_from_fields(modrm_fields.rm0, modrm_fields.rm1,
+                    modrm_fields.rm2, rex_fields.rm_extended);
+                let reg = gpr_from_fields(modrm_fields.reg0,
+                    modrm_fields.reg1, modrm_fields.reg2,
+                    rex_fields.reg_extended);
+                match bitvec::eq_dec(8, rex, rex_w_rr(rm, reg)) {
+                    Inr(_) => None,
+                    Inl(rex_exact) => match bitvec::eq_dec(8, modrm,
+                            modrm_rr(rm, reg)) {
+                        Inr(_) => None,
+                        Inl(modrm_exact) => Some(DirectOperands(
+                            rm := rm, reg := reg,
+                            rex_exact := rex_exact,
+                            modrm_exact := modrm_exact)),
+                    },
+                }
+            },
+        },
     }
 }
 
@@ -360,7 +511,9 @@ record ByteDecode(bytes: List<BitVec(8)>) {
     decoding: DecodesInstruction(bytes, instruction),
 }
 
-fn decode_opcode(bytes: List<BitVec(8)>, opcode: Nat) → Option<ByteDecode(bytes)> {
+fn decode_opcode_reference(bytes: List<BitVec(8)>, opcode: Nat) →
+    Option<ByteDecode(bytes)>
+{
     match find_operands(bytes, opcode, all_gprs(), all_gprs()) {
         None => None,
         Some(found) => match nat::eq_dec(opcode, 1) {
@@ -407,7 +560,7 @@ fn decode_opcode(bytes: List<BitVec(8)>, opcode: Nat) → Option<ByteDecode(byte
     }
 }
 
-fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
+fn decode_bytes_reference(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
     match bytes as λ actual => Option<ByteDecode(actual)> {
         Nil => None,
         Cons(prefix, tail1) => match tail1 as λ rest =>
@@ -419,9 +572,83 @@ fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
                 Cons(modrm, tail3) => match tail3 as λ rest =>
                         Option<ByteDecode(Cons(prefix,
                             Cons(opcode, Cons(modrm, rest))))> {
-                    Nil => decode_opcode(
+                    Nil => decode_opcode_reference(
                         Cons(prefix, Cons(opcode, Cons(modrm, Nil))),
                         toNat(8, opcode)),
+                    Cons(_, _) => None,
+                },
+            },
+        },
+    }
+}
+
+fn decode_instruction_reference(bytes: List<BitVec(8)>) →
+    Option<DecodedInstruction>
+{
+    match decode_bytes_reference(bytes) {
+        None => None,
+        Some(result) => Some(decoded_rr(result.instruction)),
+    }
+}
+
+fn decode_opcode_direct(rex, opcode, modrm: BitVec(8)) →
+    Option<ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))>
+{
+    match decode_operands_direct(rex, modrm) {
+        None => None,
+        Some(found) => match bitvec::eq_dec(8, opcode, ofNat(8, 1)) {
+            // 01 /r
+            Inl(opcode_exact) => Some(ByteDecode(
+                instruction := AddRR(found.rm, found.reg),
+                decoding := Inl(And(found.rex_exact,
+                    And(opcode_exact, found.modrm_exact))))),
+            Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 3)) {
+                // 03 /r
+                Inl(opcode_exact) => Some(ByteDecode(
+                    instruction := AddRR(found.reg, found.rm),
+                    decoding := Inr(And(found.rex_exact,
+                        And(opcode_exact, found.modrm_exact))))),
+                Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 133)) {
+                    // 85 /r
+                    Inl(opcode_exact) => Some(ByteDecode(
+                        instruction := TestRR(found.rm, found.reg),
+                        decoding := And(found.rex_exact,
+                            And(opcode_exact, found.modrm_exact)))),
+                    Inr(_) => match bitvec::eq_dec(8, opcode, ofNat(8, 137)) {
+                        // 89 /r
+                        Inl(opcode_exact) => Some(ByteDecode(
+                            instruction := MovRR(found.rm, found.reg),
+                            decoding := Inl(And(found.rex_exact,
+                                And(opcode_exact, found.modrm_exact))))),
+                        Inr(_) => match bitvec::eq_dec(8, opcode,
+                                ofNat(8, 139)) {
+                            // 8B /r
+                            Inl(opcode_exact) => Some(ByteDecode(
+                                instruction := MovRR(found.reg, found.rm),
+                                decoding := Inr(And(found.rex_exact,
+                                    And(opcode_exact, found.modrm_exact))))),
+                            Inr(_) => None,
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
+    match bytes as λ actual => Option<ByteDecode(actual)> {
+        Nil => None,
+        Cons(rex, tail1) => match tail1 as λ rest =>
+                Option<ByteDecode(Cons(rex, rest))> {
+            Nil => None,
+            Cons(opcode, tail2) => match tail2 as λ rest =>
+                    Option<ByteDecode(Cons(rex, Cons(opcode, rest)))> {
+                Nil => None,
+                Cons(modrm, tail3) => match tail3 as λ rest =>
+                        Option<ByteDecode(Cons(rex,
+                            Cons(opcode, Cons(modrm, rest))))> {
+                    Nil => decode_opcode_direct(rex, opcode, modrm),
                     Cons(_, _) => None,
                 },
             },
