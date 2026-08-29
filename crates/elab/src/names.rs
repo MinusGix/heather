@@ -236,6 +236,14 @@ impl Names {
         &self.scope
     }
 
+    /// Clone committed name/module state without the dynamically installed
+    /// scope stack used while re-lowering stored surface declarations.
+    pub(crate) fn semantic_snapshot(&self) -> Self {
+        let mut names = self.clone();
+        names.resolution_scopes = RefCell::new(Vec::new());
+        names
+    }
+
     pub(crate) fn module(&self) -> &str {
         &self.scope.module
     }

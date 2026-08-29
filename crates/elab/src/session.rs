@@ -17,6 +17,7 @@ use crate::{Elaborator, MetaPrograms, Names, R, Representations, Traits, Types};
 /// deliberately do not live here. Their owners already delimit their
 /// lifetimes; conflating them with committed program state would make a
 /// speculative rollback silently undo caller policy or diagnostic history.
+#[derive(Clone)]
 struct SessionCheckpoint {
     psi: GlobalCtx,
     delta_psi: GlobalCtx,
@@ -26,6 +27,33 @@ struct SessionCheckpoint {
     representations: Representations,
     meta_programs: MetaPrograms,
     provenance: Provenance,
+}
+
+/// An in-memory image of every semantic fact committed by an elaborator.
+///
+/// This is deliberately not a serialization format and not a kernel verdict:
+/// it can only be obtained from an elaborator which already checked the
+/// captured prefix in this process. Forking it creates fresh attempt,
+/// diagnostic, report, policy, metric, memo, and gate state around the same
+/// committed facts. Persistent, untrusted module images are a later stage of
+/// `docs/semantic-module-images-design.md` and must recheck their decoded
+/// kernel bindings before installing metadata.
+#[derive(Clone)]
+pub struct SemanticImage {
+    committed: SessionCheckpoint,
+}
+
+impl SemanticImage {
+    /// Start an isolated default-configured suffix over this committed image.
+    ///
+    /// The caller installs any lint profile, metrics collector, or kernel gate
+    /// explicitly. In particular, a cache oracle is never inherited through
+    /// an image as an accidental trust decision.
+    pub fn elaborator(&self) -> Elaborator {
+        let mut elab = Elaborator::new();
+        self.committed.clone().restore(&mut elab);
+        elab
+    }
 }
 
 impl SessionCheckpoint {
@@ -40,6 +68,12 @@ impl SessionCheckpoint {
             meta_programs: elab.meta_programs.clone(),
             provenance: elab.provenance.clone(),
         }
+    }
+
+    fn capture_semantic(elab: &Elaborator) -> Self {
+        let mut committed = Self::capture(elab);
+        committed.names = elab.names.semantic_snapshot();
+        committed
     }
 
     fn restore(self, elab: &mut Elaborator) {
@@ -60,6 +94,16 @@ impl SessionCheckpoint {
 }
 
 impl Elaborator {
+    /// Capture all committed semantic state and none of this session's
+    /// transient checking state.
+    ///
+    /// The image is process-local. It is the ownership and isolation boundary
+    /// from which persistent per-module images will be derived; it does not
+    /// skip or stand in for a kernel judgment on disk-loaded data.
+    pub fn semantic_image(&self) -> SemanticImage {
+        SemanticImage { committed: SessionCheckpoint::capture_semantic(self) }
+    }
+
     /// Run an operation atomically with respect to all committed session
     /// state. The original error is returned after restoring the checkpoint.
     pub(crate) fn session_transaction<T>(

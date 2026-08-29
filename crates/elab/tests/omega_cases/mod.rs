@@ -7,8 +7,9 @@
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
+use std::time::Instant;
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage, stats};
 
 use super::support;
 
@@ -25,15 +26,19 @@ const OMEGA: &str = include_str!("../../../../lib/std/omega.hthr");
 static PREFIX_LOAD: Mutex<()> = Mutex::new(());
 
 thread_local! {
-    static BASE: OnceCell<Elaborator> = const { OnceCell::new() };
+    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
 }
 
-fn load_elaborator() -> Elaborator {
+fn load_image() -> SemanticImage {
     // Two libtest workers otherwise miss the cold declaration cache together
     // and each spends the process's CPU rail checking the same arithmetic
     // prefix. The first worker fills it; the second waits and replays it.
     let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut elab = Elaborator::with_prelude().expect("prelude");
+    let report_phases = std::env::var_os("HEATHER_OMEGA_PREFIX_PHASES").is_some();
+    if report_phases {
+        elab.enable_item_timings();
+    }
     support::with_decl_cache(&mut elab, |elab| {
         for (name, source) in [
             ("logic", LOGIC),
@@ -46,19 +51,49 @@ fn load_elaborator() -> Elaborator {
             ("int", INT),
             ("omega", OMEGA),
         ] {
+            if report_phases {
+                stats::reset_kernel_ns();
+            }
+            let started = Instant::now();
             elab.elab_module_source(name, source)
                 .unwrap_or_else(|error| panic!("{name} did not check: {error}"));
+            if report_phases {
+                let total_ns = started.elapsed().as_nanos() as u64;
+                let kernel_ns = stats::kernel_ns();
+                eprintln!(
+                    "omega prefix {name}: total={:.3}s kernel={:.3}s frontend={:.3}s",
+                    total_ns as f64 / 1e9,
+                    kernel_ns as f64 / 1e9,
+                    total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
+                );
+            }
         }
     });
+    if report_phases {
+        let mut timings = elab.take_item_timings();
+        timings.sort_by(|left, right| right.total_ns.cmp(&left.total_ns));
+        eprintln!("omega prefix slowest surface items:");
+        for timing in timings.iter().take(20) {
+            eprintln!(
+                "  {}::{} total={:.3}s kernel={:.3}s frontend={:.3}s",
+                timing.module,
+                timing.item,
+                timing.total_ns as f64 / 1e9,
+                timing.kernel_ns as f64 / 1e9,
+                timing.total_ns.saturating_sub(timing.kernel_ns) as f64 / 1e9,
+            );
+        }
+    }
     elab.take_omega_reports();
-    elab
+    elab.semantic_image()
 }
 
 fn elaborator() -> Elaborator {
-    // `Elaborator::clone` is the test fixture's isolated transactional
-    // snapshot. `omega_div_mod.rs` deliberately remains ungated so the full
-    // suite still checks this exact library prefix front to back once.
-    BASE.with(|base| base.get_or_init(load_elaborator).clone())
+    // The semantic image is the explicit committed-state boundary: reports,
+    // attempts, policy and the cache gate do not cross it. `omega_div_mod.rs`
+    // deliberately remains ungated so the full suite still checks this exact
+    // library prefix front to back once.
+    BASE.with(|base| base.get_or_init(load_image).elaborator())
 }
 
 fn message(error: ElabError) -> String {

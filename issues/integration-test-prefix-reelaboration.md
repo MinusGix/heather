@@ -43,6 +43,9 @@ on a cached verdict.
 - **[[parallel-checking-and-caching]]** owns declaration-verdict cache trust.
 - **[[warm-path-rewalks-unchanged-declarations]]** owns the analogous CLI
   warm-path walk. This issue owns test fixture state, not that CLI design.
+- **[[semantic-module-images]]** owns persistent semantic reconstruction
+  across process boundaries. This issue owns the test-harness forcing cases
+  and their rail, not the general artifact format.
 
 ## Log
 

@@ -59,6 +59,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
@@ -116,8 +117,23 @@ mod recursion;
 mod representations;
 pub mod resolve;
 mod session;
+pub use session::SemanticImage;
 mod slots;
 mod statements;
+
+/// Opt-in attribution for one surface item, including generated declarations
+/// and elaborator-side conversion performed while processing that item.
+///
+/// `kernel_ns` is the final declaration-gate subset. The remainder is parser-
+/// independent frontend work because `elab_module_source` parses the complete
+/// file before item timing begins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemTiming {
+    pub module: String,
+    pub item: String,
+    pub total_ns: u64,
+    pub kernel_ns: u64,
+}
 mod surface;
 mod traits;
 mod types;
@@ -523,6 +539,10 @@ pub struct Elaborator {
     /// share it so speculative and generated checking contribute to the same
     /// requested measurement; ordinary elaborators leave it absent.
     value_metrics: Option<Rc<ValueMetrics>>,
+    /// Optional item-level frontend attribution. Clones share an explicitly
+    /// enabled collector, matching `value_metrics`; ordinary elaborators pay
+    /// only the `Option` branch at item boundaries.
+    item_timings: Option<Rc<RefCell<Vec<ItemTiming>>>>,
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
@@ -1122,6 +1142,21 @@ impl application::ImplicitApplicationElab for Elaborator {
     }
 }
 
+fn item_timing_name(item: &Item) -> String {
+    match item {
+        Item::Decl(decl) => decl.name.clone(),
+        Item::Inductive(ind) => ind.name.clone(),
+        Item::Class(class) => format!("class {}", class.name),
+        Item::Instance(instance) => format!("instance {}", instance.class.name),
+        Item::Designation(designation) => format!("designation {}", designation.symbol),
+        Item::Datarepr(repr) => format!("datarepr {}", repr.name),
+        Item::Impl(implementation) => {
+            format!("impl {} for {}", implementation.op, implementation.repr)
+        }
+        Item::Import(import) => format!("import {}", import.module),
+    }
+}
+
 impl Default for Elaborator {
     fn default() -> Self {
         Self::new()
@@ -1149,6 +1184,7 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
+            item_timings: None,
             omega_reports: RefCell::new(Vec::new()),
             omega_failure_reports: RefCell::new(Vec::new()),
             meta_programs: MetaPrograms::default(),
@@ -1194,6 +1230,18 @@ impl Elaborator {
         self.value_metrics
             .as_ref()
             .map(|metrics| metrics.snapshot())
+    }
+
+    /// Begin collecting per-surface-item frontend and final-gate time.
+    pub fn enable_item_timings(&mut self) {
+        self.item_timings = Some(Rc::new(RefCell::new(Vec::new())));
+    }
+
+    /// Drain item timings without disabling the collector.
+    pub fn take_item_timings(&self) -> Vec<ItemTiming> {
+        self.item_timings
+            .as_ref()
+            .map_or_else(Vec::new, |timings| timings.borrow_mut().drain(..).collect())
     }
 
     pub(crate) fn record_omega_failure_report(&self, report: OmegaReport) {
@@ -1291,6 +1339,9 @@ impl Elaborator {
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
         for item in &file.items {
+            let timing = self.item_timings.as_ref().map(|_| {
+                (Instant::now(), stats::kernel_ns())
+            });
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
             let r = match item {
@@ -1314,6 +1365,19 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 self.run_source_lints(item, &lint_source);
+            }
+            if let Some((started, kernel_before)) = timing {
+                let kernel_ns = stats::kernel_ns().saturating_sub(kernel_before);
+                self.item_timings
+                    .as_ref()
+                    .expect("item timing remains enabled during one item")
+                    .borrow_mut()
+                    .push(ItemTiming {
+                        module: module.to_string(),
+                        item: item_timing_name(item),
+                        total_ns: started.elapsed().as_nanos() as u64,
+                        kernel_ns,
+                    });
             }
             r?;
         }
