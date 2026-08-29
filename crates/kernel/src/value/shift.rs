@@ -533,6 +533,10 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
         Val::TmFin { len } => Val::TmFin { len: tm_clo(len, o) },
         Val::Zero => Val::Zero,
         Val::Succ(p) => Val::Succ(tm_clo(p, o)),
+        Val::NatRun { program, tail } => Val::NatRun {
+            program: Rc::clone(program),
+            tail: tm_clo(tail, o),
+        },
         Val::Refl { level: l, ty, tm } => Val::Refl {
             level: level(l, o),
             ty: ty_clo(ty, o),

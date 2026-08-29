@@ -53,3 +53,14 @@ requires.
   to 43.13 s / 22.49 s kernel. A confirmation measured 43.44 s / 22.42 s and
   110.18 s for the noisier complete suite. Kernel (299), BitVec (7), IR fuel,
   and fold/tabulate/map/nth controls remain green.
+- 2026-08-28: Rejected the next broader identity predicate. After first
+  requiring pointwise-identical captured values, accepting structurally equal
+  (rather than pointer-identical) annotation bodies raised x86 fast hits from
+  25.0% to 61.3% and avoided another 17,633 recursive comparisons. The body
+  equality walks consumed the gain: against the committed confirmation at
+  43.44 s module / 22.42 s kernel / 110.18 s suite, the candidate measured
+  43.66 s / 23.37 s / 106.29 s. The noisy suite tail improved, but the isolated
+  module was flat and kernel time regressed about 4%, so the experiment was
+  reverted completely. Do not broaden scoped identity with an uncached
+  structural body walk; the residual needs representation sharing,
+  fingerprints, or the separately designed common-type route.

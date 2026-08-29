@@ -50,7 +50,10 @@ use crate::fmt::node;
 use crate::level::Level;
 use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
 
+pub mod program;
 pub mod shift;
+
+use program::ContextProgram;
 
 // ---------------------------------------------------------------------------
 // Environments
@@ -947,6 +950,13 @@ pub enum Val<'v> {
     // -- data --
     Zero,
     Succ(&'v TmClo<'v>),
+    /// A saturated/shared program of `Succ` contexts over `tail`. It has the
+    /// same one-step view as an ordinary `Succ`; the program is an evaluator
+    /// representation and is not a new source constructor.
+    NatRun {
+        program: Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+    },
     Refl {
         level: Level,
         ty: &'v TyClo<'v>,
@@ -1030,6 +1040,19 @@ pub enum Val<'v> {
 }
 
 impl<'v> Val<'v> {
+    /// The virtual predecessor of a compressed successor program.
+    pub fn nat_run_pred(
+        arena: &'v ValueArena<'v>,
+        program: &Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+    ) -> &'v TmClo<'v> {
+        let (_, rest) = ContextProgram::uncons(program);
+        match rest {
+            None => tail,
+            Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+        }
+    }
+
     /// The neutral variable at concrete level `lvl`.
     pub fn var(lvl: u32) -> Val<'v> {
         Val::Neutral(Rc::new(VNeutral {
@@ -1377,6 +1400,10 @@ impl fmt::Debug for Val<'_> {
             Val::TmFin { len } => write!(f, "`Fin({len:?})"),
             Val::Zero => f.write_str("ze"),
             Val::Succ(t) => write!(f, "su {t:?}"),
+            Val::NatRun { program, tail } => match &**program {
+                ContextProgram::Run { count, .. } => write!(f, "su^{} {tail:?}", count),
+                ContextProgram::Compose { .. } => write!(f, "su^<shared> {tail:?}"),
+            },
             Val::Refl { tm, .. } => write!(f, "refl({tm:?})"),
             Val::SRefl { tm, .. } => write!(f, "srefl({tm:?})"),
             Val::Squash { tm, .. } => write!(f, "squash({tm:?})"),

@@ -140,3 +140,10 @@ Acceptance has two parts:
   consumers, still pass under ordinary fuel; the tradeoff is time rather than
   a return of the old fuel cliff. Further work should make stored annotation
   comparison/instantiation cheaper without discarding its dependent spelling.
+- 2026-08-28: A generic succinct-value experiment is now owned by
+  [[succinct-inductive-values]]. Saturated `u64` constructor runs and shared
+  composition can represent values beyond one run without expanding their
+  logical spine. This does not yet close the arithmetic acceptance here:
+  experiments that produced runs automatically either regressed x86 or did
+  not help the forcing customer, while `Le` consumes both logical spines and
+  the machine-width `carry_add` proposition still reaches `OutOfFuel`.

@@ -474,6 +474,10 @@ impl<'a, 'v> Agree<'a, 'v> {
             // -- data --
             (Val::Zero, Term::Zero) => ok(),
             (Val::Succ(a), Term::Succ(b)) => self.lazy_tm(a, b, gamma, d),
+            (Val::NatRun { program, tail }, Term::Succ(b)) => {
+                let pred = Val::nat_run_pred(self.arena, program, tail);
+                self.lazy_tm(pred, b, gamma, d)
+            }
             (Val::Refl { level: a, ty, tm }, Term::Refl { level: b, ty: t2, tm: m2 })
             | (Val::SRefl { level: a, ty, tm }, Term::SRefl { level: b, ty: t2, tm: m2 }) => {
                 self.lev(a, b, "refl level")?;

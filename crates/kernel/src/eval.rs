@@ -678,6 +678,17 @@ impl<'a, 'v> Eval<'a, 'v> {
                     snd: self.arena.ty(tail),
                 }
             }
+            Val::NatRun { program, tail } => {
+                self.spend()?;
+                let pred = Val::nat_run_pred(self.arena, program, tail);
+                let tail = TyClo::vec(level.clone(), elem, pred);
+                VTy::Sigma {
+                    fst_level: level.clone(),
+                    snd_level: level.clone(),
+                    fst: elem,
+                    snd: self.arena.ty(tail),
+                }
+            }
             _ => VTy::Vec {
                 level: level.clone(),
                 elem,
@@ -698,6 +709,23 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
+                let rhs_env = Env::empty(self.arena).push(pred);
+                VTy::Sum {
+                    lhs_level: Level::Zero,
+                    rhs_level: Level::Zero,
+                    lhs: self.arena.ty(TyClo::new(
+                        Env::empty(self.arena),
+                        Rc::new(Type::Unit { level: Level::Zero }),
+                    )),
+                    rhs: self.arena.ty(TyClo::new(
+                        rhs_env,
+                        Rc::new(Type::Fin { len: Rc::new(Term::Var(LocalVar(0))) }),
+                    )),
+                }
+            }
+            Val::NatRun { program, tail } => {
+                self.spend()?;
+                let pred = Val::nat_run_pred(self.arena, program, tail);
                 let rhs_env = Env::empty(self.arena).push(pred);
                 VTy::Sum {
                     lhs_level: Level::Zero,
@@ -1236,6 +1264,26 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
                 Ok(Work::Apply(step, vec![pred, ih]))
             }
+            (Val::NatRun { program, tail }, Elim::ElimNat { step, .. }) => {
+                self.spend()?;
+                if matches!(
+                    step.as_syn(),
+                    Some((_, body)) if matches!(
+                        &**body,
+                        Term::Succ(ih)
+                            if matches!(&**ih, Term::Var(crate::term::LocalVar(0)))
+                    )
+                ) {
+                    let mapped_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
+                    return Ok(Work::Val(Rc::new(Val::NatRun {
+                        program: Rc::clone(program),
+                        tail: mapped_tail,
+                    })));
+                }
+                let pred = Val::nat_run_pred(self.arena, program, tail);
+                let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
+                Ok(Work::Apply(*step, vec![pred, ih]))
+            }
             (Val::Refl { .. }, Elim::J { case, .. }) => {
                 self.spend()?;
                 let case = *case;
@@ -1593,4 +1641,83 @@ pub fn whnf_value_ty<'v>(
     let env = Env::identity(arena, gamma.entries.len() as u32);
     let v = ev.eval_ty(t, &env)?;
     ev.delta_whnf_ty(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Elim, Eval};
+    use crate::level::Level;
+    use crate::reduce::{Defs, OutOfFuel};
+    use crate::term::{CtxBase, LocalVar, Term, Type};
+    use crate::value::program::ContextProgram;
+    use crate::value::{Env, TmClo, TyClo, Val, ValueArena};
+    use std::num::NonZeroU64;
+    use std::rc::Rc;
+
+    fn two_to_64() -> Rc<ContextProgram<()>> {
+        let full = ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap());
+        ContextProgram::prepend((), NonZeroU64::new(1).unwrap(), full)
+    }
+
+    fn shared_two_to_64() -> Rc<ContextProgram<()>> {
+        let mut program = ContextProgram::run((), NonZeroU64::new(1).unwrap());
+        for _ in 0..64 {
+            program = ContextProgram::compose(Rc::clone(&program), program);
+        }
+        program
+    }
+
+    fn nat_elim<'v>(
+        arena: &'v ValueArena<'v>,
+        env: Env<'v>,
+        step_body: Term,
+    ) -> Elim<'v> {
+        Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::val(Rc::new(Val::Zero))),
+            step: arena.tm(TmClo::syn(env, Rc::new(step_body))),
+        }
+    }
+
+    #[test]
+    fn saturated_runs_present_two_to_64_as_one_successor_step() {
+        let arena = ValueArena::new();
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let program = two_to_64();
+        let pred = Val::nat_run_pred(&arena, &program, tail);
+        assert!(matches!(pred, TmClo::Val(v) if matches!(&**v, Val::NatRun { .. })));
+    }
+
+    #[test]
+    fn successor_algebra_maps_a_shared_run_without_visiting_its_nodes() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let program = shared_two_to_64();
+        let head = Rc::new(Val::NatRun { program: Rc::clone(&program), tail });
+        let elim = nat_elim(
+            &arena,
+            env,
+            Term::Succ(Rc::new(Term::Var(LocalVar(0)))),
+        );
+        let mut ev = Eval::new(2, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(head, elim).unwrap();
+        assert!(matches!(&*result,
+            Val::NatRun { program: mapped, .. } if Rc::ptr_eq(mapped, &program)));
+    }
+
+    #[test]
+    fn an_arbitrary_fold_over_a_shared_run_still_obeys_fuel() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let head = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
+        // Return the induction hypothesis: observing the result genuinely
+        // asks to traverse the logical spine, so compression must not claim
+        // a constant-time answer.
+        let elim = nat_elim(&arena, env, Term::Var(LocalVar(0)));
+        let mut ev = Eval::new(32, Defs::opaque(), CtxBase::Nil, &arena);
+        assert_eq!(ev.elim(head, elim).unwrap_err(), OutOfFuel);
+    }
 }

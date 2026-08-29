@@ -102,6 +102,7 @@ fn var_at<'v>(env: &Env<'v>, level: u32) -> &'v TmClo<'v> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroU64;
 
     #[test]
     fn type_identity_fast_path_is_scope_sensitive() {
@@ -185,6 +186,34 @@ mod tests {
             Conv::<Values>::new(1, &psi).tm(&env, &a, &other_home, &ty, &Level::Zero),
             Err(crate::conv::ConvError::OutOfFuel)
         );
+    }
+
+    #[test]
+    fn one_shared_nat_program_is_reflexive_without_expansion() {
+        let arena = value::ValueArena::new();
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let leaf = value::program::ContextProgram::run(
+            (),
+            NonZeroU64::new(u64::MAX).unwrap(),
+        );
+        let program = value::program::ContextProgram::compose(
+            Rc::clone(&leaf),
+            Rc::clone(&leaf),
+        );
+        let left = TmC {
+            clo: arena.tm(TmClo::val(Rc::new(Val::NatRun {
+                program: Rc::clone(&program),
+                tail,
+            }))),
+            home: 0,
+            sat: 0,
+        };
+        let right = TmC {
+            clo: arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            home: 0,
+            sat: 0,
+        };
+        assert!(Values::tm_eq_fast(&left, &right));
     }
 }
 
@@ -600,6 +629,10 @@ impl<'v> Dom<'v> for Values {
 
             Val::Zero => TmView::Zero,
             Val::Succ(t) => TmView::Succ(TmC::here(env, *t)),
+            Val::NatRun { program, tail } => TmView::Succ(TmC::here(
+                env,
+                Val::nat_run_pred(env.rho.arena(), program, tail),
+            )),
             Val::Refl { tm, .. } => TmView::Refl { tm: TmC::here(env, *tm) },
             Val::Inl { val, .. } => TmView::Inl { val: TmC::here(env, *val) },
             Val::Inr { val, .. } => TmView::Inr { val: TmC::here(env, *val) },
@@ -1120,6 +1153,28 @@ impl<'v> Dom<'v> for Values {
     /// strip loop meets.
     fn tm_eq_fast(a: &TmC<'v>, b: &TmC<'v>) -> bool {
         Self::tm_identity_fast(a, b)
+            || a.home == b.home
+                && a.sat == b.sat
+                && matches!(
+                    (a.clo, b.clo),
+                    (
+                        TmClo::Val(left),
+                        TmClo::Val(right),
+                    ) if matches!(
+                        (&**left, &**right),
+                        (
+                            Val::NatRun { program: p1, tail: t1 },
+                            Val::NatRun { program: p2, tail: t2 },
+                        ) if Rc::ptr_eq(p1, p2)
+                            && (std::ptr::eq(*t1, *t2)
+                                || matches!(
+                                    (t1.as_syn(), t2.as_syn()),
+                                    (Some((e1, b1)), Some((e2, b2)))
+                                        if value::Env::ptr_eq(e1, e2)
+                                            && (Rc::ptr_eq(b1, b2) || b1 == b2)
+                                ))
+                    )
+                )
     }
 
     fn app(

@@ -1,6 +1,6 @@
 ---
 title: Extend Omega reflection through division, modulus, and divisibility
-status: closed
+status: open
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-26
@@ -86,3 +86,15 @@ frontend does not expand large unary divisions during reflection.
   an independent resource envelope because checking a deeply unary literal is
   intentionally real work; general large-numeral representation costs remain
   separate from this now-complete frontend expansion.
+- 2026-08-28: Reopened after the plain full suite exposed that both shipped
+  division rails have regressed on an isolated build of current `HEAD`.
+  `omega_div_mod` and `omega_div_mod_scaling` each spend roughly four minutes
+  and then report a surviving real-shadow problem; the general `omega` binary
+  was killed in the same full run. In the small failure, the reflected rows
+  contain `n <= 8`, `3 <= div(n,3)`, and atom nonnegativity, but no certified
+  quotient-defining row relating `n` to `3 * div(n,3)`. Thus the solver's
+  refusal is appropriate for the problem it received: the regression is in
+  recognizing or inserting the division auxiliary facts, not in real-shadow
+  elimination. This predates [[succinct-inductive-values]]: the clean `HEAD`
+  artifact reproduces it without that working tree's value representation.
+  The introducing commit is not yet attributed.
