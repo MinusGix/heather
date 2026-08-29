@@ -76,3 +76,13 @@ on a cached verdict.
   **in-process** half. Cross-binary reuse still consists solely of kernel
   verdict replay and remains open: a serialized elaborator snapshot or
   immutable shared build artifact needs its own trust/versioning design.
+- 2026-08-29: Omega is now a forcing customer inside one integration-test
+  binary, not merely across binaries. `crates/elab/tests/omega.rs` contains 27
+  tests and each constructs the same prelude plus eight-module arithmetic
+  prefix. Under the suite's test-thread cap, the first two workers both spend
+  over 60 seconds rebuilding that prefix and the process is SIGKILLed at
+  roughly 151 seconds wall by the cumulative 300-second CPU rail, before
+  either test reports completion. By contrast, the one-test division binaries
+  finish green at roughly 221--222 seconds each. The prefix must be built once
+  and cheaply cloned, or equivalently shared without crossing `Rc`-based
+  elaborator state between threads; raising the CPU rail is not the fix.

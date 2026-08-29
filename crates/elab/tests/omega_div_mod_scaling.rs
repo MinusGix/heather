@@ -34,6 +34,7 @@ fn elaborator() -> Elaborator {
         elab.elab_module_source(name, source)
             .unwrap_or_else(|error| panic!("{name} did not check: {error}"));
     }
+    elab.take_omega_reports();
     elab
 }
 

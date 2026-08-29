@@ -1,6 +1,6 @@
 ---
 title: Extend Omega reflection through division, modulus, and divisibility
-status: open
+status: closed
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-26
@@ -98,3 +98,24 @@ frontend does not expand large unary divisions during reflection.
   elimination. This predates [[succinct-inductive-values]]: the clean `HEAD`
   artifact reproduces it without that working tree's value representation.
   The introducing commit is not yet attributed.
+- 2026-08-29: Fixed and closed again. The regression was introduced by
+  `77dcc7f`'s CutSat work: `nat_term_source` correctly stopped asking the
+  surface printer to respell kernel numerals and emitted stable
+  `Succ(Succ(...0))` structure, but the shared `integer_source` recognizer
+  still accepted only decimal, `OfNat`, and `NegSucc` spellings. Natural
+  constants therefore became opaque atoms; more importantly, a structural
+  divisor such as `3` was not a literal, so the division atom carried no
+  `DivisionAtom` metadata and the certified quotient rows were never added.
+  `integer_source` now parses the structural Nat grammar with checked `i128`
+  accumulation. A focused unit rail pins valid, spaced, and malformed forms.
+
+  The first end-to-end retry passed every theorem and failed only because the
+  newly successful Omega calls in the loaded library contributed telemetry
+  ahead of the customer reports. All three Omega harnesses now clear prefix
+  reports before running their fixture. `omega_div_mod` and the 16/512
+  scaling target both pass end to end (221.31 s and 222.35 s in one serial
+  harness run), and the 140-test elaborator unit suite is green. The separate
+  27-test `omega.rs` binary still exhausts its cumulative process CPU rail by
+  rebuilding the arithmetic prefix per test; that harness cost is recorded
+  on [[integration-test-prefix-reelaboration]], not hidden by weakening the
+  rail here.

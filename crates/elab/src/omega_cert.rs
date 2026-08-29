@@ -479,6 +479,23 @@ fn integer_source(source: &str) -> Option<Z> {
     if let Ok(value) = compact.parse() {
         return Some(value);
     }
+    // `nat_term_source` deliberately preserves kernel constructors instead
+    // of asking the surface printer to turn a numeral back into decimal.
+    // Keep that stable spelling usable as a literal too: otherwise a
+    // structural divisor becomes an opaque atom and never receives its
+    // certified division bounds.
+    let mut structural = compact.as_str();
+    let mut value = 0i128;
+    while let Some(inner) = structural
+        .strip_prefix("Succ(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        value = value.checked_add(1)?;
+        structural = inner;
+    }
+    if structural == "0" {
+        return Some(value);
+    }
     if let Some(inner) = compact
         .strip_prefix("OfNat(")
         .and_then(|s| s.strip_suffix(')'))
@@ -3712,6 +3729,15 @@ pub(crate) fn reconstruct(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integer_parser_accepts_structural_nat_literals() {
+        assert_eq!(integer_source("0"), Some(0));
+        assert_eq!(integer_source("Succ(Succ(Succ(0)))"), Some(3));
+        assert_eq!(integer_source(" Succ( Succ(0) ) "), Some(2));
+        assert_eq!(integer_source("Succ(x)"), None);
+        assert_eq!(integer_source("Succ(0))"), None);
+    }
 
     #[test]
     fn coefficient_parser_accepts_only_the_generated_list_grammar() {
