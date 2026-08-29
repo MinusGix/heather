@@ -3,7 +3,7 @@ title: Stop rebuilding the same prelude and library state in every integration t
 status: open
 labels: [testing,elaboration,performance,caching]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-29
 ---
 
 Many elaborator integration tests construct `Elaborator::with_prelude()` and
@@ -86,3 +86,25 @@ on a cached verdict.
   finish green at roughly 221--222 seconds each. The prefix must be built once
   and cheaply cloned, or equivalently shared without crossing `Rc`-based
   elaborator state between threads; raising the CPU rail is not the fix.
+- 2026-08-29: The Omega fixture now builds that prefix once in a thread-local
+  `OnceCell` and gives every case an isolated `Elaborator::clone`. A mutex
+  serializes the first cache fill, although the final one-test-per-binary
+  layout no longer needs concurrent workers. Neither the declaration cache
+  nor the snapshot alone was sufficient: all 573 declarations hitting the
+  cache still left the original 27-case process above the rail (SIGKILL at
+  about 304 seconds), because restoring the checked declarations and running
+  the cases remain real work. The 27 cases are therefore retained as three
+  named nine-case suites in separate integration-test binaries. Warm target
+  times are 220.84 seconds (core), 190.98 seconds (logic), and 173.29 seconds
+  (reconstruction), each with 573 cache hits. The reconstruction suite also
+  passed from an empty store in 172.98 seconds while kernel-checking 570
+  declarations and accepting three intra-run hits. This restores ample
+  per-process rail margin without weakening the independent ungated
+  `omega_div_mod` front-to-back backstop. The compromise is reporting
+  granularity: libtest now counts three suites rather than 27 cases, while a
+  failing case still names its helper in the panic/backtrace. Generic cheap
+  cross-binary prefix restoration remains open and would remove the need for
+  this pragmatic sharding. The ordinary four-way full rail subsequently
+  passed all 149 binaries (2,167 tests) in 621 seconds wall time: core,
+  logic, and reconstruction took 241.88, 196.85, and 183.67 seconds under
+  contention, all below the 300-second per-process limit.
