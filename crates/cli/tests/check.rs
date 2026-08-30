@@ -199,19 +199,26 @@ fn a_corrupt_semantic_module_is_reported_and_rebuilt() {
 }
 
 #[test]
-fn warning_producing_modules_are_rebuilt_until_images_carry_diagnostics() {
+fn warning_producing_modules_replay_the_same_diagnostics() {
     let dir = cache_dir("module-warning");
     let arg = dir.display().to_string();
-    for _ in 0..2 {
+    let mut cold_diagnostics = None;
+    for run in 0..2 {
         let out = heather(&["check", "--cache-dir", &arg, "warning.hthr"]);
         assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stderr).contains("warning:"));
-        assert!(
-            String::from_utf8_lossy(&out.stdout)
-                .contains("0 semantic modules replayed and kernel-checked")
-        );
+        if let Some(cold) = &cold_diagnostics {
+            assert_eq!(&out.stderr, cold, "cached diagnostics must be byte-identical");
+        } else {
+            cold_diagnostics = Some(out.stderr.clone());
+        }
+        let expected = if run == 0 { 0 } else { 1 };
+        assert!(String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "{expected} semantic module{} replayed and kernel-checked",
+            if expected == 1 { "" } else { "s" }
+        )));
     }
-    assert!(!dir.join("modules-v1").exists());
+    assert!(dir.join("modules-v1").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -46,9 +46,9 @@ fn published_image_round_trips_and_replays_against_the_supplied_prefix() {
     let delta = source
         .elab_module_delta("sample", src, dependencies.clone())
         .unwrap();
-    let written_interface = cache.publish(key, &delta).unwrap();
+    let written_interface = cache.publish(key, &delta, &[]).unwrap();
     let loaded = cache
-        .load(key, prefix)
+        .load(key, prefix, src.len())
         .unwrap()
         .expect("published image exists");
     assert_eq!(loaded.interface_hash, written_interface);
@@ -76,7 +76,7 @@ fn corruption_is_rejected_before_semantic_replay() {
     let delta = source
         .elab_module_delta("sample", src, dependencies)
         .unwrap();
-    cache.publish(key, &delta).unwrap();
+    cache.publish(key, &delta, &[]).unwrap();
 
     let path = cache.path(key);
     let mut bytes = std::fs::read(&path).unwrap();
@@ -84,7 +84,43 @@ fn corruption_is_rejected_before_semantic_replay() {
     bytes[last] ^= 1;
     std::fs::write(path, bytes).unwrap();
     assert!(matches!(
-        cache.load(key, prefix),
+        cache.load(key, prefix, src.len()),
+        Err(ModuleCacheError::Corrupt(_))
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn warnings_round_trip_with_lint_fixes_and_source_bounded_spans() {
+    let dir = temp("warnings");
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = ModuleImageCache::new(dir.clone());
+    let dependencies = ModuleDependencyIdentity::default();
+    let src = "fn identity(x: Nat) -> Nat { x }";
+    let key = ModuleCacheKey::for_source("sample", src, &dependencies, LintProfile::Stdlib);
+    let mut source = Elaborator::with_prelude().unwrap();
+    source.set_lint_profile(LintProfile::Stdlib);
+    let prefix = source.psi().clone();
+    let delta = source
+        .check_module_delta("sample", src, dependencies)
+        .expect("warning does not fail the module");
+    let warnings = source.take_warnings();
+    assert!(!warnings.is_empty());
+    assert!(warnings[0].fix.is_some());
+    cache.publish(key, &delta, &warnings).unwrap();
+
+    let loaded = cache.load(key, prefix.clone(), src.len()).unwrap().unwrap();
+    assert_eq!(loaded.warnings.len(), warnings.len());
+    assert_eq!(loaded.warnings[0].lint, warnings[0].lint);
+    assert_eq!(loaded.warnings[0].msg, warnings[0].msg);
+    assert_eq!(loaded.warnings[0].span, warnings[0].span);
+    assert_eq!(
+        loaded.warnings[0].fix.as_ref().map(|fix| (&fix.replacement, fix.span)),
+        warnings[0].fix.as_ref().map(|fix| (&fix.replacement, fix.span))
+    );
+
+    assert!(matches!(
+        cache.load(key, prefix, 0),
         Err(ModuleCacheError::Corrupt(_))
     ));
     let _ = std::fs::remove_dir_all(dir);

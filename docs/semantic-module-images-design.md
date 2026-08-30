@@ -368,14 +368,13 @@ Stage 4 rather than being smuggled into this representation.
   positions. The CLI performs bounded load, inert decode, kernel-checked
   replay, ordinary diagnostic-preserving rebuild on a miss or rejection, and
   unique-temporary-sibling plus atomic-rename publication. Corrupt artifacts
-  are reported and rebuilt rather than trusted or made fatal.
+  are reported and rebuilt rather than trusted or made fatal. The envelope
+  also carries source-bounded warning spans and structured fixes, so replayed
+  diagnostics are byte-identical to cold diagnostics.
 - Project the module's true downstream interface identity. The baseline
   conservatively hashes the complete semantic artifact, so proof-only source
   edits invalidate consumers even though this is unnecessary. This loses
   reuse, not soundness.
-- Carry deterministic warnings in the envelope. Until then, a module which
-  emits a warning is deliberately not published: a warm run must not silently
-  erase a diagnostic.
 - Keep generated/mutated suffixes outside the imported image boundary.
 
 Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:

@@ -331,10 +331,21 @@ disk artifact is acceleration data, not a proof verdict.
   temporary siblings and atomic rename; corrupt-artifact and round-trip tests
   cover the storage boundary.
 
-  Two deliberate performance limitations remain. V1's resulting module
+  One deliberate performance limitation remains. V1's resulting module
   identity is conservatively the hash of the complete semantic artifact,
   rather than a projection of only facts observable by dependents, so an
-  opaque proof edit invalidates downstream images. And warnings are not yet
-  encoded: warning-producing modules are therefore never published, keeping
-  cache hits observationally honest at the cost of reuse. Both are explicit
-  follow-up slices, not trust holes.
+  opaque proof edit invalidates downstream images. This is an explicit
+  follow-up slice, not a trust hole.
+- 2026-08-30: warning-producing modules are now persistent too. The outer
+  envelope records stable lint identity, message, primary span and optional
+  structured fix; decoding bounds counts and strings, validates UTF-8, and
+  rejects spans outside the exact selected source. A CLI cold/warm test pins
+  byte-identical warning diagnostics.
+
+  This matters on the intended workload rather than merely closing a corner:
+  the x86-64 import closure currently emits 62 warnings across `nat`,
+  `bitvec`, `relation`, `certified_lookup` and the model itself. Before warning
+  persistence, a warm module-image run still took 29.77 seconds because those
+  expensive modules had to re-elaborate. With the warning envelope all 13
+  modules replay and the same diagnostics print in 5.90 seconds. The format
+  change rejects and ordinarily rebuilds baseline Stage 4b artifacts.

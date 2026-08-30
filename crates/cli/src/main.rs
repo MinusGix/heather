@@ -238,6 +238,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         for m in &modules {
             let mut replayed = false;
             let mut checked_delta = None;
+            let mut cached_warnings = None;
             let mut cache_key = None;
             let errs = if images_usable {
                 // V1 images contain absolute Ψ positions. Consequently their
@@ -248,11 +249,12 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 let key = ModuleCacheKey::for_source(&m.name, &m.src, &dependencies, lint_profile);
                 cache_key = Some(key);
                 let images = module_cache.as_ref().expect("usable image cache exists");
-                match images.load(key, elab.psi().clone()) {
+                match images.load(key, elab.psi().clone(), m.src.len()) {
                     Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
                         Ok(()) => {
                             module_interfaces.push(loaded.interface_hash);
                             module_hits += 1;
+                            cached_warnings = Some(loaded.warnings);
                             replayed = true;
                         }
                         Err(e) => eprintln!(
@@ -296,20 +298,18 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             // (docs/diagnostic-warnings-design.md §3). They do not fail the
             // run and they do not touch the `ok` line — a warned file is a
             // checked file (§4).
-            let warns = elab.take_warnings();
+            let warns = cached_warnings.unwrap_or_else(|| elab.take_warnings());
             if !replayed
                 && errs.is_empty()
-                && warns.is_empty()
                 && images_usable
                 && let Some(key) = cache_key
                 && let Some(images) = &module_cache
                 && let Some(delta) = &checked_delta
             {
-                // Warning-producing modules are deliberately not persisted
-                // until the envelope carries diagnostics: a cache hit must
-                // never make a warning disappear. Publication failure is
-                // non-fatal because this run's checked answer still stands.
-                if let Err(e) = images.publish(key, delta) {
+                // Diagnostics are part of the envelope, so a cache hit is
+                // observationally identical to the source path. Publication
+                // failure is non-fatal because this run's answer still stands.
+                if let Err(e) = images.publish(key, delta, &warns) {
                     eprintln!("cache: could not store module `{}` ({e})", m.name);
                 }
             }

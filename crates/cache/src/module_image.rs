@@ -10,17 +10,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use heather_elab::{
-    LintProfile, ModuleDelta, ModuleDependencyIdentity, ModuleImageDecodeError, ModuleImageLimits,
+    Lint, LintFix, LintProfile, ModuleDelta, ModuleDependencyIdentity, ModuleImageDecodeError,
+    ModuleImageLimits, Span, Warning,
 };
 use heather_kernel::term::GlobalCtx;
 
 use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
-const MAGIC: &[u8; 8] = b"HTHCACH\x01";
+const MAGIC: &[u8; 8] = b"HTHCACH\x02";
 const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/1\0";
 const DOMAIN_INTERFACE: &[u8] = b"heather/module-artifact-interface/1\0";
-const HEADER: usize = 8 + 32 + 32 + 8;
+const HEADER: usize = 8 + 32 + 32 + 8 + 8;
 const CHECKSUM: usize = 32;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -63,6 +64,7 @@ fn put_bytes(h: &mut Sha256, bytes: &[u8]) {
 
 pub struct LoadedModule {
     pub delta: ModuleDelta,
+    pub warnings: Vec<Warning>,
     /// V1 conservatively identifies the complete semantic artifact. A later
     /// interface projection can stop proof-only edits invalidating consumers
     /// without changing the loader/storage boundary.
@@ -128,6 +130,7 @@ impl ModuleImageCache {
         &self,
         key: ModuleCacheKey,
         dependency_psi: GlobalCtx,
+        source_len: usize,
     ) -> Result<Option<LoadedModule>, ModuleCacheError> {
         let path = self.path(key);
         let file = match std::fs::File::open(&path) {
@@ -161,24 +164,29 @@ impl ModuleImageCache {
         let semantic_len = u64::from_le_bytes(bytes[72..80].try_into().unwrap());
         let semantic_len = usize::try_from(semantic_len)
             .map_err(|_| ModuleCacheError::Corrupt("module cache artifact length overflows"))?;
-        let expected = HEADER
+        let warning_count = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+        let warning_count = usize::try_from(warning_count)
+            .map_err(|_| ModuleCacheError::Corrupt("module warning count overflows"))?;
+        if warning_count > self.limits.max_sequence {
+            return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
+        }
+        let semantic_end = HEADER
             .checked_add(semantic_len)
-            .and_then(|n| n.checked_add(CHECKSUM))
             .ok_or(ModuleCacheError::Corrupt(
                 "module cache artifact length overflows",
             ))?;
-        if expected != bytes.len() {
+        let checksum_at = bytes.len() - CHECKSUM;
+        if semantic_end > checksum_at {
             return Err(ModuleCacheError::Corrupt(
                 "module cache artifact length does not match",
             ));
         }
-        let checksum_at = HEADER + semantic_len;
         if sha256(&bytes[..checksum_at]) != bytes[checksum_at..] {
             return Err(ModuleCacheError::Corrupt(
                 "module cache artifact checksum does not match",
             ));
         }
-        let semantic = &bytes[HEADER..checksum_at];
+        let semantic = &bytes[HEADER..semantic_end];
         if artifact_interface(semantic) != interface_hash {
             return Err(ModuleCacheError::Corrupt(
                 "module cache interface identity does not match",
@@ -186,8 +194,15 @@ impl ModuleImageCache {
         }
         let delta = ModuleDelta::from_image_bytes(semantic, dependency_psi, self.limits)
             .map_err(ModuleCacheError::Decode)?;
+        let warnings = decode_warnings(
+            &bytes[semantic_end..checksum_at],
+            warning_count,
+            source_len,
+            self.limits,
+        )?;
         Ok(Some(LoadedModule {
             delta,
+            warnings,
             interface_hash,
         }))
     }
@@ -199,6 +214,7 @@ impl ModuleImageCache {
         &self,
         key: ModuleCacheKey,
         delta: &ModuleDelta,
+        warnings: &[Warning],
     ) -> Result<[u8; 32], ModuleCacheError> {
         let semantic = delta.to_image_bytes();
         if semantic.len() > self.limits.max_bytes {
@@ -207,12 +223,20 @@ impl ModuleImageCache {
             ));
         }
         let interface_hash = artifact_interface(&semantic);
+        if warnings.len() > self.limits.max_sequence {
+            return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
+        }
         let mut bytes = Vec::with_capacity(HEADER + semantic.len() + CHECKSUM);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&key.0);
         bytes.extend_from_slice(&interface_hash);
         bytes.extend_from_slice(&(semantic.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&(warnings.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&semantic);
+        encode_warnings(&mut bytes, warnings, self.limits)?;
+        if bytes.len() > HEADER.saturating_add(self.limits.max_bytes) {
+            return Err(ModuleCacheError::Corrupt("module cache artifact exceeds the byte limit"));
+        }
         let checksum = sha256(&bytes);
         bytes.extend_from_slice(&checksum);
 
@@ -226,6 +250,139 @@ impl ModuleImageCache {
             return Err(error.into());
         }
         Ok(interface_hash)
+    }
+}
+
+fn encode_warnings(
+    out: &mut Vec<u8>,
+    warnings: &[Warning],
+    limits: ModuleImageLimits,
+) -> Result<(), ModuleCacheError> {
+    for warning in warnings {
+        out.push(match warning.lint {
+            Lint::UnreachableMatchArm => 0,
+            Lint::MatchFunctionApplication => 1,
+            Lint::TightNegationSpacing => 2,
+            Lint::StdlibUnicodeSpelling => 3,
+            Lint::NestedCall => 4,
+            Lint::UnusedPatternBinder => 5,
+            Lint::OperatorFallback => 6,
+            Lint::RedundantMatchMotive => 7,
+        });
+        put_warning_string(out, &warning.msg, limits)?;
+        put_span(out, warning.span);
+        match &warning.fix {
+            None => out.push(0),
+            Some(fix) => {
+                out.push(1);
+                put_span(out, fix.span);
+                put_warning_string(out, &fix.replacement, limits)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn put_warning_string(
+    out: &mut Vec<u8>,
+    value: &str,
+    limits: ModuleImageLimits,
+) -> Result<(), ModuleCacheError> {
+    if value.len() > limits.max_string_bytes {
+        return Err(ModuleCacheError::Corrupt("module warning string exceeds the limit"));
+    }
+    out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn put_span(out: &mut Vec<u8>, span: Span) {
+    out.extend_from_slice(&(span.start as u64).to_le_bytes());
+    out.extend_from_slice(&(span.end as u64).to_le_bytes());
+}
+
+fn decode_warnings(
+    bytes: &[u8],
+    count: usize,
+    source_len: usize,
+    limits: ModuleImageLimits,
+) -> Result<Vec<Warning>, ModuleCacheError> {
+    let mut reader = WarningReader { bytes, at: 0, source_len, limits };
+    let mut warnings = Vec::with_capacity(count);
+    for _ in 0..count {
+        let lint = match reader.byte()? {
+            0 => Lint::UnreachableMatchArm,
+            1 => Lint::MatchFunctionApplication,
+            2 => Lint::TightNegationSpacing,
+            3 => Lint::StdlibUnicodeSpelling,
+            4 => Lint::NestedCall,
+            5 => Lint::UnusedPatternBinder,
+            6 => Lint::OperatorFallback,
+            7 => Lint::RedundantMatchMotive,
+            _ => return Err(ModuleCacheError::Corrupt("module warning has an invalid lint tag")),
+        };
+        let msg = reader.string()?;
+        let span = reader.span()?;
+        let fix = match reader.byte()? {
+            0 => None,
+            1 => Some(LintFix { span: reader.span()?, replacement: reader.string()? }),
+            _ => return Err(ModuleCacheError::Corrupt("module warning has an invalid fix tag")),
+        };
+        warnings.push(Warning { lint, msg, span, fix });
+    }
+    if reader.at != bytes.len() {
+        return Err(ModuleCacheError::Corrupt("module warning payload has trailing bytes"));
+    }
+    Ok(warnings)
+}
+
+struct WarningReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    source_len: usize,
+    limits: ModuleImageLimits,
+}
+
+impl WarningReader<'_> {
+    fn take(&mut self, len: usize) -> Result<&[u8], ModuleCacheError> {
+        let end = self
+            .at
+            .checked_add(len)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(ModuleCacheError::Corrupt("module warning payload is truncated"))?;
+        let value = &self.bytes[self.at..end];
+        self.at = end;
+        Ok(value)
+    }
+
+    fn byte(&mut self) -> Result<u8, ModuleCacheError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn usize(&mut self) -> Result<usize, ModuleCacheError> {
+        let value = u64::from_le_bytes(self.take(8)?.try_into().unwrap());
+        usize::try_from(value)
+            .map_err(|_| ModuleCacheError::Corrupt("module warning integer overflows"))
+    }
+
+    fn string(&mut self) -> Result<String, ModuleCacheError> {
+        let len = self.usize()?;
+        if len > self.limits.max_string_bytes {
+            return Err(ModuleCacheError::Corrupt("module warning string exceeds the limit"));
+        }
+        let bytes = self.take(len)?;
+        let value = std::str::from_utf8(bytes)
+            .map_err(|_| ModuleCacheError::Corrupt("module warning string is not UTF-8"))?;
+        Ok(value.to_string())
+    }
+
+    fn span(&mut self) -> Result<Span, ModuleCacheError> {
+        let start = self.usize()?;
+        let end = self.usize()?;
+        if start > end || end > self.source_len {
+            return Err(ModuleCacheError::Corrupt("module warning span is outside its source"));
+        }
+        Ok(Span { start, end })
     }
 }
 

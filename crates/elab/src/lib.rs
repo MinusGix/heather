@@ -73,7 +73,7 @@ use heather_kernel::typing::{self, DEFAULT_FUEL, TypeError};
 use heather_kernel::value::{ValueArena, ValueMetrics, ValueMetricsSnapshot};
 use heather_syntax::{
     Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm, NamedArg,
-    OnStmt, OnTarget, ParseError, Span, Ty, TyKind, parse_file,
+    OnStmt, OnTarget, ParseError, Ty, TyKind, parse_file,
 };
 
 mod access;
@@ -182,6 +182,7 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 
 pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning};
+pub use heather_syntax::Span;
 
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
