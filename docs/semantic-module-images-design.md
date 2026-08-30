@@ -362,11 +362,20 @@ Stage 4 rather than being smuggled into this representation.
 
 - **Done (4a):** add the versioned bounded semantic encoding, inert decode,
   structural validation, deterministic round trips and hostile-input tests.
-- Add the loader-owned source/semantics identity header around those semantic
-  bytes. The codec already carries ordered dependency interface identities;
-  source hashing and compiler-semantics identity belong to the loader slice,
-  because `ModuleDelta` neither reads files nor chooses cache policy.
-- Integrate it with the loader and atomic cache writes.
+- **Done (4b baseline):** the loader-owned cache key covers module name, exact
+  source digest, build-derived parser/elaborator/kernel semantics, and the
+  complete ordered accepted-module prefix required by v1's absolute Ψ
+  positions. The CLI performs bounded load, inert decode, kernel-checked
+  replay, ordinary diagnostic-preserving rebuild on a miss or rejection, and
+  unique-temporary-sibling plus atomic-rename publication. Corrupt artifacts
+  are reported and rebuilt rather than trusted or made fatal.
+- Project the module's true downstream interface identity. The baseline
+  conservatively hashes the complete semantic artifact, so proof-only source
+  edits invalidate consumers even though this is unnecessary. This loses
+  reuse, not soundness.
+- Carry deterministic warnings in the envelope. Until then, a module which
+  emits a warning is deliberately not published: a warm run must not silently
+  erase a diagnostic.
 - Keep generated/mutated suffixes outside the imported image boundary.
 
 Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:

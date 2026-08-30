@@ -317,6 +317,24 @@ disk artifact is acceleration data, not a proof verdict.
   no-panic quarantine boundary for hostile artifacts. Deterministic rebuild,
   byte-identical decode/re-encode, every-prefix truncation, hostile-budget,
   dangling-reference and registry-rich source/decode/replay tests are green.
-  The remaining Stage 4b work is loader-owned source/semantics fingerprinting,
-  filesystem cache lookup and atomic publication; no filesystem policy has
-  leaked into the elaborator codec.
+  No filesystem policy has leaked into the elaborator codec.
+- 2026-08-30: the Stage 4b loader/cache baseline is implemented. A build-time
+  fingerprint now covers the syntax, elaborator and kernel sources; the
+  content-addressed key also covers module name, exact source digest and the
+  complete ordered accepted-module identity prefix. The CLI loads bounded
+  artifacts, decodes them inertly against its live Ψ, rechecks the complete
+  suffix through the kernel, and only then publishes the candidate semantic
+  world. Misses, corruption and replay rejection rebuild through a new
+  journaled form of the ordinary multi-error checker, preserving the CLI's
+  diagnostic recovery rather than replacing it with first-error atomic
+  elaboration. Successful warning-free modules publish through unique
+  temporary siblings and atomic rename; corrupt-artifact and round-trip tests
+  cover the storage boundary.
+
+  Two deliberate performance limitations remain. V1's resulting module
+  identity is conservatively the hash of the complete semantic artifact,
+  rather than a projection of only facts observable by dependents, so an
+  opaque proof edit invalidates downstream images. And warnings are not yet
+  encoded: warning-producing modules are therefore never published, keeping
+  cache hits observationally honest at the cost of reuse. Both are explicit
+  follow-up slices, not trust holes.

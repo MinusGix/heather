@@ -1,0 +1,1 @@
+fn apply(f: Nat → Nat → Nat) → Nat { f(0)(1) }

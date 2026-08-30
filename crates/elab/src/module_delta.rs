@@ -20,7 +20,7 @@ use crate::names::{GlobalRegistration, NameKind, Scope};
 use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo, InstKey};
-use crate::{Elaborator, R};
+use crate::{ElabError, Elaborator, R};
 
 /// Ordered dependency-interface identities supplied by the module loader.
 /// The digest algorithm lives outside the elaborator; these stable bytes are
@@ -370,6 +370,47 @@ impl Elaborator {
         })
     }
 
+    /// Check a whole module with the ordinary diagnostic-recovery policy and,
+    /// when every item succeeds, return the same logical delta as
+    /// [`Self::elab_module_delta`].
+    ///
+    /// Unlike the atomic extraction entry point, a failing module keeps the
+    /// successful items around so later items can still be diagnosed. This is
+    /// the CLI `check` contract; the discarded journal merely means there is
+    /// no reusable image for a module which did not check completely.
+    pub fn check_module_delta(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+    ) -> Result<ModuleDelta, Vec<ElabError>> {
+        assert!(
+            self.module_journal.borrow().is_none(),
+            "module delta extraction is not nested"
+        );
+        let dependency_psi = (*self.psi).clone();
+        let base_len = dependency_psi.bindings.len();
+        *self.module_journal.borrow_mut() = Some(ModuleJournal { events: Vec::new() });
+        let errs = self.check_module_source_inner(module, src);
+        let journal = self
+            .module_journal
+            .borrow_mut()
+            .take()
+            .expect("module journal was installed");
+        if !errs.is_empty() {
+            return Err(errs);
+        }
+        let extension = self.psi.bindings.iter().skip(base_len).cloned().collect();
+        Ok(ModuleDelta {
+            module: module.to_string(),
+            dependencies,
+            dependency_psi,
+            extension,
+            scope: self.names.scope().clone(),
+            events: journal.events,
+        })
+    }
+
     /// Recheck the stored suffix, install metadata into a private candidate,
     /// and publish the candidate only after every operation succeeds.
     pub fn replay_module_delta(
@@ -502,6 +543,37 @@ mod tests {
     use heather_kernel::term::{GlobalBinding, Term};
 
     use super::*;
+
+    #[test]
+    fn diagnostic_extraction_returns_a_delta_only_for_a_whole_successful_module() {
+        let mut e = Elaborator::with_prelude().unwrap();
+        let before = e.psi().bindings.len();
+        let delta = e
+            .check_module_delta(
+                "good",
+                "fn value() -> Nat { 0 }",
+                ModuleDependencyIdentity::default(),
+            )
+            .unwrap();
+        assert!(delta.binding_count() > 0);
+        assert!(e.psi().bindings.len() > before);
+
+        let after_good = e.psi().bindings.len();
+        let errs = match e.check_module_delta(
+            "mixed",
+            "fn kept() -> Nat { 0 }\nfn broken() -> Nat { Type }",
+            ModuleDependencyIdentity::default(),
+        ) {
+            Ok(_) => panic!("the broken module unexpectedly checked"),
+            Err(errs) => errs,
+        };
+        assert_eq!(errs.len(), 1);
+        assert!(
+            e.psi().bindings.len() > after_good,
+            "ordinary diagnostic recovery must retain the successful item"
+        );
+        assert!(e.module_journal.borrow().is_none());
+    }
 
     #[test]
     fn elaborator_semantic_commits_route_through_this_module() {

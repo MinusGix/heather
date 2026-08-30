@@ -27,30 +27,65 @@ use sha256::{Sha256, hex};
 
 fn main() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let src = Path::new(&manifest).join("..").join("kernel").join("src");
-    let src = src.canonicalize().unwrap_or_else(|e| {
-        panic!("heather-cache: cannot read the kernel source at {}: {e}", src.display())
-    });
+    let crates = Path::new(&manifest).join("..");
+    let kernel = source_root(&crates, "kernel");
+    println!(
+        "cargo:rustc-env=HEATHER_KERNEL_SEMANTICS={}",
+        hex(&fingerprint(&[("kernel", &kernel)], &[]))
+    );
 
-    let mut files = Vec::new();
-    collect(&src, &mut files);
-    files.sort();
-    assert!(!files.is_empty(), "heather-cache: no kernel sources under {}", src.display());
+    // Persistent module images depend on frontend decisions as well as the
+    // kernel judgment. Include every source tree which parses or elaborates
+    // their payload; the binary format itself has an explicit version.
+    let syntax = source_root(&crates, "syntax");
+    let elab = source_root(&crates, "elab");
+    let prelude = elab.join("prelude.hthr").canonicalize()
+        .unwrap_or_else(|e| panic!("heather-cache: cannot read the prelude: {e}"));
+    println!(
+        "cargo:rustc-env=HEATHER_ELABORATOR_SEMANTICS={}",
+        hex(&fingerprint(
+            &[("kernel", &kernel), ("syntax", &syntax), ("elab", &elab)],
+            &[("prelude", &prelude)],
+        ))
+    );
+    for src in [&kernel, &syntax, &elab] {
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
+    println!("cargo:rerun-if-changed={}", prelude.display());
+    println!("cargo:rerun-if-changed=build.rs");
+}
 
+fn source_root(crates: &Path, name: &str) -> PathBuf {
+    let src = crates.join(name).join("src");
+    src.canonicalize().unwrap_or_else(|e| {
+        panic!("heather-cache: cannot read the {name} source at {}: {e}", src.display())
+    })
+}
+
+fn fingerprint(roots: &[(&str, &PathBuf)], extra: &[(&str, &PathBuf)]) -> [u8; 32] {
     let mut h = Sha256::new();
-    for f in &files {
-        // The path is hashed too, so that moving code between files — which
-        // can change nothing textually in aggregate — still moves the
-        // fingerprint.
-        let rel = f.strip_prefix(&src).unwrap_or(f);
-        h.update(rel.to_string_lossy().as_bytes());
+    for (label, src) in roots {
+        let mut files = Vec::new();
+        collect(src, &mut files);
+        files.sort();
+        assert!(!files.is_empty(), "heather-cache: no sources under {}", src.display());
+        for f in &files {
+            h.update(label.as_bytes());
+            h.update(b"/");
+            let rel = f.strip_prefix(src).unwrap_or(f);
+            h.update(rel.to_string_lossy().as_bytes());
+            h.update(b"\0");
+            h.update(&std::fs::read(f).unwrap_or_else(|e| panic!("cannot read {}: {e}", f.display())));
+            h.update(b"\0");
+        }
+    }
+    for (label, file) in extra {
+        h.update(label.as_bytes());
         h.update(b"\0");
-        h.update(&std::fs::read(f).unwrap_or_else(|e| panic!("cannot read {}: {e}", f.display())));
+        h.update(&std::fs::read(file).unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display())));
         h.update(b"\0");
     }
-    println!("cargo:rustc-env=HEATHER_KERNEL_SEMANTICS={}", hex(&h.finish()));
-    println!("cargo:rerun-if-changed={}", src.display());
-    println!("cargo:rerun-if-changed=build.rs");
+    h.finish()
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

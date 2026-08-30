@@ -21,6 +21,7 @@ use heather_elab::gate::{GateItem, KernelGate};
 use heather_kernel::term::GlobalCtx;
 
 pub mod merkle;
+pub mod module_image;
 pub mod sha256;
 pub mod store;
 
@@ -43,6 +44,10 @@ use store::Store;
 /// issue's "decisions, not steps" trace rule, and it should end up being the
 /// same value.
 pub const KERNEL_SEMANTICS: &str = env!("HEATHER_KERNEL_SEMANTICS");
+
+/// Conservative build-derived identity for the parser, elaborator, image
+/// schema producer, and kernel used by persistent semantic module images.
+pub const ELABORATOR_SEMANTICS: &str = env!("HEATHER_ELABORATOR_SEMANTICS");
 
 /// The per-repository cache directory, relative to the working directory.
 pub const DEFAULT_DIR: &str = ".heather/cache";

@@ -1844,6 +1844,10 @@ impl Elaborator {
     /// broken reports that and checks nothing: there is no recovery point
     /// before the scope exists.
     pub fn check_module_source(&mut self, module: &str, src: &str) -> Vec<ElabError> {
+        self.check_module_source_inner(module, src)
+    }
+
+    pub(crate) fn check_module_source_inner(&mut self, module: &str, src: &str) -> Vec<ElabError> {
         let file = match parse_file(src) {
             Ok(f) => f,
             Err(e) => return vec![e.into()],

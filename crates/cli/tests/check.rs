@@ -171,9 +171,48 @@ fn a_cached_run_says_so_and_counts_what_it_trusted() {
     assert_eq!(warm.status.code(), Some(0));
     let warm_out = String::from_utf8_lossy(&warm.stdout).to_string();
     assert!(warm_out.contains("0 declarations kernel-checked"), "{warm_out}");
-    assert!(!warm_out.contains("0 accepted from cache"), "{warm_out}");
+    assert!(warm_out.contains("1 semantic module replayed and kernel-checked"), "{warm_out}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_corrupt_semantic_module_is_reported_and_rebuilt() {
+    let dir = cache_dir("module-corrupt");
+    let arg = dir.display().to_string();
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
+    let modules = dir.join("modules-v1");
+    let artifact = std::fs::read_dir(&modules)
+        .unwrap()
+        .next()
+        .expect("one cached module")
+        .unwrap()
+        .path();
+    std::fs::write(artifact, b"not an image").unwrap();
+
+    let warm = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    assert_eq!(warm.status.code(), Some(0), "{}", String::from_utf8_lossy(&warm.stderr));
+    let err = String::from_utf8_lossy(&warm.stderr);
+    assert!(err.contains("stored module `good` is unusable"), "{err}");
+    assert!(err.contains("rebuilding"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn warning_producing_modules_are_rebuilt_until_images_carry_diagnostics() {
+    let dir = cache_dir("module-warning");
+    let arg = dir.display().to_string();
+    for _ in 0..2 {
+        let out = heather(&["check", "--cache-dir", &arg, "warning.hthr"]);
+        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("warning:"));
+        assert!(
+            String::from_utf8_lossy(&out.stdout)
+                .contains("0 semantic modules replayed and kernel-checked")
+        );
+    }
+    assert!(!dir.join("modules-v1").exists());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A cache written by a different kernel is discarded out loud, and the run
