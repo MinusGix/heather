@@ -59,6 +59,40 @@ fn paths_use_resolved_module_identity() {
 }
 
 #[test]
+fn image_suffixes_follow_provenance_across_the_shared_prefix() {
+    let mut base = Elaborator::new();
+    base.elab_module_source(
+        "trusted",
+        "axiom seed(): Nat; theorem via(): Nat { seed() }",
+    )
+    .unwrap();
+    let image = base.semantic_image();
+
+    let mut suffix = image.elaborator();
+    suffix
+        .elab_module_source(
+            "client",
+            "import trusted; theorem result(): Nat { via() }",
+        )
+        .unwrap();
+
+    let result = suffix.axiom_report("client::result").unwrap();
+    assert_eq!(
+        result.axioms[0].path,
+        ["client::result", "trusted::via", "trusted::seed"]
+    );
+    assert!(base.axiom_report("client::result").is_err());
+    assert_eq!(
+        suffix
+            .axiom_violations()
+            .iter()
+            .map(|report| report.target.as_str())
+            .collect::<Vec<_>>(),
+        ["client::result", "trusted::via"]
+    );
+}
+
+#[test]
 fn a_failed_generated_bundle_rolls_provenance_back() {
     let mut e = Elaborator::new();
     let err = e.elab_generated_source(

@@ -13,39 +13,73 @@ use crate::inductive::Inductive;
 use crate::names::qkey;
 
 #[derive(Clone, Default)]
-pub(crate) struct Types {
+struct TypeLayer {
     inductives: HashMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
     forded_by_skeleton: HashMap<u32, Rc<Inductive>>,
     constructors: HashMap<String, (Rc<Inductive>, usize)>,
     record_fields: HashSet<String>,
+}
+
+/// Append-only nominal indexes split into immutable image layers and one
+/// suffix delta. The indexes for a declaration remain one `TypeLayer`, so a
+/// commit cannot expose only one face of a nominal type.
+#[derive(Clone, Default)]
+pub(crate) struct Types {
+    sealed: Rc<Vec<Rc<TypeLayer>>>,
+    current: Rc<TypeLayer>,
     next_tag: u32,
     gdefs: GenDefs,
 }
 
 impl Types {
+    pub(crate) fn semantic_snapshot(&self) -> Self {
+        let mut types = self.clone();
+        types.seal_current();
+        types.gdefs = types.gdefs.semantic_snapshot();
+        types
+    }
+
+    fn seal_current(&mut self) {
+        let empty = self.current.inductives.is_empty()
+            && self.current.by_tag.is_empty()
+            && self.current.forded_by_skeleton.is_empty()
+            && self.current.constructors.is_empty()
+            && self.current.record_fields.is_empty();
+        if empty {
+            return;
+        }
+        Rc::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
+        self.current = Rc::new(TypeLayer::default());
+    }
+
+    fn layers(&self) -> impl Iterator<Item = &TypeLayer> {
+        std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
+    }
+
     pub(crate) fn next_tag(&self) -> u32 {
         self.next_tag
     }
 
     pub(crate) fn inductive(&self, key: &str) -> Option<&Rc<Inductive>> {
-        self.inductives.get(key)
+        self.layers().find_map(|layer| layer.inductives.get(key))
     }
 
     pub(crate) fn by_tag(&self, tag: u32) -> Option<&Rc<Inductive>> {
-        self.by_tag.get(&tag)
+        self.layers().find_map(|layer| layer.by_tag.get(&tag))
     }
 
     pub(crate) fn forded_by_skeleton(&self, tag: u32) -> Option<&Rc<Inductive>> {
-        self.forded_by_skeleton.get(&tag)
+        self.layers()
+            .find_map(|layer| layer.forded_by_skeleton.get(&tag))
     }
 
     pub(crate) fn constructor(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
-        self.constructors.get(key)
+        self.layers().find_map(|layer| layer.constructors.get(key))
     }
 
     pub(crate) fn has_record_field(&self, name: &str) -> bool {
-        self.record_fields.contains(name)
+        self.layers().any(|layer| layer.record_fields.contains(name))
     }
 
     pub(crate) fn gdefs(&self) -> &GenDefs {
@@ -64,36 +98,43 @@ impl Types {
     pub(crate) fn commit(&mut self, module: &str, ind: Rc<Inductive>) {
         if let Some(skeleton) = &ind.skel {
             debug_assert_eq!(skeleton.tag, self.next_tag);
-            debug_assert!(!self.by_tag.contains_key(&skeleton.tag));
-            self.by_tag.insert(skeleton.tag, Rc::clone(skeleton));
-            self.inductives
+            debug_assert!(self.by_tag(skeleton.tag).is_none());
+        }
+        let ind_tag = self.next_tag + u32::from(ind.skel.is_some());
+        debug_assert_eq!(ind.tag, ind_tag);
+        debug_assert!(self.by_tag(ind.tag).is_none());
+
+        let layer = Rc::make_mut(&mut self.current);
+        if let Some(skeleton) = &ind.skel {
+            layer.by_tag.insert(skeleton.tag, Rc::clone(skeleton));
+            layer.inductives
                 .insert(qkey(module, &skeleton.name), Rc::clone(skeleton));
-            self.forded_by_skeleton
+            layer.forded_by_skeleton
                 .insert(skeleton.tag, Rc::clone(&ind));
             self.next_tag += 1;
         }
 
-        debug_assert_eq!(ind.tag, self.next_tag);
-        debug_assert!(!self.by_tag.contains_key(&ind.tag));
         for (index, ctor) in ind.ctors.iter().enumerate() {
-            self.constructors
+            layer.constructors
                 .insert(qkey(module, &ctor.name), (Rc::clone(&ind), index));
         }
         if ind.is_record {
             for (name, _) in &ind.ctors[0].fields {
                 if let Some(name) = name {
-                    self.record_fields.insert(name.clone());
+                    layer.record_fields.insert(name.clone());
                 }
             }
         }
-        self.by_tag.insert(ind.tag, Rc::clone(&ind));
-        self.inductives.insert(qkey(module, &ind.name), ind);
+        layer.by_tag.insert(ind.tag, Rc::clone(&ind));
+        layer.inductives.insert(qkey(module, &ind.name), ind);
         self.next_tag += 1;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use crate::Elaborator;
     use crate::names::qkey;
 
@@ -111,5 +152,24 @@ mod tests {
             .expect("committed");
         assert_eq!(good.tag, 0);
         assert_eq!(el.types.next_tag(), 1);
+    }
+
+    #[test]
+    fn semantic_image_shares_nominal_and_generated_prefixes() {
+        let mut base = Elaborator::new();
+        base.elab_source("inductive A { MkA }").unwrap();
+        let image = base.semantic_image();
+        let mut left = image.elaborator();
+        let right = image.elaborator();
+
+        assert!(Rc::ptr_eq(&left.types.sealed, &right.types.sealed));
+        assert!(left.types.gdefs.shares_sealed_with(&right.types.gdefs));
+        left.elab_source("inductive B { MkB }").unwrap();
+
+        assert!(Rc::ptr_eq(&left.types.sealed, &right.types.sealed));
+        assert!(left.types.gdefs.shares_sealed_with(&right.types.gdefs));
+        assert!(left.types.inductive(&qkey("main", "B")).is_some());
+        assert!(right.types.inductive(&qkey("main", "B")).is_none());
+        assert_eq!(left.types.next_tag(), right.types.next_tag() + 1);
     }
 }

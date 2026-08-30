@@ -264,8 +264,10 @@ Stage 2a is complete: explicit shared world, independently shared registries,
 session-local resolution scopes, atomic pointer rollback, and behavioral plus
 ownership tests. Stage 2b has converted the name registry to shared
 module-sized deltas, converted Ψ to bounded persistent chunks, and added
-image-fork/first-declaration benchmark cases. The other registries remain to
-be evaluated and converted selectively.
+image-fork/first-declaration benchmark cases. Provenance is now sealed into
+shared image layers as well. Nominal type and generated-definition indexes
+likewise use correlated immutable layers. The other registries remain to be
+evaluated and converted selectively.
 
 ### Stage 3 — module deltas and safe reload
 
@@ -326,6 +328,25 @@ noise. In parallel, kernel optimizations should favor untrusted, intra-check
 memoization and structural sharing. Persistent admission through
 `KernelGate` is a distinct trusted-cache rung and must not be introduced as an
 incidental performance optimization.
+
+The first registry-specific growth measurement validated this method. With
+whole-table provenance COW, a fixed first suffix declaration grew from 11.15
+microseconds over 16 imported declarations to 116.19 microseconds over 1,024
+(fitted slope 0.56). Sealing provenance into immutable image layers made the
+same four-point family 9.90, 10.49, 10.51, and 10.06 microseconds (slope
+0.00). This family remains untracked until a stable full frontend recording;
+the before/after run establishes the removed dependency on imported-prefix
+size, not a permanent absolute baseline.
+
+The nominal-type probe justified the next conversion, but with a smaller
+effect. A fixed one-constructor suffix inductive grew from 14.27 microseconds
+over 4 imported types to 64.14 microseconds over 256 (slope 0.36). Layering
+both the correlated nominal indexes and the generated-definition registry
+reduced the 256-type point to 29.60 microseconds and the fitted slope to 0.16,
+inside the declared flatness band. The residual movement is retained in the
+fixture: generated work and nominal tags still change with the imported world,
+so this result is bounded first-write cost rather than a claim that an
+inductive is context-independent.
 
 ## 11. Verification and performance gates
 

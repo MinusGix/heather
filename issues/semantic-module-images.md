@@ -188,3 +188,32 @@ disk artifact is acceleration data, not a proof verdict.
   tables. This track is explicitly separate from theorem-scale x86/Omega
   performance, which requires conversion/evaluation attribution and kernel
   work; sub-microsecond image operations cannot explain those targets.
+- 2026-08-29: The first registry-specific growth family confirmed the
+  provenance target. Before conversion, one fixed ordinary suffix declaration
+  grew 11.15 -> 19.45 -> 42.90 -> 116.19 microseconds over 16/64/256/1,024
+  imported declarations (slope 0.56). `Provenance` now seals its current
+  dependency map into an immutable shared image layer and starts the suffix
+  empty; entries are `Rc`-shared and lookup/report ordering remains logical
+  across layers. The same family is now 9.90 -> 10.49 -> 10.51 -> 10.06
+  microseconds, slope 0.00, an approximately 11.5x reduction at 1,024. A new
+  ownership/transitive-path test pins prefix sharing and suffix isolation;
+  public provenance, image equivalence, determinism, transaction, and
+  benchmark-smoke tests are green. The new family is not yet a recorded
+  baseline. The broad fast rail is also green: 2,051 passed / 0 failed across
+  150 binaries (plus serial documentation tests), including every Omega shard
+  and x86_64; 772 seconds wall under the two-worker acceptance runner.
+- 2026-08-29: The nominal-type first-write probe also found a real, smaller
+  imported-prefix cost: 14.27 -> 18.41 -> 29.42 -> 64.14 microseconds over
+  4/16/64/256 imported one-constructor types (slope 0.36). `Types` now seals
+  its correlated name/tag/constructor/record-field indexes as one immutable
+  layer, while `GenDefs` seals its paired forward/reverse and guard indexes in
+  a sibling layer; the suffix starts both empty without breaking atomic
+  registration. After conversion the family reads 14.98 -> 20.00 -> 23.26 ->
+  29.60 microseconds (slope 0.16, inside the flatness band), about 2.2x faster
+  at 256 types. The remaining mild growth stays visible rather than being
+  described as zero: nominal tags and generated work still observe the larger
+  world. Ownership/isolation plus 110 focused nominal, generated-definition,
+  image, determinism, rollback, provenance, and benchmark tests are green.
+  The subsequent broad fast rail is green as well: 2,052 passed / 0 failed
+  across 150 binaries plus serial documentation tests, including all five
+  Omega shards and x86_64; 548 seconds wall with three acceptance workers.

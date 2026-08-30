@@ -60,6 +60,8 @@ impl SessionCheckpoint {
         committed.psi = Shared::new(elab.psi.semantic_snapshot());
         committed.delta_psi = Shared::new(elab.delta_psi.semantic_snapshot());
         committed.names = Shared::new(elab.names.semantic_snapshot());
+        committed.types = Shared::new(elab.types.semantic_snapshot());
+        committed.provenance = Shared::new(elab.provenance.semantic_snapshot());
         Self {
             committed: Rc::new(committed),
         }

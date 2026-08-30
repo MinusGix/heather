@@ -277,6 +277,8 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("corpus/parse", "the parser alone over lib/*.hthr"),
         ("corpus/check-file", "lib/*.hthr end to end, with the phase split"),
         ("scale/declarations", "n independent fn+theorem pairs"),
+        ("scale/image-first-ordinary", "first suffix declaration over an n-declaration image"),
+        ("scale/image-first-inductive", "first inductive over an n-type image"),
         ("scale/wide-inductive", "an inductive with n constructors and its n-arm match"),
         ("scale/certified-dispatch", "an n-row certified lookup and its proofs"),
         ("forded/computed-arms", "route 2b with n constructors — §14.2's μ multiplier"),

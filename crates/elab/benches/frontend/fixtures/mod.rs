@@ -25,7 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
-use heather_elab::{Elaborator, IndexedRoute, stats};
+use heather_elab::{Elaborator, IndexedRoute, SemanticImage, stats};
 use heather_syntax::parse_file;
 
 use crate::harness::{Family, Phases};
@@ -199,6 +199,24 @@ pub fn cloned_runner(base: Elaborator, src: String) -> (impl Fn() -> u64, Rc<Cel
         stats::reset_kernel_ns();
         let t = Instant::now();
         let mut e = base.clone();
+        let errs = e.check_source(&src);
+        let total_ns = t.elapsed().as_nanos() as u64;
+        measure_phases(&src, &out, total_ns);
+        errs.len() as u64
+    };
+    (run, cell)
+}
+
+/// A run in a fresh suffix over a captured semantic image. Unlike
+/// [`cloned_runner`], this seals module-sized registry deltas before timing,
+/// so growth in the imported prefix can expose first-write detachment.
+pub fn image_runner(image: SemanticImage, src: String) -> (impl Fn() -> u64, Rc<Cell<Phases>>) {
+    let cell = Rc::new(Cell::new(Phases::default()));
+    let out = cell.clone();
+    let run = move || {
+        stats::reset_kernel_ns();
+        let t = Instant::now();
+        let mut e = image.elaborator();
         let errs = e.check_source(&src);
         let total_ns = t.elapsed().as_nanos() as u64;
         measure_phases(&src, &out, total_ns);

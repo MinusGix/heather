@@ -12,10 +12,16 @@
 use crate::harness::{Case, Family};
 use heather_elab::{Elaborator, IndexedRoute};
 
-use super::{cloned_runner, prelude, validate, validate_route};
+use super::{cloned_runner, image_runner, prelude, validate, validate_route};
 
 pub fn families() -> Vec<Family> {
-    vec![declarations(), wide_inductive(), certified_dispatch()]
+    vec![
+        declarations(),
+        image_first_ordinary(),
+        image_first_inductive(),
+        wide_inductive(),
+        certified_dispatch(),
+    ]
 }
 
 const LOGIC: &str = include_str!("../../../../../lib/std/logic.hthr");
@@ -52,6 +58,104 @@ fn declarations() -> Family {
         // here means a per-declaration walk over Ψ.
         expect_slope: Some((0.80, 1.30)),
         cases: sweep("scale/declarations", &[16, 32, 64, 128], src),
+    }
+}
+
+/// The cost of entering one new module after importing an increasingly large
+/// ordinary prefix. The declaration itself is deliberately fixed; movement
+/// with `n` is first-write detachment or a prefix-dependent lookup, not more
+/// source work.
+fn image_first_ordinary() -> Family {
+    let sizes = [16, 64, 256, 1024];
+    let sizes = if crate::harness::smoke() {
+        &sizes[..1]
+    } else {
+        &sizes[..]
+    };
+    let cases = sizes
+        .iter()
+        .map(|&n| {
+            let mut base = prelude();
+            let mut prefix = String::new();
+            for i in 0..n {
+                prefix.push_str(&format!("fn imported_{i}(x: Nat) -> Nat {{ x }}\n"));
+            }
+            let errors = base.check_module_source("imported", &prefix);
+            assert!(
+                errors.is_empty(),
+                "fixture `scale/image-first-ordinary:{n}` prefix does not check: {}",
+                errors[0].render(&prefix)
+            );
+            let suffix = "fn suffix(x: Nat) -> Nat { x }".to_string();
+            let image = base.semantic_image();
+            let mut validation = image.elaborator();
+            let errors = validation.check_module_source("suffix", &suffix);
+            assert!(
+                errors.is_empty(),
+                "fixture `scale/image-first-ordinary:{n}` suffix does not check: {}",
+                errors[0].render(&suffix)
+            );
+            let (run, cell) = image_runner(image, suffix);
+            Case::new(n, 0, run).with_phases(cell)
+        })
+        .collect();
+
+    Family {
+        name: "scale/image-first-ordinary",
+        what: "first ordinary declaration after an n-declaration semantic image",
+        unit: "imported decls",
+        expect_slope: Some((-0.35, 0.35)),
+        cases,
+    }
+}
+
+/// The matching first-write probe for the nominal type registry. The prefix
+/// grows by independent one-constructor inductives while the suffix inductive
+/// stays fixed, so a slope identifies imported `Types` detachment rather than
+/// generated-term width.
+fn image_first_inductive() -> Family {
+    let sizes = [4, 16, 64, 256];
+    let sizes = if crate::harness::smoke() {
+        &sizes[..1]
+    } else {
+        &sizes[..]
+    };
+    let cases = sizes
+        .iter()
+        .map(|&n| {
+            let mut base = prelude();
+            let mut prefix = String::new();
+            for i in 0..n {
+                prefix.push_str(&format!(
+                    "inductive Imported{i} {{ MkImported{i} }}\n"
+                ));
+            }
+            let errors = base.check_module_source("imported_types", &prefix);
+            assert!(
+                errors.is_empty(),
+                "fixture `scale/image-first-inductive:{n}` prefix does not check: {}",
+                errors[0].render(&prefix)
+            );
+            let suffix = "inductive SuffixType { MkSuffixType }".to_string();
+            let image = base.semantic_image();
+            let mut validation = image.elaborator();
+            let errors = validation.check_module_source("suffix_type", &suffix);
+            assert!(
+                errors.is_empty(),
+                "fixture `scale/image-first-inductive:{n}` suffix does not check: {}",
+                errors[0].render(&suffix)
+            );
+            let (run, cell) = image_runner(image, suffix);
+            Case::new(n, 0, run).with_phases(cell)
+        })
+        .collect();
+
+    Family {
+        name: "scale/image-first-inductive",
+        what: "first inductive after an n-inductive semantic image",
+        unit: "imported types",
+        expect_slope: Some((-0.35, 0.35)),
+        cases,
     }
 }
 
