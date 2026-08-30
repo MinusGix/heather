@@ -17,7 +17,6 @@
 //! decides anything. The consequence that pays for it: library growth can
 //! introduce errors, never reinterpretations.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -46,7 +45,7 @@ pub(crate) enum NameKind {
 }
 
 /// One import of one module.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImportSpec {
     pub module: String,
     /// The `::{…}` list, if written. Empty for a plain `import m;`.
@@ -54,7 +53,7 @@ pub(crate) struct ImportSpec {
 }
 
 /// The visibility of the module currently being elaborated.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Scope {
     pub module: String,
     pub imports: Vec<ImportSpec>,
@@ -94,6 +93,29 @@ struct NameIndex {
     by_name: HashMap<String, Vec<NameEntry>>,
 }
 
+/// One module-sized name-registry delta. Sealed layers are immutable and
+/// shared; only the current layer is detached when a suffix commits a name.
+#[derive(Clone, Default)]
+struct NameLayer {
+    module_scopes: HashMap<String, Scope>,
+    index: NameIndex,
+    globals: HashMap<String, GlobalInfo>,
+    by_abs: HashMap<u32, String>,
+    member_bases: HashSet<String>,
+    surface_decls: HashMap<String, Decl>,
+}
+
+impl NameLayer {
+    fn is_empty(&self) -> bool {
+        self.module_scopes.is_empty()
+            && self.index.by_name.is_empty()
+            && self.globals.is_empty()
+            && self.by_abs.is_empty()
+            && self.member_bases.is_empty()
+            && self.surface_decls.is_empty()
+    }
+}
+
 /// Committed ordinary declarations and the indexes that make them nameable.
 ///
 /// These tables are one invariant, not four independent caches: a global is
@@ -103,13 +125,8 @@ struct NameIndex {
 #[derive(Clone)]
 pub(crate) struct Names {
     scope: Scope,
-    resolution_scopes: RefCell<Vec<Rc<Scope>>>,
-    module_scopes: HashMap<String, Scope>,
-    index: NameIndex,
-    globals: HashMap<String, GlobalInfo>,
-    by_abs: HashMap<u32, String>,
-    member_bases: HashSet<String>,
-    surface_decls: HashMap<String, Decl>,
+    sealed: Rc<Vec<Rc<NameLayer>>>,
+    current: Rc<NameLayer>,
 }
 
 /// A callable global's Ψ coordinate and surface parameter metadata.
@@ -130,21 +147,6 @@ pub(crate) struct GlobalRegistration {
     pub(crate) params: Rc<Vec<ParamMeta>>,
     pub(crate) member_base: Option<String>,
     pub(crate) surface: Decl,
-}
-
-/// Restores the ambient name-resolution environment after re-lowering stored
-/// surface syntax.
-pub(crate) struct ResolutionScope<'a> {
-    stack: &'a RefCell<Vec<Rc<Scope>>>,
-}
-
-impl Drop for ResolutionScope<'_> {
-    fn drop(&mut self) {
-        self.stack
-            .borrow_mut()
-            .pop()
-            .expect("a resolution scope was installed");
-    }
 }
 
 /// The result of resolving one written name against one scope.
@@ -204,31 +206,14 @@ impl NameIndex {
     pub fn entries(&self, name: &str) -> &[NameEntry] {
         self.by_name.get(name).map(|v| v.as_slice()).unwrap_or(&[])
     }
-
-    /// Is `name` declared in `module`, as any kind?
-    pub fn declares(&self, module: &str, name: &str) -> bool {
-        self.entries(name).iter().any(|e| e.module == module)
-    }
-
-    /// Is `name` declared in `module` as one of `kinds`?
-    pub fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
-        self.entries(name)
-            .iter()
-            .any(|e| e.module == module && kinds.contains(&e.kind))
-    }
 }
 
 impl Names {
     pub(crate) fn new(module: impl Into<String>) -> Self {
         Names {
             scope: Scope::new(module),
-            resolution_scopes: RefCell::new(Vec::new()),
-            module_scopes: HashMap::new(),
-            index: NameIndex::default(),
-            globals: HashMap::new(),
-            by_abs: HashMap::new(),
-            member_bases: HashSet::new(),
-            surface_decls: HashMap::new(),
+            sealed: Rc::new(Vec::new()),
+            current: Rc::new(NameLayer::default()),
         }
     }
 
@@ -236,51 +221,83 @@ impl Names {
         &self.scope
     }
 
-    /// Clone committed name/module state without the dynamically installed
-    /// scope stack used while re-lowering stored surface declarations.
-    pub(crate) fn semantic_snapshot(&self) -> Self {
-        let mut names = self.clone();
-        names.resolution_scopes = RefCell::new(Vec::new());
-        names
-    }
-
     pub(crate) fn module(&self) -> &str {
         &self.scope.module
     }
 
     pub(crate) fn module_scope(&self, module: &str) -> Option<&Scope> {
-        self.module_scopes.get(module)
+        self.current.module_scopes.get(module).or_else(|| {
+            self.sealed
+                .iter()
+                .rev()
+                .find_map(|layer| layer.module_scopes.get(module))
+        })
     }
 
     pub(crate) fn has_module(&self, module: &str) -> bool {
-        self.module_scopes.contains_key(module)
+        self.module_scope(module).is_some()
     }
 
     pub(crate) fn enter_scope(&mut self, scope: Scope) {
-        self.module_scopes
-            .insert(scope.module.clone(), scope.clone());
+        // Re-entering the same module is an additive source chunk (a REPL and
+        // many tests rely on this). Keep one delta for all of its chunks;
+        // otherwise lookup depth would grow with declarations submitted one
+        // at a time rather than with modules in the import closure.
+        if scope.module != self.scope.module {
+            self.seal_current();
+        }
+        if self.module_scope(&scope.module) != Some(&scope) {
+            Rc::make_mut(&mut self.current)
+                .module_scopes
+                .insert(scope.module.clone(), scope.clone());
+        }
         self.scope = scope;
     }
 
-    pub(crate) fn use_scope(&self, scope: Rc<Scope>) -> ResolutionScope<'_> {
-        self.resolution_scopes.borrow_mut().push(scope);
-        ResolutionScope {
-            stack: &self.resolution_scopes,
+    /// Freeze the current module delta and start an empty suffix layer without
+    /// copying any declaration-sized table.
+    pub(crate) fn semantic_snapshot(&self) -> Self {
+        let mut names = self.clone();
+        names.seal_current();
+        names
+    }
+
+    fn seal_current(&mut self) {
+        if self.current.is_empty() {
+            return;
         }
+        Rc::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
+        self.current = Rc::new(NameLayer::default());
+    }
+
+    fn layers(&self) -> impl Iterator<Item = &NameLayer> {
+        std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
+    }
+
+    fn entries<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a NameEntry> + 'a {
+        self.sealed
+            .iter()
+            .flat_map(move |layer| layer.index.entries(name))
+            .chain(self.current.index.entries(name))
     }
 
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
-        self.index.declares(module, name)
+        self.entries(name).any(|e| e.module == module)
     }
 
     pub(crate) fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
-        self.index.declares_as(module, name, kinds)
+        self.entries(name)
+            .any(|e| e.module == module && kinds.contains(&e.kind))
     }
 
-    pub(crate) fn visible_entries_are(&self, name: &str, kinds: &[NameKind]) -> bool {
-        let scopes = self.resolution_scopes.borrow();
-        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
-        self.index.entries(name).iter().all(|e| {
+    pub(crate) fn visible_entries_are(
+        &self,
+        scope: Option<&Scope>,
+        name: &str,
+        kinds: &[NameKind],
+    ) -> bool {
+        let scope = scope.unwrap_or(&self.scope);
+        self.entries(name).all(|e| {
             let visible = e.module == scope.module
                 || scope.imports_module(&e.module)
                 || e.module == PRELUDE_MODULE;
@@ -289,39 +306,43 @@ impl Names {
     }
 
     pub(crate) fn insert_current(&mut self, name: &str, kind: NameKind) {
-        self.index.insert(&self.scope.module, name, kind);
+        Rc::make_mut(&mut self.current)
+            .index
+            .insert(&self.scope.module, name, kind);
     }
 
     pub(crate) fn resolve_kinds(
         &self,
+        scope: Option<&Scope>,
         name: &str,
         kinds: &[NameKind],
         is_ctor_of: impl Fn(&str, &str, &str) -> bool,
     ) -> NameRes {
-        let scopes = self.resolution_scopes.borrow();
-        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
-        resolve_kinds(&self.index, scope, name, kinds, is_ctor_of)
+        let scope = scope.unwrap_or(&self.scope);
+        resolve_kinds(self, scope, name, kinds, is_ctor_of)
     }
 
     pub(crate) fn global(&self, key: &str) -> Option<&GlobalInfo> {
-        self.globals.get(key)
+        self.layers().find_map(|layer| layer.globals.get(key))
     }
 
     pub(crate) fn global_name_at(&self, abs: u32) -> Option<&str> {
-        self.by_abs.get(&abs).map(String::as_str)
+        self.layers()
+            .find_map(|layer| layer.by_abs.get(&abs).map(String::as_str))
     }
 
     pub(crate) fn params_at(&self, abs: u32) -> Option<Rc<Vec<ParamMeta>>> {
-        let key = self.by_abs.get(&abs)?;
-        Some(Rc::clone(&self.globals.get(key)?.params))
+        let key = self.global_name_at(abs)?;
+        Some(Rc::clone(&self.global(key)?.params))
     }
 
     pub(crate) fn has_member_base(&self, name: &str) -> bool {
-        self.member_bases.contains(name)
+        self.layers().any(|layer| layer.member_bases.contains(name))
     }
 
     pub(crate) fn surface_decl(&self, name: &str) -> Option<&Decl> {
-        self.surface_decls.get(name)
+        self.layers()
+            .find_map(|layer| layer.surface_decls.get(name))
     }
 
     pub(crate) fn commit_global(&mut self, abs: u32, reg: GlobalRegistration) {
@@ -332,16 +353,18 @@ impl Names {
             member_base,
             surface,
         } = reg;
-        debug_assert!(!self.globals.contains_key(&key));
-        debug_assert!(!self.by_abs.contains_key(&abs));
-        self.index
+        debug_assert!(self.global(&key).is_none());
+        debug_assert!(self.global_name_at(abs).is_none());
+        let current = Rc::make_mut(&mut self.current);
+        current
+            .index
             .insert(&self.scope.module, &name, NameKind::Global);
-        self.by_abs.insert(abs, key.clone());
-        self.globals.insert(key, GlobalInfo { abs, params });
+        current.by_abs.insert(abs, key.clone());
+        current.globals.insert(key, GlobalInfo { abs, params });
         if let Some(base) = member_base {
-            self.member_bases.insert(base);
+            current.member_bases.insert(base);
         }
-        self.surface_decls.insert(name, surface);
+        current.surface_decls.insert(name, surface);
     }
 }
 
@@ -382,26 +405,26 @@ pub(crate) const ANY_KIND: &[NameKind] = &[];
 /// asymmetry is the whole point: there a type name and a constructor are
 /// *both* legal readings, so shrinking would be choosing.
 fn resolve_kinds(
-    index: &NameIndex,
+    names: &Names,
     scope: &Scope,
     name: &str,
     kinds: &[NameKind],
     is_ctor_of: impl Fn(&str, &str, &str) -> bool,
 ) -> NameRes {
     let Some((qual, base)) = split_qual(name) else {
-        return resolve_bare_kinds(index, scope, name, kinds);
+        return resolve_bare_kinds(names, scope, name, kinds);
     };
     // `nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
     // this file never imported.
     let visible_module =
         qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
-    if visible_module && index.declares(qual, base) {
+    if visible_module && names.declares(qual, base) {
         return NameRes::Found(qual.to_string());
     }
     // `Option::None` — a constructor qualified by its *type*. The type name is
     // itself resolved by the same regime, so `Option` may come from an import.
-    if let NameRes::Found(m) = resolve_bare(index, scope, qual)
+    if let NameRes::Found(m) = resolve_bare(names, scope, qual)
         && is_ctor_of(&m, qual, base)
     {
         return NameRes::Found(m);
@@ -413,7 +436,7 @@ fn resolve_kinds(
     // to the same type are ambiguous at use with both origins named. Tried
     // after the module-path and constructor readings, so nothing that resolved
     // before can be reinterpreted by one.
-    match resolve_bare_kinds(index, scope, name, kinds) {
+    match resolve_bare_kinds(names, scope, name, kinds) {
         NameRes::Found(m) => return NameRes::Found(m),
         NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
         NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {}
@@ -424,19 +447,18 @@ fn resolve_kinds(
     NameRes::NoSuchQualifier(qual.to_string())
 }
 
-fn resolve_bare(index: &NameIndex, scope: &Scope, name: &str) -> NameRes {
-    resolve_bare_kinds(index, scope, name, ANY_KIND)
+fn resolve_bare(names: &Names, scope: &Scope, name: &str) -> NameRes {
+    resolve_bare_kinds(names, scope, name, ANY_KIND)
 }
 
-fn resolve_bare_kinds(index: &NameIndex, scope: &Scope, name: &str, kinds: &[NameKind]) -> NameRes {
+fn resolve_bare_kinds(names: &Names, scope: &Scope, name: &str, kinds: &[NameKind]) -> NameRes {
     // The filter is applied at each use rather than collected once: this
     // function is on the hot path of every name in every file, and an
     // allocation per resolution is not worth saving three predicate calls.
     // `kinds.is_empty()` is the unfiltered regime, so the closure costs one
     // branch when nobody is filtering.
     let of_kind = |e: &NameEntry| kinds.is_empty() || kinds.contains(&e.kind);
-    let entries = index.entries(name);
-    if !entries.iter().any(of_kind) {
+    if !names.entries(name).any(of_kind) {
         return NameRes::NotFound;
     }
     // A listed name is a standing disambiguation and wins outright. Two
@@ -447,7 +469,9 @@ fn resolve_bare_kinds(index: &NameIndex, scope: &Scope, name: &str, kinds: &[Nam
         .iter()
         .filter(|i| {
             i.listed.iter().any(|n| n == name)
-                && entries.iter().any(|e| e.module == i.module && of_kind(e))
+                && names
+                    .entries(name)
+                    .any(|e| e.module == i.module && of_kind(e))
         })
         .map(|i| i.module.clone())
         .collect();
@@ -459,14 +483,14 @@ fn resolve_bare_kinds(index: &NameIndex, scope: &Scope, name: &str, kinds: &[Nam
     }
     // Locals beat unlisted imports: the file you are reading beats the file
     // you are not. This is the one precedence in the system.
-    if entries
-        .iter()
+    if names
+        .entries(name)
         .any(|e| e.module == scope.module && of_kind(e))
     {
         return NameRes::Found(scope.module.clone());
     }
     let mut hits: Vec<String> = Vec::new();
-    for e in entries.iter().filter(|e| of_kind(e)) {
+    for e in names.entries(name).filter(|e| of_kind(e)) {
         let visible = scope.imports_module(&e.module) || e.module == PRELUDE_MODULE;
         if visible && !hits.contains(&e.module) {
             hits.push(e.module.clone());
@@ -506,5 +530,42 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
         NameRes::Restricted(msg) => Some(msg.clone()),
         NameRes::NotFound => Some(fallback),
         NameRes::Found(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod layered_tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn semantic_snapshot_seals_modules_and_suffix_mutates_only_an_empty_delta() {
+        let mut names = Names::new(DEFAULT_MODULE);
+        for i in 0..64 {
+            let module = format!("m{i}");
+            names.enter_scope(Scope::new(&module));
+            names.insert_current("shared", NameKind::Global);
+            names.insert_current(&format!("only_{i}"), NameKind::Global);
+        }
+
+        let image = names.semantic_snapshot();
+        assert_eq!(image.sealed.len(), 64);
+        assert!(image.current.is_empty());
+        for i in 0..64 {
+            assert!(image.declares(&format!("m{i}"), "shared"));
+            assert!(image.declares(&format!("m{i}"), &format!("only_{i}")));
+        }
+
+        let mut suffix = image.clone();
+        let sealed = Rc::clone(&suffix.sealed);
+        suffix.enter_scope(Scope::new("m63"));
+        assert!(Rc::ptr_eq(&sealed, &suffix.sealed));
+        suffix.insert_current("suffix", NameKind::Global);
+        assert!(Rc::ptr_eq(&image.sealed, &suffix.sealed));
+        assert!(image.current.is_empty());
+        assert_eq!(suffix.current.index.entries("suffix").len(), 1);
+        assert!(!image.declares(image.module(), "suffix"));
+        assert!(suffix.declares(suffix.module(), "suffix"));
     }
 }

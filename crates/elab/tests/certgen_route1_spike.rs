@@ -53,9 +53,9 @@ fn elab_err(src: &str) -> String {
 /// *against* — `GlobalVar` counts from the end of Ψ, so a body must be
 /// re-checked under the prefix that excludes its own binding.
 fn last_body(e: &Elaborator) -> (GlobalCtx, Term, Type, heather_kernel::level::Level) {
-    let bindings = &e.psi().bindings;
-    let (last, before) = bindings.split_last().expect("a binding");
-    match last {
+    let mut before = e.psi().bindings.to_vec();
+    let last = before.pop().expect("a binding");
+    match &last {
         GlobalBinding::Tm { ty, level, body: Some(b), .. } => (
             GlobalCtx::new(before.to_vec()),
             (**b).clone(),

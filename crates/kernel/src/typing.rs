@@ -139,10 +139,10 @@ impl From<ConvError> for TypeError {
 /// variables.
 pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
     let tc = Tc::new(fuel);
-    for (i, b) in psi.bindings.iter().enumerate() {
-        let prefix = GlobalCtx::new(psi.bindings[..i].to_vec());
+    let mut prefix = GlobalCtx::default();
+    for b in psi.bindings.iter() {
         let env = Env {
-            psi: prefix,
+            psi: prefix.clone(),
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs,
@@ -180,6 +180,8 @@ pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
                 }
             }
         }
+        drop(env);
+        prefix.push(b.clone());
     }
     Ok(())
 }
@@ -470,7 +472,7 @@ struct ConvMemoBucket {
     inferred: Discriminant<Type>,
     expected_anchor: TypeAnchor,
     inferred_anchor: TypeAnchor,
-    psi: RcIdentity<Vec<GlobalBinding>>,
+    psi: RcIdentity<()>,
     gamma: CtxEntriesIdentity,
     gamma_base: Option<u32>,
     layer: Layer,
@@ -527,7 +529,7 @@ impl Tc {
             inferred: inferred_head,
             expected_anchor: type_anchor(expected),
             inferred_anchor: type_anchor(inferred),
-            psi: RcIdentity::new(Rc::clone(&env.psi.bindings)),
+            psi: RcIdentity::new(env.psi.bindings.identity()),
             gamma: env.gamma.entries.identity(),
             gamma_base: match env.gamma.base {
                 CtxBase::Nil => None,
@@ -546,7 +548,7 @@ impl Tc {
                         entry.layer == env.layer
                             && entry.univs == env.univs
                             && entry.level == *l
-                            && Rc::ptr_eq(&entry.psi.bindings, &env.psi.bindings)
+                            && entry.psi.bindings.same_identity(&env.psi.bindings)
                             && entry.gamma == env.gamma
                             && entry.expected == *expected
                             && entry.inferred == *inferred

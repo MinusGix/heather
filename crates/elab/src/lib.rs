@@ -58,6 +58,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -465,36 +466,88 @@ struct PendingDecl {
     direct_dependencies: Vec<String>,
 }
 
-/// `Clone` is deliberate and cheap: every field is a `HashMap` of `Rc`s or a
-/// small `Vec`, so cloning a prelude'd elaborator costs microseconds where
-/// [`Self::with_prelude`] costs milliseconds. The frontend benchmark suite
-/// needs it — a timed unit of work has to be repeatable, and `check_source`
-/// mutates — and speculative elaboration (an LSP, a tactic that tries a
-/// branch) is the same need one layer up.
+/// Restores the temporary name-resolution environment after re-lowering
+/// stored surface syntax.
+struct ResolutionScope<'a> {
+    stack: &'a RefCell<Vec<Rc<names::Scope>>>,
+}
+
+impl Drop for ResolutionScope<'_> {
+    fn drop(&mut self) {
+        self.stack
+            .borrow_mut()
+            .pop()
+            .expect("a resolution scope was installed");
+    }
+}
+
+/// The durable semantic world. It is immutable while shared; the first commit
+/// in a fork obtains a private copy through [`Rc::make_mut`]. Keeping this
+/// boundary explicit makes image capture and image restoration O(1), and is
+/// the ownership seam at which per-registry overlays can replace whole-world
+/// copy-on-write.
+#[derive(Clone)]
+struct Shared<T>(Rc<T>);
+
+impl<T> Shared<T> {
+    fn new(value: T) -> Self {
+        Self(Rc::new(value))
+    }
+}
+
+impl<T> Deref for Shared<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Clone> DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Rc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct CommittedWorld {
+    psi: Shared<GlobalCtx>,
+    delta_psi: Shared<GlobalCtx>,
+    names: Shared<Names>,
+    types: Shared<Types>,
+    traits: Shared<Traits>,
+    representations: Shared<Representations>,
+    provenance: Shared<provenance::Provenance>,
+    meta_programs: Shared<MetaPrograms>,
+}
+
+impl CommittedWorld {
+    fn empty() -> Self {
+        Self {
+            psi: Shared::new(GlobalCtx::default()),
+            delta_psi: Shared::new(GlobalCtx::default()),
+            names: Shared::new(Names::new(DEFAULT_MODULE)),
+            types: Shared::new(Types::default()),
+            traits: Shared::new(Traits::default()),
+            representations: Shared::new(Representations::default()),
+            provenance: Shared::new(provenance::Provenance::default()),
+            meta_programs: Shared::new(MetaPrograms::default()),
+        }
+    }
+}
+
+/// Cloning an elaborator shares its committed world. Transient policy,
+/// diagnostics, scratch space, and dynamic scopes retain their established
+/// clone behavior; [`SemanticImage::elaborator`] instead supplies fresh
+/// transient state around the shared world.
 #[derive(Clone)]
 pub struct Elaborator {
-    psi: GlobalCtx,
-    /// [`Self::psi`] padded with `goal_base` bodiless slots, so that a
-    /// `GlobalVar` as the *term* world numbers it (goals innermost) resolves
-    /// to the right binding. Only δ-unfolding reads it, and a goal never has
-    /// a body, so the padding's contents are irrelevant and it can be kept
-    /// in step with two cheap rebuilds rather than recomputed per lookup
-    /// (unlike [`Self::goal_psi`], which conversion needs statements from).
-    delta_psi: GlobalCtx,
-    /// Module scopes, committed ordinary declarations, and every index that
-    /// makes them nameable (`names.rs`).
-    names: Names,
-    /// Committed nominal declarations and every index or generated definition
-    /// belonging to them (`types.rs`).
-    types: Types,
-    /// Committed classes, instances, designations, and derived dictionaries
-    /// (`traits.rs`).
-    traits: Traits,
-    /// Committed representation declarations, implementations, obligations,
-    /// monomorph names, and designed access paths (`representations.rs`).
-    representations: Representations,
-    /// Direct declaration edges and their transitive assumption paths.
-    provenance: provenance::Provenance,
+    committed: Rc<CommittedWorld>,
+    /// Dynamically installed scope while stored surface syntax is re-lowered.
+    /// This is execution state, not a committed name-registry fact, so it must
+    /// remain private to one elaborator when semantic state is shared.
+    resolution_scopes: RefCell<Vec<Rc<names::Scope>>>,
     /// Nesting depth of generated-source elaboration. This is execution mode,
     /// not representation registry state; zero means user source.
     generated_depth: usize,
@@ -550,10 +603,6 @@ pub struct Elaborator {
     /// are diagnostic history, so declaration rollback deliberately retains
     /// them for the caller that receives the corresponding error.
     omega_failure_reports: RefCell<Vec<OmegaReport>>,
-    /// Meta-layer definitions and the slots claimed by their `for` clauses
-    /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
-    /// enter Ψ; both lookup views commit together after validation.
-    meta_programs: MetaPrograms,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -572,6 +621,20 @@ pub struct Elaborator {
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
     gate: Option<Rc<dyn gate::KernelGate>>,
+}
+
+impl Deref for Elaborator {
+    type Target = CommittedWorld;
+
+    fn deref(&self) -> &Self::Target {
+        &self.committed
+    }
+}
+
+impl DerefMut for Elaborator {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Rc::make_mut(&mut self.committed)
+    }
 }
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
@@ -1167,13 +1230,8 @@ impl Elaborator {
     /// An empty elaborator (no prelude).
     pub fn new() -> Self {
         Elaborator {
-            psi: GlobalCtx::default(),
-            delta_psi: GlobalCtx::default(),
-            names: Names::new(DEFAULT_MODULE),
-            types: Types::default(),
-            traits: Traits::default(),
-            representations: Representations::default(),
-            provenance: provenance::Provenance::default(),
+            committed: Rc::new(CommittedWorld::empty()),
+            resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: 0,
             impl_provenance: None,
             attempt: DeclAttempt::default(),
@@ -1187,7 +1245,6 @@ impl Elaborator {
             item_timings: None,
             omega_reports: RefCell::new(Vec::new()),
             omega_failure_reports: RefCell::new(Vec::new()),
-            meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
@@ -1339,9 +1396,10 @@ impl Elaborator {
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
         for item in &file.items {
-            let timing = self.item_timings.as_ref().map(|_| {
-                (Instant::now(), stats::kernel_ns())
-            });
+            let timing = self
+                .item_timings
+                .as_ref()
+                .map(|_| (Instant::now(), stats::kernel_ns()));
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
             let r = match item {
@@ -1488,17 +1546,24 @@ impl Elaborator {
     }
 
     fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
-        self.names.resolve_kinds(name, kinds, |m, ty, ctor| {
-            self.types
-                .inductive(&qkey(m, ty))
-                .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
-        })
+        let scopes = self.resolution_scopes.borrow();
+        self.names
+            .resolve_kinds(scopes.last().map(Rc::as_ref), name, kinds, |m, ty, ctor| {
+                self.types
+                    .inductive(&qkey(m, ty))
+                    .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
+            })
     }
 
     /// Install the declaration scope for one read of stored inductive syntax.
     /// The guard restores the caller's scope on every return path.
-    fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> names::ResolutionScope<'a> {
-        self.names.use_scope(Rc::clone(&ind.scope))
+    fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> ResolutionScope<'a> {
+        self.resolution_scopes
+            .borrow_mut()
+            .push(Rc::clone(&ind.scope));
+        ResolutionScope {
+            stack: &self.resolution_scopes,
+        }
     }
 
     /// The base half of a written name — `nat::sub` and `sub` both name `sub`.
@@ -5384,7 +5449,7 @@ impl Elaborator {
 
     /// Semantic operations over committed Ψ, with no declaration padding.
     fn committed_oracle(&self) -> oracle::SemanticOracle {
-        oracle::SemanticOracle::in_world(self.psi.clone(), self.fuel)
+        oracle::SemanticOracle::in_world((*self.psi).clone(), self.fuel)
     }
 
     /// The capabilities currently admitted to expression elaboration.
@@ -5439,7 +5504,7 @@ impl Elaborator {
             self.delta_psi = self.psi.clone();
             return;
         }
-        let mut bindings = (*self.psi.bindings).clone();
+        let mut bindings = self.psi.bindings.to_vec();
         bindings.resize(
             bindings.len() + self.attempt.goal_arena.base() as usize,
             GlobalBinding::Tm {
@@ -5450,6 +5515,6 @@ impl Elaborator {
                 body: None,
             },
         );
-        self.delta_psi = GlobalCtx::new(bindings);
+        *self.delta_psi = GlobalCtx::new(bindings);
     }
 }

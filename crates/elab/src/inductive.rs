@@ -803,7 +803,8 @@ impl Elaborator {
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.
-        self.types.commit(self.names.module(), Rc::clone(&ind));
+        let module = self.names.module().to_string();
+        self.types.commit(&module, Rc::clone(&ind));
         if let Some(skeleton) = &ind.skel {
             self.add_name(&skeleton.name, NameKind::Inductive);
         }

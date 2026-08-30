@@ -163,8 +163,12 @@ impl Elaborator {
         // type name has a universe type and cannot check there; dropping that
         // reading is therefore a shrink, while a `Global` or `Meta` may return
         // the expected type and must still make this route stand down.
-        self.names
-            .visible_entries_are(name, &[NameKind::Ctor, NameKind::Inductive])
+        let scopes = self.resolution_scopes.borrow();
+        self.names.visible_entries_are(
+            scopes.last().map(Rc::as_ref),
+            name,
+            &[NameKind::Ctor, NameKind::Inductive],
+        )
     }
 
     /// A constructor applied to its arguments, however the surface

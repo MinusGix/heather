@@ -1428,7 +1428,7 @@ impl GlobalBinding {
 /// The global context Ψ. `bindings[0]` is outermost; [`GlobalVar`] 0 refers
 /// to the last binding.
 ///
-/// The binding list is behind an [`Rc`] so that *cloning Ψ is O(1)*.
+/// The binding list is persistent and chunked so that *cloning Ψ is O(1)*.
 /// Typing and conversion carry Ψ inside an environment they clone at every
 /// binder descent, and a `fn` is now a bodied binding
 /// (issues/simulate-conversion-cost.md), so a deep copy per descent was the
@@ -1436,27 +1436,165 @@ impl GlobalBinding {
 /// (issues/context-representation-clones.md). Sharing is safe here in a way
 /// it is not for Γ: Ψ never appears *inside* a term, so no conversion rule
 /// compares it structurally, and it is only ever extended at declaration
-/// granularity — [`GlobalCtx::push`] pays a copy-on-write there, which is
-/// once per declaration rather than once per binder.
+/// granularity. Appending to a shared context copies at most one bounded tail
+/// rather than the entire prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
-    pub bindings: Rc<Vec<GlobalBinding>>,
+    pub bindings: GlobalBindings,
+}
+
+const GLOBAL_CHUNK: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GlobalChunk {
+    bindings: Rc<Vec<GlobalBinding>>,
+}
+
+/// Persistent outermost-first storage for Ψ.
+#[derive(Clone)]
+pub struct GlobalBindings {
+    sealed: Rc<Vec<GlobalChunk>>,
+    sealed_len: usize,
+    tail: Rc<Vec<GlobalBinding>>,
+    identity: Rc<()>,
+}
+
+impl Default for GlobalBindings {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl PartialEq for GlobalBindings {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for GlobalBindings {}
+
+impl std::fmt::Debug for GlobalBindings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl GlobalBindings {
+    fn new(bindings: Vec<GlobalBinding>) -> Self {
+        let mut sealed = Vec::new();
+        let mut tail = Vec::with_capacity(GLOBAL_CHUNK);
+        let mut sealed_len = 0;
+        for binding in bindings {
+            tail.push(binding);
+            if tail.len() == GLOBAL_CHUNK {
+                sealed_len += tail.len();
+                sealed.push(GlobalChunk {
+                    bindings: Rc::new(std::mem::take(&mut tail)),
+                });
+            }
+        }
+        Self {
+            sealed: Rc::new(sealed),
+            sealed_len,
+            tail: Rc::new(tail),
+            identity: Rc::new(()),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.sealed_len + self.tail.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<&GlobalBinding> {
+        if index >= self.sealed_len {
+            return self.tail.get(index - self.sealed_len);
+        }
+        self.sealed
+            .get(index / GLOBAL_CHUNK)?
+            .bindings
+            .get(index % GLOBAL_CHUNK)
+    }
+
+    pub fn last(&self) -> Option<&GlobalBinding> {
+        self.tail
+            .last()
+            .or_else(|| self.sealed.last().and_then(|chunk| chunk.bindings.last()))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &GlobalBinding> {
+        self.sealed
+            .iter()
+            .flat_map(|chunk| chunk.bindings.iter())
+            .chain(self.tail.iter())
+    }
+
+    pub fn to_vec(&self) -> Vec<GlobalBinding> {
+        self.iter().cloned().collect()
+    }
+
+    pub(crate) fn identity(&self) -> Rc<()> {
+        Rc::clone(&self.identity)
+    }
+
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    fn push(&mut self, binding: GlobalBinding) {
+        if self.tail.len() == GLOBAL_CHUNK {
+            self.seal_tail();
+        }
+        Rc::make_mut(&mut self.tail).push(binding);
+        self.identity = Rc::new(());
+    }
+
+    fn seal_tail(&mut self) {
+        if self.tail.is_empty() {
+            return;
+        }
+        debug_assert_eq!(self.tail.len(), GLOBAL_CHUNK);
+        self.sealed_len += self.tail.len();
+        Rc::make_mut(&mut self.sealed).push(GlobalChunk {
+            bindings: Rc::clone(&self.tail),
+        });
+        self.tail = Rc::new(Vec::new());
+        self.identity = Rc::new(());
+    }
 }
 
 impl GlobalCtx {
     /// Ψ from its bindings, outermost first.
     pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-        GlobalCtx { bindings: Rc::new(bindings) }
+        GlobalCtx { bindings: GlobalBindings::new(bindings) }
     }
 
     /// Append one binding (copy-on-write if this Ψ is shared).
     pub fn push(&mut self, b: GlobalBinding) {
-        Rc::make_mut(&mut self.bindings).push(b);
+        self.bindings.push(b);
     }
 
     /// Append several bindings (copy-on-write if this Ψ is shared).
     pub fn extend(&mut self, bs: impl IntoIterator<Item = GlobalBinding>) {
-        Rc::make_mut(&mut self.bindings).extend(bs);
+        for binding in bs {
+            self.bindings.push(binding);
+        }
+    }
+
+    /// Share the bounded append tail for an immutable semantic image.
+    pub fn semantic_snapshot(&self) -> GlobalCtx {
+        self.clone()
+    }
+}
+
+impl std::ops::Index<usize> for GlobalBindings {
+    type Output = GlobalBinding;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).expect("global binding index out of bounds")
     }
 }
 
@@ -1735,4 +1873,33 @@ pub fn wf_step_telescope_at(
         &LocalSubst::id(gamma).shift_local(3).extended(Rc::new(sup_ac.shift_local(1))),
     );
     (cs_ty, ih_ty, step_ty)
+}
+
+#[cfg(test)]
+mod global_ctx_tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn semantic_snapshot_shares_chunks_and_bounds_suffix_detachment() {
+        let mut base = GlobalCtx::new(vec![GlobalBinding::Ctx; 150]);
+        for _ in 0..25 {
+            base.push(GlobalBinding::Ctx);
+        }
+        let image = base.semantic_snapshot();
+        assert_eq!(image.bindings.len(), 175);
+        assert!(image.bindings.tail.len() <= GLOBAL_CHUNK);
+
+        let mut suffix = image.clone();
+        assert!(Rc::ptr_eq(&image.bindings.sealed, &suffix.bindings.sealed));
+        let tail_len = image.bindings.tail.len();
+        suffix.push(GlobalBinding::Ctx);
+        assert_eq!(image.bindings.len(), 175);
+        assert_eq!(suffix.bindings.len(), 176);
+        assert!(Rc::ptr_eq(&image.bindings.sealed, &suffix.bindings.sealed));
+        assert_eq!(suffix.bindings.tail.len(), tail_len + 1);
+        assert!(suffix.bindings.iter().all(|b| *b == GlobalBinding::Ctx));
+        assert_eq!(suffix, GlobalCtx::new(vec![GlobalBinding::Ctx; 176]));
+    }
 }

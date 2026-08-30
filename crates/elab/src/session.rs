@@ -6,10 +6,9 @@
 //! the one rollback boundary spanning every durable registry those ordinary
 //! commits can change.
 
-use heather_kernel::term::GlobalCtx;
+use std::rc::Rc;
 
-use crate::provenance::Provenance;
-use crate::{Elaborator, MetaPrograms, Names, R, Representations, Traits, Types};
+use crate::{CommittedWorld, Elaborator, R, Shared};
 
 /// A complete snapshot of facts committed by successful declarations.
 ///
@@ -19,14 +18,7 @@ use crate::{Elaborator, MetaPrograms, Names, R, Representations, Traits, Types};
 /// speculative rollback silently undo caller policy or diagnostic history.
 #[derive(Clone)]
 struct SessionCheckpoint {
-    psi: GlobalCtx,
-    delta_psi: GlobalCtx,
-    names: Names,
-    types: Types,
-    traits: Traits,
-    representations: Representations,
-    meta_programs: MetaPrograms,
-    provenance: Provenance,
+    committed: Rc<CommittedWorld>,
 }
 
 /// An in-memory image of every semantic fact committed by an elaborator.
@@ -59,32 +51,22 @@ impl SemanticImage {
 impl SessionCheckpoint {
     fn capture(elab: &Elaborator) -> Self {
         Self {
-            psi: elab.psi.clone(),
-            delta_psi: elab.delta_psi.clone(),
-            names: elab.names.clone(),
-            types: elab.types.clone(),
-            traits: elab.traits.clone(),
-            representations: elab.representations.clone(),
-            meta_programs: elab.meta_programs.clone(),
-            provenance: elab.provenance.clone(),
+            committed: Rc::clone(&elab.committed),
         }
     }
 
     fn capture_semantic(elab: &Elaborator) -> Self {
-        let mut committed = Self::capture(elab);
-        committed.names = elab.names.semantic_snapshot();
-        committed
+        let mut committed = (*elab.committed).clone();
+        committed.psi = Shared::new(elab.psi.semantic_snapshot());
+        committed.delta_psi = Shared::new(elab.delta_psi.semantic_snapshot());
+        committed.names = Shared::new(elab.names.semantic_snapshot());
+        Self {
+            committed: Rc::new(committed),
+        }
     }
 
     fn restore(self, elab: &mut Elaborator) {
-        elab.psi = self.psi;
-        elab.delta_psi = self.delta_psi;
-        elab.names = self.names;
-        elab.types = self.types;
-        elab.traits = self.traits;
-        elab.representations = self.representations;
-        elab.meta_programs = self.meta_programs;
-        elab.provenance = self.provenance;
+        elab.committed = self.committed;
 
         // Absolute Ψ positions may be reused after rollback. A cached answer
         // for a removed declaration must not become the answer for its future
@@ -101,7 +83,9 @@ impl Elaborator {
     /// from which persistent per-module images will be derived; it does not
     /// skip or stand in for a kernel judgment on disk-loaded data.
     pub fn semantic_image(&self) -> SemanticImage {
-        SemanticImage { committed: SessionCheckpoint::capture_semantic(self) }
+        SemanticImage {
+            committed: SessionCheckpoint::capture_semantic(self),
+        }
     }
 
     /// Run an operation atomically with respect to all committed session
@@ -116,5 +100,31 @@ impl Elaborator {
             checkpoint.restore(self);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn image_forks_share_then_detach_only_mutated_registries() {
+        let image = Elaborator::new().semantic_image();
+        let mut left = image.elaborator();
+        let right = image.elaborator();
+
+        assert!(Rc::ptr_eq(&left.committed, &right.committed));
+        left.elab_source("fn id(x: Nat) -> Nat { x }").unwrap();
+
+        assert!(!Rc::ptr_eq(&left.committed, &right.committed));
+        assert!(Rc::ptr_eq(&left.types.0, &right.types.0));
+        assert!(Rc::ptr_eq(&left.traits.0, &right.traits.0));
+        assert!(Rc::ptr_eq(
+            &left.representations.0,
+            &right.representations.0,
+        ));
+        assert!(Rc::ptr_eq(&left.meta_programs.0, &right.meta_programs.0));
     }
 }

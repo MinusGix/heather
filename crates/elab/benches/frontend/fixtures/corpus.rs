@@ -68,6 +68,8 @@ fn prelude_family() -> Family {
     // rebuilding it, and the two numbers side by side are what makes that
     // an argument rather than an assumption.
     let base = super::prelude();
+    let image = base.semantic_image();
+    let suffix_image = image.clone();
     Family {
         name: "corpus/prelude",
         what: "building a prelude'd elaborator — the per-file fixed cost the CLI pays",
@@ -79,6 +81,16 @@ fn prelude_family() -> Family {
                 let e = base.clone();
                 std::hint::black_box(&e);
                 1
+            }),
+            Case::named("image-fork", 1, 1, move || {
+                let e = image.elaborator();
+                std::hint::black_box(&e);
+                1
+            }),
+            Case::named("image-first-decl", 1, 1, move || {
+                let mut e = suffix_image.elaborator();
+                e.elab_source("fn image_suffix(x: Nat) -> Nat { x }")
+                    .is_ok() as u64
             }),
         ],
     }

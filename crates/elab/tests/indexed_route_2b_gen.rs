@@ -754,7 +754,7 @@ fn walk_emitted(src: &str) -> usize {
     let base = e.psi().bindings.len();
     e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
     let mut w = Walk::default();
-    for b in &e.psi().bindings[base..] {
+    for b in e.psi().bindings.iter().skip(base) {
         match b {
             GlobalBinding::Tm { ty, body, .. } => {
                 w.ty(ty, false);

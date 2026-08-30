@@ -414,6 +414,7 @@ impl Elaborator {
             .map(|(slot, order)| (Some(slot), order))
             .unwrap_or((None, Vec::new()));
         let module = self.names.module().to_string();
+        let psi_len = self.psi.bindings.len() as u32;
         self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
         self.meta_programs.commit(
             module,
@@ -422,7 +423,7 @@ impl Elaborator {
             MetaDef {
                 term: Rc::new(term),
                 stmt: Rc::new(stmt),
-                psi_len: self.psi.bindings.len() as u32,
+                psi_len,
                 order,
             },
         );

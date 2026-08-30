@@ -1,6 +1,6 @@
 # Semantic module images
 
-Status: accepted design, implementation staged. Owner:
+Status: accepted design, stages 1 and 2a complete; Stage 2b underway. Owner:
 `issues/semantic-module-images.md`.
 
 ## 1. Problem and target
@@ -179,6 +179,36 @@ several derived `Clone`s copy maps, strings, vectors, provenance paths, and
 stored surface AST. Stage 2 moves these behind the same explicit committed-
 world boundary rather than relying on the accidental cost of `derive(Clone)`.
 
+The first Stage 2 slice uses two-level copy-on-write. A `SemanticImage` and
+all of its forks share one `CommittedWorld`; detaching that small world copies
+only handles, because each durable registry is independently shared. The first
+write to a particular registry then detaches just that registry. Temporary
+stored-syntax resolution scopes live on the elaboration session, not in the
+shared `Names` registry.
+
+This is an ownership implementation of the base/overlay boundary. Stage 2b's
+first conversion makes `Names` a sequence of immutable module-sized layers
+plus one mutable current-module delta. Image capture seals that delta by
+sharing it and starts restored suffixes empty; name resolution streams across
+the layers without constructing a flattened candidate table. Re-entering one
+module keeps one layer, so lookup depth follows the module closure rather than
+REPL/source-chunk count.
+
+Ψ now uses persistent, bounded chunks. Full 64-binding chunks are sealed and
+shared; a snapshot shares its at-most-63-binding tail, so a subsequent append
+copies at most that bounded tail. Absolute lookup remains O(1) by quotient and
+remainder into fixed-width chunks. This also bounds the
+cost of the ordinary `psi`/`delta_psi` sharing after each declaration—the flat
+vector could recopy a growing suffix repeatedly, not merely once at image
+restore. Exact/debug rendering deliberately exposes only the logical binding
+sequence, never chunk boundaries, because that rendering participates in
+elaboration and cache identity.
+
+The remaining registries still detach as whole tables on first mutation.
+Later Stage 2b slices apply the measured layering shape where table size
+warrants it; measurements must continue to distinguish O(1) image/fork
+creation, lookup depth, and first-write detachment.
+
 ## 7. Loader and compiler architecture
 
 The CLI loader resolves the module DAG and, for each node:
@@ -230,6 +260,13 @@ This stage defines the boundary. It does not claim a cross-process speedup.
 - Accumulate new module facts in an overlay and freeze atomically.
 - Measure snapshot, first suffix commit, and lookup costs as the world grows.
 
+Stage 2a is complete: explicit shared world, independently shared registries,
+session-local resolution scopes, atomic pointer rollback, and behavioral plus
+ownership tests. Stage 2b has converted the name registry to shared
+module-sized deltas, converted Ψ to bounded persistent chunks, and added
+image-fork/first-declaration benchmark cases. The other registries remain to
+be evaluated and converted selectively.
+
 ### Stage 3 — module deltas and safe reload
 
 - Extract the exact delta for one successful module.
@@ -250,7 +287,47 @@ This stage defines the boundary. It does not claim a cross-process speedup.
 - Schedule independent module nodes in parallel.
 - Add replay/trusted quick modes only as separately reviewed trust rungs.
 
-## 10. Verification and performance gates
+## 10. Performance priorities after the image boundary
+
+Image construction is no longer the dominant performance problem. The
+prelude fixture currently measures an approximately 88 ns world clone, 385 ns
+image fork, and 8.33 microseconds from a fork through its first ordinary
+declaration, against about 222 microseconds to rebuild the prelude. The
+remaining work therefore separates three costs instead of treating all of
+them as "image performance":
+
+1. **First-write detachment.** Add a growth fixture for the first declaration
+   which mutates each durable registry. Convert registries selectively from
+   those measurements. Provenance is first: every ordinary declaration writes
+   it, its entries contain dependency paths and inherited-axiom maps, and its
+   whole-table clone may be deeper than the pointer-heavy type indexes.
+2. **Dependency replay.** Finish module deltas and safe loading soon enough to
+   stop parsing, elaborating, and regenerating unchanged dependencies. A disk
+   artifact remains acceleration input rather than a proof verdict; the first
+   rung rechecks imported kernel bindings before exposing their metadata.
+3. **New-proof cost.** Large x86 and Omega declarations are dominated by
+   elaboration, conversion, normalization, and the final kernel gate. Registry
+   persistence cannot turn a 96-second isolated theorem target into a fast
+   one. Add conversion hit/miss, evaluation, allocation, and repeated-query
+   attribution before changing kernel algorithms.
+
+The provisional registry order is provenance, nominal types, traits,
+representations, then meta-programs. It is not a mandate to apply one data
+structure mechanically. In particular, trait resolution already has queries
+which scan candidate tables; its persistent representation should be designed
+with secondary indexes by class/member so it improves normal elaboration as
+well as suffix detachment. Provenance measurements likewise separate map
+detachment from inherited-path construction, since layering fixes only the
+former.
+
+Once provenance and the measured large registries are bounded, prefer moving
+to Stage 3 over polishing tiny registries whose first-write cost is lost in
+noise. In parallel, kernel optimizations should favor untrusted, intra-check
+memoization and structural sharing. Persistent admission through
+`KernelGate` is a distinct trusted-cache rung and must not be introduced as an
+incidental performance optimization.
+
+## 11. Verification and performance gates
 
 Correctness tests must cover ordinary declarations, an inductive with generated
 definitions, stored surface re-lowering, traits/instances/designations,

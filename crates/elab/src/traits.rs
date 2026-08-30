@@ -1177,8 +1177,8 @@ impl Elaborator {
             ancestors,
             owner,
         };
-        self.traits
-            .commit_class(qkey(self.names.module(), &d.name), info);
+        let key = qkey(self.names.module(), &d.name);
+        self.traits.commit_class(key, info);
         Ok(())
     }
 
@@ -2140,10 +2140,11 @@ impl Elaborator {
         let r = self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
         self.instance_scope.clear();
         r?;
+        let global = qkey(self.names.module(), &prefix);
         self.traits.commit_instance(
             key,
             InstanceInfo {
-                global: qkey(self.names.module(), &prefix),
+                global,
                 written,
                 index,
                 parameterized,
@@ -2491,10 +2492,11 @@ impl Elaborator {
                 span,
             );
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
+            let global = qkey(self.names.module(), &aname);
             self.traits.commit_instance(
                 instance_key(&akey, head_key, &aindex),
                 InstanceInfo {
-                    global: qkey(self.names.module(), &aname),
+                    global,
                     written: class_ref_written(&aref),
                     index: aindex,
                     parameterized,

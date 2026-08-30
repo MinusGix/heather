@@ -328,7 +328,7 @@ impl GoalArena {
     /// Ψ as goal statements see it, including reserved-but-unused slots.
     pub(super) fn world(&self, psi: &GlobalCtx, meta_pushed: &[GlobalBinding]) -> GlobalCtx {
         if !meta_pushed.is_empty() {
-            let mut bindings = (*psi.bindings).clone();
+            let mut bindings = psi.bindings.to_vec();
             bindings.extend(meta_pushed.iter().cloned());
             return GlobalCtx::new(bindings);
         }
@@ -336,7 +336,7 @@ impl GoalArena {
             return psi.clone();
         }
         let goals = self.entries.borrow();
-        let mut bindings = (*psi.bindings).clone();
+        let mut bindings = psi.bindings.to_vec();
         for k in 0..self.base as usize {
             bindings.push(match goals.get(k) {
                 Some(goal) => GlobalBinding::Tm {
