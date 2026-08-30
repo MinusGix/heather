@@ -48,6 +48,14 @@ disk artifact is acceleration data, not a proof verdict.
 - **[[application-annotation-sharing-cost]]** owns the cost of genuinely new
   x86 declarations; module images remove unchanged dependency work, not that
   root-module cost.
+- **[[semantic-replay-phase-attribution]]** owns attribution inside the
+  remaining warm replay time.
+- **[[shared-semantic-test-fixtures]]** and
+  **[[resident-accepted-semantic-worlds]]** own the next consumers rather than
+  changing this format's trust boundary.
+- **[[semantic-cache-lifecycle]]**, **[[module-interface-schema-hardening]]**
+  and **[[relocatable-semantic-module-images]]** own persistent housekeeping,
+  projection maintenance and the deferred non-exact-prefix format.
 
 ## Log
 
