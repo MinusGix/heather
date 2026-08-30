@@ -411,7 +411,16 @@ Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:
   disablement and non-fatal notices; callers retain presentation, stopping
   and trust-rung policy. A fresh-consumer integration test reconstructs the
   same Ψ from a previous session's image.
-- Reuse images in the daemon and test tooling.
+- **Done (first test consumers):** `semantic_test_base` loads explicit ordered
+  fixture closures beneath `target/semantic-test-images`, returns an ordinary
+  in-process elaborator sealed with `NoGate`, and loudly rebuilds corrupt
+  images. The x86 target and four Omega shards use it; profiling switches keep
+  their old source-only paths, and `omega_div_mod` remains the full-source
+  Omega backstop. Dedicated prefix-only warmup targets run before these
+  acceptance shards under their own process rails, so cold image creation and
+  a large fresh suffix cannot accidentally combine past one CPU limit.
+- Reuse accepted worlds in a daemon and across several consumers in one
+  process.
 - Schedule independent module nodes in parallel.
 - Add replay/trusted quick modes only as separately reviewed trust rungs.
 

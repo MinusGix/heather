@@ -1,6 +1,6 @@
 ---
 title: Share safely accepted semantic prefixes across expensive test fixtures
-status: open
+status: closed
 labels: [testing,tooling,elaboration,performance,caching]
 created: 2026-08-30
 updated: 2026-08-30
@@ -46,3 +46,43 @@ the resulting immutable world for fresh theorem/control suffixes.
 - **[[generated-term-oracle-controls-not-convertible]]** records why the x86
   suite was consolidated and why its controls must remain freshly checked.
 
+## Log
+
+- 2026-08-30: Implemented `semantic_test_base` in the shared elaborator test
+  support. It accepts an explicit dependency-first source list, uses the
+  public `SemanticSession` and `target/semantic-test-images`, prints every
+  cache rejection, and returns an elaborator explicitly sealed with
+  `NoGate`. An isolated-directory control corrupts an image, observes the
+  loud rejection/rebuild, requires equal Ψ and checks a fresh consumer suffix.
+
+  X86 uses the helper for ordinary tests while its phase/value profiling
+  environment variables retain the original source-only route. The exact
+  target passed cold in 171.88 seconds and warm in 143.94; base-only warm
+  replay of all 13 modules is 7.38 seconds. The remaining roughly 136 seconds
+  belongs to freshly checked execution, decoder and negative-control
+  suffixes, so semantic setup reuse is helpful but not their owner.
+
+  The larger suite win is Omega. The core, logic and reconstruction binaries
+  and the division-scaling shard now replay the same nine-module prefix;
+  `omega_div_mod` deliberately remains source-only as the full-prefix
+  backstop. Warm exact-target results, all green with nine safe module
+  replays: core 160.06 seconds, logic 67.64, reconstruction 40.01 and scaling
+  98.12. Logic's first cold combined prefix+shard run reached the fixed rail
+  and was killed at 312 seconds after atomically publishing the missing Omega
+  image; the immediate warm rerun passed. This is precisely the cross-binary
+  multiplier the shared store removes without weakening fresh suffix checks.
+
+  Cold scheduling is explicit rather than hopeful. `semantic_x86_warmup` and
+  `semantic_omega_warmup` contain only their prefix loads; `scripts/test` runs
+  the applicable target first for focused x86/Omega invocations and both
+  before an unfiltered parallel suite. Each process receives the ordinary
+  memory/CPU rail. Thus an invalidated Omega prefix may spend its roughly
+  prefix-sized budget once, then the acceptance shard starts with a fresh CPU
+  budget and safe replay. Warm warmups measured 7.28 seconds for all 13 x86
+  modules and 0.93 seconds for all nine Omega modules. A runner-driven warm
+  reconstruction check then passed in 34.92 seconds.
+
+  Closed: the reusable seam, corruption control, x86 conversion, profiler
+  escape hatch, Omega family conversion, source-only backstop and measured
+  exact targets are all present. General multi-consumer in-process reuse is
+  separately owned by [[resident-accepted-semantic-worlds]].

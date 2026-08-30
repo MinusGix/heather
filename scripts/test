@@ -74,6 +74,46 @@ manifest=$(mktemp)
 cargo test --workspace --no-run --quiet --message-format=json > "$manifest"
 compile_seconds=$((SECONDS - compile_started))
 
+# Expensive acceptance targets consume a semantic library prefix and then a
+# large freshly checked suffix. On a cold or invalidated cache each half fits
+# the per-process CPU rail, while their sum may not. Populate/replay the shared
+# prefix first in its own bounded process so whichever shard Cargo schedules
+# first cannot inherit both budgets. Focused invocations get only the warmup
+# they need; an unfiltered suite prepares both families before parallel target
+# scheduling. The warmup itself uses safe semantic replay — never the trusted
+# declaration gate — and stale images rebuild from source.
+semantic_warmup() {
+  local target=$1
+  (
+    ulimit -v 4194304
+    ulimit -t 300
+    RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
+      cargo test -p heather-elab --test "$target" -- --format terse
+  )
+}
+
+if (( $# == 0 )); then
+  semantic_warmup semantic_x86_warmup
+  semantic_warmup semantic_omega_warmup
+else
+  requested=" $* "
+  whole_elab=false
+  if { [[ "$requested" == *" -p heather-elab "* ]] ||
+       [[ "$requested" == *" --package heather-elab "* ]]; } &&
+     [[ "$requested" != *" --test "* ]]; then
+    whole_elab=true
+  fi
+  if $whole_elab || [[ "$requested" == *"--test x86_64"* ]]; then
+    semantic_warmup semantic_x86_warmup
+  fi
+  if $whole_elab || [[ "$requested" == *"--test omega"* ]] ||
+     [[ "$requested" == *"--test omega_logic"* ]] ||
+     [[ "$requested" == *"--test omega_reconstruction"* ]] ||
+     [[ "$requested" == *"--test omega_div_mod_scaling"* ]]; then
+    semantic_warmup semantic_omega_warmup
+  fi
+fi
+
 # An unfiltered workspace run has no Cargo selection semantics left to
 # preserve, so run its independent binaries in bounded parallel. Focused
 # invocations retain Cargo's native serial path below. By default the runner

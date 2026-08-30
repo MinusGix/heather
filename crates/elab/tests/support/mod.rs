@@ -24,6 +24,64 @@ use std::rc::Rc;
 
 use heather_kernel::term::GlobalCtx;
 
+/// Build an in-process test base from checked semantic module images.
+///
+/// The ordered input is the same dependency-first closure an ordinary test
+/// used to elaborate by hand. A cold run checks every source module and
+/// publishes beneath `target/semantic-test-images`; a warm run bounded-decodes
+/// and kernel-checks every stored suffix before metadata becomes visible.
+/// The returned elaborator has `NoGate`, so fixture theorems, mutations and
+/// controls always reach the real kernel.
+pub fn semantic_test_base(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/semantic-test-images");
+    semantic_test_base_at(modules, dir)
+}
+
+/// The isolated-directory form used by the support boundary's own corruption
+/// and rebuild controls. Ordinary suites should use [`semantic_test_base`]
+/// so they share one content-addressed store beneath `target/`.
+pub fn semantic_test_base_at(
+    modules: &[(&str, &str)],
+    dir: std::path::PathBuf,
+) -> heather_elab::Elaborator {
+    let mut session = heather_cli::semantic::SemanticSession::new(Some(dir));
+    let mut elab = heather_elab::Elaborator::with_prelude().expect("prelude");
+    for &(name, src) in modules {
+        let module = heather_cli::loader::Module {
+            name: name.into(),
+            path: std::path::PathBuf::from(format!("{name}.hthr")),
+            src: src.into(),
+        };
+        let outcome = session.check(
+            &mut elab,
+            &module,
+            heather_elab::LintProfile::Default,
+        );
+        for notice in &outcome.notices {
+            eprintln!("semantic-test-images: {notice}");
+        }
+        if !outcome.errors.is_empty() {
+            let rendered = outcome
+                .errors
+                .iter()
+                .map(|error| error.render(src))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            panic!("{name} did not check:\n{rendered}");
+        }
+    }
+    elab.set_gate(Rc::new(heather_elab::gate::NoGate));
+    if std::env::var_os("HEATHER_SEMANTIC_FIXTURE_STATS").is_some() {
+        eprintln!(
+            "semantic-test-images: {} module{} safely replayed",
+            session.hits(),
+            if session.hits() == 1 { "" } else { "s" },
+        );
+    }
+    elab
+}
+
 /// The Nat arithmetic + Id lemma suite: stress-proof-suite item 1, and the
 /// corpus the determinism/golden-hash tests elaborate. Lives here rather
 /// than in `nat_suite.rs` so that both targets pin the *same* source — a

@@ -1,6 +1,8 @@
 //! First x86-64 vertical slice: decoded register MOV/ADD/SUB/CMP/TEST, flags, opaque
 //! memory preservation, and length-derived RIP fallthrough.
 
+mod support;
+
 use heather_elab::{stats, ElabError, Elaborator};
 use std::time::Instant;
 
@@ -18,23 +20,40 @@ const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
 const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
 const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/model.hthr");
 
+const X86_MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("bitvec", BITVEC),
+    ("relation", RELATION),
+    ("location", LOCATION),
+    ("certified_lookup", CERTIFIED_LOOKUP),
+    ("x86_64", X86_64),
+];
+
 fn elaborated() -> Elaborator {
+    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+    let report_phases = std::env::var_os("HEATHER_X86_PHASES").is_some();
+    if !report_metrics && !report_phases {
+        return support::semantic_test_base(X86_MODULES);
+    }
+
+    // Profiling asks what fresh elaboration of the x86 module costs. Keep
+    // that path source-only; replay numbers have their own session benchmark.
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
-        ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
-        ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
-        ("bitvec", BITVEC), ("relation", RELATION), ("location", LOCATION),
-        ("certified_lookup", CERTIFIED_LOOKUP),
-    ] {
+    for &(name, src) in &X86_MODULES[..X86_MODULES.len() - 1] {
         if let Err(err) = e.elab_module_source(name, src) {
             panic!("{name} did not check: {}", err.render(src));
         }
     }
-    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
     if report_metrics {
         e.enable_value_metrics();
     }
-    let report_phases = std::env::var_os("HEATHER_X86_PHASES").is_some();
     if report_phases {
         stats::reset_kernel_ns();
     }

@@ -4,7 +4,11 @@
 //! substantial literal while checking that Omega's reflected problem and
 //! proof search remain the same size as for a small divisor. It has an
 //! independent process budget because checking the literal itself is real
-//! unary work even though division is never evaluated.
+//! unary work even though division is never evaluated. Its checked library
+//! prefix safely replays from the shared semantic test-image store;
+//! `omega_div_mod.rs` remains the source-only suite backstop.
+
+mod support;
 
 use heather_elab::{ElabError, Elaborator};
 
@@ -18,22 +22,20 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 const INT: &str = include_str!("../../../lib/std/int.hthr");
 const OMEGA: &str = include_str!("../../../lib/std/omega.hthr");
 
+const OMEGA_MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("omega", OMEGA),
+];
+
 fn elaborator() -> Elaborator {
-    let mut elab = Elaborator::with_prelude().expect("prelude");
-    for (name, source) in [
-        ("logic", LOGIC),
-        ("bool", BOOL),
-        ("nat", NAT),
-        ("option", OPTION),
-        ("pair", PAIR),
-        ("list", LIST),
-        ("algebra", ALGEBRA),
-        ("int", INT),
-        ("omega", OMEGA),
-    ] {
-        elab.elab_module_source(name, source)
-            .unwrap_or_else(|error| panic!("{name} did not check: {error}"));
-    }
+    let elab = support::semantic_test_base(OMEGA_MODULES);
     elab.take_omega_reports();
     elab
 }

@@ -23,6 +23,18 @@ const ALGEBRA: &str = include_str!("../../../../lib/std/algebra.hthr");
 const INT: &str = include_str!("../../../../lib/std/int.hthr");
 const OMEGA: &str = include_str!("../../../../lib/std/omega.hthr");
 
+const OMEGA_MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("omega", OMEGA),
+];
+
 static PREFIX_LOAD: Mutex<()> = Mutex::new(());
 
 thread_local! {
@@ -34,23 +46,21 @@ fn load_image() -> SemanticImage {
     // and each spends the process's CPU rail checking the same arithmetic
     // prefix. The first worker fills it; the second waits and replays it.
     let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut elab = Elaborator::with_prelude().expect("prelude");
     let report_phases = std::env::var_os("HEATHER_OMEGA_PREFIX_PHASES").is_some();
+    if !report_phases {
+        let elab = support::semantic_test_base(OMEGA_MODULES);
+        elab.take_omega_reports();
+        return elab.semantic_image();
+    }
+
+    // Profiling asks what fresh prefix elaboration costs. Keep its historical
+    // declaration-gated source path rather than timing semantic replay.
+    let mut elab = Elaborator::with_prelude().expect("prelude");
     if report_phases {
         elab.enable_item_timings();
     }
     support::with_decl_cache(&mut elab, |elab| {
-        for (name, source) in [
-            ("logic", LOGIC),
-            ("bool", BOOL),
-            ("nat", NAT),
-            ("option", OPTION),
-            ("pair", PAIR),
-            ("list", LIST),
-            ("algebra", ALGEBRA),
-            ("int", INT),
-            ("omega", OMEGA),
-        ] {
+        for &(name, source) in OMEGA_MODULES {
             if report_phases {
                 stats::reset_kernel_ns();
             }
@@ -90,9 +100,10 @@ fn load_image() -> SemanticImage {
 
 fn elaborator() -> Elaborator {
     // The semantic image is the explicit committed-state boundary: reports,
-    // attempts, policy and the cache gate do not cross it. `omega_div_mod.rs`
-    // deliberately remains ungated so the full suite still checks this exact
-    // library prefix front to back once.
+    // attempts, policy and the cache gate do not cross it. Stored module
+    // images are kernel-checked before this process-local image is captured.
+    // `omega_div_mod.rs` deliberately remains source-only so the full suite
+    // still checks this exact library prefix front to back once.
     BASE.with(|base| base.get_or_init(load_image).elaborator())
 }
 

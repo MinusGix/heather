@@ -1,8 +1,9 @@
 //! End-to-end acceptance for Omega's certified division/modulus frontend.
 //!
-//! This is a separate target from `omega.rs`: both targets elaborate the full
-//! arithmetic library, and keeping independent process budgets prevents the
-//! solver's core acceptance matrix from exhausting the test harness CPU cap.
+//! This remains the suite's source/kernel backstop: unlike the semantic-image
+//! consumers in the sibling Omega targets, it elaborates the full arithmetic
+//! library on every run. Its independent process budget keeps that check and
+//! the division acceptance matrix from consuming another shard's rail.
 
 use heather_elab::{ElabError, Elaborator};
 
