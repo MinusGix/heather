@@ -805,6 +805,10 @@ impl Elaborator {
         // same declarations to surface resolution.
         let module = self.names.module().to_string();
         self.types.commit(&module, Rc::clone(&ind));
+        self.record_module_event(crate::module_delta::DeltaEvent::Inductive {
+            module,
+            info: Rc::clone(&ind),
+        });
         if let Some(skeleton) = &ind.skel {
             self.add_name(&skeleton.name, NameKind::Inductive);
         }

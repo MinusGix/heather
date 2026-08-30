@@ -274,6 +274,7 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report]) -> i32 {
 fn fixtures_index() -> Vec<(&'static str, &'static str)> {
     vec![
         ("corpus/prelude", "the per-file fixed cost the CLI pays"),
+        ("corpus/module-replay", "one real stdlib closure from source versus safe replay"),
         ("corpus/parse", "the parser alone over lib/*.hthr"),
         ("corpus/check-file", "lib/*.hthr end to end, with the phase split"),
         ("scale/declarations", "n independent fn+theorem pairs"),

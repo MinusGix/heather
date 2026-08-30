@@ -75,6 +75,10 @@ impl Elaborator {
                 .or_default()
                 .push(member.to_string());
         }
+        self.record_module_event(crate::module_delta::DeltaEvent::Access {
+            designed: designed.to_string(),
+            minted: minted.to_string(),
+        });
     }
 
     /// Record a generated name with no designed spelling (design §3.3).
@@ -83,6 +87,10 @@ impl Elaborator {
             .access_mut()
             .restricted
             .insert(minted.to_string(), Restriction::Internal(of.to_string()));
+        self.record_module_event(crate::module_delta::DeltaEvent::InternalAccess {
+            minted: minted.to_string(),
+            owner: of.to_string(),
+        });
     }
 
     /// The declaration a designed path names, if this is one.

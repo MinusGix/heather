@@ -4,6 +4,7 @@
 //! | tex judgment            | here                                    |
 //! |-------------------------|-----------------------------------------|
 //! | `⊢_L Ψ`                 | [`check_global_ctx`]                    |
+//! | `⊢_L Ψ, Ψ'` from `⊢_L Ψ`| [`check_global_ctx_extension`]          |
 //! | `⊢_i Γ`                 | [`check_local_ctx`] / [`Tc::ctx_wf`]    |
 //! | `⊢_i T @ l`             | [`check_type`] / [`Tc::ty_infer`]       |
 //! | `⊢_i t : T @ l`         | [`check_term`] / [`Tc::tm_infer`]       |
@@ -139,8 +140,32 @@ impl From<ConvError> for TypeError {
 /// variables.
 pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
     let tc = Tc::new(fuel);
-    let mut prefix = GlobalCtx::default();
-    for b in psi.bindings.iter() {
+    check_global_bindings(&tc, GlobalCtx::default(), psi.bindings.iter(), univs)
+}
+
+/// Check an ordered extension of an already well-formed global context.
+///
+/// This is the safe module-image gate: each binding is checked against the
+/// accepted prefix plus every earlier binding in `extension`, without
+/// rechecking `prefix` itself. Like the other public checking judgments, it
+/// presupposes the well-formedness of its ambient context.
+pub fn check_global_ctx_extension(
+    prefix: &GlobalCtx,
+    extension: &[GlobalBinding],
+    univs: u32,
+    fuel: u64,
+) -> R {
+    let tc = Tc::new(fuel);
+    check_global_bindings(&tc, prefix.clone(), extension.iter(), univs)
+}
+
+fn check_global_bindings<'a>(
+    tc: &Tc,
+    mut prefix: GlobalCtx,
+    bindings: impl IntoIterator<Item = &'a GlobalBinding>,
+    univs: u32,
+) -> R {
+    for b in bindings {
         let env = Env {
             psi: prefix.clone(),
             gamma: LocalCtx::nil(),

@@ -1178,7 +1178,8 @@ impl Elaborator {
             owner,
         };
         let key = qkey(self.names.module(), &d.name);
-        self.traits.commit_class(key, info);
+        self.traits.commit_class(key.clone(), info.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Class { key, info });
         Ok(())
     }
 
@@ -1853,14 +1854,9 @@ impl Elaborator {
                 d.span,
             );
         }
-        self.traits.commit_designation(
-            key,
-            DesignationInfo {
-                op,
-                written,
-                carrier: head,
-            },
-        );
+        let info = DesignationInfo { op, written, carrier: head };
+        self.traits.commit_designation(key.clone(), info.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Designation { key, info });
         Ok(())
     }
 
@@ -2141,15 +2137,9 @@ impl Elaborator {
         self.instance_scope.clear();
         r?;
         let global = qkey(self.names.module(), &prefix);
-        self.traits.commit_instance(
-            key,
-            InstanceInfo {
-                global,
-                written,
-                index,
-                parameterized,
-            },
-        );
+        let info = InstanceInfo { global, written, index, parameterized };
+        self.traits.commit_instance(key.clone(), info.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Instance { key, info });
         Ok(())
     }
 
@@ -2493,15 +2483,15 @@ impl Elaborator {
             );
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
             let global = qkey(self.names.module(), &aname);
-            self.traits.commit_instance(
-                instance_key(&akey, head_key, &aindex),
-                InstanceInfo {
-                    global,
-                    written: class_ref_written(&aref),
-                    index: aindex,
-                    parameterized,
-                },
-            );
+            let key = instance_key(&akey, head_key, &aindex);
+            let info = InstanceInfo {
+                global,
+                written: class_ref_written(&aref),
+                index: aindex,
+                parameterized,
+            };
+            self.traits.commit_instance(key.clone(), info.clone());
+            self.record_module_event(crate::module_delta::DeltaEvent::Instance { key, info });
         }
         Ok(())
     }

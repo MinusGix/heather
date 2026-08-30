@@ -1,6 +1,7 @@
 # Semantic module images
 
-Status: accepted design, stages 1 and 2a complete; Stage 2b underway. Owner:
+Status: accepted design, Stage 3 in-memory boundary implemented; persistent
+format and loader integration remain Stage 4. Owner:
 `issues/semantic-module-images.md`.
 
 ## 1. Problem and target
@@ -277,6 +278,43 @@ evaluated and converted selectively.
 - Differentially compare source-built and image-built worlds and downstream
   elaboration.
 
+Stage 3 records logical commit operations while a module elaborates; it does
+not diff private hash tables after the fact and does not expose their runtime
+layering as an artifact schema. The ordered Ψ extension is captured directly,
+while registry events retain the same correlated payloads consumed by their
+existing infallible commit points. A successful module freezes the journal;
+failure discards it with the ordinary session transaction.
+
+Replay has two phases. First, kernel bindings are checked sequentially against
+an already-accepted dependency prefix, with frontend metadata quarantined.
+Only after every binding passes are the logical registry events installed into
+a private committed-world candidate and published atomically. The kernel API
+therefore includes an explicit global-context-extension judgment whose
+presupposition is a well-formed prefix; rechecking that prefix would defeat the
+module boundary.
+
+The remaining whole-table trait, representation, and meta-program COW is not a
+Stage 3 prerequisite. Initial replay may pay it. End-to-end module-loading and
+trait-resolution measurements decide whether those registries are layered or
+indexed later; their current storage must not leak into `ModuleDelta`.
+
+The in-memory slice is implemented. `elab_module_delta` wraps a complete
+module in one committed-state transaction and journals ordinary globals,
+generated definitions, nominal types and names, trait entries, derived
+dictionaries, representation/implementation entries and obligations, designed
+access paths, provenance, and meta-program definitions/slot claims. Nested
+generated transactions mark and truncate that same journal on failure.
+
+`ModuleDependencyIdentity` carries the loader-supplied ordered interface
+identity; replay also compares the complete logical kernel prefix, so an
+independently rebuilt but equal dependency world is accepted while a merely
+same-sized or allocation-related world is not. Replay checks the ordered Ψ
+suffix with `check_global_ctx_extension`, constructs metadata in a private
+candidate, and swaps the committed world only after success. The delta remains
+opaque and process-local. Bounds-checked decoding, semantic/kernel/source
+fingerprints, and structural validation of decoded event payloads belong to
+Stage 4 rather than being smuggled into this representation.
+
 ### Stage 4 — persistent format and CLI cache
 
 - Add the versioned bounded encoding and full identity header.
@@ -347,6 +385,17 @@ inside the declared flatness band. The residual movement is retained in the
 fixture: generated work and nominal tags still change with the imported world,
 so this result is bounded first-write cost rather than a claim that an
 inductive is context-independent.
+
+Stage 3's first end-to-end numbers make the next priority unambiguous. In a
+release quick probe, `logic.hthr` took 10.25 ms from source and 1.62 ms through
+safe replay (6.3x). The full nine-module Omega dependency closure took 78.119 s
+to elaborate and journal from source versus 0.376 s to recheck and replay all
+577 bindings (207.5x). Replay by module was logic 2 ms, bool 4 ms, nat 4 ms,
+option/pair below 1 ms, list 48 ms, algebra 75 ms, int 150 ms, and omega 92 ms.
+These are one-run directional measurements, not recorded regression baselines,
+but they put the entire safe replay below half a second. No deferred registry
+rewrite is presently named by this workload; attribution should revisit them
+only if a larger closure or lookup-heavy changed suffix makes one visible.
 
 ## 11. Verification and performance gates
 

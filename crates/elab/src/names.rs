@@ -141,6 +141,7 @@ pub(crate) struct GlobalInfo {
 }
 
 /// Everything the name registry installs for one ordinary declaration.
+#[derive(Clone)]
 pub(crate) struct GlobalRegistration {
     pub(crate) name: String,
     pub(crate) key: String,

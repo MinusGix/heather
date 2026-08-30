@@ -466,13 +466,23 @@ impl Elaborator {
             record: record_name(&d.name),
             ctors: Rc::new(std::mem::take(&mut spec.ctors)),
         };
+        let key = spec.key.clone();
+        let name = d.name.clone();
+        let monomorph = spec.monomorph;
         self.representations.commit_repr(
-            spec.key.clone(),
-            d.name.clone(),
-            info,
-            spec.monomorph,
-            obs,
+            key.clone(),
+            name.clone(),
+            info.clone(),
+            monomorph.clone(),
+            obs.clone(),
         );
+        self.record_module_event(crate::module_delta::DeltaEvent::Repr {
+            key,
+            name,
+            info,
+            monomorph,
+            obligations: obs,
+        });
         Ok(())
     }
 
@@ -2506,12 +2516,17 @@ impl Elaborator {
         ));
         self.elab_generated(&src, &owner, d.span, &sp)?;
         let provenance = self.impl_provenance.unwrap_or(provenance);
-        self.representations.commit_impl(
-            d.repr.clone(),
-            d.op.clone(),
-            ImplEntry { global, provenance },
-            obs,
-        );
+        let repr = d.repr.clone();
+        let op = d.op.clone();
+        let entry = ImplEntry { global, provenance };
+        self.representations
+            .commit_impl(repr.clone(), op.clone(), entry.clone(), obs.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Impl {
+            repr,
+            op,
+            entry,
+            obligations: obs,
+        });
         Ok(())
     }
 

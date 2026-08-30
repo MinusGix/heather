@@ -113,11 +113,13 @@ mod lint;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod metaprograms;
+mod module_delta;
 mod quote;
 mod recursion;
 mod representations;
 pub mod resolve;
 mod session;
+pub use module_delta::{ModuleDelta, ModuleDependencyIdentity, ModuleReplayError};
 pub use session::SemanticImage;
 mod slots;
 mod statements;
@@ -544,6 +546,9 @@ impl CommittedWorld {
 #[derive(Clone)]
 pub struct Elaborator {
     committed: Rc<CommittedWorld>,
+    /// Logical semantic additions made while one module delta is extracted.
+    /// Failed transactions truncate this alongside committed state.
+    module_journal: RefCell<Option<module_delta::ModuleJournal>>,
     /// Dynamically installed scope while stored surface syntax is re-lowered.
     /// This is execution state, not a committed name-registry fact, so it must
     /// remain private to one elaborator when semantic state is shared.
@@ -1231,6 +1236,7 @@ impl Elaborator {
     pub fn new() -> Self {
         Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
+            module_journal: RefCell::new(None),
             resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: 0,
             impl_provenance: None,
@@ -1716,6 +1722,10 @@ impl Elaborator {
     /// tables land together.
     pub(crate) fn add_name(&mut self, name: &str, kind: NameKind) {
         self.names.insert_current(name, kind);
+        self.record_module_event(module_delta::DeltaEvent::Name {
+            name: name.to_string(),
+            kind,
+        });
     }
 
     /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
@@ -2121,10 +2131,18 @@ impl Elaborator {
             direct_dependencies,
         } = pending;
         let key = registration.key.clone();
+        let event_registration = registration.clone();
+        let event_dependencies = direct_dependencies.clone();
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
         self.names.commit_global(abs, registration);
         self.provenance.commit(key, is_axiom, direct_dependencies);
+        self.record_module_event(module_delta::DeltaEvent::Global {
+            abs,
+            registration: event_registration,
+            is_axiom,
+            direct_dependencies: event_dependencies,
+        });
         self.refresh_delta_psi();
     }
 

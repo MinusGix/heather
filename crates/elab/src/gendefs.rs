@@ -300,7 +300,7 @@ impl GenDefs {
         Rc::make_mut(&mut self.current).fam_lvl.insert(tag, value);
     }
 
-    fn insert_binding(&mut self, key: GenDef, abs: u32) {
+    pub(crate) fn insert_binding(&mut self, key: GenDef, abs: u32) {
         let layer = Rc::make_mut(&mut self.current);
         layer.by_key.insert(key, abs);
         layer.by_abs.insert(abs, key);
@@ -1463,6 +1463,7 @@ impl Elaborator {
             Rc::new(body),
         ));
         self.types.gdefs_mut().insert_binding(key, abs);
+        self.record_module_event(crate::module_delta::DeltaEvent::GenDef { key, abs });
         self.refresh_delta_psi();
         Ok(())
     }

@@ -3,7 +3,7 @@ title: Load checked semantic module images without re-elaboration
 status: open
 labels: [tooling,elaboration,performance,caching,design]
 created: 2026-08-29
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 
 The declaration-verdict cache skips only the final kernel gate. Serious
@@ -217,3 +217,50 @@ disk artifact is acceleration data, not a proof verdict.
   The subsequent broad fast rail is green as well: 2,052 passed / 0 failed
   across 150 binaries plus serial documentation tests, including all five
   Omega shards and x86_64; 548 seconds wall with three acceptance workers.
+- 2026-08-30: Stage 3 is now the active target. Remaining trait,
+  representation, and meta-program storage rewrites are explicitly deferred
+  unless replay or resolution measurements name them. `ModuleDelta` will be a
+  logical ordered commit journal, not a diff or serialization of live registry
+  maps. Replay quarantines metadata, checks the Ψ extension sequentially, and
+  publishes only an atomic fully validated candidate. The first kernel seam is
+  implemented as `check_global_ctx_extension`: it checks an ordered suffix
+  against a presupposed well-formed prefix without rechecking dependencies;
+  the existing whole-context checker now shares exactly the same binding
+  routine.
+- 2026-08-30: Stage 3's in-memory semantic delta and safe replay boundary are
+  implemented. Extraction journals logical operations at the existing
+  infallible commit points rather than diffing registry storage: ordinary and
+  generated globals, names/nominal types, traits and derived dictionaries,
+  repr/impl obligations and access paths, provenance, and meta-program slots.
+  Whole-module extraction is atomic, and nested generated-bundle rollback
+  truncates the journal together with the committed-world pointer.
+
+  Replay requires both the loader-supplied ordered dependency identity and an
+  equal logical Ψ prefix; this deliberately accepts an independently rebuilt
+  equivalent world and uses no allocation identity. It rechecks the suffix in
+  order with `check_global_ctx_extension`, keeps metadata quarantined in a
+  private candidate world, then publishes one committed pointer. Differential
+  tests prove equal Ψ and downstream elaboration versus source, dependency
+  mismatch and failed extraction preserve the target, a deliberately
+  corrupted stored body is kernel-refused without leaking its name, and a
+  combined registry fixture exercises inductives/generated definitions,
+  classes, instances, designations, meta definitions, reprs, and designed
+  access paths.
+
+  Release measurements: the tracked frontend fixture's real `logic.hthr`
+  module is 10.25 ms from source versus 1.62 ms through safe replay (6.3x).
+  The manual ignored Omega closure probe builds and journals nine modules in
+  78.119 s, then rechecks/replays all 577 bindings in 0.376 s (207.5x): logic
+  2 ms, bool 4, nat 4, option/pair below 1, list 48, algebra 75, int 150, and
+  omega 92. The full safe path is already below half a second, so this run
+  names no trait/representation/meta COW rewrite as the next target. Stage 4's
+  bounded persistent encoding and loader identities now have vastly more
+  leverage than tuning those unmeasured tables.
+- 2026-08-30: Final Stage 3 verification is green: 2,188 passed / 0 failed /
+  1 intentionally ignored across 151 binaries plus serial documentation tests
+  in 675 seconds wall. The ignored target is the manual Omega source/replay
+  benchmark above; it passed separately in release mode. The ordinary rail
+  includes all five Omega acceptance shards, x86_64, class/operator resolution,
+  repr generation/access, datarepr and obligation records, meta templates,
+  generated-term mutation controls, semantic-image differential tests, and the
+  new kernel-extension judgment.

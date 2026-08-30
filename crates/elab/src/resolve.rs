@@ -625,7 +625,7 @@ impl Elaborator {
             // it (record §6.1).
             body: Some(Rc::new(term)),
         });
-        self.traits.commit_derived(DerivedInst {
+        let derived = DerivedInst {
             name,
             abs,
             ty: goal.clone(),
@@ -633,7 +633,9 @@ impl Elaborator {
             // The Ψ length *before* the push above — the world the stored
             // type is scoped in.
             at: abs,
-        });
+        };
+        self.traits.commit_derived(derived.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Derived(derived));
         self.refresh_delta_psi();
     }
 }

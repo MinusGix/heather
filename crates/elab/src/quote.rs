@@ -416,17 +416,21 @@ impl Elaborator {
         let module = self.names.module().to_string();
         let psi_len = self.psi.bindings.len() as u32;
         self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
-        self.meta_programs.commit(
+        let name = decl.name.clone();
+        let definition = MetaDef {
+            term: Rc::new(term),
+            stmt: Rc::new(stmt),
+            psi_len,
+            order,
+        };
+        self.meta_programs
+            .commit(module.clone(), name.clone(), slot, definition.clone());
+        self.record_module_event(crate::module_delta::DeltaEvent::Meta {
             module,
-            decl.name.clone(),
+            name,
             slot,
-            MetaDef {
-                term: Rc::new(term),
-                stmt: Rc::new(stmt),
-                psi_len,
-                order,
-            },
-        );
+            definition,
+        });
         Ok(())
     }
 

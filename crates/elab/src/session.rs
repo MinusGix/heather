@@ -97,9 +97,19 @@ impl Elaborator {
         operation: impl FnOnce(&mut Self) -> R<T>,
     ) -> R<T> {
         let checkpoint = SessionCheckpoint::capture(self);
+        let journal_mark = self
+            .module_journal
+            .borrow()
+            .as_ref()
+            .map(|journal| journal.events.len());
         let result = operation(self);
         if result.is_err() {
             checkpoint.restore(self);
+            if let Some(mark) = journal_mark
+                && let Some(journal) = self.module_journal.borrow_mut().as_mut()
+            {
+                journal.events.truncate(mark);
+            }
         }
         result
     }

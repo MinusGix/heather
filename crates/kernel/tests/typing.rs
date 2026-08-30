@@ -21,8 +21,8 @@ use heather_kernel::term::{
     LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::{
-    check_global_ctx, check_local_ctx, check_local_subst, check_term, check_type, infer_term,
-    infer_type, TypeError,
+    check_global_ctx, check_global_ctx_extension, check_local_ctx, check_local_subst, check_term,
+    check_type, infer_term, infer_type, TypeError,
 };
 
 const FUEL: u64 = 100_000;
@@ -324,6 +324,25 @@ fn global_context_formation() {
     assert_eq!(
         check_global_ctx(&unbound, 0, FUEL).unwrap_err(),
         TypeError::UnboundGlobalVar(0)
+    );
+}
+
+#[test]
+fn global_context_extension_checks_only_the_ordered_suffix() {
+    let all = sample_psi();
+    let bindings = all.bindings.to_vec();
+    let prefix = GlobalCtx::new(bindings[..1].to_vec());
+    check_global_ctx(&prefix, 0, FUEL).unwrap();
+    check_global_ctx_extension(&prefix, &bindings[1..], 0, FUEL).unwrap();
+
+    let bad = [GlobalBinding::Ty {
+        ctx: g_ctx(9),
+        layer: Layer::Code,
+        level: Level::Zero,
+    }];
+    assert_eq!(
+        check_global_ctx_extension(&prefix, &bad, 0, FUEL).unwrap_err(),
+        TypeError::UnboundGlobalVar(9)
     );
 }
 

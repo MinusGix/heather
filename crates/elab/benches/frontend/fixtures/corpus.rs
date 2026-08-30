@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use heather_elab::Elaborator;
+use heather_elab::{Elaborator, ModuleDependencyIdentity};
 
 use crate::harness::{Case, Family};
 
@@ -56,7 +56,67 @@ fn decls_prefix(src: &str) -> String {
 }
 
 pub fn families() -> Vec<Family> {
-    vec![prelude_family(), parse_family(), check_file()]
+    vec![prelude_family(), module_replay_family(), parse_family(), check_file()]
+}
+
+/// The first front-to-back Stage 3 measurement: build one real standard-
+/// library closure from source, or install its already-elaborated logical
+/// module deltas while rechecking every stored kernel binding. Both paths
+/// start from a fresh checked prelude; delta extraction is setup, not timing.
+fn module_replay_family() -> Family {
+    let modules = closure("std/logic.hthr");
+    let identity = |n: usize| {
+        ModuleDependencyIdentity::new((0..n).map(|i| [i as u8; 32]).collect())
+    };
+    let mut extractor = Elaborator::with_prelude().expect("prelude");
+    let mut deltas = Vec::new();
+    for (i, (module, src)) in modules.iter().enumerate() {
+        deltas.push(
+            extractor
+                .elab_module_delta(module, src, identity(i))
+                .unwrap_or_else(|error| panic!("extract `{module}`: {error}")),
+        );
+    }
+    let expected = extractor.psi().bindings.len() as u64;
+
+    let mut validation = Elaborator::with_prelude().expect("prelude");
+    for (i, delta) in deltas.iter().enumerate() {
+        validation
+            .replay_module_delta(delta, &identity(i))
+            .unwrap_or_else(|error| panic!("replay `{}`: {error}", delta.module()));
+    }
+    assert_eq!(validation.psi(), extractor.psi(), "source/replay Ψ differs");
+
+    let source_modules = modules.clone();
+    let replay_deltas = deltas.clone();
+    Family {
+        name: "corpus/module-replay",
+        what: "one real stdlib closure from source versus safe logical-delta replay",
+        unit: "modules",
+        expect_slope: None,
+        cases: vec![
+            Case::named("logic.hthr:source", modules.len() as u64, expected, move || {
+                let mut elab = Elaborator::with_prelude().expect("prelude");
+                for (module, src) in &source_modules {
+                    elab.elab_module_source(module, src).unwrap_or_else(|error| {
+                        panic!("source-build `{module}` during benchmark: {error}")
+                    });
+                }
+                elab.psi().bindings.len() as u64
+            })
+            .with_budget(10_000_000_000),
+            Case::named("logic.hthr:replay", modules.len() as u64, expected, move || {
+                let mut elab = Elaborator::with_prelude().expect("prelude");
+                for (i, delta) in replay_deltas.iter().enumerate() {
+                    elab.replay_module_delta(delta, &identity(i)).unwrap_or_else(|error| {
+                        panic!("replay `{}` during benchmark: {error}", delta.module())
+                    });
+                }
+                elab.psi().bindings.len() as u64
+            })
+            .with_budget(10_000_000_000),
+        ],
+    }
 }
 
 /// What every file pays before its own first declaration. This is the fixed

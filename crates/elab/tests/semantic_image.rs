@@ -2,7 +2,7 @@
 //! boundary. Persistent images and imported-binding rechecks are later stages
 //! of `docs/semantic-module-images-design.md`.
 
-use heather_elab::Elaborator;
+use heather_elab::{Elaborator, ModuleDependencyIdentity, ModuleReplayError};
 
 mod support;
 
@@ -116,4 +116,75 @@ fn choose(token: Token) -> Nat {
     assert!(fork.take_omega_reports().is_empty());
     assert!(fork.take_omega_failure_reports().is_empty());
     assert!(fork.take_item_timings().is_empty(), "instrumentation policy is transient");
+}
+
+#[test]
+fn a_logical_module_delta_replays_over_an_independently_rebuilt_prefix() {
+    let dependencies = ModuleDependencyIdentity::new(vec![[7; 32], [11; 32]]);
+    let mut source = prefix();
+    let delta = source
+        .elab_module_delta("consumer", SUFFIX, dependencies.clone())
+        .expect("extract consumer delta");
+
+    let mut replayed = prefix();
+    replayed
+        .replay_module_delta(&delta, &dependencies)
+        .expect("recheck and replay consumer delta");
+
+    assert_eq!(delta.module(), "consumer");
+    assert!(delta.binding_count() >= 2);
+    assert_eq!(replayed.psi(), source.psi());
+    assert_eq!(support::psi_hash(replayed.psi()), support::psi_hash(source.psi()));
+
+    let downstream = r#"
+import consumer;
+import fixture;
+import bool;
+fn observed() -> Parcel<Bool> { wrapped_true() }
+theorem observed_is_wrap(): observed() = Wrap(True) { refl }
+"#;
+    source
+        .elab_module_source("downstream", downstream)
+        .expect("source-built downstream");
+    replayed
+        .elab_module_source("downstream", downstream)
+        .expect("replay-built downstream");
+    assert_eq!(replayed.psi(), source.psi());
+}
+
+#[test]
+fn replay_refuses_wrong_dependency_identity_without_mutating_the_world() {
+    let expected = ModuleDependencyIdentity::new(vec![[1; 32]]);
+    let mut source = prefix();
+    let delta = source
+        .elab_module_delta("consumer", SUFFIX, expected)
+        .expect("extract consumer delta");
+
+    let mut target = prefix();
+    let before = target.psi().clone();
+    let wrong = ModuleDependencyIdentity::new(vec![[2; 32]]);
+    assert!(matches!(
+        target.replay_module_delta(&delta, &wrong),
+        Err(ModuleReplayError::DependencyIdentity)
+    ));
+    assert_eq!(target.psi(), &before);
+}
+
+#[test]
+fn failed_delta_extraction_rolls_back_the_whole_module() {
+    let mut elab = prefix();
+    let before = elab.psi().clone();
+    let result = elab.elab_module_delta(
+        "broken",
+        "import bool;\nfn landed() -> Bool { True }\nfn broken() -> Bool { missing }",
+        ModuleDependencyIdentity::default(),
+    );
+    let error = match result {
+        Ok(_) => panic!("a module delta cannot contain a successful prefix"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("missing"), "{error}");
+    assert_eq!(elab.psi(), &before);
+    elab.elab_module_source("broken", "import bool;\nfn landed() -> Bool { True }")
+        .expect("the rolled-back name is reusable");
 }
