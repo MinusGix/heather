@@ -222,6 +222,63 @@ fn warning_producing_modules_replay_the_same_diagnostics() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn opaque_proof_edits_do_not_invalidate_dependent_module_images() {
+    let dir = cache_dir("module-interface");
+    let sources = dir.join("sources");
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(&sources).unwrap();
+    let dependency = sources.join("dependency.hthr");
+    let consumer = sources.join("consumer.hthr");
+    std::fs::write(
+        &dependency,
+        "theorem stable(n: Nat): n = n { refl }\nfn visible() -> Nat { 0 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &consumer,
+        "import dependency;\ntheorem uses_stable(n: Nat): n = n { stable(n) }\n",
+    )
+    .unwrap();
+    let cache_arg = cache.display().to_string();
+    let consumer_arg = consumer.display().to_string();
+    assert_eq!(
+        heather(&["check", "--cache-dir", &cache_arg, &consumer_arg])
+            .status
+            .code(),
+        Some(0)
+    );
+
+    std::fs::write(
+        &dependency,
+        "theorem stable(n: Nat): n = n { let p: (n = n) = refl; p }\nfn visible() -> Nat { 0 }\n",
+    )
+    .unwrap();
+    let proof_edit = heather(&["check", "--cache-dir", &cache_arg, &consumer_arg]);
+    assert_eq!(proof_edit.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&proof_edit.stdout)
+            .contains("1 semantic module replayed and kernel-checked"),
+        "the changed dependency rebuilds, but its unchanged consumer should replay: {}",
+        String::from_utf8_lossy(&proof_edit.stdout)
+    );
+
+    std::fs::write(
+        &dependency,
+        "theorem stable(n: Nat): n = n { let p: (n = n) = refl; p }\nfn visible() -> Nat { 1 }\n",
+    )
+    .unwrap();
+    let definition_edit = heather(&["check", "--cache-dir", &cache_arg, &consumer_arg]);
+    assert_eq!(definition_edit.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&definition_edit.stdout)
+            .contains("0 semantic modules replayed and kernel-checked"),
+        "a transparent dependency edit invalidates its exact-prefix consumer: {}",
+        String::from_utf8_lossy(&definition_edit.stdout)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A cache written by a different kernel is discarded out loud, and the run
 /// that follows is a full check that says it checked everything.
 #[test]

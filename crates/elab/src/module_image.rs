@@ -34,6 +34,7 @@ use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
 const MAGIC: &[u8; 8] = b"HTHMOD\0\x01";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x01";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -101,9 +102,15 @@ impl fmt::Display for ModuleImageDecodeError {
 
 impl std::error::Error for ModuleImageDecodeError {}
 
-#[derive(Default)]
 struct Writer {
     bytes: Vec<u8>,
+    interface: bool,
+}
+
+impl Default for Writer {
+    fn default() -> Self {
+        Self { bytes: Vec::new(), interface: false }
+    }
 }
 
 impl Writer {
@@ -791,8 +798,13 @@ fn get_binding(r: &mut Reader<'_>) -> Result<GlobalBinding, ModuleImageDecodeErr
 // remain useful when the loader retains the matching source artifact.
 
 fn put_span(w: &mut Writer, span: Span) {
-    w.usize(span.start);
-    w.usize(span.end);
+    if w.interface {
+        w.usize(0);
+        w.usize(0);
+    } else {
+        w.usize(span.start);
+        w.usize(span.end);
+    }
 }
 
 fn get_span(r: &mut Reader<'_>) -> Result<Span, ModuleImageDecodeError> {
@@ -1126,7 +1138,15 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     });
     w.string(&decl.name);
     w.vec(&decl.tyvars, |w, var| { w.string(&var.name); w.u64(var.level); put_span(w, var.span); });
-    w.vec(&decl.params, put_param); put_ty(w, &decl.result); put_block(w, &decl.body); put_span(w, decl.span);
+    w.vec(&decl.params, put_param); put_ty(w, &decl.result);
+    if w.interface && matches!(decl.kind, DeclKind::Theorem | DeclKind::Axiom) {
+        // The checked kernel binding retains the statement and opacity bit.
+        // The proof block is neither delta-visible nor re-lowered downstream.
+        w.byte(0xff);
+    } else {
+        put_block(w, &decl.body);
+    }
+    put_span(w, decl.span);
 }
 
 fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
@@ -1455,7 +1475,14 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
         DeltaEvent::Name { name, kind } => { w.byte(0); w.string(name); put_name_kind(w, *kind); }
         DeltaEvent::Global { abs, registration, is_axiom, direct_dependencies } => {
             w.byte(1); w.u32(*abs); put_registration(w, registration); w.bool(*is_axiom);
-            w.vec(direct_dependencies, |w, dependency| w.string(dependency));
+            if w.interface {
+                // Proof dependency edges feed provenance reports dynamically
+                // from the restored prefix; dependent elaboration does not
+                // specialize against the body of an opaque theorem.
+                w.len(0);
+            } else {
+                w.vec(direct_dependencies, |w, dependency| w.string(dependency));
+            }
         }
         DeltaEvent::GenDef { key, abs } => { w.byte(2); put_gen_def(w, *key); w.u32(*abs); }
         DeltaEvent::GenTyCode { tag, inline, level } => {
@@ -1684,13 +1711,23 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
 
 pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {
     let mut w = Writer::default();
-    w.bytes.extend_from_slice(MAGIC);
+    encode_delta_into(&mut w, delta, MAGIC);
+    w.bytes
+}
+
+pub(crate) fn encode_delta_interface(delta: &ModuleDelta) -> Vec<u8> {
+    let mut w = Writer { bytes: Vec::new(), interface: true };
+    encode_delta_into(&mut w, delta, INTERFACE_MAGIC);
+    w.bytes
+}
+
+fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
+    w.bytes.extend_from_slice(magic);
     w.string(&delta.module);
     w.len(delta.dependencies.ordered_interface_hashes().len());
     for hash in delta.dependencies.ordered_interface_hashes() { w.bytes.extend_from_slice(hash); }
     w.len(delta.dependency_psi.bindings.len());
-    w.vec(&delta.extension, put_binding); put_scope(&mut w, &delta.scope); w.vec(&delta.events, put_event);
-    w.bytes
+    w.vec(&delta.extension, put_binding); put_scope(w, &delta.scope); w.vec(&delta.events, put_event);
 }
 
 pub(crate) fn decode_delta(

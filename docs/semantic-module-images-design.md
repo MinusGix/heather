@@ -371,10 +371,13 @@ Stage 4 rather than being smuggled into this representation.
   are reported and rebuilt rather than trusted or made fatal. The envelope
   also carries source-bounded warning spans and structured fixes, so replayed
   diagnostics are byte-identical to cold diagnostics.
-- Project the module's true downstream interface identity. The baseline
-  conservatively hashes the complete semantic artifact, so proof-only source
-  edits invalidate consumers even though this is unnecessary. This loses
-  reuse, not soundness.
+- **Done (4b interface projection):** result identity is a separate semantic
+  projection rather than a hash of replay bytes. It canonicalizes source
+  spans, erases opaque theorem/axiom proof blocks and their provenance edges,
+  and retains statements, transparent function bodies, names, scopes and the
+  frontend registries consulted by dependent elaboration. Proof-only and
+  layout-only edits therefore rebuild their own source image without
+  invalidating consumers; transparent-body and theorem-statement edits do.
 - Keep generated/mutated suffixes outside the imported image boundary.
 
 Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:

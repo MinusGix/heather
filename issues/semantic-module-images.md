@@ -331,11 +331,9 @@ disk artifact is acceleration data, not a proof verdict.
   temporary siblings and atomic rename; corrupt-artifact and round-trip tests
   cover the storage boundary.
 
-  One deliberate performance limitation remains. V1's resulting module
-  identity is conservatively the hash of the complete semantic artifact,
-  rather than a projection of only facts observable by dependents, so an
-  opaque proof edit invalidates downstream images. This is an explicit
-  follow-up slice, not a trust hole.
+  The initial resulting-module identity is conservatively the hash of the
+  complete semantic artifact. A following slice replaces this with the true
+  downstream-observable projection.
 - 2026-08-30: warning-producing modules are now persistent too. The outer
   envelope records stable lint identity, message, primary span and optional
   structured fix; decoding bounds counts and strings, validates UTF-8, and
@@ -349,3 +347,16 @@ disk artifact is acceleration data, not a proof verdict.
   expensive modules had to re-elaborate. With the warning envelope all 13
   modules replay and the same diagnostics print in 5.90 seconds. The format
   change rejects and ordinarily rebuilds baseline Stage 4b artifacts.
+- 2026-08-30: module interface identity is now distinct from replay artifact
+  identity. Its versioned encoding canonicalizes every source span, erases
+  opaque theorem/axiom proof blocks and proof-provenance edges, and retains
+  theorem statements, transparent function bodies, names/scopes and semantic
+  registry payloads. The content-addressed key domain moved with the identity
+  scheme, so previous artifacts become ordinary misses rather than being
+  misreported as corrupt.
+
+  Red/green tests pin proof and layout insensitivity against transparent-body
+  and theorem-statement sensitivity. A CLI dependency test exercises the
+  actual cache graph: changing an imported theorem proof rebuilds that module
+  while replaying its consumer; changing a transparent definition in the same
+  module invalidates the exact-prefix consumer too.

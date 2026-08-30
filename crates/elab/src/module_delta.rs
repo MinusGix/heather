@@ -68,6 +68,14 @@ impl ModuleDelta {
         crate::module_image::encode_delta(self)
     }
 
+    /// Deterministic downstream-observable projection used for module
+    /// interface identity. Unlike the replay image, this canonicalizes source
+    /// spans and opaque proof bodies while retaining transparent definitions
+    /// and frontend registries consulted by dependent elaboration.
+    pub fn to_interface_bytes(&self) -> Vec<u8> {
+        crate::module_image::encode_delta_interface(self)
+    }
+
     /// Decode an inert module image against an already accepted dependency
     /// kernel prefix. This allocates no unchecked collection beyond `limits`
     /// and does not mutate an elaborator; publication still goes through

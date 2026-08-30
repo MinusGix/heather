@@ -18,9 +18,9 @@ use heather_kernel::term::GlobalCtx;
 use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
-const MAGIC: &[u8; 8] = b"HTHCACH\x02";
-const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/1\0";
-const DOMAIN_INTERFACE: &[u8] = b"heather/module-artifact-interface/1\0";
+const MAGIC: &[u8; 8] = b"HTHCACH\x03";
+const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/2\0";
+const DOMAIN_INTERFACE: &[u8] = b"heather/module-interface/1\0";
 const HEADER: usize = 8 + 32 + 32 + 8 + 8;
 const CHECKSUM: usize = 32;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -121,7 +121,7 @@ impl ModuleImageCache {
     }
 
     pub fn interface_hash(delta: &ModuleDelta) -> [u8; 32] {
-        artifact_interface(&delta.to_image_bytes())
+        projected_interface(delta)
     }
 
     /// Absence is an ordinary miss. An existing but unusable artifact is
@@ -187,13 +187,13 @@ impl ModuleImageCache {
             ));
         }
         let semantic = &bytes[HEADER..semantic_end];
-        if artifact_interface(semantic) != interface_hash {
+        let delta = ModuleDelta::from_image_bytes(semantic, dependency_psi, self.limits)
+            .map_err(ModuleCacheError::Decode)?;
+        if projected_interface(&delta) != interface_hash {
             return Err(ModuleCacheError::Corrupt(
                 "module cache interface identity does not match",
             ));
         }
-        let delta = ModuleDelta::from_image_bytes(semantic, dependency_psi, self.limits)
-            .map_err(ModuleCacheError::Decode)?;
         let warnings = decode_warnings(
             &bytes[semantic_end..checksum_at],
             warning_count,
@@ -222,7 +222,7 @@ impl ModuleImageCache {
                 "semantic image exceeds the byte limit",
             ));
         }
-        let interface_hash = artifact_interface(&semantic);
+        let interface_hash = projected_interface(delta);
         if warnings.len() > self.limits.max_sequence {
             return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
         }
@@ -386,10 +386,10 @@ impl WarningReader<'_> {
     }
 }
 
-fn artifact_interface(semantic: &[u8]) -> [u8; 32] {
+fn projected_interface(delta: &ModuleDelta) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(DOMAIN_INTERFACE);
-    h.update(semantic);
+    h.update(&delta.to_interface_bytes());
     h.finish()
 }
 
