@@ -36,13 +36,12 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use heather_cache::Cache;
-use heather_cache::module_image::{ModuleCacheKey, ModuleImageCache};
-use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity};
+use heather_elab::{Elaborator, LintProfile};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
-use heather_cli::loader;
+use heather_cli::{loader, semantic::SemanticSession};
 
 mod color;
 
@@ -187,8 +186,6 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         Rc::new(c)
     });
-    let module_cache = opts.cache.then(|| ModuleImageCache::new(opts.cache_dir.clone()));
-
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -232,87 +229,19 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let mut root_ok = true;
-        let mut module_interfaces = Vec::new();
-        let mut module_hits = 0usize;
-        let mut images_usable = module_cache.is_some();
+        let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()));
         for m in &modules {
-            let mut replayed = false;
-            let mut checked_delta = None;
-            let mut cached_warnings = None;
-            let mut cache_key = None;
-            let errs = if images_usable {
-                // V1 images contain absolute Ψ positions. Consequently their
-                // dependency identity is the complete accepted loader prefix,
-                // not merely the direct-import set; replay independently checks
-                // the logical Ψ prefix as the final guard.
-                let dependencies = ModuleDependencyIdentity::new(module_interfaces.clone());
-                let key = ModuleCacheKey::for_source(&m.name, &m.src, &dependencies, lint_profile);
-                cache_key = Some(key);
-                let images = module_cache.as_ref().expect("usable image cache exists");
-                match images.load(key, elab.psi().clone(), m.src.len()) {
-                    Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
-                        Ok(()) => {
-                            module_interfaces.push(loaded.interface_hash);
-                            module_hits += 1;
-                            cached_warnings = Some(loaded.warnings);
-                            replayed = true;
-                        }
-                        Err(e) => eprintln!(
-                            "cache: stored module `{}` failed semantic replay ({e}) — rebuilding",
-                            m.name
-                        ),
-                    },
-                    Ok(None) => {}
-                    Err(e) => eprintln!(
-                        "cache: stored module `{}` is unusable ({e}) — rebuilding",
-                        m.name
-                    ),
-                }
-                if replayed {
-                    Vec::new()
-                } else {
-                    match elab.check_module_delta(&m.name, &m.src, dependencies) {
-                        Ok(delta) => {
-                            let interface = ModuleImageCache::interface_hash(&delta);
-                            module_interfaces.push(interface);
-                            checked_delta = Some(delta);
-                            Vec::new()
-                        }
-                        Err(errs) => {
-                            // The ordinary checker retains successful items for
-                            // diagnostic recovery, so this is no longer a clean
-                            // image prefix. Keep checking, but cache no suffix of
-                            // this run.
-                            images_usable = false;
-                            errs
-                        }
-                    }
-                }
-            } else {
-                // Preserve the unflagged and post-error path exactly: no
-                // journal allocation and no semantic encoding overhead.
-                elab.check_module_source(&m.name, &m.src)
-            };
+            let outcome = semantic.check(&mut elab, m, lint_profile);
+            for notice in &outcome.notices {
+                eprintln!("{notice}");
+            }
+            let errs = outcome.errors;
             // Warnings are drained per module, before the next one is checked:
             // a span indexes into the source it came from
             // (docs/diagnostic-warnings-design.md §3). They do not fail the
             // run and they do not touch the `ok` line — a warned file is a
             // checked file (§4).
-            let warns = cached_warnings.unwrap_or_else(|| elab.take_warnings());
-            if !replayed
-                && errs.is_empty()
-                && images_usable
-                && let Some(key) = cache_key
-                && let Some(images) = &module_cache
-                && let Some(delta) = &checked_delta
-            {
-                // Diagnostics are part of the envelope, so a cache hit is
-                // observationally identical to the source path. Publication
-                // failure is non-fatal because this run's answer still stands.
-                if let Err(e) = images.publish(key, delta, &warns) {
-                    eprintln!("cache: could not store module `{}` ({e})", m.name);
-                }
-            }
+            let warns = outcome.warnings;
             if !warns.is_empty() {
                 let shown = display_path(&m.path, path);
                 for w in &warns {
@@ -390,8 +319,8 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },
                         n.hits,
-                        module_hits,
-                        if module_hits == 1 { "" } else { "s" },
+                        semantic.hits(),
+                        if semantic.hits() == 1 { "" } else { "s" },
                     );
                 }
                 _ => println!("{path}: {}", color::success("ok", stdout_color)),
@@ -419,54 +348,18 @@ fn check_inspection_modules(
     elab: &mut Elaborator,
     modules: &[loader::Module],
     lint_profile: LintProfile,
-) -> Result<(), (usize, Vec<ElabError>)> {
-    if !opts.cache {
-        for (i, m) in modules.iter().enumerate() {
-            let errs = elab.check_module_source(&m.name, &m.src);
-            if !errs.is_empty() {
-                return Err((i, errs));
-            }
-            // Inspection commands have historically omitted warnings. Drain
-            // them at their source boundary so their spans cannot leak into
-            // a later module or report.
-            elab.take_warnings();
-        }
-        return Ok(());
-    }
-
-    let images = ModuleImageCache::new(opts.cache_dir.clone());
-    let mut module_interfaces = Vec::new();
+) -> Result<(), (usize, Vec<heather_elab::ElabError>)> {
+    let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()));
     for (i, m) in modules.iter().enumerate() {
-        let dependencies = ModuleDependencyIdentity::new(module_interfaces.clone());
-        let key = ModuleCacheKey::for_source(&m.name, &m.src, &dependencies, lint_profile);
-        match images.load(key, elab.psi().clone(), m.src.len()) {
-            Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
-                Ok(()) => {
-                    module_interfaces.push(loaded.interface_hash);
-                    continue;
-                }
-                Err(e) => eprintln!(
-                    "cache: stored module `{}` failed semantic replay ({e}) — rebuilding",
-                    m.name
-                ),
-            },
-            Ok(None) => {}
-            Err(e) => eprintln!(
-                "cache: stored module `{}` is unusable ({e}) — rebuilding",
-                m.name
-            ),
+        let outcome = semantic.check(elab, m, lint_profile);
+        for notice in &outcome.notices {
+            eprintln!("{notice}");
         }
-
-        let delta = match elab.check_module_delta(&m.name, &m.src, dependencies) {
-            Ok(delta) => delta,
-            Err(errs) => return Err((i, errs)),
-        };
-        let interface = ModuleImageCache::interface_hash(&delta);
-        module_interfaces.push(interface);
-        let warnings = elab.take_warnings();
-        if let Err(e) = images.publish(key, &delta, &warnings) {
-            eprintln!("cache: could not store module `{}` ({e})", m.name);
+        if !outcome.errors.is_empty() {
+            return Err((i, outcome.errors));
         }
+        // Inspection commands have historically omitted warnings. The shared
+        // session has already drained them at their source boundary.
     }
     Ok(())
 }

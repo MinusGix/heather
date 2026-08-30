@@ -405,6 +405,12 @@ Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:
   `heather obligations`) reuses the same bounded, kernel-checked semantic
   module images as `heather check`. These commands do not enable the separate
   trusted declaration-cache gate merely because module replay is requested.
+- **Done (shared consumer boundary):** cache-aware closure state is a library
+  `SemanticSession`, not CLI-loop state. It owns exact-prefix identities,
+  bounded load/replay/publication, warning envelopes, post-error cache
+  disablement and non-fatal notices; callers retain presentation, stopping
+  and trust-rung policy. A fresh-consumer integration test reconstructs the
+  same Ψ from a previous session's image.
 - Reuse images in the daemon and test tooling.
 - Schedule independent module nodes in parallel.
 - Add replay/trusted quick modes only as separately reviewed trust rungs.

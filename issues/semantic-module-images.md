@@ -370,3 +370,17 @@ disk artifact is acceleration data, not a proof verdict.
   CLI tests pin obligation output across a cold/warm replay and corrupt an
   axiom image to prove that rejection is loud, rebuilding is non-fatal, and
   the resulting provenance report is unchanged.
+- 2026-08-30: the cache-aware module walk is now a public library
+  `SemanticSession` shared by `check`, `axioms` and `obligations`. It owns the
+  ordered interface prefix, safe replay, source fallback, warning envelopes,
+  publication and the rule that a source error disables images for the
+  remaining broken prefix. It returns diagnostics and structured cache
+  notices rather than printing or choosing whether a caller continues. A
+  direct library test creates a fresh elaborator/session, replays an image
+  written by its predecessor and requires identical Ψ.
+
+  The extracted boundary is neutral on the real workload. A fresh release
+  x86-64 closure took 66.29 seconds and checked 763 declarations; its warm run
+  replayed all 13 modules in 5.44 seconds with zero declarations checked or
+  trusted from the separate declaration cache. The previous pre-extraction
+  warm point was 5.90 seconds, so there is no regression to explain.

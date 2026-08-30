@@ -1,0 +1,157 @@
+//! Cache-aware semantic module loading without presentation policy.
+//!
+//! A session follows one topologically ordered import closure. It owns the
+//! exact-prefix identity required by the current absolute-Ψ image format and
+//! returns diagnostics, warnings and cache notices to its caller. Cache hits
+//! are always bounded, kernel-checked semantic replay; this component never
+//! installs the separate trusted declaration cache gate.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use heather_cache::module_image::{ModuleCacheKey, ModuleImageCache};
+use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity, Warning};
+
+use crate::loader::Module;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheNoticeKind {
+    LoadRejected,
+    ReplayRejected,
+    PublishFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheNotice {
+    pub module: String,
+    pub kind: CacheNoticeKind,
+    pub error: String,
+}
+
+impl fmt::Display for CacheNotice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            CacheNoticeKind::LoadRejected => write!(
+                f,
+                "cache: stored module `{}` is unusable ({}) — rebuilding",
+                self.module, self.error
+            ),
+            CacheNoticeKind::ReplayRejected => write!(
+                f,
+                "cache: stored module `{}` failed semantic replay ({}) — rebuilding",
+                self.module, self.error
+            ),
+            CacheNoticeKind::PublishFailed => {
+                write!(f, "cache: could not store module `{}` ({})", self.module, self.error)
+            }
+        }
+    }
+}
+
+pub struct ModuleOutcome {
+    pub errors: Vec<ElabError>,
+    pub warnings: Vec<Warning>,
+    pub replayed: bool,
+    pub notices: Vec<CacheNotice>,
+}
+
+/// State for one accepted, topologically ordered module closure.
+pub struct SemanticSession {
+    images: Option<ModuleImageCache>,
+    interfaces: Vec<[u8; 32]>,
+    images_usable: bool,
+    hits: usize,
+}
+
+impl SemanticSession {
+    pub fn new(cache_dir: Option<PathBuf>) -> Self {
+        let images = cache_dir.map(ModuleImageCache::new);
+        Self {
+            images_usable: images.is_some(),
+            images,
+            interfaces: Vec::new(),
+            hits: 0,
+        }
+    }
+
+    pub fn hits(&self) -> usize {
+        self.hits
+    }
+
+    /// Check or replay the next module. After a source error, later modules
+    /// remain checkable for diagnostic recovery, but no longer read or write
+    /// images because the accepted prefix has been broken.
+    pub fn check(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        lint_profile: LintProfile,
+    ) -> ModuleOutcome {
+        if !self.images_usable {
+            return ModuleOutcome {
+                errors: elab.check_module_source(&module.name, &module.src),
+                warnings: elab.take_warnings(),
+                replayed: false,
+                notices: Vec::new(),
+            };
+        }
+
+        let dependencies = ModuleDependencyIdentity::new(self.interfaces.clone());
+        let key = ModuleCacheKey::for_source(
+            &module.name,
+            &module.src,
+            &dependencies,
+            lint_profile,
+        );
+        let images = self.images.as_ref().expect("usable images have a cache");
+        let mut notices = Vec::new();
+        match images.load(key, elab.psi().clone(), module.src.len()) {
+            Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
+                Ok(()) => {
+                    self.interfaces.push(loaded.interface_hash);
+                    self.hits += 1;
+                    return ModuleOutcome {
+                        errors: Vec::new(),
+                        warnings: loaded.warnings,
+                        replayed: true,
+                        notices,
+                    };
+                }
+                Err(error) => notices.push(CacheNotice {
+                    module: module.name.clone(),
+                    kind: CacheNoticeKind::ReplayRejected,
+                    error: error.to_string(),
+                }),
+            },
+            Ok(None) => {}
+            Err(error) => notices.push(CacheNotice {
+                module: module.name.clone(),
+                kind: CacheNoticeKind::LoadRejected,
+                error: error.to_string(),
+            }),
+        }
+
+        let delta = match elab.check_module_delta(&module.name, &module.src, dependencies) {
+            Ok(delta) => delta,
+            Err(errors) => {
+                self.images_usable = false;
+                return ModuleOutcome {
+                    errors,
+                    warnings: elab.take_warnings(),
+                    replayed: false,
+                    notices,
+                };
+            }
+        };
+        self.interfaces.push(ModuleImageCache::interface_hash(&delta));
+        let warnings = elab.take_warnings();
+        if let Err(error) = images.publish(key, &delta, &warnings) {
+            notices.push(CacheNotice {
+                module: module.name.clone(),
+                kind: CacheNoticeKind::PublishFailed,
+                error: error.to_string(),
+            });
+        }
+        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, notices }
+    }
+}

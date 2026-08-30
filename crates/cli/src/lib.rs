@@ -1,4 +1,6 @@
-//! The parts of the CLI that are not the CLI: today, the import loader.
+//! Reusable driver pieces shared by the CLI, benchmarks and future resident
+//! consumers. Import discovery and semantic module replay live here so each
+//! command does not grow its own subtly different module walk.
 //!
 //! `heather` is a binary, and the loader was a private module of it until the
 //! frontend benchmark corpus needed the *same* closure the CLI computes
@@ -15,3 +17,4 @@
 //! else here is meant to be a public API.
 
 pub mod loader;
+pub mod semantic;
