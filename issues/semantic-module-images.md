@@ -302,3 +302,21 @@ disk artifact is acceleration data, not a proof verdict.
   rerun after showing the same broad-run boundary. The previous green full
   run measured these targets below the rail, so this is resource evidence on
   a slower host, not a green claim and not a semantic failure.
+- 2026-08-30: Stage 4a's semantic wire codec is implemented. `ModuleDelta`
+  now has a deterministic versioned encoding and a bounded, inert decoder
+  covering the complete kernel syntax, semantically retained surface AST and
+  all sixteen registry-event families. Dependency Ψ is not serialized: the
+  image carries its expected length and ordered interface identities, while
+  the caller supplies the already accepted logical prefix.
+
+  Decode rejects unknown tags, malformed scalar encodings, invalid UTF-8,
+  truncation/trailing bytes, over-budget bytes/strings/sequences/nodes/depth,
+  dangling suffix positions, mismatched correlated tables and duplicate
+  registry operations. Replay now preflights decoded events against dependency
+  registries before calling infallible commit operations, retaining the
+  no-panic quarantine boundary for hostile artifacts. Deterministic rebuild,
+  byte-identical decode/re-encode, every-prefix truncation, hostile-budget,
+  dangling-reference and registry-rich source/decode/replay tests are green.
+  The remaining Stage 4b work is loader-owned source/semantics fingerprinting,
+  filesystem cache lookup and atomic publication; no filesystem policy has
+  leaked into the elaborator codec.

@@ -326,6 +326,28 @@ type-code guard, recursive `Wf` slot pair, and family-level indexes were not.
 Replay therefore produced convertible but much larger unfolded annotations.
 Those correlated indexes are now explicit events through the same commit seam.
 
+Stage 4a now gives that logical delta a process-independent wire form. The
+codec is manual and exhaustive over kernel levels, contexts, substitutions,
+types, terms (including all code-recursion branches), the semantically live
+surface AST, and every journal event payload. This is deliberate schema code,
+not a derived general-purpose deserializer: a new enum constructor makes the
+codec fail to compile until its stable tag and fields are chosen.
+
+The decoder is total under caller-selectable byte, node, sequence, string and
+nesting budgets. It rejects truncation, trailing bytes, unknown tags, invalid
+booleans/UTF-8, impossible parallel tables, dangling absolute Ψ positions and
+duplicate correlated registry entries before a delta can reach replay. Replay
+also preflights each operation against the accepted dependency world's live
+registries, so hostile bytes cannot turn an infallible commit assertion into a
+panic. The decoded delta remains inert; the existing ordered kernel-extension
+judgment and candidate-world swap are still the only publication path.
+
+The dependency Ψ itself is intentionally absent from the bytes. The envelope
+records its binding count and the ordered loader-supplied interface hashes,
+while decoding requires the caller to provide the already accepted logical
+prefix. This makes it impossible for an image to bless its own dependencies
+and avoids duplicating the dependency world in every module artifact.
+
 `ModuleDependencyIdentity` carries the loader-supplied ordered interface
 identity; replay also compares the complete logical kernel prefix, so an
 independently rebuilt but equal dependency world is accepted while a merely
@@ -338,7 +360,12 @@ Stage 4 rather than being smuggled into this representation.
 
 ### Stage 4 — persistent format and CLI cache
 
-- Add the versioned bounded encoding and full identity header.
+- **Done (4a):** add the versioned bounded semantic encoding, inert decode,
+  structural validation, deterministic round trips and hostile-input tests.
+- Add the loader-owned source/semantics identity header around those semantic
+  bytes. The codec already carries ordered dependency interface identities;
+  source hashing and compiler-semantics identity belong to the loader slice,
+  because `ModuleDelta` neither reads files nor chooses cache policy.
 - Integrate it with the loader and atomic cache writes.
 - Keep generated/mutated suffixes outside the imported image boundary.
 

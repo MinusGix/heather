@@ -175,7 +175,7 @@ impl GenDef {
 #[derive(Clone)]
 pub(crate) struct WfSlots {
     /// The shape as `lower_instance` writes it: the raw sum-of-Σs.
-    shape: Rc<Type>,
+    pub(crate) shape: Rc<Type>,
     /// The shape as a *decode* of the whole-type code writes it —
     /// `El ⌜S⌝`, the lazy reduct of `El (D#tycode^δ)`
     /// (`reduce.rs`'s `TmWf` rule). A value built at a **respelled expected
@@ -184,12 +184,12 @@ pub(crate) struct WfSlots {
     /// constructor-value site — the one the measurement put first — declines
     /// silently. Measured: statements did not move at all until this was
     /// added.
-    shape_decoded: Rc<Type>,
+    pub(crate) shape_decoded: Rc<Type>,
     /// The arity term, identical under both spellings (`code_of` keeps a
     /// term slot verbatim, and the decode hands it back unchanged).
-    arity: Rc<Term>,
+    pub(crate) arity: Rc<Term>,
     /// The declaration's level, which is also its shape's.
-    level: Level,
+    pub(crate) level: Level,
 }
 
 /// One append-only generated-definition delta. Its lookup views are sealed
@@ -282,6 +282,22 @@ impl GenDefs {
 
     fn wf_slots(&self, tag: &u32) -> Option<&WfSlots> {
         self.layers().find_map(|layer| layer.wf_slots.get(tag))
+    }
+
+    pub(crate) fn has_binding(&self, key: &GenDef, abs: u32) -> bool {
+        self.contains_key(key) || self.key_for_abs(&abs).is_some()
+    }
+
+    pub(crate) fn has_ty_code(&self, tag: u32) -> bool {
+        self.ty_code(&tag).is_some()
+    }
+
+    pub(crate) fn has_wf_slot_entry(&self, tag: u32) -> bool {
+        self.wf_slots(&tag).is_some()
+    }
+
+    pub(crate) fn has_fam_level_entry(&self, tag: u32) -> bool {
+        self.fam_levels(&tag).is_some()
     }
 
     fn has_wf_slots(&self) -> bool {

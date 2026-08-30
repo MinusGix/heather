@@ -43,12 +43,12 @@ impl ModuleDependencyIdentity {
 /// only operation which may install quarantined metadata.
 #[derive(Clone)]
 pub struct ModuleDelta {
-    module: String,
-    dependencies: ModuleDependencyIdentity,
-    dependency_psi: GlobalCtx,
-    extension: Vec<GlobalBinding>,
-    scope: Scope,
-    events: Vec<DeltaEvent>,
+    pub(crate) module: String,
+    pub(crate) dependencies: ModuleDependencyIdentity,
+    pub(crate) dependency_psi: GlobalCtx,
+    pub(crate) extension: Vec<GlobalBinding>,
+    pub(crate) scope: Scope,
+    pub(crate) events: Vec<DeltaEvent>,
 }
 
 impl ModuleDelta {
@@ -59,6 +59,26 @@ impl ModuleDelta {
     pub fn binding_count(&self) -> usize {
         self.extension.len()
     }
+
+    /// Encode this checked, process-local delta as a deterministic semantic
+    /// module image. The dependency kernel prefix itself is deliberately not
+    /// serialized; only its length and the loader-supplied interface
+    /// identities enter the image.
+    pub fn to_image_bytes(&self) -> Vec<u8> {
+        crate::module_image::encode_delta(self)
+    }
+
+    /// Decode an inert module image against an already accepted dependency
+    /// kernel prefix. This allocates no unchecked collection beyond `limits`
+    /// and does not mutate an elaborator; publication still goes through
+    /// [`Elaborator::replay_module_delta`].
+    pub fn from_image_bytes(
+        bytes: &[u8],
+        dependency_psi: GlobalCtx,
+        limits: crate::ModuleImageLimits,
+    ) -> Result<Self, crate::ModuleImageDecodeError> {
+        crate::module_image::decode_delta(bytes, dependency_psi, limits)
+    }
 }
 
 #[derive(Debug)]
@@ -66,6 +86,7 @@ pub enum ModuleReplayError {
     DependencyIdentity,
     DependencyKernelPrefix,
     Kernel(TypeError),
+    MetadataConflict(&'static str),
 }
 
 impl fmt::Display for ModuleReplayError {
@@ -76,6 +97,9 @@ impl fmt::Display for ModuleReplayError {
                 write!(f, "module dependency kernel prefix does not match")
             }
             Self::Kernel(error) => write!(f, "stored module binding was rejected: {error:?}"),
+            Self::MetadataConflict(registry) => {
+                write!(f, "stored module metadata conflicts with the accepted {registry} registry")
+            }
         }
     }
 }
@@ -365,6 +389,13 @@ impl Elaborator {
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
         candidate.psi.extend(delta.extension.iter().cloned());
+        // Check every operation against the dependency world before applying
+        // any of them. Some one-module commits intentionally share a logical
+        // name across correlated registries; intra-delta duplicates were
+        // already rejected by the image decoder.
+        for event in &delta.events {
+            candidate.preflight_module_event(event)?;
+        }
         for event in delta.events.iter().cloned() {
             candidate.apply_module_event(event);
         }
@@ -409,6 +440,56 @@ impl Elaborator {
                 self.semantic_commit_meta(module, name, slot, definition);
             }
         }
+    }
+
+    fn preflight_module_event(&self, event: &DeltaEvent) -> Result<(), ModuleReplayError> {
+        let conflict = match event {
+            DeltaEvent::Name { name, .. }
+                if self.names.declares(&self.names.scope().module, name) => Some("name"),
+            DeltaEvent::Global { abs, registration, .. }
+                if self.names.global(&registration.key).is_some()
+                    || self.names.global_name_at(*abs).is_some() => Some("global-name"),
+            DeltaEvent::GenDef { key, abs }
+                if self.types.gdefs().has_binding(key, *abs) => Some("generated-definition"),
+            DeltaEvent::GenTyCode { tag, .. }
+                if self.types.gdefs().has_ty_code(*tag) => Some("generated type-code"),
+            DeltaEvent::GenWfSlots { tag, .. }
+                if self.types.gdefs().has_wf_slot_entry(*tag) => Some("generated Wf-slot"),
+            DeltaEvent::GenFamLevels { tag, .. }
+                if self.types.gdefs().has_fam_level_entry(*tag) => Some("generated family-level"),
+            DeltaEvent::Inductive { module, info }
+                if self.types.inductive(&crate::names::qkey(module, &info.name)).is_some()
+                    || self.types.by_tag(info.tag).is_some()
+                    || info.skel.as_ref().is_some_and(|skel| self.types.by_tag(skel.tag).is_some()) =>
+            {
+                Some("nominal-type")
+            }
+            DeltaEvent::Class { key, .. } if self.traits.has_class(key) => Some("class"),
+            DeltaEvent::Instance { key, .. } if self.traits.has_instance(key) => Some("instance"),
+            DeltaEvent::Designation { key, .. } if self.traits.designation(key).is_some() => {
+                Some("designation")
+            }
+            DeltaEvent::Derived(info)
+                if self.traits.derived().iter().any(|old| old.abs == info.abs) => Some("derived-instance"),
+            DeltaEvent::Repr { key, name, monomorph, .. }
+                if self.representations.for_spec(key).is_some()
+                    || self.representations.has_name(name)
+                    || monomorph.as_ref().is_some_and(|(tag, args)| {
+                        self.representations.monomorph(*tag, args).is_some()
+                    }) => Some("representation"),
+            DeltaEvent::Impl { repr, op, .. }
+                if self.representations.has_impl(repr, op) => Some("implementation"),
+            DeltaEvent::Access { designed, .. }
+                if self.access_alias(designed).is_some() => Some("designed-access"),
+            DeltaEvent::Meta { module, name, slot, .. }
+                if self.meta_programs.definition(module, name).is_some()
+                    || slot.is_some_and(|slot| self.meta_programs.slot_owner(slot).is_some()) =>
+            {
+                Some("meta-program")
+            }
+            _ => None,
+        };
+        conflict.map_or(Ok(()), |registry| Err(ModuleReplayError::MetadataConflict(registry)))
     }
 }
 
