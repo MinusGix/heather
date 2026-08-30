@@ -1721,11 +1721,7 @@ impl Elaborator {
     /// registration time — after the kernel gate — so that the index and the
     /// tables land together.
     pub(crate) fn add_name(&mut self, name: &str, kind: NameKind) {
-        self.names.insert_current(name, kind);
-        self.record_module_event(module_delta::DeltaEvent::Name {
-            name: name.to_string(),
-            kind,
-        });
+        self.semantic_commit_name(name, kind);
     }
 
     /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
@@ -2130,19 +2126,9 @@ impl Elaborator {
             is_axiom,
             direct_dependencies,
         } = pending;
-        let key = registration.key.clone();
-        let event_registration = registration.clone();
-        let event_dependencies = direct_dependencies.clone();
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
-        self.names.commit_global(abs, registration);
-        self.provenance.commit(key, is_axiom, direct_dependencies);
-        self.record_module_event(module_delta::DeltaEvent::Global {
-            abs,
-            registration: event_registration,
-            is_axiom,
-            direct_dependencies: event_dependencies,
-        });
+        self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
         self.refresh_delta_psi();
     }
 

@@ -469,20 +469,7 @@ impl Elaborator {
         let key = spec.key.clone();
         let name = d.name.clone();
         let monomorph = spec.monomorph;
-        self.representations.commit_repr(
-            key.clone(),
-            name.clone(),
-            info.clone(),
-            monomorph.clone(),
-            obs.clone(),
-        );
-        self.record_module_event(crate::module_delta::DeltaEvent::Repr {
-            key,
-            name,
-            info,
-            monomorph,
-            obligations: obs,
-        });
+        self.semantic_commit_repr(key, name, info, monomorph, obs);
         Ok(())
     }
 
@@ -2519,14 +2506,7 @@ impl Elaborator {
         let repr = d.repr.clone();
         let op = d.op.clone();
         let entry = ImplEntry { global, provenance };
-        self.representations
-            .commit_impl(repr.clone(), op.clone(), entry.clone(), obs.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Impl {
-            repr,
-            op,
-            entry,
-            obligations: obs,
-        });
+        self.semantic_commit_impl(repr, op, entry, obs);
         Ok(())
     }
 

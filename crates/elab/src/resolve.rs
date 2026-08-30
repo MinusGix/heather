@@ -634,8 +634,7 @@ impl Elaborator {
             // type is scoped in.
             at: abs,
         };
-        self.traits.commit_derived(derived.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Derived(derived));
+        self.semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
 }

@@ -1178,8 +1178,7 @@ impl Elaborator {
             owner,
         };
         let key = qkey(self.names.module(), &d.name);
-        self.traits.commit_class(key.clone(), info.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Class { key, info });
+        self.semantic_commit_class(key, info);
         Ok(())
     }
 
@@ -1855,8 +1854,7 @@ impl Elaborator {
             );
         }
         let info = DesignationInfo { op, written, carrier: head };
-        self.traits.commit_designation(key.clone(), info.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Designation { key, info });
+        self.semantic_commit_designation(key, info);
         Ok(())
     }
 
@@ -2138,8 +2136,7 @@ impl Elaborator {
         r?;
         let global = qkey(self.names.module(), &prefix);
         let info = InstanceInfo { global, written, index, parameterized };
-        self.traits.commit_instance(key.clone(), info.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Instance { key, info });
+        self.semantic_commit_instance(key, info);
         Ok(())
     }
 
@@ -2490,8 +2487,7 @@ impl Elaborator {
                 index: aindex,
                 parameterized,
             };
-            self.traits.commit_instance(key.clone(), info.clone());
-            self.record_module_event(crate::module_delta::DeltaEvent::Instance { key, info });
+            self.semantic_commit_instance(key, info);
         }
         Ok(())
     }

@@ -288,15 +288,15 @@ impl GenDefs {
         self.layers().any(|layer| !layer.wf_slots.is_empty())
     }
 
-    fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
+    pub(crate) fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
         Rc::make_mut(&mut self.current).ty_code.insert(tag, value);
     }
 
-    fn insert_wf_slots(&mut self, tag: u32, value: WfSlots) {
+    pub(crate) fn insert_wf_slots(&mut self, tag: u32, value: WfSlots) {
         Rc::make_mut(&mut self.current).wf_slots.insert(tag, value);
     }
 
-    fn insert_fam_levels(&mut self, tag: u32, value: (Level, Level)) {
+    pub(crate) fn insert_fam_levels(&mut self, tag: u32, value: (Level, Level)) {
         Rc::make_mut(&mut self.current).fam_lvl.insert(tag, value);
     }
 
@@ -458,9 +458,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            self.types
-                .gdefs_mut()
-                .insert_ty_code(ind.tag, (Rc::new(d_ty.clone()), l.clone()));
+            self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone());
         }
         self.register_wf_slots(ind, &d_ty, &l, span);
     }
@@ -915,7 +913,7 @@ impl Elaborator {
                 level: l.clone(),
                 tm: Rc::new(scode),
             });
-            self.types.gdefs_mut().insert_wf_slots(
+            self.semantic_commit_gen_wf_slots(
                 ind.tag,
                 WfSlots {
                     shape: Rc::clone(shape),
@@ -1348,7 +1346,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, level, body, span)
             .is_ok()
         {
-            self.types.gdefs_mut().insert_fam_levels(ind.tag, (l, ilvl));
+            self.semantic_commit_gen_fam_levels(ind.tag, l, ilvl);
         }
     }
 
@@ -1462,8 +1460,7 @@ impl Elaborator {
             level,
             Rc::new(body),
         ));
-        self.types.gdefs_mut().insert_binding(key, abs);
-        self.record_module_event(crate::module_delta::DeltaEvent::GenDef { key, abs });
+        self.semantic_commit_gen_def(key, abs);
         self.refresh_delta_psi();
         Ok(())
     }

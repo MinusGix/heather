@@ -264,3 +264,41 @@ disk artifact is acceleration data, not a proof verdict.
   repr generation/access, datarepr and obligation records, meta templates,
   generated-term mutation controls, semantic-image differential tests, and the
   new kernel-extension judgment.
+- 2026-08-30: Stage 3 hardening centralized durable frontend mutations behind
+  semantic commit operations shared by source elaboration and replay. Journal
+  payloads are now built lazily, so inactive extraction adds no unconditional
+  cloning. A source-tree tripwire rejects known direct registry commits outside
+  that seam; it is intentionally defense in depth rather than a claim that a
+  textual audit can replace schema review.
+
+  New observable differential fixtures force canonical derived resolution,
+  meta-slot execution, repr/impl access, and obligation lookup from a consumer
+  module, then require exact source/replay Ψ. The repr fixture caught an actual
+  completeness hole: generated-definition bindings replayed, but their
+  type-code guard, recursive-shape slots, and family-level indexes did not.
+  The result still kernel-checked because replay unfolded to a convertible
+  structural type, but it lost the compact annotation spelling and generated
+  a different, much larger term. These correlated indexes now have explicit
+  events and use the same commit seam. Focused verification is green: 9/9
+  semantic-image integration tests and 3/3 replay-boundary unit tests.
+
+  Stage 4's documented risks are now explicit: hostile bytes need total,
+  allocation-budgeted decoding and cross-reference validation; metadata stays
+  quarantined through full suffix checking; dependency identity is computed by
+  the loader rather than trusted from the artifact; v1 absolute positions
+  require the exact ordered prefix; and cache publication is atomic. The next
+  implementation slice is the bounded versioned codec, not further
+  sub-microsecond registry tuning.
+
+  Broad fast verification exercised all 151 binaries. It produced 2,059
+  passes, zero assertion failures, and one ignored manual benchmark; x86_64,
+  Omega logic/reconstruction, every repr/datarepr/access suite, the elaborator
+  unit suite, and the semantic-image fixture all passed. The aggregate run is
+  nevertheless recorded as incomplete: under three-way contention, Omega
+  core and the two division/modulus binaries reached the harness's fixed
+  300-CPU-second limit and were killed. Omega core then passed serially in
+  282.42 seconds. `omega_div_mod` still reached the rail serially at 305
+  seconds without an assertion result; its scaling sibling was not redundantly
+  rerun after showing the same broad-run boundary. The previous green full
+  run measured these targets below the rail, so this is resource evidence on
+  a slower host, not a green claim and not a semantic failure.

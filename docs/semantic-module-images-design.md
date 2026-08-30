@@ -300,10 +300,31 @@ indexed later; their current storage must not leak into `ModuleDelta`.
 
 The in-memory slice is implemented. `elab_module_delta` wraps a complete
 module in one committed-state transaction and journals ordinary globals,
-generated definitions, nominal types and names, trait entries, derived
-dictionaries, representation/implementation entries and obligations, designed
-access paths, provenance, and meta-program definitions/slot claims. Nested
-generated transactions mark and truncate that same journal on failure.
+generated definitions and all of their inverse/guard indexes, nominal types
+and names, trait entries, derived dictionaries, representation/implementation
+entries and obligations, designed access paths, provenance, and meta-program
+definitions/slot claims. Nested generated transactions mark and truncate that
+same journal on failure.
+
+Stage 3 is hardened around one semantic-commit seam. Source elaboration and
+replay call the same commit operations; those operations both update the live
+registry and, only while extracting a delta, append the corresponding logical
+event. Event payload construction is lazy, so ordinary source elaboration and
+replay do not clone registry values merely because journaling exists. An
+ordinary test scans the elaborator source tree for direct calls to the durable
+registry mutation primitives outside this seam. This is a maintenance tripwire,
+not a type-system proof: adding a new registry or a new mutation primitive must
+also extend the event schema, replay match, and tripwire list.
+
+The hardening differential tests assert downstream behavior rather than only
+comparing the stored Ψ suffix. They force a canonical derived dictionary, a
+meta-program slot, and a representation implementation with designed access
+paths and obligation rows, then compare source-built and replay-built kernel
+contexts exactly after a consumer module. This found a real omitted-state bug:
+the generated-definition forward/reverse binding map was journaled, but its
+type-code guard, recursive `Wf` slot pair, and family-level indexes were not.
+Replay therefore produced convertible but much larger unfolded annotations.
+Those correlated indexes are now explicit events through the same commit seam.
 
 `ModuleDependencyIdentity` carries the loader-supplied ordered interface
 identity; replay also compares the complete logical kernel prefix, so an
@@ -320,6 +341,25 @@ Stage 4 rather than being smuggled into this representation.
 - Add the versioned bounded encoding and full identity header.
 - Integrate it with the loader and atomic cache writes.
 - Keep generated/mutated suffixes outside the imported image boundary.
+
+Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:
+
+- Decode is total and budgeted. Counts, string lengths, nesting depth, binding
+  mass, and event payloads are bounded before allocation; malformed bytes,
+  duplicate correlated entries, invalid absolute positions, and dangling
+  registry references return cache misses/errors rather than panicking.
+- Decoded metadata remains a quarantined candidate until identity checks,
+  structural validation, and the complete ordered kernel-extension judgment
+  succeed. Publication remains one committed-world swap.
+- The loader computes source and ordered dependency-interface identities from
+  the resolved module graph. Image bytes may state those identities but never
+  choose or bless them.
+- Format v1 deliberately retains absolute Ψ positions and therefore requires
+  the exact ordered dependency interface. Relocatable references are a later
+  format, justified only when the loader needs composition over a differently
+  positioned but interface-equivalent prefix.
+- Cache writes use a temporary sibling plus atomic rename, and a format or
+  semantics-fingerprint mismatch is an ordinary rebuild, not recovery logic.
 
 ### Stage 5 — resident and parallel consumers
 

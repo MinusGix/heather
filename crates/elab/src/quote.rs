@@ -423,14 +423,7 @@ impl Elaborator {
             psi_len,
             order,
         };
-        self.meta_programs
-            .commit(module.clone(), name.clone(), slot, definition.clone());
-        self.record_module_event(crate::module_delta::DeltaEvent::Meta {
-            module,
-            name,
-            slot,
-            definition,
-        });
+        self.semantic_commit_meta(module, name, slot, definition);
         Ok(())
     }
 
