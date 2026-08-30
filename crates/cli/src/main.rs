@@ -37,7 +37,7 @@ use std::rc::Rc;
 
 use heather_cache::Cache;
 use heather_cache::module_image::{ModuleCacheKey, ModuleImageCache};
-use heather_elab::{Elaborator, LintProfile, ModuleDependencyIdentity};
+use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
@@ -90,8 +90,8 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--deny-axioms] <file-or-dir>...\n\
-                     \x20      heather obligations [-L <dir>]... [--json] <file.hthr>...\n\
-                     \x20      heather axioms <target> [-L <dir>]... [--json] <file-or-dir>...";
+                     \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
+                     \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -409,6 +409,68 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     ExitCode::from(if failed { 1 } else { 0 })
 }
 
+/// Populate an elaborator for a read-only inspection command. These commands
+/// deliberately do not use the declaration cache's trusted quick gate: a
+/// semantic module hit is decoded, kernel-checked and replayed exactly as it
+/// is for `check`, while a miss takes the ordinary source path and publishes
+/// the resulting image for the next inspection.
+fn check_inspection_modules(
+    opts: &Opts,
+    elab: &mut Elaborator,
+    modules: &[loader::Module],
+    lint_profile: LintProfile,
+) -> Result<(), (usize, Vec<ElabError>)> {
+    if !opts.cache {
+        for (i, m) in modules.iter().enumerate() {
+            let errs = elab.check_module_source(&m.name, &m.src);
+            if !errs.is_empty() {
+                return Err((i, errs));
+            }
+            // Inspection commands have historically omitted warnings. Drain
+            // them at their source boundary so their spans cannot leak into
+            // a later module or report.
+            elab.take_warnings();
+        }
+        return Ok(());
+    }
+
+    let images = ModuleImageCache::new(opts.cache_dir.clone());
+    let mut module_interfaces = Vec::new();
+    for (i, m) in modules.iter().enumerate() {
+        let dependencies = ModuleDependencyIdentity::new(module_interfaces.clone());
+        let key = ModuleCacheKey::for_source(&m.name, &m.src, &dependencies, lint_profile);
+        match images.load(key, elab.psi().clone(), m.src.len()) {
+            Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
+                Ok(()) => {
+                    module_interfaces.push(loaded.interface_hash);
+                    continue;
+                }
+                Err(e) => eprintln!(
+                    "cache: stored module `{}` failed semantic replay ({e}) — rebuilding",
+                    m.name
+                ),
+            },
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "cache: stored module `{}` is unusable ({e}) — rebuilding",
+                m.name
+            ),
+        }
+
+        let delta = match elab.check_module_delta(&m.name, &m.src, dependencies) {
+            Ok(delta) => delta,
+            Err(errs) => return Err((i, errs)),
+        };
+        let interface = ModuleImageCache::interface_hash(&delta);
+        module_interfaces.push(interface);
+        let warnings = elab.take_warnings();
+        if let Err(e) = images.publish(key, &delta, &warnings) {
+            eprintln!("cache: could not store module `{}` ({e})", m.name);
+        }
+    }
+    Ok(())
+}
+
 /// `heather axioms <target> [--json] <root>` checks the import closure and
 /// reports the deterministic shortest path from `target` to every assumption.
 fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
@@ -424,6 +486,8 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
+        let lint_profile = lint_profile_for_path(Path::new(path));
+        elab.set_lint_profile(lint_profile);
         let roots = match roots_for_path(Path::new(path)) {
             Ok(roots) => roots,
             Err(msg) => {
@@ -439,11 +503,10 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        for m in &modules {
-            let errs = elab.check_module_source(&m.name, &m.src);
-            if errs.is_empty() {
-                continue;
-            }
+        if let Err((module, errs)) =
+            check_inspection_modules(opts, &mut elab, &modules, lint_profile)
+        {
+            let m = &modules[module];
             let shown = display_path(&m.path, path);
             for e in &errs {
                 eprint!(
@@ -522,6 +585,8 @@ fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
+        let lint_profile = lint_profile_for_path(Path::new(path));
+        elab.set_lint_profile(lint_profile);
         let modules = match loader::load(Path::new(path), &opts.search) {
             Ok(m) => m,
             Err(e) => {
@@ -529,11 +594,10 @@ fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        for m in &modules {
-            let errs = elab.check_module_source(&m.name, &m.src);
-            if errs.is_empty() {
-                continue;
-            }
+        if let Err((module, errs)) =
+            check_inspection_modules(opts, &mut elab, &modules, lint_profile)
+        {
+            let m = &modules[module];
             let shown = display_path(&m.path, path);
             for e in &errs {
                 eprint!(

@@ -401,6 +401,10 @@ Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:
 
 ### Stage 5 — resident and parallel consumers
 
+- **In progress:** read-only proof inspection (`heather axioms` and
+  `heather obligations`) reuses the same bounded, kernel-checked semantic
+  module images as `heather check`. These commands do not enable the separate
+  trusted declaration-cache gate merely because module replay is requested.
 - Reuse images in the daemon and test tooling.
 - Schedule independent module nodes in parallel.
 - Add replay/trusted quick modes only as separately reviewed trust rungs.

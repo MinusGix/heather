@@ -360,3 +360,13 @@ disk artifact is acceleration data, not a proof verdict.
   actual cache graph: changing an imported theorem proof rebuilds that module
   while replaying its consumer; changing a transparent definition in the same
   module invalidates the exact-prefix consumer too.
+- 2026-08-30: the first Stage 5 consumers are the proof-inspection commands.
+  `heather axioms` and `heather obligations` now honor their already-parsed
+  cache flags by loading the same bounded images, rechecking their kernel
+  suffixes and replaying the quarantined metadata before answering. A miss or
+  rejected image takes the ordinary source path and republishes; inspection
+  does not silently opt into the separate declaration-cache trust rung.
+
+  CLI tests pin obligation output across a cold/warm replay and corrupt an
+  axiom image to prove that rejection is loud, rebuilding is non-fatal, and
+  the resulting provenance report is unchanged.

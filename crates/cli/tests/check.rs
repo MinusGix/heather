@@ -348,6 +348,21 @@ fn obligations_json_is_one_object_per_row() {
     assert!(text.contains("\"provenance\": null"), "{text}");
 }
 
+#[test]
+fn obligations_can_replay_safe_semantic_module_images() {
+    let dir = cache_dir("obligations-inspection");
+    let arg = dir.display().to_string();
+    let args = ["obligations", "--cache-dir", &arg, "obligations.hthr"];
+    let cold = heather(&args);
+    assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
+
+    let warm = heather(&args);
+    assert_eq!(warm.status.code(), Some(0), "{}", String::from_utf8_lossy(&warm.stderr));
+    assert_eq!(warm.stdout, cold.stdout, "replay preserves the inspection result");
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A `?` is a failure, so there is nothing to list: inline-first means a listed
 /// file is a certified file (§6).
 #[test]
@@ -382,6 +397,32 @@ fn axioms_json_exposes_direct_edges_and_paths() {
     assert!(text.contains("\"direct\": [\"axioms::direct\"]"), "{text}");
     assert!(text.contains("\"kind\": \"user\""), "{text}");
     assert!(text.contains("\"path\": [\"axioms::indirect\", \"axioms::direct\", \"axioms::seed\"]"), "{text}");
+}
+
+#[test]
+fn axioms_loads_and_rebuilds_semantic_module_images() {
+    let dir = cache_dir("axioms-inspection");
+    let arg = dir.display().to_string();
+    let args = ["axioms", "indirect", "--cache-dir", &arg, "axioms.hthr"];
+    let cold = heather(&args);
+    assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
+
+    let modules = dir.join("modules-v1");
+    let artifact = std::fs::read_dir(&modules)
+        .unwrap()
+        .next()
+        .expect("one cached module")
+        .unwrap()
+        .path();
+    std::fs::write(artifact, b"not an image").unwrap();
+    let rebuilt = heather(&args);
+    assert_eq!(rebuilt.status.code(), Some(0));
+    assert_eq!(rebuilt.stdout, cold.stdout, "rebuild preserves the axiom report");
+    let err = String::from_utf8_lossy(&rebuilt.stderr);
+    assert!(err.contains("stored module `axioms` is unusable"), "{err}");
+    assert!(err.contains("rebuilding"), "{err}");
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
