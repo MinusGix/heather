@@ -1,0 +1,68 @@
+// Typed x86 instruction blocks. This layer composes the existing canonical
+// single-instruction encoder, decoder boundary, and relational execution
+// without introducing fetch or a complete ABI function model.
+
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import relation;
+
+fn canonical_block_bytes(instructions: List<Instruction>) → List<BitVec(8)> {
+    match instructions {
+        Nil => Nil,
+        Cons(instruction, rest) =>
+            canonical_bytes(instruction) ++ canonical_block_bytes(rest),
+    }
+}
+
+// The stored instruction list determines a placed layout by advancing each
+// successor span from the preceding decoded length. All current canonical
+// forms are three bytes, but this relation is phrased through `next_rip` so a
+// later variable-length decoded block can generalize it without changing the
+// execution order.
+fn CanonicalBlockDecodes(instructions: List<Instruction>) → BitVec(64) → Type {
+    match instructions {
+        Nil => λ start => True,
+        Cons(instruction, rest) => λ start =>
+            DecodedAt(encoded_at(start, instruction), decoded_rr(instruction)) ∧
+            CanonicalBlockDecodes(rest, next_rip(start, 3)),
+    }
+}
+
+theorem canonical_block_decodes(instructions: List<Instruction>):
+    (start: BitVec(64)) → CanonicalBlockDecodes(instructions, start)
+{
+    match instructions {
+        Nil => start ⊢ trivial,
+        Cons(instruction, rest) => start ⊢ And(
+            canonical_encoding_decodes(start, instruction),
+            canonical_block_decodes(rest, next_rip(start, 3))),
+    }
+}
+
+// Functional execution is a convenient representative for deterministic
+// clients. `ExecuteBlock` below is authoritative and retains the nondeterminism
+// of instructions such as TEST.
+fn execute_block_normal<M>(instructions: List<Instruction>) →
+    MachineState<M> → MachineState<M>
+{
+    match instructions {
+        Nil => λ before => before,
+        Cons(instruction, rest) => λ before =>
+            execute_block_normal(rest,
+                execute_normal(decoded_rr(instruction), before)),
+    }
+}
+
+fn ExecuteBlock<M>(instructions: List<Instruction>) →
+    MachineState<M> → MachineState<M> → Type
+{
+    match instructions {
+        Nil => λ before after => before = after,
+        Cons(instruction, rest) => λ before after =>
+            ∃ middle: MachineState<M>,
+                Execute(decoded_rr(instruction), before, Returned(middle)) ∧
+                ExecuteBlock(rest, middle, after),
+    }
+}

@@ -1,0 +1,142 @@
+// The first certified FunctionIR lowering rule: modular `BitVec(64)` Add to a
+// placed x86 MOV/ADD leaf block. This is deliberately a composed theorem, not
+// a materialized WordIR or a general register allocator.
+
+import function_ir;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import list;
+import logic;
+
+fn add64_x86_instructions() → List<Instruction> {
+    Cons(MovRR(Rax, Rdi), Cons(AddRR(Rax, Rsi), Nil))
+}
+
+fn add64_x86_bytes() → List<BitVec(8)> {
+    canonical_block_bytes(add64_x86_instructions())
+}
+
+theorem add64_x86_byte_length(): add64_x86_bytes().len() = 6 { refl }
+
+theorem add64_x86_block_decodes(start: BitVec(64)):
+    CanonicalBlockDecodes(add64_x86_instructions(), start)
+{
+    canonical_block_decodes(add64_x86_instructions(), start)
+}
+
+theorem add64_x86_block_is_allowed<M>(before: MachineState<M>):
+    ExecuteBlock(add64_x86_instructions(), before,
+        execute_block_normal(add64_x86_instructions(), before))
+{
+    Exists(
+        execute_normal(decoded_rr(MovRR(Rax, Rdi)), before),
+        And(
+            canonical_execute_normal_is_allowed(MovRR(Rax, Rdi), before),
+            Exists(
+                execute_normal(decoded_rr(AddRR(Rax, Rsi)),
+                    execute_normal(decoded_rr(MovRR(Rax, Rdi)), before)),
+                And(
+                    canonical_execute_normal_is_allowed(AddRR(Rax, Rsi),
+                        execute_normal(decoded_rr(MovRR(Rax, Rdi)), before)),
+                    refl))))
+}
+
+theorem add64_x86_result<M>(before: MachineState<M>):
+    read_gpr(Rax,
+        execute_block_normal(add64_x86_instructions(), before).gprs) =
+    bitvec::add(64,
+        read_gpr(Rdi, before.gprs), read_gpr(Rsi, before.gprs))
+{
+    refl
+}
+
+theorem add64_x86_preserves_memory<M>(before: MachineState<M>):
+    execute_block_normal(add64_x86_instructions(), before).memory = before.memory
+{
+    refl
+}
+
+fn Add64Protected(register: Gpr) → Type {
+    match register { Rax => False, _ => True }
+}
+
+theorem add64_x86_preserves_protected<M>(register: Gpr,
+    before: MachineState<M>): Add64Protected(register) →
+    read_gpr(register,
+        execute_block_normal(add64_x86_instructions(), before).gprs) =
+        read_gpr(register, before.gprs)
+{
+    match register {
+        Rax => protected ⊢ false_elim(protected),
+        Rcx => protected ⊢ refl, Rdx => protected ⊢ refl,
+        Rbx => protected ⊢ refl, Rsp => protected ⊢ refl,
+        Rbp => protected ⊢ refl, Rsi => protected ⊢ refl,
+        Rdi => protected ⊢ refl, R8 => protected ⊢ refl,
+        R9 => protected ⊢ refl, R10 => protected ⊢ refl,
+        R11 => protected ⊢ refl, R12 => protected ⊢ refl,
+        R13 => protected ⊢ refl, R14 => protected ⊢ refl,
+        R15 => protected ⊢ refl,
+    }
+}
+
+theorem add64_x86_advances_rip<M>(before: MachineState<M>):
+    execute_block_normal(add64_x86_instructions(), before).rip =
+        next_rip(next_rip(before.rip, 3), 3)
+{
+    refl
+}
+
+// The location-sensitive refinement boundary. Inputs in FunctionIR valuation
+// slots 0 and 1 are represented by RDI and RSI; after executing the selected
+// block, RAX represents FunctionIR slot 2. Flags are intentionally outside
+// the observation, and memory framing is supplied separately above.
+theorem add64_x86_refines_function_ir<M>(values: Valuation(),
+    before: MachineState<M>,
+    left_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    right_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
+    graph: RegionHolds(add64_raw(), values)):
+    read_gpr(Rax,
+        execute_block_normal(add64_x86_instructions(), before).gprs) =
+        values(64, 2)
+{
+    trans(add64_x86_result(before),
+        sym(add64_denotes(
+            read_gpr(Rdi, before.gprs), read_gpr(Rsi, before.gprs),
+            values, left_placed, right_placed, graph)))
+}
+
+// One end-to-end placed-block certificate: relational execution is admitted,
+// the observed result refines the FunctionIR graph, memory is framed, and RIP
+// advances by the two decoded instruction lengths. Byte decoding is a
+// placement-parametric fact supplied by `add64_x86_block_decodes`.
+theorem add64_x86_artifact<M>(values: Valuation(), before: MachineState<M>,
+    left_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    right_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
+    graph: RegionHolds(add64_raw(), values)):
+    ExecuteBlock(add64_x86_instructions(), before,
+        execute_block_normal(add64_x86_instructions(), before))
+    ∧ (read_gpr(Rax,
+            execute_block_normal(add64_x86_instructions(), before).gprs) =
+            values(64, 2)
+       ∧ (execute_block_normal(add64_x86_instructions(), before).memory =
+                before.memory
+          ∧ (execute_block_normal(add64_x86_instructions(), before).rip =
+                next_rip(next_rip(before.rip, 3), 3)
+             ∧ ((register: Gpr) → Add64Protected(register) →
+                read_gpr(register,
+                    execute_block_normal(
+                        add64_x86_instructions(), before).gprs) =
+                    read_gpr(register, before.gprs)))))
+{
+    And(
+        add64_x86_block_is_allowed(before),
+        And(
+            add64_x86_refines_function_ir(values, before,
+                left_placed, right_placed, graph),
+            And(add64_x86_preserves_memory(before),
+                And(add64_x86_advances_rip(before),
+                    λ register protected =>
+                        add64_x86_preserves_protected(
+                            register, before, protected)))))
+}

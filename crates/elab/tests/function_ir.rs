@@ -1,0 +1,92 @@
+//! The first future-facing FunctionIR slice: raw stable-ID regions, hybrid
+//! validation, graph-relational semantics, and modular `add64`.
+
+mod support;
+
+use heather_elab::{ElabError, Elaborator};
+
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/int.hthr");
+const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
+const FUNCTION_IR: &str = include_str!("../../../lib/function_ir.hthr");
+
+const MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("bitvec", BITVEC),
+    ("function_ir", FUNCTION_IR),
+];
+
+fn elaborated() -> Elaborator {
+    support::semantic_test_base(MODULES)
+}
+
+#[test]
+fn function_ir_suite() {
+    let base = elaborated();
+    checked_add64_is_available(&base);
+    wrong_add64_observation_is_refused(&base);
+}
+
+fn checked_add64_is_available(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import function_ir;
+import bitvec;
+
+fn selected() → CheckedRegion { add64_function() }
+
+theorem selected_is_valid(): RegionValid(selected().raw) { selected().valid }
+
+theorem add64_result(x, y: BitVec(64), values: Valuation(),
+    hx: values(64, 0) = x,
+    hy: values(64, 1) = y,
+    graph: RegionHolds(selected().raw, values)):
+    values(64, 2) = bitvec::add(64, x, y)
+{
+    add64_denotes(x, y, values, hx, hy, graph)
+}
+"#;
+    if let Err(err) = e.elab_module_source("function_ir_acceptance", src) {
+        panic!("FunctionIR acceptance did not check: {}", err.render(src));
+    }
+}
+
+fn wrong_add64_observation_is_refused(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import function_ir;
+import bitvec;
+
+theorem wrong_result(x, y: BitVec(64), values: Valuation(),
+    hx: values(64, 0) = x,
+    hy: values(64, 1) = y,
+    graph: RegionHolds(add64_raw(), values)):
+    values(64, 2) = x
+{
+    graph.left
+}
+"#;
+    match e.elab_module_source("function_ir_wrong", src) {
+        Ok(()) => panic!("wrong FunctionIR result certificate checked"),
+        Err(ElabError::Parse(err)) => {
+            panic!("negative control failed in the parser: {}", err.msg)
+        }
+        Err(err) => {
+            let message = format!("{err:?}");
+            assert!(message.contains("NotConvertible"), "{message}");
+        }
+    }
+}

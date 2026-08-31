@@ -1,0 +1,216 @@
+// FunctionIR's first typed-region slice. Regions are stored as deterministic
+// topological node sequences, but their pure meaning is a conjunction of
+// dependency equations over stable value IDs. The list is therefore a
+// schedule used by validation and execution, not an observable ordering of
+// independent computations.
+//
+// This is intentionally small: every value is a fixed-width bitvector and
+// `Add` is the only operation. The raw-data-plus-`RegionValid` boundary is the
+// hybrid representation that later operation families and nested regions can
+// grow from without inheriting `ir_v1`'s constructor-tree value model.
+
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// Stable IDs are Nats in the first representation. A port records the type
+// independently of its uses, so validation—not the raw node constructor—pins
+// operand references to definitions of the required width.
+record Port { id: Nat, width: Nat }
+
+// A region's port environment has a dedicated carrier even though its first
+// representation is a list. Clients use this API rather than depending on the
+// storage choice or confusing an environment with an arbitrary list of IDs.
+record Ports { entries: List<Port> }
+
+fn empty_ports() → Ports { Ports(Nil) }
+
+fn push_port(port: Port, ports: Ports) → Ports {
+    Ports(Cons(port, ports.entries))
+}
+
+// Operation-specific fields keep raw construction simple while making the
+// operation's input and output arities explicit. Future multi-result
+// operations may carry several output IDs in their own constructor.
+inductive Node { Add(width: Nat, output: Nat, left: Nat, right: Nat) }
+
+record Region {
+    inputs: Ports,
+    nodes: List<Node>,
+    outputs: Ports,
+}
+
+fn node_output(node: Node) → Port {
+    match node { Add(width, output, _, _) => Port(output, width) }
+}
+
+// ---------------------------------------------------------------------------
+// Raw-region validation
+
+fn HasPortEntries(entries: List<Port>, id, width: Nat) → Type {
+    match entries {
+        Nil => False,
+        Cons(port, rest) =>
+            (port.id = id ∧ port.width = width) ∨
+                HasPortEntries(rest, id, width),
+    }
+}
+
+fn HasPort(ports: Ports, id, width: Nat) → Type {
+    HasPortEntries(ports.entries, id, width)
+}
+
+fn FreshPortIdEntries(entries: List<Port>, id: Nat) → Type {
+    match entries {
+        Nil => True,
+        Cons(port, rest) => id ≠ port.id ∧ FreshPortIdEntries(rest, id),
+    }
+}
+
+fn FreshPortId(ports: Ports, id: Nat) → Type {
+    FreshPortIdEntries(ports.entries, id)
+}
+
+fn UniquePortEntries(entries: List<Port>) → Type {
+    match entries {
+        Nil => True,
+        Cons(port, rest) => FreshPortIdEntries(rest, port.id) ∧
+            UniquePortEntries(rest),
+    }
+}
+
+fn UniquePorts(ports: Ports) → Type { UniquePortEntries(ports.entries) }
+
+fn NodeValidIn(definitions: Ports, node: Node) → Type {
+    match node {
+        Add(width, output, left, right) =>
+            HasPort(definitions, left, width) ∧
+            (HasPort(definitions, right, width) ∧
+             FreshPortId(definitions, output)),
+    }
+}
+
+fn NodesValid(nodes: List<Node>) → Ports → Type {
+    match nodes {
+        Nil => λ definitions => True,
+        Cons(node, rest) => λ definitions =>
+            NodeValidIn(definitions, node) ∧
+            NodesValid(rest, push_port(node_output(node), definitions)),
+    }
+}
+
+fn definitions_after(nodes: List<Node>) → Ports → Ports {
+    match nodes {
+        Nil => λ definitions => definitions,
+        Cons(node, rest) => λ definitions =>
+            definitions_after(rest, push_port(node_output(node), definitions)),
+    }
+}
+
+fn OutputEntriesValid(definitions: Ports, outputs: List<Port>) → Type {
+    match outputs {
+        Nil => True,
+        Cons(output, rest) =>
+            HasPort(definitions, output.id, output.width) ∧
+            OutputEntriesValid(definitions, rest),
+    }
+}
+
+fn OutputsValid(definitions, outputs: Ports) → Type {
+    OutputEntriesValid(definitions, outputs.entries)
+}
+
+record RegionValid(region: Region) {
+    inputs_unique: UniquePorts(region.inputs),
+    nodes_valid: NodesValid(region.nodes, region.inputs),
+    outputs_valid:
+        OutputsValid(definitions_after(region.nodes, region.inputs),
+            region.outputs),
+}
+
+record CheckedRegion {
+    raw: Region,
+    valid: RegionValid(raw),
+}
+
+// ---------------------------------------------------------------------------
+// Pure graph semantics
+
+// A valuation assigns a bitvector of every width to every stable value ID.
+// Region inputs constrain selected entries from outside; each node adds an
+// equation; region outputs select entries for observation. Because node
+// equations do not consume or update a sequential environment, their meaning
+// depends only on graph edges, not on the stored schedule.
+fn Valuation() → Type { (width: Nat) → Nat → BitVec(width) }
+
+fn NodeHolds(values: Valuation(), node: Node) → Type {
+    match node {
+        Add(width, output, left, right) =>
+            values(width, output) =
+                bitvec::add(width, values(width, left), values(width, right)),
+    }
+}
+
+fn NodesHold(values: Valuation(), nodes: List<Node>) → Type {
+    match nodes {
+        Nil => True,
+        Cons(node, rest) =>
+            NodeHolds(values, node) ∧ NodesHold(values, rest),
+    }
+}
+
+fn RegionHolds(region: Region, values: Valuation()) → Type {
+    NodesHold(values, region.nodes)
+}
+
+// ---------------------------------------------------------------------------
+// First checked function: modular 64-bit addition
+
+fn add64_raw() → Region {
+    Region(
+        inputs := Ports(Cons(Port(id := 0, width := 64),
+                        Cons(Port(id := 1, width := 64), Nil))),
+        nodes := Cons(Add(width := 64, output := 2, left := 0, right := 1),
+                  Nil),
+        outputs := Ports(Cons(Port(id := 2, width := 64), Nil)))
+}
+
+theorem add64_valid(): RegionValid(add64_raw()) {
+    RegionValid {
+        inputs_unique: And(
+            And(nat::zero_ne_succ(0), trivial),
+            And(trivial, trivial)),
+        nodes_valid: And(
+            And(
+                Inl(And(refl, refl)),
+                And(
+                    Inr(Inl(And(refl, refl))),
+                    And(
+                        nat::succ_ne_zero(1),
+                        And(
+                            λ bad => nat::succ_ne_zero(0,
+                                nat::succ_inj(1, 0, bad)),
+                            trivial)))),
+            trivial),
+        outputs_valid: And(Inl(And(refl, refl)), trivial),
+    }
+}
+
+fn add64_function() → CheckedRegion {
+    CheckedRegion(raw := add64_raw(), valid := add64_valid())
+}
+
+theorem add64_denotes(x, y: BitVec(64), values: Valuation(),
+    x_value: values(64, 0) = x,
+    y_value: values(64, 1) = y,
+    graph: RegionHolds(add64_raw(), values)):
+    values(64, 2) = bitvec::add(64, x, y)
+{
+    apply trans;
+    give graph.left;
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::add(64, ·, values(64, 1)), x_value);
+    list::cong_fn<BitVec(64), BitVec(64)>(bitvec::add(64, x, ·), y_value)
+}
