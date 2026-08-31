@@ -549,3 +549,25 @@ opaque stage boundaries, not for making the semantic graph sequential. The
 current `sum4` regions are raw semantic examples; producing their
 `RegionValid` certificates ergonomically remains a next validation/generator
 slice.
+
+### 2026-08-31: proof-carrying reference validation
+
+`check_region_valid` now traverses raw regions and returns
+`Option<RegionValid(region)>`. Successful lookup, freshness, uniqueness, node,
+and output checks construct exactly the propositions used by `RegionValid`;
+there is no Boolean mirror and therefore no separate soundness theorem.
+`validate_region` packages successful evidence as a `CheckedRegion`, while
+`CheckSucceeded` plus `proof_of_check_success` lets a closed declaration turn
+the computed `Some` branch into an opaque named validity theorem. Both `sum4`
+schedules are now ordinary checked regions, and rejection tests cover duplicate
+IDs, undefined operands and outputs, and width mismatch.
+
+The first reference checker returned a full decision `P ∨ ¬P`. That was the
+wrong compiler boundary: rejected programs do not need recursively constructed
+kernel refutations. Moving to `Option<P>` cut the cold validation probe from
+roughly 33 seconds to 19 seconds; ensuring clients consume opaque validity
+theorems rather than rerunning the checker reduced the focused cold fixture to
+roughly 13 seconds. This is still too expensive for serious graphs, so
+`issues/function-ir-validation-proof-cost.md` records the certifying-generator
+target. The in-language checker remains the executable specification and a
+useful dynamic fallback; it is not presumed to be the final fast path.
