@@ -4726,11 +4726,6 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> R<Term> {
-        if let Some(list) =
-            self.lower_standard_list_literal(cx, elems, expected, expected_level, span)?
-        {
-            return Ok(list);
-        }
         let class_key = names::qkey(PRELUDE_MODULE, "CollectionLiteral");
         let class = self
             .traits
@@ -4763,7 +4758,7 @@ impl Elaborator {
 
         let length = inductive::nat_lit(elems.len());
         let targs = [(expected.clone(), expected_level.clone())];
-        let vargs = [(length, Type::Nat, Level::Zero)];
+        let vargs = [(length.clone(), Type::Nat, Level::Zero)];
         let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &vargs, span)?;
         let carrier = self.display_type(cx, expected);
         let display = format!("CollectionLiteral<{carrier}>({})", elems.len());
@@ -4776,6 +4771,10 @@ impl Elaborator {
 
         let (element, element_universe, _) =
             self.project_field(cx, &ind, &goal, Rc::clone(&dict), element_field, span)?;
+        // Projection from a resolved dictionary can retain the whole
+        // dependent dictionary term. Normalize the field value before it is
+        // embedded in every vector-element annotation below.
+        let element = (*self.whnf_tm(cx, &element, span)?).clone();
         let Type::Ty(element_level) = self.whnf(cx, &element_universe, span)? else {
             return err(
                 "internal: collection-literal `element` is not a type code",
@@ -4786,11 +4785,20 @@ impl Elaborator {
             level: element_level.clone(),
             tm: Rc::new(element),
         };
+        // Build the compact domain before projecting `fromLiteral`: keeping
+        // this independently rooted prevents the later dependent projection
+        // from becoming part of the vector's annotations.
+        let literal_dom = Type::Vec {
+            level: element_level.clone(),
+            elem: Rc::new(element_ty.clone()),
+            len: Rc::new(length),
+        };
 
         let (from, from_ty, _) =
             self.project_field(cx, &ind, &goal, dict, from_field, span)?;
+        let from = (*self.whnf_tm(cx, &from, span)?).clone();
         let Type::Pi {
-            dom_level,
+            dom_level: _,
             cod_level,
             dom,
             cod,
@@ -4818,7 +4826,7 @@ impl Elaborator {
         // re-enter this protocol route.
         let vector = self
             .expr_elab()
-            .check_indexed_form(self, cx, literal, &dom)
+            .check_indexed_form(self, cx, literal, &literal_dom)
             .expect("a collection literal is an indexed vector checking form")?;
         let vector = Rc::new(vector);
         let result_ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&vector)));
@@ -4828,14 +4836,15 @@ impl Elaborator {
                 span,
             );
         }
-        Ok(Term::App {
+        let converted = Term::App {
             fun: Rc::new(from),
-            dom_level,
-            cod_level,
-            dom,
-            cod,
+            dom_level: element_level,
+            cod_level: expected_level.clone(),
+            dom: Rc::new(literal_dom),
+            cod: Rc::new(expected.shift_local(1)),
             arg: vector,
-        })
+        };
+        Ok((*self.whnf_tm(cx, &converted, span)?).clone())
     }
 
     /// A local variable by absolute position (outermost first), as

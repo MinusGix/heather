@@ -172,6 +172,16 @@ not a rescue, and saying so is the honest size of it.
 Two ordinary hygiene refusals come with the value list: a value binder may not
 repeat a name, and may not shadow one of the instance's own type parameters.
 
+### 4.3 Value-indexed classes do not mint derived specializations
+
+The canonical derived-instance table deliberately skips classes with value
+parameters. An open index cannot become an empty-context global; a closed one
+can, but each distinct value would mint a synonymous specialization of the
+same declared parameterized instance. Resolution keeps that application
+directly instead. This gives collection-literal lengths and operation indices
+one uniform policy and avoids unbounded global growth at the cost of optional
+sharing only.
+
 ## 5. Termination: Paterson's condition counts value binders
 
 `check_decrease` (layer 2 §6) enforces that each `requires` subgoal is

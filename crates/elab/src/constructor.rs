@@ -52,61 +52,6 @@ impl Elaborator {
         Some((nil, cons))
     }
 
-    fn list_literal_tail(elems: &[Expr], span: Span) -> Expr {
-        let start = elems.first().map_or(span.end.saturating_sub(1), |elem| elem.span.start);
-        Expr {
-            kind: ExprKind::CollectionLit(elems.to_vec()),
-            span: Span { start, end: span.end },
-        }
-    }
-
-    /// Preserve the compact constructor normal form of the standard List
-    /// instance after protocol resolution has proved that it opted in. This is
-    /// an elaboration optimization, not syntax selection: unrelated containers
-    /// reach their dictionary's `fromLiteral`, while the standard right fold
-    /// is emitted directly so large definitional proofs do not spend their
-    /// conversion fuel unfolding one dictionary projection per list cell.
-    pub(super) fn lower_standard_list_literal(
-        &self,
-        cx: &Cx,
-        elems: &[Expr],
-        expected: &Type,
-        level: &Level,
-        span: Span,
-    ) -> R<Option<Term>> {
-        // Merely being the canonical List is not enough: the ordinary instance
-        // declaration must have registered successfully.
-        if !self.standard_list_literal_instance_registered() {
-            return Ok(None);
-        }
-        let expected_whnf = self.whnf(cx, expected, span)?;
-        let Some(ind) = self.expected_ind(&expected_whnf) else { return Ok(None) };
-        if !self.is_standard_list(&ind) {
-            return Ok(None);
-        }
-        let Some((nil, cons)) = Self::list_ctor_indices(&ind) else {
-            return err(
-                "the canonical `list::List` declaration is incompatible with its collection-literal instance",
-                span,
-            );
-        };
-        Ok(Some(match elems.split_first() {
-            None => self.build_ctor_value(cx, &ind, nil, &[], expected, level, span)?,
-            Some((head, rest)) => {
-                let tail = Self::list_literal_tail(rest, span);
-                self.build_ctor_value(
-                    cx,
-                    &ind,
-                    cons,
-                    &[head.clone(), tail],
-                    expected,
-                    level,
-                    span,
-                )?
-            }
-        }))
-    }
-
     fn manual_list_spine(
         &self,
         cx: &Cx,

@@ -47,7 +47,7 @@ fn the_list_module_checks() {
 }
 
 #[test]
-fn its_literal_instance_uses_the_compact_standard_lowering() {
+fn its_literal_instance_uses_the_compact_protocol_lowering() {
     let mut e = elaborated();
     let before = e.psi().bindings.len();
     e.elab_module_source("list_literal_probe", "import list; fn xs() -> List<Nat> { [1, 2] }")

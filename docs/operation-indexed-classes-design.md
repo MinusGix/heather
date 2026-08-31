@@ -651,22 +651,21 @@ candidate's index** (`candidate: Bool::Monoid#bool#or (index `bool::or`)`),
 which is the same observability from the other end and is pinned as a test.
 A syntactic lane remains available the day a measurement wants it.
 
-### 14.3 The canonical derived table does not fire for indexed goals (§6)
+### 14.3 The canonical derived table does not mint indexed goals (§6)
 
 §6 says the design adds no conversion the current machinery does not perform.
 True, but it *removes* a sharing: layer 2's canonical derived table
-(`docs/traits-layer2-design.md` §8) never mints for a goal with a value index.
-The index is a term in the goal type, and a term elaborated at a use site
-carries that site's identity substitution, so the table's closedness test —
-asked of the kernel in the empty context, which is where a minted global has
-to live — says no. Two use sites of `mconcat(append, …)` at one carrier each
-inline their own derivation where they used to share one. It costs sharing and
+(`docs/traits-layer2-design.md` §8) deliberately does not mint for a class
+with value parameters. Open indices cannot pass the empty-context closedness
+test; a closed index can, but minting it would create one synonymous global
+per index for an already-declared parameterized instance application. Two use
+sites of `mconcat(append, …)` at one carrier therefore each inline their own
+derivation where an unindexed class would share one. It costs sharing and
 never correctness (the table's own standing bargain), and the migrated
 `algebra.hthr` checks in 0.42 s against 1.83 s before, so nothing is waiting on
-it; pinned as a test that states the fact rather than hiding it, and left for
-the coordinator to file if it is worth an issue. `strengthen_ty` was tried and
-does not help: a global reference under an identity substitution does not
-survive the strengthening round-trip.
+it. Open and closed controls pin the policy; `strengthen_ty` was tried for the
+open case and does not help because a global reference under an identity
+substitution does not survive the strengthening round-trip.
 
 ### 14.4 A value parameter's type was elaborated in the wrong context
 

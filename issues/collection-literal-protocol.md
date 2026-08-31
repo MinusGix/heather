@@ -46,8 +46,9 @@ surface universe polymorphism remains unavailable.
 Spread is intentionally not a `CollectionLiteral` field. It belongs to the
 separate optional protocol owned by [[collection-literal-spread]], so a type
 may support finite literals without supporting concatenation or open tails.
-The remaining List-only elaboration shortcut is owned by
-[[collection-literal-dictionary-reduction]].
+The original List-only elaboration shortcut was removed by
+[[collection-literal-dictionary-reduction]]: all opted-in containers now use
+the same compact protocol lowering.
 
 ## Acceptance
 
@@ -80,3 +81,6 @@ The remaining List-only elaboration shortcut is owned by
   finite literals do not mint derived dictionaries or spend proof fuel on one
   projection per cell. Full-suite verification: 2241 passed, 0 failed, 1
   ignored.
+- 2026-08-31: The follow-up dictionary-reduction round removed that fast path.
+  Normalized projections plus canonical protocol annotations preserve the
+  compact normal form generically for List and user containers.

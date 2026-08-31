@@ -104,6 +104,24 @@ theorem closed(): dec_of<Leq(1, 2)>() = L(tt) {{ refl }}
 }
 
 #[test]
+fn a_closed_value_index_reuses_the_parameterized_instance_without_a_mint() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+class Indexed<A>(n: Nat) { value: Nat }
+instance(n: Nat) Indexed<Nat>(n) { value := n }
+"#,
+    )
+    .expect("value-indexed instance registers");
+    let derived_before = e.derived_instances().len();
+
+    e.elab_source("fn closed_use(d: Indexed<Nat>(2) := infer) -> Nat { d.value }")
+        .expect("closed value index resolves");
+
+    assert_eq!(e.derived_instances().len(), derived_before);
+}
+
+#[test]
 fn a_composed_goal_backchains_through_it() {
     // Not a rename: the connective instance is generic over a *type* and this
     // one over two *values*, and the search composes them at an open carrier.

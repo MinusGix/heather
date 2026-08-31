@@ -175,7 +175,7 @@ fn a_same_named_local_class_cannot_hijack_bracket_syntax() {
 }
 
 #[test]
-fn the_standard_list_fast_path_does_not_mint_a_derived_dictionary() {
+fn the_standard_list_protocol_path_does_not_mint_a_derived_dictionary() {
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
     elaborator.elab_module_source("list", LIST).expect("canonical list module");
     let before = elaborator.psi().bindings.len();

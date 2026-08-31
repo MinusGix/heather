@@ -219,6 +219,12 @@ impl Elaborator {
             "class",
             format!("{} ({} instance(s))", ind.name, cands.len()),
         ));
+        let class_has_value_indices = !self
+            .traits
+            .class(&ckey)
+            .expect("class existence checked above")
+            .valparams
+            .is_empty();
         for (g, parameterized, index) in cands {
             // Candidate construction elaborates a real global reference, but
             // a rejected candidate is search state rather than part of the
@@ -246,16 +252,14 @@ impl Elaborator {
                     // instance's value is already one global reached by name,
                     // and minting a second one for it would duplicate the very
                     // thing the table exists to keep single.
-                    if parameterized {
-                        // Note (`docs/operation-indexed-classes-design.md`, the
-                        // corrections section): a goal with a **value index**
-                        // never reaches the table. The index is a *term* in the
-                        // goal type and a term elaborated at a use site carries
-                        // that site's identity substitution, so the closedness
-                        // test below — asked of the kernel in the empty context,
-                        // which is where a minted global has to live — says no.
-                        // It costs sharing and never correctness, which is this
-                        // table's standing bargain.
+                    if parameterized && !class_has_value_indices {
+                        // A closed value index can pass the mint's empty-context
+                        // check, but each distinct index would then create a
+                        // synonym for the same declared parameterized instance
+                        // application. Indexed classes deliberately retain that
+                        // application directly; open indices are unmintable in
+                        // any case. This costs optional sharing, never
+                        // correctness, and avoids one global per literal length.
                         self.record_derived(goal, lvl);
                     }
                     return Some(t);

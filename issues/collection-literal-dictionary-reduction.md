@@ -1,6 +1,6 @@
 ---
 title: Remove the standard List literal lowering fast path
-status: open
+status: closed
 labels: [frontend,elaboration,traits,performance]
 created: 2026-08-31
 updated: 2026-08-31
@@ -43,3 +43,16 @@ dictionary per finite literal.
 - 2026-08-31: Filed from the protocol integration result: the ordinary path is
   semantically correct, but its projection shape exceeded established x86
   proof budgets.
+- 2026-08-31: Replaced the List-only lowering with a generic compact protocol
+  route. The elaborator normalizes `element` and `fromLiteral`, validates the
+  projected function type, then annotates the primitive vector and conversion
+  with the canonical `[element; n] -> C` contract before normalizing the
+  completed application. This removes dependent dictionary projections from
+  repeated term annotations without inspecting the container identity.
+  Value-indexed classes now retain the declared parameterized instance
+  application instead of minting one synonymous global per closed index.
+  Standard List and a user `Bag` still reduce definitionally; the warm
+  FunctionIR x86 boundary checks in 4.90 s (the pre-change semantic-image cache
+  reproduced the old 60 s term until rebuilt), and the x86_64 boundary passes
+  unchanged at its existing fuel and stack limits. Full suite: 2243 passed, 0
+  failed, 1 ignored.
