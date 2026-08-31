@@ -80,3 +80,11 @@ quiet.
 - 2026-08-30: Replaced the container-prefixed form with generic `[…]` after
   review. List and vector literals are now selected by their expected type;
   ambiguous inference is rejected instead of defaulting to either container.
+- 2026-08-30: Checking-only is retained as a design invariant: without an
+  expected type, even nonempty syntax cannot choose nominal List versus fixed
+  vector honestly. Future opt-in belongs to [[collection-literal-protocol]],
+  not a default inferred container.
+- 2026-08-30: Follow-ups filed with separate owners:
+  [[canonical-list-literal-identity]] for the immediate nominal-identity fix,
+  [[collection-literal-fixits]] for automatic lint edits, and
+  [[collection-literal-spread]] for open-tail/spread design.

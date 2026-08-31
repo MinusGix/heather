@@ -3171,7 +3171,7 @@ impl Elaborator {
                 let (ind, i, args, named) = self
                     .ctor_spine_expected(cx, e, expected)
                     .expect("just checked");
-                self.lint_manual_list_construction(e, &ind, i);
+                self.lint_manual_list_construction(cx, e, &ind, i);
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -3919,7 +3919,7 @@ impl Elaborator {
             // the whole spine does (docs/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
-                self.lint_manual_list_construction(e, &ind, i);
+                self.lint_manual_list_construction(cx, e, &ind, i);
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -4139,7 +4139,7 @@ impl Elaborator {
                     );
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
-                    self.lint_manual_list_construction(e, &ind, i);
+                    self.lint_manual_list_construction(cx, e, &ind, i);
                     let permuted =
                         application::resolve_constructor_arguments(&ind, i, args, named, e.span)?;
                     let args = permuted.as_deref().unwrap_or(args);

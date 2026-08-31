@@ -8,17 +8,21 @@ const LIST: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }\n";
 
 fn elab(body: &str) -> Elaborator {
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
-    let source = format!("{LIST}{body}");
+    elaborator.elab_module_source("list", LIST).expect("canonical list module");
+    let source = format!("import list;\n{body}");
     elaborator
-        .elab_source(&source)
+        .elab_module_source("list_literal_test", &source)
         .unwrap_or_else(|error| panic!("{}", error.render(&source)));
     elaborator
 }
 
 fn elab_err(body: &str) -> (String, String) {
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
-    let source = format!("{LIST}{body}");
-    let error = elaborator.elab_source(&source).expect_err("expected elaboration to fail");
+    elaborator.elab_module_source("list", LIST).expect("canonical list module");
+    let source = format!("import list;\n{body}");
+    let error = elaborator
+        .elab_module_source("list_literal_error", &source)
+        .expect_err("expected elaboration to fail");
     let message = match &error {
         ElabError::Elab { msg, .. } | ElabError::Parse(heather_syntax::ParseError { msg, .. }) => {
             msg.clone()
@@ -94,7 +98,36 @@ fn a_list_literal_refuses_non_list_expected_types_and_nonstandard_list_shapes() 
     assert!(message.contains("cannot construct") || message.contains("expected `List<A>`"), "{message}");
 
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
-    let source = "inductive List<A> { Empty, Push(A, List<A>) } fn f() -> List<Nat> { [1] }";
-    let error = elaborator.elab_source(source).expect_err("nonstandard List must be refused");
-    assert!(error.to_string().contains("needs `List<A>` with `Nil` and `Cons"), "{error}");
+    let malformed = "inductive List<A> { Empty, Push(A, List<A>) }";
+    elaborator
+        .elab_module_source("list", malformed)
+        .expect("the declaration itself is a valid inductive");
+    let source = "import list; fn f() -> List<Nat> { [1] }";
+    let error = elaborator
+        .elab_module_source("malformed_list_user", source)
+        .expect_err("a malformed canonical List must be refused");
+    assert!(error.to_string().contains("canonical `list::List` declaration is incompatible"), "{error}");
+}
+
+#[test]
+fn a_same_named_same_shaped_nominal_impostor_is_not_the_standard_list() {
+    let mut elaborator = Elaborator::with_prelude().expect("prelude");
+    elaborator.elab_module_source("list", LIST).expect("canonical list module");
+    elaborator.elab_module_source("other", LIST).expect("unrelated list module");
+
+    let rejected = "import other; fn f() -> other::List<Nat> { [1, 2] }";
+    let error = elaborator
+        .elab_module_source("impostor_user", rejected)
+        .expect_err("structural imitation must not opt in");
+    assert!(error.to_string().contains("has not opted into collection literals"), "{error}");
+
+    let accepted = r#"
+        import list;
+        import other;
+        fn f() -> list::List<Nat> { [1, 2] }
+        theorem lowers(): f() = list::Cons(1, list::Cons(2, list::Nil)) { refl }
+    "#;
+    elaborator
+        .elab_module_source("qualified_standard_user", accepted)
+        .unwrap_or_else(|error| panic!("{}", error.render(accepted)));
 }

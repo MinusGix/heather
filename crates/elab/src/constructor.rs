@@ -15,13 +15,20 @@ use heather_syntax::{
 };
 
 use crate::inductive::{self, Inductive};
-use crate::names::NameKind;
+use crate::names::{NameKind, qkey};
 use crate::{Cx, Elaborator, IMPLICIT_MARK_REFUSED, R, application, err, has_implicit_mark};
 
 impl Elaborator {
+    const STANDARD_LIST_MODULE: &'static str = "list";
+
+    fn is_standard_list(&self, ind: &Inductive) -> bool {
+        self.types
+            .inductive(&qkey(Self::STANDARD_LIST_MODULE, "List"))
+            .is_some_and(|standard| standard.tag == ind.tag)
+    }
+
     fn list_ctor_indices(ind: &Inductive) -> Option<(usize, usize)> {
-        if ind.name.rsplit("::").next() != Some("List")
-            || ind.params.len() != 1
+        if ind.params.len() != 1
             || !ind.valparams.is_empty()
             || ind.index.is_some()
         {
@@ -60,9 +67,15 @@ impl Elaborator {
                 span,
             );
         };
+        if !self.is_standard_list(&ind) {
+            return err(
+                "this inductive has not opted into collection literals; supported containers are the canonical `list::List<A>` and `[T; n]`",
+                span,
+            );
+        }
         let Some((nil, cons)) = Self::list_ctor_indices(&ind) else {
             return err(
-                format!("a collection literal cannot construct `{}`; list construction needs `List<A>` with `Nil` and `Cons(A, List<A>)`", ind.name),
+                "the canonical `list::List` declaration is incompatible with collection literals; expected `Nil` and `Cons(A, List<A>)`",
                 span,
             );
         };
@@ -83,14 +96,27 @@ impl Elaborator {
         }
     }
 
-    fn manual_list_spine(expr: &Expr) -> bool {
+    fn manual_list_spine(
+        &self,
+        cx: &Cx,
+        expr: &Expr,
+        list_tag: u32,
+        nil: usize,
+        cons: usize,
+    ) -> bool {
         match &expr.kind {
-            ExprKind::Var(name) => name.rsplit("::").next() == Some("Nil"),
+            ExprKind::Var(name) => self
+                .ctor_here(cx, name)
+                .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == nil),
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if named.is_empty()
-                    && matches!(&head.kind, ExprKind::Var(name) if name.rsplit("::").next() == Some("Cons")) =>
+                    && matches!(&head.kind, ExprKind::Var(name) if self
+                        .ctor_here(cx, name)
+                        .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == cons)) =>
             {
-                matches!(args.as_slice(), [_, tail] if Self::manual_list_spine(tail))
+                matches!(args.as_slice(), [_, tail] if self.manual_list_spine(
+                    cx, tail, list_tag, nil, cons,
+                ))
             }
             _ => false,
         }
@@ -101,12 +127,16 @@ impl Elaborator {
     /// not merely another declaration using familiar constructor names.
     pub(super) fn lint_manual_list_construction(
         &self,
+        cx: &Cx,
         expr: &Expr,
         ind: &Inductive,
         ctor: usize,
     ) {
-        let Some((_, cons)) = Self::list_ctor_indices(ind) else { return };
-        if ctor != cons || !Self::manual_list_spine(expr) {
+        if !self.is_standard_list(ind) {
+            return;
+        }
+        let Some((nil, cons)) = Self::list_ctor_indices(ind) else { return };
+        if ctor != cons || !self.manual_list_spine(cx, expr, ind.tag, nil, cons) {
             return;
         }
         if self.warnings.borrow().iter().any(|warning| {

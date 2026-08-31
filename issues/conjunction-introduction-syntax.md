@@ -1,6 +1,6 @@
 ---
 title: Add concise term introduction syntax for conjunction
-status: resolved
+status: closed
 labels: [surface,syntax,logic,ergonomics]
 created: 2026-08-30
 updated: 2026-08-30

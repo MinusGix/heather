@@ -14,6 +14,13 @@ const TOK: &str = "
 inductive Tok { TA, TB }
 inductive P { Mk(a: Tok, b: Tok) }
 ";
+const LIST: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }";
+
+fn with_standard_list() -> Elaborator {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("list", LIST).expect("canonical list module");
+    e
+}
 
 /// Check a good file and return its warnings' messages.
 fn warns(src: &str) -> Vec<String> {
@@ -128,12 +135,12 @@ fn warnings_carry_a_stable_lint_identity() {
 
 #[test]
 fn a_finite_manual_list_spine_recommends_list_literal_syntax_once() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
+    let mut e = with_standard_list();
     let src = r#"
-        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        import list;
         fn xs() -> List<Nat> { Cons(1, Cons(2, Nil)) }
     "#;
-    assert!(e.check_source(src).is_empty());
+    e.elab_module_source("manual_list_warning", src).expect("source checks");
     let warnings = e.take_warnings();
     let list_warnings = warnings
         .iter()
@@ -146,14 +153,14 @@ fn a_finite_manual_list_spine_recommends_list_literal_syntax_once() {
 
 #[test]
 fn recursive_list_construction_and_literal_syntax_do_not_warn() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
+    let mut e = with_standard_list();
     let src = r#"
-        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        import list;
         fn keep<A>(x: A, tail: List<A>) -> List<A> { Cons(x, tail) }
         fn empty<A>() -> List<A> { Nil }
         fn literal() -> List<Nat> { [1, 2] }
     "#;
-    assert!(e.check_source(src).is_empty());
+    e.elab_module_source("recursive_list_no_warning", src).expect("source checks");
     assert!(
         e.take_warnings().iter().all(|warning| warning.lint != Lint::ManualListConstruction),
         "open constructor work, bare Nil, and the preferred syntax stay quiet",
@@ -162,17 +169,32 @@ fn recursive_list_construction_and_literal_syntax_do_not_warn() {
 
 #[test]
 fn an_inferred_finite_list_spine_is_also_concrete_enough_to_warn() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
+    let mut e = with_standard_list();
     let src = r#"
-        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        import list;
         fn xs() -> List<Nat> { let inferred = Cons(1, Cons(2, Nil)); inferred }
     "#;
-    assert!(e.check_source(src).is_empty());
+    e.elab_module_source("inferred_list_warning", src).expect("source checks");
     let warnings = e.take_warnings();
     assert_eq!(
         warnings.iter().filter(|warning| warning.lint == Lint::ManualListConstruction).count(),
         1,
         "the inferred outer spine is the one finding: {warnings:?}",
+    );
+}
+
+#[test]
+fn a_nominal_list_impostor_does_not_receive_the_standard_list_lint() {
+    let mut e = with_standard_list();
+    e.elab_module_source("other", LIST).expect("unrelated list module");
+    let src = r#"
+        import other;
+        fn xs() -> other::List<Nat> { Cons(1, Cons(2, Nil)) }
+    "#;
+    e.elab_module_source("impostor_list_warning", src).expect("source checks");
+    assert!(
+        e.take_warnings().iter().all(|warning| warning.lint != Lint::ManualListConstruction),
+        "a nominally unrelated declaration must not inherit standard-list syntax policy",
     );
 }
 
