@@ -217,6 +217,31 @@ impl Traits {
         self.instances.contains_key(key)
     }
 
+    /// A generic class index overlaps every concrete index at the same class
+    /// and carrier. Resolution tries candidates by canonical name rather than
+    /// specificity, so admit neither declaration order: coexistence would make
+    /// the selected dictionary an artifact of sorting.
+    pub(crate) fn generic_index_overlap(
+        &self,
+        class_key: &str,
+        head_key: &str,
+        index: &str,
+    ) -> Option<&InstanceInfo> {
+        let parts: Vec<_> = index.split(", ").collect();
+        self.instances
+            .iter()
+            .find(|((class, head, other_index), _)| {
+                let other: Vec<_> = other_index.split(", ").collect();
+                class == class_key
+                    && head == head_key
+                    && parts.len() == other.len()
+                    && parts.iter().zip(other).all(|(a, b)| {
+                        a == &b || a.starts_with("#binder") || b.starts_with("#binder")
+                    })
+            })
+            .map(|(_, info)| info)
+    }
+
     pub(crate) fn commit_instance(&mut self, key: InstKey, info: InstanceInfo) {
         debug_assert!(!self.instances.contains_key(&key));
         self.instances.insert(key, info);
@@ -1196,13 +1221,17 @@ impl Elaborator {
 
     /// The **index spelling** of an instance head
     /// (docs/operation-indexed-classes-design.md §3.1): each index argument's
-    /// resolved global key, joined. This is a *key*, computed from the
-    /// declaration alone, which is why the shapes it admits are exactly the
-    /// ones a name can be read off — a global reference, possibly applied to
-    /// the instance's own type parameters. An arbitrary λ is refused here, and
-    /// the alternative is stated: a structure built from an unnamed operation
-    /// is what scope is for.
-    fn index_spelling(&self, cref: &ClassRef, class: &ClassInfo) -> R<String> {
+    /// resolved global key, joined. A direct generic binder instead contributes
+    /// its alpha-stable binder position. Both are *keys* computed from the
+    /// declaration alone. An arbitrary λ is refused here, and the alternative
+    /// is stated: a structure built from an unnamed operation is what scope is
+    /// for.
+    fn index_spelling(
+        &self,
+        cref: &ClassRef,
+        class: &ClassInfo,
+        decl: &InstanceDecl,
+    ) -> R<String> {
         let mut parts = Vec::with_capacity(cref.index.len());
         for (p, a) in class.valparams.iter().zip(cref.index.iter()) {
             let head = match &a.kind {
@@ -1244,7 +1273,20 @@ impl Elaborator {
                     a.span,
                 );
             };
-            parts.push(self.key_of(n).unwrap_or_else(|| n.clone()));
+            // A value-generic index is determined by unifying the candidate
+            // head with the goal, just like a binder in the carrier. Give it
+            // a declaration-stable, unwritable key component: binder spelling
+            // must not make alpha-equivalent instances distinct.
+            let generic = decl
+                .tyvars
+                .iter()
+                .map(|p| &p.name)
+                .chain(decl.valparams.iter().map(|p| &p.name))
+                .position(|name| name == n);
+            parts.push(match generic {
+                Some(i) => format!("#binder{i}"),
+                None => self.key_of(n).unwrap_or_else(|| n.clone()),
+            });
         }
         Ok(parts.join(", "))
     }
@@ -1996,7 +2038,7 @@ impl Elaborator {
                 d.class.span,
             );
         }
-        let index = self.index_spelling(&d.class, &class)?;
+        let index = self.index_spelling(&d.class, &class, d)?;
         let equality_suffix = if equality { "#Eq" } else { "" };
         let prefix = if index.is_empty() {
             format!("{head}::{}{equality_suffix}", class.name)
@@ -2034,6 +2076,18 @@ impl Elaborator {
                     },
                     prev.global,
                     prev.written
+                ),
+                d.class.span,
+            );
+        }
+        if let Some(prev) = self.traits.generic_index_overlap(&class_key, &head_key, &index) {
+            return err(
+                format!(
+                    "`{}` already has an overlapping generic-index instance of `{}` \
+                     (`{}`), declared as `{}`: a generic index matches every concrete \
+                     index at this class and carrier, so the two instances would make \
+                     resolution order-dependent",
+                    head_key, class_key, prev.global, prev.written
                 ),
                 d.class.span,
             );
@@ -2283,7 +2337,7 @@ impl Elaborator {
             let Some(ainfo) = self.traits.class(&akey).cloned() else {
                 continue;
             };
-            let aindex = self.index_spelling(&anc_ref(a), &ainfo)?;
+            let aindex = self.index_spelling(&anc_ref(a), &ainfo, d)?;
             let Some(inst) = self
                 .traits
                 .instance(&instance_key(&akey, head_key, &aindex))
@@ -2429,7 +2483,7 @@ impl Elaborator {
                 continue;
             };
             let aref = anc_ref(&a);
-            let aindex = self.index_spelling(&aref, &ainfo)?;
+            let aindex = self.index_spelling(&aref, &ainfo, d)?;
             if self
                 .traits
                 .has_instance(&instance_key(&akey, head_key, &aindex))
@@ -2514,9 +2568,9 @@ impl Elaborator {
     ///   instance's own type parameters, and the index is part of the class
     ///   type, so a goal determines it there —
     ///   `instance<A> Mag<Bool2>(pick<A>)` both declares and resolves.
-    /// - A **value binder** counts the class arguments only. It cannot reach an
-    ///   index at all: an index joins the registry key as a *spelling* and must
-    ///   therefore be a global reference, which a local binder has no way to be.
+    /// - A **value binder** counts the class arguments and index. A generic
+    ///   index receives an alpha-stable registry component and is recovered by
+    ///   the same candidate-head unification as a binder in the carrier.
     fn check_binders(&self, d: &InstanceDecl) -> R<()> {
         let head = class_ref_written(&d.class);
         // A binder absent from the head is usually one of three wishes, and the
@@ -2558,30 +2612,7 @@ impl Elaborator {
             if d.valparams[..i].iter().any(|q| q.name == p.name) {
                 return err(format!("duplicate value binder `{}`", p.name), p.span);
             }
-            if head_var_count(&d.class, &p.name) == 0 {
-                // Occurring in the *index* is not occurring in the head for a
-                // value binder, and the distinction is worth its own sentence
-                // rather than the generic complaint above: `index_spelling`
-                // would key the instance under the binder's own name, so two
-                // instances differing only in what they called `k` would land at
-                // different keys and two agreeing on it would collide. This is
-                // the one place the two binder kinds genuinely diverge.
-                if index_var_count(&d.class, &p.name) > 0 {
-                    return err(
-                        format!(
-                            "the value binder `{}` occurs only in this instance's index, \
-                             which is not a position a *value* binder can be recovered \
-                             from: an index argument joins the registry key as a spelling \
-                             and must therefore be a global reference \
-                             (docs/operation-indexed-classes-design.md §3.1). A type \
-                             parameter may sit there, because a global reference at one is \
-                             still a global reference; an instance generic in its index is \
-                             a different feature from either",
-                            p.name
-                        ),
-                        p.span,
-                    );
-                }
+            if head_var_count(&d.class, &p.name) + index_var_count(&d.class, &p.name) == 0 {
                 return err(routes("value binder", &p.name), p.span);
             }
         }

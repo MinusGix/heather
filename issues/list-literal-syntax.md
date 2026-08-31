@@ -88,3 +88,6 @@ quiet.
   [[canonical-list-literal-identity]] for the immediate nominal-identity fix,
   [[collection-literal-fixits]] for automatic lint edits, and
   [[collection-literal-spread]] for open-tail/spread design.
+- 2026-08-31: [[collection-literal-protocol]] landed. `[…]` now resolves the
+  canonical prelude `CollectionLiteral<C>(n)` class; standard List is an
+  ordinary instance and vectors retain the intrinsic primitive reading.

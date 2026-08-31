@@ -3014,15 +3014,16 @@ impl Elaborator {
                 self.build_absurd(cx, arg, expected, lvl, e.span)
             }
             // A bracket literal is selected by its expected container type.
-            // Primitive vectors retain their indexed lowering; `List<A>` uses
-            // the declaration's ordinary `Cons`/`Nil` constructors.
+            // Primitive vectors are the bootstrap representation and retain
+            // their intrinsic reading, just as `Nat` does for numerals. Every
+            // other container opts in through the canonical prelude protocol.
             ExprKind::CollectionLit(elems) => {
                 if matches!(&*inductive::decoded(expected), Type::Vec { .. }) {
                     self.expr_elab()
                         .check_indexed_form(self, cx, e, expected)
                         .expect("classified as an ExprElab indexed checking form")
                 } else {
-                    self.check_list_literal(cx, elems, expected, lvl, e.span)
+                    self.check_collection_literal(cx, e, elems, expected, lvl, e.span)
                 }
             }
             // `FZ` / `FS(j)` against an expected `Fin`. Checking-only, like
@@ -4709,6 +4710,132 @@ impl Elaborator {
         let (num, num_ty, _) = self.elab_infer(cx, e)?;
         self.note_check_mismatch(cx, &num_ty, expected, &Level::Zero, span);
         Ok(num)
+    }
+
+    /// Interpret `[…]` through the one protocol owned by the implicit
+    /// prelude. The syntax supplies both class inputs: the expected container
+    /// and the literal's statically known length. The dictionary's dependent
+    /// `element` field then supplies the checking type for every entry, and
+    /// `fromLiteral` consumes the primitive vector lowering.
+    fn check_collection_literal(
+        &self,
+        cx: &Cx,
+        literal: &Expr,
+        elems: &[Expr],
+        expected: &Type,
+        expected_level: &Level,
+        span: Span,
+    ) -> R<Term> {
+        if let Some(list) =
+            self.lower_standard_list_literal(cx, elems, expected, expected_level, span)?
+        {
+            return Ok(list);
+        }
+        let class_key = names::qkey(PRELUDE_MODULE, "CollectionLiteral");
+        let class = self
+            .traits
+            .class(&class_key)
+            .cloned()
+            .ok_or_else(|| ElabError::Elab {
+                msg: "internal: the prelude collection-literal protocol is missing".into(),
+                span,
+            })?;
+        let ind = self
+            .types
+            .inductive(&class_key)
+            .cloned()
+            .ok_or_else(|| ElabError::Elab {
+                msg: "internal: the prelude collection-literal dictionary is missing".into(),
+                span,
+            })?;
+        if class.params.len() != 1 || class.valparams.len() != 1 {
+            return err("internal: malformed prelude collection-literal protocol", span);
+        }
+        let Some(element_field) = ind.field_index("element") else {
+            return err("internal: collection-literal protocol has no `element` field", span);
+        };
+        let Some(from_field) = ind.field_index("fromLiteral") else {
+            return err(
+                "internal: collection-literal protocol has no `fromLiteral` field",
+                span,
+            );
+        };
+
+        let length = inductive::nat_lit(elems.len());
+        let targs = [(expected.clone(), expected_level.clone())];
+        let vargs = [(length, Type::Nat, Level::Zero)];
+        let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &vargs, span)?;
+        let carrier = self.display_type(cx, expected);
+        let display = format!("CollectionLiteral<{carrier}>({})", elems.len());
+        let mut trace = Vec::new();
+        let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, span, &mut trace)
+        else {
+            return Err(ElabError::Resolution { goal: display, span, trace });
+        };
+        let dict = Rc::new(dict);
+
+        let (element, element_universe, _) =
+            self.project_field(cx, &ind, &goal, Rc::clone(&dict), element_field, span)?;
+        let Type::Ty(element_level) = self.whnf(cx, &element_universe, span)? else {
+            return err(
+                "internal: collection-literal `element` is not a type code",
+                span,
+            );
+        };
+        let element_ty = Type::El {
+            level: element_level.clone(),
+            tm: Rc::new(element),
+        };
+
+        let (from, from_ty, _) =
+            self.project_field(cx, &ind, &goal, dict, from_field, span)?;
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = self.whnf(cx, &from_ty, span)?
+        else {
+            return err(
+                "internal: collection-literal `fromLiteral` is not a function",
+                span,
+            );
+        };
+        let Type::Vec { elem: vector_element, .. } = &*inductive::decoded(&dom) else {
+            return err(
+                "internal: collection-literal `fromLiteral` does not accept a vector",
+                span,
+            );
+        };
+        if !self.conv_types(cx, vector_element, &element_ty, &element_level) {
+            return err(
+                "internal: collection-literal element and conversion domain disagree",
+                span,
+            );
+        }
+        // Checking the same surface node directly through ExprElab is the
+        // bootstrap boundary: it constructs the primitive vector and cannot
+        // re-enter this protocol route.
+        let vector = self
+            .expr_elab()
+            .check_indexed_form(self, cx, literal, &dom)
+            .expect("a collection literal is an indexed vector checking form")?;
+        let vector = Rc::new(vector);
+        let result_ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&vector)));
+        if !self.conv_types(cx, &result_ty, expected, &cod_level) {
+            return err(
+                "internal: collection-literal conversion does not return its carrier",
+                span,
+            );
+        }
+        Ok(Term::App {
+            fun: Rc::new(from),
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            arg: vector,
+        })
     }
 
     /// A local variable by absolute position (outermost first), as

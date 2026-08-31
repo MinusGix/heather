@@ -841,3 +841,11 @@ theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
         Cons(_, t) => nth_append_r(t, ys, i),
     }
 }
+
+// Literal construction is declared after the core API so opting the type into
+// syntax does not perturb the de Bruijn shape of the long-established list
+// definitions and their conversion-sensitive clients.
+instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
+    element := A,
+    fromLiteral := λ (xs: [A; n]) => xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),
+}

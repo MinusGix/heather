@@ -18,6 +18,16 @@
 // Universe polymorphism is still out: `A` ranges over `Ty 0`, so these live
 // at level 1. Quantifying over the *level* is layer-m `ΠΠ ℓ⃗` territory.
 
+// The expected-type-directed meaning of `[…]`. The syntax supplies the
+// container `C` from checking position and the literal length `n`; the
+// dictionary supplies the element type used to check every entry and a
+// conversion from the primitive vector representation. Keeping this class in
+// the implicit prelude gives the syntax one canonical protocol identity.
+class CollectionLiteral<C>(n: Nat) {
+    element: Type,
+    fromLiteral: [element; n] → C,
+}
+
 // Endpoints are implicit `{}`-parameters: they are recovered by unification
 // from the proof argument's type (issues/elab-stage2-metas.md). `@sym(a,b,p)`
 // still supplies them positionally *and leaves `A` inferred* — `@` controls

@@ -12,6 +12,11 @@ use crate::gendefs::GenDefs;
 use crate::inductive::Inductive;
 use crate::names::qkey;
 
+/// The syntax-owned prelude class must not renumber every user nominal type.
+/// Tags are encoded in binary (`inductive::tag_type`), so this reserved value
+/// costs 17 nodes while staying far outside the sequential space.
+pub(crate) const COLLECTION_LITERAL_TAG: u32 = 1 << 16;
+
 #[derive(Clone, Default)]
 struct TypeLayer {
     inductives: HashMap<String, Rc<Inductive>>,
@@ -96,12 +101,15 @@ impl Types {
     /// consume one. A forded declaration installs its skeleton immediately
     /// before the family, matching the tags used while constructing both.
     pub(crate) fn commit(&mut self, module: &str, ind: Rc<Inductive>) {
+        let reserved_collection_literal = module == crate::PRELUDE_MODULE
+            && ind.name == "CollectionLiteral"
+            && ind.tag == COLLECTION_LITERAL_TAG;
         if let Some(skeleton) = &ind.skel {
             debug_assert_eq!(skeleton.tag, self.next_tag);
             debug_assert!(self.by_tag(skeleton.tag).is_none());
         }
         let ind_tag = self.next_tag + u32::from(ind.skel.is_some());
-        debug_assert_eq!(ind.tag, ind_tag);
+        debug_assert!(reserved_collection_literal || ind.tag == ind_tag);
         debug_assert!(self.by_tag(ind.tag).is_none());
 
         let layer = Rc::make_mut(&mut self.current);
@@ -127,7 +135,12 @@ impl Types {
         }
         layer.by_tag.insert(ind.tag, Rc::clone(&ind));
         layer.inductives.insert(qkey(module, &ind.name), ind);
-        self.next_tag += 1;
+        if !reserved_collection_literal {
+            self.next_tag += 1;
+            if self.next_tag == COLLECTION_LITERAL_TAG {
+                self.next_tag += 1;
+            }
+        }
     }
 }
 
@@ -152,6 +165,24 @@ mod tests {
             .expect("committed");
         assert_eq!(good.tag, 0);
         assert_eq!(el.types.next_tag(), 1);
+    }
+
+    #[test]
+    fn the_syntax_protocol_does_not_renumber_user_nominal_tags() {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        assert_eq!(el.types.next_tag(), 0);
+        assert_eq!(
+            el.types
+                .inductive(&qkey(crate::PRELUDE_MODULE, "CollectionLiteral"))
+                .expect("protocol class")
+                .tag,
+            crate::types::COLLECTION_LITERAL_TAG,
+        );
+        el.elab_source("inductive First { MkFirst }").unwrap();
+        assert_eq!(
+            el.types.inductive(&qkey("main", "First")).expect("first user type").tag,
+            0,
+        );
     }
 
     #[test]

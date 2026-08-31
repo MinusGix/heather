@@ -46,6 +46,15 @@ fn the_list_module_checks() {
     elaborated();
 }
 
+#[test]
+fn its_literal_instance_uses_the_compact_standard_lowering() {
+    let mut e = elaborated();
+    let before = e.psi().bindings.len();
+    e.elab_module_source("list_literal_probe", "import list; fn xs() -> List<Nat> { [1, 2] }")
+        .expect("literal checks");
+    assert_eq!(e.psi().bindings.len(), before + 1);
+}
+
 /// The seven laws `issues/std-api-waves.md` named as wave L2, plus the three
 /// this round proved on top of them. Named one by one rather than counted:
 /// the point is which facts the library states, and a count would go on

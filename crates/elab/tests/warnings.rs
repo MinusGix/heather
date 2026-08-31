@@ -14,7 +14,14 @@ const TOK: &str = "
 inductive Tok { TA, TB }
 inductive P { Mk(a: Tok, b: Tok) }
 ";
-const LIST: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }";
+const LIST: &str = r#"
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
+    element := A,
+    fromLiteral := λ (xs: [A; n]) =>
+        xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),
+}
+"#;
 
 fn with_standard_list() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");

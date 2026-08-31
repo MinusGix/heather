@@ -1,10 +1,18 @@
-//! Expected-type-directed `[…]` construction (`issues/list-literal-syntax.md`). Literals
-//! are surface sugar for the ordinary `Nil`/`Cons` declaration and add no
-//! kernel form.
+//! Expected-type-directed `[…]` construction through the canonical
+//! `CollectionLiteral` protocol. Literals use a primitive vector as their
+//! bootstrap representation and add no kernel form.
 
 use heather_elab::{ElabError, Elaborator};
 
-const LIST: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }\n";
+const LIST_DECL: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }\n";
+const LIST: &str = r#"
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
+    element := A,
+    fromLiteral := λ (xs: [A; n]) =>
+        xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),
+}
+"#;
 
 fn elab(body: &str) -> Elaborator {
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
@@ -93,9 +101,9 @@ fn empty_and_heterogeneous_literals_have_local_diagnostics() {
 }
 
 #[test]
-fn a_list_literal_refuses_non_list_expected_types_and_nonstandard_list_shapes() {
+fn a_collection_literal_requires_an_instance() {
     let (message, _) = elab_err("fn f() -> Nat { [1] }");
-    assert!(message.contains("cannot construct") || message.contains("expected `List<A>`"), "{message}");
+    assert!(message.contains("no instance for `CollectionLiteral<Nat>(1)`"), "{message}");
 
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
     let malformed = "inductive List<A> { Empty, Push(A, List<A>) }";
@@ -105,21 +113,21 @@ fn a_list_literal_refuses_non_list_expected_types_and_nonstandard_list_shapes() 
     let source = "import list; fn f() -> List<Nat> { [1] }";
     let error = elaborator
         .elab_module_source("malformed_list_user", source)
-        .expect_err("a malformed canonical List must be refused");
-    assert!(error.to_string().contains("canonical `list::List` declaration is incompatible"), "{error}");
+        .expect_err("an unregistered container must be refused");
+    assert!(error.to_string().contains("no instance for"), "{error}");
 }
 
 #[test]
-fn a_same_named_same_shaped_nominal_impostor_is_not_the_standard_list() {
+fn opt_in_is_by_instance_not_a_hard_coded_list_identity() {
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
     elaborator.elab_module_source("list", LIST).expect("canonical list module");
-    elaborator.elab_module_source("other", LIST).expect("unrelated list module");
+    elaborator.elab_module_source("other", LIST_DECL).expect("unrelated list module");
 
     let rejected = "import other; fn f() -> other::List<Nat> { [1, 2] }";
     let error = elaborator
         .elab_module_source("impostor_user", rejected)
         .expect_err("structural imitation must not opt in");
-    assert!(error.to_string().contains("has not opted into collection literals"), "{error}");
+    assert!(error.to_string().contains("no instance for"), "{error}");
 
     let accepted = r#"
         import list;
@@ -130,4 +138,49 @@ fn a_same_named_same_shaped_nominal_impostor_is_not_the_standard_list() {
     elaborator
         .elab_module_source("qualified_standard_user", accepted)
         .unwrap_or_else(|error| panic!("{}", error.render(accepted)));
+}
+
+#[test]
+fn an_unrelated_container_can_opt_in_with_its_own_element_type() {
+    elab(
+        r#"
+        inductive Bag<A> { Empty, Push(head: A, tail: Bag<A>) }
+        instance<A>(n: Nat) CollectionLiteral<Bag<A>>(n) {
+            element := A,
+            fromLiteral := λ (xs: [A; n]) =>
+                xs.fold(Empty<A>, λ (head: A) (tail: Bag<A>) => Push(head, tail)),
+        }
+        fn bag() -> Bag<Nat> { [7, 8] }
+        theorem bag_lowers(): bag() = Push(7, Push(8, Empty)) { refl }
+        "#,
+    );
+}
+
+#[test]
+fn a_same_named_local_class_cannot_hijack_bracket_syntax() {
+    let mut elaborator = Elaborator::with_prelude().expect("prelude");
+    let source = r#"
+        class CollectionLiteral<C>(n: Nat) { tag: Nat }
+        instance(n: Nat) CollectionLiteral<Nat>(n) { tag := 0 }
+        fn vector_still_uses_prelude() -> [Nat; 1] { [1] }
+        fn not_a_collection() -> Nat { [1] }
+    "#;
+    let error = elaborator
+        .elab_module_source("shadow_protocol", source)
+        .expect_err("syntax must consult the canonical prelude class");
+    assert!(
+        error.to_string().contains("no instance for `CollectionLiteral<Nat>(1)`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_standard_list_fast_path_does_not_mint_a_derived_dictionary() {
+    let mut elaborator = Elaborator::with_prelude().expect("prelude");
+    elaborator.elab_module_source("list", LIST).expect("canonical list module");
+    let before = elaborator.psi().bindings.len();
+    elaborator
+        .elab_module_source("literal_user", "import list; fn xs() -> List<Nat> { [1, 2] }")
+        .expect("literal checks");
+    assert_eq!(elaborator.psi().bindings.len(), before + 1);
 }

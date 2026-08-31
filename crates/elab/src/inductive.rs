@@ -768,7 +768,13 @@ impl Elaborator {
         // declaration with its indices erased, registered as an ordinary
         // declaration so that the *unindexed* tiers lower it verbatim — which
         // is §4.1's single most consequential sentence, mechanized.
-        let first_tag = self.types.next_tag();
+        let first_tag = if self.names.module() == crate::PRELUDE_MODULE
+            && d.name == "CollectionLiteral"
+        {
+            crate::types::COLLECTION_LITERAL_TAG
+        } else {
+            self.types.next_tag()
+        };
         let skel = match &route {
             Some(IdxRoute::Forded(_)) => Some(Rc::new(skeleton_of(
                 d,

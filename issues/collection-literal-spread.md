@@ -1,4 +1,10 @@
 ---
+title: Design collection literal spread and tail syntax
+status: open
+labels: [frontend,syntax,ergonomics]
+created: 2026-08-30
+updated: 2026-08-31
+---
 
 Finite `[…]` construction deliberately has no open-tail form, leaving
 `Cons(head, tail)` as the honest spelling for recursive list code. A spread
@@ -30,10 +36,7 @@ operation.
 ## Log
 
 - 2026-08-30: Filed from the generic collection-literal follow-up review.
-title: Design collection literal spread and tail syntax
-status: open
-labels: [frontend,syntax,ergonomics]
-created: 2026-08-30
-updated: 2026-08-30
----
-
+- 2026-08-31: The base protocol landed as `CollectionLiteral<C>(n)`. Spread is
+  deliberately a separate optional class layered on it: literal-capable does
+  not imply spread-capable, and this issue owns the operation/evaluation-order
+  design rather than adding a required field to the base dictionary.

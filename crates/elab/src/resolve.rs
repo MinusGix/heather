@@ -187,14 +187,11 @@ impl Elaborator {
             tr.push(line(depth, "no-class", "the goal type is not a class"));
             return None;
         };
-        let Some(ckey) = self.key_of(&ind.name) else {
-            tr.push(line(
-                depth,
-                "no-class",
-                format!("`{}` does not resolve here", ind.name),
-            ));
-            return None;
-        };
+        // The goal has already exposed its nominal tag, so its owning
+        // declaration is known. Re-resolving the bare class name here lets a
+        // same-named local class redirect search away from the goal's actual
+        // class; use the declaration identity carried by the tag instead.
+        let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
         if !self.traits.has_class(&ckey) {
             tr.push(line(
                 depth,

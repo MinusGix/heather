@@ -69,14 +69,28 @@ lose the computation this is all for. Hiding it is sugar to consider later
 atom ::= … | '[' (expr (',' expr)*)? ']'
 ```
 
-Checking-only and selected by the expected container type. Against
-`Vec(T; k)`, `k` must be a **literal** — the literal's own length is what it
-is, and matching it against a neutral length is a unification problem, not a
-check. `[]` is `⟨⟩ : Unit^l`; `[a, b]` is
+Checking-only and selected by the expected container type through the
+canonical prelude class:
+
+```heather
+class CollectionLiteral<C>(n: Nat) {
+    element: Type,
+    fromLiteral: [element; n] → C,
+}
+```
+
+The expected `C` and syntax-known length `n` determine a dictionary;
+`element` supplies the expected type for every written entry, including when
+the literal is empty, and `fromLiteral` receives the already-checked primitive
+vector. This bulk boundary makes ordering and duplicate policy an instance's
+visible implementation choice. `List<T>` right-folds that vector into
+`Nil`/`Cons`. Primitive `[T; n]` is the intrinsic bootstrap reading, analogous
+to `Nat`'s intrinsic numeral reading; user containers use the class.
+
+For primitive vectors, `n` must still be a **literal** and equal the expected
+length. `[]` is `⟨⟩ : Unit^l`; `[a, b]` is
 `pair(a, pair(b, ⟨⟩))`, built against the Σ-chain that `Vec(T; 2)` unfolds to.
-Against `List<T>`, the same surface lowers to the declaration's ordinary
-`Nil`/`Cons` spine. With no expected container the spelling is ambiguous and
-does not default to either representation.
+With no expected container the spelling is ambiguous and does not default.
 
 This is the one place `,` and `[` meet, and it is exactly why lambdas take
 `=>` and not `,` (`docs/surface-function-types.md` §1.2): `[λ (x: Nat), f(x), g]`

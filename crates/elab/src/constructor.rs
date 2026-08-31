@@ -16,7 +16,11 @@ use heather_syntax::{
 
 use crate::inductive::{self, Inductive};
 use crate::names::{NameKind, qkey};
-use crate::{Cx, Elaborator, IMPLICIT_MARK_REFUSED, R, application, err, has_implicit_mark};
+use crate::traits::instance_key;
+use crate::{
+    Cx, Elaborator, IMPLICIT_MARK_REFUSED, PRELUDE_MODULE, R, application, err,
+    has_implicit_mark,
+};
 
 impl Elaborator {
     const STANDARD_LIST_MODULE: &'static str = "list";
@@ -41,46 +45,50 @@ impl Elaborator {
 
     fn list_literal_tail(elems: &[Expr], span: Span) -> Expr {
         let start = elems.first().map_or(span.end.saturating_sub(1), |elem| elem.span.start);
-        let tail_span = Span { start, end: span.end };
         Expr {
             kind: ExprKind::CollectionLit(elems.to_vec()),
-            span: tail_span,
+            span: Span { start, end: span.end },
         }
     }
 
-    /// Check `[…]` at `List<A>` by exposing one ordinary constructor at a time.
-    /// The recursive tail comes back through the same checking route, so every
-    /// element keeps its written span and is checked against the one `A` from
-    /// the expected `List<A>`.
-    pub(super) fn check_list_literal(
+    /// Preserve the compact constructor normal form of the standard List
+    /// instance after protocol resolution has proved that it opted in. This is
+    /// an elaboration optimization, not syntax selection: unrelated containers
+    /// reach their dictionary's `fromLiteral`, while the standard right fold
+    /// is emitted directly so large definitional proofs do not spend their
+    /// conversion fuel unfolding one dictionary projection per list cell.
+    pub(super) fn lower_standard_list_literal(
         &self,
         cx: &Cx,
         elems: &[Expr],
         expected: &Type,
         level: &Level,
         span: Span,
-    ) -> R<Term> {
+    ) -> R<Option<Term>> {
+        let protocol = qkey(PRELUDE_MODULE, "CollectionLiteral");
+        let list = qkey(Self::STANDARD_LIST_MODULE, "List");
+        // `A` is binder 0 and the generic literal length is binder 1 in the
+        // standard instance. Merely being the canonical List is not enough:
+        // the ordinary instance declaration must have registered successfully.
+        if !self
+            .traits
+            .has_instance(&instance_key(&protocol, &list, "#binder1"))
+        {
+            return Ok(None);
+        }
         let expected_whnf = self.whnf(cx, expected, span)?;
-        let Some(ind) = self.expected_ind(&expected_whnf) else {
-            return err(
-                "a collection literal needs an expected `List<A>` or `[T; n]` type",
-                span,
-            );
-        };
+        let Some(ind) = self.expected_ind(&expected_whnf) else { return Ok(None) };
         if !self.is_standard_list(&ind) {
-            return err(
-                "this inductive has not opted into collection literals; supported containers are the canonical `list::List<A>` and `[T; n]`",
-                span,
-            );
+            return Ok(None);
         }
         let Some((nil, cons)) = Self::list_ctor_indices(&ind) else {
             return err(
-                "the canonical `list::List` declaration is incompatible with collection literals; expected `Nil` and `Cons(A, List<A>)`",
+                "the canonical `list::List` declaration is incompatible with its collection-literal instance",
                 span,
             );
         };
-        match elems.split_first() {
-            None => self.build_ctor_value(cx, &ind, nil, &[], expected, level, span),
+        Ok(Some(match elems.split_first() {
+            None => self.build_ctor_value(cx, &ind, nil, &[], expected, level, span)?,
             Some((head, rest)) => {
                 let tail = Self::list_literal_tail(rest, span);
                 self.build_ctor_value(
@@ -91,9 +99,9 @@ impl Elaborator {
                     expected,
                     level,
                     span,
-                )
+                )?
             }
-        }
+        }))
     }
 
     fn manual_list_spine(

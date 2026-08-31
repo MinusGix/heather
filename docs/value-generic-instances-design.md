@@ -141,20 +141,18 @@ rule *is* asymmetric, just not where it had been drawn:
 | binder | counts |
 |---|---|
 | type parameter | class arguments **and** index |
-| value binder | class arguments only |
+| value binder | class arguments **and** index |
 
 A **type parameter may occur in an index**, and usefully — an index argument may
 be a global reference at this instance's own type parameters, and the index is
 part of the class type, so a goal determines it there.
 `instance<A> Mag<Bool2>(pick<A>)` both declares and resolves, and a rule
-counting class arguments only would refuse it. A **value binder cannot reach an
-index at all**: an index joins the key as a *spelling* and must therefore be a
-global reference, which a local binder has no way to be —
-`index_spelling` falls back to the name as written, so `instance(k: F)
-Monoid<Nat>(k)` would key under `k`, two instances differing only in what they
-called their binder would land at different keys, and two agreeing on it would
-collide. That case keeps its own message, because the generic complaint reads as
-false to someone looking at `Monoid<Nat>(k)`.
+counting class arguments only would refuse it. Since 2026-08-31 a **value
+binder may occur in an index too**: candidate-head unification recovers it from
+the goal, while `index_spelling` uses its binder position to mint an
+alpha-stable, unwritable registry component. Thus `instance<A>(n: Nat)
+CollectionLiteral<List<A>>(n)` represents one generic instance, not a slot
+whose identity depends on whether its writer called the binder `n` or `k`.
 
 So the two kinds differ in *where a goal can determine them from*, and the check
 follows that rather than being tidy. `head_var_count` and `index_var_count`
@@ -162,9 +160,10 @@ are the two halves.
 
 ### 4.2 What the extension cost
 
-Nothing in the repository: no declaration in `lib/` and no test in the suite used
-the loophole, measured by turning the check on and running the full suite
-(1762 passed, 0 failed). Nor was the old behaviour *broken* — `instance<A>
+The original type-parameter extension changed nothing in the repository: no
+declaration in `lib/` and no test in the suite used the loophole, measured by
+turning the check on and running the full suite (1762 passed, 0 failed). Nor was
+the old behaviour *broken* — `instance<A>
 Dec<Bot>` declared, refused to resolve with a diagnostic that named the
 candidate, the reason and the escape, and `Bot::Dec<Nat>.d` worked by hand. The
 extension buys earliness, one rule instead of two, and the fan-out entry; it is

@@ -74,5 +74,5 @@ fn rejections() {
 
     // not a supported container type at all
     let m = elab_err("fn f() -> Nat { [1] }");
-    assert!(m.contains("expected `List<A>` or `[T; n]` type"), "{m}");
+    assert!(m.contains("no instance for `CollectionLiteral<Nat>(1)`"), "{m}");
 }

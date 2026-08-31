@@ -219,7 +219,7 @@ fn a_vector_literal_still_checks_its_length() {
         fn bad(v: Nat) -> B(v) { Buf { n: [1, 2] } }
         "#,
     );
-    assert!(m.contains("needs an expected `List<A>` or `[T; n]` type"), "{m}");
+    assert!(m.contains("no instance for `CollectionLiteral<Nat>(2)`"), "{m}");
 }
 
 // -- repair 4: the vector *receiver* readers --------------------------------

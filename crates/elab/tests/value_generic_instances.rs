@@ -252,18 +252,57 @@ instance(k: Nat) Dec<Top> {{ d := L(tt) }}
 }
 
 #[test]
-fn a_binder_reaching_only_the_index_is_refused() {
-    // The index is not a recovery position: it joins the registry key as a
-    // *spelling*, and a local binder has none — the key would be the binder's
-    // own name. Its own message, because "does not occur in the head" reads as
-    // false to someone looking at `Ind<Top>(k)`.
+fn a_binder_reaching_only_the_index_is_recovered_from_the_goal() {
+    // A generic index has an alpha-stable registry component, while candidate
+    // unification recovers the actual value from the goal.
+    ok(&format!(
+        r#"{KIT}
+class Ind<A>(op: A -> A) {{ tag: Nat }}
+instance(k: Top -> Top) Ind<Top>(k) {{ tag := 0 }}
+fn keep(x: Top) -> Top {{ x }}
+fn by_resolution(m: Ind<Top>(keep) := infer) -> Nat {{ m.tag }}
+"#
+    ));
+}
+
+#[test]
+fn alpha_renaming_a_generic_index_does_not_create_a_second_slot() {
     let e = bad(&format!(
         r#"{KIT}
 class Ind<A>(op: A -> A) {{ tag: Nat }}
 instance(k: Top -> Top) Ind<Top>(k) {{ tag := 0 }}
-"#
+instance(other: Top -> Top) Ind<Top>(other) {{ tag := 1 }}
+"#,
     ));
-    assert!(e.contains("occurs only in this instance's index"), "unexpected: {e}");
+    assert!(e.contains("already has an instance"), "unexpected: {e}");
+}
+
+#[test]
+fn a_generic_index_cannot_overlap_a_concrete_index() {
+    let e = bad(&format!(
+        r#"{KIT}
+class Ind<A>(op: A -> A) {{ tag: Nat }}
+fn keep(x: Top) -> Top {{ x }}
+instance(k: Top -> Top) Ind<Top>(k) {{ tag := 0 }}
+instance Ind<Top>(keep) {{ tag := 1 }}
+"#,
+    ));
+    assert!(e.contains("overlapping generic-index instance"), "unexpected: {e}");
+}
+
+#[test]
+fn generic_multi_indices_may_be_disjoint_in_a_concrete_component() {
+    ok(&format!(
+        r#"{KIT}
+class Ind2<A>(op: A -> A, n: Nat) {{ tag: Nat }}
+fn keep(x: Top) -> Top {{ x }}
+fn drop(x: Top) -> Top {{ tt }}
+instance(n: Nat) Ind2<Top>(keep, n) {{ tag := 0 }}
+instance(n: Nat) Ind2<Top>(drop, n) {{ tag := 1 }}
+fn first(m: Ind2<Top>(keep, 2) := infer) -> Nat {{ m.tag }}
+fn second(m: Ind2<Top>(drop, 2) := infer) -> Nat {{ m.tag }}
+"#,
+    ));
 }
 
 #[test]
