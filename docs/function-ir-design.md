@@ -571,3 +571,31 @@ roughly 13 seconds. This is still too expensive for serious graphs, so
 `issues/function-ir-validation-proof-cost.md` records the certifying-generator
 target. The in-language checker remains the executable specification and a
 useful dynamic fallback; it is not presumed to be the final fast path.
+
+### 2026-08-31: untrusted direct certificate emission
+
+The first certifying fast path lives on the compiler/tool side. Given the
+concrete region model from which code is being emitted, it writes a
+`RegionValid` theorem with direct `HasPort` constructor paths, reflexivity for
+closed ID/width equalities, and order lemmas for distinct IDs. The generated
+text is ordinary Heather source and the kernel checks it against the actual
+region declaration. In particular, a test feeds the generator a stale model;
+the resulting certificate is rejected by conversion. The generator therefore
+improves proof construction without joining the trusted core.
+
+This is deliberately not source reflection yet. The runtime compiler already
+owns the concrete graph model, so duplicating that model into a decision
+procedure would add work without adding trust. A later self-hosted compiler can
+move the same analysis into the language while retaining the checked theorem as
+the boundary.
+
+Direct emission separates two costs that the reference checker had conflated.
+It avoids recursively deciding known equalities, including unary-Nat width
+literals, but it cannot make the current validity proposition compact. With
+list-backed environments, every node carries freshness evidence against all
+earlier ports and lookups carry linear constructor paths. The resulting proof
+is quadratic even when generation is linear: the focused eight-node chain
+checks, while probes at 20 and 100 nodes exceeded 60 and 90 seconds. The next
+representation target is a compact validity environment that preserves stable
+graph identities and schedule independence; see
+`issues/function-ir-validity-environment-scaling.md`.

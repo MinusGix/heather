@@ -24,6 +24,25 @@ chain of successor congruences even though a generated certificate could emit
 `refl` for the same closed equality. Stable-ID inequalities similarly carry
 structural decision evidence.
 
+## 2026-08-31: direct certificate generator
+
+The first untrusted Rust-side generator now accepts a concrete region model
+and emits a `RegionValid` theorem containing direct lookup constructor paths,
+`refl` for exact ID and width matches, and direct order-based disequalities.
+The kernel checks the generated theorem against the named Heather region. A
+negative control deliberately changes the generator's model without changing
+the theorem statement and is rejected by conversion, so the generator is not
+part of the trusted core.
+
+This removes the reference checker's repeated equality decisions and proves
+both `sum4` schedules. It also exposes a distinct scaling limit in the
+*statement* of `RegionValid`: each new node proves freshness against every
+previous definition, and list lookup paths grow with the environment. An
+eight-node chain checks in the focused suite, while experimental 20- and
+100-node chains did not complete within 60 and 90 seconds respectively. That
+quadratic certificate-shape problem is tracked separately in
+[[function-ir-validity-environment-scaling]].
+
 ## Desired direction
 
 Keep `check_region_valid` as the in-language reference validator and dynamic
@@ -41,8 +60,9 @@ Do not solve this by raising kernel fuel or weakening `RegionValid`.
 
 - Generated and reference validation agree on valid and invalid region corpus
   cases.
-- A graph with at least 100 simple nodes validates in time suitable for an
-  ordinary compiler test.
+- Subject to the validity-environment representation issue, generated proofs
+  avoid rerunning recursive equality decisions and check substantially faster
+  than reference validation for the same small graph.
 - Generated certificates are kernel-checked and contain no axiom or trusted
   validation shortcut.
 - Width literals such as 64 do not create proof work linear in the represented

@@ -541,6 +541,15 @@ theorem lt_irrefl(n: Nat): ¬(n < n) {
     }
 }
 
+theorem ne_of_lt(n, m: Nat, h: n < m): n ≠ m {
+    λ equal => lt_irrefl(n,
+        lt_congr_iff(n, n, m, n, refl, sym(equal)).mp(h))
+}
+
+theorem ne_of_gt(n, m: Nat, h: m < n): n ≠ m {
+    λ equal => ne_of_lt(m, n, h, sym(equal))
+}
+
 theorem le_of_lt(n: Nat): (m: Nat) → n < m → n <= m {
     match n {
         Zero => λ m h => trivial,
