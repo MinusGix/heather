@@ -11,7 +11,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{
     ANON_CTOR_LEFT, ANON_CTOR_ONLY, ANON_CTOR_RIGHT, Expr, ExprKind, NamedArg,
-    RecordLitField, Span, Ty, TyKind,
+    LIST_LITERAL, RecordLitField, Span, Ty, TyKind,
 };
 
 use crate::inductive::{self, Inductive};
@@ -19,6 +19,145 @@ use crate::names::NameKind;
 use crate::{Cx, Elaborator, IMPLICIT_MARK_REFUSED, R, application, err, has_implicit_mark};
 
 impl Elaborator {
+    fn list_ctor_indices(ind: &Inductive) -> Option<(usize, usize)> {
+        if ind.name.rsplit("::").next() != Some("List")
+            || ind.params.len() != 1
+            || !ind.valparams.is_empty()
+            || ind.index.is_some()
+        {
+            return None;
+        }
+        let nil = ind.ctors.iter().position(|ctor| ctor.name == "Nil" && ctor.fields.is_empty())?;
+        let cons = ind.ctors.iter().position(|ctor| ctor.name == "Cons" && ctor.fields.len() == 2)?;
+        Some((nil, cons))
+    }
+
+    fn list_literal_tail(elems: &[Expr], span: Span) -> Expr {
+        let start = elems.first().map_or(span.end.saturating_sub(1), |elem| elem.span.start);
+        let tail_span = Span { start, end: span.end };
+        Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::Var(LIST_LITERAL.into()),
+                    span: tail_span,
+                }),
+                args: elems.to_vec(),
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: tail_span,
+        }
+    }
+
+    /// Check `List[…]` by exposing exactly one ordinary constructor at a time.
+    /// The recursive tail comes back through the same checking route, so every
+    /// element keeps its written span and is checked against the one `A` from
+    /// the expected `List<A>`.
+    pub(super) fn check_list_literal(
+        &self,
+        cx: &Cx,
+        elems: &[Expr],
+        expected: &Type,
+        level: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let expected_whnf = self.whnf(cx, expected, span)?;
+        let Some(ind) = self.expected_ind(&expected_whnf) else {
+            return err("a `List[…]` literal needs an expected `List<A>` type", span);
+        };
+        let Some((nil, cons)) = Self::list_ctor_indices(&ind) else {
+            return err(
+                format!("a `List[…]` literal cannot construct `{}`; it needs `List<A>` with `Nil` and `Cons(A, List<A>)`", ind.name),
+                span,
+            );
+        };
+        match elems.split_first() {
+            None => self.build_ctor_value(cx, &ind, nil, &[], expected, level, span),
+            Some((head, rest)) => {
+                let tail = Self::list_literal_tail(rest, span);
+                self.build_ctor_value(
+                    cx,
+                    &ind,
+                    cons,
+                    &[head.clone(), tail],
+                    expected,
+                    level,
+                    span,
+                )
+            }
+        }
+    }
+
+    /// Infer a nonempty literal through the ordinary `Cons` inference rule:
+    /// the first field is exactly the declaration parameter `A`, and the tail
+    /// is then checked at the resulting `List<A>`. An empty list intentionally
+    /// has no such witness and asks for a checking position.
+    pub(super) fn infer_list_literal(
+        &self,
+        cx: &Cx,
+        elems: &[Expr],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let Some((head, rest)) = elems.split_first() else {
+            return err(
+                "cannot infer the element type of `List[]`; annotate it or use it where a `List<A>` is expected",
+                span,
+            );
+        };
+        let Some(ind) = self.lookup_inductive("List").cloned() else {
+            return Err(self.name_miss("List", "unknown type `List` for this list literal", span));
+        };
+        let Some((_, cons)) = Self::list_ctor_indices(&ind) else {
+            return err(
+                "`List[…]` needs the standard `List<A>` declaration with `Nil` and `Cons(A, List<A>)`",
+                span,
+            );
+        };
+        let tail = Self::list_literal_tail(rest, span);
+        self.infer_ctor(cx, &ind, cons, &[head.clone(), tail], span)
+    }
+
+    fn manual_list_spine(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Var(name) => name.rsplit("::").next() == Some("Nil"),
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if named.is_empty()
+                    && matches!(&head.kind, ExprKind::Var(name) if name.rsplit("::").next() == Some("Cons")) =>
+            {
+                matches!(args.as_slice(), [_, tail] if Self::manual_list_spine(tail))
+            }
+            _ => false,
+        }
+    }
+
+    /// Warn once, at the outermost finite `Cons(…, …Nil)` spine, after
+    /// constructor resolution has proved that it is the standard `List` and
+    /// not merely another declaration using familiar constructor names.
+    pub(super) fn lint_manual_list_construction(
+        &self,
+        expr: &Expr,
+        ind: &Inductive,
+        ctor: usize,
+    ) {
+        let Some((_, cons)) = Self::list_ctor_indices(ind) else { return };
+        if ctor != cons || !Self::manual_list_spine(expr) {
+            return;
+        }
+        if self.warnings.borrow().iter().any(|warning| {
+            warning.lint == crate::Lint::ManualListConstruction
+                && warning.span.start <= expr.span.start
+                && expr.span.end <= warning.span.end
+        }) {
+            return;
+        }
+        self.emit_lint(
+            crate::Lint::ManualListConstruction,
+            "this builds a concrete list with a manual `Cons`/`Nil` spine; write `List[…]` instead (your parentheses have suffered enough)",
+            expr.span,
+        );
+    }
+
     /// A record literal (§6): permute the written fields into declaration
     /// order and hand the result to the ordinary tier-0 constructor path.
     /// Every diagnostic about *which* fields were written lives here, since

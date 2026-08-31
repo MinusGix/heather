@@ -64,11 +64,19 @@
         "named": true
       },
       {
+        "type": "index_expression",
+        "named": true
+      },
+      {
         "type": "j_expression",
         "named": true
       },
       {
         "type": "lambda_expression",
+        "named": true
+      },
+      {
+        "type": "list_expression",
         "named": true
       },
       {
@@ -433,6 +441,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -445,11 +457,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -465,11 +489,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -537,6 +561,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -549,11 +577,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -569,11 +609,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -1116,6 +1156,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -1128,11 +1172,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -1148,11 +1204,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -1260,6 +1316,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -1272,11 +1332,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -1292,11 +1364,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -1310,29 +1382,108 @@
   {
     "type": "declaration_call_type",
     "named": true,
-    "fields": {},
+    "fields": {
+      "function": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
       "required": true,
       "types": [
         {
           "type": "argument_list",
-          "named": true
-        },
-        {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "type_arguments",
           "named": true
         }
       ]
@@ -1371,6 +1522,10 @@
           "named": true
         },
         {
+          "type": "declaration_index_type",
+          "named": true
+        },
+        {
           "type": "declaration_member_type",
           "named": true
         },
@@ -1380,6 +1535,10 @@
         },
         {
           "type": "declaration_quantified_type",
+          "named": true
+        },
+        {
+          "type": "declaration_type_application",
           "named": true
         },
         {
@@ -1395,6 +1554,14 @@
           "named": true
         },
         {
+          "type": "list_expression",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
           "type": "number",
           "named": true
         },
@@ -1407,11 +1574,11 @@
           "named": true
         },
         {
-          "type": "type_arguments",
+          "type": "universe",
           "named": true
         },
         {
-          "type": "universe",
+          "type": "vector_expression",
           "named": true
         },
         {
@@ -1422,79 +1589,230 @@
     }
   },
   {
+    "type": "declaration_index_type",
+    "named": true,
+    "fields": {
+      "index": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "declaration_member_type",
     "named": true,
-    "fields": {},
+    "fields": {
+      "member": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
-      "multiple": true,
-      "required": true,
+      "multiple": false,
+      "required": false,
       "types": [
         {
           "type": "argument_list",
-          "named": true
-        },
-        {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "contextual_identifier",
-          "named": true
-        },
-        {
-          "type": "declaration_binary_type",
-          "named": true
-        },
-        {
-          "type": "declaration_call_type",
-          "named": true
-        },
-        {
-          "type": "declaration_function_type",
-          "named": true
-        },
-        {
-          "type": "declaration_member_type",
-          "named": true
-        },
-        {
-          "type": "declaration_prefix_type",
-          "named": true
-        },
-        {
-          "type": "declaration_quantified_type",
-          "named": true
-        },
-        {
-          "type": "hole",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "squash_type",
-          "named": true
-        },
-        {
-          "type": "type_arguments",
-          "named": true
-        },
-        {
-          "type": "universe",
-          "named": true
-        },
-        {
-          "type": "vector_type",
           "named": true
         }
       ]
@@ -1505,7 +1823,7 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": true,
+      "multiple": false,
       "required": true,
       "types": [
         {
@@ -1529,6 +1847,10 @@
           "named": true
         },
         {
+          "type": "declaration_index_type",
+          "named": true
+        },
+        {
           "type": "declaration_member_type",
           "named": true
         },
@@ -1541,11 +1863,23 @@
           "named": true
         },
         {
+          "type": "declaration_type_application",
+          "named": true
+        },
+        {
           "type": "hole",
           "named": true
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_expression",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1561,11 +1895,11 @@
           "named": true
         },
         {
-          "type": "type_arguments",
+          "type": "universe",
           "named": true
         },
         {
-          "type": "universe",
+          "type": "vector_expression",
           "named": true
         },
         {
@@ -1604,6 +1938,10 @@
           "named": true
         },
         {
+          "type": "declaration_index_type",
+          "named": true
+        },
+        {
           "type": "declaration_member_type",
           "named": true
         },
@@ -1616,11 +1954,23 @@
           "named": true
         },
         {
+          "type": "declaration_type_application",
+          "named": true
+        },
+        {
           "type": "hole",
           "named": true
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_expression",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1636,15 +1986,125 @@
           "named": true
         },
         {
-          "type": "type_arguments",
-          "named": true
-        },
-        {
           "type": "universe",
           "named": true
         },
         {
+          "type": "vector_expression",
+          "named": true
+        },
+        {
           "type": "vector_type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "declaration_type_application",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "type_arguments",
           "named": true
         }
       ]
@@ -1706,6 +2166,10 @@
       "types": [
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "named_destructure_field",
           "named": true
         }
       ]
@@ -1857,6 +2321,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -1869,11 +2337,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -1889,11 +2369,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -2017,6 +2497,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -2034,6 +2518,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -2153,6 +2641,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -2170,6 +2662,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -2225,6 +2721,10 @@
           "named": true
         },
         {
+          "type": "head_index_expression",
+          "named": true
+        },
+        {
           "type": "head_member_expression",
           "named": true
         },
@@ -2245,6 +2745,10 @@
           "named": true
         },
         {
+          "type": "list_expression",
+          "named": true
+        },
+        {
           "type": "number",
           "named": true
         },
@@ -2261,6 +2765,100 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "head_index_expression",
+    "named": true,
+    "fields": {
+      "index": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -2296,6 +2894,10 @@
           "named": true
         },
         {
+          "type": "head_index_expression",
+          "named": true
+        },
+        {
           "type": "head_member_expression",
           "named": true
         },
@@ -2313,6 +2915,10 @@
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_expression",
           "named": true
         },
         {
@@ -2363,6 +2969,10 @@
           "named": true
         },
         {
+          "type": "head_index_expression",
+          "named": true
+        },
+        {
           "type": "head_member_expression",
           "named": true
         },
@@ -2380,6 +2990,10 @@
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_expression",
           "named": true
         },
         {
@@ -2471,6 +3085,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -2488,6 +3106,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -2607,6 +3229,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -2624,6 +3250,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -2727,6 +3357,32 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "index_expression",
+    "named": true,
+    "fields": {
+      "index": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
             "named": true
           }
         ]
@@ -2953,6 +3609,25 @@
     }
   },
   {
+    "type": "list_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        },
+        {
+          "type": "list_literal_start",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "match_arm",
     "named": true,
     "fields": {
@@ -3040,6 +3715,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -3052,11 +3731,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -3072,11 +3763,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -3118,6 +3809,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -3135,6 +3830,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -3214,6 +3913,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -3231,6 +3934,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -3288,6 +3995,10 @@
             "named": true
           },
           {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
             "type": "head_member_expression",
             "named": true
           },
@@ -3305,6 +4016,10 @@
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
             "named": true
           },
           {
@@ -3400,6 +4115,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -3412,11 +4131,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -3432,11 +4163,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -3477,6 +4208,32 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "named_destructure_field",
+    "named": true,
+    "fields": {
+      "field": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
             "named": true
           }
         ]
@@ -4102,6 +4859,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -4114,11 +4875,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -4134,11 +4907,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -4216,6 +4989,10 @@
             "named": true
           },
           {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
             "type": "declaration_member_type",
             "named": true
           },
@@ -4228,11 +5005,23 @@
             "named": true
           },
           {
+            "type": "declaration_type_application",
+            "named": true
+          },
+          {
             "type": "hole",
             "named": true
           },
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -4248,11 +5037,11 @@
             "named": true
           },
           {
-            "type": "type_arguments",
+            "type": "universe",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "vector_expression",
             "named": true
           },
           {
@@ -4674,6 +5463,10 @@
   {
     "type": "let",
     "named": false
+  },
+  {
+    "type": "list_literal_start",
+    "named": true
   },
   {
     "type": "match",

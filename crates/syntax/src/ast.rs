@@ -13,6 +13,9 @@ pub struct Span {
 pub const ANON_CTOR_ONLY: &str = "#anonymous-constructor";
 pub const ANON_CTOR_LEFT: &str = "#anonymous-left-constructor";
 pub const ANON_CTOR_RIGHT: &str = "#anonymous-right-constructor";
+/// Parser-internal call head for `List[a, b]`. The elaborator keeps the form
+/// distinct until an expected type or the first element determines `List<A>`.
+pub const LIST_LITERAL: &str = "#list-literal";
 
 impl Span {
     pub fn join(self, other: Span) -> Span {

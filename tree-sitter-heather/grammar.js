@@ -61,7 +61,7 @@ module.exports = grammar({
     ),
 
     function_declaration: $ => seq(
-      optional('meta'), 'fn', field('name', $.qualified_identifier),
+      optional('meta'), 'fn', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
@@ -69,14 +69,14 @@ module.exports = grammar({
     ),
 
     theorem_declaration: $ => seq(
-      'theorem', field('name', $.qualified_identifier),
+      'theorem', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type), field('body', $.block),
     ),
 
     axiom_declaration: $ => seq(
-      'axiom', field('name', $.qualified_identifier),
+      'axiom', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type), ';',
@@ -162,7 +162,7 @@ module.exports = grammar({
     implicit_binder_group: $ => seq('{', commaSep1($.parameter_run), '}'),
 
     class_reference: $ => seq(
-      field('name', $.qualified_identifier), field('arguments', $.type_arguments),
+      field('name', $._qualified_name), field('arguments', $.type_arguments),
       // In a `requires C<A> (x: A)` head the following parentheses are the
       // declaration's binder list. Prefer reducing the class reference there;
       // an actual `C<A>(index)` remains the only valid parse when its contents
@@ -205,7 +205,12 @@ module.exports = grammar({
       'let', choice(field('name', $.identifier), $.destructure_pattern),
       optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
     ),
-    destructure_pattern: $ => seq('{', commaSep1($.identifier), optional(','), '}'),
+    destructure_pattern: $ => seq(
+      '{', commaSep1(choice($.identifier, $.named_destructure_field)), optional(','), '}',
+    ),
+    named_destructure_field: $ => seq(
+      field('field', $.identifier), ':=', field('name', $.identifier),
+    ),
     split_statement: $ => seq(
       'split', optional(seq(field('equation', $.identifier), ':')),
       field('value', $._expression), optional(seq('as', field('motive', $._expression))), ';',
@@ -222,13 +227,17 @@ module.exports = grammar({
     _head_expression: $ => choice(
       $.identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
-      $.anonymous_constructor_expression,
+      $.list_expression, $.anonymous_constructor_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
+      $.head_index_expression,
       $.head_prefix_expression, $.head_binary_expression,
     ),
     head_call_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, $.argument_list)),
     head_member_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, choice('.', '::'), $.identifier, optional($.argument_list))),
     head_type_application: $ => prec.left(PREC.POSTFIX, seq(choice($.identifier, $.qualified_identifier), $.type_arguments)),
+    head_index_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._head_expression), '[', field('index', $._expression), ']',
+    )),
     head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '¬'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
@@ -251,6 +260,7 @@ module.exports = grammar({
       $.declaration_binary_type,
       $.declaration_quantified_type,
       $.declaration_prefix_type,
+      $.match_expression,
     ),
     _type_atom: $ => choice(
       $.identifier,
@@ -261,19 +271,26 @@ module.exports = grammar({
       $.hole,
       $.universe,
       $.vector_type,
+      $.vector_expression,
+      $.list_expression,
       $.squash_type,
       seq('(', $._declaration_type, ')'),
-      seq(choice($.identifier, $.qualified_identifier, $.builtin_type), $.type_arguments),
+      $.declaration_type_application,
       $.declaration_call_type,
       $.declaration_member_type,
+      $.declaration_index_type,
     ),
+    declaration_type_application: $ => prec.dynamic(4, prec.left(PREC.POSTFIX, seq(
+      field('value', $._type_atom), $.type_arguments,
+    ))),
     declaration_call_type: $ => prec.left(PREC.POSTFIX, seq(
-      choice($.identifier, $.qualified_identifier, $.builtin_type),
-      optional($.type_arguments), repeat1($.argument_list),
+      field('function', $._type_atom), repeat1($.argument_list),
     )),
     declaration_member_type: $ => prec.left(PREC.POSTFIX, seq(
-      choice($.identifier, $.qualified_identifier, seq('(', $._declaration_type, ')')),
-      repeat1(seq('.', $.identifier, optional($.argument_list))),
+      field('value', $._type_atom), choice('.', '::'), field('member', $.identifier), optional($.argument_list),
+    )),
+    declaration_index_type: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._type_atom), '[', field('index', $._expression), ']',
     )),
     declaration_function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._declaration_type,
@@ -306,6 +323,7 @@ module.exports = grammar({
       $.vector_type,
       $.squash_type,
       $.vector_expression,
+      $.list_expression,
       $.anonymous_constructor_expression,
       $.block_expression,
       $.lambda_expression,
@@ -326,6 +344,7 @@ module.exports = grammar({
       $.record_expression,
       $.call_expression,
       $.member_expression,
+      $.index_expression,
       $.type_application_expression,
       $.prefix_expression,
       $.binary_expression,
@@ -341,6 +360,10 @@ module.exports = grammar({
       seq('Squash', '<', field('type', $._declaration_type), '>'),
     ),
     vector_expression: $ => seq('[', commaSep($._expression), optional(','), ']'),
+    list_expression: $ => seq(
+      alias(token(seq('List', '[')), $.list_literal_start),
+      commaSep($._expression), optional(','), ']',
+    ),
     anonymous_constructor_expression: $ => choice(
       seq('⟨', commaSep($._expression), optional(','), '⟩'),
       seq('⟨', field('value', $._expression), '|', '⟩'),
@@ -410,7 +433,7 @@ module.exports = grammar({
     squash_ind_expression: $ => seq('squash_ind', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     refl_expression: _ => 'refl',
 
-    explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $.qualified_identifier, optional($.type_arguments), $.argument_list)),
+    explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
     call_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._expression), repeat1(field('arguments', $.argument_list)),
     )),
@@ -421,6 +444,9 @@ module.exports = grammar({
     )), optional(','), ')'),
     named_argument: $ => seq(field('name', $.identifier), ':=', field('value', $._expression)),
     member_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), choice('.', '::'), field('member', $.identifier), optional($.argument_list))),
+    index_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._expression), '[', field('index', $._expression), ']',
+    )),
     type_application_expression: $ => prec.dynamic(4, prec.left(PREC.POSTFIX, seq(
       field('value', choice($.identifier, $.qualified_identifier, $.member_expression)),
       $.type_arguments,
@@ -460,9 +486,10 @@ module.exports = grammar({
       alias('give', $.identifier),
       alias('refl', $.identifier),
     ),
-    // Lower lexical precedence lets a plain name remain `identifier` wherever
-    // either node is valid, while declaration/name positions also accept it.
-    qualified_identifier: _ => token(prec(-1, /[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*/)),
+    // Keep plain and namespace-qualified names lexically disjoint. Declaration
+    // name positions alias either spelling to the stable qualified-name node.
+    _qualified_name: $ => alias(choice($.identifier, $.qualified_identifier), $.qualified_identifier),
+    qualified_identifier: _ => token(/[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/),
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
     number: _ => /[0-9]+/,
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),

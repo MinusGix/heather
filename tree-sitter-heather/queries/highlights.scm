@@ -14,6 +14,7 @@
 ] @keyword
 
 (squash_type) @type.builtin
+(list_expression (list_literal_start) @type)
 
 [
   "λ" "fun" "∀" "∃"

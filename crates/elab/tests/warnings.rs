@@ -126,6 +126,56 @@ fn warnings_carry_a_stable_lint_identity() {
     assert_eq!(w.lint.name(), "unreachable-match-arm");
 }
 
+#[test]
+fn a_finite_manual_list_spine_recommends_list_literal_syntax_once() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = r#"
+        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        fn xs() -> List<Nat> { Cons(1, Cons(2, Nil)) }
+    "#;
+    assert!(e.check_source(src).is_empty());
+    let warnings = e.take_warnings();
+    let list_warnings = warnings
+        .iter()
+        .filter(|warning| warning.lint == Lint::ManualListConstruction)
+        .collect::<Vec<_>>();
+    assert_eq!(list_warnings.len(), 1, "one warning for the outer spine: {warnings:?}");
+    assert_eq!(list_warnings[0].lint.name(), "manual-list-construction");
+    assert!(list_warnings[0].msg.contains("write `List[…]` instead"));
+}
+
+#[test]
+fn recursive_list_construction_and_literal_syntax_do_not_warn() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = r#"
+        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        fn keep<A>(x: A, tail: List<A>) -> List<A> { Cons(x, tail) }
+        fn empty<A>() -> List<A> { Nil }
+        fn literal() -> List<Nat> { List[1, 2] }
+    "#;
+    assert!(e.check_source(src).is_empty());
+    assert!(
+        e.take_warnings().iter().all(|warning| warning.lint != Lint::ManualListConstruction),
+        "open constructor work, bare Nil, and the preferred syntax stay quiet",
+    );
+}
+
+#[test]
+fn an_inferred_finite_list_spine_is_also_concrete_enough_to_warn() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = r#"
+        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        fn xs() -> List<Nat> { let inferred = Cons(1, Cons(2, Nil)); inferred }
+    "#;
+    assert!(e.check_source(src).is_empty());
+    let warnings = e.take_warnings();
+    assert_eq!(
+        warnings.iter().filter(|warning| warning.lint == Lint::ManualListConstruction).count(),
+        1,
+        "the inferred outer spine is the one finding: {warnings:?}",
+    );
+}
+
 // -- registered source lints ----------------------------------------------
 
 #[test]

@@ -25,7 +25,10 @@ done
   XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
     "$OLDPWD/$cli" parse test/fixtures/positive/*.hthr --quiet
   XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
-    "$OLDPWD/$cli" parse ../lib/*.hthr ../lib/std/*.hthr ../docs/showcase/calc.hthr --quiet
+    "$OLDPWD/$cli" parse ../docs/showcase/calc.hthr --quiet
+  rg --files ../lib ../crates -g '*.hthr' |
+    XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
+      "$OLDPWD/$cli" parse --paths /dev/stdin --quiet
   for query in queries/*.scm; do
     XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
       "$OLDPWD/$cli" query "$query" test/fixtures/positive/basic.hthr >/dev/null

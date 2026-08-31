@@ -81,6 +81,7 @@
 //!                 ("{" (name ":" expr)* "}")?     -- record literal
 //!                 (("." name ("(" args ")")?) | "(" args ")")*   -- postfix
 //!          | "[" (expr ("," expr)*)? "]"           -- vector literal
+//!          | "List" "[" (expr ("," expr)*)? "]"    -- list literal
 //!          | "{" stmt* expr "}"                    -- block, PREFIX `{` only
 //!          | name | numeral | "(" expr ")"
 //! binder  := name | "(" name ":" type ")"
@@ -3530,6 +3531,41 @@ impl Parser {
         })
     }
 
+    /// `List[a, b, c]` — an ordinary `List<A>` constructor spine, retained as
+    /// an unspellable call until elaboration can take `A` from the expected
+    /// type or infer it from the first element. The `[` must be adjacent to
+    /// `List`, preserving the old `List [i]` reading as ordinary indexing.
+    fn list_literal_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `List`
+        debug_assert!(matches!(self.peek(), TokKind::LBracket));
+        self.bump();
+        self.with_record_lit(false, |p| {
+            let mut elems = Vec::new();
+            while !matches!(p.peek(), TokKind::RBracket) {
+                elems.push(p.expr()?);
+                if !matches!(p.peek(), TokKind::Comma) {
+                    break;
+                }
+                p.bump();
+                if matches!(p.peek(), TokKind::RBracket) {
+                    break;
+                }
+            }
+            let close = p.expect(&TokKind::RBracket, "`]` to close the list literal")?;
+            let head = Expr { kind: ExprKind::Var(LIST_LITERAL.into()), span: start };
+            Ok(Expr {
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: elems,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: start.join(close),
+            })
+        })
+    }
+
     /// A primary expression: keyword forms (`match`/`refl`/`j`/`calc`), an
     /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
     fn atom(&mut self) -> R<Expr> {
@@ -3541,6 +3577,12 @@ impl Parser {
         // ordinary subexpressions.
         if matches!(self.peek(), TokKind::LAngle) {
             return self.anonymous_constructor_expr();
+        }
+        if matches!(self.peek(), TokKind::Ident(name) if name == "List")
+            && matches!(self.nth(1), TokKind::LBracket)
+            && self.tight(self.pos + 1)
+        {
+            return self.list_literal_expr();
         }
         // Squash is type syntax in expression position too, just like an
         // arrow type.  This matters in particular under `code { ... }`: the

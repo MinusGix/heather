@@ -43,6 +43,8 @@ pub enum Lint {
     OperatorFallback,
     /// An explicit match motive can be omitted in its checking position.
     RedundantMatchMotive,
+    /// A finite `Cons`/`Nil` construction can use `List[…]`.
+    ManualListConstruction,
 }
 
 impl Lint {
@@ -58,6 +60,7 @@ impl Lint {
             Self::UnusedPatternBinder => "unused-pattern-binder",
             Self::OperatorFallback => "operator-fallback",
             Self::RedundantMatchMotive => "redundant-match-motive",
+            Self::ManualListConstruction => "manual-list-construction",
         }
     }
 }

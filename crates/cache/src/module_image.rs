@@ -268,6 +268,7 @@ fn encode_warnings(
             Lint::UnusedPatternBinder => 5,
             Lint::OperatorFallback => 6,
             Lint::RedundantMatchMotive => 7,
+            Lint::ManualListConstruction => 8,
         });
         put_warning_string(out, &warning.msg, limits)?;
         put_span(out, warning.span);
@@ -319,6 +320,7 @@ fn decode_warnings(
             5 => Lint::UnusedPatternBinder,
             6 => Lint::OperatorFallback,
             7 => Lint::RedundantMatchMotive,
+            8 => Lint::ManualListConstruction,
             _ => return Err(ModuleCacheError::Corrupt("module warning has an invalid lint tag")),
         };
         let msg = reader.string()?;

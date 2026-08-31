@@ -3142,6 +3142,17 @@ impl Elaborator {
                 explicit: false,
                 goal_oriented: false,
             } if named.is_empty()
+                && matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::LIST_LITERAL) =>
+            {
+                self.check_list_literal(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if named.is_empty()
                 && matches!(
                     &head.kind,
                     ExprKind::Var(name)
@@ -3167,6 +3178,7 @@ impl Elaborator {
                 let (ind, i, args, named) = self
                     .ctor_spine_expected(cx, e, expected)
                     .expect("just checked");
+                self.lint_manual_list_construction(e, &ind, i);
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -3725,6 +3737,17 @@ impl Elaborator {
                         .unwrap_or_else(|| err(format!("unknown type `{name}`"), e.span))
                 }
             }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if named.is_empty()
+                && matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::LIST_LITERAL) =>
+            {
+                self.infer_list_literal(cx, args, e.span)
+            }
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
@@ -3914,6 +3937,7 @@ impl Elaborator {
             // the whole spine does (docs/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
+                self.lint_manual_list_construction(e, &ind, i);
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -4133,6 +4157,7 @@ impl Elaborator {
                     );
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
+                    self.lint_manual_list_construction(e, &ind, i);
                     let permuted =
                         application::resolve_constructor_arguments(&ind, i, args, named, e.span)?;
                     let args = permuted.as_deref().unwrap_or(args);

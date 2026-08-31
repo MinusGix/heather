@@ -10,8 +10,11 @@
   "import" "inductive" "record" "class" "instance" "designation"
   "datarepr" "impl" "fn" "theorem" "axiom" "meta" "requires" "assuming" "extends"
   "for" "at" "prefix" "mk" "let" "split" "on" "match" "if"
-  "else" "as" "code" "calc" "self" "infer"
+  "else" "as" "code" "calc" "self" "infer" "squash_ind"
 ] @keyword
+
+(squash_type) @type.builtin
+(list_expression (list_literal_start) @type)
 
 [
   "λ" "fun" "∀" "∃"
