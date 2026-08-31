@@ -76,7 +76,31 @@ connective is a *type former*, like `=`, not an operation a carrier can have,
 and there is nothing a designation could say about `∧` at a carrier because
 its operands are propositions rather than values of one.
 
-### 4.1 Precedence
+### 4.1 Introduction and pattern notation
+
+Constructor terms remain visibly terms and are selected by the expected type:
+
+| written | constructor selected | examples |
+|---|---|---|
+| `⟨a, b, …⟩` | the sole constructor | `And`, `Exists`, `Pair`, any record |
+| `⟨a |⟩` | the first of exactly two constructors | `Or::Inl` |
+| `⟨| b⟩` | the second of exactly two constructors | `Or::Inr`, `Option::Some` |
+
+The same three shapes are patterns: `match h { ⟨p |⟩ => …, ⟨| q⟩ =>
+… }` and `match h { ⟨p, q⟩ => … }`. Nested notation follows the
+right-nested proposition shape directly: a proof of `P ∧ Q ∧ R` is
+`⟨p, ⟨q, r⟩⟩`.
+
+This is shape-directed rather than connective-name-directed. It therefore
+solves the same construction asymmetry for existential and ordinary record
+values without adding a special AST or kernel form. It is checking-only: the
+expected type supplies the declaration and its type arguments. Restricting
+the bar forms to exactly two constructors prevents declaration order in a
+larger inductive from becoming an implicit numeric constructor API. A bare
+`|` remains a lexer error outside `⟨…⟩`, so Boolean `||` and the reserved
+or-pattern space are unchanged.
+
+### 4.2 Precedence
 
 Tightest to loosest:
 
@@ -109,7 +133,7 @@ proof-relevant reason: `And(p, And(q, r))` is the nesting the record builds
 and projects). `↔` is **non-associative**, like the comparison rung, with its
 own targeted message.
 
-### 4.2 The two rewinds
+### 4.3 The two rewinds
 
 `ty_atom` returns early for an applied type (`D<A>`) and for a parenthesized
 group, so either as a connective's *left operand* would leave the connective
@@ -118,7 +142,7 @@ decline when `at_connective()`, rewind, and let the expression grammar build
 the whole type — the same move the `D<A>` rule already made for a following
 `(` (`docs/surface-polymorphism.md` §1).
 
-### 4.3 One binder group per quantifier
+### 4.4 One binder group per quantifier
 
 `∀ x, y: A, P` writes; `∀ x: A, y: B, P` does not, and gets a message naming
 the nesting that replaces it. Forced rather than chosen: after the

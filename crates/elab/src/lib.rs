@@ -3135,6 +3135,28 @@ impl Elaborator {
             // The name is read with the expected type as evidence
             // ([`Self::ctor_here_expected`]), so a bare constructor the name
             // layer left ambiguous is settled by the type that is checking it.
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if named.is_empty()
+                && matches!(
+                    &head.kind,
+                    ExprKind::Var(name)
+                        if matches!(
+                            name.as_str(),
+                            heather_syntax::ANON_CTOR_ONLY
+                                | heather_syntax::ANON_CTOR_LEFT
+                                | heather_syntax::ANON_CTOR_RIGHT
+                        )
+                ) =>
+            {
+                let ExprKind::Var(name) = &head.kind else { unreachable!() };
+                let (ind, i) = self.anonymous_ctor_expected(cx, name, expected, e.span)?;
+                self.build_ctor_value(cx, &ind, i, args, expected, lvl, e.span)
+            }
             ExprKind::Var(name) if self.ctor_here_expected(cx, name, expected).is_some() => {
                 let (ind, i) = self
                     .ctor_here_expected(cx, name, expected)
@@ -3759,6 +3781,23 @@ impl Elaborator {
                     );
                 }
                 Ok((t, ty, lvl))
+            }
+            ExprKind::App { head, .. }
+                if matches!(
+                    &head.kind,
+                    ExprKind::Var(name)
+                        if matches!(
+                            name.as_str(),
+                            heather_syntax::ANON_CTOR_ONLY
+                                | heather_syntax::ANON_CTOR_LEFT
+                                | heather_syntax::ANON_CTOR_RIGHT
+                        )
+                ) =>
+            {
+                err(
+                    "anonymous constructor notation is checking-only: give it an expected type",
+                    e.span,
+                )
             }
             // `f<T, …>(a, b)` and `@f<T, …>(a, b)`. The type arguments are
             // applied first; what happens to the remaining `{}`-implicits is

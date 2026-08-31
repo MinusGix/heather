@@ -9,7 +9,10 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
-use heather_syntax::{Expr, ExprKind, NamedArg, RecordLitField, Span, Ty, TyKind};
+use heather_syntax::{
+    ANON_CTOR_LEFT, ANON_CTOR_ONLY, ANON_CTOR_RIGHT, Expr, ExprKind, NamedArg,
+    RecordLitField, Span, Ty, TyKind,
+};
 
 use crate::inductive::{self, Inductive};
 use crate::names::NameKind;
@@ -65,12 +68,56 @@ impl Elaborator {
     /// constructor is checked against the function type it η-expands into
     /// (docs/constructor-function-values.md §2), so the declaration is in the
     /// codomain, not the head.
-    fn expected_ind(&self, expected: &Type) -> Option<Rc<Inductive>> {
+    pub(super) fn expected_ind(&self, expected: &Type) -> Option<Rc<Inductive>> {
         let mut ty = expected;
         while let Type::Pi { cod, .. } = ty {
             ty = cod;
         }
         self.tag_of(ty)
+    }
+
+    /// Resolve anonymous constructor notation from its expected type. The
+    /// product spelling is intentionally limited to a declaration with one
+    /// constructor; the injection spellings to exactly two. This keeps the
+    /// punctuation structural rather than turning declaration order in a
+    /// large inductive into an implicit numeric API.
+    pub(super) fn anonymous_ctor_expected(
+        &self,
+        cx: &Cx,
+        written: &str,
+        expected: &Type,
+        span: Span,
+    ) -> R<(Rc<Inductive>, usize)> {
+        let expected = self.whnf(cx, expected, span)?;
+        let Some(ind) = self.expected_ind(&expected) else {
+            return err(
+                "anonymous constructor notation needs an expected inductive or record type",
+                span,
+            );
+        };
+        let (want, index) = match written {
+            ANON_CTOR_ONLY => (1, 0),
+            ANON_CTOR_LEFT => (2, 0),
+            ANON_CTOR_RIGHT => (2, 1),
+            _ => unreachable!("not an anonymous constructor sentinel"),
+        };
+        if ind.ctors.len() != want {
+            let form = match written {
+                ANON_CTOR_ONLY => "`⟨…⟩`",
+                ANON_CTOR_LEFT => "`⟨… |⟩`",
+                ANON_CTOR_RIGHT => "`⟨| …⟩`",
+                _ => unreachable!(),
+            };
+            return err(
+                format!(
+                    "{form} needs an expected type with {want} constructor(s), but `{}` has {}",
+                    ind.name,
+                    ind.ctors.len()
+                ),
+                span,
+            );
+        }
+        Ok((ind, index))
     }
 
     /// [`Self::ctor_here`], plus the **expected type** as evidence

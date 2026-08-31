@@ -337,6 +337,52 @@ theorem u(P: Type, Q: Type, h: Iff<Or<P, Q>, And<P, Q>>): Or<P, Q> ↔ And<P, Q>
 }
 
 // ---------------------------------------------------------------------------
+// 4b. Expected-type-directed connective introductions and patterns.
+
+#[test]
+fn concise_conjunction_introduction_nests_to_three_fields() {
+    ok("
+theorem pair<P, Q>(p: P, q: Q): P ∧ Q { ⟨p, q⟩ }
+theorem triple<P, Q, R>(p: P, q: Q, r: R): P ∧ Q ∧ R { ⟨p, ⟨q, r⟩⟩ }
+theorem consume<P, Q, R>(h: P ∧ Q ∧ R): Q {
+    match h { ⟨_, ⟨q, _⟩⟩ => q }
+}
+");
+}
+
+#[test]
+fn concise_binary_sum_introduction_and_elimination() {
+    ok("
+theorem left<P, Q>(p: P): P ∨ Q { ⟨p |⟩ }
+theorem right<P, Q>(q: Q): P ∨ Q { ⟨| q⟩ }
+theorem choose<P, Q>(h: P ∨ Q, p0: P): P {
+    match h { ⟨p |⟩ => p, ⟨| _⟩ => p0 }
+}
+");
+}
+
+#[test]
+fn anonymous_constructor_notation_generalizes_by_shape() {
+    ok("
+record Wrap<A> { value: A }
+inductive Choice<A> { No, Yes(value: A) }
+theorem wrap<A>(a: A): Wrap<A> { ⟨a⟩ }
+theorem yes<A>(a: A): Choice<A> { ⟨| a⟩ }
+theorem unwrap<A>(w: Wrap<A>): A { match w { ⟨a⟩ => a } }
+theorem witness(): ∃ n: Nat, n = 2 { ⟨2, refl⟩ }
+");
+}
+
+#[test]
+fn anonymous_constructor_notation_is_checking_only_and_shape_checked() {
+    let e = bad("fn inferred<P>(p: P) -> P { let x = ⟨p⟩; p }");
+    assert!(e.contains("checking-only"), "{e}");
+
+    let e = bad("theorem wrong<P, Q>(p: P): P ∧ Q { ⟨p |⟩ }");
+    assert!(e.contains("with 2 constructor(s)"), "{e}");
+}
+
+// ---------------------------------------------------------------------------
 // 5. The quantifiers.
 
 /// `∀` is a synonym: it desugars to the arrow form the surface already had,

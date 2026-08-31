@@ -19,7 +19,7 @@
 
 [
   "+" "-" "++" "*" "<" "<=" "=" "≠" "&&" "||" "∙"
-  "¬" "∧" "∨" "↔" "<->" "→" "->" "=>" "⊢" "|-" ":="
+  "¬" "∧" "∨" "↔" "<->" "→" "->" "=>" "⊢" "|-" ":=" "⟨" "⟩" "|"
 ] @operator
 
 ; Default names conservatively to variables. More specific, later patterns

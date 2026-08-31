@@ -178,9 +178,9 @@ fn add64_raw() → Region {
 
 theorem add64_valid(): RegionValid(add64_raw()) {
     RegionValid {
-        inputs_unique: And(
-            And(nat::zero_ne_succ(0), trivial),
-            And(trivial, trivial)),
+        inputs_unique: ⟨
+            ⟨nat::zero_ne_succ(0), trivial⟩,
+            ⟨trivial, trivial⟩⟩,
         nodes_valid: And(
             And(
                 Inl(And(refl, refl)),

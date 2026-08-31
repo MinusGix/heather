@@ -3490,10 +3490,58 @@ impl Parser {
         self.pos = save;
     }
 
+    fn anonymous_constructor_expr(&mut self) -> R<Expr> {
+        let open = self.expect(&TokKind::LAngle, "`⟨`")?;
+        let (head_name, args) = if matches!(self.peek(), TokKind::Pipe) {
+            self.bump();
+            let arg = self.expr()?;
+            (ANON_CTOR_RIGHT, vec![arg])
+        } else if matches!(self.peek(), TokKind::RAngle) {
+            (ANON_CTOR_ONLY, vec![])
+        } else {
+            let first = self.expr()?;
+            if matches!(self.peek(), TokKind::Pipe) {
+                self.bump();
+                (ANON_CTOR_LEFT, vec![first])
+            } else {
+                let mut args = vec![first];
+                while matches!(self.peek(), TokKind::Comma) {
+                    self.bump();
+                    if matches!(self.peek(), TokKind::RAngle) {
+                        break;
+                    }
+                    args.push(self.expr()?);
+                }
+                (ANON_CTOR_ONLY, args)
+            }
+        };
+        let close = self.expect(&TokKind::RAngle, "`⟩` to close the constructor")?;
+        let span = open.join(close);
+        let head = Expr { kind: ExprKind::Var(head_name.into()), span: open };
+        Ok(Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        })
+    }
+
     /// A primary expression: keyword forms (`match`/`refl`/`j`/`calc`), an
     /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
     fn atom(&mut self) -> R<Expr> {
         let start = self.peek_span();
+        // Expected-type-directed constructor notation. A comma tuple selects
+        // the sole constructor; a bar against either edge selects a side of
+        // a two-constructor sum. The synthetic call head cannot be written by
+        // a user and lets every existing AST traversal treat the arguments as
+        // ordinary subexpressions.
+        if matches!(self.peek(), TokKind::LAngle) {
+            return self.anonymous_constructor_expr();
+        }
         // Squash is type syntax in expression position too, just like an
         // arrow type.  This matters in particular under `code { ... }`: the
         // quotation must retain the distinct `TmSquash` encoding rather than
@@ -4129,13 +4177,18 @@ impl Parser {
     fn match_arms(&mut self) -> R<Vec<Arm>> {
         let mut arms: Vec<Arm> = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
-            let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
+            let (ctor, cspan, binders) = if matches!(self.peek(), TokKind::LAngle) {
+                self.anonymous_constructor_pat()?
+            } else {
+                let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
+                let binders = self.pat_args(&ctor, cspan)?;
+                (ctor, cspan, binders)
+            };
             // `_ =>` is the default arm. It parses here rather than needing a
             // token of its own because `_` already lexes as an identifier
             // (`on _: P` reads it that way), so the form steals nothing
             // (docs/nested-match-patterns-design.md §2).
             let default = ctor == "_";
-            let binders = self.pat_args(&ctor, cspan)?;
             self.expect(&TokKind::FatArrow, "`=>`")?;
             let body = self.expr()?;
             let span = cspan.join(body.span);
@@ -4146,6 +4199,37 @@ impl Parser {
             self.bump();
         }
         Ok(arms)
+    }
+
+    /// Pattern counterpart of [`Self::anonymous_constructor_expr`]. Keeping
+    /// the same three unspellable constructor sentinels means the elaborator
+    /// can resolve both introduction and elimination from the type in hand.
+    fn anonymous_constructor_pat(&mut self) -> R<(String, Span, Vec<Pat>)> {
+        let open = self.expect(&TokKind::LAngle, "`⟨`")?;
+        let (name, args) = if matches!(self.peek(), TokKind::Pipe) {
+            self.bump();
+            (ANON_CTOR_RIGHT, vec![self.pat_arg()?])
+        } else if matches!(self.peek(), TokKind::RAngle) {
+            (ANON_CTOR_ONLY, vec![])
+        } else {
+            let first = self.pat_arg()?;
+            if matches!(self.peek(), TokKind::Pipe) {
+                self.bump();
+                (ANON_CTOR_LEFT, vec![first])
+            } else {
+                let mut args = vec![first];
+                while matches!(self.peek(), TokKind::Comma) {
+                    self.bump();
+                    if matches!(self.peek(), TokKind::RAngle) {
+                        break;
+                    }
+                    args.push(self.pat_arg()?);
+                }
+                (ANON_CTOR_ONLY, args)
+            }
+        };
+        let close = self.expect(&TokKind::RAngle, "`⟩` to close the constructor pattern")?;
+        Ok((name.into(), open.join(close), args))
     }
 
     /// `match code e as T { branch(x, …) => …, _ => … }`
@@ -4220,6 +4304,10 @@ impl Parser {
     /// (§3.5). So the *only* thing that distinguishes a deep pattern here is a
     /// following `(`.
     fn pat(&mut self) -> R<Pat> {
+        if matches!(self.peek(), TokKind::LAngle) {
+            let (name, span, args) = self.anonymous_constructor_pat()?;
+            return Ok(Pat::Ctor { name, args, span });
+        }
         let (name, span) = self.binder_ident("pattern binder")?;
         if !matches!(self.peek(), TokKind::LParen) {
             return Ok(Pat::Var { name, span });
@@ -4893,6 +4981,20 @@ mod tests {
         // `¬` is an ordinary call: `Not` takes a `Type` and has no type
         // parameters to fill.
         assert_eq!(as_call(&body("¬p")).0, "Not");
+    }
+
+    #[test]
+    fn term_introduction_type_connectives_and_boolean_operators_are_distinct() {
+        let ExprKind::App { head, args, .. } = body("⟨p, q⟩") else {
+            panic!("expected anonymous constructor application")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == ANON_CTOR_ONLY));
+        assert_eq!(args.len(), 2);
+
+        assert!(matches!(body("P ∧ Q"), ExprKind::TyApp { .. }));
+        let boolean = body("a && b");
+        let (name, _, _) = as_call(&boolean);
+        assert_eq!(name, "&&");
     }
 
     /// `∀` is a **synonym**: it produces the same `TyKind::Fn` the arrow form

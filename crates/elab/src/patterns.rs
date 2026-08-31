@@ -20,7 +20,10 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};
-use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
+use heather_syntax::{
+    ANON_CTOR_LEFT, ANON_CTOR_ONLY, ANON_CTOR_RIGHT, Arm, Block, Expr, ExprKind, MatchForm, Pat,
+    Span, Stmt,
+};
 
 use crate::inductive::{FieldKind, decoded};
 use crate::{Alias, Cx, Elaborator, R, err};
@@ -37,6 +40,23 @@ struct Row {
     /// `(user name, column variable)`, innermost last.
     binds: Vec<(String, String)>,
     span: Span,
+}
+
+fn is_anonymous_ctor(name: &str) -> bool {
+    matches!(name, ANON_CTOR_ONLY | ANON_CTOR_LEFT | ANON_CTOR_RIGHT)
+}
+
+fn anonymous_ctor_name<'a>(
+    ind: &'a crate::inductive::Inductive,
+    written: &str,
+) -> Option<&'a str> {
+    let index = match written {
+        ANON_CTOR_ONLY if ind.ctors.len() == 1 => 0,
+        ANON_CTOR_LEFT if ind.ctors.len() == 2 => 0,
+        ANON_CTOR_RIGHT if ind.ctors.len() == 2 => 1,
+        _ => return None,
+    };
+    Some(ind.ctors[index].name.as_str())
 }
 
 /// The type evidence attached to one pattern-matrix column. A stored field
@@ -143,6 +163,9 @@ impl Elaborator {
         mlvl: &Level,
         span: Span,
     ) -> R<Option<(Cx, Vec<Arm>)>> {
+        let had_anonymous = arms.iter().any(|a| is_anonymous_ctor(&a.ctor));
+        let arms = self.resolve_anonymous_arms(cx, arms, scrut_ty, span)?;
+        let arms = arms.as_slice();
         let has_named = arms.iter().any(|a| a.binders.iter().any(Pat::has_named));
         // The fast path, and the reason the pass may be called from three
         // entry points without anyone costing it (§9). A bare identifier is
@@ -156,7 +179,7 @@ impl Elaborator {
                 .enumerate()
                 .any(|(j, p)| self.pat_is_deep_at(p, cols.as_ref().and_then(|cs| cs.get(j))))
         });
-        if !has_named && !arms.iter().any(|a| a.default) && !has_deep {
+        if !had_anonymous && !has_named && !arms.iter().any(|a| a.default) && !has_deep {
             return Ok(None);
         }
         self.check_default_arms(arms, span)?;
@@ -734,17 +757,26 @@ impl Elaborator {
                 }
             }
             Pat::Var { .. } => p.clone(),
-            Pat::Ctor { name, args, span } => Pat::Ctor {
-                name: name.clone(),
-                args: {
-                    let cols =
-                        col.and_then(|c| self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span));
-                    args.iter()
-                        .enumerate()
-                        .map(|(j, a)| self.reclassify_at(a, cols.as_ref().and_then(|cs| cs.get(j))))
-                        .collect()
-                },
-                span: *span,
+            Pat::Ctor { name, args, span } => {
+                let resolved = col
+                    .and_then(|c| self.inductive_at(&c.cx, &c.ty, *span))
+                    .and_then(|ind| anonymous_ctor_name(&ind, name).map(str::to_owned))
+                    .unwrap_or_else(|| name.clone());
+                Pat::Ctor {
+                    name: resolved.clone(),
+                    args: {
+                        let cols = col.and_then(|c| {
+                            self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, &resolved, *span)
+                        });
+                        args.iter()
+                            .enumerate()
+                            .map(|(j, a)| {
+                                self.reclassify_at(a, cols.as_ref().and_then(|cs| cs.get(j)))
+                            })
+                            .collect()
+                    },
+                    span: *span,
+                }
             },
             Pat::Named { field, pat, span } => Pat::Named {
                 field: field.clone(),
@@ -808,6 +840,7 @@ impl Elaborator {
             };
         }
         let ind = self.inductive_at(cx, ty, span)?;
+        let ctor_name = anonymous_ctor_name(&ind, ctor_name).unwrap_or(ctor_name);
         let i = crate::inductive::arm_ctor_index(&ind, ctor_name)?;
         let ctor = &ind.ctors[i];
         let spine = self.spine(ty, lvl, ind.ctors.len(), span).ok()?;
@@ -872,6 +905,43 @@ impl Elaborator {
             })
             .collect::<Option<Vec<_>>>()?;
         Some(fields)
+    }
+
+    fn resolve_anonymous_arms(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrut_ty: &Type,
+        span: Span,
+    ) -> R<Vec<Arm>> {
+        if !arms.iter().any(|a| is_anonymous_ctor(&a.ctor)) {
+            return Ok(arms.to_vec());
+        }
+        let Some(ind) = self.inductive_at(cx, scrut_ty, span) else {
+            return err(
+                "anonymous constructor patterns need an inductive or record scrutinee",
+                span,
+            );
+        };
+        arms.iter()
+            .map(|arm| {
+                if !is_anonymous_ctor(&arm.ctor) {
+                    return Ok(arm.clone());
+                }
+                let Some(name) = anonymous_ctor_name(&ind, &arm.ctor) else {
+                    let want = if arm.ctor == ANON_CTOR_ONLY { 1 } else { 2 };
+                    return err(
+                        format!(
+                            "this anonymous constructor pattern needs a type with {want} constructor(s), but `{}` has {}",
+                            ind.name,
+                            ind.ctors.len()
+                        ),
+                        arm.span,
+                    );
+                };
+                Ok(Arm { ctor: name.to_owned(), ..arm.clone() })
+            })
+            .collect()
     }
 
     /// Restore declaration order for every `field := pattern` list before

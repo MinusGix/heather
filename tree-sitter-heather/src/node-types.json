@@ -4,6 +4,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "anonymous_constructor_expression",
+        "named": true
+      },
+      {
         "type": "apply_expression",
         "named": true
       },
@@ -204,6 +208,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "anonymous_constructor_pattern",
+        "named": true
+      },
+      {
         "type": "constructor_pattern",
         "named": true
       },
@@ -212,6 +220,62 @@
         "named": true
       }
     ]
+  },
+  {
+    "type": "anonymous_constructor_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "anonymous_constructor_pattern",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_pattern",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_pattern",
+          "named": true
+        },
+        {
+          "type": "named_pattern",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "apply_expression",
@@ -1933,6 +1997,10 @@
             "named": false
           },
           {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
             "type": "argument_slot",
             "named": true
           },
@@ -2065,6 +2133,10 @@
             "named": false
           },
           {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
             "type": "argument_slot",
             "named": true
           },
@@ -2128,6 +2200,10 @@
       "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "anonymous_constructor_expression",
+          "named": true
+        },
         {
           "type": "argument_list",
           "named": true
@@ -2196,6 +2272,10 @@
       "required": true,
       "types": [
         {
+          "type": "anonymous_constructor_expression",
+          "named": true
+        },
+        {
           "type": "argument_list",
           "named": true
         },
@@ -2262,6 +2342,10 @@
       "multiple": false,
       "required": true,
       "types": [
+        {
+          "type": "anonymous_constructor_expression",
+          "named": true
+        },
         {
           "type": "argument_slot",
           "named": true
@@ -2365,6 +2449,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
           },
           {
             "type": "argument_slot",
@@ -2497,6 +2585,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
           },
           {
             "type": "argument_slot",
@@ -3006,6 +3098,10 @@
             "named": false
           },
           {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
             "type": "argument_slot",
             "named": true
           },
@@ -3098,6 +3194,10 @@
             "named": false
           },
           {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
             "type": "argument_slot",
             "named": true
           },
@@ -3166,6 +3266,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
           },
           {
             "type": "argument_slot",
@@ -4632,6 +4736,10 @@
     "named": false
   },
   {
+    "type": "|",
+    "named": false
+  },
+  {
     "type": "|-",
     "named": false
   },
@@ -4689,6 +4797,14 @@
   },
   {
     "type": "⊢",
+    "named": false
+  },
+  {
+    "type": "⟨",
+    "named": false
+  },
+  {
+    "type": "⟩",
     "named": false
   }
 ]

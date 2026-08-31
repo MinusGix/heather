@@ -7,6 +7,13 @@ pub struct Span {
     pub end: usize,
 }
 
+/// Parser-internal call heads used to carry expected-type-directed constructor
+/// notation through the ordinary expression AST. `#` is not an identifier
+/// character, so source text can never name or shadow these sentinels.
+pub const ANON_CTOR_ONLY: &str = "#anonymous-constructor";
+pub const ANON_CTOR_LEFT: &str = "#anonymous-left-constructor";
+pub const ANON_CTOR_RIGHT: &str = "#anonymous-right-constructor";
+
 impl Span {
     pub fn join(self, other: Span) -> Span {
         Span { start: self.start.min(other.start), end: self.end.max(other.end) }

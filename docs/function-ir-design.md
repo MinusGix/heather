@@ -514,10 +514,10 @@ part of the first API; `issues/x86-block-normal-execution-proof-fuel.md` owns
 that proof-cost boundary. This is not a reason to specialize block semantics,
 and no fuel increase is proposed.
 
-The first validity literal also confirms that conjunction currently has
-concise type syntax (`P ∧ Q`) but no corresponding term-introduction syntax;
-`issues/conjunction-introduction-syntax.md` owns replacing nested `And(...)`
-constructor noise. Argument-slot sections do work for the two congruence
-functions in `add64_denotes`; because slots are checking-only, the generic
-`cong_fn` carrier arguments are made explicit to supply their expected
-function type.
+The first validity literal exposed the former asymmetry between concise
+conjunction types (`P ∧ Q`) and nested `And(...)` terms. The resolved
+`issues/conjunction-introduction-syntax.md` added anonymous constructor syntax,
+and `add64_valid` now writes its input-uniqueness tree as nested `⟨…, …⟩`.
+Argument-slot sections do work for the two congruence functions in
+`add64_denotes`; because slots are checking-only, the generic `cong_fn` carrier
+arguments are made explicit to supply their expected function type.

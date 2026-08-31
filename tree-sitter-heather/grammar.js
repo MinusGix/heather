@@ -222,6 +222,7 @@ module.exports = grammar({
     _head_expression: $ => choice(
       $.identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
+      $.anonymous_constructor_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_prefix_expression, $.head_binary_expression,
     ),
@@ -305,6 +306,7 @@ module.exports = grammar({
       $.vector_type,
       $.squash_type,
       $.vector_expression,
+      $.anonymous_constructor_expression,
       $.block_expression,
       $.lambda_expression,
       $.quantified_expression,
@@ -339,6 +341,11 @@ module.exports = grammar({
       seq('Squash', '<', field('type', $._declaration_type), '>'),
     ),
     vector_expression: $ => seq('[', commaSep($._expression), optional(','), ']'),
+    anonymous_constructor_expression: $ => choice(
+      seq('⟨', commaSep($._expression), optional(','), '⟩'),
+      seq('⟨', field('value', $._expression), '|', '⟩'),
+      seq('⟨', '|', field('value', $._expression), '⟩'),
+    ),
     block_expression: $ => $.block,
 
     lambda_expression: $ => prec.right(seq(
@@ -380,8 +387,13 @@ module.exports = grammar({
     )),
     match_body: $ => seq('{', commaSep($.match_arm), optional(','), '}'),
     match_arm: $ => seq(field('pattern', $._pattern), '=>', field('body', $._expression)),
-    _pattern: $ => choice($.identifier, $.constructor_pattern),
+    _pattern: $ => choice($.identifier, $.constructor_pattern, $.anonymous_constructor_pattern),
     constructor_pattern: $ => seq(field('constructor', choice($.identifier, $.qualified_identifier)), '(', commaSep(choice($.named_pattern, $._pattern)), optional(','), ')'),
+    anonymous_constructor_pattern: $ => choice(
+      seq('⟨', commaSep(choice($.named_pattern, $._pattern)), optional(','), '⟩'),
+      seq('⟨', field('value', $._pattern), '|', '⟩'),
+      seq('⟨', '|', field('value', $._pattern), '⟩'),
+    ),
     named_pattern: $ => seq(field('field', $.identifier), ':=', field('pattern', $._pattern)),
 
     quote_expression: $ => seq('code', $.block),

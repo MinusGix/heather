@@ -45,6 +45,12 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
+    /// Anonymous constructor delimiters. `⟨a, b⟩` selects the sole
+    /// constructor of the expected type; `⟨a |⟩` / `⟨| b⟩` select
+    /// the first / second constructor of a binary sum.
+    LAngle,    // ⟨
+    RAngle,    // ⟩
+    Pipe,      // | (only meaningful inside anonymous constructor syntax)
     /// Function/implication arrow. `→` is the preferred mathematical
     /// spelling; `->` remains an ASCII alias and produces the same token.
     Arrow,     // → or ->
@@ -52,13 +58,13 @@ pub enum TokKind {
     /// `⊢` / `|-` — the turnstile of a contextual type `Code(g |- T)` and a
     /// checking-position sequent binder `x ⊢ body`. Both spellings become one
     /// token, so downstream syntax cannot assign them different semantics.
-    /// A bare `|` stays a lex error.
+    /// A bare `|` stays a lex error except inside anonymous constructor
+    /// delimiters, where it marks a binary-sum injection.
     Turnstile, // ⊢ or |-
     /// `&&` and `||` — the Boolean operator spellings
     /// (issues/bool-operator-designations.md). Two-byte; the bare `&` and `|`
-    /// stay lex errors, deliberately: the single characters are unclaimed
-    /// tokens (`|` in particular is reserved against a future or-pattern),
-    /// and doubling is what keeps them so.
+    /// stay lex errors outside `⟨…⟩`; doubling is what keeps them
+    /// unambiguous there.
     AmpAmp,    // &&
     PipePipe,  // ||
     /// `∥` (U+2225, PARALLEL TO), the delimiter in `∥A∥`.
@@ -130,6 +136,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
     let bytes = src.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0;
+    let mut anonymous_depth = 0usize;
     while i < bytes.len() {
         let c = bytes[i];
         // whitespace
@@ -239,14 +246,27 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "⊢" => Some(TokKind::Turnstile),
             "→" => Some(TokKind::Arrow),
             "∥" => Some(TokKind::NormBar),
+            "⟨" => Some(TokKind::LAngle),
+            "⟩" => Some(TokKind::RAngle),
             _ => None,
         };
         if let Some(kind) = three_kind {
+            match kind {
+                TokKind::LAngle => anonymous_depth += 1,
+                TokKind::RAngle => anonymous_depth = anonymous_depth.saturating_sub(1),
+                _ => {}
+            }
             toks.push(Tok { kind, span: Span { start, end: start + 3 } });
             i += 3;
             continue;
         }
         let two = src.get(i..i + 2).unwrap_or("");
+        if c == b'|' && two != "||" && two != "|-" && anonymous_depth == 0 {
+            return Err(LexError {
+                msg: "unexpected character '|'".into(),
+                span: Span { start, end: start + 1 },
+            });
+        }
         // `·`, U+00B7 MIDDLE DOT, is deliberately distinct from `∙`, the
         // generic infix bullet. Consume an immediately adjacent run of
         // Unicode subscript digits into the same token: adjacency and the
@@ -311,6 +331,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'}' => (TokKind::RBrace, 1),
                 b'[' => (TokKind::LBracket, 1),
                 b']' => (TokKind::RBracket, 1),
+                b'|' => (TokKind::Pipe, 1),
                 b',' => (TokKind::Comma, 1),
                 b':' => (TokKind::Colon, 1),
                 b';' => (TokKind::Semi, 1),
