@@ -599,3 +599,39 @@ checks, while probes at 20 and 100 nodes exceeded 60 and 90 seconds. The next
 representation target is a compact validity environment that preserves stable
 graph identities and schedule independence; see
 `issues/function-ir-validity-environment-scaling.md`.
+
+### 2026-08-31: compact directory/rank validity prototype
+
+`RegionValidV2` now prototypes that compact environment alongside the original
+relation. Its balanced directory maps stable IDs to a width and a unique
+origin, either `InputAt(input_index)` or `NodeAt(node_rank)`. Bounds threaded
+through the search tree prove global ID uniqueness in linear space. Exact
+origins connect every raw input and node output to the directory, while operand
+validity is directory membership plus the small condition that a producing
+node's rank precedes its consumer. The directory cardinality excludes phantom
+entries. Consequently, changing the schedule changes node ranks but does not
+renumber stable IDs; both `sum4` schedules validate against the new relation.
+
+The first balanced-tree emitter was still slow because it materialized the
+entire transparent tree under one name. Every apparently logarithmic lookup
+had to reconstruct that value before following its path. Emitting a persistent
+tree of named subtree functions, an opaque ordering fact per subtree, and one
+opaque lookup fact per stable port makes the operational cost match the data
+structure. Generic composition lemmas keep the generator untrusted: they only
+assemble ordinary kernel-checked `DirectoryWithin`, membership, availability,
+and indexed-list evidence.
+
+A second sharing boundary is equally important. A single nested proof of one
+hundred scheduled nodes spent 68.9 seconds in frontend elaboration even after
+directory lookup was cheap. The generator now emits named node-list suffixes
+and an opaque `NodesIndexed` stage for each suffix. At 20 nodes this reduced the
+final record assembly from 15.7 seconds to 0.087 seconds. The focused 100-node
+test, including FunctionIR module setup, then completed in 13.66 seconds; the
+old list-environment certificate had not completed in 90 seconds. A stale V2
+model is rejected against the real raw region, confirming that none of these
+sharing declarations is a trusted shortcut.
+
+The prototype intentionally does not replace `RegionValid` or `CheckedRegion`
+yet. [[function-ir-validity-v2-adoption]] owns the compatibility and migration
+decision; in particular, converting every V2 certificate back into the old
+quadratic proposition would discard the performance result.

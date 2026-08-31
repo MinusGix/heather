@@ -275,6 +275,283 @@ record RegionValid(region: Region) {
             region.outputs),
 }
 
+// ---------------------------------------------------------------------------
+// Experimental compact validity environment
+
+// The original validity relation deliberately follows the scheduled node list,
+// which makes its meaning simple but repeats the complete accumulated
+// environment at every node. `RegionValidV2` separates stable graph identity
+// from schedule availability. A balanced search directory records each port's
+// width and unique origin; ranks say when a node-produced value becomes
+// available. This lives alongside `RegionValid` until its scaling and proof
+// ergonomics have been measured on larger compiler graphs.
+
+inductive PortOrigin { InputAt(index: Nat), NodeAt(index: Nat) }
+
+record DirectoryPort { port: Port, origin: PortOrigin }
+
+inductive PortDirectory {
+    DirectoryEmpty,
+    DirectoryBranch(
+        left: PortDirectory,
+        entry: DirectoryPort,
+        right: PortDirectory),
+}
+
+fn DirectoryAbove(lower: Option<Nat>, id: Nat) → Type {
+    match lower { None => True, Some(bound) => bound < id }
+}
+
+fn DirectoryBelow(upper: Option<Nat>, id: Nat) → Type {
+    match upper { None => True, Some(bound) => id < bound }
+}
+
+// Bounds are threaded down the tree, so ordering evidence is linear in the
+// directory size rather than restating every descendant comparison at every
+// branch.
+fn DirectoryWithin(directory: PortDirectory) →
+    Option<Nat> → Option<Nat> → Type
+{
+    match directory {
+        DirectoryEmpty => λ _ _ => True,
+        DirectoryBranch(left, entry, right) => λ lower upper =>
+            DirectoryAbove(lower, entry.port.id) ∧
+            (DirectoryBelow(upper, entry.port.id) ∧
+             (DirectoryWithin(left, lower, Some(entry.port.id)) ∧
+              DirectoryWithin(right, Some(entry.port.id), upper))),
+    }
+}
+
+fn DirectoryOrdered(directory: PortDirectory) → Type {
+    DirectoryWithin(directory, None, None)
+}
+
+theorem directory_within_empty(lower, upper: Option<Nat>):
+    DirectoryWithin(DirectoryEmpty, lower, upper)
+{
+    trivial
+}
+
+theorem directory_within_branch(
+    {left, right: PortDirectory}, {entry: DirectoryPort},
+    {lower, upper: Option<Nat>},
+    above: DirectoryAbove(lower, entry.port.id),
+    below: DirectoryBelow(upper, entry.port.id),
+    left_within: DirectoryWithin(left, lower, Some(entry.port.id)),
+    right_within: DirectoryWithin(right, Some(entry.port.id), upper)):
+    DirectoryWithin(DirectoryBranch(left, entry, right), lower, upper)
+{
+    ⟨above, ⟨below, ⟨left_within, right_within⟩⟩⟩
+}
+
+fn directory_count(directory: PortDirectory) → Nat {
+    match directory {
+        DirectoryEmpty => 0,
+        DirectoryBranch(left, _, right) =>
+            Succ(directory_count(left) + directory_count(right)),
+    }
+}
+
+fn HasDirectoryPortAt(directory: PortDirectory, id, width: Nat,
+    origin: PortOrigin) → Type
+{
+    match directory {
+        DirectoryEmpty => False,
+        DirectoryBranch(left, entry, right) =>
+            (entry.port.id = id ∧
+             (entry.port.width = width ∧ entry.origin = origin)) ∨
+            (HasDirectoryPortAt(left, id, width, origin) ∨
+             HasDirectoryPortAt(right, id, width, origin)),
+    }
+}
+
+theorem directory_has_here(
+    {left, right: PortDirectory}, {entry: DirectoryPort}):
+    HasDirectoryPortAt(DirectoryBranch(left, entry, right),
+        entry.port.id, entry.port.width, entry.origin)
+{
+    ⟨⟨refl, ⟨refl, refl⟩⟩ |⟩
+}
+
+theorem directory_has_left(
+    {left, right: PortDirectory}, {entry: DirectoryPort},
+    {id, width: Nat}, {origin: PortOrigin},
+    found: HasDirectoryPortAt(left, id, width, origin)):
+    HasDirectoryPortAt(DirectoryBranch(left, entry, right),
+        id, width, origin)
+{
+    ⟨| ⟨found |⟩⟩
+}
+
+theorem directory_has_right(
+    {left, right: PortDirectory}, {entry: DirectoryPort},
+    {id, width: Nat}, {origin: PortOrigin},
+    found: HasDirectoryPortAt(right, id, width, origin)):
+    HasDirectoryPortAt(DirectoryBranch(left, entry, right),
+        id, width, origin)
+{
+    ⟨| ⟨| found⟩⟩
+}
+
+fn HasDirectoryPort(directory: PortDirectory, id, width: Nat) → Type {
+    Exists<PortOrigin>(λ origin =>
+        HasDirectoryPortAt(directory, id, width, origin))
+}
+
+fn OriginAvailableBefore(origin: PortOrigin, before: Nat) → Type {
+    match origin { InputAt(_) => True, NodeAt(index) => index < before }
+}
+
+fn HasAvailableDirectoryPort(directory: PortDirectory,
+    id, width, before: Nat) → Type
+{
+    Exists<PortOrigin>(λ origin =>
+        HasDirectoryPortAt(directory, id, width, origin) ∧
+        OriginAvailableBefore(origin, before))
+}
+
+theorem available_input(
+    {directory: PortDirectory}, {id, width: Nat}, index, before: Nat,
+    found: HasDirectoryPortAt(directory, id, width, InputAt(index))):
+    HasAvailableDirectoryPort(directory, id, width, before)
+{
+    Exists(InputAt(index), ⟨found, trivial⟩)
+}
+
+theorem available_node(
+    {directory: PortDirectory}, {id, width: Nat}, index, before: Nat,
+    found: HasDirectoryPortAt(directory, id, width, NodeAt(index)),
+    earlier: index < before):
+    HasAvailableDirectoryPort(directory, id, width, before)
+{
+    Exists(NodeAt(index), ⟨found, earlier⟩)
+}
+
+theorem directory_port_exists(
+    {directory: PortDirectory}, {id, width: Nat}, {origin: PortOrigin},
+    found: HasDirectoryPortAt(directory, id, width, origin)):
+    HasDirectoryPort(directory, id, width)
+{
+    Exists(origin, found)
+}
+
+fn InputEntriesIndexed(directory: PortDirectory,
+    entries: List<Port>) → Nat → Type
+{
+    match entries {
+        Nil => λ _ => True,
+        Cons(port, rest) => λ index =>
+            HasDirectoryPortAt(directory, port.id, port.width,
+                InputAt(index)) ∧
+            InputEntriesIndexed(directory, rest, Succ(index)),
+    }
+}
+
+fn InputsIndexed(directory: PortDirectory, inputs: Ports) → Type {
+    InputEntriesIndexed(directory, inputs.entries, 0)
+}
+
+theorem input_entries_indexed_nil(
+    {directory: PortDirectory}, {index: Nat}):
+    InputEntriesIndexed(directory, Nil, index)
+{
+    trivial
+}
+
+theorem input_entries_indexed_cons(
+    {directory: PortDirectory}, {index: Nat},
+    {port: Port}, {rest: List<Port>},
+    found: HasDirectoryPortAt(directory, port.id, port.width,
+        InputAt(index)),
+    tail: InputEntriesIndexed(directory, rest, Succ(index))):
+    InputEntriesIndexed(directory, Cons(port, rest), index)
+{
+    ⟨found, tail⟩
+}
+
+fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
+    match node {
+        Add(width, output, left, right) =>
+            HasDirectoryPortAt(directory, output, width, NodeAt(index)) ∧
+            (HasAvailableDirectoryPort(directory, left, width, index) ∧
+             HasAvailableDirectoryPort(directory, right, width, index)),
+    }
+}
+
+theorem node_indexed_add(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found:
+        HasDirectoryPortAt(directory, output, width, NodeAt(index)),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index, Add(width, output, left, right))
+{
+    ⟨output_found, ⟨left_found, right_found⟩⟩
+}
+
+fn NodesIndexed(directory: PortDirectory, nodes: List<Node>) → Nat → Type {
+    match nodes {
+        Nil => λ _ => True,
+        Cons(node, rest) => λ index =>
+            NodeIndexedIn(directory, index, node) ∧
+            NodesIndexed(directory, rest, Succ(index)),
+    }
+}
+
+theorem nodes_indexed_nil(
+    {directory: PortDirectory}, {index: Nat}):
+    NodesIndexed(directory, Nil, index)
+{
+    trivial
+}
+
+theorem nodes_indexed_cons(
+    {directory: PortDirectory}, {index: Nat},
+    {node: Node}, {rest: List<Node>},
+    head: NodeIndexedIn(directory, index, node),
+    tail: NodesIndexed(directory, rest, Succ(index))):
+    NodesIndexed(directory, Cons(node, rest), index)
+{
+    ⟨head, tail⟩
+}
+
+fn OutputEntriesIndexed(directory: PortDirectory,
+    outputs: List<Port>) → Type
+{
+    match outputs {
+        Nil => True,
+        Cons(output, rest) =>
+            HasDirectoryPort(directory, output.id, output.width) ∧
+            OutputEntriesIndexed(directory, rest),
+    }
+}
+
+theorem output_entries_indexed_nil({directory: PortDirectory}):
+    OutputEntriesIndexed(directory, Nil)
+{
+    trivial
+}
+
+theorem output_entries_indexed_cons(
+    {directory: PortDirectory}, {output: Port}, {rest: List<Port>},
+    found: HasDirectoryPort(directory, output.id, output.width),
+    tail: OutputEntriesIndexed(directory, rest)):
+    OutputEntriesIndexed(directory, Cons(output, rest))
+{
+    ⟨found, tail⟩
+}
+
+record RegionValidV2(region: Region) {
+    directory: PortDirectory,
+    directory_ordered: DirectoryOrdered(directory),
+    directory_size:
+        directory_count(directory) =
+            region.inputs.entries.len() + region.nodes.len(),
+    inputs_indexed: InputsIndexed(directory, region.inputs),
+    nodes_indexed: NodesIndexed(directory, region.nodes, 0),
+    outputs_indexed: OutputEntriesIndexed(directory, region.outputs.entries),
+}
+
 record CheckedRegion {
     raw: Region,
     valid: RegionValid(raw),

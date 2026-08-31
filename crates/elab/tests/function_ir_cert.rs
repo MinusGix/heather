@@ -39,6 +39,14 @@ fn function_ir_certificate_generator_suite() {
     eight_node_certificate_checks(&base);
 }
 
+#[test]
+fn function_ir_v2_certificate_generator_suite() {
+    let base = support::semantic_test_base(MODULES);
+    generated_sum4_v2_certificates_check(&base);
+    stale_v2_model_is_rejected(&base);
+    generated_v2_chain_checks(&base, 100);
+}
+
 fn sum4(left_first: bool) -> Region {
     let left = AddNode {
         width: 64,
@@ -116,6 +124,32 @@ fn generated_sum4_certificates_check(base: &Elaborator) {
     }
 }
 
+fn generated_sum4_v2_certificates_check(base: &Elaborator) {
+    let left = cert::generate_v2(
+        "sum4_left_generated_valid_v2",
+        "sum4_left_first_raw()",
+        &sum4(true),
+    )
+    .expect("left sum4 V2 model");
+    let right = cert::generate_v2(
+        "sum4_right_generated_valid_v2",
+        "sum4_right_first_raw()",
+        &sum4(false),
+    )
+    .expect("right sum4 V2 model");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{}\n{}",
+        left.text, right.text
+    );
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_generated_sum4_v2", &source) {
+        panic!(
+            "generated sum4 V2 certificates did not check: {}",
+            error.render(&source)
+        );
+    }
+}
+
 fn stale_model_is_rejected(base: &Elaborator) {
     let mut stale = sum4(true);
     stale.nodes[2].right = 4;
@@ -130,14 +164,72 @@ fn stale_model_is_rejected(base: &Elaborator) {
     }
 }
 
+fn stale_v2_model_is_rejected(base: &Elaborator) {
+    let mut stale = sum4(false);
+    stale.nodes[2].left = 5;
+    let emission = cert::generate_v2("dishonest_sum4_valid_v2", "sum4_right_first_raw()", &stale)
+        .expect("the stale V2 model is internally valid");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{}",
+        emission.text
+    );
+    let mut e = base.clone();
+    match e.elab_module_source("function_ir_stale_certificate_v2", &source) {
+        Ok(()) => panic!("a V2 certificate generated from a stale model checked"),
+        Err(ElabError::Parse(error)) => panic!("generated V2 text did not parse: {}", error.msg),
+        Err(error) => assert!(format!("{error:?}").contains("NotConvertible"), "{error:?}"),
+    }
+}
+
 fn eight_node_certificate_checks(base: &Elaborator) {
+    let region = chain(8);
+
+    let raw = cert::render_region_function("generated_chain_raw", &region);
+    let proof = cert::generate("generated_chain_valid", "generated_chain_raw()", &region)
+        .expect("chain model");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{raw}\n{}",
+        proof.text
+    );
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_generated_chain", &source) {
+        panic!(
+            "generated 8-node certificate did not check: {}",
+            error.render(&source)
+        );
+    }
+}
+
+fn generated_v2_chain_checks(base: &Elaborator, node_count: u64) {
+    let region = chain(node_count);
+    let raw = cert::render_region_function("generated_v2_chain_raw", &region);
+    let proof = cert::generate_v2(
+        "generated_v2_chain_valid",
+        "generated_v2_chain_raw()",
+        &region,
+    )
+    .expect("V2 chain model");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{raw}\n{}",
+        proof.text
+    );
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_generated_v2_chain", &source) {
+        panic!(
+            "generated {node_count}-node V2 certificate did not check: {}",
+            error.render(&source)
+        );
+    }
+}
+
+fn chain(node_count: u64) -> Region {
     let mut region = Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
         nodes: Vec::new(),
         outputs: Vec::new(),
     };
     let mut previous = 1;
-    for output in 2..10 {
+    for output in 2..node_count + 2 {
         region.nodes.push(AddNode {
             width: 64,
             output,
@@ -150,19 +242,5 @@ fn eight_node_certificate_checks(base: &Elaborator) {
         id: previous,
         width: 64,
     });
-
-    let raw = cert::render_region_function("generated_chain_raw", &region);
-    let proof = cert::generate("generated_chain_valid", "generated_chain_raw()", &region)
-        .expect("chain model");
-    let source = format!(
-        "import function_ir;\nimport list;\nimport nat;\n{raw}\n{}",
-        proof.text
-    );
-    let mut e = base.clone();
-    if let Err(error) = e.elab_module_source("function_ir_generated_chain", &source) {
-        panic!(
-            "generated 8-node certificate did not check: {}",
-            error.render(&source)
-        );
-    }
+    region
 }
