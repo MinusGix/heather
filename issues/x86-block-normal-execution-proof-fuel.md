@@ -3,7 +3,7 @@ title: Generic normal x86 block execution certificate exhausts kernel fuel
 status: open
 labels: [compiler,proofs,performance,kernel,x86]
 created: 2026-08-30
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 The first typed x86 block layer defines both:
@@ -47,3 +47,18 @@ annotations, and whether a small relation-composition lemma prevents the
 recursive goal from repeatedly unfolding the complete x86 state and
 instruction semantics. Measure the failing conversion before changing the
 kernel.
+
+## 2026-08-31 partial result
+
+`canonical_execute_block_cons` now provides the small relation-composition
+lemma: given a certified tail from the canonical head's normal successor to an
+explicit final state, it constructs the certified cons block. Together with
+`execute_block_nil`, this scales to the concrete five-instruction `sum4`
+lowering at ordinary fuel and removes hand-written `Exists`/`And` trees.
+
+The stronger recursive theorem above still exhausts fuel, so the issue remains
+open. A second boundary appeared when a single `refl` was asked to normalize
+the complete five-instruction register result. Naming execution stages and
+composing their small observation lemmas checks. A complete fix should make
+the generic recursive bridge similarly retain sharing instead of repeatedly
+unfolding accumulated machine states.

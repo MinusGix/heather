@@ -521,3 +521,31 @@ and `add64_valid` now writes its input-uniqueness tree as nested `⟨…, …⟩
 Argument-slot sections do work for the two congruence functions in
 `add64_denotes`; because slots are checking-only, the generic `cong_fn` carrier
 arguments are made explicit to supply their expected function type.
+
+### 2026-08-31: schedule independence and pressure-bearing lowering
+
+The second slice adds `sum4`, a three-node graph with two independent additions
+and a joining addition. Two topological schedules store the independent nodes
+in opposite orders. Their `RegionHolds` propositions are equivalent by merely
+reassociating and permuting conjunction evidence; `sum4_denotes` is shared by
+both schedules through a node-local `add_node_denotes` rule. This is the first
+concrete confirmation that stored node order is a schedule, not graph meaning.
+
+The x86 selection uses four input registers, `RAX` for the left result, and
+`R8` for the right result before joining them. This small amount of register
+pressure exposed two useful certificate interfaces:
+
+- `BlockArtifact` names the common execution, result, memory, RIP, and
+  protected-register boundary instead of restating a deeply nested
+  conjunction for every lowering; and
+- `canonical_execute_block_cons` composes one canonical instruction with an
+  already-certified tail without recursively normalizing an arbitrary list.
+
+The five-instruction functional execution is deliberately expressed through
+named stages. Asking `refl` to normalize the complete register state at once
+exhausts ordinary kernel fuel; small destination and preservation facts compose
+without raising fuel. This is evidence for generated local proof steps and
+opaque stage boundaries, not for making the semantic graph sequential. The
+current `sum4` regions are raw semantic examples; producing their
+`RegionValid` certificates ergonomically remains a next validation/generator
+slice.

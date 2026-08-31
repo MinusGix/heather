@@ -37,6 +37,7 @@ fn elaborated() -> Elaborator {
 fn function_ir_suite() {
     let base = elaborated();
     checked_add64_is_available(&base);
+    sum4_schedules_and_result_are_available(&base);
     wrong_add64_observation_is_refused(&base);
 }
 
@@ -61,6 +62,40 @@ theorem add64_result(x, y: BitVec(64), values: Valuation(),
 "#;
     if let Err(err) = e.elab_module_source("function_ir_acceptance", src) {
         panic!("FunctionIR acceptance did not check: {}", err.render(src));
+    }
+}
+
+fn sum4_schedules_and_result_are_available(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import function_ir;
+import bitvec;
+
+theorem schedule_swap(values: Valuation(),
+    graph: RegionHolds(sum4_left_first_raw(), values)):
+    RegionHolds(sum4_right_first_raw(), values)
+{
+    sum4_schedules_equivalent(values).mp(graph)
+}
+
+theorem sum4_result(a, b, c, d: BitVec(64), values: Valuation(),
+    ha: values(64, 0) = a,
+    hb: values(64, 1) = b,
+    hc: values(64, 2) = c,
+    hd: values(64, 3) = d,
+    graph: RegionHolds(sum4_right_first_raw(), values)):
+    values(64, 6) = bitvec::add(64,
+        bitvec::add(64, a, b), bitvec::add(64, c, d))
+{
+    sum4_denotes(a, b, c, d, values, ha, hb, hc, hd,
+        sum4_schedules_equivalent(values).mpr(graph))
+}
+"#;
+    if let Err(err) = e.elab_module_source("function_ir_sum4_acceptance", src) {
+        panic!(
+            "FunctionIR sum4 acceptance did not check: {}",
+            err.render(src)
+        );
     }
 }
 

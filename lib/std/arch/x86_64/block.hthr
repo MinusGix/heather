@@ -35,9 +35,9 @@ theorem canonical_block_decodes(instructions: List<Instruction>):
 {
     match instructions {
         Nil => start ⊢ trivial,
-        Cons(instruction, rest) => start ⊢ And(
+        Cons(instruction, rest) => start ⊢ ⟨
             canonical_encoding_decodes(start, instruction),
-            canonical_block_decodes(rest, next_rip(start, 3))),
+            canonical_block_decodes(rest, next_rip(start, 3))⟩,
     }
 }
 
@@ -65,4 +65,40 @@ fn ExecuteBlock<M>(instructions: List<Instruction>) →
                 Execute(decoded_rr(instruction), before, Returned(middle)) ∧
                 ExecuteBlock(rest, middle, after),
     }
+}
+
+// One-step certificate composition avoids asking the kernel to discover a
+// recursive proof for an arbitrary instruction list. A selector emits one
+// application per selected instruction, while sharing this constructor and
+// the leaf proof across every lowering rule.
+theorem execute_block_nil<M>(state: MachineState<M>):
+    ExecuteBlock([], state, state)
+{
+    refl
+}
+
+theorem canonical_execute_block_cons<M>(instruction: Instruction,
+    rest: List<Instruction>, before, after: MachineState<M>,
+    tail: ExecuteBlock(rest,
+        execute_normal(decoded_rr(instruction), before), after)):
+    ExecuteBlock(Cons(instruction, rest), before, after)
+{
+    ⟨execute_normal(decoded_rr(instruction), before),
+        ⟨canonical_execute_normal_is_allowed(instruction, before), tail⟩⟩
+}
+
+// Common boundary for a certified straight-line leaf block. It deliberately
+// observes only one result register, memory, RIP, and a caller-selected frame;
+// flags and clobbered registers remain unobservable.
+record BlockArtifact<M>(instructions: List<Instruction>,
+    before: MachineState<M>, result_register: Gpr, result: BitVec(64),
+    protected: Gpr → Type, final_rip: BitVec(64))
+{
+    after: MachineState<M>,
+    execution: ExecuteBlock(instructions, before, after),
+    result_correct: read_gpr(result_register, after.gprs) = result,
+    memory_preserved: after.memory = before.memory,
+    rip_correct: after.rip = final_rip,
+    registers_preserved: (register: Gpr) → protected(register) →
+        read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
 }

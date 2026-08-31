@@ -66,6 +66,19 @@ theorem selected_add_refines<M>(values: Valuation(), before: MachineState<M>,
 {
     add64_x86_refines_function_ir(values, before, hx, hy, graph)
 }
+
+theorem selected_sum4_refines<M>(values: Valuation(), before: MachineState<M>,
+    ha: values(64, 0) = read_gpr(Rdi, before.gprs),
+    hb: values(64, 1) = read_gpr(Rsi, before.gprs),
+    hc: values(64, 2) = read_gpr(Rdx, before.gprs),
+    hd: values(64, 3) = read_gpr(Rcx, before.gprs),
+    graph: RegionHolds(sum4_right_first_raw(), values)):
+    read_gpr(Rax, sum4_x86_artifact(values, before, ha, hb, hc, hd,
+        sum4_schedules_equivalent(values).mpr(graph)).after.gprs) = values(64, 6)
+{
+    sum4_x86_artifact(values, before, ha, hb, hc, hd,
+        sum4_schedules_equivalent(values).mpr(graph)).result_correct
+}
 "#;
     if let Err(err) = e.elab_module_source("function_ir_x86_acceptance", src) {
         panic!(
