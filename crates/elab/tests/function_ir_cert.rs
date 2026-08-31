@@ -44,6 +44,7 @@ fn function_ir_v2_certificate_generator_suite() {
     let base = support::semantic_test_base(MODULES);
     generated_sum4_v2_certificates_check(&base);
     stale_v2_model_is_rejected(&base);
+    generated_v2_sparse_dag_checks(&base);
     generated_v2_chain_checks(&base, 100);
 }
 
@@ -217,6 +218,73 @@ fn generated_v2_chain_checks(base: &Elaborator, node_count: u64) {
     if let Err(error) = e.elab_module_source("function_ir_generated_v2_chain", &source) {
         panic!(
             "generated {node_count}-node V2 certificate did not check: {}",
+            error.render(&source)
+        );
+    }
+}
+
+fn generated_v2_sparse_dag_checks(base: &Elaborator) {
+    // Keep the ordinary regression sparse without exercising the separate
+    // large-closed-Nat comparison performance bug.  IDs near `u64::MAX`
+    // made this tiny certificate consume roughly 24 GiB, while 10,000 already
+    // overflowed the checker thread's stack.
+    let top = 100;
+    let region = Region {
+        inputs: vec![
+            Port {
+                id: top - 10,
+                width: 8,
+            },
+            Port {
+                id: top - 9,
+                width: 8,
+            },
+            Port { id: 42, width: 64 },
+            Port { id: 7, width: 64 },
+        ],
+        nodes: vec![
+            AddNode {
+                width: 8,
+                output: top - 8,
+                left: top - 10,
+                right: top - 9,
+            },
+            AddNode {
+                width: 64,
+                output: 60,
+                left: 42,
+                right: 7,
+            },
+            AddNode {
+                width: 64,
+                output: 59,
+                left: 60,
+                right: 42,
+            },
+            AddNode {
+                width: 64,
+                output: 58,
+                left: 60,
+                right: 7,
+            },
+        ],
+        outputs: vec![Port { id: 59, width: 64 }, Port { id: 58, width: 64 }],
+    };
+    let raw = cert::render_region_function("generated_sparse_dag_raw", &region);
+    let proof = cert::generate_v2(
+        "generated_sparse_dag_valid",
+        "generated_sparse_dag_raw()",
+        &region,
+    )
+    .expect("sparse mixed-width DAG model");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{raw}\n{}",
+        proof.text
+    );
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_generated_sparse_dag", &source) {
+        panic!(
+            "generated sparse mixed-width DAG certificate did not check: {}",
             error.render(&source)
         );
     }

@@ -644,5 +644,36 @@ mod tests {
         assert!(generate_v2("future", "future()", &future_reference)
             .unwrap_err()
             .contains("undefined"));
+
+        let duplicate_output = Region {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            nodes: vec![
+                AddNode {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1,
+                },
+                AddNode {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1,
+                },
+            ],
+            outputs: vec![],
+        };
+        assert!(generate_v2("duplicate", "duplicate()", &duplicate_output)
+            .unwrap_err()
+            .contains("already defined"));
+
+        let wrong_output_width = Region {
+            inputs: vec![Port { id: 0, width: 8 }],
+            nodes: vec![],
+            outputs: vec![Port { id: 0, width: 64 }],
+        };
+        assert!(generate_v2("width", "width()", &wrong_output_width)
+            .unwrap_err()
+            .contains("not requested width"));
     }
 }
