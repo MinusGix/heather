@@ -14,6 +14,7 @@ const TOK: &str = "
 inductive Tok { TA, TB }
 inductive P { Mk(a: Tok, b: Tok) }
 ";
+const LIST_DECL: &str = "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }\n";
 const LIST: &str = r#"
 inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
 instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
@@ -202,6 +203,21 @@ fn a_nominal_list_impostor_does_not_receive_the_standard_list_lint() {
     assert!(
         e.take_warnings().iter().all(|warning| warning.lint != Lint::ManualListConstruction),
         "a nominally unrelated declaration must not inherit standard-list syntax policy",
+    );
+}
+
+#[test]
+fn the_standard_list_without_literal_opt_in_receives_no_unusable_suggestion() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("list", LIST_DECL).expect("canonical list declaration");
+    let src = r#"
+        import list;
+        fn xs() -> List<Nat> { Cons(1, Cons(2, Nil)) }
+    "#;
+    e.elab_module_source("list_without_literal_instance", src).expect("source checks");
+    assert!(
+        e.take_warnings().iter().all(|warning| warning.lint != Lint::ManualListConstruction),
+        "a lint must not suggest syntax the declaration has not opted into",
     );
 }
 

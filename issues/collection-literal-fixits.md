@@ -1,4 +1,10 @@
 ---
+title: Offer structured fixes for manual list construction
+status: open
+labels: [frontend,lint,ergonomics]
+created: 2026-08-30
+updated: 2026-08-30
+---
 
 `manual-list-construction` detects a finite `Cons(…, …Nil)` spine and suggests
 `[…]`, but the warning carries only text. Offer a structured source edit for
@@ -24,10 +30,3 @@ the formatting ownership of nested expressions.
 ## Log
 
 - 2026-08-30: Filed from the generic collection-literal follow-up review.
-title: Offer structured fixes for manual list construction
-status: open
-labels: [frontend,lint,ergonomics]
-created: 2026-08-30
-updated: 2026-08-30
----
-

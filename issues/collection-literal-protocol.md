@@ -46,6 +46,8 @@ surface universe polymorphism remains unavailable.
 Spread is intentionally not a `CollectionLiteral` field. It belongs to the
 separate optional protocol owned by [[collection-literal-spread]], so a type
 may support finite literals without supporting concatenation or open tails.
+The remaining List-only elaboration shortcut is owned by
+[[collection-literal-dictionary-reduction]].
 
 ## Acceptance
 

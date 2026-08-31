@@ -3,7 +3,7 @@ title: Add proper list literal syntax
 status: closed
 labels: [frontend,syntax,stdlib,ergonomics]
 created: 2026-08-27
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 Heather's `List<A>` values are currently written as nested constructors:
@@ -91,3 +91,6 @@ quiet.
 - 2026-08-31: [[collection-literal-protocol]] landed. `[…]` now resolves the
   canonical prelude `CollectionLiteral<C>(n)` class; standard List is an
   ordinary instance and vectors retain the intrinsic primitive reading.
+- 2026-08-31: The semantic `manual-list-construction` lint now also verifies
+  that the canonical List's ordinary literal instance is registered before it
+  suggests `[…]`; a same-named declaration without opt-in stays quiet.

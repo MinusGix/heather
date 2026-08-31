@@ -25,6 +25,15 @@ use crate::{
 impl Elaborator {
     const STANDARD_LIST_MODULE: &'static str = "list";
 
+    fn standard_list_literal_instance_registered(&self) -> bool {
+        let protocol = qkey(PRELUDE_MODULE, "CollectionLiteral");
+        let list = qkey(Self::STANDARD_LIST_MODULE, "List");
+        // `A` is binder 0 and the generic literal length is binder 1 in the
+        // standard instance.
+        self.traits
+            .has_instance(&instance_key(&protocol, &list, "#binder1"))
+    }
+
     fn is_standard_list(&self, ind: &Inductive) -> bool {
         self.types
             .inductive(&qkey(Self::STANDARD_LIST_MODULE, "List"))
@@ -65,15 +74,9 @@ impl Elaborator {
         level: &Level,
         span: Span,
     ) -> R<Option<Term>> {
-        let protocol = qkey(PRELUDE_MODULE, "CollectionLiteral");
-        let list = qkey(Self::STANDARD_LIST_MODULE, "List");
-        // `A` is binder 0 and the generic literal length is binder 1 in the
-        // standard instance. Merely being the canonical List is not enough:
-        // the ordinary instance declaration must have registered successfully.
-        if !self
-            .traits
-            .has_instance(&instance_key(&protocol, &list, "#binder1"))
-        {
+        // Merely being the canonical List is not enough: the ordinary instance
+        // declaration must have registered successfully.
+        if !self.standard_list_literal_instance_registered() {
             return Ok(None);
         }
         let expected_whnf = self.whnf(cx, expected, span)?;
@@ -140,7 +143,7 @@ impl Elaborator {
         ind: &Inductive,
         ctor: usize,
     ) {
-        if !self.is_standard_list(ind) {
+        if !self.is_standard_list(ind) || !self.standard_list_literal_instance_registered() {
             return;
         }
         let Some((nil, cons)) = Self::list_ctor_indices(ind) else { return };

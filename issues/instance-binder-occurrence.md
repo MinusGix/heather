@@ -89,4 +89,6 @@ longer claims a justification the round did not have.
   for a value binder determined only by a class index. Generic index binders
   now use alpha-stable `#binderN` registry keys and are recovered by ordinary
   candidate unification. The absent-from-both rule remains; tests pin both
-  successful resolution and alpha-renamed duplicate rejection.
+  successful resolution and alpha-renamed duplicate rejection. Replacing the
+  bounded spelling-based overlap check if index forms widen belongs to
+  [[structural-instance-index-overlap]].
