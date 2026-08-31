@@ -63,17 +63,20 @@ a surface that hides it would have to invent an existential and immediately
 lose the computation this is all for. Hiding it is sugar to consider later
 (§7), not the primitive.
 
-### 2.2 Vector literals `[a, b, c]`
+### 2.2 Collection literals `[a, b, c]`
 
 ```
 atom ::= … | '[' (expr (',' expr)*)? ']'
 ```
 
-Checking-only, against an expected `Vec(T; k)` whose length must be a
-**literal** — the literal's own length is what it is, and matching it against
-a neutral length is a unification problem, not a check. `[]` is `⟨⟩ : Unit^l`;
-`[a, b]` is `pair(a, pair(b, ⟨⟩))`, built against the Σ-chain that
-`Vec(T; 2)` unfolds to.
+Checking-only and selected by the expected container type. Against
+`Vec(T; k)`, `k` must be a **literal** — the literal's own length is what it
+is, and matching it against a neutral length is a unification problem, not a
+check. `[]` is `⟨⟩ : Unit^l`; `[a, b]` is
+`pair(a, pair(b, ⟨⟩))`, built against the Σ-chain that `Vec(T; 2)` unfolds to.
+Against `List<T>`, the same surface lowers to the declaration's ordinary
+`Nil`/`Cons` spine. With no expected container the spelling is ambiguous and
+does not default to either representation.
 
 This is the one place `,` and `[` meet, and it is exactly why lambdas take
 `=>` and not `,` (`docs/surface-function-types.md` §1.2): `[λ (x: Nat), f(x), g]`
@@ -275,7 +278,7 @@ Each diagnosed, never mis-lowered — the hazard class
 | `[T; n]` for `T` mentioning `D` but not *being* `D` | tier 1 §1's nested-recursion message, unchanged |
 | a vector literal at a non-literal expected length | "a vector literal needs a literal length here; `xs` of length `n` has to come from a binder" |
 | a vector literal of the wrong length | "this vector literal has `k` elements but `m` are expected" |
-| a vector literal with no expected type | "a vector literal needs an expected type (it is checking-only, like `refl`)" |
+| a collection literal with no expected type | "a collection literal needs an expected container type (it is checking-only, like `refl`)" |
 | `xs.map(f)` on a non-vector | "`map`'s receiver has to be a vector" |
 | a self-call `xs.map(f)` where `xs` is not *the* container binder | "a recursive call over a vector has to be over the container field bound by the enclosing `match`" |
 | a self-call over a container at a **dependent** result type | "recursing over a container field needs the result type to be independent of its argument … (§4.3)" — this is the phase-3 boundary, and it is a rejection rather than a silent mis-elaboration |

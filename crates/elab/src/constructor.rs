@@ -11,7 +11,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{
     ANON_CTOR_LEFT, ANON_CTOR_ONLY, ANON_CTOR_RIGHT, Expr, ExprKind, NamedArg,
-    LIST_LITERAL, RecordLitField, Span, Ty, TyKind,
+    RecordLitField, Span, Ty, TyKind,
 };
 
 use crate::inductive::{self, Inductive};
@@ -36,21 +36,12 @@ impl Elaborator {
         let start = elems.first().map_or(span.end.saturating_sub(1), |elem| elem.span.start);
         let tail_span = Span { start, end: span.end };
         Expr {
-            kind: ExprKind::App {
-                head: Box::new(Expr {
-                    kind: ExprKind::Var(LIST_LITERAL.into()),
-                    span: tail_span,
-                }),
-                args: elems.to_vec(),
-                named: Vec::new(),
-                explicit: false,
-                goal_oriented: false,
-            },
+            kind: ExprKind::CollectionLit(elems.to_vec()),
             span: tail_span,
         }
     }
 
-    /// Check `List[…]` by exposing exactly one ordinary constructor at a time.
+    /// Check `[…]` at `List<A>` by exposing one ordinary constructor at a time.
     /// The recursive tail comes back through the same checking route, so every
     /// element keeps its written span and is checked against the one `A` from
     /// the expected `List<A>`.
@@ -64,11 +55,14 @@ impl Elaborator {
     ) -> R<Term> {
         let expected_whnf = self.whnf(cx, expected, span)?;
         let Some(ind) = self.expected_ind(&expected_whnf) else {
-            return err("a `List[…]` literal needs an expected `List<A>` type", span);
+            return err(
+                "a collection literal needs an expected `List<A>` or `[T; n]` type",
+                span,
+            );
         };
         let Some((nil, cons)) = Self::list_ctor_indices(&ind) else {
             return err(
-                format!("a `List[…]` literal cannot construct `{}`; it needs `List<A>` with `Nil` and `Cons(A, List<A>)`", ind.name),
+                format!("a collection literal cannot construct `{}`; list construction needs `List<A>` with `Nil` and `Cons(A, List<A>)`", ind.name),
                 span,
             );
         };
@@ -87,35 +81,6 @@ impl Elaborator {
                 )
             }
         }
-    }
-
-    /// Infer a nonempty literal through the ordinary `Cons` inference rule:
-    /// the first field is exactly the declaration parameter `A`, and the tail
-    /// is then checked at the resulting `List<A>`. An empty list intentionally
-    /// has no such witness and asks for a checking position.
-    pub(super) fn infer_list_literal(
-        &self,
-        cx: &Cx,
-        elems: &[Expr],
-        span: Span,
-    ) -> R<(Term, Type, Level)> {
-        let Some((head, rest)) = elems.split_first() else {
-            return err(
-                "cannot infer the element type of `List[]`; annotate it or use it where a `List<A>` is expected",
-                span,
-            );
-        };
-        let Some(ind) = self.lookup_inductive("List").cloned() else {
-            return Err(self.name_miss("List", "unknown type `List` for this list literal", span));
-        };
-        let Some((_, cons)) = Self::list_ctor_indices(&ind) else {
-            return err(
-                "`List[…]` needs the standard `List<A>` declaration with `Nil` and `Cons(A, List<A>)`",
-                span,
-            );
-        };
-        let tail = Self::list_literal_tail(rest, span);
-        self.infer_ctor(cx, &ind, cons, &[head.clone(), tail], span)
     }
 
     fn manual_list_spine(expr: &Expr) -> bool {
@@ -153,7 +118,7 @@ impl Elaborator {
         }
         self.emit_lint(
             crate::Lint::ManualListConstruction,
-            "this builds a concrete list with a manual `Cons`/`Nil` spine; write `List[…]` instead (your parentheses have suffered enough)",
+            "this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)",
             expr.span,
         );
     }

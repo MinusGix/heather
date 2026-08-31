@@ -462,10 +462,10 @@ impl<'a> ExprElab<'a> {
                     None => err("this equation has no code", e.span),
                 }
             })()),
-            ExprKind::VecLit(_) => Some(err(
-                "a vector literal needs an expected type (it is checking-only, like \
-                 `refl`): annotate it (`let xs: [T; 2] = [a, b];`) or use it as an \
-                 argument",
+            ExprKind::CollectionLit(_) => Some(err(
+                "a collection literal needs an expected container type (it is \
+                 checking-only, like `refl`): annotate it (`let xs: List<T> = \
+                 [a, b];`) or use it as an argument",
                 e.span,
             )),
             // Root settles local/declaration shadowing before admitting these
@@ -547,7 +547,9 @@ impl<'a> ExprElab<'a> {
         expected: &Type,
     ) -> Option<R<Term>> {
         match &e.kind {
-            ExprKind::VecLit(elems) => Some(self.check_vec_lit(elab, cx, elems, expected, e.span)),
+            ExprKind::CollectionLit(elems) => {
+                Some(self.check_vec_lit(elab, cx, elems, expected, e.span))
+            }
             ExprKind::Var(name) if name == "FZ" => {
                 Some(self.check_fin_index(elab, cx, None, expected, e.span))
             }
@@ -1368,7 +1370,7 @@ mod tests {
             len: Rc::new(crate::inductive::nat_lit(2)),
         };
         let literal = Expr {
-            kind: ExprKind::VecLit(vec![
+            kind: ExprKind::CollectionLit(vec![
                 Expr {
                     kind: ExprKind::Num(3),
                     span: SPAN,

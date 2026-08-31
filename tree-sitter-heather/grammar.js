@@ -227,7 +227,7 @@ module.exports = grammar({
     _head_expression: $ => choice(
       $.identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
-      $.list_expression, $.anonymous_constructor_expression,
+      $.anonymous_constructor_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
       $.head_prefix_expression, $.head_binary_expression,
@@ -272,7 +272,6 @@ module.exports = grammar({
       $.universe,
       $.vector_type,
       $.vector_expression,
-      $.list_expression,
       $.squash_type,
       seq('(', $._declaration_type, ')'),
       $.declaration_type_application,
@@ -323,7 +322,6 @@ module.exports = grammar({
       $.vector_type,
       $.squash_type,
       $.vector_expression,
-      $.list_expression,
       $.anonymous_constructor_expression,
       $.block_expression,
       $.lambda_expression,
@@ -360,10 +358,6 @@ module.exports = grammar({
       seq('Squash', '<', field('type', $._declaration_type), '>'),
     ),
     vector_expression: $ => seq('[', commaSep($._expression), optional(','), ']'),
-    list_expression: $ => seq(
-      alias(token(seq('List', '[')), $.list_literal_start),
-      commaSep($._expression), optional(','), ']',
-    ),
     anonymous_constructor_expression: $ => choice(
       seq('⟨', commaSep($._expression), optional(','), '⟩'),
       seq('⟨', field('value', $._expression), '|', '⟩'),

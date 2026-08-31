@@ -115,7 +115,7 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
         }
         ExprKind::TyApp { head, .. } => go(head),
         ExprKind::Lam { .. } => {}
-        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::CollectionLit(xs) => xs.iter().for_each(go),
         ExprKind::Eq(a, b) => {
             go(a);
             go(b);
@@ -279,7 +279,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
         }
         ExprKind::TyApp { head, .. } => go(head),
         ExprKind::Lam { .. } => {}
-        ExprKind::VecLit(xs) => xs.iter_mut().for_each(go),
+        ExprKind::CollectionLit(xs) => xs.iter_mut().for_each(go),
         ExprKind::Eq(a, b) => {
             go(a);
             go(b);
@@ -442,7 +442,7 @@ mod count_holes_impl {
                     .for_each(|t| ty(t, n));
                 expr(body, n);
             }
-            ExprKind::VecLit(elems) => elems.iter().for_each(|x| expr(x, n)),
+            ExprKind::CollectionLit(elems) => elems.iter().for_each(|x| expr(x, n)),
             ExprKind::Index { recv, idx } => {
                 expr(recv, n);
                 expr(idx, n);
@@ -594,7 +594,7 @@ pub(super) fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         }
         ExprKind::TyApp { head, .. } => go(head),
         ExprKind::Lam { body, .. } => go(body),
-        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::CollectionLit(xs) => xs.iter().for_each(go),
         ExprKind::Eq(a, b) => {
             go(a);
             go(b);

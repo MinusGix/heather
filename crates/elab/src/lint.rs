@@ -43,7 +43,7 @@ pub enum Lint {
     OperatorFallback,
     /// An explicit match motive can be omitted in its checking position.
     RedundantMatchMotive,
-    /// A finite `Cons`/`Nil` construction can use `List[…]`.
+    /// A finite `Cons`/`Nil` construction can use `[…]`.
     ManualListConstruction,
 }
 
@@ -299,7 +299,7 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
                 .for_each(|t| ty(t, out));
             expr(body, out);
         }
-        ExprKind::VecLit(xs) => xs.iter().for_each(|x| expr(x, out)),
+        ExprKind::CollectionLit(xs) => xs.iter().for_each(|x| expr(x, out)),
         ExprKind::Eq(a, b) | ExprKind::Index { recv: a, idx: b } => {
             expr(a, out);
             expr(b, out);
@@ -671,7 +671,7 @@ impl BinderUses {
                 }
                 this.expr(body);
             }),
-            ExprKind::VecLit(xs) => xs.iter().for_each(|x| self.expr(x)),
+            ExprKind::CollectionLit(xs) => xs.iter().for_each(|x| self.expr(x)),
             ExprKind::Eq(a, b) | ExprKind::Index { recv: a, idx: b } => {
                 self.expr(a);
                 self.expr(b);

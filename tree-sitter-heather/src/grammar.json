@@ -2605,10 +2605,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "list_expression"
-        },
-        {
-          "type": "SYMBOL",
           "name": "anonymous_constructor_expression"
         },
         {
@@ -3348,10 +3344,6 @@
         {
           "type": "SYMBOL",
           "name": "vector_expression"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "list_expression"
         },
         {
           "type": "SYMBOL",
@@ -4188,10 +4180,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "list_expression"
-        },
-        {
-          "type": "SYMBOL",
           "name": "anonymous_constructor_expression"
         },
         {
@@ -4454,81 +4442,6 @@
         {
           "type": "STRING",
           "value": "["
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "SYMBOL",
-                  "name": "_expression"
-                },
-                {
-                  "type": "REPEAT",
-                  "content": {
-                    "type": "SEQ",
-                    "members": [
-                      {
-                        "type": "STRING",
-                        "value": ","
-                      },
-                      {
-                        "type": "SYMBOL",
-                        "name": "_expression"
-                      }
-                    ]
-                  }
-                }
-              ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": ","
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "STRING",
-          "value": "]"
-        }
-      ]
-    },
-    "list_expression": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "ALIAS",
-          "content": {
-            "type": "TOKEN",
-            "content": {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "List"
-                },
-                {
-                  "type": "STRING",
-                  "value": "["
-                }
-              ]
-            }
-          },
-          "named": true,
-          "value": "list_literal_start"
         },
         {
           "type": "CHOICE",

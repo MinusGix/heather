@@ -42,7 +42,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 | `:= compile_pushes_eval(l)` (endpoints fill the arguments) | unification-driven instantiation of a calc-step justification | `issues/elab-unifier-completeness.md` (nearest) |
 | no `cong_run` anywhere | congruence inferred from the goal's shape | `issues/congruence-by-anti-unification.md` |
 | `heather disprove '…'` at the shell | counterexample search before anyone pays for a proof | `issues/heather-disprove.md` |
-| `n :: s` cons notation | finite construction is now `List[TPush(n)]`; infix open-tail cons remains absent | `issues/notation-extensibility.md` |
+| `n :: s` cons notation | finite construction is now `[TPush(n)]`; infix open-tail cons remains absent | `issues/notation-extensibility.md` |
 | `Result`, `?`-chaining, `.map` | prelude types and their chaining kit | `issues/prelude-option-and-friends.md` |
 | `let b :: a :: s2 = s else { … }` | let-else (the one-non-absurd-branch match) | `issues/let-else-sugar.md` |
 | `String`, `.chars()`, `[c, ..rest]`, `if c.is_digit()` guards | strings, slice patterns, match guards | no owner yet |

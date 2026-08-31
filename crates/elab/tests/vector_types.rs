@@ -1,4 +1,4 @@
-//! The surface vector type `[T; n]` and vector literals
+//! The surface vector type `[T; n]` and generic collection literals
 //! (docs/container-fields.md §2), the surface half of container fields.
 
 use heather_elab::{ElabError, Elaborator};
@@ -66,13 +66,13 @@ fn rejections() {
 
     // no expected type
     let m = elab_err("fn f(n: Nat) -> Nat { let xs = [1, 2];\n n }");
-    assert!(m.contains("needs an expected type"), "{m}");
+    assert!(m.contains("needs an expected container type"), "{m}");
 
     // a literal at a variable length
     let m = elab_err("fn f(n: Nat) -> [Nat; n] { [1] }");
     assert!(m.contains("literal length"), "{m}");
 
-    // not a vector type at all
+    // not a supported container type at all
     let m = elab_err("fn f() -> Nat { [1] }");
-    assert!(m.contains("`[T; n]` expected type"), "{m}");
+    assert!(m.contains("expected `List<A>` or `[T; n]` type"), "{m}");
 }

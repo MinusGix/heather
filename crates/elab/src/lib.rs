@@ -3013,16 +3013,20 @@ impl Elaborator {
                 };
                 self.build_absurd(cx, arg, expected, lvl, e.span)
             }
-            // A vector literal against an expected `Vec(T; k)`. Checking-only
-            // like `refl`, and the length must be a *literal*: matching a
-            // literal's own length against a neutral one is unification, not
-            // a check (docs/container-fields.md §2.2).
-            ExprKind::VecLit(_) => self
-                .expr_elab()
-                .check_indexed_form(self, cx, e, expected)
-                .expect("classified as an ExprElab indexed checking form"),
+            // A bracket literal is selected by its expected container type.
+            // Primitive vectors retain their indexed lowering; `List<A>` uses
+            // the declaration's ordinary `Cons`/`Nil` constructors.
+            ExprKind::CollectionLit(elems) => {
+                if matches!(&*inductive::decoded(expected), Type::Vec { .. }) {
+                    self.expr_elab()
+                        .check_indexed_form(self, cx, e, expected)
+                        .expect("classified as an ExprElab indexed checking form")
+                } else {
+                    self.check_list_literal(cx, elems, expected, lvl, e.span)
+                }
+            }
             // `FZ` / `FS(j)` against an expected `Fin`. Checking-only, like
-            // `refl` and a vector literal: `FZ` inhabits `Fin(Succ k)` for
+            // `refl` and a collection literal: `FZ` inhabits `Fin(Succ k)` for
             // *every* `k`, and nothing in the term names one
             // (docs/surface-fin-indexing-design.md §3.1). Keyed on the
             // expected type and never on the name, so a user inductive with a
@@ -3135,17 +3139,6 @@ impl Elaborator {
             // The name is read with the expected type as evidence
             // ([`Self::ctor_here_expected`]), so a bare constructor the name
             // layer left ambiguous is settled by the type that is checking it.
-            ExprKind::App {
-                head,
-                args,
-                named,
-                explicit: false,
-                goal_oriented: false,
-            } if named.is_empty()
-                && matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::LIST_LITERAL) =>
-            {
-                self.check_list_literal(cx, args, expected, lvl, e.span)
-            }
             ExprKind::App {
                 head,
                 args,
@@ -3556,7 +3549,7 @@ impl Elaborator {
             | ExprKind::Num(_)
             | ExprKind::Eq(..)
             | ExprKind::TyLit(..)
-            | ExprKind::VecLit(_) => self
+            | ExprKind::CollectionLit(_) => self
                 .expr_elab()
                 .infer_form(self, cx, e)
                 .expect("classified as an ExprElab inference form"),
@@ -3736,17 +3729,6 @@ impl Elaborator {
                     self.ctor_at(cx, &head, tyargs, &args, e.span)
                         .unwrap_or_else(|| err(format!("unknown type `{name}`"), e.span))
                 }
-            }
-            ExprKind::App {
-                head,
-                args,
-                named,
-                explicit: false,
-                goal_oriented: false,
-            } if named.is_empty()
-                && matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::LIST_LITERAL) =>
-            {
-                self.infer_list_literal(cx, args, e.span)
             }
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
@@ -4051,7 +4033,7 @@ impl Elaborator {
                         Level::constant(1),
                     ));
                 }
-                // `FS(j)` is checking-only, like `refl` and a vector literal:
+                // `FS(j)` is checking-only, like `refl` and a collection literal:
                 // it inhabits `Fin(Succ k)` for every `k`, and nothing in the
                 // term names one (§3.1). Said only where `FS` is not some
                 // other declaration's constructor and is not shadowed, so a
@@ -4987,7 +4969,7 @@ impl Elaborator {
     ///   (the shadowed reading is a `Var` and infers).
     /// - `AutoRefl` — checking-only by construction (a speculative `refl`
     ///   against the expected `Id`).
-    /// - `VecLit` — "a vector literal needs an expected type".
+    /// - `CollectionLit` — "a collection literal needs an expected container type".
     /// - a `Lam` with any unannotated binder — nothing to take the domain
     ///   from (`elab_lam_infer` requires every annotation; `elab_lam_check`
     ///   reads the domain off the expected `Π`).
@@ -5013,7 +4995,7 @@ impl Elaborator {
     /// only in checking position, as before).
     fn is_checking_only(&self, cx: &Cx, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::VecLit(_) => true,
+            ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::CollectionLit(_) => true,
             // A bare operator symbol that needs a carrier
             // (docs/bare-symbol-checking-carrier-design.md §3.2, §4.3). Same
             // sentence as the bare implicit prefix two arms down: it *can*

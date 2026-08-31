@@ -141,7 +141,7 @@ fn a_finite_manual_list_spine_recommends_list_literal_syntax_once() {
         .collect::<Vec<_>>();
     assert_eq!(list_warnings.len(), 1, "one warning for the outer spine: {warnings:?}");
     assert_eq!(list_warnings[0].lint.name(), "manual-list-construction");
-    assert!(list_warnings[0].msg.contains("write `List[…]` instead"));
+    assert!(list_warnings[0].msg.contains("write `[…]` instead"));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn recursive_list_construction_and_literal_syntax_do_not_warn() {
         inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
         fn keep<A>(x: A, tail: List<A>) -> List<A> { Cons(x, tail) }
         fn empty<A>() -> List<A> { Nil }
-        fn literal() -> List<Nat> { List[1, 2] }
+        fn literal() -> List<Nat> { [1, 2] }
     "#;
     assert!(e.check_source(src).is_empty());
     assert!(

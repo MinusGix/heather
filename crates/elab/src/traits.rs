@@ -699,7 +699,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                 .collect(),
             body: Box::new(rename_expr(m, body)),
         },
-        VecLit(es) => VecLit(es.iter().map(|x| rename_expr(m, x)).collect()),
+        CollectionLit(es) => CollectionLit(es.iter().map(|x| rename_expr(m, x)).collect()),
         Eq(a, b) => Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyLit(t) => TyLit(Box::new(rename_ty(m, t))),
         Match {

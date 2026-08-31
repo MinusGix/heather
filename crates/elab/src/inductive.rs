@@ -3512,7 +3512,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
         // A motive body in type syntax: read it as the type it is.
         ExprKind::TyLit(t) => occurs(t, name).is_some(),
-        ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
+        ExprKind::CollectionLit(es) => es.iter().any(|x| expr_mentions(x, name)),
         ExprKind::Index { recv, idx } => expr_mentions(recv, name) || expr_mentions(idx, name),
         ExprKind::Dot {
             recv, args, named, ..

@@ -1,4 +1,4 @@
-//! `List[…]` construction syntax (`issues/list-literal-syntax.md`). Literals
+//! Expected-type-directed `[…]` construction (`issues/list-literal-syntax.md`). Literals
 //! are surface sugar for the ordinary `Nil`/`Cons` declaration and add no
 //! kernel form.
 
@@ -32,35 +32,41 @@ fn elab_err(body: &str) -> (String, String) {
 fn empty_nonempty_and_trailing_comma_literals_lower_to_list_constructors() {
     elab(
         r#"
-        fn empty() -> List<Nat> { List[] }
-        fn three() -> List<Nat> { List[1, 2, 3,] }
+        fn empty() -> List<Nat> { [] }
+        fn three() -> List<Nat> { [1, 2, 3,] }
+        fn pass(xs: List<Nat>) -> List<Nat> { xs }
 
         theorem empty_lowers(): empty() = Nil { refl }
         theorem three_lowers(): three() = Cons(1, Cons(2, Cons(3, Nil))) { refl }
+        theorem argument_gets_container_context():
+            pass([4, 5]) = Cons(4, Cons(5, Nil)) { refl }
         "#,
     );
 }
 
 #[test]
-fn a_nonempty_literal_infers_its_homogeneous_element_type() {
+fn list_literals_are_checking_only_because_the_container_is_ambiguous() {
     elab(
         r#"
-        fn inferred() -> List<Nat> {
-            let xs = List[1, 2];
+        fn checked() -> List<Nat> {
+            let xs: List<Nat> = [1, 2];
             xs
         }
-        theorem inferred_lowers(): inferred() = Cons(1, Cons(2, Nil)) { refl }
+        theorem checked_lowers(): checked() = Cons(1, Cons(2, Nil)) { refl }
         "#,
     );
+
+    let (message, _) = elab_err("fn f() -> Nat { let xs = [1, 2]; 0 }");
+    assert!(message.contains("collection literal needs an expected container type"), "{message}");
 }
 
 #[test]
 fn list_and_vector_brackets_remain_distinct() {
     elab(
         r#"
-        fn list() -> List<Nat> { List[1, 2] }
+        fn list() -> List<Nat> { [1, 2] }
         fn vector() -> [Nat; 2] { [1, 2] }
-        fn spaced_index(List: [Nat; 1]) -> Nat { List [FZ] }
+        fn adjacent_index(List: [Nat; 1]) -> Nat { List[FZ] }
         theorem list_lowers(): list() = Cons(1, Cons(2, Nil)) { refl }
         "#,
     );
@@ -68,27 +74,27 @@ fn list_and_vector_brackets_remain_distinct() {
 
 #[test]
 fn empty_and_heterogeneous_literals_have_local_diagnostics() {
-    let (message, _) = elab_err("fn f() -> Nat { let xs = List[]; 0 }");
-    assert!(message.contains("cannot infer the element type of `List[]`"), "{message}");
+    let (message, _) = elab_err("fn f() -> Nat { let xs = []; 0 }");
+    assert!(message.contains("collection literal needs an expected container type"), "{message}");
 
     let (message, rendered) = elab_err(
         r#"
         inductive Bool { False, True }
-        fn f() -> List<Nat> { List[1, True, 3] }
+        fn f() -> List<Nat> { [1, True, 3] }
         "#,
     );
     assert!(message.contains("not the expected type"), "{message}");
-    assert!(rendered.contains("List[1, True, 3]"), "{rendered}");
+    assert!(rendered.contains("[1, True, 3]"), "{rendered}");
     assert!(rendered.lines().any(|line| line.contains("^^^^") && !line.contains("^^^^^^^^^^")), "the element, not the whole literal, should be highlighted: {rendered}");
 }
 
 #[test]
 fn a_list_literal_refuses_non_list_expected_types_and_nonstandard_list_shapes() {
-    let (message, _) = elab_err("fn f() -> Nat { List[1] }");
+    let (message, _) = elab_err("fn f() -> Nat { [1] }");
     assert!(message.contains("cannot construct") || message.contains("expected `List<A>`"), "{message}");
 
     let mut elaborator = Elaborator::with_prelude().expect("prelude");
-    let source = "inductive List<A> { Empty, Push(A, List<A>) } fn f() -> List<Nat> { List[1] }";
+    let source = "inductive List<A> { Empty, Push(A, List<A>) } fn f() -> List<Nat> { [1] }";
     let error = elaborator.elab_source(source).expect_err("nonstandard List must be refused");
     assert!(error.to_string().contains("needs `List<A>` with `Nil` and `Cons"), "{error}");
 }

@@ -953,7 +953,7 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         }
         ExprKind::TyApp { head, args } => { w.byte(6); put_expr(w, head); w.vec(args, put_ty); }
         ExprKind::Lam { binders, body } => { w.byte(7); w.vec(binders, put_lam_binder); put_expr(w, body); }
-        ExprKind::VecLit(values) => { w.byte(8); w.vec(values, put_expr); }
+        ExprKind::CollectionLit(values) => { w.byte(8); w.vec(values, put_expr); }
         ExprKind::Eq(lhs, rhs) => { w.byte(9); put_expr(w, lhs); put_expr(w, rhs); }
         ExprKind::TyLit(ty) => { w.byte(10); put_ty(w, ty); }
         ExprKind::Refl => w.byte(11),
@@ -1002,7 +1002,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             },
             6 => ExprKind::TyApp { head: Box::new(get_expr(r)?), args: r.vec(get_ty)? },
             7 => ExprKind::Lam { binders: r.vec(get_lam_binder)?, body: Box::new(get_expr(r)?) },
-            8 => ExprKind::VecLit(r.vec(get_expr)?),
+            8 => ExprKind::CollectionLit(r.vec(get_expr)?),
             9 => ExprKind::Eq(Box::new(get_expr(r)?), Box::new(get_expr(r)?)),
             10 => ExprKind::TyLit(Box::new(get_ty(r)?)),
             11 => ExprKind::Refl,

@@ -13,9 +13,6 @@ pub struct Span {
 pub const ANON_CTOR_ONLY: &str = "#anonymous-constructor";
 pub const ANON_CTOR_LEFT: &str = "#anonymous-left-constructor";
 pub const ANON_CTOR_RIGHT: &str = "#anonymous-right-constructor";
-/// Parser-internal call head for `List[a, b]`. The elaborator keeps the form
-/// distinct until an expected type or the first element determines `List<A>`.
-pub const LIST_LITERAL: &str = "#list-literal";
 
 impl Span {
     pub fn join(self, other: Span) -> Span {
@@ -902,10 +899,10 @@ pub enum ExprKind {
     /// `λ (x: A) (y: B) => e`, or `fun` for the ASCII spelling. Multiple
     /// binders are sugar for nesting.
     Lam { binders: Vec<LamBinder>, body: Box<Expr> },
-    /// `[a, b, c]` — a vector literal. Checking-only, like `refl`: the
-    /// expected `[T; k]` supplies both the element type and the length, and
-    /// the length must be a literal (docs/container-fields.md §2.2).
-    VecLit(Vec<Expr>),
+    /// `[a, b, c]` — an expected-type-directed collection literal.
+    /// Checking-only, like `refl`: `List<T>` lowers it through `Cons`/`Nil`,
+    /// while `[T; k]` lowers it to the primitive vector representation.
+    CollectionLit(Vec<Expr>),
     /// `a = b` — the identity type, as an **expression**. A type is an
     /// expression whose type is a universe, so with `Type<n>` writable there
     /// is no reason for the equality former to live only in `TyKind`
@@ -1029,7 +1026,7 @@ pub enum ExprKind {
     /// (docs/surface-fin-indexing-design.md §5). A **postfix** form, produced
     /// in `postfix`'s loop beside `Dot` and the call `(`, so `[1,2,3][0]` and
     /// `xs[i].foo` chain in the order written. Both prefix readings of `[` —
-    /// `[T; n]` in type position, a vector literal in expression position —
+    /// `[T; n]` in type position, a collection literal in expression position —
     /// are unaffected: `[` is disambiguated by position, never by lookahead.
     Index { recv: Box<Expr>, idx: Box<Expr> },
     /// `D { f: e, … }` or `D<T, …> { f: e, … }` — a record literal

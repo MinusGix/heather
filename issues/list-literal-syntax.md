@@ -9,9 +9,8 @@ updated: 2026-08-30
 Heather's `List<A>` values are currently written as nested constructors:
 `Cons(a, Cons(b, Cons(c, Nil)))`. This is tolerable in recursive definitions
 but actively obscures data in byte encodings, certificate rows, examples, and
-theorems. The existing `[a, b, c]` surface is a fixed-length vector literal,
-so list syntax needs an explicit design rather than silently changing that
-reading based on a late expected type.
+theorems. The existing `[a, b, c]` surface began as a fixed-length vector
+literal; this issue now makes that surface generic over the expected container.
 
 ## Acceptance
 
@@ -19,9 +18,8 @@ reading based on a late expected type.
   document how it coexists with `[T; n]` vectors and vector literals.
 - Lower list literals to ordinary `Nil`/`Cons`; the kernel and `std/list`
   acquire no literal primitive.
-- Support an open element type in checking position, an inferred homogeneous
-  element type where inference has enough information, and useful diagnostics
-  for an empty literal with no determining context.
+- Support an open element type in checking position and useful diagnostics for
+  a literal with no determining container context.
 - Decide whether a final-tail/spread form belongs in the first round. If it
   does, specify evaluation order and ensure the tail is checked as `List<A>`.
 - Preserve source spans well enough that an element error points at the
@@ -34,20 +32,23 @@ reading based on a late expected type.
 
 ## Implemented design
 
-List construction is `List[a, b, c]`; the empty list is `List[]`. `List` and
-the opening bracket are adjacent, making the form contextual and preserving a
-spaced `List [i]` as ordinary indexing. The three bracket forms stay distinct:
+Construction uses the same bracket literal for lists and vectors. The expected
+type selects the container, much as an expected numeric type selects a numeral
+interpretation:
 
-- `List[a, b]` constructs `Cons(a, Cons(b, Nil))` at `List<A>`.
-- `[a, b]` is the existing fixed-length vector literal.
+- `[a, b]` constructs `Cons(a, Cons(b, Nil))` when checked at `List<A>`.
+- `[a, b]` constructs the primitive fixed-length representation when checked
+  at `[A; 2]`.
 - `[A; n]` is the existing vector type.
 
-The literal remains a surface form until elaboration. In checking position the
-expected `List<A>` supplies the element type, including for `List[]`. In
-inference position a nonempty literal uses its first element exactly as
-ordinary `Cons` inference does; `List[]` asks for an annotation or argument
-position. Each element retains its written expression and span while the tail
-is lowered recursively, so a bad element is diagnosed locally.
+The literal is deliberately checking-only: without an expected type even a
+nonempty `[a, b]` cannot choose honestly between `List<A>` and `[A; 2]`.
+Annotations, function results, and argument domains provide that expectation,
+including for `[]`. Each element retains its written expression and span while
+a list tail is lowered recursively, so a bad element is diagnosed locally.
+
+Because `List` is no longer part of literal syntax, `xs[i]` and even a value
+named `List` indexed as `List[i]` need no whitespace exception.
 
 There is no spread/final-tail form in this round. Open-tail construction is
 precisely the case where `Cons(head, tail)` communicates the recursive intent
@@ -63,9 +64,9 @@ quiet.
 
 - **[[std-list-api]]** owns the `List<A>`, `Nil`, and `Cons` API. Assumed here:
   only that literals elaborate to those existing definitions.
-- **[[vector-types-as-expressions]]** owns vector literal/type behavior.
-  Assumed here: only that list syntax must not make its current readings
-  expected-type-dependent or ambiguous.
+- **[[vector-types-as-expressions]]** owns vector type behavior. Bracket
+  construction is now intentionally expected-type-dependent while `[A; n]`
+  remains syntactically distinct.
 - **[[x86-64-machine-model]]** is a motivating consumer, not a dependency.
 
 ## Log
@@ -76,3 +77,6 @@ quiet.
 - 2026-08-30: Implemented `List[…]`, checking and nonempty inference,
   element-local diagnostics, the concrete-spine lint, editor grammar support,
   and the motivating FunctionIR x86 construction.
+- 2026-08-30: Replaced the container-prefixed form with generic `[…]` after
+  review. List and vector literals are now selected by their expected type;
+  ambiguous inference is rejected instead of defaulting to either container.

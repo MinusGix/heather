@@ -10,7 +10,7 @@ import list;
 import logic;
 
 fn add64_x86_instructions() → List<Instruction> {
-    List[MovRR(Rax, Rdi), AddRR(Rax, Rsi)]
+    [MovRR(Rax, Rdi), AddRR(Rax, Rsi)]
 }
 
 fn add64_x86_bytes() → List<BitVec(8)> {

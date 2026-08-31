@@ -1450,7 +1450,7 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
             bound.truncate(n0);
             found
         }
-        ExprKind::VecLit(es) => es.iter().any(|a| mentions_free(a, names, bound)),
+        ExprKind::CollectionLit(es) => es.iter().any(|a| mentions_free(a, names, bound)),
         ExprKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
         ExprKind::TyLit(t) => mentions_free_ty(t, names, bound),
         ExprKind::Match {

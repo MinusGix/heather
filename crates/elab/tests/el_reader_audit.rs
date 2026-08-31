@@ -200,7 +200,7 @@ fn a_vector_literal_checks_at_a_coded_vec() {
 }
 
 // Negative control for repair 3: the length still has to match, and a
-// non-vector expected type is still not a vector.
+// non-container expected type still cannot select a collection literal.
 #[test]
 fn a_vector_literal_still_checks_its_length() {
     let m = elab_err(
@@ -219,7 +219,7 @@ fn a_vector_literal_still_checks_its_length() {
         fn bad(v: Nat) -> B(v) { Buf { n: [1, 2] } }
         "#,
     );
-    assert!(m.contains("needs a `[T; n]` expected type"), "{m}");
+    assert!(m.contains("needs an expected `List<A>` or `[T; n]` type"), "{m}");
 }
 
 // -- repair 4: the vector *receiver* readers --------------------------------

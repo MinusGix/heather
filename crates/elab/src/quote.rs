@@ -1354,7 +1354,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             }
             scan_splices(body, menv, out)
         }
-        ExprKind::VecLit(elems) => elems.iter().try_for_each(|x| scan_splices(x, menv, out)),
+        ExprKind::CollectionLit(elems) => elems.iter().try_for_each(|x| scan_splices(x, menv, out)),
         // `$xs[$i]` — both sides are ordinary expressions.
         ExprKind::Index { recv, idx } => {
             scan_splices(recv, menv, out)?;
