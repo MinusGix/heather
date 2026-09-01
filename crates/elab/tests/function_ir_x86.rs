@@ -5,7 +5,7 @@ mod support;
 
 use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
-use heather_elab::{ElabError, Elaborator, stats};
+use heather_elab::{stats, ElabError, Elaborator};
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -222,6 +222,35 @@ fn generated_commutative_right_reuse_checks() {
     }
 }
 
+#[test]
+fn generated_constant_add_dag_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let region = constant_add();
+    let raw = cert::render_region_function("constant_add_raw", &region);
+    let emission = lower::generate(
+        "constant_add_x86",
+        "constant_add_raw()",
+        &region,
+        &[Gpr::Rdi],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("lower constant/Add DAG");
+    assert_eq!(emission.lowered.instructions.len(), 2);
+    assert!(emission
+        .text
+        .contains("byte_length(): constant_add_x86_bytes().len() = 13"));
+    assert!(emission.text.contains("next_rip(next_rip(start, 10), 3)"));
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_constant_add_x86", &source) {
+        panic!(
+            "generated constant/Add artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
 fn add64() -> Region {
     Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
@@ -253,6 +282,26 @@ fn commutative_right_reuse() -> Region {
             },
         ],
         outputs: vec![Port { id: 4, width: 64 }],
+    }
+}
+
+fn constant_add() -> Region {
+    Region {
+        inputs: vec![Port { id: 0, width: 64 }],
+        nodes: vec![
+            Node::Const {
+                width: 64,
+                output: 1,
+                value: 1_u64 << 63,
+            },
+            Node::Add {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1,
+            },
+        ],
+        outputs: vec![Port { id: 2, width: 64 }],
     }
 }
 

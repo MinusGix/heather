@@ -1,5 +1,5 @@
 //! Untrusted spill-free x86 selection and register assignment for the current
-//! pure FunctionIR 64-bit binary-ALU fragment. Proof emission consumes this explicit plan;
+//! pure FunctionIR 64-bit constant/binary-ALU fragment. Proof emission consumes this explicit plan;
 //! neither the allocator nor the plan is trusted by the kernel.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +51,51 @@ impl BinaryNode {
             "{constructor}(width := {}, output := {}, left := {}, right := {})",
             self.width, self.output, self.left, self.right,
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstantNode {
+    pub width: u64,
+    pub output: u64,
+    pub value: u64,
+}
+
+impl ConstantNode {
+    fn render(self) -> String {
+        format!(
+            "Const(width := {}, output := {}, value := {})",
+            self.width, self.output, self.value,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectedNode {
+    Constant(ConstantNode),
+    Binary(BinaryNode),
+}
+
+impl SelectedNode {
+    fn render(self) -> String {
+        match self {
+            SelectedNode::Constant(node) => node.render(),
+            SelectedNode::Binary(node) => node.render(),
+        }
+    }
+
+    fn output(self) -> u64 {
+        match self {
+            SelectedNode::Constant(node) => node.output,
+            SelectedNode::Binary(node) => node.output,
+        }
+    }
+
+    fn width(self) -> u64 {
+        match self {
+            SelectedNode::Constant(node) => node.width,
+            SelectedNode::Binary(node) => node.width,
+        }
     }
 }
 
@@ -115,6 +160,7 @@ impl Gpr {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Instruction {
     MovRR { destination: Gpr, source: Gpr },
+    MovRI { destination: Gpr, immediate: u64 },
     AddRR { destination: Gpr, source: Gpr },
     SubRR { destination: Gpr, source: Gpr },
     AndRR { destination: Gpr, source: Gpr },
@@ -132,6 +178,14 @@ impl Instruction {
                 "MovRR({}, {})",
                 destination.heather_name(),
                 source.heather_name(),
+            ),
+            Instruction::MovRI {
+                destination,
+                immediate,
+            } => format!(
+                "MovRI({}, bitvec::ofNat(64, {}))",
+                destination.heather_name(),
+                immediate,
             ),
             Instruction::AddRR {
                 destination,
@@ -179,6 +233,7 @@ impl Instruction {
     pub fn destination(self) -> Gpr {
         match self {
             Instruction::MovRR { destination, .. }
+            | Instruction::MovRI { destination, .. }
             | Instruction::AddRR { destination, .. }
             | Instruction::SubRR { destination, .. }
             | Instruction::AndRR { destination, .. }
@@ -186,14 +241,21 @@ impl Instruction {
             | Instruction::XorRR { destination, .. } => destination,
         }
     }
+
+    pub fn canonical_length(self) -> usize {
+        match self {
+            Instruction::MovRI { .. } => 10,
+            _ => 3,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodePlan {
     pub node_index: usize,
-    pub node: BinaryNode,
-    pub left_register: Gpr,
-    pub right_register: Gpr,
+    pub node: SelectedNode,
+    pub left_register: Option<Gpr>,
+    pub right_register: Option<Gpr>,
     pub destination: Gpr,
     pub reused_value: Option<u64>,
     pub orientation: OperandOrientation,
@@ -201,7 +263,7 @@ pub struct NodePlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoweredBinaryDag {
+pub struct LoweredDag {
     pub input_registers: Vec<Gpr>,
     pub node_plans: Vec<NodePlan>,
     pub instructions: Vec<Instruction>,
@@ -212,7 +274,7 @@ pub struct LoweredBinaryDag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct X86Emission {
-    pub lowered: LoweredBinaryDag,
+    pub lowered: LoweredDag,
     pub text: String,
 }
 
@@ -288,15 +350,15 @@ impl fmt::Display for LoweringError {
     }
 }
 
-/// Lower one valid-looking, 64-bit, single-output binary-ALU DAG. The generated
+/// Lower one valid-looking, 64-bit, single-output constant/binary-ALU DAG. The generated
 /// certificate remains responsible for proving that this untrusted plan agrees
 /// with the actual Heather region.
-pub fn lower_binary_dag(
+pub fn lower_dag(
     region: &Region,
     input_registers: &[Gpr],
     temporary_registers: &[Gpr],
     requested_output: Gpr,
-) -> Result<LoweredBinaryDag, LoweringError> {
+) -> Result<LoweredDag, LoweringError> {
     if region.inputs.len() != input_registers.len() {
         return Err(LoweringError::InputPlacementCount {
             inputs: region.inputs.len(),
@@ -338,9 +400,10 @@ pub fn lower_binary_dag(
 
     let mut uses = BTreeMap::<u64, usize>::new();
     for (node_index, node) in region.nodes.iter().enumerate() {
-        let node = binary_node(*node, node_index)?;
-        *uses.entry(node.left).or_default() += 1;
-        *uses.entry(node.right).or_default() += 1;
+        if let SelectedNode::Binary(node) = selected_node(*node, node_index)? {
+            *uses.entry(node.left).or_default() += 1;
+            *uses.entry(node.right).or_default() += 1;
+        }
     }
     for output in &region.outputs {
         *uses.entry(output.id).or_default() += 1;
@@ -351,107 +414,149 @@ pub fn lower_binary_dag(
     let mut node_plans = Vec::with_capacity(region.nodes.len());
     let mut clobbered = BTreeSet::new();
 
-    for (node_index, &node) in region.nodes.iter().enumerate() {
-        let node = binary_node(node, node_index)?;
-        require_width(node.output, node.width)?;
-        let Some(&left_register) = placements.get(&node.left) else {
-            return Err(LoweringError::UndefinedValue(node.left));
-        };
-        let Some(&right_register) = placements.get(&node.right) else {
-            return Err(LoweringError::UndefinedValue(node.right));
-        };
-        if widths.get(&node.left) != Some(&node.width) {
-            return Err(LoweringError::UnsupportedWidth {
-                value: node.left,
-                width: *widths.get(&node.left).unwrap_or(&0),
-            });
+    for (node_index, &raw_node) in region.nodes.iter().enumerate() {
+        let selected = selected_node(raw_node, node_index)?;
+        require_width(selected.output(), selected.width())?;
+        if placements.contains_key(&selected.output()) {
+            return Err(LoweringError::DuplicateValue(selected.output()));
         }
-        if widths.get(&node.right) != Some(&node.width) {
-            return Err(LoweringError::UnsupportedWidth {
-                value: node.right,
-                width: *widths.get(&node.right).unwrap_or(&0),
-            });
-        }
-        if placements.contains_key(&node.output) {
-            return Err(LoweringError::DuplicateValue(node.output));
-        }
+        let produces_output = region.outputs[0].id == selected.output();
 
-        let left_last = last_use_in_node(&uses, node.left, node.left, node.right);
-        let right_last = last_use_in_node(&uses, node.right, node.left, node.right);
-        let left_reusable = left_last && owners.get(&left_register) == Some(&node.left);
-        let right_reusable = node.operation.commutativity_theorem().is_some()
-            && right_last
-            && owners.get(&right_register) == Some(&node.right);
-        let produces_output = region.outputs[0].id == node.output;
-
-        let (reused_value, orientation) = if produces_output
-            && right_reusable
-            && right_register == requested_output
-            && (!left_reusable || left_register != requested_output)
-        {
-            (Some(node.right), OperandOrientation::Reversed)
-        } else if left_reusable {
-            (Some(node.left), OperandOrientation::Original)
-        } else if right_reusable {
-            (Some(node.right), OperandOrientation::Reversed)
-        } else {
-            (None, OperandOrientation::Original)
-        };
-
-        let (destination, step_instructions) = match reused_value {
-            Some(_) => {
-                let (destination, source) = match orientation {
-                    OperandOrientation::Original => (left_register, right_register),
-                    OperandOrientation::Reversed => (right_register, left_register),
-                };
-                (
-                    destination,
-                    vec![binary_instruction(node.operation, destination, source)],
-                )
-            }
-            None => {
-                let Some(&destination) = temporary_registers
-                    .iter()
-                    .find(|register| !owners.contains_key(register))
-                else {
-                    return Err(LoweringError::RegisterPressure {
+        let (
+            left_register,
+            right_register,
+            destination,
+            reused_value,
+            orientation,
+            step_instructions,
+        ) = match selected {
+            SelectedNode::Constant(node) => {
+                let preferred = produces_output
+                    .then_some(requested_output)
+                    .filter(|register| !owners.contains_key(register));
+                let destination = preferred
+                    .or_else(|| {
+                        temporary_registers
+                            .iter()
+                            .copied()
+                            .find(|register| !owners.contains_key(register))
+                    })
+                    .ok_or(LoweringError::RegisterPressure {
                         node_index,
                         live_temporaries: owners.len(),
-                    });
-                };
-                owners.insert(destination, node.output);
+                    })?;
                 (
+                    None,
+                    None,
                     destination,
-                    vec![
-                        Instruction::MovRR {
+                    None,
+                    OperandOrientation::Original,
+                    vec![Instruction::MovRI {
+                        destination,
+                        immediate: node.value,
+                    }],
+                )
+            }
+            SelectedNode::Binary(node) => {
+                let Some(&left_register) = placements.get(&node.left) else {
+                    return Err(LoweringError::UndefinedValue(node.left));
+                };
+                let Some(&right_register) = placements.get(&node.right) else {
+                    return Err(LoweringError::UndefinedValue(node.right));
+                };
+                for value in [node.left, node.right] {
+                    if widths.get(&value) != Some(&node.width) {
+                        return Err(LoweringError::UnsupportedWidth {
+                            value,
+                            width: *widths.get(&value).unwrap_or(&0),
+                        });
+                    }
+                }
+
+                let left_last = last_use_in_node(&uses, node.left, node.left, node.right);
+                let right_last = last_use_in_node(&uses, node.right, node.left, node.right);
+                let left_reusable = left_last && owners.get(&left_register) == Some(&node.left);
+                let right_reusable = node.operation.commutativity_theorem().is_some()
+                    && right_last
+                    && owners.get(&right_register) == Some(&node.right);
+                let (reused_value, orientation) = if produces_output
+                    && right_reusable
+                    && right_register == requested_output
+                    && (!left_reusable || left_register != requested_output)
+                {
+                    (Some(node.right), OperandOrientation::Reversed)
+                } else if left_reusable {
+                    (Some(node.left), OperandOrientation::Original)
+                } else if right_reusable {
+                    (Some(node.right), OperandOrientation::Reversed)
+                } else {
+                    (None, OperandOrientation::Original)
+                };
+                let (destination, step_instructions) = match reused_value {
+                    Some(_) => {
+                        let (destination, source) = match orientation {
+                            OperandOrientation::Original => (left_register, right_register),
+                            OperandOrientation::Reversed => (right_register, left_register),
+                        };
+                        (
                             destination,
-                            source: left_register,
-                        },
-                        binary_instruction(node.operation, destination, right_register),
-                    ],
+                            vec![binary_instruction(node.operation, destination, source)],
+                        )
+                    }
+                    None => {
+                        let destination = temporary_registers
+                            .iter()
+                            .copied()
+                            .find(|register| !owners.contains_key(register))
+                            .ok_or(LoweringError::RegisterPressure {
+                                node_index,
+                                live_temporaries: owners.len(),
+                            })?;
+                        (
+                            destination,
+                            vec![
+                                Instruction::MovRR {
+                                    destination,
+                                    source: left_register,
+                                },
+                                binary_instruction(node.operation, destination, right_register),
+                            ],
+                        )
+                    }
+                };
+                consume_use(&mut uses, node.left)?;
+                consume_use(&mut uses, node.right)?;
+                for value in [node.left, node.right] {
+                    if uses.get(&value) == Some(&0) {
+                        if let Some(&register) = placements.get(&value) {
+                            if register != destination && owners.get(&register) == Some(&value) {
+                                owners.remove(&register);
+                            }
+                        }
+                    }
+                }
+                (
+                    Some(left_register),
+                    Some(right_register),
+                    destination,
+                    reused_value,
+                    orientation,
+                    step_instructions,
                 )
             }
         };
-
-        consume_use(&mut uses, node.left)?;
-        consume_use(&mut uses, node.right)?;
-        for value in [node.left, node.right] {
-            if uses.get(&value) == Some(&0) {
-                if let Some(&register) = placements.get(&value) {
-                    if register != destination && owners.get(&register) == Some(&value) {
-                        owners.remove(&register);
-                    }
-                }
-            }
+        if uses.get(&selected.output()).copied().unwrap_or(0) > 0 {
+            owners.insert(destination, selected.output());
+        } else {
+            owners.remove(&destination);
         }
-        owners.insert(destination, node.output);
-        placements.insert(node.output, destination);
-        widths.insert(node.output, node.width);
+        placements.insert(selected.output(), destination);
+        widths.insert(selected.output(), selected.width());
         clobbered.insert(destination);
         instructions.extend(step_instructions.iter().copied());
         node_plans.push(NodePlan {
             node_index,
-            node,
+            node: selected,
             left_register,
             right_register,
             destination,
@@ -478,7 +583,7 @@ pub fn lower_binary_dag(
         output_register = requested_output;
     }
 
-    Ok(LoweredBinaryDag {
+    Ok(LoweredDag {
         input_registers: input_registers.to_vec(),
         node_plans,
         instructions,
@@ -500,7 +605,7 @@ pub fn generate(
     temporary_registers: &[Gpr],
     requested_output: Gpr,
 ) -> Result<X86Emission, LoweringError> {
-    let lowered = lower_binary_dag(
+    let lowered = lower_dag(
         region,
         input_registers,
         temporary_registers,
@@ -531,7 +636,11 @@ pub fn generate(
          \x20   canonical_block_decodes({instructions_name}(), start)\n\
          }}\n\n",
         render_instruction_cons(prefix, &lowered.instructions, 0),
-        lowered.instructions.len() * 3,
+        lowered
+            .instructions
+            .iter()
+            .map(|instruction| instruction.canonical_length())
+            .sum::<usize>(),
     );
 
     text.push_str(&format!(
@@ -540,7 +649,7 @@ pub fn generate(
     for (index, instruction) in lowered.instructions.iter().copied().enumerate() {
         text.push_str(&format!(
             "fn {prefix}_state_{}<M>(before: MachineState<M>) → MachineState<M> {{\n\
-             \x20   execute_normal(decoded_rr({}), {prefix}_state_{index}(before))\n\
+             \x20   execute_normal(decoded_canonical({}), {prefix}_state_{index}(before))\n\
              }}\n",
             index + 1,
             instruction.render(),
@@ -605,7 +714,7 @@ pub fn generate(
          theorem {prefix}_advances_rip<M>(before: MachineState<M>):\n\
          \x20   {after_name}(before).rip = {prefix}_final_rip(before.rip)\n\
          {{ refl }}\n\n",
-        render_final_rip("start", lowered.instructions.len()),
+        render_final_rip("start", &lowered.instructions),
     ));
 
     let protected_arms = render_protected_arms(&lowered.clobbered);
@@ -788,7 +897,7 @@ fn emit_graph_stages(prefix: &str, plans: &[NodePlan], text: &mut String) {
 fn emit_placement_proofs(
     prefix: &str,
     region: &Region,
-    lowered: &LoweredBinaryDag,
+    lowered: &LoweredDag,
     parameters: &str,
     arguments: &str,
     text: &mut String,
@@ -796,9 +905,10 @@ fn emit_placement_proofs(
     let mut frame_facts = BTreeSet::new();
     let mut remaining = BTreeMap::<u64, usize>::new();
     for plan in &lowered.node_plans {
-        let node = plan.node;
-        *remaining.entry(node.left).or_default() += 1;
-        *remaining.entry(node.right).or_default() += 1;
+        if let SelectedNode::Binary(node) = plan.node {
+            *remaining.entry(node.left).or_default() += 1;
+            *remaining.entry(node.right).or_default() += 1;
+        }
     }
     for output in &region.outputs {
         *remaining.entry(output.id).or_default() += 1;
@@ -827,49 +937,71 @@ fn emit_placement_proofs(
         let before_index = instruction_index;
         instruction_index += plan.instructions.len();
         let after_index = instruction_index;
-        let (&left_register, left_stored_proof) = live
-            .get(&plan.node.left)
-            .map(|(register, proof)| (register, proof))
-            .expect("validated left placement");
-        let (&right_register, right_stored_proof) = live
-            .get(&plan.node.right)
-            .map(|(register, proof)| (register, proof))
-            .expect("validated right placement");
-        let left_proof = placement_at_state(
-            prefix,
-            plan.node.left,
-            left_register,
-            before_index,
-            left_stored_proof,
-            &input_indices,
-        );
-        let right_proof = placement_at_state(
-            prefix,
-            plan.node.right,
-            right_register,
-            before_index,
-            right_stored_proof,
-            &input_indices,
-        );
         let equation = format!(
             "{prefix}_graph_{}(values, before, context).left",
             plan.node_index,
         );
         let output_name = format!(
             "{prefix}_value_{}_after_node_{}",
-            plan.node.output, plan.node_index
+            plan.node.output(),
+            plan.node_index
         );
         for (offset, instruction) in plan.instructions.iter().copied().enumerate() {
             emit_step_result_fact(prefix, before_index + offset, instruction, text);
         }
-        let (binary_before_index, binary_left_register, binary_left_proof, binary_right_proof) =
-            if plan.instructions.len() == 2 {
-                let move_after_index = before_index + 1;
-                let moved_name = format!(
-                    "{prefix}_value_{}_moved_for_node_{}",
-                    plan.node.left, plan.node_index,
-                );
+        match plan.node {
+            SelectedNode::Constant(node) => {
+                debug_assert_eq!(plan.instructions.len(), 1);
                 text.push_str(&format!(
+                    "theorem {output_name}<M>({parameters}):\n\
+                     \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
+                     {{\n\
+                     \x20   trans({equation}, sym({prefix}_step_{before_index}_result(\n\
+                     \x20       {prefix}_state_{before_index}(before)))\n\
+                     }}\n",
+                    node.output,
+                    plan.destination.heather_name(),
+                ));
+            }
+            SelectedNode::Binary(node) => {
+                let plan_left_register = plan.left_register.expect("binary left register");
+                let plan_right_register = plan.right_register.expect("binary right register");
+                let (&left_register, left_stored_proof) = live
+                    .get(&node.left)
+                    .map(|(register, proof)| (register, proof))
+                    .expect("validated left placement");
+                let (&right_register, right_stored_proof) = live
+                    .get(&node.right)
+                    .map(|(register, proof)| (register, proof))
+                    .expect("validated right placement");
+                let left_proof = placement_at_state(
+                    prefix,
+                    node.left,
+                    left_register,
+                    before_index,
+                    left_stored_proof,
+                    &input_indices,
+                );
+                let right_proof = placement_at_state(
+                    prefix,
+                    node.right,
+                    right_register,
+                    before_index,
+                    right_stored_proof,
+                    &input_indices,
+                );
+                let (
+                    binary_before_index,
+                    binary_left_register,
+                    binary_left_proof,
+                    binary_right_proof,
+                ) = if plan.instructions.len() == 2 {
+                    let move_after_index = before_index + 1;
+                    let moved_name = format!(
+                        "{prefix}_value_{}_moved_for_node_{}",
+                        node.left, plan.node_index,
+                    );
+                    text.push_str(&format!(
                     "theorem {moved_name}<M>({parameters}):\n\
                      \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
                      {{\n\
@@ -879,35 +1011,35 @@ fn emit_placement_proofs(
                      \x20       {prefix}_step_{before_index}_result(\n\
                      \x20           {prefix}_state_{before_index}(before)))\n\
                      }}\n",
-                    plan.node.left,
+                    node.left,
                     plan.destination.heather_name(),
-                    plan.node.left,
-                    plan.left_register.heather_name(),
+                    node.left,
+                    plan_left_register.heather_name(),
                     plan.destination.heather_name(),
                 ));
-                let right_after_move = if input_indices.contains_key(&plan.node.right) {
-                    placement_at_state(
-                        prefix,
-                        plan.node.right,
-                        plan.right_register,
-                        move_after_index,
-                        right_stored_proof,
-                        &input_indices,
-                    )
-                } else {
-                    let right_name = format!(
-                        "{prefix}_value_{}_before_add_node_{}",
-                        plan.node.right, plan.node_index,
-                    );
-                    let right_frame = emit_step_frame_fact(
-                        prefix,
-                        before_index,
-                        plan.instructions[0],
-                        plan.right_register,
-                        &mut frame_facts,
-                        text,
-                    );
-                    text.push_str(&format!(
+                    let right_after_move = if input_indices.contains_key(&node.right) {
+                        placement_at_state(
+                            prefix,
+                            node.right,
+                            plan_right_register,
+                            move_after_index,
+                            right_stored_proof,
+                            &input_indices,
+                        )
+                    } else {
+                        let right_name = format!(
+                            "{prefix}_value_{}_before_add_node_{}",
+                            node.right, plan.node_index,
+                        );
+                        let right_frame = emit_step_frame_fact(
+                            prefix,
+                            before_index,
+                            plan.instructions[0],
+                            plan_right_register,
+                            &mut frame_facts,
+                            text,
+                        );
+                        text.push_str(&format!(
                         "theorem {right_name}<M>({parameters}):\n\
                          \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
                          {{\n\
@@ -916,79 +1048,84 @@ fn emit_placement_proofs(
                          \x20       {prefix}_state_{move_after_index}(before), {right_proof},\n\
                          \x20       {right_frame}({prefix}_state_{before_index}(before)))\n\
                          }}\n",
-                        plan.node.right,
-                        plan.right_register.heather_name(),
-                        plan.node.right,
-                        plan.right_register.heather_name(),
+                        node.right,
+                        plan_right_register.heather_name(),
+                        node.right,
+                        plan_right_register.heather_name(),
                     ));
-                    format!("{right_name}({arguments})")
+                        format!("{right_name}({arguments})")
+                    };
+                    (
+                        move_after_index,
+                        plan.destination,
+                        format!("{moved_name}({arguments})"),
+                        right_after_move,
+                    )
+                } else {
+                    debug_assert_eq!(plan.instructions.len(), 1);
+                    (
+                        before_index,
+                        plan_left_register,
+                        left_proof.clone(),
+                        right_proof.clone(),
+                    )
                 };
-                (
-                    move_after_index,
-                    plan.destination,
-                    format!("{moved_name}({arguments})"),
-                    right_after_move,
-                )
-            } else {
-                debug_assert_eq!(plan.instructions.len(), 1);
-                (
-                    before_index,
-                    plan.left_register,
-                    left_proof.clone(),
-                    right_proof.clone(),
-                )
-            };
-        let (machine_left_value, machine_right_value, placement_equation) = match plan.orientation {
-            OperandOrientation::Original => (plan.node.left, plan.node.right, equation.clone()),
-            OperandOrientation::Reversed => {
-                let commuted_name = format!("{prefix}_node_{}_commuted_equation", plan.node_index,);
-                text.push_str(&format!(
-                    "theorem {commuted_name}<M>({parameters}):\n\
+                let (machine_left_value, machine_right_value, placement_equation) =
+                    match plan.orientation {
+                        OperandOrientation::Original => (node.left, node.right, equation.clone()),
+                        OperandOrientation::Reversed => {
+                            let commuted_name =
+                                format!("{prefix}_node_{}_commuted_equation", plan.node_index,);
+                            text.push_str(&format!(
+                                "theorem {commuted_name}<M>({parameters}):\n\
                      \x20   values(64, {}) = {}(64, values(64, {}), values(64, {}))\n\
                      {{\n\
                      \x20   trans({equation}, {}(64, values(64, {}), values(64, {})))\n\
                      }}\n",
-                    plan.node.output,
-                    plan.node.operation.semantic_function(),
-                    plan.node.right,
-                    plan.node.left,
-                    plan.node
-                        .operation
-                        .commutativity_theorem()
-                        .expect("only commutative operations reverse"),
-                    plan.node.left,
-                    plan.node.right,
-                ));
-                (
-                    plan.node.right,
-                    plan.node.left,
-                    format!("{commuted_name}({arguments})"),
-                )
-            }
-        };
-        let placement_head = format!(
-            "placed_after_binary(values, {}, {}, {}, {}(64, ·, ·)",
-            plan.node.output,
-            machine_left_value,
-            machine_right_value,
-            plan.node.operation.semantic_function(),
-        );
-        let (binary_left_register, binary_right_register, binary_left_proof, binary_right_proof) =
-            match plan.orientation {
-                OperandOrientation::Original => (
+                                node.output,
+                                node.operation.semantic_function(),
+                                node.right,
+                                node.left,
+                                node.operation
+                                    .commutativity_theorem()
+                                    .expect("only commutative operations reverse"),
+                                node.left,
+                                node.right,
+                            ));
+                            (
+                                node.right,
+                                node.left,
+                                format!("{commuted_name}({arguments})"),
+                            )
+                        }
+                    };
+                let placement_head = format!(
+                    "placed_after_binary(values, {}, {}, {}, {}(64, ·, ·)",
+                    node.output,
+                    machine_left_value,
+                    machine_right_value,
+                    node.operation.semantic_function(),
+                );
+                let (
                     binary_left_register,
-                    plan.right_register,
+                    binary_right_register,
                     binary_left_proof,
                     binary_right_proof,
-                ),
-                OperandOrientation::Reversed => (
-                    plan.right_register,
-                    binary_left_register,
-                    binary_right_proof,
-                    binary_left_proof,
-                ),
-            };
-        text.push_str(&format!(
+                ) = match plan.orientation {
+                    OperandOrientation::Original => (
+                        binary_left_register,
+                        plan_right_register,
+                        binary_left_proof,
+                        binary_right_proof,
+                    ),
+                    OperandOrientation::Reversed => (
+                        plan_right_register,
+                        binary_left_register,
+                        binary_right_proof,
+                        binary_left_proof,
+                    ),
+                };
+                text.push_str(&format!(
             "theorem {output_name}<M>({parameters}):\n\
              \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
              {{\n\
@@ -998,15 +1135,17 @@ fn emit_placement_proofs(
              \x20       {prefix}_step_{binary_before_index}_result(\n\
              \x20           {prefix}_state_{binary_before_index}(before)))\n\
              }}\n",
-            plan.node.output,
+            node.output,
             plan.destination.heather_name(),
             binary_left_register.heather_name(),
             binary_right_register.heather_name(),
             plan.destination.heather_name(),
         ));
 
-        consume_known_use(&mut remaining, plan.node.left);
-        consume_known_use(&mut remaining, plan.node.right);
+                consume_known_use(&mut remaining, node.left);
+                consume_known_use(&mut remaining, node.right);
+            }
+        }
         let mut next_live = BTreeMap::new();
         for (&value, &(register, ref proof)) in &live {
             if remaining.get(&value).copied().unwrap_or(0) == 0 {
@@ -1049,9 +1188,9 @@ fn emit_placement_proofs(
             }
             next_live.insert(value, (register, frame_proof));
         }
-        if remaining.get(&plan.node.output).copied().unwrap_or(0) > 0 {
+        if remaining.get(&plan.node.output()).copied().unwrap_or(0) > 0 {
             next_live.insert(
-                plan.node.output,
+                plan.node.output(),
                 (plan.destination, format!("{output_name}({arguments})")),
             );
         }
@@ -1128,6 +1267,10 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
             destination,
             format!("read_gpr({}, state.gprs)", source.heather_name()),
         ),
+        Instruction::MovRI {
+            destination,
+            immediate,
+        } => (destination, format!("bitvec::ofNat(64, {immediate})")),
         Instruction::AddRR {
             destination,
             source,
@@ -1151,7 +1294,7 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
     };
     text.push_str(&format!(
         "theorem {prefix}_step_{step}_result<M>(state: MachineState<M>):\n\
-         \x20   read_gpr({}, execute_normal(decoded_rr({}), state).gprs) =\n\
+         \x20   read_gpr({}, execute_normal(decoded_canonical({}), state).gprs) =\n\
          \x20       {operation}\n\
          {{ refl }}\n",
         destination.heather_name(),
@@ -1188,7 +1331,7 @@ fn emit_step_frame_fact(
     if emitted.insert((step, register)) {
         text.push_str(&format!(
             "theorem {name}<M>(state: MachineState<M>):\n\
-             \x20   read_gpr({}, execute_normal(decoded_rr({}), state).gprs) =\n\
+             \x20   read_gpr({}, execute_normal(decoded_canonical({}), state).gprs) =\n\
              \x20       read_gpr({}, state.gprs)\n\
              {{ refl }}\n",
             register.heather_name(),
@@ -1199,8 +1342,12 @@ fn emit_step_frame_fact(
     name
 }
 
-fn render_final_rip(start: &str, instruction_count: usize) -> String {
-    (0..instruction_count).fold(start.to_string(), |rip, _| format!("next_rip({rip}, 3)"))
+fn render_final_rip(start: &str, instructions: &[Instruction]) -> String {
+    instructions
+        .iter()
+        .fold(start.to_string(), |rip, instruction| {
+            format!("next_rip({rip}, {})", instruction.canonical_length())
+        })
 }
 
 fn render_protected_arms(clobbered: &BTreeSet<Gpr>) -> String {
@@ -1226,68 +1373,77 @@ fn render_preservation_arms(clobbered: &BTreeSet<Gpr>) -> String {
     arms.join("\n")
 }
 
-fn binary_node(node: Node, node_index: usize) -> Result<BinaryNode, LoweringError> {
+fn selected_node(node: Node, node_index: usize) -> Result<SelectedNode, LoweringError> {
     match node {
+        Node::Const {
+            width,
+            output,
+            value,
+        } => Ok(SelectedNode::Constant(ConstantNode {
+            width,
+            output,
+            value,
+        })),
         Node::Add {
             width,
             output,
             left,
             right,
-        } => Ok(BinaryNode {
+        } => Ok(SelectedNode::Binary(BinaryNode {
             operation: BinaryOperation::Add,
             width,
             output,
             left,
             right,
-        }),
+        })),
         Node::Sub {
             width,
             output,
             left,
             right,
-        } => Ok(BinaryNode {
+        } => Ok(SelectedNode::Binary(BinaryNode {
             operation: BinaryOperation::Sub,
             width,
             output,
             left,
             right,
-        }),
+        })),
         Node::BitAnd {
             width,
             output,
             left,
             right,
-        } => Ok(BinaryNode {
+        } => Ok(SelectedNode::Binary(BinaryNode {
             operation: BinaryOperation::BitAnd,
             width,
             output,
             left,
             right,
-        }),
+        })),
         Node::BitOr {
             width,
             output,
             left,
             right,
-        } => Ok(BinaryNode {
+        } => Ok(SelectedNode::Binary(BinaryNode {
             operation: BinaryOperation::BitOr,
             width,
             output,
             left,
             right,
-        }),
+        })),
         Node::BitXor {
             width,
             output,
             left,
             right,
-        } => Ok(BinaryNode {
+        } => Ok(SelectedNode::Binary(BinaryNode {
             operation: BinaryOperation::BitXor,
             width,
             output,
             left,
             right,
-        }),
+        })),
         _ => Err(LoweringError::UnsupportedOperation { node_index }),
     }
 }
@@ -1400,7 +1556,7 @@ mod tests {
             outputs: vec![Port { id: 2, width: 64 }],
         };
         let lowered =
-            lower_binary_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(
             lowered.instructions,
             vec![
@@ -1417,12 +1573,59 @@ mod tests {
     }
 
     #[test]
+    fn constant_and_add_use_real_lengths_and_one_temporary() {
+        let region = Region {
+            inputs: vec![Port { id: 0, width: 64 }],
+            nodes: vec![
+                Node::Const {
+                    width: 64,
+                    output: 1,
+                    value: u64::MAX,
+                },
+                Node::Add {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1,
+                },
+            ],
+            outputs: vec![Port { id: 2, width: 64 }],
+        };
+        let lowered = lower_dag(&region, &[Gpr::Rdi], &[Gpr::Rax], Gpr::Rax).unwrap();
+        assert_eq!(
+            lowered.instructions,
+            vec![
+                Instruction::MovRI {
+                    destination: Gpr::Rax,
+                    immediate: u64::MAX,
+                },
+                Instruction::AddRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::Rdi,
+                },
+            ]
+        );
+        assert_eq!(
+            lowered
+                .instructions
+                .iter()
+                .map(|instruction| instruction.canonical_length())
+                .sum::<usize>(),
+            13,
+        );
+        assert_eq!(
+            render_final_rip("start", &lowered.instructions),
+            "next_rip(next_rip(start, 10), 3)"
+        );
+    }
+
+    #[test]
     fn sum4_reuses_the_operand_already_in_the_requested_output_register() {
         let inputs = [Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx];
         let temporaries = [Gpr::Rax, Gpr::R8];
         for left_first in [true, false] {
             let lowered =
-                lower_binary_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
+                lower_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
             let plan = &lowered.node_plans[2];
             assert_eq!(plan.reused_value, Some(if left_first { 4 } else { 5 }));
             assert_eq!(
@@ -1466,18 +1669,16 @@ mod tests {
             width: 64,
         });
         let lowered =
-            lower_binary_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(lowered.instructions.len(), 101);
-        assert!(
-            lowered.node_plans[1..]
-                .iter()
-                .all(|step| step.reused_value.is_some())
-        );
+        assert!(lowered.node_plans[1..]
+            .iter()
+            .all(|step| step.reused_value.is_some()));
     }
 
     #[test]
     fn independent_live_results_report_register_pressure() {
-        let error = lower_binary_dag(
+        let error = lower_dag(
             &sum4(true),
             &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx],
             &[Gpr::Rax],
@@ -1539,7 +1740,7 @@ mod tests {
         ];
         for final_node in final_nodes {
             let region = right_temporary_region(final_node);
-            let lowered = lower_binary_dag(
+            let lowered = lower_dag(
                 &region,
                 &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
                 &[Gpr::Rax],
@@ -1564,7 +1765,7 @@ mod tests {
             left: 0,
             right: 3,
         });
-        let error = lower_binary_dag(
+        let error = lower_dag(
             &region,
             &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
             &[Gpr::Rax],
