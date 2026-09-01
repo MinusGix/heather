@@ -835,6 +835,7 @@ pub fn generate_prefixed_conditional(
     public_parameters.push(format!(
         "graph: StructuredRegionHolds(values, {structured_region_expr})",
     ));
+    let public_parameters_rendered = public_parameters.join(",\n    ");
     let prefix_arguments = if prefix_arguments.is_empty() {
         String::new()
     } else {
@@ -959,6 +960,118 @@ pub fn generate_prefixed_conditional(
         condition_register.heather_name(),
         condition_register.heather_name(),
     ));
+    if continuation_emission
+        .lowered
+        .when_true
+        .instructions
+        .iter()
+        .copied()
+        .all(|instruction| render_gpr_only_step(instruction).is_some())
+        && continuation_emission
+            .lowered
+            .when_false
+            .instructions
+            .iter()
+            .copied()
+            .all(|instruction| render_gpr_only_step(instruction).is_some())
+    {
+        text.push_str(&format!(
+            "\n\ntheorem {linked_name}_condition_placed<M>({public_parameters_rendered}):\n\
+             \x20   BitValuePlaced(values, {condition}, {},\n\
+             \x20     linked_prefix_after({linked_name}_block(), before))\n\
+             {{\n\
+             \x20   sym({prefix_name}_refines_function_ir(\n\
+             \x20     values, before{prefix_arguments}, graph.left))\n\
+             }}\n\n\
+             theorem {linked_name}_test_selects<M>({public_parameters_rendered}):\n\
+             \x20   linked_test_after({linked_name}_block(), before).flags.zf =\n\
+             \x20     zero_test_selector(bitvec::head_bit(0, values(1, {condition})))\n\
+             {{\n\
+             \x20   linked_test_bit_value_placed_zf(values, {condition},\n\
+             \x20     {linked_name}_block(), before,\n\
+             \x20     {linked_name}_condition_placed(\n\
+             \x20       values, before{prefix_arguments}, graph))\n\
+             }}\n\n\
+             theorem {linked_name}_condition_matches<M>({public_parameters_rendered}):\n\
+             \x20   machine_condition({}, {prefix_name}_after(before)) =\n\
+             \x20     bitvec::head_bit(0, values(1, {condition}))\n\
+             {{\n\
+             \x20   bit_value_placed_condition(values, {condition}, {},\n\
+             \x20     {prefix_name}_after(before),\n\
+             \x20     sym({prefix_name}_refines_function_ir(\n\
+             \x20       values, before{prefix_arguments}, graph.left)))\n\
+             }}\n\n\
+             theorem {linked_name}_false_path_agrees<M>(before: MachineState<M>):\n\
+             \x20   read_gpr({}, linked_false_after(\n\
+             \x20       {linked_name}_block(), before).gprs) = read_gpr({},\n\
+             \x20       {false_name}_after({prefix_name}_after(before)).gprs)\n\
+             {{\n\
+             \x20   cong_fn<Gprs, BitVec(64)>(\n\
+             \x20     read_gpr({}, ·),\n\
+             \x20     {false_name}_gprs_congruent(\n\
+             \x20       linked_branch_after({linked_name}_block(), before),\n\
+             \x20       {prefix_name}_after(before),\n\
+             \x20       linked_branch_preserves_prefix_gprs(\n\
+             \x20         {linked_name}_block(), before)))\n\
+             }}\n\n\
+             theorem {linked_name}_true_path_agrees<M>(before: MachineState<M>):\n\
+             \x20   read_gpr({}, linked_true_jump_after(\n\
+             \x20       {linked_name}_block(), before).gprs) = read_gpr({},\n\
+             \x20       {true_name}_after({prefix_name}_after(before)).gprs)\n\
+             {{\n\
+             \x20   cong_fn<Gprs, BitVec(64)>(read_gpr({}, ·), trans(\n\
+             \x20     execute_short_control_preserves_gprs(Jump(\n\
+             \x20       {linked_name}_block().join_displacement),\n\
+             \x20       linked_true_after({linked_name}_block(), before)),\n\
+             \x20     {true_name}_gprs_congruent(\n\
+             \x20       linked_branch_after({linked_name}_block(), before),\n\
+             \x20       {prefix_name}_after(before),\n\
+             \x20       linked_branch_preserves_prefix_gprs(\n\
+             \x20         {linked_name}_block(), before))))\n\
+             }}\n\n\
+             theorem {linked_name}_agrees_with_structured<M>({public_parameters_rendered}):\n\
+             \x20   read_gpr({}, linked_conditional_after(\n\
+             \x20       {linked_name}_block(), before).gprs) =\n\
+             \x20     read_gpr({}, {after_name}(before).gprs)\n\
+             {{\n\
+             \x20   linked_conditional_read_agrees(\n\
+             \x20     bitvec::head_bit(0, values(1, {condition})), {},\n\
+             \x20     {linked_name}_block(), before, {continuation_control}(),\n\
+             \x20     {prefix_name}_after(before),\n\
+             \x20     {true_name}_after({prefix_name}_after(before)),\n\
+             \x20     {false_name}_after({prefix_name}_after(before)),\n\
+             \x20     {linked_name}_test_selects(\n\
+             \x20       values, before{prefix_arguments}, graph),\n\
+             \x20     {linked_name}_condition_matches(\n\
+             \x20       values, before{prefix_arguments}, graph),\n\
+             \x20     {linked_name}_false_path_agrees(before),\n\
+             \x20     {linked_name}_true_path_agrees(before))\n\
+             }}\n\n\
+             theorem {linked_name}_refines_function_ir<M>({public_parameters_rendered}):\n\
+             \x20   read_gpr({}, linked_conditional_after(\n\
+             \x20       {linked_name}_block(), before).gprs) = values(64, {})\n\
+             {{\n\
+             \x20   trans({linked_name}_agrees_with_structured(\n\
+             \x20       values, before{prefix_arguments}, graph),\n\
+             \x20     {prefix}_refines_function_ir(\n\
+             \x20       values, before{prefix_arguments}, graph))\n\
+             }}\n",
+            condition_register.heather_name(),
+            condition_register.heather_name(),
+            condition_register.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            requested_output.heather_name(),
+            outputs[0].id,
+        ));
+    }
     Ok(PrefixedConditionalX86Emission {
         prefix: prefix_emission.lowered,
         continuation: continuation_emission.lowered,
@@ -1382,6 +1495,10 @@ pub fn generate(
         lowered.instructions.len(),
     ));
 
+    if let Some(congruence) = render_gpr_congruence(prefix, &lowered.instructions) {
+        text.push_str(&congruence);
+    }
+
     emit_execution_stages(prefix, &lowered.instructions, &mut text);
     text.push_str(&format!(
         "theorem {prefix}_block_is_allowed<M>(before: MachineState<M>):\n\
@@ -1550,6 +1667,96 @@ fn render_instruction_cons(prefix: &str, instructions: &[Instruction], index: us
         instructions[index].render(),
         index + 1,
     )
+}
+
+fn render_gpr_only_step(instruction: Instruction) -> Option<String> {
+    match instruction {
+        Instruction::MovRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_mov_rr({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::MovRI {
+            destination,
+            immediate,
+        } => Some(format!(
+            "gpr_only_mov_ri({}, bitvec::ofNat(64, {}))",
+            destination.heather_name(),
+            immediate,
+        )),
+        Instruction::AddRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_add({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::SubRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_sub({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::AndRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_and({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::OrRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_or({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::XorRR {
+            destination,
+            source,
+        } => Some(format!(
+            "gpr_only_xor({}, {})",
+            destination.heather_name(),
+            source.heather_name(),
+        )),
+        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
+            None
+        }
+    }
+}
+
+fn render_gpr_congruence(prefix: &str, instructions: &[Instruction]) -> Option<String> {
+    let effects = instructions
+        .iter()
+        .copied()
+        .map(render_gpr_only_step)
+        .collect::<Option<Vec<_>>>()?;
+    let proof = instructions
+        .iter()
+        .zip(effects)
+        .enumerate()
+        .fold("same".to_string(), |same, (index, (instruction, effect))| {
+            format!(
+                "execute_normal_gprs_congruent({},\n            {prefix}_state_{index}(left), {prefix}_state_{index}(right),\n            {effect}, {same})",
+                instruction.render(),
+            )
+        });
+    Some(format!(
+        "theorem {prefix}_gprs_congruent<M>(left, right: MachineState<M>,\n\
+         \x20   same: left.gprs = right.gprs):\n\
+         \x20   {prefix}_after(left).gprs = {prefix}_after(right).gprs\n\
+         {{\n\
+         \x20   {proof}\n\
+         }}\n\n"
+    ))
 }
 
 fn instruction_suffix_name(prefix: &str, index: usize) -> String {

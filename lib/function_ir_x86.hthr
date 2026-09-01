@@ -38,6 +38,17 @@ fn add64_x86_after<M>(before: MachineState<M>) → MachineState<M> {
     add64_x86_state_2(before)
 }
 
+theorem add64_x86_gprs_congruent<M>(left, right: MachineState<M>,
+    same: left.gprs = right.gprs):
+    add64_x86_after(left).gprs = add64_x86_after(right).gprs
+{
+    execute_normal_gprs_congruent(AddRR(Rax, Rsi),
+            add64_x86_state_1(left), add64_x86_state_1(right),
+            gpr_only_add(Rax, Rsi), execute_normal_gprs_congruent(MovRR(Rax, Rdi),
+            add64_x86_state_0(left), add64_x86_state_0(right),
+            gpr_only_mov_rr(Rax, Rdi), same))
+}
+
 theorem add64_x86_execute_from_2<M>(before: MachineState<M>):
     ExecuteBlock(add64_x86_instructions_2(),
         add64_x86_state_2(before), add64_x86_state_2(before))
@@ -214,6 +225,23 @@ fn sum4_x86_state_5<M>(before: MachineState<M>) → MachineState<M> {
 }
 fn sum4_x86_after<M>(before: MachineState<M>) → MachineState<M> {
     sum4_x86_state_5(before)
+}
+
+theorem sum4_x86_gprs_congruent<M>(left, right: MachineState<M>,
+    same: left.gprs = right.gprs):
+    sum4_x86_after(left).gprs = sum4_x86_after(right).gprs
+{
+    execute_normal_gprs_congruent(AddRR(Rax, R8),
+            sum4_x86_state_4(left), sum4_x86_state_4(right),
+            gpr_only_add(Rax, R8), execute_normal_gprs_congruent(AddRR(R8, Rcx),
+            sum4_x86_state_3(left), sum4_x86_state_3(right),
+            gpr_only_add(R8, Rcx), execute_normal_gprs_congruent(MovRR(R8, Rdx),
+            sum4_x86_state_2(left), sum4_x86_state_2(right),
+            gpr_only_mov_rr(R8, Rdx), execute_normal_gprs_congruent(AddRR(Rax, Rsi),
+            sum4_x86_state_1(left), sum4_x86_state_1(right),
+            gpr_only_add(Rax, Rsi), execute_normal_gprs_congruent(MovRR(Rax, Rdi),
+            sum4_x86_state_0(left), sum4_x86_state_0(right),
+            gpr_only_mov_rr(Rax, Rdi), same)))))
 }
 
 theorem sum4_x86_execute_from_5<M>(before: MachineState<M>):

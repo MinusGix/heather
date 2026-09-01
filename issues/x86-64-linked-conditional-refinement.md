@@ -17,25 +17,29 @@ its entry state has different flags and RIP from the abstract leaf entry while
 retaining the same GPRs and memory. Direct generated proofs either exhausted
 kernel fuel or exposed this non-definitional state equality.
 
+## Progress (2026-09-01)
+
+The result-refinement half is complete. `GprOnlyStep` gives Mov/constant/ALU
+instructions a small certificate that their GPR effect ignores incoming flags,
+RIP, and memory. The generator composes those certificates over each concrete
+leaf, TEST/JZ/JMP frame facts transport the common input GPR file, and
+`linked_conditional_read_agrees` relates the machine selector to the FunctionIR
+Boolean. The emitted `*_linked_refines_function_ir` theorem now proves the
+actual linked machine result.
+
+This representation was chosen after measuring and rejecting a generic
+instruction case split in the base x86 module: that version raised the x86
+rail from about 29 seconds to 80–90 seconds. Per-step certificates keep the
+base rail near 29 seconds and the focused linked artifact near its previous
+166 seconds.
+
+The issue stays open only for the physical join-RIP theorem.
+
 ## Direction
 
-- Define an instruction/block effect summary stating which state components a
-  leaf reads and writes; the first useful class is GPR ALU code independent of
-  incoming flags, RIP, and memory.
-- Prove execution congruence under equality of the components actually read.
-- Use TEST/JZ/JMP frame facts to establish that congruence at both leaf entries
-  and that the unconditional jump preserves the yielded GPR result.
-- Compose the resulting linked-to-abstract observation theorem with the
-  existing abstract FunctionIR refinement.
 - Separately connect signed rel8 distance facts to bitvector RIP equality and
   prove both paths finish at `linked_join_start`.
 
 ## Acceptance
 
-- Both selector values execute the intended leaf and produce the FunctionIR
-  output in the declared result register.
 - Both paths reach the same proved physical join RIP.
-- GPR and memory frame claims are explicit; undefined TEST AF does not affect
-  branch selection or result correctness.
-- The proof checks under ordinary fuel and scales with named block facts rather
-  than expanding the complete linked artifact in one motive.

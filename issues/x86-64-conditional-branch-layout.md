@@ -34,8 +34,8 @@ displacements for the current Add/Sub example, a 35-byte linked sequence,
 checked per-component decoding, forward-distance/no-truncation layout facts,
 canonical control execution, and generator rejection above `i8::MAX`.
 
-The issue remains open because the final two acceptance obligations are not
-yet discharged: both path RIPs must be equated to the declared physical join,
-and the linked execution result must be related to the already-proved abstract
-FunctionIR conditional. The focused proof design is tracked separately in
-[[x86-64-linked-conditional-refinement]].
+The linked execution result is now related to the already-proved abstract
+FunctionIR conditional through compositional per-instruction GPR effects. The
+issue remains open for the final physical-layout obligation: both path RIPs
+must be equated to the declared common join. The focused proof design is
+tracked separately in [[x86-64-linked-conditional-refinement]].

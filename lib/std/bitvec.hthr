@@ -822,6 +822,12 @@ theorem cons_head_tail(n: Nat, x: BitVec(Succ(n))):
         λ i => match i { FZ => refl, FS(j) => refl })
 }
 
+theorem one_bit_eq_ofBool(x: BitVec(1)):
+    x = ofBool(head_bit(0, x))
+{
+    sym(cons_head_tail(0, x))
+}
+
 theorem iterate_increment_toNat_cons(n: Nat, bit: Bool, x: BitVec(n),
         tail_law: iterate_increment(n, zero(n), toNat(n, x)) = x):
         iterate_increment(Succ(n), zero(Succ(n)),

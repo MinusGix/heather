@@ -778,13 +778,22 @@ bytes; its checked layout computes forward displacements +8 and +6 from the
 canonical leaf lengths and rejects distances beyond signed rel8.
 
 Decode and canonical deterministic control execution are checked for the
-whole linked object. The remaining proof boundary is intentionally explicit:
-the linked path changes flags and RIP before entering a leaf, whereas the
-abstract conditional enters that leaf directly. Add/Sub observe the same GPRs,
-but a reusable control-insensitivity/frame theorem is needed to connect those
-states without asking conversion to normalize the entire generated artifact.
-Final taken/untaken RIP equality and the linked-result refinement are tracked
-by [[x86-64-linked-conditional-refinement]]. This keeps physical layout out of
+whole linked object. The linked path changes flags and RIP before entering a
+leaf, whereas the abstract conditional enters that leaf directly. Generated
+ALU blocks now carry composable `GprOnlyStep` certificates: each supported
+instruction proves with a tiny local fact that its GPR result depends only on
+incoming GPRs, and the generator chains those facts over the scheduled block.
+TEST and short control preserve the GPR file, so both linked leaves agree with
+their abstract counterparts. A Boolean observation theorem then relates the
+real TEST/JZ choice to the FunctionIR bit and composes the concrete linked
+result with the existing structured refinement.
+
+The effect certificate deliberately lives in `function_ir_x86_support`, not
+the base x86 model: moving a generic instruction case split into the base made
+the x86 rail grow from roughly 29 to 90 seconds, while generated per-step facts
+restore the base cost and leave the 35-byte linked certificate essentially
+unchanged. Final taken/untaken RIP equality remains tracked by
+[[x86-64-linked-conditional-refinement]]. This keeps physical layout out of
 semantic region validity while preserving the abstract refinement as the
 reference specification.
 

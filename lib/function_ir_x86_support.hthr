@@ -28,6 +28,251 @@ fn BitValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
         read_gpr(register, state.gprs)
 }
 
+fn zero_test_selector(bit: Bool) → Bool { bool::not(bit) }
+
+record GprOnlyStep<M>(instruction: Instruction) {
+    run: Gprs → Gprs,
+    correct: (state: MachineState<M>) →
+        execute_normal(decoded_canonical(instruction), state).gprs =
+            run(state.gprs),
+}
+
+fn gpr_only_mov_rr<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(MovRR(destination, source))
+{
+    GprOnlyStep(
+        run := λ before => write_gpr(destination,
+            read_gpr(source, before), before),
+        correct := λ state => refl)
+}
+
+fn gpr_only_mov_ri<M>(destination: Gpr, immediate: BitVec(64)) →
+    GprOnlyStep<M>(MovRI(destination, immediate))
+{
+    GprOnlyStep(
+        run := λ before => write_gpr(destination, immediate, before),
+        correct := λ state => refl)
+}
+
+fn gpr_only_add<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(AddRR(destination, source))
+{
+    GprOnlyStep(run := λ before => execute_add(destination, source, before).gprs,
+        correct := λ state => refl)
+}
+
+fn gpr_only_sub<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(SubRR(destination, source))
+{
+    GprOnlyStep(run := λ before => execute_sub(destination, source, before).gprs,
+        correct := λ state => refl)
+}
+
+fn gpr_only_and<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(AndRR(destination, source))
+{
+    GprOnlyStep(run := λ before => execute_and(destination, source, before).gprs,
+        correct := λ state => refl)
+}
+
+fn gpr_only_or<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(OrRR(destination, source))
+{
+    GprOnlyStep(run := λ before => execute_or(destination, source, before).gprs,
+        correct := λ state => refl)
+}
+
+fn gpr_only_xor<M>(destination, source: Gpr) →
+    GprOnlyStep<M>(XorRR(destination, source))
+{
+    GprOnlyStep(run := λ before => execute_xor(destination, source, before).gprs,
+        correct := λ state => refl)
+}
+
+theorem execute_normal_gprs_congruent<M>(instruction: Instruction,
+    left, right: MachineState<M>, effect: GprOnlyStep<M>(instruction),
+    same: left.gprs = right.gprs):
+    execute_normal(decoded_canonical(instruction), left).gprs =
+        execute_normal(decoded_canonical(instruction), right).gprs
+{
+    trans(effect.correct(left),
+        trans(cong_fn<Gprs, Gprs>(effect.run, same),
+            sym(effect.correct(right))))
+}
+
+theorem test_zero_extended_bool(bit: Bool):
+    test_flags(bitvec::zero_extend(1, 63, bitvec::ofBool(bit)),
+        bitvec::zero_extend(1, 63, bitvec::ofBool(bit)), False).zf =
+        bool::not(bit)
+{
+    match bit { False => refl, True => refl }
+}
+
+theorem test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
+    register: Gpr, state: MachineState<M>,
+    placed: BitValuePlaced(values, id, register, state)):
+    test_flags(read_gpr(register, state.gprs),
+        read_gpr(register, state.gprs), False).zf =
+        zero_test_selector(bitvec::head_bit(0, values(1, id)))
+{
+    j(placed,
+        λ actual _ => test_flags(actual, actual, False).zf =
+            bool::not(bitvec::head_bit(0, values(1, id))),
+        j(bitvec::one_bit_eq_ofBool(values(1, id)),
+            λ actual _ => test_flags(bitvec::zero_extend(1, 63, actual),
+                bitvec::zero_extend(1, 63, actual), False).zf =
+                bool::not(bitvec::head_bit(0, values(1, id))),
+            test_zero_extended_bool(bitvec::head_bit(0, values(1, id)))))
+}
+
+theorem linked_test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
+    block: LinkedConditionalBlock, before: MachineState<M>,
+    placed: BitValuePlaced(values, id, block.test_register,
+        linked_prefix_after(block, before))):
+    linked_test_after(block, before).flags.zf =
+        zero_test_selector(bitvec::head_bit(0, values(1, id)))
+{
+    test_bit_value_placed_zf(values, id, block.test_register,
+        linked_prefix_after(block, before), placed)
+}
+
+theorem select_zero_test<A>(selected, tested: Bool,
+    when_true, when_false: A, p: tested = zero_test_selector(selected)):
+    (match tested { False => when_true, True => when_false }) =
+        match selected { False => when_false, True => when_true }
+{
+    j(sym(p),
+        λ actual _ => (match actual {
+            False => when_true, True => when_false,
+        }) = match selected { False => when_false, True => when_true },
+        match selected as λ actual => (match zero_test_selector(actual) {
+            False => when_true, True => when_false,
+        }) = match actual { False => when_false, True => when_true }
+        { False => refl, True => refl })
+}
+
+theorem select_equal<A>(selected, tested: Bool,
+    when_false, when_true: A, p: tested = selected):
+    (match tested { False => when_false, True => when_true }) =
+        match selected { False => when_false, True => when_true }
+{
+    j(sym(p),
+        λ actual _ => (match actual {
+            False => when_false, True => when_true,
+        }) = match selected { False => when_false, True => when_true },
+        match selected as λ actual => (match actual {
+            False => when_false, True => when_true,
+        }) = match actual { False => when_false, True => when_true }
+        { False => refl, True => refl })
+}
+
+fn linked_conditional_read<M>(register: Gpr, block: LinkedConditionalBlock,
+    before: MachineState<M>) → BitVec(64)
+{
+    match linked_test_after(block, before).flags.zf {
+        False => read_gpr(register, linked_true_jump_after(block, before).gprs),
+        True => read_gpr(register, linked_false_after(block, before).gprs),
+    }
+}
+
+theorem linked_conditional_read_after<M>(register: Gpr,
+    block: LinkedConditionalBlock, before: MachineState<M>):
+    read_gpr(register, linked_conditional_after(block, before).gprs) =
+        linked_conditional_read(register, block, before)
+{
+    match linked_test_after(block, before).flags.zf as
+        λ selected => read_gpr(register, (match selected {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }).gprs) = match selected {
+            False => read_gpr(register,
+                linked_true_jump_after(block, before).gprs),
+            True => read_gpr(register,
+                linked_false_after(block, before).gprs),
+        }
+    { False => refl, True => refl }
+}
+
+fn conditional_block_read<M>(register: Gpr, block: ConditionalBlock,
+    before, when_true, when_false: MachineState<M>) → BitVec(64)
+{
+    match machine_condition(block.condition_register, before) {
+        False => read_gpr(register, when_false.gprs),
+        True => read_gpr(register, when_true.gprs),
+    }
+}
+
+theorem conditional_block_read_after<M>(register: Gpr, block: ConditionalBlock,
+    before, when_true, when_false: MachineState<M>):
+    read_gpr(register, conditional_block_after(block, before,
+        when_true, when_false).gprs) =
+    conditional_block_read(register, block, before, when_true, when_false)
+{
+    match machine_condition(block.condition_register, before) as
+        λ selected => read_gpr(register,
+            selected_block_after(selected, when_true, when_false).gprs) =
+        match selected {
+            False => read_gpr(register, when_false.gprs),
+            True => read_gpr(register, when_true.gprs),
+        }
+    { False => refl, True => refl }
+}
+
+theorem linked_conditional_read_agrees<M>(selected: Bool, register: Gpr,
+    linked: LinkedConditionalBlock, linked_before: MachineState<M>,
+    abstract: ConditionalBlock, abstract_before,
+    when_true, when_false: MachineState<M>,
+    linked_choice: linked_test_after(linked, linked_before).flags.zf =
+        zero_test_selector(selected),
+    abstract_choice: machine_condition(abstract.condition_register,
+        abstract_before) = selected,
+    false_agrees: read_gpr(register,
+        linked_false_after(linked, linked_before).gprs) =
+        read_gpr(register, when_false.gprs),
+    true_agrees: read_gpr(register,
+        linked_true_jump_after(linked, linked_before).gprs) =
+        read_gpr(register, when_true.gprs)):
+    read_gpr(register, linked_conditional_after(linked, linked_before).gprs) =
+        read_gpr(register, conditional_block_after(abstract, abstract_before,
+            when_true, when_false).gprs)
+{
+    calc {
+        read_gpr(register, linked_conditional_after(linked, linked_before).gprs)
+            = linked_conditional_read(register, linked, linked_before) :=
+                linked_conditional_read_after(register, linked, linked_before),
+            = match selected {
+                False => read_gpr(register, when_false.gprs),
+                True => read_gpr(register, when_true.gprs),
+            } := trans(
+                select_zero_test(selected,
+                    linked_test_after(linked, linked_before).flags.zf,
+                    read_gpr(register,
+                        linked_true_jump_after(linked, linked_before).gprs),
+                    read_gpr(register,
+                        linked_false_after(linked, linked_before).gprs),
+                    linked_choice),
+                match selected as λ actual => (match actual {
+                    False => read_gpr(register,
+                        linked_false_after(linked, linked_before).gprs),
+                    True => read_gpr(register,
+                        linked_true_jump_after(linked, linked_before).gprs),
+                }) = match actual {
+                    False => read_gpr(register, when_false.gprs),
+                    True => read_gpr(register, when_true.gprs),
+                } { False => false_agrees, True => true_agrees }),
+            = conditional_block_read(register, abstract, abstract_before,
+                when_true, when_false) := sym(select_equal(selected,
+                    machine_condition(abstract.condition_register,
+                        abstract_before),
+                    read_gpr(register, when_false.gprs),
+                    read_gpr(register, when_true.gprs), abstract_choice)),
+            = read_gpr(register, conditional_block_after(abstract,
+                abstract_before, when_true, when_false).gprs) :=
+                sym(conditional_block_read_after(register, abstract,
+                    abstract_before, when_true, when_false)),
+    }
+}
+
 theorem bit_value_placed_condition<M>(values: Valuation(), id: Nat,
     register: Gpr, state: MachineState<M>,
     placed: BitValuePlaced(values, id, register, state)):

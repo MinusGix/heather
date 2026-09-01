@@ -363,18 +363,22 @@ fn with_rip<M>(state: MachineState<M>, rip: BitVec(64)) → MachineState<M> {
         memory := state.memory)
 }
 
-fn execute_short_control<M>(control: ShortControl,
-    before: MachineState<M>) → MachineState<M>
+fn short_control_rip<M>(control: ShortControl,
+    before: MachineState<M>) → BitVec(64)
 {
     match control {
         JumpZero(displacement) => match before.flags.zf {
-            False => with_rip(before, next_rip(before.rip, 2)),
-            True => with_rip(before,
-                short_branch_target(before.rip, displacement)),
+            False => next_rip(before.rip, 2),
+            True => short_branch_target(before.rip, displacement),
         },
-        Jump(displacement) => with_rip(before,
-            short_branch_target(before.rip, displacement)),
+        Jump(displacement) => short_branch_target(before.rip, displacement),
     }
+}
+
+fn execute_short_control<M>(control: ShortControl,
+    before: MachineState<M>) → MachineState<M>
+{
+    with_rip(before, short_control_rip(control, before))
 }
 
 fn ExecuteShortControl<M>(control: ShortControl,
@@ -386,6 +390,13 @@ fn ExecuteShortControl<M>(control: ShortControl,
 theorem canonical_short_control_executes<M>(control: ShortControl,
     before: MachineState<M>): ExecuteShortControl(control, before,
         execute_short_control(control, before))
+{
+    refl
+}
+
+theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
+    before: MachineState<M>):
+    execute_short_control(control, before).gprs = before.gprs
 {
     refl
 }
@@ -507,6 +518,14 @@ fn linked_branch_after<M>(block: LinkedConditionalBlock,
 {
     execute_short_control(JumpZero(block.false_displacement),
         linked_test_after(block, before))
+}
+
+theorem linked_branch_preserves_prefix_gprs<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>):
+    linked_branch_after(block, before).gprs =
+        linked_prefix_after(block, before).gprs
+{
+    refl
 }
 
 fn linked_true_after<M>(block: LinkedConditionalBlock,

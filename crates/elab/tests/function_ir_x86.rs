@@ -451,6 +451,8 @@ fn generated_comparison_prefixed_conditional_checks() {
     assert!(emission.text.contains("LinkedConditionalLayout"));
     assert!(emission.text.contains("ExecuteLinkedConditionalBlock"));
     assert!(emission.text.contains("_linked_bytes().len() = 35"));
+    assert!(emission.text.contains("_gprs_congruent"));
+    assert!(emission.text.contains("_linked_refines_function_ir"));
     assert!(emission.text.contains("graph.left"));
     assert!(emission.text.contains("graph.right"));
     let raw = format!(
