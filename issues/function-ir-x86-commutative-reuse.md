@@ -1,6 +1,6 @@
 ---
 title: Reuse either operand for commutative FunctionIR x86 operations
-status: open
+status: closed
 labels: [compiler,function-ir,x86,optimization,register-allocation]
 created: 2026-09-01
 updated: 2026-09-01
@@ -48,7 +48,7 @@ machine-order placement theorem. Sub remains ordered, and deterministic choice
 prefers the requested output register when both operands are reusable.
 
 The checked library gained structural `band_comm`, `bor_comm`, and `bxor_comm`
-laws. Add remains intentionally disabled until [[bitvec-add-commutativity]]
-supplies the corresponding checked arithmetic theorem; its current
-repeated-increment definition makes that a substantive prerequisite rather
-than a safe compiler assertion.
+laws. [[bitvec-add-commutativity]] now supplies the corresponding checked
+arithmetic theorem, so Add follows the same explicit proof-producing reversal
+path. Unit controls cover all four commutative operations and ordered Sub; the
+generated one-temporary Add DAG kernel-checks end to end.

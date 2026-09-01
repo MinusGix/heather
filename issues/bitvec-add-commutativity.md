@@ -1,6 +1,6 @@
 ---
 title: Prove commutativity and foundational algebra for BitVec addition
-status: open
+status: closed
 labels: [stdlib,bitvec,proofs,arithmetic,compiler]
 created: 2026-09-01
 updated: 2026-09-01
@@ -42,3 +42,14 @@ support optimization proofs such as reassociation and constant folding.
 ## What it assumes from elsewhere
 
 - **[[fixed-width-bitvectors]]** owns the BitVec semantic surface.
+
+## Resolution, 2026-09-01
+
+`bitvec::add_comm` is now proved generically without changing `bitvec::add` or
+`add_sub_cancel`. The proof shows that Nat-indexed repeated increment composes,
+connects doubled counts to the little-endian tail, proves every vector is zero
+incremented `toNat(vector)` times, and then applies `nat::add_comm`.
+
+The open-width suite and explicit widths 0, 1, and 64 pass, including carry-out
+and unequal-high-bit controls. The FunctionIR x86 selector consumes this
+checked theorem for reversed destructive Add selection.

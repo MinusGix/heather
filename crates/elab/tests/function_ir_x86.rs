@@ -245,7 +245,7 @@ fn commutative_right_reuse() -> Region {
                 left: 1,
                 right: 2,
             },
-            Node::BitOr {
+            Node::Add {
                 width: 64,
                 output: 4,
                 left: 0,

@@ -29,7 +29,7 @@ impl BinaryOperation {
 
     fn commutativity_theorem(self) -> Option<&'static str> {
         match self {
-            BinaryOperation::Add => None,
+            BinaryOperation::Add => Some("bitvec::add_comm"),
             BinaryOperation::Sub => None,
             BinaryOperation::BitAnd => Some("bitvec::band_comm"),
             BinaryOperation::BitOr => Some("bitvec::bor_comm"),
@@ -1417,32 +1417,30 @@ mod tests {
     }
 
     #[test]
-    fn sum4_reuses_left_operands_and_moves_only_when_the_schedule_requires_it() {
+    fn sum4_reuses_the_operand_already_in_the_requested_output_register() {
         let inputs = [Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx];
         let temporaries = [Gpr::Rax, Gpr::R8];
         for left_first in [true, false] {
             let lowered =
                 lower_binary_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
-            assert_eq!(lowered.node_plans[2].reused_value, Some(4));
-            if left_first {
-                assert_eq!(lowered.instructions.len(), 5);
-                assert_eq!(
-                    lowered.instructions.last(),
-                    Some(&Instruction::AddRR {
-                        destination: Gpr::Rax,
-                        source: Gpr::R8,
-                    })
-                );
-            } else {
-                assert_eq!(lowered.instructions.len(), 6);
-                assert_eq!(
-                    lowered.instructions.last(),
-                    Some(&Instruction::MovRR {
-                        destination: Gpr::Rax,
-                        source: Gpr::R8,
-                    })
-                );
-            }
+            let plan = &lowered.node_plans[2];
+            assert_eq!(plan.reused_value, Some(if left_first { 4 } else { 5 }));
+            assert_eq!(
+                plan.orientation,
+                if left_first {
+                    OperandOrientation::Original
+                } else {
+                    OperandOrientation::Reversed
+                }
+            );
+            assert_eq!(lowered.instructions.len(), 5);
+            assert_eq!(
+                lowered.instructions.last(),
+                Some(&Instruction::AddRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::R8,
+                })
+            );
         }
     }
 
@@ -1514,6 +1512,12 @@ mod tests {
     #[test]
     fn dying_right_operand_is_reused_for_each_proven_commutative_operation() {
         let final_nodes = [
+            Node::Add {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 3,
+            },
             Node::BitAnd {
                 width: 64,
                 output: 4,
