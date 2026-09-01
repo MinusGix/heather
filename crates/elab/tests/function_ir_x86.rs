@@ -443,6 +443,14 @@ fn generated_comparison_prefixed_conditional_checks() {
     .expect("lower comparison-prefixed conditional");
     assert!(emission.text.contains("SetBelow(Dl)"));
     assert!(emission.text.contains("PrefixedConditionalBlock"));
+    assert!(emission.text.contains("LinkedConditionalBlock"));
+    assert!(emission.text.contains("linked_conditional_bytes"));
+    assert!(emission.text.contains("bitvec::ofNat(8, 8)"));
+    assert!(emission.text.contains("bitvec::ofNat(8, 6)"));
+    assert!(emission.text.contains("LinkedConditionalDecodes"));
+    assert!(emission.text.contains("LinkedConditionalLayout"));
+    assert!(emission.text.contains("ExecuteLinkedConditionalBlock"));
+    assert!(emission.text.contains("_linked_bytes().len() = 35"));
     assert!(emission.text.contains("graph.left"));
     assert!(emission.text.contains("graph.right"));
     let raw = format!(

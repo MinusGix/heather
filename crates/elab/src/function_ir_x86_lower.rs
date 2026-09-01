@@ -416,6 +416,9 @@ pub enum LoweringError {
     UnsupportedStructuredRegion,
     MissingConditionPlacement(u64),
     UnsupportedSequenceInterface,
+    ShortBranchOutOfRange {
+        bytes: usize,
+    },
 }
 
 impl fmt::Display for LoweringError {
@@ -479,6 +482,10 @@ impl fmt::Display for LoweringError {
             LoweringError::UnsupportedSequenceInterface => write!(
                 f,
                 "the first prefixed conditional lowering requires one one-bit prefix output and branch arguments inherited from prefix inputs",
+            ),
+            LoweringError::ShortBranchOutOfRange { bytes } => write!(
+                f,
+                "linked conditional needs a {bytes}-byte forward displacement, beyond rel8 range",
             ),
         }
     }
@@ -785,6 +792,27 @@ pub fn generate_prefixed_conditional(
         branch_temporary_registers,
         requested_output,
     )?;
+    let true_bytes = continuation_emission
+        .lowered
+        .when_true
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>();
+    let false_bytes = continuation_emission
+        .lowered
+        .when_false
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>();
+    let false_displacement = true_bytes + 2;
+    let join_displacement = false_bytes;
+    for bytes in [false_displacement, join_displacement] {
+        if bytes > i8::MAX as usize {
+            return Err(LoweringError::ShortBranchOutOfRange { bytes });
+        }
+    }
     let input_indices = prefix_region
         .inputs
         .iter()
@@ -834,6 +862,20 @@ pub fn generate_prefixed_conditional(
     let after_name = format!("{prefix}_after");
     let continuation_control = format!("{continuation_name}_control");
     let continuation_after = format!("{continuation_name}_after");
+    let linked_name = format!("{prefix}_linked");
+    let true_name = format!("{continuation_name}_true");
+    let false_name = format!("{continuation_name}_false");
+    let linked_byte_length = prefix_emission
+        .lowered
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>()
+        + 3
+        + 2
+        + true_bytes
+        + 2
+        + false_bytes;
     let mut text = prefix_emission.text;
     text.push('\n');
     text.push_str(&continuation_emission.text);
@@ -863,10 +905,59 @@ pub fn generate_prefixed_conditional(
          \x20       {prefix_name}_after(before){carried_arguments},\n\
          \x20       sym({prefix_name}_refines_function_ir(\n\
          \x20           values, before{prefix_arguments}, graph.left)), graph.right)\n\
-         }}\n",
+         }}\n\n\
+         fn {linked_name}_block() → LinkedConditionalBlock {{\n\
+         \x20   LinkedConditionalBlock(\n\
+         \x20       prefix := {prefix_name}_instructions(),\n\
+         \x20       test_register := {},\n\
+         \x20       false_displacement := bitvec::ofNat(8, {false_displacement}),\n\
+         \x20       when_true := {true_name}_instructions(),\n\
+         \x20       join_displacement := bitvec::ofNat(8, {join_displacement}),\n\
+         \x20       when_false := {false_name}_instructions())\n\
+         }}\n\n\
+         fn {linked_name}_bytes() → List<BitVec(8)> {{\n\
+         \x20   linked_conditional_bytes({linked_name}_block())\n\
+         }}\n\n\
+         theorem {linked_name}_byte_length():\n\
+         \x20   {linked_name}_bytes().len() = {linked_byte_length}\n\
+         {{ refl }}\n\n\
+         theorem {linked_name}_decodes(start: BitVec(64)):\n\
+         \x20   LinkedConditionalDecodes({linked_name}_block(), start)\n\
+         {{\n\
+         \x20   LinkedConditionalDecodes(\n\
+         \x20     prefix_decoding := canonical_block_decodes(\n\
+         \x20       {prefix_name}_instructions(), start),\n\
+         \x20     test_decoding := canonical_encoding_decodes(\n\
+         \x20       linked_test_start({linked_name}_block(), start), TestRR({}, {})),\n\
+         \x20     branch_decoding := decode_short_control_complete(JumpZero(\n\
+         \x20           bitvec::ofNat(8, {false_displacement}))),\n\
+         \x20     true_decoding := canonical_block_decodes({true_name}_instructions(),\n\
+         \x20           linked_true_start({linked_name}_block(), start)),\n\
+         \x20     join_decoding := decode_short_control_complete(Jump(\n\
+         \x20             bitvec::ofNat(8, {join_displacement}))),\n\
+         \x20     false_decoding := canonical_block_decodes(\n\
+         \x20       {false_name}_instructions(),\n\
+         \x20       linked_false_start({linked_name}_block(), start)))\n\
+         }}\n\n\
+         theorem {linked_name}_layout():\n\
+         \x20   LinkedConditionalLayout({linked_name}_block())\n\
+         {{\n\
+         \x20   LinkedConditionalLayout(\n\
+         \x20     false_forward := refl,\n\
+         \x20     false_distance := refl,\n\
+         \x20     join_forward := refl,\n\
+         \x20     join_distance := refl)\n\
+         }}\n\n\
+         theorem {linked_name}_executes<M>(before: MachineState<M>):\n\
+         \x20   ExecuteLinkedConditionalBlock({linked_name}_block(), before,\n\
+         \x20       linked_conditional_after({linked_name}_block(), before))\n\
+         {{ canonical_linked_conditional_executes({linked_name}_block(), before) }}\n",
         public_parameters.join(",\n    "),
         requested_output.heather_name(),
         outputs[0].id,
+        condition_register.heather_name(),
+        condition_register.heather_name(),
+        condition_register.heather_name(),
     ));
     Ok(PrefixedConditionalX86Emission {
         prefix: prefix_emission.lowered,

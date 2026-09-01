@@ -1886,7 +1886,11 @@ theorem canonical_bytes_length(instruction: Instruction):
 }
 
 fn next_rip(current: BitVec(64), length: Nat) → BitVec(64) {
-    bitvec::add(64, current, ofNat(64, length))
+    // Decoded instruction lengths are bounded by 15. Advancing by structural
+    // iteration is exactly modular addition at width 64, while preserving the
+    // composition shape needed by block-layout proofs instead of rebuilding a
+    // binary literal and asking conversion to rediscover that shape.
+    bitvec::iterate_increment(64, current, length)
 }
 
 fn xor_bits(n: Nat) → BitVec(n) → Bool {

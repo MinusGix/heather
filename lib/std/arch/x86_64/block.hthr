@@ -7,6 +7,8 @@ import bitvec;
 import bool;
 import list;
 import logic;
+import nat;
+import option;
 import relation;
 
 fn canonical_block_bytes(instructions: List<Instruction>) → List<BitVec(8)> {
@@ -227,4 +229,326 @@ theorem execute_prefixed_conditional<M>(block: PrefixedConditionalBlock,
     ExecutePrefixedConditionalBlock(block, before, after)
 {
     Exists(middle, ⟨prefix, continuation⟩)
+}
+
+// Canonical short control transfers used by the first physically linked
+// conditional layout. Keeping terminators distinct from straight-line
+// `Instruction` lists prevents ExecuteBlock from pretending that execution
+// continues linearly after a taken jump.
+inductive ShortControl {
+    JumpZero(displacement: BitVec(8)),
+    Jump(displacement: BitVec(8)),
+}
+
+fn short_control_bytes(control: ShortControl) → List<BitVec(8)> {
+    match control {
+        JumpZero(displacement) => [bitvec::ofNat(8, 116), displacement],
+        Jump(displacement) => [bitvec::ofNat(8, 235), displacement],
+    }
+}
+
+record ShortControlDecode(bytes: List<BitVec(8)>) {
+    control: ShortControl,
+    decoding: bytes = short_control_bytes(control),
+}
+
+fn decode_short_control(bytes: List<BitVec(8)>) →
+    Option<ShortControlDecode(bytes)>
+{
+    match bytes as λ actual => Option<ShortControlDecode(actual)> {
+        Nil => None,
+        Cons(opcode, tail1) => match tail1 as λ rest =>
+                Option<ShortControlDecode(Cons(opcode, rest))> {
+            Nil => None,
+            Cons(displacement, tail2) => match tail2 as λ rest =>
+                    Option<ShortControlDecode(
+                        Cons(opcode, Cons(displacement, rest)))> {
+                Cons(_, _) => None,
+                Nil => match bitvec::eq_dec(8, opcode, bitvec::ofNat(8, 116)) {
+                    Inl(opcode_exact) => Some(ShortControlDecode(
+                        control := JumpZero(displacement),
+                        decoding := cong_fn(
+                            λ found => [found, displacement], opcode_exact))),
+                    Inr(_) => match bitvec::eq_dec(8, opcode,
+                            bitvec::ofNat(8, 235)) {
+                        Inl(opcode_exact) => Some(ShortControlDecode(
+                            control := Jump(displacement),
+                            decoding := cong_fn(
+                                λ found => [found, displacement], opcode_exact))),
+                        Inr(_) => None,
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn erase_short_control_decode(bytes: List<BitVec(8)>,
+    decoded: Option<ShortControlDecode(bytes)>) → Option<ShortControl>
+{
+    match decoded { None => None, Some(result) => Some(result.control) }
+}
+
+theorem decode_short_control_complete(control: ShortControl):
+    erase_short_control_decode(short_control_bytes(control),
+        decode_short_control(short_control_bytes(control))) = Some(control)
+{
+    match control { JumpZero(_) => refl, Jump(_) => refl }
+}
+
+theorem decode_short_control_rejects_empty():
+    erase_short_control_decode([], decode_short_control([])) = None
+{ refl }
+
+theorem decode_short_control_rejects_truncated():
+    erase_short_control_decode([bitvec::ofNat(8, 116)],
+        decode_short_control([bitvec::ofNat(8, 116)])) = None
+{ refl }
+
+theorem decode_short_control_rejects_trailing():
+    erase_short_control_decode(
+        [bitvec::ofNat(8, 116), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0)],
+        decode_short_control(
+            [bitvec::ofNat(8, 116), bitvec::ofNat(8, 0),
+                bitvec::ofNat(8, 0)])) = None
+{ refl }
+
+theorem decode_short_control_rejects_unknown_opcode():
+    erase_short_control_decode([bitvec::ofNat(8, 117), bitvec::ofNat(8, 0)],
+        decode_short_control(
+            [bitvec::ofNat(8, 117), bitvec::ofNat(8, 0)])) = None
+{ refl }
+
+fn short_branch_target(start: BitVec(64), displacement: BitVec(8)) →
+    BitVec(64)
+{
+    bitvec::add(64, next_rip(start, 2),
+        bitvec::sign_extend(7, 56, displacement))
+}
+
+theorem short_branch_target_8(start: BitVec(64)):
+    short_branch_target(start, bitvec::ofNat(8, 8)) =
+        bitvec::iterate_increment(64, next_rip(start, 2), 8)
+{
+    refl
+}
+
+theorem short_branch_target_6(start: BitVec(64)):
+    short_branch_target(start, bitvec::ofNat(8, 6)) =
+        bitvec::iterate_increment(64, next_rip(start, 2), 6)
+{
+    refl
+}
+
+theorem advance_3_3(x: BitVec(64)):
+    bitvec::iterate_increment(64,
+        bitvec::iterate_increment(64, x, 3), 3) =
+    bitvec::iterate_increment(64, x, 6)
+{
+    bitvec::iterate_increment_compose(64, x, 3, 3)
+}
+
+theorem advance_3_3_2(x: BitVec(64)):
+    bitvec::iterate_increment(64,
+        bitvec::iterate_increment(64,
+            bitvec::iterate_increment(64, x, 3), 3), 2) =
+    bitvec::iterate_increment(64, x, 8)
+{
+    trans(bitvec::cong_iterate_increment(64, 2, advance_3_3(x)),
+        bitvec::iterate_increment_compose(64, x, 6, 2))
+}
+
+fn with_rip<M>(state: MachineState<M>, rip: BitVec(64)) → MachineState<M> {
+    MachineState(gprs := state.gprs, flags := state.flags, rip := rip,
+        memory := state.memory)
+}
+
+fn execute_short_control<M>(control: ShortControl,
+    before: MachineState<M>) → MachineState<M>
+{
+    match control {
+        JumpZero(displacement) => match before.flags.zf {
+            False => with_rip(before, next_rip(before.rip, 2)),
+            True => with_rip(before,
+                short_branch_target(before.rip, displacement)),
+        },
+        Jump(displacement) => with_rip(before,
+            short_branch_target(before.rip, displacement)),
+    }
+}
+
+fn ExecuteShortControl<M>(control: ShortControl,
+    before, after: MachineState<M>) → Type
+{
+    after = execute_short_control(control, before)
+}
+
+theorem canonical_short_control_executes<M>(control: ShortControl,
+    before: MachineState<M>): ExecuteShortControl(control, before,
+        execute_short_control(control, before))
+{
+    refl
+}
+
+fn after_canonical_block(start: BitVec(64),
+    instructions: List<Instruction>) → BitVec(64)
+{
+    list::foldl(instructions,
+        λ rip instruction => next_rip(rip, canonical_length(instruction)), start)
+}
+
+record LinkedConditionalBlock {
+    prefix: List<Instruction>,
+    test_register: Gpr,
+    false_displacement: BitVec(8),
+    when_true: List<Instruction>,
+    join_displacement: BitVec(8),
+    when_false: List<Instruction>,
+}
+
+fn linked_conditional_bytes(block: LinkedConditionalBlock) → List<BitVec(8)> {
+    canonical_block_bytes(block.prefix) ++
+    canonical_bytes(TestRR(block.test_register, block.test_register)) ++
+    short_control_bytes(JumpZero(block.false_displacement)) ++
+    canonical_block_bytes(block.when_true) ++
+    short_control_bytes(Jump(block.join_displacement)) ++
+    canonical_block_bytes(block.when_false)
+}
+
+fn linked_test_start(block: LinkedConditionalBlock, start: BitVec(64)) →
+    BitVec(64)
+{
+    after_canonical_block(start, block.prefix)
+}
+
+fn linked_branch_start(block: LinkedConditionalBlock, start: BitVec(64)) →
+    BitVec(64)
+{
+    next_rip(linked_test_start(block, start), 3)
+}
+
+fn linked_true_start(block: LinkedConditionalBlock, start: BitVec(64)) →
+    BitVec(64)
+{
+    next_rip(linked_branch_start(block, start), 2)
+}
+
+fn linked_join_jump_start(block: LinkedConditionalBlock,
+    start: BitVec(64)) → BitVec(64)
+{
+    after_canonical_block(linked_true_start(block, start), block.when_true)
+}
+
+fn linked_false_start(block: LinkedConditionalBlock, start: BitVec(64)) →
+    BitVec(64)
+{
+    next_rip(linked_join_jump_start(block, start), 2)
+}
+
+fn linked_join_start(block: LinkedConditionalBlock, start: BitVec(64)) →
+    BitVec(64)
+{
+    after_canonical_block(linked_false_start(block, start), block.when_false)
+}
+
+record LinkedConditionalLayout(block: LinkedConditionalBlock)
+{
+    false_forward: byte_bit7(block.false_displacement) = False,
+    false_distance: bitvec::toNat(8, block.false_displacement) =
+        canonical_block_bytes(block.when_true).len() + 2,
+    join_forward: byte_bit7(block.join_displacement) = False,
+    join_distance: bitvec::toNat(8, block.join_displacement) =
+        canonical_block_bytes(block.when_false).len(),
+}
+
+fn ShortControlDecodes(control: ShortControl) → Type {
+    erase_short_control_decode(short_control_bytes(control),
+        decode_short_control(short_control_bytes(control))) = Some(control)
+}
+
+record LinkedConditionalDecodes(block: LinkedConditionalBlock,
+    start: BitVec(64))
+{
+    prefix_decoding: CanonicalBlockDecodes(block.prefix, start),
+    test_decoding: DecodedAt(encoded_at(linked_test_start(block, start),
+        TestRR(block.test_register, block.test_register)),
+        decoded_canonical(TestRR(block.test_register, block.test_register))),
+    branch_decoding: ShortControlDecodes(JumpZero(block.false_displacement)),
+    true_decoding: CanonicalBlockDecodes(block.when_true,
+        linked_true_start(block, start)),
+    join_decoding: ShortControlDecodes(Jump(block.join_displacement)),
+    false_decoding: CanonicalBlockDecodes(block.when_false,
+        linked_false_start(block, start)),
+}
+
+fn linked_prefix_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_block_normal(block.prefix, before)
+}
+
+fn linked_test_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    // The canonical TEST representative written directly. This is equivalent
+    // to execute_normal(decoded_canonical(TestRR(...))), but avoids expanding
+    // the dependent decoder whenever linked control inspects ZF.
+    let prefix_after = linked_prefix_after(block, before);
+    let value = read_gpr(block.test_register, prefix_after.gprs);
+    MachineState(
+        gprs := prefix_after.gprs,
+        flags := test_flags(value, value, False),
+        rip := next_rip(prefix_after.rip, 3),
+        memory := prefix_after.memory)
+}
+
+fn linked_branch_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_short_control(JumpZero(block.false_displacement),
+        linked_test_after(block, before))
+}
+
+fn linked_true_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_block_normal(block.when_true, linked_branch_after(block, before))
+}
+
+fn linked_true_jump_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_short_control(Jump(block.join_displacement),
+        linked_true_after(block, before))
+}
+
+fn linked_false_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_block_normal(block.when_false, linked_branch_after(block, before))
+}
+
+fn linked_conditional_after<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    match linked_test_after(block, before).flags.zf {
+        False => linked_true_jump_after(block, before),
+        True => linked_false_after(block, before),
+    }
+}
+
+// The linked layout has a canonical deterministic execution representative,
+// just like `execute_block_normal`. It performs TEST, the real short control
+// transfer, exactly one leaf, and the join jump on the fallthrough path.
+fn ExecuteLinkedConditionalBlock<M>(block: LinkedConditionalBlock,
+    before, after: MachineState<M>) → Type
+{
+    after = linked_conditional_after(block, before)
+}
+
+theorem canonical_linked_conditional_executes<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>): ExecuteLinkedConditionalBlock(block, before,
+        linked_conditional_after(block, before))
+{
+    refl
 }

@@ -768,15 +768,25 @@ compiler cannot prove the convenient branch rather than the branch the
 machine observes. The checked acceptance function chooses `Add` or `Sub` and
 joins in `RAX`.
 
-This is structured machine control flow, not final linked branch bytes.
-Canonical bytes and decoding remain checked for each leaf, while concrete
-`Jcc`/`Jmp` encodings, relative displacement calculation, block layout, and
-fallthrough selection belong to the next linker-facing boundary. Keeping
-that debt explicit avoids smuggling layout into semantic region validity;
-see [[x86-64-conditional-branch-layout]]. The same explicit-input/common-yield
-shape generalizes naturally to `Loop`, while `Function` and `Apply` will also
-need calling-convention and effect interfaces rather than merely another
-recursive constructor.
+The abstract `ConditionalBlock` remains the semantic composition boundary.
+The first linker-facing slice now also emits one concrete byte sequence around
+it: canonical prefix, `TEST r64,r64`, `JZ rel8`, true leaf, `JMP rel8`, and the
+false leaf. `JZ` and `JMP` have exact two-byte encodings, an executable strict
+decoder, signed displacement execution, and negative controls for empty,
+truncated, trailing, and unknown-opcode inputs. The generated example is 35
+bytes; its checked layout computes forward displacements +8 and +6 from the
+canonical leaf lengths and rejects distances beyond signed rel8.
+
+Decode and canonical deterministic control execution are checked for the
+whole linked object. The remaining proof boundary is intentionally explicit:
+the linked path changes flags and RIP before entering a leaf, whereas the
+abstract conditional enters that leaf directly. Add/Sub observe the same GPRs,
+but a reusable control-insensitivity/frame theorem is needed to connect those
+states without asking conversion to normalize the entire generated artifact.
+Final taken/untaken RIP equality and the linked-result refinement are tracked
+by [[x86-64-linked-conditional-refinement]]. This keeps physical layout out of
+semantic region validity while preserving the abstract refinement as the
+reference specification.
 
 The first producer-to-control composition adds `Sequence(prefix,
 continuation)`. Its flat prefix extends the continuation's scope with the
