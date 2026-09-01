@@ -1,6 +1,6 @@
 # FunctionIR: typed regions, semantic graphs, and certified lowering
 
-Status: **living design note, pre-implementation** (2026-08-30).
+Status: **living design and implementation record** (2026-08-31).
 
 This document records the intended direction for the FunctionIR that replaces
 the bootstrap constructor-tree IR in `lib/ir_v1.hthr`. It is deliberately not
@@ -659,3 +659,34 @@ mixed-width sparse DAG, semantic schedule-equivalence, and x86 refinement
 rails. The performance debts found while building it remain separate language
 issues: frontend sharing of large proof composition, named-argument expected
 types, and run-aware reduction of very large closed Nat order comparisons.
+
+## 13. Next implementation path
+
+The next priority is an executable, proof-producing x86 lowering for the
+current pure Add DAG, tracked by [[function-ir-x86-lowering-generator]]. This
+is intentionally a vertical compiler slice rather than another round of
+validity tuning: select instructions, assign and reuse spill-free registers,
+emit canonical bytes, and generate staged execution/refinement certificates.
+The add64 and sum4 artifacts are acceptance fixtures, not permanent handwritten
+implementations; generated equivalents should delete them.
+
+The planned sequence after that is:
+
+1. [[function-ir-alu-core]] adds constants, representative bitwise and shift
+   operations, and interpretation-sensitive comparisons through the now-real
+   operation/lowering interface.
+2. [[source-to-function-ir-certification]] reflects a small source BitVec
+   fragment directly into FunctionIR and composes its source-denotation proof
+   through generated x86, beginning concrete replacement of `ir_v1` rather
+   than translating through it.
+3. [[function-ir-conditional-regions]] adds the first nested structured control
+   node and tests the RVSDG direction without simultaneously designing loops
+   or a general effect system.
+
+Three language-performance issues remain deliberately off this critical path:
+[[frontend-large-proof-composition-cost]],
+[[named-argument-checking-context-loss]], and
+[[nat-order-large-run-comparison]]. Generated staging and ordinary-size IDs
+make current work viable; these should return to the foreground when measured
+as blockers or when parallel work can improve them without distorting compiler
+architecture.
