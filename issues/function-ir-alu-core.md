@@ -51,3 +51,8 @@ The issue remains open for constants/immediate encodings, shifts, and
 comparison materialization. Those are intentionally the next slice because
 they break the current accidental assumption that every selected instruction
 is a three-byte destructive register-register operation.
+
+A 20-node/22-instruction version was also probed. Its generated check had not
+finished after five minutes and was removed from the ordinary rail; the
+selector itself is instantaneous. [[function-ir-x86-proof-scaling]] owns that
+proof-composition wall rather than lowering the intended program-size target.
