@@ -39,3 +39,16 @@ selection rules, or in a separate proof-producing rewrite layer.
   untrusted proof emission.
 - **[[function-ir-alu-core]]** supplies the commutative and ordered operations.
 
+## Progress, 2026-09-01
+
+The selected plan now records original versus reversed operand orientation.
+AND/OR/XOR can reuse a dying right-hand temporary, and generated proof emission
+kernel-checks an explicit graph-equation swap before applying the ordinary
+machine-order placement theorem. Sub remains ordered, and deterministic choice
+prefers the requested output register when both operands are reusable.
+
+The checked library gained structural `band_comm`, `bor_comm`, and `bxor_comm`
+laws. Add remains intentionally disabled until [[bitvec-add-commutativity]]
+supplies the corresponding checked arithmetic theorem; its current
+repeated-increment definition makes that a substantive prerequisite rather
+than a safe compiler assertion.

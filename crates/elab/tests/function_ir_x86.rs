@@ -195,6 +195,31 @@ fn generated_right_first_sum4_checks() {
     }
 }
 
+#[test]
+fn generated_commutative_right_reuse_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let region = commutative_right_reuse();
+    let raw = cert::render_region_function("commutative_right_reuse_raw", &region);
+    let emission = lower::generate(
+        "commutative_right_reuse_x86",
+        "commutative_right_reuse_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("lower DAG by reusing its dying right operand");
+    assert_eq!(emission.lowered.instructions.len(), 3);
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_commutative_reuse_x86", &source) {
+        panic!(
+            "generated commutative-reuse artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
 fn add64() -> Region {
     Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
@@ -205,6 +230,27 @@ fn add64() -> Region {
             right: 1,
         }],
         outputs: vec![Port { id: 2, width: 64 }],
+    }
+}
+
+fn commutative_right_reuse() -> Region {
+    Region {
+        inputs: (0..3).map(|id| Port { id, width: 64 }).collect(),
+        nodes: vec![
+            Node::BitAnd {
+                width: 64,
+                output: 3,
+                left: 1,
+                right: 2,
+            },
+            Node::BitOr {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 3,
+            },
+        ],
+        outputs: vec![Port { id: 4, width: 64 }],
     }
 }
 

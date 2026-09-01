@@ -716,6 +716,13 @@ theorem xor_bit_self(b: Bool): xor_bit(b, b) = False {
     match b { False => refl, True => refl }
 }
 
+theorem xor_bit_comm(a, b: Bool): xor_bit(a, b) = xor_bit(b, a) {
+    match a {
+        False => match b { False => refl, True => refl },
+        True => match b { False => refl, True => refl },
+    }
+}
+
 theorem cons_bit_cong(n: Nat, {a, b: Bool}, {xs, ys: BitVec(n)},
                       ph: a = b, pt: xs = ys): cons_bit(n, a, xs) = cons_bit(n, b, ys) {
     j(ph, λ z p => cons_bit(n, a, xs) = cons_bit(n, z, ys),
@@ -730,6 +737,33 @@ theorem extensionality(n: Nat): (x, y: BitVec(n)) →
         Succ(k, ih) => λ x y at =>
             cons_bit_cong(k, at(FZ),
                 ih(tail_bits(k, x), tail_bits(k, y), λ j => at(FS(j)))),
+    }
+}
+
+theorem band_comm(n: Nat): (x, y: BitVec(n)) → band(n, x, y) = band(n, y, x) {
+    match n as λ k => (x, y: BitVec(k)) → band(k, x, y) = band(k, y, x) {
+        Zero => λ x y => refl,
+        Succ(k, ih) => λ x y => cons_bit_cong(k,
+            bool::and_comm(head_bit(k, x), head_bit(k, y)),
+            ih(tail_bits(k, x), tail_bits(k, y))),
+    }
+}
+
+theorem bor_comm(n: Nat): (x, y: BitVec(n)) → bor(n, x, y) = bor(n, y, x) {
+    match n as λ k => (x, y: BitVec(k)) → bor(k, x, y) = bor(k, y, x) {
+        Zero => λ x y => refl,
+        Succ(k, ih) => λ x y => cons_bit_cong(k,
+            bool::or_comm(head_bit(k, x), head_bit(k, y)),
+            ih(tail_bits(k, x), tail_bits(k, y))),
+    }
+}
+
+theorem bxor_comm(n: Nat): (x, y: BitVec(n)) → bxor(n, x, y) = bxor(n, y, x) {
+    match n as λ k => (x, y: BitVec(k)) → bxor(k, x, y) = bxor(k, y, x) {
+        Zero => λ x y => refl,
+        Succ(k, ih) => λ x y => cons_bit_cong(k,
+            xor_bit_comm(head_bit(k, x), head_bit(k, y)),
+            ih(tail_bits(k, x), tail_bits(k, y))),
     }
 }
 

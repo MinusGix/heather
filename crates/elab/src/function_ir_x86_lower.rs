@@ -26,6 +26,16 @@ impl BinaryOperation {
             BinaryOperation::BitXor => "bitvec::bxor",
         }
     }
+
+    fn commutativity_theorem(self) -> Option<&'static str> {
+        match self {
+            BinaryOperation::Add => None,
+            BinaryOperation::Sub => None,
+            BinaryOperation::BitAnd => Some("bitvec::band_comm"),
+            BinaryOperation::BitOr => Some("bitvec::bor_comm"),
+            BinaryOperation::BitXor => Some("bitvec::bxor_comm"),
+        }
+    }
 }
 
 impl BinaryNode {
@@ -51,6 +61,12 @@ pub struct BinaryNode {
     pub output: u64,
     pub left: u64,
     pub right: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandOrientation {
+    Original,
+    Reversed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -180,6 +196,7 @@ pub struct NodePlan {
     pub right_register: Gpr,
     pub destination: Gpr,
     pub reused_value: Option<u64>,
+    pub orientation: OperandOrientation,
     pub instructions: Vec<Instruction>,
 }
 
@@ -360,27 +377,38 @@ pub fn lower_binary_dag(
         }
 
         let left_last = last_use_in_node(&uses, node.left, node.left, node.right);
+        let right_last = last_use_in_node(&uses, node.right, node.left, node.right);
         let left_reusable = left_last && owners.get(&left_register) == Some(&node.left);
+        let right_reusable = node.operation.commutativity_theorem().is_some()
+            && right_last
+            && owners.get(&right_register) == Some(&node.right);
         let produces_output = region.outputs[0].id == node.output;
 
-        let reused_value = if produces_output && left_reusable && left_register == requested_output
+        let (reused_value, orientation) = if produces_output
+            && right_reusable
+            && right_register == requested_output
+            && (!left_reusable || left_register != requested_output)
         {
-            Some(node.left)
+            (Some(node.right), OperandOrientation::Reversed)
         } else if left_reusable {
-            Some(node.left)
+            (Some(node.left), OperandOrientation::Original)
+        } else if right_reusable {
+            (Some(node.right), OperandOrientation::Reversed)
         } else {
-            None
+            (None, OperandOrientation::Original)
         };
 
         let (destination, step_instructions) = match reused_value {
-            Some(_) => (
-                left_register,
-                vec![binary_instruction(
-                    node.operation,
-                    left_register,
-                    right_register,
-                )],
-            ),
+            Some(_) => {
+                let (destination, source) = match orientation {
+                    OperandOrientation::Original => (left_register, right_register),
+                    OperandOrientation::Reversed => (right_register, left_register),
+                };
+                (
+                    destination,
+                    vec![binary_instruction(node.operation, destination, source)],
+                )
+            }
             None => {
                 let Some(&destination) = temporary_registers
                     .iter()
@@ -428,6 +456,7 @@ pub fn lower_binary_dag(
             right_register,
             destination,
             reused_value,
+            orientation,
             instructions: step_instructions,
         });
     }
@@ -909,24 +938,70 @@ fn emit_placement_proofs(
                     right_proof.clone(),
                 )
             };
+        let (machine_left_value, machine_right_value, placement_equation) = match plan.orientation {
+            OperandOrientation::Original => (plan.node.left, plan.node.right, equation.clone()),
+            OperandOrientation::Reversed => {
+                let commuted_name = format!("{prefix}_node_{}_commuted_equation", plan.node_index,);
+                text.push_str(&format!(
+                    "theorem {commuted_name}<M>({parameters}):\n\
+                     \x20   values(64, {}) = {}(64, values(64, {}), values(64, {}))\n\
+                     {{\n\
+                     \x20   trans({equation}, {}(64, values(64, {}), values(64, {})))\n\
+                     }}\n",
+                    plan.node.output,
+                    plan.node.operation.semantic_function(),
+                    plan.node.right,
+                    plan.node.left,
+                    plan.node
+                        .operation
+                        .commutativity_theorem()
+                        .expect("only commutative operations reverse"),
+                    plan.node.left,
+                    plan.node.right,
+                ));
+                (
+                    plan.node.right,
+                    plan.node.left,
+                    format!("{commuted_name}({arguments})"),
+                )
+            }
+        };
+        let placement_head = format!(
+            "placed_after_binary(values, {}, {}, {}, {}(64, ·, ·)",
+            plan.node.output,
+            machine_left_value,
+            machine_right_value,
+            plan.node.operation.semantic_function(),
+        );
+        let (binary_left_register, binary_right_register, binary_left_proof, binary_right_proof) =
+            match plan.orientation {
+                OperandOrientation::Original => (
+                    binary_left_register,
+                    plan.right_register,
+                    binary_left_proof,
+                    binary_right_proof,
+                ),
+                OperandOrientation::Reversed => (
+                    plan.right_register,
+                    binary_left_register,
+                    binary_right_proof,
+                    binary_left_proof,
+                ),
+            };
         text.push_str(&format!(
             "theorem {output_name}<M>({parameters}):\n\
              \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
              {{\n\
-             \x20   placed_after_binary(values, {}, {}, {}, {}(64, ·, ·), {}, {}, {},\n\
+             \x20   {placement_head}, {}, {}, {},\n\
              \x20       {prefix}_state_{binary_before_index}(before), {prefix}_state_{after_index}(before),\n\
-             \x20       {equation}, {binary_left_proof}, {binary_right_proof},\n\
+             \x20       {placement_equation}, {binary_left_proof}, {binary_right_proof},\n\
              \x20       {prefix}_step_{binary_before_index}_result(\n\
              \x20           {prefix}_state_{binary_before_index}(before)))\n\
              }}\n",
             plan.node.output,
             plan.destination.heather_name(),
-            plan.node.output,
-            plan.node.left,
-            plan.node.right,
-            plan.node.operation.semantic_function(),
             binary_left_register.heather_name(),
-            plan.right_register.heather_name(),
+            binary_right_register.heather_name(),
             plan.destination.heather_name(),
         ));
 
@@ -1407,6 +1482,87 @@ mod tests {
         let error = lower_binary_dag(
             &sum4(true),
             &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx],
+            &[Gpr::Rax],
+            Gpr::Rax,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            LoweringError::RegisterPressure {
+                node_index: 1,
+                live_temporaries: 1,
+            }
+        );
+    }
+
+    fn right_temporary_region(final_node: Node) -> Region {
+        Region {
+            inputs: (0..3).map(|id| Port { id, width: 64 }).collect(),
+            nodes: vec![
+                Node::BitAnd {
+                    width: 64,
+                    output: 3,
+                    left: 1,
+                    right: 2,
+                },
+                final_node,
+            ],
+            outputs: vec![Port { id: 4, width: 64 }],
+        }
+    }
+
+    #[test]
+    fn dying_right_operand_is_reused_for_each_proven_commutative_operation() {
+        let final_nodes = [
+            Node::BitAnd {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 3,
+            },
+            Node::BitOr {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 3,
+            },
+            Node::BitXor {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 3,
+            },
+        ];
+        for final_node in final_nodes {
+            let region = right_temporary_region(final_node);
+            let lowered = lower_binary_dag(
+                &region,
+                &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+                &[Gpr::Rax],
+                Gpr::Rax,
+            )
+            .unwrap();
+            assert_eq!(lowered.instructions.len(), 3);
+            assert_eq!(lowered.node_plans[1].reused_value, Some(3));
+            assert_eq!(
+                lowered.node_plans[1].orientation,
+                OperandOrientation::Reversed
+            );
+            assert_eq!(lowered.instructions[2].destination(), Gpr::Rax);
+        }
+    }
+
+    #[test]
+    fn subtraction_never_reverses_to_reuse_its_right_operand() {
+        let region = right_temporary_region(Node::Sub {
+            width: 64,
+            output: 4,
+            left: 0,
+            right: 3,
+        });
+        let error = lower_binary_dag(
+            &region,
+            &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
             &[Gpr::Rax],
             Gpr::Rax,
         )
