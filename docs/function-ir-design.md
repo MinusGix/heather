@@ -792,10 +792,17 @@ The effect certificate deliberately lives in `function_ir_x86_support`, not
 the base x86 model: moving a generic instruction case split into the base made
 the x86 rail grow from roughly 29 to 90 seconds, while generated per-step facts
 restore the base cost and leave the 35-byte linked certificate essentially
-unchanged. Final taken/untaken RIP equality remains tracked by
-[[x86-64-linked-conditional-refinement]]. This keeps physical layout out of
-semantic region validity while preserving the abstract refinement as the
-reference specification.
+unchanged.
+
+Physical join correctness is now checked as well. Layout endpoints advance by
+the encoded block byte length, `LinkedConditionalLayout` carries exact semantic
+targets in addition to the auditable rel8 distance facts, and generated named
+facts connect the executed prefix and leaves to those endpoints. Tiny pure
+Boolean/RIP lemmas select the taken or untaken result, so the emitted
+`*_linked_reaches_join` theorem proves both executions finish at the same
+`linked_join_start` without placing the entire x86 machine in a dependent match
+motive. This keeps physical layout out of semantic region validity while
+preserving the abstract refinement as the reference specification.
 
 The first producer-to-control composition adds `Sequence(prefix,
 continuation)`. Its flat prefix extends the continuation's scope with the

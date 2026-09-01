@@ -1,6 +1,6 @@
 ---
 title: Link structured conditional blocks to canonical x86 branch bytes
-status: open
+status: closed
 labels: [x86,compiler,encoding,control-flow,linker]
 blocked-by: [function-ir-conditional-regions]
 created: 2026-09-01
@@ -34,8 +34,9 @@ displacements for the current Add/Sub example, a 35-byte linked sequence,
 checked per-component decoding, forward-distance/no-truncation layout facts,
 canonical control execution, and generator rejection above `i8::MAX`.
 
-The linked execution result is now related to the already-proved abstract
-FunctionIR conditional through compositional per-instruction GPR effects. The
-issue remains open for the final physical-layout obligation: both path RIPs
-must be equated to the declared common join. The focused proof design is
-tracked separately in [[x86-64-linked-conditional-refinement]].
+The linked execution result is related to the already-proved abstract
+FunctionIR conditional through compositional per-instruction GPR effects.
+Generated prefix/leaf endpoint facts and exact semantic rel8 targets now prove
+both selected paths finish at `linked_join_start`; the final physical-layout
+obligation is discharged. The focused proof design is recorded separately in
+[[x86-64-linked-conditional-refinement]].

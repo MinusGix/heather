@@ -1,6 +1,6 @@
 ---
 title: Relate linked x86 conditional execution to its abstract FunctionIR block
-status: open
+status: closed
 labels: [x86,compiler,function-ir,proof,control-flow]
 blocked-by: [x86-64-conditional-branch-layout]
 created: 2026-09-01
@@ -33,13 +33,13 @@ rail from about 29 seconds to 80–90 seconds. Per-step certificates keep the
 base rail near 29 seconds and the focused linked artifact near its previous
 166 seconds.
 
-The issue stays open only for the physical join-RIP theorem.
-
-## Direction
-
-- Separately connect signed rel8 distance facts to bitvector RIP equality and
-  prove both paths finish at `linked_join_start`.
+The physical join-RIP theorem is complete as well. Layout positions are defined
+by encoded byte spans, exact branch targets are certified alongside the rel8
+distance facts, and generated named endpoint theorems connect real execution
+to those positions. The small `selected_rip_reaches` theorem performs the only
+Boolean choice; the emitted `*_linked_reaches_join` theorem proves either path
+ends at the common join.
 
 ## Acceptance
 
-- Both paths reach the same proved physical join RIP.
+- [x] Both paths reach the same proved physical join RIP.

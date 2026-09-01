@@ -877,6 +877,11 @@ pub fn generate_prefixed_conditional(
         + true_bytes
         + 2
         + false_bytes;
+    let prefix_span_proof = render_block_span_proof(&prefix_emission.lowered.instructions);
+    let true_span_proof =
+        render_block_span_proof(&continuation_emission.lowered.when_true.instructions);
+    let false_span_proof =
+        render_block_span_proof(&continuation_emission.lowered.when_false.instructions);
     let mut text = prefix_emission.text;
     text.push('\n');
     text.push_str(&continuation_emission.text);
@@ -940,6 +945,56 @@ pub fn generate_prefixed_conditional(
          \x20       {false_name}_instructions(),\n\
          \x20       linked_false_start({linked_name}_block(), start)))\n\
          }}\n\n\
+         theorem {linked_name}_false_span(start: BitVec(64)):\n\
+         \x20   short_branch_target(start, bitvec::ofNat(8, {false_displacement})) =\n\
+         \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
+         \x20     {false_displacement})\n\
+         {{ refl }}\n\n\
+         theorem {linked_name}_join_span(start: BitVec(64)):\n\
+         \x20   short_branch_target(start, bitvec::ofNat(8, {join_displacement})) =\n\
+         \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
+         \x20     {join_displacement})\n\
+         {{ refl }}\n\n\
+         theorem {linked_name}_prefix_span(start: BitVec(64)):\n\
+         \x20   {prefix_name}_final_rip(start) =\n\
+         \x20     after_canonical_block(start, {prefix_name}_instructions())\n\
+         {{ {prefix_span_proof} }}\n\n\
+         theorem {linked_name}_true_block_span(start: BitVec(64)):\n\
+         \x20   {true_name}_final_rip(start) =\n\
+         \x20     after_canonical_block(start, {true_name}_instructions())\n\
+         {{ {true_span_proof} }}\n\n\
+         theorem {linked_name}_false_block_span(start: BitVec(64)):\n\
+         \x20   {false_name}_final_rip(start) =\n\
+         \x20     after_canonical_block(start, {false_name}_instructions())\n\
+         {{ {false_span_proof} }}\n\n\
+         theorem {linked_name}_false_target(start: BitVec(64)):\n\
+         \x20   short_branch_target(linked_branch_start(\n\
+         \x20     {linked_name}_block(), start), bitvec::ofNat(8, {false_displacement})) =\n\
+         \x20   linked_false_start({linked_name}_block(), start)\n\
+         {{\n\
+         \x20   calc {{\n\
+         \x20     short_branch_target(linked_branch_start(\n\
+         \x20       {linked_name}_block(), start),\n\
+         \x20       bitvec::ofNat(8, {false_displacement}))\n\
+         \x20       = bitvec::iterate_increment(64,\n\
+         \x20           linked_true_start({linked_name}_block(), start),\n\
+         \x20           {false_displacement}) := {linked_name}_false_span(\n\
+         \x20             linked_branch_start({linked_name}_block(), start)),\n\
+         \x20       = linked_false_start({linked_name}_block(), start) :=\n\
+         \x20             sym(bitvec::iterate_increment_compose(64,\n\
+         \x20               linked_true_start({linked_name}_block(), start),\n\
+         \x20               {true_bytes}, 2)),\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {linked_name}_join_target(start: BitVec(64)):\n\
+         \x20   short_branch_target(linked_join_jump_start(\n\
+         \x20     {linked_name}_block(), start), bitvec::ofNat(8, {join_displacement})) =\n\
+         \x20   linked_join_start({linked_name}_block(), start)\n\
+         {{\n\
+         \x20   trans({linked_name}_join_span(\n\
+         \x20       linked_join_jump_start({linked_name}_block(), start)),\n\
+         \x20     refl)\n\
+         }}\n\n\
          theorem {linked_name}_layout():\n\
          \x20   LinkedConditionalLayout({linked_name}_block())\n\
          {{\n\
@@ -947,12 +1002,137 @@ pub fn generate_prefixed_conditional(
          \x20     false_forward := refl,\n\
          \x20     false_distance := refl,\n\
          \x20     join_forward := refl,\n\
-         \x20     join_distance := refl)\n\
+         \x20     join_distance := refl,\n\
+         \x20     false_target := {linked_name}_false_target,\n\
+         \x20     join_target := {linked_name}_join_target)\n\
          }}\n\n\
          theorem {linked_name}_executes<M>(before: MachineState<M>):\n\
          \x20   ExecuteLinkedConditionalBlock({linked_name}_block(), before,\n\
          \x20       linked_conditional_after({linked_name}_block(), before))\n\
-         {{ canonical_linked_conditional_executes({linked_name}_block(), before) }}\n",
+         {{ canonical_linked_conditional_executes({linked_name}_block(), before) }}\n\n\
+         theorem {linked_name}_prefix_at<M>(before: MachineState<M>):\n\
+         \x20   linked_prefix_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_test_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   trans({prefix_name}_advances_rip(before),\n\
+         \x20     {linked_name}_prefix_span(before.rip))\n\
+         }}\n\n\
+         theorem {linked_name}_true_at<M>(before: MachineState<M>):\n\
+         \x20   linked_true_after({linked_name}_block(), before).rip =\n\
+         \x20     after_canonical_block(\n\
+         \x20       linked_branch_after({linked_name}_block(), before).rip,\n\
+         \x20       {true_name}_instructions())\n\
+         {{\n\
+         \x20   trans({true_name}_advances_rip(\n\
+         \x20       linked_branch_after({linked_name}_block(), before)),\n\
+         \x20     {linked_name}_true_block_span(\n\
+         \x20       linked_branch_after({linked_name}_block(), before).rip))\n\
+         }}\n\n\
+         theorem {linked_name}_false_at<M>(before: MachineState<M>):\n\
+         \x20   linked_false_after({linked_name}_block(), before).rip =\n\
+         \x20     after_canonical_block(\n\
+         \x20       linked_branch_after({linked_name}_block(), before).rip,\n\
+         \x20       {false_name}_instructions())\n\
+         {{\n\
+         \x20   trans({false_name}_advances_rip(\n\
+         \x20       linked_branch_after({linked_name}_block(), before)),\n\
+         \x20     {linked_name}_false_block_span(\n\
+         \x20       linked_branch_after({linked_name}_block(), before).rip))\n\
+         }}\n\n\
+         theorem {linked_name}_not_taken_at<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after(\n\
+         \x20     {linked_name}_block(), before).flags.zf = False):\n\
+         \x20   linked_branch_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_true_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   trans(jump_zero_not_taken_rip(\n\
+         \x20       linked_test_after({linked_name}_block(), before).flags.zf,\n\
+         \x20       linked_test_after({linked_name}_block(), before).rip,\n\
+         \x20       {linked_name}_block().false_displacement, selected),\n\
+         \x20     bitvec::cong_iterate_increment(64, 2,\n\
+         \x20       linked_test_reaches_branch_start(\n\
+         \x20         {linked_name}_block(), before,\n\
+         \x20         {linked_name}_prefix_at(before))))\n\
+         }}\n\n\
+         theorem {linked_name}_taken_at<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after(\n\
+         \x20     {linked_name}_block(), before).flags.zf = True):\n\
+         \x20   linked_branch_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_false_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   trans(jump_zero_taken_rip(\n\
+         \x20       linked_test_after({linked_name}_block(), before).flags.zf,\n\
+         \x20       linked_test_after({linked_name}_block(), before).rip,\n\
+         \x20       {linked_name}_block().false_displacement, selected),\n\
+         \x20     trans(cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20         λ rip => short_branch_target(rip,\n\
+         \x20           {linked_name}_block().false_displacement),\n\
+         \x20         linked_test_reaches_branch_start(\n\
+         \x20           {linked_name}_block(), before,\n\
+         \x20           {linked_name}_prefix_at(before))),\n\
+         \x20       {linked_name}_layout().false_target(before.rip)))\n\
+         }}\n\n\
+         theorem {linked_name}_true_reaches_join<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after(\n\
+         \x20     {linked_name}_block(), before).flags.zf = False):\n\
+         \x20   linked_true_jump_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_join_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   calc {{\n\
+         \x20     linked_true_jump_after({linked_name}_block(), before).rip\n\
+         \x20       = short_branch_target(\n\
+         \x20           linked_true_after({linked_name}_block(), before).rip,\n\
+         \x20           {linked_name}_block().join_displacement) := refl,\n\
+         \x20       = short_branch_target(linked_join_jump_start(\n\
+         \x20           {linked_name}_block(), before.rip),\n\
+         \x20           {linked_name}_block().join_displacement) :=\n\
+         \x20           cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20             λ rip => short_branch_target(rip,\n\
+         \x20               {linked_name}_block().join_displacement),\n\
+         \x20             trans({linked_name}_true_at(before),\n\
+         \x20               cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20                 λ rip => after_canonical_block(rip,\n\
+         \x20                   {true_name}_instructions()),\n\
+         \x20                 {linked_name}_not_taken_at(before, selected)))),\n\
+         \x20       = linked_join_start({linked_name}_block(), before.rip) :=\n\
+         \x20           {linked_name}_layout().join_target(before.rip),\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {linked_name}_false_reaches_join<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after(\n\
+         \x20     {linked_name}_block(), before).flags.zf = True):\n\
+         \x20   linked_false_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_join_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   calc {{\n\
+         \x20     linked_false_after({linked_name}_block(), before).rip\n\
+         \x20       = after_canonical_block(linked_branch_after(\n\
+         \x20           {linked_name}_block(), before).rip,\n\
+         \x20           {false_name}_instructions()) :=\n\
+         \x20           {linked_name}_false_at(before),\n\
+         \x20       = after_canonical_block(linked_false_start(\n\
+         \x20           {linked_name}_block(), before.rip),\n\
+         \x20           {false_name}_instructions()) :=\n\
+         \x20           cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20             λ rip => after_canonical_block(rip,\n\
+         \x20               {false_name}_instructions()),\n\
+         \x20             {linked_name}_taken_at(before, selected)),\n\
+         \x20       = linked_join_start({linked_name}_block(), before.rip) := refl,\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {linked_name}_reaches_join<M>(before: MachineState<M>):\n\
+         \x20   linked_conditional_after({linked_name}_block(), before).rip =\n\
+         \x20     linked_join_start({linked_name}_block(), before.rip)\n\
+         {{\n\
+         \x20   trans(linked_conditional_rip({linked_name}_block(), before),\n\
+         \x20     selected_rip_reaches(\n\
+         \x20       linked_test_after({linked_name}_block(), before).flags.zf,\n\
+         \x20       linked_true_jump_after({linked_name}_block(), before).rip,\n\
+         \x20       linked_false_after({linked_name}_block(), before).rip,\n\
+         \x20       linked_join_start({linked_name}_block(), before.rip),\n\
+         \x20       λ selected => {linked_name}_true_reaches_join(before, selected),\n\
+         \x20       λ selected => {linked_name}_false_reaches_join(before, selected)))\n\
+         }}\n",
         public_parameters.join(",\n    "),
         requested_output.heather_name(),
         outputs[0].id,
@@ -1667,6 +1847,23 @@ fn render_instruction_cons(prefix: &str, instructions: &[Instruction], index: us
         instructions[index].render(),
         index + 1,
     )
+}
+
+fn render_block_span_proof(instructions: &[Instruction]) -> String {
+    let mut total = 0;
+    let mut proof = "refl".to_string();
+    let mut nested = "start".to_string();
+    for (index, instruction) in instructions.iter().enumerate() {
+        let length = instruction.canonical_length();
+        if index != 0 {
+            proof = format!(
+                "trans(@bitvec::cong_iterate_increment(64, {length},\n        {nested}, bitvec::iterate_increment(64, start, {total}), {proof}),\n        bitvec::iterate_increment_compose(64, start, {total}, {length}))"
+            );
+        }
+        nested = format!("bitvec::iterate_increment(64, {nested}, {length})");
+        total += length;
+    }
+    proof
 }
 
 fn render_gpr_only_step(instruction: Instruction) -> Option<String> {

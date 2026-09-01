@@ -363,14 +363,21 @@ fn with_rip<M>(state: MachineState<M>, rip: BitVec(64)) → MachineState<M> {
         memory := state.memory)
 }
 
+fn jump_zero_rip(selected: Bool, start: BitVec(64),
+    displacement: BitVec(8)) → BitVec(64)
+{
+    match selected {
+        False => next_rip(start, 2),
+        True => short_branch_target(start, displacement),
+    }
+}
+
 fn short_control_rip<M>(control: ShortControl,
     before: MachineState<M>) → BitVec(64)
 {
     match control {
-        JumpZero(displacement) => match before.flags.zf {
-            False => next_rip(before.rip, 2),
-            True => short_branch_target(before.rip, displacement),
-        },
+        JumpZero(displacement) => jump_zero_rip(before.flags.zf, before.rip,
+            displacement),
         Jump(displacement) => short_branch_target(before.rip, displacement),
     }
 }
@@ -404,8 +411,8 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 fn after_canonical_block(start: BitVec(64),
     instructions: List<Instruction>) → BitVec(64)
 {
-    list::foldl(instructions,
-        λ rip instruction => next_rip(rip, canonical_length(instruction)), start)
+    bitvec::iterate_increment(64, start,
+        canonical_block_bytes(instructions).len())
 }
 
 record LinkedConditionalBlock {
@@ -470,6 +477,12 @@ record LinkedConditionalLayout(block: LinkedConditionalBlock)
     join_forward: byte_bit7(block.join_displacement) = False,
     join_distance: bitvec::toNat(8, block.join_displacement) =
         canonical_block_bytes(block.when_false).len(),
+    false_target: (start: BitVec(64)) →
+        short_branch_target(linked_branch_start(block, start),
+            block.false_displacement) = linked_false_start(block, start),
+    join_target: (start: BitVec(64)) →
+        short_branch_target(linked_join_jump_start(block, start),
+            block.join_displacement) = linked_join_start(block, start),
 }
 
 fn ShortControlDecodes(control: ShortControl) → Type {
@@ -570,4 +583,69 @@ theorem canonical_linked_conditional_executes<M>(block: LinkedConditionalBlock,
         linked_conditional_after(block, before))
 {
     refl
+}
+
+theorem linked_test_reaches_branch_start<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>,
+    prefix_at: linked_prefix_after(block, before).rip =
+        linked_test_start(block, before.rip)):
+    linked_test_after(block, before).rip =
+        linked_branch_start(block, before.rip)
+{
+    bitvec::cong_iterate_increment(64, 3, prefix_at)
+}
+
+theorem jump_zero_not_taken_rip(selected: Bool, start: BitVec(64),
+    displacement: BitVec(8), evidence: selected = False):
+    jump_zero_rip(selected, start, displacement) = next_rip(start, 2)
+{
+    j(sym(evidence), λ actual _ => jump_zero_rip(actual, start, displacement) =
+        next_rip(start, 2), refl)
+}
+
+theorem jump_zero_taken_rip(selected: Bool, start: BitVec(64),
+    displacement: BitVec(8), evidence: selected = True):
+    jump_zero_rip(selected, start, displacement) =
+        short_branch_target(start, displacement)
+{
+    j(sym(evidence), λ actual _ => jump_zero_rip(actual, start, displacement) =
+        short_branch_target(start, displacement), refl)
+}
+
+fn select_rip(selected: Bool, when_false, when_true: BitVec(64)) → BitVec(64)
+{
+    match selected { False => when_false, True => when_true }
+}
+
+theorem linked_conditional_rip<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>):
+    linked_conditional_after(block, before).rip = select_rip(
+        linked_test_after(block, before).flags.zf,
+        linked_true_jump_after(block, before).rip,
+        linked_false_after(block, before).rip)
+{
+    match linked_test_after(block, before).flags.zf as λ selected =>
+        (match selected {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }).rip = match selected {
+            False => linked_true_jump_after(block, before).rip,
+            True => linked_false_after(block, before).rip,
+        }
+    { False => refl, True => refl }
+}
+
+theorem selected_rip_reaches(selected: Bool, when_false, when_true,
+    join: BitVec(64), false_at: selected = False → when_false = join,
+    true_at: selected = True → when_true = join):
+    select_rip(selected, when_false, when_true) = join
+{
+    match selected as λ actual =>
+        (actual = False → when_false = join) →
+        (actual = True → when_true = join) →
+        select_rip(actual, when_false, when_true) = join
+    {
+        False => false_case true_case ⊢ false_case(refl),
+        True => false_case true_case ⊢ true_case(refl),
+    }(false_at, true_at)
 }
