@@ -74,6 +74,7 @@ impl ConstantNode {
 pub enum SelectedNode {
     Constant(ConstantNode),
     Binary(BinaryNode),
+    Comparison(ComparisonNode),
 }
 
 impl SelectedNode {
@@ -81,6 +82,7 @@ impl SelectedNode {
         match self {
             SelectedNode::Constant(node) => node.render(),
             SelectedNode::Binary(node) => node.render(),
+            SelectedNode::Comparison(node) => node.render(),
         }
     }
 
@@ -88,6 +90,7 @@ impl SelectedNode {
         match self {
             SelectedNode::Constant(node) => node.output,
             SelectedNode::Binary(node) => node.output,
+            SelectedNode::Comparison(node) => node.output,
         }
     }
 
@@ -95,6 +98,7 @@ impl SelectedNode {
         match self {
             SelectedNode::Constant(node) => node.width,
             SelectedNode::Binary(node) => node.width,
+            SelectedNode::Comparison(_) => 1,
         }
     }
 }
@@ -106,6 +110,34 @@ pub struct BinaryNode {
     pub output: u64,
     pub left: u64,
     pub right: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComparisonOperation {
+    UnsignedLessThan,
+    SignedLessThan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComparisonNode {
+    pub operation: ComparisonOperation,
+    pub operand_width: u64,
+    pub output: u64,
+    pub left: u64,
+    pub right: u64,
+}
+
+impl ComparisonNode {
+    fn render(self) -> String {
+        let constructor = match self.operation {
+            ComparisonOperation::UnsignedLessThan => "UnsignedLessThan",
+            ComparisonOperation::SignedLessThan => "SignedLessThan",
+        };
+        format!(
+            "{constructor}(width := {}, output := {}, left := {}, right := {})",
+            self.operand_width, self.output, self.left, self.right,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +164,44 @@ pub enum Gpr {
     R13,
     R14,
     R15,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LowByteGpr {
+    Al,
+    Cl,
+    Dl,
+    Bl,
+}
+
+impl LowByteGpr {
+    fn from_gpr(register: Gpr) -> Option<Self> {
+        match register {
+            Gpr::Rax => Some(Self::Al),
+            Gpr::Rcx => Some(Self::Cl),
+            Gpr::Rdx => Some(Self::Dl),
+            Gpr::Rbx => Some(Self::Bl),
+            _ => None,
+        }
+    }
+
+    fn gpr(self) -> Gpr {
+        match self {
+            Self::Al => Gpr::Rax,
+            Self::Cl => Gpr::Rcx,
+            Self::Dl => Gpr::Rdx,
+            Self::Bl => Gpr::Rbx,
+        }
+    }
+
+    fn heather_name(self) -> &'static str {
+        match self {
+            Self::Al => "Al",
+            Self::Cl => "Cl",
+            Self::Dl => "Dl",
+            Self::Bl => "Bl",
+        }
+    }
 }
 
 impl Gpr {
@@ -166,6 +236,9 @@ pub enum Instruction {
     AndRR { destination: Gpr, source: Gpr },
     OrRR { destination: Gpr, source: Gpr },
     XorRR { destination: Gpr, source: Gpr },
+    CmpRR { left: Gpr, right: Gpr },
+    SetBelow { destination: LowByteGpr },
+    SetLess { destination: LowByteGpr },
 }
 
 impl Instruction {
@@ -227,10 +300,19 @@ impl Instruction {
                 destination.heather_name(),
                 source.heather_name(),
             ),
+            Instruction::CmpRR { left, right } => {
+                format!("CmpRR({}, {})", left.heather_name(), right.heather_name(),)
+            }
+            Instruction::SetBelow { destination } => {
+                format!("SetBelow({})", destination.heather_name())
+            }
+            Instruction::SetLess { destination } => {
+                format!("SetLess({})", destination.heather_name())
+            }
         }
     }
 
-    pub fn destination(self) -> Gpr {
+    pub fn destination(self) -> Option<Gpr> {
         match self {
             Instruction::MovRR { destination, .. }
             | Instruction::MovRI { destination, .. }
@@ -238,7 +320,11 @@ impl Instruction {
             | Instruction::SubRR { destination, .. }
             | Instruction::AndRR { destination, .. }
             | Instruction::OrRR { destination, .. }
-            | Instruction::XorRR { destination, .. } => destination,
+            | Instruction::XorRR { destination, .. } => Some(destination),
+            Instruction::CmpRR { .. } => None,
+            Instruction::SetBelow { destination } | Instruction::SetLess { destination } => {
+                Some(destination.gpr())
+            }
         }
     }
 
@@ -268,6 +354,7 @@ pub struct LoweredDag {
     pub node_plans: Vec<NodePlan>,
     pub instructions: Vec<Instruction>,
     pub output_id: u64,
+    pub output_width: u64,
     pub output_register: Gpr,
     pub clobbered: BTreeSet<Gpr>,
 }
@@ -295,6 +382,9 @@ pub enum LoweringError {
     UndefinedValue(u64),
     OutputCount(usize),
     UnsupportedOperation {
+        node_index: usize,
+    },
+    NoSafeByteRegister {
         node_index: usize,
     },
     RegisterPressure {
@@ -339,6 +429,10 @@ impl fmt::Display for LoweringError {
             LoweringError::UnsupportedOperation { node_index } => {
                 write!(f, "node {node_index} is not yet supported by x86 lowering")
             }
+            LoweringError::NoSafeByteRegister { node_index } => write!(
+                f,
+                "node {node_index} needs one of RAX/RCX/RDX/RBX for safe no-REX SETcc materialization",
+            ),
             LoweringError::RegisterPressure {
                 node_index,
                 live_temporaries,
@@ -400,9 +494,16 @@ pub fn lower_dag(
 
     let mut uses = BTreeMap::<u64, usize>::new();
     for (node_index, node) in region.nodes.iter().enumerate() {
-        if let SelectedNode::Binary(node) = selected_node(*node, node_index)? {
-            *uses.entry(node.left).or_default() += 1;
-            *uses.entry(node.right).or_default() += 1;
+        match selected_node(*node, node_index)? {
+            SelectedNode::Binary(node) => {
+                *uses.entry(node.left).or_default() += 1;
+                *uses.entry(node.right).or_default() += 1;
+            }
+            SelectedNode::Comparison(node) => {
+                *uses.entry(node.left).or_default() += 1;
+                *uses.entry(node.right).or_default() += 1;
+            }
+            SelectedNode::Constant(_) => {}
         }
     }
     for output in &region.outputs {
@@ -416,7 +517,10 @@ pub fn lower_dag(
 
     for (node_index, &raw_node) in region.nodes.iter().enumerate() {
         let selected = selected_node(raw_node, node_index)?;
-        require_width(selected.output(), selected.width())?;
+        match selected {
+            SelectedNode::Comparison(_) => {}
+            _ => require_width(selected.output(), selected.width())?,
+        }
         if placements.contains_key(&selected.output()) {
             return Err(LoweringError::DuplicateValue(selected.output()));
         }
@@ -544,6 +648,94 @@ pub fn lower_dag(
                     step_instructions,
                 )
             }
+            SelectedNode::Comparison(node) => {
+                if !produces_output {
+                    return Err(LoweringError::UnsupportedOperation { node_index });
+                }
+                if node.operand_width != 64 {
+                    return Err(LoweringError::UnsupportedWidth {
+                        value: node.output,
+                        width: node.operand_width,
+                    });
+                }
+                let Some(&left_register) = placements.get(&node.left) else {
+                    return Err(LoweringError::UndefinedValue(node.left));
+                };
+                let Some(&right_register) = placements.get(&node.right) else {
+                    return Err(LoweringError::UndefinedValue(node.right));
+                };
+                for value in [node.left, node.right] {
+                    if widths.get(&value) != Some(&64) {
+                        return Err(LoweringError::UnsupportedWidth {
+                            value,
+                            width: *widths.get(&value).unwrap_or(&0),
+                        });
+                    }
+                }
+                let preferred = produces_output
+                    .then_some(requested_output)
+                    .filter(|register| !owners.contains_key(register))
+                    .and_then(|register| LowByteGpr::from_gpr(register).map(|_| register));
+                let destination = preferred.or_else(|| {
+                    temporary_registers.iter().copied().find(|register| {
+                        !owners.contains_key(register) && LowByteGpr::from_gpr(*register).is_some()
+                    })
+                });
+                let destination = match destination {
+                    Some(destination) => destination,
+                    None if temporary_registers
+                        .iter()
+                        .any(|register| !owners.contains_key(register)) =>
+                    {
+                        return Err(LoweringError::NoSafeByteRegister { node_index });
+                    }
+                    None => {
+                        return Err(LoweringError::RegisterPressure {
+                            node_index,
+                            live_temporaries: owners.len(),
+                        });
+                    }
+                };
+                let byte_destination = LowByteGpr::from_gpr(destination)
+                    .expect("comparison destination was filtered to a low-byte register");
+                consume_use(&mut uses, node.left)?;
+                consume_use(&mut uses, node.right)?;
+                for value in [node.left, node.right] {
+                    if uses.get(&value) == Some(&0) {
+                        if let Some(&register) = placements.get(&value) {
+                            if owners.get(&register) == Some(&value) {
+                                owners.remove(&register);
+                            }
+                        }
+                    }
+                }
+                let set = match node.operation {
+                    ComparisonOperation::UnsignedLessThan => Instruction::SetBelow {
+                        destination: byte_destination,
+                    },
+                    ComparisonOperation::SignedLessThan => Instruction::SetLess {
+                        destination: byte_destination,
+                    },
+                };
+                (
+                    Some(left_register),
+                    Some(right_register),
+                    destination,
+                    None,
+                    OperandOrientation::Original,
+                    vec![
+                        Instruction::MovRI {
+                            destination,
+                            immediate: 0,
+                        },
+                        Instruction::CmpRR {
+                            left: left_register,
+                            right: right_register,
+                        },
+                        set,
+                    ],
+                )
+            }
         };
         if uses.get(&selected.output()).copied().unwrap_or(0) > 0 {
             owners.insert(destination, selected.output());
@@ -567,7 +759,12 @@ pub fn lower_dag(
     }
 
     let output = region.outputs[0];
-    require_width(output.id, output.width)?;
+    if output.width != 64 && output.width != 1 {
+        return Err(LoweringError::UnsupportedWidth {
+            value: output.id,
+            width: output.width,
+        });
+    }
     if widths.get(&output.id) != Some(&output.width) {
         return Err(LoweringError::UndefinedValue(output.id));
     }
@@ -588,6 +785,7 @@ pub fn lower_dag(
         node_plans,
         instructions,
         output_id: output.id,
+        output_width: output.width,
         output_register,
         clobbered,
     })
@@ -688,22 +886,28 @@ pub fn generate(
         &arguments,
         &mut text,
     );
+    let result_expression = match lowered.output_width {
+        64 => format!("values(64, {})", lowered.output_id),
+        1 => format!(
+            "bitvec::zero_extend(1, 63, values(1, {}))",
+            lowered.output_id,
+        ),
+        _ => unreachable!("lowering accepted only 64-bit and one-bit outputs"),
+    };
     text.push_str(&format!(
         "theorem {prefix}_refines_compact<M>({compact_parameters}):\n\
-         \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {})\n\
+         \x20   read_gpr({}, {after_name}(before).gprs) = {result_expression}\n\
          {{\n\
          \x20   sym({final_placement})\n\
          }}\n\n\
          theorem {prefix}_refines_function_ir<M>({public_parameters}):\n\
-         \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {})\n\
+         \x20   read_gpr({}, {after_name}(before).gprs) = {result_expression}\n\
          {{\n\
          \x20   {prefix}_refines_compact(values, before,\n\
          \x20       {prefix}_Context({context_arguments}))\n\
          }}\n\n",
         lowered.output_register.heather_name(),
-        lowered.output_id,
         lowered.output_register.heather_name(),
-        lowered.output_id,
     ));
 
     text.push_str(&format!(
@@ -736,7 +940,7 @@ pub fn generate(
     text.push_str(&format!(
         "theorem {prefix}_artifact<M>({public_parameters}):\n\
          \x20   BlockArtifact<M>({instructions_name}(), before, {},\n\
-         \x20       values(64, {}), {protected_name},\n\
+         \x20       {result_expression}, {protected_name},\n\
          \x20       {prefix}_final_rip(before.rip))\n\
          {{\n\
          \x20   BlockArtifact(\n\
@@ -749,7 +953,6 @@ pub fn generate(
          \x20           {prefix}_preserves_protected(register, before, protected))\n\
          }}\n",
         lowered.output_register.heather_name(),
-        lowered.output_id,
     ));
 
     Ok(X86Emission { lowered, text })
@@ -905,9 +1108,16 @@ fn emit_placement_proofs(
     let mut frame_facts = BTreeSet::new();
     let mut remaining = BTreeMap::<u64, usize>::new();
     for plan in &lowered.node_plans {
-        if let SelectedNode::Binary(node) = plan.node {
-            *remaining.entry(node.left).or_default() += 1;
-            *remaining.entry(node.right).or_default() += 1;
+        match plan.node {
+            SelectedNode::Binary(node) => {
+                *remaining.entry(node.left).or_default() += 1;
+                *remaining.entry(node.right).or_default() += 1;
+            }
+            SelectedNode::Comparison(node) => {
+                *remaining.entry(node.left).or_default() += 1;
+                *remaining.entry(node.right).or_default() += 1;
+            }
+            SelectedNode::Constant(_) => {}
         }
     }
     for output in &region.outputs {
@@ -946,8 +1156,10 @@ fn emit_placement_proofs(
             plan.node.output(),
             plan.node_index
         );
-        for (offset, instruction) in plan.instructions.iter().copied().enumerate() {
-            emit_step_result_fact(prefix, before_index + offset, instruction, text);
+        if !matches!(plan.node, SelectedNode::Comparison(_)) {
+            for (offset, instruction) in plan.instructions.iter().copied().enumerate() {
+                emit_step_result_fact(prefix, before_index + offset, instruction, text);
+            }
         }
         match plan.node {
             SelectedNode::Constant(node) => {
@@ -1145,6 +1357,102 @@ fn emit_placement_proofs(
                 consume_known_use(&mut remaining, node.left);
                 consume_known_use(&mut remaining, node.right);
             }
+            SelectedNode::Comparison(node) => {
+                debug_assert_eq!(plan.instructions.len(), 3);
+                let left_register = plan.left_register.expect("comparison left register");
+                let right_register = plan.right_register.expect("comparison right register");
+                let (_, left_stored_proof) = live
+                    .get(&node.left)
+                    .expect("validated comparison left placement");
+                let (_, right_stored_proof) = live
+                    .get(&node.right)
+                    .expect("validated comparison right placement");
+                let compare_state = before_index + 1;
+                let mut advance_operand =
+                    |value: u64,
+                     register: Gpr,
+                     stored_proof: &str,
+                     side: &str,
+                     text: &mut String| {
+                        if input_indices.contains_key(&value) {
+                            return placement_at_state(
+                                prefix,
+                                value,
+                                register,
+                                compare_state,
+                                stored_proof,
+                                &input_indices,
+                            );
+                        }
+                        let frame = emit_step_frame_fact(
+                            prefix,
+                            before_index,
+                            plan.instructions[0],
+                            register,
+                            &mut frame_facts,
+                            text,
+                        );
+                        let name =
+                            format!("{prefix}_comparison_{}_{}_at_cmp", plan.node_index, side,);
+                        text.push_str(&format!(
+                        "theorem {name}<M>({parameters}):\n\
+                         \x20   ValuePlaced(values, {value}, {}, {prefix}_state_{compare_state}(before))\n\
+                         {{\n\
+                         \x20   placed_after_frame(values, {value}, {},\n\
+                         \x20       {prefix}_state_{before_index}(before), {prefix}_state_{compare_state}(before),\n\
+                         \x20       {stored_proof}, {frame}({prefix}_state_{before_index}(before)))\n\
+                         }}\n",
+                        register.heather_name(),
+                        register.heather_name(),
+                    ));
+                        format!("{name}({arguments})")
+                    };
+                let left_proof =
+                    advance_operand(node.left, left_register, left_stored_proof, "left", text);
+                let right_proof = advance_operand(
+                    node.right,
+                    right_register,
+                    right_stored_proof,
+                    "right",
+                    text,
+                );
+                let condition = match node.operation {
+                    ComparisonOperation::UnsignedLessThan => "bitvec::unsigned_lt_bit",
+                    ComparisonOperation::SignedLessThan => "bitvec::signed_lt_bit",
+                };
+                let result_name = format!("{prefix}_comparison_{}_result", plan.node_index);
+                text.push_str(&format!(
+                    "theorem {result_name}<M>(before: MachineState<M>):\n\
+                     \x20   read_gpr({}, {prefix}_state_{after_index}(before).gprs) =\n\
+                     \x20       bitvec::zero_extend(1, 63, bitvec::ofBool(\n\
+                     \x20           {condition}(64, read_gpr({}, {prefix}_state_{compare_state}(before).gprs),\n\
+                     \x20               read_gpr({}, {prefix}_state_{compare_state}(before).gprs))))\n\
+                     {{ refl }}\n",
+                    plan.destination.heather_name(),
+                    left_register.heather_name(),
+                    right_register.heather_name(),
+                ));
+                text.push_str(&format!(
+                    "theorem {output_name}<M>({parameters}):\n\
+                     \x20   BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
+                     {{\n\
+                     \x20   placed_after_comparison(values, {}, {}, {}, {condition}(64, ·, ·),\n\
+                     \x20       {}, {}, {}, {prefix}_state_{compare_state}(before),\n\
+                     \x20       {prefix}_state_{after_index}(before), {equation}, {left_proof}, {right_proof},\n\
+                     \x20       {result_name}(before))\n\
+                     }}\n",
+                    node.output,
+                    plan.destination.heather_name(),
+                    node.output,
+                    node.left,
+                    node.right,
+                    left_register.heather_name(),
+                    right_register.heather_name(),
+                    plan.destination.heather_name(),
+                ));
+                consume_known_use(&mut remaining, node.left);
+                consume_known_use(&mut remaining, node.right);
+            }
         }
         let mut next_live = BTreeMap::new();
         for (&value, &(register, ref proof)) in &live {
@@ -1211,11 +1519,16 @@ fn emit_placement_proofs(
             text,
         );
         let final_name = format!("{prefix}_output_placed");
+        let (placement, move_theorem) = if lowered.output_width == 1 {
+            ("BitValuePlaced", "bit_placed_after_move")
+        } else {
+            ("ValuePlaced", "placed_after_move")
+        };
         text.push_str(&format!(
             "theorem {final_name}<M>({parameters}):\n\
-             \x20   ValuePlaced(values, {}, {}, {prefix}_state_{}(before))\n\
+             \x20   {placement}(values, {}, {}, {prefix}_state_{}(before))\n\
              {{\n\
-             \x20   placed_after_move(values, {}, {}, {},\n\
+             \x20   {move_theorem}(values, {}, {}, {},\n\
              \x20       {prefix}_state_{instruction_index}(before),\n\
              \x20       {prefix}_state_{}(before), {source_proof},\n\
              \x20       {prefix}_step_{instruction_index}_result(\n\
@@ -1291,6 +1604,9 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
             destination,
             source,
         } => render_binary_result(BinaryOperation::BitXor, destination, source),
+        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
+            panic!("comparison instructions use their composed result fact")
+        }
     };
     text.push_str(&format!(
         "theorem {prefix}_step_{step}_result<M>(state: MachineState<M>):\n\
@@ -1326,7 +1642,7 @@ fn emit_step_frame_fact(
     emitted: &mut BTreeSet<(usize, Gpr)>,
     text: &mut String,
 ) -> String {
-    debug_assert_ne!(instruction.destination(), register);
+    debug_assert_ne!(instruction.destination(), Some(register));
     let name = format!("{prefix}_step_{step}_preserves_{}", register.heather_name());
     if emitted.insert((step, register)) {
         text.push_str(&format!(
@@ -1444,6 +1760,30 @@ fn selected_node(node: Node, node_index: usize) -> Result<SelectedNode, Lowering
             left,
             right,
         })),
+        Node::UnsignedLessThan {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(SelectedNode::Comparison(ComparisonNode {
+            operation: ComparisonOperation::UnsignedLessThan,
+            operand_width: width,
+            output,
+            left,
+            right,
+        })),
+        Node::SignedLessThan {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(SelectedNode::Comparison(ComparisonNode {
+            operation: ComparisonOperation::SignedLessThan,
+            operand_width: width,
+            output,
+            left,
+            right,
+        })),
         _ => Err(LoweringError::UnsupportedOperation { node_index }),
     }
 }
@@ -1555,8 +1895,7 @@ mod tests {
             }],
             outputs: vec![Port { id: 2, width: 64 }],
         };
-        let lowered =
-            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+        let lowered = lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(
             lowered.instructions,
             vec![
@@ -1620,12 +1959,87 @@ mod tests {
     }
 
     #[test]
+    fn comparisons_use_a_safe_zero_cmp_setcc_sequence() {
+        for (node, final_instruction) in [
+            (
+                Node::UnsignedLessThan {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1,
+                },
+                Instruction::SetBelow {
+                    destination: LowByteGpr::Al,
+                },
+            ),
+            (
+                Node::SignedLessThan {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1,
+                },
+                Instruction::SetLess {
+                    destination: LowByteGpr::Al,
+                },
+            ),
+        ] {
+            let region = Region {
+                inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+                nodes: vec![node],
+                outputs: vec![Port { id: 2, width: 1 }],
+            };
+            let lowered = lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+            assert_eq!(
+                lowered.instructions,
+                vec![
+                    Instruction::MovRI {
+                        destination: Gpr::Rax,
+                        immediate: 0,
+                    },
+                    Instruction::CmpRR {
+                        left: Gpr::Rdi,
+                        right: Gpr::Rsi,
+                    },
+                    final_instruction,
+                ]
+            );
+            assert_eq!(lowered.output_width, 1);
+            assert_eq!(
+                lowered
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.canonical_length())
+                    .sum::<usize>(),
+                16,
+            );
+        }
+    }
+
+    #[test]
+    fn comparison_declines_an_unsafe_byte_register_pool() {
+        let region = Region {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            nodes: vec![Node::UnsignedLessThan {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1,
+            }],
+            outputs: vec![Port { id: 2, width: 1 }],
+        };
+        assert_eq!(
+            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::R8], Gpr::R8),
+            Err(LoweringError::NoSafeByteRegister { node_index: 0 }),
+        );
+    }
+
+    #[test]
     fn sum4_reuses_the_operand_already_in_the_requested_output_register() {
         let inputs = [Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx];
         let temporaries = [Gpr::Rax, Gpr::R8];
         for left_first in [true, false] {
-            let lowered =
-                lower_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
+            let lowered = lower_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
             let plan = &lowered.node_plans[2];
             assert_eq!(plan.reused_value, Some(if left_first { 4 } else { 5 }));
             assert_eq!(
@@ -1668,12 +2082,13 @@ mod tests {
             id: left,
             width: 64,
         });
-        let lowered =
-            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+        let lowered = lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(lowered.instructions.len(), 101);
-        assert!(lowered.node_plans[1..]
-            .iter()
-            .all(|step| step.reused_value.is_some()));
+        assert!(
+            lowered.node_plans[1..]
+                .iter()
+                .all(|step| step.reused_value.is_some())
+        );
     }
 
     #[test]
@@ -1753,7 +2168,7 @@ mod tests {
                 lowered.node_plans[1].orientation,
                 OperandOrientation::Reversed
             );
-            assert_eq!(lowered.instructions[2].destination(), Gpr::Rax);
+            assert_eq!(lowered.instructions[2].destination(), Some(Gpr::Rax));
         }
     }
 

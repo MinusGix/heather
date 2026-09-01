@@ -147,3 +147,11 @@ Acceptance has two parts:
   experiments that produced runs automatically either regressed x86 or did
   not help the forcing customer, while `Le` consumes both logical spines and
   the machine-width `carry_add` proposition still reaches `OutOfFuel`.
+- 2026-09-01: Comparison materialization supplied another small closed
+  reproducer. A direct `refl` assertion for unsigned or signed 64-bit ordering
+  at the `2^63` boundary exhausts ordinary kernel fuel, even as the symbolic
+  theorem equating x86 `CMP` flags with `unsigned_lt_bit`/`signed_lt_bit` checks
+  and staged generated comparison certificates finish in 20--28 seconds.
+  Splitting the concrete conjunction into individual theorems did not help;
+  the first unsigned `0 < 2^63` item alone exhausts fuel. Keep this with the
+  closed producer/consumer investigation rather than raising compiler rails.

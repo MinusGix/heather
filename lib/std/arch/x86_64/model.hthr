@@ -4,7 +4,8 @@
 // proofs about externally supplied bytes meet at that boundary.
 //
 // Scope: long-mode scalar register forms MOV (register and imm64), ADD, SUB,
-// CMP, and TEST over r64 operands. There are no memory operands or execution
+// CMP and TEST over r64 operands, plus canonical legacy-low-byte SETB/SETL.
+// There are no memory operands or execution
 // faults in this slice. Coverage remains distinct from semantic outcomes
 // through std/relation.
 
@@ -94,6 +95,18 @@ record MachineState<M> {
     memory: M,
 }
 
+// The first SETcc slice deliberately names only the four legacy low-byte
+// registers whose no-REX encodings cannot denote AH/CH/DH/BH by accident.
+inductive LowByteGpr { Al, Cl, Dl, Bl }
+
+fn low_byte_gpr(register: LowByteGpr) → Gpr {
+    match register { Al => Rax, Cl => Rcx, Dl => Rdx, Bl => Rbx }
+}
+
+fn low_byte_code(register: LowByteGpr) → Nat {
+    match register { Al => 0, Cl => 1, Dl => 2, Bl => 3 }
+}
+
 inductive Instruction {
     MovRR(destination: Gpr, source: Gpr),
     MovRI(destination: Gpr, immediate: BitVec(64)),
@@ -103,6 +116,8 @@ inductive Instruction {
     OrRR(destination: Gpr, source: Gpr),
     XorRR(destination: Gpr, source: Gpr),
     CmpRR(left: Gpr, right: Gpr),
+    SetBelow(destination: LowByteGpr),
+    SetLess(destination: LowByteGpr),
     TestRR(left: Gpr, right: Gpr),
 }
 
@@ -422,6 +437,15 @@ fn mov_ri_bytes(destination: Gpr, immediate: BitVec(64)) →
         imm_byte6(immediate), imm_byte7(immediate)]
 }
 
+fn setcc_modrm(destination: LowByteGpr) → BitVec(8) {
+    bitvec::ofNat(8, 192 + low_byte_code(destination))
+}
+
+fn setcc_bytes(opcode: Nat, destination: LowByteGpr) → List<BitVec(8)> {
+    [bitvec::ofNat(8, 15), bitvec::ofNat(8, opcode),
+        setcc_modrm(destination)]
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -447,6 +471,9 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         // 39 /r: CMP r64 with r/m64.
         CmpRR(left, right) =>
             rr_bytes(57, left, right),
+        // 0F 92 /0 and 0F 9C /0: materialize CF and SF xor OF.
+        SetBelow(destination) => setcc_bytes(146, destination),
+        SetLess(destination) => setcc_bytes(156, destination),
         // 85 /r: TEST r64 against r/m64.
         TestRR(left, right) =>
             rr_bytes(133, left, right),
@@ -495,6 +522,8 @@ fn canonical_length_valid(instruction: Instruction) →
         OrRR(_, _) => And(trivial, trivial),
         XorRR(_, _) => And(trivial, trivial),
         CmpRR(_, _) => And(trivial, trivial),
+        SetBelow(_) => And(trivial, trivial),
+        SetLess(_) => And(trivial, trivial),
         TestRR(_, _) => And(trivial, trivial),
     }
 }
@@ -543,6 +572,12 @@ fn MovRiEncoding(bytes: List<BitVec(8)>, destination: Gpr,
     bytes = mov_ri_bytes(destination, immediate)
 }
 
+fn SetccEncoding(bytes: List<BitVec(8)>, opcode: Nat,
+    destination: LowByteGpr) → Type
+{
+    bytes = setcc_bytes(opcode, destination)
+}
+
 // Direction-opcode alternatives normalize into one semantic instruction.
 // Operand roles are reversed in the 8B/03/2B/3B forms because ModRM.reg,
 // rather than ModRM.r/m, names the destination or left operand there.
@@ -568,6 +603,8 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         CmpRR(left, right) =>
             RrEncoding(bytes, 57, left, right)
             ∨ RrEncoding(bytes, 59, right, left),
+        SetBelow(destination) => SetccEncoding(bytes, 146, destination),
+        SetLess(destination) => SetccEncoding(bytes, 156, destination),
         TestRR(left, right) => RrEncoding(bytes, 133, left, right),
     }
 }
@@ -1337,6 +1374,56 @@ fn decode_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
     decode_rr_bytes(bytes)
 }
 
+fn low_byte_from_modrm(byte: BitVec(8)) → LowByteGpr {
+    match byte_bit1(byte) {
+        False => match byte_bit0(byte) { False => Al, True => Cl },
+        True => match byte_bit0(byte) { False => Dl, True => Bl },
+    }
+}
+
+fn decode_setcc_opcode(opcode, modrm: BitVec(8)) → Option<Instruction> {
+    let destination = low_byte_from_modrm(modrm);
+    match bitvec::eq_dec(8, modrm, setcc_modrm(destination)) {
+        Inr(_) => None,
+        Inl(_) => match bitvec::eq_dec(8, opcode, bitvec::ofNat(8, 146)) {
+            Inl(_) => Some(SetBelow(destination)),
+            Inr(_) => match bitvec::eq_dec(8, opcode, bitvec::ofNat(8, 156)) {
+                Inl(_) => Some(SetLess(destination)),
+                Inr(_) => None,
+            },
+        },
+    }
+}
+
+fn decode_setcc(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
+    match bytes {
+        Nil => None,
+        Cons(prefix, tail1) => match byte_bit6(prefix) {
+            // Every REX prefix takes this cheap arm, keeping RR decoding
+            // definitionally unchanged.
+            True => None,
+            False => match tail1 {
+                Nil => None,
+                Cons(opcode, tail2) => match tail2 {
+                    Nil => None,
+                    Cons(modrm, tail3) => match tail3 {
+                        Cons(_, _) => None,
+                        Nil => match bitvec::eq_dec(8, prefix,
+                                bitvec::ofNat(8, 15)) {
+                            Inr(_) => None,
+                            Inl(_) => match decode_setcc_opcode(opcode, modrm) {
+                                None => None,
+                                Some(instruction) =>
+                                    Some(decoded_canonical(instruction)),
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
 fn decode_mov_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match bytes {
         Nil => None,
@@ -1386,9 +1473,12 @@ fn decode_mov_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
 fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match decode_mov_ri(bytes) {
         Some(decoded) => Some(decoded),
-        None => match decode_bytes(bytes) {
-            None => None,
-            Some(result) => Some(decoded_canonical(result.instruction)),
+        None => match decode_setcc(bytes) {
+            Some(decoded) => Some(decoded),
+            None => match decode_bytes(bytes) {
+                None => None,
+                Some(result) => Some(decoded_canonical(result.instruction)),
+            },
         },
     }
 }
@@ -1536,6 +1626,31 @@ theorem decode_instruction_of_mov_ri_encoding(bytes: List<BitVec(8)>,
         decode_mov_ri_complete(destination, immediate))
 }
 
+theorem decode_set_below_complete(destination: LowByteGpr):
+    decode_instruction(setcc_bytes(146, destination)) =
+        Some(decoded_canonical(SetBelow(destination)))
+{
+    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+}
+
+theorem decode_set_less_complete(destination: LowByteGpr):
+    decode_instruction(setcc_bytes(156, destination)) =
+        Some(decoded_canonical(SetLess(destination)))
+{
+    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+}
+
+theorem decode_instruction_of_setcc_encoding(bytes: List<BitVec(8)>,
+    opcode: Nat, destination: LowByteGpr, instruction: Instruction,
+    encoding: SetccEncoding(bytes, opcode, destination),
+    generated: decode_instruction(setcc_bytes(opcode, destination)) =
+        Some(decoded_canonical(instruction))):
+    decode_instruction(bytes) = Some(decoded_canonical(instruction))
+{
+    j(sym(encoding), λ actual q => decode_instruction(actual) =
+        Some(decoded_canonical(instruction)), generated)
+}
+
 theorem decode_instruction_complete(bytes: List<BitVec(8)>,
     instruction: Instruction,
     decoding: DecodesInstruction(bytes, instruction)):
@@ -1599,6 +1714,14 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
                 right, left, CmpRR(left, right), encoding,
                 decode_instruction_rr_complete(CmpRegRm, right, left)),
         },
+        SetBelow(destination) => λ encoding =>
+            decode_instruction_of_setcc_encoding(bytes, 146, destination,
+                SetBelow(destination), encoding,
+                decode_set_below_complete(destination)),
+        SetLess(destination) => λ encoding =>
+            decode_instruction_of_setcc_encoding(bytes, 156, destination,
+                SetLess(destination), encoding,
+                decode_set_less_complete(destination)),
         TestRR(left, right) => λ encoding =>
             decode_instruction_of_rr_encoding(bytes, 133, left, right,
                 TestRR(left, right), encoding,
@@ -1642,7 +1765,8 @@ theorem decoded_canonical_length(instruction: Instruction):
         MovRR(_, _) => refl, MovRI(_, _) => refl,
         AddRR(_, _) => refl, SubRR(_, _) => refl,
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
-        CmpRR(_, _) => refl, TestRR(_, _) => refl,
+        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl,
+        TestRR(_, _) => refl,
     }
 }
 
@@ -1666,6 +1790,8 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         OrRR(_, _) => And(And(refl, And(refl, refl)), refl),
         XorRR(_, _) => And(And(refl, And(refl, refl)), refl),
         CmpRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
+        SetBelow(_) => And(refl, refl),
+        SetLess(_) => And(refl, refl),
         TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
     }
 }
@@ -1753,6 +1879,8 @@ theorem canonical_bytes_length(instruction: Instruction):
         OrRR(_, _) => refl,
         XorRR(_, _) => refl,
         CmpRR(_, _) => refl,
+        SetBelow(_) => refl,
+        SetLess(_) => refl,
         TestRR(_, _) => refl,
     }
 }
@@ -1894,6 +2022,33 @@ fn execute_cmp(left, right: Gpr, before: Gprs) → RegisterEffect
     )
 }
 
+fn condition_byte(condition: Bool) → BitVec(8) {
+    bitvec::zero_extend(1, 7, bitvec::ofBool(condition))
+}
+
+fn write_low_byte(destination: LowByteGpr, condition: Bool,
+    before: Gprs) → Gprs
+{
+    let register = low_byte_gpr(destination);
+    write_gpr(register,
+        bitvec::concat(8, 56, condition_byte(condition),
+            bitvec::drop_low(8, 56, read_gpr(register, before))), before)
+}
+
+fn execute_set_below(destination: LowByteGpr, before: Gprs,
+    flags: Flags) → RegisterEffect
+{
+    RegisterEffect(gprs := write_low_byte(destination, flags.cf, before),
+        flags := flags)
+}
+
+fn execute_set_less(destination: LowByteGpr, before: Gprs,
+    flags: Flags) → RegisterEffect
+{
+    RegisterEffect(gprs := write_low_byte(destination,
+        bitvec::xor_bit(flags.sf, flags.of), before), flags := flags)
+}
+
 fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
     RegisterEffect
 {
@@ -1912,6 +2067,8 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
         OrRR(destination, source) => execute_or(destination, source, before),
         XorRR(destination, source) => execute_xor(destination, source, before),
         CmpRR(left, right) => execute_cmp(left, right, before),
+        SetBelow(destination) => execute_set_below(destination, before, flags),
+        SetLess(destination) => execute_set_less(destination, before, flags),
         // Canonical representative for functional clients. `Execute` below
         // is authoritative and admits both values of undefined AF.
         TestRR(left, right) => RegisterEffect(
@@ -1959,6 +2116,8 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
         OrRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
         XorRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
         CmpRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        SetBelow(_) => outcome = Returned(execute_normal(decoded, before)),
+        SetLess(_) => outcome = Returned(execute_normal(decoded, before)),
         TestRR(left, right) => ∃ af: Bool,
             outcome = Returned(execute_test(left, right, decoded.length, before, af)),
     }
@@ -1988,6 +2147,8 @@ theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
         OrRR(_, _) => refl,
         XorRR(_, _) => refl,
         CmpRR(_, _) => refl,
+        SetBelow(_) => refl,
+        SetLess(_) => refl,
         TestRR(_, _) => Exists(False, refl),
     }
 }
@@ -2201,6 +2362,8 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         OrRR(_, _) => refl,
         XorRR(_, _) => refl,
         CmpRR(_, _) => refl,
+        SetBelow(_) => refl,
+        SetLess(_) => refl,
         TestRR(_, _) => refl,
     }
 }

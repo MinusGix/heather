@@ -5,7 +5,7 @@ mod support;
 
 use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
-use heather_elab::{stats, ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, stats};
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -237,15 +237,73 @@ fn generated_constant_add_dag_checks() {
     )
     .expect("lower constant/Add DAG");
     assert_eq!(emission.lowered.instructions.len(), 2);
-    assert!(emission
-        .text
-        .contains("byte_length(): constant_add_x86_bytes().len() = 13"));
+    assert!(
+        emission
+            .text
+            .contains("byte_length(): constant_add_x86_bytes().len() = 13")
+    );
     assert!(emission.text.contains("next_rip(next_rip(start, 10), 3)"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
     if let Err(error) = e.elab_module_source("function_ir_constant_add_x86", &source) {
         panic!(
             "generated constant/Add artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
+fn generated_mixed_unsigned_comparison_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let region = mixed_unsigned_comparison();
+    let raw = cert::render_region_function("mixed_unsigned_comparison_raw", &region);
+    let emission = lower::generate(
+        "mixed_unsigned_comparison_x86",
+        "mixed_unsigned_comparison_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+        &[Gpr::Rax, Gpr::Rbx],
+        Gpr::Rax,
+    )
+    .expect("lower mixed Add/unsigned-comparison DAG");
+    assert_eq!(emission.lowered.output_width, 1);
+    assert!(emission.text.contains("SetBelow(Bl)"));
+    assert!(
+        emission
+            .text
+            .contains("bitvec::zero_extend(1, 63, values(1, 4))")
+    );
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_unsigned_comparison_x86", &source) {
+        panic!(
+            "generated mixed unsigned-comparison artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
+fn generated_signed_comparison_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let region = signed_comparison();
+    let raw = cert::render_region_function("signed_comparison_raw", &region);
+    let emission = lower::generate(
+        "signed_comparison_x86",
+        "signed_comparison_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("lower signed comparison");
+    assert!(emission.text.contains("SetLess(Al)"));
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_signed_comparison_x86", &source) {
+        panic!(
+            "generated signed-comparison artifact did not check: {}",
             error.render(&source),
         );
     }
@@ -302,6 +360,40 @@ fn constant_add() -> Region {
             },
         ],
         outputs: vec![Port { id: 2, width: 64 }],
+    }
+}
+
+fn mixed_unsigned_comparison() -> Region {
+    Region {
+        inputs: (0..3).map(|id| Port { id, width: 64 }).collect(),
+        nodes: vec![
+            Node::Add {
+                width: 64,
+                output: 3,
+                left: 0,
+                right: 1,
+            },
+            Node::UnsignedLessThan {
+                width: 64,
+                output: 4,
+                left: 3,
+                right: 2,
+            },
+        ],
+        outputs: vec![Port { id: 4, width: 1 }],
+    }
+}
+
+fn signed_comparison() -> Region {
+    Region {
+        inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        nodes: vec![Node::SignedLessThan {
+            width: 64,
+            output: 2,
+            left: 0,
+            right: 1,
+        }],
+        outputs: vec![Port { id: 2, width: 1 }],
     }
 }
 

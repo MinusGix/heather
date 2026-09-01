@@ -46,10 +46,12 @@ kernel-checked against `RegionHolds`. The reusable placement theorem uses
 direct equality elimination: spelling the same substitution through generic
 congruence and transitivity crossed the existing kernel fuel rail.
 
-The issue remains open for constants/immediate encodings, shifts, and
-comparison materialization. Those are intentionally the next slice because
-they break the current accidental assumption that every selected instruction
-is a three-byte destructive register-register operation.
+Constants now lower through full-width `MOV r64, imm64`, with per-instruction
+layout replacing the old three-byte assumption. Signed and unsigned
+comparisons now lower through distinct `CMP`/`SETcc` rules and expose an
+explicit zero-extended representation for one-bit results. Immediate shifts
+remain the final backend family owned by this umbrella; their x86 masked-count
+legalization is tracked in [[function-ir-x86-shift-legalization]].
 
 A 20-node/22-instruction version was also probed. Its generated check had not
 finished after five minutes and was removed from the ordinary rail; the

@@ -92,6 +92,7 @@ fn x86_64_suite() {
     }
     register_and_execution_laws_check(&base);
     mov_ri_encoding_decoding_and_execution_check(&base);
+    setcc_encoding_decoding_and_execution_check(&base);
     if report_metrics {
         eprintln!(
             "x86_64 execution-law metrics: {:?}",
@@ -114,6 +115,61 @@ fn x86_64_suite() {
             "x86_64 negative-control metrics: {:?}",
             base.value_metrics().unwrap()
         );
+    }
+}
+
+fn setcc_encoding_decoding_and_execution_check(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import option;
+
+theorem canonical_setcc_bytes():
+    canonical_bytes(SetBelow(Al)) =
+        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192)]
+    ∧ canonical_bytes(SetLess(Bl)) =
+        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 156), bitvec::ofNat(8, 195)]
+{
+    And(refl, refl)
+}
+
+theorem canonical_setcc_decodes():
+    decode_instruction(canonical_bytes(SetBelow(Al))) =
+        Some(decoded_canonical(SetBelow(Al)))
+    ∧ decode_instruction(canonical_bytes(SetLess(Bl))) =
+        Some(decoded_canonical(SetLess(Bl)))
+{
+    And(refl, refl)
+}
+
+theorem malformed_setcc_is_rejected():
+    decode_instruction(
+        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146)]) = None
+    ∧ decode_instruction(
+        [bitvec::ofNat(8, 14), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192)]) = None
+    ∧ decode_instruction(
+        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 196)]) = None
+    ∧ decode_instruction(
+        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192),
+            bitvec::ofNat(8, 0)]) = None
+{
+    And(refl, And(refl, And(refl, refl)))
+}
+
+theorem cmp_flags_are_function_ir_conditions(left, right: BitVec(64)):
+    sub_flags(left, right).cf = bitvec::unsigned_lt_bit(64, left, right)
+    ∧ bitvec::xor_bit(sub_flags(left, right).sf, sub_flags(left, right).of) =
+        bitvec::signed_lt_bit(64, left, right)
+{
+    And(refl, refl)
+}
+
+"#;
+    if let Err(err) = e.elab_module_source("x86_setcc_checks", src) {
+        panic!("x86 SETcc checks did not check: {}", err.render(src));
     }
 }
 

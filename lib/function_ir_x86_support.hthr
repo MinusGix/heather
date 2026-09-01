@@ -7,6 +7,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bool;
 import list;
 import logic;
 
@@ -14,6 +15,27 @@ fn ValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
     state: MachineState<M>) → Type
 {
     values(64, id) = read_gpr(register, state.gprs)
+}
+
+// A one-bit SSA value is materialized in a GPR as the canonical zero-extended
+// machine value. Keeping this separate from `ValuePlaced` makes the first
+// mixed-width boundary explicit without pretending arbitrary widths already
+// have an ABI representation.
+fn BitValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
+    state: MachineState<M>) → Type
+{
+    bitvec::zero_extend(1, 63, values(1, id)) =
+        read_gpr(register, state.gprs)
+}
+
+theorem bit_placed_after_move<M>(values: Valuation(), id: Nat,
+    source, destination: Gpr, before, after: MachineState<M>,
+    placed: BitValuePlaced(values, id, source, before),
+    moved: read_gpr(destination, after.gprs) =
+        read_gpr(source, before.gprs)):
+    BitValuePlaced(values, id, destination, after)
+{
+    trans(placed, sym(moved))
 }
 
 theorem placed_after_frame<M>(values: Valuation(), id: Nat, register: Gpr,
@@ -59,5 +81,35 @@ theorem placed_after_binary<M>(values: Valuation(), output, left, right: Nat,
             λ found _ => operation(values(64, left), values(64, right)) =
                 operation(values(64, left), found),
             refl));
+    sym(computed)
+}
+
+theorem placed_after_comparison<M>(values: Valuation(), output, left, right: Nat,
+    condition: BitVec(64) → BitVec(64) → Bool,
+    left_register, right_register, destination: Gpr,
+    before, after: MachineState<M>,
+    equation: values(1, output) = bitvec::ofBool(
+        condition(values(64, left), values(64, right))),
+    left_placed: ValuePlaced(values, left, left_register, before),
+    right_placed: ValuePlaced(values, right, right_register, before),
+    computed: read_gpr(destination, after.gprs) = bitvec::zero_extend(1, 63,
+        bitvec::ofBool(condition(read_gpr(left_register, before.gprs),
+            read_gpr(right_register, before.gprs))))):
+    BitValuePlaced(values, output, destination, after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(1), BitVec(64)>(
+        bitvec::zero_extend(1, 63, ·), equation);
+    apply trans;
+    give j(left_placed,
+        λ found _ => bitvec::zero_extend(1, 63, bitvec::ofBool(
+            condition(values(64, left), values(64, right)))) =
+            bitvec::zero_extend(1, 63, bitvec::ofBool(
+                condition(found, read_gpr(right_register, before.gprs)))),
+        j(right_placed,
+            λ found _ => bitvec::zero_extend(1, 63, bitvec::ofBool(
+                condition(values(64, left), values(64, right)))) =
+                bitvec::zero_extend(1, 63, bitvec::ofBool(
+                    condition(values(64, left), found))), refl));
     sym(computed)
 }
