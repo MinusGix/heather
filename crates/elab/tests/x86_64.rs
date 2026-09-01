@@ -91,6 +91,7 @@ fn x86_64_suite() {
         base.reset_value_metrics();
     }
     register_and_execution_laws_check(&base);
+    mov_ri_encoding_decoding_and_execution_check(&base);
     if report_metrics {
         eprintln!(
             "x86_64 execution-law metrics: {:?}",
@@ -261,8 +262,9 @@ theorem sub_and_cmp_direction_encodings_normalize(start: BitVec(64)):
 
 theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
     before: MachineState<M>):
-    ExecuteAt(encoded_at(before.rip, instruction), decoded_rr(instruction), before,
-        Returned(execute_normal(decoded_rr(instruction), before)))
+    ExecuteAt(encoded_at(before.rip, instruction),
+        decoded_canonical(instruction), before,
+        Returned(execute_normal(decoded_canonical(instruction), before)))
 {
     canonical_encoding_executes(instruction, before)
 }
@@ -270,7 +272,8 @@ theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
 theorem decoded_length_drives_fallthrough<M>(span: InstructionBytes,
     decoded: DecodedInstruction, before: MachineState<M>,
     decoding: DecodedAt(span, decoded)):
-    execute_normal(decoded, before).rip = next_rip(before.rip, 3)
+    execute_normal(decoded, before).rip =
+        next_rip(before.rip, canonical_length(decoded.instruction))
 {
     decoded_execution_advances_by_consumed_length(span, decoded, before, decoding)
 }
@@ -354,7 +357,7 @@ theorem executable_decoder_accepts_both_sub_and_cmp_directions():
 theorem executable_decoder_is_complete(bytes: List<BitVec(8)>,
     instruction: Instruction,
     decoding: DecodesInstruction(bytes, instruction)):
-    decode_instruction(bytes) = Some(decoded_rr(instruction))
+    decode_instruction(bytes) = Some(decoded_canonical(instruction))
 {
     decode_instruction_complete(bytes, instruction, decoding)
 }
@@ -425,8 +428,8 @@ theorem executable_decoder_result_reaches_execution<M>(
     bytes: List<BitVec(8)>, result: ByteDecode(bytes), before: MachineState<M>):
     ExecuteAt(
         InstructionBytes(start := before.rip, bytes := bytes),
-        decoded_rr(result.instruction), before,
-        Returned(execute_normal(decoded_rr(result.instruction), before)))
+        decoded_canonical(result.instruction), before,
+        Returned(execute_normal(decoded_canonical(result.instruction), before)))
 {
     decoded_byte_result_executes(bytes, result, before)
 }
@@ -456,6 +459,86 @@ theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
             other => format!("{other}"),
         };
         panic!("x86 computations did not check: {msg}");
+    }
+}
+
+fn mov_ri_encoding_decoding_and_execution_check(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import x86_64;
+import bitvec;
+import list;
+import option;
+import logic;
+
+theorem mov_ri_low_zero_bytes():
+    canonical_bytes(MovRI(Rax, zero(64))) =
+        [ofNat(8, 72), ofNat(8, 184),
+         zero(8), zero(8), zero(8), zero(8),
+         zero(8), zero(8), zero(8), zero(8)]
+{ refl }
+
+theorem mov_ri_extended_ones_bytes():
+    canonical_bytes(MovRI(R15, all_ones(64))) =
+        [ofNat(8, 73), ofNat(8, 191),
+         all_ones(8), all_ones(8), all_ones(8), all_ones(8),
+         all_ones(8), all_ones(8), all_ones(8), all_ones(8)]
+{ refl }
+
+theorem mov_ri_canonical_lengths():
+    canonical_length(MovRI(Rax, zero(64))) = 10
+    ∧ canonical_bytes(MovRI(R15, all_ones(64))).len() = 10
+    ∧ decoded_canonical(MovRI(R8, one(64))).length = 10
+{ And(refl, And(refl, refl)) }
+
+theorem mov_ri_decoder_accepts_boundaries():
+    decode_instruction(canonical_bytes(MovRI(Rax, zero(64)))) =
+        Some(decoded_canonical(MovRI(Rax, zero(64))))
+    ∧ decode_instruction(canonical_bytes(MovRI(R15, all_ones(64)))) =
+        Some(decoded_canonical(MovRI(R15, all_ones(64))))
+{
+    And(decode_mov_ri_complete(Rax, zero(64)),
+        decode_mov_ri_complete(R15, all_ones(64)))
+}
+
+theorem mov_ri_decoder_rejects_truncated_trailing_and_bad_head():
+    decode_instruction(
+        [ofNat(8, 72), ofNat(8, 184),
+         zero(8), zero(8), zero(8), zero(8),
+         zero(8), zero(8), zero(8)]) = None
+    ∧ decode_instruction(
+        [ofNat(8, 72), ofNat(8, 184),
+         zero(8), zero(8), zero(8), zero(8),
+         zero(8), zero(8), zero(8), zero(8), zero(8)]) = None
+    ∧ decode_instruction(
+        [ofNat(8, 64), ofNat(8, 184),
+         zero(8), zero(8), zero(8), zero(8),
+         zero(8), zero(8), zero(8), zero(8)]) = None
+{ And(refl, And(refl, refl)) }
+
+theorem mov_ri_executes_and_frames<M>(destination: Gpr,
+    immediate: BitVec(64), before: MachineState<M>):
+    read_gpr(destination,
+        execute_normal(decoded_canonical(MovRI(destination, immediate)),
+            before).gprs) = immediate
+    ∧ execute_normal(decoded_canonical(MovRI(destination, immediate)),
+        before).flags = before.flags
+    ∧ execute_normal(decoded_canonical(MovRI(destination, immediate)),
+        before).memory = before.memory
+    ∧ execute_normal(decoded_canonical(MovRI(destination, immediate)),
+        before).rip = next_rip(before.rip, 10)
+{
+    And(mov_ri_writes_immediate(destination, immediate, before),
+        And(mov_ri_preserves_flags(destination, immediate, before),
+            And(mov_ri_preserves_memory(destination, immediate, before), refl)))
+}
+"#;
+    if let Err(err) = e.elab_module_source("mov_ri", src) {
+        let msg = match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        };
+        panic!("MOV r64, imm64 laws did not check: {msg}");
     }
 }
 

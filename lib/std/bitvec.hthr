@@ -998,6 +998,25 @@ theorem split_concat_high(n: Nat): (m: Nat) → (lo: BitVec(n)) →
     }
 }
 
+// Splitting a vector at any width and joining the two pieces again is the
+// identity.  This is the converse used by byte-oriented encoders: they may
+// expose a word as little-endian chunks without changing its typed value.
+theorem concat_split(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
+        concat(n, m, take_low(n, m, x), drop_low(n, m, x)) = x {
+    match n as λ k => (m: Nat) → (x: BitVec(m + k)) →
+            concat(k, m, take_low(k, m, x), drop_low(k, m, x)) = x {
+        Zero => λ m x => refl,
+        Succ(k, ih) => λ m x => trans(
+            @cons_bit_cong(m + k,
+                head_bit(m + k, x), head_bit(m + k, x),
+                concat(k, m, take_low(k, m, tail_bits(m + k, x)),
+                    drop_low(k, m, tail_bits(m + k, x))),
+                tail_bits(m + k, x), refl,
+                ih(m, tail_bits(m + k, x))),
+            cons_head_tail(m + k, x)),
+    }
+}
+
 theorem truncate_zero_extend(n, extra: Nat, x: BitVec(n)):
         truncate(n, extra, zero_extend(n, extra, x)) = x {
     split_concat_low(n, extra, x, zero(extra))

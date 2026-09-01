@@ -17,16 +17,15 @@ fn canonical_block_bytes(instructions: List<Instruction>) → List<BitVec(8)> {
 }
 
 // The stored instruction list determines a placed layout by advancing each
-// successor span from the preceding decoded length. All current canonical
-// forms are three bytes, but this relation is phrased through `next_rip` so a
-// later variable-length decoded block can generalize it without changing the
-// execution order.
+// successor span from the preceding instruction's canonical decoded length.
 fn CanonicalBlockDecodes(instructions: List<Instruction>) → BitVec(64) → Type {
     match instructions {
         Nil => λ start => True,
         Cons(instruction, rest) => λ start =>
-            DecodedAt(encoded_at(start, instruction), decoded_rr(instruction)) ∧
-            CanonicalBlockDecodes(rest, next_rip(start, 3)),
+            DecodedAt(encoded_at(start, instruction),
+                decoded_canonical(instruction)) ∧
+            CanonicalBlockDecodes(rest,
+                next_rip(start, canonical_length(instruction))),
     }
 }
 
@@ -37,7 +36,8 @@ theorem canonical_block_decodes(instructions: List<Instruction>):
         Nil => start ⊢ trivial,
         Cons(instruction, rest) => start ⊢ ⟨
             canonical_encoding_decodes(start, instruction),
-            canonical_block_decodes(rest, next_rip(start, 3))⟩,
+            canonical_block_decodes(rest,
+                next_rip(start, canonical_length(instruction)))⟩,
     }
 }
 
@@ -49,7 +49,7 @@ fn execute_block_normal<M>(instructions: List<Instruction>) →
     MachineState<M> → MachineState<M>
 {
     execute_steps(
-        λ instruction before => execute_normal(decoded_rr(instruction), before),
+        λ instruction before => execute_normal(decoded_canonical(instruction), before),
         instructions)
 }
 
@@ -57,7 +57,7 @@ fn ExecuteBlock<M>(instructions: List<Instruction>) →
     MachineState<M> → MachineState<M> → Type
 {
     ExecuteSteps(λ instruction before after =>
-        Execute(decoded_rr(instruction), before, Returned(after)),
+        Execute(decoded_canonical(instruction), before, Returned(after)),
         instructions)
 }
 
@@ -69,20 +69,20 @@ theorem execute_block_nil<M>(state: MachineState<M>):
     ExecuteBlock([], state, state)
 {
     execute_steps_nil<Instruction, MachineState<M>>(λ instruction before after =>
-        Execute(decoded_rr(instruction), before, Returned(after)), state)
+        Execute(decoded_canonical(instruction), before, Returned(after)), state)
 }
 
 theorem canonical_execute_block_cons<M>(instruction: Instruction,
     rest: List<Instruction>, before, after: MachineState<M>,
     tail: ExecuteBlock(rest,
-        execute_normal(decoded_rr(instruction), before), after)):
+        execute_normal(decoded_canonical(instruction), before), after)):
     ExecuteBlock(Cons(instruction, rest), before, after)
 {
     execute_steps_cons<Instruction, MachineState<M>>(
         λ current state result =>
-            Execute(decoded_rr(current), state, Returned(result)),
+            Execute(decoded_canonical(current), state, Returned(result)),
         instruction, rest, before,
-        execute_normal(decoded_rr(instruction), before), after,
+        execute_normal(decoded_canonical(instruction), before), after,
         canonical_execute_normal_is_allowed(instruction, before), tail)
 }
 
@@ -91,9 +91,9 @@ theorem canonical_block_executes_normal<M>(instructions: List<Instruction>):
         execute_block_normal(instructions, before))
 {
     execute_steps_are_allowed(
-        λ instruction state => execute_normal(decoded_rr(instruction), state),
+        λ instruction state => execute_normal(decoded_canonical(instruction), state),
         λ instruction state after =>
-            Execute(decoded_rr(instruction), state, Returned(after)),
+            Execute(decoded_canonical(instruction), state, Returned(after)),
         canonical_execute_normal_is_allowed<M>, instructions)
 }
 
