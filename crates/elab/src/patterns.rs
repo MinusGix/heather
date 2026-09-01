@@ -46,10 +46,7 @@ fn is_anonymous_ctor(name: &str) -> bool {
     matches!(name, ANON_CTOR_ONLY | ANON_CTOR_LEFT | ANON_CTOR_RIGHT)
 }
 
-fn anonymous_ctor_name<'a>(
-    ind: &'a crate::inductive::Inductive,
-    written: &str,
-) -> Option<&'a str> {
+fn anonymous_ctor_name<'a>(ind: &'a crate::inductive::Inductive, written: &str) -> Option<&'a str> {
     let index = match written {
         ANON_CTOR_ONLY if ind.ctors.len() == 1 => 0,
         ANON_CTOR_LEFT if ind.ctors.len() == 2 => 0,
@@ -777,7 +774,7 @@ impl Elaborator {
                     },
                     span: *span,
                 }
-            },
+            }
             Pat::Named { field, pat, span } => Pat::Named {
                 field: field.clone(),
                 pat: Box::new(self.reclassify_at(pat, col)),
@@ -812,10 +809,11 @@ impl Elaborator {
         span: Span,
     ) -> Option<Vec<PatCol>> {
         if let Type::Fin { len } = &*decoded(ty) {
-            let pred = match &*self.whnf_tm(cx, len, span).ok()? {
-                Term::Zero => return None,
-                Term::Succ(k) => Rc::clone(k),
-                _ => return None,
+            let len_w = self.whnf_tm(cx, len, span).ok()?;
+            let pred = match crate::inductive::nat_head(&len_w) {
+                crate::inductive::NatHead::Zero => return None,
+                crate::inductive::NatHead::Succ(k) => k,
+                crate::inductive::NatHead::Neutral => return None,
             };
             return match ctor_name {
                 "FZ" => Some(vec![]),
@@ -1112,10 +1110,13 @@ impl Elaborator {
             return Some(named(&ind));
         }
         if let Type::Fin { len } = &*decoded(scrut_ty) {
-            return match &*self.whnf_tm(cx, len, span).ok()? {
-                Term::Zero => Some(vec![]),
-                Term::Succ(_) => Some(vec![("FZ".into(), 0), ("FS".into(), 1)]),
-                _ => None,
+            let len_w = self.whnf_tm(cx, len, span).ok()?;
+            return match crate::inductive::nat_head(&len_w) {
+                crate::inductive::NatHead::Zero => Some(vec![]),
+                crate::inductive::NatHead::Succ(_) => {
+                    Some(vec![("FZ".into(), 0), ("FS".into(), 1)])
+                }
+                crate::inductive::NatHead::Neutral => None,
             };
         }
         match head {

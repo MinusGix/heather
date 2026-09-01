@@ -149,19 +149,19 @@ impl Elaborator {
         // fall-through.
         if let Type::Fin { len } = &*crate::inductive::decoded(scrut_ty) {
             let len_w = self.whnf_tm(cx, len, span)?;
-            match &*len_w {
+            match crate::inductive::nat_head(&len_w) {
                 // `Fin(0) ⇝ Empty⁰` is a whnf step, so `head` is already
                 // `Type::Empty` and `match i { }` *is* `elim_Empty` — the arm
                 // below, unchanged (§1.1 finding 1). Nothing to write here.
-                Term::Zero => {}
-                Term::Succ(k) => {
-                    return self.elab_match_fin(cx, form, arms, scrut_t, k, motive, mlvl, span);
+                crate::inductive::NatHead::Zero => {}
+                crate::inductive::NatHead::Succ(k) => {
+                    return self.elab_match_fin(cx, form, arms, scrut_t, &k, motive, mlvl, span);
                 }
                 // Permanent, not a gap: `Fin` has no eliminator of its own
                 // (§1.2), so at an open length there is no canonical form to
                 // case on. The message names the fix rather than the
                 // limitation, and the fix is the shape `nth` itself has.
-                _ => {
+                crate::inductive::NatHead::Neutral => {
                     let here = match &*len_w {
                         Term::Var(LocalVar(i)) => cx
                             .names

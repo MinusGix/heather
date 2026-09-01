@@ -463,6 +463,28 @@ pub(crate) fn nat_value(t: &Term) -> Option<usize> {
     }
 }
 
+/// The constructor view of a weak-head-normal natural. Compact `NatLit`
+/// producers and ordinary unary syntax must be indistinguishable to surface
+/// features that inspect `Vec`/`Fin` lengths.
+pub(crate) enum NatHead {
+    Zero,
+    Succ(Rc<Term>),
+    Neutral,
+}
+
+pub(crate) fn nat_head(t: &Term) -> NatHead {
+    match t {
+        Term::Zero | Term::NatLit(0) => NatHead::Zero,
+        Term::Succ(pred) => NatHead::Succ(Rc::clone(pred)),
+        Term::NatLit(n) => NatHead::Succ(Rc::new(if *n == 1 {
+            Term::Zero
+        } else {
+            Term::NatLit(n - 1)
+        })),
+        _ => NatHead::Neutral,
+    }
+}
+
 pub(crate) fn nat_lit(k: usize) -> Term {
     let mut t = Term::Zero;
     for _ in 0..k {
@@ -769,13 +791,12 @@ impl Elaborator {
         // declaration with its indices erased, registered as an ordinary
         // declaration so that the *unindexed* tiers lower it verbatim — which
         // is §4.1's single most consequential sentence, mechanized.
-        let first_tag = if self.names.module() == crate::PRELUDE_MODULE
-            && d.name == "CollectionLiteral"
-        {
-            crate::types::COLLECTION_LITERAL_TAG
-        } else {
-            self.types.next_tag()
-        };
+        let first_tag =
+            if self.names.module() == crate::PRELUDE_MODULE && d.name == "CollectionLiteral" {
+                crate::types::COLLECTION_LITERAL_TAG
+            } else {
+                self.types.next_tag()
+            };
         let skel = match &route {
             Some(IdxRoute::Forded(_)) => Some(Rc::new(skeleton_of(
                 d,

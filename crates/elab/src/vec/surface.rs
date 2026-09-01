@@ -205,7 +205,7 @@ pub(crate) fn elab_head_tail(
         return err(format!("`{name}`'s receiver has to be a vector"), span);
     };
     let len_w = elab.whnf_vector_term(cx, len, span)?;
-    let Term::Succ(pred) = &*len_w else {
+    let crate::inductive::NatHead::Succ(pred) = crate::inductive::nat_head(&len_w) else {
         let name = if is_head { "head" } else { "tail" };
         return err(
             format!(
@@ -246,7 +246,7 @@ pub(crate) fn elab_head_tail(
             Type::Vec {
                 level: level.clone(),
                 elem: Rc::clone(elem),
-                len: Rc::clone(pred),
+                len: Rc::clone(&pred),
             },
         )
     };

@@ -579,16 +579,19 @@ impl<'a> ExprElab<'a> {
                         msg: "out of fuel reducing a term".into(),
                         span,
                     })?;
-                    let Term::Succ(pred) = reduced else {
-                        return err(
-                            format!(
-                                "`{numeral}` is not an index of this `Fin`: a numeral here \
+                    let pred = match crate::inductive::nat_head(&reduced) {
+                        crate::inductive::NatHead::Succ(pred) => pred,
+                        _ => {
+                            return err(
+                                format!(
+                                    "`{numeral}` is not an index of this `Fin`: a numeral here \
                                  needs the length to reduce to at least {} successor(s), and \
                                  this one reduces to {peeled}",
-                                numeral + 1
-                            ),
-                            span,
-                        );
+                                    numeral + 1
+                                ),
+                                span,
+                            );
+                        }
                     };
                     base = pred;
                 }
@@ -830,20 +833,22 @@ impl<'a> ExprElab<'a> {
             msg: "out of fuel reducing a term".into(),
             span,
         })?;
-        let Term::Succ(k) = &len_w else {
-            return if matches!(&len_w, Term::Zero) {
-                err("`Fin(0)` is empty, so it has no index", span)
-            } else {
-                err(
+        let k = match crate::inductive::nat_head(&len_w) {
+            crate::inductive::NatHead::Succ(k) => k,
+            crate::inductive::NatHead::Zero => {
+                return err("`Fin(0)` is empty, so it has no index", span);
+            }
+            crate::inductive::NatHead::Neutral => {
+                return err(
                     "the length has to reduce to a successor here; `Fin(n)` at an open \
                      `n` has no canonical index",
                     span,
-                )
-            };
+                );
+            }
         };
         let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
         let lhs = Rc::new(Type::Unit { level: Level::Zero });
-        let rhs = Rc::new(Type::Fin { len: Rc::clone(k) });
+        let rhs = Rc::new(Type::Fin { len: k });
         match succ_of {
             None => Ok(Term::Inl {
                 lhs_level,
