@@ -2,9 +2,8 @@
 title: Certify a reflected source fragment into FunctionIR
 status: open
 labels: [compiler,function-ir,metaprogramming,proofs,codegen]
-blocked-by: [function-ir-x86-lowering-generator]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 
 The new FunctionIR currently begins from a concrete compiler-owned graph.
@@ -34,3 +33,8 @@ name the source function actually reflected.
 - **[[compile-typeclass-design]]** owns how the completed source-to-code
   certificate is packaged for compiler discovery.
 
+The certified backend dependency is now satisfied. The recommended sequence is
+to land [[function-ir-x86-commutative-reuse]] and
+[[function-ir-x86-constants]] first, then reflect the already-supported pure
+BitVec Add/Sub/AND/OR/XOR source fragment. That ordering is architectural, not
+a hard dependency: the first add-only source theorem could begin sooner.

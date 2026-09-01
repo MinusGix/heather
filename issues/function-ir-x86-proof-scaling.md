@@ -36,6 +36,8 @@ certificate whose steps refer to opaque predecessor facts.
 - **[[frontend-large-proof-composition-cost]]** owns general frontend sharing;
   this issue owns generator-side proof factorization that is useful even before
   a general frontend improvement lands.
+- **[[x86-block-normal-execution-proof-fuel]]** owns replacing per-instruction
+  execution stages with the natural generic functional-to-relational theorem.
 
 ## Progress, 2026-09-01
 

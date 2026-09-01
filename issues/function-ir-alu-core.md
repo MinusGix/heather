@@ -2,7 +2,6 @@
 title: Grow FunctionIR from Add into a useful fixed-width ALU core
 status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
-blocked-by: [function-ir-x86-lowering-generator]
 created: 2026-08-31
 updated: 2026-09-01
 ---
@@ -56,3 +55,9 @@ A 20-node/22-instruction version was also probed. Its generated check had not
 finished after five minutes and was removed from the ordinary rail; the
 selector itself is instantaneous. [[function-ir-x86-proof-scaling]] owns that
 proof-composition wall rather than lowering the intended program-size target.
+
+Backend follow-ons are split by the target boundary they introduce:
+[[function-ir-x86-commutative-reuse]], [[function-ir-x86-constants]],
+[[function-ir-x86-shift-legalization]], and
+[[function-ir-x86-comparison-materialization]]. This issue remains the semantic
+umbrella rather than accumulating their encoding and allocation details.
