@@ -636,6 +636,7 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::ElimCodeTm { ty_motive_level, tm_motive_level, motives, branches, code_level, ctx, ty, scrut } => {
             w.byte(52); put_level(w, ty_motive_level); put_level(w, tm_motive_level); put_motives(w, motives); put_branches(w, branches); put_level(w, code_level); put_ctx(w, ctx); put_type(w, ty); put_term(w, scrut);
         }
+        Term::NatLit(n) => { w.byte(53); w.u64(*n); }
     }
 }
 
@@ -694,6 +695,7 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         50 => Term::LetBoxTm { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), body: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
         51 => Term::ElimCodeTy { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, scrut: Rc::new(get_term(r)?) },
         52 => Term::ElimCodeTm { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
+        53 => Term::NatLit(r.u64()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }

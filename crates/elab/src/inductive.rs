@@ -457,6 +457,7 @@ pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Te
 pub(crate) fn nat_value(t: &Term) -> Option<usize> {
     match t {
         Term::Zero => Some(0),
+        Term::NatLit(n) => usize::try_from(*n).ok(),
         Term::Succ(p) => nat_value(p).map(|k| k + 1),
         _ => None,
     }

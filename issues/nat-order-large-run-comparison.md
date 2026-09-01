@@ -16,11 +16,15 @@ leaves the graph and proof shape unchanged but already overflows the checker
 thread's stack.  A second follow-up with a maximum identifier of 1,000 did the
 same.  The ordinary regression therefore keeps every identifier below 100.
 
-The strong working hypothesis is closed reduction of `Lt`/`Le` inside
-`DirectoryWithin`: saturated `u64` Nat runs make the values representable, but
-recursive order normalization peels or composes the enormous common prefix
-instead of cancelling run counts.  This is not yet a profile-backed attribution;
-the near-maximum identifiers are the isolated differentiator.
+The first investigation separated two costs that the original failure had
+conflated. Surface numeral elaboration still built `Succ` syntax in a loop, so
+the near-maximum case could consume memory before `Lt` ever ran; the succinct
+value representation had no ordinary producer. After compact literal syntax
+removed that cost, the same certificate fails quickly by stack overflow under
+a 4 GiB address-space limit. Closed reduction of `Lt`/`Le` inside
+`DirectoryWithin` is therefore still a real, independent problem: recursive
+order normalization peels the enormous common prefix instead of cancelling
+run counts.
 
 ## Reproducer discipline
 
@@ -61,6 +65,22 @@ FunctionIR special case.
   cap.
 - Controls cover unequal prefixes and nested saturated runs, so the fix does
   not merely recognize one numeral spelling.
+
+## Log
+
+- 2026-08-31: Landed the producer half. `Term::NatLit(u64)` keeps closed
+  surface numerals constant-size and evaluates a nonzero literal directly to
+  one generic `ContextProgram::Run`; substitution, typing, conversion views,
+  reflection, module images, cache identity, `Vec`/`Fin`, and literal-length
+  inspection preserve its ordinary `Zero`/`Succ` semantics. A maximum-u64
+  declaration plus literal reflexivity checks in effectively zero time under
+  a 256 MiB address-space limit. The original maximum-ID FunctionIR probe no
+  longer grows toward the OOM killer: under a 4 GiB limit it reaches the
+  remaining recursive-order stack overflow in about three seconds. Thus the
+  23.88 GiB observation belonged primarily to unary *syntax production*, while
+  the earlier 1,000/10,000 stack failures correctly identified the consumer
+  problem. The issue remains open for generic synchronous-run cancellation;
+  neither `Le` nor FunctionIR received a name-based rule.
 
 ## What it assumes from elsewhere
 

@@ -301,7 +301,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
         // nullary constructor of a level-`l` `Wf` uninhabitable — the defect
         // route (a) exists to close (docs/unit-empty-level-indexing.md §1).
         Type::Vec { level, elem, len } => match &**len {
-            Term::Zero => Some(Type::Unit { level: level.clone() }),
+            Term::Zero | Term::NatLit(0) => Some(Type::Unit { level: level.clone() }),
             Term::Succ(pred) => Some(Type::Sigma {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -312,6 +312,19 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
                     len: Rc::new(pred.shift_local(1)),
                 }),
             }),
+            Term::NatLit(n) => {
+                let pred = if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) };
+                Some(Type::Sigma {
+                    fst_level: level.clone(),
+                    snd_level: level.clone(),
+                    fst: Rc::clone(elem),
+                    snd: Rc::new(Type::Vec {
+                        level: level.clone(),
+                        elem: Rc::new(elem.shift_local(1)),
+                        len: Rc::new(pred),
+                    }),
+                })
+            }
             _ => step_term_delta(len, gamma, defs).map(|len| Type::Vec {
                 level: level.clone(),
                 elem: Rc::clone(elem),
@@ -322,12 +335,20 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
         // `Fin` is declared at level 0, so both reducts land there and it
         // needs nothing from the level-indexing round.
         Type::Fin { len } => match &**len {
-            Term::Zero => Some(Type::Empty { level: Level::Zero }),
+            Term::Zero | Term::NatLit(0) => Some(Type::Empty { level: Level::Zero }),
             Term::Succ(pred) => Some(Type::Sum {
                 lhs_level: Level::Zero,
                 rhs_level: Level::Zero,
                 lhs: Rc::new(Type::Unit { level: Level::Zero }),
                 rhs: Rc::new(Type::Fin { len: Rc::clone(pred) }),
+            }),
+            Term::NatLit(n) => Some(Type::Sum {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                lhs: Rc::new(Type::Unit { level: Level::Zero }),
+                rhs: Rc::new(Type::Fin {
+                    len: Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) }),
+                }),
             }),
             _ => step_term_delta(len, gamma, defs).map(|len| Type::Fin { len: Rc::new(len) }),
         },
@@ -352,7 +373,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         Term::GlobalTm { var, subst } => Some(defs.body(*var)?.apply_local(subst)),
         Term::ElimNat { level, motive, base, step, scrut } => match &**scrut {
             // elim_Nat … ze ⇝ s
-            Term::Zero => Some((**base).clone()),
+            Term::Zero | Term::NatLit(0) => Some((**base).clone()),
             // elim_Nat … (su t) ⇝ s'[t/x, elim_Nat … t/y]
             Term::Succ(pred) => {
                 let rec = Term::ElimNat {
@@ -364,6 +385,20 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 };
                 let delta = LocalSubst::id(gamma)
                     .extended(Rc::clone(pred))
+                    .extended(Rc::new(rec));
+                Some(step.apply_local(&delta))
+            }
+            Term::NatLit(n) => {
+                let pred = Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) });
+                let rec = Term::ElimNat {
+                    level: level.clone(),
+                    motive: Rc::clone(motive),
+                    base: Rc::clone(base),
+                    step: Rc::clone(step),
+                    scrut: Rc::clone(&pred),
+                };
+                let delta = LocalSubst::id(gamma)
+                    .extended(pred)
                     .extended(Rc::new(rec));
                 Some(step.apply_local(&delta))
             }
@@ -1202,7 +1237,7 @@ pub(crate) fn beta_elim_tm(
             ))
         }
         // (g. t_ze)
-        Term::Zero => Some(fire(
+        Term::Zero | Term::NatLit(0) => Some(fire(
             &b.tm_zero,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
@@ -1221,6 +1256,22 @@ pub(crate) fn beta_elim_tm(
                 &b.tm_succ,
                 &[],
                 vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(pred))],
+                vec![s_pred],
+                gamma,
+            ))
+        }
+        Term::NatLit(n) => {
+            let pred = Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) });
+            let s_pred = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Nat),
+                Rc::clone(&pred),
+            );
+            Some(fire(
+                &b.tm_succ,
+                &[],
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(pred)],
                 vec![s_pred],
                 gamma,
             ))

@@ -314,6 +314,11 @@ pub enum Term {
 
     // ---- natural numbers ----
     Zero,
+    /// A closed natural-number literal. This is observationally the same
+    /// constructor spine as `Succ^value(Zero)` (and `NatLit(0)` is `Zero`),
+    /// but keeps source numerals compact until evaluation can hand them to the
+    /// generic context-program representation.
+    NatLit(u64),
     Succ(Rc<Term>),
     /// `elim_Nat^l (x. M) s (x, y. s') t`; `motive` binds one local variable
     /// (the Nat), `step` binds two (predecessor, recursive result).

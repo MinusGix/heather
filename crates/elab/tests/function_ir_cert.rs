@@ -211,9 +211,10 @@ fn generated_chain_checks(base: &Elaborator, node_count: u64) {
 
 fn generated_sparse_dag_checks(base: &Elaborator) {
     // Keep the ordinary regression sparse without exercising the separate
-    // large-closed-Nat comparison performance bug.  IDs near `u64::MAX`
-    // made this tiny certificate consume roughly 24 GiB, while 10,000 already
-    // overflowed the checker thread's stack.
+    // large-closed-Nat comparison performance bug. Compact literal syntax now
+    // prevents the original roughly 24 GiB allocation while reading IDs near
+    // `u64::MAX`, but recursively computing their order still overflows the
+    // checker thread's stack (as 10,000 did before the producer fix).
     let top = 100;
     let region = Region {
         inputs: vec![

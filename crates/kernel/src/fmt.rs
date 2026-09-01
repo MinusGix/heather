@@ -230,6 +230,7 @@ impl fmt::Debug for Term {
                 write!(f, "«Wf[{level:?}]({shape:?}). {arity:?}»")
             }
             Term::Zero => f.write_str("0"),
+            Term::NatLit(n) => write!(f, "{n}"),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
                 f,

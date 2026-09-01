@@ -975,6 +975,12 @@ impl<'v> Dom<'v> for Syn {
             Term::TmFin { len } => TmView::TmFin { len: Rc::clone(len) },
 
             Term::Zero => TmView::Zero,
+            Term::NatLit(0) => TmView::Zero,
+            Term::NatLit(n) => TmView::Succ(Rc::new(if *n == 1 {
+                Term::Zero
+            } else {
+                Term::NatLit(n - 1)
+            })),
             Term::Succ(t) => TmView::Succ(Rc::clone(t)),
             Term::Refl { tm, .. } => TmView::Refl { tm: Rc::clone(tm) },
             Term::Inl { val, .. } => TmView::Inl { val: Rc::clone(val) },

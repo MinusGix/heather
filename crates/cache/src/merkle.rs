@@ -230,6 +230,7 @@ mod tag {
     pub const E_TMSQUASH: u8 = 0x72;
     pub const E_SQUASH: u8 = 0x73;
     pub const E_ELIMSQUASH: u8 = 0x74;
+    pub const E_NATLIT: u8 = 0x75;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -623,6 +624,11 @@ impl<'a> Walk<'a> {
                 self.term(arity);
             }
             Term::Zero => self.tag(tag::E_ZERO),
+            Term::NatLit(n) => {
+                self.tag(tag::E_NATLIT);
+                self.u32(*n as u32);
+                self.u32((n >> 32) as u32);
+            }
             Term::Succ(t) => {
                 self.tag(tag::E_SUCC);
                 self.term(t);

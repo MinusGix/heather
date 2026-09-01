@@ -1165,7 +1165,7 @@ impl<'v> Dom<'v> for Values {
                         (
                             Val::NatRun { program: p1, tail: t1 },
                             Val::NatRun { program: p2, tail: t2 },
-                        ) if Rc::ptr_eq(p1, p2)
+                        ) if value::program::ContextProgram::equivalent_fast(p1, p2)
                             && (std::ptr::eq(*t1, *t2)
                                 || matches!(
                                     (t1.as_syn(), t2.as_syn()),

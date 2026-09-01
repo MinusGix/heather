@@ -156,6 +156,7 @@ impl Cache {
             | Term::TmEmpty { .. }
             | Term::TmSEmpty { .. }
             | Term::Zero
+            | Term::NatLit(_)
             | Term::Triv { .. }
             | Term::BoxTy(_)
             | Term::BoxTm(_) => return LocalUse::CLOSED,
@@ -335,6 +336,7 @@ impl Cache {
             | Term::TmEmpty { .. }
             | Term::TmSEmpty { .. }
             | Term::Zero
+            | Term::NatLit(_)
             | Term::Triv { .. }
             | Term::BoxTy(_)
             | Term::BoxTm(_) => LocalUse::CLOSED,

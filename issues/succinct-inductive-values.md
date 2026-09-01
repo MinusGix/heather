@@ -55,6 +55,16 @@ special-case generated constructor names.
 
 ## Log
 
+- 2026-08-31: Closed Nat literals now provide the first ordinary producer for
+  the dormant value substrate. `Term::NatLit(u64)` is a compact internal form
+  with the same one-step `Zero`/`Succ` observations as its constructor spine;
+  evaluation sends it directly to one saturated `ContextProgram::Run`. This
+  fixes representational allocation through `u64::MAX`, but does not pretend
+  arbitrary folds are homomorphisms: the synchronized recursive `Le` consumer
+  still overflows its native stack on huge nearby operands and remains owned
+  by [[nat-order-large-run-comparison]]. Generic declared-inductive production
+  and composed-program consumers remain open here.
+
 - 2026-08-28: The representation substrate landed in the value domain.
   `ContextProgram<C>` has
   saturated runs, shared composition, and iterative one-step destruction.

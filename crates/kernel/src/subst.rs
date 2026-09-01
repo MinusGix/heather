@@ -564,6 +564,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
         },
         Term::Zero => Term::Zero,
+        Term::NatLit(n) => Term::NatLit(*n),
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
         Term::ElimNat { level, motive, base, step, scrut } => Term::ElimNat {
             level: m.level(level, at),

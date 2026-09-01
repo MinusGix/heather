@@ -1205,6 +1205,10 @@ impl Tc {
                 self.not_var_layer(env)?;
                 Ok((Type::Nat, Level::Zero))
             }
+            Term::NatLit(_) => {
+                self.not_var_layer(env)?;
+                Ok((Type::Nat, Level::Zero))
+            }
             Term::Succ(n) => {
                 self.not_var_layer(env)?;
                 self.tm_check(env, n, &Type::Nat, &Level::Zero)?;

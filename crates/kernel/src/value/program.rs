@@ -56,6 +56,26 @@ impl<C: Clone + Eq> ContextProgram<C> {
         Rc::new(ContextProgram::Compose { outer, inner })
     }
 
+    /// A cheap sufficient test that two programs denote the same context.
+    /// Object identity remains the broadest constant-time case; independently
+    /// allocated runs are just as easy because their whole denotation is the
+    /// pair `(context, count)`. The composed case deliberately stops at shared
+    /// children rather than walking a potentially exponential DAG.
+    pub fn equivalent_fast(left: &Rc<Self>, right: &Rc<Self>) -> bool {
+        Rc::ptr_eq(left, right)
+            || match (&**left, &**right) {
+                (
+                    ContextProgram::Run { context: lc, count: ln },
+                    ContextProgram::Run { context: rc, count: rn },
+                ) => lc == rc && ln == rn,
+                (
+                    ContextProgram::Compose { outer: lo, inner: li },
+                    ContextProgram::Compose { outer: ro, inner: ri },
+                ) => Rc::ptr_eq(lo, ro) && Rc::ptr_eq(li, ri),
+                _ => false,
+            }
+    }
+
     /// The outer constructor and a shared program for everything beneath it.
     /// `None` for the remainder means the caller has reached the program's
     /// hole. The rebuilding walk is iterative so a hostile composition spine
@@ -116,6 +136,18 @@ mod tests {
         let (context, rest) = ContextProgram::uncons(&program);
         assert_eq!(*context, 's');
         assert!(rest.is_some());
+    }
+
+    #[test]
+    fn independently_allocated_saturated_runs_compare_without_expansion() {
+        let left = ContextProgram::run('s', n(u64::MAX));
+        let right = ContextProgram::run('s', n(u64::MAX));
+        assert!(!Rc::ptr_eq(&left, &right));
+        assert!(ContextProgram::equivalent_fast(&left, &right));
+        assert!(!ContextProgram::equivalent_fast(
+            &left,
+            &ContextProgram::run('s', n(u64::MAX - 1)),
+        ));
     }
 
 }

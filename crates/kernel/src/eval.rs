@@ -46,6 +46,7 @@
 //! every `El` decode, every `Vec`/`Fin` unfold, every δ-unfold. Exhaustion is
 //! [`OutOfFuel`] and is never a verdict.
 
+use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use crate::level::Level;
@@ -58,6 +59,7 @@ use crate::value::{
     Elim, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
     ValueArena,
 };
+use crate::value::program::ContextProgram;
 
 type Res<T> = Result<T, OutOfFuel>;
 
@@ -841,6 +843,14 @@ impl<'a, 'v> Eval<'a, 'v> {
 
             // -- data --
             Term::Zero => Val::Zero,
+            Term::NatLit(0) => Val::Zero,
+            Term::NatLit(n) => Val::NatRun {
+                program: ContextProgram::run(
+                    (),
+                    NonZeroU64::new(*n).expect("nonzero NatLit arm"),
+                ),
+                tail: self.arena.tm(TmClo::val(Rc::new(Val::Zero))),
+            },
             Term::Succ(p) => Val::Succ(tclo(env, p)),
             Term::Refl { level, ty, tm } => Val::Refl {
                 level: level.clone(),
@@ -1687,6 +1697,19 @@ mod tests {
         let program = two_to_64();
         let pred = Val::nat_run_pred(&arena, &program, tail);
         assert!(matches!(pred, TmClo::Val(v) if matches!(&**v, Val::NatRun { .. })));
+    }
+
+    #[test]
+    fn maximum_literal_enters_the_value_domain_as_one_saturated_run() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let mut ev = Eval::new(1, Defs::opaque(), CtxBase::Nil, &arena);
+        let value = ev.eval_tm_ref(&Term::NatLit(u64::MAX), &env).unwrap();
+        assert!(matches!(&*value,
+            Val::NatRun { program, tail }
+                if matches!(&**program,
+                    ContextProgram::Run { count, .. } if count.get() == u64::MAX)
+                && matches!(tail, TmClo::Val(z) if matches!(&**z, Val::Zero))));
     }
 
     #[test]

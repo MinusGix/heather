@@ -153,11 +153,7 @@ pub(crate) struct ExprElab<'a> {
 
 impl<'a> ExprElab<'a> {
     fn natural_literal(n: u64) -> Term {
-        let mut term = Term::Zero;
-        for _ in 0..n {
-            term = Term::Succ(Rc::new(term));
-        }
-        term
+        if n == 0 { Term::Zero } else { Term::NatLit(n) }
     }
 
     pub(crate) fn new(
@@ -1123,8 +1119,10 @@ mod tests {
         };
         let fake = StructuralFake::default();
         let (term, ty, level) = expr.infer_form(&fake, &cx, &numeral).unwrap().unwrap();
-        assert!(matches!(term, Term::Succ(_)));
+        assert_eq!(term, Term::NatLit(2));
         assert_eq!((ty, level), (Type::Nat, Level::Zero));
+
+        assert_eq!(ExprElab::natural_literal(u64::MAX), Term::NatLit(u64::MAX));
 
         let trivial = Expr {
             kind: ExprKind::Var("trivial".into()),
