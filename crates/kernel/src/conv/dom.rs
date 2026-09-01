@@ -615,6 +615,17 @@ pub(super) trait Dom<'v>: Sized {
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
     fn tm_eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
+    /// If both weak heads expose compressed repetitions of the same unary
+    /// constructor context, cancel their equal outer prefix and return the
+    /// residual sub-structures. `None` means only that this domain has no
+    /// justified compressed step; ordinary structural comparison follows.
+    fn cancel_nat_prefix(
+        _env: &Env<'v>,
+        _a: &Self::Tm,
+        _b: &Self::Tm,
+    ) -> Option<(Self::TmC, Self::TmC)> {
+        None
+    }
     #[allow(clippy::too_many_arguments)]
     fn app(
         cv: &mut Conv<'v, Self>,

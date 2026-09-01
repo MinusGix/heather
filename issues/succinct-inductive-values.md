@@ -39,8 +39,9 @@ special-case generated constructor names.
 - Extend the same mechanism to unary recursive declared inductives through a
   constructor-shape rule, not a Nat or global-name rule.
 - Attribute which useful consumers are context homomorphisms. In particular,
-  recursively defined `Le` is currently outside the fast fragment and must
-  not be repaired by recognizing the name `Le`.
+  recursively defined `Le` originally lay outside the unary-map fragment and
+  must not be repaired by recognizing the name `Le`; its generic synchronous
+  two-run algebra is now handled under [[nat-order-large-run-comparison]].
 
 ## What it assumes from elsewhere
 
@@ -54,6 +55,15 @@ special-case generated constructor names.
   a program's runtime layout.
 
 ## Log
+
+- 2026-08-31: [[nat-order-large-run-comparison]] added generic matching-prefix
+  cancellation for context programs and recognized the exact two-input fold
+  algebra whose successor/successor branch resumes the recursive result at
+  both predecessors. This brings `Le` into a second, structurally justified
+  fast fragment without naming it, while arbitrary folds retain ordinary fuel
+  behavior. Nat conversion uses the same cancellation before exposing unary
+  constructors. Declared-inductive production and independently constructed
+  exponential composition DAGs remain broader work for this issue.
 
 - 2026-08-31: Closed Nat literals now provide the first ordinary producer for
   the dormant value substrate. `Term::NatLit(u64)` is a compact internal form

@@ -648,6 +648,7 @@ impl<'v> Dom<'v> for Values {
             Val::BoxTm(t) => TmView::BoxTm(t),
 
             Val::Lam { .. }
+            | Val::NatSync { .. }
             | Val::ULam { .. }
             | Val::CtxLam { .. }
             | Val::TyLam { .. }
@@ -1175,6 +1176,36 @@ impl<'v> Dom<'v> for Values {
                                 ))
                     )
                 )
+    }
+
+    fn cancel_nat_prefix(
+        env: &Env<'v>,
+        a: &Rc<Val<'v>>,
+        b: &Rc<Val<'v>>,
+    ) -> Option<(TmC<'v>, TmC<'v>)> {
+        let (
+            Val::NatRun { program: left, tail: left_tail },
+            Val::NatRun { program: right, tail: right_tail },
+        ) = (&**a, &**b)
+        else {
+            return None;
+        };
+        let cancelled = value::program::ContextProgram::cancel_matching_prefix(
+            Rc::clone(left),
+            Rc::clone(right),
+        );
+        if !cancelled.changed {
+            return None;
+        }
+        let arena = env.rho.arena();
+        let residual = |program, tail| match program {
+            None => tail,
+            Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+        };
+        Some((
+            TmC::here(env, residual(cancelled.left, left_tail)),
+            TmC::here(env, residual(cancelled.right, right_tail)),
+        ))
     }
 
     fn app(

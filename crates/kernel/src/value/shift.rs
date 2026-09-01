@@ -537,6 +537,11 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             program: Rc::clone(program),
             tail: tm_clo(tail, o),
         },
+        Val::NatSync { program, tail, elim } => Val::NatSync {
+            program: Rc::clone(program),
+            tail: tm_clo(tail, o),
+            elim: Rc::new(elimination(elim, o)),
+        },
         Val::Refl { level: l, ty, tm } => Val::Refl {
             level: level(l, o),
             ty: ty_clo(ty, o),

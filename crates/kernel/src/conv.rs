@@ -1220,12 +1220,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 (TmView::BoxTm(_), _) | (_, TmView::BoxTm(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            TyView::Nat => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                (TmView::Zero, TmView::Zero) => Ok(()),
-                (TmView::Succ(x), TmView::Succ(y)) => self.tm_at_nat(env, x, y),
-                (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            TyView::Nat => {
+                if let Some((x, y)) = D::cancel_nat_prefix(env, a, b) {
+                    return self.tm_at_nat(env, &x, &y);
+                }
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+                    (TmView::Zero, TmView::Zero) => Ok(()),
+                    (TmView::Succ(x), TmView::Succ(y)) => self.tm_at_nat(env, x, y),
+                    (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
+                }
+            }
             TyView::Ty(_) => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                 (TmView::TmNat, TmView::TmNat) => Ok(()),
                 (TmView::TmTy(x), TmView::TmTy(y)) => self.lev_eq(x, y),

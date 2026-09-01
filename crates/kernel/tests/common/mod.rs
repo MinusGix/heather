@@ -1107,6 +1107,7 @@ pub fn count_term(t: &Term) -> u64 {
         | Term::TmNat
         | Term::TmTy(_)
         | Term::Zero
+        | Term::NatLit(_)
         | Term::TmUnit { .. }
         | Term::TmEmpty { .. }
         | Term::Triv { .. } => 0,

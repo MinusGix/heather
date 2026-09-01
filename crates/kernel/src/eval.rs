@@ -90,6 +90,28 @@ fn stuck<'v>(head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
     neutral(Head::Stuck(Rc::clone(head)), vec![e.clone()], None)
 }
 
+/// The fold step has the exact shape
+///
+/// `λ m. elim_Nat ... m ... (λ l _. ih l)`.
+///
+/// Here `ih` is the outer fold's recursive result. This is a structural
+/// homomorphism for a *pair* of matching successor contexts: one constructor
+/// from each side reduces to the same fold at both predecessors. Types,
+/// motives, and zero branches may be arbitrary; they remain in the original
+/// eliminators and are evaluated once cancellation reaches a residual.
+fn nat_step_synchronizes(step: &TmClo<'_>) -> bool {
+    let Some((_, body)) = step.as_syn() else { return false };
+    let Term::Lam { body, .. } = &**body else { return false };
+    let Term::ElimNat { scrut, step, .. } = &**body else { return false };
+    if !matches!(&**scrut, Term::Var(LocalVar(0))) {
+        return false;
+    }
+    matches!(&**step,
+        Term::App { fun, arg, .. }
+            if matches!(&**fun, Term::Var(LocalVar(3)))
+                && matches!(&**arg, Term::Var(LocalVar(1))))
+}
+
 // ---------------------------------------------------------------------------
 // The machine
 // ---------------------------------------------------------------------------
@@ -161,6 +183,17 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     fn vclo(&self, value: Rc<Val<'v>>) -> &'v TmClo<'v> {
         self.arena.tm(TmClo::val(value))
+    }
+
+    fn nat_residual(
+        &self,
+        program: Option<Rc<ContextProgram<()>>>,
+        tail: &'v TmClo<'v>,
+    ) -> &'v TmClo<'v> {
+        match program {
+            None => tail,
+            Some(program) => self.vclo(Rc::new(Val::NatRun { program, tail })),
+        }
     }
 
     fn spend(&mut self) -> Res<()> {
@@ -1230,6 +1263,45 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Ok(Work::Val(self.push_elim(&n, e)));
         }
         match (&*head, &e) {
+            (
+                Val::NatSync { program, tail, elim },
+                Elim::App { dom_level, cod_level, dom, cod, arg },
+            ) => {
+                let right = self.force(arg)?;
+                if let Val::NatRun { program: right_program, tail: right_tail } = &*right {
+                    let cancelled = ContextProgram::cancel_matching_prefix(
+                        Rc::clone(program),
+                        Rc::clone(right_program),
+                    );
+                    if cancelled.changed {
+                        self.spend()?;
+                        let left = self.nat_residual(cancelled.left, tail);
+                        let right = self.nat_residual(cancelled.right, right_tail);
+                        let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
+                        let app = Elim::App {
+                            dom_level: dom_level.clone(),
+                            cod_level: cod_level.clone(),
+                            dom,
+                            cod,
+                            arg: right,
+                        };
+                        self.frames.push(Frame::Elim(Rc::new(app)));
+                        return Ok(Work::Force(folded));
+                    }
+                }
+
+                // The right-hand head is not a matching run. Expose exactly
+                // the ordinary outer successor step and retry the application
+                // on its result; no semantic case is guessed here.
+                let pred = Val::nat_run_pred(self.arena, program, tail);
+                let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(elim)));
+                let Elim::ElimNat { step, .. } = &**elim else {
+                    unreachable!("NatSync stores a Nat eliminator")
+                };
+                self.frames.push(Frame::Elim(Rc::new(e)));
+                self.spend()?;
+                Ok(Work::Apply(*step, vec![pred, ih]))
+            }
             (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
                 self.spend()?;
                 let (body, arg) = (*body, *arg);
@@ -1276,6 +1348,13 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             (Val::NatRun { program, tail }, Elim::ElimNat { step, .. }) => {
                 self.spend()?;
+                if nat_step_synchronizes(step) {
+                    return Ok(Work::Val(Rc::new(Val::NatSync {
+                        program: Rc::clone(program),
+                        tail,
+                        elim: Rc::new(e.clone()),
+                    })));
+                }
                 if matches!(
                     step.as_syn(),
                     Some((_, body)) if matches!(
@@ -1655,7 +1734,7 @@ pub fn whnf_value_ty<'v>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Elim, Eval};
+    use super::{nat_step_synchronizes, Elim, Eval};
     use crate::level::Level;
     use crate::reduce::{Defs, OutOfFuel};
     use crate::term::{CtxBase, LocalVar, Term, Type};
@@ -1687,6 +1766,43 @@ mod tests {
             motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
             base: arena.tm(TmClo::val(Rc::new(Val::Zero))),
             step: arena.tm(TmClo::syn(env, Rc::new(step_body))),
+        }
+    }
+
+    fn dummy_lam(body: Term) -> Term {
+        Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(body),
+        }
+    }
+
+    fn synchronous_step() -> Term {
+        dummy_lam(Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::App {
+                fun: Rc::new(Term::Var(LocalVar(3))),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Nat),
+                cod: Rc::new(Type::Nat),
+                arg: Rc::new(Term::Var(LocalVar(1))),
+            }),
+            scrut: Rc::new(Term::Var(LocalVar(0))),
+        })
+    }
+
+    fn app_elim<'v>(arena: &'v ValueArena<'v>, arg: &'v TmClo<'v>) -> Elim<'v> {
+        let ty = arena.ty(TyClo::new(Env::empty(arena), Rc::new(Type::Nat)));
+        Elim::App {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: ty,
+            cod: ty,
+            arg,
         }
     }
 
@@ -1742,5 +1858,43 @@ mod tests {
         let elim = nat_elim(&arena, env, Term::Var(LocalVar(0)));
         let mut ev = Eval::new(32, Defs::opaque(), CtxBase::Nil, &arena);
         assert_eq!(ev.elim(head, elim).unwrap_err(), OutOfFuel);
+    }
+
+    #[test]
+    fn synchronous_fold_cancels_independent_saturated_runs() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
+            tail,
+        });
+        let right = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
+            tail,
+        })));
+        let elim = Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::syn(env, Rc::new(dummy_lam(Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(synchronous_step()))),
+        };
+        let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
+        let folded = ev.elim(left, elim).unwrap();
+        let result = ev.elim(folded, app_elim(&arena, right)).unwrap();
+        assert!(matches!(&*result, Val::Zero));
+    }
+
+    #[test]
+    fn almost_synchronous_algebra_is_not_accelerated() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let mut step = synchronous_step();
+        let Term::Lam { body, .. } = &mut step else { unreachable!() };
+        let Term::ElimNat { step: inner, .. } = Rc::make_mut(body) else { unreachable!() };
+        let Term::App { fun, .. } = Rc::make_mut(inner) else { unreachable!() };
+        *fun = Rc::new(Term::Var(LocalVar(0)));
+        let closure = TmClo::syn(env, Rc::new(step));
+        assert!(!nat_step_synchronizes(&closure));
     }
 }

@@ -18,6 +18,63 @@ pub enum ContextProgram<C> {
     Compose { outer: Rc<ContextProgram<C>>, inner: Rc<ContextProgram<C>> },
 }
 
+/// Residual programs after cancelling an equal outer prefix.
+pub struct CancelledPrefix<C> {
+    pub left: Option<Rc<ContextProgram<C>>>,
+    pub right: Option<Rc<ContextProgram<C>>>,
+    pub changed: bool,
+}
+
+struct Cursor<C> {
+    pending: Vec<Rc<ContextProgram<C>>>,
+    run: Option<(C, NonZeroU64)>,
+}
+
+impl<C: Clone + Eq> Cursor<C> {
+    fn new(program: Rc<ContextProgram<C>>) -> Self {
+        Self { pending: vec![program], run: None }
+    }
+
+    fn next(&mut self) -> Option<(C, NonZeroU64)> {
+        loop {
+            if let Some((context, count)) = &self.run {
+                return Some((context.clone(), *count));
+            }
+            match &*self.pending.pop()? {
+                ContextProgram::Run { context, count } => {
+                    self.run = Some((context.clone(), *count));
+                }
+                ContextProgram::Compose { outer, inner } => {
+                    self.pending.push(Rc::clone(inner));
+                    self.pending.push(Rc::clone(outer));
+                }
+            }
+        }
+    }
+
+    fn consume(&mut self, count: u64) {
+        let (_, old) = self.run.as_ref().expect("consume follows next");
+        self.run = NonZeroU64::new(old.get() - count)
+            .map(|rest| (self.run.as_ref().unwrap().0.clone(), rest));
+    }
+
+    fn remainder(mut self) -> Option<Rc<ContextProgram<C>>> {
+        let mut pieces = Vec::with_capacity(self.pending.len() + usize::from(self.run.is_some()));
+        if let Some((context, count)) = self.run.take() {
+            pieces.push(ContextProgram::run(context, count));
+        }
+        while let Some(piece) = self.pending.pop() {
+            pieces.push(piece);
+        }
+        let mut pieces = pieces.into_iter().rev();
+        let mut result = pieces.next()?;
+        for outer in pieces {
+            result = ContextProgram::compose(outer, result);
+        }
+        Some(result)
+    }
+}
+
 impl<C: fmt::Debug> fmt::Debug for ContextProgram<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| match self {
@@ -74,6 +131,36 @@ impl<C: Clone + Eq> ContextProgram<C> {
                 ) => Rc::ptr_eq(lo, ro) && Rc::ptr_eq(li, ri),
                 _ => false,
             }
+    }
+
+    /// Cancel an equal sequence of outer contexts without visiting its
+    /// represented constructor nodes. The walk is over run/composition
+    /// fragments; residual fragments retain the original shared subprograms.
+    /// A differing context is a hard boundary, not a claim about it.
+    pub fn cancel_matching_prefix(left: Rc<Self>, right: Rc<Self>) -> CancelledPrefix<C> {
+        if Self::equivalent_fast(&left, &right) {
+            return CancelledPrefix { left: None, right: None, changed: true };
+        }
+        let mut left = Cursor::new(left);
+        let mut right = Cursor::new(right);
+        let mut changed = false;
+        loop {
+            let (Some((lc, ln)), Some((rc, rn))) = (left.next(), right.next()) else {
+                break;
+            };
+            if lc != rc {
+                break;
+            }
+            let count = ln.get().min(rn.get());
+            left.consume(count);
+            right.consume(count);
+            changed = true;
+        }
+        CancelledPrefix {
+            left: left.remainder(),
+            right: right.remainder(),
+            changed,
+        }
     }
 
     /// The outer constructor and a shared program for everything beneath it.
@@ -148,6 +235,54 @@ mod tests {
             &left,
             &ContextProgram::run('s', n(u64::MAX - 1)),
         ));
+    }
+
+    #[test]
+    fn matching_run_prefixes_cancel_arithmetically() {
+        let left = ContextProgram::run('s', n(u64::MAX));
+        let right = ContextProgram::run('s', n(u64::MAX - 7));
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right);
+        assert!(cancelled.changed);
+        assert!(cancelled.right.is_none());
+        assert!(matches!(cancelled.left.as_deref(),
+            Some(ContextProgram::Run { count, .. }) if count.get() == 7));
+    }
+
+    #[test]
+    fn cancellation_crosses_composed_saturated_runs_and_stops_at_mismatch() {
+        let full = ContextProgram::run('s', n(u64::MAX));
+        let left = ContextProgram::compose(ContextProgram::run('s', n(3)), Rc::clone(&full));
+        let right = ContextProgram::compose(ContextProgram::run('s', n(1)), full);
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right);
+        assert!(cancelled.changed);
+        assert!(cancelled.right.is_none());
+        assert!(matches!(cancelled.left.as_deref(),
+            Some(ContextProgram::Run { count, .. }) if count.get() == 2));
+
+        let left = ContextProgram::compose(
+            ContextProgram::run('s', n(2)),
+            ContextProgram::run('x', n(4)),
+        );
+        let right = ContextProgram::compose(
+            ContextProgram::run('s', n(1)),
+            ContextProgram::run('y', n(4)),
+        );
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right);
+        assert!(cancelled.changed);
+        assert!(cancelled.left.is_some());
+        assert!(cancelled.right.is_some());
+    }
+
+    #[test]
+    fn one_shared_exponential_program_cancels_without_traversal() {
+        let mut program = ContextProgram::run('s', n(1));
+        for _ in 0..64 {
+            program = ContextProgram::compose(Rc::clone(&program), program);
+        }
+        let cancelled = ContextProgram::cancel_matching_prefix(Rc::clone(&program), program);
+        assert!(cancelled.changed);
+        assert!(cancelled.left.is_none());
+        assert!(cancelled.right.is_none());
     }
 
 }

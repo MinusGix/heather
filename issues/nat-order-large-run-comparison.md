@@ -1,6 +1,6 @@
 ---
 title: Make closed Nat order cancel large shared run prefixes
-status: open
+status: closed
 labels: [kernel,frontend,performance,nat,representation]
 created: 2026-08-31
 updated: 2026-08-31
@@ -67,6 +67,30 @@ FunctionIR special case.
   not merely recognize one numeral spelling.
 
 ## Log
+
+- 2026-08-31: Closed with two generic consumers of the shared context-program
+  primitive. `ContextProgram::cancel_matching_prefix` walks run/composition
+  fragments, subtracts saturated counts arithmetically, retains residual
+  shared subprograms, and stops rather than guessing at a differing context.
+  Nat conversion now invokes that operation before exposing `Succ`, fixing
+  the independent linear recursion seen while comparing unequal literal
+  annotations.
+
+  Evaluation recognizes the exact synchronous fold algebra
+  `λ m. elim_Nat ... m ... (λ l _. ih l)`. It represents that fold until
+  application supplies the second run, cancels the matching prefix, and
+  resumes the original eliminators at both residuals. Names and zero cases
+  are not inspected. A one-variable near miss stays on the ordinary fueled
+  path, as does the existing hostile arbitrary-fold control.
+
+  The original mixed-width, fanout, nonmonotone-ID FunctionIR certificate at
+  `u64::MAX` now checks in 6.34 seconds under a 256 MiB address-space limit
+  and a 30-second timeout. Before consumer cancellation, the same post-producer
+  probe overflowed its stack in roughly three seconds under 4 GiB. Focused
+  controls compare equal and unequal maximum literals with eight fuel, cancel
+  unequal and composed saturated runs, and stop at differing contexts. The
+  ordinary certificate rail retains small IDs; explicit environment switches
+  expose the maximum probe so it is never run accidentally without caps.
 
 - 2026-08-31: Landed the producer half. `Term::NatLit(u64)` keeps closed
   surface numerals constant-size and evaluates a nonzero literal directly to

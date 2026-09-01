@@ -89,6 +89,39 @@ fn verdict(r: R) -> &'static str {
     }
 }
 
+#[test]
+fn maximum_nat_literals_compare_by_run_fragments() {
+    let psi = GlobalCtx::new(vec![]);
+    let gamma = LocalCtx::nil();
+    let maximum = Term::NatLit(u64::MAX);
+    assert_eq!(
+        conv_term(
+            &psi,
+            &gamma,
+            Layer::Prog,
+            &maximum,
+            &maximum,
+            &Type::Nat,
+            &Level::Zero,
+            8,
+        ),
+        Ok(()),
+    );
+    assert_eq!(
+        conv_term(
+            &psi,
+            &gamma,
+            Layer::Prog,
+            &maximum,
+            &Term::NatLit(u64::MAX - 1),
+            &Type::Nat,
+            &Level::Zero,
+            8,
+        ),
+        Err(ConvError::NotConvertible),
+    );
+}
+
 /// Both engines on the same term pair.
 #[allow(clippy::too_many_arguments)]
 fn both_tm(

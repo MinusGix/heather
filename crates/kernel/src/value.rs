@@ -957,6 +957,15 @@ pub enum Val<'v> {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
     },
+    /// A Nat fold whose successor algebra is a function that synchronously
+    /// eliminates a second Nat. The exact algebraic witness is checked before
+    /// constructing this value; application can therefore cancel matching
+    /// constructor programs and resume the original fold at both residuals.
+    NatSync {
+        program: Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        elim: Rc<Elim<'v>>,
+    },
     Refl {
         level: Level,
         ty: &'v TyClo<'v>,
@@ -1403,6 +1412,10 @@ impl fmt::Debug for Val<'_> {
             Val::NatRun { program, tail } => match &**program {
                 ContextProgram::Run { count, .. } => write!(f, "su^{} {tail:?}", count),
                 ContextProgram::Compose { .. } => write!(f, "su^<shared> {tail:?}"),
+            },
+            Val::NatSync { program, .. } => match &**program {
+                ContextProgram::Run { count, .. } => write!(f, "sync^{}", count),
+                ContextProgram::Compose { .. } => f.write_str("sync^<shared>"),
             },
             Val::Refl { tm, .. } => write!(f, "refl({tm:?})"),
             Val::SRefl { tm, .. } => write!(f, "srefl({tm:?})"),

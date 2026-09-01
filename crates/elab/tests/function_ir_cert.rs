@@ -35,6 +35,10 @@ const MODULES: &[(&str, &str)] = &[
 #[test]
 fn function_ir_certificate_generator_suite() {
     let base = support::semantic_test_base(MODULES);
+    if std::env::var_os("HEATHER_FUNCTION_IR_SPARSE_ONLY").is_some() {
+        generated_sparse_dag_checks(&base);
+        return;
+    }
     generated_sum4_certificates_check(&base);
     stale_model_is_rejected(&base);
     generated_sparse_dag_checks(&base);
@@ -210,12 +214,12 @@ fn generated_chain_checks(base: &Elaborator, node_count: u64) {
 }
 
 fn generated_sparse_dag_checks(base: &Elaborator) {
-    // Keep the ordinary regression sparse without exercising the separate
-    // large-closed-Nat comparison performance bug. Compact literal syntax now
-    // prevents the original roughly 24 GiB allocation while reading IDs near
-    // `u64::MAX`, but recursively computing their order still overflows the
-    // checker thread's stack (as 10,000 did before the producer fix).
-    let top = 100;
+    // Ordinary runs stay small. The environment override exists specifically
+    // for the issue's address-space/time-capped maximum-value probe; do not
+    // invoke that probe without the documented process limits.
+    let top = std::env::var("HEATHER_FUNCTION_IR_SPARSE_TOP")
+        .map(|value| value.parse().expect("numeric sparse top"))
+        .unwrap_or(100);
     let region = Region {
         inputs: vec![
             Port {
