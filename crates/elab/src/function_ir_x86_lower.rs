@@ -28,6 +28,22 @@ impl BinaryOperation {
     }
 }
 
+impl BinaryNode {
+    fn render(self) -> String {
+        let constructor = match self.operation {
+            BinaryOperation::Add => "Add",
+            BinaryOperation::Sub => "Sub",
+            BinaryOperation::BitAnd => "BitAnd",
+            BinaryOperation::BitOr => "BitOr",
+            BinaryOperation::BitXor => "BitXor",
+        };
+        format!(
+            "{constructor}(width := {}, output := {}, left := {}, right := {})",
+            self.width, self.output, self.left, self.right,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryNode {
     pub operation: BinaryOperation,
@@ -465,12 +481,16 @@ pub fn generate(
     let bytes_name = format!("{prefix}_bytes");
     let after_name = format!("{prefix}_after");
     let protected_name = format!("{prefix}_Protected");
-    let parameters = common_parameters(region_expr, region, input_registers);
-    let arguments = common_arguments(region);
-    let rendered_instructions = render_instruction_list(&lowered.instructions);
+    let public_parameters = common_parameters(region_expr, region, input_registers);
+    let public_arguments = common_arguments(region);
+    let compact_parameters = compact_parameters(prefix);
+    let context_arguments = context_constructor_arguments(region);
+    let arguments = "values, before, context";
+    let instruction_spine = render_instruction_spine(prefix, &lowered.instructions);
     let mut text = format!(
-        "fn {instructions_name}() → List<Instruction> {{\n\
-         \x20   {rendered_instructions}\n\
+        "{instruction_spine}\
+         fn {instructions_name}() → List<Instruction> {{\n\
+         \x20   {}\n\
          }}\n\n\
          fn {bytes_name}() → List<BitVec(8)> {{\n\
          \x20   canonical_block_bytes({instructions_name}())\n\
@@ -481,6 +501,7 @@ pub fn generate(
          {{\n\
          \x20   canonical_block_decodes({instructions_name}(), start)\n\
          }}\n\n",
+        render_instruction_cons(prefix, &lowered.instructions, 0),
         lowered.instructions.len() * 3,
     );
 
@@ -503,23 +524,46 @@ pub fn generate(
         lowered.instructions.len(),
     ));
 
-    let execution = render_execution_proof(prefix, &lowered.instructions);
+    emit_execution_stages(prefix, &lowered.instructions, &mut text);
     text.push_str(&format!(
         "theorem {prefix}_block_is_allowed<M>(before: MachineState<M>):\n\
          \x20   ExecuteBlock({instructions_name}(), before, {after_name}(before))\n\
          {{\n\
-         \x20   {execution}\n\
+         \x20   {prefix}_execute_from_0(before)\n\
          }}\n\n"
     ));
 
-    let final_placement =
-        emit_placement_proofs(prefix, region, &lowered, &parameters, &arguments, &mut text);
     text.push_str(&format!(
-        "theorem {prefix}_refines_function_ir<M>({parameters}):\n\
+        "record {prefix}_Context<M>(values: Valuation(), before: MachineState<M>) {{\n\
+{}\
+         \x20   graph: RegionHolds({region_expr}, values),\n\
+         }}\n\n",
+        render_context_fields(region, input_registers),
+    ));
+    emit_graph_stages(prefix, &lowered.node_plans, &mut text);
+
+    let final_placement = emit_placement_proofs(
+        prefix,
+        region,
+        &lowered,
+        &compact_parameters,
+        &arguments,
+        &mut text,
+    );
+    text.push_str(&format!(
+        "theorem {prefix}_refines_compact<M>({compact_parameters}):\n\
          \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {})\n\
          {{\n\
          \x20   sym({final_placement})\n\
+         }}\n\n\
+         theorem {prefix}_refines_function_ir<M>({public_parameters}):\n\
+         \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {})\n\
+         {{\n\
+         \x20   {prefix}_refines_compact(values, before,\n\
+         \x20       {prefix}_Context({context_arguments}))\n\
          }}\n\n",
+        lowered.output_register.heather_name(),
+        lowered.output_id,
         lowered.output_register.heather_name(),
         lowered.output_id,
     ));
@@ -552,7 +596,7 @@ pub fn generate(
     ));
 
     text.push_str(&format!(
-        "theorem {prefix}_artifact<M>({parameters}):\n\
+        "theorem {prefix}_artifact<M>({public_parameters}):\n\
          \x20   BlockArtifact<M>({instructions_name}(), before, {},\n\
          \x20       values(64, {}), {protected_name},\n\
          \x20       {prefix}_final_rip(before.rip))\n\
@@ -560,7 +604,7 @@ pub fn generate(
          \x20   BlockArtifact(\n\
          \x20       after := {after_name}(before),\n\
          \x20       execution := {prefix}_block_is_allowed(before),\n\
-         \x20       result_correct := {prefix}_refines_function_ir({arguments}),\n\
+         \x20       result_correct := {prefix}_refines_function_ir({public_arguments}),\n\
          \x20       memory_preserved := {prefix}_preserves_memory(before),\n\
          \x20       rip_correct := {prefix}_advances_rip(before),\n\
          \x20       registers_preserved := λ register protected =>\n\
@@ -596,28 +640,120 @@ fn common_arguments(region: &Region) -> String {
     arguments.join(", ")
 }
 
-fn render_instruction_list(instructions: &[Instruction]) -> String {
+fn render_context_fields(region: &Region, registers: &[Gpr]) -> String {
+    let mut fields = String::new();
+    for ((index, port), register) in region.inputs.iter().enumerate().zip(registers) {
+        fields.push_str(&format!(
+            "         \x20   input_{index}_placed: ValuePlaced(values, {}, {}, before),\n\
+             ",
+            port.id,
+            register.heather_name(),
+        ));
+    }
+    fields
+}
+
+fn compact_parameters(prefix: &str) -> String {
     format!(
-        "[{}]",
-        instructions
-            .iter()
-            .map(|instruction| instruction.render())
-            .collect::<Vec<_>>()
-            .join(", "),
+        "values: Valuation(),\n    before: MachineState<M>,\n    context: {prefix}_Context<M>(values, before)"
     )
 }
 
-fn render_execution_proof(prefix: &str, instructions: &[Instruction]) -> String {
-    let final_state = format!("{prefix}_state_{}(before)", instructions.len());
-    let mut proof = format!("execute_block_nil({final_state})");
-    for index in (0..instructions.len()).rev() {
-        proof = format!(
-            "canonical_execute_block_cons({}, {}, {prefix}_state_{index}(before), {final_state}, {proof})",
-            instructions[index].render(),
-            render_instruction_list(&instructions[index + 1..]),
-        );
+fn context_constructor_arguments(region: &Region) -> String {
+    let mut arguments = (0..region.inputs.len())
+        .map(|index| format!("input_{index}_placed"))
+        .collect::<Vec<_>>();
+    arguments.push("graph := graph".to_string());
+    arguments.join(", ")
+}
+
+fn render_instruction_spine(prefix: &str, instructions: &[Instruction]) -> String {
+    let mut text = format!(
+        "fn {prefix}_instructions_{}() → List<Instruction> {{ [] }}\n",
+        instructions.len(),
+    );
+    for index in (1..instructions.len()).rev() {
+        text.push_str(&format!(
+            "fn {prefix}_instructions_{index}() → List<Instruction> {{ {} }}\n",
+            render_instruction_cons(prefix, instructions, index),
+        ));
     }
-    proof
+    text
+}
+
+fn render_instruction_cons(prefix: &str, instructions: &[Instruction], index: usize) -> String {
+    format!(
+        "Cons({}, {prefix}_instructions_{}())",
+        instructions[index].render(),
+        index + 1,
+    )
+}
+
+fn instruction_suffix_name(prefix: &str, index: usize) -> String {
+    if index == 0 {
+        format!("{prefix}_instructions()")
+    } else {
+        format!("{prefix}_instructions_{index}()")
+    }
+}
+
+fn emit_execution_stages(prefix: &str, instructions: &[Instruction], text: &mut String) {
+    let final_index = instructions.len();
+    text.push_str(&format!(
+        "theorem {prefix}_execute_from_{final_index}<M>(before: MachineState<M>):\n\
+         \x20   ExecuteBlock({prefix}_instructions_{final_index}(),\n\
+         \x20       {prefix}_state_{final_index}(before), {prefix}_state_{final_index}(before))\n\
+         {{ execute_block_nil({prefix}_state_{final_index}(before)) }}\n"
+    ));
+    for index in (0..instructions.len()).rev() {
+        let suffix = instruction_suffix_name(prefix, index);
+        let tail = instruction_suffix_name(prefix, index + 1);
+        text.push_str(&format!(
+            "theorem {prefix}_execute_from_{index}<M>(before: MachineState<M>):\n\
+             \x20   ExecuteBlock({suffix}, {prefix}_state_{index}(before),\n\
+             \x20       {prefix}_state_{final_index}(before))\n\
+             {{\n\
+             \x20   canonical_execute_block_cons({}, {tail},\n\
+             \x20       {prefix}_state_{index}(before), {prefix}_state_{final_index}(before),\n\
+             \x20       {prefix}_execute_from_{}(before))\n\
+             }}\n",
+            instructions[index].render(),
+            index + 1,
+        ));
+    }
+}
+
+fn emit_graph_stages(prefix: &str, plans: &[NodePlan], text: &mut String) {
+    let node_count = plans.len();
+    text.push_str(&format!(
+        "fn {prefix}_nodes_{node_count}() → List<Node> {{ [] }}\n"
+    ));
+    for index in (0..node_count).rev() {
+        text.push_str(&format!(
+            "fn {prefix}_nodes_{index}() → List<Node> {{\n\
+             \x20   Cons({}, {prefix}_nodes_{}())\n\
+             }}\n",
+            plans[index].node.render(),
+            index + 1,
+        ));
+    }
+    text.push_str(&format!(
+        "theorem {prefix}_graph_0<M>(values: Valuation(), before: MachineState<M>,\n\
+         \x20   context: {prefix}_Context<M>(values, before)):\n\
+         \x20   NodesHold(values, {prefix}_nodes_0())\n\
+         {{ context.graph }}\n"
+    ));
+    for index in 0..node_count {
+        text.push_str(&format!(
+            "theorem {prefix}_graph_{}<M>(values: Valuation(), before: MachineState<M>,\n\
+             \x20   context: {prefix}_Context<M>(values, before)):\n\
+             \x20   NodesHold(values, {prefix}_nodes_{}())\n\
+             {{ {prefix}_graph_{index}(values, before, context).right }}\n",
+            index + 1,
+            index + 1,
+        ));
+    }
+    text.push('\n');
 }
 
 fn emit_placement_proofs(
@@ -639,13 +775,22 @@ fn emit_placement_proofs(
         *remaining.entry(output.id).or_default() += 1;
     }
     let mut live = BTreeMap::<u64, (Gpr, String)>::new();
+    let input_indices = region
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, port)| (port.id, index))
+        .collect::<BTreeMap<_, _>>();
     for (index, (port, register)) in region
         .inputs
         .iter()
         .zip(&lowered.input_registers)
         .enumerate()
     {
-        live.insert(port.id, (*register, format!("input_{index}_placed")));
+        live.insert(
+            port.id,
+            (*register, format!("context.input_{index}_placed")),
+        );
     }
 
     let mut instruction_index = 0;
@@ -653,11 +798,34 @@ fn emit_placement_proofs(
         let before_index = instruction_index;
         instruction_index += plan.instructions.len();
         let after_index = instruction_index;
-        let (_, left_proof) = live.get(&plan.node.left).expect("validated left placement");
-        let (_, right_proof) = live
+        let (&left_register, left_stored_proof) = live
+            .get(&plan.node.left)
+            .map(|(register, proof)| (register, proof))
+            .expect("validated left placement");
+        let (&right_register, right_stored_proof) = live
             .get(&plan.node.right)
+            .map(|(register, proof)| (register, proof))
             .expect("validated right placement");
-        let equation = format!("graph{}.left", ".right".repeat(plan.node_index));
+        let left_proof = placement_at_state(
+            prefix,
+            plan.node.left,
+            left_register,
+            before_index,
+            left_stored_proof,
+            &input_indices,
+        );
+        let right_proof = placement_at_state(
+            prefix,
+            plan.node.right,
+            right_register,
+            before_index,
+            right_stored_proof,
+            &input_indices,
+        );
+        let equation = format!(
+            "{prefix}_graph_{}(values, before, context).left",
+            plan.node_index,
+        );
         let output_name = format!(
             "{prefix}_value_{}_after_node_{}",
             plan.node.output, plan.node_index
@@ -688,37 +856,49 @@ fn emit_placement_proofs(
                     plan.left_register.heather_name(),
                     plan.destination.heather_name(),
                 ));
-                let right_name = format!(
-                    "{prefix}_value_{}_before_add_node_{}",
-                    plan.node.right, plan.node_index,
-                );
-                let right_frame = emit_step_frame_fact(
-                    prefix,
-                    before_index,
-                    plan.instructions[0],
-                    plan.right_register,
-                    &mut frame_facts,
-                    text,
-                );
-                text.push_str(&format!(
-                    "theorem {right_name}<M>({parameters}):\n\
-                     \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
-                     {{\n\
-                     \x20   placed_after_frame(values, {}, {},\n\
-                     \x20       {prefix}_state_{before_index}(before),\n\
-                     \x20       {prefix}_state_{move_after_index}(before), {right_proof},\n\
-                     \x20       {right_frame}({prefix}_state_{before_index}(before)))\n\
-                     }}\n",
-                    plan.node.right,
-                    plan.right_register.heather_name(),
-                    plan.node.right,
-                    plan.right_register.heather_name(),
-                ));
+                let right_after_move = if input_indices.contains_key(&plan.node.right) {
+                    placement_at_state(
+                        prefix,
+                        plan.node.right,
+                        plan.right_register,
+                        move_after_index,
+                        right_stored_proof,
+                        &input_indices,
+                    )
+                } else {
+                    let right_name = format!(
+                        "{prefix}_value_{}_before_add_node_{}",
+                        plan.node.right, plan.node_index,
+                    );
+                    let right_frame = emit_step_frame_fact(
+                        prefix,
+                        before_index,
+                        plan.instructions[0],
+                        plan.right_register,
+                        &mut frame_facts,
+                        text,
+                    );
+                    text.push_str(&format!(
+                        "theorem {right_name}<M>({parameters}):\n\
+                         \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
+                         {{\n\
+                         \x20   placed_after_frame(values, {}, {},\n\
+                         \x20       {prefix}_state_{before_index}(before),\n\
+                         \x20       {prefix}_state_{move_after_index}(before), {right_proof},\n\
+                         \x20       {right_frame}({prefix}_state_{before_index}(before)))\n\
+                         }}\n",
+                        plan.node.right,
+                        plan.right_register.heather_name(),
+                        plan.node.right,
+                        plan.right_register.heather_name(),
+                    ));
+                    format!("{right_name}({arguments})")
+                };
                 (
                     move_after_index,
                     plan.destination,
                     format!("{moved_name}({arguments})"),
-                    format!("{right_name}({arguments})"),
+                    right_after_move,
                 )
             } else {
                 debug_assert_eq!(plan.instructions.len(), 1);
@@ -755,6 +935,10 @@ fn emit_placement_proofs(
         let mut next_live = BTreeMap::new();
         for (&value, &(register, ref proof)) in &live {
             if remaining.get(&value).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            if input_indices.contains_key(&value) {
+                next_live.insert(value, (register, proof.clone()));
                 continue;
             }
             let mut frame_proof = proof.clone();
@@ -833,6 +1017,27 @@ fn emit_placement_proofs(
         ));
         format!("{final_name}({arguments})")
     }
+}
+
+fn placement_at_state(
+    prefix: &str,
+    value: u64,
+    register: Gpr,
+    state: usize,
+    stored_proof: &str,
+    input_indices: &BTreeMap<u64, usize>,
+) -> String {
+    let Some(&input_index) = input_indices.get(&value) else {
+        return stored_proof.to_string();
+    };
+    if state == 0 {
+        return format!("context.input_{input_index}_placed");
+    }
+    format!(
+        "placed_after_frame(values, {value}, {}, before, {prefix}_state_{state}(before), \
+         context.input_{input_index}_placed, refl)",
+        register.heather_name(),
+    )
 }
 
 fn consume_known_use(remaining: &mut BTreeMap<u64, usize>, value: u64) {

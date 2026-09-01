@@ -705,6 +705,18 @@ shifts, and comparisons remain separate backend work because they introduce
 variable-length immediate encodings, count normalization, and flag-to-value
 materialization rather than another instance of the destructive RR rule.
 
+Generated refinement scaling now uses three explicit sharing boundaries. A
+compact context prevents every local theorem from restoring the complete graph
+and input-placement telescope; opaque node-list suffixes make each semantic
+equation a constant-depth projection; and immutable input registers are framed
+directly from the entry state rather than copied through every instruction.
+Instruction execution is likewise staged over persistent suffixes because the
+tempting generic induction theorem currently exceeds kernel fuel. Together
+these changes move a 20-node mixed ALU artifact from beyond five minutes to
+64.5 seconds and keep a 50-node probe linear at 154.1 seconds. The remaining
+cost is approximately one opaque execution stage per instruction and one
+placement stage per node, not growth in graph depth or live-input distance.
+
 ## 14. Next implementation path
 
 The planned sequence is now:

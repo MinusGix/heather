@@ -5,7 +5,8 @@ mod support;
 
 use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, stats};
+use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -54,8 +55,22 @@ fn function_ir_x86_suite() {
 
 #[test]
 fn generated_mixed_binary_alu_dag_checks() {
+    check_generated_mixed_binary_alu_dag(5);
+}
+
+#[test]
+#[ignore = "20-node FunctionIR/x86 scaling rail; run explicitly"]
+fn generated_20_node_mixed_binary_alu_dag_checks() {
+    check_generated_mixed_binary_alu_dag(20);
+}
+
+fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
-    let region = mixed_binary_alu();
+    let node_count = std::env::var("HEATHER_FUNCTION_IR_X86_NODES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default_node_count);
+    let region = mixed_binary_alu(node_count);
     let raw = cert::render_region_function("mixed_binary_alu_raw", &region);
     let emission = lower::generate(
         "mixed_binary_alu_x86",
@@ -66,15 +81,75 @@ fn generated_mixed_binary_alu_dag_checks() {
         Gpr::Rax,
     )
     .expect("lower mixed binary ALU DAG");
-    assert_eq!(emission.lowered.node_plans.len(), 5);
-    assert_eq!(emission.lowered.instructions.len(), 7);
+    assert_eq!(emission.lowered.node_plans.len(), node_count);
+    assert_eq!(emission.lowered.instructions.len(), node_count + 2);
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
+    let report_timings = std::env::var_os("HEATHER_FUNCTION_IR_X86_TIMINGS").is_some();
+    if report_timings {
+        e.enable_item_timings();
+        stats::reset_kernel_ns();
+    }
+    let started = Instant::now();
     if let Err(error) = e.elab_module_source("function_ir_mixed_alu_x86", &source) {
         panic!(
             "generated mixed binary ALU artifact did not check: {}",
             error.render(&source),
         );
+    }
+    if report_timings {
+        let total = started.elapsed();
+        let mut timings = e.take_item_timings();
+        let mut categories = std::collections::BTreeMap::<&str, (usize, u64, u64)>::new();
+        for item in &timings {
+            let category = timing_category(&item.item);
+            let entry = categories.entry(category).or_default();
+            entry.0 += 1;
+            entry.1 += item.total_ns;
+            entry.2 += item.kernel_ns;
+        }
+        timings.sort_by_key(|item| std::cmp::Reverse(item.total_ns));
+        eprintln!(
+            "mixed ALU total={:.3}s kernel={:.3}s frontend={:.3}s",
+            total.as_secs_f64(),
+            stats::kernel_ns() as f64 / 1e9,
+            (total.as_nanos() as u64).saturating_sub(stats::kernel_ns()) as f64 / 1e9,
+        );
+        for (category, (count, total_ns, kernel_ns)) in categories {
+            eprintln!(
+                "mixed ALU category {category} count={count} total={:.3}s kernel={:.3}s frontend={:.3}s",
+                total_ns as f64 / 1e9,
+                kernel_ns as f64 / 1e9,
+                total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
+            );
+        }
+        for item in timings.into_iter().take(12) {
+            eprintln!(
+                "mixed ALU item {} total={:.3}s kernel={:.3}s frontend={:.3}s",
+                item.item,
+                item.total_ns as f64 / 1e9,
+                item.kernel_ns as f64 / 1e9,
+                item.total_ns.saturating_sub(item.kernel_ns) as f64 / 1e9,
+            );
+        }
+    }
+}
+
+fn timing_category(item: &str) -> &'static str {
+    if item.contains("_execute_from_") {
+        "execution"
+    } else if item.contains("_graph_") || item.contains("_nodes_") {
+        "graph"
+    } else if item.contains("_step_") && item.contains("_preserves_") {
+        "machine-frame"
+    } else if item.contains("_step_") && item.contains("_result") {
+        "machine-result"
+    } else if item.contains("_after_node_") || item.contains("_before_add_node_") {
+        "value-placement"
+    } else if item.contains("_state_") || item.contains("_after") {
+        "machine-state"
+    } else {
+        "boundary"
     }
 }
 
@@ -175,8 +250,9 @@ fn sum4(left_first: bool) -> Region {
     }
 }
 
-fn mixed_binary_alu() -> Region {
-    Region {
+fn mixed_binary_alu(node_count: usize) -> Region {
+    assert!(node_count >= 5);
+    let mut region = Region {
         inputs: (0..4).map(|id| Port { id, width: 64 }).collect(),
         nodes: vec![
             Node::BitAnd {
@@ -210,8 +286,51 @@ fn mixed_binary_alu() -> Region {
                 right: 2,
             },
         ],
-        outputs: vec![Port { id: 8, width: 64 }],
+        outputs: Vec::new(),
+    };
+    let mut left = 8;
+    for node_index in 5..node_count {
+        let output = 4 + node_index as u64;
+        let right = ((node_index - 5) % 4) as u64;
+        region.nodes.push(match node_index % 5 {
+            0 => Node::Add {
+                width: 64,
+                output,
+                left,
+                right,
+            },
+            1 => Node::Sub {
+                width: 64,
+                output,
+                left,
+                right,
+            },
+            2 => Node::BitAnd {
+                width: 64,
+                output,
+                left,
+                right,
+            },
+            3 => Node::BitOr {
+                width: 64,
+                output,
+                left,
+                right,
+            },
+            _ => Node::BitXor {
+                width: 64,
+                output,
+                left,
+                right,
+            },
+        });
+        left = output;
     }
+    region.outputs.push(Port {
+        id: left,
+        width: 64,
+    });
+    region
 }
 
 fn checked_example_lowering_module() -> String {

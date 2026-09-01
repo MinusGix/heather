@@ -36,3 +36,37 @@ certificate whose steps refer to opaque predecessor facts.
 - **[[frontend-large-proof-composition-cost]]** owns general frontend sharing;
   this issue owns generator-side proof factorization that is useful even before
   a general frontend improvement lands.
+
+## Progress, 2026-09-01
+
+The first scaling cut is implemented and changes the shape rather than raising
+fuel. Internal placement theorems now take one compact context record; node
+semantics advance through persistent opaque `NodesHold` suffixes; instruction
+execution advances through persistent instruction suffixes and opaque stages;
+and immutable input-register placements are instantiated directly at their
+use state instead of being copied through every intervening instruction.
+
+Measured alone with item timing enabled, debug build:
+
+- the original 20-node/22-instruction module exceeded 300 seconds;
+- the staged 5-node module takes 25.3 seconds;
+- 20 nodes take 64.5 seconds; and
+- 50 nodes take 154.1 seconds.
+
+The 20-to-50 ratio is 2.39× for 2.5× as many nodes. Late node facts remain
+flat (roughly 1.5--1.75 seconds each), so the former superlinear projection and
+frame-propagation shapes are gone. At 20 nodes, machine framing fell from 80
+generated facts/18.4 seconds to 2 facts/0.46 seconds, while value-placement
+facts fell from 102/49.9 seconds to 22/30.2 seconds. Execution staging remains
+about 1 second per selected instruction and value placement about 1.5 seconds
+per node; these linear constants keep this issue open for the 100-node rail.
+
+The ordinary five-node acceptance remains fast enough for the default suite;
+the 20-node case is an explicit ignored stress test. Set
+`HEATHER_FUNCTION_IR_X86_TIMINGS=1` for item/category attribution and
+`HEATHER_FUNCTION_IR_X86_NODES=N` to probe another size.
+
+As an integration-level result, the complete serial `function_ir_x86` test
+binary fell from 163.7 seconds before this cut to 106.2 seconds after it, while
+adding the larger mixed-operation machinery and retaining stale-model and
+alternate-schedule controls.
