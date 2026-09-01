@@ -660,17 +660,38 @@ rails. The performance debts found while building it remain separate language
 issues: frontend sharing of large proof composition, named-argument expected
 types, and run-aware reduction of very large closed Nat order comparisons.
 
-## 13. Next implementation path
+## 13. Executable Add-DAG lowering
 
-The next priority is an executable, proof-producing x86 lowering for the
-current pure Add DAG, tracked by [[function-ir-x86-lowering-generator]]. This
-is intentionally a vertical compiler slice rather than another round of
-validity tuning: select instructions, assign and reuse spill-free registers,
-emit canonical bytes, and generate staged execution/refinement certificates.
-The add64 and sum4 artifacts are acceptance fixtures, not permanent handwritten
-implementations; generated equivalents should delete them.
+The first executable, proof-producing x86 lowering now closes
+[[function-ir-x86-lowering-generator]]. It is a vertical compiler slice:
+given a concrete pure 64-bit Add DAG and input placements, the untrusted host
+tool computes use counts, selects `MOV`/`ADD`, assigns and reuses spill-free
+temporaries, and renders an ordinary Heather certificate. The kernel checks
+the plan against both the actual `RegionHolds` graph and x86 execution.
 
-The planned sequence after that is:
+Proofs are staged at instruction granularity. Each emitted instruction has a
+small result fact over an abstract machine state, and live values cross it
+with concrete-register frame facts. `ValuePlaced` composition then connects
+those local machine facts to successive graph equations. This is not merely a
+presentation detail: whole-node reflexivity crossed the kernel fuel rail on
+sum4, whereas local facts keep normalization bounded and expose the intended
+compiler invariant directly.
+
+The generated module replaces the handwritten add64 and sum4 bodies and also
+contains the alternate sum4 schedule. A golden drift test ties the checked
+file to the renderer; one semantic backstop checks the complete generated
+module without redundantly elaborating an identical dynamic copy. Host tests
+cover deterministic selection, last-use reuse, a long constant-pressure
+chain, precise pressure decline, and stale-model rejection at conversion.
+
+The initial boundary deliberately remains small: `Add` at width 64, one
+result, declared input/temporary locations, and no spills. The internal plan
+already separates selected instructions, placements, liveness, and emitted
+proofs enough for the next operation family and a later spill policy.
+
+## 14. Next implementation path
+
+The planned sequence is now:
 
 1. [[function-ir-alu-core]] adds constants, representative bitwise and shift
    operations, and interpretation-sensitive comparisons through the now-real

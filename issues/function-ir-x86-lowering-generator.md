@@ -1,6 +1,6 @@
 ---
 title: Generate certified x86 lowering for pure FunctionIR Add DAGs
-status: open
+status: closed
 labels: [compiler,function-ir,x86,proofs,codegen]
 created: 2026-08-31
 updated: 2026-08-31
@@ -29,6 +29,33 @@ lowering rather than a per-fixture renderer:
 The generator is untrusted. Its output is Heather source checked against the
 actual FunctionIR graph and x86 semantics. A stale graph, placement, or
 instruction list must fail at the ordinary elaborator/kernel boundary.
+
+## Resolution
+
+Implemented on 2026-08-31. The host-side lowering validates the concrete
+64-bit, single-output Add DAG, computes use counts, assigns a declared
+spill-free temporary pool, reuses a left operand's register after its last
+use, and emits `MOV`/destructive `ADD` plus a final requested-output move when
+needed. Pressure and malformed placements are structured declines.
+
+The emitted Heather module proves each concrete instruction's result and frame
+on an abstract machine state, then composes those local facts into staged
+`ValuePlaced` proofs. This shape matters: asking reflexivity to normalize a
+whole nested block exhausted ordinary kernel fuel even for sum4. The final
+artifact includes canonical bytes/decoding, relational block execution,
+FunctionIR refinement, memory and protected-register framing, and RIP advance.
+
+`lib/function_ir_x86.hthr` is now a generated golden containing add64 and both
+sum4 schedules. Its drift test regenerates from the same ordinary Region
+models, while the semantic suite checks the complete module. The handwritten
+proof bodies were deleted. A structurally stale model is rejected by
+conversion; allocator tests cover temporary pressure, last-use reuse, and a
+100-node chain with constant temporary demand.
+
+The accepted initial limits are explicit: only `Add` at width 64, one result,
+no spills, and only left-operand destructive reuse. Reusing the right operand
+would need either commutativity in the generated semantic proof or an
+instruction-selection rule that carries operand permutation evidence.
 
 ## Acceptance
 

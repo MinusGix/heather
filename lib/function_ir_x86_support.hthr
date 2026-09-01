@@ -1,0 +1,61 @@
+// Reusable proof boundary for generated straight-line FunctionIR/x86
+// lowering. A generator supplies concrete machine states and `refl` frame or
+// execution facts; these lemmas compose them with graph equations and value
+// placements without trusting the generator.
+
+import function_ir;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import list;
+import logic;
+
+fn ValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
+    state: MachineState<M>) → Type
+{
+    values(64, id) = read_gpr(register, state.gprs)
+}
+
+theorem placed_after_frame<M>(values: Valuation(), id: Nat, register: Gpr,
+    before, after: MachineState<M>,
+    placed: ValuePlaced(values, id, register, before),
+    frame: read_gpr(register, after.gprs) =
+        read_gpr(register, before.gprs)):
+    ValuePlaced(values, id, register, after)
+{
+    trans(placed, sym(frame))
+}
+
+theorem placed_after_move<M>(values: Valuation(), id: Nat,
+    source, destination: Gpr, before, after: MachineState<M>,
+    placed: ValuePlaced(values, id, source, before),
+    moved: read_gpr(destination, after.gprs) =
+        read_gpr(source, before.gprs)):
+    ValuePlaced(values, id, destination, after)
+{
+    trans(placed, sym(moved))
+}
+
+theorem placed_after_add<M>(values: Valuation(), output, left, right: Nat,
+    left_register, right_register, destination: Gpr,
+    before, after: MachineState<M>,
+    equation: values(64, output) =
+        bitvec::add(64, values(64, left), values(64, right)),
+    left_placed: ValuePlaced(values, left, left_register, before),
+    right_placed: ValuePlaced(values, right, right_register, before),
+    computed: read_gpr(destination, after.gprs) = bitvec::add(64,
+        read_gpr(left_register, before.gprs),
+        read_gpr(right_register, before.gprs))):
+    ValuePlaced(values, output, destination, after)
+{
+    apply trans;
+    give equation;
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::add(64, ·, values(64, right)), left_placed);
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::add(64, read_gpr(left_register, before.gprs), ·),
+        right_placed);
+    sym(computed)
+}

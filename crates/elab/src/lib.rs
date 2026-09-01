@@ -86,6 +86,7 @@ mod omega_cert;
 pub use omega_cert::{CutSatReport, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
+pub mod function_ir_x86_lower;
 mod code;
 mod constructor;
 mod context;
