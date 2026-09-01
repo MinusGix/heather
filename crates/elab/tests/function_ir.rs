@@ -67,12 +67,29 @@ fn structured_conditional_is_valid_and_selects_one_branch(base: &Elaborator) {
         }],
         outputs: add.outputs.clone(),
     };
+    let comparison = Region {
+        inputs: add.inputs.clone(),
+        nodes: vec![Node::UnsignedLessThan {
+            width: 64,
+            output: 3,
+            left: 0,
+            right: 1,
+        }],
+        outputs: vec![Port { id: 3, width: 1 }],
+    };
     let add_raw = cert::render_region_function("conditional_add_raw", &add);
     let sub_raw = cert::render_region_function("conditional_sub_raw", &sub);
+    let comparison_raw = cert::render_region_function("conditional_comparison_raw", &comparison);
     let add_valid = cert::generate("conditional_add_valid", "conditional_add_raw()", &add)
         .expect("add branch certificate");
     let sub_valid = cert::generate("conditional_sub_valid", "conditional_sub_raw()", &sub)
         .expect("sub branch certificate");
+    let comparison_valid = cert::generate(
+        "conditional_comparison_valid",
+        "conditional_comparison_raw()",
+        &comparison,
+    )
+    .expect("comparison prefix certificate");
     let src = format!(
         r#"
 import function_ir;
@@ -83,8 +100,10 @@ import nat;
 
 {add_raw}
 {sub_raw}
+{comparison_raw}
 {add_certificate}
 {sub_certificate}
+{comparison_certificate}
 
 fn conditional_inputs() → Ports {{
     Ports([Port(id := 0, width := 64), Port(id := 1, width := 64),
@@ -101,6 +120,10 @@ fn selected_conditional() → StructuredRegion {{
     Conditional(conditional_inputs(), 3, conditional_arguments(),
         conditional_outputs(), Dataflow(conditional_add_raw()),
         Dataflow(conditional_sub_raw()))
+}}
+
+fn comparison_prefixed_conditional() → StructuredRegion {{
+    Sequence(conditional_comparison_raw(), selected_conditional())
 }}
 
 theorem conditional_0_ne_1(): 0 ≠ 1 {{ nat::zero_ne_succ(0) }}
@@ -140,6 +163,29 @@ theorem selected_conditional_valid(): StructuredRegionValid(selected_conditional
             ⟨conditional_add_valid(), conditional_sub_valid()⟩⟩⟩⟩⟩⟩⟩⟩⟩
 }}
 
+theorem comparison_continuation_available():
+    InterfaceSubset(conditional_inputs().entries,
+        conditional_comparison_raw().inputs.entries ++
+        conditional_comparison_raw().outputs.entries)
+{{
+    ⟨⟨⟨refl, refl⟩ |⟩,
+     ⟨⟨| ⟨⟨refl, refl⟩ |⟩⟩,
+      ⟨⟨| ⟨| ⟨⟨refl, refl⟩ |⟩⟩⟩, trivial⟩⟩⟩
+}}
+
+theorem comparison_prefixed_conditional_valid():
+    StructuredRegionValid(comparison_prefixed_conditional())
+{{
+    ⟨conditional_comparison_valid(),
+     ⟨comparison_continuation_available(), selected_conditional_valid()⟩⟩
+}}
+
+theorem comparison_prefixed_conditional_holds(values: Valuation(),
+    comparison: RegionHolds(conditional_comparison_raw(), values),
+    continuation: StructuredRegionHolds(values, selected_conditional())):
+    StructuredRegionHolds(values, comparison_prefixed_conditional())
+{{ ⟨comparison, continuation⟩ }}
+
 theorem conditional_takes_false(values: Valuation(),
     condition_false: bitvec::head_bit(0, values(1, 3)) = False,
     false_graph: RegionHolds(conditional_sub_raw(), values)):
@@ -166,6 +212,7 @@ theorem conditional_takes_true(values: Valuation(),
 "#,
         add_certificate = add_valid.text,
         sub_certificate = sub_valid.text,
+        comparison_certificate = comparison_valid.text,
     );
     let mut e = base.clone();
     if let Err(err) = e.elab_module_source("function_ir_structured_conditional", &src) {

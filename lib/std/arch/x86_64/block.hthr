@@ -202,3 +202,29 @@ theorem execute_conditional_selected<M>(block: ConditionalBlock,
         True => true_branch,
     }
 }
+
+// Sequential composition used when a straight-line prefix materializes the
+// condition consumed by a structured branch. The intermediate state is an
+// explicit witness, so execution cannot accidentally branch from the entry
+// state or skip the condition-producing instructions.
+record PrefixedConditionalBlock {
+    prefix: List<Instruction>,
+    continuation: ConditionalBlock,
+}
+
+fn ExecutePrefixedConditionalBlock<M>(block: PrefixedConditionalBlock,
+    before, after: MachineState<M>) → Type
+{
+    Exists<MachineState<M>>(λ middle =>
+        ExecuteBlock(block.prefix, before, middle) ∧
+        ExecuteConditionalBlock(block.continuation, middle, after))
+}
+
+theorem execute_prefixed_conditional<M>(block: PrefixedConditionalBlock,
+    before, middle, after: MachineState<M>,
+    prefix: ExecuteBlock(block.prefix, before, middle),
+    continuation: ExecuteConditionalBlock(block.continuation, middle, after)):
+    ExecutePrefixedConditionalBlock(block, before, after)
+{
+    Exists(middle, ⟨prefix, continuation⟩)
+}

@@ -372,6 +372,13 @@ pub struct ConditionalX86Emission {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrefixedConditionalX86Emission {
+    pub prefix: LoweredDag,
+    pub continuation: LoweredConditional,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoweredConditional {
     pub condition_id: u64,
     pub condition_register: Gpr,
@@ -408,6 +415,7 @@ pub enum LoweringError {
     InvalidStructuredRegion(String),
     UnsupportedStructuredRegion,
     MissingConditionPlacement(u64),
+    UnsupportedSequenceInterface,
 }
 
 impl fmt::Display for LoweringError {
@@ -467,6 +475,10 @@ impl fmt::Display for LoweringError {
             LoweringError::MissingConditionPlacement(condition) => write!(
                 f,
                 "conditional value {condition} has no input register placement",
+            ),
+            LoweringError::UnsupportedSequenceInterface => write!(
+                f,
+                "the first prefixed conditional lowering requires one one-bit prefix output and branch arguments inherited from prefix inputs",
             ),
         }
     }
@@ -680,6 +692,187 @@ pub fn generate_conditional(
         requested_output.heather_name(),
     ));
     Ok(ConditionalX86Emission { lowered, text })
+}
+
+/// Generate a comparison-producing straight-line prefix followed by the first
+/// structured conditional. The comparison result is placed by the prefix,
+/// while inherited 64-bit arguments are carried across using its frame proof.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_prefixed_conditional(
+    prefix: &str,
+    structured_region_expr: &str,
+    prefix_region_expr: &str,
+    conditional_region_expr: &str,
+    true_region_expr: &str,
+    false_region_expr: &str,
+    region: &StructuredRegion,
+    input_registers: &[Gpr],
+    condition_register: Gpr,
+    branch_temporary_registers: &[Gpr],
+    requested_output: Gpr,
+) -> Result<PrefixedConditionalX86Emission, LoweringError> {
+    cert::validate_structured_region(region).map_err(LoweringError::InvalidStructuredRegion)?;
+    let StructuredRegion::Sequence {
+        prefix: prefix_region,
+        continuation,
+    } = region
+    else {
+        return Err(LoweringError::UnsupportedStructuredRegion);
+    };
+    let StructuredRegion::Conditional {
+        condition,
+        arguments,
+        outputs,
+        ..
+    } = &**continuation
+    else {
+        return Err(LoweringError::UnsupportedStructuredRegion);
+    };
+    if prefix_region.inputs.len() != input_registers.len() {
+        return Err(LoweringError::InputPlacementCount {
+            inputs: prefix_region.inputs.len(),
+            registers: input_registers.len(),
+        });
+    }
+    if prefix_region.outputs.len() != 1
+        || prefix_region.outputs[0].id != *condition
+        || prefix_region.outputs[0].width != 1
+        || outputs.len() != 1
+        || outputs[0].width != 64
+        || arguments
+            .iter()
+            .any(|argument| !prefix_region.inputs.contains(argument))
+    {
+        return Err(LoweringError::UnsupportedSequenceInterface);
+    }
+    let input_placements = prefix_region
+        .inputs
+        .iter()
+        .zip(input_registers)
+        .map(|(port, register)| (port.id, *register))
+        .collect::<BTreeMap<_, _>>();
+    let conditional_inputs = continuation
+        .inputs()
+        .iter()
+        .map(|port| {
+            if port.id == *condition && port.width == 1 {
+                Ok(condition_register)
+            } else {
+                input_placements
+                    .get(&port.id)
+                    .copied()
+                    .ok_or(LoweringError::UnsupportedSequenceInterface)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let prefix_name = format!("{prefix}_prefix");
+    let continuation_name = format!("{prefix}_continuation");
+    let prefix_emission = generate(
+        &prefix_name,
+        prefix_region_expr,
+        prefix_region,
+        input_registers,
+        &[condition_register],
+        condition_register,
+    )?;
+    let continuation_emission = generate_conditional(
+        &continuation_name,
+        conditional_region_expr,
+        true_region_expr,
+        false_region_expr,
+        continuation,
+        &conditional_inputs,
+        branch_temporary_registers,
+        requested_output,
+    )?;
+    let input_indices = prefix_region
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, port)| (port.id, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut public_parameters = vec![
+        "values: Valuation()".to_string(),
+        "before: MachineState<M>".to_string(),
+    ];
+    let mut prefix_arguments = Vec::new();
+    for (index, (port, register)) in prefix_region.inputs.iter().zip(input_registers).enumerate() {
+        public_parameters.push(format!(
+            "input_{index}_placed: ValuePlaced(values, {}, {}, before)",
+            port.id,
+            register.heather_name(),
+        ));
+        prefix_arguments.push(format!("input_{index}_placed"));
+    }
+    public_parameters.push(format!(
+        "graph: StructuredRegionHolds(values, {structured_region_expr})",
+    ));
+    let prefix_arguments = if prefix_arguments.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", prefix_arguments.join(", "))
+    };
+    let carried_arguments = arguments
+        .iter()
+        .map(|argument| {
+            let index = input_indices[&argument.id];
+            let register = input_registers[index];
+            format!(
+                "placed_after_frame(values, {}, {}, before, {prefix_name}_after(before), input_{index}_placed, {prefix_name}_preserves_protected({}, before, trivial))",
+                argument.id,
+                register.heather_name(),
+                register.heather_name(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let carried_arguments = if carried_arguments.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", carried_arguments.join(", "))
+    };
+    let control_name = format!("{prefix}_block");
+    let after_name = format!("{prefix}_after");
+    let continuation_control = format!("{continuation_name}_control");
+    let continuation_after = format!("{continuation_name}_after");
+    let mut text = prefix_emission.text;
+    text.push('\n');
+    text.push_str(&continuation_emission.text);
+    text.push_str(&format!(
+        "\n\nfn {control_name}() → PrefixedConditionalBlock {{\n\
+         \x20   PrefixedConditionalBlock(\n\
+         \x20       prefix := {prefix_name}_instructions(),\n\
+         \x20       continuation := {continuation_control}())\n\
+         }}\n\n\
+         fn {after_name}<M>(before: MachineState<M>) → MachineState<M> {{\n\
+         \x20   {continuation_after}({prefix_name}_after(before))\n\
+         }}\n\n\
+         theorem {prefix}_control_is_allowed<M>(before: MachineState<M>):\n\
+         \x20   ExecutePrefixedConditionalBlock({control_name}(), before,\n\
+         \x20       {after_name}(before))\n\
+         {{\n\
+         \x20   execute_prefixed_conditional({control_name}(), before,\n\
+         \x20       {prefix_name}_after(before), {after_name}(before),\n\
+         \x20       {prefix_name}_block_is_allowed(before),\n\
+         \x20       {continuation_name}_control_is_allowed(\n\
+         \x20           {prefix_name}_after(before)))\n\
+         }}\n\n\
+         theorem {prefix}_refines_function_ir<M>({}):\n\
+         \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {})\n\
+         {{\n\
+         \x20   {continuation_name}_refines_function_ir(values,\n\
+         \x20       {prefix_name}_after(before){carried_arguments},\n\
+         \x20       sym({prefix_name}_refines_function_ir(\n\
+         \x20           values, before{prefix_arguments}, graph.left)), graph.right)\n\
+         }}\n",
+        public_parameters.join(",\n    "),
+        requested_output.heather_name(),
+        outputs[0].id,
+    ));
+    Ok(PrefixedConditionalX86Emission {
+        prefix: prefix_emission.lowered,
+        continuation: continuation_emission.lowered,
+        text,
+    })
 }
 
 /// Lower one valid-looking, 64-bit, single-output constant/binary-ALU DAG. The generated

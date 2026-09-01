@@ -44,6 +44,11 @@ executes only that leaf, and proves the common `RAX` result. Invalid captures,
 unavailable conditions, invalid leaves, and mismatched yields are pinned as
 negative controls.
 
+The follow-up producer composition is also complete: `Sequence` scopes a flat
+comparison prefix over the conditional, and a generated certificate carries
+the comparison result and protected arguments through the explicit
+intermediate machine state before branching.
+
 Leaf encodings are canonical and decoded; physical conditional-transfer bytes
 and displacement/layout proofs are intentionally tracked separately in
 [[x86-64-conditional-branch-layout]].

@@ -90,6 +90,10 @@ pub struct Region {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StructuredRegion {
     Dataflow(Region),
+    Sequence {
+        prefix: Region,
+        continuation: Box<StructuredRegion>,
+    },
     Conditional {
         inputs: Vec<Port>,
         condition: u64,
@@ -104,6 +108,7 @@ impl StructuredRegion {
     pub fn inputs(&self) -> &[Port] {
         match self {
             Self::Dataflow(region) => &region.inputs,
+            Self::Sequence { prefix, .. } => &prefix.inputs,
             Self::Conditional { inputs, .. } => inputs,
         }
     }
@@ -111,6 +116,7 @@ impl StructuredRegion {
     pub fn outputs(&self) -> &[Port] {
         match self {
             Self::Dataflow(region) => &region.outputs,
+            Self::Sequence { continuation, .. } => continuation.outputs(),
             Self::Conditional { outputs, .. } => outputs,
         }
     }
@@ -121,6 +127,21 @@ pub fn validate_structured_region(region: &StructuredRegion) -> Result<(), Strin
         StructuredRegion::Dataflow(region) => {
             directory_entries(region)?;
             Ok(())
+        }
+        StructuredRegion::Sequence {
+            prefix,
+            continuation,
+        } => {
+            directory_entries(prefix)?;
+            for input in continuation.inputs() {
+                if !prefix.inputs.contains(input) && !prefix.outputs.contains(input) {
+                    return Err(format!(
+                        "continuation input {}:{} is not available from the prefix",
+                        input.id, input.width,
+                    ));
+                }
+            }
+            validate_structured_region(continuation)
         }
         StructuredRegion::Conditional {
             inputs,
@@ -1018,6 +1039,68 @@ mod tests {
             validate_structured_region(&captured)
                 .unwrap_err()
                 .contains("captures undeclared")
+        );
+    }
+
+    #[test]
+    fn structured_sequence_exposes_only_inputs_and_declared_prefix_outputs() {
+        let prefix = Region {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            nodes: vec![Node::UnsignedLessThan {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1,
+            }],
+            outputs: vec![Port { id: 2, width: 1 }],
+        };
+        let continuation = |condition| StructuredRegion::Conditional {
+            inputs: vec![
+                Port { id: 0, width: 64 },
+                Port { id: 1, width: 64 },
+                Port {
+                    id: condition,
+                    width: 1,
+                },
+            ],
+            condition,
+            arguments: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            outputs: vec![Port { id: 3, width: 64 }],
+            when_true: Box::new(StructuredRegion::Dataflow(Region {
+                inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+                nodes: vec![Node::Add {
+                    width: 64,
+                    output: 3,
+                    left: 0,
+                    right: 1,
+                }],
+                outputs: vec![Port { id: 3, width: 64 }],
+            })),
+            when_false: Box::new(StructuredRegion::Dataflow(Region {
+                inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+                nodes: vec![Node::Sub {
+                    width: 64,
+                    output: 3,
+                    left: 0,
+                    right: 1,
+                }],
+                outputs: vec![Port { id: 3, width: 64 }],
+            })),
+        };
+        let valid = StructuredRegion::Sequence {
+            prefix: prefix.clone(),
+            continuation: Box::new(continuation(2)),
+        };
+        assert_eq!(validate_structured_region(&valid), Ok(()));
+
+        let unavailable = StructuredRegion::Sequence {
+            prefix,
+            continuation: Box::new(continuation(9)),
+        };
+        assert!(
+            validate_structured_region(&unavailable)
+                .unwrap_err()
+                .contains("not available from the prefix")
         );
     }
 }

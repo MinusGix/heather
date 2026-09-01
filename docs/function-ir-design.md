@@ -777,3 +777,26 @@ see [[x86-64-conditional-branch-layout]]. The same explicit-input/common-yield
 shape generalizes naturally to `Loop`, while `Function` and `Apply` will also
 need calling-convention and effect interfaces rather than merely another
 recursive constructor.
+
+The first producer-to-control composition adds `Sequence(prefix,
+continuation)`. Its flat prefix extends the continuation's scope with the
+union of the prefix's original inputs and declared outputs. This is more useful
+than requiring every live input to be repeated as a prefix result, while still
+preventing the continuation from capturing an undeclared intermediate node.
+Denotation is simply the prefix `RegionHolds` paired with the continuation's
+structured denotation.
+
+The executable acceptance artifact uses an `UnsignedLessThan` prefix. It
+materializes the comparison in `RDX` with zero/`CMP`/`SETB`, carries the
+protected `RDI` and `RSI` placements through that block, then uses the produced
+bit to choose Add or Sub and joins the result in `RAX`. Machine execution
+packages the prefix's final state as an explicit existential witness before
+conditional execution, ruling out both skipping the producer and branching
+from the entry state. The generated refinement consumes `graph.left` for the
+comparison and `graph.right` for the selected continuation.
+
+The generator intentionally supports this first normal form rather than
+pretending to be a recursive structured backend already: one one-bit prefix
+result, inherited branch arguments, two dataflow leaves, and one 64-bit join
+result. General recursive selection is tracked by
+[[function-ir-recursive-structured-lowering]].

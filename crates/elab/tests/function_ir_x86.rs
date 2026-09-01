@@ -381,6 +381,99 @@ fn generated_structured_conditional_checks() {
     }
 }
 
+#[test]
+fn generated_comparison_prefixed_conditional_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let comparison = Region {
+        inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        nodes: vec![Node::UnsignedLessThan {
+            width: 64,
+            output: 2,
+            left: 0,
+            right: 1,
+        }],
+        outputs: vec![Port { id: 2, width: 1 }],
+    };
+    let branch = |node| Region {
+        inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        nodes: vec![node],
+        outputs: vec![Port { id: 3, width: 64 }],
+    };
+    let when_true = branch(Node::Add {
+        width: 64,
+        output: 3,
+        left: 0,
+        right: 1,
+    });
+    let when_false = branch(Node::Sub {
+        width: 64,
+        output: 3,
+        left: 0,
+        right: 1,
+    });
+    let conditional = StructuredRegion::Conditional {
+        inputs: vec![
+            Port { id: 0, width: 64 },
+            Port { id: 1, width: 64 },
+            Port { id: 2, width: 1 },
+        ],
+        condition: 2,
+        arguments: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        outputs: vec![Port { id: 3, width: 64 }],
+        when_true: Box::new(StructuredRegion::Dataflow(when_true.clone())),
+        when_false: Box::new(StructuredRegion::Dataflow(when_false.clone())),
+    };
+    let region = StructuredRegion::Sequence {
+        prefix: comparison.clone(),
+        continuation: Box::new(conditional),
+    };
+    let emission = lower::generate_prefixed_conditional(
+        "minmax_alu_x86",
+        "minmax_alu_raw()",
+        "minmax_compare_raw()",
+        "minmax_conditional_raw()",
+        "minmax_add_raw()",
+        "minmax_sub_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi],
+        Gpr::Rdx,
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("lower comparison-prefixed conditional");
+    assert!(emission.text.contains("SetBelow(Dl)"));
+    assert!(emission.text.contains("PrefixedConditionalBlock"));
+    assert!(emission.text.contains("graph.left"));
+    assert!(emission.text.contains("graph.right"));
+    let raw = format!(
+        "{}\n{}\n{}\n\
+         fn minmax_conditional_raw() → StructuredRegion {{\n\
+             Conditional(\n\
+                 Ports([Port(id := 0, width := 64), Port(id := 1, width := 64),\n\
+                     Port(id := 2, width := 1)]), 2,\n\
+                 Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),\n\
+                 Ports([Port(id := 3, width := 64)]),\n\
+                 Dataflow(minmax_add_raw()), Dataflow(minmax_sub_raw()))\n\
+         }}\n\n\
+         fn minmax_alu_raw() → StructuredRegion {{\n\
+             Sequence(minmax_compare_raw(), minmax_conditional_raw())\n\
+         }}",
+        cert::render_region_function("minmax_compare_raw", &comparison),
+        cert::render_region_function("minmax_add_raw", &when_true),
+        cert::render_region_function("minmax_sub_raw", &when_false),
+    );
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) =
+        e.elab_module_source("function_ir_comparison_prefixed_conditional_x86", &source)
+    {
+        panic!(
+            "generated comparison-prefixed conditional artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
 fn add64() -> Region {
     Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],

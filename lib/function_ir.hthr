@@ -602,6 +602,7 @@ fn RegionHolds(region: Region, values: Valuation()) → Type {
 // structured control.
 inductive StructuredRegion {
     Dataflow(region: Region),
+    Sequence(prefix: Region, continuation: StructuredRegion),
     Conditional(
         inputs: Ports,
         condition: Nat,
@@ -614,6 +615,7 @@ inductive StructuredRegion {
 fn structured_inputs(region: StructuredRegion) → Ports {
     match region {
         Dataflow(body) => body.inputs,
+        Sequence(prefix, _) => prefix.inputs,
         Conditional(inputs, _, _, _, _, _) => inputs,
     }
 }
@@ -621,6 +623,7 @@ fn structured_inputs(region: StructuredRegion) → Ports {
 fn structured_outputs(region: StructuredRegion) → Ports {
     match region {
         Dataflow(body) => body.outputs,
+        Sequence(_, continuation) => structured_outputs(continuation),
         Conditional(_, _, _, outputs, _, _) => outputs,
     }
 }
@@ -660,6 +663,11 @@ fn InterfaceSubset(entries, available: List<Port>) → Type {
 fn StructuredRegionValid(region: StructuredRegion) → Type {
     match region {
         Dataflow(body) => RegionValid(body),
+        Sequence(prefix, continuation) =>
+            RegionValid(prefix) ∧
+            (InterfaceSubset(structured_inputs(continuation).entries,
+                prefix.inputs.entries ++ prefix.outputs.entries) ∧
+             StructuredRegionValid(continuation)),
         Conditional(inputs, condition, arguments, outputs,
             when_true, when_false) =>
             PortEntriesUnique(inputs.entries) ∧
@@ -678,6 +686,9 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
 fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type {
     match region {
         Dataflow(body) => RegionHolds(body, values),
+        Sequence(prefix, continuation) =>
+            RegionHolds(prefix, values) ∧
+            StructuredRegionHolds(values, continuation),
         Conditional(_, condition, _, _, when_true, when_false) =>
             match bitvec::head_bit(0, values(1, condition)) {
                 False => StructuredRegionHolds(values, when_false),
