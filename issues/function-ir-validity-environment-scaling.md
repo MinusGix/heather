@@ -74,5 +74,6 @@ module setup, completed in 13.66 seconds. The old relation's 100-node probe had
 not completed in 90 seconds.
 
 Both schedules, a 100-node chain, host-side malformed-model rejection, and a
-stale-model/kernel rejection now pass. Adoption without converting back to the
-quadratic proposition is tracked by [[function-ir-validity-v2-adoption]].
+stale-model/kernel rejection now pass. Direct adoption without converting back
+to the quadratic proposition then landed under
+[[function-ir-validity-v2-adoption]].

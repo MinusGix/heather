@@ -51,62 +51,11 @@ struct Directory {
     right: Option<Box<Directory>>,
 }
 
-/// Render a certificate for `region_expr`, which should be a closed Heather
-/// expression such as `sum4_left_first_raw()`.
+/// Render a compact directory/rank certificate for `region_expr`, which
+/// should be a closed Heather expression such as `sum4_left_first_raw()`.
+/// Its proof size is linearithmic: directory ordering is linear and every
+/// declaration/use follows one path through a balanced tree.
 pub fn generate(
-    theorem_name: &str,
-    region_expr: &str,
-    region: &Region,
-) -> Result<Emission, String> {
-    let inputs_unique = unique(&region.inputs)?;
-    let mut definitions = region.inputs.clone();
-    let mut node_proofs = Vec::with_capacity(region.nodes.len());
-    for (index, node) in region.nodes.iter().enumerate() {
-        let left = lookup(&definitions, node.left, node.width)
-            .map_err(|why| format!("node {index}'s left operand is invalid: {why}"))?;
-        let right = lookup(&definitions, node.right, node.width)
-            .map_err(|why| format!("node {index}'s right operand is invalid: {why}"))?;
-        let fresh = fresh(&definitions, node.output)
-            .map_err(|why| format!("node {index}'s output is invalid: {why}"))?;
-        node_proofs.push(pair(left, pair(right, fresh)));
-        definitions.insert(
-            0,
-            Port {
-                id: node.output,
-                width: node.width,
-            },
-        );
-    }
-    let nodes_valid = conjunction(node_proofs);
-
-    let mut output_proofs = Vec::with_capacity(region.outputs.len());
-    for (index, output) in region.outputs.iter().enumerate() {
-        output_proofs.push(
-            lookup(&definitions, output.id, output.width)
-                .map_err(|why| format!("output {index} is invalid: {why}"))?,
-        );
-    }
-    let outputs_valid = conjunction(output_proofs);
-
-    let text = format!(
-        "theorem {theorem_name}(): RegionValid({region_expr}) {{\n\
-         \x20   RegionValid {{\n\
-         \x20       inputs_unique: {inputs_unique},\n\
-         \x20       nodes_valid: {nodes_valid},\n\
-         \x20       outputs_valid: {outputs_valid},\n\
-         \x20   }}\n\
-         }}\n"
-    );
-    Ok(Emission {
-        theorem_name: theorem_name.to_string(),
-        text,
-    })
-}
-
-/// Render the experimental directory/rank certificate. Unlike `generate`,
-/// its proof size is linearithmic: the directory ordering proof is linear and
-/// every declaration/use follows one path through a balanced tree.
-pub fn generate_v2(
     theorem_name: &str,
     region_expr: &str,
     region: &Region,
@@ -125,7 +74,7 @@ pub fn generate_v2(
         &mut declarations,
     );
     for entry in &entries {
-        let fact_name = v2_port_fact_name(theorem_name, entry.port.id);
+        let fact_name = port_fact_name(theorem_name, entry.port.id);
         let proof = prove_directory_lookup(
             theorem_name,
             directory.as_deref(),
@@ -152,12 +101,12 @@ pub fn generate_v2(
         inputs_indexed = format!(
             "input_entries_indexed_cons(index := {index}, port := {}, found := {}(), tail := {inputs_indexed})",
             render_port(*port),
-            v2_port_fact_name(theorem_name, port.id),
+            port_fact_name(theorem_name, port.id),
         );
     }
 
-    let terminal_nodes_name = v2_nodes_name(theorem_name, region.nodes.len());
-    let terminal_proof_name = v2_nodes_proof_name(theorem_name, region.nodes.len());
+    let terminal_nodes_name = node_list_name(theorem_name, region.nodes.len());
+    let terminal_proof_name = nodes_proof_name(theorem_name, region.nodes.len());
     declarations.push_str(&format!(
         "fn {terminal_nodes_name}() → List<Node> {{ [] }}\n\
          theorem {terminal_proof_name}(): NodesIndexed(\
@@ -170,7 +119,7 @@ pub fn generate_v2(
     ));
     for (index, node) in region.nodes.iter().enumerate().rev() {
         let rank = index as u64;
-        let output = format!("{}()", v2_port_fact_name(theorem_name, node.output));
+        let output = format!("{}()", port_fact_name(theorem_name, node.output));
         let left = prove_available_from_fact(&entries, theorem_name, node.left, node.width, rank)?;
         let right =
             prove_available_from_fact(&entries, theorem_name, node.right, node.width, rank)?;
@@ -178,10 +127,10 @@ pub fn generate_v2(
             "node_indexed_add(directory := {directory_name}(), index := {index}, width := {}, output := {}, left := {}, right := {}, output_found := {output}, left_found := {left}, right_found := {right})",
             node.width, node.output, node.left, node.right,
         );
-        let nodes_name = v2_nodes_name(theorem_name, index);
-        let next_nodes_name = v2_nodes_name(theorem_name, index + 1);
-        let proof_name = v2_nodes_proof_name(theorem_name, index);
-        let next_proof_name = v2_nodes_proof_name(theorem_name, index + 1);
+        let nodes_name = node_list_name(theorem_name, index);
+        let next_nodes_name = node_list_name(theorem_name, index + 1);
+        let proof_name = nodes_proof_name(theorem_name, index);
+        let next_proof_name = nodes_proof_name(theorem_name, index + 1);
         declarations.push_str(&format!(
             "fn {nodes_name}() → List<Node> {{\n\
              \x20   Cons({}, {next_nodes_name}())\n\
@@ -196,7 +145,7 @@ pub fn generate_v2(
             render_node(*node),
         ));
     }
-    let nodes_indexed = format!("{}()", v2_nodes_proof_name(theorem_name, 0));
+    let nodes_indexed = format!("{}()", nodes_proof_name(theorem_name, 0));
 
     let mut outputs_indexed =
         format!("output_entries_indexed_nil(directory := {directory_name}())");
@@ -204,7 +153,7 @@ pub fn generate_v2(
         find_entry(&entries, port.id, port.width)?;
         let found = format!(
             "directory_port_exists({}())",
-            v2_port_fact_name(theorem_name, port.id)
+            port_fact_name(theorem_name, port.id)
         );
         outputs_indexed = format!(
             "output_entries_indexed_cons(output := {}, found := {found}, tail := {outputs_indexed})",
@@ -214,8 +163,8 @@ pub fn generate_v2(
 
     let text = format!(
         "{declarations}\
-         theorem {theorem_name}(): RegionValidV2({region_expr}) {{\n\
-         \x20   RegionValidV2 {{\n\
+         theorem {theorem_name}(): RegionValid({region_expr}) {{\n\
+         \x20   RegionValid {{\n\
          \x20       directory: {directory_name}(),\n\
          \x20       directory_ordered: {ordered_name}(),\n\
          \x20       directory_size: refl,\n\
@@ -260,26 +209,6 @@ pub fn render_region_function(name: &str, region: &Region) -> String {
         nodes,
         ports(&region.outputs)
     )
-}
-
-fn lookup(definitions: &[Port], id: u64, width: u64) -> Result<String, String> {
-    let Some(position) = definitions
-        .iter()
-        .position(|port| port.id == id && port.width == width)
-    else {
-        if let Some(port) = definitions.iter().find(|port| port.id == id) {
-            return Err(format!(
-                "value {id} has width {}, not requested width {width}",
-                port.width
-            ));
-        }
-        return Err(format!("value {id} is undefined"));
-    };
-    let mut proof = "⟨⟨refl, refl⟩ |⟩".to_string();
-    for _ in 0..position {
-        proof = format!("⟨| {proof}⟩");
-    }
-    Ok(proof)
 }
 
 fn directory_entries(region: &Region) -> Result<Vec<DirectoryEntry>, String> {
@@ -546,7 +475,7 @@ fn prove_available_from_fact(
     before: u64,
 ) -> Result<String, String> {
     let entry = find_entry(entries, id, width)?;
-    let fact = format!("{}()", v2_port_fact_name(theorem_name, id));
+    let fact = format!("{}()", port_fact_name(theorem_name, id));
     match entry.origin {
         Origin::Input(index) => Ok(format!("available_input({index}, {before}, {fact})")),
         Origin::Node(index) if index < before => Ok(format!(
@@ -563,54 +492,16 @@ fn render_origin(origin: Origin) -> String {
     }
 }
 
-fn v2_port_fact_name(theorem_name: &str, id: u64) -> String {
+fn port_fact_name(theorem_name: &str, id: u64) -> String {
     format!("{theorem_name}_port_{id}")
 }
 
-fn v2_nodes_name(theorem_name: &str, index: usize) -> String {
+fn node_list_name(theorem_name: &str, index: usize) -> String {
     format!("{theorem_name}_nodes_at_{index}")
 }
 
-fn v2_nodes_proof_name(theorem_name: &str, index: usize) -> String {
+fn nodes_proof_name(theorem_name: &str, index: usize) -> String {
     format!("{theorem_name}_nodes_indexed_at_{index}")
-}
-
-fn fresh(definitions: &[Port], id: u64) -> Result<String, String> {
-    let mut proofs = Vec::with_capacity(definitions.len());
-    for port in definitions {
-        if id == port.id {
-            return Err(format!("value {id} is already defined"));
-        }
-        proofs.push(distinct(id, port.id));
-    }
-    Ok(conjunction(proofs))
-}
-
-fn unique(entries: &[Port]) -> Result<String, String> {
-    let mut proof = "trivial".to_string();
-    for index in (0..entries.len()).rev() {
-        proof = pair(fresh(&entries[index + 1..], entries[index].id)?, proof);
-    }
-    Ok(proof)
-}
-
-fn distinct(left: u64, right: u64) -> String {
-    if left < right {
-        format!("nat::ne_of_lt({left}, {right}, trivial)")
-    } else {
-        format!("nat::ne_of_gt({left}, {right}, trivial)")
-    }
-}
-
-fn pair(left: String, right: String) -> String {
-    format!("⟨{left}, {right}⟩")
-}
-
-fn conjunction(proofs: Vec<String>) -> String {
-    proofs
-        .into_iter()
-        .rev()
-        .fold("trivial".to_string(), |rest, proof| pair(proof, rest))
 }
 
 #[cfg(test)]
@@ -627,10 +518,6 @@ mod tests {
         assert!(generate("bad", "bad()", &duplicate)
             .unwrap_err()
             .contains("already defined"));
-        assert!(generate_v2("bad_v2", "bad()", &duplicate)
-            .unwrap_err()
-            .contains("already defined"));
-
         let future_reference = Region {
             inputs: vec![Port { id: 0, width: 64 }],
             nodes: vec![AddNode {
@@ -641,7 +528,7 @@ mod tests {
             }],
             outputs: vec![],
         };
-        assert!(generate_v2("future", "future()", &future_reference)
+        assert!(generate("future", "future()", &future_reference)
             .unwrap_err()
             .contains("undefined"));
 
@@ -663,7 +550,7 @@ mod tests {
             ],
             outputs: vec![],
         };
-        assert!(generate_v2("duplicate", "duplicate()", &duplicate_output)
+        assert!(generate("duplicate", "duplicate()", &duplicate_output)
             .unwrap_err()
             .contains("already defined"));
 
@@ -672,7 +559,7 @@ mod tests {
             nodes: vec![],
             outputs: vec![Port { id: 0, width: 64 }],
         };
-        assert!(generate_v2("width", "width()", &wrong_output_width)
+        assert!(generate("width", "width()", &wrong_output_width)
             .unwrap_err()
             .contains("not requested width"));
     }

@@ -631,7 +631,31 @@ old list-environment certificate had not completed in 90 seconds. A stale V2
 model is rejected against the real raw region, confirming that none of these
 sharing declarations is a trusted shortcut.
 
-The prototype intentionally does not replace `RegionValid` or `CheckedRegion`
-yet. [[function-ir-validity-v2-adoption]] owns the compatibility and migration
-decision; in particular, converting every V2 certificate back into the old
-quadratic proposition would discard the performance result.
+This section records the prototype stage. The direct replacement described
+below removed the temporary `V2` distinction rather than converting compact
+certificates back into the quadratic proposition.
+
+### 2026-08-31: compact validity becomes the only boundary
+
+The experiment is now the implementation. `RegionValid` is the balanced
+stable-ID directory plus schedule-rank relation, and `CheckedRegion` packages
+that relation directly. The old list-environment validity proposition,
+recursive `check_region_valid`, computed-validation wrappers, and quadratic
+Rust emitter were deleted. There is no compatibility theorem or fallback path
+that reconstructs their proof trees.
+
+The compact emitter now owns the plain `generate` name. Add64 and both sum4
+schedules retain public validity theorems and checked-region constructors in
+`lib/function_ir_certificates.hthr`. That module is generated from the same
+untrusted concrete models used by the compiler path; a focused golden test
+regenerates it on request and otherwise detects drift. Consumers import the
+certificate module only when they need packaged validity, while
+`function_ir.hthr` holds the IR, compact validity vocabulary, semantics, and
+raw examples.
+
+The cutover keeps malformed-model rejection on the host side and stale-model
+rejection at the elaborator/kernel boundary. It also keeps the 100-node chain,
+mixed-width sparse DAG, semantic schedule-equivalence, and x86 refinement
+rails. The performance debts found while building it remain separate language
+issues: frontend sharing of large proof composition, named-argument expected
+types, and run-aware reduction of very large closed Nat order comparisons.

@@ -1,6 +1,6 @@
 ---
 title: FunctionIR proof-carrying validation is much slower than its graph walk
-status: open
+status: closed
 labels: [compiler,proofs,performance,function-ir]
 created: 2026-08-31
 updated: 2026-08-31
@@ -67,3 +67,13 @@ Do not solve this by raising kernel fuel or weakening `RegionValid`.
   validation shortcut.
 - Width literals such as 64 do not create proof work linear in the represented
   Nat depth at every use.
+
+## 2026-08-31: superseded and removed
+
+The direct generator was not merely added beside the reference checker. Once
+the compact directory/rank relation passed its scaling and stale-model rails,
+it replaced the old proposition outright under [[function-ir-validity-v2-adoption]].
+The recursive `check_region_valid` path and its repeated equality decisions no
+longer exist, and the sole generator emits shared compact certificates. The
+remaining large-Nat consumer failure is independently owned by
+[[nat-order-large-run-comparison]].

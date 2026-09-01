@@ -47,244 +47,12 @@ fn node_output(node: Node) → Port {
 }
 
 // ---------------------------------------------------------------------------
-// Raw-region validation
+// Compact validity environment
 
-fn HasPortEntries(entries: List<Port>, id, width: Nat) → Type {
-    match entries {
-        Nil => False,
-        Cons(port, rest) =>
-            (port.id = id ∧ port.width = width) ∨
-                HasPortEntries(rest, id, width),
-    }
-}
-
-fn HasPort(ports: Ports, id, width: Nat) → Type {
-    HasPortEntries(ports.entries, id, width)
-}
-
-fn FreshPortIdEntries(entries: List<Port>, id: Nat) → Type {
-    match entries {
-        Nil => True,
-        Cons(port, rest) => id ≠ port.id ∧ FreshPortIdEntries(rest, id),
-    }
-}
-
-fn FreshPortId(ports: Ports, id: Nat) → Type {
-    FreshPortIdEntries(ports.entries, id)
-}
-
-fn UniquePortEntries(entries: List<Port>) → Type {
-    match entries {
-        Nil => True,
-        Cons(port, rest) => FreshPortIdEntries(rest, port.id) ∧
-            UniquePortEntries(rest),
-    }
-}
-
-fn UniquePorts(ports: Ports) → Type { UniquePortEntries(ports.entries) }
-
-theorem has_port_here(port: Port, ports: Ports):
-    HasPort(push_port(port, ports), port.id, port.width)
-{
-    ⟨⟨refl, refl⟩ |⟩
-}
-
-theorem has_port_there(port: Port, ports: Ports, id, width: Nat,
-    found: HasPort(ports, id, width)):
-    HasPort(push_port(port, ports), id, width)
-{
-    ⟨| found⟩
-}
-
-theorem fresh_empty(id: Nat): FreshPortId(empty_ports(), id) { trivial }
-
-theorem fresh_push(port: Port, ports: Ports, id: Nat,
-    distinct: id ≠ port.id, fresh: FreshPortId(ports, id)):
-    FreshPortId(push_port(port, ports), id)
-{
-    ⟨distinct, fresh⟩
-}
-
-theorem unique_empty(): UniquePorts(empty_ports()) { trivial }
-
-theorem unique_push(port: Port, ports: Ports,
-    fresh: FreshPortId(ports, port.id), unique: UniquePorts(ports)):
-    UniquePorts(push_port(port, ports))
-{
-    ⟨fresh, unique⟩
-}
-
-// Validation computes only the successful certificate. Failure is data, not a
-// second proof tree: compilation needs to distinguish success from failure,
-// but it does not need a kernel proof refuting every rejected raw region.
-fn check_and<P, Q>(left: Option<P>, right: Option<Q>) → Option<P ∧ Q> {
-    match left {
-        None => None,
-        Some(p) => match right { None => None, Some(q) => Some(⟨p, q⟩) },
-    }
-}
-
-fn check_or<P, Q>(left: Option<P>, right: Option<Q>) → Option<P ∨ Q> {
-    match left {
-        Some(p) => Some(⟨p |⟩),
-        None => match right { None => None, Some(q) => Some(⟨| q⟩) },
-    }
-}
-
-fn check_nat_ne(left, right: Nat) → Option<left ≠ right> {
-    match nat::eq_dec(left, right) { Inl(_) => None, Inr(ne) => Some(ne) }
-}
-
-fn check_nat_eq(left, right: Nat) → Option<left = right> {
-    match nat::eq_dec(left, right) { Inl(eq) => Some(eq), Inr(_) => None }
-}
-
-fn check_has_port_entries(entries: List<Port>, id, width: Nat) →
-    Option<HasPortEntries(entries, id, width)>
-{
-    match entries {
-        Nil => None,
-        Cons(port, rest) => check_or(
-            check_and(check_nat_eq(port.id, id),
-                check_nat_eq(port.width, width)),
-            check_has_port_entries(rest, id, width)),
-    }
-}
-
-fn check_has_port(ports: Ports, id, width: Nat) →
-    Option<HasPort(ports, id, width)>
-{
-    check_has_port_entries(ports.entries, id, width)
-}
-
-fn check_fresh_port_id_entries(entries: List<Port>, id: Nat) →
-    Option<FreshPortIdEntries(entries, id)>
-{
-    match entries {
-        Nil => Some(trivial),
-        Cons(port, rest) => check_and(check_nat_ne(id, port.id),
-            check_fresh_port_id_entries(rest, id)),
-    }
-}
-
-fn check_fresh_port_id(ports: Ports, id: Nat) →
-    Option<FreshPortId(ports, id)>
-{
-    check_fresh_port_id_entries(ports.entries, id)
-}
-
-fn check_unique_port_entries(entries: List<Port>) →
-    Option<UniquePortEntries(entries)>
-{
-    match entries {
-        Nil => Some(trivial),
-        Cons(port, rest) => check_and(
-            check_fresh_port_id_entries(rest, port.id),
-            check_unique_port_entries(rest)),
-    }
-}
-
-fn check_unique_ports(ports: Ports) → Option<UniquePorts(ports)>
-{
-    check_unique_port_entries(ports.entries)
-}
-
-fn NodeValidIn(definitions: Ports, node: Node) → Type {
-    match node {
-        Add(width, output, left, right) =>
-            HasPort(definitions, left, width) ∧
-            (HasPort(definitions, right, width) ∧
-             FreshPortId(definitions, output)),
-    }
-}
-
-fn NodesValid(nodes: List<Node>) → Ports → Type {
-    match nodes {
-        Nil => λ definitions => True,
-        Cons(node, rest) => λ definitions =>
-            NodeValidIn(definitions, node) ∧
-            NodesValid(rest, push_port(node_output(node), definitions)),
-    }
-}
-
-fn definitions_after(nodes: List<Node>) → Ports → Ports {
-    match nodes {
-        Nil => λ definitions => definitions,
-        Cons(node, rest) => λ definitions =>
-            definitions_after(rest, push_port(node_output(node), definitions)),
-    }
-}
-
-fn OutputEntriesValid(definitions: Ports, outputs: List<Port>) → Type {
-    match outputs {
-        Nil => True,
-        Cons(output, rest) =>
-            HasPort(definitions, output.id, output.width) ∧
-            OutputEntriesValid(definitions, rest),
-    }
-}
-
-fn OutputsValid(definitions, outputs: Ports) → Type {
-    OutputEntriesValid(definitions, outputs.entries)
-}
-
-fn check_node_valid_in(definitions: Ports, node: Node) →
-    Option<NodeValidIn(definitions, node)>
-{
-    match node {
-        Add(width, output, left, right) => check_and(
-            check_has_port(definitions, left, width),
-            check_and(check_has_port(definitions, right, width),
-                check_fresh_port_id(definitions, output))),
-    }
-}
-
-fn check_nodes_valid(nodes: List<Node>) → (definitions: Ports) →
-    Option<NodesValid(nodes, definitions)>
-{
-    match nodes {
-        Nil => λ definitions => Some(trivial),
-        Cons(node, rest) => λ definitions => check_and(
-            check_node_valid_in(definitions, node),
-            check_nodes_valid(rest, push_port(node_output(node), definitions))),
-    }
-}
-
-fn check_output_entries_valid(definitions: Ports, outputs: List<Port>) →
-    Option<OutputEntriesValid(definitions, outputs)>
-{
-    match outputs {
-        Nil => Some(trivial),
-        Cons(output, rest) => check_and(
-            check_has_port(definitions, output.id, output.width),
-            check_output_entries_valid(definitions, rest)),
-    }
-}
-
-fn check_outputs_valid(definitions, outputs: Ports) →
-    Option<OutputsValid(definitions, outputs)>
-{
-    check_output_entries_valid(definitions, outputs.entries)
-}
-
-record RegionValid(region: Region) {
-    inputs_unique: UniquePorts(region.inputs),
-    nodes_valid: NodesValid(region.nodes, region.inputs),
-    outputs_valid:
-        OutputsValid(definitions_after(region.nodes, region.inputs),
-            region.outputs),
-}
-
-// ---------------------------------------------------------------------------
-// Experimental compact validity environment
-
-// The original validity relation deliberately follows the scheduled node list,
-// which makes its meaning simple but repeats the complete accumulated
-// environment at every node. `RegionValidV2` separates stable graph identity
-// from schedule availability. A balanced search directory records each port's
-// width and unique origin; ranks say when a node-produced value becomes
-// available. This lives alongside `RegionValid` until its scaling and proof
-// ergonomics have been measured on larger compiler graphs.
+// A balanced directory separates stable graph identity from schedule
+// availability. It records each port's width and unique origin; ranks say when
+// a node-produced value becomes available. The directory cardinality and
+// exact input/output origins rule out duplicate or phantom definitions.
 
 inductive PortOrigin { InputAt(index: Nat), NodeAt(index: Nat) }
 
@@ -541,7 +309,7 @@ theorem output_entries_indexed_cons(
     ⟨found, tail⟩
 }
 
-record RegionValidV2(region: Region) {
+record RegionValid(region: Region) {
     directory: PortDirectory,
     directory_ordered: DirectoryOrdered(directory),
     directory_size:
@@ -555,78 +323,6 @@ record RegionValidV2(region: Region) {
 record CheckedRegion {
     raw: Region,
     valid: RegionValid(raw),
-}
-
-fn check_region_valid(region: Region) → Option<RegionValid(region)>
-{
-    match check_unique_ports(region.inputs) {
-        None => None,
-        Some(inputs_unique) => match check_nodes_valid(
-            region.nodes, region.inputs)
-        {
-            None => None,
-            Some(nodes_valid) => match check_outputs_valid(
-                definitions_after(region.nodes, region.inputs), region.outputs)
-            {
-                None => None,
-                Some(outputs_valid) => Some(RegionValid {
-                    inputs_unique: inputs_unique,
-                    nodes_valid: nodes_valid,
-                    outputs_valid: outputs_valid,
-                }),
-            },
-        },
-    }
-}
-
-fn validation_result(region: Region,
-    check: Option<RegionValid(region)>) →
-    Option<CheckedRegion>
-{
-    match check {
-        None => None,
-        Some(valid) => Some(CheckedRegion(raw := region, valid := valid)),
-    }
-}
-
-fn validate_region(region: Region) → Option<CheckedRegion> {
-    validation_result(region, check_region_valid(region))
-}
-
-fn ValidationSucceeded(result: Option<CheckedRegion>) → Type {
-    match result { None => False, Some(_) => True }
-}
-
-fn CheckSucceeded<P>(result: Option<P>) → Type {
-    match result { None => False, Some(_) => True }
-}
-
-fn proof_of_check_success<P>(result: Option<P>,
-    success: CheckSucceeded(result)) → P
-{
-    (match result as λ checked => CheckSucceeded(checked) → P {
-        None => λ impossible => false_elim(impossible),
-        Some(proof) => λ _ => proof,
-    })(success)
-}
-
-fn checked_region_from_check(region: Region,
-    check: Option<RegionValid(region)>,
-    success: ValidationSucceeded(validation_result(region, check))) →
-    CheckedRegion
-{
-    (match check as λ result =>
-        ValidationSucceeded(validation_result(region, result)) → CheckedRegion
-    {
-        None => λ impossible => false_elim(impossible),
-        Some(valid) => λ _ => CheckedRegion(raw := region, valid := valid),
-    })(success)
-}
-
-fn checked_region_of_success(region: Region,
-    success: ValidationSucceeded(validate_region(region))) → CheckedRegion
-{
-    checked_region_from_check(region, check_region_valid(region), success)
 }
 
 // ---------------------------------------------------------------------------
@@ -692,31 +388,6 @@ fn add64_raw() → Region {
         outputs := Ports([Port(id := 2, width := 64)]))
 }
 
-theorem add64_valid(): RegionValid(add64_raw()) {
-    RegionValid {
-        inputs_unique: ⟨
-            ⟨nat::zero_ne_succ(0), trivial⟩,
-            ⟨trivial, trivial⟩⟩,
-        nodes_valid: ⟨
-            ⟨
-                ⟨⟨refl, refl⟩ |⟩,
-                ⟨
-                    ⟨| ⟨⟨refl, refl⟩ |⟩⟩,
-                    ⟨
-                        nat::succ_ne_zero(1),
-                        ⟨
-                            λ bad => nat::succ_ne_zero(0,
-                                nat::succ_inj(1, 0, bad)),
-                            trivial⟩⟩⟩⟩,
-            trivial⟩,
-        outputs_valid: ⟨⟨⟨refl, refl⟩ |⟩, trivial⟩,
-    }
-}
-
-fn add64_function() → CheckedRegion {
-    CheckedRegion(raw := add64_raw(), valid := add64_valid())
-}
-
 theorem add64_denotes(x, y: BitVec(64), values: Valuation(),
     x_value: values(64, 0) = x,
     y_value: values(64, 1) = y,
@@ -763,24 +434,6 @@ fn sum4_left_first_raw() → Region {
 fn sum4_right_first_raw() → Region {
     Region(inputs := sum4_inputs(), nodes := sum4_right_first_nodes(),
         outputs := sum4_outputs())
-}
-
-theorem sum4_left_first_valid(): RegionValid(sum4_left_first_raw())
-{
-    proof_of_check_success(check_region_valid(sum4_left_first_raw()), trivial)
-}
-
-theorem sum4_right_first_valid(): RegionValid(sum4_right_first_raw())
-{
-    proof_of_check_success(check_region_valid(sum4_right_first_raw()), trivial)
-}
-
-fn sum4_left_first_function() → CheckedRegion {
-    CheckedRegion(raw := sum4_left_first_raw(), valid := sum4_left_first_valid())
-}
-
-fn sum4_right_first_function() → CheckedRegion {
-    CheckedRegion(raw := sum4_right_first_raw(), valid := sum4_right_first_valid())
 }
 
 theorem sum4_left_to_right_schedule(values: Valuation(),
