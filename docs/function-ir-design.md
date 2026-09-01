@@ -677,12 +677,14 @@ presentation detail: whole-node reflexivity crossed the kernel fuel rail on
 sum4, whereas local facts keep normalization bounded and expose the intended
 compiler invariant directly.
 
-The generated module replaces the handwritten add64 and sum4 bodies and also
-contains the alternate sum4 schedule. A golden drift test ties the checked
-file to the renderer; one semantic backstop checks the complete generated
-module without redundantly elaborating an identical dynamic copy. Host tests
-cover deterministic selection, last-use reuse, a long constant-pressure
-chain, precise pressure decline, and stale-model rejection at conversion.
+The generated module replaces the handwritten add64 and sum4 bodies. A golden
+drift test ties the checked file to the renderer; one semantic backstop checks
+that complete generated module without redundantly elaborating an identical
+dynamic copy. The alternate sum4 schedule is generated into an independent
+test module, preserving end-to-end coverage while letting its kernel check run
+in parallel with the primary module. Host tests cover deterministic selection,
+last-use reuse, a long constant-pressure chain, precise pressure decline, and
+stale-model rejection at conversion.
 
 The initial boundary deliberately remains small: `Add` at width 64, one
 result, declared input/temporary locations, and no spills. The internal plan

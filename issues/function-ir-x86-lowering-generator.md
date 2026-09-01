@@ -45,12 +45,14 @@ whole nested block exhausted ordinary kernel fuel even for sum4. The final
 artifact includes canonical bytes/decoding, relational block execution,
 FunctionIR refinement, memory and protected-register framing, and RIP advance.
 
-`lib/function_ir_x86.hthr` is now a generated golden containing add64 and both
-sum4 schedules. Its drift test regenerates from the same ordinary Region
-models, while the semantic suite checks the complete module. The handwritten
-proof bodies were deleted. A structurally stale model is rejected by
-conversion; allocator tests cover temporary pressure, last-use reuse, and a
-100-node chain with constant temporary demand.
+`lib/function_ir_x86.hthr` is now a generated golden containing add64 and the
+primary sum4 schedule. Its drift test regenerates from the same ordinary
+Region models, while the semantic suite checks the complete module. The
+alternate sum4 schedule is generated and checked in an independent module so
+the two expensive kernel checks can run concurrently. The handwritten proof
+bodies were deleted. A structurally stale model is rejected by conversion;
+allocator tests cover temporary pressure, last-use reuse, and a 100-node chain
+with constant temporary demand.
 
 The accepted initial limits are explicit: only `Add` at width 64, one result,
 no spills, and only left-operand destructive reuse. Reusing the right operand
