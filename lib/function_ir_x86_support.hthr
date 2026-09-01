@@ -28,6 +28,16 @@ fn BitValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
         read_gpr(register, state.gprs)
 }
 
+theorem bit_value_placed_condition<M>(values: Valuation(), id: Nat,
+    register: Gpr, state: MachineState<M>,
+    placed: BitValuePlaced(values, id, register, state)):
+    machine_condition(register, state) = bitvec::head_bit(0, values(1, id))
+{
+    j(placed,
+        λ actual _ => bitvec::head_bit(63, actual) =
+            bitvec::head_bit(0, values(1, id)), refl)
+}
+
 theorem bit_placed_after_move<M>(values: Valuation(), id: Nat,
     source, destination: Gpr, before, after: MachineState<M>,
     placed: BitValuePlaced(values, id, source, before),

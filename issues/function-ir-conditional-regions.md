@@ -1,10 +1,10 @@
 ---
 title: Add the first structured Conditional region to FunctionIR
-status: open
+status: closed
 labels: [compiler,function-ir,semantics,control-flow,rvsdg]
 blocked-by: [function-ir-alu-core]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 
 Introduce an intuitively named `Conditional` node owning nested regions after
@@ -34,3 +34,16 @@ not introduce a general effect system or loops at the same time.
 - **[[function-ir-alu-core]]** supplies a useful condition-producing operation
   and an extensible lowering rule boundary.
 
+## Resolution
+
+Implemented with a directly recursive `StructuredRegion` over flat dataflow
+leaves, explicit argument and yield interfaces, selected-branch denotation,
+host validation and kernel-checked validity examples. The first generated x86
+artifact selects between Add and Sub leaves from a materialized one-bit GPR,
+executes only that leaf, and proves the common `RAX` result. Invalid captures,
+unavailable conditions, invalid leaves, and mismatched yields are pinned as
+negative controls.
+
+Leaf encodings are canonical and decoded; physical conditional-transfer bytes
+and displacement/layout proofs are intentionally tracked separately in
+[[x86-64-conditional-branch-layout]].

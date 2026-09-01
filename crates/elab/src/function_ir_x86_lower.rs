@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::function_ir_cert::{Node, Region};
+use crate::function_ir_cert::{self as cert, Node, Region, StructuredRegion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOperation {
@@ -366,6 +366,20 @@ pub struct X86Emission {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionalX86Emission {
+    pub lowered: LoweredConditional,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoweredConditional {
+    pub condition_id: u64,
+    pub condition_register: Gpr,
+    pub when_true: LoweredDag,
+    pub when_false: LoweredDag,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoweringError {
     InputPlacementCount {
         inputs: usize,
@@ -391,6 +405,9 @@ pub enum LoweringError {
         node_index: usize,
         live_temporaries: usize,
     },
+    InvalidStructuredRegion(String),
+    UnsupportedStructuredRegion,
+    MissingConditionPlacement(u64),
 }
 
 impl fmt::Display for LoweringError {
@@ -440,8 +457,229 @@ impl fmt::Display for LoweringError {
                 f,
                 "node {node_index} needs another register while {live_temporaries} temporaries are live",
             ),
+            LoweringError::InvalidStructuredRegion(message) => {
+                write!(f, "invalid structured region: {message}")
+            }
+            LoweringError::UnsupportedStructuredRegion => write!(
+                f,
+                "the first x86 conditional lowering requires two dataflow leaves",
+            ),
+            LoweringError::MissingConditionPlacement(condition) => write!(
+                f,
+                "conditional value {condition} has no input register placement",
+            ),
         }
     }
+}
+
+/// Lower the first structured control-flow slice. Each successor is selected
+/// and allocated independently from the same explicit branch interface; only
+/// the selected leaf will execute at the machine boundary.
+pub fn lower_conditional(
+    region: &StructuredRegion,
+    input_registers: &[Gpr],
+    temporary_registers: &[Gpr],
+    requested_output: Gpr,
+) -> Result<LoweredConditional, LoweringError> {
+    cert::validate_structured_region(region).map_err(LoweringError::InvalidStructuredRegion)?;
+    let StructuredRegion::Conditional {
+        inputs,
+        condition,
+        arguments,
+        when_true,
+        when_false,
+        ..
+    } = region
+    else {
+        return Err(LoweringError::UnsupportedStructuredRegion);
+    };
+    if inputs.len() != input_registers.len() {
+        return Err(LoweringError::InputPlacementCount {
+            inputs: inputs.len(),
+            registers: input_registers.len(),
+        });
+    }
+    let placements = inputs
+        .iter()
+        .zip(input_registers)
+        .map(|(port, register)| (port.id, *register))
+        .collect::<BTreeMap<_, _>>();
+    let condition_register = placements
+        .get(condition)
+        .copied()
+        .ok_or(LoweringError::MissingConditionPlacement(*condition))?;
+    let argument_registers = arguments
+        .iter()
+        .map(|port| {
+            placements
+                .get(&port.id)
+                .copied()
+                .ok_or(LoweringError::UndefinedValue(port.id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (StructuredRegion::Dataflow(when_true), StructuredRegion::Dataflow(when_false)) =
+        (&**when_true, &**when_false)
+    else {
+        return Err(LoweringError::UnsupportedStructuredRegion);
+    };
+    Ok(LoweredConditional {
+        condition_id: *condition,
+        condition_register,
+        when_true: lower_dag(
+            when_true,
+            &argument_registers,
+            temporary_registers,
+            requested_output,
+        )?,
+        when_false: lower_dag(
+            when_false,
+            &argument_registers,
+            temporary_registers,
+            requested_output,
+        )?,
+    })
+}
+
+/// Render the checked leaves plus their structured machine selector and join.
+/// Branch-transfer byte placement remains a linker obligation; both leaf byte
+/// streams and the state-dependent selected execution are checked here.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_conditional(
+    prefix: &str,
+    structured_region_expr: &str,
+    true_region_expr: &str,
+    false_region_expr: &str,
+    region: &StructuredRegion,
+    input_registers: &[Gpr],
+    temporary_registers: &[Gpr],
+    requested_output: Gpr,
+) -> Result<ConditionalX86Emission, LoweringError> {
+    let lowered = lower_conditional(
+        region,
+        input_registers,
+        temporary_registers,
+        requested_output,
+    )?;
+    let StructuredRegion::Conditional {
+        inputs,
+        condition,
+        arguments,
+        when_true,
+        when_false,
+        ..
+    } = region
+    else {
+        unreachable!("lower_conditional accepted only Conditional")
+    };
+    let (StructuredRegion::Dataflow(true_region), StructuredRegion::Dataflow(false_region)) =
+        (&**when_true, &**when_false)
+    else {
+        unreachable!("lower_conditional accepted only dataflow leaves")
+    };
+    let placements = inputs
+        .iter()
+        .zip(input_registers)
+        .map(|(port, register)| (port.id, *register))
+        .collect::<BTreeMap<_, _>>();
+    let argument_registers = arguments
+        .iter()
+        .map(|port| placements[&port.id])
+        .collect::<Vec<_>>();
+    let true_prefix = format!("{prefix}_true");
+    let false_prefix = format!("{prefix}_false");
+    let true_emission = generate(
+        &true_prefix,
+        true_region_expr,
+        true_region,
+        &argument_registers,
+        temporary_registers,
+        requested_output,
+    )?;
+    let false_emission = generate(
+        &false_prefix,
+        false_region_expr,
+        false_region,
+        &argument_registers,
+        temporary_registers,
+        requested_output,
+    )?;
+    let condition_register = lowered.condition_register.heather_name();
+    let output_id = true_region.outputs[0].id;
+    let mut public_parameters = vec![
+        "values: Valuation()".to_string(),
+        "before: MachineState<M>".to_string(),
+    ];
+    let mut branch_arguments = Vec::new();
+    for (index, port) in arguments.iter().enumerate() {
+        let register = argument_registers[index].heather_name();
+        public_parameters.push(format!(
+            "argument_{index}_placed: ValuePlaced(values, {}, {register}, before)",
+            port.id,
+        ));
+        branch_arguments.push(format!("argument_{index}_placed"));
+    }
+    public_parameters.push(format!(
+        "condition_placed: BitValuePlaced(values, {condition}, {condition_register}, before)",
+    ));
+    public_parameters.push(format!(
+        "graph: StructuredRegionHolds(values, {structured_region_expr})",
+    ));
+    let branch_arguments = if branch_arguments.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", branch_arguments.join(", "))
+    };
+    let control_name = format!("{prefix}_control");
+    let after_name = format!("{prefix}_after");
+    let mut text = true_emission.text;
+    text.push('\n');
+    text.push_str(&false_emission.text);
+    text.push_str(&format!(
+        "\n\nfn {control_name}() → ConditionalBlock {{\n\
+         \x20   ConditionalBlock(condition_register := {condition_register},\n\
+         \x20       when_true := {true_prefix}_instructions(),\n\
+         \x20       when_false := {false_prefix}_instructions())\n\
+         }}\n\n\
+         fn {after_name}<M>(before: MachineState<M>) → MachineState<M> {{\n\
+         \x20   conditional_block_after({control_name}(), before,\n\
+         \x20       {true_prefix}_after(before), {false_prefix}_after(before))\n\
+         }}\n\n\
+         theorem {prefix}_control_is_allowed<M>(before: MachineState<M>):\n\
+         \x20   ExecuteConditionalBlock({control_name}(), before, {after_name}(before))\n\
+         {{\n\
+         \x20   execute_conditional_selected({control_name}(), before,\n\
+         \x20       {true_prefix}_after(before), {false_prefix}_after(before),\n\
+         \x20       {true_prefix}_block_is_allowed(before),\n\
+         \x20       {false_prefix}_block_is_allowed(before))\n\
+         }}\n\n\
+         theorem {prefix}_refines_function_ir<M>({}):\n\
+         \x20   read_gpr({}, {after_name}(before).gprs) = values(64, {output_id})\n\
+         {{\n\
+         \x20   j(sym(bit_value_placed_condition(values, {condition},\n\
+         \x20           {condition_register}, before, condition_placed)),\n\
+         \x20       λ selected _ => read_gpr({}, selected_block_after(selected,\n\
+         \x20           {true_prefix}_after(before),\n\
+         \x20           {false_prefix}_after(before)).gprs) = values(64, {output_id}),\n\
+         \x20       (match bitvec::head_bit(0, values(1, {condition})) as λ selected =>\n\
+         \x20           (match selected {{\n\
+         \x20               False => RegionHolds({false_region_expr}, values),\n\
+         \x20               True => RegionHolds({true_region_expr}, values),\n\
+         \x20           }}) → read_gpr({}, selected_block_after(selected,\n\
+         \x20               {true_prefix}_after(before),\n\
+         \x20               {false_prefix}_after(before)).gprs) = values(64, {output_id})\n\
+         \x20       {{\n\
+         \x20           False => selected_graph ⊢ {false_prefix}_refines_function_ir(\n\
+         \x20               values, before{branch_arguments}, selected_graph),\n\
+         \x20           True => selected_graph ⊢ {true_prefix}_refines_function_ir(\n\
+         \x20               values, before{branch_arguments}, selected_graph),\n\
+         \x20       }})(graph))\n\
+         }}\n",
+        public_parameters.join(",\n    "),
+        requested_output.heather_name(),
+        requested_output.heather_name(),
+        requested_output.heather_name(),
+    ));
+    Ok(ConditionalX86Emission { lowered, text })
 }
 
 /// Lower one valid-looking, 64-bit, single-output constant/binary-ALU DAG. The generated
@@ -2031,6 +2269,65 @@ mod tests {
         assert_eq!(
             lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::R8], Gpr::R8),
             Err(LoweringError::NoSafeByteRegister { node_index: 0 }),
+        );
+    }
+
+    #[test]
+    fn structured_conditional_lowers_independent_selected_leaves() {
+        let branch = |node| Region {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            nodes: vec![node],
+            outputs: vec![Port { id: 2, width: 64 }],
+        };
+        let region = StructuredRegion::Conditional {
+            inputs: vec![
+                Port { id: 0, width: 64 },
+                Port { id: 1, width: 64 },
+                Port { id: 3, width: 1 },
+            ],
+            condition: 3,
+            arguments: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            outputs: vec![Port { id: 2, width: 64 }],
+            when_true: Box::new(StructuredRegion::Dataflow(branch(Node::Add {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1,
+            }))),
+            when_false: Box::new(StructuredRegion::Dataflow(branch(Node::Sub {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1,
+            }))),
+        };
+        let lowered = lower_conditional(
+            &region,
+            &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+            &[Gpr::Rax],
+            Gpr::Rax,
+        )
+        .unwrap();
+        assert_eq!(lowered.condition_register, Gpr::Rdx);
+        assert_eq!(
+            lowered.when_true.instructions,
+            vec![
+                Instruction::MovRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::Rdi,
+                },
+                Instruction::AddRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::Rsi,
+                },
+            ],
+        );
+        assert_eq!(
+            lowered.when_false.instructions.last(),
+            Some(&Instruction::SubRR {
+                destination: Gpr::Rax,
+                source: Gpr::Rsi,
+            }),
         );
     }
 

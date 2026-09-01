@@ -739,3 +739,41 @@ Three language-performance issues remain deliberately off this critical path:
 make current work viable; these should return to the foreground when measured
 as blockers or when parallel work can improve them without distorting compiler
 architecture.
+
+### 2026-09-01: first structured conditional and machine join
+
+FunctionIR now separates the flat scheduled dataflow DAG from recursive
+control structure. `StructuredRegion` has a `Dataflow` leaf and a directly
+recursive `Conditional` carrying explicit outer inputs, a one-bit condition,
+the arguments visible to either branch, a common yielded interface, and two
+nested regions. Direct recursion is intentional: the tempting
+`List<NodeF<Region>>` encoding is nested recursion, which Heather correctly
+rejects today. Keeping `Region` as the leaf also preserves its useful
+schedule-independent graph semantics rather than replacing it with a tree.
+
+Validity forbids hidden captures, requires the condition to be an available
+one-bit port, checks unique interfaces, requires both branch input interfaces
+to equal the declared arguments, requires both yield interfaces to agree, and
+recursively validates each branch. Denotation inspects the condition and asks
+only the selected branch to hold. Branch-local stable IDs may consequently be
+reused: the two branch environments never coexist semantically.
+
+The first executable lowering accepts two dataflow leaves with a single
+64-bit result. It independently selects and assigns each leaf from the common
+argument placement, materializes a `ConditionalBlock` whose choice is read
+from the low bit of a real GPR, executes exactly the chosen certified leaf,
+and joins both results in the requested output register. A placement theorem
+connects the zero-extended FunctionIR bit to the machine selector, so the
+compiler cannot prove the convenient branch rather than the branch the
+machine observes. The checked acceptance function chooses `Add` or `Sub` and
+joins in `RAX`.
+
+This is structured machine control flow, not final linked branch bytes.
+Canonical bytes and decoding remain checked for each leaf, while concrete
+`Jcc`/`Jmp` encodings, relative displacement calculation, block layout, and
+fallthrough selection belong to the next linker-facing boundary. Keeping
+that debt explicit avoids smuggling layout into semantic region validity;
+see [[x86-64-conditional-branch-layout]]. The same explicit-input/common-yield
+shape generalizes naturally to `Loop`, while `Function` and `Apply` will also
+need calling-convention and effect interfaces rather than merely another
+recursive constructor.

@@ -87,6 +87,91 @@ pub struct Region {
     pub outputs: Vec<Port>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StructuredRegion {
+    Dataflow(Region),
+    Conditional {
+        inputs: Vec<Port>,
+        condition: u64,
+        arguments: Vec<Port>,
+        outputs: Vec<Port>,
+        when_true: Box<StructuredRegion>,
+        when_false: Box<StructuredRegion>,
+    },
+}
+
+impl StructuredRegion {
+    pub fn inputs(&self) -> &[Port] {
+        match self {
+            Self::Dataflow(region) => &region.inputs,
+            Self::Conditional { inputs, .. } => inputs,
+        }
+    }
+
+    pub fn outputs(&self) -> &[Port] {
+        match self {
+            Self::Dataflow(region) => &region.outputs,
+            Self::Conditional { outputs, .. } => outputs,
+        }
+    }
+}
+
+pub fn validate_structured_region(region: &StructuredRegion) -> Result<(), String> {
+    match region {
+        StructuredRegion::Dataflow(region) => {
+            directory_entries(region)?;
+            Ok(())
+        }
+        StructuredRegion::Conditional {
+            inputs,
+            condition,
+            arguments,
+            outputs,
+            when_true,
+            when_false,
+        } => {
+            ensure_unique_interface("conditional input", inputs)?;
+            ensure_unique_interface("conditional argument", arguments)?;
+            if !inputs
+                .iter()
+                .any(|port| port.id == *condition && port.width == 1)
+            {
+                return Err(format!(
+                    "conditional value {condition} is not an available one-bit input"
+                ));
+            }
+            for argument in arguments {
+                if !inputs.contains(argument) {
+                    return Err(format!(
+                        "conditional argument {}:{} is not an input",
+                        argument.id, argument.width,
+                    ));
+                }
+            }
+            for (side, branch) in [("true", when_true), ("false", when_false)] {
+                if branch.inputs() != arguments {
+                    return Err(format!("{side} branch captures undeclared inputs"));
+                }
+                if branch.outputs() != outputs {
+                    return Err(format!("{side} branch yields a different interface"));
+                }
+                validate_structured_region(branch)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn ensure_unique_interface(kind: &str, ports: &[Port]) -> Result<(), String> {
+    let mut ids = std::collections::BTreeSet::new();
+    for port in ports {
+        if !ids.insert(port.id) {
+            return Err(format!("duplicate {kind} ID {}", port.id));
+        }
+    }
+    Ok(())
+}
+
 impl Node {
     pub fn output(self) -> Port {
         match self {
@@ -844,6 +929,95 @@ mod tests {
             generate("width", "width()", &wrong_output_width)
                 .unwrap_err()
                 .contains("not requested width")
+        );
+    }
+
+    #[test]
+    fn structured_conditionals_reject_captures_and_interface_mismatches() {
+        let arguments = vec![Port { id: 0, width: 64 }];
+        let output = vec![Port { id: 2, width: 64 }];
+        let leaf = |inputs: Vec<Port>, outputs: Vec<Port>| {
+            StructuredRegion::Dataflow(Region {
+                inputs,
+                nodes: vec![],
+                outputs,
+            })
+        };
+        let valid = StructuredRegion::Conditional {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 1 }],
+            condition: 1,
+            arguments: arguments.clone(),
+            outputs: output.clone(),
+            when_true: Box::new(leaf(arguments.clone(), output.clone())),
+            when_false: Box::new(leaf(arguments.clone(), output.clone())),
+        };
+        // Empty leaves cannot actually yield the requested output, so flat
+        // validation remains authoritative inside the structural check.
+        assert!(
+            validate_structured_region(&valid)
+                .unwrap_err()
+                .contains("undefined")
+        );
+
+        let producing_leaf = |inputs: Vec<Port>| {
+            StructuredRegion::Dataflow(Region {
+                inputs,
+                nodes: vec![Node::Const {
+                    width: 64,
+                    output: 2,
+                    value: 0,
+                }],
+                outputs: output.clone(),
+            })
+        };
+        let valid = StructuredRegion::Conditional {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 1 }],
+            condition: 1,
+            arguments: arguments.clone(),
+            outputs: output.clone(),
+            when_true: Box::new(producing_leaf(arguments.clone())),
+            when_false: Box::new(producing_leaf(arguments.clone())),
+        };
+        assert_eq!(validate_structured_region(&valid), Ok(()));
+
+        let mut unavailable = valid.clone();
+        if let StructuredRegion::Conditional { condition, .. } = &mut unavailable {
+            *condition = 99;
+        }
+        assert!(
+            validate_structured_region(&unavailable)
+                .unwrap_err()
+                .contains("not an available one-bit input")
+        );
+
+        let mut mismatched_yield = valid.clone();
+        if let StructuredRegion::Conditional { when_false, .. } = &mut mismatched_yield {
+            *when_false = Box::new(producing_leaf(vec![Port { id: 0, width: 64 }]));
+            if let StructuredRegion::Dataflow(region) = &mut **when_false {
+                region.outputs[0].width = 32;
+            }
+        }
+        assert!(
+            validate_structured_region(&mismatched_yield)
+                .unwrap_err()
+                .contains("yields a different interface")
+        );
+
+        let captured = StructuredRegion::Conditional {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 1 }],
+            condition: 1,
+            arguments: arguments.clone(),
+            outputs: output.clone(),
+            when_true: Box::new(producing_leaf(vec![
+                Port { id: 0, width: 64 },
+                Port { id: 9, width: 64 },
+            ])),
+            when_false: Box::new(producing_leaf(arguments)),
+        };
+        assert!(
+            validate_structured_region(&captured)
+                .unwrap_err()
+                .contains("captures undeclared")
         );
     }
 }

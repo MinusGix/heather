@@ -591,6 +591,101 @@ fn RegionHolds(region: Region, values: Valuation()) → Type {
     NodesHold(values, region.nodes)
 }
 
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// Flat `Region` remains the scheduled presentation of one pure dataflow
+// graph. `StructuredRegion` composes those leaves with directly recursive
+// control nodes. Direct recursion is intentional: writing branches as
+// `List<NodeF<StructuredRegion>>` would require nested-inductive lowering and
+// would also blur the semantic difference between dataflow scheduling and
+// structured control.
+inductive StructuredRegion {
+    Dataflow(region: Region),
+    Conditional(
+        inputs: Ports,
+        condition: Nat,
+        arguments: Ports,
+        outputs: Ports,
+        when_true: StructuredRegion,
+        when_false: StructuredRegion),
+}
+
+fn structured_inputs(region: StructuredRegion) → Ports {
+    match region {
+        Dataflow(body) => body.inputs,
+        Conditional(inputs, _, _, _, _, _) => inputs,
+    }
+}
+
+fn structured_outputs(region: StructuredRegion) → Ports {
+    match region {
+        Dataflow(body) => body.outputs,
+        Conditional(_, _, _, outputs, _, _) => outputs,
+    }
+}
+
+fn PortIdAbsent(id: Nat, entries: List<Port>) → Type {
+    match entries {
+        Nil => True,
+        Cons(port, rest) => id ≠ port.id ∧ PortIdAbsent(id, rest),
+    }
+}
+
+fn PortEntriesUnique(entries: List<Port>) → Type {
+    match entries {
+        Nil => True,
+        Cons(port, rest) => PortIdAbsent(port.id, rest) ∧ PortEntriesUnique(rest),
+    }
+}
+
+fn HasInterfacePort(entries: List<Port>, id, width: Nat) → Type {
+    match entries {
+        Nil => False,
+        Cons(port, rest) =>
+            (port.id = id ∧ port.width = width) ∨
+            HasInterfacePort(rest, id, width),
+    }
+}
+
+fn InterfaceSubset(entries, available: List<Port>) → Type {
+    match entries {
+        Nil => True,
+        Cons(port, rest) =>
+            HasInterfacePort(available, port.id, port.width) ∧
+            InterfaceSubset(rest, available),
+    }
+}
+
+fn StructuredRegionValid(region: StructuredRegion) → Type {
+    match region {
+        Dataflow(body) => RegionValid(body),
+        Conditional(inputs, condition, arguments, outputs,
+            when_true, when_false) =>
+            PortEntriesUnique(inputs.entries) ∧
+            (PortEntriesUnique(arguments.entries) ∧
+             (HasInterfacePort(inputs.entries, condition, 1) ∧
+              (InterfaceSubset(arguments.entries, inputs.entries) ∧
+               (structured_inputs(when_true) = arguments ∧
+                (structured_inputs(when_false) = arguments ∧
+                 (structured_outputs(when_true) = outputs ∧
+                  (structured_outputs(when_false) = outputs ∧
+                   (StructuredRegionValid(when_true) ∧
+                    StructuredRegionValid(when_false))))))))),
+    }
+}
+
+fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type {
+    match region {
+        Dataflow(body) => RegionHolds(body, values),
+        Conditional(_, condition, _, _, when_true, when_false) =>
+            match bitvec::head_bit(0, values(1, condition)) {
+                False => StructuredRegionHolds(values, when_false),
+                True => StructuredRegionHolds(values, when_true),
+            },
+    }
+}
+
 // The semantic rule for an Add node, factored away from any particular
 // region. Lowering proofs can use the same observation lemma no matter where
 // the node occurs in a schedule.

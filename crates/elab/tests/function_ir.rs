@@ -3,6 +3,7 @@
 
 mod support;
 
+use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -41,7 +42,138 @@ fn function_ir_suite() {
     checked_add64_is_available(&base);
     sum4_schedules_and_result_are_available(&base);
     alu_node_semantics_are_available(&base);
+    structured_conditional_is_valid_and_selects_one_branch(&base);
     wrong_add64_observation_is_refused(&base);
+}
+
+fn structured_conditional_is_valid_and_selects_one_branch(base: &Elaborator) {
+    let add = Region {
+        inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        nodes: vec![Node::Add {
+            width: 64,
+            output: 2,
+            left: 0,
+            right: 1,
+        }],
+        outputs: vec![Port { id: 2, width: 64 }],
+    };
+    let sub = Region {
+        inputs: add.inputs.clone(),
+        nodes: vec![Node::Sub {
+            width: 64,
+            output: 2,
+            left: 0,
+            right: 1,
+        }],
+        outputs: add.outputs.clone(),
+    };
+    let add_raw = cert::render_region_function("conditional_add_raw", &add);
+    let sub_raw = cert::render_region_function("conditional_sub_raw", &sub);
+    let add_valid = cert::generate("conditional_add_valid", "conditional_add_raw()", &add)
+        .expect("add branch certificate");
+    let sub_valid = cert::generate("conditional_sub_valid", "conditional_sub_raw()", &sub)
+        .expect("sub branch certificate");
+    let src = format!(
+        r#"
+import function_ir;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+{add_raw}
+{sub_raw}
+{add_certificate}
+{sub_certificate}
+
+fn conditional_inputs() → Ports {{
+    Ports([Port(id := 0, width := 64), Port(id := 1, width := 64),
+        Port(id := 3, width := 1)])
+}}
+
+fn conditional_arguments() → Ports {{
+    Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)])
+}}
+
+fn conditional_outputs() → Ports {{ Ports([Port(id := 2, width := 64)]) }}
+
+fn selected_conditional() → StructuredRegion {{
+    Conditional(conditional_inputs(), 3, conditional_arguments(),
+        conditional_outputs(), Dataflow(conditional_add_raw()),
+        Dataflow(conditional_sub_raw()))
+}}
+
+theorem conditional_0_ne_1(): 0 ≠ 1 {{ nat::zero_ne_succ(0) }}
+theorem conditional_0_ne_3(): 0 ≠ 3 {{ nat::zero_ne_succ(2) }}
+theorem conditional_1_ne_3(equal: 1 = 3): False
+{{ nat::zero_ne_succ(1)(nat::succ_inj(0, 2, equal)) }}
+
+theorem conditional_inputs_unique():
+    PortEntriesUnique(conditional_inputs().entries)
+{{
+    ⟨⟨conditional_0_ne_1(), ⟨conditional_0_ne_3(), trivial⟩⟩,
+     ⟨⟨conditional_1_ne_3, trivial⟩, ⟨trivial, trivial⟩⟩⟩
+}}
+
+theorem conditional_arguments_unique():
+    PortEntriesUnique(conditional_arguments().entries)
+{{
+    ⟨⟨conditional_0_ne_1(), trivial⟩, ⟨trivial, trivial⟩⟩
+}}
+
+theorem conditional_condition_available():
+    HasInterfacePort(conditional_inputs().entries, 3, 1)
+{{ ⟨| ⟨| ⟨⟨refl, refl⟩ |⟩⟩⟩ }}
+
+theorem conditional_arguments_available():
+    InterfaceSubset(conditional_arguments().entries,
+        conditional_inputs().entries)
+{{ ⟨⟨⟨refl, refl⟩ |⟩, ⟨⟨| ⟨⟨refl, refl⟩ |⟩⟩, trivial⟩⟩ }}
+
+theorem selected_conditional_valid(): StructuredRegionValid(selected_conditional())
+{{
+    ⟨conditional_inputs_unique(),
+     ⟨conditional_arguments_unique(),
+      ⟨conditional_condition_available(),
+       ⟨conditional_arguments_available(),
+        ⟨refl, ⟨refl, ⟨refl, ⟨refl,
+            ⟨conditional_add_valid(), conditional_sub_valid()⟩⟩⟩⟩⟩⟩⟩⟩⟩
+}}
+
+theorem conditional_takes_false(values: Valuation(),
+    condition_false: bitvec::head_bit(0, values(1, 3)) = False,
+    false_graph: RegionHolds(conditional_sub_raw(), values)):
+    StructuredRegionHolds(values, selected_conditional())
+{{
+    j(sym(condition_false),
+        λ actual _ => match actual {{
+            False => RegionHolds(conditional_sub_raw(), values),
+            True => RegionHolds(conditional_add_raw(), values),
+        }}, false_graph)
+}}
+
+theorem conditional_takes_true(values: Valuation(),
+    condition_true: bitvec::head_bit(0, values(1, 3)) = True,
+    true_graph: RegionHolds(conditional_add_raw(), values)):
+    StructuredRegionHolds(values, selected_conditional())
+{{
+    j(sym(condition_true),
+        λ actual _ => match actual {{
+            False => RegionHolds(conditional_sub_raw(), values),
+            True => RegionHolds(conditional_add_raw(), values),
+        }}, true_graph)
+}}
+"#,
+        add_certificate = add_valid.text,
+        sub_certificate = sub_valid.text,
+    );
+    let mut e = base.clone();
+    if let Err(err) = e.elab_module_source("function_ir_structured_conditional", &src) {
+        panic!(
+            "structured FunctionIR conditional did not check: {}",
+            err.render(&src)
+        );
+    }
 }
 
 fn alu_node_semantics_are_available(base: &Elaborator) {

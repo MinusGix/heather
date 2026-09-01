@@ -3,7 +3,7 @@
 
 mod support;
 
-use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
+use heather_elab::function_ir_cert::{self as cert, Node, Port, Region, StructuredRegion};
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
 use heather_elab::{ElabError, Elaborator, stats};
 use std::time::Instant;
@@ -304,6 +304,78 @@ fn generated_signed_comparison_checks() {
     if let Err(error) = e.elab_module_source("function_ir_signed_comparison_x86", &source) {
         panic!(
             "generated signed-comparison artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
+fn generated_structured_conditional_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let branch = |node| Region {
+        inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        nodes: vec![node],
+        outputs: vec![Port { id: 2, width: 64 }],
+    };
+    let when_true = branch(Node::Add {
+        width: 64,
+        output: 2,
+        left: 0,
+        right: 1,
+    });
+    let when_false = branch(Node::Sub {
+        width: 64,
+        output: 2,
+        left: 0,
+        right: 1,
+    });
+    let region = StructuredRegion::Conditional {
+        inputs: vec![
+            Port { id: 0, width: 64 },
+            Port { id: 1, width: 64 },
+            Port { id: 3, width: 1 },
+        ],
+        condition: 3,
+        arguments: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+        outputs: vec![Port { id: 2, width: 64 }],
+        when_true: Box::new(StructuredRegion::Dataflow(when_true.clone())),
+        when_false: Box::new(StructuredRegion::Dataflow(when_false.clone())),
+    };
+    let emission = lower::generate_conditional(
+        "choose_alu_x86",
+        "choose_alu_raw()",
+        "choose_add_raw()",
+        "choose_sub_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("lower structured conditional");
+    assert!(
+        emission
+            .text
+            .contains("ConditionalBlock(condition_register := Rdx")
+    );
+    assert!(emission.text.contains("bit_value_placed_condition"));
+    let raw = format!(
+        "{}\n{}\n\
+         fn choose_alu_raw() → StructuredRegion {{\n\
+             Conditional(\n\
+                 Ports([Port(id := 0, width := 64), Port(id := 1, width := 64),\n\
+                     Port(id := 3, width := 1)]), 3,\n\
+                 Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),\n\
+                 Ports([Port(id := 2, width := 64)]),\n\
+                 Dataflow(choose_add_raw()), Dataflow(choose_sub_raw()))\n\
+         }}",
+        cert::render_region_function("choose_add_raw", &when_true),
+        cert::render_region_function("choose_sub_raw", &when_false),
+    );
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_structured_conditional_x86", &source) {
+        panic!(
+            "generated structured conditional artifact did not check: {}",
             error.render(&source),
         );
     }

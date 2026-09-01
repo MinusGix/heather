@@ -4,6 +4,7 @@
 
 import x86_64;
 import bitvec;
+import bool;
 import list;
 import logic;
 import relation;
@@ -111,4 +112,93 @@ record BlockArtifact<M>(instructions: List<Instruction>,
     rip_correct: after.rip = final_rip,
     registers_preserved: (register: Gpr) → protected(register) →
         read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
+}
+
+// A structured machine control-flow node. The branch bodies remain ordinary
+// canonical instruction blocks; the linker-facing Jcc/Jmp byte layout is a
+// separate boundary, just as block placement is separate from ExecuteBlock.
+// Reading the materialized low bit makes selection a property of machine
+// state rather than an oracle supplied by the compiler proof.
+record ConditionalBlock {
+    condition_register: Gpr,
+    when_true: List<Instruction>,
+    when_false: List<Instruction>,
+}
+
+fn machine_condition<M>(register: Gpr, state: MachineState<M>) → Bool {
+    bitvec::head_bit(63, read_gpr(register, state.gprs))
+}
+
+fn ExecuteSelectedBlock<M>(selected: Bool, block: ConditionalBlock,
+    before, after: MachineState<M>) → Type
+{
+    match selected {
+        False => ExecuteBlock(block.when_false, before, after),
+        True => ExecuteBlock(block.when_true, before, after),
+    }
+}
+
+fn selected_block_after<M>(selected: Bool,
+    when_true, when_false: MachineState<M>) → MachineState<M>
+{
+    match selected {
+        False => when_false,
+        True => when_true,
+    }
+}
+
+fn ExecuteConditionalBlock<M>(block: ConditionalBlock) →
+    MachineState<M> → MachineState<M> → Type
+{
+    λ before after => ExecuteSelectedBlock(
+        machine_condition(block.condition_register, before), block, before, after)
+}
+
+fn conditional_block_after<M>(block: ConditionalBlock,
+    before, when_true, when_false: MachineState<M>) → MachineState<M>
+{
+    selected_block_after(machine_condition(block.condition_register, before),
+        when_true, when_false)
+}
+
+theorem execute_conditional_false<M>(block: ConditionalBlock,
+    before, after: MachineState<M>,
+    condition: machine_condition(block.condition_register, before) = False,
+    branch: ExecuteBlock(block.when_false, before, after)):
+    ExecuteConditionalBlock(block, before, after)
+{
+    j(sym(condition),
+        λ actual _ => match actual {
+            False => ExecuteBlock(block.when_false, before, after),
+            True => ExecuteBlock(block.when_true, before, after),
+        }, branch)
+}
+
+theorem execute_conditional_true<M>(block: ConditionalBlock,
+    before, after: MachineState<M>,
+    condition: machine_condition(block.condition_register, before) = True,
+    branch: ExecuteBlock(block.when_true, before, after)):
+    ExecuteConditionalBlock(block, before, after)
+{
+    j(sym(condition),
+        λ actual _ => match actual {
+            False => ExecuteBlock(block.when_false, before, after),
+            True => ExecuteBlock(block.when_true, before, after),
+        }, branch)
+}
+
+theorem execute_conditional_selected<M>(block: ConditionalBlock,
+    before, when_true, when_false: MachineState<M>,
+    true_branch: ExecuteBlock(block.when_true, before, when_true),
+    false_branch: ExecuteBlock(block.when_false, before, when_false)):
+    ExecuteConditionalBlock(block, before,
+        conditional_block_after(block, before, when_true, when_false))
+{
+    match machine_condition(block.condition_register, before) as λ selected =>
+        ExecuteSelectedBlock(selected, block, before,
+            selected_block_after(selected, when_true, when_false))
+    {
+        False => false_branch,
+        True => true_branch,
+    }
 }
