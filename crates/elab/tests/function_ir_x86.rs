@@ -50,6 +50,8 @@ const MODULES: &[(&str, &str)] = &[
 fn function_ir_x86_suite() {
     let base = support::semantic_test_base(MODULES);
     composed_artifact_is_available(&base);
+    generic_normal_block_execution_is_available(&base);
+    dishonest_normal_block_result_is_refused(&base);
     wrong_canonical_byte_length_is_refused(&base);
 }
 
@@ -491,6 +493,64 @@ theorem selected_sum4_refines<M>(values: Valuation(), before: MachineState<M>,
             "FunctionIR/x86 composition did not check: {}",
             err.render(src)
         );
+    }
+}
+
+fn generic_normal_block_execution_is_available(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import x86_64;
+import x86_64_block;
+import list;
+
+theorem normal_test_block_is_allowed<M>(before: MachineState<M>):
+    ExecuteBlock([TestRR(Rax, Rbx)], before,
+        execute_block_normal([TestRR(Rax, Rbx)], before))
+{
+    canonical_block_executes_normal([TestRR(Rax, Rbx)], before)
+}
+
+theorem alternate_test_af_is_still_allowed<M>(before: MachineState<M>):
+    ExecuteBlock([TestRR(Rax, Rbx)], before,
+        execute_test(Rax, Rbx, 3, before, True))
+{
+    ⟨execute_test(Rax, Rbx, 3, before, True),
+        ⟨Exists(True, refl), refl⟩⟩
+}
+"#;
+    if let Err(err) = e.elab_module_source("x86_64_normal_block_acceptance", src) {
+        panic!(
+            "generic normal block theorem did not check: {}",
+            err.render(src)
+        );
+    }
+}
+
+fn dishonest_normal_block_result_is_refused(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import x86_64;
+import x86_64_block;
+import list;
+
+theorem dishonest_add_block<M>(before: MachineState<M>):
+    ExecuteBlock([AddRR(Rax, Rbx)], before, before)
+{
+    canonical_block_executes_normal([AddRR(Rax, Rbx)], before)
+}
+"#;
+    match e.elab_module_source("x86_64_normal_block_dishonest", src) {
+        Ok(()) => panic!("canonical block theorem admitted a dishonest final state"),
+        Err(ElabError::Parse(error)) => {
+            panic!(
+                "dishonest-result control failed in the parser: {}",
+                error.msg
+            )
+        }
+        Err(error) => {
+            let message = format!("{error:?}");
+            assert!(message.contains("NotConvertible"), "{message}");
+        }
     }
 }
 

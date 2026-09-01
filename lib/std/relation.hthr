@@ -211,6 +211,65 @@ inductive Coverage<A, E> {
 }
 
 // ---------------------------------------------------------------------------
+// Traces indexed by an explicit command list. Keeping the functional fold and
+// relational trace generic is important for large step semantics: clients can
+// prove the fold admissible before specializing `Step`, rather than placing a
+// complete machine relation in the dependent induction motive.
+
+fn execute_steps<I, S>(step: I → S → S, instructions: List<I>) → S → S {
+    match instructions {
+        Nil => λ before => before,
+        Cons(instruction, rest) => λ before =>
+            execute_steps(step, rest, step(instruction, before)),
+    }
+}
+
+fn ExecuteSteps<I, S>(Step: I → S → S → Type,
+    instructions: List<I>) → S → S → Type
+{
+    match instructions {
+        Nil => λ before after => before = after,
+        Cons(instruction, rest) => λ before after =>
+            ∃ middle: S,
+                Step(instruction, before, middle) ∧
+                ExecuteSteps(Step, rest, middle, after),
+    }
+}
+
+theorem execute_steps_are_allowed<I, S>(step: I → S → S,
+    Step: I → S → S → Type,
+    step_allowed: (instruction: I) → (before: S) →
+        Step(instruction, before, step(instruction, before)),
+    instructions: List<I>):
+    (before: S) → ExecuteSteps(Step, instructions, before,
+        execute_steps(step, instructions, before))
+{
+    match instructions {
+        Nil => before ⊢ refl,
+        Cons(instruction, rest) => before ⊢
+            ⟨step(instruction, before), ⟨
+                step_allowed(instruction, before),
+                execute_steps_are_allowed(step, Step, step_allowed, rest,
+                    step(instruction, before))⟩⟩,
+    }
+}
+
+theorem execute_steps_nil<I, S>(Step: I → S → S → Type, state: S):
+    ExecuteSteps(Step, [], state, state)
+{
+    refl
+}
+
+theorem execute_steps_cons<I, S>(Step: I → S → S → Type,
+    instruction: I, rest: List<I>, before, middle, after: S,
+    head: Step(instruction, before, middle),
+    tail: ExecuteSteps(Step, rest, middle, after)):
+    ExecuteSteps(Step, Cons(instruction, rest), before, after)
+{
+    ⟨middle, ⟨head, tail⟩⟩
+}
+
+// ---------------------------------------------------------------------------
 // Exact finite steps and their reflexive-transitive existential closure.
 
 fn Steps<A>(R: A → A → Type, fuel: Nat) → A → A → Type {

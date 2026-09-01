@@ -89,6 +89,7 @@ fn deterministic_and_nonfunctional_customers_check() {
     let probe = r#"
 import relation;
 import bool;
+import list;
 import pair;
 
 inductive TinyInstr { Increment, Clear }
@@ -105,6 +106,18 @@ fn TinyStep(instruction: TinyInstr) -> Nat -> Nat -> Type {
 }
 
 theorem deterministic_increment(): TinyStep(Increment, 2, 3) { refl }
+
+theorem eval_tiny_is_allowed(instruction: TinyInstr, register: Nat):
+    TinyStep(instruction, register, eval_tiny(instruction, register))
+{ refl }
+
+theorem tiny_program_is_allowed(register: Nat):
+    ExecuteSteps(TinyStep, [Increment, Clear], register,
+        execute_steps(eval_tiny, [Increment, Clear], register))
+{
+    execute_steps_are_allowed(eval_tiny, TinyStep, eval_tiny_is_allowed,
+        [Increment, Clear], register)
+}
 
 fn FlagHavoc(source, target: Pair<Bool, Nat>) -> Type {
     FrameFirst(Havoc<Bool>, source, target)

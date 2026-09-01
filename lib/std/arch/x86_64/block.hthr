@@ -43,28 +43,22 @@ theorem canonical_block_decodes(instructions: List<Instruction>):
 
 // Functional execution is a convenient representative for deterministic
 // clients. `ExecuteBlock` below is authoritative and retains the nondeterminism
-// of instructions such as TEST.
+// of instructions such as TEST. The generic command trace in `relation`
+// keeps the recursive proof independent of the large x86 step semantics.
 fn execute_block_normal<M>(instructions: List<Instruction>) →
     MachineState<M> → MachineState<M>
 {
-    match instructions {
-        Nil => λ before => before,
-        Cons(instruction, rest) => λ before =>
-            execute_block_normal(rest,
-                execute_normal(decoded_rr(instruction), before)),
-    }
+    execute_steps(
+        λ instruction before => execute_normal(decoded_rr(instruction), before),
+        instructions)
 }
 
 fn ExecuteBlock<M>(instructions: List<Instruction>) →
     MachineState<M> → MachineState<M> → Type
 {
-    match instructions {
-        Nil => λ before after => before = after,
-        Cons(instruction, rest) => λ before after =>
-            ∃ middle: MachineState<M>,
-                Execute(decoded_rr(instruction), before, Returned(middle)) ∧
-                ExecuteBlock(rest, middle, after),
-    }
+    ExecuteSteps(λ instruction before after =>
+        Execute(decoded_rr(instruction), before, Returned(after)),
+        instructions)
 }
 
 // One-step certificate composition avoids asking the kernel to discover a
@@ -74,7 +68,8 @@ fn ExecuteBlock<M>(instructions: List<Instruction>) →
 theorem execute_block_nil<M>(state: MachineState<M>):
     ExecuteBlock([], state, state)
 {
-    refl
+    execute_steps_nil<Instruction, MachineState<M>>(λ instruction before after =>
+        Execute(decoded_rr(instruction), before, Returned(after)), state)
 }
 
 theorem canonical_execute_block_cons<M>(instruction: Instruction,
@@ -83,8 +78,23 @@ theorem canonical_execute_block_cons<M>(instruction: Instruction,
         execute_normal(decoded_rr(instruction), before), after)):
     ExecuteBlock(Cons(instruction, rest), before, after)
 {
-    ⟨execute_normal(decoded_rr(instruction), before),
-        ⟨canonical_execute_normal_is_allowed(instruction, before), tail⟩⟩
+    execute_steps_cons<Instruction, MachineState<M>>(
+        λ current state result =>
+            Execute(decoded_rr(current), state, Returned(result)),
+        instruction, rest, before,
+        execute_normal(decoded_rr(instruction), before), after,
+        canonical_execute_normal_is_allowed(instruction, before), tail)
+}
+
+theorem canonical_block_executes_normal<M>(instructions: List<Instruction>):
+    (before: MachineState<M>) → ExecuteBlock(instructions, before,
+        execute_block_normal(instructions, before))
+{
+    execute_steps_are_allowed(
+        λ instruction state => execute_normal(decoded_rr(instruction), state),
+        λ instruction state after =>
+            Execute(decoded_rr(instruction), state, Returned(after)),
+        canonical_execute_normal_is_allowed<M>, instructions)
 }
 
 // Common boundary for a certified straight-line leaf block. It deliberately
