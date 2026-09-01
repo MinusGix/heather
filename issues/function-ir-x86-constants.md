@@ -1,6 +1,6 @@
 ---
 title: Lower FunctionIR constants and generalize x86 instruction layout
-status: open
+status: closed
 labels: [compiler,function-ir,x86,encoding,codegen,proofs]
 created: 2026-09-01
 updated: 2026-09-01
@@ -48,3 +48,24 @@ constant.
 - **[[function-ir-x86-proof-scaling]]** supplies persistent instruction/proof
   staging that must survive variable lengths.
 
+## Resolution
+
+Implemented a total first constant-selection rule using canonical
+`MOV r64, imm64`. The x86 model now exposes uniform `canonical_length` and
+`decoded_canonical` operations, reconstructs the immediate from exactly eight
+little-endian bytes, rejects malformed/truncated/trailing encodings, and gives
+the instruction its exact register-write, frame, and ten-byte RIP semantics.
+Canonical block decoding and execution now fold each instruction's real length
+rather than assuming three-byte RR instructions.
+
+The FunctionIR backend selects constants into a free register, emits their
+full modulo-`2^64` immediate, and uses summed canonical lengths for byte and RIP
+proofs. An end-to-end `Const(2^63) + input` certificate checks a mixed
+ten-byte/three-byte block, its 13 canonical bytes, staged execution, result,
+memory frame, protected registers, and RIP. Focused model controls cover low
+and extended destination registers, zero and all-ones immediates, and rejected
+bad REX/opcode, truncated, and trailing streams.
+
+The first mixed certificate took about 121 seconds on the development host.
+That is correct and bounded, but records useful motivation for the separate
+proof-scaling work; it is not hidden by a fuel increase.

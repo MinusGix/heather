@@ -29,10 +29,10 @@ theorem add64_x86_block_decodes(start: BitVec(64)):
 
 fn add64_x86_state_0<M>(before: MachineState<M>) → MachineState<M> { before }
 fn add64_x86_state_1<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(MovRR(Rax, Rdi)), add64_x86_state_0(before))
+    execute_normal(decoded_canonical(MovRR(Rax, Rdi)), add64_x86_state_0(before))
 }
 fn add64_x86_state_2<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(AddRR(Rax, Rsi)), add64_x86_state_1(before))
+    execute_normal(decoded_canonical(AddRR(Rax, Rsi)), add64_x86_state_1(before))
 }
 fn add64_x86_after<M>(before: MachineState<M>) → MachineState<M> {
     add64_x86_state_2(before)
@@ -84,11 +84,11 @@ theorem add64_x86_graph_1<M>(values: Valuation(), before: MachineState<M>,
 { add64_x86_graph_0(values, before, context).right }
 
 theorem add64_x86_step_0_result<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(MovRR(Rax, Rdi)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(MovRR(Rax, Rdi)), state).gprs) =
         read_gpr(Rdi, state.gprs)
 { refl }
 theorem add64_x86_step_1_result<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(AddRR(Rax, Rsi)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, Rsi)), state).gprs) =
         bitvec::add(64, read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
 { refl }
 theorem add64_x86_value_0_moved_for_node_0<M>(values: Valuation(),
@@ -198,19 +198,19 @@ theorem sum4_x86_block_decodes(start: BitVec(64)):
 
 fn sum4_x86_state_0<M>(before: MachineState<M>) → MachineState<M> { before }
 fn sum4_x86_state_1<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(MovRR(Rax, Rdi)), sum4_x86_state_0(before))
+    execute_normal(decoded_canonical(MovRR(Rax, Rdi)), sum4_x86_state_0(before))
 }
 fn sum4_x86_state_2<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(AddRR(Rax, Rsi)), sum4_x86_state_1(before))
+    execute_normal(decoded_canonical(AddRR(Rax, Rsi)), sum4_x86_state_1(before))
 }
 fn sum4_x86_state_3<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(MovRR(R8, Rdx)), sum4_x86_state_2(before))
+    execute_normal(decoded_canonical(MovRR(R8, Rdx)), sum4_x86_state_2(before))
 }
 fn sum4_x86_state_4<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(AddRR(R8, Rcx)), sum4_x86_state_3(before))
+    execute_normal(decoded_canonical(AddRR(R8, Rcx)), sum4_x86_state_3(before))
 }
 fn sum4_x86_state_5<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_rr(AddRR(Rax, R8)), sum4_x86_state_4(before))
+    execute_normal(decoded_canonical(AddRR(Rax, R8)), sum4_x86_state_4(before))
 }
 fn sum4_x86_after<M>(before: MachineState<M>) → MachineState<M> {
     sum4_x86_state_5(before)
@@ -302,11 +302,11 @@ theorem sum4_x86_graph_3<M>(values: Valuation(), before: MachineState<M>,
 { sum4_x86_graph_2(values, before, context).right }
 
 theorem sum4_x86_step_0_result<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(MovRR(Rax, Rdi)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(MovRR(Rax, Rdi)), state).gprs) =
         read_gpr(Rdi, state.gprs)
 { refl }
 theorem sum4_x86_step_1_result<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(AddRR(Rax, Rsi)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, Rsi)), state).gprs) =
         bitvec::add(64, read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
 { refl }
 theorem sum4_x86_value_0_moved_for_node_0<M>(values: Valuation(),
@@ -332,11 +332,11 @@ theorem sum4_x86_value_4_after_node_0<M>(values: Valuation(),
             sum4_x86_state_1(before)))
 }
 theorem sum4_x86_step_2_result<M>(state: MachineState<M>):
-    read_gpr(R8, execute_normal(decoded_rr(MovRR(R8, Rdx)), state).gprs) =
+    read_gpr(R8, execute_normal(decoded_canonical(MovRR(R8, Rdx)), state).gprs) =
         read_gpr(Rdx, state.gprs)
 { refl }
 theorem sum4_x86_step_3_result<M>(state: MachineState<M>):
-    read_gpr(R8, execute_normal(decoded_rr(AddRR(R8, Rcx)), state).gprs) =
+    read_gpr(R8, execute_normal(decoded_canonical(AddRR(R8, Rcx)), state).gprs) =
         bitvec::add(64, read_gpr(R8, state.gprs), read_gpr(Rcx, state.gprs))
 { refl }
 theorem sum4_x86_value_2_moved_for_node_1<M>(values: Valuation(),
@@ -362,7 +362,7 @@ theorem sum4_x86_value_5_after_node_1<M>(values: Valuation(),
             sum4_x86_state_3(before)))
 }
 theorem sum4_x86_step_2_preserves_Rax<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(MovRR(R8, Rdx)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(MovRR(R8, Rdx)), state).gprs) =
         read_gpr(Rax, state.gprs)
 { refl }
 theorem sum4_x86_value_4_after_node_1_step_1<M>(values: Valuation(),
@@ -376,7 +376,7 @@ theorem sum4_x86_value_4_after_node_1_step_1<M>(values: Valuation(),
         sum4_x86_step_2_preserves_Rax(sum4_x86_state_2(before)))
 }
 theorem sum4_x86_step_3_preserves_Rax<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(AddRR(R8, Rcx)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(AddRR(R8, Rcx)), state).gprs) =
         read_gpr(Rax, state.gprs)
 { refl }
 theorem sum4_x86_value_4_after_node_1_step_2<M>(values: Valuation(),
@@ -390,7 +390,7 @@ theorem sum4_x86_value_4_after_node_1_step_2<M>(values: Valuation(),
         sum4_x86_step_3_preserves_Rax(sum4_x86_state_3(before)))
 }
 theorem sum4_x86_step_4_result<M>(state: MachineState<M>):
-    read_gpr(Rax, execute_normal(decoded_rr(AddRR(Rax, R8)), state).gprs) =
+    read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, R8)), state).gprs) =
         bitvec::add(64, read_gpr(Rax, state.gprs), read_gpr(R8, state.gprs))
 { refl }
 theorem sum4_x86_value_6_after_node_2<M>(values: Valuation(),

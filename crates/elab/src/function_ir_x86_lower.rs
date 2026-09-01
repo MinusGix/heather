@@ -957,7 +957,7 @@ fn emit_placement_proofs(
                      \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
                      {{\n\
                      \x20   trans({equation}, sym({prefix}_step_{before_index}_result(\n\
-                     \x20       {prefix}_state_{before_index}(before)))\n\
+                     \x20       {prefix}_state_{before_index}(before))))\n\
                      }}\n",
                     node.output,
                     plan.destination.heather_name(),
