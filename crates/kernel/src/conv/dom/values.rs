@@ -104,6 +104,48 @@ mod tests {
     use super::*;
     use std::num::NonZeroU64;
 
+    fn doubling_nat(
+        leaf_count: u64,
+        depth: u32,
+    ) -> Rc<value::program::ContextProgram<()>> {
+        let mut program = value::program::ContextProgram::run(
+            (),
+            NonZeroU64::new(leaf_count).unwrap(),
+        );
+        for _ in 0..depth {
+            program = value::program::ContextProgram::compose(Rc::clone(&program), program);
+        }
+        program
+    }
+
+    fn nat_run<'v>(
+        arena: &'v value::ValueArena<'v>,
+        program: Rc<value::program::ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+    ) -> TmC<'v> {
+        TmC {
+            clo: arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            home: 0,
+            sat: 0,
+        }
+    }
+
+    fn compare_nat_runs(
+        left: Rc<value::program::ContextProgram<()>>,
+        right: Rc<value::program::ContextProgram<()>>,
+        fuel: u64,
+    ) -> R {
+        let psi = crate::term::GlobalCtx::default();
+        let gamma = LocalCtx::nil();
+        let arena = value::ValueArena::new();
+        let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left = nat_run(&arena, left, tail);
+        let right = nat_run(&arena, right, tail);
+        let ty = TyC::value(&env, Rc::new(VTy::Nat));
+        Conv::<Values>::new(fuel, &psi).tm(&env, &left, &right, &ty, &Level::Zero)
+    }
+
     #[test]
     fn type_identity_fast_path_is_scope_sensitive() {
         let arena = value::ValueArena::new();
@@ -214,6 +256,35 @@ mod tests {
             sat: 0,
         };
         assert!(Values::tm_eq_fast(&left, &right));
+    }
+
+    #[test]
+    fn independently_allocated_exponential_nat_dags_convert() {
+        assert_eq!(compare_nat_runs(doubling_nat(1, 64), doubling_nat(1, 64), 80), Ok(()));
+    }
+
+    #[test]
+    fn exponential_nat_prefix_preserves_unequal_residual_verdict() {
+        let left = value::program::ContextProgram::compose(
+            doubling_nat(1, 64),
+            value::program::ContextProgram::run((), NonZeroU64::new(1).unwrap()),
+        );
+        let right = value::program::ContextProgram::compose(
+            doubling_nat(1, 64),
+            value::program::ContextProgram::run((), NonZeroU64::new(2).unwrap()),
+        );
+        assert_eq!(
+            compare_nat_runs(left, right, 96),
+            Err(crate::conv::ConvError::NotConvertible),
+        );
+    }
+
+    #[test]
+    fn hostile_near_match_obeys_conversion_fuel() {
+        assert_eq!(
+            compare_nat_runs(doubling_nat(1, 64), doubling_nat(2, 64), 16),
+            Err(crate::conv::ConvError::OutOfFuel),
+        );
     }
 }
 
@@ -1179,33 +1250,40 @@ impl<'v> Dom<'v> for Values {
     }
 
     fn cancel_nat_prefix(
+        cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
         a: &Rc<Val<'v>>,
         b: &Rc<Val<'v>>,
-    ) -> Option<(TmC<'v>, TmC<'v>)> {
+    ) -> R<Option<(TmC<'v>, TmC<'v>)>> {
         let (
             Val::NatRun { program: left, tail: left_tail },
             Val::NatRun { program: right, tail: right_tail },
         ) = (&**a, &**b)
         else {
-            return None;
+            return Ok(None);
         };
         let cancelled = value::program::ContextProgram::cancel_matching_prefix(
             Rc::clone(left),
             Rc::clone(right),
-        );
+            cv.fuel,
+        )
+        .map_err(|_| {
+            cv.fuel = 0;
+            crate::conv::ConvError::OutOfFuel
+        })?;
+        cv.fuel -= cancelled.inspected;
         if !cancelled.changed {
-            return None;
+            return Ok(None);
         }
         let arena = env.rho.arena();
         let residual = |program, tail| match program {
             None => tail,
             Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
         };
-        Some((
+        Ok(Some((
             TmC::here(env, residual(cancelled.left, left_tail)),
             TmC::here(env, residual(cancelled.right, right_tail)),
-        ))
+        )))
     }
 
     fn app(

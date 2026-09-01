@@ -1221,7 +1221,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             TyView::Nat => {
-                if let Some((x, y)) = D::cancel_nat_prefix(env, a, b) {
+                if let Some((x, y)) = D::cancel_nat_prefix(self, env, a, b)? {
                     return self.tm_at_nat(env, &x, &y);
                 }
                 match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {

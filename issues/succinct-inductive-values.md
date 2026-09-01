@@ -56,14 +56,35 @@ special-case generated constructor names.
 
 ## Log
 
+- 2026-09-01: Independently allocated but bisimilar value-program DAGs now
+  compare and cancel in work proportional to unique node pairs. The walk is
+  iterative, and retains every node named by its pointer-pair memo so allocator
+  reuse cannot alias a key. It shares one explicit inspection budget with
+  cursor descent. Conversion
+  charges those inspections to its fuel; a synchronous fold reserves its
+  ordinary reduction step, charges the program work, and returns `OutOfFuel`
+  if the bound is insufficient. Thus neither a hostile near-match nor a
+  genuinely different program can acquire an unfueled verdict.
+
+  Rails cover shared identity, independently allocated depth-64 doubling
+  DAGs, unequal residuals after an exponential common prefix, composed
+  saturated runs, and a bounded hostile near-match. The independent-equality,
+  conversion, and hostile controls each complete effectively instantly under
+  a 128 MiB address-space limit and ten-second timeout. This is intentionally a
+  sufficient DAG bisimulation plus prefix cursor, not a complete solver for
+  arbitrary straight-line programs that denote the same context string with
+  unrelated association and run boundaries; [[context-program-denotational-equivalence]]
+  owns that larger compressed-string problem. Declared-inductive production
+  remains the other open acceptance item here.
+
 - 2026-08-31: [[nat-order-large-run-comparison]] added generic matching-prefix
   cancellation for context programs and recognized the exact two-input fold
   algebra whose successor/successor branch resumes the recursive result at
   both predecessors. This brings `Le` into a second, structurally justified
   fast fragment without naming it, while arbitrary folds retain ordinary fuel
   behavior. Nat conversion uses the same cancellation before exposing unary
-  constructors. Declared-inductive production and independently constructed
-  exponential composition DAGs remain broader work for this issue.
+  constructors. Declared-inductive production remained broader work for this
+  issue; independently constructed bisimilar DAGs were completed above.
 
 - 2026-08-31: Closed Nat literals now provide the first ordinary producer for
   the dormant value substrate. `Term::NatLit(u64)` is a compact internal form

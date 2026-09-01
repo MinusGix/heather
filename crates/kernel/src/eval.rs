@@ -1272,7 +1272,13 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let cancelled = ContextProgram::cancel_matching_prefix(
                         Rc::clone(program),
                         Rc::clone(right_program),
-                    );
+                        self.fuel.saturating_sub(1),
+                    )
+                    .map_err(|_| {
+                        self.fuel = 0;
+                        OutOfFuel
+                    })?;
+                    self.fuel -= cancelled.inspected;
                     if cancelled.changed {
                         self.spend()?;
                         let left = self.nat_residual(cancelled.left, tail);
@@ -1880,6 +1886,28 @@ mod tests {
             step: arena.tm(TmClo::syn(env, Rc::new(synchronous_step()))),
         };
         let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
+        let folded = ev.elim(left, elim).unwrap();
+        let result = ev.elim(folded, app_elim(&arena, right)).unwrap();
+        assert!(matches!(&*result, Val::Zero));
+    }
+
+    #[test]
+    fn synchronous_fold_bisimulates_independent_exponential_dags() {
+        let arena = ValueArena::new();
+        let env = Env::empty(&arena);
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
+        let right = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+            program: shared_two_to_64(),
+            tail,
+        })));
+        let elim = Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::syn(env, Rc::new(dummy_lam(Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(synchronous_step()))),
+        };
+        let mut ev = Eval::new(80, Defs::opaque(), CtxBase::Nil, &arena);
         let folded = ev.elim(left, elim).unwrap();
         let result = ev.elim(folded, app_elim(&arena, right)).unwrap();
         assert!(matches!(&*result, Val::Zero));

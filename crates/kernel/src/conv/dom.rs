@@ -620,11 +620,12 @@ pub(super) trait Dom<'v>: Sized {
     /// residual sub-structures. `None` means only that this domain has no
     /// justified compressed step; ordinary structural comparison follows.
     fn cancel_nat_prefix(
+        _cv: &mut Conv<'v, Self>,
         _env: &Env<'v>,
         _a: &Self::Tm,
         _b: &Self::Tm,
-    ) -> Option<(Self::TmC, Self::TmC)> {
-        None
+    ) -> R<Option<(Self::TmC, Self::TmC)>> {
+        Ok(None)
     }
     #[allow(clippy::too_many_arguments)]
     fn app(
