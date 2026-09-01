@@ -1,11 +1,41 @@
 //! Untrusted spill-free x86 selection and register assignment for the current
-//! pure FunctionIR `Add` fragment. Proof emission consumes this explicit plan;
+//! pure FunctionIR 64-bit binary-ALU fragment. Proof emission consumes this explicit plan;
 //! neither the allocator nor the plan is trusted by the kernel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::function_ir_cert::{AddNode, Region};
+use crate::function_ir_cert::{Node, Region};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOperation {
+    Add,
+    Sub,
+    BitAnd,
+    BitOr,
+    BitXor,
+}
+
+impl BinaryOperation {
+    fn semantic_function(self) -> &'static str {
+        match self {
+            BinaryOperation::Add => "bitvec::add",
+            BinaryOperation::Sub => "bitvec::sub",
+            BinaryOperation::BitAnd => "bitvec::band",
+            BinaryOperation::BitOr => "bitvec::bor",
+            BinaryOperation::BitXor => "bitvec::bxor",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BinaryNode {
+    pub operation: BinaryOperation,
+    pub width: u64,
+    pub output: u64,
+    pub left: u64,
+    pub right: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Gpr {
@@ -54,6 +84,10 @@ impl Gpr {
 pub enum Instruction {
     MovRR { destination: Gpr, source: Gpr },
     AddRR { destination: Gpr, source: Gpr },
+    SubRR { destination: Gpr, source: Gpr },
+    AndRR { destination: Gpr, source: Gpr },
+    OrRR { destination: Gpr, source: Gpr },
+    XorRR { destination: Gpr, source: Gpr },
 }
 
 impl Instruction {
@@ -75,14 +109,49 @@ impl Instruction {
                 destination.heather_name(),
                 source.heather_name(),
             ),
+            Instruction::SubRR {
+                destination,
+                source,
+            } => format!(
+                "SubRR({}, {})",
+                destination.heather_name(),
+                source.heather_name(),
+            ),
+            Instruction::AndRR {
+                destination,
+                source,
+            } => format!(
+                "AndRR({}, {})",
+                destination.heather_name(),
+                source.heather_name(),
+            ),
+            Instruction::OrRR {
+                destination,
+                source,
+            } => format!(
+                "OrRR({}, {})",
+                destination.heather_name(),
+                source.heather_name(),
+            ),
+            Instruction::XorRR {
+                destination,
+                source,
+            } => format!(
+                "XorRR({}, {})",
+                destination.heather_name(),
+                source.heather_name(),
+            ),
         }
     }
 
     pub fn destination(self) -> Gpr {
         match self {
-            Instruction::MovRR { destination, .. } | Instruction::AddRR { destination, .. } => {
-                destination
-            }
+            Instruction::MovRR { destination, .. }
+            | Instruction::AddRR { destination, .. }
+            | Instruction::SubRR { destination, .. }
+            | Instruction::AndRR { destination, .. }
+            | Instruction::OrRR { destination, .. }
+            | Instruction::XorRR { destination, .. } => destination,
         }
     }
 }
@@ -90,7 +159,7 @@ impl Instruction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodePlan {
     pub node_index: usize,
-    pub node: AddNode,
+    pub node: BinaryNode,
     pub left_register: Gpr,
     pub right_register: Gpr,
     pub destination: Gpr,
@@ -99,7 +168,7 @@ pub struct NodePlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoweredAddDag {
+pub struct LoweredBinaryDag {
     pub input_registers: Vec<Gpr>,
     pub node_plans: Vec<NodePlan>,
     pub instructions: Vec<Instruction>,
@@ -110,7 +179,7 @@ pub struct LoweredAddDag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct X86Emission {
-    pub lowered: LoweredAddDag,
+    pub lowered: LoweredBinaryDag,
     pub text: String,
 }
 
@@ -130,6 +199,9 @@ pub enum LoweringError {
     DuplicateValue(u64),
     UndefinedValue(u64),
     OutputCount(usize),
+    UnsupportedOperation {
+        node_index: usize,
+    },
     RegisterPressure {
         node_index: usize,
         live_temporaries: usize,
@@ -169,6 +241,9 @@ impl fmt::Display for LoweringError {
             LoweringError::OutputCount(count) => {
                 write!(f, "single-result block lowering received {count} outputs")
             }
+            LoweringError::UnsupportedOperation { node_index } => {
+                write!(f, "node {node_index} is not yet supported by x86 lowering")
+            }
             LoweringError::RegisterPressure {
                 node_index,
                 live_temporaries,
@@ -180,15 +255,15 @@ impl fmt::Display for LoweringError {
     }
 }
 
-/// Lower one valid-looking, 64-bit, single-output Add DAG. The generated
+/// Lower one valid-looking, 64-bit, single-output binary-ALU DAG. The generated
 /// certificate remains responsible for proving that this untrusted plan agrees
 /// with the actual Heather region.
-pub fn lower_add_dag(
+pub fn lower_binary_dag(
     region: &Region,
     input_registers: &[Gpr],
     temporary_registers: &[Gpr],
     requested_output: Gpr,
-) -> Result<LoweredAddDag, LoweringError> {
+) -> Result<LoweredBinaryDag, LoweringError> {
     if region.inputs.len() != input_registers.len() {
         return Err(LoweringError::InputPlacementCount {
             inputs: region.inputs.len(),
@@ -229,7 +304,8 @@ pub fn lower_add_dag(
     }
 
     let mut uses = BTreeMap::<u64, usize>::new();
-    for node in &region.nodes {
+    for (node_index, node) in region.nodes.iter().enumerate() {
+        let node = binary_node(*node, node_index)?;
         *uses.entry(node.left).or_default() += 1;
         *uses.entry(node.right).or_default() += 1;
     }
@@ -243,6 +319,7 @@ pub fn lower_add_dag(
     let mut clobbered = BTreeSet::new();
 
     for (node_index, &node) in region.nodes.iter().enumerate() {
+        let node = binary_node(node, node_index)?;
         require_width(node.output, node.width)?;
         let Some(&left_register) = placements.get(&node.left) else {
             return Err(LoweringError::UndefinedValue(node.left));
@@ -282,10 +359,11 @@ pub fn lower_add_dag(
         let (destination, step_instructions) = match reused_value {
             Some(_) => (
                 left_register,
-                vec![Instruction::AddRR {
-                    destination: left_register,
-                    source: right_register,
-                }],
+                vec![binary_instruction(
+                    node.operation,
+                    left_register,
+                    right_register,
+                )],
             ),
             None => {
                 let Some(&destination) = temporary_registers
@@ -305,10 +383,7 @@ pub fn lower_add_dag(
                             destination,
                             source: left_register,
                         },
-                        Instruction::AddRR {
-                            destination,
-                            source: right_register,
-                        },
+                        binary_instruction(node.operation, destination, right_register),
                     ],
                 )
             }
@@ -358,7 +433,7 @@ pub fn lower_add_dag(
         output_register = requested_output;
     }
 
-    Ok(LoweredAddDag {
+    Ok(LoweredBinaryDag {
         input_registers: input_registers.to_vec(),
         node_plans,
         instructions,
@@ -380,7 +455,7 @@ pub fn generate(
     temporary_registers: &[Gpr],
     requested_output: Gpr,
 ) -> Result<X86Emission, LoweringError> {
-    let lowered = lower_add_dag(
+    let lowered = lower_binary_dag(
         region,
         input_registers,
         temporary_registers,
@@ -548,14 +623,15 @@ fn render_execution_proof(prefix: &str, instructions: &[Instruction]) -> String 
 fn emit_placement_proofs(
     prefix: &str,
     region: &Region,
-    lowered: &LoweredAddDag,
+    lowered: &LoweredBinaryDag,
     parameters: &str,
     arguments: &str,
     text: &mut String,
 ) -> String {
     let mut frame_facts = BTreeSet::new();
     let mut remaining = BTreeMap::<u64, usize>::new();
-    for node in &region.nodes {
+    for plan in &lowered.node_plans {
+        let node = plan.node;
         *remaining.entry(node.left).or_default() += 1;
         *remaining.entry(node.right).or_default() += 1;
     }
@@ -589,17 +665,14 @@ fn emit_placement_proofs(
         for (offset, instruction) in plan.instructions.iter().copied().enumerate() {
             emit_step_result_fact(prefix, before_index + offset, instruction, text);
         }
-        let (add_before_index, add_left_register, add_left_proof, add_right_proof) = if plan
-            .instructions
-            .len()
-            == 2
-        {
-            let move_after_index = before_index + 1;
-            let moved_name = format!(
-                "{prefix}_value_{}_moved_for_node_{}",
-                plan.node.left, plan.node_index,
-            );
-            text.push_str(&format!(
+        let (binary_before_index, binary_left_register, binary_left_proof, binary_right_proof) =
+            if plan.instructions.len() == 2 {
+                let move_after_index = before_index + 1;
+                let moved_name = format!(
+                    "{prefix}_value_{}_moved_for_node_{}",
+                    plan.node.left, plan.node_index,
+                );
+                text.push_str(&format!(
                     "theorem {moved_name}<M>({parameters}):\n\
                      \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
                      {{\n\
@@ -615,19 +688,19 @@ fn emit_placement_proofs(
                     plan.left_register.heather_name(),
                     plan.destination.heather_name(),
                 ));
-            let right_name = format!(
-                "{prefix}_value_{}_before_add_node_{}",
-                plan.node.right, plan.node_index,
-            );
-            let right_frame = emit_step_frame_fact(
-                prefix,
-                before_index,
-                plan.instructions[0],
-                plan.right_register,
-                &mut frame_facts,
-                text,
-            );
-            text.push_str(&format!(
+                let right_name = format!(
+                    "{prefix}_value_{}_before_add_node_{}",
+                    plan.node.right, plan.node_index,
+                );
+                let right_frame = emit_step_frame_fact(
+                    prefix,
+                    before_index,
+                    plan.instructions[0],
+                    plan.right_register,
+                    &mut frame_facts,
+                    text,
+                );
+                text.push_str(&format!(
                     "theorem {right_name}<M>({parameters}):\n\
                      \x20   ValuePlaced(values, {}, {}, {prefix}_state_{move_after_index}(before))\n\
                      {{\n\
@@ -641,37 +714,38 @@ fn emit_placement_proofs(
                     plan.node.right,
                     plan.right_register.heather_name(),
                 ));
-            (
-                move_after_index,
-                plan.destination,
-                format!("{moved_name}({arguments})"),
-                format!("{right_name}({arguments})"),
-            )
-        } else {
-            debug_assert_eq!(plan.instructions.len(), 1);
-            (
-                before_index,
-                plan.left_register,
-                left_proof.clone(),
-                right_proof.clone(),
-            )
-        };
+                (
+                    move_after_index,
+                    plan.destination,
+                    format!("{moved_name}({arguments})"),
+                    format!("{right_name}({arguments})"),
+                )
+            } else {
+                debug_assert_eq!(plan.instructions.len(), 1);
+                (
+                    before_index,
+                    plan.left_register,
+                    left_proof.clone(),
+                    right_proof.clone(),
+                )
+            };
         text.push_str(&format!(
             "theorem {output_name}<M>({parameters}):\n\
              \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
              {{\n\
-             \x20   placed_after_add(values, {}, {}, {}, {}, {}, {},\n\
-             \x20       {prefix}_state_{add_before_index}(before), {prefix}_state_{after_index}(before),\n\
-             \x20       {equation}, {add_left_proof}, {add_right_proof},\n\
-             \x20       {prefix}_step_{add_before_index}_result(\n\
-             \x20           {prefix}_state_{add_before_index}(before)))\n\
+             \x20   placed_after_binary(values, {}, {}, {}, {}(64, ·, ·), {}, {}, {},\n\
+             \x20       {prefix}_state_{binary_before_index}(before), {prefix}_state_{after_index}(before),\n\
+             \x20       {equation}, {binary_left_proof}, {binary_right_proof},\n\
+             \x20       {prefix}_step_{binary_before_index}_result(\n\
+             \x20           {prefix}_state_{binary_before_index}(before)))\n\
              }}\n",
             plan.node.output,
             plan.destination.heather_name(),
             plan.node.output,
             plan.node.left,
             plan.node.right,
-            add_left_register.heather_name(),
+            plan.node.operation.semantic_function(),
+            binary_left_register.heather_name(),
             plan.right_register.heather_name(),
             plan.destination.heather_name(),
         ));
@@ -777,14 +851,23 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
         Instruction::AddRR {
             destination,
             source,
-        } => (
+        } => render_binary_result(BinaryOperation::Add, destination, source),
+        Instruction::SubRR {
             destination,
-            format!(
-                "bitvec::add(64, read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
-        ),
+            source,
+        } => render_binary_result(BinaryOperation::Sub, destination, source),
+        Instruction::AndRR {
+            destination,
+            source,
+        } => render_binary_result(BinaryOperation::BitAnd, destination, source),
+        Instruction::OrRR {
+            destination,
+            source,
+        } => render_binary_result(BinaryOperation::BitOr, destination, source),
+        Instruction::XorRR {
+            destination,
+            source,
+        } => render_binary_result(BinaryOperation::BitXor, destination, source),
     };
     text.push_str(&format!(
         "theorem {prefix}_step_{step}_result<M>(state: MachineState<M>):\n\
@@ -794,6 +877,22 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
         destination.heather_name(),
         instruction.render(),
     ));
+}
+
+fn render_binary_result(
+    operation: BinaryOperation,
+    destination: Gpr,
+    source: Gpr,
+) -> (Gpr, String) {
+    (
+        destination,
+        format!(
+            "{}(64, read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
+            operation.semantic_function(),
+            destination.heather_name(),
+            source.heather_name(),
+        ),
+    )
 }
 
 fn emit_step_frame_fact(
@@ -847,6 +946,97 @@ fn render_preservation_arms(clobbered: &BTreeSet<Gpr>) -> String {
     arms.join("\n")
 }
 
+fn binary_node(node: Node, node_index: usize) -> Result<BinaryNode, LoweringError> {
+    match node {
+        Node::Add {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(BinaryNode {
+            operation: BinaryOperation::Add,
+            width,
+            output,
+            left,
+            right,
+        }),
+        Node::Sub {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(BinaryNode {
+            operation: BinaryOperation::Sub,
+            width,
+            output,
+            left,
+            right,
+        }),
+        Node::BitAnd {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(BinaryNode {
+            operation: BinaryOperation::BitAnd,
+            width,
+            output,
+            left,
+            right,
+        }),
+        Node::BitOr {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(BinaryNode {
+            operation: BinaryOperation::BitOr,
+            width,
+            output,
+            left,
+            right,
+        }),
+        Node::BitXor {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(BinaryNode {
+            operation: BinaryOperation::BitXor,
+            width,
+            output,
+            left,
+            right,
+        }),
+        _ => Err(LoweringError::UnsupportedOperation { node_index }),
+    }
+}
+
+fn binary_instruction(operation: BinaryOperation, destination: Gpr, source: Gpr) -> Instruction {
+    match operation {
+        BinaryOperation::Add => Instruction::AddRR {
+            destination,
+            source,
+        },
+        BinaryOperation::Sub => Instruction::SubRR {
+            destination,
+            source,
+        },
+        BinaryOperation::BitAnd => Instruction::AndRR {
+            destination,
+            source,
+        },
+        BinaryOperation::BitOr => Instruction::OrRR {
+            destination,
+            source,
+        },
+        BinaryOperation::BitXor => Instruction::XorRR {
+            destination,
+            source,
+        },
+    }
+}
+
 fn require_width(value: u64, width: u64) -> Result<(), LoweringError> {
     if width == 64 {
         Ok(())
@@ -876,13 +1066,13 @@ mod tests {
     use crate::function_ir_cert::Port;
 
     fn sum4(left_first: bool) -> Region {
-        let left = AddNode {
+        let left = Node::Add {
             width: 64,
             output: 4,
             left: 0,
             right: 1,
         };
-        let right = AddNode {
+        let right = Node::Add {
             width: 64,
             output: 5,
             left: 2,
@@ -894,7 +1084,7 @@ mod tests {
                 vec![
                     left,
                     right,
-                    AddNode {
+                    Node::Add {
                         width: 64,
                         output: 6,
                         left: 4,
@@ -905,7 +1095,7 @@ mod tests {
                 vec![
                     right,
                     left,
-                    AddNode {
+                    Node::Add {
                         width: 64,
                         output: 6,
                         left: 4,
@@ -921,7 +1111,7 @@ mod tests {
     fn add64_selects_one_move_and_one_destructive_add() {
         let region = Region {
             inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
-            nodes: vec![AddNode {
+            nodes: vec![Node::Add {
                 width: 64,
                 output: 2,
                 left: 0,
@@ -929,7 +1119,8 @@ mod tests {
             }],
             outputs: vec![Port { id: 2, width: 64 }],
         };
-        let lowered = lower_add_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+        let lowered =
+            lower_binary_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(
             lowered.instructions,
             vec![
@@ -951,7 +1142,7 @@ mod tests {
         let temporaries = [Gpr::Rax, Gpr::R8];
         for left_first in [true, false] {
             let lowered =
-                lower_add_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
+                lower_binary_dag(&sum4(left_first), &inputs, &temporaries, Gpr::Rax).unwrap();
             assert_eq!(lowered.node_plans[2].reused_value, Some(4));
             if left_first {
                 assert_eq!(lowered.instructions.len(), 5);
@@ -984,7 +1175,7 @@ mod tests {
         };
         let mut left = 0;
         for output in 2..102 {
-            region.nodes.push(AddNode {
+            region.nodes.push(Node::Add {
                 width: 64,
                 output,
                 left,
@@ -996,7 +1187,8 @@ mod tests {
             id: left,
             width: 64,
         });
-        let lowered = lower_add_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
+        let lowered =
+            lower_binary_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(lowered.instructions.len(), 101);
         assert!(
             lowered.node_plans[1..]
@@ -1007,7 +1199,7 @@ mod tests {
 
     #[test]
     fn independent_live_results_report_register_pressure() {
-        let error = lower_add_dag(
+        let error = lower_binary_dag(
             &sum4(true),
             &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx],
             &[Gpr::Rax],

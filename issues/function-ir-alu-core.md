@@ -4,7 +4,7 @@ status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
 blocked-by: [function-ir-x86-lowering-generator]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 
 After the Add-DAG lowering path is executable, extend the official pure
@@ -33,3 +33,21 @@ framework without a concrete consumer.
 - **[[function-ir-x86-lowering-generator]]** supplies the executable lowering
   and certificate composition boundary that new operation rules extend.
 
+## Progress, 2026-09-01
+
+The official `Node` family now has fixed-width constants, modular add/subtract,
+AND/OR/XOR, three immediate shifts, and signed and unsigned less-than. Compact
+validity generation rejects width and comparison-result mistakes, and direct
+semantic equations check at both 8 and 64 bits.
+
+The first backend slice generalizes the former Add-only selector to 64-bit
+register-register Add/Sub/AND/OR/XOR. A mixed DAG with two simultaneously live
+subexpressions is selected, allocated, rendered, decoded by the x86 model, and
+kernel-checked against `RegionHolds`. The reusable placement theorem uses
+direct equality elimination: spelling the same substitution through generic
+congruence and transitivity crossed the existing kernel fuel rail.
+
+The issue remains open for constants/immediate encodings, shifts, and
+comparison materialization. Those are intentionally the next slice because
+they break the current accidental assumption that every selected instruction
+is a three-byte destructive register-register operation.

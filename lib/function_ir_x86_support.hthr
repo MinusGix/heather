@@ -36,14 +36,15 @@ theorem placed_after_move<M>(values: Valuation(), id: Nat,
     trans(placed, sym(moved))
 }
 
-theorem placed_after_add<M>(values: Valuation(), output, left, right: Nat,
+theorem placed_after_binary<M>(values: Valuation(), output, left, right: Nat,
+    operation: BitVec(64) → BitVec(64) → BitVec(64),
     left_register, right_register, destination: Gpr,
     before, after: MachineState<M>,
     equation: values(64, output) =
-        bitvec::add(64, values(64, left), values(64, right)),
+        operation(values(64, left), values(64, right)),
     left_placed: ValuePlaced(values, left, left_register, before),
     right_placed: ValuePlaced(values, right, right_register, before),
-    computed: read_gpr(destination, after.gprs) = bitvec::add(64,
+    computed: read_gpr(destination, after.gprs) = operation(
         read_gpr(left_register, before.gprs),
         read_gpr(right_register, before.gprs))):
     ValuePlaced(values, output, destination, after)
@@ -51,11 +52,12 @@ theorem placed_after_add<M>(values: Valuation(), output, left, right: Nat,
     apply trans;
     give equation;
     apply trans;
-    give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::add(64, ·, values(64, right)), left_placed);
-    apply trans;
-    give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::add(64, read_gpr(left_register, before.gprs), ·),
-        right_placed);
+    give j(left_placed,
+        λ found _ => operation(values(64, left), values(64, right)) =
+            operation(found, read_gpr(right_register, before.gprs)),
+        j(right_placed,
+            λ found _ => operation(values(64, left), values(64, right)) =
+                operation(values(64, left), found),
+            refl));
     sym(computed)
 }

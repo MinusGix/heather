@@ -57,6 +57,8 @@ fn one(n: Nat) → BitVec(n) {
     }
 }
 
+fn ofBool(value: Bool) → BitVec(1) { from_bits(1, [value]) }
+
 fn get(n: Nat, x: BitVec(n), i: Fin(n)) → Bool { x.bits[i] }
 
 fn set(n: Nat) → BitVec(n) → Fin(n) → Bool → BitVec(n) {
@@ -640,6 +642,16 @@ fn signed_overflow_add(n: Nat, a, b: BitVec(n)) → Bool {
 fn signed_overflow_sub(n: Nat, a, b: BitVec(n)) → Bool {
     bool::not(bool_eq(sign_bit(n, a), sign_bit(n, b))) &&
     bool::not(bool_eq(sign_bit(n, sub(n, a, b)), sign_bit(n, a)))
+}
+
+// Executable comparison results used by instruction semantics and IRs. The
+// proposition-valued interpretations above remain the proof-facing boundary.
+fn unsigned_lt_bit(n: Nat, a, b: BitVec(n)) → Bool {
+    borrow_sub_bit(n, a, b)
+}
+
+fn signed_lt_bit(n: Nat, a, b: BitVec(n)) → Bool {
+    xor_bit(sign_bit(n, sub(n, a, b)), signed_overflow_sub(n, a, b))
 }
 
 // ---------------------------------------------------------------------------

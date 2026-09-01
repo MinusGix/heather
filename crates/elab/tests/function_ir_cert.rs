@@ -4,7 +4,7 @@
 
 mod support;
 
-use heather_elab::function_ir_cert::{self as cert, AddNode, Port, Region};
+use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -40,9 +40,153 @@ fn function_ir_certificate_generator_suite() {
         return;
     }
     generated_sum4_certificates_check(&base);
+    generated_alu_core_checks(&base);
     stale_model_is_rejected(&base);
     generated_sparse_dag_checks(&base);
     generated_chain_checks(&base, 100);
+}
+
+fn alu_core() -> Region {
+    Region {
+        inputs: vec![
+            Port { id: 0, width: 8 },
+            Port { id: 1, width: 8 },
+            Port { id: 10, width: 64 },
+            Port { id: 11, width: 64 },
+        ],
+        nodes: vec![
+            Node::Const {
+                width: 8,
+                output: 2,
+                value: 255,
+            },
+            Node::Add {
+                width: 8,
+                output: 3,
+                left: 0,
+                right: 2,
+            },
+            Node::Sub {
+                width: 8,
+                output: 4,
+                left: 3,
+                right: 1,
+            },
+            Node::BitAnd {
+                width: 8,
+                output: 5,
+                left: 4,
+                right: 0,
+            },
+            Node::BitOr {
+                width: 8,
+                output: 6,
+                left: 5,
+                right: 1,
+            },
+            Node::BitXor {
+                width: 8,
+                output: 7,
+                left: 6,
+                right: 2,
+            },
+            Node::ShiftLeft {
+                width: 8,
+                output: 8,
+                value: 7,
+                amount: 2,
+            },
+            Node::LogicalShiftRight {
+                width: 8,
+                output: 9,
+                value: 8,
+                amount: 1,
+            },
+            Node::ArithmeticShiftRight {
+                width: 64,
+                output: 12,
+                value: 10,
+                amount: 3,
+            },
+            Node::UnsignedLessThan {
+                width: 8,
+                output: 13,
+                left: 9,
+                right: 1,
+            },
+            Node::SignedLessThan {
+                width: 64,
+                output: 14,
+                left: 10,
+                right: 11,
+            },
+            Node::Const {
+                width: 64,
+                output: 15,
+                value: 42,
+            },
+            Node::Add {
+                width: 64,
+                output: 16,
+                left: 11,
+                right: 15,
+            },
+        ],
+        outputs: vec![
+            Port { id: 9, width: 8 },
+            Port { id: 12, width: 64 },
+            Port { id: 13, width: 1 },
+            Port { id: 14, width: 1 },
+            Port { id: 16, width: 64 },
+        ],
+    }
+}
+
+fn generated_alu_core_checks(base: &Elaborator) {
+    let region = alu_core();
+    let raw = cert::render_region_function("generated_alu_core_raw", &region);
+    let proof = cert::generate(
+        "generated_alu_core_valid",
+        "generated_alu_core_raw()",
+        &region,
+    )
+    .expect("mixed ALU model");
+    let source = format!(
+        "import function_ir;\nimport list;\nimport logic;\nimport nat;\n{raw}\n{}",
+        proof.text,
+    );
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_generated_alu_core", &source) {
+        panic!(
+            "generated mixed ALU certificate did not check: {}",
+            error.render(&source),
+        );
+    }
+
+    let mut wrong_operand_width = region.clone();
+    wrong_operand_width.nodes[3] = Node::BitAnd {
+        width: 64,
+        output: 5,
+        left: 4,
+        right: 0,
+    };
+    let message = cert::generate(
+        "wrong_operand_width",
+        "generated_alu_core_raw()",
+        &wrong_operand_width,
+    )
+    .unwrap_err();
+    assert!(message.contains("not requested width 64"), "{message}");
+
+    let mut wrong_comparison_output = region;
+    wrong_comparison_output.outputs[2].width = 8;
+    let message = cert::generate(
+        "wrong_comparison_output",
+        "generated_alu_core_raw()",
+        &wrong_comparison_output,
+    )
+    .unwrap_err();
+    assert!(message.contains("not requested width 8"), "{message}");
 }
 
 #[test]
@@ -60,7 +204,7 @@ fn checked_example_certificates_are_current() {
 fn add64() -> Region {
     Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
-        nodes: vec![AddNode {
+        nodes: vec![Node::Add {
             width: 64,
             output: 2,
             left: 0,
@@ -106,13 +250,13 @@ fn checked_example_certificate_module() -> String {
 }
 
 fn sum4(left_first: bool) -> Region {
-    let left = AddNode {
+    let left = Node::Add {
         width: 64,
         output: 4,
         left: 0,
         right: 1,
     };
-    let right = AddNode {
+    let right = Node::Add {
         width: 64,
         output: 5,
         left: 2,
@@ -129,7 +273,7 @@ fn sum4(left_first: bool) -> Region {
             vec![
                 left,
                 right,
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 6,
                     left: 4,
@@ -140,7 +284,7 @@ fn sum4(left_first: bool) -> Region {
             vec![
                 right,
                 left,
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 6,
                     left: 4,
@@ -180,7 +324,12 @@ fn generated_sum4_certificates_check(base: &Elaborator) {
 
 fn stale_model_is_rejected(base: &Elaborator) {
     let mut stale = sum4(false);
-    stale.nodes[2].left = 5;
+    stale.nodes[2] = Node::Add {
+        width: 64,
+        output: 6,
+        left: 5,
+        right: 5,
+    };
     let emission = cert::generate("dishonest_sum4_valid", "sum4_right_first_raw()", &stale)
         .expect("the stale model is internally valid");
     let source = format!(
@@ -234,25 +383,25 @@ fn generated_sparse_dag_checks(base: &Elaborator) {
             Port { id: 7, width: 64 },
         ],
         nodes: vec![
-            AddNode {
+            Node::Add {
                 width: 8,
                 output: top - 8,
                 left: top - 10,
                 right: top - 9,
             },
-            AddNode {
+            Node::Add {
                 width: 64,
                 output: 60,
                 left: 42,
                 right: 7,
             },
-            AddNode {
+            Node::Add {
                 width: 64,
                 output: 59,
                 left: 60,
                 right: 42,
             },
-            AddNode {
+            Node::Add {
                 width: 64,
                 output: 58,
                 left: 60,
@@ -289,7 +438,7 @@ fn chain(node_count: u64) -> Region {
     };
     let mut previous = 1;
     for output in 2..node_count + 2 {
-        region.nodes.push(AddNode {
+        region.nodes.push(Node::Add {
             width: 64,
             output,
             left: previous,

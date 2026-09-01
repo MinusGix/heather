@@ -3,7 +3,7 @@
 
 mod support;
 
-use heather_elab::function_ir_cert::{AddNode, Port, Region};
+use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
 use heather_elab::{ElabError, Elaborator};
 
@@ -53,6 +53,32 @@ fn function_ir_x86_suite() {
 }
 
 #[test]
+fn generated_mixed_binary_alu_dag_checks() {
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let region = mixed_binary_alu();
+    let raw = cert::render_region_function("mixed_binary_alu_raw", &region);
+    let emission = lower::generate(
+        "mixed_binary_alu_x86",
+        "mixed_binary_alu_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx, Gpr::Rcx],
+        &[Gpr::Rax, Gpr::R8],
+        Gpr::Rax,
+    )
+    .expect("lower mixed binary ALU DAG");
+    assert_eq!(emission.lowered.node_plans.len(), 5);
+    assert_eq!(emission.lowered.instructions.len(), 7);
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("function_ir_mixed_alu_x86", &source) {
+        panic!(
+            "generated mixed binary ALU artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
 fn checked_example_x86_lowerings_are_current() {
     let expected = checked_example_lowering_module();
     if std::env::var_os("UPDATE_FUNCTION_IR_X86").is_some() {
@@ -97,7 +123,7 @@ fn generated_right_first_sum4_checks() {
 fn add64() -> Region {
     Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
-        nodes: vec![AddNode {
+        nodes: vec![Node::Add {
             width: 64,
             output: 2,
             left: 0,
@@ -108,13 +134,13 @@ fn add64() -> Region {
 }
 
 fn sum4(left_first: bool) -> Region {
-    let left = AddNode {
+    let left = Node::Add {
         width: 64,
         output: 4,
         left: 0,
         right: 1,
     };
-    let right = AddNode {
+    let right = Node::Add {
         width: 64,
         output: 5,
         left: 2,
@@ -126,7 +152,7 @@ fn sum4(left_first: bool) -> Region {
             vec![
                 left,
                 right,
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 6,
                     left: 4,
@@ -137,7 +163,7 @@ fn sum4(left_first: bool) -> Region {
             vec![
                 right,
                 left,
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 6,
                     left: 4,
@@ -146,6 +172,45 @@ fn sum4(left_first: bool) -> Region {
             ]
         },
         outputs: vec![Port { id: 6, width: 64 }],
+    }
+}
+
+fn mixed_binary_alu() -> Region {
+    Region {
+        inputs: (0..4).map(|id| Port { id, width: 64 }).collect(),
+        nodes: vec![
+            Node::BitAnd {
+                width: 64,
+                output: 4,
+                left: 0,
+                right: 1,
+            },
+            Node::BitXor {
+                width: 64,
+                output: 5,
+                left: 2,
+                right: 3,
+            },
+            Node::Sub {
+                width: 64,
+                output: 6,
+                left: 4,
+                right: 5,
+            },
+            Node::BitOr {
+                width: 64,
+                output: 7,
+                left: 6,
+                right: 1,
+            },
+            Node::Add {
+                width: 64,
+                output: 8,
+                left: 7,
+                right: 2,
+            },
+        ],
+        outputs: vec![Port { id: 8, width: 64 }],
     }
 }
 
@@ -194,7 +259,12 @@ fn generated_module(body: &str) -> String {
 
 fn stale_lowering_model_is_rejected(base: &Elaborator) {
     let mut stale = add64();
-    stale.nodes[0].output = 3;
+    stale.nodes[0] = Node::Add {
+        width: 64,
+        output: 3,
+        left: 0,
+        right: 1,
+    };
     stale.outputs[0].id = 3;
     let emission = lower::generate(
         "dishonest_add64_x86",

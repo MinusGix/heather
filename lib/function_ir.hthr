@@ -32,9 +32,22 @@ fn push_port(port: Port, ports: Ports) → Ports {
 }
 
 // Operation-specific fields keep raw construction simple while making the
-// operation's input and output arities explicit. Future multi-result
-// operations may carry several output IDs in their own constructor.
-inductive Node { Add(width: Nat, output: Nat, left: Nat, right: Nat) }
+// operation's input and output arities explicit. Shift counts are immediate
+// mathematical Nats at this layer; target masking is a lowering concern.
+// Comparisons consume `width`-bit operands and produce a one-bit BitVec.
+inductive Node {
+    Const(width: Nat, output: Nat, value: Nat),
+    Add(width: Nat, output: Nat, left: Nat, right: Nat),
+    Sub(width: Nat, output: Nat, left: Nat, right: Nat),
+    BitAnd(width: Nat, output: Nat, left: Nat, right: Nat),
+    BitOr(width: Nat, output: Nat, left: Nat, right: Nat),
+    BitXor(width: Nat, output: Nat, left: Nat, right: Nat),
+    ShiftLeft(width: Nat, output: Nat, value: Nat, amount: Nat),
+    LogicalShiftRight(width: Nat, output: Nat, value: Nat, amount: Nat),
+    ArithmeticShiftRight(width: Nat, output: Nat, value: Nat, amount: Nat),
+    UnsignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
+    SignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
+}
 
 record Region {
     inputs: Ports,
@@ -43,7 +56,19 @@ record Region {
 }
 
 fn node_output(node: Node) → Port {
-    match node { Add(width, output, _, _) => Port(output, width) }
+    match node {
+        Const(width, output, _) => Port(output, width),
+        Add(width, output, _, _) => Port(output, width),
+        Sub(width, output, _, _) => Port(output, width),
+        BitAnd(width, output, _, _) => Port(output, width),
+        BitOr(width, output, _, _) => Port(output, width),
+        BitXor(width, output, _, _) => Port(output, width),
+        ShiftLeft(width, output, _, _) => Port(output, width),
+        LogicalShiftRight(width, output, _, _) => Port(output, width),
+        ArithmeticShiftRight(width, output, _, _) => Port(output, width),
+        UnsignedLessThan(_, output, _, _) => Port(output, 1),
+        SignedLessThan(_, output, _, _) => Port(output, 1),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,24 +262,204 @@ theorem input_entries_indexed_cons(
     ⟨found, tail⟩
 }
 
+fn ProducedAt(directory: PortDirectory, index, id, width: Nat) → Type {
+    HasDirectoryPortAt(directory, id, width, NodeAt(index))
+}
+
+fn BinaryNodeIndexed(directory: PortDirectory, index, width, output,
+    left, right: Nat) → Type
+{
+    ProducedAt(directory, index, output, width) ∧
+    (HasAvailableDirectoryPort(directory, left, width, index) ∧
+     HasAvailableDirectoryPort(directory, right, width, index))
+}
+
+fn UnaryImmediateNodeIndexed(directory: PortDirectory, index, width, output,
+    value: Nat) → Type
+{
+    ProducedAt(directory, index, output, width) ∧
+    HasAvailableDirectoryPort(directory, value, width, index)
+}
+
+fn CompareNodeIndexed(directory: PortDirectory, index, width, output,
+    left, right: Nat) → Type
+{
+    ProducedAt(directory, index, output, 1) ∧
+    (HasAvailableDirectoryPort(directory, left, width, index) ∧
+     HasAvailableDirectoryPort(directory, right, width, index))
+}
+
 fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
     match node {
+        Const(width, output, _) => ProducedAt(directory, index, output, width),
         Add(width, output, left, right) =>
-            HasDirectoryPortAt(directory, output, width, NodeAt(index)) ∧
-            (HasAvailableDirectoryPort(directory, left, width, index) ∧
-             HasAvailableDirectoryPort(directory, right, width, index)),
+            BinaryNodeIndexed(directory, index, width, output, left, right),
+        Sub(width, output, left, right) =>
+            BinaryNodeIndexed(directory, index, width, output, left, right),
+        BitAnd(width, output, left, right) =>
+            BinaryNodeIndexed(directory, index, width, output, left, right),
+        BitOr(width, output, left, right) =>
+            BinaryNodeIndexed(directory, index, width, output, left, right),
+        BitXor(width, output, left, right) =>
+            BinaryNodeIndexed(directory, index, width, output, left, right),
+        ShiftLeft(width, output, value, _) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, value),
+        LogicalShiftRight(width, output, value, _) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, value),
+        ArithmeticShiftRight(width, output, value, _) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, value),
+        UnsignedLessThan(width, output, left, right) =>
+            CompareNodeIndexed(directory, index, width, output, left, right),
+        SignedLessThan(width, output, left, right) =>
+            CompareNodeIndexed(directory, index, width, output, left, right),
     }
+}
+
+theorem node_indexed_const_fields(
+    {directory: PortDirectory}, {index, width, output: Nat},
+    output_found: ProducedAt(directory, index, output, width)):
+    ProducedAt(directory, index, output, width)
+{
+    output_found
+}
+
+theorem node_indexed_binary(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found:
+        ProducedAt(directory, index, output, width),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    BinaryNodeIndexed(directory, index, width, output, left, right)
+{
+    ⟨output_found, ⟨left_found, right_found⟩⟩
+}
+
+theorem node_indexed_unary_immediate(
+    {directory: PortDirectory}, {index, width, output, value: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    value_found: HasAvailableDirectoryPort(directory, value, width, index)):
+    UnaryImmediateNodeIndexed(directory, index, width, output, value)
+{
+    ⟨output_found, value_found⟩
+}
+
+theorem node_indexed_compare(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, 1),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    CompareNodeIndexed(directory, index, width, output, left, right)
+{
+    ⟨output_found, ⟨left_found, right_found⟩⟩
+}
+
+theorem node_indexed_const(
+    {directory: PortDirectory}, {index, width, output, value: Nat},
+    output_found: ProducedAt(directory, index, output, width)):
+    NodeIndexedIn(directory, index, Const(width, output, value))
+{
+    node_indexed_const_fields(output_found)
 }
 
 theorem node_indexed_add(
     {directory: PortDirectory}, {index, width, output, left, right: Nat},
-    output_found:
-        HasDirectoryPortAt(directory, output, width, NodeAt(index)),
+    output_found: ProducedAt(directory, index, output, width),
     left_found: HasAvailableDirectoryPort(directory, left, width, index),
     right_found: HasAvailableDirectoryPort(directory, right, width, index)):
     NodeIndexedIn(directory, index, Add(width, output, left, right))
 {
-    ⟨output_found, ⟨left_found, right_found⟩⟩
+    node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_sub(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index, Sub(width, output, left, right))
+{
+    node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_bitand(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index, BitAnd(width, output, left, right))
+{
+    node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_bitor(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index, BitOr(width, output, left, right))
+{
+    node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_bitxor(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index, BitXor(width, output, left, right))
+{
+    node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_shift_left(
+    {directory: PortDirectory}, {index, width, output, value, amount: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    value_found: HasAvailableDirectoryPort(directory, value, width, index)):
+    NodeIndexedIn(directory, index, ShiftLeft(width, output, value, amount))
+{
+    node_indexed_unary_immediate(output_found, value_found)
+}
+
+theorem node_indexed_logical_shift_right(
+    {directory: PortDirectory}, {index, width, output, value, amount: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    value_found: HasAvailableDirectoryPort(directory, value, width, index)):
+    NodeIndexedIn(directory, index,
+        LogicalShiftRight(width, output, value, amount))
+{
+    node_indexed_unary_immediate(output_found, value_found)
+}
+
+theorem node_indexed_arithmetic_shift_right(
+    {directory: PortDirectory}, {index, width, output, value, amount: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    value_found: HasAvailableDirectoryPort(directory, value, width, index)):
+    NodeIndexedIn(directory, index,
+        ArithmeticShiftRight(width, output, value, amount))
+{
+    node_indexed_unary_immediate(output_found, value_found)
+}
+
+theorem node_indexed_unsigned_less_than(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, 1),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index,
+        UnsignedLessThan(width, output, left, right))
+{
+    node_indexed_compare(output_found, left_found, right_found)
+}
+
+theorem node_indexed_signed_less_than(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, 1),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index,
+        SignedLessThan(width, output, left, right))
+{
+    node_indexed_compare(output_found, left_found, right_found)
 }
 
 fn NodesIndexed(directory: PortDirectory, nodes: List<Node>) → Nat → Type {
@@ -337,9 +542,40 @@ fn Valuation() → Type { (width: Nat) → Nat → BitVec(width) }
 
 fn NodeHolds(values: Valuation(), node: Node) → Type {
     match node {
+        Const(width, output, value) =>
+            values(width, output) = bitvec::ofNat(width, value),
         Add(width, output, left, right) =>
             values(width, output) =
                 bitvec::add(width, values(width, left), values(width, right)),
+        Sub(width, output, left, right) =>
+            values(width, output) =
+                bitvec::sub(width, values(width, left), values(width, right)),
+        BitAnd(width, output, left, right) =>
+            values(width, output) =
+                bitvec::band(width, values(width, left), values(width, right)),
+        BitOr(width, output, left, right) =>
+            values(width, output) =
+                bitvec::bor(width, values(width, left), values(width, right)),
+        BitXor(width, output, left, right) =>
+            values(width, output) =
+                bitvec::bxor(width, values(width, left), values(width, right)),
+        ShiftLeft(width, output, value, amount) =>
+            values(width, output) =
+                bitvec::shift_left(width, values(width, value), amount),
+        LogicalShiftRight(width, output, value, amount) =>
+            values(width, output) =
+                bitvec::shift_right(width, values(width, value), amount),
+        ArithmeticShiftRight(width, output, value, amount) =>
+            values(width, output) =
+                bitvec::arithmetic_shift_right(width, values(width, value), amount),
+        UnsignedLessThan(width, output, left, right) =>
+            values(1, output) = bitvec::ofBool(
+                bitvec::unsigned_lt_bit(width,
+                    values(width, left), values(width, right))),
+        SignedLessThan(width, output, left, right) =>
+            values(1, output) = bitvec::ofBool(
+                bitvec::signed_lt_bit(width,
+                    values(width, left), values(width, right))),
     }
 }
 

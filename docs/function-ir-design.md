@@ -70,14 +70,17 @@ alone does not require materialization.
 
 ## 2. Initial semantic scope
 
-The first FunctionIR fragment should be deliberately small:
+The first FunctionIR fragment is deliberately small:
 
 - typed function inputs and outputs;
 - a pure acyclic region;
 - explicit SSA/dataflow values;
 - fixed-width bitvectors;
-- constants if the first examples need them;
-- `Add`; and
+- constants;
+- modular `Add` and `Sub`;
+- bitwise AND, OR, and XOR;
+- immediate logical/arithmetic shifts;
+- signed and unsigned less-than; and
 - region outputs, which serve as the initial return mechanism.
 
 It should have no general effect structure yet. In particular, the initial
@@ -660,7 +663,7 @@ rails. The performance debts found while building it remain separate language
 issues: frontend sharing of large proof composition, named-argument expected
 types, and run-aware reduction of very large closed Nat order comparisons.
 
-## 13. Executable Add-DAG lowering
+## 13. Executable DAG lowering
 
 The first executable, proof-producing x86 lowering now closes
 [[function-ir-x86-lowering-generator]]. It is a vertical compiler slice:
@@ -686,10 +689,21 @@ in parallel with the primary module. Host tests cover deterministic selection,
 last-use reuse, a long constant-pressure chain, precise pressure decline, and
 stale-model rejection at conversion.
 
-The initial boundary deliberately remains small: `Add` at width 64, one
-result, declared input/temporary locations, and no spills. The internal plan
-already separates selected instructions, placements, liveness, and emitted
-proofs enough for the next operation family and a later spill policy.
+The initial boundary deliberately began small: `Add` at width 64, one result,
+declared input/temporary locations, and no spills. The internal plan separates
+selected instructions, placements, liveness, and emitted proofs enough for new
+operation families and a later spill policy.
+
+The first ALU expansion confirms that boundary. FunctionIR now denotes
+constants, modular subtraction, bitwise operations, immediate shifts, and
+signed/unsigned comparisons at arbitrary widths. The executable x86 subset
+handles the five 64-bit register-register binary operations Add/Sub/AND/OR/XOR
+through the same allocator and placement rule. A mixed graph keeps two
+subexpressions live, selects seven instructions, and checks through canonical
+encoding, decoded execution, and final FunctionIR refinement. Constants,
+shifts, and comparisons remain separate backend work because they introduce
+variable-length immediate encodings, count normalization, and flag-to-value
+materialization rather than another instance of the destructive RR rule.
 
 ## 14. Next implementation path
 

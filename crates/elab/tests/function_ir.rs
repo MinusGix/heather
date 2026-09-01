@@ -40,7 +40,51 @@ fn function_ir_suite() {
     let base = elaborated();
     checked_add64_is_available(&base);
     sum4_schedules_and_result_are_available(&base);
+    alu_node_semantics_are_available(&base);
     wrong_add64_observation_is_refused(&base);
+}
+
+fn alu_node_semantics_are_available(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import function_ir;
+import bitvec;
+
+theorem const8(values: Valuation(),
+    equation: NodeHolds(values, Const(8, 2, 255))):
+    values(8, 2) = bitvec::ofNat(8, 255)
+{
+    equation
+}
+
+theorem xor64(values: Valuation(),
+    equation: NodeHolds(values, BitXor(64, 2, 0, 1))):
+    values(64, 2) = bitvec::bxor(64, values(64, 0), values(64, 1))
+{
+    equation
+}
+
+theorem shift8(values: Valuation(),
+    equation: NodeHolds(values, LogicalShiftRight(8, 2, 0, 3))):
+    values(8, 2) = bitvec::shift_right(8, values(8, 0), 3)
+{
+    equation
+}
+
+theorem signed_compare64(values: Valuation(),
+    equation: NodeHolds(values, SignedLessThan(64, 2, 0, 1))):
+    values(1, 2) = bitvec::ofBool(bitvec::signed_lt_bit(64,
+        values(64, 0), values(64, 1)))
+{
+    equation
+}
+"#;
+    if let Err(err) = e.elab_module_source("function_ir_alu_semantics", src) {
+        panic!(
+            "FunctionIR ALU semantics did not check: {}",
+            err.render(src)
+        );
+    }
 }
 
 fn checked_add64_is_available(base: &Elaborator) {

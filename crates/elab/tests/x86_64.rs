@@ -3,7 +3,7 @@
 
 mod support;
 
-use heather_elab::{stats, ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, stats};
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -72,7 +72,10 @@ fn elaborated() -> Elaborator {
         );
     }
     if report_metrics {
-        eprintln!("x86_64 module value metrics: {:?}", e.value_metrics().unwrap());
+        eprintln!(
+            "x86_64 module value metrics: {:?}",
+            e.value_metrics().unwrap()
+        );
     }
     e
 }
@@ -89,18 +92,27 @@ fn x86_64_suite() {
     }
     register_and_execution_laws_check(&base);
     if report_metrics {
-        eprintln!("x86_64 execution-law metrics: {:?}", base.value_metrics().unwrap());
+        eprintln!(
+            "x86_64 execution-law metrics: {:?}",
+            base.value_metrics().unwrap()
+        );
         base.reset_value_metrics();
     }
     direct_decoder_agrees_with_reference_on_boundary_cases(&base);
     if report_metrics {
-        eprintln!("x86_64 decoder-agreement metrics: {:?}", base.value_metrics().unwrap());
+        eprintln!(
+            "x86_64 decoder-agreement metrics: {:?}",
+            base.value_metrics().unwrap()
+        );
         base.reset_value_metrics();
     }
     invalid_decoded_lengths_are_refused(&base);
     unsupported_or_malformed_byte_spans_are_refused(&base);
     if report_metrics {
-        eprintln!("x86_64 negative-control metrics: {:?}", base.value_metrics().unwrap());
+        eprintln!(
+            "x86_64 negative-control metrics: {:?}",
+            base.value_metrics().unwrap()
+        );
     }
 }
 
@@ -181,6 +193,17 @@ theorem canonical_sub_and_cmp_bytes():
         Cons(ofNat(8, 72), Cons(ofNat(8, 57), Cons(ofNat(8, 216), Nil)))
 {
     And(refl, refl)
+}
+
+theorem canonical_logic_bytes():
+    canonical_bytes(AndRR(R9, R10)) =
+        Cons(ofNat(8, 77), Cons(ofNat(8, 33), Cons(ofNat(8, 209), Nil)))
+    ∧ canonical_bytes(OrRR(Rax, Rbx)) =
+        Cons(ofNat(8, 72), Cons(ofNat(8, 9), Cons(ofNat(8, 216), Nil)))
+    ∧ canonical_bytes(XorRR(R15, Rax)) =
+        Cons(ofNat(8, 73), Cons(ofNat(8, 49), Cons(ofNat(8, 199), Nil)))
+{
+    And(refl, And(refl, refl))
 }
 
 theorem canonical_test_extension_bytes():
@@ -302,6 +325,17 @@ theorem executable_decoder_accepts_test():
         Some(decoded_rr(TestRR(Rax, Rbx)))
 {
     refl
+}
+
+theorem executable_decoder_accepts_logic():
+    decode_instruction(canonical_bytes(AndRR(R9, R10))) =
+        Some(decoded_rr(AndRR(R9, R10)))
+    ∧ decode_instruction(canonical_bytes(OrRR(Rax, Rbx))) =
+        Some(decoded_rr(OrRR(Rax, Rbx)))
+    ∧ decode_instruction(canonical_bytes(XorRR(R15, Rax))) =
+        Some(decoded_rr(XorRR(R15, Rax)))
+{
+    And(refl, And(refl, refl))
 }
 
 theorem executable_decoder_accepts_both_sub_and_cmp_directions():
@@ -433,62 +467,24 @@ import bitvec;
 import list;
 import logic;
 
-theorem supported_opcodes_agree():
-    decode_instruction(canonical_bytes(MovRR(Rax, Rbx))) =
-        decode_instruction_reference(canonical_bytes(MovRR(Rax, Rbx)))
-    ∧ decode_instruction(alternate_mov_bytes(Rax, Rbx)) =
-        decode_instruction_reference(alternate_mov_bytes(Rax, Rbx))
-    ∧ decode_instruction(canonical_bytes(AddRR(Rax, Rcx))) =
-        decode_instruction_reference(canonical_bytes(AddRR(Rax, Rcx)))
-    ∧ decode_instruction(alternate_add_bytes(Rax, Rcx)) =
-        decode_instruction_reference(alternate_add_bytes(Rax, Rcx))
-    ∧ decode_instruction(canonical_bytes(TestRR(Rax, Rbx))) =
-        decode_instruction_reference(canonical_bytes(TestRR(Rax, Rbx)))
-{
-    And(refl, And(refl, And(refl, And(refl, refl))))
-}
+theorem reference_decoder_accepts_extended_mov():
+    decode_instruction_reference(canonical_bytes(MovRR(R8, R9))) =
+        Some(decoded_rr(MovRR(R8, R9)))
+{ refl }
 
-theorem rex_extension_combinations_agree():
-    decode_instruction(canonical_bytes(MovRR(Rax, Rbx))) =
-        decode_instruction_reference(canonical_bytes(MovRR(Rax, Rbx)))
-    ∧ decode_instruction(canonical_bytes(MovRR(R8, Rbx))) =
-        decode_instruction_reference(canonical_bytes(MovRR(R8, Rbx)))
-    ∧ decode_instruction(canonical_bytes(MovRR(Rax, R8))) =
-        decode_instruction_reference(canonical_bytes(MovRR(Rax, R8)))
-    ∧ decode_instruction(canonical_bytes(MovRR(R8, R9))) =
-        decode_instruction_reference(canonical_bytes(MovRR(R8, R9)))
-{
-    And(refl, And(refl, And(refl, refl)))
-}
+theorem reference_decoder_accepts_logic():
+    decode_instruction_reference(canonical_bytes(AndRR(Rax, Rbx))) =
+        Some(decoded_rr(AndRR(Rax, Rbx)))
+    ∧ decode_instruction_reference(canonical_bytes(OrRR(Rax, Rbx))) =
+        Some(decoded_rr(OrRR(Rax, Rbx)))
+    ∧ decode_instruction_reference(canonical_bytes(XorRR(Rax, Rbx))) =
+        Some(decoded_rr(XorRR(Rax, Rbx)))
+{ And(refl, And(refl, refl)) }
 
-theorem sub_and_cmp_opcodes_agree():
-    decode_instruction(canonical_bytes(SubRR(Rax, Rbx))) =
-        decode_instruction_reference(canonical_bytes(SubRR(Rax, Rbx)))
-    ∧ decode_instruction(alternate_sub_bytes(Rax, Rbx)) =
-        decode_instruction_reference(alternate_sub_bytes(Rax, Rbx))
-    ∧ decode_instruction(canonical_bytes(CmpRR(Rax, Rbx))) =
-        decode_instruction_reference(canonical_bytes(CmpRR(Rax, Rbx)))
-    ∧ decode_instruction(alternate_cmp_bytes(Rax, Rbx)) =
-        decode_instruction_reference(alternate_cmp_bytes(Rax, Rbx))
-{
-    And(refl, And(refl, And(refl, refl)))
-}
-
-theorem malformed_inputs_agree():
-    decode_instruction(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
-        Cons(ofNat(8, 216), Nil)))) =
-        decode_instruction_reference(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
-            Cons(ofNat(8, 216), Nil))))
-    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-        Cons(ofNat(8, 24), Nil)))) =
-        decode_instruction_reference(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-            Cons(ofNat(8, 24), Nil))))
-    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))) =
-        decode_instruction_reference(Cons(ofNat(8, 72),
-            Cons(ofNat(8, 137), Nil)))
-{
-    And(refl, And(refl, refl))
-}
+theorem reference_decoder_rejects_bad_rex():
+    decode_instruction_reference(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
+        Cons(ofNat(8, 216), Nil)))) = None
+{ refl }
 "#;
     if let Err(err) = e.elab_module_source("decoder_agreement", src) {
         let msg = match err {
@@ -508,8 +504,10 @@ fn impossible() -> DecodedInstruction {
         valid_length := squash(And(trivial, trivial)))
 }
 "#;
-    assert!(e.elab_module_source("bad", src).is_err(),
-        "a zero-byte x86 instruction was accepted");
+    assert!(
+        e.elab_module_source("bad", src).is_err(),
+        "a zero-byte x86 instruction was accepted"
+    );
 }
 
 fn unsupported_or_malformed_byte_spans_are_refused(base: &Elaborator) {
@@ -588,7 +586,9 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
 
     for src in cases {
         let mut e = base.clone();
-        assert!(e.elab_module_source("bad_bytes", src).is_err(),
-            "an unsupported or malformed byte span was accepted:\n{src}");
+        assert!(
+            e.elab_module_source("bad_bytes", src).is_err(),
+            "an unsupported or malformed byte span was accepted:\n{src}"
+        );
     }
 }

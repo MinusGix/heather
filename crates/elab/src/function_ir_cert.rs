@@ -12,18 +12,133 @@ pub struct Port {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AddNode {
-    pub width: u64,
-    pub output: u64,
-    pub left: u64,
-    pub right: u64,
+pub enum Node {
+    Const {
+        width: u64,
+        output: u64,
+        value: u64,
+    },
+    Add {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    Sub {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    BitAnd {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    BitOr {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    BitXor {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    ShiftLeft {
+        width: u64,
+        output: u64,
+        value: u64,
+        amount: u64,
+    },
+    LogicalShiftRight {
+        width: u64,
+        output: u64,
+        value: u64,
+        amount: u64,
+    },
+    ArithmeticShiftRight {
+        width: u64,
+        output: u64,
+        value: u64,
+        amount: u64,
+    },
+    UnsignedLessThan {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
+    SignedLessThan {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Region {
     pub inputs: Vec<Port>,
-    pub nodes: Vec<AddNode>,
+    pub nodes: Vec<Node>,
     pub outputs: Vec<Port>,
+}
+
+impl Node {
+    pub fn output(self) -> Port {
+        match self {
+            Node::Const { width, output, .. }
+            | Node::Add { width, output, .. }
+            | Node::Sub { width, output, .. }
+            | Node::BitAnd { width, output, .. }
+            | Node::BitOr { width, output, .. }
+            | Node::BitXor { width, output, .. }
+            | Node::ShiftLeft { width, output, .. }
+            | Node::LogicalShiftRight { width, output, .. }
+            | Node::ArithmeticShiftRight { width, output, .. } => Port { id: output, width },
+            Node::UnsignedLessThan { output, .. } | Node::SignedLessThan { output, .. } => Port {
+                id: output,
+                width: 1,
+            },
+        }
+    }
+
+    fn operands(self) -> Vec<Port> {
+        match self {
+            Node::Const { .. } => Vec::new(),
+            Node::ShiftLeft { width, value, .. }
+            | Node::LogicalShiftRight { width, value, .. }
+            | Node::ArithmeticShiftRight { width, value, .. } => {
+                vec![Port { id: value, width }]
+            }
+            Node::Add {
+                width, left, right, ..
+            }
+            | Node::Sub {
+                width, left, right, ..
+            }
+            | Node::BitAnd {
+                width, left, right, ..
+            }
+            | Node::BitOr {
+                width, left, right, ..
+            }
+            | Node::BitXor {
+                width, left, right, ..
+            }
+            | Node::UnsignedLessThan {
+                width, left, right, ..
+            }
+            | Node::SignedLessThan {
+                width, left, right, ..
+            } => {
+                vec![Port { id: left, width }, Port { id: right, width }]
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -119,14 +234,8 @@ pub fn generate(
     ));
     for (index, node) in region.nodes.iter().enumerate().rev() {
         let rank = index as u64;
-        let output = format!("{}()", port_fact_name(theorem_name, node.output));
-        let left = prove_available_from_fact(&entries, theorem_name, node.left, node.width, rank)?;
-        let right =
-            prove_available_from_fact(&entries, theorem_name, node.right, node.width, rank)?;
-        let head = format!(
-            "node_indexed_add(directory := {directory_name}(), index := {index}, width := {}, output := {}, left := {}, right := {}, output_found := {output}, left_found := {left}, right_found := {right})",
-            node.width, node.output, node.left, node.right,
-        );
+        let head =
+            render_node_indexed_proof(theorem_name, &directory_name, &entries, index, rank, *node)?;
         let nodes_name = node_list_name(theorem_name, index);
         let next_nodes_name = node_list_name(theorem_name, index + 1);
         let proof_name = nodes_proof_name(theorem_name, index);
@@ -193,12 +302,7 @@ pub fn render_region_function(name: &str, region: &Region) -> String {
     let nodes = region
         .nodes
         .iter()
-        .map(|n| {
-            format!(
-                "Add(width := {}, output := {}, left := {}, right := {})",
-                n.width, n.output, n.left, n.right
-            )
-        })
+        .map(|node| render_node(*node))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -223,17 +327,15 @@ fn directory_entries(region: &Region) -> Result<Vec<DirectoryEntry>, String> {
         )?;
     }
     for (index, node) in region.nodes.iter().enumerate() {
-        find_entry(&entries, node.left, node.width)
-            .map_err(|why| format!("node {index}'s left operand is invalid: {why}"))?;
-        find_entry(&entries, node.right, node.width)
-            .map_err(|why| format!("node {index}'s right operand is invalid: {why}"))?;
+        for (operand_index, operand) in node.operands().into_iter().enumerate() {
+            find_entry(&entries, operand.id, operand.width).map_err(|why| {
+                format!("node {index}'s operand {operand_index} is invalid: {why}")
+            })?;
+        }
         insert_entry(
             &mut entries,
             DirectoryEntry {
-                port: Port {
-                    id: node.output,
-                    width: node.width,
-                },
+                port: node.output(),
                 origin: Origin::Node(index as u64),
             },
         )
@@ -411,11 +513,184 @@ fn render_port(port: Port) -> String {
     format!("Port(id := {}, width := {})", port.id, port.width)
 }
 
-fn render_node(node: AddNode) -> String {
-    format!(
-        "Add(width := {}, output := {}, left := {}, right := {})",
-        node.width, node.output, node.left, node.right
-    )
+fn render_node(node: Node) -> String {
+    match node {
+        Node::Const {
+            width,
+            output,
+            value,
+        } => {
+            format!("Const(width := {width}, output := {output}, value := {value})")
+        }
+        Node::Add {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("Add", width, output, left, right),
+        Node::Sub {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("Sub", width, output, left, right),
+        Node::BitAnd {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("BitAnd", width, output, left, right),
+        Node::BitOr {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("BitOr", width, output, left, right),
+        Node::BitXor {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("BitXor", width, output, left, right),
+        Node::ShiftLeft {
+            width,
+            output,
+            value,
+            amount,
+        } => render_shift("ShiftLeft", width, output, value, amount),
+        Node::LogicalShiftRight {
+            width,
+            output,
+            value,
+            amount,
+        } => render_shift("LogicalShiftRight", width, output, value, amount),
+        Node::ArithmeticShiftRight {
+            width,
+            output,
+            value,
+            amount,
+        } => render_shift("ArithmeticShiftRight", width, output, value, amount),
+        Node::UnsignedLessThan {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("UnsignedLessThan", width, output, left, right),
+        Node::SignedLessThan {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("SignedLessThan", width, output, left, right),
+    }
+}
+
+fn render_binary(name: &str, width: u64, output: u64, left: u64, right: u64) -> String {
+    format!("{name}(width := {width}, output := {output}, left := {left}, right := {right})")
+}
+
+fn render_shift(name: &str, width: u64, output: u64, value: u64, amount: u64) -> String {
+    format!("{name}(width := {width}, output := {output}, value := {value}, amount := {amount})")
+}
+
+fn render_node_indexed_proof(
+    theorem_name: &str,
+    directory_name: &str,
+    entries: &[DirectoryEntry],
+    index: usize,
+    rank: u64,
+    node: Node,
+) -> Result<String, String> {
+    let output_port = node.output();
+    let output = format!("{}()", port_fact_name(theorem_name, output_port.id));
+    let common = format!(
+        "directory := {directory_name}(), index := {index}, width := {}, output := {}",
+        match node {
+            Node::UnsignedLessThan { width, .. } | Node::SignedLessThan { width, .. } => width,
+            _ => output_port.width,
+        },
+        output_port.id,
+    );
+    match node {
+        Node::Const { value, .. } => Ok(format!(
+            "node_indexed_const({common}, value := {value}, output_found := {output})"
+        )),
+        Node::ShiftLeft {
+            width,
+            value,
+            amount,
+            ..
+        }
+        | Node::LogicalShiftRight {
+            width,
+            value,
+            amount,
+            ..
+        }
+        | Node::ArithmeticShiftRight {
+            width,
+            value,
+            amount,
+            ..
+        } => {
+            let found = prove_available_from_fact(entries, theorem_name, value, width, rank)?;
+            let theorem = match node {
+                Node::ShiftLeft { .. } => "node_indexed_shift_left",
+                Node::LogicalShiftRight { .. } => "node_indexed_logical_shift_right",
+                Node::ArithmeticShiftRight { .. } => "node_indexed_arithmetic_shift_right",
+                _ => unreachable!(),
+            };
+            Ok(format!(
+                "{theorem}({common}, value := {value}, amount := {amount}, output_found := {output}, value_found := {found})"
+            ))
+        }
+        Node::Add {
+            width, left, right, ..
+        }
+        | Node::Sub {
+            width, left, right, ..
+        }
+        | Node::BitAnd {
+            width, left, right, ..
+        }
+        | Node::BitOr {
+            width, left, right, ..
+        }
+        | Node::BitXor {
+            width, left, right, ..
+        } => {
+            let left_found = prove_available_from_fact(entries, theorem_name, left, width, rank)?;
+            let right_found = prove_available_from_fact(entries, theorem_name, right, width, rank)?;
+            let theorem = match node {
+                Node::Add { .. } => "node_indexed_add",
+                Node::Sub { .. } => "node_indexed_sub",
+                Node::BitAnd { .. } => "node_indexed_bitand",
+                Node::BitOr { .. } => "node_indexed_bitor",
+                Node::BitXor { .. } => "node_indexed_bitxor",
+                _ => unreachable!(),
+            };
+            Ok(format!(
+                "{theorem}({common}, left := {left}, right := {right}, output_found := {output}, left_found := {left_found}, right_found := {right_found})"
+            ))
+        }
+        Node::UnsignedLessThan {
+            width, left, right, ..
+        }
+        | Node::SignedLessThan {
+            width, left, right, ..
+        } => {
+            let left_found = prove_available_from_fact(entries, theorem_name, left, width, rank)?;
+            let right_found = prove_available_from_fact(entries, theorem_name, right, width, rank)?;
+            let theorem = match node {
+                Node::UnsignedLessThan { .. } => "node_indexed_unsigned_less_than",
+                Node::SignedLessThan { .. } => "node_indexed_signed_less_than",
+                _ => unreachable!(),
+            };
+            Ok(format!(
+                "{theorem}({common}, left := {left}, right := {right}, output_found := {output}, left_found := {left_found}, right_found := {right_found})"
+            ))
+        }
+    }
 }
 
 fn render_bound(bound: Option<u64>) -> String {
@@ -515,12 +790,14 @@ mod tests {
             nodes: vec![],
             outputs: vec![],
         };
-        assert!(generate("bad", "bad()", &duplicate)
-            .unwrap_err()
-            .contains("already defined"));
+        assert!(
+            generate("bad", "bad()", &duplicate)
+                .unwrap_err()
+                .contains("already defined")
+        );
         let future_reference = Region {
             inputs: vec![Port { id: 0, width: 64 }],
-            nodes: vec![AddNode {
+            nodes: vec![Node::Add {
                 width: 64,
                 output: 1,
                 left: 0,
@@ -528,20 +805,22 @@ mod tests {
             }],
             outputs: vec![],
         };
-        assert!(generate("future", "future()", &future_reference)
-            .unwrap_err()
-            .contains("undefined"));
+        assert!(
+            generate("future", "future()", &future_reference)
+                .unwrap_err()
+                .contains("undefined")
+        );
 
         let duplicate_output = Region {
             inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
             nodes: vec![
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 2,
                     left: 0,
                     right: 1,
                 },
-                AddNode {
+                Node::Add {
                     width: 64,
                     output: 2,
                     left: 0,
@@ -550,17 +829,21 @@ mod tests {
             ],
             outputs: vec![],
         };
-        assert!(generate("duplicate", "duplicate()", &duplicate_output)
-            .unwrap_err()
-            .contains("already defined"));
+        assert!(
+            generate("duplicate", "duplicate()", &duplicate_output)
+                .unwrap_err()
+                .contains("already defined")
+        );
 
         let wrong_output_width = Region {
             inputs: vec![Port { id: 0, width: 8 }],
             nodes: vec![],
             outputs: vec![Port { id: 0, width: 64 }],
         };
-        assert!(generate("width", "width()", &wrong_output_width)
-            .unwrap_err()
-            .contains("not requested width"));
+        assert!(
+            generate("width", "width()", &wrong_output_width)
+                .unwrap_err()
+                .contains("not requested width")
+        );
     }
 }

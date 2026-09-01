@@ -86,7 +86,7 @@ theorem add64_x86_value_2_after_node_0<M>(values: Valuation(),
     graph: RegionHolds(add64_raw(), values)):
     ValuePlaced(values, 2, Rax, add64_x86_state_2(before))
 {
-    placed_after_add(values, 2, 0, 1, Rax, Rsi, Rax,
+    placed_after_binary(values, 2, 0, 1, bitvec::add(64, ·, ·), Rax, Rsi, Rax,
         add64_x86_state_1(before), add64_x86_state_2(before),
         graph.left, add64_x86_value_0_moved_for_node_0(values, before, input_0_placed, input_1_placed, graph), add64_x86_value_1_before_add_node_0(values, before, input_0_placed, input_1_placed, graph),
         add64_x86_step_1_result(
@@ -237,7 +237,7 @@ theorem sum4_x86_value_4_after_node_0<M>(values: Valuation(),
     graph: RegionHolds(sum4_left_first_raw(), values)):
     ValuePlaced(values, 4, Rax, sum4_x86_state_2(before))
 {
-    placed_after_add(values, 4, 0, 1, Rax, Rsi, Rax,
+    placed_after_binary(values, 4, 0, 1, bitvec::add(64, ·, ·), Rax, Rsi, Rax,
         sum4_x86_state_1(before), sum4_x86_state_2(before),
         graph.left, sum4_x86_value_0_moved_for_node_0(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph), sum4_x86_value_1_before_add_node_0(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph),
         sum4_x86_step_1_result(
@@ -365,7 +365,7 @@ theorem sum4_x86_value_5_after_node_1<M>(values: Valuation(),
     graph: RegionHolds(sum4_left_first_raw(), values)):
     ValuePlaced(values, 5, R8, sum4_x86_state_4(before))
 {
-    placed_after_add(values, 5, 2, 3, R8, Rcx, R8,
+    placed_after_binary(values, 5, 2, 3, bitvec::add(64, ·, ·), R8, Rcx, R8,
         sum4_x86_state_3(before), sum4_x86_state_4(before),
         graph.right.left, sum4_x86_value_2_moved_for_node_1(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph), sum4_x86_value_3_before_add_node_1(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph),
         sum4_x86_step_3_result(
@@ -420,7 +420,7 @@ theorem sum4_x86_value_6_after_node_2<M>(values: Valuation(),
     graph: RegionHolds(sum4_left_first_raw(), values)):
     ValuePlaced(values, 6, Rax, sum4_x86_state_5(before))
 {
-    placed_after_add(values, 6, 4, 5, Rax, R8, Rax,
+    placed_after_binary(values, 6, 4, 5, bitvec::add(64, ·, ·), Rax, R8, Rax,
         sum4_x86_state_4(before), sum4_x86_state_5(before),
         graph.right.right.left, sum4_x86_value_4_after_node_1_step_2(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph), sum4_x86_value_5_after_node_1(values, before, input_0_placed, input_1_placed, input_2_placed, input_3_placed, graph),
         sum4_x86_step_4_result(
