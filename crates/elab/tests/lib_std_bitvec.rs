@@ -168,6 +168,9 @@ theorem ashr(): arithmetic_shift_right(4, ofNat(4, 12), 2) = ofNat(4, 15) { refl
 fn laws_hold_at_open_values_and_widths() {
     ok(r#"
 theorem xself(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { xor_self(n, x) }
+theorem add_is_commutative(n: Nat, x, y: BitVec(n)): add(n, x, y) = add(n, y, x) {
+    add_comm(n, x, y)
+}
 theorem cancel(n: Nat, x, y: BitVec(n)): sub(n, add(n, x, y), y) = x {
     add_sub_cancel(n, x, y)
 }
@@ -212,6 +215,37 @@ theorem borrow_backward64(x, y: BitVec(64), h: borrow_sub(64, x, y)):
 { borrow_sub_bit_of_borrow(64, x, y, h) }
 "#);
     bad("theorem fake(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { refl }");
+}
+
+#[test]
+fn add_commutativity_covers_width_and_carry_boundaries() {
+    ok(r#"
+theorem width_zero(): add(0, zero(0), zero(0)) = add(0, zero(0), zero(0)) {
+    add_comm(0, zero(0), zero(0))
+}
+theorem width_one(): add(1, zero(1), one(1)) = add(1, one(1), zero(1)) {
+    add_comm(1, zero(1), one(1))
+}
+theorem machine_width(left, right: BitVec(64)):
+    add(64, left, right) = add(64, right, left) {
+    add_comm(64, left, right)
+}
+theorem carry_out():
+    add(8, all_ones(8), one(8)) = add(8, one(8), all_ones(8)) {
+    add_comm(8, all_ones(8), one(8))
+}
+theorem unequal_high_bits():
+    add(8, ofNat(8, 128), ofNat(8, 3)) =
+    add(8, ofNat(8, 3), ofNat(8, 128)) {
+    add_comm(8, ofNat(8, 128), ofNat(8, 3))
+}
+"#);
+    bad(r#"
+theorem commutativity_is_not_absorption(n: Nat, left, right: BitVec(n)):
+    add(n, left, right) = left {
+    add_comm(n, left, right)
+}
+"#);
 }
 
 #[test]

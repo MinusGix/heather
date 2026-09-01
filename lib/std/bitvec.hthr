@@ -767,6 +767,136 @@ theorem bxor_comm(n: Nat): (x, y: BitVec(n)) → bxor(n, x, y) = bxor(n, y, x) {
     }
 }
 
+theorem cong_increment(n: Nat, {x, y: BitVec(n)}, p: x = y):
+        increment(n, x) = increment(n, y) {
+    j(p, λ z q => increment(n, x) = increment(n, z), refl)
+}
+
+theorem cong_iterate_increment(n, count: Nat, {x, y: BitVec(n)}, p: x = y):
+        iterate_increment(n, x, count) = iterate_increment(n, y, count) {
+    j(p, λ z q => iterate_increment(n, x, count) = iterate_increment(n, z, count), refl)
+}
+
+theorem cong_iterate_increment_count(n: Nat, x: BitVec(n), {a, b: Nat}, p: a = b):
+        iterate_increment(n, x, a) = iterate_increment(n, x, b) {
+    j(p, λ k q => iterate_increment(n, x, a) = iterate_increment(n, x, k), refl)
+}
+
+// Iteration is an action of Nat addition. The orientation follows `nat::add`,
+// which recurses on its second argument, and keeps each proof step definitional.
+theorem iterate_increment_compose(n: Nat, x: BitVec(n), first, second: Nat):
+        iterate_increment(n, iterate_increment(n, x, first), second) =
+        iterate_increment(n, x, first + second) {
+    match second {
+        Zero => refl,
+        Succ(k) => cong_increment(n,
+            iterate_increment_compose(n, x, first, k)),
+    }
+}
+
+// At a positive width, two low-bit increments advance the tail once. This is
+// the structural bridge between the unary iterator used by `add` and the
+// little-endian binary interpretation used by `toNat`.
+theorem iterate_increment_twice(n: Nat, x: BitVec(n), count: Nat):
+        iterate_increment(Succ(n), cons_bit(n, False, x), twice(count)) =
+        cons_bit(n, False, iterate_increment(n, x, count)) {
+    match count {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_increment(Succ(n), cong_increment(Succ(n),
+                iterate_increment_twice(n, x, k))),
+            refl),
+    }
+}
+
+theorem iterate_increment_succ_twice(n: Nat, x: BitVec(n), count: Nat):
+        iterate_increment(Succ(n), cons_bit(n, False, x), Succ(twice(count))) =
+        cons_bit(n, True, iterate_increment(n, x, count)) {
+    cong_increment(Succ(n), iterate_increment_twice(n, x, count))
+}
+
+theorem cons_head_tail(n: Nat, x: BitVec(Succ(n))):
+        cons_bit(n, head_bit(n, x), tail_bits(n, x)) = x {
+    extensionality(Succ(n),
+        cons_bit(n, head_bit(n, x), tail_bits(n, x)), x,
+        λ i => match i { FZ => refl, FS(j) => refl })
+}
+
+theorem iterate_increment_toNat_cons(n: Nat, bit: Bool, x: BitVec(n),
+        tail_law: iterate_increment(n, zero(n), toNat(n, x)) = x):
+        iterate_increment(Succ(n), zero(Succ(n)),
+            toNat(Succ(n), cons_bit(n, bit, x))) = cons_bit(n, bit, x) {
+    match bit {
+        False => calc {
+            iterate_increment(Succ(n), zero(Succ(n)),
+                0 + twice(toNat(n, x)))
+                = iterate_increment(Succ(n), zero(Succ(n)), twice(toNat(n, x))) :=
+                    cong_iterate_increment_count(Succ(n), zero(Succ(n)),
+                        nat::add_left_zero(twice(toNat(n, x)))),
+                = cons_bit(n, False,
+                    iterate_increment(n, zero(n), toNat(n, x))) :=
+                    iterate_increment_twice(n, zero(n), toNat(n, x)),
+                = cons_bit(n, False, x) := cons_bit_cong(n, refl, tail_law),
+        },
+        True => calc {
+            iterate_increment(Succ(n), zero(Succ(n)),
+                1 + twice(toNat(n, x)))
+                = iterate_increment(Succ(n), zero(Succ(n)),
+                    Succ(twice(toNat(n, x)))) :=
+                    cong_iterate_increment_count(Succ(n), zero(Succ(n)),
+                        trans(nat::add_succ_left(0, twice(toNat(n, x))),
+                            cong_succ(nat::add_left_zero(twice(toNat(n, x)))))),
+                = cons_bit(n, True,
+                    iterate_increment(n, zero(n), toNat(n, x))) :=
+                    iterate_increment_succ_twice(n, zero(n), toNat(n, x)),
+                = cons_bit(n, True, x) := cons_bit_cong(n, refl, tail_law),
+        },
+    }
+}
+
+// Every vector is exactly the initial segment of the cyclic increment orbit
+// selected by its unsigned interpretation. No arithmetic bound or quotient is
+// needed: the proof follows one bit and one doubled tail count at a time.
+theorem iterate_increment_toNat(n: Nat): (x: BitVec(n)) →
+        iterate_increment(n, zero(n), toNat(n, x)) = x {
+    match n as λ k => (x: BitVec(k)) →
+            iterate_increment(k, zero(k), toNat(k, x)) = x {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => trans(
+            iterate_increment_toNat_cons(k, head_bit(k, x), tail_bits(k, x),
+                ih(tail_bits(k, x))),
+            cons_head_tail(k, x)),
+    }
+}
+
+theorem add_comm(n: Nat, left, right: BitVec(n)):
+        add(n, left, right) = add(n, right, left) {
+    calc {
+        add(n, left, right)
+            = iterate_increment(n,
+                iterate_increment(n, zero(n), toNat(n, left)),
+                toNat(n, right)) :=
+                cong_iterate_increment(n, toNat(n, right),
+                    sym(iterate_increment_toNat(n, left))),
+            = iterate_increment(n, zero(n),
+                toNat(n, left) + toNat(n, right)) :=
+                iterate_increment_compose(n, zero(n),
+                    toNat(n, left), toNat(n, right)),
+            = iterate_increment(n, zero(n),
+                toNat(n, right) + toNat(n, left)) :=
+                cong_iterate_increment_count(n, zero(n),
+                    nat::add_comm(toNat(n, left), toNat(n, right))),
+            = iterate_increment(n,
+                iterate_increment(n, zero(n), toNat(n, right)),
+                toNat(n, left)) :=
+                sym(iterate_increment_compose(n, zero(n),
+                    toNat(n, right), toNat(n, left))),
+            = add(n, right, left) :=
+                cong_iterate_increment(n, toNat(n, left),
+                    iterate_increment_toNat(n, right)),
+    }
+}
+
 fn eq_dec(n: Nat) → (x, y: BitVec(n)) → x = y ∨ x ≠ y {
     match n as λ k => (x, y: BitVec(k)) → x = y ∨ x ≠ y {
         Zero => λ x y => Inl(refl),
