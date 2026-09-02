@@ -4,8 +4,10 @@
 mod support;
 
 use heather_elab::function_ir_cert::{self as cert, Node, Port, Region, StructuredRegion};
+use heather_elab::function_ir_source;
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
 use heather_elab::{ElabError, Elaborator, stats};
+use heather_syntax::parse_file;
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -58,6 +60,104 @@ fn function_ir_x86_suite() {
 #[test]
 fn generated_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(5);
+}
+
+#[test]
+fn source_bitvec_add_reaches_checked_x86_artifact() {
+    const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
+         \x20   bitvec::add(64, left, right)\n\
+         }";
+    let declaration = parse_file(ADD)
+        .expect("parse source function")
+        .items
+        .pop()
+        .expect("source declaration")
+        .into_decl();
+    let emission = function_ir_source::generate_x86(
+        "source_add_x86",
+        &declaration,
+        [Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("compile initial source fragment");
+    assert_eq!(
+        emission.instructions,
+        vec![
+            lower::Instruction::MovRR {
+                destination: Gpr::Rax,
+                source: Gpr::Rdi
+            },
+            lower::Instruction::AddRR {
+                destination: Gpr::Rax,
+                source: Gpr::Rsi
+            },
+        ],
+    );
+    assert!(emission.text.contains("source_add_x86_source_artifact"));
+
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let source = generated_module(&format!("{ADD}\n\n{}", emission.text));
+    let mut e = base.clone();
+    if let Err(error) = e.elab_module_source("source_add_function_ir_x86", &source) {
+        panic!(
+            "source-to-x86 artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
+fn stale_source_function_ir_certificate_is_rejected() {
+    const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
+         \x20   bitvec::add(64, left, right)\n\
+         }";
+    let declaration = parse_file(ADD)
+        .expect("parse source function")
+        .items
+        .pop()
+        .expect("source declaration")
+        .into_decl();
+    let frontend = function_ir_source::generate_function_ir("stale_source_add", &declaration)
+        .expect("certify source FunctionIR");
+    let stale_source = format!(
+        "import function_ir;\nimport bitvec;\nimport list;\nimport logic;\nimport nat;\n\n{ADD}\n\n{}",
+        frontend.text,
+    )
+    .replace(
+        "bitvec::add(64, left, right)",
+        "bitvec::sub(64, left, right)",
+    );
+    let mut dishonest = support::semantic_test_base(&MODULES[..15]);
+    match dishonest.elab_module_source("stale_source_add_function_ir_x86", &stale_source) {
+        Ok(()) => panic!("a source theorem generated from a stale body checked"),
+        Err(ElabError::Parse(error)) => {
+            panic!("stale-source control failed in the parser: {}", error.msg)
+        }
+        Err(error) => {
+            let message = format!("{error:?}");
+            assert!(message.contains("NotConvertible"), "{message}");
+        }
+    }
+}
+
+#[test]
+fn source_fragment_declines_nested_expressions() {
+    let source = "fn nested(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
+        bitvec::add(64, bitvec::add(64, left, right), right)\n}";
+    let declaration = parse_file(source)
+        .expect("parse nested source")
+        .items
+        .pop()
+        .expect("source declaration")
+        .into_decl();
+    let message = function_ir_source::reflect(&declaration)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("operands must be source parameters"),
+        "{message}"
+    );
 }
 
 #[test]

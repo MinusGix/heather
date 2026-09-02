@@ -719,18 +719,18 @@ placement stage per node, not growth in graph depth or live-input distance.
 
 ## 14. Next implementation path
 
-The planned sequence is now:
+The ALU core, first structured conditional, linked join, and first source
+frontend are now present. The planned sequence is therefore:
 
-1. [[function-ir-alu-core]] adds constants, representative bitwise and shift
-   operations, and interpretation-sensitive comparisons through the now-real
-   operation/lowering interface.
-2. [[source-to-function-ir-certification]] reflects a small source BitVec
-   fragment directly into FunctionIR and composes its source-denotation proof
-   through generated x86, beginning concrete replacement of `ir_v1` rather
-   than translating through it.
-3. [[function-ir-conditional-regions]] adds the first nested structured control
-   node and tests the RVSDG direction without simultaneously designing loops
-   or a general effect system.
+1. [[source-function-ir-expression-dags]] grows source reflection from one
+   binary operation to expression DAGs and constants. This converts useful
+   20--100 node source functions without changing the semantic boundary.
+2. [[function-ir-recursive-structured-lowering]] replaces the current single
+   comparison-prefix/conditional normal form with recursive structured
+   selection and composition.
+3. [[function-ir-x86-shift-legalization]] finishes the remaining ALU family,
+   while [[function-ir-x86-fused-compare-branch]] can remove comparison
+   materialization when measured worthwhile.
 
 Three language-performance issues remain deliberately off this critical path:
 [[frontend-large-proof-composition-cost]],
@@ -826,3 +826,37 @@ pretending to be a recursive structured backend already: one one-bit prefix
 result, inherited branch arguments, two dataflow leaves, and one 64-bit join
 result. General recursive selection is tracked by
 [[function-ir-recursive-structured-lowering]].
+
+### 2026-09-01: first source function reaches a checked x86 artifact
+
+`function_ir_source` now recognizes an explicit initial source fragment: a
+monomorphic two-argument `BitVec(64)` function whose body is one
+`bitvec::add`, `sub`, `band`, `bor`, or `bxor` call over its parameters. It
+constructs the corresponding stable-ID region directly, emits compact
+`RegionValid`, invokes the existing x86 selector, and proves the graph result
+equal to the actual source function application. A final `BlockArtifact`
+observes that source application as its result, so the path is source function
+to canonical bytes and relational machine execution without passing through
+`ir_v1`.
+
+The frontend presently reads the surface declaration. This is not a trust
+shortcut: the generated theorem names the elaborated source definition and
+the kernel rejects a stale graph. The acceptance test deliberately generates
+from addition and then changes the source body to subtraction; conversion
+rejects the certificate. Moving recognition onto elaborated terms remains an
+available hardening step when the fragment encounters surface sugar worth
+normalizing before selection.
+
+The fragment declines polymorphism, implicit or solver parameters, local
+statements, non-64-bit types, nested expressions, and unknown operations with
+specific diagnostics. [[source-function-ir-expression-dags]] owns the next
+useful widening rather than allowing unsupported syntax to leak into a vague
+backend error.
+
+Proof source emission now has a small internal document model for functions,
+theorems, generics, parameters, results, bodies, and module spacing. Heather
+expressions deliberately remain textual leaves: mirroring the complete parser
+AST in the compiler would create a second frontend. The new source compiler
+and the common straight-line block header use this structure, establishing an
+incremental route away from monolithic format strings while preserving the
+kernel-checked generated-source boundary.

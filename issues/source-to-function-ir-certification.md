@@ -1,6 +1,6 @@
 ---
 title: Certify a reflected source fragment into FunctionIR
-status: open
+status: closed
 labels: [compiler,function-ir,metaprogramming,proofs,codegen]
 created: 2026-08-31
 updated: 2026-09-01
@@ -38,3 +38,20 @@ to land [[function-ir-x86-commutative-reuse]] and
 [[function-ir-x86-constants]] first, then reflect the already-supported pure
 BitVec Add/Sub/AND/OR/XOR source fragment. That ordering is architectural, not
 a hard dependency: the first add-only source theorem could begin sooner.
+
+## Resolution
+
+`function_ir_source` now reflects the first explicit fragment: two ordinary
+`BitVec(64)` parameters and one Add/Sub/AND/OR/XOR application. It emits the
+raw region, compact validity certificate, ordinary x86 lowering certificate,
+source-denotation equality, and a `BlockArtifact` whose result is the actual
+source call. The selected add path is the canonical `MOV RAX,RDI; ADD
+RAX,RSI` byte sequence.
+
+The negative control generates from addition and substitutes subtraction for
+the source definition before checking; ordinary conversion rejects the stale
+certificate. Unsupported nested expressions decline before lowering with a
+specific fragment diagnostic. No theorem or data path mentions `ir_v1`.
+
+The next source construct is nested pure expressions, tracked by
+[[source-function-ir-expression-dags]].

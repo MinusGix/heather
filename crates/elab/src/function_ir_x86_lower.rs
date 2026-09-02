@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::function_ir_cert::{self as cert, Node, Region, StructuredRegion};
+use crate::heather_emit::{Declaration, Module};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOperation {
@@ -1633,28 +1634,42 @@ pub fn generate(
     let compact_parameters = compact_parameters(prefix);
     let context_arguments = context_constructor_arguments(region);
     let arguments = "values, before, context";
-    let instruction_spine = render_instruction_spine(prefix, &lowered.instructions);
-    let mut text = format!(
-        "{instruction_spine}\
-         fn {instructions_name}() → List<Instruction> {{\n\
-         \x20   {}\n\
-         }}\n\n\
-         fn {bytes_name}() → List<BitVec(8)> {{\n\
-         \x20   canonical_block_bytes({instructions_name}())\n\
-         }}\n\n\
-         theorem {prefix}_byte_length(): {bytes_name}().len() = {} {{ refl }}\n\n\
-         theorem {prefix}_block_decodes(start: BitVec(64)):\n\
-         \x20   CanonicalBlockDecodes({instructions_name}(), start)\n\
-         {{\n\
-         \x20   canonical_block_decodes({instructions_name}(), start)\n\
-         }}\n\n",
-        render_instruction_cons(prefix, &lowered.instructions, 0),
-        lowered
-            .instructions
-            .iter()
-            .map(|instruction| instruction.canonical_length())
-            .sum::<usize>(),
+    let mut header = Module::default();
+    header.raw(render_instruction_spine(prefix, &lowered.instructions));
+    header.declaration(
+        Declaration::function(&instructions_name, "List<Instruction>")
+            .body(render_instruction_cons(prefix, &lowered.instructions, 0)),
     );
+    header.declaration(
+        Declaration::function(&bytes_name, "List<BitVec(8)>")
+            .body(format!("canonical_block_bytes({instructions_name}())")),
+    );
+    header.declaration(
+        Declaration::theorem(
+            format!("{prefix}_byte_length"),
+            format!(
+                "{bytes_name}().len() = {}",
+                lowered
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.canonical_length())
+                    .sum::<usize>(),
+            ),
+        )
+        .body("refl"),
+    );
+    header.declaration(
+        Declaration::theorem(
+            format!("{prefix}_block_decodes"),
+            format!("CanonicalBlockDecodes({instructions_name}(), start)"),
+        )
+        .parameter("start: BitVec(64)")
+        .body(format!(
+            "canonical_block_decodes({instructions_name}(), start)"
+        )),
+    );
+    let mut text = header.render();
+    text.push('\n');
 
     text.push_str(&format!(
         "fn {prefix}_state_0<M>(before: MachineState<M>) → MachineState<M> {{ before }}\n"
