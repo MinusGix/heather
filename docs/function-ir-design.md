@@ -905,3 +905,45 @@ direct elaborator-data sink can target the same construction IR if profiling
 shows parsing is material; [[generated-heather-direct-elaboration]] records
 the measurement and equivalence requirements rather than prematurely making
 compiler generators construct kernel terms.
+
+### 2026-09-02: block arguments and a shared continuation
+
+The next control-flow core now models the fact that the earlier conditional
+only approximated: a machine join is not merely two arms agreeing to write the
+same global value ID.  Predecessor edges pass typed values and a successor
+binds fresh SSA parameters.  `BlockArgument(width, value, parameter)` records
+that transfer, and its semantics equates the successor parameter with the
+selected predecessor value at the shared width.
+
+The first concrete `ControlRegion` is the useful four-block diamond rather
+than an unrestricted CFG: a straight-line producer, two selected dataflow
+arms, and one shared continuation.  Both edges must pass exactly their arm's
+declared outputs, must bind the same ordered parameter interface, and the
+continuation must accept precisely that interface.  Parameters are unique and
+fresh from the values visible before the branch.  This is genuine SSA block
+argument semantics while retaining structurally obvious acyclicity and an
+RVSDG-like region boundary.
+
+`ControlRegion` is temporarily separate from the older `StructuredRegion`.
+Adding a large constructor to the already-hot recursive type made two warm
+x86 model probes grow from the earlier focused baseline to roughly 73 seconds,
+even after the constructor's non-recursive conjunction was factored.  A
+record-shaped first core avoids widening every existing eliminator.  This is
+a migration boundary, not a legacy promise: the block-argument route should
+replace the old conditional once its certified backend subsumes it.
+
+The Rust-side interpreter executes this representation independently of x86.
+It evaluates the selected arm, snapshots all edge sources, binds successor
+parameters with parallel-copy semantics, and executes the continuation once.
+The first acceptance graph is `max_plus(a, b, c)`: unsigned compare `a < b`,
+pass either `b` or `a` as fresh parameter `selected`, carry `c` as a second
+parameter, and compute `selected + c` in the join.  Controls cover both arms,
+equality, modular overflow, and stale edge interfaces.
+
+The initial x86 selector produces the corresponding physical block view.  It
+materializes the comparison in `RCX`, maps the selected value from `RSI` or
+`RDI` into the common join register `R8`, carries `c` in `RDX`, and lowers the
+single shared continuation to `MOV RAX,R8; ADD RAX,RDX`.  Edge copies are
+planned as parallel transfers and cycles currently decline explicitly rather
+than silently emitting a sequentially wrong copy.  The remaining certification
+step is tracked by [[function-ir-control-region-x86-certification]].

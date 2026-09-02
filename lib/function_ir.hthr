@@ -594,6 +594,53 @@ fn RegionHolds(region: Region, values: Valuation()) → Type {
 // ---------------------------------------------------------------------------
 // Structured regions
 
+// A control-flow edge binds `value` from its predecessor to the fresh
+// `parameter` visible in its successor.  Width lives on the binding so the
+// semantic equality is well typed without a cast or a trusted lookup.
+record BlockArgument {
+    width: Nat,
+    value: Nat,
+    parameter: Nat,
+}
+
+fn BlockArguments() → Type { List<BlockArgument> }
+
+fn block_argument_value_entries(arguments: BlockArguments()) → List<Port> {
+    match arguments {
+        Nil => [],
+        Cons(argument, rest) => Cons(
+            Port(id := argument.value, width := argument.width),
+            block_argument_value_entries(rest)),
+    }
+}
+
+fn block_argument_values(arguments: BlockArguments()) → Ports {
+    Ports(block_argument_value_entries(arguments))
+}
+
+fn block_argument_parameter_entries(arguments: BlockArguments()) → List<Port> {
+    match arguments {
+        Nil => [],
+        Cons(argument, rest) => Cons(
+            Port(id := argument.parameter, width := argument.width),
+            block_argument_parameter_entries(rest)),
+    }
+}
+
+fn block_argument_parameters(arguments: BlockArguments()) → Ports {
+    Ports(block_argument_parameter_entries(arguments))
+}
+
+fn BlockArgumentsHold(values: Valuation(), arguments: BlockArguments()) → Type {
+    match arguments {
+        Nil => True,
+        Cons(argument, rest) =>
+            values(argument.width, argument.parameter) =
+                values(argument.width, argument.value) ∧
+            BlockArgumentsHold(values, rest),
+    }
+}
+
 // Flat `Region` remains the scheduled presentation of one pure dataflow
 // graph. `StructuredRegion` composes those leaves with directly recursive
 // control nodes. Direct recursion is intentional: writing branches as
@@ -639,6 +686,14 @@ fn PortEntriesUnique(entries: List<Port>) → Type {
     match entries {
         Nil => True,
         Cons(port, rest) => PortIdAbsent(port.id, rest) ∧ PortEntriesUnique(rest),
+    }
+}
+
+fn PortIdsDisjoint(left, right: List<Port>) → Type {
+    match left {
+        Nil => True,
+        Cons(port, rest) =>
+            PortIdAbsent(port.id, right) ∧ PortIdsDisjoint(rest, right),
     }
 }
 
@@ -695,6 +750,114 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
                 True => StructuredRegionHolds(values, when_true),
             },
     }
+}
+
+// The first block-argument graph is a four-block diamond: a producer prefix,
+// two selected arms, and one shared continuation.  Keeping this initial core
+// as records avoids imposing another recursive eliminator on all FunctionIR
+// users.  Recursive composition can be added once this shape has replaced
+// the older conditional route and its measured representation cost is known.
+record ConditionalJoinRegion {
+    inputs: Ports,
+    condition: Nat,
+    arguments: Ports,
+    when_true: Region,
+    true_arguments: BlockArguments(),
+    when_false: Region,
+    false_arguments: BlockArguments(),
+    continuation: Region,
+}
+
+record ControlRegion {
+    prefix: Region,
+    join: ConditionalJoinRegion,
+}
+
+fn control_inputs(region: ControlRegion) → Ports { region.prefix.inputs }
+fn control_outputs(region: ControlRegion) → Ports { region.join.continuation.outputs }
+
+fn ControlJoinInterfacesValid(join: ConditionalJoinRegion) → Type
+{
+    PortEntriesUnique(join.inputs.entries) ∧
+    (PortEntriesUnique(join.arguments.entries) ∧
+     (HasInterfacePort(join.inputs.entries, join.condition, 1) ∧
+      (InterfaceSubset(join.arguments.entries, join.inputs.entries) ∧
+       (join.when_true.inputs = join.arguments ∧
+        (join.when_false.inputs = join.arguments ∧
+         (join.when_true.outputs = block_argument_values(join.true_arguments) ∧
+          (join.when_false.outputs = block_argument_values(join.false_arguments) ∧
+           (block_argument_parameters(join.true_arguments) =
+            block_argument_parameters(join.false_arguments) ∧
+            (join.continuation.inputs =
+                block_argument_parameters(join.true_arguments) ∧
+             (PortEntriesUnique(
+                block_argument_parameters(join.true_arguments).entries) ∧
+              PortIdsDisjoint(
+                block_argument_parameters(join.true_arguments).entries,
+                join.inputs.entries)))))))))))
+}
+
+fn ControlRegionValid(region: ControlRegion) → Type {
+    RegionValid(region.prefix) ∧
+    (InterfaceSubset(region.join.inputs.entries,
+        region.prefix.inputs.entries ++ region.prefix.outputs.entries) ∧
+     (ControlJoinInterfacesValid(region.join) ∧
+      (RegionValid(region.join.when_true) ∧
+       (RegionValid(region.join.when_false) ∧
+        RegionValid(region.join.continuation)))))
+}
+
+fn ControlJoinHolds(values: Valuation(), join: ConditionalJoinRegion) → Type {
+    match bitvec::head_bit(0, values(1, join.condition)) {
+        False => RegionHolds(join.when_false, values) ∧
+            (BlockArgumentsHold(values, join.false_arguments) ∧
+             RegionHolds(join.continuation, values)),
+        True => RegionHolds(join.when_true, values) ∧
+            (BlockArgumentsHold(values, join.true_arguments) ∧
+             RegionHolds(join.continuation, values)),
+    }
+}
+
+fn ControlRegionHolds(values: Valuation(), region: ControlRegion) → Type {
+    RegionHolds(region.prefix, values) ∧ ControlJoinHolds(values, region.join)
+}
+
+theorem control_join_false(values: Valuation(), join: ConditionalJoinRegion,
+    condition: bitvec::head_bit(0, values(1, join.condition)) = False,
+    branch: RegionHolds(join.when_false, values),
+    arguments: BlockArgumentsHold(values, join.false_arguments),
+    continuation: RegionHolds(join.continuation, values)):
+    ControlJoinHolds(values, join)
+{
+    j(sym(condition),
+        λ actual _ => match actual as λ _ => Type {
+            False => RegionHolds(join.when_false, values) ∧
+                (BlockArgumentsHold(values, join.false_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+            True => RegionHolds(join.when_true, values) ∧
+                (BlockArgumentsHold(values, join.true_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+        },
+        ⟨branch, ⟨arguments, continuation⟩⟩)
+}
+
+theorem control_join_true(values: Valuation(), join: ConditionalJoinRegion,
+    condition: bitvec::head_bit(0, values(1, join.condition)) = True,
+    branch: RegionHolds(join.when_true, values),
+    arguments: BlockArgumentsHold(values, join.true_arguments),
+    continuation: RegionHolds(join.continuation, values)):
+    ControlJoinHolds(values, join)
+{
+    j(sym(condition),
+        λ actual _ => match actual as λ _ => Type {
+            False => RegionHolds(join.when_false, values) ∧
+                (BlockArgumentsHold(values, join.false_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+            True => RegionHolds(join.when_true, values) ∧
+                (BlockArgumentsHold(values, join.true_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+        },
+        ⟨branch, ⟨arguments, continuation⟩⟩)
 }
 
 // The semantic rule for an Add node, factored away from any particular

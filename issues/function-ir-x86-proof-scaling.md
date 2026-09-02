@@ -108,3 +108,11 @@ incomplete only because the separately owned `omega_div_mod` target was
 SIGKILLed near its existing single-workload rail. The accumulated FunctionIR
 x86 process failure described above is therefore resolved; the issue remains
 open for its original 100-node proof-constant acceptance target.
+
+The 2026-09-02 block-argument round gives a useful noisy-host distinction.
+Under a five-child full run, control flow was SIGKILLed at 319.17s at almost
+the exact moment `omega_div_mod` was also killed; the runner correctly marked
+the 2,291-pass run incomplete.  Re-running control flow alone under unchanged
+rails passed in 152.42s.  No semantic/proof failure is present, but full-suite
+co-scheduling is now tracked separately by
+[[parallel-test-memory-headroom-under-heavy-prefixes]].

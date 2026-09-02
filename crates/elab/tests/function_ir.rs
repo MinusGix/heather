@@ -3,7 +3,9 @@
 
 mod support;
 
-use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
+use heather_elab::function_ir_cert::{
+    self as cert, BlockArgument, ConditionalJoinRegion, ControlRegion, Node, Port, Region,
+};
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -43,7 +45,93 @@ fn function_ir_suite() {
     sum4_schedules_and_result_are_available(&base);
     alu_node_semantics_are_available(&base);
     structured_conditional_is_valid_and_selects_one_branch(&base);
+    block_arguments_feed_one_shared_continuation(&base);
     wrong_add64_observation_is_refused(&base);
+}
+
+fn block_arguments_feed_one_shared_continuation(base: &Elaborator) {
+    let p = |id, width| Port { id, width };
+    let branch_inputs = vec![p(0, 64), p(1, 64), p(2, 64)];
+    let graph = ControlRegion {
+        prefix: Region {
+            inputs: branch_inputs.clone(),
+            nodes: vec![Node::UnsignedLessThan {
+                width: 64,
+                output: 3,
+                left: 0,
+                right: 1,
+            }],
+            outputs: vec![p(3, 1)],
+        },
+        join: ConditionalJoinRegion {
+            inputs: vec![p(0, 64), p(1, 64), p(2, 64), p(3, 1)],
+            condition: 3,
+            arguments: branch_inputs.clone(),
+            when_true: Region {
+                inputs: branch_inputs.clone(),
+                nodes: vec![],
+                outputs: vec![p(1, 64), p(2, 64)],
+            },
+            true_arguments: vec![
+                BlockArgument {
+                    width: 64,
+                    value: 1,
+                    parameter: 4,
+                },
+                BlockArgument {
+                    width: 64,
+                    value: 2,
+                    parameter: 5,
+                },
+            ],
+            when_false: Region {
+                inputs: branch_inputs,
+                nodes: vec![],
+                outputs: vec![p(0, 64), p(2, 64)],
+            },
+            false_arguments: vec![
+                BlockArgument {
+                    width: 64,
+                    value: 0,
+                    parameter: 4,
+                },
+                BlockArgument {
+                    width: 64,
+                    value: 2,
+                    parameter: 5,
+                },
+            ],
+            continuation: Region {
+                inputs: vec![p(4, 64), p(5, 64)],
+                nodes: vec![Node::Add {
+                    width: 64,
+                    output: 6,
+                    left: 4,
+                    right: 5,
+                }],
+                outputs: vec![p(6, 64)],
+            },
+        },
+    };
+    let raw = cert::render_control_region_function("max_plus_raw", &graph)
+        .expect("render valid block-argument graph");
+    let src = format!(
+        r#"
+import function_ir;
+import bitvec;
+import list;
+import logic;
+
+{raw}
+"#,
+    );
+    let mut e = base.clone();
+    if let Err(err) = e.elab_module_source("function_ir_block_arguments", &src) {
+        panic!(
+            "FunctionIR block arguments did not check: {}",
+            err.render(&src)
+        );
+    }
 }
 
 fn structured_conditional_is_valid_and_selects_one_branch(base: &Elaborator) {

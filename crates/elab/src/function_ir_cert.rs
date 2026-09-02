@@ -87,6 +87,17 @@ pub struct Region {
     pub outputs: Vec<Port>,
 }
 
+/// One value carried across a control-flow edge into a fresh block parameter.
+///
+/// Keeping the width on the edge makes the transfer intrinsically typed while
+/// leaving value IDs as compact, compiler-friendly data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockArgument {
+    pub width: u64,
+    pub value: u64,
+    pub parameter: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StructuredRegion {
     Dataflow(Region),
@@ -102,6 +113,36 @@ pub enum StructuredRegion {
         when_true: Box<StructuredRegion>,
         when_false: Box<StructuredRegion>,
     },
+}
+
+/// The selected arms and their explicit transfers into one shared block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionalJoinRegion {
+    pub inputs: Vec<Port>,
+    pub condition: u64,
+    pub arguments: Vec<Port>,
+    pub when_true: Region,
+    pub true_arguments: Vec<BlockArgument>,
+    pub when_false: Region,
+    pub false_arguments: Vec<BlockArgument>,
+    pub continuation: Region,
+}
+
+/// The first real block-argument graph: producer, selected arms, and join.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlRegion {
+    pub prefix: Region,
+    pub join: ConditionalJoinRegion,
+}
+
+impl ControlRegion {
+    pub fn inputs(&self) -> &[Port] {
+        &self.prefix.inputs
+    }
+
+    pub fn outputs(&self) -> &[Port] {
+        &self.join.continuation.outputs
+    }
 }
 
 impl StructuredRegion {
@@ -181,6 +222,95 @@ pub fn validate_structured_region(region: &StructuredRegion) -> Result<(), Strin
             Ok(())
         }
     }
+}
+
+pub fn validate_control_region(region: &ControlRegion) -> Result<(), String> {
+    directory_entries(&region.prefix)?;
+    for input in &region.join.inputs {
+        if !region.prefix.inputs.contains(input) && !region.prefix.outputs.contains(input) {
+            return Err(format!(
+                "join input {}:{} is not available from the prefix",
+                input.id, input.width,
+            ));
+        }
+    }
+    let ConditionalJoinRegion {
+        inputs,
+        condition,
+        arguments,
+        when_true,
+        true_arguments,
+        when_false,
+        false_arguments,
+        continuation,
+    } = &region.join;
+    ensure_unique_interface("conditional-join input", inputs)?;
+    ensure_unique_interface("conditional-join argument", arguments)?;
+    if !inputs
+        .iter()
+        .any(|port| port.id == *condition && port.width == 1)
+    {
+        return Err(format!(
+            "conditional-join value {condition} is not an available one-bit input"
+        ));
+    }
+    for argument in arguments {
+        if !inputs.contains(argument) {
+            return Err(format!(
+                "conditional-join argument {}:{} is not an input",
+                argument.id, argument.width,
+            ));
+        }
+    }
+    for (side, branch, edge) in [
+        ("true", when_true, true_arguments),
+        ("false", when_false, false_arguments),
+    ] {
+        if branch.inputs != *arguments {
+            return Err(format!("{side} join branch captures undeclared inputs"));
+        }
+        let yielded = edge
+            .iter()
+            .map(|argument| Port {
+                id: argument.value,
+                width: argument.width,
+            })
+            .collect::<Vec<_>>();
+        if branch.outputs != yielded {
+            return Err(format!(
+                "{side} join edge does not pass the branch output interface"
+            ));
+        }
+        directory_entries(branch)?;
+    }
+    let true_parameters = edge_parameters(true_arguments);
+    let false_parameters = edge_parameters(false_arguments);
+    if true_parameters != false_parameters {
+        return Err("conditional-join edges bind different parameters".to_string());
+    }
+    ensure_unique_interface("join parameter", &true_parameters)?;
+    for parameter in &true_parameters {
+        if inputs.iter().any(|input| input.id == parameter.id) {
+            return Err(format!(
+                "join parameter {} is not fresh from the conditional inputs",
+                parameter.id,
+            ));
+        }
+    }
+    if continuation.inputs != true_parameters {
+        return Err("conditional-join continuation does not bind the edge parameters".to_string());
+    }
+    directory_entries(continuation).map(|_| ())
+}
+
+fn edge_parameters(arguments: &[BlockArgument]) -> Vec<Port> {
+    arguments
+        .iter()
+        .map(|argument| Port {
+            id: argument.parameter,
+            width: argument.width,
+        })
+        .collect()
 }
 
 fn ensure_unique_interface(kind: &str, ports: &[Port]) -> Result<(), String> {
@@ -419,6 +549,53 @@ pub fn render_region_function(name: &str, region: &Region) -> String {
         nodes,
         ports(&region.outputs)
     )
+}
+
+/// Render the four-block control graph through the same inspectable Heather
+/// source boundary as flat regions.
+pub fn render_control_region_function(
+    name: &str,
+    region: &ControlRegion,
+) -> Result<String, String> {
+    validate_control_region(region)?;
+    let prefix_name = format!("{name}_prefix");
+    let true_name = format!("{name}_true");
+    let false_name = format!("{name}_false");
+    let continuation_name = format!("{name}_continuation");
+    let ports = |ports: &[Port]| {
+        ports
+            .iter()
+            .map(|port| render_port(*port))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let edge = |arguments: &[BlockArgument]| {
+        arguments.iter().rev().fold("Nil".to_string(), |tail, argument| {
+            format!(
+                "Cons(BlockArgument(width := {}, value := {}, parameter := {}), {tail})",
+                argument.width, argument.value, argument.parameter,
+            )
+        })
+    };
+    Ok(format!(
+        "{}\n{}\n{}\n{}\n\
+         fn {name}() → ControlRegion {{\n\
+         \x20   ControlRegion(prefix := {prefix_name}(), join := ConditionalJoinRegion(\n\
+         \x20       inputs := Ports([{}]), condition := {}, arguments := Ports([{}]),\n\
+         \x20       when_true := {true_name}(), true_arguments := {},\n\
+         \x20       when_false := {false_name}(), false_arguments := {},\n\
+         \x20       continuation := {continuation_name}()))\n\
+         }}\n",
+        render_region_function(&prefix_name, &region.prefix),
+        render_region_function(&true_name, &region.join.when_true),
+        render_region_function(&false_name, &region.join.when_false),
+        render_region_function(&continuation_name, &region.join.continuation),
+        ports(&region.join.inputs),
+        region.join.condition,
+        ports(&region.join.arguments),
+        edge(&region.join.true_arguments),
+        edge(&region.join.false_arguments),
+    ))
 }
 
 fn directory_entries(region: &Region) -> Result<Vec<DirectoryEntry>, String> {

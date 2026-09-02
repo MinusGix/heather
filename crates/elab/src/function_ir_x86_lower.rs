@@ -5,7 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::function_ir_cert::{self as cert, Node, Region, StructuredRegion};
+use crate::function_ir_cert::{
+    self as cert, BlockArgument, ControlRegion, Node, Region, StructuredRegion,
+};
 use crate::heather_emit::{Block, Declaration, Expr, Module, Parameter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,6 +380,16 @@ pub struct LoweredConditional {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoweredControlRegion {
+    pub prefix: LoweredDag,
+    pub condition_register: Gpr,
+    pub when_true_transfer: Vec<Instruction>,
+    pub when_false_transfer: Vec<Instruction>,
+    pub join_registers: Vec<Gpr>,
+    pub continuation: LoweredDag,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoweringError {
     InputPlacementCount {
         inputs: usize,
@@ -407,6 +419,12 @@ pub enum LoweringError {
     UnsupportedStructuredRegion,
     MissingConditionPlacement(u64),
     UnsupportedSequenceInterface,
+    UnsupportedJoinArm,
+    JoinPlacementCount {
+        parameters: usize,
+        registers: usize,
+    },
+    ParallelCopyNeedsTemporary,
     ShortBranchOutOfRange {
         bytes: usize,
     },
@@ -474,12 +492,124 @@ impl fmt::Display for LoweringError {
                 f,
                 "the first prefixed conditional lowering requires one one-bit prefix output and branch arguments inherited from prefix inputs",
             ),
+            LoweringError::UnsupportedJoinArm => write!(
+                f,
+                "the first block-argument lowering requires dataflow-free join arms",
+            ),
+            LoweringError::JoinPlacementCount { parameters, registers } => write!(
+                f,
+                "join has {parameters} parameters but {registers} join registers were supplied",
+            ),
+            LoweringError::ParallelCopyNeedsTemporary => write!(
+                f,
+                "join edge contains a register cycle and needs a parallel-copy temporary",
+            ),
             LoweringError::ShortBranchOutOfRange { bytes } => write!(
                 f,
                 "linked conditional needs a {bytes}-byte forward displacement, beyond rel8 range",
             ),
         }
     }
+}
+
+/// Lower the first genuine block-argument diamond.  The prefix computes the
+/// selector, each edge performs a parallel value transfer into one common
+/// register interface, and the continuation is selected exactly once.
+pub fn lower_control_region(
+    region: &ControlRegion,
+    input_registers: &[Gpr],
+    condition_register: Gpr,
+    join_registers: &[Gpr],
+    continuation_temporaries: &[Gpr],
+    requested_output: Gpr,
+) -> Result<LoweredControlRegion, LoweringError> {
+    cert::validate_control_region(region).map_err(LoweringError::InvalidStructuredRegion)?;
+    if region.inputs().len() != input_registers.len() {
+        return Err(LoweringError::InputPlacementCount {
+            inputs: region.inputs().len(),
+            registers: input_registers.len(),
+        });
+    }
+    if region.join.when_true.nodes.len() != 0 || region.join.when_false.nodes.len() != 0 {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+    if region.join.true_arguments.len() != join_registers.len() {
+        return Err(LoweringError::JoinPlacementCount {
+            parameters: region.join.true_arguments.len(),
+            registers: join_registers.len(),
+        });
+    }
+
+    let prefix = lower_dag(
+        &region.prefix,
+        input_registers,
+        &[condition_register],
+        condition_register,
+    )?;
+    if region.prefix.outputs[0].id != region.join.condition || region.prefix.outputs[0].width != 1 {
+        return Err(LoweringError::UnsupportedSequenceInterface);
+    }
+
+    let mut available = region
+        .prefix
+        .inputs
+        .iter()
+        .zip(input_registers)
+        .map(|(port, register)| (port.id, *register))
+        .collect::<BTreeMap<_, _>>();
+    available.insert(region.join.condition, condition_register);
+    let true_transfer =
+        lower_edge_transfer(&region.join.true_arguments, join_registers, &available)?;
+    let false_transfer =
+        lower_edge_transfer(&region.join.false_arguments, join_registers, &available)?;
+    let continuation = lower_dag(
+        &region.join.continuation,
+        join_registers,
+        continuation_temporaries,
+        requested_output,
+    )?;
+    Ok(LoweredControlRegion {
+        prefix,
+        condition_register,
+        when_true_transfer: true_transfer,
+        when_false_transfer: false_transfer,
+        join_registers: join_registers.to_vec(),
+        continuation,
+    })
+}
+
+fn lower_edge_transfer(
+    arguments: &[BlockArgument],
+    destinations: &[Gpr],
+    available: &BTreeMap<u64, Gpr>,
+) -> Result<Vec<Instruction>, LoweringError> {
+    let mut pending = arguments
+        .iter()
+        .zip(destinations)
+        .map(|(argument, destination)| {
+            let source = available
+                .get(&argument.value)
+                .copied()
+                .ok_or(LoweringError::UndefinedValue(argument.value))?;
+            Ok((*destination, source))
+        })
+        .collect::<Result<Vec<_>, LoweringError>>()?;
+    pending.retain(|(destination, source)| destination != source);
+    let mut instructions = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let Some(index) = pending
+            .iter()
+            .position(|(destination, _)| !pending.iter().any(|(_, source)| source == destination))
+        else {
+            return Err(LoweringError::ParallelCopyNeedsTemporary);
+        };
+        let (destination, source) = pending.remove(index);
+        instructions.push(Instruction::MovRR {
+            destination,
+            source,
+        });
+    }
+    Ok(instructions)
 }
 
 /// Lower the first structured control-flow slice. Each successor is selected
@@ -2788,7 +2918,110 @@ fn consume_use(uses: &mut BTreeMap<u64, usize>, value: u64) -> Result<(), Loweri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::function_ir_cert::Port;
+    use crate::function_ir_cert::{BlockArgument, ConditionalJoinRegion, ControlRegion, Port};
+
+    #[test]
+    fn max_plus_lowers_to_edge_moves_and_one_shared_continuation() {
+        let p = |id, width| Port { id, width };
+        let branch_inputs = vec![p(0, 64), p(1, 64), p(2, 64)];
+        let graph = ControlRegion {
+            prefix: Region {
+                inputs: branch_inputs.clone(),
+                nodes: vec![Node::UnsignedLessThan {
+                    width: 64,
+                    output: 3,
+                    left: 0,
+                    right: 1,
+                }],
+                outputs: vec![p(3, 1)],
+            },
+            join: ConditionalJoinRegion {
+                inputs: vec![p(0, 64), p(1, 64), p(2, 64), p(3, 1)],
+                condition: 3,
+                arguments: branch_inputs.clone(),
+                when_true: Region {
+                    inputs: branch_inputs.clone(),
+                    nodes: vec![],
+                    outputs: vec![p(1, 64), p(2, 64)],
+                },
+                true_arguments: vec![
+                    BlockArgument {
+                        width: 64,
+                        value: 1,
+                        parameter: 4,
+                    },
+                    BlockArgument {
+                        width: 64,
+                        value: 2,
+                        parameter: 5,
+                    },
+                ],
+                when_false: Region {
+                    inputs: branch_inputs,
+                    nodes: vec![],
+                    outputs: vec![p(0, 64), p(2, 64)],
+                },
+                false_arguments: vec![
+                    BlockArgument {
+                        width: 64,
+                        value: 0,
+                        parameter: 4,
+                    },
+                    BlockArgument {
+                        width: 64,
+                        value: 2,
+                        parameter: 5,
+                    },
+                ],
+                continuation: Region {
+                    inputs: vec![p(4, 64), p(5, 64)],
+                    nodes: vec![Node::Add {
+                        width: 64,
+                        output: 6,
+                        left: 4,
+                        right: 5,
+                    }],
+                    outputs: vec![p(6, 64)],
+                },
+            },
+        };
+        let lowered = lower_control_region(
+            &graph,
+            &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+            Gpr::Rcx,
+            &[Gpr::R8, Gpr::Rdx],
+            &[Gpr::Rax],
+            Gpr::Rax,
+        )
+        .unwrap();
+        assert_eq!(
+            lowered.when_true_transfer,
+            vec![Instruction::MovRR {
+                destination: Gpr::R8,
+                source: Gpr::Rsi
+            }]
+        );
+        assert_eq!(
+            lowered.when_false_transfer,
+            vec![Instruction::MovRR {
+                destination: Gpr::R8,
+                source: Gpr::Rdi
+            }]
+        );
+        assert_eq!(
+            lowered.continuation.instructions,
+            vec![
+                Instruction::MovRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::R8
+                },
+                Instruction::AddRR {
+                    destination: Gpr::Rax,
+                    source: Gpr::Rdx
+                },
+            ]
+        );
+    }
 
     fn sum4(left_first: bool) -> Region {
         let left = Node::Add {
