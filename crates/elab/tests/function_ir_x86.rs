@@ -1,5 +1,6 @@
 //! FunctionIR `Add` through typed x86 block selection, encoding layout, and
 //! relational execution.
+#![allow(dead_code)]
 
 mod support;
 
@@ -49,7 +50,36 @@ const MODULES: &[(&str, &str)] = &[
     ("function_ir_x86", FUNCTION_IR_X86),
 ];
 
-#[test]
+pub fn run_model_tests() {
+    function_ir_x86_suite();
+}
+
+pub fn run_lowering_tests() {
+    checked_example_x86_lowerings_are_current();
+    stale_generated_add_dag_lowering_is_rejected();
+}
+
+pub fn run_source_tests() {
+    source_bitvec_add_reaches_checked_x86_artifact();
+    stale_source_function_ir_certificate_is_rejected();
+    source_fragment_declines_nested_expressions();
+    structured_source_emission_parses_as_a_complete_module();
+}
+
+pub fn run_alu_tests() {
+    generated_mixed_binary_alu_dag_checks();
+    generated_right_first_sum4_checks();
+    generated_commutative_right_reuse_checks();
+    generated_constant_add_dag_checks();
+}
+
+pub fn run_control_flow_tests() {
+    generated_mixed_unsigned_comparison_checks();
+    generated_signed_comparison_checks();
+    generated_structured_conditional_checks();
+    generated_comparison_prefixed_conditional_checks();
+}
+
 fn function_ir_x86_suite() {
     let base = support::semantic_test_base(MODULES);
     composed_artifact_is_available(&base);
@@ -58,12 +88,10 @@ fn function_ir_x86_suite() {
     wrong_canonical_byte_length_is_refused(&base);
 }
 
-#[test]
 fn generated_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(5);
 }
 
-#[test]
 fn source_bitvec_add_reaches_checked_x86_artifact() {
     const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
          \x20   bitvec::add(64, left, right)\n\
@@ -108,7 +136,6 @@ fn source_bitvec_add_reaches_checked_x86_artifact() {
     }
 }
 
-#[test]
 fn stale_source_function_ir_certificate_is_rejected() {
     const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
          \x20   bitvec::add(64, left, right)\n\
@@ -142,7 +169,6 @@ fn stale_source_function_ir_certificate_is_rejected() {
     }
 }
 
-#[test]
 fn source_fragment_declines_nested_expressions() {
     let source = "fn nested(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
         bitvec::add(64, bitvec::add(64, left, right), right)\n}";
@@ -161,7 +187,6 @@ fn source_fragment_declines_nested_expressions() {
     );
 }
 
-#[test]
 fn structured_source_emission_parses_as_a_complete_module() {
     const SOURCE: &str = "fn source_xor(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
          \x20   bitvec::bxor(64, left, right)\n\
@@ -186,9 +211,7 @@ fn structured_source_emission_parses_as_a_complete_module() {
     }
 }
 
-#[test]
-#[ignore = "elaborated source reflection/module rail; run explicitly"]
-fn elaborated_source_reflection_builds_a_shared_dag() {
+pub fn elaborated_source_reflection_builds_a_shared_dag() {
     const SOURCE: &str = r#"
 import bitvec;
 
@@ -264,9 +287,7 @@ fn unsupported_shift(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     );
 }
 
-#[test]
-#[ignore = "full nested source-to-x86 proof rail; run explicitly"]
-fn elaborated_shared_source_reaches_checked_x86_artifact() {
+pub fn elaborated_shared_source_reaches_checked_x86_artifact() {
     const SOURCE: &str = r#"
 import bitvec;
 
@@ -305,9 +326,7 @@ fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     }
 }
 
-#[test]
-#[ignore = "20/100-node elaborated source-to-x86 scaling rail; run explicitly"]
-fn elaborated_source_x86_scaling() {
+pub fn elaborated_source_x86_scaling() {
     let node_count = std::env::var("HEATHER_SOURCE_X86_NODES")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -500,9 +519,7 @@ fn report_scaling_timings(
     }
 }
 
-#[test]
-#[ignore = "20-node FunctionIR/x86 scaling rail; run explicitly"]
-fn generated_20_node_mixed_binary_alu_dag_checks() {
+pub fn generated_20_node_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(20);
 }
 
@@ -614,7 +631,6 @@ fn timing_category(item: &str) -> &'static str {
     }
 }
 
-#[test]
 fn checked_example_x86_lowerings_are_current() {
     let expected = checked_example_lowering_module();
     if std::env::var_os("UPDATE_FUNCTION_IR_X86").is_some() {
@@ -626,7 +642,6 @@ fn checked_example_x86_lowerings_are_current() {
     assert_eq!(FUNCTION_IR_X86, expected);
 }
 
-#[test]
 fn stale_generated_add_dag_lowering_is_rejected() {
     // The control generates its own module; do not pay to check the complete
     // generated golden first merely to prove that a dishonest one fails.
@@ -634,7 +649,6 @@ fn stale_generated_add_dag_lowering_is_rejected() {
     stale_lowering_model_is_rejected(&base);
 }
 
-#[test]
 fn generated_right_first_sum4_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let emission = lower::generate(
@@ -656,7 +670,6 @@ fn generated_right_first_sum4_checks() {
     }
 }
 
-#[test]
 fn generated_commutative_right_reuse_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let region = commutative_right_reuse();
@@ -681,7 +694,6 @@ fn generated_commutative_right_reuse_checks() {
     }
 }
 
-#[test]
 fn generated_constant_add_dag_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let region = constant_add();
@@ -712,7 +724,6 @@ fn generated_constant_add_dag_checks() {
     }
 }
 
-#[test]
 fn generated_mixed_unsigned_comparison_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let region = mixed_unsigned_comparison();
@@ -743,7 +754,6 @@ fn generated_mixed_unsigned_comparison_checks() {
     }
 }
 
-#[test]
 fn generated_signed_comparison_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let region = signed_comparison();
@@ -768,7 +778,6 @@ fn generated_signed_comparison_checks() {
     }
 }
 
-#[test]
 fn generated_structured_conditional_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let branch = |node| Region {
@@ -840,7 +849,6 @@ fn generated_structured_conditional_checks() {
     }
 }
 
-#[test]
 fn generated_comparison_prefixed_conditional_checks() {
     let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     let comparison = Region {

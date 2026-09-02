@@ -90,3 +90,11 @@ envelope before printing a result line. The focused repaired case passes in
 hide this by raising the rail: either continue reducing the execution/
 placement constants owned here or shard the now-independent test groups as
 `issues/integration-test-prefix-reelaboration.md` did for Omega.
+
+The suite is now split into model, checked lowering, source, binary-ALU, and
+control-flow test processes, with the explicitly ignored large-DAG probes in a
+sixth scaling target. The old `function_ir_x86.rs` is shared fixture code and
+deliberately contains no tests of its own. This keeps one canonical
+workload/emitter while giving each independent semantic group its own unchanged
+process rail; the content-addressed semantic module store prevents the split
+from multiplying the expensive checked-library prefix.
