@@ -157,3 +157,31 @@ and should re-read this at the same time — conversion no longer calls
   instruction profile alone; bucket/probe behavior and the full memory rail
   are part of this cache's acceptance test. A cache redesign should instead
   address admission and closure production together.
+
+- 2026-09-02: The next environment-representation probes separated retained
+  size from the tempting source-level story. An arena environment cell used
+  to contain its captured value plus an entire `Env` tail (32 bytes): the
+  arena pointer and length were therefore repeated at every link. Making the
+  cell a plain `(value, next-cell)` pair cuts it to 16 bytes while preserving
+  the 24-byte, copyable `Env { arena, head, len }` handle and all lookup/
+  prefix semantics. On the generated 20-node FunctionIR module the first
+  run moved 84.7 s to 82.2 s; that small wall-time change is within machine
+  noise, but the structural saving applies to all 27.2 M cells observed by
+  the five-node allocation instrument (about 435 MiB of cell storage rather
+  than 870 MiB).
+
+  Two more aggressive forms were implemented as probes and rejected. A
+  stack-local virtual `Push1Env` avoided materializing only 357 of
+  27,170,490 cells (0.0013%): dependent closure construction almost always
+  captures the extended environment before returning, so the virtual view
+  immediately has to become persistent. Moving `len` into each node made
+  `Env` and `TmClo` eight bytes smaller, but made every cell eight bytes
+  larger and did not shrink `TyClo` at all (its uncommon inline `Level`
+  payloads determine that enum's size). At the measured allocation mix this
+  is roughly 200 MiB saved in term closures versus 216 MiB added in cells,
+  before allocator effects, so it was not retained. A future compact handle
+  must remove its arena pointer while keeping 16-byte cells, which means
+  threading the already-known query arena through extension; shrinking
+  `TyClo` additionally requires moving the uncommon synthesized level-bearing
+  cases out of line. Those changes should land together and earn their larger
+  trusted-kernel surface with a fresh whole-workload measurement.

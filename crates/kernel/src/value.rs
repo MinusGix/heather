@@ -77,7 +77,7 @@ pub struct Env<'v> {
 
 struct EnvNode<'v> {
     val: &'v TmClo<'v>,
-    rest: Env<'v>,
+    rest: Option<&'v EnvNode<'v>>,
 }
 
 /// The result of resolving a de Bruijn index against an [`Env`].
@@ -125,7 +125,7 @@ impl<'v> Env<'v> {
     /// equality but cheaper than conversion, and is stable for the lifetime
     /// of the query's arena.
     pub fn values_ptr_eq(a: &Env<'v>, b: &Env<'v>) -> bool {
-        Self::values_ptr_eq_prefix(a, b, a.len)
+        Self::values_ptr_eq_prefix(a, b, a.len())
     }
 
     /// Pointwise identity for only the `used` innermost entries.
@@ -134,18 +134,19 @@ impl<'v> Env<'v> {
     /// cannot observe the older captured tail. Equal-length environments are
     /// still required so the same index denotes the same binder/base slot.
     pub fn values_ptr_eq_prefix(a: &Env<'v>, b: &Env<'v>, used: u32) -> bool {
-        if a.len != b.len {
+        let len = a.len;
+        if len != b.len {
             return false;
         }
-        let (mut x, mut y) = (a, b);
-        let mut remaining = used.min(a.len);
+        let (mut x, mut y) = (a.node, b.node);
+        let mut remaining = used.min(len);
         while remaining > 0 {
-            match (x.node, y.node) {
+            match (x, y) {
                 (None, None) => return true,
                 (Some(nx), Some(ny)) if std::ptr::eq(nx, ny) => return true,
                 (Some(nx), Some(ny)) if std::ptr::eq(nx.val, ny.val) => {
-                    x = &nx.rest;
-                    y = &ny.rest;
+                    x = nx.rest;
+                    y = ny.rest;
                     remaining -= 1;
                 }
                 _ => return false,
@@ -160,9 +161,10 @@ impl<'v> Env<'v> {
         if let Some(m) = self.arena.metrics {
             ValueMetrics::bump(&m.inner.env_nodes);
         }
+        let node = EnvNode { val, rest: self.node };
         Env {
             arena: self.arena,
-            node: Some(self.arena.envs.alloc(EnvNode { val, rest: *self })),
+            node: Some(self.arena.envs.alloc(node)),
             len: self.len + 1,
         }
     }
@@ -179,21 +181,22 @@ impl<'v> Env<'v> {
 
     /// Resolve a de Bruijn index (0 = innermost).
     pub fn lookup(&self, i: u32) -> Lookup<'v> {
-        if i >= self.len {
-            return Lookup::Base(i - self.len);
+        let len = self.len();
+        if i >= len {
+            return Lookup::Base(i - len);
         }
-        let mut cur = self;
+        let mut cur = self.node;
         let mut k = i;
         loop {
             // Safe by the length invariant: `k < cur.len` at every step.
-            let Some(n) = cur.node.as_ref() else {
+            let Some(n) = cur else {
                 return Lookup::Base(k);
             };
             if k == 0 {
                 return Lookup::Bound(n.val);
             }
             k -= 1;
-            cur = &n.rest;
+            cur = n.rest;
         }
     }
 
@@ -217,9 +220,12 @@ impl<'v> Env<'v> {
     /// The outermost `n` entries — the identity environment of a Γ-prefix.
     pub fn prefix(&self, n: u32) -> Env<'v> {
         let mut cur = *self;
-        while cur.len > n {
-            match cur.node.as_ref() {
-                Some(node) => cur = node.rest,
+        while cur.len() > n {
+            match cur.node {
+                Some(node) => {
+                    cur.node = node.rest;
+                    cur.len -= 1;
+                }
                 None => break,
             }
         }
@@ -229,11 +235,11 @@ impl<'v> Env<'v> {
     /// The entries, **outermost first** — the order [`Env::extend`] wants.
     /// Used by the outer-namespace maps, which have to rebuild the list.
     pub fn to_vec(&self) -> Vec<&'v TmClo<'v>> {
-        let mut out = Vec::with_capacity(self.len as usize);
-        let mut cur = self;
-        while let Some(n) = cur.node.as_ref() {
+        let mut out = Vec::with_capacity(self.len() as usize);
+        let mut cur = self.node;
+        while let Some(n) = cur {
             out.push(n.val);
-            cur = &n.rest;
+            cur = n.rest;
         }
         out.reverse();
         out
@@ -1381,7 +1387,7 @@ impl Elim<'_> {
 
 impl fmt::Debug for Env<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        node(f, |f| write!(f, "ρ[{}]", self.len))
+        node(f, |f| write!(f, "ρ[{}]", self.len()))
     }
 }
 
@@ -1610,6 +1616,23 @@ mod tests {
         assert!(super::Env::values_ptr_eq_prefix(&left, &right, 0));
         assert!(super::Env::values_ptr_eq_prefix(&left, &right, 1));
         assert!(!super::Env::values_ptr_eq_prefix(&left, &right, 2));
+    }
+
+    #[test]
+    fn environment_prefix_keeps_length_and_abstract_boundary_in_sync() {
+        let arena = ValueArena::new();
+        let base = super::Env::empty(&arena);
+        let outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let env = base.push(outer).push(inner);
+
+        let prefix = env.prefix(1);
+        assert_eq!(prefix.len(), 1);
+        assert!(matches!(
+            prefix.lookup(0),
+            super::Lookup::Bound(v) if std::ptr::eq(v, outer)
+        ));
+        assert!(matches!(prefix.lookup(1), super::Lookup::Base(0)));
     }
 
     #[test]

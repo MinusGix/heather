@@ -179,6 +179,18 @@ from textbook NbE forced by context variables, and getting it wrong is a
 silent scoping bug, so it is pinned by the differential test's open-term
 cases (`wt.rs` generates non-empty Γ over all three base shapes).
 
+**Implemented representation note (2026-09-02).** The persistent local
+environment has a copyable handle `(arena, head, len)` and arena-owned cells
+`(value, next)`. In particular a cell does not recursively embed the whole
+handle: doing so repeated the arena pointer and length in every captured
+link, doubling a cell from 16 to 32 bytes. The explicit handle length is not
+merely a cached convenience; it identifies where indices cross into the
+abstract prefix, while cells remain context-independent shared tails.
+`issues/value-domain-allocation-constant.md` records two rejected follow-ups:
+a virtual one-binding view almost always had to persist immediately, and
+putting the length back in every cell traded more cell memory than it saved
+in the smaller subset of closure handles.
+
 ### 3.3 The constructors, enumerated against `term.rs`
 
 `Type` has 21 variants, `Term` 47. The mapping is mechanical, and the only
