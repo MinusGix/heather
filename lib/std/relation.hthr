@@ -9,106 +9,6 @@ import list;
 import pair;
 
 // ---------------------------------------------------------------------------
-// Properties of homogeneous relations.
-//
-// Each property is indexed by the relation it describes, for the same reason
-// `Monoid<A>(op)` is indexed by its operation: one carrier may have several
-// relations, and no instance is allowed to nominate one as "the" relation.
-// These are deliberately independent pieces. Orders, setoids, and apartness
-// compose the pieces they actually need; decidability belongs to none of them.
-
-class Reflexive<A>(R: A → A → Type) {
-    rel_refl: (x: A) → R(x, x),
-}
-
-class Symmetric<A>(R: A → A → Type) {
-    rel_sym: (x, y: A) → R(x, y) → R(y, x),
-}
-
-class Transitive<A>(R: A → A → Type) {
-    rel_trans: (x, y, z: A) → R(x, y) → R(y, z) → R(x, z),
-}
-
-class Antisymmetric<A>(R: A → A → Type) {
-    rel_antisym: (x, y: A) → R(x, y) → R(y, x) → x = y,
-}
-
-class Irreflexive<A>(R: A → A → Type) {
-    rel_irrefl: (x: A) → R(x, x) → False,
-}
-
-class Total<A>(R: A → A → Type) {
-    rel_total: (x, y: A) → R(x, y) ∨ R(y, x),
-}
-
-// The first composite is equality-like rather than order-like. Its empty body
-// is an intentional class-composition probe: the one useful dictionary has
-// exactly the three canonical parent views and no copied law of its own.
-class Equivalence<A>(R: A → A → Type)
-    extends Reflexive<A>(R), Symmetric<A>(R), Transitive<A>(R)
-{}
-
-// Pulling a relation back along a function is the smallest non-identity test
-// of the property vocabulary. It is also the operation later setoid work will
-// use to state induced equality without inventing a second relation API.
-fn Pullback<A, B>(f: A → B, R: B → B → Type) → A → A → Type {
-    λ x y => R(f(x), f(y))
-}
-
-fn pullback_reflexive<A, B>(f: A → B, R: B → B → Type,
-    h: Reflexive<B>(R)) → Reflexive<A>(Pullback(f, R))
-{
-    Reflexive(λ x => h.rel_refl(f(x)))
-}
-
-fn pullback_symmetric<A, B>(f: A → B, R: B → B → Type,
-    h: Symmetric<B>(R)) → Symmetric<A>(Pullback(f, R))
-{
-    Symmetric(λ x y hxy => h.rel_sym(f(x), f(y), hxy))
-}
-
-fn pullback_transitive<A, B>(f: A → B, R: B → B → Type,
-    h: Transitive<B>(R)) → Transitive<A>(Pullback(f, R))
-{
-    Transitive(λ x y z hxy hyz =>
-        h.rel_trans(f(x), f(y), f(z), hxy, hyz))
-}
-
-fn pullback_equivalence<A, B>(f: A → B, R: B → B → Type,
-    h: Equivalence<B>(R)) → Equivalence<A>(Pullback(f, R))
-{
-    Equivalence(
-        λ x => h.rel_refl(f(x)),
-        λ x y hxy => h.rel_sym(f(x), f(y), hxy),
-        λ x y z hxy hyz =>
-            h.rel_trans(f(x), f(y), f(z), hxy, hyz))
-}
-
-// A relation-preserving map is kept as a predicate, not a class: the map and
-// both relations already identify the property completely, and the first
-// consumers pass its evidence explicitly. Composition is heterogeneous in
-// both carrier changes, ensuring this layer is not equality-only in disguise.
-fn PreservesRelation<A, B>(RA: A → A → Type, RB: B → B → Type,
-    f: A → B) → Type
-{
-    (x, y: A) → RA(x, y) → RB(f(x), f(y))
-}
-
-theorem preserves_relation_id<A>(R: A → A → Type):
-    PreservesRelation(R, R, λ x => x)
-{
-    λ x y h => h
-}
-
-theorem preserves_relation_compose<A, B, C>(RA: A → A → Type,
-    RB: B → B → Type, RC: C → C → Type, f: A → B, g: B → C,
-    hf: PreservesRelation(RA, RB, f), hg: PreservesRelation(RB, RC, g)):
-    PreservesRelation(RA, RC, λ x => g(f(x)))
-{
-    λ x y h => hg(f(x), f(y), hf(x, y, h))
-}
-
-// ---------------------------------------------------------------------------
 // Inclusion, equivalence, and the two refinement readings.
 
 fn Included<A, B>(R, S: A → B → Type) → Type {
@@ -182,23 +82,6 @@ theorem must_refines_trans<A, B>(R, S, T: A → B → Type,
 // Identity, converse, composition, and deterministic graphs.
 
 fn RelId<A>(a, b: A) → Type { a = b }
-
-// Identity is the generic concrete control. A constructor, rather than an
-// `instance<A>`, is deliberate: a bare type variable has no carrier head that
-// could own the canonical global `A::Equivalence`. Concrete carriers may
-// register the same dictionary when resolution is useful.
-fn relid_equivalence<A>() → Equivalence<A>(RelId<A>) {
-    Equivalence(
-        λ x => refl,
-        λ x y h => sym(h),
-        λ x y z hxy hyz => trans(hxy, hyz))
-}
-
-instance Equivalence<Nat>(RelId<Nat>) {
-    rel_refl := λ x => refl,
-    rel_sym := λ x y h => sym(h),
-    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
-}
 
 fn Converse<A, B>(R: A → B → Type, b: B, a: A) → Type { R(a, b) }
 

@@ -9,6 +9,7 @@ const OPTION: &str = include_str!("../../../lib/std/option.hthr");
 const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
+const RELATION_PROPS: &str = include_str!("../../../lib/std/relation_props.hthr");
 
 fn elaborated() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -20,6 +21,7 @@ fn elaborated() -> Elaborator {
         ("pair", PAIR),
         ("list", LIST),
         ("relation", RELATION),
+        ("relation_props", RELATION_PROPS),
     ] {
         if let Err(err) = e.elab_module_source(name, src) {
             let msg = match err {
@@ -42,6 +44,7 @@ fn relation_properties_compose_at_concrete_and_open_carriers() {
     let mut e = elaborated();
     let probe = r#"
 import relation;
+import relation_props;
 
 fn from_reflexive<A: Reflexive(R)>(R: A -> A -> Type, x: A) -> R(x, x) {
     A.rel_refl(x)
@@ -79,6 +82,7 @@ theorem heterogeneous_composition<A, B, C>(
 
     let unrelated = r#"
 import relation;
+import relation_props;
 inductive Point { Pt }
 fn Always(x, y: Point) -> Type { True }
 instance Symmetric<Point>(Always) { rel_sym := λ x y h => trivial }

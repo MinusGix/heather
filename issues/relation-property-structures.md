@@ -46,7 +46,7 @@ No decision procedure belongs in these structures.
 ## Log
 
 - 2026-09-02: Filed as the layer beneath orders and setoids.
-- 2026-09-02: First round LANDED in `std/relation`: six primitive property
+- 2026-09-02: First round LANDED in `std/relation_props`: six primitive property
   classes, field-free `Equivalence`, identity constructor plus a concrete
   canonical control, pullback, and heterogeneous relation-preserving
   composition. Focused acceptance is 5/5. The required full `scripts/test`
@@ -57,3 +57,10 @@ No decision procedure belongs in these structures.
   therefore it is an inherited kernel baseline failure, not relation residue.
   This issue's acceptance is complete and the tracker closes it rather than
   owning that unrelated regression.
+- 2026-09-02: Moved the law-bearing hierarchy out of `std/relation` when the
+  compiler's heavy FunctionIR x86 test exposed how little performance margin
+  semantic-relation customers currently have. `std/relation_props` now owns
+  the classes, pullbacks, and relation-preserving maps, while the established
+  semantic module remains a lean dependency. A detached-base control later
+  confirmed that the x86 target's Furnace SIGKILL is inherited even without
+  the new hierarchy; the split is still the cleaner dependency boundary.
