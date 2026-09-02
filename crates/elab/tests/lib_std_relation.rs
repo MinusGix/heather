@@ -38,6 +38,62 @@ fn the_relation_module_checks() {
 }
 
 #[test]
+fn relation_properties_compose_at_concrete_and_open_carriers() {
+    let mut e = elaborated();
+    let probe = r#"
+import relation;
+
+fn from_reflexive<A: Reflexive(R)>(R: A -> A -> Type, x: A) -> R(x, x) {
+    A.rel_refl(x)
+}
+
+// The concrete identity instance is `Equivalence`; resolution reaches its
+// canonical `Reflexive` parent rather than requiring a second declaration.
+theorem nat_identity_from_parent(n: Nat): RelId(n, n) {
+    from_reflexive(RelId<Nat>, n)
+}
+
+// A bare type variable cannot own a canonical instance, so the open-carrier
+// spelling is the explicit generic constructor.
+theorem open_identity<A>(x: A): RelId(x, x) {
+    relid_equivalence<A>().rel_refl(x)
+}
+
+theorem pullback_identity<A, B>(f: A -> B, x: A):
+    Pullback(f, RelId<B>, x, x)
+{
+    pullback_equivalence(f, RelId<B>, relid_equivalence<B>()).rel_refl(x)
+}
+
+theorem heterogeneous_composition<A, B, C>(
+    RA: A -> A -> Type, RB: B -> B -> Type, RC: C -> C -> Type,
+    f: A -> B, g: B -> C,
+    hf: PreservesRelation(RA, RB, f), hg: PreservesRelation(RB, RC, g),
+    x, y: A, hxy: RA(x, y)): RC(g(f(x)), g(f(y)))
+{
+    preserves_relation_compose(RA, RB, RC, f, g, hf, hg)(x, y, hxy)
+}
+"#;
+    e.elab_module_source("property_customers", probe)
+        .expect("relation properties must compose at concrete and open carriers");
+
+    let unrelated = r#"
+import relation;
+inductive Point { Pt }
+fn Always(x, y: Point) -> Type { True }
+instance Symmetric<Point>(Always) { rel_sym := λ x y h => trivial }
+fn needs_reflexive<A: Reflexive(R)>(R: A -> A -> Type, x: A) -> R(x, x) {
+    A.rel_refl(x)
+}
+theorem bad(x: Point): Always(x, x) { needs_reflexive(Always, x) }
+"#;
+    assert!(
+        e.elab_module_source("unrelated_property", unrelated).is_err(),
+        "an unrelated relation property was used as reflexivity"
+    );
+}
+
+#[test]
 fn algebra_and_finite_execution_laws_apply_at_open_inputs() {
     let mut e = elaborated();
     let probe = r#"
