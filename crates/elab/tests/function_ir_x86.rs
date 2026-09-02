@@ -186,6 +186,125 @@ fn structured_source_emission_parses_as_a_complete_module() {
 }
 
 #[test]
+#[ignore = "elaborated source reflection/module rail; run explicitly"]
+fn elaborated_source_reflection_builds_a_shared_dag() {
+    const SOURCE: &str = r#"
+import bitvec;
+
+fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    let shared = bitvec::add(64, left, right);
+    bitvec::bxor(64, shared,
+        bitvec::add(64, shared, bitvec::ofNat(64, 7)))
+}
+
+fn unsupported_shift(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    bitvec::shift_left(64, left, 1)
+}
+"#;
+    let mut elaborator = support::semantic_test_base(&MODULES[..15]);
+    if let Err(error) = elaborator.elab_module_source("shared_alu_source", SOURCE) {
+        panic!("shared source did not elaborate: {}", error.render(SOURCE));
+    }
+    let reflected = function_ir_source::reflect_elaborated(&elaborator, "shared_alu")
+        .expect("reflect checked shared expression");
+    assert_eq!(
+        reflected,
+        function_ir_source::reflect_elaborated(&elaborator, "shared_alu")
+            .expect("repeat deterministic reflection"),
+    );
+    assert_eq!(
+        reflected.region.nodes,
+        vec![
+            Node::Add {
+                width: 64,
+                output: 2,
+                left: 0,
+                right: 1
+            },
+            Node::Const {
+                width: 64,
+                output: 3,
+                value: 7
+            },
+            Node::Add {
+                width: 64,
+                output: 4,
+                left: 2,
+                right: 3
+            },
+            Node::BitXor {
+                width: 64,
+                output: 5,
+                left: 2,
+                right: 4
+            },
+        ],
+    );
+    assert_eq!(reflected.region.outputs, vec![Port { id: 5, width: 64 }]);
+    let emission = function_ir_source::generate_elaborated_function_ir(
+        &elaborator,
+        "shared_alu_function_ir",
+        "shared_alu",
+    )
+    .expect("emit staged source denotation");
+    let module = format!(
+        "import function_ir;\nimport bitvec;\nimport list;\nimport logic;\nimport nat;\n\n{}",
+        emission.text,
+    );
+    if let Err(error) = parse_file(&module) {
+        panic!("staged source denotation did not parse: {}", error.msg);
+    }
+    let message = function_ir_source::reflect_elaborated(&elaborator, "unsupported_shift")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("outside Add/Sub/AND/OR/XOR/ofNat"),
+        "{message}"
+    );
+}
+
+#[test]
+#[ignore = "full nested source-to-x86 proof rail; run explicitly"]
+fn elaborated_shared_source_reaches_checked_x86_artifact() {
+    const SOURCE: &str = r#"
+import bitvec;
+
+fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    let shared = bitvec::add(64, left, right);
+    bitvec::bxor(64, shared,
+        bitvec::add(64, shared, bitvec::ofNat(64, 7)))
+}
+"#;
+    let mut source_base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    if let Err(error) = source_base.elab_module_source("shared_alu_x86_source", SOURCE) {
+        panic!("shared source did not elaborate: {}", error.render(SOURCE));
+    }
+    let emission = function_ir_source::generate_elaborated_x86(
+        &source_base,
+        "shared_alu_x86",
+        "shared_alu",
+        [Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax, Gpr::R8],
+        Gpr::Rax,
+    )
+    .expect("compile elaborated shared expression");
+    assert_eq!(emission.reflected.region.nodes.len(), 4);
+    assert_eq!(emission.instructions.len(), 5);
+    assert!(emission.instructions.contains(&lower::Instruction::MovRI {
+        destination: Gpr::R8,
+        immediate: 7,
+    }));
+    let source = generated_module(&emission.text);
+    let mut checker = source_base;
+    if let Err(error) = checker.elab_module_source("shared_alu_x86_artifact", &source) {
+        panic!(
+            "nested source-to-x86 artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+}
+
+#[test]
 #[ignore = "20-node FunctionIR/x86 scaling rail; run explicitly"]
 fn generated_20_node_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(20);

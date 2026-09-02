@@ -839,19 +839,31 @@ observes that source application as its result, so the path is source function
 to canonical bytes and relational machine execution without passing through
 `ir_v1`.
 
-The frontend presently reads the surface declaration. This is not a trust
-shortcut: the generated theorem names the elaborated source definition and
-the kernel rejects a stale graph. The acceptance test deliberately generates
-from addition and then changes the source body to subtraction; conversion
-rejects the certificate. Moving recognition onto elaborated terms remains an
-available hardening step when the fragment encounters surface sugar worth
-normalizing before selection.
+The initial entry point reads a surface declaration, but the compiler-shaped
+path now reflects the checked global body. It resolves operation heads by
+their absolute global identities, peels the elaborated lambdas, and retains
+the source function's canonical qualified name for certificates checked in a
+different module. Generated source imports that defining module explicitly.
+The kernel still rejects a stale graph; reflection does not bypass ordinary
+elaboration or checking.
 
-The fragment declines polymorphism, implicit or solver parameters, local
-statements, non-64-bit types, nested expressions, and unknown operations with
-specific diagnostics. [[source-function-ir-expression-dags]] owns the next
-useful widening rather than allowing unsupported syntax to leak into a vague
-backend error.
+Nested Add/Sub/AND/OR/XOR and closed `bitvec::ofNat(64, literal)` expressions
+lower by deterministic postorder traversal. Structural memoization recovers
+sharing after elaboration: even when a surface `let` has substituted and
+duplicated its body, equal elaborated subterms receive one stable FunctionIR
+port. Unsupported resolved globals decline at this boundary with the admitted
+operation family named.
+
+Source denotation is staged like machine execution. Generated suffix facts
+extract each `NodeHolds` equation at constant projection depth, and one opaque
+value theorem per node composes that equation with its operands' earlier value
+facts. The root theorem merely specializes the final value fact to the actual
+source function, whose transparent body unfolds at the checker boundary. The
+four-node shared Add/constant/Add/XOR acceptance artifact selects five x86
+instructions and checks end-to-end in 142.28 seconds, only modestly above the
+roughly 130-second single-node source artifact on the same local machine.
+[[source-function-ir-expression-dags]] remains open for the 20/100-node rails
+and adversarial stale-edge controls.
 
 Proof source emission now uses the Rust-side construction API documented in
 `docs/generated-heather-emission-api.md`. Expressions, positional and named

@@ -68,6 +68,11 @@ straight-line x86 header also uses it for instruction values, instruction-list
 spines, byte lists, byte lengths, and decoding declarations. That complete
 header slice contains no raw Heather syntax.
 
+The nested-source frontend also uses the API for its scheduled node-list
+suffixes, graph-equation projections, per-node value theorems, operation
+lambdas, and final source specialization. Generated names are the only string
+formatting in that semantic proof path.
+
 The older FunctionIR validity and x86 proof generators can migrate
 declaration-by-declaration. `Module::raw` permits composition with their
 already-checked output during that transition; it should not be the default

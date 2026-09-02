@@ -5,13 +5,17 @@
 //! theorem names the actual source function, so stale translation is rejected
 //! by ordinary elaboration and kernel checking.
 
+use std::collections::BTreeMap;
+
+use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};
 
+use crate::Elaborator;
 use crate::function_ir_cert::{self as cert, Node, Port, Region};
 use crate::function_ir_x86_lower::{self as x86, Gpr, LoweringError};
 use crate::heather_emit::{Block, Declaration, Expr as HeatherExpr, Module, Parameter, Statement};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceBinaryOperation {
     Add,
     Sub,
@@ -66,6 +70,27 @@ impl SourceBinaryOperation {
             },
         }
     }
+
+    fn semantic_name(self) -> &'static str {
+        match self {
+            Self::Add => "bitvec::add",
+            Self::Sub => "bitvec::sub",
+            Self::BitAnd => "bitvec::band",
+            Self::BitOr => "bitvec::bor",
+            Self::BitXor => "bitvec::bxor",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceExpr {
+    Input(u64),
+    Constant(u64),
+    Binary {
+        operation: SourceBinaryOperation,
+        left: Box<SourceExpr>,
+        right: Box<SourceExpr>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +99,8 @@ pub struct ReflectedFunction {
     pub parameter_names: [String; 2],
     pub operation: SourceBinaryOperation,
     pub region: Region,
+    pub result: SourceExpr,
+    pub node_expressions: Vec<(u64, SourceExpr)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,6 +160,11 @@ pub fn reflect(declaration: &Decl) -> Result<ReflectedFunction, SourceError> {
     let left_id = parameter_id(left, declaration)?;
     let right_id = parameter_id(right, declaration)?;
     let output = 2;
+    let result = SourceExpr::Binary {
+        operation,
+        left: Box::new(SourceExpr::Input(left_id)),
+        right: Box::new(SourceExpr::Input(right_id)),
+    };
     let region = Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
         nodes: vec![operation.node(output, left_id, right_id)],
@@ -149,7 +181,223 @@ pub fn reflect(declaration: &Decl) -> Result<ReflectedFunction, SourceError> {
         ],
         operation,
         region,
+        result: result.clone(),
+        node_expressions: vec![(output, result)],
     })
+}
+
+/// Reflect a checked global's elaborated body. Unlike [`reflect`], this sees
+/// resolved operation identities and elaborated-away surface `let`s.
+pub fn reflect_elaborated(
+    elaborator: &Elaborator,
+    source_name: &str,
+) -> Result<ReflectedFunction, SourceError> {
+    let caller_abs = elaborator.global_abs(source_name).ok_or_else(|| {
+        SourceError::Unsupported(format!("unknown source function `{source_name}`"))
+    })?;
+    let qualified_source_name =
+        elaborator
+            .global_qualified_name_at(caller_abs)
+            .ok_or_else(|| {
+                SourceError::Unsupported(format!(
+                    "source function `{source_name}` has no canonical global name"
+                ))
+            })?;
+    let (ty, body) = elaborator.global_body(source_name).ok_or_else(|| {
+        SourceError::Unsupported(format!(
+            "`{source_name}` is not a transparent computing function"
+        ))
+    })?;
+    if pi_arity(&ty) != 2 {
+        return unsupported("the initial elaborated fragment requires exactly two parameters");
+    }
+    let mut core = &*body;
+    let mut lambda_count = 0usize;
+    while let Term::Lam { body, .. } = core {
+        lambda_count += 1;
+        core = body;
+    }
+    if lambda_count != 2 {
+        return unsupported("the checked source body must elaborate to exactly two lambdas");
+    }
+
+    let operations = OperationGlobals::resolve(elaborator)?;
+    let result = reflect_term(core, caller_abs, &operations)?;
+    let operation = match &result {
+        SourceExpr::Binary { operation, .. } => *operation,
+        _ => return unsupported("the source result must be a supported binary BitVec expression"),
+    };
+    let (region, node_expressions) = build_region(&result)?;
+    Ok(ReflectedFunction {
+        source_name: qualified_source_name,
+        parameter_names: ["argument_0".to_string(), "argument_1".to_string()],
+        operation,
+        region,
+        result,
+        node_expressions,
+    })
+}
+
+struct OperationGlobals {
+    operations: BTreeMap<usize, SourceBinaryOperation>,
+    of_nat: usize,
+}
+
+impl OperationGlobals {
+    fn resolve(elaborator: &Elaborator) -> Result<Self, SourceError> {
+        let mut operations = BTreeMap::new();
+        for (name, operation) in [
+            ("bitvec::add", SourceBinaryOperation::Add),
+            ("bitvec::sub", SourceBinaryOperation::Sub),
+            ("bitvec::band", SourceBinaryOperation::BitAnd),
+            ("bitvec::bor", SourceBinaryOperation::BitOr),
+            ("bitvec::bxor", SourceBinaryOperation::BitXor),
+        ] {
+            let abs = elaborator.global_abs(name).ok_or_else(|| {
+                SourceError::Unsupported(format!("required operation `{name}` is not loaded"))
+            })?;
+            operations.insert(abs, operation);
+        }
+        let of_nat = elaborator.global_abs("bitvec::ofNat").ok_or_else(|| {
+            SourceError::Unsupported("required operation `bitvec::ofNat` is not loaded".to_string())
+        })?;
+        Ok(Self { operations, of_nat })
+    }
+}
+
+fn pi_arity(ty: &Type) -> usize {
+    let mut arity = 0;
+    let mut current = ty;
+    while let Type::Pi { cod, .. } = current {
+        arity += 1;
+        current = cod;
+    }
+    arity
+}
+
+fn reflect_term(
+    term: &Term,
+    caller_abs: usize,
+    globals: &OperationGlobals,
+) -> Result<SourceExpr, SourceError> {
+    if let Term::Var(LocalVar(index)) = term {
+        return match index {
+            1 => Ok(SourceExpr::Input(0)),
+            0 => Ok(SourceExpr::Input(1)),
+            _ => unsupported("the source expression captures an unsupported local binder"),
+        };
+    }
+
+    let (head, arguments) = application_spine(term);
+    let Term::GlobalTm { var, .. } = head else {
+        return unsupported("the source expression is not headed by a resolved global operation");
+    };
+    let head_abs = caller_abs.checked_sub(1 + var.0 as usize).ok_or_else(|| {
+        SourceError::Unsupported("source global reference escapes its Ψ prefix".to_string())
+    })?;
+    if let Some(operation) = globals.operations.get(&head_abs).copied() {
+        if arguments.len() != 3 || nat_literal(arguments[0]) != Some(64) {
+            return unsupported("supported BitVec binary operations must be applied at width 64");
+        }
+        return Ok(SourceExpr::Binary {
+            operation,
+            left: Box::new(reflect_term(arguments[1], caller_abs, globals)?),
+            right: Box::new(reflect_term(arguments[2], caller_abs, globals)?),
+        });
+    }
+    if head_abs == globals.of_nat {
+        if arguments.len() != 2 || nat_literal(arguments[0]) != Some(64) {
+            return unsupported("BitVec constants must use `bitvec::ofNat(64, literal)`");
+        }
+        let Some(value) = nat_literal(arguments[1]) else {
+            return unsupported("the initial constant fragment requires a closed Nat literal");
+        };
+        return Ok(SourceExpr::Constant(value));
+    }
+    unsupported("the elaborated source calls an operation outside Add/Sub/AND/OR/XOR/ofNat")
+}
+
+fn application_spine(term: &Term) -> (&Term, Vec<&Term>) {
+    let mut head = term;
+    let mut arguments = Vec::new();
+    while let Term::App { fun, arg, .. } = head {
+        arguments.push(&**arg);
+        head = fun;
+    }
+    arguments.reverse();
+    (head, arguments)
+}
+
+fn nat_literal(term: &Term) -> Option<u64> {
+    match term {
+        Term::Zero => Some(0),
+        Term::NatLit(value) => Some(*value),
+        Term::Succ(predecessor) => nat_literal(predecessor)?.checked_add(1),
+        _ => None,
+    }
+}
+
+fn build_region(result: &SourceExpr) -> Result<(Region, Vec<(u64, SourceExpr)>), SourceError> {
+    let mut builder = DagBuilder {
+        next_id: 2,
+        ids: BTreeMap::new(),
+        nodes: Vec::new(),
+        node_expressions: Vec::new(),
+    };
+    let output = builder.lower(result)?;
+    Ok((
+        Region {
+            inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
+            nodes: builder.nodes,
+            outputs: vec![Port {
+                id: output,
+                width: 64,
+            }],
+        },
+        builder.node_expressions,
+    ))
+}
+
+struct DagBuilder {
+    next_id: u64,
+    ids: BTreeMap<SourceExpr, u64>,
+    nodes: Vec<Node>,
+    node_expressions: Vec<(u64, SourceExpr)>,
+}
+
+impl DagBuilder {
+    fn lower(&mut self, expression: &SourceExpr) -> Result<u64, SourceError> {
+        if let SourceExpr::Input(id) = expression {
+            return Ok(*id);
+        }
+        if let Some(id) = self.ids.get(expression) {
+            return Ok(*id);
+        }
+        let operands = match expression {
+            SourceExpr::Input(_) => unreachable!(),
+            SourceExpr::Constant(_) => None,
+            SourceExpr::Binary { left, right, .. } => Some((self.lower(left)?, self.lower(right)?)),
+        };
+        let id = self.next_id;
+        let node = match (expression, operands) {
+            (SourceExpr::Constant(value), None) => Node::Const {
+                width: 64,
+                output: id,
+                value: *value,
+            },
+            (SourceExpr::Binary { operation, .. }, Some((left, right))) => {
+                operation.node(id, left, right)
+            }
+            _ => unreachable!(),
+        };
+        self.next_id = self.next_id.checked_add(1).ok_or_else(|| {
+            SourceError::Unsupported("source DAG exhausted stable IDs".to_string())
+        })?;
+        self.ids.insert(expression.clone(), id);
+        self.nodes.push(node);
+        self.node_expressions.push((id, expression.clone()));
+        Ok(id)
+    }
 }
 
 /// Emit raw FunctionIR, compact validity, and the equality between its output
@@ -158,7 +406,21 @@ pub fn generate_function_ir(
     prefix: &str,
     declaration: &Decl,
 ) -> Result<SourceFunctionIrEmission, SourceError> {
-    let reflected = reflect(declaration)?;
+    generate_reflected_function_ir(prefix, reflect(declaration)?)
+}
+
+pub fn generate_elaborated_function_ir(
+    elaborator: &Elaborator,
+    prefix: &str,
+    source_name: &str,
+) -> Result<SourceFunctionIrEmission, SourceError> {
+    generate_reflected_function_ir(prefix, reflect_elaborated(elaborator, source_name)?)
+}
+
+fn generate_reflected_function_ir(
+    prefix: &str,
+    reflected: ReflectedFunction,
+) -> Result<SourceFunctionIrEmission, SourceError> {
     let region_name = format!("{prefix}_raw");
     let valid_name = format!("{prefix}_valid");
     let region_expr = format!("{region_name}()");
@@ -166,17 +428,22 @@ pub fn generate_function_ir(
         .map_err(SourceError::InvalidRegion)?;
 
     let mut module = Module::default();
+    if let Some((source_module, _)) = reflected.source_name.rsplit_once("::") {
+        module.raw(format!("import {source_module};"));
+    }
     module.raw(cert::render_region_function(
         &region_name,
         &reflected.region,
     ));
     module.raw(validity.text);
+    emit_source_semantics(prefix, &region_name, &reflected, &mut module)?;
+    let output = reflected.region.outputs[0].id;
     let source_call = source_call(&reflected);
     module.declaration(
         Declaration::theorem(
             format!("{prefix}_denotes_source"),
-            HeatherExpr::equal(valuation(2), source_call),
-            Block::expression(HeatherExpr::name("graph").project("left")),
+            HeatherExpr::equal(valuation(output), source_call),
+            Block::expression(value_fact(prefix, output)),
         )
         .parameter(Parameter::explicit(
             "values",
@@ -201,7 +468,40 @@ pub fn generate_x86(
     temporary_registers: &[Gpr],
     requested_output: Gpr,
 ) -> Result<SourceX86Emission, SourceError> {
-    let frontend = generate_function_ir(prefix, declaration)?;
+    generate_reflected_x86(
+        prefix,
+        reflect(declaration)?,
+        input_registers,
+        temporary_registers,
+        requested_output,
+    )
+}
+
+pub fn generate_elaborated_x86(
+    elaborator: &Elaborator,
+    prefix: &str,
+    source_name: &str,
+    input_registers: [Gpr; 2],
+    temporary_registers: &[Gpr],
+    requested_output: Gpr,
+) -> Result<SourceX86Emission, SourceError> {
+    generate_reflected_x86(
+        prefix,
+        reflect_elaborated(elaborator, source_name)?,
+        input_registers,
+        temporary_registers,
+        requested_output,
+    )
+}
+
+fn generate_reflected_x86(
+    prefix: &str,
+    reflected: ReflectedFunction,
+    input_registers: [Gpr; 2],
+    temporary_registers: &[Gpr],
+    requested_output: Gpr,
+) -> Result<SourceX86Emission, SourceError> {
+    let frontend = generate_reflected_function_ir(prefix, reflected)?;
     let reflected = frontend.reflected;
     let region_name = format!("{prefix}_raw");
     let region_expr = format!("{region_name}()");
@@ -326,6 +626,280 @@ pub fn generate_x86(
     })
 }
 
+fn emit_source_semantics(
+    prefix: &str,
+    region_name: &str,
+    reflected: &ReflectedFunction,
+    module: &mut Module,
+) -> Result<(), SourceError> {
+    let node_count = reflected.region.nodes.len();
+    module.declaration(Declaration::function(
+        source_nodes_name(prefix, node_count),
+        HeatherExpr::name("List<Node>"),
+        Block::expression(HeatherExpr::list([])),
+    ));
+    for index in (0..node_count).rev() {
+        module.declaration(Declaration::function(
+            source_nodes_name(prefix, index),
+            HeatherExpr::name("List<Node>"),
+            Block::expression(HeatherExpr::call(
+                "Cons",
+                [
+                    node_to_heather(reflected.region.nodes[index])?,
+                    HeatherExpr::nullary(source_nodes_name(prefix, index + 1)),
+                ],
+            )),
+        ));
+    }
+
+    for index in 0..node_count {
+        let body = if index == 0 {
+            HeatherExpr::name("graph")
+        } else {
+            HeatherExpr::call(
+                source_graph_name(prefix, index - 1),
+                [HeatherExpr::name("values"), HeatherExpr::name("graph")],
+            )
+            .project("right")
+        };
+        module.declaration(
+            Declaration::theorem(
+                source_graph_name(prefix, index),
+                HeatherExpr::call(
+                    "NodesHold",
+                    [
+                        HeatherExpr::name("values"),
+                        HeatherExpr::nullary(source_nodes_name(prefix, index)),
+                    ],
+                ),
+                Block::expression(body),
+            )
+            .parameter(Parameter::explicit(
+                "values",
+                HeatherExpr::nullary("Valuation"),
+            ))
+            .parameter(Parameter::explicit("graph", region_holds(region_name))),
+        );
+    }
+
+    let expression_ids = reflected
+        .node_expressions
+        .iter()
+        .map(|(id, expression)| (expression.clone(), *id))
+        .collect::<BTreeMap<_, _>>();
+    for (index, ((id, expression), node)) in reflected
+        .node_expressions
+        .iter()
+        .zip(&reflected.region.nodes)
+        .enumerate()
+    {
+        let equation = HeatherExpr::call(
+            source_graph_name(prefix, index),
+            [HeatherExpr::name("values"), HeatherExpr::name("graph")],
+        )
+        .project("left");
+        let proof = match (expression, node) {
+            (SourceExpr::Constant(_), Node::Const { .. }) => equation,
+            (
+                SourceExpr::Binary {
+                    operation,
+                    left,
+                    right,
+                },
+                Node::Add {
+                    left: left_id,
+                    right: right_id,
+                    ..
+                }
+                | Node::Sub {
+                    left: left_id,
+                    right: right_id,
+                    ..
+                }
+                | Node::BitAnd {
+                    left: left_id,
+                    right: right_id,
+                    ..
+                }
+                | Node::BitOr {
+                    left: left_id,
+                    right: right_id,
+                    ..
+                }
+                | Node::BitXor {
+                    left: left_id,
+                    right: right_id,
+                    ..
+                },
+            ) => HeatherExpr::call(
+                "binary_node_denotes",
+                [
+                    HeatherExpr::nat(64),
+                    HeatherExpr::nat(*id),
+                    HeatherExpr::nat(*left_id),
+                    HeatherExpr::nat(*right_id),
+                    operation_lambda(*operation),
+                    source_expression(left),
+                    source_expression(right),
+                    HeatherExpr::name("values"),
+                    source_value_proof(prefix, left, &expression_ids)?,
+                    source_value_proof(prefix, right, &expression_ids)?,
+                    equation,
+                ],
+            ),
+            _ => {
+                return unsupported("reflected expression and FunctionIR node schedules disagree");
+            }
+        };
+        module.declaration(
+            Declaration::theorem(
+                source_value_name(prefix, *id),
+                HeatherExpr::equal(valuation(*id), source_expression(expression)),
+                Block::expression(proof),
+            )
+            .parameter(Parameter::explicit(
+                "values",
+                HeatherExpr::nullary("Valuation"),
+            ))
+            .parameter(Parameter::explicit("graph", region_holds(region_name))),
+        );
+    }
+    Ok(())
+}
+
+fn source_nodes_name(prefix: &str, index: usize) -> String {
+    format!("{prefix}_source_nodes_{index}")
+}
+
+fn source_graph_name(prefix: &str, index: usize) -> String {
+    format!("{prefix}_source_graph_{index}")
+}
+
+fn source_value_name(prefix: &str, id: u64) -> String {
+    format!("{prefix}_source_value_{id}")
+}
+
+fn value_fact(prefix: &str, id: u64) -> HeatherExpr {
+    HeatherExpr::call(
+        source_value_name(prefix, id),
+        [HeatherExpr::name("values"), HeatherExpr::name("graph")],
+    )
+}
+
+fn source_value_proof(
+    prefix: &str,
+    expression: &SourceExpr,
+    expression_ids: &BTreeMap<SourceExpr, u64>,
+) -> Result<HeatherExpr, SourceError> {
+    match expression {
+        SourceExpr::Input(_) => Ok(HeatherExpr::name("refl")),
+        _ => expression_ids
+            .get(expression)
+            .copied()
+            .map(|id| value_fact(prefix, id))
+            .ok_or_else(|| {
+                SourceError::Unsupported(
+                    "source expression is absent from the reflected DAG schedule".to_string(),
+                )
+            }),
+    }
+}
+
+fn operation_lambda(operation: SourceBinaryOperation) -> HeatherExpr {
+    HeatherExpr::lambda(
+        ["left", "right"],
+        HeatherExpr::call(
+            operation.semantic_name(),
+            [
+                HeatherExpr::nat(64),
+                HeatherExpr::name("left"),
+                HeatherExpr::name("right"),
+            ],
+        ),
+    )
+}
+
+fn source_expression(expression: &SourceExpr) -> HeatherExpr {
+    match expression {
+        SourceExpr::Input(id) => valuation(*id),
+        SourceExpr::Constant(value) => HeatherExpr::call(
+            "bitvec::ofNat",
+            [HeatherExpr::nat(64), HeatherExpr::nat(*value)],
+        ),
+        SourceExpr::Binary {
+            operation,
+            left,
+            right,
+        } => HeatherExpr::call(
+            operation.semantic_name(),
+            [
+                HeatherExpr::nat(64),
+                source_expression(left),
+                source_expression(right),
+            ],
+        ),
+    }
+}
+
+fn node_to_heather(node: Node) -> Result<HeatherExpr, SourceError> {
+    let binary = |constructor: &'static str, width, output, left, right| {
+        HeatherExpr::named_call(
+            constructor,
+            [
+                ("width", HeatherExpr::nat(width)),
+                ("output", HeatherExpr::nat(output)),
+                ("left", HeatherExpr::nat(left)),
+                ("right", HeatherExpr::nat(right)),
+            ],
+        )
+    };
+    match node {
+        Node::Const {
+            width,
+            output,
+            value,
+        } => Ok(HeatherExpr::named_call(
+            "Const",
+            [
+                ("width", HeatherExpr::nat(width)),
+                ("output", HeatherExpr::nat(output)),
+                ("value", HeatherExpr::nat(value)),
+            ],
+        )),
+        Node::Add {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(binary("Add", width, output, left, right)),
+        Node::Sub {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(binary("Sub", width, output, left, right)),
+        Node::BitAnd {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(binary("BitAnd", width, output, left, right)),
+        Node::BitOr {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(binary("BitOr", width, output, left, right)),
+        Node::BitXor {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(binary("BitXor", width, output, left, right)),
+        _ => unsupported("source semantics do not yet support this FunctionIR node"),
+    }
+}
+
 fn valuation(id: u64) -> HeatherExpr {
     HeatherExpr::call("values", [HeatherExpr::nat(64), HeatherExpr::nat(id)])
 }
@@ -401,4 +975,57 @@ fn parameter_id(argument: &Expr, declaration: &Decl) -> Result<u64, SourceError>
         .position(|parameter| parameter.name == *name)
         .map(|index| index as u64)
         .ok_or_else(|| SourceError::Unsupported(format!("unknown source operand `{name}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SourceBinaryOperation, SourceExpr, build_region};
+    use crate::function_ir_cert::Node;
+
+    #[test]
+    fn structural_postorder_recovers_shared_subexpressions() {
+        let shared = SourceExpr::Binary {
+            operation: SourceBinaryOperation::Add,
+            left: Box::new(SourceExpr::Input(0)),
+            right: Box::new(SourceExpr::Input(1)),
+        };
+        let result = SourceExpr::Binary {
+            operation: SourceBinaryOperation::BitXor,
+            left: Box::new(shared.clone()),
+            right: Box::new(SourceExpr::Binary {
+                operation: SourceBinaryOperation::Add,
+                left: Box::new(shared),
+                right: Box::new(SourceExpr::Constant(7)),
+            }),
+        };
+        let (region, _) = build_region(&result).expect("lower shared expression");
+        assert_eq!(
+            region.nodes,
+            vec![
+                Node::Add {
+                    width: 64,
+                    output: 2,
+                    left: 0,
+                    right: 1
+                },
+                Node::Const {
+                    width: 64,
+                    output: 3,
+                    value: 7
+                },
+                Node::Add {
+                    width: 64,
+                    output: 4,
+                    left: 2,
+                    right: 3
+                },
+                Node::BitXor {
+                    width: 64,
+                    output: 5,
+                    left: 2,
+                    right: 4
+                },
+            ],
+        );
+    }
 }

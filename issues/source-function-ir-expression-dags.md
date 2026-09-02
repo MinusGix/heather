@@ -3,7 +3,7 @@ title: Reflect pure source expression DAGs into FunctionIR
 status: open
 labels: [compiler,function-ir,metaprogramming,proofs,codegen]
 created: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 Grow the first source-to-FunctionIR frontend from one binary operation over
@@ -29,3 +29,21 @@ sharing is explicit; it should not require a sequential semantic IR.
 - Unsupported calls and effects decline at the source boundary with the
   operation or construct named.
 - A stale node, operand edge, or source body is rejected by ordinary checking.
+
+## Progress
+
+The elaborated-body frontend now recognizes resolved Add/Sub/AND/OR/XOR and
+closed `bitvec::ofNat(64, literal)` applications. It assigns stable IDs by
+deterministic postorder and structurally memoizes expressions. The checked
+acceptance function deliberately uses a surface `let`; although elaboration
+substitutes its body, reflection recovers one shared Add port. Its four nodes
+are shared Add, Const 7, dependent Add, and final XOR.
+
+Generated source semantics use named node-list suffixes and one opaque value
+theorem per node, composed by the generic `binary_node_denotes` rule. The root
+fact specializes definitionally to the canonical qualified source global.
+The complete five-instruction x86 artifact checks in 142.28 seconds locally.
+
+Remaining acceptance work is the 20/100-node source scaling rail and a focused
+kernel negative control for a stale internal operand edge. Unsupported-call
+decline and repeated-reflection determinism are covered.

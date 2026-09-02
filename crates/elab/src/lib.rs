@@ -2009,6 +2009,13 @@ impl Elaborator {
         Some(key.rsplit("::").next().unwrap_or(key).to_string())
     }
 
+    /// The canonical qualified spelling of a global. Generated modules use
+    /// this rather than [`Self::global_name_at`]'s deliberately presentation-
+    /// oriented base name when they refer across a module boundary.
+    pub(crate) fn global_qualified_name_at(&self, abs: usize) -> Option<String> {
+        Some(self.names.global_name_at(abs as u32)?.to_string())
+    }
+
     /// The absolute Ψ index a `GlobalVar` *occurring in a term being
     /// displayed* refers to. Same inversion as [`Self::gen_def_of`]'s, and for
     /// the same reason: the index counts from the innermost end of the padded

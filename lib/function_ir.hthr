@@ -700,6 +700,23 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
 // The semantic rule for an Add node, factored away from any particular
 // region. Lowering proofs can use the same observation lemma no matter where
 // the node occurs in a schedule.
+theorem binary_node_denotes(width, output, left, right: Nat,
+    operation: BitVec(width) → BitVec(width) → BitVec(width),
+    x, y: BitVec(width), values: Valuation(),
+    x_value: values(width, left) = x,
+    y_value: values(width, right) = y,
+    equation: values(width, output) =
+        operation(values(width, left), values(width, right))):
+    values(width, output) = operation(x, y)
+{
+    apply trans;
+    give equation;
+    apply trans;
+    give list::cong_fn<BitVec(width), BitVec(width)>(
+        operation(·, values(width, right)), x_value);
+    list::cong_fn<BitVec(width), BitVec(width)>(operation(x, ·), y_value)
+}
+
 theorem add_node_denotes(width, output, left, right: Nat,
     x, y: BitVec(width), values: Valuation(),
     x_value: values(width, left) = x,
@@ -708,13 +725,9 @@ theorem add_node_denotes(width, output, left, right: Nat,
         Add(width := width, output := output, left := left, right := right))):
     values(width, output) = bitvec::add(width, x, y)
 {
-    apply trans;
-    give equation;
-    apply trans;
-    give list::cong_fn<BitVec(width), BitVec(width)>(
-        bitvec::add(width, ·, values(width, right)), x_value);
-    list::cong_fn<BitVec(width), BitVec(width)>(
-        bitvec::add(width, x, ·), y_value)
+    binary_node_denotes(width, output, left, right,
+        bitvec::add(width, ·, ·), x, y, values,
+        x_value, y_value, equation)
 }
 
 // ---------------------------------------------------------------------------
