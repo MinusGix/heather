@@ -9,7 +9,7 @@ use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};
 
 use crate::function_ir_cert::{self as cert, Node, Port, Region};
 use crate::function_ir_x86_lower::{self as x86, Gpr, LoweringError};
-use crate::heather_emit::{Declaration, Module};
+use crate::heather_emit::{Block, Declaration, Expr as HeatherExpr, Module, Parameter, Statement};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceBinaryOperation {
@@ -171,15 +171,18 @@ pub fn generate_function_ir(
         &reflected.region,
     ));
     module.raw(validity.text);
-    let source_call = format!("{}(values(64, 0), values(64, 1))", reflected.source_name,);
+    let source_call = source_call(&reflected);
     module.declaration(
         Declaration::theorem(
             format!("{prefix}_denotes_source"),
-            format!("values(64, 2) = {source_call}"),
+            HeatherExpr::equal(valuation(2), source_call),
+            Block::expression(HeatherExpr::name("graph").project("left")),
         )
-        .parameter("values: Valuation()")
-        .parameter(format!("graph: RegionHolds({region_expr}, values)"))
-        .body("graph.left"),
+        .parameter(Parameter::explicit(
+            "values",
+            HeatherExpr::nullary("Valuation"),
+        ))
+        .parameter(Parameter::explicit("graph", region_holds(&region_name))),
     );
 
     Ok(SourceFunctionIrEmission {
@@ -200,7 +203,8 @@ pub fn generate_x86(
 ) -> Result<SourceX86Emission, SourceError> {
     let frontend = generate_function_ir(prefix, declaration)?;
     let reflected = frontend.reflected;
-    let region_expr = format!("{prefix}_raw()");
+    let region_name = format!("{prefix}_raw");
+    let region_expr = format!("{region_name}()");
     let backend = x86::generate(
         prefix,
         &region_expr,
@@ -210,45 +214,109 @@ pub fn generate_x86(
         requested_output,
     )
     .map_err(SourceError::Lowering)?;
-    let source_call = format!("{}(values(64, 0), values(64, 1))", reflected.source_name,);
+    let source_call = source_call(&reflected);
     let mut module = Module::default();
     module.raw(frontend.text);
     module.raw(backend.text);
 
     let parameters = vec![
-        "values: Valuation()".to_string(),
-        "before: MachineState<M>".to_string(),
-        format!(
-            "input_0_placed: ValuePlaced(values, 0, {}, before)",
-            input_registers[0].heather_name(),
+        Parameter::explicit("values", HeatherExpr::nullary("Valuation")),
+        Parameter::explicit("before", HeatherExpr::name("MachineState<M>")),
+        Parameter::explicit(
+            "input_0_placed",
+            HeatherExpr::call(
+                "ValuePlaced",
+                [
+                    HeatherExpr::name("values"),
+                    HeatherExpr::nat(0),
+                    HeatherExpr::name(input_registers[0].heather_name()),
+                    HeatherExpr::name("before"),
+                ],
+            ),
         ),
-        format!(
-            "input_1_placed: ValuePlaced(values, 1, {}, before)",
-            input_registers[1].heather_name(),
+        Parameter::explicit(
+            "input_1_placed",
+            HeatherExpr::call(
+                "ValuePlaced",
+                [
+                    HeatherExpr::name("values"),
+                    HeatherExpr::nat(1),
+                    HeatherExpr::name(input_registers[1].heather_name()),
+                    HeatherExpr::name("before"),
+                ],
+            ),
         ),
-        format!("graph: RegionHolds({region_expr}, values)"),
+        Parameter::explicit("graph", region_holds(&region_name)),
     ];
+    let backend_artifact = HeatherExpr::call(
+        format!("{prefix}_artifact"),
+        [
+            HeatherExpr::name("values"),
+            HeatherExpr::name("before"),
+            HeatherExpr::name("input_0_placed"),
+            HeatherExpr::name("input_1_placed"),
+            HeatherExpr::name("graph"),
+        ],
+    );
+    let source_artifact = HeatherExpr::named_call(
+        "BlockArtifact",
+        [
+            ("after", HeatherExpr::name("artifact").project("after")),
+            (
+                "execution",
+                HeatherExpr::name("artifact").project("execution"),
+            ),
+            (
+                "result_correct",
+                HeatherExpr::call(
+                    "trans",
+                    [
+                        HeatherExpr::name("artifact").project("result_correct"),
+                        HeatherExpr::call(
+                            format!("{prefix}_denotes_source"),
+                            [HeatherExpr::name("values"), HeatherExpr::name("graph")],
+                        ),
+                    ],
+                ),
+            ),
+            (
+                "memory_preserved",
+                HeatherExpr::name("artifact").project("memory_preserved"),
+            ),
+            (
+                "rip_correct",
+                HeatherExpr::name("artifact").project("rip_correct"),
+            ),
+            (
+                "registers_preserved",
+                HeatherExpr::name("artifact").project("registers_preserved"),
+            ),
+        ],
+    );
     module.declaration(
         Declaration::theorem(
             format!("{prefix}_source_artifact"),
-            format!(
-                "BlockArtifact<M>({prefix}_instructions(), before, {},\n        {source_call}, {prefix}_Protected, {prefix}_final_rip(before.rip))",
-                requested_output.heather_name(),
+            HeatherExpr::call(
+                "BlockArtifact<M>",
+                [
+                    HeatherExpr::nullary(format!("{prefix}_instructions")),
+                    HeatherExpr::name("before"),
+                    HeatherExpr::name(requested_output.heather_name()),
+                    source_call,
+                    HeatherExpr::name(format!("{prefix}_Protected")),
+                    HeatherExpr::call(
+                        format!("{prefix}_final_rip"),
+                        [HeatherExpr::name("before").project("rip")],
+                    ),
+                ],
+            ),
+            Block::new(
+                [Statement::let_value("artifact", backend_artifact)],
+                source_artifact,
             ),
         )
         .generic("M")
-        .parameters(parameters)
-        .body(format!(
-            "let artifact = {prefix}_artifact(values, before,\n    input_0_placed, input_1_placed, graph);\n\
-             BlockArtifact(\n\
-             \x20   after := artifact.after,\n\
-             \x20   execution := artifact.execution,\n\
-             \x20   result_correct := trans(artifact.result_correct,\n\
-             \x20       {prefix}_denotes_source(values, graph)),\n\
-             \x20   memory_preserved := artifact.memory_preserved,\n\
-             \x20   rip_correct := artifact.rip_correct,\n\
-             \x20   registers_preserved := artifact.registers_preserved)",
-        )),
+        .parameters(parameters),
     );
 
     Ok(SourceX86Emission {
@@ -256,6 +324,24 @@ pub fn generate_x86(
         instructions: backend.lowered.instructions,
         text: module.render(),
     })
+}
+
+fn valuation(id: u64) -> HeatherExpr {
+    HeatherExpr::call("values", [HeatherExpr::nat(64), HeatherExpr::nat(id)])
+}
+
+fn source_call(reflected: &ReflectedFunction) -> HeatherExpr {
+    HeatherExpr::call(reflected.source_name.clone(), [valuation(0), valuation(1)])
+}
+
+fn region_holds(region_name: &str) -> HeatherExpr {
+    HeatherExpr::call(
+        "RegionHolds",
+        [
+            HeatherExpr::nullary(region_name),
+            HeatherExpr::name("values"),
+        ],
+    )
 }
 
 fn unsupported<T>(message: &str) -> Result<T, SourceError> {

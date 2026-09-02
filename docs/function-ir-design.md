@@ -853,10 +853,19 @@ specific diagnostics. [[source-function-ir-expression-dags]] owns the next
 useful widening rather than allowing unsupported syntax to leak into a vague
 backend error.
 
-Proof source emission now has a small internal document model for functions,
-theorems, generics, parameters, results, bodies, and module spacing. Heather
-expressions deliberately remain textual leaves: mirroring the complete parser
-AST in the compiler would create a second frontend. The new source compiler
-and the common straight-line block header use this structure, establishing an
-incremental route away from monolithic format strings while preserving the
-kernel-checked generated-source boundary.
+Proof source emission now uses the Rust-side construction API documented in
+`docs/generated-heather-emission-api.md`. Expressions, positional and named
+calls, projections, equalities, lists, lambdas, parameters, statements,
+blocks, declarations, and modules are explicit values with deterministic
+rendering. The new source compiler constructs its complete denotation and
+artifact proofs through this API, and the common straight-line x86 header has
+also migrated. An explicit raw-expression escape hatch supports gradual
+migration without making arbitrary strings the default representation.
+
+Rendering remains an untrusted final sink. The resulting source takes the
+ordinary parser, elaborator, and kernel path, retaining name resolution,
+implicit insertion, diagnostics, and an inspectable certificate. A future
+direct elaborator-data sink can target the same construction IR if profiling
+shows parsing is material; [[generated-heather-direct-elaboration]] records
+the measurement and equivalence requirements rather than prematurely making
+compiler generators construct kernel terms.

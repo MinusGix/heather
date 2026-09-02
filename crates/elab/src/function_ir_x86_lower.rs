@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::function_ir_cert::{self as cert, Node, Region, StructuredRegion};
-use crate::heather_emit::{Declaration, Module};
+use crate::heather_emit::{Block, Declaration, Expr, Module, Parameter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOperation {
@@ -244,71 +244,51 @@ pub enum Instruction {
 
 impl Instruction {
     pub fn render(self) -> String {
+        self.heather_expr().render()
+    }
+
+    pub fn heather_expr(self) -> Expr {
         match self {
             Instruction::MovRR {
                 destination,
                 source,
-            } => format!(
-                "MovRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
+            } => register_pair("MovRR", destination, source),
             Instruction::MovRI {
                 destination,
                 immediate,
-            } => format!(
-                "MovRI({}, bitvec::ofNat(64, {}))",
-                destination.heather_name(),
-                immediate,
+            } => Expr::call(
+                "MovRI",
+                [
+                    Expr::name(destination.heather_name()),
+                    Expr::call("bitvec::ofNat", [Expr::nat(64), Expr::nat(immediate)]),
+                ],
             ),
             Instruction::AddRR {
                 destination,
                 source,
-            } => format!(
-                "AddRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
+            } => register_pair("AddRR", destination, source),
             Instruction::SubRR {
                 destination,
                 source,
-            } => format!(
-                "SubRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
+            } => register_pair("SubRR", destination, source),
             Instruction::AndRR {
                 destination,
                 source,
-            } => format!(
-                "AndRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
+            } => register_pair("AndRR", destination, source),
             Instruction::OrRR {
                 destination,
                 source,
-            } => format!(
-                "OrRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
+            } => register_pair("OrRR", destination, source),
             Instruction::XorRR {
                 destination,
                 source,
-            } => format!(
-                "XorRR({}, {})",
-                destination.heather_name(),
-                source.heather_name(),
-            ),
-            Instruction::CmpRR { left, right } => {
-                format!("CmpRR({}, {})", left.heather_name(), right.heather_name(),)
-            }
+            } => register_pair("XorRR", destination, source),
+            Instruction::CmpRR { left, right } => register_pair("CmpRR", left, right),
             Instruction::SetBelow { destination } => {
-                format!("SetBelow({})", destination.heather_name())
+                Expr::call("SetBelow", [Expr::name(destination.heather_name())])
             }
             Instruction::SetLess { destination } => {
-                format!("SetLess({})", destination.heather_name())
+                Expr::call("SetLess", [Expr::name(destination.heather_name())])
             }
         }
     }
@@ -335,6 +315,16 @@ impl Instruction {
             _ => 3,
         }
     }
+}
+
+fn register_pair(constructor: &str, left: Gpr, right: Gpr) -> Expr {
+    Expr::call(
+        constructor,
+        [
+            Expr::name(left.heather_name()),
+            Expr::name(right.heather_name()),
+        ],
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1635,38 +1625,53 @@ pub fn generate(
     let context_arguments = context_constructor_arguments(region);
     let arguments = "values, before, context";
     let mut header = Module::default();
-    header.raw(render_instruction_spine(prefix, &lowered.instructions));
-    header.declaration(
-        Declaration::function(&instructions_name, "List<Instruction>")
-            .body(render_instruction_cons(prefix, &lowered.instructions, 0)),
-    );
-    header.declaration(
-        Declaration::function(&bytes_name, "List<BitVec(8)>")
-            .body(format!("canonical_block_bytes({instructions_name}())")),
-    );
-    header.declaration(
-        Declaration::theorem(
-            format!("{prefix}_byte_length"),
-            format!(
-                "{bytes_name}().len() = {}",
+    emit_instruction_spine(prefix, &lowered.instructions, &mut header);
+    header.declaration(Declaration::function(
+        &instructions_name,
+        Expr::name("List<Instruction>"),
+        Block::expression(instruction_cons(prefix, &lowered.instructions, 0)),
+    ));
+    header.declaration(Declaration::function(
+        &bytes_name,
+        Expr::name("List<BitVec(8)>"),
+        Block::expression(Expr::call(
+            "canonical_block_bytes",
+            [Expr::nullary(instructions_name.clone())],
+        )),
+    ));
+    header.declaration(Declaration::theorem(
+        format!("{prefix}_byte_length"),
+        Expr::equal(
+            Expr::nullary(Expr::nullary(bytes_name.clone()).project("len")),
+            Expr::nat(
                 lowered
                     .instructions
                     .iter()
                     .map(|instruction| instruction.canonical_length())
-                    .sum::<usize>(),
+                    .sum::<usize>() as u64,
             ),
-        )
-        .body("refl"),
-    );
+        ),
+        Block::expression(Expr::name("refl")),
+    ));
     header.declaration(
         Declaration::theorem(
             format!("{prefix}_block_decodes"),
-            format!("CanonicalBlockDecodes({instructions_name}(), start)"),
+            Expr::call(
+                "CanonicalBlockDecodes",
+                [
+                    Expr::nullary(instructions_name.clone()),
+                    Expr::name("start"),
+                ],
+            ),
+            Block::expression(Expr::call(
+                "canonical_block_decodes",
+                [
+                    Expr::nullary(instructions_name.clone()),
+                    Expr::name("start"),
+                ],
+            )),
         )
-        .parameter("start: BitVec(64)")
-        .body(format!(
-            "canonical_block_decodes({instructions_name}(), start)"
-        )),
+        .parameter(Parameter::explicit("start", Expr::name("BitVec(64)"))),
     );
     let mut text = header.render();
     text.push('\n');
@@ -1842,25 +1847,28 @@ fn context_constructor_arguments(region: &Region) -> String {
     arguments.join(", ")
 }
 
-fn render_instruction_spine(prefix: &str, instructions: &[Instruction]) -> String {
-    let mut text = format!(
-        "fn {prefix}_instructions_{}() → List<Instruction> {{ [] }}\n",
-        instructions.len(),
-    );
+fn emit_instruction_spine(prefix: &str, instructions: &[Instruction], module: &mut Module) {
+    module.declaration(Declaration::function(
+        format!("{prefix}_instructions_{}", instructions.len()),
+        Expr::name("List<Instruction>"),
+        Block::expression(Expr::list([])),
+    ));
     for index in (1..instructions.len()).rev() {
-        text.push_str(&format!(
-            "fn {prefix}_instructions_{index}() → List<Instruction> {{ {} }}\n",
-            render_instruction_cons(prefix, instructions, index),
+        module.declaration(Declaration::function(
+            format!("{prefix}_instructions_{index}"),
+            Expr::name("List<Instruction>"),
+            Block::expression(instruction_cons(prefix, instructions, index)),
         ));
     }
-    text
 }
 
-fn render_instruction_cons(prefix: &str, instructions: &[Instruction], index: usize) -> String {
-    format!(
-        "Cons({}, {prefix}_instructions_{}())",
-        instructions[index].render(),
-        index + 1,
+fn instruction_cons(prefix: &str, instructions: &[Instruction], index: usize) -> Expr {
+    Expr::call(
+        "Cons",
+        [
+            instructions[index].heather_expr(),
+            Expr::nullary(format!("{prefix}_instructions_{}", index + 1)),
+        ],
     )
 }
 

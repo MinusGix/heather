@@ -161,6 +161,31 @@ fn source_fragment_declines_nested_expressions() {
 }
 
 #[test]
+fn structured_source_emission_parses_as_a_complete_module() {
+    const SOURCE: &str = "fn source_xor(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
+         \x20   bitvec::bxor(64, left, right)\n\
+         }";
+    let declaration = parse_file(SOURCE)
+        .expect("parse source function")
+        .items
+        .pop()
+        .expect("source declaration")
+        .into_decl();
+    let emission = function_ir_source::generate_x86(
+        "source_xor_x86",
+        &declaration,
+        [Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("emit source artifact");
+    let module = generated_module(&format!("{SOURCE}\n\n{}", emission.text));
+    if let Err(error) = parse_file(&module) {
+        panic!("structured emission did not parse: {}", error.msg);
+    }
+}
+
+#[test]
 #[ignore = "20-node FunctionIR/x86 scaling rail; run explicitly"]
 fn generated_20_node_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(20);

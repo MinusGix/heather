@@ -9,8 +9,15 @@ import bitvec;
 import list;
 import logic;
 
-fn add64_x86_instructions_2() → List<Instruction> { [] }
-fn add64_x86_instructions_1() → List<Instruction> { Cons(AddRR(Rax, Rsi), add64_x86_instructions_2()) }
+fn add64_x86_instructions_2() → List<Instruction>
+{
+    []
+}
+
+fn add64_x86_instructions_1() → List<Instruction>
+{
+    Cons(AddRR(Rax, Rsi), add64_x86_instructions_2())
+}
 
 fn add64_x86_instructions() → List<Instruction>
 {
@@ -193,11 +200,30 @@ theorem add64_x86_artifact<M>(values: Valuation(),
             add64_x86_preserves_protected(register, before, protected))
 }
 
-fn sum4_x86_instructions_5() → List<Instruction> { [] }
-fn sum4_x86_instructions_4() → List<Instruction> { Cons(AddRR(Rax, R8), sum4_x86_instructions_5()) }
-fn sum4_x86_instructions_3() → List<Instruction> { Cons(AddRR(R8, Rcx), sum4_x86_instructions_4()) }
-fn sum4_x86_instructions_2() → List<Instruction> { Cons(MovRR(R8, Rdx), sum4_x86_instructions_3()) }
-fn sum4_x86_instructions_1() → List<Instruction> { Cons(AddRR(Rax, Rsi), sum4_x86_instructions_2()) }
+fn sum4_x86_instructions_5() → List<Instruction>
+{
+    []
+}
+
+fn sum4_x86_instructions_4() → List<Instruction>
+{
+    Cons(AddRR(Rax, R8), sum4_x86_instructions_5())
+}
+
+fn sum4_x86_instructions_3() → List<Instruction>
+{
+    Cons(AddRR(R8, Rcx), sum4_x86_instructions_4())
+}
+
+fn sum4_x86_instructions_2() → List<Instruction>
+{
+    Cons(MovRR(R8, Rdx), sum4_x86_instructions_3())
+}
+
+fn sum4_x86_instructions_1() → List<Instruction>
+{
+    Cons(AddRR(Rax, Rsi), sum4_x86_instructions_2())
+}
 
 fn sum4_x86_instructions() → List<Instruction>
 {

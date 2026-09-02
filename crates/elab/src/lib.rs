@@ -97,7 +97,7 @@ mod dispatch;
 mod display;
 mod expr;
 pub mod gate;
-mod heather_emit;
+pub mod heather_emit;
 pub mod stats;
 pub use datarepr::{Obligation, Provenance};
 mod names;
