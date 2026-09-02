@@ -101,9 +101,9 @@ pub fn env<'v>(e: &Env<'v>, o: Outer<'v>) -> Env<'v> {
     if o.is_none() {
         return *e;
     }
-    let mut out = Env::empty(o.arena);
+    let mut out = Env::empty();
     for c in e.to_vec() {
-        out = out.push(tm_clo(c, o));
+        out = out.push(o.arena, tm_clo(c, o));
     }
     out
 }
@@ -129,9 +129,11 @@ pub fn ty_clo<'v>(c: &'v TyClo<'v>, o: Outer<'v>) -> &'v TyClo<'v> {
         TyClo::Syn { env: e, body, .. } => TyClo::new(env(e, o), ty_syn(body, o)),
         TyClo::Val(v) => TyClo::val(vty(v, o)),
         TyClo::Vec { level: l, elem, len, .. } => {
-            TyClo::vec(level(l, o), ty_clo(elem, o), tm_clo(len, o))
+            return o.arena.ty_vec(level(l, o), ty_clo(elem, o), tm_clo(len, o));
         }
-        TyClo::El { level: l, tm, .. } => TyClo::el(level(l, o), tm_clo(tm, o)),
+        TyClo::El { level: l, tm, .. } => {
+            return o.arena.ty_el(level(l, o), tm_clo(tm, o));
+        }
     })
 }
 

@@ -67,14 +67,6 @@ type Res<T> = Result<T, OutOfFuel>;
 // Small constructors
 // ---------------------------------------------------------------------------
 
-fn tclo<'v>(env: &Env<'v>, t: &Rc<Term>) -> &'v TmClo<'v> {
-    env.arena().tm(TmClo::syn(*env, Rc::clone(t)))
-}
-
-fn yclo<'v>(env: &Env<'v>, t: &Rc<Type>) -> &'v TyClo<'v> {
-    env.arena().ty(TyClo::new(*env, Rc::clone(t)))
-}
-
 fn neutral<'v>(
     head: Head<'v>,
     spine: ElimSpine<'v>,
@@ -258,13 +250,13 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Work::Elim(head, e) => self.step_elim(head, e)?,
                 Work::Apply1(c, arg) => match c {
                     TmClo::Syn { env, body, .. } => {
-                        Work::Eval(Rc::clone(body), env.push(arg))
+                        Work::Eval(Rc::clone(body), env.push(self.arena, arg))
                     }
                     _ => Work::Force(c),
                 },
                 Work::Apply(c, args) => match c {
                     TmClo::Syn { env, body, .. } => {
-                        Work::Eval(Rc::clone(body), env.extend(&args))
+                        Work::Eval(Rc::clone(body), env.extend(self.arena, &args))
                     }
                     // A closure position holding a computed value has no
                     // pending binders; it ignores them.
@@ -328,14 +320,14 @@ impl<'a, 'v> Eval<'a, 'v> {
                 self.eval_ty(&body, &env)?
             }
             TyClo::Vec { level, elem, len, .. } => {
-                let (level, elem, len) = (level.clone(), *elem, *len);
+                let (level, elem, len) = (*level, *elem, *len);
                 let lv = self.force(len)?;
-                self.vec_ty(&level, elem, &lv)?
+                self.vec_ty(level, elem, &lv)?
             }
             TyClo::El { level, tm, .. } => {
-                let (level, tm) = (level.clone(), *tm);
+                let (level, tm) = (*level, *tm);
                 let v = self.force(tm)?;
-                self.decode(&level, &v)?
+                self.decode(level, &v)?
             }
         };
         self.arena.cache_ty(c, &v);
@@ -362,7 +354,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
         match c {
             TyClo::Syn { env, body, .. } => {
-                let (env, body) = (env.extend(args), Rc::clone(body));
+                let (env, body) = (env.extend(self.arena, args), Rc::clone(body));
                 self.eval_ty(&body, &env)
             }
             _ => self.force_ty(c),
@@ -467,6 +459,12 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// Evaluate a type to a weak head normal type value.
     pub fn eval_ty(&mut self, t: &Type, env: &Env<'v>) -> Res<Rc<VTy<'v>>> {
+        let yclo = |env: &Env<'v>, body: &Rc<Type>| {
+            self.arena.ty(TyClo::new(*env, Rc::clone(body)))
+        };
+        let tclo = |env: &Env<'v>, body: &Rc<Term>| {
+            self.arena.tm(TmClo::syn(*env, Rc::clone(body)))
+        };
         let v = match t {
             Type::Nat => VTy::Nat,
             Type::Ty(l) => VTy::Ty(l.clone()),
@@ -575,13 +573,13 @@ impl<'a, 'v> Eval<'a, 'v> {
         // domain's own lazy `El` says the same thing about a value.
         let arena = self.arena;
         let el = |l: &Level, c: &'v TmClo<'v>| -> Option<&'v TyClo<'v>> {
-            Some(arena.ty(match c.as_syn() {
-                Some((env, body)) => TyClo::new(
+            Some(match c.as_syn() {
+                Some((env, body)) => arena.ty(TyClo::new(
                     *env,
                     Rc::new(Type::El { level: l.clone(), tm: Rc::clone(body) }),
-                ),
-                None => TyClo::el(l.clone(), c),
-            }))
+                )),
+                None => arena.ty_el(l.clone(), c),
+            })
         };
         let stuck_el =
             || Ok(Rc::new(VTy::Neutral(VNeTy::El { level: level.clone(), tm: Rc::clone(v) })));
@@ -706,23 +704,21 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
-                let tail = TyClo::vec(level.clone(), elem, pred);
                 VTy::Sigma {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
                     fst: elem,
-                    snd: self.arena.ty(tail),
+                    snd: self.arena.ty_vec(level.clone(), elem, pred),
                 }
             }
             Val::NatRun { program, tail } => {
                 self.spend()?;
                 let pred = Val::nat_run_pred(self.arena, program, tail);
-                let tail = TyClo::vec(level.clone(), elem, pred);
                 VTy::Sigma {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
                     fst: elem,
-                    snd: self.arena.ty(tail),
+                    snd: self.arena.ty_vec(level.clone(), elem, pred),
                 }
             }
             _ => VTy::Vec {
@@ -745,12 +741,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
-                let rhs_env = Env::empty(self.arena).push(pred);
+                let rhs_env = Env::empty().push(self.arena, pred);
                 VTy::Sum {
                     lhs_level: Level::Zero,
                     rhs_level: Level::Zero,
                     lhs: self.arena.ty(TyClo::new(
-                        Env::empty(self.arena),
+                        Env::empty(),
                         Rc::new(Type::Unit { level: Level::Zero }),
                     )),
                     rhs: self.arena.ty(TyClo::new(
@@ -762,12 +758,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             Val::NatRun { program, tail } => {
                 self.spend()?;
                 let pred = Val::nat_run_pred(self.arena, program, tail);
-                let rhs_env = Env::empty(self.arena).push(pred);
+                let rhs_env = Env::empty().push(self.arena, pred);
                 VTy::Sum {
                     lhs_level: Level::Zero,
                     rhs_level: Level::Zero,
                     lhs: self.arena.ty(TyClo::new(
-                        Env::empty(self.arena),
+                        Env::empty(),
                         Rc::new(Type::Unit { level: Level::Zero }),
                     )),
                     rhs: self.arena.ty(TyClo::new(
@@ -811,6 +807,12 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// One step of [`Eval::eval_tm`], with its **tail positions returned**
     /// rather than called: see [`Eval::drive`].
     fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
+        let yclo = |env: &Env<'v>, body: &Rc<Type>| {
+            self.arena.ty(TyClo::new(*env, Rc::clone(body)))
+        };
+        let tclo = |env: &Env<'v>, body: &Rc<Term>| {
+            self.arena.tm(TmClo::syn(*env, Rc::clone(body)))
+        };
         let v = match t {
             Term::Var(x) => match env.lookup(x.0) {
                 Lookup::Bound(c) => return Ok(Work::Force(c)),
@@ -1228,9 +1230,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// through to the same [`Head::BaseVar`] numbering either way.
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
         let unfold = self.defs.body(var).map(|body| {
-            let mut denv = Env::empty(self.arena);
+            let mut denv = Env::empty();
             for v in &subst.terms {
-                denv = denv.push(self.vclo(Rc::clone(v)));
+                denv = denv.push(self.arena, self.vclo(Rc::clone(v)));
             }
             self.arena.tm(TmClo::syn(denv, body))
         });
@@ -1525,7 +1527,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         else {
             return Ok(None);
         };
-        let rho_af = env.push(label).push(children);
+        let rho_af = env.push(self.arena, label).push(self.arena, children);
         let lmax = Level::max(shape_level.clone(), pos_level.clone());
         let w_syn = Type::W {
             shape_level: shape_level.clone(),
@@ -1599,7 +1601,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         else {
             return Ok(None);
         };
-        let rho_acs = env.push(label).push(children);
+        let rho_acs = env.push(self.arena, label).push(self.arena, children);
         let wf_syn = Type::Wf {
             level: level.clone(),
             shape: Rc::clone(shape_body),
@@ -1802,7 +1804,7 @@ mod tests {
     }
 
     fn app_elim<'v>(arena: &'v ValueArena<'v>, arg: &'v TmClo<'v>) -> Elim<'v> {
-        let ty = arena.ty(TyClo::new(Env::empty(arena), Rc::new(Type::Nat)));
+        let ty = arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         Elim::App {
             dom_level: Level::Zero,
             cod_level: Level::Zero,
@@ -1824,7 +1826,7 @@ mod tests {
     #[test]
     fn maximum_literal_enters_the_value_domain_as_one_saturated_run() {
         let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let mut ev = Eval::new(1, Defs::opaque(), CtxBase::Nil, &arena);
         let value = ev.eval_tm_ref(&Term::NatLit(u64::MAX), &env).unwrap();
         assert!(matches!(&*value,
@@ -1837,7 +1839,7 @@ mod tests {
     #[test]
     fn successor_algebra_maps_a_shared_run_without_visiting_its_nodes() {
         let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let program = shared_two_to_64();
         let head = Rc::new(Val::NatRun { program: Rc::clone(&program), tail });
@@ -1855,7 +1857,7 @@ mod tests {
     #[test]
     fn an_arbitrary_fold_over_a_shared_run_still_obeys_fuel() {
         let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let head = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
         // Return the induction hypothesis: observing the result genuinely
@@ -1869,7 +1871,7 @@ mod tests {
     #[test]
     fn synchronous_fold_cancels_independent_saturated_runs() {
         let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let left = Rc::new(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
@@ -1894,7 +1896,7 @@ mod tests {
     #[test]
     fn synchronous_fold_bisimulates_independent_exponential_dags() {
         let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let left = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
         let right = arena.tm(TmClo::val(Rc::new(Val::NatRun {
@@ -1915,8 +1917,7 @@ mod tests {
 
     #[test]
     fn almost_synchronous_algebra_is_not_accelerated() {
-        let arena = ValueArena::new();
-        let env = Env::empty(&arena);
+        let env = Env::empty();
         let mut step = synchronous_step();
         let Term::Lam { body, .. } = &mut step else { unreachable!() };
         let Term::ElimNat { step: inner, .. } = Rc::make_mut(body) else { unreachable!() };

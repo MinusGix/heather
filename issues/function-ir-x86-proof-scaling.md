@@ -98,3 +98,13 @@ deliberately contains no tests of its own. This keeps one canonical
 workload/emitter while giving each independent semantic group its own unchanged
 process rail; the content-addressed semantic module store prevents the split
 from multiplying the expensive checked-library prefix.
+
+The next plain `scripts/test` validates the process boundary under actual
+parallel suite load: model 85.4 s, checked lowering 27.1 s, source 79.8 s,
+binary ALU 160.5 s, and control flow 213.5 s, all inside their unchanged
+individual rails. The former aggregate target now contains no tests and exits
+immediately. The run reached 2,289 passes and zero failures; it was formally
+incomplete only because the separately owned `omega_div_mod` target was
+SIGKILLed near its existing single-workload rail. The accumulated FunctionIR
+x86 process failure described above is therefore resolved; the issue remains
+open for its original 100-node proof-constant acceptance target.

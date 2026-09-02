@@ -307,6 +307,9 @@ pub mod oracle {
 /// the syntax domain never reads.
 #[derive(Clone)]
 struct Env<'v> {
+    /// Query-local storage for value closures and persistent environments.
+    /// Kept here rather than in every compact value-domain `Env` handle.
+    arena: &'v ValueArena<'v>,
     /// Shared, not cloned: a binder push clones the whole scope, and Ψ's
     /// bindings each carry a local context of their own — copying them per
     /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
@@ -408,6 +411,7 @@ impl<'v> Env<'v> {
     ) -> Env<'v> {
         let (rho, vtys) = value_scope(arena, gamma);
         Env {
+            arena,
             psi: Rc::new(psi.clone()),
             bodies: Rc::new(BodyCache::new()),
             gamma: gamma.clone(),
@@ -428,7 +432,7 @@ impl<'v> Env<'v> {
     /// scope is rebuilt from scratch: a different Γ is a different set of
     /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env<'v> {
-        let (rho, vtys) = value_scope(self.rho.arena(), &gamma);
+        let (rho, vtys) = value_scope(self.arena, &gamma);
         let vbase = gamma.entries.len() as u32;
         Env { gamma, layer, rho, vtys, vbase, tele: (0, 0, 0), ..self.clone() }
     }
@@ -441,15 +445,16 @@ impl<'v> Env<'v> {
     /// (only [`Env<'v>::in_ctx`] and [`Env<'v>::new`] do): nothing reads it but the
     /// length and the base.
     fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env<'v> {
-        let vty = self.rho.arena().ty(TyClo::new(self.rho, Rc::clone(&ty)));
+        let vty = self.arena.ty(TyClo::new(self.rho, Rc::clone(&ty)));
         self.push_entry(ty, vty, level)
     }
 
     fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
-        e.rho = e.rho.push(e.rho.arena().tm(TmClo::val(Rc::new(value::Val::var(
+        let var = e.arena.tm(TmClo::val(Rc::new(value::Val::var(
             self.gamma.entries.len() as u32,
-        )))));
+        ))));
+        e.rho = e.rho.push(e.arena, var);
         e.vtys = e.vtys.push(vty, level.clone());
         e.gamma.entries.push(CtxEntry { ty, level });
         e
@@ -464,12 +469,13 @@ impl<'v> Env<'v> {
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
         let psi = Rc::new(psi);
-        let o = Outer { arena: self.rho.arena(), univs: tu, globals: tg };
+        let o = Outer { arena: self.arena, univs: tu, globals: tg };
         let mut vtys = TyEnv::empty();
         for (t, l) in self.vtys.to_vec() {
             vtys = vtys.push(value::shift::ty_clo(&t, o), l);
         }
         Env {
+            arena: self.arena,
             psi,
             bodies: Rc::new(BodyCache::new()),
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
@@ -1424,7 +1430,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                         let lmax = Level::max((*shape_level).clone(), (*pos_level).clone());
                         let pos_at = D::inst_ty(self, env, env, pos, std::slice::from_ref(a1))?;
                         let w_c = D::as_child_ty(self, env, w)?;
-                        let cod = D::weaken_ty(&w_c, 1);
+                        let cod = D::weaken_ty(env, &w_c, 1);
                         let f_ty = D::pi(self, env, pos_level, &lmax, &pos_at, &cod)?;
                         let f_l = Level::max((*pos_level).clone(), lmax);
                         self.tm(env, f1, f2, &f_ty, &f_l)
@@ -1632,8 +1638,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 // M scoped in (Γ, z : A + B), as in typing.rs.
                 let e_z = D::push_entry(env, &sum, &lmax);
                 self.ty(&e_z, m1, m2, ml1)?;
-                let s1_up = D::weaken_ty(s1, 1);
-                let t1_up = D::weaken_ty(t1, 1);
+                let s1_up = D::weaken_ty(env, s1, 1);
+                let t1_up = D::weaken_ty(env, t1, 1);
                 // c_l at M[inl x/z] in (Γ, x : A).
                 let e_x = D::push_entry(env, s1, dl1);
                 let x0 = D::local(&e_x, LocalVar(0));
@@ -1698,7 +1704,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 // shape binder, so this is instantiation, not weakening.
                 let t_at_a = D::inst_ty(self, env, &e_a, t1, &[a_var])?;
                 let f_ty =
-                    D::pi(self, &e_a, cl1, &lmax, &t_at_a, &D::weaken_ty(&w_ty, 2))?;
+                    D::pi(self, &e_a, cl1, &lmax, &t_at_a, &D::weaken_ty(&e_a, &w_ty, 2))?;
                 let e_af =
                     D::push_entry(&e_a, &f_ty, &Level::max((*cl1).clone(), lmax.clone()));
                 let a_var2 = D::local(&e_af, LocalVar(1));
@@ -1712,7 +1718,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     cl1,
                     &lmax,
                     &t_at_a_afy,
-                    &D::weaken_ty(&w_ty, 4),
+                    &D::weaken_ty(&e_afy, &w_ty, 4),
                     &D::local(&e_afy, LocalVar(1)),
                     &D::local(&e_afy, LocalVar(0)),
                 )?;
@@ -1729,7 +1735,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     &D::local(&e_af, LocalVar(0)),
                 )?;
                 let step_ty =
-                    D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&sup_af, 1)])?;
+                    D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&e_step, &sup_af, 1)])?;
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
                 self.tm_nee_c(env, n1, n2)?; // inferred W: redundant, ignored
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
@@ -1810,8 +1816,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     self,
                     &e_y,
                     al1,
-                    &D::weaken_ty(s1, 1),
-                    &D::weaken_tm(a1, 1),
+                    &D::weaken_ty(&e_y, s1, 1),
+                    &D::weaken_tm(&e_y, a1, 1),
                     &D::local(&e_y, LocalVar(0)),
                 )?;
                 let e_yp = D::push_entry(&e_y, &p_ty, al1);

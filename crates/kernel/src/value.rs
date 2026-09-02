@@ -67,10 +67,10 @@ use program::ContextProgram;
 /// end is a variable of the abstract prefix `g` (see [`Lookup`]). Because
 /// the list only ever grows on the right, the *level* `len - 1 - i` assigned
 /// to an entry never changes — which is exactly why closures need no
-/// shifting.
+/// shifting. The query arena is deliberately not repeated in this handle;
+/// operations that allocate a new persistent cell receive it explicitly.
 #[derive(Clone, Copy)]
 pub struct Env<'v> {
-    arena: &'v ValueArena<'v>,
     node: Option<&'v EnvNode<'v>>,
     len: u32,
 }
@@ -90,8 +90,8 @@ pub enum Lookup<'v> {
 }
 
 impl<'v> Env<'v> {
-    pub fn empty(arena: &'v ValueArena<'v>) -> Env<'v> {
-        Env { arena, node: None, len: 0 }
+    pub fn empty() -> Env<'v> {
+        Env { node: None, len: 0 }
     }
 
     /// The number of concrete entries.
@@ -101,10 +101,6 @@ impl<'v> Env<'v> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    pub fn arena(&self) -> &'v ValueArena<'v> {
-        self.arena
     }
 
     /// Object identity: the same spine (both empty, or one shared head
@@ -156,25 +152,24 @@ impl<'v> Env<'v> {
     }
 
     /// `ρ, v` — one more binder, innermost.
-    pub fn push(&self, val: &'v TmClo<'v>) -> Env<'v> {
+    pub fn push(&self, arena: &'v ValueArena<'v>, val: &'v TmClo<'v>) -> Env<'v> {
         #[cfg(feature = "value-metrics")]
-        if let Some(m) = self.arena.metrics {
+        if let Some(m) = arena.metrics {
             ValueMetrics::bump(&m.inner.env_nodes);
         }
         let node = EnvNode { val, rest: self.node };
         Env {
-            arena: self.arena,
-            node: Some(self.arena.envs.alloc(node)),
+            node: Some(arena.envs.alloc(node)),
             len: self.len + 1,
         }
     }
 
     /// Push several binders, `vals[0]` outermost (the order the branch
     /// telescopes and the β-rules write them).
-    pub fn extend(&self, vals: &[&'v TmClo<'v>]) -> Env<'v> {
+    pub fn extend(&self, arena: &'v ValueArena<'v>, vals: &[&'v TmClo<'v>]) -> Env<'v> {
         let mut e = *self;
         for v in vals {
-            e = e.push(v);
+            e = e.push(arena, v);
         }
         e
     }
@@ -209,10 +204,10 @@ impl<'v> Env<'v> {
     /// shares that spine; no identity state escapes the query or lives in a
     /// thread-local cache.
     pub fn identity(arena: &'v ValueArena<'v>, n: u32) -> Env<'v> {
-        let mut env = Env::empty(arena);
+        let mut env = Env::empty();
         for level in 0..n {
             let value = Rc::new(Val::var(level));
-            env = env.push(arena.tm(TmClo::val(value)));
+            env = env.push(arena, arena.tm(TmClo::val(value)));
         }
         env
     }
@@ -255,6 +250,7 @@ pub struct ValueArena<'v> {
     term_cache: RefCell<ValueCache<*const TmClo<'v>, Val<'v>>>,
     type_cache: RefCell<ValueCache<*const TyClo<'v>, VTy<'v>>>,
     envs: Arena<EnvNode<'v>>,
+    levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
     types: Arena<TyClo<'v>>,
@@ -488,6 +484,7 @@ impl<'v> ValueArena<'v> {
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
             envs: Arena::new(),
+            levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
             types: Arena::new(),
@@ -504,6 +501,7 @@ impl<'v> ValueArena<'v> {
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
                 envs: Arena::new(),
+                levels: Arena::new(),
                 elims: Arena::new(),
                 terms: Arena::new(),
                 types: Arena::new(),
@@ -530,6 +528,25 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&m.inner.type_closures);
         }
         self.types.alloc(value)
+    }
+
+    /// Build one of the uncommon synthesized type forms. Keeping its level
+    /// in the query region rather than inline lets the overwhelmingly common
+    /// syntactic closures carry the compact 16-byte environment handle.
+    pub fn ty_vec(
+        &'v self,
+        level: Level,
+        elem: &'v TyClo<'v>,
+        len: &'v TmClo<'v>,
+    ) -> &'v TyClo<'v> {
+        let level = self.levels.alloc(level);
+        self.ty(TyClo::vec(level, elem, len))
+    }
+
+    /// The `El` counterpart of [`ValueArena::ty_vec`].
+    pub fn ty_el(&'v self, level: Level, tm: &'v TmClo<'v>) -> &'v TyClo<'v> {
+        let level = self.levels.alloc(level);
+        self.ty(TyClo::el(level, tm))
     }
 
     /// Extend a neutral elimination spine in constant time. Spine nodes live
@@ -696,6 +713,11 @@ impl<'v> TmClo<'v> {
 /// - [`TyClo::Vec`] is `Vec^l(T; k)` held **unforced**, so that the Σ-tail of
 ///   a vector at a canonical length stays lazy even when the element type is
 ///   a value with no syntax. Forcing it is `Eval::vec_ty`.
+///
+/// The uncommon synthesized forms store their universe level out of line in
+/// the query arena. That keeps both closure enums at four words on 64-bit
+/// targets instead of making every syntactic closure pay for `Level`'s rare
+/// largest variant.
 pub enum TyClo<'v> {
     Syn {
         env: Env<'v>,
@@ -703,7 +725,7 @@ pub enum TyClo<'v> {
     },
     Val(Rc<VTy<'v>>),
     Vec {
-        level: Level,
+        level: &'v Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
     },
@@ -712,7 +734,7 @@ pub enum TyClo<'v> {
     /// keeping it lazy is what makes the decode one step deep and lets
     /// conversion synthesize `El`s over encodings that are values.
     El {
-        level: Level,
+        level: &'v Level,
         tm: &'v TmClo<'v>,
     },
 }
@@ -726,11 +748,11 @@ impl<'v> TyClo<'v> {
         TyClo::Val(v)
     }
 
-    pub fn vec(level: Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
+    fn vec(level: &'v Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::Vec { level, elem, len }
     }
 
-    pub fn el(level: Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
+    fn el(level: &'v Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::El { level, tm }
     }
 
@@ -1559,8 +1581,17 @@ impl fmt::Debug for Val<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Elim, ElimSpine, TmClo, Val, ValueArena, ValueMetrics};
+    use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, Val, ValueArena, ValueMetrics};
     use std::rc::Rc;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn hot_value_handles_stay_four_words_or_smaller() {
+        assert_eq!(std::mem::size_of::<Env<'_>>(), 16);
+        assert_eq!(std::mem::size_of::<EnvNode<'_>>(), 16);
+        assert_eq!(std::mem::size_of::<TmClo<'_>>(), 32);
+        assert_eq!(std::mem::size_of::<TyClo<'_>>(), 32);
+    }
 
     #[test]
     fn deep_arena_value_chain_drops_without_using_the_native_stack() {
@@ -1590,27 +1621,27 @@ mod tests {
     #[test]
     fn environment_value_identity_ignores_nodes_but_not_captured_values() {
         let arena = ValueArena::new();
-        let base = super::Env::empty(&arena);
+        let base = super::Env::empty();
         let shared = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left = base.push(shared);
-        let right = base.push(shared);
+        let left = base.push(&arena, shared);
+        let right = base.push(&arena, shared);
         assert!(!super::Env::ptr_eq(&left, &right));
         assert!(super::Env::values_ptr_eq(&left, &right));
 
         let separately_allocated = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let different = base.push(separately_allocated);
+        let different = base.push(&arena, separately_allocated);
         assert!(!super::Env::values_ptr_eq(&left, &different));
     }
 
     #[test]
     fn environment_prefix_identity_ignores_unobserved_outer_values() {
         let arena = ValueArena::new();
-        let base = super::Env::empty(&arena);
+        let base = super::Env::empty();
         let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left = base.push(left_outer).push(shared_inner);
-        let right = base.push(right_outer).push(shared_inner);
+        let left = base.push(&arena, left_outer).push(&arena, shared_inner);
+        let right = base.push(&arena, right_outer).push(&arena, shared_inner);
 
         assert!(!super::Env::values_ptr_eq(&left, &right));
         assert!(super::Env::values_ptr_eq_prefix(&left, &right, 0));
@@ -1621,10 +1652,10 @@ mod tests {
     #[test]
     fn environment_prefix_keeps_length_and_abstract_boundary_in_sync() {
         let arena = ValueArena::new();
-        let base = super::Env::empty(&arena);
+        let base = super::Env::empty();
         let outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let env = base.push(outer).push(inner);
+        let env = base.push(&arena, outer).push(&arena, inner);
 
         let prefix = env.prefix(1);
         assert_eq!(prefix.len(), 1);
@@ -1639,7 +1670,7 @@ mod tests {
     fn query_value_cache_is_bounded() {
         let metrics = ValueMetrics::default();
         let arena = ValueArena::profiled(&metrics);
-        let env = super::Env::empty(&arena);
+        let env = super::Env::empty();
         let mut closures = Vec::with_capacity(super::VALUE_CACHE_CAPACITY + 1);
         for _ in 0..=super::VALUE_CACHE_CAPACITY {
             let clo = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));

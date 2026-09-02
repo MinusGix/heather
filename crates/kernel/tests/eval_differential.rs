@@ -1405,7 +1405,7 @@ fn a_failed_thunk_is_not_poisoned() {
     let arena = ValueArena::new();
 
     // (a) an ordinary suspension.
-    let clo = arena.tm(TmClo::syn(Env::empty(&arena), Rc::clone(&big)));
+    let clo = arena.tm(TmClo::syn(Env::empty(), Rc::clone(&big)));
     let mut small = Eval::new(3, Defs::opaque(), gamma.base, &arena);
     assert!(small.force(clo).is_err(), "the small budget must not suffice");
     assert!(arena.memo_tm(clo).is_none(), "a failed force must memoize nothing");
@@ -1427,7 +1427,7 @@ fn a_failed_thunk_is_not_poisoned() {
     });
     let mut small = Eval::new(4, Defs::transparent(&dpsi), gamma.base, &arena);
     let glued = small
-        .eval_tm(&u, &Env::empty(&arena))
+        .eval_tm(&u, &Env::empty())
         .expect("building the glued neutral is one step");
     let unfold = match &*glued {
         Val::Neutral(n) => n.unfold.clone().expect("a definition is glued"),
@@ -1451,7 +1451,7 @@ fn zero_fuel_reduces_nothing() {
     let t = nat_rec(numeral(1));
     let arena = ValueArena::new();
     let mut ev = Eval::new(0, Defs::opaque(), gamma.base, &arena);
-    assert!(ev.eval_tm(&t, &Env::empty(&arena)).is_err(), "a redex must cost fuel");
+    assert!(ev.eval_tm(&t, &Env::empty()).is_err(), "a redex must cost fuel");
     assert!(
         whnf_term_delta(&t, &gamma, Defs::opaque(), 0).is_err(),
         "the rewriter agrees"

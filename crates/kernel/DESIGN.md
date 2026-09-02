@@ -389,6 +389,13 @@ paper too).
   dead `Rc` allocation through its control block.) Conversion and the
   definition-body cache are unchanged; a force after eviction may spend fuel
   again, which affects cost thresholds but never a verdict.
+  Hot handles are kept compact: an environment closure captures only its
+  persistent head and length, while whichever machine extends it supplies the
+  already-owned query arena explicitly. Persistent cells remain two pointers.
+  Universe levels on the uncommon synthesized `Vec`/`El` type closures live
+  in the same arena rather than determining the size of every closure. On
+  64-bit targets direct tests pin `Env`/`EnvNode` at 16 bytes and both term and
+  type closures at 32 bytes.
 - **Value-machine instrumentation is explicit and observational.** A caller
   may lend a `ValueMetrics` collector to arenas directly, or use the profiled
   typing entry points to aggregate the many conversion arenas created by one

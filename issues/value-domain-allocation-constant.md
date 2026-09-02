@@ -185,3 +185,33 @@ and should re-read this at the same time — conversion no longer calls
   `TyClo` additionally requires moving the uncommon synthesized level-bearing
   cases out of line. Those changes should land together and earn their larger
   trusted-kernel surface with a fresh whole-workload measurement.
+
+- 2026-09-02: The coordinated representation landed. A value-domain `Env` is
+  now the 16-byte `(head, len)` handle; allocation takes the query arena
+  explicitly, which was already owned by `Eval`, conversion's outer `Env`,
+  and the cold outer-namespace map. The 16-byte `(value, next)` cells are
+  unchanged. `TyClo::Vec` and `TyClo::El` keep their uncommon `Level` in a
+  typed query arena, so both `TmClo` and `TyClo` shrink from 40 to 32 bytes.
+  A 64-bit layout test pins all four intended sizes: `Env` 16, `EnvNode` 16,
+  `TmClo` 32, and `TyClo` 32. The evaluator/conversion differential suites
+  remain green, including outer-namespace weakening and fuel behavior.
+
+  At the measured five-node FunctionIR mix, the closure reduction alone is
+  about 588 MiB: eight bytes from each of 25.1 M term and 48.4 M type
+  closures. Rare synthesized `Vec`/`El` closures now occupy a 32-byte closure
+  plus an arena `Level` instead of one 40-byte closure, so their individual
+  footprint grows; this is deliberately traded against the tens of millions
+  of ordinary syntactic closures. Wall time did not move detectably on the
+  noisy debug workload (the ALU shard measured 134.3 s before and 138.6 s
+  after). This round therefore claims retained-memory/headroom, not a timing
+  improvement; cache admission and closure-production counts remain the next
+  levers for CPU time.
+
+  The release microbenchmark does expose a CPU win that the large noisy module
+  hides. `scripts/bench --check` passed all 106 comparisons, with
+  `nat/check-numeral` at 0.19--0.22x its recorded time, `wf/check-tree` at
+  0.69--0.75x, the 200-term generated checker at 0.79x, and the 33-node code
+  recursor check at 0.76x. No fitted slope left its band. These are locality
+  and per-query constant improvements, consistent with the smallest queries
+  benefiting most; they do not change the FunctionIR proof-composition slope
+  or contradict the neutral end-to-end ALU measurement above.

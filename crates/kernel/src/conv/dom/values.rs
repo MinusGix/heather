@@ -46,6 +46,7 @@ use crate::term::{
 };
 use crate::value::{
     self, shift::Outer, Elim, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val,
+    ValueArena,
 };
 
 use super::super::{Conv, Env, R, NC};
@@ -85,8 +86,8 @@ fn glen<'v>(env: &Env<'v>) -> u32 {
 }
 
 /// The neutral variable a binder pushed at Γ-length `level` is bound to.
-fn fresh<'v>(env: &value::Env<'v>, level: u32) -> &'v TmClo<'v> {
-    env.arena().tm(TmClo::val(Rc::new(Val::var(level))))
+fn fresh<'v>(arena: &'v ValueArena<'v>, level: u32) -> &'v TmClo<'v> {
+    arena.tm(TmClo::val(Rc::new(Val::var(level))))
 }
 
 /// The same variable, taken from the environment that already holds it
@@ -96,7 +97,7 @@ fn var_at<'v>(env: &Env<'v>, level: u32) -> &'v TmClo<'v> {
     let n = env.gamma.entries.len() as u32;
     match n.checked_sub(1 + level).map(|i| env.rho.lookup(i)) {
         Some(value::Lookup::Bound(c)) => c,
-        _ => fresh(&env.rho, level),
+        _ => fresh(env.arena, level),
     }
 }
 
@@ -154,7 +155,7 @@ mod tests {
             level: Level::Zero,
             tm: Rc::new(Term::Var(LocalVar(0))),
         };
-        let clo = arena.ty(TyClo::new(value::Env::empty(&arena), Rc::new(body)));
+        let clo = arena.ty(TyClo::new(value::Env::empty(), Rc::new(body)));
         let a = TyC { clo, home: 2, sat: 3 };
         let same = TyC { clo, home: 2, sat: 3 };
         let other_home = TyC { clo, home: 1, sat: 3 };
@@ -171,7 +172,7 @@ mod tests {
         let body = || {
             Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) })
         };
-        let rho = value::Env::empty(&arena).push(fresh(&value::Env::empty(&arena), 0));
+        let rho = value::Env::empty().push(&arena, fresh(&arena, 0));
         let a = TyC { clo: arena.ty(TyClo::new(rho, body())), home: 2, sat: 3 };
 
         // Distinct closures, same environment spine, α-equal bodies: a hit.
@@ -183,7 +184,7 @@ mod tests {
         // is deliberately not inspected (the head pointer is the test).
         let other_env = TyC {
             clo: arena.ty(TyClo::new(
-                value::Env::empty(&arena).push(fresh(&value::Env::empty(&arena), 0)),
+                value::Env::empty().push(&arena, fresh(&arena, 0)),
                 body(),
             )),
             home: 2,
@@ -199,7 +200,7 @@ mod tests {
 
         // The term side takes the same shortcut.
         let t = || Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
-        let rho = value::Env::empty(&arena).push(fresh(&value::Env::empty(&arena), 0));
+        let rho = value::Env::empty().push(&arena, fresh(&arena, 0));
         let ta = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         let tb = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         assert!(Values::tm_identity_fast(&ta, &tb));
@@ -211,12 +212,12 @@ mod tests {
         let gamma = LocalCtx::nil();
         let arena = value::ValueArena::new();
         let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-        let base = value::Env::empty(&arena);
+        let base = value::Env::empty();
         let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left_env = base.push(left_outer).push(shared_inner);
-        let right_env = base.push(right_outer).push(shared_inner);
+        let left_env = base.push(&arena, left_outer).push(&arena, shared_inner);
+        let right_env = base.push(&arena, right_outer).push(&arena, shared_inner);
 
         let inner_body = Rc::new(Type::El {
             level: Level::Zero,
@@ -265,7 +266,7 @@ mod tests {
     fn term_identity_fast_path_is_scope_sensitive() {
         let arena = value::ValueArena::new();
         let body = Term::Succ(Rc::new(Term::Zero));
-        let clo = arena.tm(TmClo::syn(value::Env::empty(&arena), Rc::new(body)));
+        let clo = arena.tm(TmClo::syn(value::Env::empty(), Rc::new(body)));
         let a = TmC { clo, home: 2, sat: 3 };
         let same = TmC { clo, home: 2, sat: 3 };
         let other_home = TmC { clo, home: 1, sat: 3 };
@@ -359,7 +360,7 @@ impl<'v> TyC<'v> {
     }
 
     fn value(env: &Env<'v>, v: Rc<VTy<'v>>) -> TyC<'v> {
-        TyC::here(env, env.rho.arena().ty(TyClo::val(v)))
+        TyC::here(env, env.arena.ty(TyClo::val(v)))
     }
 }
 
@@ -375,32 +376,40 @@ impl<'v> TmC<'v> {
     }
 
     fn value(env: &Env<'v>, v: Rc<Val<'v>>) -> TmC<'v> {
-        TmC::here(env, env.rho.arena().tm(TmClo::val(v)))
+        TmC::here(env, env.arena.tm(TmClo::val(v)))
     }
 }
 
 /// Apply a type closure to arguments, **without forcing**: a syntactic
 /// closure extends its environment, anything else has no pending binders and
 /// ignores them.
-fn apply_ty_clo<'v>(c: &'v TyClo<'v>, args: &[&'v TmClo<'v>]) -> &'v TyClo<'v> {
+fn apply_ty_clo<'v>(
+    arena: &'v ValueArena<'v>,
+    c: &'v TyClo<'v>,
+    args: &[&'v TmClo<'v>],
+) -> &'v TyClo<'v> {
     if args.is_empty() {
         return c;
     }
     match c {
         TyClo::Syn { env, body, .. } => {
-            env.arena().ty(TyClo::new(env.extend(args), Rc::clone(body)))
+            arena.ty(TyClo::new(env.extend(arena, args), Rc::clone(body)))
         }
         _ => c,
     }
 }
 
-fn apply_tm_clo<'v>(c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> &'v TmClo<'v> {
+fn apply_tm_clo<'v>(
+    arena: &'v ValueArena<'v>,
+    c: &'v TmClo<'v>,
+    args: &[&'v TmClo<'v>],
+) -> &'v TmClo<'v> {
     if args.is_empty() {
         return c;
     }
     match c {
         TmClo::Syn { env, body, .. } => {
-            env.arena().tm(TmClo::syn(env.extend(args), Rc::clone(body)))
+            arena.tm(TmClo::syn(env.extend(arena, args), Rc::clone(body)))
         }
         _ => c,
     }
@@ -410,25 +419,33 @@ fn apply_tm_clo<'v>(c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> &'v TmClo<'v> {
 /// is what `shift_local` means on the syntax side, and the reason it is a
 /// shift *there* and a nothing *here* is that the body's own free indices
 /// have to step over the new cells.
-fn weaken_ty_clo<'v>(c: &'v TyClo<'v>, by: u32) -> &'v TyClo<'v> {
+fn weaken_ty_clo<'v>(
+    arena: &'v ValueArena<'v>,
+    c: &'v TyClo<'v>,
+    by: u32,
+) -> &'v TyClo<'v> {
     if by == 0 {
         return c;
     }
     match c {
         TyClo::Syn { env, body, .. } => {
-            env.arena().ty(TyClo::new(*env, Rc::new(body.shift_local(by))))
+            arena.ty(TyClo::new(*env, Rc::new(body.shift_local(by))))
         }
         _ => c,
     }
 }
 
-fn weaken_tm_clo<'v>(c: &'v TmClo<'v>, by: u32) -> &'v TmClo<'v> {
+fn weaken_tm_clo<'v>(
+    arena: &'v ValueArena<'v>,
+    c: &'v TmClo<'v>,
+    by: u32,
+) -> &'v TmClo<'v> {
     if by == 0 {
         return c;
     }
     match c {
         TmClo::Syn { env, body, .. } => {
-            env.arena().tm(TmClo::syn(*env, Rc::new(body.shift_local(by))))
+            arena.tm(TmClo::syn(*env, Rc::new(body.shift_local(by))))
         }
         _ => c,
     }
@@ -446,13 +463,13 @@ fn open_ty<'v>(env: &Env<'v>, c: &TyC<'v>, pending: u32) -> &'v TyClo<'v> {
     let mut clo = c.clo;
     let mut sat = c.sat;
     if sat < want {
-        clo = weaken_ty_clo(clo, want - sat);
+        clo = weaken_ty_clo(env.arena, clo, want - sat);
         sat = want;
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
         let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| var_at(env, l)).collect();
-        clo = apply_ty_clo(clo, &args);
+        clo = apply_ty_clo(env.arena, clo, &args);
     }
     clo
 }
@@ -462,13 +479,13 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
     let mut clo = c.clo;
     let mut sat = c.sat;
     if sat < want {
-        clo = weaken_tm_clo(clo, want - sat);
+        clo = weaken_tm_clo(env.arena, clo, want - sat);
         sat = want;
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
         let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| var_at(env, l)).collect();
-        clo = apply_tm_clo(clo, &args);
+        clo = apply_tm_clo(env.arena, clo, &args);
     }
     clo
 }
@@ -483,7 +500,7 @@ fn run<'v, T>(
     f: impl FnOnce(&mut Eval<'_, 'v>) -> Result<T, crate::reduce::OutOfFuel>,
 ) -> R<T> {
     let defs = cv.defs(env);
-    let mut ev = Eval::new(cv.fuel, defs, env.gamma.base, env.rho.arena());
+    let mut ev = Eval::new(cv.fuel, defs, env.gamma.base, env.arena);
     let out = f(&mut ev);
     cv.fuel = ev.fuel();
     out.map_err(|_| crate::conv::ConvError::OutOfFuel)
@@ -758,7 +775,7 @@ impl<'v> Dom<'v> for Values {
             Val::Succ(t) => TmView::Succ(TmC::here(env, *t)),
             Val::NatRun { program, tail } => TmView::Succ(TmC::here(
                 env,
-                Val::nat_run_pred(env.rho.arena(), program, tail),
+                Val::nat_run_pred(env.arena, program, tail),
             )),
             Val::Refl { tm, .. } => TmView::Refl { tm: TmC::here(env, *tm) },
             Val::Inl { val, .. } => TmView::Inl { val: TmC::here(env, *val) },
@@ -807,7 +824,7 @@ impl<'v> Dom<'v> for Values {
     fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v> {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
-            let vty = e.rho.arena().ty(TyClo::new(e.rho, Rc::clone(ty)));
+            let vty = e.arena.ty(TyClo::new(e.rho, Rc::clone(ty)));
             e = e.push_entry(Rc::clone(ty), vty, level.clone());
         }
         e.tele.2 = tele.locals.len() as u32;
@@ -837,22 +854,22 @@ impl<'v> Dom<'v> for Values {
         let Some(e) = env.gamma.entries.nth_inner(x.0) else {
             return Err(NC);
         };
-        let rho = value::Env::identity(env.rho.arena(), i);
-        let clo = env.rho.arena().ty(TyClo::new(rho, Rc::clone(&e.ty)));
+        let rho = value::Env::identity(env.arena, i);
+        let clo = env.arena.ty(TyClo::new(rho, Rc::clone(&e.ty)));
         Ok((TyC::here(env, clo), e.level.clone()))
     }
 
-    fn weaken_ty(t: &TyC<'v>, by: u32) -> TyC<'v> {
+    fn weaken_ty(env: &Env<'v>, t: &TyC<'v>, by: u32) -> TyC<'v> {
         TyC {
-            clo: weaken_ty_clo(t.clo, by),
+            clo: weaken_ty_clo(env.arena, t.clo, by),
             home: t.home,
             sat: t.sat + by,
         }
     }
 
-    fn weaken_tm(t: &TmC<'v>, by: u32) -> TmC<'v> {
+    fn weaken_tm(env: &Env<'v>, t: &TmC<'v>, by: u32) -> TmC<'v> {
         TmC {
-            clo: weaken_tm_clo(t.clo, by),
+            clo: weaken_tm_clo(env.arena, t.clo, by),
             home: t.home,
             sat: t.sat + by,
         }
@@ -861,7 +878,7 @@ impl<'v> Dom<'v> for Values {
     // -- embedding ----------------------------------------------------------
 
     fn embed_ty(env: &Env<'v>, t: Rc<Type>) -> TyC<'v> {
-        TyC::here(env, env.rho.arena().ty(TyClo::new(env.rho, t)))
+        TyC::here(env, env.arena.ty(TyClo::new(env.rho, t)))
     }
 
     /// Raw syntax scoped in Γ-plus-telescope, read in the recursor's own
@@ -869,11 +886,11 @@ impl<'v> Dom<'v> for Values {
     /// [`Dom::push_spec`] just pushed — weakened in the outer namespaces,
     /// extended by the telescope's local binders.
     fn embed_ty_at(rec: &RecEnv<'v>, env: &Env<'v>, t: Rc<Type>) -> TyC<'v> {
-        TyC::here(env, env.rho.arena().ty(TyClo::new(rec_env(rec, env), t)))
+        TyC::here(env, env.arena.ty(TyClo::new(rec_env(rec, env), t)))
     }
 
     fn embed_tm_at(rec: &RecEnv<'v>, env: &Env<'v>, t: Rc<Term>) -> TmC<'v> {
-        TmC::here(env, env.rho.arena().tm(TmClo::syn(rec_env(rec, env), t)))
+        TmC::here(env, env.arena.tm(TmClo::syn(rec_env(rec, env), t)))
     }
 
     // -- instantiation ------------------------------------------------------
@@ -891,7 +908,7 @@ impl<'v> Dom<'v> for Values {
         let k = args.len() as u32;
         let clo = open_ty(home, m, k);
         let vals: Vec<&'v TmClo<'v>> = args.iter().map(|a| open_tm(cur, a, 0)).collect();
-        Ok(TyC::here(cur, apply_ty_clo(&clo, &vals)))
+        Ok(TyC::here(cur, apply_ty_clo(cur.arena, clo, &vals)))
     }
 
     fn inst_tm(
@@ -904,11 +921,11 @@ impl<'v> Dom<'v> for Values {
         let k = args.len() as u32;
         let clo = open_tm(home, m, k);
         let vals: Vec<&'v TmClo<'v>> = args.iter().map(|a| open_tm(cur, a, 0)).collect();
-        Ok(TmC::here(cur, apply_tm_clo(&clo, &vals)))
+        Ok(TmC::here(cur, apply_tm_clo(cur.arena, clo, &vals)))
     }
 
     fn shift_global_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>, by: u32) -> R<TyC<'v>> {
-        let o = Outer { arena: env.rho.arena(), univs: 0, globals: by };
+        let o = Outer { arena: env.arena, univs: 0, globals: by };
         Ok(TyC { clo: value::shift::ty_clo(t.clo, o), home: t.home, sat: t.sat })
     }
 
@@ -921,7 +938,7 @@ impl<'v> Dom<'v> for Values {
         };
         Ok(TyC::here(
             env,
-            env.rho.arena().ty(TyClo::new(*benv, Rc::new(bbody.inst_univ(phi)))),
+            env.arena.ty(TyClo::new(*benv, Rc::new(bbody.inst_univ(phi)))),
         ))
     }
 
@@ -934,12 +951,12 @@ impl<'v> Dom<'v> for Values {
     }
 
     fn under_tele_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>, tu: u32, tg: u32) -> R<TyC<'v>> {
-        let o = Outer { arena: env.rho.arena(), univs: tu, globals: tg };
+        let o = Outer { arena: env.arena, univs: tu, globals: tg };
         Ok(TyC { clo: value::shift::reenv_ty(t.clo, o), home: t.home, sat: t.sat })
     }
 
     fn under_tele_tm(_cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>, tu: u32, tg: u32) -> R<TmC<'v>> {
-        let o = Outer { arena: env.rho.arena(), univs: tu, globals: tg };
+        let o = Outer { arena: env.arena, univs: tu, globals: tg };
         Ok(TmC { clo: value::shift::reenv_tm(t.clo, o), home: t.home, sat: t.sat })
     }
 
@@ -972,11 +989,12 @@ impl<'v> Dom<'v> for Values {
         k: usize,
         t: &Rc<Type>,
     ) -> R<TyC<'v>> {
-        let mut e = value::Env::empty(env.rho.arena());
+        let mut e = value::Env::empty();
         for v in &d.terms[..k] {
-            e = e.push(env.rho.arena().tm(TmClo::val(Rc::clone(v))));
+            let value = env.arena.tm(TmClo::val(Rc::clone(v)));
+            e = e.push(env.arena, value);
         }
-        Ok(TyC::here(env, env.rho.arena().ty(TyClo::new(e, Rc::clone(t)))))
+        Ok(TyC::here(env, env.arena.ty(TyClo::new(e, Rc::clone(t)))))
     }
 
     // -- synthesized types --------------------------------------------------
@@ -1027,7 +1045,7 @@ impl<'v> Dom<'v> for Values {
     /// reducing anything.
     fn el(_cv: &mut Conv<'v, Self>, env: &Env<'v>, level: &Level, tm: &TmC<'v>) -> R<TyC<'v>> {
         let c = open_tm(env, tm, 0);
-        Ok(TyC::here(env, env.rho.arena().ty(TyClo::el(level.clone(), c))))
+        Ok(TyC::here(env, env.arena.ty_el(level.clone(), c)))
     }
 
     fn pi(
@@ -1115,11 +1133,11 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::here(
             env,
-            env.rho.arena().ty(TyClo::vec(
+            env.arena.ty_vec(
                 level.clone(),
                 open_ty(env, elem, 0),
                 open_tm(env, len, 0),
-            )),
+            ),
         ))
     }
 
@@ -1263,7 +1281,7 @@ impl<'v> Dom<'v> for Values {
                         )
             );
         let fast = ordinary || env_hit;
-        env.rho.arena().record_app_annotation(codomain, fast, env_hit);
+        env.arena.record_app_annotation(codomain, fast, env_hit);
         fast
     }
 
@@ -1336,7 +1354,7 @@ impl<'v> Dom<'v> for Values {
         if !cancelled.changed {
             return Ok(None);
         }
-        let arena = env.rho.arena();
+        let arena = env.arena;
         let residual = |program, tail| match program {
             None => tail,
             Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
@@ -1454,7 +1472,7 @@ impl<'v> Dom<'v> for Values {
         b: &Rc<Val<'v>>,
         num_vars: u32,
     ) -> R<(TmC<'v>, TmC<'v>)> {
-        let o = Outer { arena: inner.rho.arena(), univs: num_vars, globals: 0 };
+        let o = Outer { arena: inner.arena, univs: num_vars, globals: 0 };
         let (a, b) = (value::shift::val(a, o), value::shift::val(b, o));
         let levels: Vec<Level> = (0..num_vars).rev().map(rec::lvar).collect();
         let e = Elim::UApp { levels };
@@ -1473,7 +1491,7 @@ impl<'v> Dom<'v> for Values {
         a: &Rc<Val<'v>>,
         b: &Rc<Val<'v>>,
     ) -> R<(TmC<'v>, TmC<'v>)> {
-        let o = Outer { arena: inner.rho.arena(), univs: 0, globals: 1 };
+        let o = Outer { arena: inner.arena, univs: 0, globals: 1 };
         let (a, b) = (value::shift::val(a, o), value::shift::val(b, o));
         let e = Elim::CtxApp { ctx: rec::g_ctx(0) };
         let (x, y) = run(cv, inner, |ev| {
@@ -1492,7 +1510,7 @@ impl<'v> Dom<'v> for Values {
         b: &Rc<Val<'v>>,
         ctx: &LocalCtx,
     ) -> R<(TmC<'v>, TmC<'v>)> {
-        let o = Outer { arena: inner.rho.arena(), univs: 0, globals: 1 };
+        let o = Outer { arena: inner.arena, univs: 0, globals: 1 };
         let (a, b) = (value::shift::val(a, o), value::shift::val(b, o));
         let e = Elim::TyApp { arg: Rc::new(rec::gty(0, &ctx.shift_global(1))) };
         let (x, y) = run(cv, inner, |ev| {
@@ -1561,13 +1579,13 @@ impl<'v> Dom<'v> for Values {
         let (cs, ih, step) =
             wf_step_telescope(&gamma, level, motive_level, sbody, abody, mbody);
         let l = glen(env);
-        let e1 = senv.push(fresh(&senv, l));
-        let e2 = e1.push(fresh(&e1, l + 1));
-        let e3 = e2.push(fresh(&e2, l + 2));
+        let e1 = senv.push(env.arena, fresh(env.arena, l));
+        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
+        let e3 = e2.push(env.arena, fresh(env.arena, l + 2));
         Ok((
-            TyC { clo: env.rho.arena().ty(TyClo::new(e1, Rc::new(cs))), home: l + 1, sat: l + 1 },
-            TyC { clo: env.rho.arena().ty(TyClo::new(e2, Rc::new(ih))), home: l + 2, sat: l + 2 },
-            TyC { clo: env.rho.arena().ty(TyClo::new(e3, Rc::new(step))), home: l + 3, sat: l + 3 },
+            TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(cs))), home: l + 1, sat: l + 1 },
+            TyC { clo: env.arena.ty(TyClo::new(e2, Rc::new(ih))), home: l + 2, sat: l + 2 },
+            TyC { clo: env.arena.ty(TyClo::new(e3, Rc::new(step))), home: l + 3, sat: l + 3 },
         ))
     }
 
@@ -1586,8 +1604,8 @@ impl<'v> Dom<'v> for Values {
         let body = motive
             .inst_univ(&[code_level.clone()])
             .apply_global(&GlobalSubst::single(GlobalEntry::Ctx(ctx.clone())));
-        let e = rec.0.push(open_tm(env, scrut, 0));
-        Ok(TyC::here(env, env.rho.arena().ty(TyClo::new(e, Rc::new(body)))))
+        let e = rec.0.push(env.arena, open_tm(env, scrut, 0));
+        Ok(TyC::here(env, env.arena.ty(TyClo::new(e, Rc::new(body)))))
     }
 
     fn inst_tm_motive(
@@ -1606,8 +1624,8 @@ impl<'v> Dom<'v> for Values {
                 GlobalEntry::Ty(Rc::clone(ty)),
             ],
         });
-        let e = rec.0.push(open_tm(env, scrut, 0));
-        Ok(TyC::here(env, env.rho.arena().ty(TyClo::new(e, Rc::new(body)))))
+        let e = rec.0.push(env.arena, open_tm(env, scrut, 0));
+        Ok(TyC::here(env, env.arena.ty(TyClo::new(e, Rc::new(body)))))
     }
 }
 
@@ -1621,7 +1639,7 @@ fn inst_global_ty<'v>(env: &Env<'v>, body: &TyC<'v>, sigma: GlobalSubst) -> R<Ty
     };
     Ok(TyC::here(
         env,
-        env.rho.arena().ty(TyClo::new(*benv, Rc::new(bbody.apply_global(&sigma)))),
+        env.arena.ty(TyClo::new(*benv, Rc::new(bbody.apply_global(&sigma)))),
     ))
 }
 
@@ -1648,11 +1666,11 @@ fn rec_env<'v>(rec: &RecEnv<'v>, env: &Env<'v>) -> value::Env<'v> {
     let (tu, tg, tl) = env.tele;
     let mut e = value::shift::env(
         &rec.0,
-        Outer { arena: env.rho.arena(), univs: tu, globals: tg },
+        Outer { arena: env.arena, univs: tu, globals: tg },
     );
     let base = glen(env) - tl;
     for i in 0..tl {
-        e = e.push(fresh(&e, base + i));
+        e = e.push(env.arena, fresh(env.arena, base + i));
     }
     e
 }

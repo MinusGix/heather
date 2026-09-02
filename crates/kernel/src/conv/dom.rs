@@ -383,8 +383,8 @@ pub(super) trait Dom<'v>: Sized {
     fn var_type(cv: &mut Conv<'v, Self>, env: &Env<'v>, x: LocalVar) -> R<(Self::TyC, Level)>;
     /// Weaken past `by` binders pushed on the right. Free at the value domain
     /// (variables are levels), a `shift_local` at the syntax one.
-    fn weaken_ty(t: &Self::TyC, by: u32) -> Self::TyC;
-    fn weaken_tm(t: &Self::TmC, by: u32) -> Self::TmC;
+    fn weaken_ty(env: &Env<'v>, t: &Self::TyC, by: u32) -> Self::TyC;
+    fn weaken_tm(env: &Env<'v>, t: &Self::TmC, by: u32) -> Self::TmC;
 
     // -- embedding raw syntax -----------------------------------------------
 
@@ -1242,12 +1242,12 @@ impl<'v> Dom<'v> for Syn {
     }
 
     #[inline]
-    fn weaken_ty(t: &Rc<Type>, by: u32) -> Rc<Type> {
+    fn weaken_ty(_env: &Env<'v>, t: &Rc<Type>, by: u32) -> Rc<Type> {
         Rc::new(t.shift_local(by))
     }
 
     #[inline]
-    fn weaken_tm(t: &Rc<Term>, by: u32) -> Rc<Term> {
+    fn weaken_tm(_env: &Env<'v>, t: &Rc<Term>, by: u32) -> Rc<Term> {
         Rc::new(t.shift_local(by))
     }
 

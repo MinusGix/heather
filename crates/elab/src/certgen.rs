@@ -3028,7 +3028,7 @@ impl<'v> Reader<'_, 'v> {
     /// empty Γ, which is the context every analyzer application is built at.
     fn root(&self, t: Term) -> &'v TmClo<'v> {
         self.arena
-            .tm(TmClo::syn(Env::empty(self.arena), Rc::new(t)))
+            .tm(TmClo::syn(Env::empty(), Rc::new(t)))
     }
 
     /// The δ-transparent weak head **value** of a sub-structure.
@@ -3480,7 +3480,7 @@ fn global_app<'v>(
         var: GlobalVar((len - 1 - abs) as u32),
         subst: LocalSubst::id(&empty),
     };
-    let mut out = arena.tm(TmClo::syn(Env::empty(arena), Rc::new(head)));
+    let mut out = arena.tm(TmClo::syn(Env::empty(), Rc::new(head)));
     for arg in args {
         let Type::Pi {
             dom_level,
@@ -3494,8 +3494,8 @@ fn global_app<'v>(
         let elim = Elim::App {
             dom_level: dom_level.clone(),
             cod_level: cod_level.clone(),
-            dom: arena.ty(TyClo::new(Env::empty(arena), Rc::clone(dom))),
-            cod: arena.ty(TyClo::new(Env::empty(arena), Rc::clone(cod))),
+            dom: arena.ty(TyClo::new(Env::empty(), Rc::clone(dom))),
+            cod: arena.ty(TyClo::new(Env::empty(), Rc::clone(cod))),
             arg,
         };
         out = arena.tm(TmClo::elim(out, Rc::new(elim)));
@@ -3534,7 +3534,7 @@ fn run_cert_fold<'v>(
             for _ in 0..mask {
                 n = Term::Succ(Rc::new(n));
             }
-            let kids = arena.tm(TmClo::syn(Env::empty(arena), Rc::new(n)));
+            let kids = arena.tm(TmClo::syn(Env::empty(), Rc::new(n)));
             global_app(e, "cert_body_w", vec![ir, kids], arena)?
         }
     };
