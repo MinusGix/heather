@@ -8,6 +8,7 @@ use heather_elab::function_ir_source;
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
 use heather_elab::{ElabError, Elaborator, stats};
 use heather_syntax::parse_file;
+use std::fmt::Write as _;
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -305,6 +306,201 @@ fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
 }
 
 #[test]
+#[ignore = "20/100-node elaborated source-to-x86 scaling rail; run explicitly"]
+fn elaborated_source_x86_scaling() {
+    let node_count = std::env::var("HEATHER_SOURCE_X86_NODES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20);
+    let frontend_only = std::env::var_os("HEATHER_SOURCE_X86_FRONTEND_ONLY").is_some();
+    let source = mixed_source_alu(node_count);
+
+    let module_count = if frontend_only { 15 } else { MODULES.len() - 1 };
+    let fixture_started = Instant::now();
+    let mut source_base = support::semantic_test_base(&MODULES[..module_count]);
+    let fixture_elapsed = fixture_started.elapsed();
+    let source_started = Instant::now();
+    if let Err(error) = source_base.elab_module_source("scaled_source_alu", &source) {
+        panic!("scaled source did not elaborate: {}", error.render(&source));
+    }
+    let source_elapsed = source_started.elapsed();
+
+    let reflection_started = Instant::now();
+    let reflected = function_ir_source::reflect_elaborated(&source_base, "scaled_alu")
+        .expect("reflect scaled checked expression");
+    let reflection_elapsed = reflection_started.elapsed();
+    assert_eq!(reflected.region.nodes.len(), node_count);
+
+    let frontend_generation_started = Instant::now();
+    let frontend = function_ir_source::generate_elaborated_function_ir(
+        &source_base,
+        "scaled_alu_frontend",
+        "scaled_alu",
+    )
+    .expect("certify scaled elaborated expression");
+    let frontend_generation_elapsed = frontend_generation_started.elapsed();
+
+    let generation_started = Instant::now();
+    let emission = function_ir_source::generate_elaborated_x86(
+        &source_base,
+        "scaled_alu_x86",
+        "scaled_alu",
+        [Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax, Gpr::R8, Gpr::R9],
+        Gpr::Rax,
+    )
+    .expect("compile scaled elaborated expression");
+    let generation_elapsed = generation_started.elapsed();
+    assert_eq!(emission.reflected.region.nodes.len(), node_count);
+
+    let generated = generated_module(&emission.text);
+    let parse_started = Instant::now();
+    if let Err(error) = parse_file(&generated) {
+        panic!("scaled generated artifact did not parse: {}", error.msg);
+    }
+    let parse_elapsed = parse_started.elapsed();
+    eprintln!(
+        "source x86 n={node_count} source_bytes={} frontend_bytes={} generated_bytes={} instructions={} fixture={:.3}s source_elab={:.3}s reflection={:.3}s frontend_generation={:.3}s x86_generation={:.3}s parse={:.3}s",
+        source.len(),
+        frontend.text.len(),
+        generated.len(),
+        emission.instructions.len(),
+        fixture_elapsed.as_secs_f64(),
+        source_elapsed.as_secs_f64(),
+        reflection_elapsed.as_secs_f64(),
+        frontend_generation_elapsed.as_secs_f64(),
+        generation_elapsed.as_secs_f64(),
+        parse_elapsed.as_secs_f64(),
+    );
+
+    if frontend_only {
+        let frontend_source = format!(
+            "import function_ir;\nimport bitvec;\nimport list;\nimport logic;\nimport nat;\n\n{}",
+            frontend.text,
+        );
+        let mut checker = source_base;
+        checker.enable_item_timings();
+        stats::reset_kernel_ns();
+        let check_started = Instant::now();
+        if let Err(error) =
+            checker.elab_module_source("scaled_alu_frontend_artifact", &frontend_source)
+        {
+            panic!(
+                "scaled source FunctionIR artifact did not check: {}",
+                error.render(&frontend_source),
+            );
+        }
+        report_scaling_timings(
+            "source frontend",
+            check_started.elapsed(),
+            checker.take_item_timings(),
+        );
+        return;
+    }
+
+    if std::env::var_os("HEATHER_SOURCE_X86_SKIP_CHECK").is_some() {
+        return;
+    }
+
+    let mut checker = source_base;
+    checker.enable_item_timings();
+    stats::reset_kernel_ns();
+    let check_started = Instant::now();
+    if let Err(error) = checker.elab_module_source("scaled_alu_x86_artifact", &generated) {
+        panic!(
+            "scaled source-to-x86 artifact did not check: {}",
+            error.render(&generated),
+        );
+    }
+    report_scaling_timings(
+        "source x86",
+        check_started.elapsed(),
+        checker.take_item_timings(),
+    );
+}
+
+fn mixed_source_alu(node_count: usize) -> String {
+    assert!(
+        node_count > 0,
+        "the source scaling rail needs a result node"
+    );
+    let mut source = String::from(
+        "import bitvec;\n\nfn scaled_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n",
+    );
+    let mut created = 0usize;
+    let mut value_index = 0usize;
+    let mut current = String::from("left");
+    while created < node_count {
+        let operation = ["add", "sub", "band", "bor", "bxor"][value_index % 5];
+        let right = if created + 2 <= node_count && value_index % 7 == 6 {
+            let constant = format!("constant_{value_index}");
+            writeln!(
+                source,
+                "    let {constant} = bitvec::ofNat(64, {});",
+                value_index + 1,
+            )
+            .unwrap();
+            created += 1;
+            constant
+        } else if value_index % 2 == 0 {
+            String::from("right")
+        } else {
+            String::from("left")
+        };
+        let next = format!("value_{value_index}");
+        writeln!(
+            source,
+            "    let {next} = bitvec::{operation}(64, {current}, {right});",
+        )
+        .unwrap();
+        current = next;
+        created += 1;
+        value_index += 1;
+    }
+    writeln!(source, "    {current}\n}}").unwrap();
+    source
+}
+
+fn report_scaling_timings(
+    label: &str,
+    total: std::time::Duration,
+    mut timings: Vec<heather_elab::ItemTiming>,
+) {
+    let mut categories = std::collections::BTreeMap::<&str, (usize, u64, u64)>::new();
+    for item in &timings {
+        let category = timing_category(&item.item);
+        let entry = categories.entry(category).or_default();
+        entry.0 += 1;
+        entry.1 += item.total_ns;
+        entry.2 += item.kernel_ns;
+    }
+    timings.sort_by_key(|item| std::cmp::Reverse(item.total_ns));
+    eprintln!(
+        "{label} check_total={:.3}s kernel={:.3}s frontend={:.3}s",
+        total.as_secs_f64(),
+        stats::kernel_ns() as f64 / 1e9,
+        (total.as_nanos() as u64).saturating_sub(stats::kernel_ns()) as f64 / 1e9,
+    );
+    for (category, (count, total_ns, kernel_ns)) in categories {
+        eprintln!(
+            "{label} category {category} count={count} total={:.3}s kernel={:.3}s frontend={:.3}s",
+            total_ns as f64 / 1e9,
+            kernel_ns as f64 / 1e9,
+            total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
+        );
+    }
+    for item in timings.into_iter().take(16) {
+        eprintln!(
+            "{label} item {} total={:.3}s kernel={:.3}s frontend={:.3}s",
+            item.item,
+            item.total_ns as f64 / 1e9,
+            item.kernel_ns as f64 / 1e9,
+            item.total_ns.saturating_sub(item.kernel_ns) as f64 / 1e9,
+        );
+    }
+}
+
+#[test]
 #[ignore = "20-node FunctionIR/x86 scaling rail; run explicitly"]
 fn generated_20_node_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(20);
@@ -382,7 +578,17 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
 }
 
 fn timing_category(item: &str) -> &'static str {
-    if item.contains("_execute_from_") {
+    if item.contains("_source_nodes_") {
+        "source-node-list"
+    } else if item.contains("_source_graph_") {
+        "source-graph"
+    } else if item.contains("_source_value_") {
+        "source-value"
+    } else if item.contains("_source_expansion_") || item.contains("_source_expands") {
+        "source-expansion"
+    } else if item.contains("_denotes_source") || item.contains("_source_artifact") {
+        "source-boundary"
+    } else if item.contains("_execute_from_") {
         "execution"
     } else if item.contains("_graph_") || item.contains("_nodes_") {
         "graph"

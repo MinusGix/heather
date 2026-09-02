@@ -70,8 +70,17 @@ header slice contains no raw Heather syntax.
 
 The nested-source frontend also uses the API for its scheduled node-list
 suffixes, graph-equation projections, per-node value theorems, operation
-lambdas, and final source specialization. Generated names are the only string
-formatting in that semantic proof path.
+lambdas, named semantic values, staged per-node source-expansion equalities,
+and final source specialization. Generated names are the only string formatting
+in that semantic proof path.
+
+The 100-node source rail shows the current rendering sink's actual limitation.
+Rendering and reparsing 7.66MB takes well under 200ms, so text parsing is not a
+runtime bottleneck. The size comes from repeatedly spelling expanded equality
+endpoints so the elaborator does not lose dependent inference. A future sink
+should therefore preserve shared elaborated subterms and expected types; merely
+skipping UTF-8 parsing would not materially improve the measured 677.7-second
+proof check. See [[generated-source-semantic-term-sharing]].
 
 The older FunctionIR validity and x86 proof generators can migrate
 declaration-by-declaration. `Module::raw` permits composition with their

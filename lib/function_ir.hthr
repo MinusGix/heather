@@ -717,6 +717,78 @@ theorem binary_node_denotes(width, output, left, right: Nat,
     list::cong_fn<BitVec(width), BitVec(width)>(operation(x, ·), y_value)
 }
 
+theorem equality_refl<A>(value: A): value = value { refl }
+
+theorem bitvec64_add_congruent(
+    {left_before, left_after, right_before, right_after: BitVec(64)},
+    left: left_before = left_after,
+    right: right_before = right_after):
+    bitvec::add(64, left_before, right_before) =
+        bitvec::add(64, left_after, right_after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::add(64, ·, right_before), left);
+    list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::add(64, left_after, ·), right)
+}
+
+theorem bitvec64_sub_congruent(
+    {left_before, left_after, right_before, right_after: BitVec(64)},
+    left: left_before = left_after,
+    right: right_before = right_after):
+    bitvec::sub(64, left_before, right_before) =
+        bitvec::sub(64, left_after, right_after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::sub(64, ·, right_before), left);
+    list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::sub(64, left_after, ·), right)
+}
+
+theorem bitvec64_band_congruent(
+    {left_before, left_after, right_before, right_after: BitVec(64)},
+    left: left_before = left_after,
+    right: right_before = right_after):
+    bitvec::band(64, left_before, right_before) =
+        bitvec::band(64, left_after, right_after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::band(64, ·, right_before), left);
+    list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::band(64, left_after, ·), right)
+}
+
+theorem bitvec64_bor_congruent(
+    {left_before, left_after, right_before, right_after: BitVec(64)},
+    left: left_before = left_after,
+    right: right_before = right_after):
+    bitvec::bor(64, left_before, right_before) =
+        bitvec::bor(64, left_after, right_after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::bor(64, ·, right_before), left);
+    list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::bor(64, left_after, ·), right)
+}
+
+theorem bitvec64_bxor_congruent(
+    {left_before, left_after, right_before, right_after: BitVec(64)},
+    left: left_before = left_after,
+    right: right_before = right_after):
+    bitvec::bxor(64, left_before, right_before) =
+        bitvec::bxor(64, left_after, right_after)
+{
+    apply trans;
+    give list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::bxor(64, ·, right_before), left);
+    list::cong_fn<BitVec(64), BitVec(64)>(
+        bitvec::bxor(64, left_after, ·), right)
+}
+
 theorem add_node_denotes(width, output, left, right: Nat,
     x, y: BitVec(width), values: Valuation(),
     x_value: values(width, left) = x,

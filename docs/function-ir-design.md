@@ -857,13 +857,37 @@ operation family named.
 Source denotation is staged like machine execution. Generated suffix facts
 extract each `NodeHolds` equation at constant projection depth, and one opaque
 value theorem per node composes that equation with its operands' earlier value
-facts. The root theorem merely specializes the final value fact to the actual
-source function, whose transparent body unfolds at the checker boundary. The
-four-node shared Add/constant/Add/XOR acceptance artifact selects five x86
-instructions and checks end-to-end in 142.28 seconds, only modestly above the
-roughly 130-second single-node source artifact on the same local machine.
-[[source-function-ir-expression-dags]] remains open for the 20/100-node rails
-and adversarial stale-edge controls.
+facts. A small named semantic function per node keeps those value facts from
+reprinting the complete source subtree. Separate opaque expansion equalities
+then relate each named semantic value to the corresponding elaborated source
+expression one operation at a time. Operation-specific 64-bit congruence
+lemmas and fully explicit local endpoints are intentional: recursive generic
+congruence calls lose endpoint inference, while dependent indexed witnesses
+cross kernel fuel after only a few layers.
+
+The scaling rail now builds real elaborated source functions containing all
+five binary ALU operations and constants, then measures source elaboration,
+reflection, FunctionIR emission, x86 emission, parsing, frontend work, kernel
+work, and per-declaration categories separately. Host work is negligible even
+at 100 nodes: source elaboration is 71ms, reflection 1ms, both generators about
+144ms, and parsing 31--36ms. The checked proof boundary is the cost:
+
+- the 20-node source frontend checks in 20.9s;
+- the 100-node source frontend checks in 199.3s;
+- the complete 20-node source-to-x86 artifact checks in 105.6s; and
+- the complete 100-node artifact checks in 677.7s, split almost evenly between
+  kernel (337.0s) and frontend (340.7s).
+
+At 100 nodes, execution stages cost 187.9s, value placement 155.9s, source
+value facts 98.4s, and global/boundary declarations 169.6s; the latter includes
+76.7s in `gprs_congruent`. Source graph staging costs 23.5s and the final source
+artifact only 17.5s. Thus no hidden Rust compiler or parser bottleneck remains:
+the next performance work is generated-proof elaboration/checking. Explicit
+expanded endpoints also make the source certificate 7.46MB despite bounded
+per-declaration proofs; [[generated-source-semantic-term-sharing]] tracks a
+shared/direct elaboration representation for that remaining duplication.
+[[source-function-ir-expression-dags]] remains open only for the focused stale
+internal-edge control and performance follow-up.
 
 Proof source emission now uses the Rust-side construction API documented in
 `docs/generated-heather-emission-api.md`. Expressions, positional and named

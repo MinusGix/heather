@@ -80,6 +80,16 @@ impl SourceBinaryOperation {
             Self::BitXor => "bitvec::bxor",
         }
     }
+
+    fn congruence_name(self) -> &'static str {
+        match self {
+            Self::Add => "bitvec64_add_congruent",
+            Self::Sub => "bitvec64_sub_congruent",
+            Self::BitAnd => "bitvec64_band_congruent",
+            Self::BitOr => "bitvec64_bor_congruent",
+            Self::BitXor => "bitvec64_bxor_congruent",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -439,11 +449,42 @@ fn generate_reflected_function_ir(
     emit_source_semantics(prefix, &region_name, &reflected, &mut module)?;
     let output = reflected.region.outputs[0].id;
     let source_call = source_call(&reflected);
+    let expression_ids = reflected
+        .node_expressions
+        .iter()
+        .map(|(id, expression)| (expression.clone(), *id))
+        .collect::<BTreeMap<_, _>>();
+    let root_expansion =
+        emit_source_expansion_theorems(prefix, &reflected, &expression_ids, &mut module)?;
+    let expansion_name = format!("{prefix}_source_expands");
+    module.declaration(
+        Declaration::theorem(
+            &expansion_name,
+            HeatherExpr::equal(
+                HeatherExpr::call(
+                    source_term_name(prefix, output),
+                    [HeatherExpr::name("values")],
+                ),
+                source_call.clone(),
+            ),
+            Block::expression(root_expansion),
+        )
+        .parameter(Parameter::explicit(
+            "values",
+            HeatherExpr::nullary("Valuation"),
+        )),
+    );
     module.declaration(
         Declaration::theorem(
             format!("{prefix}_denotes_source"),
             HeatherExpr::equal(valuation(output), source_call),
-            Block::expression(value_fact(prefix, output)),
+            Block::expression(HeatherExpr::call(
+                "trans",
+                [
+                    value_fact(prefix, output),
+                    HeatherExpr::call(expansion_name.as_str(), [HeatherExpr::name("values")]),
+                ],
+            )),
         )
         .parameter(Parameter::explicit(
             "values",
@@ -633,6 +674,11 @@ fn emit_source_semantics(
     module: &mut Module,
 ) -> Result<(), SourceError> {
     let node_count = reflected.region.nodes.len();
+    let expression_ids = reflected
+        .node_expressions
+        .iter()
+        .map(|(id, expression)| (expression.clone(), *id))
+        .collect::<BTreeMap<_, _>>();
     module.declaration(Declaration::function(
         source_nodes_name(prefix, node_count),
         HeatherExpr::name("List<Node>"),
@@ -650,6 +696,39 @@ fn emit_source_semantics(
                 ],
             )),
         ));
+    }
+
+    for (id, expression) in &reflected.node_expressions {
+        let body = match expression {
+            SourceExpr::Input(_) => unreachable!(),
+            SourceExpr::Constant(value) => HeatherExpr::call(
+                "bitvec::ofNat",
+                [HeatherExpr::nat(64), HeatherExpr::nat(*value)],
+            ),
+            SourceExpr::Binary {
+                operation,
+                left,
+                right,
+            } => HeatherExpr::call(
+                operation.semantic_name(),
+                [
+                    HeatherExpr::nat(64),
+                    source_operand(prefix, left, &expression_ids)?,
+                    source_operand(prefix, right, &expression_ids)?,
+                ],
+            ),
+        };
+        module.declaration(
+            Declaration::function(
+                source_term_name(prefix, *id),
+                HeatherExpr::name("BitVec(64)"),
+                Block::expression(body),
+            )
+            .parameter(Parameter::explicit(
+                "values",
+                HeatherExpr::nullary("Valuation"),
+            )),
+        );
     }
 
     for index in 0..node_count {
@@ -682,11 +761,6 @@ fn emit_source_semantics(
         );
     }
 
-    let expression_ids = reflected
-        .node_expressions
-        .iter()
-        .map(|(id, expression)| (expression.clone(), *id))
-        .collect::<BTreeMap<_, _>>();
     for (index, ((id, expression), node)) in reflected
         .node_expressions
         .iter()
@@ -739,8 +813,8 @@ fn emit_source_semantics(
                     HeatherExpr::nat(*left_id),
                     HeatherExpr::nat(*right_id),
                     operation_lambda(*operation),
-                    source_expression(left),
-                    source_expression(right),
+                    source_operand(prefix, left, &expression_ids)?,
+                    source_operand(prefix, right, &expression_ids)?,
                     HeatherExpr::name("values"),
                     source_value_proof(prefix, left, &expression_ids)?,
                     source_value_proof(prefix, right, &expression_ids)?,
@@ -754,7 +828,10 @@ fn emit_source_semantics(
         module.declaration(
             Declaration::theorem(
                 source_value_name(prefix, *id),
-                HeatherExpr::equal(valuation(*id), source_expression(expression)),
+                HeatherExpr::equal(
+                    valuation(*id),
+                    HeatherExpr::call(source_term_name(prefix, *id), [HeatherExpr::name("values")]),
+                ),
                 Block::expression(proof),
             )
             .parameter(Parameter::explicit(
@@ -779,6 +856,10 @@ fn source_value_name(prefix: &str, id: u64) -> String {
     format!("{prefix}_source_value_{id}")
 }
 
+fn source_term_name(prefix: &str, id: u64) -> String {
+    format!("{prefix}_source_term_{id}")
+}
+
 fn value_fact(prefix: &str, id: u64) -> HeatherExpr {
     HeatherExpr::call(
         source_value_name(prefix, id),
@@ -792,7 +873,10 @@ fn source_value_proof(
     expression_ids: &BTreeMap<SourceExpr, u64>,
 ) -> Result<HeatherExpr, SourceError> {
     match expression {
-        SourceExpr::Input(_) => Ok(HeatherExpr::name("refl")),
+        SourceExpr::Input(id) => Ok(HeatherExpr::call(
+            "equality_refl<BitVec(64)>",
+            [valuation(*id)],
+        )),
         _ => expression_ids
             .get(expression)
             .copied()
@@ -817,6 +901,104 @@ fn operation_lambda(operation: SourceBinaryOperation) -> HeatherExpr {
             ],
         ),
     )
+}
+
+fn source_operand(
+    prefix: &str,
+    expression: &SourceExpr,
+    expression_ids: &BTreeMap<SourceExpr, u64>,
+) -> Result<HeatherExpr, SourceError> {
+    match expression {
+        SourceExpr::Input(id) => Ok(valuation(*id)),
+        _ => expression_ids
+            .get(expression)
+            .copied()
+            .map(|id| {
+                HeatherExpr::call(source_term_name(prefix, id), [HeatherExpr::name("values")])
+            })
+            .ok_or_else(|| {
+                SourceError::Unsupported(
+                    "source operand is absent from the reflected DAG schedule".to_string(),
+                )
+            }),
+    }
+}
+
+fn source_expansion_fact(
+    prefix: &str,
+    expression: &SourceExpr,
+    expression_ids: &BTreeMap<SourceExpr, u64>,
+) -> Result<HeatherExpr, SourceError> {
+    match expression {
+        SourceExpr::Input(_) => Ok(HeatherExpr::name("refl")),
+        _ => expression_ids
+            .get(expression)
+            .copied()
+            .map(|id| {
+                HeatherExpr::call(
+                    source_expansion_name(prefix, id),
+                    [HeatherExpr::name("values")],
+                )
+            })
+            .ok_or_else(|| {
+                SourceError::Unsupported(
+                    "source expression is absent from the reflected DAG schedule".to_string(),
+                )
+            }),
+    }
+}
+
+fn emit_source_expansion_theorems(
+    prefix: &str,
+    reflected: &ReflectedFunction,
+    expression_ids: &BTreeMap<SourceExpr, u64>,
+    module: &mut Module,
+) -> Result<HeatherExpr, SourceError> {
+    let output = reflected.region.outputs[0].id;
+    for (id, expression) in &reflected.node_expressions {
+        let name = source_expansion_name(prefix, *id);
+        let body = match expression {
+            SourceExpr::Input(_) => unreachable!(),
+            SourceExpr::Constant(_) => Block::expression(HeatherExpr::name("refl")),
+            SourceExpr::Binary {
+                operation,
+                left,
+                right,
+            } => Block::expression(HeatherExpr::call(
+                format!("@{}", operation.congruence_name()),
+                [
+                    source_operand(prefix, left, expression_ids)?,
+                    source_expression(left),
+                    source_operand(prefix, right, expression_ids)?,
+                    source_expression(right),
+                    source_expansion_fact(prefix, left, expression_ids)?,
+                    source_expansion_fact(prefix, right, expression_ids)?,
+                ],
+            )),
+        };
+        module.declaration(
+            Declaration::theorem(
+                &name,
+                HeatherExpr::equal(
+                    HeatherExpr::call(source_term_name(prefix, *id), [HeatherExpr::name("values")]),
+                    source_expression(expression),
+                ),
+                body,
+            )
+            .parameter(Parameter::explicit(
+                "values",
+                HeatherExpr::nullary("Valuation"),
+            )),
+        );
+    }
+    Ok(HeatherExpr::call(
+        source_expansion_name(prefix, output),
+        [HeatherExpr::name("values")],
+    ))
+}
+
+fn source_expansion_name(prefix: &str, id: u64) -> String {
+    format!("{prefix}_source_expansion_{id}")
 }
 
 fn source_expression(expression: &SourceExpr) -> HeatherExpr {
@@ -979,7 +1161,7 @@ fn parameter_id(argument: &Expr, declaration: &Decl) -> Result<u64, SourceError>
 
 #[cfg(test)]
 mod tests {
-    use super::{SourceBinaryOperation, SourceExpr, build_region};
+    use super::{build_region, SourceBinaryOperation, SourceExpr};
     use crate::function_ir_cert::Node;
 
     #[test]

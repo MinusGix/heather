@@ -39,11 +39,20 @@ acceptance function deliberately uses a surface `let`; although elaboration
 substitutes its body, reflection recovers one shared Add port. Its four nodes
 are shared Add, Const 7, dependent Add, and final XOR.
 
-Generated source semantics use named node-list suffixes and one opaque value
-theorem per node, composed by the generic `binary_node_denotes` rule. The root
-fact specializes definitionally to the canonical qualified source global.
-The complete five-instruction x86 artifact checks in 142.28 seconds locally.
+Generated source semantics use named node-list suffixes, one opaque value
+theorem per node, one small semantic function per port, and per-node expansion
+equalities. Operation-specific congruence lemmas keep each expansion proof one
+layer deep without relying on the elaborator to infer endpoints from recursive
+proof arguments.
 
-Remaining acceptance work is the 20/100-node source scaling rail and a focused
-kernel negative control for a stale internal operand edge. Unsupported-call
-decline and repeated-reflection determinism are covered.
+The parameterized rail now passes at both requested scales. The source-only
+frontend checks in 20.9s at 20 nodes and 199.3s at 100 nodes. The complete x86
+artifacts check in 105.6s and 677.7s respectively. At 100 nodes reflection and
+generation remain below 150ms each; proof elaboration and checking dominate.
+The detailed breakdown is recorded in `docs/function-ir-design.md`.
+
+The expanded endpoint syntax is still 7.46MB at 100 nodes; follow-up is tracked
+in [[generated-source-semantic-term-sharing]]. Remaining acceptance work here
+is a focused kernel negative control for a stale internal operand edge.
+Unsupported-call decline, repeated-reflection determinism, constants, sharing,
+and the 20/100-node source-to-x86 path are covered.
