@@ -3,7 +3,7 @@ title: Represent repeated inductive construction as saturated shared programs
 status: open
 labels: [kernel, inductives, conversion, performance, representation]
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-02
 ---
 
 Large canonical inductive values need not be materialized as one native node
@@ -55,6 +55,37 @@ special-case generated constructor names.
   a program's runtime layout.
 
 ## Log
+
+- 2026-09-02: The first ordinary compact-literal producer exposed two
+  compatibility omissions in certgen after landing. Its value reader still
+  accepted only `Zero`/`Succ`, so the in-language signature checker failed on
+  `su^1 ze`; independently, the reflection marker pass rejected a literal
+  function body such as `fn seven() -> Nat { 7 }` before the code recursor
+  could present its ordinary successor view. Both are repaired without unary
+  expansion. `ContextProgram::repetition_count_up_to` computes an exact
+  bounded size over the shared DAG, certgen consumes that count and resumes at
+  the run tail, and `mark` preserves `NatLit` for the already-compatible code
+  recursor.
+
+  The wider audit found two more consumers of the same missing constructor
+  view. `absurd`'s Nat no-confusion builder matched raw `Zero`/`Succ` syntax
+  (breaking both its focused tests and the standard List law kit), and the
+  route-2b cast-invariant test's deliberately exhaustive syntax walker had no
+  compact-literal leaf. The former now uses the shared `nat_head` view; the
+  latter explicitly treats a closed literal as a leaf.
+
+  Why these escaped the producer round: its reported verification ran the
+  kernel library, cache rails, elaborator **library** tests, the FunctionIR
+  certificate generator and the new maximum-literal integration test. It did
+  not run the separate certgen integration binaries, and no full
+  `scripts/test` followed the cherry-pick. The maximum-literal rail proved
+  production/reflexivity but exercised neither value readback nor reflected
+  code, no-confusion, or the test-side structural audit. The first omission now
+  has a zero-library-prefix unit regression in `certgen.rs`, so the same
+  elaborator-library command catches compact and exponentially shared runs;
+  certgen's existing `seven` acceptance continues to pin the reflection
+  boundary. The final gate for this repair is the full suite, not the original
+  focused set.
 
 - 2026-09-01: Independently allocated but bisimilar value-program DAGs now
   compare and cancel in work proportional to unique node pairs. The walk is

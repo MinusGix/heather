@@ -4123,19 +4123,19 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let unit_at_zero = loop {
-            match (&*lhs, &*rhs) {
-                (Term::Zero, Term::Succ(_)) => break true,
-                (Term::Succ(_), Term::Zero) => break false,
-                (Term::Zero, Term::Zero) => {
+            match (nat_head(&lhs), nat_head(&rhs)) {
+                (NatHead::Zero, NatHead::Succ(_)) => break true,
+                (NatHead::Succ(_), NatHead::Zero) => break false,
+                (NatHead::Zero, NatHead::Zero) => {
                     return err(
                         "both sides of this equation are `Zero`, so it is not absurd",
                         span,
                     );
                 }
-                (Term::Succ(a), Term::Succ(b)) => {
-                    let (a, b) = (self.whnf_tm(cx, a, span)?, self.whnf_tm(cx, b, span)?);
-                    if !matches!(&*a, Term::Zero | Term::Succ(_))
-                        || !matches!(&*b, Term::Zero | Term::Succ(_))
+                (NatHead::Succ(a), NatHead::Succ(b)) => {
+                    let (a, b) = (self.whnf_tm(cx, &a, span)?, self.whnf_tm(cx, &b, span)?);
+                    if matches!(nat_head(&a), NatHead::Neutral)
+                        || matches!(nat_head(&b), NatHead::Neutral)
                     {
                         return err(
                             "both sides of this equation are `Succ`, so it is not absurd \
@@ -4147,7 +4147,7 @@ impl Elaborator {
                     lhs = a;
                     rhs = b;
                 }
-                _ => {
+                (NatHead::Neutral, _) | (_, NatHead::Neutral) => {
                     return err(
                         "`absurd` needs both sides of the equation to reduce to Nat constructors",
                         span,

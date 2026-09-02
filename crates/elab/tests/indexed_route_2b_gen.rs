@@ -589,7 +589,7 @@ impl Walk {
                     self.tm(x, former);
                 }
             }
-            Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero => {}
+            Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero | Term::NatLit(_) => {}
             Term::TmUnit { .. } | Term::TmEmpty { .. } | Term::TmSEmpty { .. } => {}
             Term::Triv { .. } => {}
             Term::Succ(a) => self.tm(a, former),

@@ -226,6 +226,82 @@ impl<C: fmt::Debug> fmt::Debug for ContextProgram<C> {
     }
 }
 
+impl<C> ContextProgram<C> {
+    /// The exact number of contexts represented by `program`, provided it is
+    /// at most `limit`. Shared composition nodes are counted once and reused,
+    /// so asking about an exponentially denoting DAG costs its graph size,
+    /// not its denotation size. `None` means only "larger than the bound".
+    pub fn repetition_count_up_to(program: &Rc<Self>, limit: u64) -> Option<u64> {
+        #[derive(Clone, Copy)]
+        enum Count {
+            Visiting,
+            Exact(u64),
+            TooLarge,
+        }
+
+        enum Visit<C> {
+            Enter(Rc<ContextProgram<C>>),
+            Finish(Rc<ContextProgram<C>>),
+        }
+
+        type Key<C> = *const ContextProgram<C>;
+        // The root retains the whole immutable DAG until this function
+        // returns, so none of these identity keys can be freed or reused.
+        // They are compared and hashed only, never dereferenced.
+        let key = |program: &Rc<Self>| Rc::as_ptr(program);
+        let mut counts = HashMap::<Key<C>, Count>::new();
+        let mut work = vec![Visit::Enter(Rc::clone(program))];
+        while let Some(visit) = work.pop() {
+            match visit {
+                Visit::Enter(program) => {
+                    let k = key(&program);
+                    if counts.contains_key(&k) {
+                        continue;
+                    }
+                    match &*program {
+                        ContextProgram::Run { count, .. } => {
+                            let count = count.get();
+                            counts.insert(
+                                k,
+                                if count <= limit {
+                                    Count::Exact(count)
+                                } else {
+                                    Count::TooLarge
+                                },
+                            );
+                        }
+                        ContextProgram::Compose { outer, inner } => {
+                            counts.insert(k, Count::Visiting);
+                            work.push(Visit::Finish(Rc::clone(&program)));
+                            work.push(Visit::Enter(Rc::clone(outer)));
+                            work.push(Visit::Enter(Rc::clone(inner)));
+                        }
+                    }
+                }
+                Visit::Finish(program) => {
+                    let ContextProgram::Compose { outer, inner } = &*program else {
+                        unreachable!("only compositions schedule a finish visit")
+                    };
+                    let sum = match (counts.get(&key(outer)), counts.get(&key(inner))) {
+                        (Some(Count::Exact(outer)), Some(Count::Exact(inner))) => outer
+                            .checked_add(*inner)
+                            .filter(|count| *count <= limit)
+                            .map_or(Count::TooLarge, Count::Exact),
+                        (Some(Count::TooLarge), _) | (_, Some(Count::TooLarge)) => Count::TooLarge,
+                        _ => unreachable!("children finish before their composition"),
+                    };
+                    counts.insert(key(&program), sum);
+                }
+            }
+        }
+        match counts.get(&key(program)) {
+            Some(Count::Exact(count)) => Some(*count),
+            Some(Count::TooLarge) => None,
+            _ => unreachable!("root count is complete"),
+        }
+    }
+}
+
 impl<C: Clone + Eq> ContextProgram<C> {
     pub fn run(context: C, count: NonZeroU64) -> Rc<Self> {
         Rc::new(ContextProgram::Run { context, count })
@@ -394,6 +470,22 @@ mod tests {
         let two_to_64 = ContextProgram::prepend('s', n(1), Rc::clone(&full));
         assert!(matches!(&*two_to_64, ContextProgram::Compose { inner, .. }
             if Rc::ptr_eq(inner, &full)));
+    }
+
+    #[test]
+    fn bounded_repetition_count_reuses_shared_compositions() {
+        let mut program = ContextProgram::run((), n(1));
+        for _ in 0..63 {
+            program = ContextProgram::compose(Rc::clone(&program), program);
+        }
+        assert_eq!(ContextProgram::repetition_count_up_to(&program, 1_000_000), None);
+
+        let seven = ContextProgram::compose(
+            ContextProgram::run((), n(3)),
+            ContextProgram::run((), n(4)),
+        );
+        assert_eq!(ContextProgram::repetition_count_up_to(&seven, 7), Some(7));
+        assert_eq!(ContextProgram::repetition_count_up_to(&seven, 6), None);
     }
 
     #[test]

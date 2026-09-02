@@ -3,7 +3,7 @@ title: Make generated FunctionIR x86 refinement scale past small DAGs
 status: open
 labels: [compiler,function-ir,x86,proofs,performance]
 created: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 The binary-ALU expansion probed the generated x86 refinement at 20 FunctionIR
@@ -72,3 +72,21 @@ As an integration-level result, the complete serial `function_ir_x86` test
 binary fell from 163.7 seconds before this cut to 106.2 seconds after it, while
 adding the larger mixed-operation machinery and retaining stale-model and
 alternate-schedule controls.
+
+## Follow-up, 2026-09-02
+
+The full-suite audit after compact-Nat compatibility repairs found one stale
+emission assertion: the structured Heather emitter formats a theorem's
+proposition on the line after `byte_length():`, while the test still searched
+for the legacy one-line spelling. The emitted theorem still states and checks
+that the constant/Add block is 13 bytes; the assertion now pins the structured
+format, and its focused test passes.
+
+The same full run also shows this target has again outgrown its process rail as
+a *collection*: libtest runs two heavy cases inside the binary, and the process
+was killed at 152.85 seconds wall by the cumulative 300-CPU-second/4-GiB
+envelope before printing a result line. The focused repaired case passes in
+22.28 seconds, and all earlier completed FunctionIR targets were green. Do not
+hide this by raising the rail: either continue reducing the execution/
+placement constants owned here or shard the now-independent test groups as
+`issues/integration-test-prefix-reelaboration.md` did for Omega.

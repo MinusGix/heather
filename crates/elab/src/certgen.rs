@@ -1977,6 +1977,7 @@ use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
 use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val, ValueArena};
+use heather_kernel::value::program::ContextProgram;
 
 use crate::Elaborator;
 use crate::slots::Slot;
@@ -2275,6 +2276,7 @@ fn mark(
             marker(depth - 1 - i)
         }
         Term::Zero => Term::Zero,
+        Term::NatLit(n) => Term::NatLit(*n),
         Term::Succ(p) => Term::Succ(Rc::new(mark(p, depth, cx, wfarm)?)),
         // A payload-field read: `fst (snd^{j+1} c)` over the arm's case
         // binder. Only meaningful inside a tier-1 arm; anywhere else a
@@ -3108,7 +3110,7 @@ impl<'v> Reader<'_, 'v> {
 
     fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
         let mut v = self.force(c)?;
-        let mut n = 0;
+        let mut n = 0u64;
         loop {
             let next = match &*v {
                 Val::Zero => return Ok(n),
@@ -3118,6 +3120,15 @@ impl<'v> Reader<'_, 'v> {
                         return Err("an implausible numeral".into());
                     }
                     *p
+                }
+                Val::NatRun { program, tail } => {
+                    let remaining = 1_000_000 - n;
+                    let Some(count) = ContextProgram::repetition_count_up_to(program, remaining)
+                    else {
+                        return Err("an implausible numeral".into());
+                    };
+                    n += count;
+                    *tail
                 }
                 other => return Err(format!("a Nat that is not a numeral: {other:?}")),
             };
@@ -3901,4 +3912,35 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
     };
     let cert = run_cert_fold(e, ir, &body.callees, kids, &arena)?;
     emit_with_model(f, arity, res, pts, model, cert, ctx)
+}
+
+#[cfg(test)]
+mod compact_nat_tests {
+    use std::num::NonZeroU64;
+
+    use super::*;
+
+    #[test]
+    fn reader_counts_compact_and_shared_nat_runs_without_expansion() {
+        let psi = heather_kernel::term::GlobalCtx::default();
+        let arena = ValueArena::new();
+        let reader = Reader::new(&psi, &arena);
+        assert_eq!(reader.nat(reader.root(Term::NatLit(7))), Ok(7));
+
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let three = ContextProgram::run((), NonZeroU64::new(3).unwrap());
+        let seven = ContextProgram::compose(
+            ContextProgram::run((), NonZeroU64::new(4).unwrap()),
+            three,
+        );
+        let seven = arena.tm(TmClo::val(Rc::new(Val::NatRun { program: seven, tail })));
+        assert_eq!(reader.nat(seven), Ok(7));
+
+        let mut huge = ContextProgram::run((), NonZeroU64::new(1).unwrap());
+        for _ in 0..20 {
+            huge = ContextProgram::compose(Rc::clone(&huge), huge);
+        }
+        let huge = arena.tm(TmClo::val(Rc::new(Val::NatRun { program: huge, tail })));
+        assert_eq!(reader.nat(huge), Err("an implausible numeral".into()));
+    }
 }

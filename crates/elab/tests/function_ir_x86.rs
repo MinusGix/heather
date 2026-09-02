@@ -699,7 +699,7 @@ fn generated_constant_add_dag_checks() {
     assert!(
         emission
             .text
-            .contains("byte_length(): constant_add_x86_bytes().len() = 13")
+            .contains("byte_length():\n    constant_add_x86_bytes().len() = 13")
     );
     assert!(emission.text.contains("next_rip(next_rip(start, 10), 3)"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
