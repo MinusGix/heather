@@ -3,7 +3,7 @@ title: Reduce residual stored application annotation conversion cost
 status: open
 labels: [kernel,conversion,performance,representation]
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-02
 ---
 
 Restoring the annotation-directed neutral application rule fixed
@@ -64,3 +64,11 @@ requires.
   reverted completely. Do not broaden scoped identity with an uncached
   structural body walk; the residual needs representation sharing,
   fingerprints, or the separately designed common-type route.
+- 2026-09-02: Added a bounded form of the existing identity shortcut: when
+  two annotation closures share one body, compare captured values only down
+  to that body's memoized free-local bound. Older captures cannot be
+  observed. On the five-node FunctionIR/x86 diagnostic this changed the
+  execution items from roughly 72/90 to 86 domain and 84 codomain fast hits
+  and removed about 0.6 M of 48.4 M type-closure constructions (~1.25%). It
+  is sound and useful but not the dominant lever; persistent neutral spines
+  produced the material wall-time improvement in the same round.

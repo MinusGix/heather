@@ -56,8 +56,8 @@ use crate::term::{
     nth, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
 use crate::value::{
-    Elim, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
-    ValueArena,
+    Elim, ElimSpine, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail,
+    VTy, Val, ValueArena,
 };
 use crate::value::program::ContextProgram;
 
@@ -77,7 +77,7 @@ fn yclo<'v>(env: &Env<'v>, t: &Rc<Type>) -> &'v TyClo<'v> {
 
 fn neutral<'v>(
     head: Head<'v>,
-    spine: Vec<Elim<'v>>,
+    spine: ElimSpine<'v>,
     unfold: Option<&'v TmClo<'v>>,
 ) -> Rc<Val<'v>> {
     Rc::new(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
@@ -86,8 +86,9 @@ fn neutral<'v>(
 /// An eliminator applied to something it cannot eliminate. Unreachable on
 /// well-typed input — `reduce.rs` is equally stuck there — but represented
 /// rather than panicked on, so no input reaches undefined behaviour.
-fn stuck<'v>(head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
-    neutral(Head::Stuck(Rc::clone(head)), vec![e.clone()], None)
+fn stuck<'v>(arena: &'v ValueArena<'v>, head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
+    let spine = arena.elim(ElimSpine::empty(), e.clone());
+    neutral(Head::Stuck(Rc::clone(head)), spine, None)
 }
 
 /// The fold step has the exact shape
@@ -1233,7 +1234,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             self.arena.tm(TmClo::syn(denv, body))
         });
-        neutral(Head::Global { var, subst }, Vec::new(), unfold)
+        neutral(Head::Global { var, subst }, ElimSpine::empty(), unfold)
     }
 
     /// `T ⇝* W` on **syntax**, in a local context that is not the ambient
@@ -1317,7 +1318,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 if *num_vars as usize == levels.len() =>
             {
                 self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(&head, &e))) };
+                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
                 // The written vectors pair positionally (outermost first);
                 // instantiation wants innermost-first.
                 let phi: Vec<Level> = levels.iter().rev().cloned().collect();
@@ -1326,14 +1327,14 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             (Val::CtxLam { body, .. }, Elim::CtxApp { ctx }) => {
                 self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(&head, &e))) };
+                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
                 let sigma = GlobalSubst::single(GlobalEntry::Ctx(ctx.clone()));
                 let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
                 Ok(Work::Eval(inst, benv))
             }
             (Val::TyLam { body, .. }, Elim::TyApp { arg }) => {
                 self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(&head, &e))) };
+                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
                 let sigma = GlobalSubst::single(GlobalEntry::Ty(Rc::clone(arg)));
                 let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
                 Ok(Work::Eval(inst, benv))
@@ -1418,7 +1419,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (label, children) = (*label, *children);
                 match self.fire_elim_w(label, children, &e)? {
                     Some(v) => Ok(v),
-                    None => Ok(Work::Val(stuck(&head, &e))),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
             (Val::Supf { label, children, .. }, Elim::ElimWf { .. }) => {
@@ -1426,19 +1427,19 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (label, children) = (*label, *children);
                 match self.fire_elim_wf(label, children, &e)? {
                     Some(v) => Ok(v),
-                    None => Ok(Work::Val(stuck(&head, &e))),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
             (Val::BoxTy(code), Elim::LetBoxTy { body, .. }) => {
                 self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(&head, &e))) };
+                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
                 let sigma = GlobalSubst::single(GlobalEntry::Ty(Rc::clone(code)));
                 let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
                 Ok(Work::Eval(inst, benv))
             }
             (Val::BoxTm(code), Elim::LetBoxTm { body, .. }) => {
                 self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(&head, &e))) };
+                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
                 let sigma = GlobalSubst::single(GlobalEntry::Tm(Rc::clone(code)));
                 let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
                 Ok(Work::Eval(inst, benv))
@@ -1449,31 +1450,31 @@ impl<'a, 'v> Eval<'a, 'v> {
                 if matches!(&**code, Type::GlobalTy { .. }) {
                     return Ok(Work::Val(neutral(
                         Head::BoxedGlobalTy(Rc::clone(code)),
-                        vec![e.clone()],
+                        self.arena.elim(ElimSpine::empty(), e.clone()),
                         None,
                     )));
                 }
                 let code = Rc::clone(code);
                 match self.fire_code_ty(&code, &e)? {
                     Some(v) => Ok(v),
-                    None => Ok(Work::Val(stuck(&head, &e))),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
             (Val::BoxTm(code), Elim::ElimCodeTm { .. }) => {
                 if matches!(&**code, Term::GlobalTm { .. }) {
                     return Ok(Work::Val(neutral(
                         Head::BoxedGlobalTm(Rc::clone(code)),
-                        vec![e.clone()],
+                        self.arena.elim(ElimSpine::empty(), e.clone()),
                         None,
                     )));
                 }
                 let code = Rc::clone(code);
                 match self.fire_code_tm(&code, &e)? {
                     Some(v) => Ok(v),
-                    None => Ok(Work::Val(stuck(&head, &e))),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
-            _ => Ok(Work::Val(stuck(&head, &e))),
+            _ => Ok(Work::Val(stuck(self.arena, &head, &e))),
         }
     }
 
@@ -1485,8 +1486,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             .unfold
             .as_ref()
             .map(|u| self.arena.tm(TmClo::elim(u, Rc::new(e.clone()))));
-        let mut spine = n.spine.clone();
-        spine.push(e);
+        let spine = self.arena.elim(n.spine, e);
         neutral(n.head.clone(), spine, unfold)
     }
 

@@ -125,21 +125,33 @@ impl<'v> Env<'v> {
     /// equality but cheaper than conversion, and is stable for the lifetime
     /// of the query's arena.
     pub fn values_ptr_eq(a: &Env<'v>, b: &Env<'v>) -> bool {
+        Self::values_ptr_eq_prefix(a, b, a.len)
+    }
+
+    /// Pointwise identity for only the `used` innermost entries.
+    ///
+    /// A closure body whose largest free de Bruijn index is below `used`
+    /// cannot observe the older captured tail. Equal-length environments are
+    /// still required so the same index denotes the same binder/base slot.
+    pub fn values_ptr_eq_prefix(a: &Env<'v>, b: &Env<'v>, used: u32) -> bool {
         if a.len != b.len {
             return false;
         }
         let (mut x, mut y) = (a, b);
-        loop {
+        let mut remaining = used.min(a.len);
+        while remaining > 0 {
             match (x.node, y.node) {
                 (None, None) => return true,
                 (Some(nx), Some(ny)) if std::ptr::eq(nx, ny) => return true,
                 (Some(nx), Some(ny)) if std::ptr::eq(nx.val, ny.val) => {
                     x = &nx.rest;
                     y = &ny.rest;
+                    remaining -= 1;
                 }
                 _ => return false,
             }
         }
+        true
     }
 
     /// `ρ, v` — one more binder, innermost.
@@ -237,6 +249,7 @@ pub struct ValueArena<'v> {
     term_cache: RefCell<ValueCache<*const TmClo<'v>, Val<'v>>>,
     type_cache: RefCell<ValueCache<*const TyClo<'v>, VTy<'v>>>,
     envs: Arena<EnvNode<'v>>,
+    elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
     types: Arena<TyClo<'v>>,
 }
@@ -363,6 +376,41 @@ impl ValueMetrics {
     }
 }
 
+impl ValueMetricsSnapshot {
+    /// Per-counter delta between two snapshots of the same collector.
+    ///
+    /// Cache peaks are high-water marks rather than event counters, so their
+    /// delta records only growth beyond the previous high-water mark.
+    pub fn saturating_sub(self, earlier: ValueMetricsSnapshot) -> ValueMetricsSnapshot {
+        macro_rules! delta {
+            ($field:ident) => {
+                self.$field.saturating_sub(earlier.$field)
+            };
+        }
+        ValueMetricsSnapshot {
+            arenas: delta!(arenas),
+            env_nodes: delta!(env_nodes),
+            term_closures: delta!(term_closures),
+            type_closures: delta!(type_closures),
+            term_cache_lookups: delta!(term_cache_lookups),
+            term_cache_hits: delta!(term_cache_hits),
+            term_cache_inserts: delta!(term_cache_inserts),
+            term_cache_evictions: delta!(term_cache_evictions),
+            term_cache_peak: delta!(term_cache_peak),
+            type_cache_lookups: delta!(type_cache_lookups),
+            type_cache_hits: delta!(type_cache_hits),
+            type_cache_inserts: delta!(type_cache_inserts),
+            type_cache_evictions: delta!(type_cache_evictions),
+            type_cache_peak: delta!(type_cache_peak),
+            app_domain_checks: delta!(app_domain_checks),
+            app_domain_fast_hits: delta!(app_domain_fast_hits),
+            app_codomain_checks: delta!(app_codomain_checks),
+            app_codomain_fast_hits: delta!(app_codomain_fast_hits),
+            app_shared_body_env_hits: delta!(app_shared_body_env_hits),
+        }
+    }
+}
+
 struct ValueCache<K, V> {
     values: HashMap<K, Rc<V>>,
     order: VecDeque<K>,
@@ -434,6 +482,7 @@ impl<'v> ValueArena<'v> {
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
             envs: Arena::new(),
+            elims: Arena::new(),
             terms: Arena::new(),
             types: Arena::new(),
         }
@@ -449,6 +498,7 @@ impl<'v> ValueArena<'v> {
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
                 envs: Arena::new(),
+                elims: Arena::new(),
                 terms: Arena::new(),
                 types: Arena::new(),
             }
@@ -474,6 +524,13 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&m.inner.type_closures);
         }
         self.types.alloc(value)
+    }
+
+    /// Extend a neutral elimination spine in constant time. Spine nodes live
+    /// in the query region, so sharing a prefix needs neither a `Vec` copy nor
+    /// reference-count bookkeeping.
+    pub fn elim(&'v self, prev: ElimSpine<'v>, elim: Elim<'v>) -> ElimSpine<'v> {
+        ElimSpine(Some(self.elims.alloc(ElimNode { elim, prev: prev.0 })))
     }
 
     /// The cached value for `clo`, if it is currently retained by this
@@ -767,7 +824,7 @@ impl Head<'_> {
 /// that fails.
 pub struct VNeutral<'v> {
     pub head: Head<'v>,
-    pub spine: Vec<Elim<'v>>,
+    pub spine: ElimSpine<'v>,
     pub unfold: Option<&'v TmClo<'v>>,
 }
 
@@ -1066,7 +1123,7 @@ impl<'v> Val<'v> {
     pub fn var(lvl: u32) -> Val<'v> {
         Val::Neutral(Rc::new(VNeutral {
             head: Head::Var(lvl),
-            spine: Vec::new(),
+            spine: ElimSpine::empty(),
             unfold: None,
         }))
     }
@@ -1075,7 +1132,7 @@ impl<'v> Val<'v> {
     pub fn base_var(depth: u32) -> Val<'v> {
         Val::Neutral(Rc::new(VNeutral {
             head: Head::BaseVar(depth),
-            spine: Vec::new(),
+            spine: ElimSpine::empty(),
             unfold: None,
         }))
     }
@@ -1090,6 +1147,61 @@ impl<'v> Val<'v> {
 // ---------------------------------------------------------------------------
 // Eliminations
 // ---------------------------------------------------------------------------
+
+/// A persistent neutral-elimination spine, newest elimination first.
+///
+/// Extending a neutral and recovering its immediate head are both O(1). The
+/// previous `Vec<Elim>` representation cloned the full spine for either
+/// operation, making ordinary nested applications implicitly quadratic in
+/// the evaluator and conversion checker.
+#[derive(Clone, Copy, Default)]
+pub struct ElimSpine<'v>(Option<&'v ElimNode<'v>>);
+
+struct ElimNode<'v> {
+    elim: Elim<'v>,
+    prev: Option<&'v ElimNode<'v>>,
+}
+
+impl<'v> ElimSpine<'v> {
+    pub const fn empty() -> ElimSpine<'v> {
+        ElimSpine(None)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0.is_none()
+    }
+
+    /// The outermost (last-pushed) elimination.
+    pub fn last(self) -> Option<&'v Elim<'v>> {
+        self.0.map(|node| &node.elim)
+    }
+
+    /// Remove the outermost elimination while sharing the whole prefix.
+    pub fn pop(self) -> ElimSpine<'v> {
+        ElimSpine(self.0.and_then(|node| node.prev))
+    }
+
+    pub fn split_last(self) -> Option<(&'v Elim<'v>, ElimSpine<'v>)> {
+        self.0.map(|node| (&node.elim, ElimSpine(node.prev)))
+    }
+
+    /// Iterate outermost-to-innermost (newest-to-oldest).
+    pub fn iter_rev(self) -> ElimSpineIter<'v> {
+        ElimSpineIter(self.0)
+    }
+}
+
+pub struct ElimSpineIter<'v>(Option<&'v ElimNode<'v>>);
+
+impl<'v> Iterator for ElimSpineIter<'v> {
+    type Item = &'v Elim<'v>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = self.0?;
+        self.0 = node.prev;
+        Some(&node.elim)
+    }
+}
 
 /// One elimination of a neutral spine, with the eliminator's annotations
 /// evaluated (or held as closures) exactly as the corresponding [`Term`]
@@ -1330,7 +1442,9 @@ impl fmt::Debug for VNeutral<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| {
             write!(f, "{:?}", self.head)?;
-            for e in &self.spine {
+            let mut spine: Vec<_> = self.spine.iter_rev().collect();
+            spine.reverse();
+            for e in spine {
                 write!(f, " ·{}", e.tag())?;
             }
             if self.unfold.is_some() {
@@ -1439,7 +1553,7 @@ impl fmt::Debug for Val<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TmClo, Val, ValueArena, ValueMetrics};
+    use super::{Elim, ElimSpine, TmClo, Val, ValueArena, ValueMetrics};
     use std::rc::Rc;
 
     #[test]
@@ -1450,6 +1564,21 @@ mod tests {
             clo = arena.tm(TmClo::val(Rc::new(Val::Succ(clo))));
         }
         assert!(arena.memo_tm(clo).is_some());
+    }
+
+    #[test]
+    fn deep_elimination_spine_extends_and_unconses_without_copying() {
+        let arena = ValueArena::new();
+        let mut spine = ElimSpine::empty();
+        for _ in 0..100_000 {
+            spine = arena.elim(spine, Elim::UApp { levels: Vec::new() });
+        }
+        assert_eq!(spine.iter_rev().count(), 100_000);
+        for _ in 0..100_000 {
+            assert!(matches!(spine.last(), Some(Elim::UApp { .. })));
+            spine = spine.pop();
+        }
+        assert!(spine.is_empty());
     }
 
     #[test]
@@ -1465,6 +1594,22 @@ mod tests {
         let separately_allocated = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let different = base.push(separately_allocated);
         assert!(!super::Env::values_ptr_eq(&left, &different));
+    }
+
+    #[test]
+    fn environment_prefix_identity_ignores_unobserved_outer_values() {
+        let arena = ValueArena::new();
+        let base = super::Env::empty(&arena);
+        let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left = base.push(left_outer).push(shared_inner);
+        let right = base.push(right_outer).push(shared_inner);
+
+        assert!(!super::Env::values_ptr_eq(&left, &right));
+        assert!(super::Env::values_ptr_eq_prefix(&left, &right, 0));
+        assert!(super::Env::values_ptr_eq_prefix(&left, &right, 1));
+        assert!(!super::Env::values_ptr_eq_prefix(&left, &right, 2));
     }
 
     #[test]

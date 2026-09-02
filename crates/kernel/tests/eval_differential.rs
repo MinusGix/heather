@@ -651,7 +651,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         // δ-reduced syntax side).
         let prefix = Rc::new(VNeutral {
             head: n.head.clone(),
-            spine: rest.to_vec(),
+            spine: rest,
             unfold: None,
         });
         match (last, w) {

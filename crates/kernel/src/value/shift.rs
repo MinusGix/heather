@@ -366,9 +366,15 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
 }
 
 fn neutral<'v>(n: &Rc<VNeutral<'v>>, o: Outer<'v>) -> Rc<VNeutral<'v>> {
+    let mut eliminations: Vec<_> = n.spine.iter_rev().collect();
+    eliminations.reverse();
+    let mut spine = super::ElimSpine::empty();
+    for elim in eliminations {
+        spine = o.arena.elim(spine, elimination(elim, o));
+    }
     Rc::new(VNeutral {
         head: head(&n.head, o),
-        spine: n.spine.iter().map(|e| elimination(e, o)).collect(),
+        spine,
         unfold: n.unfold.as_ref().map(|u| tm_clo(u, o)),
     })
 }

@@ -142,6 +142,9 @@ pub struct ItemTiming {
     pub item: String,
     pub total_ns: u64,
     pub kernel_ns: u64,
+    /// Value-machine activity attributable to this item when the opt-in
+    /// collector is enabled.
+    pub value_metrics: Option<ValueMetricsSnapshot>,
 }
 mod surface;
 mod traits;
@@ -1412,7 +1415,7 @@ impl Elaborator {
             let timing = self
                 .item_timings
                 .as_ref()
-                .map(|_| (Instant::now(), stats::kernel_ns()));
+                .map(|_| (Instant::now(), stats::kernel_ns(), self.value_metrics()));
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
             let r = match item {
@@ -1437,8 +1440,11 @@ impl Elaborator {
                 self.mint_pending();
                 self.run_source_lints(item, &lint_source);
             }
-            if let Some((started, kernel_before)) = timing {
+            if let Some((started, kernel_before, value_before)) = timing {
                 let kernel_ns = stats::kernel_ns().saturating_sub(kernel_before);
+                let value_metrics = self.value_metrics().zip(value_before).map(
+                    |(after, before)| after.saturating_sub(before),
+                );
                 self.item_timings
                     .as_ref()
                     .expect("item timing remains enabled during one item")
@@ -1448,6 +1454,7 @@ impl Elaborator {
                         item: item_timing_name(item),
                         total_ns: started.elapsed().as_nanos() as u64,
                         kernel_ns,
+                        value_metrics,
                     });
             }
             r?;

@@ -3,7 +3,7 @@ title: The value domain costs a 1.5-3x constant where there is no sharing to win
 status: open
 labels: [kernel,conversion,performance]
 created: 2026-07-31
-updated: 2026-08-14
+updated: 2026-09-02
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -124,3 +124,36 @@ and should re-read this at the same time — conversion no longer calls
   the cliff. The arena solves a correctness failure and remains landed; the
   baseline is re-recorded as required, with the regression and mechanism
   explicitly owned here rather than silently normalized away.
+- 2026-09-02: A generated FunctionIR/x86 scaling profile fired this issue
+  again at a much larger real workload. At five ALU nodes the checker built
+  about 27.5 M environment cells, 25.1 M term closures and 48.4 M type
+  closures; `perf` was allocator/cache/destructor topped (`malloc` 6.4%,
+  `ValueArena::cache_ty` 4.4%, `Vec<Elim>::clone` 2.1%, with further free,
+  `Rc` and arena-drop cost). The first representation fix landed here:
+  neutral elimination spines are now persistent arena lists. Extending a
+  neutral and viewing its immediate predecessor are O(1), replacing two full
+  `Vec<Elim>` copies, with no per-node heap allocation or recursive drop.
+  On the generated 20-node module this moved 105.6 s to 84.7 s (~20%); the
+  application-heavy `gprs_congruent` item moved from ~9.0 s to 6.2 s at 20
+  nodes and 2.4 s at the five-node diagnostic size. The kernel rails and a
+  100k-cell non-recursive spine regression pass.
+
+  Two negative probes constrain the next step. A 64-slot allocation-free
+  exact interner for `(Rc<Type>, Env)` syntax closures found only 1,718 hits
+  in 46.3 M constructions (0.0037%) and was reverted: these are genuinely
+  changing closures, not locally lost pointer identity. Enlarging the
+  bounded type cache from 16K to 64K gained only ~180K hits while 16.3 M
+  evictions remained and wall time regressed, also reverted. The remaining
+  target is therefore the production of changing environments/closures (or
+  a representation that makes their changes virtual), not a larger table.
+
+  The post-fix `perf` sample confirms `Vec<Elim>::clone` disappeared. The
+  residual remains allocator/cache dominated: `_int_malloc` 6.1%,
+  `cache_ty` 4.7%, allocator consolidation/unlink 7.6% together, and value
+  cache hashing about 3%. A deterministic mixed-pointer hasher plus one-probe
+  insertion looked locally obvious but failed the real gate: the generated
+  process ran beyond twice its prior completion time and was stopped. Both
+  changes were reverted. Do not replace hashbrown's hasher from a flat
+  instruction profile alone; bucket/probe behavior and the full memory rail
+  are part of this cache's acceptance test. A cache redesign should instead
+  address admission and closure production together.

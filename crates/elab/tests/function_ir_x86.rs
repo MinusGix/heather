@@ -528,9 +528,14 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
     let report_timings = std::env::var_os("HEATHER_FUNCTION_IR_X86_TIMINGS").is_some();
+    let report_value_metrics =
+        std::env::var_os("HEATHER_FUNCTION_IR_X86_VALUE_METRICS").is_some();
     if report_timings {
         e.enable_item_timings();
         stats::reset_kernel_ns();
+    }
+    if report_value_metrics {
+        e.enable_value_metrics();
     }
     let started = Instant::now();
     if let Err(error) = e.elab_module_source("function_ir_mixed_alu_x86", &source) {
@@ -567,13 +572,17 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
         }
         for item in timings.into_iter().take(12) {
             eprintln!(
-                "mixed ALU item {} total={:.3}s kernel={:.3}s frontend={:.3}s",
+                "mixed ALU item {} total={:.3}s kernel={:.3}s frontend={:.3}s metrics={:?}",
                 item.item,
                 item.total_ns as f64 / 1e9,
                 item.kernel_ns as f64 / 1e9,
                 item.total_ns.saturating_sub(item.kernel_ns) as f64 / 1e9,
+                item.value_metrics,
             );
         }
+    }
+    if report_value_metrics {
+        eprintln!("mixed ALU value metrics: {:?}", e.value_metrics().unwrap());
     }
 }
 

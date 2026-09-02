@@ -36,6 +36,7 @@
 
 use std::rc::Rc;
 
+use crate::bounds;
 use crate::eval::Eval;
 use crate::level::Level;
 use crate::rec;
@@ -202,6 +203,62 @@ mod tests {
         let ta = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         let tb = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         assert!(Values::tm_identity_fast(&ta, &tb));
+    }
+
+    #[test]
+    fn application_annotation_identity_reads_only_free_captures() {
+        let psi = crate::term::GlobalCtx::default();
+        let gamma = LocalCtx::nil();
+        let arena = value::ValueArena::new();
+        let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
+        let base = value::Env::empty(&arena);
+        let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left_env = base.push(left_outer).push(shared_inner);
+        let right_env = base.push(right_outer).push(shared_inner);
+
+        let inner_body = Rc::new(Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        });
+        let inner_left = TyC {
+            clo: arena.ty(TyClo::new(left_env, Rc::clone(&inner_body))),
+            home: 2,
+            sat: 2,
+        };
+        let inner_right = TyC {
+            clo: arena.ty(TyClo::new(right_env, inner_body)),
+            home: 2,
+            sat: 2,
+        };
+        assert!(Values::app_annotation_fast(
+            &env,
+            &inner_left,
+            &inner_right,
+            false,
+        ));
+
+        let outer_body = Rc::new(Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::Var(LocalVar(1))),
+        });
+        let outer_left = TyC {
+            clo: arena.ty(TyClo::new(left_env, Rc::clone(&outer_body))),
+            home: 2,
+            sat: 2,
+        };
+        let outer_right = TyC {
+            clo: arena.ty(TyClo::new(right_env, outer_body)),
+            home: 2,
+            sat: 2,
+        };
+        assert!(!Values::app_annotation_fast(
+            &env,
+            &outer_left,
+            &outer_right,
+            false,
+        ));
     }
 
     #[test]
@@ -450,8 +507,7 @@ fn glued<'v>(v: &Rc<Val<'v>>) -> Option<GlobalVar> {
 /// spine is recovered from the longer one's, which was built as exactly that
 /// elimination applied to it.
 fn spine_head<'v>(n: &Rc<VNeutral<'v>>) -> Rc<Val<'v>> {
-    let mut spine = n.spine.clone();
-    spine.pop();
+    let spine = n.spine.pop();
     if spine.is_empty() {
         match &n.head {
             Head::BoxedGlobalTy(c) => return Rc::new(Val::BoxTy(Rc::clone(c))),
@@ -1199,7 +1255,12 @@ impl<'v> Dom<'v> for Values {
             && matches!(
                 (a.clo.as_syn(), b.clo.as_syn()),
                 (Some((e1, b1)), Some((e2, b2)))
-                    if Rc::ptr_eq(b1, b2) && value::Env::values_ptr_eq(e1, e2)
+                    if Rc::ptr_eq(b1, b2)
+                        && value::Env::values_ptr_eq_prefix(
+                            e1,
+                            e2,
+                            bounds::type_local_bound(b1),
+                        )
             );
         let fast = ordinary || env_hit;
         env.rho.arena().record_app_annotation(codomain, fast, env_hit);

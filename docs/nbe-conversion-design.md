@@ -336,7 +336,7 @@ definition, because paying for the second pass unconditionally cost
 **Decision: glued neutrals.**
 
 ```
-VNeutral { head: Head, spine: Vec<Elim>, unfold: Option<Thunk<Val>> }
+VNeutral { head: Head, spine: PersistentSpine<Elim>, unfold: Option<Thunk<Val>> }
 Head ::= Var(lvl) | BaseVar(depth) | Global(u, δ_values) | BoxedGlobal(box-syntax)
 ```
 
