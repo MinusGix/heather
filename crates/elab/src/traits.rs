@@ -522,6 +522,31 @@ pub(crate) fn render_expr(e: &Expr) -> String {
     }
 }
 
+/// Whether two inherited class references name the same law-bearing fiber.
+///
+/// `extends` arguments are restricted to the child's own parameters, so every
+/// type argument is a bare named parameter and every index is a bare variable.
+/// Compare those names structurally rather than using the diagnostic renderer:
+/// class name alone is insufficient because `Monoid<A>(add)` and
+/// `Monoid<A>(mul)` are distinct fibers.
+fn same_parent_fiber(a: &ClassRef, b: &ClassRef) -> bool {
+    a.name == b.name
+        && a.args.len() == b.args.len()
+        && a.args.iter().zip(&b.args).all(|(x, y)| {
+            matches!(
+                (&x.kind, &y.kind),
+                (
+                    TyKind::Named { name: xn, args: xa },
+                    TyKind::Named { name: yn, args: ya }
+                ) if xa.is_empty() && ya.is_empty() && xn == yn
+            )
+        })
+        && a.index.len() == b.index.len()
+        && a.index.iter().zip(&b.index).all(|(x, y)| {
+            matches!((&x.kind, &y.kind), (ExprKind::Var(xn), ExprKind::Var(yn)) if xn == yn)
+        })
+}
+
 #[cfg(test)]
 mod inequality_render_tests {
     use super::*;
@@ -1104,10 +1129,35 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
-        // Flatten: ancestors first, then own fields, deduped by name.
+        // Flatten: ancestors first, then own fields. A genuine diamond reaches
+        // the same parent fiber twice and contributes it once. Reaching one
+        // class at two distinct indices is *not* a diamond: silently deduping
+        // it by class name would lose one complete algebraic structure.
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut owner: Vec<Option<String>> = Vec::new();
         let mut ancestors: Vec<ClassRef> = Vec::new();
+        let add_ancestor = |ancestors: &mut Vec<ClassRef>, candidate: ClassRef| -> R<()> {
+            let Some(previous) = ancestors.iter().find(|x| x.name == candidate.name) else {
+                ancestors.push(candidate);
+                return Ok(());
+            };
+            if same_parent_fiber(previous, &candidate) {
+                return Ok(());
+            }
+            err(
+                format!(
+                    "`{}` inherits the class `{}` at two distinct fibers (`{}` and `{}`): \
+                     unqualified flattening cannot identify them; package the parent \
+                     dictionaries under distinct fields until qualified parent \
+                     composition is available",
+                    d.name,
+                    candidate.name,
+                    class_ref_written(previous),
+                    class_ref_written(&candidate)
+                ),
+                candidate.span,
+            )
+        };
         for parent in &d.extends {
             let (pinfo, rename) = self.parent_view(d, parent)?;
             // The parent's own ancestors come with it, renamed the same way.
@@ -1118,18 +1168,17 @@ impl Elaborator {
                     index: a.index.iter().map(|e| rename_expr(&rename, e)).collect(),
                     span: parent.span,
                 };
-                if !ancestors.iter().any(|x| x.name == a.name) {
-                    ancestors.push(a);
-                }
+                add_ancestor(&mut ancestors, a)?;
             }
-            if !ancestors.iter().any(|x| x.name == parent.name) {
-                ancestors.push(ClassRef {
+            add_ancestor(
+                &mut ancestors,
+                ClassRef {
                     name: parent.name.clone(),
                     args: parent.args.clone(),
                     index: parent.index.clone(),
                     span: parent.span,
-                });
-            }
+                },
+            )?;
             for (f, o) in pinfo.fields.iter().zip(pinfo.owner.iter()) {
                 let from = o.clone().unwrap_or_else(|| pinfo.name.clone());
                 let name = f.name.clone().unwrap_or_default();

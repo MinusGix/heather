@@ -33,3 +33,34 @@ a field-free composite, and explicit first-class packaging as the control.
 - 2026-09-02: Filed from the algebra/reals API discussion. Algebra is important
   enough to force general class-composition support, but not arithmetic-only
   magic.
+- 2026-09-02: Adversarial first probes establish that Heather's existing
+  composition is already strong for a single fiber: empty composite classes
+  work, a shared ancestor in a diamond is synthesized once, its projections
+  agree definitionally, and an open child dictionary upcasts to its parents.
+  Resolution is intentionally one-way: a declared child supplies parents, but
+  independently registered parents are never assembled into an undeclared
+  child. This preserves proof relevance and keeps theory composition explicit.
+- 2026-09-02: The two-operation probe found a real safety bug. Repeating one
+  indexed parent class at distinct fibers, directly or through two parents,
+  was accepted but deduplicated by class name, silently discarding the second
+  structure. The elaborator now distinguishes identical-fiber diamonds from
+  distinct-fiber repetition: the former still collapses, while the latter is
+  refused with both fibers named. Explicit dependent-record packaging is
+  tested as the honest control and preserves both dictionaries.
+- 2026-09-02: Role-bearing class aliases are not the answer to multi-operation
+  composition. They are intentionally transparent views of one class fiber;
+  using them to manufacture distinct storage would recreate parallel
+  hierarchies under another spelling. The remaining design choice is between
+  the earlier qualified-flat-slot direction and named parent dictionaries.
+  Named parents (`extends Monoid<A>(add) as additive`) could lower to an actual
+  `additive: Monoid<A>(add)` component: upcast projects the exact dictionary,
+  collisions are naturally addressed as `s.additive.unit`, and unique-parent
+  member dispatch can remain automatic. This revises the old assumption that
+  `as` must merely rename copied flat fields; implementation waits for this
+  representation choice to be agreed rather than baking it into the safety
+  fix.
+- 2026-09-02: The focused composition corpus is 6/6. Full Furnace
+  `scripts/test` is 2,300 passed, zero failed, and five ignored, including the
+  complete operation-indexed class, trait, algebra, and order suites. The issue
+  remains open for qualified-parent representation and semiring-shaped
+  acceptance rather than conflating that design with the landed refusal.
