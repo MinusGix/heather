@@ -4,10 +4,13 @@
 
 mod support;
 
-use heather_elab::function_ir_cert::{self as cert, Node, Port, Region, StructuredRegion};
+use heather_elab::function_ir_cert::{
+    self as cert, BlockArgument, ConditionalJoinRegion, ControlRegion, Node, Port, Region,
+    StructuredRegion,
+};
 use heather_elab::function_ir_source;
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
-use heather_elab::{ElabError, Elaborator, stats};
+use heather_elab::{stats, ElabError, Elaborator};
 use heather_syntax::parse_file;
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -26,6 +29,8 @@ const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
 const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
 const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/model.hthr");
 const X86_64_BLOCK: &str = include_str!("../../../lib/std/arch/x86_64/block.hthr");
+const X86_64_CONTROL_BLOCK: &str = include_str!("../../../lib/std/arch/x86_64/control_block.hthr");
+const X86_64_CONTROL_FLOW: &str = include_str!("../../../lib/std/arch/x86_64/control_flow.hthr");
 const FUNCTION_IR: &str = include_str!("../../../lib/function_ir.hthr");
 const FUNCTION_IR_X86_SUPPORT: &str = include_str!("../../../lib/function_ir_x86_support.hthr");
 const FUNCTION_IR_X86: &str = include_str!("../../../lib/function_ir_x86.hthr");
@@ -45,6 +50,8 @@ const MODULES: &[(&str, &str)] = &[
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),
     ("x86_64_block", X86_64_BLOCK),
+    ("x86_64_control_block", X86_64_CONTROL_BLOCK),
+    ("x86_64_control_flow", X86_64_CONTROL_FLOW),
     ("function_ir", FUNCTION_IR),
     ("function_ir_x86_support", FUNCTION_IR_X86_SUPPORT),
     ("function_ir_x86", FUNCTION_IR_X86),
@@ -74,6 +81,7 @@ pub fn run_alu_tests() {
 }
 
 pub fn run_control_flow_tests() {
+    generated_control_region_x86_certificate_checks();
     generated_mixed_unsigned_comparison_checks();
     generated_signed_comparison_checks();
     generated_structured_conditional_checks();
@@ -545,8 +553,7 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
     let report_timings = std::env::var_os("HEATHER_FUNCTION_IR_X86_TIMINGS").is_some();
-    let report_value_metrics =
-        std::env::var_os("HEATHER_FUNCTION_IR_X86_VALUE_METRICS").is_some();
+    let report_value_metrics = std::env::var_os("HEATHER_FUNCTION_IR_X86_VALUE_METRICS").is_some();
     if report_timings {
         e.enable_item_timings();
         stats::reset_kernel_ns();
@@ -708,11 +715,9 @@ fn generated_constant_add_dag_checks() {
     )
     .expect("lower constant/Add DAG");
     assert_eq!(emission.lowered.instructions.len(), 2);
-    assert!(
-        emission
-            .text
-            .contains("byte_length():\n    constant_add_x86_bytes().len() = 13")
-    );
+    assert!(emission
+        .text
+        .contains("byte_length():\n    constant_add_x86_bytes().len() = 13"));
     assert!(emission.text.contains("next_rip(next_rip(start, 10), 3)"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
@@ -739,11 +744,9 @@ fn generated_mixed_unsigned_comparison_checks() {
     .expect("lower mixed Add/unsigned-comparison DAG");
     assert_eq!(emission.lowered.output_width, 1);
     assert!(emission.text.contains("SetBelow(Bl)"));
-    assert!(
-        emission
-            .text
-            .contains("bitvec::zero_extend(1, 63, values(1, 4))")
-    );
+    assert!(emission
+        .text
+        .contains("bitvec::zero_extend(1, 63, values(1, 4))"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
     if let Err(error) = e.elab_module_source("function_ir_unsigned_comparison_x86", &source) {
@@ -820,11 +823,9 @@ fn generated_structured_conditional_checks() {
         Gpr::Rax,
     )
     .expect("lower structured conditional");
-    assert!(
-        emission
-            .text
-            .contains("ConditionalBlock(condition_register := Rdx")
-    );
+    assert!(emission
+        .text
+        .contains("ConditionalBlock(condition_register := Rdx"));
     assert!(emission.text.contains("bit_value_placed_condition"));
     let raw = format!(
         "{}\n{}\n\
@@ -949,6 +950,148 @@ fn generated_comparison_prefixed_conditional_checks() {
             "generated comparison-prefixed conditional artifact did not check: {}",
             error.render(&source),
         );
+    }
+}
+
+fn generated_control_region_x86_certificate_checks() {
+    let p = |id, width| Port { id, width };
+    let branch_inputs = vec![p(0, 64), p(1, 64), p(2, 64)];
+    let graph = ControlRegion {
+        prefix: Region {
+            inputs: branch_inputs.clone(),
+            nodes: vec![Node::UnsignedLessThan {
+                width: 64,
+                output: 3,
+                left: 0,
+                right: 1,
+            }],
+            outputs: vec![p(3, 1)],
+        },
+        join: ConditionalJoinRegion {
+            inputs: vec![p(0, 64), p(1, 64), p(2, 64), p(3, 1)],
+            condition: 3,
+            arguments: branch_inputs.clone(),
+            when_true: Region {
+                inputs: branch_inputs.clone(),
+                nodes: vec![],
+                outputs: vec![p(1, 64), p(2, 64)],
+            },
+            true_arguments: vec![
+                BlockArgument {
+                    width: 64,
+                    value: 1,
+                    parameter: 4,
+                },
+                BlockArgument {
+                    width: 64,
+                    value: 2,
+                    parameter: 5,
+                },
+            ],
+            when_false: Region {
+                inputs: branch_inputs,
+                nodes: vec![],
+                outputs: vec![p(0, 64), p(2, 64)],
+            },
+            false_arguments: vec![
+                BlockArgument {
+                    width: 64,
+                    value: 0,
+                    parameter: 4,
+                },
+                BlockArgument {
+                    width: 64,
+                    value: 2,
+                    parameter: 5,
+                },
+            ],
+            continuation: Region {
+                inputs: vec![p(4, 64), p(5, 64)],
+                nodes: vec![Node::Add {
+                    width: 64,
+                    output: 6,
+                    left: 4,
+                    right: 5,
+                }],
+                outputs: vec![p(6, 64)],
+            },
+        },
+    };
+    let emission = lower::generate_control_region(
+        "max_plus_x86",
+        "max_plus_raw()",
+        &graph,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+        Gpr::Rcx,
+        &[Gpr::R8, Gpr::Rdx],
+        &[Gpr::Rax],
+        Gpr::Rax,
+    )
+    .expect("generate complete ControlRegion x86 certificate");
+    assert_eq!(
+        emission.lowered.when_true_transfer,
+        vec![lower::Instruction::MovRR {
+            destination: Gpr::R8,
+            source: Gpr::Rsi,
+        }],
+    );
+    assert_eq!(
+        emission.lowered.when_false_transfer,
+        vec![lower::Instruction::MovRR {
+            destination: Gpr::R8,
+            source: Gpr::Rdi,
+        }],
+    );
+    assert!(emission.text.contains("LinkedControlBlock"));
+    assert!(emission.text.contains("_linked_control_bytes().len() = 35"));
+    assert!(emission.text.contains("LinkedConditionalDecodes"));
+    assert!(emission.text.contains("CanonicalBlockDecodes"));
+    assert!(emission.text.contains("ExecuteLinkedControlBlock"));
+    assert!(emission.text.contains("ControlRegionHolds"));
+
+    let raw = cert::render_control_region_function("max_plus_raw", &graph)
+        .expect("render max_plus ControlRegion");
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    parse_file(&source).expect("generated complete ControlRegion x86 artifact parses");
+    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let mut e = base.clone();
+    e.enable_item_timings();
+    stats::reset_kernel_ns();
+    let started = Instant::now();
+    if let Err(error) = e.elab_module_source("function_ir_control_region_x86", &source) {
+        report_scaling_timings(
+            "control region x86 failure",
+            started.elapsed(),
+            e.take_item_timings(),
+        );
+        panic!(
+            "generated complete ControlRegion x86 artifact did not check: {}",
+            error.render(&source),
+        );
+    }
+    report_scaling_timings(
+        "control region x86",
+        started.elapsed(),
+        e.take_item_timings(),
+    );
+
+    let dishonest_source = generated_module(
+        "theorem dishonest_edge_destination():\n\
+             MovRR(R9, Rsi) = MovRR(R8, Rsi)\n\
+         { refl }",
+    );
+    parse_file(&dishonest_source).expect("dishonest edge certificate parses");
+    let mut dishonest = base;
+    match dishonest.elab_module_source(
+        "dishonest_function_ir_control_region_x86",
+        &dishonest_source,
+    ) {
+        Err(ElabError::Kernel { .. }) => {}
+        Err(error) => panic!(
+            "dishonest edge destination failed for the wrong reason: {}",
+            error.render(&dishonest_source),
+        ),
+        Ok(()) => panic!("dishonest edge destination unexpectedly checked"),
     }
 }
 
@@ -1194,6 +1337,8 @@ fn checked_example_lowering_module() -> String {
          import function_ir;\n\
          import x86_64;\n\
          import x86_64_block;\n\
+         import x86_64_control_block;\n\
+         import x86_64_control_flow;\n\
          import bitvec;\n\
          import list;\n\
          import logic;\n\n{}\n{}",
@@ -1204,7 +1349,7 @@ fn checked_example_lowering_module() -> String {
 fn generated_module(body: &str) -> String {
     format!(
         "import function_ir_x86_support;\nimport function_ir;\nimport x86_64;\n\
-         import x86_64_block;\nimport bitvec;\nimport list;\nimport logic;\n\n{body}",
+         import x86_64_block;\nimport x86_64_control_block;\nimport x86_64_control_flow;\nimport bitvec;\nimport list;\nimport logic;\n\n{body}",
     )
 }
 

@@ -5,6 +5,8 @@ import function_ir_x86_support;
 import function_ir;
 import x86_64;
 import x86_64_block;
+import x86_64_control_block;
+import x86_64_control_flow;
 import bitvec;
 import list;
 import logic;

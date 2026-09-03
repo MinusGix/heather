@@ -372,6 +372,12 @@ pub struct PrefixedConditionalX86Emission {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlX86Emission {
+    pub lowered: LoweredControlRegion,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoweredConditional {
     pub condition_id: u64,
     pub condition_register: Gpr,
@@ -1378,6 +1384,1026 @@ pub fn generate_prefixed_conditional(
         continuation: continuation_emission.lowered,
         text,
     })
+}
+
+/// Generate one complete checked x86 artifact for the current four-block
+/// `ControlRegion`: comparison prefix, selected edge transfer, physical join,
+/// and one shared straight-line continuation.
+///
+/// This first certificate slice deliberately accepts the useful two-argument
+/// shape exercised by `max_plus`: the first parameter is copied by each edge,
+/// while the second is already resident in its join register.  The lowering
+/// plan remains general enough to diagnose more parallel copies; extending
+/// their proof renderer is tracked separately.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_control_region(
+    prefix: &str,
+    region_expr: &str,
+    region: &ControlRegion,
+    input_registers: &[Gpr],
+    condition_register: Gpr,
+    join_registers: &[Gpr],
+    continuation_temporaries: &[Gpr],
+    requested_output: Gpr,
+) -> Result<ControlX86Emission, LoweringError> {
+    let lowered = lower_control_region(
+        region,
+        input_registers,
+        condition_register,
+        join_registers,
+        continuation_temporaries,
+        requested_output,
+    )?;
+    if region.join.true_arguments.len() != 2 || region.join.false_arguments.len() != 2 {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+
+    let prefix_name = format!("{prefix}_prefix");
+    let true_name = format!("{prefix}_true_transfer");
+    let false_name = format!("{prefix}_false_transfer");
+    let continuation_name = format!("{prefix}_continuation");
+    let linked_name = format!("{prefix}_linked_conditional");
+    let control_name = format!("{prefix}_linked_control");
+
+    let prefix_expr = format!("{region_expr}.prefix");
+    let continuation_expr = format!("{region_expr}.join.continuation");
+    let true_edge_name = format!("{prefix}_true_transfer_raw");
+    let false_edge_name = format!("{prefix}_false_transfer_raw");
+    let true_edge_expr = format!("{true_edge_name}()");
+    let false_edge_expr = format!("{false_edge_name}()");
+    let edge_region = |argument: BlockArgument| Region {
+        inputs: region.join.arguments.clone(),
+        nodes: vec![],
+        outputs: vec![cert::Port {
+            id: argument.value,
+            width: argument.width,
+        }],
+    };
+    let true_edge = edge_region(region.join.true_arguments[0]);
+    let false_edge = edge_region(region.join.false_arguments[0]);
+
+    let available = region
+        .prefix
+        .inputs
+        .iter()
+        .zip(input_registers)
+        .map(|(port, register)| (port.id, *register))
+        .chain(std::iter::once((region.join.condition, condition_register)))
+        .collect::<BTreeMap<_, _>>();
+    let edge_input_registers = region
+        .join
+        .arguments
+        .iter()
+        .map(|port| {
+            available
+                .get(&port.id)
+                .copied()
+                .ok_or(LoweringError::UndefinedValue(port.id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let prefix_emission = generate(
+        &prefix_name,
+        &prefix_expr,
+        &region.prefix,
+        input_registers,
+        &[condition_register],
+        condition_register,
+    )?;
+    let true_emission = generate(
+        &true_name,
+        &true_edge_expr,
+        &true_edge,
+        &edge_input_registers,
+        &[join_registers[0]],
+        join_registers[0],
+    )?;
+    let false_emission = generate(
+        &false_name,
+        &false_edge_expr,
+        &false_edge,
+        &edge_input_registers,
+        &[join_registers[0]],
+        join_registers[0],
+    )?;
+    let continuation_emission = generate(
+        &continuation_name,
+        &continuation_expr,
+        &region.join.continuation,
+        join_registers,
+        continuation_temporaries,
+        requested_output,
+    )?;
+    if true_emission.lowered.instructions != lowered.when_true_transfer
+        || false_emission.lowered.instructions != lowered.when_false_transfer
+        || true_emission.lowered.instructions.len() != 1
+        || false_emission.lowered.instructions.len() != 1
+    {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+    let (continuation_output_id, continuation_left_id, continuation_right_id) =
+        match region.join.continuation.nodes.as_slice() {
+            [Node::Add {
+                width: 64,
+                output,
+                left,
+                right,
+            }] => (*output, *left, *right),
+            _ => return Err(LoweringError::UnsupportedJoinArm),
+        };
+    if continuation_left_id != region.join.true_arguments[0].parameter
+        || continuation_left_id != region.join.false_arguments[0].parameter
+        || continuation_right_id != region.join.true_arguments[1].parameter
+        || continuation_right_id != region.join.false_arguments[1].parameter
+    {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+    let continuation_inputs = region
+        .join
+        .continuation
+        .inputs
+        .iter()
+        .zip(join_registers)
+        .map(|(port, register)| (port.id, *register))
+        .collect::<BTreeMap<_, _>>();
+    let continuation_left_register = continuation_inputs
+        .get(&continuation_left_id)
+        .copied()
+        .ok_or(LoweringError::UndefinedValue(continuation_left_id))?;
+    let continuation_right_register = continuation_inputs
+        .get(&continuation_right_id)
+        .copied()
+        .ok_or(LoweringError::UndefinedValue(continuation_right_id))?;
+    let expected_continuation = vec![
+        Instruction::MovRR {
+            destination: requested_output,
+            source: continuation_left_register,
+        },
+        Instruction::AddRR {
+            destination: requested_output,
+            source: continuation_right_register,
+        },
+    ];
+    if continuation_emission.lowered.instructions != expected_continuation
+        || continuation_output_id != region.join.continuation.outputs[0].id
+    {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+
+    let true_bytes = true_emission
+        .lowered
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>();
+    let false_bytes = false_emission
+        .lowered
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>();
+    let false_displacement = true_bytes + 2;
+    let join_displacement = false_bytes;
+    for bytes in [false_displacement, join_displacement] {
+        if bytes > i8::MAX as usize {
+            return Err(LoweringError::ShortBranchOutOfRange { bytes });
+        }
+    }
+    let conditional_length = prefix_emission
+        .lowered
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>()
+        + 3
+        + 2
+        + true_bytes
+        + 2
+        + false_bytes;
+    let continuation_length = continuation_emission
+        .lowered
+        .instructions
+        .iter()
+        .map(|instruction| instruction.canonical_length())
+        .sum::<usize>();
+    let prefix_span = render_block_span_proof(&prefix_emission.lowered.instructions);
+    let true_span = render_block_span_proof(&true_emission.lowered.instructions);
+    let false_span = render_block_span_proof(&false_emission.lowered.instructions);
+    let prefix_span_at = prefix_span.replace("start", "before.rip");
+    let true_span_at = true_span.replace(
+        "start",
+        &format!("linked_branch_after({linked_name}(), before).rip"),
+    );
+    let false_span_at = false_span.replace(
+        "start",
+        &format!("linked_branch_after({linked_name}(), before).rip"),
+    );
+
+    let input_indices = region
+        .prefix
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, port)| (port.id, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut parameters = vec![
+        "values: Valuation()".to_string(),
+        "before: MachineState<M>".to_string(),
+    ];
+    for (index, (port, register)) in region.prefix.inputs.iter().zip(input_registers).enumerate() {
+        parameters.push(format!(
+            "input_{index}_placed: ValuePlaced(values, {}, {}, before)",
+            port.id,
+            register.heather_name(),
+        ));
+    }
+    parameters.push(format!("graph: ControlRegionHolds(values, {region_expr})"));
+    let parameters = parameters.join(",\n    ");
+    let prefix_input_args = (0..region.prefix.inputs.len())
+        .map(|index| format!("input_{index}_placed"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let prefix_call_args = if prefix_input_args.is_empty() {
+        String::new()
+    } else {
+        format!(", {prefix_input_args}")
+    };
+    let input_parameter_declarations = (0..region.prefix.inputs.len())
+        .map(|index| {
+            let port = region.prefix.inputs[index];
+            let register = input_registers[index];
+            format!(
+                "input_{index}_placed: ValuePlaced(values, {}, {}, before)",
+                port.id,
+                register.heather_name(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n    ");
+    let input_parameter_suffix = if input_parameter_declarations.is_empty() {
+        String::new()
+    } else {
+        format!(",\n    {input_parameter_declarations}")
+    };
+    let prefix_placed = |port: cert::Port| {
+        let index = input_indices[&port.id];
+        let register = input_registers[index];
+        format!(
+            "placed_after_frame(values, {}, {}, before, {prefix_name}_after(before), \
+             input_{index}_placed, {prefix_name}_preserves_protected({}, before, trivial))",
+            port.id,
+            register.heather_name(),
+            register.heather_name(),
+        )
+    };
+    let edge_args = region
+        .join
+        .arguments
+        .iter()
+        .map(|port| prefix_placed(*port))
+        .collect::<Vec<_>>()
+        .join(",\n        ");
+
+    let first_true = region.join.true_arguments[0];
+    let second_true = region.join.true_arguments[1];
+    let first_false = region.join.false_arguments[0];
+    let second_false = region.join.false_arguments[1];
+    let first_join_register = join_registers[0].heather_name();
+    let second_join_register = join_registers[1].heather_name();
+    let true_source_register = available[&first_true.value].heather_name();
+    let false_source_register = available[&first_false.value].heather_name();
+    let second_true_register = available[&second_true.value].heather_name();
+    let second_false_register = available[&second_false.value].heather_name();
+    if second_true_register != second_join_register || second_false_register != second_join_register
+    {
+        return Err(LoweringError::UnsupportedJoinArm);
+    }
+
+    let mut text = cert::render_region_function(&true_edge_name, &true_edge);
+    text.push('\n');
+    text.push_str(&cert::render_region_function(&false_edge_name, &false_edge));
+    text.push('\n');
+    text.push_str(&prefix_emission.text);
+    text.push('\n');
+    text.push_str(&true_emission.text);
+    text.push('\n');
+    text.push_str(&false_emission.text);
+    text.push('\n');
+    text.push_str(&continuation_emission.text);
+
+    text.push_str(&format!(
+        "\nfn {linked_name}() → LinkedConditionalBlock {{\n\
+         \x20   LinkedConditionalBlock(\n\
+         \x20       prefix := {prefix_name}_instructions(),\n\
+         \x20       test_register := {},\n\
+         \x20       false_displacement := bitvec::ofNat(8, {false_displacement}),\n\
+         \x20       when_true := {true_name}_instructions(),\n\
+         \x20       join_displacement := bitvec::ofNat(8, {join_displacement}),\n\
+         \x20       when_false := {false_name}_instructions())\n\
+         }}\n\n\
+         fn {control_name}() → LinkedControlBlock {{\n\
+         \x20   LinkedControlBlock(conditional := {linked_name}(),\n\
+         \x20       continuation := {continuation_name}_instructions())\n\
+         }}\n\n\
+         fn {control_name}_bytes() → List<BitVec(8)> {{\n\
+         \x20   linked_control_bytes({control_name}())\n\
+         }}\n\n\
+         theorem {control_name}_byte_length():\n\
+         \x20   {control_name}_bytes().len() = {}\n\
+         {{ refl }}\n\n\
+         theorem {linked_name}_decodes(start: BitVec(64)):\n\
+         \x20   LinkedConditionalDecodes({linked_name}(), start)\n\
+         {{\n\
+         \x20   LinkedConditionalDecodes(\n\
+         \x20     prefix_decoding := canonical_block_decodes(\n\
+         \x20       {prefix_name}_instructions(), start),\n\
+         \x20     test_decoding := canonical_encoding_decodes(\n\
+         \x20       linked_test_start({linked_name}(), start), TestRR({}, {})),\n\
+         \x20     branch_decoding := decode_short_control_complete(JumpZero(\n\
+         \x20       bitvec::ofNat(8, {false_displacement}))),\n\
+         \x20     true_decoding := canonical_block_decodes(\n\
+         \x20       {true_name}_instructions(), linked_true_start({linked_name}(), start)),\n\
+         \x20     join_decoding := decode_short_control_complete(Jump(\n\
+         \x20       bitvec::ofNat(8, {join_displacement}))),\n\
+         \x20     false_decoding := canonical_block_decodes(\n\
+         \x20       {false_name}_instructions(), linked_false_start({linked_name}(), start)))\n\
+         }}\n\n\
+         theorem {linked_name}_false_target(start: BitVec(64)):\n\
+         \x20   short_branch_target(linked_branch_start({linked_name}(), start),\n\
+         \x20       bitvec::ofNat(8, {false_displacement})) =\n\
+         \x20     linked_false_start({linked_name}(), start)\n\
+         {{\n\
+         \x20   trans(refl, sym(bitvec::iterate_increment_compose(64,\n\
+         \x20     linked_true_start({linked_name}(), start), {true_bytes}, 2)))\n\
+         }}\n\n\
+         theorem {linked_name}_join_target(start: BitVec(64)):\n\
+         \x20   short_branch_target(linked_join_jump_start({linked_name}(), start),\n\
+         \x20       bitvec::ofNat(8, {join_displacement})) =\n\
+         \x20     linked_join_start({linked_name}(), start)\n\
+         {{ refl }}\n\n\
+         theorem {linked_name}_layout(): LinkedConditionalLayout({linked_name}())\n\
+         {{\n\
+         \x20   LinkedConditionalLayout(false_forward := refl, false_distance := refl,\n\
+         \x20     join_forward := refl, join_distance := refl,\n\
+         \x20     false_target := {linked_name}_false_target,\n\
+         \x20     join_target := {linked_name}_join_target)\n\
+         }}\n",
+        condition_register.heather_name(),
+        conditional_length + continuation_length,
+        condition_register.heather_name(),
+        condition_register.heather_name(),
+    ));
+
+    text.push_str(&format!(
+        "\ntheorem {linked_name}_prefix_at<M>(before: MachineState<M>):\n\
+         \x20   linked_prefix_after({linked_name}(), before).rip =\n\
+         \x20     linked_test_start({linked_name}(), before.rip)\n\
+         {{ trans({prefix_name}_advances_rip(before), {prefix_span_at}) }}\n\n\
+         theorem {linked_name}_true_at<M>(before: MachineState<M>):\n\
+         \x20   linked_true_after({linked_name}(), before).rip =\n\
+         \x20     after_canonical_block(linked_branch_after({linked_name}(), before).rip,\n\
+         \x20       {true_name}_instructions())\n\
+         {{ trans({true_name}_advances_rip(linked_branch_after({linked_name}(), before)),\n\
+         \x20   {true_span_at}) }}\n\n\
+         theorem {linked_name}_false_at<M>(before: MachineState<M>):\n\
+         \x20   linked_false_after({linked_name}(), before).rip =\n\
+         \x20     after_canonical_block(linked_branch_after({linked_name}(), before).rip,\n\
+         \x20       {false_name}_instructions())\n\
+         {{ trans({false_name}_advances_rip(linked_branch_after({linked_name}(), before)),\n\
+         \x20   {false_span_at}) }}\n\n\
+         theorem {linked_name}_not_taken_at<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after({linked_name}(), before).flags.zf = False):\n\
+         \x20   linked_branch_after({linked_name}(), before).rip =\n\
+         \x20     linked_true_start({linked_name}(), before.rip)\n\
+         {{\n\
+         \x20   trans(jump_zero_not_taken_rip(\n\
+         \x20       linked_test_after({linked_name}(), before).flags.zf,\n\
+         \x20       linked_test_after({linked_name}(), before).rip,\n\
+         \x20       {linked_name}().false_displacement, selected),\n\
+         \x20     bitvec::cong_iterate_increment(64, 2,\n\
+         \x20       linked_test_reaches_branch_start({linked_name}(), before,\n\
+         \x20         {linked_name}_prefix_at(before))))\n\
+         }}\n\n\
+         theorem {linked_name}_taken_at<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after({linked_name}(), before).flags.zf = True):\n\
+         \x20   linked_branch_after({linked_name}(), before).rip =\n\
+         \x20     linked_false_start({linked_name}(), before.rip)\n\
+         {{\n\
+         \x20   trans(jump_zero_taken_rip(\n\
+         \x20       linked_test_after({linked_name}(), before).flags.zf,\n\
+         \x20       linked_test_after({linked_name}(), before).rip,\n\
+         \x20       {linked_name}().false_displacement, selected),\n\
+         \x20     trans(cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20       λ rip => short_branch_target(rip, {linked_name}().false_displacement),\n\
+         \x20       linked_test_reaches_branch_start({linked_name}(), before,\n\
+         \x20         {linked_name}_prefix_at(before))),\n\
+         \x20       {linked_name}_layout().false_target(before.rip)))\n\
+         }}\n\n\
+         theorem {linked_name}_true_reaches_join<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after({linked_name}(), before).flags.zf = False):\n\
+         \x20   linked_true_jump_after({linked_name}(), before).rip =\n\
+         \x20     linked_join_start({linked_name}(), before.rip)\n\
+         {{\n\
+         \x20   calc {{\n\
+         \x20     linked_true_jump_after({linked_name}(), before).rip\n\
+         \x20       = short_branch_target(linked_true_after({linked_name}(), before).rip,\n\
+         \x20           {linked_name}().join_displacement) := refl,\n\
+         \x20       = short_branch_target(linked_join_jump_start({linked_name}(), before.rip),\n\
+         \x20           {linked_name}().join_displacement) :=\n\
+         \x20         cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20           λ rip => short_branch_target(rip, {linked_name}().join_displacement),\n\
+         \x20           trans({linked_name}_true_at(before),\n\
+         \x20             cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20               λ rip => after_canonical_block(rip, {true_name}_instructions()),\n\
+         \x20               {linked_name}_not_taken_at(before, selected)))),\n\
+         \x20       = linked_join_start({linked_name}(), before.rip) :=\n\
+         \x20         {linked_name}_layout().join_target(before.rip),\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {linked_name}_false_reaches_join<M>(before: MachineState<M>,\n\
+         \x20   selected: linked_test_after({linked_name}(), before).flags.zf = True):\n\
+         \x20   linked_false_after({linked_name}(), before).rip =\n\
+         \x20     linked_join_start({linked_name}(), before.rip)\n\
+         {{\n\
+         \x20   calc {{\n\
+         \x20     linked_false_after({linked_name}(), before).rip\n\
+         \x20       = after_canonical_block(linked_branch_after({linked_name}(), before).rip,\n\
+         \x20           {false_name}_instructions()) := {linked_name}_false_at(before),\n\
+         \x20       = after_canonical_block(linked_false_start({linked_name}(), before.rip),\n\
+         \x20           {false_name}_instructions()) :=\n\
+         \x20         cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20           λ rip => after_canonical_block(rip, {false_name}_instructions()),\n\
+         \x20           {linked_name}_taken_at(before, selected)),\n\
+         \x20       = linked_join_start({linked_name}(), before.rip) := refl,\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {linked_name}_spans<M>(before: MachineState<M>):\n\
+         \x20   LinkedConditionalSpans<M>({linked_name}(), before)\n\
+         {{ LinkedConditionalSpans(\n\
+         \x20   true_reaches_join := λ selected =>\n\
+         \x20     {linked_name}_true_reaches_join(before, selected),\n\
+         \x20   false_reaches_join := λ selected =>\n\
+         \x20     {linked_name}_false_reaches_join(before, selected)) }}\n\n\
+         theorem {linked_name}_reaches_join<M>(before: MachineState<M>):\n\
+         \x20   linked_conditional_after({linked_name}(), before).rip =\n\
+         \x20     linked_join_start({linked_name}(), before.rip)\n\
+         {{ linked_conditional_reaches_join({linked_name}(), before,\n\
+         \x20   {linked_name}_spans(before)) }}\n\n\
+         theorem {control_name}_executes<M>(before: MachineState<M>):\n\
+         \x20   ExecuteLinkedControlBlock<M>({control_name}(), before,\n\
+         \x20     linked_control_after({control_name}(), before))\n\
+         {{ canonical_linked_control_executes({control_name}(), before) }}\n"
+    ));
+
+    // Register agreement between the physical edge states and the same
+    // canonical transfer blocks started at the logical prefix state.
+    for (side, edge_name, actual) in [
+        ("true", &true_name, "linked_true_jump_after"),
+        ("false", &false_name, "linked_false_after"),
+    ] {
+        for register in join_registers {
+            let register = register.heather_name();
+            let edge_agreement = format!(
+                "{edge_name}_gprs_congruent(\n       linked_branch_after({linked_name}(), before),\n       {prefix_name}_after(before),\n       linked_branch_preserves_prefix_gprs({linked_name}(), before))"
+            );
+            let agreement = if side == "true" {
+                format!(
+                    "trans(execute_short_control_preserves_gprs(Jump({linked_name}().join_displacement), linked_true_after({linked_name}(), before)), {edge_agreement})"
+                )
+            } else {
+                edge_agreement
+            };
+            text.push_str(&format!(
+                "\ntheorem {linked_name}_{side}_{register}_agrees<M>(before: MachineState<M>):\n\
+                 \x20   read_gpr({register}, {actual}({linked_name}(), before).gprs) =\n\
+                 \x20     read_gpr({register}, {edge_name}_after({prefix_name}_after(before)).gprs)\n\
+                 {{\n\
+                 \x20   cong_fn<Gprs, BitVec(64)>(read_gpr({register}, ·),\n\
+                 \x20     {agreement})\n\
+                 }}\n"
+            ));
+        }
+    }
+
+    let true_refine_args = format!(
+        "{true_name}_refines_function_ir(values, {prefix_name}_after(before),\n        {edge_args}, trivial)"
+    );
+    let false_refine_args = format!(
+        "{false_name}_refines_function_ir(values, {prefix_name}_after(before),\n        {edge_args}, trivial)"
+    );
+    let true_second_prefix = prefix_placed(cert::Port {
+        id: second_true.value,
+        width: second_true.width,
+    });
+    let false_second_prefix = prefix_placed(cert::Port {
+        id: second_false.value,
+        width: second_false.width,
+    });
+
+    text.push_str(&format!(
+        "\ntheorem {linked_name}_condition_placed<M>(values: Valuation(),\n\
+         \x20   before: MachineState<M>{},\n\
+         \x20   prefix_graph: RegionHolds({prefix_expr}, values)):\n\
+         \x20   BitValuePlaced(values, {}, {},\n\
+         \x20     linked_prefix_after({linked_name}(), before))\n\
+         {{\n\
+         \x20   sym({prefix_name}_refines_function_ir(values, before{prefix_call_args},\n\
+         \x20     prefix_graph))\n\
+         }}\n\n\
+         theorem {linked_name}_test_selects<M>(values: Valuation(),\n\
+         \x20   before: MachineState<M>{},\n\
+         \x20   prefix_graph: RegionHolds({prefix_expr}, values)):\n\
+         \x20   linked_test_after({linked_name}(), before).flags.zf =\n\
+         \x20     zero_test_selector(bitvec::head_bit(0, values(1, {})))\n\
+         {{\n\
+         \x20   linked_test_bit_value_placed_zf(values, {}, {linked_name}(), before,\n\
+         \x20     {linked_name}_condition_placed(values, before{prefix_call_args}, prefix_graph))\n\
+         }}\n",
+        input_parameter_suffix,
+        region.join.condition,
+        condition_register.heather_name(),
+        input_parameter_suffix,
+        region.join.condition,
+        region.join.condition,
+    ));
+
+    text.push_str(&format!(
+        "\ntheorem {linked_name}_true_first_placed<M>(values: Valuation(), before: MachineState<M>{}):\n\
+         \x20   ValuePlaced(values, {}, {first_join_register},\n\
+         \x20     linked_true_jump_after({linked_name}(), before))\n\
+         {{ sym(trans({linked_name}_true_{first_join_register}_agrees(before), {true_refine_args})) }}\n\n\
+         theorem {linked_name}_false_first_placed<M>(values: Valuation(), before: MachineState<M>{}):\n\
+         \x20   ValuePlaced(values, {}, {first_join_register},\n\
+         \x20     linked_false_after({linked_name}(), before))\n\
+         {{ sym(trans({linked_name}_false_{first_join_register}_agrees(before), {false_refine_args})) }}\n\n\
+         theorem {linked_name}_true_second_placed<M>(values: Valuation(), before: MachineState<M>{}):\n\
+         \x20   ValuePlaced(values, {}, {second_join_register},\n\
+         \x20     linked_true_jump_after({linked_name}(), before))\n\
+         {{\n\
+         \x20   placed_after_frame(values, {}, {second_join_register},\n\
+         \x20     {prefix_name}_after(before), linked_true_jump_after({linked_name}(), before),\n\
+         \x20     {true_second_prefix},\n\
+         \x20     trans({linked_name}_true_{second_join_register}_agrees(before),\n\
+         \x20       {true_name}_preserves_protected({second_join_register},\n\
+         \x20         {prefix_name}_after(before), trivial)))\n\
+         }}\n\n\
+         theorem {linked_name}_false_second_placed<M>(values: Valuation(), before: MachineState<M>{}):\n\
+         \x20   ValuePlaced(values, {}, {second_join_register},\n\
+         \x20     linked_false_after({linked_name}(), before))\n\
+         {{\n\
+         \x20   placed_after_frame(values, {}, {second_join_register},\n\
+         \x20     {prefix_name}_after(before), linked_false_after({linked_name}(), before),\n\
+         \x20     {false_second_prefix},\n\
+         \x20     trans({linked_name}_false_{second_join_register}_agrees(before),\n\
+         \x20       {false_name}_preserves_protected({second_join_register},\n\
+         \x20         {prefix_name}_after(before), trivial)))\n\
+         }}\n",
+        input_parameter_suffix,
+        first_true.value,
+        input_parameter_suffix,
+        first_false.value,
+        input_parameter_suffix,
+        second_true.value,
+        second_true.value,
+        input_parameter_suffix,
+        second_false.value,
+        second_false.value,
+    ));
+
+    let continuation_output = region.join.continuation.outputs[0].id;
+    let continuation_destination = requested_output.heather_name();
+    let continuation_left_register = continuation_left_register.heather_name();
+    let continuation_right_register = continuation_right_register.heather_name();
+    let first_false_value = first_false.value;
+    let first_false_parameter = first_false.parameter;
+    let second_false_value = second_false.value;
+    let second_false_parameter = second_false.parameter;
+    let first_true_value = first_true.value;
+    let first_true_parameter = first_true.parameter;
+    let second_true_value = second_true.value;
+    let second_true_parameter = second_true.parameter;
+    text.push_str(&format!(
+        "\nfn {prefix}_false_entry<M>(before: MachineState<M>) → MachineState<M> {{\n\
+         \x20   MachineState<M>(\n\
+         \x20     gprs := {false_name}_after({prefix_name}_after(before)).gprs,\n\
+         \x20     flags := before.flags, rip := before.rip, memory := before.memory)\n\
+         }}\n\n\
+         fn {prefix}_true_entry<M>(before: MachineState<M>) → MachineState<M> {{\n\
+         \x20   MachineState<M>(\n\
+         \x20     gprs := {true_name}_after({prefix_name}_after(before)).gprs,\n\
+         \x20     flags := before.flags, rip := before.rip, memory := before.memory)\n\
+         }}\n\n\
+         fn {prefix}_continuation_gprs(entry: Gprs) → Gprs {{\n\
+         \x20   execute_add({continuation_destination}, {continuation_right_register},\n\
+         \x20     write_gpr({continuation_destination}, read_gpr({continuation_left_register}, entry), entry)).gprs\n\
+         }}\n\n\
+         theorem {prefix}_continuation_gprs_computes(entry: Gprs):\n\
+         \x20   read_gpr({continuation_destination}, {prefix}_continuation_gprs(entry)) =\n\
+         \x20     bitvec::add(64, read_gpr({continuation_left_register}, entry),\n\
+         \x20       read_gpr({continuation_right_register}, entry))\n\
+         {{\n\
+         \x20   gpr_move_add_reads({continuation_destination},\n\
+         \x20     {continuation_left_register}, {continuation_right_register}, entry, refl)\n\
+         }}\n\n\
+         theorem {prefix}_continuation_gprs_agrees<M>(before: MachineState<M>):\n\
+         \x20   {continuation_name}_after(before).gprs =\n\
+         \x20     {prefix}_continuation_gprs(before.gprs)\n\
+         {{ refl }}\n\n\
+         theorem {prefix}_false_value_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix}):\n\
+         \x20   ValuePlaced(values, {first_false_value}, {first_join_register},\n\
+         \x20     {false_name}_after({prefix_name}_after(before)))\n\
+         {{ trans({linked_name}_false_first_placed(values, before{prefix_call_args}),\n\
+         \x20   {linked_name}_false_{first_join_register}_agrees(before)) }}\n\n\
+         theorem {prefix}_false_value_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix}):\n\
+         \x20   ValuePlaced(values, {second_false_value}, {second_join_register},\n\
+         \x20     {false_name}_after({prefix_name}_after(before)))\n\
+         {{ trans({linked_name}_false_second_placed(values, before{prefix_call_args}),\n\
+         \x20   {linked_name}_false_{second_join_register}_agrees(before)) }}\n\n\
+         theorem {prefix}_true_value_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix}):\n\
+         \x20   ValuePlaced(values, {first_true_value}, {first_join_register},\n\
+         \x20     {true_name}_after({prefix_name}_after(before)))\n\
+         {{ trans({linked_name}_true_first_placed(values, before{prefix_call_args}),\n\
+         \x20   {linked_name}_true_{first_join_register}_agrees(before)) }}\n\n\
+         theorem {prefix}_true_value_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix}):\n\
+         \x20   ValuePlaced(values, {second_true_value}, {second_join_register},\n\
+         \x20     {true_name}_after({prefix_name}_after(before)))\n\
+         {{ trans({linked_name}_true_second_placed(values, before{prefix_call_args}),\n\
+         \x20   {linked_name}_true_{second_join_register}_agrees(before)) }}\n\n\
+         theorem {prefix}_false_parameter_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_false_parameter}) = values(64, {first_false_value})):\n\
+         \x20   ValuePlaced(values, {first_false_parameter}, {first_join_register},\n\
+         \x20     {false_name}_after({prefix_name}_after(before)))\n\
+         {{\n\
+         \x20   placed_for_parameter(values, {first_false_value}, {first_false_parameter},\n\
+         \x20     {first_join_register}, {false_name}_after({prefix_name}_after(before)),\n\
+         \x20     binding, {prefix}_false_value_0(\n\
+         \x20       values, before{prefix_call_args}))\n\
+         }}\n\n\
+         theorem {prefix}_false_parameter_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_false_parameter}) = values(64, {second_false_value})):\n\
+         \x20   ValuePlaced(values, {second_false_parameter}, {second_join_register},\n\
+         \x20     {false_name}_after({prefix_name}_after(before)))\n\
+         {{\n\
+         \x20   placed_for_parameter(values, {second_false_value}, {second_false_parameter},\n\
+         \x20     {second_join_register}, {false_name}_after({prefix_name}_after(before)),\n\
+         \x20     binding, {prefix}_false_value_1(\n\
+         \x20       values, before{prefix_call_args}))\n\
+         }}\n\n\
+         theorem {prefix}_true_parameter_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_true_parameter}) = values(64, {first_true_value})):\n\
+         \x20   ValuePlaced(values, {first_true_parameter}, {first_join_register},\n\
+         \x20     {true_name}_after({prefix_name}_after(before)))\n\
+         {{\n\
+         \x20   placed_for_parameter(values, {first_true_value}, {first_true_parameter},\n\
+         \x20     {first_join_register}, {true_name}_after({prefix_name}_after(before)),\n\
+         \x20     binding, {prefix}_true_value_0(\n\
+         \x20       values, before{prefix_call_args}))\n\
+         }}\n\n\
+         theorem {prefix}_true_parameter_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_true_parameter}) = values(64, {second_true_value})):\n\
+         \x20   ValuePlaced(values, {second_true_parameter}, {second_join_register},\n\
+         \x20     {true_name}_after({prefix_name}_after(before)))\n\
+         {{\n\
+         \x20   placed_for_parameter(values, {second_true_value}, {second_true_parameter},\n\
+         \x20     {second_join_register}, {true_name}_after({prefix_name}_after(before)),\n\
+         \x20     binding, {prefix}_true_value_1(\n\
+         \x20       values, before{prefix_call_args}))\n\
+         }}\n\n\
+         theorem {prefix}_false_entry_parameter_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_false_parameter}) = values(64, {first_false_value})):\n\
+         \x20   GprValuePlaced(values, {first_false_parameter}, {first_join_register}, {prefix}_false_entry(before).gprs)\n\
+         {{ {prefix}_false_parameter_0(values, before{prefix_call_args}, binding) }}\n\n\
+         theorem {prefix}_false_entry_parameter_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_false_parameter}) = values(64, {second_false_value})):\n\
+         \x20   GprValuePlaced(values, {second_false_parameter}, {second_join_register}, {prefix}_false_entry(before).gprs)\n\
+         {{ {prefix}_false_parameter_1(values, before{prefix_call_args}, binding) }}\n\n\
+         theorem {prefix}_true_entry_parameter_0<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_true_parameter}) = values(64, {first_true_value})):\n\
+         \x20   GprValuePlaced(values, {first_true_parameter}, {first_join_register}, {prefix}_true_entry(before).gprs)\n\
+         {{ {prefix}_true_parameter_0(values, before{prefix_call_args}, binding) }}\n\n\
+         theorem {prefix}_true_entry_parameter_1<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_true_parameter}) = values(64, {second_true_value})):\n\
+         \x20   GprValuePlaced(values, {second_true_parameter}, {second_join_register}, {prefix}_true_entry(before).gprs)\n\
+         {{ {prefix}_true_parameter_1(values, before{prefix_call_args}, binding) }}\n\n\
+         theorem {prefix}_false_left_agrees<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_false_parameter}) = values(64, {first_false_value})):\n\
+         \x20   read_gpr({continuation_left_register}, {prefix}_false_entry(before).gprs) =\n\
+         \x20     values(64, {continuation_left_id})\n\
+         {{ sym({prefix}_false_entry_parameter_0(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_false_right_agrees<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_false_parameter}) = values(64, {second_false_value})):\n\
+         \x20   read_gpr({continuation_right_register}, {prefix}_false_entry(before).gprs) =\n\
+         \x20     values(64, {continuation_right_id})\n\
+         {{ sym({prefix}_false_entry_parameter_1(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_true_left_agrees<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_true_parameter}) = values(64, {first_true_value})):\n\
+         \x20   read_gpr({continuation_left_register}, {prefix}_true_entry(before).gprs) =\n\
+         \x20     values(64, {continuation_left_id})\n\
+         {{ sym({prefix}_true_entry_parameter_0(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_true_right_agrees<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_true_parameter}) = values(64, {second_true_value})):\n\
+         \x20   read_gpr({continuation_right_register}, {prefix}_true_entry(before).gprs) =\n\
+         \x20     values(64, {continuation_right_id})\n\
+         {{ sym({prefix}_true_entry_parameter_1(values, before{prefix_call_args}, binding)) }}\n\n\
+         fn {prefix}_false_sum<M>(before: MachineState<M>) → BitVec(64) {{\n\
+         \x20   bitvec::add(64,\n\
+         \x20     read_gpr({continuation_left_register}, {prefix}_false_entry(before).gprs),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_false_entry(before).gprs))\n\
+         }}\n\n\
+         fn {prefix}_false_left_sum<M>(values: Valuation(), before: MachineState<M>) → BitVec(64) {{\n\
+         \x20   bitvec::add(64, values(64, {continuation_left_id}),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_false_entry(before).gprs))\n\
+         }}\n\n\
+         fn {prefix}_true_sum<M>(before: MachineState<M>) → BitVec(64) {{\n\
+         \x20   bitvec::add(64,\n\
+         \x20     read_gpr({continuation_left_register}, {prefix}_true_entry(before).gprs),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_true_entry(before).gprs))\n\
+         }}\n\n\
+         fn {prefix}_true_left_sum<M>(values: Valuation(), before: MachineState<M>) → BitVec(64) {{\n\
+         \x20   bitvec::add(64, values(64, {continuation_left_id}),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_true_entry(before).gprs))\n\
+         }}\n\n\
+         fn {prefix}_semantic_sum(values: Valuation()) → BitVec(64) {{\n\
+         \x20   bitvec::add(64, values(64, {continuation_left_id}),\n\
+         \x20     values(64, {continuation_right_id}))\n\
+         }}\n\n\
+         theorem {prefix}_continuation_spec(values: Valuation(),\n\
+         \x20   graph: RegionHolds({region_expr}.join.continuation, values)):\n\
+         \x20   {prefix}_semantic_sum(values) = values(64, {continuation_output})\n\
+         {{ sym(graph.left) }}\n\n\
+         theorem {prefix}_false_rewrite_left<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_false_parameter}) = values(64, {first_false_value})):\n\
+         \x20   {prefix}_false_sum(before) = {prefix}_false_left_sum(values, before)\n\
+         {{ cong_fn<BitVec(64), BitVec(64)>(bitvec::add(64, ·,\n\
+         \x20   read_gpr({continuation_right_register}, {prefix}_false_entry(before).gprs)),\n\
+         \x20   {prefix}_false_left_agrees(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_false_rewrite_right<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_false_parameter}) = values(64, {second_false_value})):\n\
+         \x20   {prefix}_false_left_sum(values, before) = {prefix}_semantic_sum(values)\n\
+         {{ cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20   bitvec::add(64, values(64, {continuation_left_id}), ·),\n\
+         \x20   {prefix}_false_right_agrees(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_false_computes<M>(before: MachineState<M>):\n\
+         \x20   read_gpr({continuation_destination}, {prefix}_continuation_gprs(\n\
+         \x20     {prefix}_false_entry(before).gprs)) = {prefix}_false_sum(before)\n\
+         {{ {prefix}_continuation_gprs_computes({prefix}_false_entry(before).gprs) }}\n\n\
+         theorem {prefix}_false_inputs_refine<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   left_binding: values(64, {first_false_parameter}) = values(64, {first_false_value}),\n\
+         \x20   right_binding: values(64, {second_false_parameter}) = values(64, {second_false_value}),\n\
+         \x20   continuation_graph: RegionHolds({region_expr}.join.continuation, values)):\n\
+         \x20   {prefix}_false_sum(before) = values(64, {continuation_output})\n\
+         {{\n\
+         \x20   binary_observation_refines(values, {continuation_output},\n\
+         \x20     {continuation_left_id}, {continuation_right_id}, bitvec::add(64),\n\
+         \x20     read_gpr({continuation_left_register}, {prefix}_false_entry(before).gprs),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_false_entry(before).gprs),\n\
+         \x20     continuation_graph.left,\n\
+         \x20     {prefix}_false_left_agrees(values, before{prefix_call_args}, left_binding),\n\
+         \x20     {prefix}_false_right_agrees(values, before{prefix_call_args}, right_binding))\n\
+         }}\n\n\
+         theorem {prefix}_true_rewrite_left<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {first_true_parameter}) = values(64, {first_true_value})):\n\
+         \x20   {prefix}_true_sum(before) = {prefix}_true_left_sum(values, before)\n\
+         {{ cong_fn<BitVec(64), BitVec(64)>(bitvec::add(64, ·,\n\
+         \x20   read_gpr({continuation_right_register}, {prefix}_true_entry(before).gprs)),\n\
+         \x20   {prefix}_true_left_agrees(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_true_rewrite_right<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   binding: values(64, {second_true_parameter}) = values(64, {second_true_value})):\n\
+         \x20   {prefix}_true_left_sum(values, before) = {prefix}_semantic_sum(values)\n\
+         {{ cong_fn<BitVec(64), BitVec(64)>(\n\
+         \x20   bitvec::add(64, values(64, {continuation_left_id}), ·),\n\
+         \x20   {prefix}_true_right_agrees(values, before{prefix_call_args}, binding)) }}\n\n\
+         theorem {prefix}_true_computes<M>(before: MachineState<M>):\n\
+         \x20   read_gpr({continuation_destination}, {prefix}_continuation_gprs(\n\
+         \x20     {prefix}_true_entry(before).gprs)) = {prefix}_true_sum(before)\n\
+         {{ {prefix}_continuation_gprs_computes({prefix}_true_entry(before).gprs) }}\n\n\
+         theorem {prefix}_true_inputs_refine<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   left_binding: values(64, {first_true_parameter}) = values(64, {first_true_value}),\n\
+         \x20   right_binding: values(64, {second_true_parameter}) = values(64, {second_true_value}),\n\
+         \x20   continuation_graph: RegionHolds({region_expr}.join.continuation, values)):\n\
+         \x20   {prefix}_true_sum(before) = values(64, {continuation_output})\n\
+         {{\n\
+         \x20   binary_observation_refines(values, {continuation_output},\n\
+         \x20     {continuation_left_id}, {continuation_right_id}, bitvec::add(64),\n\
+         \x20     read_gpr({continuation_left_register}, {prefix}_true_entry(before).gprs),\n\
+         \x20     read_gpr({continuation_right_register}, {prefix}_true_entry(before).gprs),\n\
+         \x20     continuation_graph.left,\n\
+         \x20     {prefix}_true_left_agrees(values, before{prefix_call_args}, left_binding),\n\
+         \x20     {prefix}_true_right_agrees(values, before{prefix_call_args}, right_binding))\n\
+         }}\n\n\
+         theorem {prefix}_false_selected_binding_0(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_false, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.false_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   values(64, {first_false_parameter}) = values(64, {first_false_value})\n\
+         {{\n\
+         \x20   block_arguments_hold_head(values,\n\
+         \x20     BlockArgument(width := 64, value := {first_false_value},\n\
+         \x20       parameter := {first_false_parameter}),\n\
+         \x20     Cons(BlockArgument(width := 64, value := {second_false_value},\n\
+         \x20       parameter := {second_false_parameter}), Nil), selected_graph.right.left)\n\
+         }}\n\n\
+         theorem {prefix}_false_selected_binding_1(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_false, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.false_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   values(64, {second_false_parameter}) = values(64, {second_false_value})\n\
+         {{\n\
+         \x20   block_arguments_hold_head(values,\n\
+         \x20     BlockArgument(width := 64, value := {second_false_value},\n\
+         \x20       parameter := {second_false_parameter}), Nil,\n\
+         \x20     block_arguments_hold_tail(values,\n\
+         \x20       BlockArgument(width := 64, value := {first_false_value},\n\
+         \x20         parameter := {first_false_parameter}),\n\
+         \x20       Cons(BlockArgument(width := 64, value := {second_false_value},\n\
+         \x20         parameter := {second_false_parameter}), Nil), selected_graph.right.left))\n\
+         }}\n\n\
+         theorem {prefix}_false_selected_continuation(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_false, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.false_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   RegionHolds({region_expr}.join.continuation, values)\n\
+         {{ selected_graph.right.right }}\n\n\
+         theorem {prefix}_true_selected_binding_0(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_true, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.true_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   values(64, {first_true_parameter}) = values(64, {first_true_value})\n\
+         {{\n\
+         \x20   block_arguments_hold_head(values,\n\
+         \x20     BlockArgument(width := 64, value := {first_true_value},\n\
+         \x20       parameter := {first_true_parameter}),\n\
+         \x20     Cons(BlockArgument(width := 64, value := {second_true_value},\n\
+         \x20       parameter := {second_true_parameter}), Nil), selected_graph.right.left)\n\
+         }}\n\n\
+         theorem {prefix}_true_selected_binding_1(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_true, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.true_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   values(64, {second_true_parameter}) = values(64, {second_true_value})\n\
+         {{\n\
+         \x20   block_arguments_hold_head(values,\n\
+         \x20     BlockArgument(width := 64, value := {second_true_value},\n\
+         \x20       parameter := {second_true_parameter}), Nil,\n\
+         \x20     block_arguments_hold_tail(values,\n\
+         \x20       BlockArgument(width := 64, value := {first_true_value},\n\
+         \x20         parameter := {first_true_parameter}),\n\
+         \x20       Cons(BlockArgument(width := 64, value := {second_true_value},\n\
+         \x20         parameter := {second_true_parameter}), Nil), selected_graph.right.left))\n\
+         }}\n\n\
+         theorem {prefix}_true_selected_continuation(values: Valuation(),\n\
+         \x20   selected_graph: RegionHolds({region_expr}.join.when_true, values) ∧\n\
+         \x20     (BlockArgumentsHold(values, {region_expr}.join.true_arguments) ∧\n\
+         \x20      RegionHolds({region_expr}.join.continuation, values))):\n\
+         \x20   RegionHolds({region_expr}.join.continuation, values)\n\
+         {{ selected_graph.right.right }}\n\n\
+         fn {prefix}_selected_gprs<M>(values: Valuation(), before: MachineState<M>) → Gprs {{\n\
+         \x20   match bitvec::head_bit(0, values(1, {region_expr}.join.condition)) {{\n\
+         \x20     False => {prefix}_continuation_gprs({prefix}_false_entry(before).gprs),\n\
+         \x20     True => {prefix}_continuation_gprs({prefix}_true_entry(before).gprs),\n\
+         \x20   }}\n\
+         }}\n\n\
+         fn {prefix}_selected_sum<M>(values: Valuation(), before: MachineState<M>) → BitVec(64) {{\n\
+         \x20   match bitvec::head_bit(0, values(1, {region_expr}.join.condition)) {{\n\
+         \x20     False => {prefix}_false_sum(before),\n\
+         \x20     True => {prefix}_true_sum(before),\n\
+         \x20   }}\n\
+         }}\n\n\
+         theorem {prefix}_false_machine_agrees<M>(before: MachineState<M>):\n\
+         \x20   execute_block_normal({continuation_name}_instructions(),\n\
+         \x20     linked_false_after({linked_name}(), before)).gprs =\n\
+         \x20   {prefix}_continuation_gprs({prefix}_false_entry(before).gprs)\n\
+         {{\n\
+         \x20   compose_equality<Gprs>(\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       linked_false_after({linked_name}(), before)).gprs,\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       {prefix}_false_entry(before)).gprs,\n\
+         \x20     {prefix}_continuation_gprs({prefix}_false_entry(before).gprs),\n\
+         \x20     {continuation_name}_gprs_congruent(\n\
+         \x20       linked_false_after({linked_name}(), before),\n\
+         \x20       {prefix}_false_entry(before),\n\
+         \x20       {false_name}_gprs_congruent(\n\
+         \x20         linked_branch_after({linked_name}(), before),\n\
+         \x20         {prefix_name}_after(before),\n\
+         \x20         linked_branch_preserves_prefix_gprs({linked_name}(), before))),\n\
+         \x20     {prefix}_continuation_gprs_agrees({prefix}_false_entry(before)))\n\
+         }}\n\n\
+         theorem {prefix}_true_entry_agrees<M>(before: MachineState<M>):\n\
+         \x20   linked_true_jump_after({linked_name}(), before).gprs =\n\
+         \x20     {prefix}_true_entry(before).gprs\n\
+         {{\n\
+         \x20   compose_equality<Gprs>(\n\
+         \x20     linked_true_jump_after({linked_name}(), before).gprs,\n\
+         \x20     linked_true_after({linked_name}(), before).gprs,\n\
+         \x20     {prefix}_true_entry(before).gprs,\n\
+         \x20     execute_short_control_preserves_gprs(\n\
+         \x20       Jump({linked_name}().join_displacement),\n\
+         \x20       linked_true_after({linked_name}(), before)),\n\
+         \x20     {true_name}_gprs_congruent(\n\
+         \x20       linked_branch_after({linked_name}(), before),\n\
+         \x20       {prefix_name}_after(before),\n\
+         \x20       linked_branch_preserves_prefix_gprs({linked_name}(), before)))\n\
+         }}\n\n\
+         theorem {prefix}_true_machine_agrees<M>(before: MachineState<M>):\n\
+         \x20   execute_block_normal({continuation_name}_instructions(),\n\
+         \x20     linked_true_jump_after({linked_name}(), before)).gprs =\n\
+         \x20   {prefix}_continuation_gprs({prefix}_true_entry(before).gprs)\n\
+         {{\n\
+         \x20   compose_equality<Gprs>(\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       linked_true_jump_after({linked_name}(), before)).gprs,\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       {prefix}_true_entry(before)).gprs,\n\
+         \x20     {prefix}_continuation_gprs({prefix}_true_entry(before).gprs),\n\
+         \x20     {continuation_name}_gprs_congruent(\n\
+         \x20       linked_true_jump_after({linked_name}(), before),\n\
+         \x20       {prefix}_true_entry(before),\n\
+         \x20       {prefix}_true_entry_agrees(before)),\n\
+         \x20     {prefix}_continuation_gprs_agrees({prefix}_true_entry(before)))\n\
+         }}\n\n\
+         theorem {prefix}_linked_agrees<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   prefix_graph: RegionHolds({prefix_expr}, values)):\n\
+         \x20   read_gpr({}, linked_control_after({control_name}(), before).gprs) =\n\
+         \x20     read_gpr({}, {prefix}_selected_gprs(values, before))\n\
+         {{\n\
+         \x20   trans(linked_control_read_after({}, {control_name}(), before),\n\
+         \x20     cong_fn<Gprs, BitVec(64)>(read_gpr({}, ·), selected_results_agree(\n\
+         \x20     bitvec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
+         \x20     linked_test_after({linked_name}(), before).flags.zf,\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       linked_true_jump_after({linked_name}(), before)).gprs,\n\
+         \x20     execute_block_normal({continuation_name}_instructions(),\n\
+         \x20       linked_false_after({linked_name}(), before)).gprs,\n\
+         \x20     {prefix}_continuation_gprs({prefix}_true_entry(before).gprs),\n\
+         \x20     {prefix}_continuation_gprs({prefix}_false_entry(before).gprs),\n\
+         \x20     {linked_name}_test_selects(values, before{prefix_call_args}, prefix_graph),\n\
+         \x20     {prefix}_false_machine_agrees(before),\n\
+         \x20     {prefix}_true_machine_agrees(before))))\n\
+         }}\n\n\
+         theorem {prefix}_selected_computes<M>(values: Valuation(), before: MachineState<M>):\n\
+         \x20   read_gpr({}, {prefix}_selected_gprs(values, before)) =\n\
+         \x20     {prefix}_selected_sum(values, before)\n\
+         {{\n\
+         \x20   selected_computation_agrees<Gprs, BitVec(64)>(\n\
+         \x20     bitvec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
+         \x20     {prefix}_continuation_gprs({prefix}_false_entry(before).gprs),\n\
+         \x20     {prefix}_continuation_gprs({prefix}_true_entry(before).gprs),\n\
+         \x20     read_gpr({}, ·), {prefix}_false_sum(before),\n\
+         \x20     {prefix}_true_sum(before), {prefix}_false_computes(before),\n\
+         \x20     {prefix}_true_computes(before))\n\
+         }}\n\n\
+         theorem {prefix}_selected_semantic_refines<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   join_graph: ControlJoinHolds(values, {region_expr}.join)):\n\
+         \x20   {prefix}_selected_sum(values, before) =\n\
+         \x20     values(64, {continuation_output})\n\
+         {{\n\
+         \x20   control_join_cases(values, {region_expr}.join,\n\
+         \x20     λ selected => (match selected {{\n\
+         \x20         False => {prefix}_false_sum(before),\n\
+         \x20         True => {prefix}_true_sum(before),\n\
+         \x20       }}) = values(64, {continuation_output}),\n\
+         \x20     join_graph,\n\
+         \x20     λ selected_graph => {prefix}_false_inputs_refine(\n\
+         \x20       values, before{prefix_call_args},\n\
+         \x20       {prefix}_false_selected_binding_0(values, selected_graph),\n\
+         \x20       {prefix}_false_selected_binding_1(values, selected_graph),\n\
+         \x20       {prefix}_false_selected_continuation(values, selected_graph)),\n\
+         \x20     λ selected_graph => {prefix}_true_inputs_refine(\n\
+         \x20       values, before{prefix_call_args},\n\
+         \x20       {prefix}_true_selected_binding_0(values, selected_graph),\n\
+         \x20       {prefix}_true_selected_binding_1(values, selected_graph),\n\
+         \x20       {prefix}_true_selected_continuation(values, selected_graph)))\n\
+         }}\n\n\
+         theorem {prefix}_selected_refines<M>(values: Valuation(), before: MachineState<M>{input_parameter_suffix},\n\
+         \x20   join_graph: ControlJoinHolds(values, {region_expr}.join)):\n\
+         \x20   read_gpr({}, {prefix}_selected_gprs(values, before)) =\n\
+         \x20     values(64, {continuation_output})\n\
+         {{\n\
+         \x20   compose_equality<BitVec(64)>(\n\
+         \x20     read_gpr({}, {prefix}_selected_gprs(values, before)),\n\
+         \x20     {prefix}_selected_sum(values, before),\n\
+         \x20     values(64, {continuation_output}),\n\
+         \x20     {prefix}_selected_computes(values, before),\n\
+         \x20     {prefix}_selected_semantic_refines(\n\
+         \x20       values, before{prefix_call_args}, join_graph))\n\
+         }}\n\n\
+         theorem {prefix}_refines_function_ir<M>({parameters}):\n\
+         \x20   read_gpr({}, linked_control_after({control_name}(), before).gprs) =\n\
+         \x20     values(64, {continuation_output})\n\
+         {{\n\
+         \x20   trans({prefix}_linked_agrees(values, before{prefix_call_args}, graph.left),\n\
+         \x20     {prefix}_selected_refines(values, before{prefix_call_args}, graph.right))\n\
+         }}\n",
+        requested_output.heather_name(), requested_output.heather_name(),
+        requested_output.heather_name(), requested_output.heather_name(),
+        requested_output.heather_name(), requested_output.heather_name(),
+        requested_output.heather_name(), requested_output.heather_name(),
+        requested_output.heather_name(),
+    ));
+
+    let _ = (true_source_register, false_source_register);
+    Ok(ControlX86Emission { lowered, text })
 }
 
 /// Lower one valid-looking, 64-bit, single-output constant/binary-ALU DAG. The generated
@@ -3325,11 +4351,9 @@ mod tests {
         });
         let lowered = lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rax).unwrap();
         assert_eq!(lowered.instructions.len(), 101);
-        assert!(
-            lowered.node_plans[1..]
-                .iter()
-                .all(|step| step.reused_value.is_some())
-        );
+        assert!(lowered.node_plans[1..]
+            .iter()
+            .all(|step| step.reused_value.is_some()));
     }
 
     #[test]

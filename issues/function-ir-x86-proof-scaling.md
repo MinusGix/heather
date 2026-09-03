@@ -3,7 +3,7 @@ title: Make generated FunctionIR x86 refinement scale past small DAGs
 status: open
 labels: [compiler,function-ir,x86,proofs,performance]
 created: 2026-09-01
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 The binary-ALU expansion probed the generated x86 refinement at 20 FunctionIR
@@ -116,3 +116,19 @@ the 2,291-pass run incomplete.  Re-running control flow alone under unchanged
 rails passed in 152.42s.  No semantic/proof failure is present, but full-suite
 co-scheduling is now tracked separately by
 [[parallel-test-memory-headroom-under-heavy-prefixes]].
+
+## Full control certificate, 2026-09-03
+
+The first complete block-argument diamond provides a realistic 165-boundary-
+declaration workload. After factoring machine computation, dependent join
+selection, scalar arithmetic, and final composition, the honest generated
+module checks under default fuel in 94.9s on a quiet debug run (50.7s kernel,
+44.2s frontend). The final linked/result theorems are no longer dominant.
+
+The largest items are now the linked conditional true-target/RIP theorem
+(7.2s), taken-target theorem (6.7s), conditional decode (4.0s), and layout
+(3.3s), followed by four protected-register facts around 2.7--3.1s each.
+This issue should therefore target reusable decode/layout endpoint sharing and
+protected-register framing before further hand-factoring of the final
+FunctionIR theorem. Per-item timing is enabled for the focused control-region
+fixture when diagnosing this path.

@@ -947,3 +947,38 @@ single shared continuation to `MOV RAX,R8; ADD RAX,RDX`.  Edge copies are
 planned as parallel transfers and cycles currently decline explicitly rather
 than silently emitting a sequentially wrong copy.  The remaining certification
 step is tracked by [[function-ir-control-region-x86-certification]].
+
+### 2026-09-03: complete physical certificate for the SSA diamond
+
+The `max_plus` path now emits and checks one physical x86 certificate from
+FunctionIR semantics through final RAX. The byte stream is the canonical
+prefix, TEST/JZ selector, true transfer, JMP, false transfer, and one shared
+MOV/ADD continuation. Separate facts establish exact instruction decoding,
+rel8 layout, convergence of either branch RIP at the continuation, relational
+execution, common-register placement, and refinement of the selected
+continuation result from `ControlRegionHolds`.
+
+The stable proof architecture separates three concerns. Machine facts prove
+which concrete GPR result each path computes. Semantic facts expose only the
+selected block-argument bindings and continuation equation. Generic Boolean
+and equality combinators connect those named endpoints. In particular,
+`control_join_cases` hides the dependent `ControlJoinHolds` eliminator and
+`block_arguments_hold_head`/`tail` expose one edge binding at a time. This
+keeps every declaration under the unchanged 2²⁰ kernel fuel rail; an
+experiment sharing one value arena across an entire typing gate was removed.
+
+The linked support is split between the established conditional block,
+shared-continuation execution state, and branch-span/RIP modules. A combined
+decode-evidence record was deliberately not retained: even with data moved to
+indices, its generated dependent projection image exceeded the semantic-image
+syntax budget, while the certificate already had the conditional and
+continuation decode theorems independently. This is another instance of the
+general projection-generation cost tracked by
+[[record-projection-defs-declaration-cost]].
+
+Item attribution on a quiet debug run measured the honest generated module at
+94.9 seconds: 50.7 seconds in kernel gates and 44.2 seconds in frontend work.
+The largest individual costs are linked conditional target/RIP, decode, and
+layout declarations; final machine/semantic selection is no longer the fuel
+bottleneck. Warm semantic-prefix replay remains a separate large startup cost
+covered by [[semantic-replay-phase-attribution]].

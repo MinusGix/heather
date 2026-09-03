@@ -6,6 +6,8 @@
 import function_ir;
 import x86_64;
 import x86_64_block;
+import x86_64_control_block;
+import x86_64_control_flow;
 import bitvec;
 import bool;
 import list;
@@ -15,6 +17,12 @@ fn ValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
     state: MachineState<M>) → Type
 {
     values(64, id) = read_gpr(register, state.gprs)
+}
+
+fn GprValuePlaced(values: Valuation(), id: Nat, register: Gpr,
+    gprs: Gprs) → Type
+{
+    values(64, id) = read_gpr(register, gprs)
 }
 
 // A one-bit SSA value is materialized in a GPR as the canonical zero-extended
@@ -193,6 +201,101 @@ theorem linked_conditional_read_after<M>(register: Gpr,
     { False => refl, True => refl }
 }
 
+fn linked_control_read<M>(register: Gpr, block: LinkedControlBlock,
+    before: MachineState<M>) → BitVec(64)
+{
+    read_gpr(register, linked_control_gprs(block, before))
+}
+
+theorem linked_control_read_after<M>(register: Gpr, block: LinkedControlBlock,
+    before: MachineState<M>):
+    read_gpr(register, linked_control_after(block, before).gprs) =
+        linked_control_read(register, block, before)
+{
+    refl
+}
+
+theorem selected_results_agree<A>(selected, tested: Bool,
+    concrete_true, concrete_false, abstract_true, abstract_false: A,
+    test_selects: tested = zero_test_selector(selected),
+    false_agrees: concrete_false = abstract_false,
+    true_agrees: concrete_true = abstract_true):
+    (match tested { False => concrete_true, True => concrete_false }) =
+        match selected { False => abstract_false, True => abstract_true }
+{
+    trans(select_zero_test(selected, tested, concrete_true, concrete_false,
+            test_selects),
+        match selected as λ actual => (match actual {
+            False => concrete_false, True => concrete_true,
+        }) = match actual {
+            False => abstract_false, True => abstract_true,
+        } { False => false_agrees, True => true_agrees })
+}
+
+theorem selected_computation_agrees<A, B>(selected: Bool,
+    when_false, when_true: A, observe: A → B,
+    false_computed, true_computed: B,
+    false_computes: observe(when_false) = false_computed,
+    true_computes: observe(when_true) = true_computed):
+    observe(match selected as λ _ => A {
+        False => when_false,
+        True => when_true,
+    }) = match selected as λ _ => B {
+        False => false_computed,
+        True => true_computed,
+    }
+{
+    match selected as λ choice =>
+        observe(match choice as λ _ => A {
+            False => when_false,
+            True => when_true,
+        }) = match choice as λ _ => B {
+            False => false_computed,
+            True => true_computed,
+        }
+    { False => false_computes, True => true_computes }
+}
+
+theorem control_join_cases(values: Valuation(), join: ConditionalJoinRegion,
+    P: Bool → Type, evidence: ControlJoinHolds(values, join),
+    when_false: (RegionHolds(join.when_false, values) ∧
+        (BlockArgumentsHold(values, join.false_arguments) ∧
+         RegionHolds(join.continuation, values))) → P(False),
+    when_true: (RegionHolds(join.when_true, values) ∧
+        (BlockArgumentsHold(values, join.true_arguments) ∧
+         RegionHolds(join.continuation, values))) → P(True)):
+    P(bitvec::head_bit(0, values(1, join.condition)))
+{
+    match bitvec::head_bit(0, values(1, join.condition)) as
+        λ selected => (match selected as λ _ => Type {
+            False => RegionHolds(join.when_false, values) ∧
+                (BlockArgumentsHold(values, join.false_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+            True => RegionHolds(join.when_true, values) ∧
+                (BlockArgumentsHold(values, join.true_arguments) ∧
+                 RegionHolds(join.continuation, values)),
+        }) → P(selected)
+    {
+        False => selected_evidence ⊢ when_false(selected_evidence),
+        True => selected_evidence ⊢ when_true(selected_evidence),
+    }(evidence)
+}
+
+theorem block_arguments_hold_head(values: Valuation(), argument: BlockArgument,
+    rest: BlockArguments(), holds: BlockArgumentsHold(values, Cons(argument, rest))):
+    values(argument.width, argument.parameter) =
+        values(argument.width, argument.value)
+{
+    holds.left
+}
+
+theorem block_arguments_hold_tail(values: Valuation(), argument: BlockArgument,
+    rest: BlockArguments(), holds: BlockArgumentsHold(values, Cons(argument, rest))):
+    BlockArgumentsHold(values, rest)
+{
+    holds.right
+}
+
 fn conditional_block_read<M>(register: Gpr, block: ConditionalBlock,
     before, when_true, when_false: MachineState<M>) → BitVec(64)
 {
@@ -313,6 +416,83 @@ theorem placed_after_move<M>(values: Valuation(), id: Nat,
     trans(placed, sym(moved))
 }
 
+theorem placed_for_parameter<M>(values: Valuation(), value, parameter: Nat,
+    register: Gpr, state: MachineState<M>,
+    binding: values(64, parameter) = values(64, value),
+    placed: ValuePlaced(values, value, register, state)):
+    ValuePlaced(values, parameter, register, state)
+{
+    trans(binding, placed)
+}
+
+theorem placed_at_equal_state<M>(values: Valuation(), id: Nat,
+    register: Gpr, before, after: MachineState<M>,
+    placed: ValuePlaced(values, id, register, before),
+    same: before = after): ValuePlaced(values, id, register, after)
+{
+    j(same,
+        λ actual _ => ValuePlaced(values, id, register, actual),
+        placed)
+}
+
+theorem linked_after_test_false<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>,
+    selected: linked_test_after(block, before).flags.zf = False):
+    linked_conditional_after(block, before) =
+        linked_true_jump_after(block, before)
+{
+    j(sym(selected),
+        λ actual _ => (match actual {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }) = linked_true_jump_after(block, before),
+        refl)
+}
+
+theorem linked_after_test_true<M>(block: LinkedConditionalBlock,
+    before: MachineState<M>,
+    selected: linked_test_after(block, before).flags.zf = True):
+    linked_conditional_after(block, before) =
+        linked_false_after(block, before)
+{
+    j(sym(selected),
+        λ actual _ => (match actual {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }) = linked_false_after(block, before),
+        refl)
+}
+
+theorem placed_after_linked_true<M>(values: Valuation(), id: Nat,
+    register: Gpr, block: LinkedConditionalBlock, before: MachineState<M>,
+    selected: linked_test_after(block, before).flags.zf = False,
+    placed: ValuePlaced(values, id, register,
+        linked_true_jump_after(block, before))):
+    ValuePlaced(values, id, register, linked_conditional_after(block, before))
+{
+    j(sym(selected),
+        λ actual _ => ValuePlaced(values, id, register, match actual {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }),
+        placed)
+}
+
+theorem placed_after_linked_false<M>(values: Valuation(), id: Nat,
+    register: Gpr, block: LinkedConditionalBlock, before: MachineState<M>,
+    selected: linked_test_after(block, before).flags.zf = True,
+    placed: ValuePlaced(values, id, register,
+        linked_false_after(block, before))):
+    ValuePlaced(values, id, register, linked_conditional_after(block, before))
+{
+    j(sym(selected),
+        λ actual _ => ValuePlaced(values, id, register, match actual {
+            False => linked_true_jump_after(block, before),
+            True => linked_false_after(block, before),
+        }),
+        placed)
+}
+
 theorem placed_after_binary<M>(values: Valuation(), output, left, right: Nat,
     operation: BitVec(64) → BitVec(64) → BitVec(64),
     left_register, right_register, destination: Gpr,
@@ -337,6 +517,63 @@ theorem placed_after_binary<M>(values: Valuation(), output, left, right: Nat,
                 operation(values(64, left), found),
             refl));
     sym(computed)
+}
+
+theorem binary_observation_refines(values: Valuation(), output, left, right: Nat,
+    operation: BitVec(64) → BitVec(64) → BitVec(64),
+    observed_left, observed_right: BitVec(64),
+    equation: values(64, output) =
+        operation(values(64, left), values(64, right)),
+    left_agrees: observed_left = values(64, left),
+    right_agrees: observed_right = values(64, right)):
+    operation(observed_left, observed_right) = values(64, output)
+{
+    trans(j(left_agrees,
+            λ found _ => operation(observed_left, observed_right) =
+                operation(found, values(64, right)),
+            j(right_agrees,
+                λ found _ => operation(observed_left, observed_right) =
+                    operation(observed_left, found), refl)),
+        sym(equation))
+}
+
+theorem compose_equality<A>(first, middle, last: A,
+    first_step: first = middle, second_step: middle = last): first = last
+{
+    trans(first_step, second_step)
+}
+
+theorem gpr_move_add_reads(destination, left_register, right_register: Gpr,
+    before: Gprs,
+    right_preserved: read_gpr(right_register,
+        write_gpr(destination, read_gpr(left_register, before), before)) =
+        read_gpr(right_register, before)):
+    read_gpr(destination, execute_add(destination, right_register,
+        write_gpr(destination, read_gpr(left_register, before), before)).gprs) =
+        bitvec::add(64, read_gpr(left_register, before),
+            read_gpr(right_register, before))
+{
+    let moved = write_gpr(destination, read_gpr(left_register, before), before);
+    calc {
+        read_gpr(destination,
+            execute_add(destination, right_register, moved).gprs)
+            = bitvec::add(64, read_gpr(destination, moved),
+                read_gpr(right_register, moved)) :=
+                read_gpr_after_write(destination,
+                    bitvec::add(64, read_gpr(destination, moved),
+                        read_gpr(right_register, moved)), moved),
+            = bitvec::add(64, read_gpr(left_register, before),
+                read_gpr(right_register, moved)) :=
+            cong_fn<BitVec(64), BitVec(64)>(
+                bitvec::add(64, ·, read_gpr(right_register, moved)),
+                read_gpr_after_write(destination,
+                    read_gpr(left_register, before), before)),
+            = bitvec::add(64, read_gpr(left_register, before),
+                read_gpr(right_register, before)) :=
+            cong_fn<BitVec(64), BitVec(64)>(
+                bitvec::add(64, read_gpr(left_register, before), ·),
+                right_preserved),
+    }
 }
 
 theorem placed_after_comparison<M>(values: Valuation(), output, left, right: Nat,
