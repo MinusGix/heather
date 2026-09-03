@@ -15,3 +15,6 @@ impl add for Packed := derive()
 fn choose(o: Option<Nat>) -> Nat {
     if let Some(value) = o { value } else { 0 }
 }
+class TaggedPair<A>(first, second: A -> A -> A)
+    extends Pointed<A>(first) as additive, Pointed<A>(second) as multiplicative
+{}

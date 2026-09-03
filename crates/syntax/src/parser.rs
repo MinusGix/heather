@@ -15,7 +15,7 @@
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
 //! rfield  := name ":" type            -- a record field is always named
-//! class   := "class" name tyvars? ("extends" cref ("," cref)*)?
+//! class   := "class" name tyvars? ("extends" cref ("as" name)? ("," cref ("as" name)?)*)?
 //!            "{" rfield ("," rfield)* ","? "}"
 //! cref    := name "<" type ("," type)* ">"
 //! inst    := "instance" tyvars? vparams? cref
@@ -839,7 +839,13 @@ impl Parser {
         let mut extends = Vec::new();
         if self.eat_kw("extends") {
             loop {
-                extends.push(self.class_ref("a parent class (`extends Monoid<A>`)")?);
+                let mut parent = self.class_ref("a parent class (`extends Monoid<A>`)")?;
+                if self.eat_kw("as") {
+                    let (tag, tag_span) = self.ident("parent dictionary tag after `as`")?;
+                    parent.path.push(tag);
+                    parent.span = parent.span.join(tag_span);
+                }
+                extends.push(parent);
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -929,7 +935,7 @@ impl Parser {
             }
             end = self.expect(&TokKind::RParen, "`)` to close the class's index arguments")?;
         }
-        Ok(ClassRef { name, args, index, span: nsp.join(end) })
+        Ok(ClassRef { name, args, index, path: Vec::new(), span: nsp.join(end) })
     }
 
     /// `designation<A> ++ at List<A> := append`

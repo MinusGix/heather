@@ -1,6 +1,6 @@
 ---
 title: Compose algebraic theories canonically through classes
-status: open
+status: closed
 labels: [stdlib,mathematics,traits,design]
 created: 2026-09-02
 updated: 2026-09-02
@@ -64,3 +64,23 @@ a field-free composite, and explicit first-class packaging as the control.
   complete operation-indexed class, trait, algebra, and order suites. The issue
   remains open for qualified-parent representation and semiring-shaped
   acceptance rather than conflating that design with the landed refusal.
+- 2026-09-02: Chose and implemented tagged parent dictionaries. An `as` parent
+  is a real dependent field containing the complete parent dictionary;
+  untagged inheritance retains flat compatibility. Ancestor metadata records
+  transitive paths and permits one class at distinct operation fibers only
+  when those paths distinguish them. Parent-first instance assembly fills a
+  tag from an existing canonical dictionary, while child-first synthesis
+  preserves direct dictionaries exactly and reconstructs transitive parents
+  from their projections. Open-carrier goals pinned to an index upcast through
+  the matching tag; index inference refuses when multiple routes remain.
+  Semiring-shaped probes cover additive/multiplicative layers and module-image
+  serialization now carries the paths.
+- 2026-09-02: The probes also found the boundary between registry identity and
+  kernel identity: a syntactically indexed class whose index occurs in no
+  field type has convertible dictionary types at every index. Distinct tagged
+  fibers of such a class are now refused rather than relying on the registry
+  to promise a distinction the kernel cannot check. The positive corpus uses
+  law fields that mention their operation, as actual algebraic theories do.
+- 2026-09-02: Final verification after rebasing onto master is 2,311 passed,
+  zero failed, and five ignored under plain Furnace `scripts/test`; the focused
+  algebraic-composition corpus is 14/14 and the Tree-sitter suite is 7/7.

@@ -395,15 +395,6 @@ impl Elaborator {
         }
         let dkey = self.key_of(&dind.name)?;
         let dinfo = self.traits.class(&dkey)?;
-        // `ancestors` is already transitive and deduped (layer 1 §2), so a
-        // grandparent is one membership test and never a chain walk.
-        if !dinfo
-            .ancestors
-            .iter()
-            .any(|r| self.key_of(&r.name).as_deref() == Some(ckey))
-        {
-            return None;
-        }
         let mut tcx = cx.clone();
         tcx.aliases.push(Rc::new(crate::Alias {
             name: "#dict".into(),
@@ -413,28 +404,51 @@ impl Elaborator {
             level: dict_lvl.clone(),
             skel: None,
         }));
-        let mut args = Vec::with_capacity(cind.ctors[0].fields.len());
-        for (n, _) in &cind.ctors[0].fields {
-            args.push(Expr {
-                kind: ExprKind::Dot {
-                    recv: Box::new(Expr {
-                        kind: ExprKind::Var("#dict".into()),
-                        span,
-                    }),
-                    name: n.clone()?,
-                    args: None,
-                    named: Vec::new(),
-                },
+        // A class may now contain the same ancestor at several tagged fibers.
+        // Try each matching path; the expected goal (including its index)
+        // remains the final authority over which one is the requested parent.
+        for ancestor in dinfo
+            .ancestors
+            .iter()
+            .filter(|r| self.key_of(&r.name).as_deref() == Some(ckey))
+        {
+            let mut source = Expr {
+                kind: ExprKind::Var("#dict".into()),
                 span,
-            });
+            };
+            for component in &ancestor.path {
+                source = Expr {
+                    kind: ExprKind::Dot {
+                        recv: Box::new(source),
+                        name: component.clone(),
+                        args: None,
+                        named: Vec::new(),
+                    },
+                    span,
+                };
+            }
+            let mut args = Vec::with_capacity(cind.ctors[0].fields.len());
+            for (n, _) in &cind.ctors[0].fields {
+                args.push(Expr {
+                    kind: ExprKind::Dot {
+                        recv: Box::new(source.clone()),
+                        name: n.clone()?,
+                        args: None,
+                        named: Vec::new(),
+                    },
+                    span,
+                });
+            }
+            let Ok(t) = self.build_ctor(&tcx, cind, 0, &args, goal, lvl, span) else {
+                continue;
+            };
+            // The gate every proposal passes (design §4.4). In particular it
+            // distinguishes two paths to one operation-indexed class.
+            if self.checks_at(cx, &t, goal, lvl) {
+                return Some(t);
+            }
         }
-        let t = self
-            .build_ctor(&tcx, cind, 0, &args, goal, lvl, span)
-            .ok()?;
-        // The gate every proposal passes (design §4.4). A mismatch in the
-        // class's *arguments* — `C<Nat>` from a `D<Bool>` — is caught here and
-        // by `build_ctor` before it, and either way the answer is "not it".
-        self.checks_at(cx, &t, goal, lvl).then_some(t)
+        None
     }
 
     /// [`Self::conv_here`] for consumers outside this module — the value-slot

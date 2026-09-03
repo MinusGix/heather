@@ -56,18 +56,18 @@ Three notes.
 ## 2. A class is a record, plus a table entry
 
 `class C<p⃗> extends … { f⃗ }` elaborates by building the `InductiveDecl`
-that `record C<p⃗> { flattened f⃗ }` would have built and calling
+that the corresponding record would have built and calling
 `elab_inductive` on it. There is no second lowering, no second field table,
 and `C<T>` is a type, `C { … }` a literal, `c.f` a projection, exactly as
 for any record — including a **dependent** field (a law mentioning earlier
 fields), which is the Σ spine's own property.
 
-The registry entry is `ClassInfo { params, fields (flattened, in order),
-parents (direct), ancestors (transitive, deduped, in a deterministic
-order) }`, keyed by the class's qualified name. Consumers arrive in layer 2;
-this round's own consumer is `extends` and the instance assembler.
+The registry entry is `ClassInfo { params, fields, ancestors }`, keyed by the
+class's qualified name. An ancestor also carries the dictionary-field path
+that reaches it. Equal fibers at equal paths are deduped; distinct fibers may
+coexist only behind distinct named paths.
 
-## 3. `extends`: flattening by renaming
+## 3. `extends`: flat and tagged parents
 
 The child's field list is
 
@@ -79,6 +79,14 @@ deduped by field name, first occurrence winning. Two *unrelated* ancestors
 contributing the same field name is a declaration error naming both — the
 dedup exists to collapse a shared ancestor reached by two paths, not to
 silently merge two different notions.
+
+That remains the lowering of an ordinary parent. A tagged parent,
+`extends P<A>(op) as laws`, instead contributes one real field
+`laws: P<A>(op)` and does not copy `P`'s fields. Transitive metadata prepends
+`laws` to the parent's own path. Thus a semiring can contain both
+`additive: CommMonoid<A>(add)` and `multiplicative: Monoid<A>(mul)` without
+renaming either theory's components or pretending the two `Monoid` fibers are
+a diamond. Tags are ordinary record projections (`s.additive.unit`).
 
 Instantiating a parent's fields at the child's arguments is therefore a
 **renaming** of the parent's type-parameter names, which is why §1 restricts
@@ -167,7 +175,8 @@ with `⟨value of f⟩`, in order of preference:
    parameters stay implicit and are inferred from the expected field type);
 2. the literal form's written `f := e`;
 3. **fill-by-reference** from an already-registered canonical ancestor
-   instance at this carrier: `Var({ancestor prefix}).f`. Only an
+   instance at this carrier: `Var({ancestor prefix}).f`; for a tagged parent
+   field, the value is the complete canonical parent dictionary. Only an
    *unparameterized* ancestor qualifies — a generic instance's value is a
    function, and deciding what to apply it to is resolution (§8);
 4. otherwise: the missing-field error, which is the record literal's own,
@@ -181,14 +190,18 @@ After the child's value is registered, every ancestor `P` of the class that
 has **no** canonical instance at this carrier is synthesized and registered:
 
 ```
-fn {Head}::{P}<tyvars>(requires …) -> P<args> { P { f: ⟨same value as the child used⟩, … } }
+fn {Head}::{P}<tyvars>(requires …) -> P<args> { ⟨the child's canonical route to P⟩ }
 ```
 
-— the child-first half. The values are literally the same expressions, so
-every projection path reaches the same components and a diamond collapses by
-construction rather than by discipline. Ancestors are visited in the
-deterministic order of §3, so a grandparent is minted once and reached the
-same way from both parents.
+— the child-first half. An untagged parent is assembled from the same flat
+components as before. A direct tagged parent is the exact dictionary field,
+without eta expansion; a transitive tagged ancestor is assembled from that
+dictionary's projections. A goal pinned to an operation index selects the
+matching route by kernel checking. An unpinned request does not choose one of
+several fibers by declaration order. If a differing index does not occur in
+the parent dictionary's field types, the two record types are convertible;
+using it twice is refused because a registry spelling cannot manufacture a
+distinction the kernel does not see.
 
 ### 4.5 Overrides owe agreement
 

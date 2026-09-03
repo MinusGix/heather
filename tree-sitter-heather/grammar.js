@@ -96,8 +96,13 @@ module.exports = grammar({
     class_declaration: $ => seq(
       'class', field('name', $.identifier), optional($.type_parameters),
       optional($.value_parameters),
-      optional(seq('extends', commaSep1($.class_reference))),
+      optional(seq('extends', commaSep1($.parent_class_reference))),
       field('body', $.field_list),
+    ),
+
+    parent_class_reference: $ => seq(
+      field('class', $.class_reference),
+      optional(seq('as', field('tag', $.identifier))),
     ),
 
     instance_declaration: $ => seq(

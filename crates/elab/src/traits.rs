@@ -37,14 +37,13 @@ pub(crate) struct ClassInfo {
     /// of `params`. Empty for an unindexed class. Their names are what a
     /// constraint binder binds the index under (§4).
     pub valparams: Vec<Param>,
-    /// The **flattened** field list — ancestors first, in `ancestors` order,
-    /// then the class's own — deduped by name (design §3). This is exactly the
-    /// record's field list, so a field's index here is its projection index.
+    /// The record's field list. Untagged parents contribute their flattened
+    /// fields; a tagged parent contributes one dictionary-valued field.
     pub fields: Vec<FieldDecl>,
-    /// Every ancestor, transitively, deduped, in the deterministic order the
-    /// flattening used. Each `ClassRef`'s arguments are written in terms of
-    /// *this* class's parameters, so instantiating this class at `T⃗`
-    /// instantiates its ancestors by the same substitution.
+    /// Every ancestor, transitively, with equal fibers at equal paths deduped.
+    /// Distinct tagged fibers are retained. Each `ClassRef`'s arguments are
+    /// written in terms of *this* class's parameters; `path` says which
+    /// dictionary-valued fields reach it from this class.
     pub ancestors: Vec<ClassRef>,
     /// Which class contributed each field, parallel to `fields`. `None` for
     /// the class's own fields. Used to phrase the collision diagnostic and to
@@ -530,6 +529,14 @@ pub(crate) fn render_expr(e: &Expr) -> String {
 /// class name alone is insufficient because `Monoid<A>(add)` and
 /// `Monoid<A>(mul)` are distinct fibers.
 fn same_parent_fiber(a: &ClassRef, b: &ClassRef) -> bool {
+    same_parent_carrier(a, b)
+        && a.index.len() == b.index.len()
+        && a.index.iter().zip(&b.index).all(|(x, y)| {
+            matches!((&x.kind, &y.kind), (ExprKind::Var(xn), ExprKind::Var(yn)) if xn == yn)
+        })
+}
+
+fn same_parent_carrier(a: &ClassRef, b: &ClassRef) -> bool {
     a.name == b.name
         && a.args.len() == b.args.len()
         && a.args.iter().zip(&b.args).all(|(x, y)| {
@@ -540,10 +547,6 @@ fn same_parent_fiber(a: &ClassRef, b: &ClassRef) -> bool {
                     TyKind::Named { name: yn, args: ya }
                 ) if xa.is_empty() && ya.is_empty() && xn == yn
             )
-        })
-        && a.index.len() == b.index.len()
-        && a.index.iter().zip(&b.index).all(|(x, y)| {
-            matches!((&x.kind, &y.kind), (ExprKind::Var(xn), ExprKind::Var(yn)) if xn == yn)
         })
 }
 
@@ -1129,10 +1132,9 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
-        // Flatten: ancestors first, then own fields. A genuine diamond reaches
-        // the same parent fiber twice and contributes it once. Reaching one
-        // class at two distinct indices is *not* a diamond: silently deduping
-        // it by class name would lose one complete algebraic structure.
+        // Untagged parents flatten as before. A tagged parent is instead one
+        // dictionary-valued field, which lets one class occur at distinct
+        // operation fibers without collapsing either structure.
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut owner: Vec<Option<String>> = Vec::new();
         let mut ancestors: Vec<ClassRef> = Vec::new();
@@ -1141,15 +1143,71 @@ impl Elaborator {
                 ancestors.push(candidate);
                 return Ok(());
             };
+            if same_parent_fiber(previous, &candidate) && previous.path == candidate.path {
+                return Ok(());
+            }
             if same_parent_fiber(previous, &candidate) {
+                return err(
+                    format!(
+                        "`{}` inherits the same `{}` fiber through two different parent \
+                         paths (`{}` and `{}`), so its canonical parent would be \
+                         ambiguous",
+                        d.name,
+                        candidate.name,
+                        previous.path.join("."),
+                        candidate.path.join(".")
+                    ),
+                    candidate.span,
+                );
+            }
+            if !previous.path.is_empty()
+                && !candidate.path.is_empty()
+                && previous.path != candidate.path
+            {
+                // A registry key can distinguish two written indices, but if
+                // a differing index never occurs in the record's field types,
+                // the kernel quite correctly sees the dictionary types as
+                // convertible. Such a class cannot support two canonical
+                // structures at one carrier.
+                if same_parent_carrier(previous, &candidate)
+                    && let Some(info) = self.lookup_class(&candidate.name)
+                {
+                    for (i, (left, right)) in
+                        previous.index.iter().zip(&candidate.index).enumerate()
+                    {
+                        let same = matches!(
+                            (&left.kind, &right.kind),
+                            (ExprKind::Var(x), ExprKind::Var(y)) if x == y
+                        );
+                        let Some(param) = info.valparams.get(i) else {
+                            continue;
+                        };
+                        if !same
+                            && info
+                                .fields
+                                .iter()
+                                .all(|field| ty_var_count(&field.ty, &param.name) == 0)
+                        {
+                            return err(
+                                format!(
+                                    "`{}` cannot inherit `{}` at two values of `{}`: that \
+                                     index does not occur in the parent dictionary's field \
+                                     types, so the kernel sees the two fibers as convertible",
+                                    d.name, candidate.name, param.name
+                                ),
+                                candidate.span,
+                            );
+                        }
+                    }
+                }
+                ancestors.push(candidate);
                 return Ok(());
             }
             err(
                 format!(
                     "`{}` inherits the class `{}` at two distinct fibers (`{}` and `{}`): \
-                     unqualified flattening cannot identify them; package the parent \
-                     dictionaries under distinct fields until qualified parent \
-                     composition is available",
+                     unqualified flattening cannot identify them; give the parent \
+                     dictionaries distinct `as` names",
                     d.name,
                     candidate.name,
                     class_ref_written(previous),
@@ -1162,10 +1220,13 @@ impl Elaborator {
             let (pinfo, rename) = self.parent_view(d, parent)?;
             // The parent's own ancestors come with it, renamed the same way.
             for a in &pinfo.ancestors {
+                let mut path = parent.path.clone();
+                path.extend(a.path.iter().cloned());
                 let a = ClassRef {
                     name: a.name.clone(),
                     args: a.args.iter().map(|t| rename_ty(&rename, t)).collect(),
                     index: a.index.iter().map(|e| rename_expr(&rename, e)).collect(),
+                    path,
                     span: parent.span,
                 };
                 add_ancestor(&mut ancestors, a)?;
@@ -1176,9 +1237,30 @@ impl Elaborator {
                     name: parent.name.clone(),
                     args: parent.args.clone(),
                     index: parent.index.clone(),
+                    path: parent.path.clone(),
                     span: parent.span,
                 },
             )?;
+            if let Some(tag) = parent.path.first() {
+                if fields.iter().any(|f| f.name.as_deref() == Some(tag)) {
+                    return err(
+                        format!("`{}` already has a field or parent named `{tag}`", d.name),
+                        parent.span,
+                    );
+                }
+                fields.push(FieldDecl {
+                    name: Some(tag.clone()),
+                    ty: heather_syntax::class_ty(
+                        parent.name.clone(),
+                        parent.args.clone(),
+                        parent.index.clone(),
+                        parent.span,
+                    ),
+                    span: parent.span,
+                });
+                owner.push(None);
+                continue;
+            }
             for (f, o) in pinfo.fields.iter().zip(pinfo.owner.iter()) {
                 let from = o.clone().unwrap_or_else(|| pinfo.name.clone());
                 let name = f.name.clone().unwrap_or_default();
@@ -1476,6 +1558,7 @@ impl Elaborator {
                 name: name.clone(),
                 args: args.clone(),
                 index: Vec::new(),
+                path: Vec::new(),
                 span: t.span,
             }),
             TyKind::OfExpr(e) => {
@@ -1488,6 +1571,7 @@ impl Elaborator {
                     name: name.to_string(),
                     args: targs.to_vec(),
                     index: args.clone(),
+                    path: Vec::new(),
                     span: t.span,
                 })
             }
@@ -2371,6 +2455,7 @@ impl Elaborator {
                 name: a.name.clone(),
                 args: anc_args(a),
                 index: anc_index(a),
+                path: a.path.clone(),
                 span,
             }
         };
@@ -2378,7 +2463,7 @@ impl Elaborator {
         // Ancestors that already have a canonical instance at this carrier —
         // the fill-by-reference source (design §4.3 rule 3) and the agreement
         // partner (§4.5).
-        let mut registered: Vec<(String, Rc<ClassInfo>, String)> = Vec::new();
+        let mut registered: Vec<(ClassRef, Rc<ClassInfo>, String)> = Vec::new();
         for a in &class.ancestors {
             let Some(akey) = self.key_of(&a.name) else {
                 continue;
@@ -2407,7 +2492,7 @@ impl Elaborator {
             let Some(ainfo) = self.traits.class(&akey).cloned() else {
                 continue;
             };
-            registered.push((a.name.clone(), ainfo, g));
+            registered.push((a.clone(), ainfo, g));
         }
 
         // 2. The field values, in declaration order.
@@ -2418,27 +2503,44 @@ impl Elaborator {
             let Some(fname) = f.name.clone() else {
                 continue;
             };
-            // The ancestor that canonically holds this field, if any.
-            let from_parent = registered
-                .iter()
-                .find(|(_, info, _)| {
-                    info.fields
-                        .iter()
-                        .any(|g| g.name.as_deref() == Some(fname.as_str()))
+            // A tagged parent field is filled with its complete canonical
+            // dictionary. An untagged inherited field keeps the original
+            // fill-by-projection behavior. Tagged ancestors never participate
+            // in that latter search: their components live below the tag.
+            let tagged_ref = self.class_ref_of_ty(&f.ty);
+            let from_parent = tagged_ref
+                .as_ref()
+                .and_then(|field_ref| {
+                    registered.iter().find(|(ancestor, _, _)| {
+                        ancestor.path.len() == 1
+                            && ancestor.path[0] == fname
+                            && same_parent_fiber(field_ref, ancestor)
+                    })
                 })
-                .map(|(aname, _, g)| {
-                    (
-                        aname.clone(),
-                        span_expr(
-                            ExprKind::Dot {
-                                recv: Box::new(var(g, span)),
-                                name: fname.clone(),
-                                args: None,
-                                named: Vec::new(),
-                            },
-                            span,
-                        ),
-                    )
+                .map(|(ancestor, _, g)| (ancestor.name.clone(), var(g, span)))
+                .or_else(|| {
+                    registered
+                        .iter()
+                        .find(|(ancestor, info, _)| {
+                            ancestor.path.is_empty()
+                                && info.fields.iter().any(|g| {
+                                    g.name.as_deref() == Some(fname.as_str())
+                                })
+                        })
+                        .map(|(ancestor, _, g)| {
+                            (
+                                ancestor.name.clone(),
+                                span_expr(
+                                    ExprKind::Dot {
+                                        recv: Box::new(var(g, span)),
+                                        name: fname.clone(),
+                                        args: None,
+                                        named: Vec::new(),
+                                    },
+                                    span,
+                                ),
+                            )
+                        })
                 });
             match (written_fields.get(&fname), from_parent) {
                 (Some(e), Some((aname, pe))) => {
@@ -2547,29 +2649,91 @@ impl Elaborator {
             let aargs = anc_args(&a);
             let aty =
                 heather_syntax::class_ty(a.name.clone(), aargs.clone(), aref.index.clone(), span);
-            // Every field of a flattened ancestor is one of the child's, by
-            // construction (design §3) — so the parent's value is literally
-            // built from the child's own field expressions, which is what makes
-            // the diamond collapse structural rather than incidental. Reported
-            // rather than asserted: a violation would mean the flattening and
-            // the registry disagree, and a library must not panic to say so.
+            // An untagged ancestor is rebuilt from the child's flattened field
+            // expressions. A tagged ancestor is rebuilt from projections of
+            // the dictionary at its path. Both routes preserve the exact
+            // component expressions and therefore the existing canonical-parent
+            // and diamond guarantees.
+            let tagged_root = if let Some(root_name) = a.path.first() {
+                let Some(root_value) = lit_fields.iter().find(|x| x.name == *root_name) else {
+                    return err(
+                        format!(
+                            "internal: `{}` reaches `{}` through `{}`, but that tagged \
+                             parent field is absent",
+                            class.name,
+                            ainfo.name,
+                            a.path.join(".")
+                        ),
+                        span,
+                    );
+                };
+                let Some(root_field) = class
+                    .fields
+                    .iter()
+                    .find(|x| x.name.as_deref() == Some(root_name.as_str()))
+                else {
+                    return err("internal: tagged parent has no field declaration", span);
+                };
+                let Some(root_ref) = self.class_ref_of_ty(&root_field.ty) else {
+                    return err("internal: tagged parent field is not a class", span);
+                };
+                let root_ref = anc_ref(&root_ref);
+                let is_direct = same_parent_fiber(&root_ref, &aref);
+                let root_ty = heather_syntax::class_ty(
+                    root_ref.name,
+                    root_ref.args,
+                    root_ref.index,
+                    span,
+                );
+                Some((root_value.expr.clone(), root_ty, is_direct))
+            } else {
+                None
+            };
             let mut afields: Vec<RecordLitField> = Vec::new();
             for n in ainfo.fields.iter().filter_map(|g| g.name.clone()) {
-                match lit_fields.iter().find(|x| x.name == n) {
-                    Some(x) => afields.push(x.clone()),
-                    None => {
-                        return err(
-                            format!(
-                                "internal: `{}` inherits `{n}` from `{}`, which the \
-                                 flattened field list does not have",
-                                class.name, ainfo.name
-                            ),
+                if a.path.is_empty() {
+                    match lit_fields.iter().find(|x| x.name == n) {
+                        Some(x) => afields.push(x.clone()),
+                        None => {
+                            return err(
+                                format!(
+                                    "internal: `{}` inherits `{n}` from `{}`, which the \
+                                     flattened field list does not have",
+                                    class.name, ainfo.name
+                                ),
+                                span,
+                            );
+                        }
+                    }
+                } else {
+                    let mut source = var("__tagged_parent", span);
+                    for component in a.path.iter().skip(1) {
+                        source = span_expr(
+                            ExprKind::Dot {
+                                recv: Box::new(source),
+                                name: component.clone(),
+                                args: None,
+                                named: Vec::new(),
+                            },
                             span,
                         );
                     }
+                    afields.push(RecordLitField {
+                        name: n.clone(),
+                        expr: span_expr(
+                            ExprKind::Dot {
+                                recv: Box::new(source),
+                                name: n,
+                                args: None,
+                                named: Vec::new(),
+                            },
+                            span,
+                        ),
+                        span,
+                    });
                 }
             }
-            let alit = span_expr(
+            let mut alit = span_expr(
                 ExprKind::RecordLit {
                     name: ainfo.name.clone(),
                     tyargs: if ainfo.valparams.is_empty() {
@@ -2581,6 +2745,29 @@ impl Elaborator {
                 },
                 span,
             );
+            if let Some((root_value, root_ty, is_direct)) = tagged_root {
+                if is_direct {
+                    // The tagged field already is the canonical parent. Do
+                    // not eta-expand it: retaining the exact dictionary is
+                    // both cheaper and the strongest proof-relevance story.
+                    alit = root_value;
+                } else {
+                    alit = span_expr(
+                        ExprKind::Block(Box::new(Block {
+                            stmts: vec![Stmt::Let {
+                                name: "__tagged_parent".into(),
+                                ty: Some(root_ty),
+                                expr: root_value,
+                                span,
+                            }],
+                            result: Box::new(alit),
+                            ons: Vec::new(),
+                            span,
+                        })),
+                        span,
+                    );
+                }
+            }
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
             let global = qkey(self.names.module(), &aname);
             let key = instance_key(&akey, head_key, &aindex);

@@ -896,7 +896,7 @@
       "required": false,
       "types": [
         {
-          "type": "class_reference",
+          "type": "parent_class_reference",
           "named": true
         },
         {
@@ -4262,6 +4262,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "parent_class_reference",
+    "named": true,
+    "fields": {
+      "class": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "class_reference",
+            "named": true
+          }
+        ]
+      },
+      "tag": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
