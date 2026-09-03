@@ -227,6 +227,11 @@ pub struct ClassRef {
     /// unindexed class, and empty at an indexed one whose slot is left for the
     /// binder desugaring to fill (§4.1's EMPTY referent).
     pub index: Vec<Expr>,
+    /// `extends Monoid<A>(op) as additive` — a named parent dictionary path.
+    /// Empty on ordinary class references and untagged parents. During class
+    /// elaboration, transitive ancestors prepend the path through which their
+    /// dictionary is reached, so this also serves as committed class metadata.
+    pub path: Vec<String>,
     pub span: Span,
 }
 

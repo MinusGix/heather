@@ -1,0 +1,100 @@
+// Mathematical order structure, separate from executable comparison.
+//
+// Every class is indexed by its relation: a carrier may support several
+// orders, and none is nominated as "the" order. `LinearOrder` supplies
+// propositional totality only. It has no decider and does not make `Cmp` a
+// parent; algorithms that branch on an order belong to the separate
+// decidable-comparison layer.
+
+import logic;
+import nat;
+import pair;
+import relation;
+import relation_props;
+import int;
+
+class Preorder<A>(R: A → A → Type)
+    extends Reflexive<A>(R), Transitive<A>(R)
+{}
+
+class PartialOrder<A>(R: A → A → Type)
+    extends Preorder<A>(R), Antisymmetric<A>(R)
+{}
+
+class LinearOrder<A>(R: A → A → Type)
+    extends PartialOrder<A>(R), Total<A>(R)
+{}
+
+// The existing carrier-owned kits fill the complete child dictionary once.
+// Canonical parent instances are synthesized from it, so generic preorder and
+// partial-order consumers do not need duplicate registrations.
+instance LinearOrder<Nat>(nat::Le) {
+    rel_refl := nat::le_refl,
+    rel_trans := nat::le_trans,
+    rel_antisym := nat::le_antisym,
+    rel_total := nat::le_total,
+}
+
+instance LinearOrder<Int>(int::Le) {
+    rel_refl := int::le_refl,
+    rel_trans := int::le_trans,
+    rel_antisym := int::le_antisym,
+    rel_total := int::le_total,
+}
+
+// Componentwise products preserve preorders and partial orders. They do not
+// preserve linearity: `(a1,b2)` and `(a2,b1)` may be incomparable. Keeping the
+// constructor at the precise layer is the first forcing case for a hierarchy
+// with a genuinely useful weaker intermediate structure.
+fn ProductOrder<A, B>(RA: A → A → Type, RB: B → B → Type)
+    → Pair<A, B> → Pair<A, B> → Type
+{
+    λ x y => RA(x.fst, y.fst) ∧ RB(x.snd, y.snd)
+}
+
+fn product_preorder<A: Preorder(RA), B: Preorder(RB)>(
+    RA: A → A → Type, RB: B → B → Type)
+    → Preorder<Pair<A, B>>(ProductOrder(RA, RB))
+{
+    Preorder(
+        λ x => And(A.rel_refl(x.fst), B.rel_refl(x.snd)),
+        λ x y z hxy hyz => And(
+            A.rel_trans(x.fst, y.fst, z.fst, hxy.left, hyz.left),
+            B.rel_trans(x.snd, y.snd, z.snd, hxy.right, hyz.right)))
+}
+
+fn product_partial_order<A: PartialOrder(RA), B: PartialOrder(RB)>(
+    RA: A → A → Type, RB: B → B → Type)
+    → PartialOrder<Pair<A, B>>(ProductOrder(RA, RB))
+{
+    PartialOrder(
+        λ x => And(A.rel_refl(x.fst), B.rel_refl(x.snd)),
+        λ x y z hxy hyz => And(
+            A.rel_trans(x.fst, y.fst, z.fst, hxy.left, hyz.left),
+            B.rel_trans(x.snd, y.snd, z.snd, hxy.right, hyz.right)),
+        λ x y hxy hyx => pair_ext(x, y,
+            A.rel_antisym(x.fst, y.fst, hxy.left, hyx.left),
+            B.rel_antisym(x.snd, y.snd, hxy.right, hyx.right)))
+}
+
+// Pullback always preserves a preorder. Antisymmetry additionally needs the
+// map to be injective; making that hypothesis visible prevents a convenient
+// relation constructor from silently claiming more structure than it has.
+fn pullback_preorder<A, B: Preorder(R)>(f: A → B, R: B → B → Type)
+    → Preorder<A>(Pullback(f, R))
+{
+    Preorder(
+        λ x => B.rel_refl(f(x)),
+        λ x y z hxy hyz => B.rel_trans(f(x), f(y), f(z), hxy, hyz))
+}
+
+fn pullback_partial_order<A, B: PartialOrder(R)>(f: A → B,
+    R: B → B → Type, injective: Injective(f))
+    → PartialOrder<A>(Pullback(f, R))
+{
+    PartialOrder(
+        λ x => B.rel_refl(f(x)),
+        λ x y z hxy hyz => B.rel_trans(f(x), f(y), f(z), hxy, hyz),
+        λ x y hxy hyx => injective(x, y,
+            B.rel_antisym(f(x), f(y), hxy, hyx)))
+}

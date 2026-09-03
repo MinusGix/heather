@@ -3,7 +3,7 @@ title: "Research a constructive core and classical interface for real numbers"
 status: open
 labels: [stdlib,mathematics,research,design]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-09-02
 ---
 
 Choose the foundational representation and library boundary for real numbers
@@ -53,3 +53,13 @@ analysis library.
 - 2026-08-20: Filed as research/design. Constructive foundations are the
   preference to test; “core” remains a usability and dependency decision, not
   an ideological label.
+- 2026-09-02: Re-evaluated after the integer/order API and class machinery had
+  grown. The investigation is now decomposed rather than asking one probe to
+  settle every notion of real: [[regular-cauchy-reals]],
+  [[located-dedekind-reals]], and [[lower-real-numbers]] own their
+  presentations; [[real-presentation-comparison]] owns directional maps and
+  assumption-sensitive equivalences; [[constructive-ordered-field-interface]]
+  and [[real-completeness-interfaces]] own the shared abstract vocabulary;
+  [[frame-and-locale-foundations]] and [[localic-real-numbers]] own the
+  point-free path. This issue retains only the eventual foundation/layering
+  recommendation across those results.

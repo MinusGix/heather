@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x01";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x01";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x02";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x02";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1345,11 +1345,15 @@ fn get_field_decl(r: &mut Reader<'_>) -> Result<FieldDecl, ModuleImageDecodeErro
 }
 
 fn put_class_ref(w: &mut Writer, class: &ClassRef) {
-    w.string(&class.name); w.vec(&class.args, put_ty); w.vec(&class.index, put_expr); put_span(w, class.span);
+    w.string(&class.name); w.vec(&class.args, put_ty); w.vec(&class.index, put_expr);
+    w.vec(&class.path, |w, part| w.string(part)); put_span(w, class.span);
 }
 
 fn get_class_ref(r: &mut Reader<'_>) -> Result<ClassRef, ModuleImageDecodeError> {
-    Ok(ClassRef { name: r.string()?, args: r.vec(get_ty)?, index: r.vec(get_expr)?, span: get_span(r)? })
+    Ok(ClassRef {
+        name: r.string()?, args: r.vec(get_ty)?, index: r.vec(get_expr)?,
+        path: r.vec(Reader::string)?, span: get_span(r)?,
+    })
 }
 
 fn put_class(w: &mut Writer, info: &ClassInfo) {
@@ -1956,6 +1960,14 @@ inductive Z { Z0 }
 inductive Chain { End, Link(tail: Chain) }
 fn zop(x: Z, y: Z) -> Z { x }
 class Mag<A> { op: A -> A -> A }
+class Pointed<A>(op: A -> A -> A) {
+    point: A,
+    stable: (x, y: A) -> op(x, y) = op(x, y),
+}
+class TwoPointed<A>(first, second: A -> A -> A)
+    extends Pointed<A>(first) as first_laws,
+            Pointed<A>(second) as second_laws
+{}
 instance Mag<Z> { op := zop }
 designation + at Z := zop
 meta fn zero_code(g: Ctx) -> Code(g |- Nat) { code { 0 } }

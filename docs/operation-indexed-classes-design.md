@@ -418,26 +418,26 @@ the same parent twice at different indices, so flattening collides `unit` with
 `AddCommMonoid`, maintained by `to_additive`) would sneak back in, and the
 design direction is to stop it at the door:
 
-> **Qualified flattening.** `extends CommMonoid<A>(add) as additive,
-> Monoid<A>(mul) as multiplicative` — the child's flattened record holds both
-> parents' fields, names qualified by the `as`-tag *where they collide*
-> (`additive.unit`, `multiplicative.unit`) and unqualified where they don't
-> (`comm` — only one parent has it — autolinks bare). Upcast to either parent
-> assembles from the tagged slots by the same canonical-value discipline; laws
-> in the child's own block state distributivity over `add` and `mul` directly,
-> so qualified paths only ever *fetch proofs*, never appear in statements —
-> which is what keeps the issue's explicit-projection skepticism answered.
+> **Tagged parent dictionaries.** `extends CommMonoid<A>(add) as additive,
+> Monoid<A>(mul) as multiplicative` lowers the tags to real dependent record
+> fields. The child therefore stores both dictionaries intact and ordinary
+> projection spells collisions (`s.additive.unit`,
+> `s.multiplicative.unit`). Nothing is selectively flattened or autolinked.
 
-The recorded alternative, **structures as fields** (`add_m:
-CommMonoid<A>(add)` as a dependent field, no `extends`), dodges the collision
-at the cost of a path on every fetched law; it stays the fallback if qualified
-flattening meets something this pass didn't foresee. One spelling decision
-flagged for that round rather than improvised in it: a qualified flat name
-contains a dot (`s.additive.unit` must parse as field-path or as a flat name
-with a qualified spelling — pick one on purpose). Held deliberately loosely:
-this is the section that most deserves an adversarial pass in its implementing
-round, it is **not needed for round one** (§13), and the round that builds it
-inherits §6's measurement gate.
+The ancestor table retains both operation fibers and their paths. A parent
+goal already pinned to `add` or `mul` upcasts through the matching path and is
+kernel-checked; an unqualified index request is ambiguous rather than ordered.
+Canonical parent instances preserve a direct tagged dictionary exactly and
+rebuild transitive parents from its projections. This representation was
+chosen over qualified flat slots because it uses the record/typechecker
+machinery directly and makes proof-relevant storage visible rather than
+inventing a second namespace inside a record.
+
+One adversarial probe made the kernel boundary explicit: a value index absent
+from every dictionary field type is phantom, so two values of it produce
+convertible record types even though their registry keys differ. Multiple
+tagged fibers are therefore refused at such an index. Algebraic structures
+naturally pass this gate because their law fields mention the operation.
 
 ## 9. Rejected alternatives, with reasons
 
@@ -608,10 +608,11 @@ pseudo-projection (§5.2); the library migration (§10). Acceptance, per
    an index still resolves as a field).
 10. Full `scripts/test` (a `lib/` change), suite count recorded.
 
-**Round two — the diamond** (§8): qualified flattening with `as`-tags, a
-`Semiring<A>(add, mul)` with distributivity as the exercise, the adversarial
-pass this document requests, and §6's measurement gate. Demand-scheduled: no
-current library declaration needs two ops.
+**Round two — the diamond** (§8): implemented as tagged parent dictionaries,
+with direct and transitive two-operation probes, canonical parent synthesis,
+parent-first filling, open-carrier upcast, and ambiguity refusal. The corpus
+uses a Semiring-shaped hierarchy; moving the mathematical hierarchy into
+`lib/` remains separate API work.
 
 **Round three — designations and operators** (§7): owned by the
 operators-onto-classes round per the standing order; this document is its

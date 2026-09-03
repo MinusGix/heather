@@ -44,13 +44,20 @@ impl Elaborator {
             } else {
                 // Not this binder's class and not one of its ancestors: try the
                 // next binder out rather than giving up on the scope.
-                let Some(anc) = dinfo
+                let mut matching = dinfo
                     .ancestors
                     .iter()
-                    .find(|r| self.key_of(&r.name).as_deref() == Some(tkey.as_str()))
-                else {
+                    .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey.as_str()));
+                let Some(anc) = matching.next() else {
                     continue;
                 };
+                // A descendant containing two fibers does not determine an
+                // unqualified index. The caller will issue the ordinary
+                // value-slot ambiguity diagnostic; an explicit tagged
+                // projection remains available.
+                if matching.next().is_some() {
+                    continue;
+                }
                 // The ancestor's index is written in the child's own
                 // value-parameter names (layer 1's `extends` restriction), so
                 // instantiating it is the positional lookup.
@@ -308,13 +315,16 @@ impl Elaborator {
             if dkey == tkey {
                 return Some(d.index.clone());
             }
-            let Some(anc) = dinfo
+            let mut matching = dinfo
                 .ancestors
                 .iter()
-                .find(|r| self.key_of(&r.name).as_deref() == Some(tkey))
-            else {
+                .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey));
+            let Some(anc) = matching.next() else {
                 continue;
             };
+            if matching.next().is_some() {
+                continue;
+            }
             return Some(
                 anc.index
                     .iter()
