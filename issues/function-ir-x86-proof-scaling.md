@@ -3,7 +3,7 @@ title: Make generated FunctionIR x86 refinement scale past small DAGs
 status: open
 labels: [compiler,function-ir,x86,proofs,performance]
 created: 2026-09-01
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 The binary-ALU expansion probed the generated x86 refinement at 20 FunctionIR
@@ -132,3 +132,7 @@ This issue should therefore target reusable decode/layout endpoint sharing and
 protected-register framing before further hand-factoring of the final
 FunctionIR theorem. Per-item timing is enabled for the focused control-region
 fixture when diagnosing this path.
+
+## Log
+
+- 2026-09-04: The control-flow shard split three ways (2026-09-04): it was dying at the 300 CPU-second rail in the parallel full lane (231 s alone, ~1.9x under three-way contention) and had done so since the shard split, so every full run read INCOMPLETE. Measured alone: control region 84 s, comparison-prefixed conditional 63 s, structured conditional 29 s, unsigned/signed comparisons 25 s + 20 s. Now function_ir_x86_control_flow (the control region), function_ir_x86_conditionals (structured + comparison-prefixed), function_ir_x86_comparisons (unsigned + signed); each stays under ~100 s alone.

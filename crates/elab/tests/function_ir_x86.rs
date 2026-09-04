@@ -80,12 +80,24 @@ pub fn run_alu_tests() {
     generated_constant_add_dag_checks();
 }
 
-pub fn run_control_flow_tests() {
+/// The control-flow group is three processes, split by measured cost
+/// (2026-09-04, alone: control region 84 s, comparison-prefixed
+/// conditional 63 s, structured conditional 29 s, unsigned/signed
+/// comparisons 25 s + 20 s). Together they sat at the 300 CPU-second rail
+/// under the parallel full lane (the suite's contention factor is ~1.9x),
+/// and a killed shard makes every full run INCOMPLETE.
+pub fn run_control_region_tests() {
     generated_control_region_x86_certificate_checks();
-    generated_mixed_unsigned_comparison_checks();
-    generated_signed_comparison_checks();
+}
+
+pub fn run_conditional_tests() {
     generated_structured_conditional_checks();
     generated_comparison_prefixed_conditional_checks();
+}
+
+pub fn run_comparison_tests() {
+    generated_mixed_unsigned_comparison_checks();
+    generated_signed_comparison_checks();
 }
 
 fn function_ir_x86_suite() {
