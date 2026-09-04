@@ -6,9 +6,12 @@
 # can consume unbounded memory, and an unbounded test process OOMs the whole
 # machine (it has happened). Under these limits the test process dies alone.
 #
-# Usage: scripts/test [--fast] [cargo-test args...]
+# Usage: scripts/test [--fast|--long] [cargo-test args...]
 #
-# --fast skips the two whole-library acceptance tests that dominate wall
+# --fast replays semantic test images written by other builds of the
+# compiler (HEATHER_SEMANTIC_IMAGES=accept-stale; see tests/support) so a
+# Rust edit does not cold-rebuild every library prefix, and skips the two
+# whole-library acceptance tests that dominate wall
 # time (issues/suite-wall-time-two-tests.md) and the four perturbed-library
 # mutation controls (issues/certgen-harness-cost.md, the 2026-08-12 lever:
 # each control elaborates a `match code` shell, and their whole content is
@@ -16,6 +19,9 @@
 # iterates on) — the inner loop while iterating. The fast lane also disables
 # Cargo's cross-target fail-fast, so a red run shows every failing test
 # binary while the expensive acceptance tests stay skipped.
+# --long additionally runs every slow kernel self-check on every occasion
+# (crates/kernel/src/checks.rs) in its own target directory; not a gate,
+# a sweep to run when the kernel's traversals or bounds memo changed.
 # default runs everything: a round's FINAL verification, and anything that
 # touches lib/, the kit, or the generators, must be a plain `scripts/test`.
 # Stable exhaustive matrices may opt into that lane by naming the test
@@ -32,6 +38,7 @@ node --test scripts/test-target-runner.test.mjs
 
 SKIP=()
 TEST_ARGS=()
+CARGO_FLAGS=()
 TEST_LANE=full
 HAS_LIBTEST_SEPARATOR=false
 for a in "$@"; do
@@ -44,6 +51,15 @@ if [[ "${1:-}" == --fast ]]; then
   shift
   TEST_LANE=fast
   TEST_ARGS=(--no-fail-fast)
+  # The fast lane replays semantic test images an earlier build of the
+  # compiler wrote instead of rebuilding every library prefix after each
+  # Rust edit (tests/support's semantic_test_base reads this). Replay still
+  # kernel-checks every binding; what this lane does not verify is that the
+  # *current* frontend elaborates unchanged library modules identically —
+  # the full lane's exact policy does, which is one more reason a round's
+  # final verification is a plain `scripts/test`.
+  export HEATHER_SEMANTIC_IMAGES=accept-stale
+  echo "fast lane: semantic test images from other builds are replayed (kernel-rechecked); the full lane rebuilds them"
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
@@ -58,6 +74,16 @@ if [[ "${1:-}" == --fast ]]; then
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
         --skip a_perturbed_fold_is_refused_by_the_kernel
         --skip a_perturbed_field_merge_is_refused_by_the_kernel)
+elif [[ "${1:-}" == --long ]]; then
+  shift
+  TEST_LANE=long
+  # Every slow kernel self-check on every occasion (crates/kernel/src/checks.rs;
+  # the default samples one bounds-skip verification in sixteen). Builds in
+  # its own target directory so switching lanes does not rebuild the
+  # workspace twice.
+  CARGO_FLAGS=(--features heather-kernel/long-checks)
+  export CARGO_TARGET_DIR=target/long
+  echo "long lane: every kernel self-check runs on every occasion (target/long)"
 fi
 
 # Keep libtest's compact dot output while leaving Cargo itself non-quiet: the
@@ -71,7 +97,7 @@ fi
 # Compile without limits (rustc is memory-hungry but trusted)...
 compile_started=$SECONDS
 manifest=$(mktemp)
-cargo test --workspace --no-run --quiet --message-format=json > "$manifest"
+cargo test --workspace "${CARGO_FLAGS[@]}" --no-run --quiet --message-format=json > "$manifest"
 compile_seconds=$((SECONDS - compile_started))
 
 # Expensive acceptance targets consume a semantic library prefix and then a
@@ -88,7 +114,7 @@ semantic_warmup() {
     ulimit -v 4194304
     ulimit -t 300
     RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
-      cargo test -p heather-elab --test "$target" -- --format terse
+      cargo test "${CARGO_FLAGS[@]}" -p heather-elab --test "$target" -- --format terse
   )
 }
 
@@ -161,7 +187,7 @@ counts=$(mktemp)
 timings=$(mktemp)
 test_started=$SECONDS
 set +e
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test "${TEST_ARGS[@]}" "$@" "${LIBTEST_ARGS[@]}" 2>&1 |
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test "${CARGO_FLAGS[@]}" "${TEST_ARGS[@]}" "$@" "${LIBTEST_ARGS[@]}" 2>&1 |
   awk -v out="$counts" -v timing_out="$timings" '
        { print }
        /^     Running / {

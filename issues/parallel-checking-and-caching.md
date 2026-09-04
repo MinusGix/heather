@@ -3,7 +3,7 @@ title: "Parallel checking and the certified cache: many agents, one telescope"
 status: open
 labels: [tooling, design, performance, cli, meta]
 created: 2026-08-06
-updated: 2026-08-16
+updated: 2026-09-04
 ---
 
 Design sketch (discussion 2026-08-06; first slice implemented the same day —
@@ -133,6 +133,94 @@ structure this design needs for forking. One round buys both.
 protocol: a session *is* a suffix over a pinned prefix hash; diagnostics
 outside the suffix are impossible to cause and trivially attributable.
 
+## Granularity: no query framework, and the proof inner loop
+
+Decided 2026-09-04 (discussion), after a step back over whether the frontend
+should go Salsa-shaped. The verdict, in one line: this design already *is*
+Salsa's red-green rule at declaration granularity with content-addressed keys;
+the query *framework* is the part not to import, and the reasons all point
+the same way.
+
+- **The kernel is never Salsa-fied, and never needs to be.** It is already a
+  memoizable pure function — (telescope prefix, declaration) → verdict, zero
+  dependencies — and the Merkle scheme exists precisely so its keys do not
+  depend on Ψ position. `crates/cache` *is* its memo table. This keeps
+  the kernel un-fancy until the bootstrap, as decided elsewhere.
+- **Fine granularity is where the cost lives.** A declaration elaborates
+  against a `CommittedWorld` it reads ambiently — instance tables,
+  designations, generated defs, scopes, representations. Declaration-level
+  queries need every such read recorded as a dependency edge; instance
+  resolution is the sore spot (a global set, so an upstream instance
+  addition legitimately changes downstream elaboration — rust-analyzer's
+  trait-solver problem). At *module* granularity this is free: the module
+  interface hash carries its instance table. So: module-granularity
+  images, declaration-granularity hashes, and dependency recording deferred
+  to the bootstrap where the verified-invalidation theorem is the payoff
+  and the recording is written once, in Heather, not twice.
+- **The demand pattern is agents, not keystrokes.** Salsa earns its
+  per-query overhead on editor latency where the changed region is tiny.
+  The load here is many sessions batch-checking whole modules in parallel,
+  which wants coarse units and a DAG scheduler. Same conclusion.
+- **Leave room, don't build:** funnel the elaborator's reads of committed
+  state through a small number of access points, the same "design the hook,
+  ship rung 1" discipline as the trace hook. Recording can be added behind
+  them without a rewrite.
+- **The ratio flipped.** The "99% kernel" figure above is stale: the warm
+  Omega prefix costs the same with 573 cache hits as cold
+  ([[semantic-module-images]]). The warm path is elaborator-dominated, and
+  Stage 4 of module images (load without re-elaboration) is the direct fix,
+  ahead of any of this. Stabilising the image/interface formats now is not
+  throwaway: the Heather-hosted compiler consumes the same formats.
+
+**Intra-module parallelism** is Lean's trick, not Salsa's: statements
+elaborate in order, theorem proof bodies farm out, guaranteed safe by the
+proofs-opaque invariant. The one concrete blocker is that `Elaborator` is
+`Rc`/`RefCell` throughout (no `Arc` in the crate), so it is not `Send`.
+Either process-level forks over a shared image or an `Rc`→`Arc` migration of
+the committed world only; cost both before choosing.
+
+### Doing better than Lean on the inner loop
+
+Lean's parallelism and `.olean` model are the floor, not the target: Lean is
+slow exactly where it matters — iterating against *one* proof with heavy
+tactics running inside it. Per edit it re-runs every tactic from the changed
+block on, re-synthesises instances, rebuilds whnf caches from nothing, and
+kernel-rechecks the whole theorem term. Nothing survives between attempts
+except in-memory snapshots at tactic boundaries, keyed by position.
+
+What is different here is that the units below the declaration are already
+first-class and content-addressable: goals are explicit records with stable
+Ψ coordinates (`crates/elab/src/goals.rs`), and Ψ is nameless, so a closed
+goal sequent alpha-normalises for free. Four pieces, three of them already
+designed, compose into a proof inner loop where an edit costs the changed
+subgoal and nothing else:
+
+1. **Closed subgoals are declarations for cache purposes.** A subgoal
+   discharged in an attempt gets lifted to an auxiliary fact whose
+   *statement* is the sequent (Lean's `auxLemma`, but hashed under interface
+   hashes instead of numbered). Editing step 7 of 10 leaves siblings' aux
+   facts hitting the declaration cache — the proofs-opaque invariant applied
+   one level down — and the kernel gates only the changed fragment plus the
+   (small) spine that assembles the fragments. This is the piece Lean lacks:
+   its kernel rechecks the whole term every time.
+2. **The goal-keyed trace tree** (rung-2 sharpening, 2026-08-06) makes the
+   changed fragment's own recheck a guided walk.
+3. **Solver results survive across edits** via
+   [[persistent-certified-fact-cache]]: an omega/simp subgoal whose sequent is
+   unchanged is a reconstruction, not a search, whatever changed around it.
+4. **Attempts fork the resident world in O(1)**
+   ([[resident-accepted-semantic-worlds]]), so no attempt re-elaborates the
+   prefix; and since the elaborator is untrusted, its whnf/conversion memos
+   may persist across attempts in the daemon keyed on term hashes — the
+   cache Lean rebuilds from scratch.
+
+Limits, stated now: only *closed* goals are cacheable (a goal with pending
+metavariables has no stable key); a changed *statement* still invalidates
+its whole subtree by construction; and (1) changes what the kernel sees (a
+spine over aux bindings instead of one term), so it goes through the gate
+seam like everything else and costs a design round of its own before any
+code.
+
 ## The command split
 
 Precedent: Coq's `vos`/`vok`/`vo`, importing its scar deliberately.
@@ -260,3 +348,4 @@ agent daemon exists.
 - 2026-08-06: Rung-2 sharpening from discussion (2026-08-06, follow-on to the hint/trust split): replay-with-delta is a NON-FEATURE if the format is right. (1) Third format rule, same standing as fingerprint-embedding and decisions-not-steps: **traces are trees keyed by the goal structure that produced them, never linear scripts** — per-subgoal, per-decision, mirroring the search's own recursion. Then replay is 'consult the trace at each subgoal, search fresh on a miss', and a root extension (new constructor) needs no diff engine: old branches hit, the new branch misses, the delta IS the missed keys. Covers case-split proofs and simp-like rewrite traces alike. (2) The recursive-root objection (every goal mentioning the changed inductive rehashes, so exact keys miss globally) is a keying problem the trust split dissolves: exact content hashes only where a trace is believed; hint retrieval may use sloppy keys (structural position — declaration/arm/subgoal-index — or hashing modulo the changed declaration), because the kernel re-judging makes mis-keyed hints cost only search time. Statement opacity confines structural visibility of the change to proofs that case-split on the changed inductive. (3) The certified form: trace = certificate consumed by a small deterministic RECONSTRUCTOR (trace + goal -> term or fail); search tactics are certificate generators and stay untrusted forever; rung 3 verifies only the reconstructor. 'Replay survives extension' is then stateable: a pure signature extension preserves reconstruction on old-branch entries — third sibling of the merge-soundness metatheorem (Ψ-weakening) and [[prog-extension-lemma]], same proof shape one level up. Ties to [[ai-facing-tooling]] and [[grind-port]]: the goal-keyed trace tree, the failure search-state, and the handed-back e-graph want to be the same object.
 - 2026-08-13: The gate seam grew its THIRD site ([[elaborator-snapshot-across-test-binaries]]'s round, which also produced the seam's second consumer — the certgen test binaries share a target/decl-cache store through tests/support's with_decl_cache): quote.rs's elab_meta_decl_inner, the Layer::Meta check of a meta fn. Measurement forced it — the two 'match code' shells' meta checks are ~34 s of lib/certgen_code.hthr's ~42 s elaboration, so the original two-site seam left that file's dominant gate uncovered and a warm --cache run of it saved almost nothing. GateItem now carries layer (part of the key: the hashed binding's layer byte separates a Meta verdict from a Code one — crates/cache/tests/merkle.rs pins it) and lands_in_psi (a meta fn registers in the meta-def table; the cache suppresses its pending-prefix hash and clears the Psi-length-keyed admits/accepted memo for it — both otherwise wrong-vouch bugs, both regression-tested in end_to_end.rs's meta group). docs/cache-v1-design.md §1 updated in place.
 - 2026-08-16: The 'noticed in passing, not fixed' from the cache-v1 round is fixed: [[gendef-gate-untimed]] landed and closed 2026-08-16 — push_gen_def's gate is wrapped in stats::time_kernel, so the frontend suite's 'kernel' phase covers all three gate sites. Nothing this issue owns moved; the note is discharged. One thing it hands back, though, in this issue's own direction: crates/cache/tests/end_to_end.rs's two 'kernel_ns() == 0 on a fully warm run' assertions are now STRONGER, because a generated definition's gate running warm would previously not have moved the counter at all. They pass, so gendefs are admitted warm as designed.
+- 2026-09-04: Architecture step-back (discussion 2026-09-04): should the frontend go Salsa-shaped? Verdict recorded as the new 'Granularity' section: the design already IS red-green at declaration granularity; the query framework is not imported (kernel stays a memoized leaf; ambient CommittedWorld reads make declaration-level dependency recording expensive and instance resolution is the sore spot; agent batch-check load wants coarse units). Order: module-image Stage 4 first (the '99% kernel' ratio is stale — warm path is elaborator-dominated), access-point discipline for committed-state reads as room-leaving, dependency recording deferred to the bootstrap. Intra-module parallelism = proof bodies farmed out, blocked on Rc/RefCell (not Send). New subsection 'Doing better than Lean on the inner loop': closed subgoals as cache-identified aux facts + goal-keyed traces + [[persistent-certified-fact-cache]] + O(1) resident forks, so an edit costs the changed subgoal only; owes its own design round before code.

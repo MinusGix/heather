@@ -2,7 +2,9 @@
 //! detail of the `heather` binary.
 
 use heather_cli::loader::Module;
-use heather_cli::semantic::SemanticSession;
+use heather_cache::module_image::{ImageFreshness, ModuleCacheKey, ModuleImageCache, SemanticsIdentity};
+use heather_cli::semantic::{CacheNoticeKind, SemanticSession};
+use heather_elab::ModuleDependencyIdentity;
 use heather_elab::{Elaborator, LintProfile};
 
 fn temp(tag: &str) -> std::path::PathBuf {
@@ -56,4 +58,54 @@ fn an_uncached_session_preserves_the_plain_source_path() {
     assert!(!outcome.replayed);
     assert!(outcome.notices.is_empty());
     assert_eq!(session.hits(), 0);
+}
+
+/// The inner-loop policy after a compiler edit: an image another build wrote
+/// is replayed and said so, per module; the default policy rebuilds instead.
+#[test]
+fn a_stale_image_is_replayed_only_under_the_accepting_policy_and_is_reported() {
+    let cache = temp("stale");
+    let module = Module {
+        name: "sample".into(),
+        path: "sample.hthr".into(),
+        src: "theorem stable(n: Nat): n = n { refl }\nfn value() -> Nat { 0 }\n".into(),
+    };
+    // Stage the artifact a previous build would have left behind.
+    let dependencies = ModuleDependencyIdentity::default();
+    let key = ModuleCacheKey::for_source(&module.name, &module.src, &dependencies, LintProfile::Default);
+    let mut writer = Elaborator::with_prelude().unwrap();
+    let delta = writer
+        .elab_module_delta(&module.name, &module.src, dependencies)
+        .unwrap();
+    let expected_psi = writer.psi().clone();
+    ModuleImageCache::new(cache.clone())
+        .publish_as(key, &delta, &[], SemanticsIdentity::of("older", "build"))
+        .unwrap();
+
+    let mut exact_elab = Elaborator::with_prelude().unwrap();
+    let mut exact = SemanticSession::new(Some(cache.clone()));
+    let outcome = exact.check(&mut exact_elab, &module, LintProfile::Default);
+    assert!(outcome.errors.is_empty());
+    assert!(!outcome.replayed, "the exact policy rebuilds");
+    assert!(outcome.notices.is_empty(), "{:?}", outcome.notices);
+    assert_eq!(exact.stale_hits(), 0);
+
+    // The rebuild overwrote the artifact; stage the stale one again.
+    ModuleImageCache::new(cache.clone())
+        .publish_as(key, &delta, &[], SemanticsIdentity::of("older", "build"))
+        .unwrap();
+    let mut stale_elab = Elaborator::with_prelude().unwrap();
+    let mut stale = SemanticSession::new(Some(cache.clone()))
+        .with_freshness(ImageFreshness::AcceptStale);
+    let outcome = stale.check(&mut stale_elab, &module, LintProfile::Default);
+    assert!(outcome.errors.is_empty());
+    assert!(outcome.replayed);
+    assert_eq!(stale.hits(), 1);
+    assert_eq!(stale.stale_hits(), 1);
+    assert_eq!(outcome.notices.len(), 1);
+    assert_eq!(outcome.notices[0].kind, CacheNoticeKind::StaleReplayed);
+    assert!(outcome.notices[0].to_string().contains("another build"), "{}", outcome.notices[0]);
+    assert_eq!(stale_elab.psi(), &expected_psi);
+
+    let _ = std::fs::remove_dir_all(cache);
 }

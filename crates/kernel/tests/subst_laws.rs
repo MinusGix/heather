@@ -7,6 +7,11 @@
 //! - universe:       t[φ'][φ] = t[φ'∘φ]
 //! - φ/δ commute:    t[δ][φ] = t[φ][δ[φ]]
 //! - σ/δ commute:    t[δ][σ] = t[σ][δ[σ]]
+//!
+//! Every case runs with `checks::SkipVerification::Full`: the bounds memo's
+//! skips (`bounds.rs`) are re-walked and compared on every occasion, so these
+//! random terms are also the corpus that law is exhaustive over. Elsewhere the
+//! default samples one skip in sixteen (`crates/kernel/src/checks.rs`).
 
 mod common;
 
@@ -22,6 +27,7 @@ const BUDGET: u32 = 12;
 
 #[test]
 fn local_identity() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed);
         let sc = gen_scope(&mut r);
@@ -33,6 +39,7 @@ fn local_identity() {
 
 #[test]
 fn local_composition() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x9e3779b97f4a7c15);
         let mut sc = gen_scope(&mut r);
@@ -58,6 +65,7 @@ fn local_composition() {
 
 #[test]
 fn local_composition_associative() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x517cc1b727220a95);
         let mut sc = gen_scope(&mut r);
@@ -79,6 +87,7 @@ fn local_composition_associative() {
 
 #[test]
 fn universe_identity_and_composition() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x2545f4914f6cdd1d);
         let sc = gen_scope(&mut r);
@@ -104,6 +113,7 @@ fn universe_identity_and_composition() {
 
 #[test]
 fn universe_local_commute() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     // t[δ][φ] = t[φ][δ[φ]]
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0xd6e8feb86659fd93);
@@ -129,6 +139,7 @@ fn universe_local_commute() {
 
 #[test]
 fn global_local_commute() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     // t[δ][σ] = t[σ][δ[σ]]
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0xa0761d6478bd642f);
@@ -152,6 +163,7 @@ fn global_local_commute() {
 
 #[test]
 fn global_empty_is_identity() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0xe7037ed1a0b428db);
         let sc = gen_scope(&mut r);
@@ -163,6 +175,7 @@ fn global_empty_is_identity() {
 
 #[test]
 fn shift_composition() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x8ebc6af09c88c6e3);
         let sc = gen_scope(&mut r);
@@ -192,6 +205,7 @@ fn shift_composition() {
 /// returned value and is necessarily a fresh `Term` either way.
 #[test]
 fn shifting_by_zero_preserves_sharing() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     let inner = Rc::new(Term::Succ(Rc::new(Term::Zero)));
     let t = Term::Succ(Rc::clone(&inner));
 
@@ -235,6 +249,7 @@ fn shifting_by_zero_preserves_sharing() {
 /// holds against the copying traversal too, so equality proves nothing here.
 #[test]
 fn substitution_shares_subterms_it_cannot_change() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     let closed_arg = Rc::new(Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Zero)))));
     let closed_dom = Rc::new(Type::Nat);
     let closed_cod = Rc::new(Type::Pi {
@@ -283,6 +298,7 @@ fn substitution_shares_subterms_it_cannot_change() {
 
 #[test]
 fn global_local_commute_weakening_focus() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     // Directly constructs the adversarial configuration for σ's tail
     // expansion: Ψ = (g : Ctx, u : Trm(g, k_u entries ⊢ …)), local contexts
     // based on g, t containing u^{wk-tailed δ'}, and σ replacing g by an
@@ -350,6 +366,7 @@ fn global_local_commute_weakening_focus() {
 /// need not be one.
 #[test]
 fn abstraction_inverts_substitution() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x94d049bb133111eb);
         let sc = gen_scope(&mut r);

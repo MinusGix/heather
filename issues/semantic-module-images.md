@@ -3,7 +3,7 @@ title: Load checked semantic module images without re-elaboration
 status: open
 labels: [tooling,elaboration,performance,caching,design]
 created: 2026-08-29
-updated: 2026-08-30
+updated: 2026-09-04
 ---
 
 The declaration-verdict cache skips only the final kernel gate. Serious
@@ -392,3 +392,5 @@ disk artifact is acceleration data, not a proof verdict.
   replayed all 13 modules in 5.44 seconds with zero declarations checked or
   trusted from the separate declaration cache. The previous pre-extraction
   warm point was 5.90 seconds, so there is no regression to explain.
+- 2026-09-04: Producing-build identity split out of the content key (2026-09-04). ModuleCacheKey now names what was elaborated (module, source digest, options, ordered dependency interfaces); the header carries a SemanticsIdentity (elaborator + kernel fingerprints hashed) and readers choose an ImageFreshness: Exact (default; another build's image is a miss, rebuilt and overwritten) or AcceptStale (replayed, kernel-rechecked as always, reported per module as CacheNoticeKind::StaleReplayed; the reader recomputes the interface projection instead of trusting the writer's). Wired as heather check --accept-stale-images and, for tests, HEATHER_SEMANTIC_IMAGES=accept-stale which scripts/test --fast exports with a banner. Motivation measured the same day: the fingerprint is a text hash of three crates, so every Rust edit made every image cold and the fast lane paid both warmups (x86 58 s, Omega 146 s in the test profile) before any shard ran; the full lane keeps Exact and is the one that proves the current frontend still elaborates the library identically. Format: MAGIC v4, key domain /3, header +32 bytes; old artifacts are orphaned at old keys, never misreported. Design doc §4/§9 updated; tests: cache (publish_as stages another build's image; Exact misses, AcceptStale loads with stale=Some and identical Ψ; a rebuild overwrites and Exact hits again) and session (notice kind and counts).
+- 2026-09-04: Measured end to end (2026-09-04, dev test profile, Omega warmup target): same-build fast-lane warmup 0.44 s (9 exact hits). After a comment-only edit to crates/elab/src/access.rs: fast lane 0.62 s with all 9 modules replayed from the previous build and the per-module StaleReplayed notice printed; full lane 71.5 s rebuilding all 9 under Exact. With the kernel skip-verification level sampled (see [[certgen-harness-cost]]), the omega shard itself went 72 s -> 28 s and omega_logic 25 s -> 11 s.

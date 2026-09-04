@@ -526,6 +526,50 @@ theorem substituted_bound(x, y: Int,
         .unwrap_or_else(|error| panic!("equality elimination did not check: {}", message(error)));
 }
 
+/// A certificate is parsed from generated text, so its expression spans
+/// index that text and not the user's file. Its `Cons`/`Nil` spines used to
+/// raise the manual-list lint against the probe module, where the borrowed
+/// offsets landed on arbitrary bytes (a `→` in `omega.hthr`, which made the
+/// CLI's snippet renderer panic). The only manual spine reported is the one
+/// the user actually wrote, and every surviving span indexes the probe.
+fn generated_certificate_lints_are_not_reported_against_user_source() {
+    let source = format!(
+        r#"{PREFIX}
+theorem substituted_bound(x, y: Int,
+    eq: y = x + OfNat(1),
+    lower: OfNat(3) <= y,
+    upper: x <= OfNat(1)):
+    False
+{{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("equality elimination did not check: {}", message(error)));
+    let warnings = elab.take_warnings();
+    let manual: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.lint == heather_elab::Lint::ManualListConstruction)
+        .collect();
+    let atoms = source.find("Cons(x, Cons(y, Nil))").expect("the probe's own spine");
+    assert_eq!(
+        manual.iter().map(|w| w.span.start).collect::<Vec<_>>(),
+        vec![atoms],
+        "only the user-written spine may be reported: {:?}",
+        manual.iter().map(|w| (&w.msg, w.span)).collect::<Vec<_>>()
+    );
+    for w in &warnings {
+        assert!(
+            w.span.end <= source.len()
+                && source.is_char_boundary(w.span.start)
+                && source.is_char_boundary(w.span.end),
+            "warning span {:?} does not index the probe source: {}",
+            w.span,
+            w.msg
+        );
+    }
+}
+
 fn reconstructs_equality_elimination_into_an_upper_bound() {
     let source = format!(
         r#"{PREFIX}
@@ -680,6 +724,7 @@ pub fn omega_reconstruction_suite() {
     reflects_negated_nat_relations();
     split_all_applies_omega_to_every_boolean_goal();
     reconstructs_easy_equality_elimination();
+    generated_certificate_lints_are_not_reported_against_user_source();
     reconstructs_equality_elimination_into_an_upper_bound();
     closes_an_integer_equality_goal_by_antisymmetry();
     proves_an_affine_equality_consequence();

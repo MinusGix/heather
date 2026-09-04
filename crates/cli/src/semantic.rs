@@ -9,7 +9,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use heather_cache::module_image::{ModuleCacheKey, ModuleImageCache};
+use heather_cache::module_image::{ImageFreshness, ModuleCacheKey, ModuleImageCache, SemanticsIdentity};
 use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity, Warning};
 
 use crate::loader::Module;
@@ -19,6 +19,10 @@ pub enum CacheNoticeKind {
     LoadRejected,
     ReplayRejected,
     PublishFailed,
+    /// An image another build wrote was replayed under
+    /// [`ImageFreshness::AcceptStale`]. Kernel-rechecked like any replay; the
+    /// notice exists because the current frontend was not exercised on it.
+    StaleReplayed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +48,11 @@ impl fmt::Display for CacheNotice {
             CacheNoticeKind::PublishFailed => {
                 write!(f, "cache: could not store module `{}` ({})", self.module, self.error)
             }
+            CacheNoticeKind::StaleReplayed => write!(
+                f,
+                "cache: module `{}` replayed from an image of another build ({}), kernel-rechecked; a run without stale images re-elaborates it",
+                self.module, self.error
+            ),
         }
     }
 }
@@ -60,7 +69,9 @@ pub struct SemanticSession {
     images: Option<ModuleImageCache>,
     interfaces: Vec<[u8; 32]>,
     images_usable: bool,
+    freshness: ImageFreshness,
     hits: usize,
+    stale_hits: usize,
 }
 
 impl SemanticSession {
@@ -70,12 +81,31 @@ impl SemanticSession {
             images_usable: images.is_some(),
             images,
             interfaces: Vec::new(),
+            freshness: ImageFreshness::Exact,
             hits: 0,
+            stale_hits: 0,
         }
     }
 
+    /// Choose how images written by other builds are treated. The default
+    /// is [`ImageFreshness::Exact`]; a final verification must keep it.
+    pub fn with_freshness(mut self, freshness: ImageFreshness) -> Self {
+        self.freshness = freshness;
+        self
+    }
+
+    pub fn freshness(&self) -> ImageFreshness {
+        self.freshness
+    }
+
+    /// Modules replayed from images, stale ones included.
     pub fn hits(&self) -> usize {
         self.hits
+    }
+
+    /// Modules replayed from images another build wrote.
+    pub fn stale_hits(&self) -> usize {
+        self.stale_hits
     }
 
     /// Check or replay the next module. After a source error, later modules
@@ -105,11 +135,23 @@ impl SemanticSession {
         );
         let images = self.images.as_ref().expect("usable images have a cache");
         let mut notices = Vec::new();
-        match images.load(key, elab.psi().clone(), module.src.len()) {
+        match images.load(key, elab.psi().clone(), module.src.len(), self.freshness) {
             Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
                 Ok(()) => {
                     self.interfaces.push(loaded.interface_hash);
                     self.hits += 1;
+                    if let Some(writer) = loaded.stale {
+                        self.stale_hits += 1;
+                        notices.push(CacheNotice {
+                            module: module.name.clone(),
+                            kind: CacheNoticeKind::StaleReplayed,
+                            error: format!(
+                                "build {} rather than {}",
+                                writer.short(),
+                                SemanticsIdentity::current().short()
+                            ),
+                        });
+                    }
                     return ModuleOutcome {
                         errors: Vec::new(),
                         warnings: loaded.warnings,

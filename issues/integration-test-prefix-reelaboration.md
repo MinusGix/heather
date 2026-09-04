@@ -3,7 +3,7 @@ title: Stop rebuilding the same prelude and library state in every integration t
 status: open
 labels: [testing,elaboration,performance,caching]
 created: 2026-08-25
-updated: 2026-08-29
+updated: 2026-09-04
 ---
 
 Many elaborator integration tests construct `Elaborator::with_prelude()` and
@@ -111,3 +111,4 @@ on a cached verdict.
   passed all 149 binaries (2,167 tests) in 621 seconds wall time: core,
   logic, and reconstruction took 241.88, 196.85, and 183.67 seconds under
   contention, all below the 300-second per-process limit.
+- 2026-09-04: Suite cost attribution from the 2026-09-02 full-run timing table (2,685 reported target-seconds over 167 targets): omega_div_mod 320 s, function_ir_x86_control_flow 319, function_ir_x86_alu 289, omega 218, ir_pass_fuel 124, function_ir_x86_source 120, omega_logic 90 -- the top seven are 55% of the suite. CORRECTION, same day: the Omega shards (omega/omega_logic/omega_reconstruction/omega_div_mod_scaling, via omega_cases/mod.rs) and every function_ir_x86 shard ALREADY use support::semantic_test_base; a first grep missed the subdirectory. Re-measured serially with warm images (dev test profile, this worktree): omega 72 s, omega_logic 25, omega_reconstruction 15, omega_div_mod 183 (its deliberate source backstop; ~60 s of that is the prefix), lib_std_bitvec 28 (with_decl_cache per test, ~1 s prefix each), ir_pass_fuel 44 (no cache; ir_v1 declarations), function_ir_x86_alu 142. So the remaining source-only prefixes are worth roughly 60-100 target-seconds in total, and the shards' cost is their own suffix work. The larger suite lever found in the same measurement is the kernel's debug-only bounds-skip re-walk (subst.rs sub_ty/sub_tm under cfg(debug_assertions)): see [[certgen-harness-cost]] log 2026-09-04.

@@ -293,11 +293,11 @@ fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
-        // claim in the profile the tests run in, exactly as shared_ty
-        // verifies the change counter; the whole cost of the walk being
-        // skipped is paid again, in debug only.
+        // claim in debug builds, exactly as shared_ty verifies the change
+        // counter — at the level `checks` sets, because the whole cost of
+        // the walk being skipped is paid again.
         #[cfg(debug_assertions)]
-        {
+        if crate::checks::verify_this_skip() {
             let before = *m.changes();
             let mapped = map_type(t, m, at);
             assert!(
@@ -329,7 +329,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
-        {
+        if crate::checks::verify_this_skip() {
             let before = *m.changes();
             let mapped = map_term(t, m, at);
             assert!(

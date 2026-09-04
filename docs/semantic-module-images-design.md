@@ -111,9 +111,10 @@ defines the position-independent name for that work.
 An image header contains:
 
 - an image-format version;
-- an elaborator-semantics fingerprint covering the image schema and frontend
-  code which constructs its metadata;
-- the existing kernel-semantics fingerprint;
+- the *producing build*: an elaborator-semantics fingerprint covering the
+  image schema and frontend code which constructs its metadata, and the
+  existing kernel-semantics fingerprint, hashed together
+  (`SemanticsIdentity`);
 - the exact source digest;
 - the ordered dependency interface hashes;
 - the module's resulting interface hash; and
@@ -124,6 +125,27 @@ interface hash controls downstream invalidation. These are deliberately
 different identities: editing a theorem proof changes its source/image but,
 because theorem bodies are opaque downstream, does not change the theorem's
 interface or invalidate consumers.
+
+The producing build is a third identity, and since 2026-09-04 it is **not
+part of the content-addressed key** (`ModuleCacheKey` names *what* was
+elaborated; the header names *who* did). A reader chooses an
+`ImageFreshness`:
+
+- `Exact` (default, and every final verification): an image another build
+  wrote is an ordinary miss, rebuilt and overwritten. A warm run under this
+  policy proves the current frontend still produces this world.
+- `AcceptStale` (`heather check --accept-stale-images`; `scripts/test
+  --fast` through `HEATHER_SEMANTIC_IMAGES=accept-stale`): images from any
+  build this reader can decode are replayed, kernel-rechecked exactly as
+  fresh ones are, and reported per module. Sound by construction — the
+  reader's kernel re-judges every binding — but the current frontend is not
+  exercised on the unchanged module, which is precisely the coverage the
+  exact lane restores. The reader recomputes the interface projection
+  rather than trusting the writer's, so downstream keys chain from one
+  build's projection.
+
+Before this split every edit to the compiler's Rust sources made every
+image cold; the fingerprint hashes source text, so a comment counted.
 
 Definitions include their bodies in their interfaces because conversion may
 delta-unfold them. Inductive and registry-producing declarations include the
@@ -396,8 +418,10 @@ Stage 4 must preserve a sharper boundary than the process-local `ModuleDelta`:
   the exact ordered dependency interface. Relocatable references are a later
   format, justified only when the loader needs composition over a differently
   positioned but interface-equivalent prefix.
-- Cache writes use a temporary sibling plus atomic rename, and a format or
-  semantics-fingerprint mismatch is an ordinary rebuild, not recovery logic.
+- Cache writes use a temporary sibling plus atomic rename, and a format
+  mismatch is an ordinary rebuild, not recovery logic; a semantics-fingerprint
+  mismatch is a rebuild under `Exact` and a reported replay under
+  `AcceptStale` (§4).
 
 ### Stage 5 — resident and parallel consumers
 

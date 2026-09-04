@@ -565,8 +565,10 @@ pub struct Elaborator {
     /// remain private to one elaborator when semantic state is shared.
     resolution_scopes: RefCell<Vec<Rc<names::Scope>>>,
     /// Nesting depth of generated-source elaboration. This is execution mode,
-    /// not representation registry state; zero means user source.
-    generated_depth: usize,
+    /// not representation registry state; zero means user source. A `Cell`
+    /// because the Omega certificate route raises it from a `&self` checking
+    /// position.
+    generated_depth: Cell<usize>,
     /// Set while a `:= derive()` route elaborates the transfer generator's
     /// emission, so that the `impl` block *inside* that emission records
     /// `Derived` rather than what its own clauses look like. `None` everywhere
@@ -1249,7 +1251,7 @@ impl Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
             module_journal: RefCell::new(None),
             resolution_scopes: RefCell::new(Vec::new()),
-            generated_depth: 0,
+            generated_depth: Cell::new(0),
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
@@ -3104,8 +3106,12 @@ impl Elaborator {
                     msg: format!("`omega` got stuck: {detail}"),
                     span: e.span,
                 })?;
+                // The certificate is parsed from generated text: its spans index
+                // that text, not the user's file, and a lint about how the
+                // generator spells a list is the generator's problem, not the
+                // reader's. Same rule as datarepr emissions (`emit_lint`).
                 let term = self
-                    .elab_check(cx, &cert.expr, expected, lvl)
+                    .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl))
                     .map_err(|error| ElabError::Elab {
                         msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
                         span: e.span,

@@ -1,4 +1,6 @@
-use heather_cache::module_image::{ModuleCacheError, ModuleCacheKey, ModuleImageCache};
+use heather_cache::module_image::{
+    ImageFreshness, ModuleCacheError, ModuleCacheKey, ModuleImageCache, SemanticsIdentity,
+};
 use heather_elab::{Elaborator, LintProfile, ModuleDependencyIdentity};
 
 fn temp(tag: &str) -> std::path::PathBuf {
@@ -6,7 +8,7 @@ fn temp(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn source_dependencies_and_semantics_select_a_content_addressed_artifact() {
+fn source_dependencies_and_options_select_a_content_addressed_artifact() {
     let none = ModuleDependencyIdentity::default();
     let dependency = ModuleDependencyIdentity::new(vec![[7; 32]]);
     let key = |module, source, dependencies, profile| {
@@ -30,6 +32,61 @@ fn source_dependencies_and_semantics_select_a_content_addressed_artifact() {
         key("m", "fn x() -> Nat { 0 }", &dependency, LintProfile::Default)
     );
     assert_ne!(a, key("m", "fn x() -> Nat { 0 }", &none, LintProfile::Stdlib));
+    // The producing build is not part of the key: it lives in the artifact,
+    // where a reader's freshness policy decides what to do with it.
+    assert_ne!(SemanticsIdentity::current(), SemanticsIdentity::of("other", "build"));
+}
+
+/// An image another build wrote is a miss under the exact policy and a
+/// reported, kernel-rechecked replay under the stale-accepting one — with
+/// the interface identity recomputed by the reader, so downstream keys chain
+/// from this build's projection rather than the writer's.
+#[test]
+fn an_image_from_another_build_is_a_miss_or_a_reported_replay_by_policy() {
+    let dir = temp("stale");
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = ModuleImageCache::new(dir.clone());
+    let dependencies = ModuleDependencyIdentity::default();
+    let src = "fn value() -> Nat { 0 }";
+    let key = ModuleCacheKey::for_source("sample", src, &dependencies, LintProfile::Default);
+
+    let mut source = Elaborator::with_prelude().unwrap();
+    let prefix = source.psi().clone();
+    let delta = source
+        .elab_module_delta("sample", src, dependencies.clone())
+        .unwrap();
+    let other = SemanticsIdentity::of("an earlier elaborator", "and its kernel");
+    let written_interface = cache.publish_as(key, &delta, &[], other).unwrap();
+
+    assert!(
+        cache
+            .load(key, prefix.clone(), src.len(), ImageFreshness::Exact)
+            .unwrap()
+            .is_none(),
+        "the exact policy treats another build's image as a miss"
+    );
+    let loaded = cache
+        .load(key, prefix.clone(), src.len(), ImageFreshness::AcceptStale)
+        .unwrap()
+        .expect("the stale-accepting policy loads it");
+    assert_eq!(loaded.stale, Some(other));
+    assert_eq!(loaded.interface_hash, written_interface);
+
+    let mut target = Elaborator::with_prelude().unwrap();
+    target
+        .replay_module_delta(&loaded.delta, &dependencies)
+        .unwrap();
+    assert_eq!(target.psi(), source.psi());
+
+    // Rebuilding under this build overwrites the artifact at the same key,
+    // and the exact policy then hits.
+    cache.publish(key, &delta, &[]).unwrap();
+    let fresh = cache
+        .load(key, prefix, src.len(), ImageFreshness::Exact)
+        .unwrap()
+        .expect("this build's image");
+    assert_eq!(fresh.stale, None);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -91,7 +148,7 @@ fn published_image_round_trips_and_replays_against_the_supplied_prefix() {
         .unwrap();
     let written_interface = cache.publish(key, &delta, &[]).unwrap();
     let loaded = cache
-        .load(key, prefix, src.len())
+        .load(key, prefix, src.len(), ImageFreshness::Exact)
         .unwrap()
         .expect("published image exists");
     assert_eq!(loaded.interface_hash, written_interface);
@@ -127,7 +184,7 @@ fn corruption_is_rejected_before_semantic_replay() {
     bytes[last] ^= 1;
     std::fs::write(path, bytes).unwrap();
     assert!(matches!(
-        cache.load(key, prefix, src.len()),
+        cache.load(key, prefix, src.len(), ImageFreshness::Exact),
         Err(ModuleCacheError::Corrupt(_))
     ));
     let _ = std::fs::remove_dir_all(dir);
@@ -152,7 +209,7 @@ fn warnings_round_trip_with_lint_fixes_and_source_bounded_spans() {
     assert!(warnings[0].fix.is_some());
     cache.publish(key, &delta, &warnings).unwrap();
 
-    let loaded = cache.load(key, prefix.clone(), src.len()).unwrap().unwrap();
+    let loaded = cache.load(key, prefix.clone(), src.len(), ImageFreshness::Exact).unwrap().unwrap();
     assert_eq!(loaded.warnings.len(), warnings.len());
     assert_eq!(loaded.warnings[0].lint, warnings[0].lint);
     assert_eq!(loaded.warnings[0].msg, warnings[0].msg);
@@ -163,7 +220,7 @@ fn warnings_round_trip_with_lint_fixes_and_source_bounded_spans() {
     );
 
     assert!(matches!(
-        cache.load(key, prefix, 0),
+        cache.load(key, prefix, 0, ImageFreshness::Exact),
         Err(ModuleCacheError::Corrupt(_))
     ));
     let _ = std::fs::remove_dir_all(dir);

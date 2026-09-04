@@ -18,17 +18,81 @@ use heather_kernel::term::GlobalCtx;
 use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
-const MAGIC: &[u8; 8] = b"HTHCACH\x03";
-const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/2\0";
+const MAGIC: &[u8; 8] = b"HTHCACH\x04";
+const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/3\0";
 const DOMAIN_INTERFACE: &[u8] = b"heather/module-interface/1\0";
-const HEADER: usize = 8 + 32 + 32 + 8 + 8;
+const DOMAIN_SEMANTICS: &[u8] = b"heather/module-semantics/1\0";
+/// magic, cache key, producing semantics, interface hash, semantic length,
+/// warning count.
+const HEADER: usize = 8 + 32 + 32 + 32 + 8 + 8;
 const CHECKSUM: usize = 32;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Which elaborator and kernel produced an image.
+///
+/// This is deliberately **not** part of [`ModuleCacheKey`]: the key names
+/// *what* was elaborated (source, dependencies, options), the semantics
+/// identity names *who* elaborated it. Keeping them apart lets a reader choose
+/// [`ImageFreshness::AcceptStale`] and replay an image its own build did not
+/// write — sound, because replay rechecks every kernel binding with the
+/// reader's kernel — instead of paying a cold rebuild after every edit to the
+/// compiler's Rust sources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticsIdentity([u8; 32]);
+
+impl SemanticsIdentity {
+    /// The identity of this build: the elaborator fingerprint (which already
+    /// covers the kernel's sources) and the kernel fingerprint, hashed
+    /// together.
+    pub fn current() -> Self {
+        Self::of(ELABORATOR_SEMANTICS, KERNEL_SEMANTICS)
+    }
+
+    /// An identity for arbitrary fingerprints. Tests and tools use it to
+    /// stand in for another build; ordinary code wants [`Self::current`].
+    pub fn of(elaborator: &str, kernel: &str) -> Self {
+        let mut h = Sha256::new();
+        h.update(DOMAIN_SEMANTICS);
+        put_bytes(&mut h, elaborator.as_bytes());
+        put_bytes(&mut h, kernel.as_bytes());
+        Self(h.finish())
+    }
+
+    pub fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+
+    /// A short rendering for notices.
+    pub fn short(self) -> String {
+        hex(&self.0).chars().take(12).collect()
+    }
+}
+
+/// How a reader treats an image produced by a different build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageFreshness {
+    /// Only images this exact elaborator and kernel wrote are replayed; any
+    /// other is an ordinary miss and is rebuilt (and overwritten). The final
+    /// gate: a warm run proves the *current* frontend still produces this
+    /// world.
+    #[default]
+    Exact,
+    /// Images from any build whose format this reader decodes are replayed,
+    /// kernel-rechecked as always, and reported as stale. Sound by
+    /// construction; what it does not verify is that the current frontend
+    /// would elaborate the unchanged module identically. An inner-loop
+    /// policy, never a final verification's.
+    AcceptStale,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModuleCacheKey([u8; 32]);
 
 impl ModuleCacheKey {
+    /// The content identity of an elaboration: module name, exact source,
+    /// checking options and the ordered dependency interfaces. The producing
+    /// build is recorded in the artifact instead ([`SemanticsIdentity`]), so
+    /// a source that has not changed keeps one key across compiler edits.
     pub fn for_source(
         module: &str,
         source: &str,
@@ -37,8 +101,6 @@ impl ModuleCacheKey {
     ) -> Self {
         let mut h = Sha256::new();
         h.update(DOMAIN_KEY);
-        put_bytes(&mut h, ELABORATOR_SEMANTICS.as_bytes());
-        put_bytes(&mut h, KERNEL_SEMANTICS.as_bytes());
         put_bytes(&mut h, module.as_bytes());
         h.update(&sha256(source.as_bytes()));
         h.update(&[match lint_profile {
@@ -65,6 +127,10 @@ fn put_bytes(h: &mut Sha256, bytes: &[u8]) {
 pub struct LoadedModule {
     pub delta: ModuleDelta,
     pub warnings: Vec<Warning>,
+    /// The build that wrote the image when it is not this one. `None` for
+    /// an image of the current build; only [`ImageFreshness::AcceptStale`]
+    /// ever loads a `Some`.
+    pub stale: Option<SemanticsIdentity>,
     /// V1 conservatively identifies the complete semantic artifact. A later
     /// interface projection can stop proof-only edits invalidating consumers
     /// without changing the loader/storage boundary.
@@ -124,13 +190,15 @@ impl ModuleImageCache {
         projected_interface(delta)
     }
 
-    /// Absence is an ordinary miss. An existing but unusable artifact is
-    /// distinguished so callers can report corruption before rebuilding.
+    /// Absence is an ordinary miss, and so — under [`ImageFreshness::Exact`]
+    /// — is an image another build wrote. An existing but unusable artifact
+    /// is distinguished so callers can report corruption before rebuilding.
     pub fn load(
         &self,
         key: ModuleCacheKey,
         dependency_psi: GlobalCtx,
         source_len: usize,
+        freshness: ImageFreshness,
     ) -> Result<Option<LoadedModule>, ModuleCacheError> {
         let path = self.path(key);
         let file = match std::fs::File::open(&path) {
@@ -159,12 +227,20 @@ impl ModuleImageCache {
                 "module cache artifact has the wrong cache key",
             ));
         }
+        let mut semantics = [0; 32];
+        semantics.copy_from_slice(&bytes[40..72]);
+        let semantics = SemanticsIdentity(semantics);
+        let stale = match freshness {
+            _ if semantics == SemanticsIdentity::current() => None,
+            ImageFreshness::Exact => return Ok(None),
+            ImageFreshness::AcceptStale => Some(semantics),
+        };
         let mut interface_hash = [0; 32];
-        interface_hash.copy_from_slice(&bytes[40..72]);
-        let semantic_len = u64::from_le_bytes(bytes[72..80].try_into().unwrap());
+        interface_hash.copy_from_slice(&bytes[72..104]);
+        let semantic_len = u64::from_le_bytes(bytes[104..112].try_into().unwrap());
         let semantic_len = usize::try_from(semantic_len)
             .map_err(|_| ModuleCacheError::Corrupt("module cache artifact length overflows"))?;
-        let warning_count = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+        let warning_count = u64::from_le_bytes(bytes[112..120].try_into().unwrap());
         let warning_count = usize::try_from(warning_count)
             .map_err(|_| ModuleCacheError::Corrupt("module warning count overflows"))?;
         if warning_count > self.limits.max_sequence {
@@ -189,10 +265,19 @@ impl ModuleImageCache {
         let semantic = &bytes[HEADER..semantic_end];
         let delta = ModuleDelta::from_image_bytes(semantic, dependency_psi, self.limits)
             .map_err(ModuleCacheError::Decode)?;
-        if projected_interface(&delta) != interface_hash {
-            return Err(ModuleCacheError::Corrupt(
-                "module cache interface identity does not match",
-            ));
+        // The stored interface hash is the writer's projection. A different
+        // build may project differently (that is what its fingerprint says),
+        // so under `AcceptStale` the reader's own projection is the identity
+        // that downstream keys must chain from; a mismatch is corruption
+        // only when the writer was this build.
+        let projected = projected_interface(&delta);
+        if projected != interface_hash {
+            if stale.is_none() {
+                return Err(ModuleCacheError::Corrupt(
+                    "module cache interface identity does not match",
+                ));
+            }
+            interface_hash = projected;
         }
         let warnings = decode_warnings(
             &bytes[semantic_end..checksum_at],
@@ -203,6 +288,7 @@ impl ModuleImageCache {
         Ok(Some(LoadedModule {
             delta,
             warnings,
+            stale,
             interface_hash,
         }))
     }
@@ -215,6 +301,18 @@ impl ModuleImageCache {
         key: ModuleCacheKey,
         delta: &ModuleDelta,
         warnings: &[Warning],
+    ) -> Result<[u8; 32], ModuleCacheError> {
+        self.publish_as(key, delta, warnings, SemanticsIdentity::current())
+    }
+
+    /// [`Self::publish`] on behalf of another build. Tests use it to stage the
+    /// image a previous compiler would have left behind; nothing else should.
+    pub fn publish_as(
+        &self,
+        key: ModuleCacheKey,
+        delta: &ModuleDelta,
+        warnings: &[Warning],
+        semantics: SemanticsIdentity,
     ) -> Result<[u8; 32], ModuleCacheError> {
         let semantic = delta.to_image_bytes();
         if semantic.len() > self.limits.max_bytes {
@@ -229,6 +327,7 @@ impl ModuleImageCache {
         let mut bytes = Vec::with_capacity(HEADER + semantic.len() + CHECKSUM);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&key.0);
+        bytes.extend_from_slice(&semantics.0);
         bytes.extend_from_slice(&interface_hash);
         bytes.extend_from_slice(&(semantic.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&(warnings.len() as u64).to_le_bytes());

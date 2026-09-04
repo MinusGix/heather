@@ -6,9 +6,15 @@
   `scripts/test --fast` (minutes, not seconds; what it skips and what
   dominates what remains live in `issues/certgen-harness-cost.md`) skips the
   whole-library acceptance tests and the perturbed-library mutation controls
-  (~4.7 CPU-min) for the inner loop; a round's **final** verification, and
-  any change touching `lib/`, the kit, or the generators, must run the plain
-  full `scripts/test`. The suite ends with one `== suite: N passed, … ==`
+  (~4.7 CPU-min) for the inner loop, and replays semantic test images that
+  an earlier build of the compiler wrote (kernel-rechecked, but the current
+  frontend is not re-run on unchanged library modules); a round's **final**
+  verification, and any change touching `lib/`, the kit, or the generators,
+  must run the plain full `scripts/test`, which rebuilds such images.
+  `scripts/test --long` (own target dir) additionally runs every slow kernel
+  self-check on every occasion (`crates/kernel/src/checks.rs`; the default
+  samples one in sixteen) — a sweep for rounds that touch the kernel's
+  traversals or bounds memo, not a gate. The suite ends with one `== suite: N passed, … ==`
   line — read that instead of re-running to grep failures and sum counts
   separately; if it says `INCOMPLETE`, a test binary died (usually the
   ulimit) and the counts are partial, not a smaller green suite. Run the full suite **in the background** and do doc/bookkeeping
@@ -22,7 +28,10 @@
   memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:
   `(ulimit -v 8388608 -t 120; target/release/heather check <file>)`,
-  loosening deliberately per run if needed — never uncapped.
+  loosening deliberately per run if needed — never uncapped. After editing
+  the compiler's Rust, `--cache --accept-stale-images` replays the library's
+  module images instead of re-elaborating them (same trade as the fast
+  lane; drop the flag for a final check).
 - **Never run `cargo fmt`** (any scope): the repo is deliberately not
   rustfmt-formatted (`issues/fmt-not-enforced-decision.md`); a formatting
   pass buries a real diff under ~18k lines of churn (it happened,

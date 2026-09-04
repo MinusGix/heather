@@ -36,6 +36,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use heather_cache::Cache;
+use heather_cache::module_image::ImageFreshness;
 use heather_elab::{Elaborator, LintProfile};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
@@ -88,7 +89,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--deny-axioms] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";
 
@@ -110,6 +111,11 @@ struct Opts {
     /// axiom. The axiom declaration itself is an explicit policy input, not a
     /// violation until something depends on it.
     deny_axioms: bool,
+    /// `--accept-stale-images`: replay semantic module images another build
+    /// of this compiler wrote (kernel-rechecked, reported per module) instead
+    /// of rebuilding them. The inner-loop policy after editing the compiler's
+    /// own sources; a final verification runs without it.
+    images: ImageFreshness,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -122,6 +128,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
         json: false,
         deny_axioms: false,
+        images: ImageFreshness::Exact,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -141,6 +148,11 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--json" {
             opts.json = true;
+            continue;
+        }
+        if a == "--accept-stale-images" {
+            opts.cache = true;
+            opts.images = ImageFreshness::AcceptStale;
             continue;
         }
         if a == "--deny-axioms" {
@@ -229,7 +241,8 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let mut root_ok = true;
-        let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()));
+        let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
+            .with_freshness(opts.images);
         for m in &modules {
             let outcome = semantic.check(&mut elab, m, lint_profile);
             for notice in &outcome.notices {
@@ -349,7 +362,8 @@ fn check_inspection_modules(
     modules: &[loader::Module],
     lint_profile: LintProfile,
 ) -> Result<(), (usize, Vec<heather_elab::ElabError>)> {
-    let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()));
+    let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
+        .with_freshness(opts.images);
     for (i, m) in modules.iter().enumerate() {
         let outcome = semantic.check(elab, m, lint_profile);
         for notice in &outcome.notices {

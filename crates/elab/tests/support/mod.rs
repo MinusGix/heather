@@ -45,7 +45,17 @@ pub fn semantic_test_base_at(
     modules: &[(&str, &str)],
     dir: std::path::PathBuf,
 ) -> heather_elab::Elaborator {
-    let mut session = heather_cli::semantic::SemanticSession::new(Some(dir));
+    // `HEATHER_SEMANTIC_IMAGES=accept-stale` (the fast lane, set by
+    // scripts/test) replays images an earlier build of the compiler wrote
+    // instead of rebuilding every prefix after each Rust edit. Replay still
+    // kernel-checks every binding; what the fast lane gives up is exercising
+    // the *current* frontend on unchanged library modules, which the full
+    // lane's exact policy restores.
+    let freshness = match std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() {
+        Ok("accept-stale") => heather_cache::module_image::ImageFreshness::AcceptStale,
+        _ => heather_cache::module_image::ImageFreshness::Exact,
+    };
+    let mut session = heather_cli::semantic::SemanticSession::new(Some(dir)).with_freshness(freshness);
     let mut elab = heather_elab::Elaborator::with_prelude().expect("prelude");
     for &(name, src) in modules {
         let module = heather_cli::loader::Module {
@@ -74,9 +84,10 @@ pub fn semantic_test_base_at(
     elab.set_gate(Rc::new(heather_elab::gate::NoGate));
     if std::env::var_os("HEATHER_SEMANTIC_FIXTURE_STATS").is_some() {
         eprintln!(
-            "semantic-test-images: {} module{} safely replayed",
+            "semantic-test-images: {} module{} safely replayed ({} from another build)",
             session.hits(),
             if session.hits() == 1 { "" } else { "s" },
+            session.stale_hits(),
         );
     }
     elab

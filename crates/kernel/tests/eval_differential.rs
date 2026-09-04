@@ -1110,6 +1110,7 @@ fn check_ty(seed: u64, psi: &GlobalCtx, gamma: &LocalCtx, t: &Rc<Type>, what: &s
 
 #[test]
 fn stream1_generated_terms_and_types() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x9e3779b97f4a7c15);
         let env = gen_wt_env(&mut r);
@@ -1126,6 +1127,7 @@ fn stream1_generated_terms_and_types() {
 
 #[test]
 fn stream2_perturbed_terms() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x517cc1b727220a95);
         let env = gen_wt_env(&mut r);
@@ -1144,6 +1146,7 @@ fn stream2_perturbed_terms() {
 
 #[test]
 fn stream3_open_terms_at_a_checked_type() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x2545f4914f6cdd1d);
         let mut env = gen_wt_env(&mut r);
@@ -1196,6 +1199,7 @@ fn under_beta(t: Rc<Term>, ty: &Type, level: &Level) -> Rc<Term> {
 
 #[test]
 fn stream4_code_recursors() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0xc3a5c85c97cb3127);
         let mut env = gen_wt_env(&mut r);
@@ -1285,6 +1289,7 @@ fn numeral(n: u32) -> Rc<Term> {
 
 #[test]
 fn stream5_definitions_and_delta_payloads() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0xff51afd7ed558ccd);
         // The body is an arbitrary well-typed `Nat` term over Δ = (·, x:Nat)
@@ -1353,6 +1358,7 @@ fn stream5_definitions_and_delta_payloads() {
 /// model.
 #[test]
 fn low_fuel_never_produces_a_wrong_answer() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     for seed in 0..CASES {
         let mut r = Rng::new(seed ^ 0x8ebc6af09c88c6e3);
         let env = gen_wt_env(&mut r);
@@ -1399,6 +1405,7 @@ fn nat_drain(n: u32) -> Rc<Term> {
 
 #[test]
 fn a_failed_thunk_is_not_poisoned() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     let big = nat_drain(12);
     let gamma = LocalCtx::nil();
     let psi = GlobalCtx::default();
@@ -1447,6 +1454,7 @@ fn a_failed_thunk_is_not_poisoned() {
 /// budget of zero, anything with a redex at the head fails on both.
 #[test]
 fn zero_fuel_reduces_nothing() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     let gamma = LocalCtx::nil();
     let t = nat_rec(numeral(1));
     let arena = ValueArena::new();

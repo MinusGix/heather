@@ -164,7 +164,7 @@ fn stale_source_function_ir_certificate_is_rejected() {
         "bitvec::add(64, left, right)",
         "bitvec::sub(64, left, right)",
     );
-    let mut dishonest = support::semantic_test_base(&MODULES[..15]);
+    let mut dishonest = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     match dishonest.elab_module_source("stale_source_add_function_ir_x86", &stale_source) {
         Ok(()) => panic!("a source theorem generated from a stale body checked"),
         Err(ElabError::Parse(error)) => {
@@ -233,7 +233,7 @@ fn unsupported_shift(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     bitvec::shift_left(64, left, 1)
 }
 "#;
-    let mut elaborator = support::semantic_test_base(&MODULES[..15]);
+    let mut elaborator = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
     if let Err(error) = elaborator.elab_module_source("shared_alu_source", SOURCE) {
         panic!("shared source did not elaborate: {}", error.render(SOURCE));
     }

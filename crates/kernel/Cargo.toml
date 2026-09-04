@@ -12,6 +12,9 @@ name = "heather_kernel"
 
 [features]
 value-metrics = []
+# Every slow self-check on every occasion (src/checks.rs); the `--long`
+# lane of scripts/test. Debug builds only have anything to switch.
+long-checks = []
 
 [dependencies]
 typed-arena = "=2.0.2"
