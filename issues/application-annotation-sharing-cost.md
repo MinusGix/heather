@@ -3,7 +3,7 @@ title: Reduce residual stored application annotation conversion cost
 status: open
 labels: [kernel,conversion,performance,representation]
 created: 2026-08-28
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 Restoring the annotation-directed neutral application rule fixed
@@ -44,6 +44,9 @@ requires.
   stored Π spelling cannot simply be discarded.
 - **[[bitvec-closed-reduction-cost]]** owns the remaining closed generated
   carry/unary arithmetic costs, not generic application annotations.
+- **[[kernel-failed-conversion-cost]]** owns the newly measured asymmetry where
+  a false large endpoint exhausts the conversion budget. This issue remains
+  about repeated work on successful conversions.
 
 ## Log
 

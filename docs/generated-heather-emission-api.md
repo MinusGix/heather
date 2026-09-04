@@ -86,3 +86,13 @@ The older FunctionIR validity and x86 proof generators can migrate
 declaration-by-declaration. `Module::raw` permits composition with their
 already-checked output during that transition; it should not be the default
 for new generators.
+
+The first structured-control backend now follows that composition boundary.
+`generate_control_region` imports the six independently generated edge,
+prefix, and continuation fragments through explicit `Module::raw` items, then
+constructs every control-specific function and theorem as a `Declaration`
+with typed parameters and blocks. Repeated true/false and first/second proof
+families are Rust data loops rather than copied Heather templates. Their
+individual propositions and proof expressions remain explicit `Expr::raw`
+leaves while the expression vocabulary grows; no raw leaf contains another
+declaration or controls module layout.

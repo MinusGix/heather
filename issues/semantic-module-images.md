@@ -56,6 +56,8 @@ disk artifact is acceleration data, not a proof verdict.
 - **[[semantic-cache-lifecycle]]**, **[[module-interface-schema-hardening]]**
   and **[[relocatable-semantic-module-images]]** own persistent housekeeping,
   projection maintenance and the deferred non-exact-prefix format.
+- **[[semantic-image-projection-expansion]]** owns disproportionate stored
+  growth from generated dependent-record projection metadata.
 
 ## Log
 
