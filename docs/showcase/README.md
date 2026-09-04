@@ -103,3 +103,24 @@ silently meaning something other than what it read as. That is the module-scope
 argument this paragraph was reaching for — fixture programs and the library
 share one namespace, and the sharing resolves without a word. The fixture was
 renamed `viaadd` for exactly that reason; the pins moved by name only.
+
+## Finite-set client exploration
+
+[`finite-sets-idealized.hthr`](finite-sets-idealized.hthr) is a separate
+client-first design sketch for relational abstraction, ahead of an implementation.
+It deliberately does not check and has no realized counterpart yet.
+[Its design analysis](../finite-set-client-design.md) works backward from the
+client to certificates, dependent membership transport, and proof opportunities.
+
+For a smaller introduction and syntax critique, see
+[three small transfer experiences](../three-small-transfer-experiences.md):
+one set function, one positive-natural function, and one rejected/repaired
+cardinality implementation. These are proposed examples, not checked programs.
+
+## Writing your own thing with laws
+
+[Mergeable summaries](your-own-thing-with-laws.md) walks through defining a
+relation-indexed class, supplying two implementations, proving a reusable
+repeated-delivery law, and reporting unfinished proof fields. The snippets are
+illustrative and unverified. Exact obligation display is the baseline;
+bounded counterexample search is an optional improvement.

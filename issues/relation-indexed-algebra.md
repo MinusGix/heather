@@ -1,0 +1,89 @@
+---
+title: Make algebraic theories generic over their equality relation
+status: open
+labels: [stdlib,mathematics,algebra,setoids,design]
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+Decision: reusable algebraic theory should be relation-indexed. The current
+identity-based `Semigroup`/`Monoid` laws cannot describe unreduced rational
+arithmetic merely by attaching respectfulness proofs to the operations.
+
+## Acceptance
+
+- Express equivalence laws, operation compatibility, and algebraic laws modulo
+  the selected relation. Preserve operation indexing and multiple structures
+  on the same carrier.
+- Make identity-based theory an ergonomic specialization. Decide between a
+  generalized source theory and generated companion interfaces; avoid two
+  independently maintained theorem libraries.
+- Demonstrate a reusable semigroup/monoid theorem on both identity-based
+  arithmetic and unreduced rationals. Include inherited dictionary views and
+  a higher-order consumer such as a fold.
+- Minimize relation plumbing in ordinary users' code and stdlib theorems using
+  inferred indices and local notation. Prototype `≈` as the conservative
+  spelling and compare locally using `=` for the structure relation with a
+  separate identity spelling. The latter is an open experiment, not an agreed
+  global change to `=`. Diagnostics must expose the actual relation and detect
+  ambiguity; a carrier alone must not choose it.
+- Record migration cost against existing theorem statements and dictionaries,
+  not just the shortest new class declaration.
+
+## What it assumes from elsewhere
+
+- **[[setoid-core-api]]** owns explicit setoid and respectfulness evidence.
+- **[[algebraic-theory-composition]]** owns canonical theory composition.
+- **[[setoid-morphisms-and-transport]]** owns moving laws between presentations.
+
+## Dictionary coherence stress test
+
+The finite-set design exposed a consequence of relation-indexed laws: units
+are unique modulo the relation, not necessarily by identity. Unreduced rational
+zero represented as 0/1 or 0/2 is a control. Keep the exact selected parent
+dictionary during inheritance; do not merge independently built dictionaries
+or replace their relevant proof/data fields merely because they correspond
+semantically. Explicit structure correspondence is separate from canonical
+instance registration. **[[inherited-field-override-owes-conversion]]** owns the
+existing override diagnostic; this issue owns the relation-indexed policy.
+
+**[[finite-set-client-design]]** supplies a raw-fold customer for an idempotent
+commutative monoid, contrasted with a duplicate-free fold needing weaker laws.
+
+## Author-facing showcase
+
+`docs/showcase/your-own-thing-with-laws.md` teaches the explicit pattern through
+`Mergeable<A>(same, merge)`: equivalence, compatibility, associativity,
+commutativity, and idempotence. A repeated-delivery theorem specializes to Nat
+maximum under identity and list append under equality of members.
+
+Use it as a small manual probe of defining one's own law-bearing interface.
+It need not create a competing algebra hierarchy: after validating the user
+experience, compose/alias the appropriate reusable law classes. Ordinary field
+goal display is required; counterexample search is not a dependency.
+
+## Named laws and class composition surface
+
+The user-authored showcase now composes named `Associative`, `Commutative`,
+`Idempotent`, and `Respects2` interfaces instead of restating their fields in
+Mergeable. Index the algebraic laws by both relation and operation; recover
+identity-specialized conveniences without duplicating theorem libraries.
+Respectful predicates and evidence-bearing wrappers must share their definition.
+
+Decision: retain `extends` for simplicity, with canonical/tagged parent
+dictionary semantics from **[[algebraic-theory-composition]]**. Colon syntax
+and an algebraic composition expression were considered but are not work for
+this round. Additional user-defined fields remain supported. Named laws allow
+clients to request only the facts they use.
+
+**[[constraint-index-binder-introduction]]** owns the compact user-proposed
+`Mergeable(same as ≈, merge as ⊔)` constraint form. The showcase's explicit
+baseline now uses `A: Mergeable(same, merge)` and `A.assoc`/`A.idem`.
+
+## Log
+
+- 2026-09-04: Filed from the setoid and general transfer design discussion.
+- 2026-09-04: Added canonical dictionary and fold capability probes from the finite-set client design.
+- 2026-09-04: Added a user-authored Mergeable showcase with concrete implementations, one generic theorem, and unfinished-field feedback.
+- 2026-09-04: Revised the showcase around named law composition and carrier constraints; recorded colon composition and implicit index introduction as surface candidates.
+- 2026-09-04: User selected existing `extends` syntax and agreed the declaring-slot rule for named implicit indices; no class-composition syntax change is planned.
