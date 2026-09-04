@@ -3,7 +3,7 @@ title: Load checked semantic module images without re-elaboration
 status: open
 labels: [tooling,elaboration,performance,caching,design]
 created: 2026-08-29
-updated: 2026-08-30
+updated: 2026-09-03
 ---
 
 The declaration-verdict cache skips only the final kernel gate. Serious
@@ -56,6 +56,8 @@ disk artifact is acceleration data, not a proof verdict.
 - **[[semantic-cache-lifecycle]]**, **[[module-interface-schema-hardening]]**
   and **[[relocatable-semantic-module-images]]** own persistent housekeeping,
   projection maintenance and the deferred non-exact-prefix format.
+- **[[semantic-image-projection-expansion]]** owns disproportionate stored
+  growth from generated dependent-record projection metadata.
 
 ## Log
 

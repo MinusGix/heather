@@ -29,7 +29,11 @@ checked artifact rather than only a checked lowering plan.
 
 The first parallel-copy planner declines cycles.  Once a graph naturally
 produces a cyclic register permutation, add a scratch-register or stack-based
-cycle breaker and certify that local transfer independently.
+cycle breaker and certify that local transfer independently. General join
+placement is owned by [[function-ir-x86-join-placement]], recursive branch and
+continuation composition by [[function-ir-recursive-structured-lowering]], and
+the generator's remaining interpolated-source representation by
+[[function-ir-x86-emitter-migration]].
 
 ## Result
 
