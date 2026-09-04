@@ -1,0 +1,104 @@
+// DESIGN SKETCH, 2026-09-04. This file deliberately DOES NOT CHECK.
+// Companion: ../finite-set-client-design.md. No library or syntax is promised.
+// `within`, `derive()`, `derive relational`, relational calc, and the finite-set
+// interface are proposed spellings. Existing functions/classes are not changed.
+
+// This block names a local mathematical view, NOT a runtime representation.
+// It supplies Set = FiniteSet<A>(E), membership, union, image, and local ≈.
+// E and its Equivalence dictionary are explicit at the boundary, inferred inside.
+within finite_sets<A>(E: A → A → Type, eq: Equivalence<A>(E)) {
+
+    // Ordinary clients write ordinary function bodies. The omitted hf argument
+    // asks for evidence at the CALL SITE; it is a real parameter of extend.
+    // The generator never assumes an arbitrary f is respectful.
+    fn extend(f: A → A, xs: Set,
+        hf: Respects(E, E, f) := derive()) → Set
+    {
+        xs ∪ image(f, xs)
+    }
+
+    // Produce the conditional certificate for the definition above. Its premise
+    // includes hf; certification neither changes the body nor chooses a repr.
+    derive relational extend;
+
+    theorem extend_union(f: A → A, xs, ys: Set,
+        hf: Respects(E, E, f) := derive()):
+        extend(f, xs ∪ ys) ≈ extend(f, xs) ∪ extend(f, ys)
+    {
+        calc {
+            extend(f, xs ∪ ys)
+                ≈ (xs ∪ ys) ∪ image(f, xs ∪ ys)
+                    := unfold(extend),
+                ≈ (xs ∪ ys) ∪ (image(f, xs) ∪ image(f, ys))
+                    := image_union(f, xs, ys),
+                ≈ (xs ∪ image(f, xs)) ∪ (ys ∪ image(f, ys))
+                    := union_shuffle(xs, ys, image(f, xs), image(f, ys)),
+                ≈ extend(f, xs) ∪ extend(f, ys)
+                    := unfold(extend),
+        }
+    }
+
+    // This chain needs congruence in its context, not a handwritten cong_extend.
+    theorem extend_duplicate(f: A → A, xs: Set,
+        hf: Respects(E, E, f) := derive()):
+        extend(f, xs ∪ xs) ≈ extend(f, xs)
+    {
+        calc {
+            extend(f, xs ∪ xs)
+                ≈ extend(f, xs) := union_idem(xs),
+        }
+    }
+
+    // Deciding a predicate and respecting E are separate requirements.
+    // The mathematical interface takes a proposition, not an exposed Boolean.
+    fn select(P: A → Type, xs: Set,
+        decide: (x: A) → P(x) ∨ ¬P(x),
+        hp: (x, y: A) → E(x, y) → (P(x) ↔ P(y)) := derive()) → Set
+    {
+        filter(P, decide, xs)
+    }
+
+    // A genuinely dependent family: the type changes with the set parameter.
+    // Evidence is ordinary/relevant for this first comparison.
+    record Element(xs: Set) {
+        value: A,
+        member: value ∈ xs,
+    }
+
+    fn move_element(xs, ys: Set, h: xs ≈ ys, e: Element(xs)) → Element(ys) {
+        Element(value := e.value, member := (member_iff(h, e.value)).mp(e.member))
+    }
+
+    // Proofs can change; the underlying value does not.
+    theorem move_element_value(xs, ys: Set, h: xs ≈ ys, e: Element(xs)):
+        move_element(xs, ys, h, e).value = e.value
+    { refl }
+}
+
+// Library-facing candidate, outside the client block: raw representatives may
+// contain duplicates. Joining their mapped elements needs an idempotent monoid.
+within finite_sets<A>(E: A → A → Type, eq: Equivalence<A>(E)) {
+    fn summarize<B>(R: B → B → Type, op: B → B → B,
+        m: IdemCommMonoid<B>(R, op), weight: A → B, xs: Set,
+        hw: Respects(E, R, weight) := derive()) → B
+    {
+        fold_join(m, weight, xs)
+    }
+    derive relational summarize;
+}
+
+// Deliberate rejected requests, shown in comments so they cannot be mistaken
+// for desired definitions or axioms. Exact diagnostics are in the companion.
+//
+// lift list::list_len as cardinality;
+//   [a] and [a,a] represent the same set but lengths differ.
+//
+// lift list::head as choose;
+//   [a,b] and [b,a] represent the same set but heads can be unrelated.
+//
+// lift list_sum as set_sum;
+//   [1] and [1,1] refute compatibility. Summing DISTINCT elements is a different
+//   implementation, available once duplicate removal is supplied/certified.
+//
+// image(f, xs) with an arbitrary f on a nontrivial element relation:
+//   proving Respects(E, F, f) unlocks this particular image operation.

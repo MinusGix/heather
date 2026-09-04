@@ -3,7 +3,7 @@ title: AI-facing tooling: every failure returns the search state that produced i
 status: open
 labels: [tooling,design,meta,diagnostics]
 created: 2026-08-05
-updated: 2026-08-25
+updated: 2026-09-04
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 riff (while the
@@ -80,6 +80,33 @@ deltas; let the agent or policy choose, and let the kernel check the term.
   here only that agent loops multiply check time by hundreds, so they
   are quietly also AI-ergonomics issues.
 
+## Proof opportunities and their conditional benefits
+
+A failed generation or optimization attempt should explain what discharging
+its exact remaining premises would enable. Return a structured candidate:
+
+- proposed artifact/rewrite and exact goal in its local context;
+- rule, known evidence, remaining premises and their dependency graph;
+- candidate status: proved, missing evidence, unsupported analysis,
+  resource-exhausted, or refuted (with validated witness when available);
+- assumption/provenance impact and matching source/dictionary dependencies;
+- a concrete benefit, with structural claims separated from measured or proved
+  cost claims; useful alternative implementations and their different premises.
+
+Identify whether the result includes a checked conditional term from premises
+to certificate, or only an unverified proposal. Missing premises are those of
+the attempted derivation, not necessarily logically necessary or minimal.
+No checked declaration with outstanding holes is introduced. Supplying evidence
+must yield a fully checked artifact before registration; changed dependencies
+require rechecking. Strengthening a client's assumptions remains a visible edit.
+
+The finite-set customer is owned by **[[finite-set-client-design]]**:
+idempotence permits omitting a duplicate-removal pass before a compatible fold;
+otherwise a certified duplicate-free enumeration enables a different fold.
+Preserve all affected consumers' observations. The compiler-side owner retains
+responsibility for whether a semantically valid optimization is profitable.
+See `docs/finite-set-client-design.md` §6 for candidate examples.
+
 ## Log
 
 - 2026-08-25: Added structured assumption-aware proof actions. Agent search
@@ -92,3 +119,4 @@ deltas; let the agent or policy choose, and let the kernel check the term.
   does not belong to this issue's search-state-as-data contract.
 
 - 2026-08-15: Two items from the obligation-records round (2026-08-15). (1) DELIVERED, small: 'heather obligations [--json] <file>' — one row per obligation-bearing field of every such declaration, with owner, the '::' path, field, state (supplied|defaulted), provenance (inline|named|derived|via) and the STATEMENT, printed as the synthesized source text rather than decoded from a kernel term. That is the property worth keeping: because the statement schema is built as surface source, the listing is legible without goal-display-decodes, and any future path that renders a statement from kernel terms inherits that problem while this one does not. The --json emitter is hand-rolled (dependency-policy) and is a fine template for the 'heather check --json' this issue owns. (2) WANT, recorded not built (round-5 verdict, 'not too important right now'): checking should CONTINUE past a failed obligation clause so that downstream breakage — a caller of the interface whose use no longer typechecks — surfaces before the proof is written. Today a '?' clause (the reporting hole: fails at its own span printing the statement it owes) stops the file there, which is exactly one fix per round-trip. This is error-tolerant elaboration, a diagnostics-mode change, and it belongs with the search-state-as-data thesis: a failure should return everything the file still has to say, not only the first thing it could not say.
+- 2026-09-04: Added conditional proof opportunities and explicit benefits, shared by lifting and optimization; finite sets provide the first concrete design examples.

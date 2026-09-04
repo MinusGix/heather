@@ -3,7 +3,7 @@ title: heather disprove: a counterexample before anyone pays for a proof
 status: open
 labels: [tooling,testing,design]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-09-04
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]. Not scheduled.
@@ -34,3 +34,22 @@ Scope discipline for a first slice:
 - **[[surface-declaration-generator]]** owns term/instance generation
   machinery. Assumed here: only that it can be pointed at a statement's
   telescope rather than at whole declarations.
+
+
+## Set-operation compatibility customer
+
+**[[finite-set-client-design]]** supplies a concrete compatibility claim:
+raw-list length as finite-set cardinality. Validate the two representations
+`[1,2]` and `[2,1,1]`, their extensional set equivalence, and unequal Nat results
+before reporting a refutation. This requires evidence for the premise, not
+only different computed outputs. At this concrete finite Nat example membership
+comparison can be decided or proved directly.
+
+`docs/three-small-transfer-experiences.md` specifies the human rendering and
+the repair suggestion. A stuck generator or bounded search without a witness
+reports its actual status; it does not claim this refutation occurred.
+
+## Log
+
+- 2026-09-04: Added the tiny raw-length/cardinality experience as a
+  hypothesis-bearing counterexample customer.
