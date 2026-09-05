@@ -80,6 +80,32 @@ clients to request only the facts they use.
 `Mergeable(same as ≈, merge as ⊔)` constraint form. The showcase's explicit
 baseline now uses `A: Mergeable(same, merge)` and `A.assoc`/`A.idem`.
 
+## Completed first implementation slice
+
+**[[manual-mergeable-round]]** completed the first bounded implementation and
+verification: named relational laws, composed Mergeable, and a generic list
+instance. The broader migration and API decisions remain here.
+
+## Author law instances directly, then compose explicitly
+
+User preference from review of the manual round: a theorem whose primary role
+is to fill a standard law field can be authored directly in that law instance.
+For example, define Reflexive/Symmetric/Transitive for SameMembers with inline
+proofs, explicitly declare an empty Equivalence instance, then declare the
+operation laws and an empty Mergeable instance. Keep useful independent helper
+lemmas as ordinary theorems; do not force every lemma into class resolution.
+
+The existing composition mechanism already supports parent-first assembly;
+the explicit composite declaration is still required and must reuse the exact
+selected evidence. This is not permission for search to infer arbitrary child
+instances from matching parents. Probe the generic List case, exact parent-proof
+reuse, both authoring orders, and useful law projections before migrating the
+landed instance. Do not add duplicate registrations alongside the existing
+child-first instance.
+
+`docs/showcase/your-own-thing-with-laws.md` records this alternative authoring
+style. **[[algebraic-theory-composition]]** owns its underlying dictionary rules.
+
 ## Log
 
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
@@ -87,3 +113,5 @@ baseline now uses `A: Mergeable(same, merge)` and `A.assoc`/`A.idem`.
 - 2026-09-04: Added a user-authored Mergeable showcase with concrete implementations, one generic theorem, and unfinished-field feedback.
 - 2026-09-04: Revised the showcase around named law composition and carrier constraints; recorded colon composition and implicit index introduction as surface candidates.
 - 2026-09-04: User selected existing `extends` syntax and agreed the declaring-slot rule for named implicit indices; no class-composition syntax change is planned.
+- 2026-09-04: **[[manual-mergeable-round]]** completed with a checked showcase and full-suite validation; the full identity-hierarchy migration remains open here.
+- 2026-09-04: Recorded the user-preferred individual-law instance authoring style and explicit composite assembly; generic migration remains a follow-up probe.

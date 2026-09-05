@@ -4,6 +4,10 @@ Status: illustrative design, 2026-09-04. This document mixes existing Heather
 class/record ideas with proposed relational notation and proof generation.
 The snippets have not been checked and are not a syntax commitment.
 
+A [checked manual counterpart](mergeable.hthr) now implements the core example.
+See [what implementing it corrected](../manual-mergeable-round.md) for the exact
+source-level differences; the illustrative syntax below remains a design sketch.
+
 The [three small experiences](../three-small-transfer-experiences.md) use
 interfaces someone else defined. Here we write one ourselves.
 
@@ -371,3 +375,57 @@ not silently assemble a new child. Tagged parent dictionaries still distinguish
 repeated law interfaces at different operation/relation indices. These
 constraints remain owned by class composition. Extra user fields remain in
 the ordinary class body.
+
+
+## 10. Put a standard law's proof directly in its instance
+
+User review suggests a useful alternative to the theorem-then-registration
+style used in the first implementation. If a proof's main purpose is to supply
+a standard capability, author it there:
+
+```heather
+instance<A> Reflexive<List<A>>(SameMembers<A>) {
+    rel_refl := λ xs a => iff_refl(),
+}
+
+instance<A> Symmetric<List<A>>(SameMembers<A>) {
+    rel_sym := λ xs ys h a => iff_sym(h(a)),
+}
+
+instance<A> Transitive<List<A>>(SameMembers<A>) {
+    rel_trans := λ xs ys zs hxy hyz a => iff_trans(hxy(a), hyz(a)),
+}
+
+instance<A> Equivalence<List<A>>(SameMembers<A>) {}
+```
+
+The last declaration is the intentional composition point. Its evidence should
+come from the already selected law instances. Similarly, once Respects2,
+Associative, Commutative and Idempotent instances for SameMembers/append are
+present, the final declaration can be:
+
+```heather
+instance<A> Mergeable<List<A>>(SameMembers<A>, append<A>) {}
+```
+
+This is an alternative authoring plan, not extra declarations to paste after
+the current List Mergeable instance: that instance already registers canonical
+parents. The existing parent-first composition mechanism supplies the intended
+basis; the exact generic example above and its migration have not yet been
+checked as a separate probe.
+
+The difference for the author is useful: “show this relation is symmetric”
+becomes a single declaration of that fact, including its proof. Clients can
+request Symmetric and use its projection without an additional named theorem
+whose only job was to fill that field.
+
+Keep ordinary named lemmas when they are useful independently: membership in
+append, a stronger transport statement, or a reusable helper inside several
+law proofs. An instance is the selected reusable evidence for a property; a
+lemma need not become an instance just because it can help prove one.
+
+Explicitly declaring Equivalence or Mergeable remains meaningful. It records
+which composite the library offers and selects its actual dictionary. Merely
+finding proofs of several parent properties during search does not invent that
+composite or identify distinct proof terms. The same rule supports both
+parent-first authoring and the original child-first authoring.

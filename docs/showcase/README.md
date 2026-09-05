@@ -124,3 +124,37 @@ relation-indexed class, supplying two implementations, proving a reusable
 repeated-delivery law, and reporting unfinished proof fields. The snippets are
 illustrative and unverified. Exact obligation display is the baseline;
 bounded counterexample search is an optional improvement.
+
+## Realized Mergeable foundation
+
+[`mergeable.hthr`](mergeable.hthr) is the checked manual counterpart to
+[the user-authored law interface](your-own-thing-with-laws.md). Its library
+closure and every showcase declaration run in `lib_setoid_mergeable`:
+
+```console
+furnace run -- scripts/test -p heather-elab --test lib_setoid_mergeable
+```
+
+[The implementation record](../manual-mergeable-round.md) contains the gap table,
+explicit compatibility proof, and acceptance boundaries. The broader idealized
+finite-set and subtype examples are still design sketches.
+
+## Composed relational contexts
+
+[`relational-contexts.hthr`](relational-contexts.hthr) constructs a certificate
+for `known ++ (incoming ++ incoming)`, applies a local law beneath that whole
+context, and states the extra evidence required by a surrounding observer.
+It runs in `lib_setoid_mergeable`; [the round notes](../relational-context-round.md)
+explain the proof rules and remaining automation work.
+
+## Bounded certificate-generation prototype
+
+[`relational_generator_input.hthr`](relational_generator_input.hthr) is ordinary
+client source for `scripts/relational-context-demo`. The driver can emit a checked
+preservation definition, expose a missing observer contract, resume with supplied
+evidence, or leave raw length unproved. [The generator round](../relational-generator-round.md)
+documents the explicit request API and its source-level prototype boundary.
+
+[`relational_generator_generated.hthr`](relational_generator_generated.hthr)
+is the saved success output, including the generated `receive_generated`
+certificate. It can be checked directly as an ordinary Heather module.

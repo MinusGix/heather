@@ -37,3 +37,4 @@ mathematical constructions rather than determine their semantics.
 - 2026-09-02: Filed as a quotient substitute at abstraction boundaries, not a
   replacement for ordinary identity throughout the library.
 - 2026-09-04: Expanded from the agreed relational-transfer design; implementation remains open.
+- 2026-09-04: **[[manual-mergeable-round]]** implements the shared respectful-function foundation and a membership-based list customer. This does not complete the rational, morphism, or function-valued acceptance owned here.

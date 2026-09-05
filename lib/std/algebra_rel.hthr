@@ -1,0 +1,51 @@
+// Small relation-indexed algebraic laws. Kept separate from the identity-only
+// algebra hierarchy while its migration is designed, and from lean execution
+// semantics so importing relation does not elaborate an unused law hierarchy.
+
+import relation_props;
+
+// An evidence-bearing interface over the shared relator. Its arguments are
+// curried as x, x2, hx, y, y2, hy, exactly as nested Respectful dictates.
+class Respects2<A, B, C>(RA: A → A → Type, RB: B → B → Type,
+    RC: C → C → Type, op: A → B → C)
+{
+    respects2: Respectful<A, A, B → C, B → C>(
+        RA, Respectful<B, B, C, C>(RB, RC), op, op),
+}
+
+class Associative<A>(same: A → A → Type, op: A → A → A) {
+    assoc: (x, y, z: A) → same(op(op(x, y), z), op(x, op(y, z))),
+}
+
+class Commutative<A>(same: A → A → Type, op: A → A → A) {
+    comm: (x, y: A) → same(op(x, y), op(y, x)),
+}
+
+class Idempotent<A>(same: A → A → Type, op: A → A → A) {
+    idem: (x: A) → same(op(x, x), x),
+}
+
+// A named composition, not a second copy of each law. Independent law classes
+// remain useful to clients that do not require the complete interface.
+class Mergeable<A>(same: A → A → Type, merge: A → A → A)
+    extends Equivalence<A>(same), Respects2<A, A, A>(same, same, same, merge),
+            Associative<A>(same, merge), Commutative<A>(same, merge),
+            Idempotent<A>(same, merge)
+{}
+
+// The manual proof that a later relational calc generator should reproduce.
+// The second step explicitly lifts idempotence through the surrounding merge.
+theorem merge_twice<A: Mergeable(same, merge)>(
+    same: A → A → Type, merge: A → A → A, state, incoming: A):
+    same(merge(merge(state, incoming), incoming), merge(state, incoming))
+{
+    // Respects2 has three carrier parameters, so A.respects2 alone cannot
+    // select its owner. Project the exact child dictionary explicitly.
+    let laws = A::Mergeable(same, merge);
+    A.rel_trans(
+        merge(merge(state, incoming), incoming),
+        merge(state, merge(incoming, incoming)), merge(state, incoming),
+        A.assoc(state, incoming, incoming),
+        laws.respects2(state, state, A.rel_refl(state),
+            merge(incoming, incoming), incoming, A.idem(incoming)))
+}

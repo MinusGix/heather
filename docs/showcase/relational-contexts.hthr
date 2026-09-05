@@ -1,0 +1,58 @@
+// Checked proof-construction examples; context discovery is still future work.
+import list;
+import relation_props;
+import relation_context;
+import list_setoid;
+
+// An ordinary user function. Its input occurs twice, beneath a fixed prefix.
+fn receive_repeated<A>(known, incoming: List<A>) → List<A> {
+    known ++ (incoming ++ incoming)
+}
+
+// The general application rule also handles a varying function: append(x)
+// changes with x, and its argument changes with that same x.
+theorem duplicate_application<A>():
+    PreservesRelation(SameMembers<A>, SameMembers<A>, λ x => append(x, x))
+{
+    respectful_ap(SameMembers<A>, SameMembers<A>, SameMembers<A>,
+        append<A>, append<A>, λ x => x, λ x => x,
+        append_same_members<A>, respectful_id(SameMembers<A>))
+}
+
+// Compose certificates for the expression tree, keeping append opaque.
+theorem receive_repeated_respects<A>(known: List<A>):
+    PreservesRelation(SameMembers<A>, SameMembers<A>,
+        λ incoming => receive_repeated(known, incoming))
+{
+    let variable = respectful_id(SameMembers<A>);
+    let fixed = respectful_const(SameMembers<A>, SameMembers<A>,
+        known, known, same_members_refl(known));
+    let duplicate = preserves_relation_binary(
+        SameMembers<A>, SameMembers<A>, SameMembers<A>, SameMembers<A>,
+        λ x => x, λ x => x, append<A>, variable, variable, append_same_members<A>);
+    preserves_relation_binary(
+        SameMembers<A>, SameMembers<A>, SameMembers<A>, SameMembers<A>,
+        λ x => known, λ x => append(x, x), append<A>,
+        fixed, duplicate, append_same_members<A>)
+}
+
+// Apply the same certificate to any local law, without inspecting its proof.
+theorem receive_repeated_rewrite<A>(known, incoming: List<A>):
+    SameMembers(receive_repeated(known, incoming ++ incoming),
+        receive_repeated(known, incoming))
+{
+    receive_repeated_respects(known,
+        incoming ++ incoming, incoming, append_self_same_members(incoming))
+}
+
+// A surrounding observation is allowed exactly when its certificate is given.
+// For raw length and SameMembers that premise is refuted in mergeable.hthr.
+theorem observe_received<A, B>(R: B → B → Type, observe: List<A> → B,
+    observes: PreservesRelation(SameMembers<A>, R, observe), known: List<A>):
+    PreservesRelation(SameMembers<A>, R,
+        λ incoming => observe(receive_repeated(known, incoming)))
+{
+    preserves_relation_compose(SameMembers<A>, SameMembers<A>, R,
+        λ incoming => receive_repeated(known, incoming), observe,
+        receive_repeated_respects(known), observes)
+}

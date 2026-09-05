@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Temporary source-generator driver. stdout contains only checked source;
+# missing evidence is reported on stderr with exit 1, errors with exit 2.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ulimit -v 8388608 -t 120
+exec cargo run --quiet -p heather-cli --example relational_context -- "${@:-success}"

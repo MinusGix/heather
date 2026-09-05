@@ -1,0 +1,49 @@
+import relation_context;
+// Ordinary source functions for the bounded context-generator demo.
+import list;
+import nat;
+import relation;
+import relation_props;
+import list_setoid;
+
+fn receive<A>(known, incoming: List<A>) -> List<A> {
+    known ++ (incoming ++ incoming)
+}
+
+// Its body is intentionally not inspected by the generator.
+fn observe<A>(xs: List<A>) -> List<A> { xs }
+
+fn observed<A>(known, incoming: List<A>) -> List<A> {
+    observe(known ++ (incoming ++ incoming))
+}
+
+fn counted<A>(known, incoming: List<A>) -> Nat {
+    list_len(known ++ (incoming ++ incoming))
+}
+
+
+fn receive_generated<A>(known: List<A>) -> PreservesRelation(SameMembers<A>, SameMembers<A>, λ incoming => receive<A>(known, incoming)) {
+    preserves_relation_binary(
+    SameMembers<A>,
+    SameMembers<A>,
+    SameMembers<A>,
+    SameMembers<A>,
+    λ incoming => known,
+    λ incoming => (incoming ++ incoming),
+    append<A>,
+    respectful_const(SameMembers<A>, SameMembers<A>, known, known, same_members_refl(known)),
+    preserves_relation_binary(
+        SameMembers<A>,
+        SameMembers<A>,
+        SameMembers<A>,
+        SameMembers<A>,
+        λ incoming => incoming,
+        λ incoming => incoming,
+        append<A>,
+        respectful_id(SameMembers<A>),
+        respectful_id(SameMembers<A>),
+        append_same_members<A>
+    ),
+    append_same_members<A>
+)
+}

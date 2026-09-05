@@ -44,3 +44,5 @@ Reference guide: `docs/setoid-transfer-references.md`.
 ## Log
 
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
+- 2026-09-04: The function-relator foundation and PreservesRelation specialization are implemented by **[[manual-mergeable-round]]**; container relators, quantifier transfer, and other acceptance remain here.
+- 2026-09-04: The next context-construction slice adds explicit constant and dependent-on-input function application certificates, plus a self-related binary helper, in `std/relation_context`. `docs/showcase/relational-contexts.hthr` exercises nested and repeated occurrences. See `docs/relational-context-round.md`; automatic context discovery and relational calc remain open. The constructors are transparent functions so proof-relevant evidence can compute. Focused validation: 7 passed. Final plain Furnace suite: 2,322 passed, 0 failed, 5 ignored.

@@ -99,6 +99,7 @@ mod display;
 mod expr;
 pub mod gate;
 pub mod heather_emit;
+pub mod relational_context;
 pub mod stats;
 pub use datarepr::{Obligation, Provenance};
 mod names;

@@ -1,0 +1,95 @@
+// Lists viewed as finite collections of members. This first customer compares
+// elements by identity; it does not need an equality decider or deduplication.
+// Ordinary List identity and its sequence operations remain available.
+
+import logic;
+import list;
+import relation_props;
+import algebra_rel;
+
+fn SameMembers<A>(xs, ys: List<A>) → Type {
+    (a: A) → Iff<Mem(a, xs), Mem(a, ys)>
+}
+
+theorem same_members_refl<A>(xs: List<A>): SameMembers(xs, xs) {
+    λ a => iff_refl()
+}
+
+theorem same_members_sym<A>(xs, ys: List<A>, h: SameMembers(xs, ys)):
+    SameMembers(ys, xs)
+{
+    λ a => iff_sym(h(a))
+}
+
+theorem same_members_trans<A>(xs, ys, zs: List<A>,
+    hxy: SameMembers(xs, ys), hyz: SameMembers(ys, zs)): SameMembers(xs, zs)
+{
+    λ a => iff_trans(hxy(a), hyz(a))
+}
+
+// Membership transport is directional; use it twice for append compatibility.
+theorem mem_append_transport<A>(xs, xs2, ys, ys2: List<A>,
+    hx: SameMembers(xs, xs2), hy: SameMembers(ys, ys2), a: A,
+    h: Mem(a, xs ++ ys)): Mem(a, xs2 ++ ys2)
+{
+    match mem_append(xs, ys, a, h) {
+        Inl(left) => mem_append_l(xs2, ys2, a, hx(a).mp(left)),
+        Inr(right) => mem_append_r(xs2, ys2, a, hy(a).mp(right)),
+    }
+}
+
+theorem append_same_members<A>(xs, xs2: List<A>, hx: SameMembers(xs, xs2),
+    ys, ys2: List<A>, hy: SameMembers(ys, ys2)):
+    SameMembers(xs ++ ys, xs2 ++ ys2)
+{
+    λ a => Iff(
+        mp := λ h => mem_append_transport(xs, xs2, ys, ys2, hx, hy, a, h),
+        mpr := λ h => mem_append_transport(xs2, xs, ys2, ys,
+            same_members_sym(xs, xs2, hx), same_members_sym(ys, ys2, hy), a, h))
+}
+
+// Identity implies membership equivalence, but the converse is not asserted.
+theorem same_members_of_eq<A>(xs, ys: List<A>, h: xs = ys): SameMembers(xs, ys) {
+    j(h, λ zs p => SameMembers(xs, zs), same_members_refl(xs))
+}
+
+theorem append_assoc_same_members<A>(xs, ys, zs: List<A>):
+    SameMembers((xs ++ ys) ++ zs, xs ++ (ys ++ zs))
+{
+    same_members_of_eq((xs ++ ys) ++ zs, xs ++ (ys ++ zs), append_assoc(xs, ys, zs))
+}
+
+theorem mem_append_swap<A>(xs, ys: List<A>, a: A, h: Mem(a, xs ++ ys)):
+    Mem(a, ys ++ xs)
+{
+    match mem_append(xs, ys, a, h) {
+        Inl(left) => mem_append_r(ys, xs, a, left),
+        Inr(right) => mem_append_l(ys, xs, a, right),
+    }
+}
+
+theorem append_comm_same_members<A>(xs, ys: List<A>): SameMembers(xs ++ ys, ys ++ xs) {
+    λ a => Iff(mp := λ h => mem_append_swap(xs, ys, a, h),
+        mpr := λ h => mem_append_swap(ys, xs, a, h))
+}
+
+theorem append_self_same_members<A>(xs: List<A>): SameMembers(xs ++ xs, xs) {
+    λ a => Iff(
+        mp := λ h => match mem_append(xs, xs, a, h) {
+            Inl(left) => left,
+            Inr(right) => right,
+        },
+        mpr := mem_append_l(xs, xs, a))
+}
+
+// Register one child; its selected canonical parent views carry these exact
+// proofs. Clients need not assemble duplicate dictionaries for each law.
+instance<A> Mergeable<List<A>>(SameMembers<A>, append<A>) {
+    rel_refl := same_members_refl,
+    rel_sym := same_members_sym,
+    rel_trans := same_members_trans,
+    respects2 := append_same_members,
+    assoc := append_assoc_same_members,
+    comm := append_comm_same_members,
+    idem := append_self_same_members,
+}

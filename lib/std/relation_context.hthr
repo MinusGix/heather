@@ -1,0 +1,38 @@
+// Compositional certificates for non-dependent expression contexts.
+// These are proof constructors for a future generator, not a syntax walker.
+// Use transparent functions: Type-valued evidence may have observable content.
+import relation_props;
+
+// A fixed value still needs evidence at the output relation. The two fixed
+// values may differ, and neither relation is assumed to be reflexive.
+fn respectful_const<A, B, C, D>(R: A → B → Type, S: C → D → Type,
+    c: C, d: D, cd: S(c, d)) →
+    Respectful(R, S, λ x => c, λ y => d)
+{
+    λ x y xy => cd
+}
+
+// Both the function and its argument may depend on the related input.
+// Reusing xy in both premises handles repeated occurrences without assuming
+// proof irrelevance or making independently chosen relation proofs equal.
+fn respectful_ap<A, B, C, D, E, F>(
+    R: A → B → Type, S: C → D → Type, T: E → F → Type,
+    f: A → C → E, g: B → D → F, a: A → C, b: B → D,
+    hf: Respectful(R, Respectful(S, T), f, g),
+    ha: Respectful(R, S, a, b)) →
+    Respectful(R, T, λ x => f(x, a(x)), λ y => g(y, b(y)))
+{
+    λ x y xy => hf(x, y, xy, a(x), b(y), ha(x, y, xy))
+}
+
+// Convenient self-related binary application. Keep every intermediate relation
+// explicit: the carrier alone cannot choose a semantic equality.
+fn preserves_relation_binary<A, B, C, D>(
+    R: A → A → Type, S: B → B → Type, T: C → C → Type, U: D → D → Type,
+    f: A → B, g: A → C, op: B → C → D,
+    hf: PreservesRelation(R, S, f), hg: PreservesRelation(R, T, g),
+    hop: Respectful(S, Respectful(T, U), op, op)) →
+    PreservesRelation(R, U, λ x => op(f(x), g(x)))
+{
+    λ x y xy => hop(f(x), f(y), hf(x, y, xy), g(x), g(y), hg(x, y, xy))
+}

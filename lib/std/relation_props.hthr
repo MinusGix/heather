@@ -95,6 +95,38 @@ fn pullback_equivalence<A, B>(f: A → B, R: B → B → Type,
             h.rel_trans(f(x), f(y), f(z), hxy, hyz))
 }
 
+// Functions are related when they send related inputs to related outputs.
+// Both input and output carriers may differ between the two functions. Nested
+// Respectful values give curried multiargument signatures without a separate
+// arity-specific definition of compatibility.
+fn Respectful<A, B, C, D>(R: A → B → Type, S: C → D → Type)
+    → (A → C) → (B → D) → Type
+{
+    λ f g => (x: A) → (y: B) → R(x, y) → S(f(x), g(y))
+}
+
+theorem respectful_id<A, B>(R: A → B → Type):
+    Respectful<A, B, A, B>(R, R, λ x => x, λ y => y)
+{
+    λ x y h => h
+}
+
+theorem respectful_apply<A, B, C, D>(R: A → B → Type, S: C → D → Type,
+    f: A → C, g: B → D, h: Respectful(R, S, f, g),
+    x: A, y: B, xy: R(x, y)): S(f(x), g(y))
+{
+    h(x, y, xy)
+}
+
+theorem respectful_compose<A, B, C, D, E, F>(
+    R: A → B → Type, S: C → D → Type, T: E → F → Type,
+    f: A → C, f2: B → D, g: C → E, g2: D → F,
+    hf: Respectful(R, S, f, f2), hg: Respectful(S, T, g, g2)):
+    Respectful(R, T, λ x => g(f(x)), λ y => g2(f2(y)))
+{
+    λ x y h => hg(f(x), f2(y), hf(x, y, h))
+}
+
 // A relation-preserving map is kept as a predicate, not a class: the map and
 // both relations already identify the property completely, and the first
 // consumers pass its evidence explicitly. Composition is heterogeneous in
@@ -102,7 +134,7 @@ fn pullback_equivalence<A, B>(f: A → B, R: B → B → Type,
 fn PreservesRelation<A, B>(RA: A → A → Type, RB: B → B → Type,
     f: A → B) → Type
 {
-    (x, y: A) → RA(x, y) → RB(f(x), f(y))
+    Respectful<A, A, B, B>(RA, RB, f, f)
 }
 
 fn Injective<A, B>(f: A → B) → Type {

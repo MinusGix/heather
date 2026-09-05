@@ -1,0 +1,60 @@
+// The checked manual counterpart to your-own-thing-with-laws.md.
+// Its module closure and every declaration are checked by lib_setoid_mergeable.
+
+import logic;
+import bool;
+import nat;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import list_setoid;
+
+// A theorem at an open element type uses the library's inferred List instance.
+theorem receive_names_twice<A>(known, incoming: List<A>):
+    SameMembers((known ++ incoming) ++ incoming, known ++ incoming)
+{
+    merge_twice(SameMembers<A>, append<A>, known, incoming)
+}
+
+// Identity control: feature flags merge by Boolean conjunction. No new equality
+// notion or extra derivation rule is needed to reuse the same generic theorem.
+theorem and_idem(b: Bool): and(b, b) = b {
+    match b { True => refl, False => refl }
+}
+
+theorem and_respects(x, x2: Bool, hx: x = x2, y, y2: Bool, hy: y = y2):
+    and(x, y) = and(x2, y2)
+{
+    j(hx, λ x3 h => and(x, y) = and(x3, y2),
+        j(hy, λ y3 h => and(x, y) = and(x, y3), refl))
+}
+
+instance Mergeable<Bool>(RelId<Bool>, and) {
+    rel_refl := λ x => refl,
+    rel_sym := λ x y h => sym(h),
+    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
+    respects2 := and_respects,
+    assoc := and_assoc,
+    comm := and_comm,
+    idem := and_idem,
+}
+
+theorem receive_flags_twice(known, incoming: Bool):
+    and(and(known, incoming), incoming) = and(known, incoming)
+{
+    merge_twice(RelId<Bool>, and, known, incoming)
+}
+
+// Equivalence really forgets repetition, without asserting identity of lists.
+theorem duplicate_member(): SameMembers<Nat>([0, 0], [0]) {
+    append_self_same_members<Nat>([0])
+}
+
+// A checked refutation, not a counterexample searcher's guessed explanation.
+// If raw length respected SameMembers it would equate 2 and 1 here.
+theorem length_not_respectful():
+    ¬PreservesRelation(SameMembers<Nat>, RelId<Nat>, list_len<Nat>)
+{
+    λ h => ne_of_gt(2, 1, trivial, h([0, 0], [0], duplicate_member()))
+}
