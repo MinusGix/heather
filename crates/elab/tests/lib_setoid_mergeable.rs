@@ -1017,3 +1017,114 @@ fn proof_position_showcase_checks_deterministically() {
         support::psi_hash(second.psi())
     );
 }
+
+#[test]
+fn relational_notation_infers_scoped_and_concrete_indices() {
+    let mut e = base();
+    check(
+        &mut e,
+        "notation_showcase",
+        include_str!("../../../docs/showcase/relational_proof.hthr"),
+    );
+    check(
+        &mut e,
+        "scoped_notation_client",
+        r#"
+import algebra_rel;
+import notation_showcase;
+theorem receive<A: Mergeable(same, merge)>(same: A → A → Type,
+    merge: A → A → A, state, incoming: A):
+    same(merge(merge(state, incoming), incoming), merge(state, incoming))
+{ merge_twice_auto(state, incoming) }
+"#,
+    );
+    let source = r#"
+import list;
+import list_setoid;
+import notation_showcase;
+theorem receive<A>(known, incoming: List<A>):
+    SameMembers<A>((known ++ incoming) ++ incoming, known ++ incoming)
+{ merge_twice_auto(known, incoming) }
+"#;
+    check(&mut e, "notation_client", source);
+}
+
+#[test]
+fn relational_indices_follow_the_goal_with_two_structures_in_scope() {
+    let mut e = base();
+    check(
+        &mut e,
+        "notation_showcase",
+        include_str!("../../../docs/showcase/relational_proof.hthr"),
+    );
+    for (name, relation, operation) in [("first", "r", "f"), ("second", "s", "g")] {
+        let source = format!(
+            r#"
+import algebra_rel;
+import notation_showcase;
+theorem receive<A: Mergeable(r, f) + Mergeable(s, g)>(
+    r, s: A → A → Type, f, g: A → A → A, x, y: A):
+    {relation}({operation}({operation}(x, y), y), {operation}(x, y))
+{{ merge_twice_auto(x, y) }}
+"#
+        );
+        check(&mut e, name, &source);
+    }
+}
+
+#[test]
+fn relational_inference_accepts_a_recently_declared_relation() {
+    let mut e = base();
+    check(
+        &mut e,
+        "recent_relation",
+        r#"
+import nat;
+theorem preserve<A>({r: A → A → Type}, x, y: A, h: r(x, y)): r(x, y) { h }
+fn Recent(x, y: Nat) -> Type { x = y }
+theorem client(x, y: Nat, h: Recent(x, y)): Recent(x, y) { preserve(x, y, h) }
+"#,
+    );
+}
+
+#[test]
+fn relational_indices_are_not_chosen_from_the_carrier() {
+    let mut e = base();
+    let source = r#"
+import list;
+import list_setoid;
+import algebra_rel;
+fn unchanged<A: Mergeable(≈, ⊔)>(x: A) -> A { x }
+fn client<A>(xs: List<A>) -> List<A> { unchanged(xs) }
+"#;
+    let error = e.elab_module_source("underdetermined", source).unwrap_err();
+    let message = error.render(source);
+    assert!(message.contains("cannot infer"), "{message}");
+    assert!(message.contains("Mergeable<A>(≈, ⊔)"), "{message}");
+    assert!(
+        !message.contains("#op") && !message.contains("#constraint"),
+        "{message}"
+    );
+}
+
+#[test]
+fn relational_notation_has_no_implicit_global_meaning() {
+    let mut e = base();
+    for symbol in ["≈", "⊔"] {
+        let source = format!("import nat; fn missing(x: Nat) -> Type {{ x {symbol} x }}");
+        let error = e
+            .elab_module_source("missing_notation", &source)
+            .unwrap_err();
+        let message = error.render(&source);
+        assert!(message.contains("no fallback name"), "{message}");
+    }
+    let source = r#"
+import relation_props;
+theorem local<A>(same as ≈: A → A → Type, x, y: A, h: x ≈ y): x ≈ y { h }
+theorem escaped<A>(same: A → A → Type, x, y: A, h: same(x, y)): x ≈ y { h }
+"#;
+    let error = e
+        .elab_module_source("escaped_notation", source)
+        .unwrap_err();
+    assert!(error.render(source).contains("no fallback name"));
+}

@@ -250,7 +250,7 @@ pub(super) fn unify_ty(
 /// with `strengthen_tm(Γ, s, d) = Some(s₀)`, the recorded `?m := s₀`
 /// satisfies `s₀[embed(Γ,d)] = s₀.shift(d) = s` — the verbatim take plus the
 /// strengthening that already runs *is* the inversion for this class.
-/// How many arguments a spine applies. Used only by the equal-arity rule.
+/// How many arguments a spine applies. Used by the value-spine rule.
 fn spine_len(mut t: &Term) -> usize {
     let mut k = 0;
     while let Term::App { fun, .. } = t {
@@ -260,13 +260,35 @@ fn spine_len(mut t: &Term) -> usize {
     k
 }
 
-/// Is this spine headed by a **committed** global — one outside this call's
-/// scratch world? A meta head at either end is what the guard exists for.
-fn rigid_global_head(mut t: &Term, n: u32) -> bool {
+/// The subject is in the committed world, so even global index zero is
+/// rigid: only the pattern uses indices below `n` as scratch metas.
+fn rigid_head(mut t: &Term) -> bool {
     while let Term::App { fun, .. } = t {
         t = fun;
     }
-    matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
+    matches!(t, Term::Var(_) | Term::GlobalTm { .. })
+}
+
+/// Align value arguments, allowing only a leading type-argument prefix on
+/// the rigid side: `?op(x, y)` can learn `append<A>`, but `?f(x)` must not
+/// learn `add(a)` from `add(a, x)`.
+fn matching_value_spine(pat: &Term, mut subj: &Term) -> bool {
+    if !rigid_head(subj) {
+        return false;
+    }
+    for _ in 0..spine_len(pat) {
+        let Term::App { fun, .. } = subj else {
+            return false;
+        };
+        subj = fun;
+    }
+    while let Term::App { fun, dom, .. } = subj {
+        if !matches!(&**dom, Type::Ty(_)) {
+            return false;
+        }
+        subj = fun;
+    }
+    true
 }
 
 fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
@@ -297,31 +319,26 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
             // `?f(?a) ≟ add(a, a)` by peeling one argument — `?f := add(a)` —
             // satisfying this occurrence and contradicting the next. Flex
             // heads applied to arbitrary terms are outside the Miller
-            // fragment; the only rule trusted for them is the LGG
-            // ([`Elaborator::solve_from_expected`]), and this guard is what
-            // keeps first-order guessing out of the position. Committed
-            // globals sit at `var.0 >= n`, so `D#fam`-headed family spines
+            // fragment. Except for the aligned rigid spine below, they are
+            // left to the LGG hook ([`Elaborator::solve_from_expected`]);
+            // this guard keeps partial-value guessing out. In the pattern,
+            // committed globals sit at `var.0 >= n`, so `D#fam` family spines
             // (the type-arg-inference-through-index walker) are untouched.
             let mut head = pat;
             while let Term::App { fun, .. } = head {
                 head = fun;
             }
             //
-            // The **equal-arity flex-rigid rule**
-            // (docs/operation-indexed-classes-design.md §4.2): where the
-            // subject's own spine is headed by a *committed global* and has
-            // exactly as many arguments, the head is determined and the
-            // decomposition is the inversion — `?op(x, u) ≟ add(x, 0)` gives
-            // `?op := add` with `u ≟ 0` learned beside it, which is how a
-            // law's corollary pins its operation. It dodges the guard's
-            // recorded counterexample precisely: `?f(?a) ≟ add(a, a)` has
-            // spine lengths 1 against 2, and the dangerous partial-application
-            // peel *is* the unequal-length case, which stays refused. Same
-            // license as every rule here — learn-only, the kernel judges.
+            // Align the value spine against a rigid global or local head.
+            // A leading type-only prefix may specialize a polymorphic
+            // declaration: `?op(x, y)` learns `append<A>`. Extra value
+            // arguments remain refused (`?f(x)` cannot learn `add(a)`).
+            // This is structural, learn-only inference, not higher-order
+            // search; the completed application still passes the kernel.
             if let Term::GlobalTm { var, .. } = head
                 && var.0 < n
                 && sols[var.0 as usize].solved().is_none()
-                && !(spine_len(pat) == spine_len(subj) && rigid_global_head(subj, n))
+                && !matching_value_spine(pat, subj)
             {
                 return;
             }
@@ -632,6 +649,46 @@ mod tests {
             &solutions[0],
             Sol::Solved(term) if **term == Term::TmNat
         ));
+    }
+
+    fn app(fun: Term, dom: Type, arg: Term) -> Term {
+        Term::App {
+            fun: Rc::new(fun),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(dom),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(arg),
+        }
+    }
+
+    #[test]
+    fn flex_spines_specialize_types_but_do_not_guess_value_prefixes() {
+        let gamma = LocalCtx::nil();
+        let global = Term::GlobalTm {
+            // Zero is a committed declaration in the subject, not meta 0.
+            var: GlobalVar(0),
+            subst: embed(&gamma, 0),
+        };
+        let Type::El { tm, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        let pat = app((*tm).clone(), Type::Nat, Term::Zero);
+        let specialized = app(global.clone(), Type::Ty(Level::Zero), Term::TmNat);
+        let subject = app(specialized.clone(), Type::Nat, Term::Zero);
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&gamma, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == specialized));
+
+        let value_prefix = app(global, Type::Nat, Term::Zero);
+        let subject = app(value_prefix, Type::Nat, Term::Zero);
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&gamma, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(solutions[0], Sol::Unsolved));
+
+        let mut withheld = [Sol::Withheld];
+        unify_tm(&gamma, &pat, &subject, 1, 0, &mut withheld);
+        assert!(matches!(withheld[0], Sol::Withheld));
     }
 
     #[test]

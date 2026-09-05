@@ -429,3 +429,13 @@ which composite the library offers and selects its actual dictionary. Merely
 finding proofs of several parent properties during search does not invent that
 composite or identify distinct proof terms. The same rule supports both
 parent-first authoring and the original child-first authoring.
+
+
+## Checked notation follow-up
+
+The [native proof showcase](relational_proof.hthr) now checks the compact
+symbol-only header `Mergeable(≈, ⊔)`, using the class telescope to supply the
+implicit index types. Explicit value binders can instead retain identifier
+names with `same as ≈` and `merge as ⊔`. The named implicit form proposed in
+section 9 remains on its existing issue; it is not necessary to obtain the
+symbol-only mathematical presentation.

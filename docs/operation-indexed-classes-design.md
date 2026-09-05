@@ -242,6 +242,13 @@ spelling needs its index supplied (§4.1's forms) — which is also the
 permanent escape whenever a statement genuinely leaves the op out of the
 goal.
 
+**2026-09-05 extension:** [relational index inference](../issues/relational-index-inference-from-goals.md)
+preserves the written expected type before reduction and admits rigid local
+heads as well as global heads. A global may have an extra leading prefix of
+type arguments, so `?op(x, y)` can recover `append<A>` from
+`append<A>(x, y)`. Extra value arguments remain refused. This extends the
+structural rule without changing the resolver ladder below.
+
 ## 5. The resolver's value-slot ladder
 
 Layer 2's search order (scope ascending, then registry, upcast where the goal

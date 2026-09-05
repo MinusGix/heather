@@ -1,0 +1,30 @@
+// Relational congruence in an ordinary proof, using the local law dictionary.
+import relation_props;
+import algebra_rel;
+
+theorem merge_twice_auto<A: Mergeable(≈, ⊔)>(state, incoming: A):
+    (state ⊔ incoming) ⊔ incoming ≈ state ⊔ incoming
+{
+    A.rel_trans(
+        (state ⊔ incoming) ⊔ incoming,
+        state ⊔ (incoming ⊔ incoming), state ⊔ incoming,
+        A.assoc(state, incoming, incoming),
+        rel_cong(A.idem(incoming)))
+}
+
+// A supplied certificate is an ordinary proof, found in the local context.
+theorem observe_related<A>(same as ≈: A → A → Type, observe: A → A,
+    xs, ys: A, h: xs ≈ ys,
+    certificate: PreservesRelation(same, same, observe)):
+    observe(xs) ≈ observe(ys)
+{ rel_cong(h) }
+
+// When evidence needs a lemma application, discharge the resulting local goal.
+theorem observe_with_lemma<A>(same as ≈: A → A → Type, observe: A → A,
+    xs, ys: A, h: xs ≈ ys,
+    supply: (u: A) → PreservesRelation(same, same, observe)):
+    observe(xs) ≈ observe(ys)
+{
+    rel_cong(h)
+    on ?compatibility := supply(xs);
+}

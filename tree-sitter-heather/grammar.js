@@ -248,10 +248,10 @@ module.exports = grammar({
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
       ...headBinary($, ['∧'], PREC.AND, 'right'),
-      ...headBinary($, ['=', '≠', '<=', '<'], PREC.COMPARE, 'left'),
+      ...headBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
-      ...headBinary($, ['+', '-', '++'], PREC.ADD, 'left'),
+      ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...headBinary($, ['*', '∙'], PREC.MUL, 'left'),
     ),
 
@@ -303,10 +303,10 @@ module.exports = grammar({
       ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...typeBinary($, ['∨'], PREC.OR, 'right'),
       ...typeBinary($, ['∧'], PREC.AND, 'right'),
-      ...typeBinary($, ['=', '≠', '<=', '<'], PREC.COMPARE, 'left'),
+      ...typeBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
-      ...typeBinary($, ['+', '-', '++'], PREC.ADD, 'left'),
+      ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...typeBinary($, ['*', '∙'], PREC.MUL, 'left'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
@@ -466,14 +466,14 @@ module.exports = grammar({
       ...binary($, ['∧'], PREC.AND, 'right'),
       // The compiler rejects comparison chains semantically. Left association
       // here gives incomplete edits a stable CST instead of a grammar conflict.
-      ...binary($, ['=', '≠', '<=', '<'], PREC.COMPARE, 'left'),
+      ...binary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
-      ...binary($, ['+', '-', '++'], PREC.ADD, 'left'),
+      ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...binary($, ['*', '∙'], PREC.MUL, 'left'),
     ),
 
-    operator: _ => choice('+', '-', '++', '*', '&&', '||', '∙', '<=', '<'),
+    operator: _ => choice('+', '-', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

@@ -631,7 +631,7 @@ impl Parser {
                 msg: format!(
                     "`{name} as …` installs an operator SYMBOL as this binder's body \
                      spelling, and `as` can only install one that already lexes: the \
-                     curated table is `+`, `++`, `*`, `&&`, `||`, `∙`, `<=`, `<` \
+                     curated table is `+`, `++`, `*`, `&&`, `||`, `∙`, `⊔`, `≈`, `<=`, `<` \
                      (issues/notation-extensibility.md owns the lexicon)"
                 ),
                 span: asp.join(self.peek_span()),
@@ -2892,8 +2892,12 @@ impl Parser {
                     span: eq_span,
                 }
             }
-            TokKind::LtEq | TokKind::Lt => {
-                let sym = if matches!(self.peek(), TokKind::LtEq) { "<=" } else { "<" };
+            TokKind::LtEq | TokKind::Lt | TokKind::Approx => {
+                let sym = match self.peek() {
+                    TokKind::LtEq => "<=",
+                    TokKind::Approx => "≈",
+                    _ => "<",
+                };
                 self.bump();
                 let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
                 let span = lhs.span.join(rhs.span);
@@ -2901,12 +2905,12 @@ impl Parser {
             }
             _ => return Ok(lhs),
         };
-        const CHAIN: &str = "comparisons do not chain: `=`, `≠`, `<=` and `<` share one \
+        const CHAIN: &str = "comparisons do not chain: `=`, `≠`, `≈`, `<=` and `<` share one \
              non-associative level, so `a <= b <= c` has no reading. Write the two \
              comparisons separately, or parenthesise the one that is meant to be an \
              operand";
         match self.peek() {
-            TokKind::LtEq | TokKind::Lt | TokKind::Eq | TokKind::Ne => self.err(CHAIN),
+            TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Eq | TokKind::Ne => self.err(CHAIN),
             TokKind::EqEq => {
                 self.err(format!("{CHAIN} (and `==` is not used in Heather: equality is `=`)"))
             }
@@ -3185,6 +3189,7 @@ impl Parser {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
             TokKind::Plus => Some(("+", 5, 6)),
+            TokKind::Join => Some(("⊔", 5, 6)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
             // the shape `append`'s recursion unfolds against and the shape
@@ -3218,6 +3223,8 @@ impl Parser {
             TokKind::AmpAmp => Some("&&"),
             TokKind::PipePipe => Some("||"),
             TokKind::Bullet => Some("∙"),
+            TokKind::Join => Some("⊔"),
+            TokKind::Approx => Some("≈"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
             _ => None,
@@ -4762,6 +4769,28 @@ mod tests {
         let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
         assert_eq!(d.symbol, "-");
         assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
+    #[test]
+    fn relational_notation_precedence_and_non_chaining() {
+        let k = body("a⊔b⊔c≈d⊔e");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "≈");
+        let (join, left, _) = as_call(&args[0].kind);
+        assert_eq!(join, "⊔");
+        assert_eq!(as_call(&left[0].kind).0, "⊔");
+        assert_eq!(as_call(&args[1].kind).0, "⊔");
+        let k = body("a⊔b*c");
+        let (_, args, _) = as_call(&k);
+        assert_eq!(as_call(&args[1].kind).0, "*");
+        for expression in ["a≈b≈c", "a≈b=c", "a=b≈c"] {
+            let error = parse_file(&format!("fn f() -> Type {{ {expression} }}")).unwrap_err();
+            assert!(error.msg.contains("comparisons do not chain"), "{}", error.msg);
+        }
+        let k = body("f(≈, ⊔)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "≈"));
+        assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊔"));
     }
 
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------

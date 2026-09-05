@@ -1201,6 +1201,31 @@ impl application::ImplicitApplicationElab for Elaborator {
             .get(obligation.param)
             .map(|parameter| parameter.name.as_str())
             .unwrap_or("?");
+        let mut goal = params
+            .get(obligation.param)
+            .and_then(|parameter| parameter.solver.as_deref())
+            .map(traits::render_ty)
+            .unwrap_or_else(|| "a solver parameter".to_string());
+        let mut symbolic = false;
+        for p in params {
+            if let Some(symbol) = traits::op_index_symbol(&p.name)
+                && goal.contains(&p.name)
+            {
+                goal = goal.replace(&p.name, symbol);
+                symbolic = true;
+            }
+        }
+        if symbolic {
+            return ElabError::Elab {
+                msg: format!(
+                    "cannot infer the implicit arguments needed for `{goal}` in `{name}` \
+                     from this call: the expected type or a scoped constraint must pin \
+                     the indices before instance search can run. Supply the indices \
+                     explicitly with `@{name}(…)` or give an expected type that names them"
+                ),
+                span,
+            };
+        }
         if let Some(solver) = params
             .get(obligation.param)
             .and_then(|parameter| parameter.solver.as_deref())
@@ -1210,11 +1235,6 @@ impl application::ImplicitApplicationElab for Elaborator {
         {
             return self.value_slot_refusal(&class, name, None, span);
         }
-        let goal = params
-            .get(obligation.param)
-            .and_then(|parameter| parameter.solver.as_deref())
-            .map(traits::render_ty)
-            .unwrap_or_else(|| "a solver parameter".to_string());
         ElabError::Elab {
             msg: format!(
                 "the goal of `{parameter}` (`{goal}`) still mentions an implicit that \
@@ -3395,8 +3415,10 @@ impl Elaborator {
                 // stays as the fallback for skeleton-less expected types.
                 let suppress = matches!(&e.kind, ExprKind::Var(_))
                     && skel.is_some_and(|s| s.params.first().is_some_and(|b| b.implicit));
+                // Keep the named relation/application structure for inference;
+                // the expected-type solver performs its own reduction retry.
                 let (t, got, _) =
-                    self.elab_infer_at(cx, e, if suppress { None } else { Some(&head) })?;
+                    self.elab_infer_at(cx, e, if suppress { None } else { Some(expected) })?;
                 // The inferred type is *not* thrown away any more
                 // (`issues/check-fallback-discards-expected-type.md`): it is
                 // compared with what was expected, and a disagreement is
@@ -5367,8 +5389,8 @@ impl Elaborator {
     ///   layer-m goal solver can construct the call instead.
     ///
     /// - **The general harvest** (design §5.1), the else branch: unify the
-    ///   scratch-world result type against the whnf'd expected type,
-    ///   learn-only. This is the same call the LGG path makes as its step 1,
+    ///   scratch-world result type against the written expected type, then
+    ///   its weak head normal form, learn-only. This is the same call the LGG path makes as its step 1,
     ///   run also when the flex-`Id` trigger does not fire — the general rule
     ///   of which that harvest was the special case. It is what solves
     ///   `sym(?p)`'s endpoints and the bare polymorphic reference's type
@@ -5385,13 +5407,6 @@ impl Elaborator {
         meta_doms: &[Type],
         span: Span,
     ) -> R<()> {
-        // Both halves below read the expected type's *head*: the harvest
-        // unifies against it structurally, and the LGG trigger needs to see an
-        // `Id`. The checking fallback used to hand this function a reduced
-        // type; it no longer reduces an `El` at level 0 (a `RelId<Nat>(a, b)`
-        // that only δ-unfolds to `a = b` arrives as written), so the one
-        // reduction this consumer needs happens here, once.
-        let expected = &self.whnf(cx, expected, span)?;
         // The LGG trigger, read off the scratch-world result type.
         let flex = (|| {
             let Type::Id { lhs, rhs, .. } = result_ty else {
@@ -5430,7 +5445,11 @@ impl Elaborator {
         // solving result-only implicits in general *was*
         // elab-unifier-completeness's question, and this round answered it.
         let Some((m, s_raw, t_raw)) = flex else {
+            // Preserve named relations and operation applications before
+            // unfolding a transparent relation into its definition.
             unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
+            let head = self.whnf(cx, expected, span)?;
+            unify_ty(&cx.gamma, result_ty, &head, n, 0, sols);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -5439,6 +5458,8 @@ impl Elaborator {
         // subject in the committed one, exactly as at an argument's domain.
         sols[m] = Sol::Withheld;
         unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
+        let expected_head = self.whnf(cx, expected, span)?;
+        unify_ty(&cx.gamma, result_ty, &expected_head, n, 0, sols);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an
@@ -5446,7 +5467,7 @@ impl Elaborator {
         let (Some(s), Some(t)) = (zonked_tm(&s_raw, n, sols), zonked_tm(&t_raw, n, sols)) else {
             return Ok(());
         };
-        let Type::Id { lhs: x, rhs: y, .. } = expected.clone() else {
+        let Type::Id { lhs: x, rhs: y, .. } = expected_head else {
             return Ok(());
         };
         // The abstraction's domain is `?f`'s *declared* parameter type — the
