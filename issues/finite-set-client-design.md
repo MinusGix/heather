@@ -3,7 +3,7 @@ title: Validate relational abstraction through an ideal finite-set client
 status: open
 labels: [stdlib,setoids,transfer,ergonomics,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Design from client code before committing to lifting syntax or whole-interface
@@ -74,3 +74,5 @@ entry points remain candidates until compared with manual expansions.
   semantic dictionary equivalence must not silently replace exact parent views.
   No implementation or syntax freeze in this round.
 - 2026-09-04: Designed three tiny user experiences; simplified the client surface and made the permutation-valued cardinality repair explicit.
+- 2026-09-05: Promoted the idealized membership-bearing element move into docs/showcase/element_transport.hthr and docs/element-transport-round.md for kernel-checked validation, including genuinely different list indices and retained occurrence evidence.
+- 2026-09-05: The membership transport slice now checks: explicit maps between Element(xs) fibers, value laws, and a checked occurrence-sensitive counterexample. Full Furnace suite: 2,406 passed, 0 failed, 5 ignored; the standalone showcase passes CLI checking. Other finite-set clients remain open.

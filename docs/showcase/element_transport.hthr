@@ -1,0 +1,101 @@
+import logic;
+import nat;
+import list;
+import list_setoid;
+
+// The index says which collection this value belongs to.
+record Element<A>(xs: List<A>) { value: A, member: Mem(value, xs) }
+
+fn SameElement<A>(xs, ys: List<A>, e: Element<A>(xs), f: Element<A>(ys)) → Type {
+    e.value = f.value
+}
+
+fn move_element<A>(xs, ys: List<A>, same: SameMembers(xs, ys),
+    e: Element<A>(xs)) → Element<A>(ys)
+{
+    Element(value := e.value, member := same(e.value).mp(e.member))
+}
+
+theorem move_value<A>(xs, ys: List<A>, same: SameMembers(xs, ys), e: Element<A>(xs)):
+    move_element(xs, ys, same, e).value = e.value
+{ refl }
+
+// Compatibility compares outputs living in different fibers.
+theorem move_respects<A>(xs, ys, xs2, ys2: List<A>,
+    h: SameMembers(xs, ys), h2: SameMembers(xs2, ys2),
+    e: Element<A>(xs), e2: Element<A>(xs2), same: SameElement(xs, xs2, e, e2)):
+    SameElement(ys, ys2, move_element(xs, ys, h, e), move_element(xs2, ys2, h2, e2))
+{ same }
+
+theorem move_identity<A>(xs: List<A>, e: Element<A>(xs)):
+    SameElement(xs, xs, move_element(xs, xs, same_members_refl(xs), e), e)
+{ refl }
+
+theorem move_composition<A>(xs, ys, zs: List<A>,
+    h: SameMembers(xs, ys), k: SameMembers(ys, zs), e: Element<A>(xs)):
+    SameElement(zs, zs,
+        move_element(ys, zs, k, move_element(xs, ys, h, e)),
+        move_element(xs, zs, same_members_trans(xs, ys, zs, h, k), e))
+{ refl }
+
+theorem move_round_trip<A>(xs, ys: List<A>, h: SameMembers(xs, ys), e: Element<A>(xs)):
+    SameElement(xs, xs,
+        move_element(ys, xs, same_members_sym(xs, ys, h), move_element(xs, ys, h, e)), e)
+{ refl }
+
+theorem move_witness_independent<A>(xs, ys: List<A>,
+    h, k: SameMembers(xs, ys), e: Element<A>(xs)):
+    SameElement(ys, ys, move_element(xs, ys, h, e), move_element(xs, ys, k, e))
+{ refl }
+
+// A value-based theorem can be reused after changing the collection index.
+theorem move_property<A>(xs, ys: List<A>, h: SameMembers(xs, ys),
+    e: Element<A>(xs), P: A → Type, proof: P(e.value)):
+    P(move_element(xs, ys, h, e).value)
+{ proof }
+
+// These functions are transparent because the next client inspects evidence.
+fn collapse_duplicate<A>(x, a: A, member: Mem(a, [x, x])) → Mem(a, [x]) {
+    match member { Inl(eq) => Inl(eq), Inr(tail) => tail }
+}
+
+fn duplicate_first<A>(x: A) → SameMembers<A>([x], [x, x]) {
+    λ a => Iff(
+        mp := λ member => match member {
+            Inl(eq) => Inl(eq), Inr(impossible) => false_elim(impossible),
+        },
+        mpr := λ member => collapse_duplicate(x, a, member))
+}
+
+fn duplicate_second<A>(x: A) → SameMembers<A>([x], [x, x]) {
+    λ a => Iff(mp := λ member => Inr(member), mpr := λ member => collapse_duplicate(x, a, member))
+}
+
+fn selected_zero() → Element<Nat>([0]) { Element(0, Inl(refl)) }
+fn first_zero() → Element<Nat>([0, 0]) {
+    move_element<Nat>([0], [0, 0], duplicate_first(0), selected_zero())
+}
+fn second_zero() → Element<Nat>([0, 0]) {
+    move_element<Nat>([0], [0, 0], duplicate_second(0), selected_zero())
+}
+
+theorem same_selected_value(): SameElement<Nat>([0, 0], [0, 0], first_zero(), second_zero()) {
+    move_witness_independent<Nat>([0], [0, 0], duplicate_first(0), duplicate_second(0), selected_zero())
+}
+
+fn occurrence(e: Element<Nat>([0, 0])) → Nat {
+    match e.member { Inl(_) => 0, Inr(_) => 1 }
+}
+
+theorem first_occurrence(): occurrence(first_zero()) = 0 { refl }
+theorem second_occurrence(): occurrence(second_zero()) = 1 { refl }
+theorem different_occurrences(): occurrence(first_zero()) ≠ occurrence(second_zero()) {
+    zero_ne_succ(0)
+}
+
+theorem occurrence_cannot_ignore_membership(
+    respects: (e, f: Element<Nat>([0, 0])) → SameElement<Nat>([0, 0], [0, 0], e, f) →
+        occurrence(e) = occurrence(f)): False
+{
+    different_occurrences()(respects(first_zero(), second_zero(), same_selected_value()))
+}

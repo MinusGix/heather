@@ -1427,3 +1427,42 @@ fn omega_missing_library_requests_an_import() {
         error.render(source)
     );
 }
+
+#[test]
+fn dependent_element_transport_preserves_values_but_retains_membership() {
+    let mut e = base();
+    check(
+        &mut e,
+        "element_transport",
+        include_str!("../../../docs/showcase/element_transport.hthr"),
+    );
+    let reuse = "import list; import list_setoid; import element_transport;
+        fn invalid<A>(xs, ys: List<A>, h: SameMembers(xs, ys), e: Element<A>(xs)) → Element<A>(ys) { e }";
+    assert!(e.elab_module_source("invalid_fiber_reuse", reuse).is_err());
+    check(
+        &mut e,
+        "explicit_fiber_move",
+        &reuse.replace("{ e }", "{ move_element(xs, ys, h, e) }"),
+    );
+    let identity = "import list; import element_transport;
+        theorem invalid(): first_zero() = second_zero() { refl }";
+    assert!(
+        e.elab_module_source("invalid_membership_identity", identity)
+            .is_err()
+    );
+    let premise = "import list; import list_setoid; import element_transport;
+        theorem preserved<A>(xs, ys: List<A>, h: SameMembers(xs, ys), e: Element<A>(xs),
+            P: A → Type, proof: P(e.value)): P(move_element(xs, ys, h, e).value) {
+            move_property(xs, ys, h, e, P, proof)
+        }";
+    check(&mut e, "preserved_element_property", premise);
+    assert!(
+        e.elab_module_source(
+            "missing_element_property",
+            &premise
+                .replace(", proof: P(e.value)", "")
+                .replace("P, proof)", "P, refl)")
+        )
+        .is_err()
+    );
+}
