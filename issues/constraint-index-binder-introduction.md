@@ -55,3 +55,4 @@ this adds control over their names and local notation.
   and records this compact form as a proposed follow-up.
 - 2026-09-04: User agreed that `index as symbol` declares an implicit index while a bare name remains a reference. Implementation and detailed collision/dependency probes remain open.
 - 2026-09-05: [[relational-showcase-notation]] exercises the existing compact symbol-only form `Mergeable(≈, ⊔)`. This issue remains specifically about introducing chosen identifier names alongside those symbols; the symbol-only form does not supply `same` and `merge` identifiers.
+- 2026-09-05: Expected-goal inference for symbolic index binders is now checked in [[relational-index-inference-from-goals]]. Introducing chosen identifier names alongside symbols remains the scope of this open issue.

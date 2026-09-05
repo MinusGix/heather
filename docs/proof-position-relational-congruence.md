@@ -27,11 +27,27 @@ by [constraint-index-binder-introduction](../issues/constraint-index-binder-intr
 Default class notation is separately tracked by
 [class-default-operators](../issues/class-default-operators.md).
 
-Calls can reuse indices from a local `Mergeable` assumption. Inferring both
-indices solely from a concrete `SameMembers` conclusion is still incomplete;
-[the failing client is tracked explicitly](../issues/relational-index-inference-from-goals.md).
-The existing library theorem `merge_twice(same, merge, state, incoming)` remains
-the direct explicit-index interface for such clients.
+The expected conclusion can supply the relation and operation at a call:
+
+```heather
+theorem receive<A>(known, incoming: List<A>):
+    SameMembers<A>((known ++ incoming) ++ incoming, known ++ incoming)
+{ merge_twice_auto(known, incoming) }
+```
+
+Here the written conclusion pins `SameMembers<A>` and `append<A>`, and ordinary
+instance resolution supplies their `Mergeable` laws. With two structures in
+scope, the expected conclusion still selects the named relation and operation.
+A call whose result does not mention the indices still needs scoped evidence
+or an explicit choice; the carrier alone does not select them.
+
+This inference preserves named relation applications before reducing them and
+allows a generic declaration's leading type arguments. It does not reconstruct
+a relation from its unfolded definition or guess partial value applications.
+For example, a native identity conclusion alone does not nominate `RelId`.
+The library theorem `merge_twice(same, merge, state, incoming)` remains an
+explicit-index alternative. See [the inference issue](../issues/relational-index-inference-from-goals.md)
+for the checked cases and boundary.
 
 `⊔` associates left at additive precedence and binds tighter than `≈`.
 `≈` shares the non-associative comparison rung with `=`. Neither new symbol
