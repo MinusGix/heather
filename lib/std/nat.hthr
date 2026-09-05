@@ -203,28 +203,27 @@ theorem mul_comm(x, y: Nat): x * y = y * x {
 // The relation is a recursion into `Type`: `Le(3, 10)` reduces to `True`, so
 // closed comparisons compute without routing the specification through Bool.
 //
-// Curried, and not by preference: the uncurried spelling is refused, because
-// the inner `match` makes the recursive call vary both arguments and the guard
-// requires the descending one to pass unchanged (issues/ih-generalization.md).
-// `leb` and `sub` are curried for exactly this reason. Over-application means
-// `Le(n, m)` still writes at every call site, and does below.
+// Uncurried since 2026-09-05: the recursion is on `n` and the inner `match`
+// varies `m`, which the elaborator now generalizes into the motive
+// (docs/ih-generalization-design.md). `leb` and `sub` were curried for the
+// same reason and are uncurried the same way. A partial application `Le(n)`
+// still writes where a relation value is wanted.
 //
 // Falsity is `logic::False`, which coexists with `bool::False` the constructor
 // (issues/false-collides-with-bools-constructor.md). Two lines of this file
 // hold both readings and neither is qualified.
 
-fn Le(n: Nat) → Nat → Type {
+fn Le(n, m: Nat) → Type {
     match n {
-        Zero => λ (m: Nat) => True,
-        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => Le(k, l) },
+        Zero => True,
+        Succ(k) => match m { Zero => False, Succ(l) => Le(k, l) },
     }
 }
 
 // Strict order, as a definition and not a second recursion. `Lt(n, m)` is
 // `Le(Succ(n), m)`, so everything `Le` computes `Lt` computes, and the two
 // facts a reader most wants — `lt_succ_iff_le` and `lt_succ_self` — are
-// definitional (see below). It is uncurried because it is not recursive, so
-// nothing forces the shape.
+// definitional (see below).
 fn Lt(n, m: Nat) → Type { Le(Succ(n), m) }
 
 designation <= at Nat := Le
@@ -237,18 +236,18 @@ designation < at Nat := Lt
 // `leb` is `certgen_code`, where a Boolean is the subject rather than the
 // statement, which is exactly the role issues/class-ops-prop-vs-bool.md leaves
 // `Bool` in.
-fn leb(n: Nat) → Nat → Bool {
+fn leb(n, m: Nat) → Bool {
     match n {
-        Zero => λ (m: Nat) => True,
-        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k, l) },
+        Zero => True,
+        Succ(k) => match m { Zero => False, Succ(l) => leb(k, l) },
     }
 }
 
-// truncated subtraction, curried because both arguments descend together
-fn sub(m: Nat) → Nat → Nat {
+// truncated subtraction; both arguments descend together, `n` generalized
+fn sub(m, n: Nat) → Nat {
     match m {
-        Zero => λ (n: Nat) => Zero,
-        Succ(m2) => λ (n: Nat) => match n { Zero => Succ(m2), Succ(n2) => sub(m2, n2) },
+        Zero => Zero,
+        Succ(m2) => match n { Zero => Succ(m2), Succ(n2) => sub(m2, n2) },
     }
 }
 
@@ -379,47 +378,49 @@ theorem lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
       j(right, λ z q => (a < c) ↔ (a < z), iff_refl()))
 }
 
-theorem le_succ_r(n: Nat): (m: Nat) → n <= m → n <= Succ(m) {
+theorem le_succ_r(n, m: Nat): n <= m → n <= Succ(m) {
     match n {
-        Zero => λ m h => trivial,
-        Succ(_, ih) => λ m =>
+        Zero => λ h => trivial,
+        Succ(k) =>
             match m {
                 Zero => bad ⊢ false_elim(bad),
-                Succ(m2) => good ⊢ ih(m2, good),
+                Succ(m2) => good ⊢ le_succ_r(k, m2, good),
             },
     }
 }
 
 // Transitivity. Three nested case analyses and no arithmetic: the recursion is
-// on the leftmost argument, and the two inner `match`es exist only to expose
-// the successors that make the hypotheses reducible. Leaving the hypothesis
-// binders in checking position lets both inner matches infer their motives.
-theorem le_trans(n: Nat): (m: Nat) → (l: Nat) → n <= m → m <= l → n <= l {
+// on the leftmost argument, `m` and `l` are generalized into its motive
+// (docs/ih-generalization-design.md), and the two inner `match`es exist only
+// to expose the successors that make the hypotheses reducible. The hypotheses
+// stay behind the arrows: a parameter is not refined by an inner `match`, a
+// binder introduced after it is.
+theorem le_trans(n, m, l: Nat): n <= m → m <= l → n <= l {
     match n {
-        Zero => λ m l h1 h2 => trivial,
-        Succ(_, ih) => λ m l =>
+        Zero => λ h1 h2 => trivial,
+        Succ(k) =>
             match m {
                 Zero => λ bad b => false_elim(bad),
                 Succ(m2) => λ a =>
                     match l {
                         Zero => λ bad => false_elim(bad),
-                        Succ(l2) => λ c => ih(m2, l2, a, c),
+                        Succ(l2) => λ c => le_trans(k, m2, l2, a, c),
                     },
             },
     }
 }
 
-theorem le_antisym(n: Nat): (m: Nat) → n <= m → m <= n → n = m {
+theorem le_antisym(n, m: Nat): n <= m → m <= n → n = m {
     match n {
-        Zero => λ m =>
+        Zero =>
             match m {
                 Zero => λ a b => refl,
                 Succ(_) => λ a bad => false_elim(bad),
             },
-        Succ(_, ih) => λ m =>
+        Succ(k) =>
             match m {
                 Zero => λ bad b => false_elim(bad),
-                Succ(m2) => λ a b => cong_succ(ih(m2, a, b)),
+                Succ(m2) => λ a b => cong_succ(le_antisym(k, m2, a, b)),
             },
     }
 }
@@ -428,13 +429,13 @@ theorem le_antisym(n: Nat): (m: Nat) → n <= m → m <= n → n = m {
 // goal `Succ(k) <= Succ(m2) ∨ Succ(m2) <= Succ(k)` and the IH's
 // `k <= m2 ∨ m2 <= k` are the SAME type, so the step is `ih(m2)` with
 // no repackaging.
-theorem le_total(n: Nat): (m: Nat) → n <= m ∨ m <= n {
+theorem le_total(n, m: Nat): n <= m ∨ m <= n {
     match n {
-        Zero => λ m => Inl(trivial),
-        Succ(_, ih) => λ m =>
+        Zero => Inl(trivial),
+        Succ(k) =>
             match m {
                 Zero => Inr(trivial),
-                Succ(m2) => ih(m2),
+                Succ(m2) => le_total(k, m2),
             },
     }
 }
@@ -448,13 +449,13 @@ theorem le_total(n: Nat): (m: Nat) → n <= m ∨ m <= n {
 // `max_of(2, 5) = 5` stops being `refl`. Deciding is computation, whatever it
 // returns. Found by the kernel rejecting that very `refl` rather than by
 // reasoning; `logic::or_pick` carries the same note for the same reason.
-fn le_dec(n: Nat) → (m: Nat) → n <= m ∨ ¬(n <= m) {
+fn le_dec(n, m: Nat) → n <= m ∨ ¬(n <= m) {
     match n {
-        Zero => λ m => Inl(trivial),
-        Succ(_, ih) => λ m =>
+        Zero => Inl(trivial),
+        Succ(k) =>
             match m {
                 Zero => Inr(·),
-                Succ(m2) => ih(m2),
+                Succ(m2) => le_dec(k, m2),
             },
     }
 }
@@ -824,20 +825,21 @@ instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n, m) }
 // The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
 // rather than chosen. `le_add` is the forward half and was already here.
 
-// `Le(n, m)` gives the difference. Induction on `n` with `m` generalized.
-theorem le_add(n: Nat): (m: Nat) → n <= m → n + sub(m, n) = m {
+// `Le(n, m)` gives the difference. Induction on `n` with `m` generalized —
+// by the elaborator, since 2026-09-05.
+theorem le_add(n, m: Nat): n <= m → n + sub(m, n) = m {
     match n {
-        Zero => m hle ⊢
+        Zero => hle ⊢
             apply trans;
             give cong_nat(λ (x: Nat) => add(0, x), sub_zero(m));
             add_left_zero(m),
-        Succ(n2, ih) => m ⊢
+        Succ(n2) =>
             match m {
                 Zero => bad ⊢ false_elim(bad),
                 Succ(m2) => good ⊢
                     apply trans;
                     give add_succ_left(n2, sub(m2, n2));
-                    cong_succ(ih(m2, good)),
+                    cong_succ(le_add(n2, m2, good)),
             },
     }
 }

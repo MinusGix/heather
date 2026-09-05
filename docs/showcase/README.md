@@ -36,8 +36,8 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 
 | Idealized construct | What's missing | Owner |
 | --- | --- | --- |
-| `theorem compile_pushes_eval(e, rest, s)` with plain parameters | varying arguments force the returned-function statement + over-applied IHs | `issues/ih-generalization.md` |
-| `fn run(toks, s)` uncurried | same mechanism at `fn` level — the stack varies, so `run` curries it | `issues/ih-generalization.md` |
+| `theorem compile_pushes_eval(e, rest, s)` with plain parameters | **landed 2026-09-05**: a varying parameter is generalized into the motive by the elaborator (`docs/ih-generalization-design.md`); the realized file still writes the old shape until `issues/uncurried-recursions-library-sweep.md` | closed |
+| `fn run(toks, s)` uncurried | **landed 2026-09-05**, same mechanism at `fn` level | closed |
 | calc steps that reassociate `++` silently | monoid laws as an ambient simp set the chain applies where they obviously fire | `issues/grind-port.md`, `issues/lemma-selection-and-search.md` |
 | `:= compile_pushes_eval(l)` (endpoints fill the arguments) | unification-driven instantiation of a calc-step justification | `issues/elab-unifier-completeness.md` (nearest) |
 | no `cong_run` anywhere | congruence inferred from the goal's shape | `issues/congruence-by-anti-unification.md` |

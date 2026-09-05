@@ -1832,6 +1832,7 @@ impl Elaborator {
                             container: None,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
+                        generalized: crate::generalize::guard_gen(&acx, dec, None),
                     })
                 })
                 .or_else(|| env.outer_guard.clone());

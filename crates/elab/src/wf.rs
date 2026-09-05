@@ -943,6 +943,7 @@ impl Elaborator {
                                 container: container_ih.clone(),
                             },
                             rebind: None,
+                            generalized: crate::generalize::guard_gen(cx, dec, Some(span)),
                         })
                     })
                     .or_else(|| cx.guard.clone());

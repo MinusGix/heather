@@ -134,14 +134,18 @@ fn non_descending_self_call_rejected() {
 }
 
 #[test]
-fn varying_argument_rejected() {
-    // The documented MVP limitation: a non-decreasing argument that changes
-    // would need the motive to generalize it. Rejected with that explanation,
-    // not left to the kernel.
-    let msg = elab_err(
-        "fn loop(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k) => loop(k, Succ(n)) } }",
+fn varying_argument_generalized() {
+    // The MVP's documented limitation, lifted (issues/ih-generalization.md,
+    // docs/ih-generalization-design.md): a non-decreasing argument that
+    // changes is generalized into the motive. The refusal survives only where
+    // there is no goal to generalize from — tests/ih_generalization.rs holds
+    // that control and the rest of the acceptance.
+    elab_ok(
+        "fn loop(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k) => loop(k, Succ(n)) } }\n\
+         theorem loop_is_add(m: Nat, n: Nat): loop(m, n) = add(n, m) {\n\
+             match m { Zero => sym(add_zero(n)), Succ(k) => trans(loop_is_add(k, Succ(n)), sym(add_succ(n, k))) }\n\
+         }",
     );
-    assert!(msg.contains("unchanged"), "{msg}");
 }
 
 #[test]

@@ -352,10 +352,13 @@ fn in_language_transcriber() {
     // Two declines the retired Rust walker used to make, re-homed
     // (issues/retire-rust-transcriber.md stage 2). A non-structural self-call
     // never reaches the generator at all: the ELABORATOR refuses it, because
-    // the only recursion it lowers is the eliminator's.
+    // the only recursion it lowers is the eliminator's. (`tw(k, k)` was the
+    // control until 2026-09-05; a varying *non-decreasing* argument is
+    // structural now — docs/ih-generalization-design.md — so the call that
+    // fails to descend has to be the one that does not descend.)
     refuted(
         &mut e,
-        "fn tw(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => tw(k, k) } }",
+        "fn tw(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => tw(a, Succ(k)) } }",
         "a non-structural self-call",
     );
     // And a `Succ` arm without a self-call is now IN the fragment — a

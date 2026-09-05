@@ -110,6 +110,7 @@ pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod forded;
 mod gendefs;
+mod generalize;
 mod goal_combinators;
 mod goals;
 mod indexed;
@@ -3024,6 +3025,53 @@ impl Elaborator {
                 let (scrut_t, scrut_ty, scrut_lvl) = self
                     .elab_infer(cx, scrut)
                     .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
+                // A recursion whose self-calls vary a parameter generalizes it
+                // into the motive (docs/ih-generalization-design.md): the goal
+                // becomes a Π over the varied parameters, the arms are wrapped
+                // in the matching lambdas, and the recursor is applied back to
+                // the parameters. Only here, in checking position — the goal
+                // is what there is to generalize.
+                let dec = recursion::descends_on_param(cx, &scrut_t);
+                let positions = match dec {
+                    Some(dec) => self.varying_params(cx, arms, dec),
+                    None => Vec::new(),
+                };
+                if let Some(dec) = dec
+                    && !positions.is_empty()
+                {
+                    let (gen_ty, gen_lvl) =
+                        self.generalize_expected(cx, &positions, expected, lvl);
+                    let motive = matching::synthesize_motive(
+                        self, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
+                    );
+                    let arms = self.wrap_arms(cx, arms, &positions);
+                    let positions = Rc::new(positions);
+                    let mut gcx = cx.clone();
+                    gcx.generalized = Some(Rc::new(generalize::Generalization {
+                        dec,
+                        positions: Rc::clone(&positions),
+                        span: e.span,
+                    }));
+                    let elim = match eqbind {
+                        None => self.elab_match(
+                            &gcx,
+                            *form,
+                            *generated,
+                            &arms,
+                            scrut_t,
+                            &scrut_ty,
+                            &scrut_lvl,
+                            motive,
+                            gen_lvl,
+                            e.span,
+                        )?,
+                        Some(h) => self.elab_convoy(
+                            &gcx, *form, *generated, h, &arms, scrut_t, &scrut_ty, &scrut_lvl,
+                            motive, &gen_lvl, &gen_ty, e.span,
+                        )?,
+                    };
+                    return Ok(self.instantiate_generalized(cx, elim, gen_ty, &positions));
+                }
                 let motive = matching::synthesize_motive(
                     self, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span,
                 );

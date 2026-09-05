@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-18
+updated: 2026-09-05
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -333,3 +333,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   monomorphized arguments from exact parameter fields only after verified
   re-lowering, and recursive generated shape references invert by registry
   lookup; ambiguous cases retain `<…>`. Bench 106/106, suite 1979 → 1980.
+- 2026-09-05: [[ih-generalization]] landed and closed (docs/ih-generalization-design.md): elaborator-computed generalized motives; library uncurried; residue at [[uncurried-recursions-library-sweep]]. Next: [[termination-measures]].

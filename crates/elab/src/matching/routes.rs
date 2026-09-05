@@ -44,6 +44,10 @@ struct Convoy {
     /// own scrutinee — and so on down. Re-indexing at the scrutinee instead
     /// would slide every component by one and typecheck nowhere.
     lift: usize,
+    /// The recursion's generalized parameters, handed down unchanged
+    /// (`generalize.rs`): the arms of a nested `match` were wrapped by the
+    /// outer one, and their self-calls apply the same ih.
+    generalized: Option<Rc<Vec<usize>>>,
 }
 
 impl Convoy {
@@ -73,6 +77,7 @@ impl Convoy {
                 gamma: self.gamma.clone(),
             },
             rebind: None,
+            generalized: self.generalized.clone(),
         })
     }
 }
@@ -261,7 +266,6 @@ impl Elaborator {
             _ => return err("`Succ` binds `(k)` or `(k, ih)`", succ.span),
         };
         let (zero, succ_body) = (&zero.body, &succ.body);
-        let _ = span;
         // Does this match descend on one of the declaration's own parameters?
         // If so, self-calls in the arm become the ih. If not (a nested match on
         // some other term), the enclosing arm's guard — if any — still stands,
@@ -410,6 +414,7 @@ impl Elaborator {
                                     gamma: cx.gamma.clone(),
                                 },
                                 rebind: None,
+                                generalized: crate::generalize::guard_gen(cx, dec, Some(span)),
                             })
                         })
                         .or_else(|| cx.guard.clone());
@@ -529,6 +534,7 @@ impl Elaborator {
             gamma: gamma.clone(),
             tuple: tuple.shift_local(by),
             lift: preds.len() - 1,
+            generalized: g.generalized.clone(),
         })
     }
 

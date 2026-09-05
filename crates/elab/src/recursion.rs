@@ -145,8 +145,25 @@ pub(crate) fn elab_self_call(
     }
 
     let (args, spill) = args.split_at(positions.len());
+    // A generalized parameter that the call cannot pass — an implicit one at
+    // a call without `@` — has no argument to apply the ih to.
+    if let Some(generalized) = &guard.generalized
+        && let Some(&missing) = generalized.iter().find(|p| !positions.contains(p))
+    {
+        return err(
+            format!(
+                "`{name}` recurses at a varying value of its implicit parameter `{}`; \
+                 pass it explicitly (`@{name}(…)`) to make the recursive call",
+                self_ref.params[missing].0
+            ),
+            span,
+        );
+    }
     let mut descendant = 0usize;
     let mut cov_at = 0usize;
+    // Arguments at generalized positions, in position order: applied to the
+    // ih below, and checked there against its Π domains.
+    let mut varied: Vec<&Expr> = Vec::new();
     let order = {
         let mut order: Vec<usize> = (0..args.len()).collect();
         if let Some(decreasing) = positions.iter().position(|&position| position == guard.dec) {
@@ -155,6 +172,10 @@ pub(crate) fn elab_self_call(
         order
     };
     for (argument, position) in order.iter().map(|&index| (&args[index], positions[index])) {
+        if position != guard.dec && guard.generalized.as_ref().is_some_and(|g| g.contains(&position)) {
+            varied.push(argument);
+            continue;
+        }
         // Compare by binder for Nat and by term for Wf. Names are diagnostic
         // data only and cannot fake structural descent through shadowing.
         let (argument_term, _, _) = elab.infer_self_call_argument(cx, argument)?;
@@ -271,8 +292,11 @@ pub(crate) fn elab_self_call(
             err(
                 format!(
                     "recursive call to `{name}` must pass `{}` unchanged: the induction \
-                     hypothesis fixes every non-decreasing parameter (generalizing a \
-                     varying argument into the motive is not supported yet)",
+                     hypothesis fixes every non-decreasing parameter. A parameter is \
+                     generalized into the motive — so that a recursive call may vary it \
+                     — only when the `match` is checked against a known result type \
+                     and the varying call is visible in its arms \
+                     (docs/ih-generalization-design.md); here it was not",
                     self_ref.params[position].0
                 ),
                 argument.span,
@@ -307,6 +331,28 @@ pub(crate) fn elab_self_call(
                 level.clone(),
             )
         }
+    };
+    // The ih is a Π over the generalized parameters (in position order, which
+    // is `varied`'s order); the ordinary application engine checks each
+    // argument against its domain, so a varied argument at the wrong type is
+    // refused where it is written.
+    let (term, ty, level) = if varied.is_empty() {
+        (term, ty, level)
+    } else {
+        let generalized = guard.generalized.as_ref().expect("varied only fills at a generalized position");
+        let metas: Vec<ParamMeta> = generalized
+            .iter()
+            .map(|&p| ParamMeta {
+                name: self_ref.params[p].0.clone(),
+                implicit: self_ref.params[p].1,
+                is_type: false,
+                is_self: false,
+                skel: None,
+                solver: None,
+            })
+            .collect();
+        let varied: Vec<Expr> = varied.into_iter().cloned().collect();
+        application::apply_explicit(elab, cx, Some(name), Rc::new(metas), 0, term, ty, level, &varied)?
     };
     if spill.is_empty() {
         return Ok((term, ty, level));
@@ -357,6 +403,12 @@ pub(crate) struct Guard {
     /// pattern variable (`Bal(SNode(l, r))`), and the ih at descendant `t`
     /// lives at exactly that one. `None` for every non-indexed guard.
     pub(crate) rebind: Option<(usize, Vec<Rc<Term>>)>,
+    /// The parameters this recursion's motive **generalizes**, ascending
+    /// (`generalize.rs`; issues/ih-generalization.md). At each of them a
+    /// self-call may pass anything: the ih is a Π over these, in this order,
+    /// and the call applies it to the written arguments. `None` when nothing
+    /// is generalized, which is every recursion written before this existed.
+    pub(crate) generalized: Option<Rc<Vec<usize>>>,
 }
 
 /// The two arm shapes a self-call can sit in. They differ in how many
@@ -538,6 +590,7 @@ mod tests {
         cx.guard = Some(Rc::new(Guard {
             dec: 0,
             rebind: None,
+            generalized: None,
             kind: GuardKind::Nat {
                 preds: vec![1],
                 tuple: Term::Var(LocalVar(0)),

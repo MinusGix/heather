@@ -27,6 +27,11 @@ pub(crate) struct Cx {
     /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
     /// self-call has no induction hypothesis to become.
     pub(crate) guard: Option<Rc<Guard>>,
+    /// A `match` in checking position whose self-calls vary a parameter
+    /// plans its generalization here for the route that builds the arms'
+    /// guards (`generalize.rs`). Keyed by the `match`'s span, so it is inert
+    /// for every other `match` it is cloned into.
+    pub(crate) generalized: Option<Rc<crate::generalize::Generalization>>,
     /// `let` bindings in scope, outermost first. Not kernel binders: an alias
     /// is inlined at each use, so `Γ` is unchanged.
     pub(crate) aliases: Vec<Rc<Alias>>,
@@ -111,6 +116,7 @@ impl Cx {
             skels: vec![],
             selfref: None,
             guard: None,
+            generalized: None,
             aliases: vec![],
             tyvars: vec![],
             dicts: vec![],

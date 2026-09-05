@@ -233,10 +233,10 @@ fn foldr<A, B>(xs: List<A>, f: A → B → B, z: B) → B {
     }
 }
 
-fn foldl<A, B>(xs: List<A>, f: B → A → B) → B → B {
+fn foldl<A, B>(xs: List<A>, f: B → A → B, z: B) → B {
     match xs {
-        Nil => λ (z: B) => z,
-        Cons(h, t) => λ (z: B) => foldl(t, f, f(z, h)),
+        Nil => z,
+        Cons(h, t) => foldl(t, f, f(z, h)),
     }
 }
 
@@ -347,9 +347,9 @@ theorem list_fold_is_foldr<A, B>(f: A → B → B, z: B, xs: List<A>):
 // issues/ih-generalization.md, which the L1/L2 round could only rank from the
 // definition's shape because it proved nothing about it.
 //
-// That the definition is already curried is what makes this free: `foldl`'s own
-// spelling forced the workaround, and the workaround is exactly the shape the
-// laws want.
+// The laws still quantify `z` behind an arrow even though the definition is
+// uncurried now (2026-09-05): `foldl_append` at a fixed `z` is false, so
+// `(z: B) →` is what the law *is*, not a workaround.
 
 theorem foldl_append<A, B>(xs, ys: List<A>, f: B → A → B):
     (z: B) → foldl(xs ++ ys, f, z) = foldl(ys, f, foldl(xs, f, z))
@@ -403,8 +403,9 @@ theorem foldl_len<A>(xs: List<A>):
 // nothing in the library wants that yet, and when something does it is a
 // second function, not a replacement.
 //
-// `take`/`drop` are curried for the reason `nth` is: the index descends
-// alongside the list.
+// `take`/`drop` recurse on the list with the index varying alongside it —
+// generalized into the motive by the elaborator
+// (docs/ih-generalization-design.md).
 
 fn filter<A>(xs: List<A>, p: A → Bool) → List<A> {
     match xs {
@@ -416,20 +417,20 @@ fn filter<A>(xs: List<A>, p: A → Bool) → List<A> {
     }
 }
 
-fn take<A>(xs: List<A>) → Nat → List<A> {
+fn take<A>(xs: List<A>, n: Nat) → List<A> {
     match xs {
-        Nil => λ (n: Nat) => Nil,
-        Cons(h, t) => λ (n: Nat) => match n {
+        Nil => Nil,
+        Cons(h, t) => match n {
             Zero => Nil,
             Succ(k) => Cons(h, take(t, k)),
         },
     }
 }
 
-fn drop<A>(xs: List<A>) → Nat → List<A> {
+fn drop<A>(xs: List<A>, n: Nat) → List<A> {
     match xs {
-        Nil => λ (n: Nat) => Nil,
-        Cons(h, t) => λ (n: Nat) => match n {
+        Nil => Nil,
+        Cons(h, t) => match n {
             Zero => Cons(h, t),
             Succ(k) => drop(t, k),
         },
@@ -598,9 +599,8 @@ theorem zip_map_fst<A, B>(xs: List<A>):
 }
 
 // The `Nil` arm splits `ys` and both `zip`'s do not, which is not symmetry
-// lost: at `xs = Nil` the goal is `Nil = take(ys, 0)`, and `take` is curried in
-// its index (issues/ih-generalization.md), so it steps only once its LIST is a
-// constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
+// lost: at `xs = Nil` the goal is `Nil = take(ys, 0)`, and `take` recurses on
+// its LIST, so it steps only once that is a constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
 theorem zip_map_snd<A, B>(xs: List<A>):
     (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, xs.len())
 {
@@ -797,23 +797,20 @@ fn List::last<A>(self xs: List<A>) → Option<A> {
     }
 }
 
-// Curried in the index for the reason every two-argument recursion in this
-// repo is: the termination checker wants one decreasing argument with the
-// rest fixed, so the argument that varies with the recursion is returned as a
-// function instead. Call sites write `xs.nth(i)`: the receiver reaches the
-// member through the type and the index spills into the curried tail
-// (issues/type-owned-members-receiver-slice.md,
-// issues/call-site-overapplication.md).
-fn List::nth<A>(self xs: List<A>) → Nat → Option<A> {
+// The index varies with the recursion on the list and is generalized into
+// the motive (docs/ih-generalization-design.md). Call sites write
+// `xs.nth(i)`: the receiver reaches the member through the type
+// (issues/type-owned-members-receiver-slice.md).
+fn List::nth<A>(self xs: List<A>, i: Nat) → Option<A> {
     match xs {
-        Nil => λ (i: Nat) => None,
-        Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t, k) },
+        Nil => None,
+        Cons(h, t) => match i { Zero => Some(h), Succ(k) => nth(t, k) },
     }
 }
 
 // Inside `xs`, `append` changes nothing. The index varies with the recursion,
-// so the statement is a function of it and every use is an over-application
-// (issues/ih-generalization.md's workaround).
+// so the statement quantifies it behind the arrow and every use is an
+// over-application (issues/call-site-overapplication.md).
 theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
     (i: Nat, a: A) → xs.nth(i) = Some(a) → (xs ++ ys).nth(i) = Some(a)
 {
