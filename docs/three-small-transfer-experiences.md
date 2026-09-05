@@ -160,6 +160,12 @@ Existing `BoundedList` already uses this pattern: relevant contents and a
 squashed fit condition, reconstructed using `squash_map`. This proposal brings
 that library pattern to expected-result elaboration.
 
+The [first checked subtype customer](positive-subtype-round.md) now demonstrates
+explicit construction, closure evidence, and inherited algebraic laws using an
+ordinary relevant record and value-based comparison. The squashed subset
+syntax and expected-result construction proposed here remain separate next
+steps.
+
 The negative control is `fn bad(x: PositiveNat) → PositiveNat { 0 }`:
 it must fail. There is no inserted runtime test or newly assumed premise.
 

@@ -165,3 +165,32 @@ fn the_reader_still_wins_where_a_head_exists() {
     );
     assert_eq!(gs[0].0, "Nat");
 }
+
+#[test]
+fn registered_record_projections_keep_field_and_receiver_names() {
+    let src = r#"
+record Inner { value: Nat, valid: value = value }
+record Outer { left: Inner, right: Inner, valid: left.value = right.value }
+theorem compare(x: Outer): x.left.value = x.right.value { ?comparison }
+"#;
+    let reports = goals(src);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].0, "x.left.value = x.right.value");
+}
+
+#[test]
+fn record_projection_display_respects_a_nested_binder() {
+    let src = r#"
+record Entry { first: Nat, second: Nat, valid: first = second }
+theorem compare(x: Entry): (y: Entry) → x.second = y.first { ?comparison }
+"#;
+    let reports = goals(src);
+    assert_eq!(reports.len(), 1);
+    let statement = &reports[0].0;
+    assert!(statement.contains("x.second"), "{statement}");
+    assert!(
+        !statement.contains("app(") && !statement.contains("Σ"),
+        "{statement}"
+    );
+    assert!(statement.contains(".first"), "{statement}");
+}

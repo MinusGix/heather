@@ -25,11 +25,15 @@ class Idempotent<A>(same: A → A → Type, op: A → A → A) {
     idem: (x: A) → same(op(x, x), x),
 }
 
+class Semigroup<A>(same: A → A → Type, op: A → A → A)
+    extends Equivalence<A>(same), Respects2<A, A, A>(same, same, same, op),
+            Associative<A>(same, op)
+{}
+
 // A named composition, not a second copy of each law. Independent law classes
 // remain useful to clients that do not require the complete interface.
 class Mergeable<A>(same: A → A → Type, merge: A → A → A)
-    extends Equivalence<A>(same), Respects2<A, A, A>(same, same, same, merge),
-            Associative<A>(same, merge), Commutative<A>(same, merge),
+    extends Semigroup<A>(same, merge), Commutative<A>(same, merge),
             Idempotent<A>(same, merge)
 {}
 

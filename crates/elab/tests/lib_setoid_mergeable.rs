@@ -1128,3 +1128,105 @@ theorem escaped<A>(same: A → A → Type, x, y: A, h: same(x, y)): x ≈ y { h 
         .unwrap_err();
     assert!(error.render(source).contains("no fallback name"));
 }
+
+const POSITIVE_SUBTYPE: &str = include_str!("../../../docs/showcase/positive_subtype.hthr");
+
+fn positive_subtype_base() -> Elaborator {
+    let mut e = base();
+    check(&mut e, "positive_subtype", POSITIVE_SUBTYPE);
+    e
+}
+
+#[test]
+fn positive_subtype_transfers_addition_and_semigroup_laws() {
+    positive_subtype_base();
+}
+
+#[test]
+fn positive_subtype_missing_closure_is_a_resumable_goal() {
+    let mut e = positive_subtype_base();
+    let source = r#"
+import nat;
+import positive_subtype;
+fn add_missing(x, y: PositiveNat) -> PositiveNat {
+    PositiveNat(value := x.value + y.value, valid := ?valid)
+}
+"#;
+    let error = e.elab_module_source("missing_closure", source).unwrap_err();
+    let message = error.render(source);
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = &error else {
+        panic!("expected a closure goal: {message}");
+    };
+    assert_eq!(goals.len(), 1, "{message}");
+    assert!(goals[0].name.contains("valid"), "{message}");
+    assert!(
+        goals[0].statement.contains("x.value") && goals[0].statement.contains("y.value"),
+        "{message}"
+    );
+    for input in ["x", "y"] {
+        assert!(
+            goals[0]
+                .context
+                .iter()
+                .any(|(name, ty)| name == input && ty.contains("PositiveNat")),
+            "{message}"
+        );
+    }
+    let repaired = source.replace(
+        "valid := ?valid)",
+        "valid := ?valid)\n    on ?valid := add_positive(x.value, y.value, x.valid);",
+    );
+    check(&mut e, "repaired_closure", &repaired);
+    let wrong = repaired.replace("add_positive(x.value, y.value, x.valid)", "x.valid");
+    assert!(e.elab_module_source("wrong_closure", &wrong).is_err());
+}
+
+#[test]
+fn positive_subtype_zero_requires_impossible_evidence() {
+    let mut e = positive_subtype_base();
+    let source = r#"
+import positive_subtype;
+fn zero_unit() -> PositiveNat { PositiveNat(value := 0, valid := ?valid) }
+"#;
+    let error = e.elab_module_source("missing_zero", source).unwrap_err();
+    let message = error.render(source);
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = &error else {
+        panic!("expected a zero-positivity goal: {message}");
+    };
+    assert_eq!(goals.len(), 1, "{message}");
+    assert!(goals[0].name.contains("valid"), "{message}");
+    assert!(
+        goals[0].statement.contains("0") || goals[0].statement.contains("False"),
+        "{message}"
+    );
+    let wrong = source.replace("?valid", "trivial");
+    assert!(e.elab_module_source("invalid_zero", &wrong).is_err());
+}
+
+#[test]
+fn positive_subtype_does_not_identify_stored_evidence() {
+    let mut e = positive_subtype_base();
+    let source = r#"
+import nat;
+import positive_subtype;
+theorem proof_identity(n: Nat, p, q: 0 < n):
+    PositiveNat(n, p) = PositiveNat(n, q) { refl }
+"#;
+    assert!(e.elab_module_source("proof_identity", source).is_err());
+}
+
+#[test]
+fn positive_subtype_still_requires_an_explicit_constructor() {
+    let mut e = positive_subtype_base();
+    let source = r#"
+import nat;
+import positive_subtype;
+fn raw_add(x, y: PositiveNat) -> PositiveNat { x.value + y.value }
+"#;
+    let error = e.elab_module_source("raw_add", source).unwrap_err();
+    let message = error.render(source);
+    assert!(
+        message.contains("Nat") && message.contains("PositiveNat"),
+        "{message}"
+    );
+}

@@ -3,7 +3,7 @@ title: Lift subtype operations and compare evidence policies
 status: open
 labels: [stdlib,subtypes,proofs,transfer,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Make closure under an operation sufficient input to generate the corresponding
@@ -61,3 +61,5 @@ This probe does not settle all subtype evidence policies.
 
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
 - 2026-09-04: Added the tiny positive-natural experience and its proposed expected-result adaptation, with an explicit squash-preserving expansion.
+- 2026-09-05: Started [[positive-subtype-manual-round]]: an explicit positive-natural record, closure proof, and inherited semigroup laws provide the first checked customer. This manual round uses relevant evidence and value-based comparison; wrapper generation and the broader evidence-policy comparison remain here.
+- 2026-09-05: The first explicit customer is complete in [[positive-subtype-manual-round]]: positive addition and semigroup laws check, with resumable closure goals and value-based comparison. Automatic result construction, heterogeneous/general transfer, evidence-policy comparisons, and cost measurements remain open here.

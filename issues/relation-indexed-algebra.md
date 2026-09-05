@@ -3,7 +3,7 @@ title: Make algebraic theories generic over their equality relation
 status: open
 labels: [stdlib,mathematics,algebra,setoids,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Decision: reusable algebraic theory should be relation-indexed. The current
@@ -115,3 +115,4 @@ style. **[[algebraic-theory-composition]]** owns its underlying dictionary rules
 - 2026-09-04: User selected existing `extends` syntax and agreed the declaring-slot rule for named implicit indices; no class-composition syntax change is planned.
 - 2026-09-04: **[[manual-mergeable-round]]** completed with a checked showcase and full-suite validation; the full identity-hierarchy migration remains open here.
 - 2026-09-04: Recorded the user-preferred individual-law instance authoring style and explicit composite assembly; generic migration remains a follow-up probe.
+- 2026-09-05: [[positive-subtype-manual-round]] adds the relation-indexed Semigroup composition and makes Mergeable extend it; the positive-natural customer reuses its laws through value-based comparison.

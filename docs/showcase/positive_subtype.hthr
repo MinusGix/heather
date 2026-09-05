@@ -1,0 +1,82 @@
+// A subtype made from an ordinary record, with ordinary relevant evidence.
+import logic;
+import nat;
+import relation_props;
+import algebra_rel;
+
+record PositiveNat { value: Nat, valid: 0 < value }
+
+// Algebra compares the numbers, without comparing their stored proofs.
+fn SameValue(x, y: PositiveNat) → Type { x.value = y.value }
+
+theorem same_value_with_other_evidence(n: Nat, p, q: 0 < n):
+    SameValue(PositiveNat(n, p), PositiveNat(n, q))
+{ refl }
+
+// A stronger closure fact: only the left number needs to be positive.
+theorem add_positive(n, m: Nat, positive: 0 < n): 0 < n + m {
+    le_trans(1, n, n + m, positive, le_add_l(n, m))
+}
+
+fn positive_add(x, y: PositiveNat) → PositiveNat {
+    PositiveNat(
+        value := x.value + y.value,
+        valid := add_positive(x.value, y.value, x.valid))
+}
+
+// The computation rule is definitional; no casts are involved.
+theorem positive_add_value(x, y: PositiveNat):
+    positive_add(x, y).value = x.value + y.value
+{ refl }
+
+// The ambient theorem supplies the subtype law directly.
+theorem positive_add_assoc(x, y, z: PositiveNat):
+    SameValue(positive_add(positive_add(x, y), z),
+        positive_add(x, positive_add(y, z)))
+{ add_assoc(x.value, y.value, z.value) }
+
+theorem positive_add_respects(x, x2: PositiveNat, hx: SameValue(x, x2),
+    y, y2: PositiveNat, hy: SameValue(y, y2)):
+    SameValue(positive_add(x, y), positive_add(x2, y2))
+{
+    j(hx, λ n h => x.value + y.value = n + y2.value,
+        j(hy, λ m h => x.value + y.value = x.value + m, refl))
+}
+
+instance Semigroup<PositiveNat>(SameValue, positive_add) {
+    rel_refl := λ x => refl,
+    rel_sym := λ x y h => sym(h),
+    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
+    respects2 := positive_add_respects,
+    assoc := positive_add_assoc,
+}
+
+// These meanings are explicitly designated for this carrier. The + inside
+// positive_add still acts on Nat because its operands are .value projections.
+designation + at PositiveNat := positive_add
+designation ≈ at PositiveNat := SameValue
+
+fn twice(x: PositiveNat) → PositiveNat { x + x }
+
+theorem twice_value(x: PositiveNat): twice(x).value = x.value + x.value
+{ refl }
+
+// An ordinary semigroup client can rewrite inside another operation.
+theorem reassociate_inside<A: Semigroup(≈, ∙)>(a, b, c, d: A):
+    ((a ∙ b) ∙ c) ∙ d ≈ (a ∙ (b ∙ c)) ∙ d
+{ rel_cong(A.assoc(a, b, c)) }
+
+theorem group_positive_sum(a, b, c, d: PositiveNat):
+    ((a + b) + c) + d ≈ (a + (b + c)) + d
+{ reassociate_inside(a, b, c, d) }
+
+// The source theorem's domain hypothesis is supplied by the record.
+theorem positive_value_is_not_zero(x: PositiveNat): x.value ≠ 0 {
+    ne_of_gt(x.value, 0, x.valid)
+}
+
+theorem zero_is_not_positive(): ¬(0 < 0) { lt_irrefl(0) }
+
+theorem one_plus_two():
+    positive_add(PositiveNat(1, trivial), PositiveNat(2, trivial)).value = 3
+{ refl }

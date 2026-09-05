@@ -452,6 +452,25 @@ impl Speller<'_> {
         }
         args.reverse();
 
+        // Closed record projections have a nominal generated-definition key.
+        // Recover only the single-receiver form; do not unfold definitions or
+        // guess how an applied function-valued field hides implicit arguments.
+        if let Term::GlobalTm { var, subst } = head
+            && subst.terms.is_empty()
+            && let [receiver] = args.as_slice()
+            && let Some(crate::gendefs::GenDef::RecProj(tag, field)) = self.el.gen_def_of(*var)
+            && let Some(record) = self.el.types.by_tag(tag)
+            && record.is_record
+            && let Some((Some(name), _)) = record.ctors[0].fields.get(field)
+        {
+            let shown = self.tm(receiver, d + 1);
+            return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. }) {
+                format!("{shown}.{name}")
+            } else {
+                format!("({shown}).{name}")
+            };
+        }
+
         let (name, implicit) = match head {
             Term::GlobalTm { var, subst } => match self.global(*var, subst) {
                 Some((n, imp)) => (n, imp),
