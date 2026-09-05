@@ -3625,6 +3625,22 @@ impl Elaborator {
                 level,
             ));
         }
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "emit_code")
+            && !self.shadowed(cx, "emit_code")
+            && self.ctor_here(cx, "emit_code").is_none()
+        {
+            if args.len() != 1 || !named.is_empty() {
+                return err("`emit_code` takes one positional meta function name", e.span);
+            }
+            return self.elab_emit_code(cx, &args[0], e.span);
+        }
         if matches!(e.as_named(), Some(("rel_cong", _, false)))
             && !self.shadowed(cx, "rel_cong")
             && self.ctor_here(cx, "rel_cong").is_none()

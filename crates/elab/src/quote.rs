@@ -840,6 +840,70 @@ impl Elaborator {
         Ok(term)
     }
 
+    /// Explicitly run a context-only code template at an ordinary use site.
+    /// Arguments to its payload remain ordinary, checked applications.
+    pub(crate) fn elab_emit_code(
+        &self,
+        cx: &Cx,
+        source: &Expr,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        if cx.meta.is_some() {
+            return err("`emit_code` requires an ordinary program context", span);
+        }
+        let ExprKind::Var(name) = &source.kind else {
+            return err("`emit_code` expects a named meta function", source.span);
+        };
+        if cx.names.iter().any(|local| local == name)
+            || cx.aliases.iter().any(|local| local.name == *name)
+            || cx.selfref.as_ref().is_some_and(|local| local.name == *name)
+        {
+            return err(
+                "`emit_code` expects a meta function, not a local value",
+                source.span,
+            );
+        }
+        let md = self
+            .key_of(name)
+            .and_then(|key| self.meta_programs.by_key(&key))
+            .ok_or_else(|| ElabError::Elab {
+                msg: format!("`{name}` does not resolve to one visible meta function"),
+                span: source.span,
+            })?;
+        let (term, stmt) = md.at(self.psi.bindings.len());
+        if !matches!(&*stmt, Type::CtxPi { body, .. } if matches!(&**body, Type::CodeTm { .. })) {
+            return err(
+                "`emit_code` requires exactly one Ctx parameter and a Code result; put value parameters inside the code payload",
+                source.span,
+            );
+        }
+        let evaluated = self.whnf_tm(
+            cx,
+            &Term::CtxApp {
+                fun: term,
+                ctx: cx.gamma.clone(),
+            },
+            span,
+        )?;
+        let Term::BoxTm(payload) = &*evaluated else {
+            return err("`emit_code` did not evaluate to a box", span);
+        };
+        let oracle = self.semantic_oracle();
+        let (ty, level) = typing::infer_term(
+            oracle.world(),
+            0,
+            Layer::Prog,
+            &cx.gamma,
+            payload,
+            self.fuel,
+        )
+        .map_err(|_| ElabError::Elab {
+            msg: "emitted code does not type at this use site".into(),
+            span,
+        })?;
+        Ok(((**payload).clone(), ty, level))
+    }
+
     /// A `$name` splice in *term* position inside a payload: a reference to
     /// its letbox-bound global, `u^{wk^{|Γ|}_g}`.
     pub(crate) fn elab_splice(&self, cx: &Cx, inner: &Expr, span: Span) -> R<(Term, Type, Level)> {

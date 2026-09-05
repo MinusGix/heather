@@ -315,6 +315,18 @@ fn consecutive_direct_calls_prefer_one_argument_list() {
 }
 
 #[test]
+fn template_emission_does_not_suggest_invalid_call_flattening() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "meta fn identity(g: Ctx) -> Code(g |- Nat -> Nat) {
+        code { fun (n: Nat) => n }
+    }
+    fn use_it(n: Nat) -> Nat { emit_code(identity)(n) }";
+    let errors = e.check_source(src);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(e.take_warnings().iter().all(|w| w.lint != Lint::NestedCall));
+}
+
+#[test]
 fn staged_or_computed_function_values_are_not_nested_call_style() {
     let src = "
         fn staged(f: Nat → Nat → Nat) → Nat { let g = f(0); g(1) }

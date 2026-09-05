@@ -34,6 +34,115 @@ fn base() -> Elaborator {
 }
 
 #[test]
+fn explicit_subtype_template_builds_positive_addition() {
+    let mut e = positive_subtype_base();
+    check(
+        &mut e,
+        "subtype_code",
+        include_str!("../../../lib/subtype_code.hthr"),
+    );
+    check(&mut e, "subtype", include_str!("../../../lib/subtype.hthr"));
+    check(
+        &mut e,
+        "lift_positive",
+        include_str!("../../../docs/showcase/lift_positive.hthr"),
+    );
+    let missing = "import nat; import positive_subtype; import subtype; import lift_positive;
+        fn pending(x, y: PositiveNat) → PositiveNat {
+            lift_binary(positive_repr(), add, ?closure, x, y)
+        }";
+    let error = e
+        .elab_module_source("packaged_missing", missing)
+        .unwrap_err();
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = error else {
+        panic!("expected a packaged closure goal");
+    };
+    assert_eq!(goals.len(), 1);
+    let repaired = missing.replace(
+        "?closure, x, y)",
+        "?closure, x, y)\n on ?closure := positive_add_closed;",
+    );
+    check(&mut e, "packaged_repaired", &repaired);
+    let changes_value = include_str!("../../../docs/showcase/lift_positive.hthr").replace(
+        "λ n p => PositiveNat(n, p)",
+        "λ n p => PositiveNat(1, trivial)",
+    );
+    assert!(
+        e.elab_module_source("invalid_projection", &changes_value)
+            .is_err()
+    );
+}
+
+#[test]
+fn emitted_subtype_closure_is_resumable_and_checked() {
+    let mut e = positive_subtype_base();
+    check(
+        &mut e,
+        "subtype_code",
+        include_str!("../../../lib/subtype_code.hthr"),
+    );
+    let source = r#"
+import nat;
+import positive_subtype;
+import subtype_code;
+fn lifted(x, y: PositiveNat) -> PositiveNat {
+    emit_code(lift_binary_code)(Nat, PositiveNat, λ n => 0 < n,
+        λ z => z.value, λ n p => PositiveNat(n, p), add,
+        ?closure, x, y)
+}
+
+
+"#;
+    let error = e.elab_module_source("missing_lift", source).unwrap_err();
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = &error else {
+        panic!("{}", error.render(source));
+    };
+    assert_eq!(goals.len(), 1);
+    assert!(goals[0].name.contains("closure"));
+    let repair = source.replace(
+        "?closure, x, y)",
+        "?closure, x, y)\n on ?closure := λ a b => add_positive(a.value, b.value, a.valid);",
+    );
+    check(&mut e, "repaired_lift", &repair);
+    let wrong = repair.replace("add_positive(a.value, b.value, a.valid)", "a.valid");
+    assert!(e.elab_module_source("wrong_lift", &wrong).is_err());
+    let zero = repair.replace(", add,", ", λ a b => 0,");
+    assert!(e.elab_module_source("zero_lift", &zero).is_err());
+}
+
+#[test]
+fn omega_proves_positive_subtype_closure() {
+    let mut e = positive_subtype_base();
+    for (name, source) in [
+        (
+            "subtype_code",
+            include_str!("../../../lib/subtype_code.hthr"),
+        ),
+        ("subtype", include_str!("../../../lib/subtype.hthr")),
+        (
+            "lift_positive",
+            include_str!("../../../docs/showcase/lift_positive.hthr"),
+        ),
+        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
+        ("int", include_str!("../../../lib/std/int.hthr")),
+        ("omega", include_str!("../../../lib/std/omega.hthr")),
+    ] {
+        check(&mut e, name, source);
+    }
+    check(
+        &mut e,
+        "positive_omega",
+        include_str!("../../../docs/showcase/positive_omega.hthr"),
+    );
+    let false_goal = "import nat; import logic; import int; import list; import omega;
+        theorem impossible(): 0 < 0 { omega }";
+    assert!(
+        e.elab_module_source("omega_positive_zero", false_goal)
+            .is_err()
+    );
+}
+
+#[test]
 fn composed_context_showcase_checks() {
     let mut e = base();
     check(

@@ -78,6 +78,22 @@ This probe does not settle all subtype evidence policies.
 
 ## Log
 
+- 2026-09-05: Started [[packaged-subtype-representation]] to share representation
+  ingredients and exercise existing Omega closure. It exposed
+  [[omega-local-proof-aliases]], [[omega-certificate-imports]], and
+  [[lambda-predicate-index-inference]]; these remain separate follow-ups.
+- 2026-09-05: [[packaged-subtype-representation]] completed: one representation
+  supplies both lift interfaces, with resumable closure and a checked Omega
+  customer. Full Furnace suite: 2,375 passed, 0 failed, 5 ignored. Automatic
+  fact collection and broader closure discovery remain open.
+
+- 2026-09-05: Started [[explicit-subtype-code-template]] for the binary wrapper
+  and projection proof. Automatic closure search and broader transfer remain here.
+- 2026-09-05: [[explicit-subtype-code-template]] completed with Heather templates,
+  explicit closure evidence, and resumable goals. Final Furnace suite: 2,374
+  passed, 0 failed, 5 ignored. This closes the explicit emission slice; automatic
+  ingredient/closure discovery and the broader evidence-policy work remain open.
+
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
 - 2026-09-04: Added the tiny positive-natural experience and its proposed expected-result adaptation, with an explicit squash-preserving expansion.
 - 2026-09-05: Started [[positive-subtype-manual-round]]: an explicit positive-natural record, closure proof, and inherited semigroup laws provide the first checked customer. This manual round uses relevant evidence and value-based comparison; wrapper generation and the broader evidence-policy comparison remain here.

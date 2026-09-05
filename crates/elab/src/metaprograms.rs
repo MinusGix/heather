@@ -55,6 +55,10 @@ pub(crate) struct MetaPrograms {
 }
 
 impl MetaPrograms {
+    pub(crate) fn by_key(&self, key: &str) -> Option<&MetaDef> {
+        self.definitions.get(key)
+    }
+
     pub(crate) fn definition(&self, module: &str, name: &str) -> Option<&MetaDef> {
         self.definitions.get(&qkey(module, name))
     }

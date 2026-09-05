@@ -1,0 +1,39 @@
+import nat;
+import positive_subtype;
+import subtype;
+
+// Describe the representation once, including its actual constructor law.
+fn Positive(n: Nat) → Type { 0 < n }
+
+fn positive_repr() → SubtypeRepr<Nat, PositiveNat>(Positive) {
+    SubtypeRepr(
+        project := λ x => x.value,
+        pack := λ n p => PositiveNat(n, p),
+        holds := λ x => x.valid,
+        project_pack := λ n p => refl)
+}
+
+theorem positive_add_closed(x, y: PositiveNat): 0 < x.value + y.value {
+    add_positive(x.value, y.value, x.valid)
+}
+
+// The ordinary interface infers the carrier types and invariant from the record.
+// Its implementation invokes the Heather code template.
+fn lifted_add(x, y: PositiveNat) -> PositiveNat {
+    lift_binary(positive_repr(), add, positive_add_closed, x, y)
+}
+
+theorem lifted_add_value(x, y: PositiveNat):
+    lifted_add(x, y).value = x.value + y.value
+{
+    lift_binary_value(positive_repr(), add, positive_add_closed, x, y)
+}
+
+theorem agrees_with_manual(x, y: PositiveNat):
+    SameValue(lifted_add(x, y), positive_add(x, y))
+{ refl }
+
+// Laws still transfer by ordinary checking through the generated wrapper.
+theorem lifted_add_assoc(x, y, z: PositiveNat):
+    SameValue(lifted_add(lifted_add(x, y), z), lifted_add(x, lifted_add(y, z)))
+{ add_assoc(x.value, y.value, z.value) }
