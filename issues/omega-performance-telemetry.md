@@ -4,7 +4,7 @@ status: open
 labels: [proofs,performance,arithmetic,testing]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Turn Omega's existing audit data into explicit scaling rails. Measure total and
@@ -41,3 +41,4 @@ division auxiliaries, and repeated shared opaque atoms.
 ## Log
 
 - 2026-09-04: Sibling filed 2026-09-04: [[omega-per-goal-elaboration-cost]] owns attributing and reducing the tens of seconds one ordinary linear goal (cutsat_left_cut, 55 s) takes to elaborate; this issue stays the rails that detect regression.
+- 2026-09-05: OmegaReport grew a 'phases' field (OmegaPhases, per-invocation wall time by phase) in the [[omega-per-goal-elaboration-cost]] round, 2026-09-05; the counts this issue owns are untouched.

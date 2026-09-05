@@ -174,7 +174,10 @@ impl SemanticSession {
         }
 
         let delta = match elab.check_module_delta(&module.name, &module.src, dependencies) {
-            Ok(delta) => delta,
+            Ok(delta) => {
+                report_omega_phases(elab, &module.name);
+                delta
+            }
             Err(errors) => {
                 self.images_usable = false;
                 return ModuleOutcome {
@@ -195,5 +198,33 @@ impl SemanticSession {
             });
         }
         ModuleOutcome { errors: Vec::new(), warnings, replayed: false, notices }
+    }
+}
+
+/// Attribution probe for `issues/omega-per-goal-elaboration-cost.md`: with
+/// `HEATHER_OMEGA_PHASES` set, print where every `omega` invocation in a
+/// freshly checked module spent its time. Innermost invocations print first
+/// (reports are pushed post-order); `check` is inclusive of nested ones.
+fn report_omega_phases(elab: &mut Elaborator, module: &str) {
+    let reports = elab.take_omega_reports();
+    if std::env::var_os("HEATHER_OMEGA_PHASES").is_none() {
+        return;
+    }
+    let s = |ns: u64| ns as f64 / 1e9;
+    for report in &reports {
+        let p = report.phases;
+        eprintln!(
+            "omega phases {module}: depth={} lemmas={:?} src={}B reflect={:.3}s omega_search={:.3}s cutsat_search={:.3}s render={:.3}s parse={:.3}s reconstruct={:.3}s check={:.3}s",
+            p.depth,
+            report.used_lemmas,
+            p.source_len,
+            s(p.reflect_ns),
+            s(p.omega_search_ns),
+            s(p.cutsat_search_ns),
+            s(p.render_ns),
+            s(p.parse_ns),
+            s(p.reconstruct_ns),
+            s(p.check_ns),
+        );
     }
 }

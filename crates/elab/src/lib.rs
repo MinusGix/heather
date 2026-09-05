@@ -83,7 +83,7 @@ mod attempt;
 pub mod cutsat;
 pub mod omega;
 mod omega_cert;
-pub use omega_cert::{CutSatReport, OmegaReport, OmegaResidualConstraint};
+pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
 pub mod function_ir_exec;
@@ -622,6 +622,9 @@ pub struct Elaborator {
     /// are diagnostic history, so declaration rollback deliberately retains
     /// them for the caller that receives the corresponding error.
     omega_failure_reports: RefCell<Vec<OmegaReport>>,
+    /// How many `omega` certificates are currently being checked above this
+    /// point: the nesting depth recorded in [`OmegaPhases`].
+    omega_depth: Cell<usize>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -1265,6 +1268,7 @@ impl Elaborator {
             item_timings: None,
             omega_reports: RefCell::new(Vec::new()),
             omega_failure_reports: RefCell::new(Vec::new()),
+            omega_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
@@ -3113,7 +3117,9 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                let cert = omega_cert::reconstruct(
+                omega_cert::reset_phases();
+                let reconstruct_started = Instant::now();
+                let mut cert = omega_cert::reconstruct(
                     self,
                     cx,
                     expected,
@@ -3125,16 +3131,25 @@ impl Elaborator {
                     msg: format!("`omega` got stuck: {detail}"),
                     span: e.span,
                 })?;
+                let mut phases = omega_cert::phases();
+                phases.reconstruct_ns = reconstruct_started.elapsed().as_nanos() as u64;
+                phases.depth = self.omega_depth.get();
+                phases.source_len = cert.source.len();
                 // The certificate is parsed from generated text: its spans index
                 // that text, not the user's file, and a lint about how the
                 // generator spells a list is the generator's problem, not the
                 // reader's. Same rule as datarepr emissions (`emit_lint`).
-                let term = self
-                    .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl))
-                    .map_err(|error| ElabError::Elab {
-                        msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
-                        span: e.span,
-                    })?;
+                let check_started = Instant::now();
+                self.omega_depth.set(phases.depth + 1);
+                let checked = self
+                    .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
+                self.omega_depth.set(phases.depth);
+                phases.check_ns = check_started.elapsed().as_nanos() as u64;
+                let term = checked.map_err(|error| ElabError::Elab {
+                    msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
+                    span: e.span,
+                })?;
+                cert.report.phases = phases;
                 self.omega_reports.borrow_mut().push(cert.report);
                 Ok(term)
             }
@@ -3336,7 +3351,22 @@ impl Elaborator {
                 // type-position reading; the universe bridge still falls
                 // through to ordinary inference when the expression is not a
                 // type by shape.
-                let head = self.whnf(cx, expected, e.span)?;
+                //
+                // A universe hides only under `El`, and only one level up:
+                // `El^{1+l} (Ty l) ⇝ Ty l` is the sole rule that produces a
+                // `Ty`, so an `El^0` — every proposition, every `Le(a, b)` at
+                // `Int` — cannot reduce to one and is not reduced here. The
+                // reduction is a probe, not a need: every consumer below
+                // reduces the hint itself where it wants a head form, and the
+                // conversion in `note_check_mismatch` is semantic. Measured on
+                // issues/omega-per-goal-elaboration-cost.md: this probe ran
+                // the small-step reducer on `Le(x, dot(row, atoms))` for
+                // seconds per argument, computing the dot product by
+                // substitution to learn that it was not a universe.
+                let head = match expected {
+                    Type::El { level, .. } if level.equiv(&Level::Zero) => expected.clone(),
+                    _ => self.whnf(cx, expected, e.span)?,
+                };
                 if let Type::Ty(want) = &head {
                     return self
                         .expr_elab()
@@ -5355,6 +5385,13 @@ impl Elaborator {
         meta_doms: &[Type],
         span: Span,
     ) -> R<()> {
+        // Both halves below read the expected type's *head*: the harvest
+        // unifies against it structurally, and the LGG trigger needs to see an
+        // `Id`. The checking fallback used to hand this function a reduced
+        // type; it no longer reduces an `El` at level 0 (a `RelId<Nat>(a, b)`
+        // that only δ-unfolds to `a = b` arrives as written), so the one
+        // reduction this consumer needs happens here, once.
+        let expected = &self.whnf(cx, expected, span)?;
         // The LGG trigger, read off the scratch-world result type.
         let flex = (|| {
             let Type::Id { lhs, rhs, .. } = result_ty else {
@@ -5393,8 +5430,7 @@ impl Elaborator {
         // solving result-only implicits in general *was*
         // elab-unifier-completeness's question, and this round answered it.
         let Some((m, s_raw, t_raw)) = flex else {
-            let head = self.whnf(cx, expected, span)?;
-            unify_ty(&cx.gamma, result_ty, &head, n, 0, sols);
+            unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -5410,7 +5446,7 @@ impl Elaborator {
         let (Some(s), Some(t)) = (zonked_tm(&s_raw, n, sols), zonked_tm(&t_raw, n, sols)) else {
             return Ok(());
         };
-        let Type::Id { lhs: x, rhs: y, .. } = self.whnf(cx, expected, span)? else {
+        let Type::Id { lhs: x, rhs: y, .. } = expected.clone() else {
             return Ok(());
         };
         // The abstraction's domain is `?f`'s *declared* parameter type — the

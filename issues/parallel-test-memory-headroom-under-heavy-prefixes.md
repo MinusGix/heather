@@ -3,7 +3,7 @@ title: Make adaptive parallel test jobs robust to simultaneous heavy semantic ta
 status: open
 labels: [testing,tooling,performance,parallelism,memory]
 created: 2026-09-02
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 The full FunctionIR block-argument verification selected five concurrent
@@ -36,3 +36,4 @@ detection.
 ## Log
 
 - 2026-09-04: 2026-09-04 full run (this branch, cold images under Exact after a format change): function_ir_x86_control_flow was SIGKILLed again at the rail under three-way contention while function_ir_x86_alu passed at 235 s (289 s on 2026-09-02); the reported 319 s for control_flow on 2026-09-02 was a kill too, so the target has been dying in the parallel full lane since the shard split. Separately, function_ir_x86_source failed deterministically: eb1f01a (2026-09-03) inserted x86_64_control_flow into the fixture MODULES list, and two hard-coded MODULES[..15] slices (the stale-source control and the shared-DAG source test) then stopped before function_ir, so the probe's import failed. Fixed to MODULES.len() - 1 like every sibling site.
+- 2026-09-05: 2026-09-05 full run ([[omega-per-goal-elaboration-cost]] round, 7 jobs): function_ir_x86_alu SIGKILLed at the rail (305 s reported) after passing at 241 s in the previous run of the same code. Serial it is 117 s on that branch (268 s at its base), so the kill is contention at ~2.5x, consistent with the entries above.

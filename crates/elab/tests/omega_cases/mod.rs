@@ -210,6 +210,17 @@ theorem audited(x, y: Int,
     assert!(report.residual.is_empty());
     assert!(report.stats.fourier_motzkin_eliminations >= 1);
     assert!(report.used_lemmas.contains(&"omega::lower_upper_combo"));
+    // Phase attribution (issues/omega-per-goal-elaboration-cost.md): the
+    // report says where its own wall time went. A `False` goal is a depth-0
+    // invocation whose reconstruction searched and parsed something, and
+    // whose certificate check is timed inclusively.
+    let phases = report.phases;
+    assert_eq!(phases.depth, 0);
+    assert!(phases.source_len > 0);
+    assert!(phases.parse_ns > 0);
+    assert!(phases.reconstruct_ns >= phases.parse_ns + phases.omega_search_ns);
+    assert!(phases.check_ns > 0);
+    assert_eq!(phases.cutsat_search_ns, 0);
 }
 
 fn shares_nonlinear_atoms_and_normalizes_integer_negation() {

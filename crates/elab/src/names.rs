@@ -286,6 +286,13 @@ impl Names {
         self.entries(name).any(|e| e.module == module)
     }
 
+    /// Does *any* module, visible from the current scope or not, declare
+    /// `name` with one of `kinds`? The scope-free question a route asks before
+    /// paying for evidence it could only use if some such declaration exists.
+    pub(crate) fn declares_any_as(&self, name: &str, kinds: &[NameKind]) -> bool {
+        self.entries(name).any(|e| kinds.contains(&e.kind))
+    }
+
     pub(crate) fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
         self.entries(name)
             .any(|e| e.module == module && kinds.contains(&e.kind))

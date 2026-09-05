@@ -269,6 +269,19 @@ impl Elaborator {
         // The span is only ever used for an out-of-fuel message, which this
         // discards along with every other failure — the route simply stands
         // down.
+        //
+        // A qualified spelling matches an arm only as `Ty::ctor` with `Ty`
+        // the expected inductive itself (`arm_ctor_index`). When the
+        // qualifier names no inductive at all — `omega::normalize_atom`,
+        // every module-qualified lemma a generated certificate applies — the
+        // route cannot fire, and reducing the expected type first would be
+        // the whole cost of asking (issues/omega-per-goal-elaboration-cost.md:
+        // seconds per lemma application, on `Le(x, dot(row, atoms))`).
+        if let Some((qualifier, _)) = name.split_once("::")
+            && !self.names.declares_any_as(qualifier, &[NameKind::Inductive])
+        {
+            return None;
+        }
         let expected = self.whnf(cx, expected, Span { start: 0, end: 0 }).ok()?;
         let ind = self.expected_ind(&expected)?;
         let i = crate::inductive::arm_ctor_index(&ind, name)?;

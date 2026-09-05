@@ -28,6 +28,10 @@ pub(crate) struct Certificate {
 }
 
 fn parse_generated_expr(source: &str) -> Result<Expr, String> {
+    timed(|p| &mut p.parse_ns, || parse_generated_expr_untimed(source))
+}
+
+fn parse_generated_expr_untimed(source: &str) -> Result<Expr, String> {
     let wrapper = format!("theorem __omega_generated(): 0 = 0 {{ {source} }}");
     let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
     let Some(Item::Decl(decl)) = file.items.pop() else {
@@ -57,6 +61,7 @@ pub struct OmegaReport {
     pub used_lemmas: Vec<&'static str>,
     pub residual: Vec<OmegaResidualConstraint>,
     pub cutsat: Option<CutSatReport>,
+    pub phases: OmegaPhases,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +69,56 @@ pub struct CutSatReport {
     pub reachable_derivations: usize,
     pub total_derivations: usize,
     pub stats: crate::cutsat::Stats,
+}
+
+/// Where one `omega` invocation's wall time went. Search phases are measured
+/// inside [`reconstruct`]; `reconstruct_ns` and `check_ns` are stamped by the
+/// dispatcher in `lib.rs` around the whole reconstruction and around the
+/// checking of the generated certificate. `check_ns` is inclusive: a
+/// certificate that re-invokes `omega` (`le_of_not_lt(… ⊢ omega)`, every
+/// `__cutsat_linear_branch`) pays for those nested invocations inside it, so
+/// `depth` says which reports are inner ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OmegaPhases {
+    pub depth: usize,
+    pub source_len: usize,
+    pub reflect_ns: u64,
+    pub omega_search_ns: u64,
+    pub cutsat_search_ns: u64,
+    pub render_ns: u64,
+    pub parse_ns: u64,
+    pub reconstruct_ns: u64,
+    pub check_ns: u64,
+}
+
+thread_local! {
+    static PHASES: std::cell::Cell<OmegaPhases> = std::cell::Cell::new(OmegaPhases::default());
+}
+
+/// Run `f`, adding its duration to the named phase of the reconstruction in
+/// progress. Reconstructions never nest (nested `omega` uses happen while the
+/// outer certificate is *checked*, after its reconstruction returned), so one
+/// thread-local accumulator per thread is enough.
+fn timed<T>(phase: fn(&mut OmegaPhases) -> &mut u64, f: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let out = f();
+    let ns = start.elapsed().as_nanos() as u64;
+    PHASES.with(|c| {
+        let mut phases = c.get();
+        *phase(&mut phases) = phase(&mut phases).saturating_add(ns);
+        c.set(phases);
+    });
+    out
+}
+
+/// Zero the phase accumulator; the dispatcher calls this before [`reconstruct`].
+pub(crate) fn reset_phases() {
+    PHASES.with(|c| c.set(OmegaPhases::default()));
+}
+
+/// The phases accumulated since [`reset_phases`].
+pub(crate) fn phases() -> OmegaPhases {
+    PHASES.with(|c| c.get())
 }
 
 fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
@@ -79,6 +134,7 @@ fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
         used_lemmas: vec![lemma],
         residual: Vec::new(),
         cutsat: None,
+        phases: OmegaPhases::default(),
     }
 }
 
@@ -1898,6 +1954,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 used_lemmas: vec![lemma],
                 residual: Vec::new(),
                 cutsat: None,
+                phases: OmegaPhases::default(),
             },
         }));
     }
@@ -1939,6 +1996,7 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
                 }],
                 residual: Vec::new(),
                 cutsat: None,
+                phases: OmegaPhases::default(),
             },
         }));
     }
@@ -2391,9 +2449,10 @@ fn reconstruct_cutsat(
             }
         }
     }
-    let (problem, outcome) = problem
-        .solve(CutLimits::default())
-        .map_err(|failure| failure.to_string())?;
+    let (problem, outcome) = timed(|p| &mut p.cutsat_search_ns, || {
+        problem.solve(CutLimits::default())
+    })
+    .map_err(|failure| failure.to_string())?;
     let CutOutcome::Contradiction {
         root,
         reachable,
@@ -2402,6 +2461,7 @@ fn reconstruct_cutsat(
     else {
         return Ok(None);
     };
+    let render_started = std::time::Instant::now();
     let (hoisted_roots, le_evidence) = hoisted_cut_les(&problem, &reachable);
     let evidence = vec![None; problem.derivations().nodes().len()];
     let body = reconstruct_cut_node(
@@ -2420,6 +2480,12 @@ fn reconstruct_cutsat(
         &vec![None; problem.derivations().nodes().len()],
         body,
     )?;
+    let render_ns = render_started.elapsed().as_nanos() as u64;
+    PHASES.with(|c| {
+        let mut phases = c.get();
+        phases.render_ns = phases.render_ns.saturating_add(render_ns);
+        c.set(phases);
+    });
     Ok(Some((
         source,
         reachable.len(),
@@ -2560,7 +2626,7 @@ pub(crate) fn reconstruct(
     }
 
     let (reflected, atoms_source, atom_labels, cut_atom_sources) =
-        if let Some(ordinary) = reflect_ordinary(elab, cx)? {
+        if let Some(ordinary) = timed(|p| &mut p.reflect_ns, || reflect_ordinary(elab, cx))? {
             let (facts, atoms_source, atom_labels, atom_sources) = ordinary;
             (facts, atoms_source, atom_labels, Some(atom_sources))
         } else {
@@ -2621,7 +2687,8 @@ pub(crate) fn reconstruct(
             .assume(fact.coeffs.as_slice().to_vec(), fact.interval)
             .map_err(|failure| failure.to_string())?;
     }
-    let (problem, outcome) = problem.solve().map_err(|failure| failure.to_string())?;
+    let (problem, outcome) = timed(|p| &mut p.omega_search_ns, || problem.solve())
+        .map_err(|failure| failure.to_string())?;
     let Outcome::Contradiction {
         derivation,
         reachable_derivations,
@@ -2658,6 +2725,7 @@ pub(crate) fn reconstruct(
                         total_derivations: cut_total,
                         stats: cut_stats,
                     }),
+                    phases: OmegaPhases::default(),
                 },
             });
         }
@@ -2706,6 +2774,7 @@ pub(crate) fn reconstruct(
             used_lemmas: Vec::new(),
             residual,
             cutsat: None,
+            phases: OmegaPhases::default(),
         });
         return Err(format!(
             "Omega's real shadow found no contradiction; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
@@ -3654,6 +3723,7 @@ pub(crate) fn reconstruct(
                 used_lemmas,
                 residual: Vec::new(),
                 cutsat: None,
+                phases: OmegaPhases::default(),
             },
         });
     }
@@ -3722,6 +3792,7 @@ pub(crate) fn reconstruct(
             used_lemmas,
             residual: Vec::new(),
             cutsat: None,
+            phases: OmegaPhases::default(),
         },
     })
 }
