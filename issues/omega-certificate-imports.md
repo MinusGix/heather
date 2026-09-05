@@ -1,6 +1,6 @@
 ---
 title: Make Omega certificate dependencies independent of incidental caller imports
-status: open
+status: closed
 labels: [tactics,omega,modules,ergonomics]
 created: 2026-09-05
 updated: 2026-09-05
@@ -24,3 +24,8 @@ replaced by actionable diagnostics when the certificate library is absent.
 
 Probe: `docs/showcase/positive_omega.hthr`. Related:
 [[omega-linear-arithmetic]], [[omega-local-proof-aliases]].
+
+## Log
+
+- 2026-09-05: Generated dependency names are qualified and resolved within an RAII certificate scope. Caller imports remain unchanged; missing Omega reports an import suggestion. The positive-subtype showcase needs only nat and omega for arithmetic.
+- 2026-09-05: Final plain Furnace suite passed: 2,377 passed, 0 failed, 5 ignored; includes qualified-name parser coverage, import isolation, and missing-library diagnostics.

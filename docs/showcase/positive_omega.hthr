@@ -1,7 +1,4 @@
 import nat;
-import logic;
-import int;
-import list;
 import omega;
 import positive_subtype;
 import subtype;
@@ -15,7 +12,8 @@ theorem projected_sum_positive(x, y: PositiveNat, positive: 0 < x.value):
 { omega }
 
 theorem record_sum_positive(x, y: PositiveNat): 0 < x.value + y.value {
-    projected_sum_positive(x, y, x.valid)
+    let positive = x.valid;
+    omega
 }
 
 // Omega supplies the closure proof; the representation handles construction.

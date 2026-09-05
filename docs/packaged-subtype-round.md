@@ -62,17 +62,15 @@ closure argument of `lift_binary`, and the projection theorem is generated
 in exactly the same way as before. No positivity-specific tactic is needed
 for this linear example.
 
-The probe also found two practical limitations. A local alias
-`let positive = x.valid; omega` does not currently add that proof to Omega's
-collected hypotheses. And its generated certificate needs `logic`, `int`,
-and `list` imported alongside `nat` and `omega`. The showcase uses those
-imports explicitly and passes the evidence as a helper parameter.
+The probe originally found two practical limitations: local proof aliases
+were not collected, and generated certificates required incidental imports.
+Both are addressed in the [follow-up round](witness-subtype-round.md).
+The showcase now uses `let positive = x.valid; omega` directly, with only
+`nat` and `omega` as its arithmetic imports.
 
-A sensible next automation step is making explicitly supplied local facts
-available to the existing solver. A broader positivity tactic could later
-compose preservation lemmas for operations outside Omega's affine fragment,
-such as products with two variable operands. It should reuse Omega for
-linear consequences rather than duplicate its arithmetic engine.
+A broader positivity tactic could later compose preservation lemmas for
+operations outside Omega's affine fragment, such as products with two
+variable operands. It should reuse Omega for linear consequences.
 
 ## Remaining inference detail
 

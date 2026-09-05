@@ -1595,6 +1595,16 @@ impl Elaborator {
 
     fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
         let scopes = self.resolution_scopes.borrow();
+        // Omega's generated certificate may explicitly name its library
+        // dependencies. This overlay applies to this qualified lookup only:
+        // it neither opens bare names nor changes the caller's saved imports.
+        if self.omega_depth.get() > 0
+            && let Some((module, base)) = split_qual(name)
+            && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
+            && self.names.declares(module, base)
+        {
+            return NameRes::Found(module.to_string());
+        }
         self.names
             .resolve_kinds(scopes.last().map(Rc::as_ref), name, kinds, |m, ty, ctor| {
                 self.types
@@ -3137,6 +3147,14 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
+                if self.omega_depth.get() == 0 && self.key_of("omega::nat_le_of_not_not_le").is_none() {
+                    return err(
+                        "`omega` requires its certificate library; add `import omega;`",
+                        e.span,
+                    );
+                }
+                let outer_depth = self.omega_depth.get();
+                let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
                 omega_cert::reset_phases();
                 let reconstruct_started = Instant::now();
                 let mut cert = omega_cert::reconstruct(
@@ -3153,17 +3171,15 @@ impl Elaborator {
                 })?;
                 let mut phases = omega_cert::phases();
                 phases.reconstruct_ns = reconstruct_started.elapsed().as_nanos() as u64;
-                phases.depth = self.omega_depth.get();
+                phases.depth = outer_depth;
                 phases.source_len = cert.source.len();
                 // The certificate is parsed from generated text: its spans index
                 // that text, not the user's file, and a lint about how the
                 // generator spells a list is the generator's problem, not the
                 // reader's. Same rule as datarepr emissions (`emit_lint`).
                 let check_started = Instant::now();
-                self.omega_depth.set(phases.depth + 1);
                 let checked = self
                     .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
-                self.omega_depth.set(phases.depth);
                 phases.check_ns = check_started.elapsed().as_nanos() as u64;
                 let term = checked.map_err(|error| ElabError::Elab {
                     msg: format!("{error}\n  generated Omega certificate: {}", cert.source),

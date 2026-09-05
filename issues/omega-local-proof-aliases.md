@@ -1,6 +1,6 @@
 ---
 title: Let Omega consume explicitly named local proof aliases
-status: open
+status: closed
 labels: [tactics,omega,ergonomics]
 created: 2026-09-05
 updated: 2026-09-05
@@ -34,3 +34,8 @@ that proof as an ordinary parameter and its entire body is `omega`.
   separate solver-composition question under [[setoid-auto-lifting]].
 
 Related: [[omega-linear-arithmetic]], [[subtype-transfer-and-evidence]].
+
+## Log
+
+- 2026-09-05: Implemented visible local-fact collection through ordinary binder/alias resolution, including weakening beneath binders and shadowing. The positive-subtype showcase now uses a named evidence alias directly; refusal controls retain irrelevant and shadowed-evidence boundaries.
+- 2026-09-05: Final plain Furnace suite passed: 2,377 passed, 0 failed, 5 ignored. Focused setoid/subtype target: 48 passed.
