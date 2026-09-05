@@ -67,6 +67,19 @@ or register an artifact with outstanding holes.
 
 ## Small automatic entry point candidate
 
+For subtype operation construction, `docs/smart-subtype-inheritance.md` scopes
+the first request to an explicit source operation, target signature, and
+representation interface. Generate the positive-addition wrapper and its
+projection theorem with registered closure evidence or resumable goals. Keep
+the evidence policy explicit; do not recognize subtypes by field names.
+Broader function discovery may suggest conditional signatures, but must not
+silently change a requested contract or strengthen every ambient result.
+Prefer a Heather metaprogram entry point receiving named or quoted source code
+and the requested target; invocation syntax and inspection APIs remain design
+work. Later ambient-theorem discovery/application can reuse this machinery to
+adapt a selected theorem to subtype arguments and expose remaining conditions.
+Explicit operation generation alone does not complete that discovery experience.
+
 The tiny examples in `docs/three-small-transfer-experiences.md` propose
 compatibility checking at declarations explicitly using a registered semantic
 interface. This is a scoped UX target, not unrestricted derivation on all

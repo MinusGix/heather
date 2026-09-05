@@ -31,6 +31,25 @@ between ambient values and subtype contents as the transfer interface.
   Decide when to recommend squashing or shared evidence; neither is an
   automatic global policy yet.
 
+## Signature-directed inheritance
+
+`docs/smart-subtype-inheritance.md` distinguishes adapting input positions,
+strengthening a selected result, and suggesting a new conditional API. Use an
+explicit target signature for lifting; an ambient return carrier alone is not
+enough to choose a subtype result. Preserve source hypotheses and expose
+unproved result invariants as resumable goals. Adding a caller premise requires
+an explicitly chosen conditional signature, never silent contract strengthening.
+
+Exercise mixed ambient/subtype inputs and two adaptations of natural
+subtraction: a Nat result without a new positivity requirement, and a positive
+result under a proved sufficient condition. Domain obligations for intermediate
+applications must remain visible in transferred conditional laws; such an
+operation does not satisfy a total semigroup interface automatically.
+
+The first generator slice remains the explicit positive-addition wrapper and
+projection theorem. Automatic signature discovery and conditional suggestions
+are later work, not requirements for that first slice.
+
 ## What it assumes from elsewhere
 
 - **[[relational-transfer-core]]** owns the ambient/subtype correspondence rules.

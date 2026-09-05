@@ -119,6 +119,8 @@ subtype.
 This is a checked manual wrapper and law transfer. Expected-result wrapper
 insertion, closure-lemma discovery, and general law generation remain in
 [subtype-transfer-and-evidence](../issues/subtype-transfer-and-evidence.md).
+The [smart-subtype design](smart-subtype-inheritance.md) scopes the next generator
+and distinguishes choosing a stronger result from inferring its obligations.
 
 The example proves `SameValue(PositiveNat(n, p), PositiveNat(n, q))` for
 arbitrary valid evidence `p` and `q`. A regression rejects using `refl` to
