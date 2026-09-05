@@ -1017,3 +1017,63 @@ fn proof_position_showcase_checks_deterministically() {
         support::psi_hash(second.psi())
     );
 }
+
+#[test]
+fn relational_notation_uses_scoped_indices_and_reports_missing_inference() {
+    let mut e = base();
+    check(
+        &mut e,
+        "notation_showcase",
+        include_str!("../../../docs/showcase/relational_proof.hthr"),
+    );
+    check(
+        &mut e,
+        "scoped_notation_client",
+        r#"
+import algebra_rel;
+import notation_showcase;
+theorem receive<A: Mergeable(same, merge)>(same: A → A → Type,
+    merge: A → A → A, state, incoming: A):
+    same(merge(merge(state, incoming), incoming), merge(state, incoming))
+{ merge_twice_auto(state, incoming) }
+"#,
+    );
+    // Tracked by relational-index-inference-from-goals: the symbolic header
+    // works, but this concrete conclusion alone does not yet infer its indices.
+    let source = r#"
+import list;
+import list_setoid;
+import notation_showcase;
+theorem receive<A>(known, incoming: List<A>):
+    SameMembers<A>((known ++ incoming) ++ incoming, known ++ incoming)
+{ merge_twice_auto(known, incoming) }
+"#;
+    let error = e.elab_module_source("notation_client", source).unwrap_err();
+    assert!(
+        error
+            .render(source)
+            .contains("implicit that could not be inferred")
+    );
+}
+
+#[test]
+fn relational_notation_has_no_implicit_global_meaning() {
+    let mut e = base();
+    for symbol in ["≈", "⊔"] {
+        let source = format!("import nat; fn missing(x: Nat) -> Type {{ x {symbol} x }}");
+        let error = e
+            .elab_module_source("missing_notation", &source)
+            .unwrap_err();
+        let message = error.render(&source);
+        assert!(message.contains("no fallback name"), "{message}");
+    }
+    let source = r#"
+import relation_props;
+theorem local<A>(same as ≈: A → A → Type, x, y: A, h: x ≈ y): x ≈ y { h }
+theorem escaped<A>(same: A → A → Type, x, y: A, h: same(x, y)): x ≈ y { h }
+"#;
+    let error = e
+        .elab_module_source("escaped_notation", source)
+        .unwrap_err();
+    assert!(error.render(source).contains("no fallback name"));
+}

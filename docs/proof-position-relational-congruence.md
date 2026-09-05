@@ -5,13 +5,45 @@ proof position. Read it as: **use this proof to justify the change inside the
 surrounding expression**. The spelling is a small elaborator entry point, not
 a commitment to a general tactic language.
 
+The notation showcase uses the existing symbol-index constraint form:
+
+```heather
+theorem merge_twice_auto<A: Mergeable(≈, ⊔)>(state, incoming: A):
+    (state ⊔ incoming) ⊔ incoming ≈ state ⊔ incoming
+```
+
+The class index telescope supplies the implicit relation and operation types.
+The symbols are local names for those arguments, not globally chosen meanings
+for `A`. The compact header does not introduce identifiers `same` and `merge`.
+If both identifier names and notation are wanted today, write the explicit form:
+
+```heather
+<A: Mergeable(same, merge)>(
+    same as ≈: A → A → Type, merge as ⊔: A → A → A, state, incoming: A)
+```
+
+Introducing both names and symbols inside the constraint itself remains tracked
+by [constraint-index-binder-introduction](../issues/constraint-index-binder-introduction.md).
+Default class notation is separately tracked by
+[class-default-operators](../issues/class-default-operators.md).
+
+Calls can reuse indices from a local `Mergeable` assumption. Inferring both
+indices solely from a concrete `SameMembers` conclusion is still incomplete;
+[the failing client is tracked explicitly](../issues/relational-index-inference-from-goals.md).
+The existing library theorem `merge_twice(same, merge, state, incoming)` remains
+the direct explicit-index interface for such clients.
+
+`⊔` associates left at additive precedence and binds tighter than `≈`.
+`≈` shares the non-associative comparison rung with `=`. Neither new symbol
+has a fallback meaning or a global designation; `=` retains native identity.
+
 For `merge_twice`, associativity exposes the repeated input. Idempotence then
 removes it inside the surrounding merge:
 
 ```heather
 A.rel_trans(
-    merge(merge(state, incoming), incoming),
-    merge(state, merge(incoming, incoming)), merge(state, incoming),
+    (state ⊔ incoming) ⊔ incoming,
+    state ⊔ (incoming ⊔ incoming), state ⊔ incoming,
     A.assoc(state, incoming, incoming),
     rel_cong(A.idem(incoming)))
 ```
@@ -76,9 +108,9 @@ user declaration or local binding named `rel_cong` retains ordinary meaning.
 
 ## Validation
 
-Plain `furnace run -- scripts/test` passed on the final code: **2,348 passed,
-0 failed, 5 ignored**, including all 33 setoid/generator/proof-position tests.
-The final run took 390 seconds. The showcase passed an independent CLI check;
+Plain `furnace run -- scripts/test` passed on the final code: **2,351 passed,
+0 failed, 5 ignored**, including all 35 setoid/generator/proof-position/notation tests.
+The final run took 426 seconds. The showcase passed an independent CLI check;
 the CLI's missing-observer diagnostic was also inspected and shows the named
 preservation requirement quoted above.
 
@@ -87,3 +119,7 @@ binary dictionary resumption, separate calls' goals, wrong relations and
 unexplained changes, invalid resumption, bounded traversal, expected-type
 checking, name shadowing, deterministic elaboration, and preservation of
 computationally observable evidence. No kernel rules or axioms were added.
+
+The subsequent [notation round](../issues/relational-showcase-notation.md)
+updates the showcase and editor grammar. Its editor corpus, positive fixtures,
+highlighting queries, and syntax inventory also passed on Furnace.

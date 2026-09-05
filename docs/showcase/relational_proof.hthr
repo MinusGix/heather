@@ -2,29 +2,28 @@
 import relation_props;
 import algebra_rel;
 
-theorem merge_twice_auto<A: Mergeable(same, merge)>(
-    same: A → A → Type, merge: A → A → A, state, incoming: A):
-    same(merge(merge(state, incoming), incoming), merge(state, incoming))
+theorem merge_twice_auto<A: Mergeable(≈, ⊔)>(state, incoming: A):
+    (state ⊔ incoming) ⊔ incoming ≈ state ⊔ incoming
 {
     A.rel_trans(
-        merge(merge(state, incoming), incoming),
-        merge(state, merge(incoming, incoming)), merge(state, incoming),
+        (state ⊔ incoming) ⊔ incoming,
+        state ⊔ (incoming ⊔ incoming), state ⊔ incoming,
         A.assoc(state, incoming, incoming),
         rel_cong(A.idem(incoming)))
 }
 
 // A supplied certificate is an ordinary proof, found in the local context.
-theorem observe_related<A>(same: A → A → Type, observe: A → A,
-    xs, ys: A, h: same(xs, ys),
+theorem observe_related<A>(same as ≈: A → A → Type, observe: A → A,
+    xs, ys: A, h: xs ≈ ys,
     certificate: PreservesRelation(same, same, observe)):
-    same(observe(xs), observe(ys))
+    observe(xs) ≈ observe(ys)
 { rel_cong(h) }
 
 // When evidence needs a lemma application, discharge the resulting local goal.
-theorem observe_with_lemma<A>(same: A → A → Type, observe: A → A,
-    xs, ys: A, h: same(xs, ys),
+theorem observe_with_lemma<A>(same as ≈: A → A → Type, observe: A → A,
+    xs, ys: A, h: xs ≈ ys,
     supply: (u: A) → PreservesRelation(same, same, observe)):
-    same(observe(xs), observe(ys))
+    observe(xs) ≈ observe(ys)
 {
     rel_cong(h)
     on ?compatibility := supply(xs);

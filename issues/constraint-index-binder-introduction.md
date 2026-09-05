@@ -3,7 +3,7 @@ title: Introduce named implicit class indices with local notation in constraints
 status: open
 labels: [frontend,traits,notation,ergonomics,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Implement the agreed compact-header direction (implementation pending):
@@ -54,3 +54,4 @@ this adds control over their names and local notation.
   user-authored showcase uses the explicit carrier-constraint header first,
   and records this compact form as a proposed follow-up.
 - 2026-09-04: User agreed that `index as symbol` declares an implicit index while a bare name remains a reference. Implementation and detailed collision/dependency probes remain open.
+- 2026-09-05: [[relational-showcase-notation]] exercises the existing compact symbol-only form `Mergeable(≈, ⊔)`. This issue remains specifically about introducing chosen identifier names alongside those symbols; the symbol-only form does not supply `same` and `merge` identifiers.
