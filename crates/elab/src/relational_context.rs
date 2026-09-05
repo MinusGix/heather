@@ -9,6 +9,9 @@ use heather_syntax::{DeclKind, Expr, ExprKind, Item, Span, parse_file};
 
 use crate::{Elaborator, heather_emit::Expr as Out};
 
+mod rewrite;
+pub use rewrite::{RewriteRequest, RewriteResult, rewrite};
+
 #[derive(Clone, Debug)]
 pub struct Operation {
     /// Written call head, e.g. `append<A>` or `++`. Matched exactly.
@@ -77,6 +80,7 @@ fn slice(source: &str, span: Span) -> &str {
 fn term(source: &str, e: &Expr) -> Out {
     match &e.kind {
         ExprKind::Var(name) => atom(name),
+        ExprKind::OpSymbol { symbol, .. } => atom(symbol),
         ExprKind::Num(n) => Out::nat(*n),
         ExprKind::TyApp { head, args } => atom(&format!(
             "{}<{}>",
@@ -323,15 +327,22 @@ impl Walker<'_> {
     }
 }
 
-/// Derive a certificate from a source declaration. `environment` contains its
-/// imports (including relation_context), but not `module` itself. Both input
-/// and output are checked in private clones; even a failure leaves it unchanged.
-pub fn derive(
-    environment: &Elaborator,
-    module: &str,
-    source: &str,
-    request: &Request,
-) -> Result<Outcome, String> {
+// Import each module at most once. Existing selective imports stay selective;
+// the ordinary checker reports any helpers they omit.
+fn required_imports(file: &heather_syntax::File) -> String {
+    ["relation_props", "relation_context"]
+        .into_iter()
+        .filter(|module| {
+            !file
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Import(import) if import.module == *module))
+        })
+        .map(|module| format!("import {module};\n"))
+        .collect()
+}
+
+fn validate_request(request: &Request) -> Result<(), String> {
     if request.generated_name.is_empty()
         || !request
             .generated_name
@@ -370,6 +381,19 @@ pub fn derive(
             expression(value)?;
         }
     }
+    Ok(())
+}
+
+/// Derive a certificate from a source declaration. `environment` contains its
+/// imports (including relation_context), but not `module` itself. Both input
+/// and output are checked in private clones; even a failure leaves it unchanged.
+pub fn derive(
+    environment: &Elaborator,
+    module: &str,
+    source: &str,
+    request: &Request,
+) -> Result<Outcome, String> {
+    validate_request(request)?;
     let file = parse_file(source).map_err(|e| format!("input parse error: {e:?}"))?;
     let decl = file
         .items
@@ -395,7 +419,7 @@ pub fn derive(
         return Err("the varying input must name a function parameter".into());
     }
     bound(&decl.body.result, 0, &mut 256)?;
-    let base = format!("import relation_context;\n{source}\n");
+    let base = format!("{}{source}\n", required_imports(&file));
     let check = |candidate: &str| {
         environment
             .clone()

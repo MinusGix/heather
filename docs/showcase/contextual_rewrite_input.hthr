@@ -1,0 +1,14 @@
+// A single contextual rewrite for the source-level demo.
+// The driver selects rewrite_receive and h; operation rules remain explicit.
+import list;
+import nat;
+import relation;
+import relation_props;
+import list_setoid;
+
+// The generator does not inspect this implementation.
+fn observe<A>(xs: List<A>) -> List<A> { xs }
+
+theorem rewrite_receive<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
+    SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))
+{ ?rewrite }

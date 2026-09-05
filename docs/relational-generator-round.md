@@ -121,3 +121,10 @@ All four standalone driver modes returned the expected exit codes; blocked
 modes emitted no source on stdout. The saved generated source also passed
 a separate ordinary `heather check` through Furnace (with existing unused-payload
 warnings in its standard-library imports). Formatting and tracker checks pass.
+
+## Following round
+
+[One contextual rewrite](contextual-rewrite-round.md) reuses this certificate
+planner after recovering a context from a theorem's two endpoints and a named
+local relation proof. Its source-driver entry point replaces a selected goal
+hole; native tactic integration remains open.

@@ -451,3 +451,300 @@ fn generator_keeps_intermediate_relations_explicit_and_bounds_its_walk() {
             .contains("bound")
     );
 }
+
+fn rewrite_request() -> heather_elab::relational_context::RewriteRequest {
+    let rules = generation_request();
+    heather_elab::relational_context::RewriteRequest {
+        theorem: "rewrite_receive".into(),
+        proof: "h".into(),
+        operations: rules.operations,
+        fixed: rules.fixed,
+    }
+}
+
+const REWRITE_SOURCE: &str = r#"
+import list;
+import nat;
+import relation;
+import relation_props;
+import list_setoid;
+theorem rewrite_receive<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
+    SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))
+{ ?rewrite }
+"#;
+
+#[test]
+fn contextual_rewrite_recovers_repeated_occurrences_and_emits_an_ordinary_proof() {
+    use heather_elab::relational_context::{Outcome, rewrite};
+    let mut e = base();
+    let result = rewrite(&e, "rewritten", REWRITE_SOURCE, &rewrite_request()).unwrap();
+    assert_eq!(result.occurrences, 2);
+    assert!(result.context.contains("known ++"));
+    let Outcome::Checked { source } = result.outcome else {
+        panic!()
+    };
+    assert!(!source.contains("?rewrite"));
+    assert!(source.contains("preserves_relation_binary"));
+    assert!(source.contains("(xs, ys, h)"));
+    check(&mut e, "rewritten", &source);
+    check(
+        &mut e,
+        "rewrite_user",
+        r#"
+import list;
+import list_setoid;
+import rewritten;
+theorem use_rewrite<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
+    SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))
+{ rewrite_receive(known, xs, ys, h) }
+"#,
+    );
+}
+
+#[test]
+fn contextual_rewrite_preserves_unchanged_occurrences_and_avoids_capture() {
+    use heather_elab::relational_context::{Fixed, Outcome, rewrite};
+    let e = base();
+    let mut request = rewrite_request();
+    request.fixed.push(Fixed {
+        term: "xs".into(),
+        relation: "SameMembers<A>".into(),
+        evidence: "same_members_refl(xs)".into(),
+    });
+    let partial = REWRITE_SOURCE.replace("known ++ (ys ++ ys)", "known ++ (ys ++ xs)");
+    let result = rewrite(&e, "partial", &partial, &request).unwrap();
+    assert_eq!(result.occurrences, 1);
+    assert!(result.context.contains("++ xs"));
+    assert!(matches!(result.outcome, Outcome::Checked { .. }));
+    // A user parameter with the generator's usual fresh-name spelling remains fixed.
+    let collision = REWRITE_SOURCE.replace("known", "__context_input_0");
+    request = rewrite_request();
+    request.fixed[0].term = "__context_input_0".into();
+    request.fixed[0].evidence = "same_members_refl(__context_input_0)".into();
+    let result = rewrite(&e, "capture", &collision, &request).unwrap();
+    assert!(result.context.starts_with("λ (__context_input_1:"));
+    assert!(matches!(result.outcome, Outcome::Checked { .. }));
+}
+
+#[test]
+fn contextual_rewrite_reports_an_observer_obligation_then_resumes() {
+    use heather_elab::relational_context::{Operation, Outcome, rewrite};
+    let e = base();
+    let mut request = rewrite_request();
+    let source = REWRITE_SOURCE
+        .replace(
+            "theorem rewrite_receive",
+            "fn observe<A>(xs: List<A>) -> List<A> { xs }\ntheorem rewrite_receive",
+        )
+        .replace(
+            "known ++ (xs ++ xs), known ++ (ys ++ ys)",
+            "observe(known ++ (xs ++ xs)), observe(known ++ (ys ++ ys))",
+        );
+    request.operations.push(Operation {
+        head: "observe".into(),
+        function: "observe<A>".into(),
+        inputs: vec!["SameMembers<A>".into()],
+        output: "SameMembers<A>".into(),
+        certificate: None,
+    });
+    let result = rewrite(&e, "missing_observer", &source, &request).unwrap();
+    assert_eq!(result.occurrences, 2);
+    let Outcome::Blocked { obligations } = result.outcome else {
+        panic!()
+    };
+    assert_eq!(obligations.len(), 1);
+    assert_eq!(
+        obligations[0].goal,
+        "PreservesRelation(SameMembers<A>, SameMembers<A>, observe<A>)"
+    );
+    assert_eq!(
+        &source[obligations[0].at.start..obligations[0].at.end],
+        "observe"
+    );
+    request.operations.last_mut().unwrap().certificate =
+        Some("preserves_relation_id(SameMembers<A>)".into());
+    assert!(matches!(
+        rewrite(&e, "missing_observer", &source, &request)
+            .unwrap()
+            .outcome,
+        Outcome::Checked { .. }
+    ));
+}
+
+#[test]
+fn contextual_rewrite_rejects_unmatched_changes_reversal_and_false_proofs() {
+    use heather_elab::relational_context::rewrite;
+    let e = base();
+    let request = rewrite_request();
+    let unrelated = REWRITE_SOURCE
+        .replace("known, xs, ys", "known, other, xs, ys")
+        .replace("known ++ (ys ++ ys)", "other ++ (ys ++ ys)");
+    let error = rewrite(&e, "unmatched", &unrelated, &request).unwrap_err();
+    assert!(
+        error.contains("context mismatch at goal, argument 1"),
+        "{error}"
+    );
+    let reverse = REWRITE_SOURCE.replace("h: SameMembers<A>(xs, ys)", "h: SameMembers<A>(ys, xs)");
+    assert!(
+        rewrite(&e, "reversed", &reverse, &request)
+            .unwrap_err()
+            .contains("context mismatch")
+    );
+    let mut invalid = request;
+    invalid.operations[0].certificate = Some("same_members_refl".into());
+    let error = rewrite(&e, "false_certificate", REWRITE_SOURCE, &invalid).unwrap_err();
+    assert!(error.contains("generated rewrite did not check"), "{error}");
+}
+
+#[test]
+fn contextual_rewrite_does_not_turn_membership_into_identity() {
+    use heather_elab::relational_context::{Operation, Outcome, rewrite};
+    let e = base();
+    let mut request = rewrite_request();
+    request.operations.push(Operation {
+        head: "list_len".into(),
+        function: "list_len<A>".into(),
+        inputs: vec!["SameMembers<A>".into()],
+        output: "RelId<Nat>".into(),
+        certificate: None,
+    });
+    let source = REWRITE_SOURCE.replace(
+        "SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))",
+        "RelId<Nat>(list_len(known ++ (xs ++ xs)), list_len(known ++ (ys ++ ys)))",
+    );
+    let Outcome::Blocked { obligations } = rewrite(&e, "length_rewrite", &source, &request)
+        .unwrap()
+        .outcome
+    else {
+        panic!()
+    };
+    assert_eq!(obligations.len(), 1);
+    assert_eq!(
+        obligations[0].goal,
+        "PreservesRelation(SameMembers<A>, RelId<Nat>, list_len<A>)"
+    );
+}
+
+#[test]
+fn contextual_rewrite_zero_occurrences_and_fragment_refusals() {
+    use heather_elab::relational_context::{Outcome, rewrite};
+    let e = base();
+    let source = REWRITE_SOURCE.replace("known ++ (xs ++ xs), known ++ (ys ++ ys)", "known, known");
+    let result = rewrite(&e, "constant_context", &source, &rewrite_request()).unwrap();
+    assert_eq!(result.occurrences, 0);
+    assert!(matches!(result.outcome, Outcome::Checked { .. }));
+    let no_hole = REWRITE_SOURCE.replace("?rewrite", "same_members_refl(known)");
+    assert!(
+        rewrite(&e, "no_hole", &no_hole, &rewrite_request())
+            .unwrap_err()
+            .contains("single hole")
+    );
+    let under_binder = REWRITE_SOURCE.replace("known ++ (xs ++ xs)", "(λ x => x)(xs)");
+    assert!(
+        rewrite(&e, "under_binder", &under_binder, &rewrite_request())
+            .unwrap_err()
+            .contains("binder-free")
+    );
+    let complex_witness = REWRITE_SOURCE.replace(
+        "h: SameMembers<A>(xs, ys)",
+        "h: SameMembers<A>(xs ++ xs, ys)",
+    );
+    assert!(
+        rewrite(&e, "complex_witness", &complex_witness, &rewrite_request())
+            .unwrap_err()
+            .contains("named value parameters")
+    );
+}
+
+#[test]
+fn contextual_rewrite_specializes_to_identity_and_enforces_its_bound() {
+    use heather_elab::relational_context::{Operation, Outcome, RewriteRequest, rewrite};
+    let e = base();
+    let request = RewriteRequest {
+        theorem: "successor_rewrite".into(),
+        proof: "h".into(),
+        fixed: vec![],
+        operations: vec![Operation {
+            head: "Succ".into(),
+            function: "Succ".into(),
+            inputs: vec!["RelId<Nat>".into()],
+            output: "RelId<Nat>".into(),
+            certificate: Some("(λ x y p => cong(p))".into()),
+        }],
+    };
+    let source = r#"
+import nat;
+import relation;
+theorem successor_rewrite(xs, ys: Nat, h: RelId<Nat>(xs, ys)):
+    RelId<Nat>(Succ(Succ(xs)), Succ(Succ(ys)))
+{ ?rewrite }
+"#;
+    let result = rewrite(&e, "identity_rewrite", source, &request).unwrap();
+    assert_eq!(result.occurrences, 1);
+    assert!(matches!(result.outcome, Outcome::Checked { .. }));
+    let nested = |base: &str| (0..34).fold(base.to_string(), |inner, _| format!("Succ({inner})"));
+    let deep = source
+        .replace("Succ(Succ(xs))", &nested("xs"))
+        .replace("Succ(Succ(ys))", &nested("ys"));
+    assert!(
+        rewrite(&e, "rewrite_bound", &deep, &request)
+            .unwrap_err()
+            .contains("bound")
+    );
+    let equal_proof =
+        REWRITE_SOURCE.replace("h: SameMembers<A>(xs, ys)", "h: SameMembers<A>(xs, xs)");
+    assert!(
+        rewrite(&e, "equal_proof", &equal_proof, &rewrite_request())
+            .unwrap_err()
+            .contains("context mismatch")
+    );
+}
+
+#[test]
+fn context_generation_adds_helper_imports_without_duplicating_existing_ones() {
+    use heather_elab::relational_context::{Outcome, Request, derive, rewrite};
+    let e = base();
+    let source =
+        "import nat; import relation; import relation_context; fn id(xs: Nat) -> Nat { xs }";
+    let request = Request {
+        function: "id".into(),
+        variable: "xs".into(),
+        input: "RelId<Nat>".into(),
+        output: "RelId<Nat>".into(),
+        generated_name: "id_preserves".into(),
+        operations: vec![],
+        fixed: vec![],
+    };
+    let Outcome::Checked { source } = derive(&e, "helper_imports", source, &request).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(source.matches("import relation_context;").count(), 1);
+    assert_eq!(source.matches("import relation_props;").count(), 1);
+    // The parser rejects imports after the first declaration.
+    let file = heather_syntax::parse_file(REWRITE_SOURCE).unwrap();
+    let mut imports = String::new();
+    let mut body = String::new();
+    for item in file.items {
+        match item {
+            heather_syntax::Item::Import(i) => {
+                imports.push_str(&REWRITE_SOURCE[i.span.start..i.span.end]);
+                imports.push('\n');
+            }
+            heather_syntax::Item::Decl(d) => {
+                body.push_str(&REWRITE_SOURCE[d.span.start..d.span.end])
+            }
+            _ => panic!(),
+        }
+    }
+    assert!(
+        rewrite(
+            &e,
+            "late_imports",
+            &format!("{body}\n{imports}"),
+            &rewrite_request()
+        )
+        .unwrap_err()
+        .contains("`import` must come before")
+    );
+}

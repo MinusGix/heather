@@ -2,22 +2,43 @@
 use heather_cli::loader;
 use heather_elab::{
     Elaborator,
-    relational_context::{Fixed, Operation, Outcome, Request, derive},
+    relational_context::{Fixed, Operation, Outcome, Request, RewriteRequest, derive, rewrite},
 };
 use std::path::Path;
 
 fn run() -> Result<bool, String> {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "success".into());
-    if !["success", "missing-observer", "supplied-observer", "length"].contains(&mode.as_str()) {
-        return Err("expected success, missing-observer, supplied-observer, or length".into());
+    if ![
+        "success",
+        "missing-observer",
+        "supplied-observer",
+        "length",
+        "rewrite",
+        "rewrite-missing-observer",
+        "rewrite-supplied-observer",
+        "rewrite-mismatch",
+        "rewrite-length",
+    ]
+    .contains(&mode.as_str())
+    {
+        return Err("expected success, missing-observer, supplied-observer, length, rewrite, rewrite-missing-observer, rewrite-supplied-observer, rewrite-mismatch, or rewrite-length".into());
     }
-    let path = Path::new("docs/showcase/relational_generator_input.hthr");
+    let rewrite_mode = mode.starts_with("rewrite");
+    let path = Path::new(if rewrite_mode {
+        "docs/showcase/contextual_rewrite_input.hthr"
+    } else {
+        "docs/showcase/relational_generator_input.hthr"
+    });
+    let input_module = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("invalid input path")?;
     let contexts = Path::new("lib/std/relation_context.hthr");
     let modules = loader::load_many(&[path, contexts], &["lib/std".into()]).map_err(|e| e.msg)?;
     let mut environment = Elaborator::with_prelude().map_err(|e| format!("{e:?}"))?;
     let mut input = None;
     for module in modules {
-        if module.name == "relational_generator_input" {
+        if module.name == input_module {
             input = Some(module.src);
         } else {
             environment
@@ -50,7 +71,7 @@ fn run() -> Result<bool, String> {
             evidence: "same_members_refl(known)".into(),
         }],
     };
-    if mode != "success" {
+    if !rewrite_mode && mode != "success" {
         let length = mode == "length";
         if length {
             request.output = "RelId<Nat>".into();
@@ -64,12 +85,51 @@ fn run() -> Result<bool, String> {
                 .then(|| "preserves_relation_id(SameMembers<A>)".into()),
         });
     }
-    match derive(
-        &environment,
-        "context_demo",
-        &input.ok_or("missing demo source")?,
-        &request,
-    )? {
+    let mut input = input.ok_or("missing demo source")?;
+    let outcome = if rewrite_mode {
+        if mode.contains("observer") || mode == "rewrite-length" {
+            let length = mode == "rewrite-length";
+            input = input.replace(
+                "SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))",
+                if length {
+                    "RelId<Nat>(list_len(known ++ (xs ++ xs)), list_len(known ++ (ys ++ ys)))"
+                } else {
+                    "SameMembers<A>(observe(known ++ (xs ++ xs)), observe(known ++ (ys ++ ys)))"
+                },
+            );
+            request.operations.push(Operation {
+                head: if length { "list_len" } else { "observe" }.into(),
+                function: if length { "list_len<A>" } else { "observe<A>" }.into(),
+                inputs: vec!["SameMembers<A>".into()],
+                output: if length {
+                    "RelId<Nat>"
+                } else {
+                    "SameMembers<A>"
+                }
+                .into(),
+                certificate: (mode == "rewrite-supplied-observer")
+                    .then(|| "preserves_relation_id(SameMembers<A>)".into()),
+            });
+        }
+        if mode == "rewrite-mismatch" {
+            input = input.replace("known ++ (ys ++ ys)", "xs ++ (ys ++ ys)");
+        }
+        rewrite(
+            &environment,
+            "rewrite_demo",
+            &input,
+            &RewriteRequest {
+                theorem: "rewrite_receive".into(),
+                proof: "h".into(),
+                operations: request.operations,
+                fixed: request.fixed,
+            },
+        )?
+        .outcome
+    } else {
+        derive(&environment, "context_demo", &input, &request)?
+    };
+    match outcome {
         Outcome::Checked { source } => {
             print!("{source}");
             Ok(true)

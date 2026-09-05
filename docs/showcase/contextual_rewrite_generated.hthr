@@ -1,0 +1,45 @@
+import relation_context;
+// A single contextual rewrite for the source-level demo.
+// The driver selects rewrite_receive and h; operation rules remain explicit.
+import list;
+import nat;
+import relation;
+import relation_props;
+import list_setoid;
+
+// The generator does not inspect this implementation.
+fn observe<A>(xs: List<A>) -> List<A> { xs }
+
+theorem rewrite_receive<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
+    SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))
+{
+    let __context_certificate_0: PreservesRelation(
+    SameMembers<A>,
+    SameMembers<A>,
+    λ (__context_input_0: List<A>) => (known ++ (__context_input_0 ++ __context_input_0))
+) =
+        preserves_relation_binary(
+            SameMembers<A>,
+            SameMembers<A>,
+            SameMembers<A>,
+            SameMembers<A>,
+            λ __context_input_0 => known,
+            λ __context_input_0 => (__context_input_0 ++ __context_input_0),
+            append<A>,
+            respectful_const(SameMembers<A>, SameMembers<A>, known, known, same_members_refl(known)),
+            preserves_relation_binary(
+                SameMembers<A>,
+                SameMembers<A>,
+                SameMembers<A>,
+                SameMembers<A>,
+                λ __context_input_0 => __context_input_0,
+                λ __context_input_0 => __context_input_0,
+                append<A>,
+                respectful_id(SameMembers<A>),
+                respectful_id(SameMembers<A>),
+                append_same_members<A>
+            ),
+            append_same_members<A>
+        );
+    __context_certificate_0(xs, ys, h)
+}

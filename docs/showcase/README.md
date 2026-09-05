@@ -158,3 +158,15 @@ documents the explicit request API and its source-level prototype boundary.
 [`relational_generator_generated.hthr`](relational_generator_generated.hthr)
 is the saved success output, including the generated `receive_generated`
 certificate. It can be checked directly as an ordinary Heather module.
+
+## One contextual rewrite
+
+[`contextual_rewrite_input.hthr`](contextual_rewrite_input.hthr) contains a theorem
+with a single goal hole. The source driver selects its proof parameter, recovers
+the shared context, and fills the hole with a checked certificate application.
+It is input to `scripts/relational-context-demo rewrite`, not a completed module
+until the driver fills that hole. [The round notes](../contextual-rewrite-round.md)
+cover partial occurrences, missing observer evidence, and the bounded fragment.
+
+The [saved generated theorem](contextual_rewrite_generated.hthr) contains the
+ordinary proof emitted by the driver and is independently checked.
