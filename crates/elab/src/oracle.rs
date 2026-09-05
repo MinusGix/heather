@@ -5,11 +5,20 @@
 //! decoding shares that input while deliberately having a different failure
 //! contract: it declines instead of turning exhaustion into an error.
 
+use std::rc::Rc;
+
 use heather_kernel::conv::{self, ConvError};
+use heather_kernel::eval;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{self, Defs, OutOfFuel};
 use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
+use heather_kernel::value::{VTy, Val, ValueArena};
+
+/// Steps the small-step reducer may spend on the *spelling* of a head the
+/// value machine has already found stuck. See [`SemanticOracle::whnf_type`]:
+/// past this budget the input itself is the answer.
+const STUCK_SPELLING_STEPS: u64 = 64;
 
 /// A kernel world used for semantic elaboration decisions.
 #[derive(Clone)]
@@ -38,12 +47,97 @@ impl SemanticOracle {
         &self.world
     }
 
+    /// The δ-transparent weak head normal form of a type, as the elaborator's
+    /// head-shape probes want it: "is this a Π", "is this a universe", "which
+    /// former is this".
+    ///
+    /// The answer is *decided* in the value domain and only *spelled* by the
+    /// small-step reducer. `reduce::whnf_type_delta` rewrites terms, so on a
+    /// type whose head is a computing `fn … → Type` over a computed argument
+    /// (`El^0(Le(x, dot(row, atoms)))`: `Le` at `Int` unfolds to a `match`
+    /// on the dot product) it evaluates the whole computation by substitution
+    /// — copying the argument lists at every step — to learn that the head is
+    /// stuck (issues/elaborator-whnf-probes-on-computing-types.md). The value
+    /// machine evaluates the same type with environments and is not
+    /// pathological there (it is what conversion already runs on these
+    /// types), so it is asked first, whenever the head could compute at all:
+    ///
+    /// - a **former** at the head: the reducer will reach the same former,
+    ///   and it is run as before to produce the syntax the probe reads
+    ///   (there is no readback from the value domain, by design —
+    ///   docs/nbe-conversion-design.md);
+    /// - a **neutral** at the head: the probe's answer is "no former", and
+    ///   every reduct is as good a witness of it as any other. The reducer is
+    ///   given a small fixed step budget so a cheaply reached stuck spelling
+    ///   stays exactly what it was, and past that budget the input itself is
+    ///   returned — convertible to every reduct, and the spelling every
+    ///   diagnostic and unifier consumer read before the probe anyway;
+    /// - out of fuel in the value domain: the reducer decides on its own.
+    ///
+    /// Adequacy of the machine against ch. 06 reduction (the kernel's
+    /// differential tests) is what makes the first bullet's "same former"
+    /// and the second's "no former" one claim.
     pub(crate) fn whnf_type(&self, gamma: &LocalCtx, ty: &Type) -> Result<Type, OutOfFuel> {
-        reduce::whnf_type_delta(ty, gamma, Defs::transparent(&self.world), self.fuel)
+        let defs = Defs::transparent(&self.world);
+        if type_head_may_compute(ty) {
+            let arena = ValueArena::new();
+            let probe = eval::whnf_value_ty(&arena, &Rc::new(ty.clone()), gamma, defs, self.fuel);
+            let stuck = match probe.as_deref() {
+                Ok(VTy::Neutral(_)) => true,
+                // A `Vec`/`Fin` at a non-canonical length is a former the
+                // input already shows; the reducer could only respell the
+                // length. (Reached through an `El`, the decode is the point.)
+                Ok(VTy::Vec { .. } | VTy::Fin { .. }) => {
+                    matches!(ty, Type::Vec { .. } | Type::Fin { .. })
+                }
+                // A former with no sub-structure *is* its own readback, and it
+                // is the shape of a decidable proposition that computed:
+                // `Le(3, dot(row, atoms))` to `Unit`. The reducer would redo
+                // the computation by substitution to spell four bytes.
+                Ok(VTy::Nat) => return Ok(Type::Nat),
+                Ok(VTy::Ty(l)) => return Ok(Type::Ty(l.clone())),
+                Ok(VTy::Unit { level }) => return Ok(Type::Unit { level: level.clone() }),
+                Ok(VTy::Empty { level }) => return Ok(Type::Empty { level: level.clone() }),
+                Ok(VTy::SEmpty { level }) => return Ok(Type::SEmpty { level: level.clone() }),
+                Ok(_) | Err(OutOfFuel) => false,
+            };
+            if stuck {
+                let budget = self.fuel.min(STUCK_SPELLING_STEPS);
+                return Ok(reduce::whnf_type_delta(ty, gamma, defs, budget)
+                    .unwrap_or_else(|OutOfFuel| ty.clone()));
+            }
+        }
+        reduce::whnf_type_delta(ty, gamma, defs, self.fuel)
     }
 
+    /// [`Self::whnf_type`] for terms, with the same division of labour: the
+    /// value machine decides whether a canonical form is at the head, the
+    /// reducer spells it. The motive-exposure path hands an `El`'s encoding
+    /// here after the type probe, so a stuck encoding has to be as cheap as
+    /// the stuck type was.
     pub(crate) fn whnf_term(&self, gamma: &LocalCtx, term: &Term) -> Result<Term, OutOfFuel> {
-        reduce::whnf_term_delta(term, gamma, Defs::transparent(&self.world), self.fuel)
+        let defs = Defs::transparent(&self.world);
+        if term_head_may_compute(term) {
+            let arena = ValueArena::new();
+            let probe = eval::whnf_value(&arena, &Rc::new(term.clone()), gamma, defs, self.fuel);
+            let stuck = match probe.as_deref() {
+                Ok(Val::Neutral(_)) => true,
+                Ok(Val::Zero) => return Ok(Term::Zero),
+                Ok(Val::Triv { level }) => return Ok(Term::Triv { level: level.clone() }),
+                Ok(Val::TmNat) => return Ok(Term::TmNat),
+                Ok(Val::TmTy(l)) => return Ok(Term::TmTy(l.clone())),
+                Ok(Val::TmUnit { level }) => return Ok(Term::TmUnit { level: level.clone() }),
+                Ok(Val::TmEmpty { level }) => return Ok(Term::TmEmpty { level: level.clone() }),
+                Ok(Val::TmSEmpty { level }) => return Ok(Term::TmSEmpty { level: level.clone() }),
+                Ok(_) | Err(OutOfFuel) => false,
+            };
+            if stuck {
+                let budget = self.fuel.min(STUCK_SPELLING_STEPS);
+                return Ok(reduce::whnf_term_delta(term, gamma, defs, budget)
+                    .unwrap_or_else(|OutOfFuel| term.clone()));
+            }
+        }
+        reduce::whnf_term_delta(term, gamma, defs, self.fuel)
     }
 
     /// Normalize without δ. Some structural encodings deliberately preserve
@@ -104,6 +198,56 @@ impl SemanticOracle {
     }
 }
 
+/// Could δ-transparent reduction of this type do more than a decode step?
+/// Only `El`, `Vec` and `Fin` step at all (a `U^δ` is opaque at every layer),
+/// and each computes exactly when the term it is stuck on does.
+fn type_head_may_compute(ty: &Type) -> bool {
+    match ty {
+        Type::El { tm, .. } => term_head_may_compute(tm),
+        Type::Vec { len, .. } | Type::Fin { len } => term_head_may_compute(len),
+        _ => false,
+    }
+}
+
+/// Could δ-transparent reduction of this term do work at its head? Walk the
+/// eliminator spine to its head: a local variable is stuck for good, a global
+/// may unfold, and a canonical form under an eliminator is a redex. A bare
+/// canonical form is already normal. Deliberately cheap and conservative —
+/// a `true` only costs the value-domain probe.
+fn term_head_may_compute(t: &Term) -> bool {
+    let mut cur = t;
+    loop {
+        cur = match cur {
+            Term::Var(_) => return false,
+            Term::GlobalTm { .. } => return true,
+            Term::ElimNat { scrut, .. }
+            | Term::ElimEmpty { scrut, .. }
+            | Term::Case { scrut, .. }
+            | Term::ElimW { scrut, .. }
+            | Term::ElimWf { scrut, .. }
+            | Term::ElimSEmpty { scrut, .. }
+            | Term::ElimSquash { scrut, .. }
+            | Term::LetBoxTy { scrut, .. }
+            | Term::LetBoxTm { scrut, .. }
+            | Term::ElimCodeTy { scrut, .. }
+            | Term::ElimCodeTm { scrut, .. } => scrut,
+            Term::J { proof, .. } | Term::Transp { proof, .. } => proof,
+            Term::Fst { pair, .. } | Term::Snd { pair, .. } => pair,
+            Term::App { fun, .. }
+            | Term::UApp { fun, .. }
+            | Term::CtxApp { fun, .. }
+            | Term::TyApp { fun, .. } => fun,
+            _ => {
+                return if std::ptr::eq(cur, t) {
+                    !reduce::is_whnf_term(t)
+                } else {
+                    true
+                };
+            }
+        };
+    }
+}
+
 pub(crate) struct TermReducts<'a> {
     oracle: &'a SemanticOracle,
     gamma: &'a LocalCtx,
@@ -160,7 +304,7 @@ impl DiagnosticOracle<'_> {
 mod tests {
     use std::rc::Rc;
 
-    use heather_kernel::term::{GlobalVar, LocalSubst};
+    use heather_kernel::term::{GlobalVar, LocalSubst, LocalVar};
 
     use super::*;
 
@@ -205,5 +349,168 @@ mod tests {
             oracle.diagnostics(1).decode_type(&LocalCtx::nil(), &ty),
             Some(Type::Nat)
         );
+    }
+
+    /// A world with one computing family at `GlobalVar(0)`:
+    /// `P : Π(Nat). Ty 0 := λ n. elim_Nat(n; Nat; Unit)` — a `fn … → Type`
+    /// whose head is a `match`, the shape of `Le` at `Int` and at `Nat`.
+    fn computing_world() -> GlobalCtx {
+        let body = Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::constant(1),
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::ElimNat {
+                level: Level::constant(1),
+                motive: Rc::new(Type::Ty(Level::Zero)),
+                base: Rc::new(Term::TmNat),
+                step: Rc::new(Term::TmUnit { level: Level::Zero }),
+                scrut: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        };
+        GlobalCtx::new(vec![GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(Type::Pi {
+                dom_level: Level::Zero,
+                cod_level: Level::constant(1),
+                dom: Rc::new(Type::Nat),
+                cod: Rc::new(Type::Ty(Level::Zero)),
+            }),
+            level: Level::constant(1),
+            body: Some(Rc::new(body)),
+        }])
+    }
+
+    /// `Γ = x : Nat`.
+    fn one_nat() -> LocalCtx {
+        LocalCtx::nil().extended(Rc::new(Type::Nat), Level::Zero)
+    }
+
+    /// `El^0 (P arg)` in `Γ = x : Nat`.
+    fn p_of(arg: Term) -> Type {
+        Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::App {
+                fun: Rc::new(Term::GlobalTm {
+                    var: GlobalVar(0),
+                    subst: LocalSubst::id(&one_nat()),
+                }),
+                dom_level: Level::Zero,
+                cod_level: Level::constant(1),
+                dom: Rc::new(Type::Nat),
+                cod: Rc::new(Type::Ty(Level::Zero)),
+                arg: Rc::new(arg),
+            }),
+        }
+    }
+
+    /// `elim_Nat(⌜n⌝; x; λ _ ih. ih)`: `n` ι-steps away from the local `x`.
+    fn count_down_to_x(n: u64) -> Term {
+        Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Var(LocalVar(0))),
+            step: Rc::new(Term::Var(LocalVar(0))),
+            scrut: Rc::new(Term::NatLit(n)),
+        }
+    }
+
+    const FUEL: u64 = 1 << 20;
+
+    fn reducer_type(ty: &Type) -> Type {
+        reduce::whnf_type_delta(ty, &one_nat(), Defs::transparent(&computing_world()), FUEL)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stuck_head_keeps_the_reducers_spelling_when_it_is_cheap() {
+        let oracle = SemanticOracle::in_world(computing_world(), FUEL);
+        let ty = p_of(Term::Var(LocalVar(0)));
+        let got = oracle.whnf_type(&one_nat(), &ty).unwrap();
+        let reducer = reducer_type(&ty);
+        assert_ne!(reducer, ty, "the probe must have something to spell");
+        assert_eq!(got, reducer);
+    }
+
+    #[test]
+    fn a_stuck_head_past_the_spelling_budget_is_the_input_itself() {
+        let oracle = SemanticOracle::in_world(computing_world(), FUEL);
+        let ty = p_of(count_down_to_x(4 * STUCK_SPELLING_STEPS));
+        let reducer = reducer_type(&ty);
+        assert_ne!(reducer, ty);
+        assert!(!matches!(reducer, Type::Pi { .. } | Type::Unit { .. } | Type::Nat));
+        assert_eq!(oracle.whnf_type(&one_nat(), &ty).unwrap(), ty);
+    }
+
+    #[test]
+    fn a_closed_former_is_read_back_from_the_value() {
+        let oracle = SemanticOracle::in_world(computing_world(), FUEL);
+        for (arg, want) in [
+            (Term::Zero, Type::Nat),
+            (Term::Succ(Rc::new(Term::Zero)), Type::Unit { level: Level::Zero }),
+            // The literal steps through `Succ` only in the reducer; the
+            // value machine runs it as a program. Same former either way.
+            (Term::NatLit(1000), Type::Unit { level: Level::Zero }),
+        ] {
+            let ty = p_of(arg);
+            assert_eq!(oracle.whnf_type(&one_nat(), &ty).unwrap(), want);
+            assert_eq!(reducer_type(&ty), want);
+        }
+    }
+
+    #[test]
+    fn a_former_with_sub_structure_takes_the_reducers_spelling() {
+        let mut bindings = computing_world().bindings.to_vec();
+        bindings.push(GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(Type::Ty(Level::Zero)),
+            level: Level::constant(1),
+            body: Some(Rc::new(Term::TmPi {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Term::TmNat),
+                cod: Rc::new(Term::TmNat),
+            })),
+        });
+        let world = GlobalCtx::new(bindings);
+        let oracle = SemanticOracle::in_world(world.clone(), FUEL);
+        let ty = Type::El {
+            level: Level::Zero,
+            // Innermost binding: the code pushed last.
+            tm: Rc::new(Term::GlobalTm {
+                var: GlobalVar(0),
+                subst: LocalSubst::id(&one_nat()),
+            }),
+        };
+        let got = oracle.whnf_type(&one_nat(), &ty).unwrap();
+        assert!(matches!(got, Type::Pi { .. }));
+        let reducer =
+            reduce::whnf_type_delta(&ty, &one_nat(), Defs::transparent(&world), FUEL).unwrap();
+        assert_eq!(got, reducer);
+    }
+
+    #[test]
+    fn terms_follow_the_same_division_of_labour() {
+        let oracle = SemanticOracle::in_world(computing_world(), FUEL);
+        // Past the budget: the input.
+        let far = count_down_to_x(4 * STUCK_SPELLING_STEPS);
+        assert_eq!(oracle.whnf_term(&one_nat(), &far).unwrap(), far);
+        // A closed canonical value: read back from the value.
+        let closed = Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::Var(LocalVar(0))),
+            scrut: Rc::new(Term::NatLit(1000)),
+        };
+        assert_eq!(oracle.whnf_term(&one_nat(), &closed).unwrap(), Term::Zero);
+        // Cheaply stuck: the reducer's spelling.
+        let near = count_down_to_x(3);
+        let reducer =
+            reduce::whnf_term_delta(&near, &one_nat(), Defs::transparent(&computing_world()), FUEL)
+                .unwrap();
+        assert_eq!(reducer, Term::Var(LocalVar(0)));
+        assert_eq!(oracle.whnf_term(&one_nat(), &near).unwrap(), reducer);
     }
 }

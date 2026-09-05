@@ -519,6 +519,18 @@ customers checked one by one.
   `typing.rs` is untouched; it keeps calling `reduce::whnf_type_delta`.**
   This is what makes `reduce.rs` a live component rather than a museum
   piece, and it is what removes readback from the round entirely.
+- **The elaborator's head-shape probes** (`SemanticOracle::whnf_type` /
+  `whnf_term`, 2026-09-05). Same shape as `typing.rs`'s — match a whnf'd
+  type on its former — but on *propositions*, whose heads compute
+  (`Le(x, dot(row, atoms))` at `Int` is a `match` on a dot product), and the
+  rewriter paid the whole computation by substitution to answer "stuck"
+  (`issues/elaborator-whnf-probes-on-computing-types.md`). The oracle now
+  asks the value machine first and lets it *decide*: a neutral means the
+  reducer gets a small step budget for the spelling and past it the input is
+  the answer; a former means the reducer runs as before to spell it. The only
+  value→syntax step is a former with no sub-structure (`Nat`, `Ty l`,
+  `Unit`, `Empty`, `sEmpty`, and their codes), which is its own readback and
+  is never evaluated again — the invariant below holds as stated.
 
 **The invariant that keeps the exponential out of readback**, stated so a
 future round cannot quietly reintroduce it:
