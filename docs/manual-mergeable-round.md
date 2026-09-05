@@ -2,6 +2,10 @@
 
 Status: implemented and verified, 2026-09-04.
 
+Historical record: the [proof-position round](proof-position-relational-congruence.md)
+subsequently replaced the library theorem's explicit compatibility step with
+`rel_cong(A.idem(incoming))`. The manual derivation below remains a comparison.
+
 Round owner: [manual-mergeable-round](../issues/manual-mergeable-round.md).
 The [realized showcase](showcase/mergeable.hthr) is checked by the
 `lib_setoid_mergeable` integration target. It is the first implemented slice

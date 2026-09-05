@@ -3082,6 +3082,24 @@ impl Elaborator {
             {
                 self.expr_elab().check_unit_form(self, cx, expected, e.span)
             }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "rel_cong")
+                && !self.shadowed(cx, "rel_cong")
+                && self.ctor_here_expected(cx, "rel_cong", expected).is_none() =>
+            {
+                let [proof] = args.as_slice() else {
+                    return err("`rel_cong` takes exactly one proof expression", e.span);
+                };
+                if !named.is_empty() {
+                    return err("`rel_cong` takes a positional proof expression", e.span);
+                }
+                relational_context::proof::check(self, cx, proof, expected, lvl, e.span)
+            }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
             // reconstruction returns an ordinary Heather
@@ -3554,6 +3572,12 @@ impl Elaborator {
                 },
                 level,
             ));
+        }
+        if matches!(e.as_named(), Some(("rel_cong", _, false)))
+            && !self.shadowed(cx, "rel_cong")
+            && self.ctor_here(cx, "rel_cong").is_none()
+        {
+            return err("`rel_cong` needs an expected relation goal; annotate this proof position", e.span);
         }
         if let ExprKind::App {
             head,
@@ -5190,6 +5214,7 @@ impl Elaborator {
             }
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
+                Some(("rel_cong", _, false)) => !self.shadowed(cx, "rel_cong") && self.ctor_here(cx, "rel_cong").is_none(),
                 Some(("FS", _, false)) => {
                     !self.shadowed(cx, "FS") && self.ctor_here(cx, "FS").is_none()
                 }

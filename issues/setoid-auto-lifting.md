@@ -3,7 +3,7 @@ title: Generate relational compatibility, lifted operations, and transfer proofs
 status: open
 labels: [kernel,metaprogramming,design]
 created: 2026-07-23
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Build a certifying generator over boxed code using compositional relational
@@ -105,3 +105,5 @@ must prevent instance registration.
 - 2026-09-04: Started [[bounded-relational-context-generator]]: explicit source-level context generation, structured missing-evidence goals, and isolated checking. Boxed-code/meta-layer implementation remains open.
 - 2026-09-04: Started [[single-contextual-rewrite]]: recover a binder-free context from a theorem goal and named relation proof, then reuse the bounded certificate planner. Native tactic and meta-layer integration remain open.
 - 2026-09-04: [[single-contextual-rewrite]] is complete for the bounded source driver: repeated/partial occurrences, checked missing obligations, and ordinary generated proof application. Full suite: 2,336 passed, 0 failed, 5 ignored. Higher-order contexts, calculation chains, native tactic integration, and the boxed-code implementation remain open.
+- 2026-09-05: [[proof-position-relational-congruence]] connects supplied lemma applications to ordinary local proof goals. The first native fragment uses resolved terms and one homogeneous relation, class parent resolution, and resumable compatibility goals.
+- 2026-09-05: [[proof-position-relational-congruence]] is complete for homogeneous unary/binary contexts at Type<0>. The library now uses supplied lemma applications with local law resolution and ordinary resumable goals. General relation changes, dependent/higher-order contexts, calculation chains, and boxed-code integration remain open. Final plain Furnace suite: 2,348 passed, 0 failed, 5 ignored.

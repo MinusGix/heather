@@ -28,8 +28,10 @@ The [saved generated theorem](showcase/contextual_rewrite_generated.hthr) is the
 exact successful driver output.
 
 `?rewrite` is an ordinary goal hole, not a newly implemented tactic keyword.
-The temporary source driver performs the replacement. Native proof-position
-integration and boxed-code/meta-layer implementation remain future work.
+The temporary source driver performs the replacement. The following
+[proof-position round](proof-position-relational-congruence.md) adds a separate
+native homogeneous entry point; boxed-code/meta-layer implementation remains
+future work.
 
 ## Try the driver
 
@@ -129,3 +131,9 @@ The required plain `furnace run -- scripts/test` passed: **2,336 passed,
 0 failed, 5 ignored**, including all 21 setoid/generator/rewrite tests. The
 completed run took 222 seconds with warm caches. An earlier attempt was
 interrupted with exit 143 before completion and was not counted as validation.
+
+## Following round
+
+[Proof-position relational congruence](proof-position-relational-congruence.md)
+adds a native, homogeneous entry point using elaborated lemma applications and
+ordinary local obligations. The source driver described above remains available.

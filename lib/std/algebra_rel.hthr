@@ -33,19 +33,15 @@ class Mergeable<A>(same: A → A → Type, merge: A → A → A)
             Idempotent<A>(same, merge)
 {}
 
-// The manual proof that a later relational calc generator should reproduce.
-// The second step explicitly lifts idempotence through the surrounding merge.
+// Associativity exposes the repeated input; relational congruence lifts
+// idempotence through the surrounding merge using the local laws.
 theorem merge_twice<A: Mergeable(same, merge)>(
     same: A → A → Type, merge: A → A → A, state, incoming: A):
     same(merge(merge(state, incoming), incoming), merge(state, incoming))
 {
-    // Respects2 has three carrier parameters, so A.respects2 alone cannot
-    // select its owner. Project the exact child dictionary explicitly.
-    let laws = A::Mergeable(same, merge);
     A.rel_trans(
         merge(merge(state, incoming), incoming),
         merge(state, merge(incoming, incoming)), merge(state, incoming),
         A.assoc(state, incoming, incoming),
-        laws.respects2(state, state, A.rel_refl(state),
-            merge(incoming, incoming), incoming, A.idem(incoming)))
+        rel_cong(A.idem(incoming)))
 }

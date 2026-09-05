@@ -748,3 +748,272 @@ fn context_generation_adds_helper_imports_without_duplicating_existing_ones() {
         .contains("`import` must come before")
     );
 }
+
+#[test]
+fn proof_position_merge_twice_uses_local_laws() {
+    let mut e = base();
+    check(
+        &mut e,
+        "proof_position",
+        r#"
+import relation_props;
+import algebra_rel;
+theorem merge_twice_auto<A: Mergeable(same, merge)>(
+    same: A → A → Type, merge: A → A → A, state, incoming: A):
+    same(merge(merge(state, incoming), incoming), merge(state, incoming))
+{
+    A.rel_trans(
+        merge(merge(state, incoming), incoming),
+        merge(state, merge(incoming, incoming)), merge(state, incoming),
+        A.assoc(state, incoming, incoming),
+        rel_cong(A.idem(incoming)))
+}
+"#,
+    );
+}
+
+const PROOF_OBSERVER: &str = r#"
+import relation_props;
+import algebra_rel;
+theorem observer<A>(same: A → A → Type, observe: A → A, xs, ys: A,
+    h: same(xs, ys), certificate: PreservesRelation(same, same, observe)):
+    same(observe(xs), observe(ys))
+{
+    rel_cong(h)
+}
+"#;
+
+#[test]
+fn proof_position_observer_uses_local_evidence_and_resumes_goals() {
+    let mut e = base();
+    check(&mut e, "local_observer", PROOF_OBSERVER);
+    let missing =
+        PROOF_OBSERVER.replace(", certificate: PreservesRelation(same, same, observe)", "");
+    let error = e
+        .elab_module_source("missing_observer", &missing)
+        .unwrap_err();
+    let message = error.render(&missing);
+    assert!(message.contains("compatibility"), "{message}");
+    assert!(
+        message.contains("PreservesRelation")
+            && message.contains("observe")
+            && !message.contains("«Π"),
+        "{message}"
+    );
+    let resumed = PROOF_OBSERVER
+        .replace(
+            "certificate: PreservesRelation(same, same, observe)",
+            "supply: (u: A) → PreservesRelation(same, same, observe)",
+        )
+        .replace(
+            "rel_cong(h)",
+            "rel_cong(h)\n    on ?compatibility := supply(xs);",
+        );
+    check(&mut e, "resumed_observer", &resumed);
+}
+
+#[test]
+fn proof_position_repeated_partial_and_zero_occurrences() {
+    let mut e = base();
+    check(
+        &mut e,
+        "occurrences",
+        r#"
+import relation_props;
+import algebra_rel;
+theorem repeated<A: Mergeable(same, op)>(same: A → A → Type, op: A → A → A,
+    x, y: A, h: same(x, y)): same(op(x, x), op(y, y)) { rel_cong(h) }
+theorem partial<A: Mergeable(same, op)>(same: A → A → Type, op: A → A → A,
+    x, y: A, h: same(x, y)): same(op(x, x), op(y, x)) { rel_cong(h) }
+theorem constant<A: Reflexive(same)>(same: A → A → Type,
+    x, y, z: A, h: same(x, y)): same(z, z) { rel_cong(h) }
+"#,
+    );
+}
+
+#[test]
+fn proof_position_fixed_evidence_is_a_real_goal() {
+    let mut e = base();
+    let source = r#"
+import relation_props;
+import algebra_rel;
+theorem fixed<A>(same: A → A → Type, x, y, z: A, h: same(x, y),
+    supply: (u: A) → same(z, z)): same(z, z) {
+    rel_cong(h)
+    on ?fixed := supply(x);
+}
+"#;
+    check(&mut e, "fixed_resumed", source);
+    let missing = source.replace("    on ?fixed := supply(x);", "");
+    let error = e.elab_module_source("fixed_missing", &missing).unwrap_err();
+    assert!(error.render(&missing).contains("fixed"));
+}
+
+#[test]
+fn proof_position_rejects_unexplained_changes_and_wrong_relations() {
+    let mut e = base();
+    let source = r#"
+import relation_props;
+import algebra_rel;
+theorem mismatch<A: Mergeable(same, op)>(same: A → A → Type, op: A → A → A,
+    x, y, z: A, h: same(x, y)): same(op(z, x), op(x, y)) { rel_cong(h) }
+"#;
+    let error = e.elab_module_source("mismatch", source).unwrap_err();
+    assert!(
+        error.render(source).contains("context mismatch"),
+        "{}",
+        error.render(source)
+    );
+    let reversed = source.replace("same(op(z, x), op(x, y))", "same(op(y, y), op(x, x))");
+    let error = e.elab_module_source("reversed", &reversed).unwrap_err();
+    assert!(error.render(&reversed).contains("context mismatch"));
+    let other = PROOF_OBSERVER
+        .replace(
+            "same: A → A → Type",
+            "same: A → A → Type, other: A → A → Type",
+        )
+        .replace(
+            "same(observe(xs), observe(ys))",
+            "other(observe(xs), observe(ys))",
+        );
+    let error = e.elab_module_source("other_relation", &other).unwrap_err();
+    assert!(error.render(&other).contains("same resolved relation"));
+}
+
+#[test]
+fn proof_position_name_can_be_shadowed() {
+    let mut e = base();
+    check(
+        &mut e,
+        "shadowed_congruence",
+        r#"
+import nat;
+fn rel_cong(n: Nat) -> Nat { n }
+fn client(n: Nat) -> Nat { rel_cong(n) }
+"#,
+    );
+}
+
+#[test]
+fn proof_position_preserves_computational_evidence() {
+    let mut e = base();
+    check(
+        &mut e,
+        "evidence_content",
+        r#"
+import nat;
+import bool;
+import relation_props;
+import algebra_rel;
+fn lift<A: Mergeable(same, op)>(same: A → A → Type, op: A → A → A,
+    x, y, fixed: A, h: same(x, y)) -> same(op(fixed, x), op(fixed, y))
+{ rel_cong(h) }
+fn Evidence(x, y: Nat) -> Type { Bool }
+instance Mergeable<Nat>(Evidence, add) {
+    rel_refl := λ x => True,
+    rel_sym := λ x y h => h,
+    rel_trans := λ x y z h k => k,
+    respects2 := λ x x2 hx y y2 hy => hy,
+    assoc := λ x y z => True,
+    comm := λ x y => True,
+    idem := λ x => True,
+}
+theorem retained(): lift(Evidence, add, 0, 1, 2, False) = False { refl }
+"#,
+    );
+}
+
+#[test]
+fn proof_position_bad_resumption_does_not_register_a_theorem() {
+    let mut e = base();
+    let source = PROOF_OBSERVER
+        .replace(", certificate: PreservesRelation(same, same, observe)", "")
+        .replace("rel_cong(h)", "rel_cong(h)\n    on ?compatibility := h;");
+    assert!(e.elab_module_source("bad_resumption", &source).is_err());
+    // The same module/declaration can be checked afterward with valid evidence.
+    check(&mut e, "bad_resumption", PROOF_OBSERVER);
+}
+
+#[test]
+fn proof_position_binary_dictionary_can_be_supplied_by_on() {
+    let mut e = base();
+    check(
+        &mut e,
+        "binary_on",
+        r#"
+import relation_props;
+import algebra_rel;
+theorem binary<A>(same: A → A → Type, op: A → A → A,
+    x, y: A, h: same(x, y),
+    supply: (u: A) → Respects2<A, A, A>(same, same, same, op)):
+    same(op(x, x), op(y, y)) {
+    rel_cong(h)
+    on ?compatibility := supply(x);
+}
+"#,
+    );
+}
+
+#[test]
+fn proof_position_multiple_calls_have_independent_goals() {
+    let mut e = base();
+    check(
+        &mut e,
+        "multiple_goals",
+        r#"
+import logic;
+import relation_props;
+import algebra_rel;
+theorem twice<A>(same: A → A → Type, observe: A → A,
+    x, y: A, h: same(x, y),
+    supply: (u: A) → PreservesRelation(same, same, observe)):
+    And<same(observe(x), observe(y)), same(observe(x), observe(y))> {
+    And(rel_cong(h), rel_cong(h))
+    on ?compatibility := supply(x);
+    on ?compatibility.1 := supply(y);
+}
+"#,
+    );
+}
+
+#[test]
+fn proof_position_is_bounded_and_needs_a_goal() {
+    let mut e = base();
+    let mut left = "xs".to_owned();
+    let mut right = "ys".to_owned();
+    for _ in 0..34 {
+        left = format!("observe({left})");
+        right = format!("observe({right})");
+    }
+    let deep = PROOF_OBSERVER.replace(
+        "same(observe(xs), observe(ys))",
+        &format!("same({left}, {right})"),
+    );
+    let error = e.elab_module_source("deep_context", &deep).unwrap_err();
+    assert!(
+        error.render(&deep).contains("depth-32"),
+        "{}",
+        error.render(&deep)
+    );
+    let inference = PROOF_OBSERVER.replace("rel_cong(h)", "let p = rel_cong(h); p");
+    let error = e.elab_module_source("needs_goal", &inference).unwrap_err();
+    assert!(error.render(&inference).contains("expected relation goal"));
+    let annotated = PROOF_OBSERVER.replace(
+        "rel_cong(h)",
+        "let p: same(observe(xs), observe(ys)) = rel_cong(h); p",
+    );
+    check(&mut e, "annotated_proof", &annotated);
+}
+
+#[test]
+fn proof_position_showcase_checks_deterministically() {
+    let source = include_str!("../../../docs/showcase/relational_proof.hthr");
+    let mut first = base();
+    let mut second = base();
+    check(&mut first, "native_showcase", source);
+    check(&mut second, "native_showcase", source);
+    assert_eq!(
+        support::psi_hash(first.psi()),
+        support::psi_hash(second.psi())
+    );
+}

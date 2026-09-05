@@ -9,6 +9,7 @@ use heather_syntax::{DeclKind, Expr, ExprKind, Item, Span, parse_file};
 
 use crate::{Elaborator, heather_emit::Expr as Out};
 
+pub(crate) mod proof;
 mod rewrite;
 pub use rewrite::{RewriteRequest, RewriteResult, rewrite};
 

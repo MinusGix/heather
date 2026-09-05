@@ -170,3 +170,9 @@ cover partial occurrences, missing observer evidence, and the bounded fragment.
 
 The [saved generated theorem](contextual_rewrite_generated.hthr) contains the
 ordinary proof emitted by the driver and is independently checked.
+
+## Relational congruence in a proof
+
+[relational_proof.hthr](relational_proof.hthr) uses a supplied idempotence proof
+inside `merge_twice` and discharges a missing observer certificate with an
+ordinary `on` clause. See [the round notes](../proof-position-relational-congruence.md).

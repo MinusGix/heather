@@ -35,6 +35,9 @@ struct Goal {
     origin: Option<(String, String)>,
     source: Option<GoalSource>,
     solution: Option<Rc<Term>>,
+    // Optional diagnostic spelling supplied from the original, unreduced type.
+    // Never parsed or used for checking; the kernel goal remains `ty`.
+    statement_spelling: Option<String>,
 }
 
 /// All goal state whose lifetime is one ordinary declaration.
@@ -230,6 +233,7 @@ impl GoalArena {
                     origin,
                     source,
                     solution: None,
+                    statement_spelling: None,
                 });
                 spans.insert(span_key, k);
                 k
@@ -290,13 +294,23 @@ impl GoalArena {
         self.entries.borrow_mut()[index].solution = Some(Rc::new(term));
     }
 
+    pub(super) fn set_statement_spelling(&self, span: Span, key: &str, spelling: String) {
+        let spans = self.spans.borrow();
+        if let Some(&index) = spans.get(&(span.start, span.end, Some(key.to_owned()))) {
+            self.entries.borrow_mut()[index].statement_spelling = Some(spelling);
+        }
+    }
+
     pub(super) fn reports(&self, mut display: impl FnMut(&Cx, &Type) -> String) -> Vec<GoalReport> {
         self.entries
             .borrow()
             .iter()
             .filter(|goal| goal.solution.is_none())
             .map(|goal| {
-                let statement = display(&goal.cx, &goal.ty);
+                let statement = goal
+                    .statement_spelling
+                    .clone()
+                    .unwrap_or_else(|| display(&goal.cx, &goal.ty));
                 let mut context = Vec::new();
                 for (i, (name, entry)) in
                     goal.cx.names.iter().zip(&goal.cx.gamma.entries).enumerate()
