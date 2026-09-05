@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x02";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x02";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x03";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x03";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1141,6 +1141,7 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     w.string(&decl.name);
     w.vec(&decl.tyvars, |w, var| { w.string(&var.name); w.u64(var.level); put_span(w, var.span); });
     w.vec(&decl.params, put_param); put_ty(w, &decl.result);
+    w.option(decl.decreases.as_ref(), put_expr);
     if w.interface && matches!(decl.kind, DeclKind::Theorem | DeclKind::Axiom) {
         // The checked kernel binding retains the statement and opacity bit.
         // The proof block is neither delta-visible nor re-lowered downstream.
@@ -1161,7 +1162,8 @@ fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
-        }))?, params: r.vec(get_param)?, result: get_ty(r)?, body: get_block(r)?, span: get_span(r)?,
+        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?,
+        body: get_block(r)?, span: get_span(r)?,
     })
 }
 

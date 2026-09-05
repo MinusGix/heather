@@ -256,6 +256,18 @@
           }
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "decreases_clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "FIELD",
           "name": "body",
           "content": {
@@ -323,6 +335,18 @@
             "type": "SYMBOL",
             "name": "_declaration_type"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "decreases_clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "FIELD",
@@ -1143,6 +1167,19 @@
               }
             }
           ]
+        }
+      ]
+    },
+    "decreases_clause": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "decreases"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_declaration_type"
         }
       ]
     },

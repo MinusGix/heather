@@ -2303,6 +2303,7 @@ impl Elaborator {
                         .chain(m.params.iter().cloned())
                         .collect(),
                     result: m.result.clone(),
+                    decreases: m.decreases.clone(),
                     body: m.body.clone(),
                     span: m.span,
                 };
@@ -2936,6 +2937,7 @@ impl Elaborator {
             tyvars: d.tyvars.clone(),
             params: instance_params(d),
             result,
+            decreases: None,
             body: body_of(body),
             span,
         };

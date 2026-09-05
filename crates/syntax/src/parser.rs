@@ -1896,6 +1896,15 @@ impl Parser {
         // opens it, not a record literal in the last endpoint of a
         // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
         let result = self.with_record_lit(true, |p| p.ty())?;
+        // `decreases e` — a termination measure, before the body. Contextual,
+        // like `requires`: an identifier can never follow a complete result
+        // type, so the word is unambiguous here. The body's `{` must not be
+        // swallowed as a record literal of the measure.
+        let decreases = if self.eat_kw("decreases") {
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
         // The `given` clause — the constraint sentence written where its
         // subject is not a binder (`given List<A>: Monoid`) — is deliberately
         // NOT decided (issues/requires-placement-syntax.md, log 2026-08-07).
@@ -1928,7 +1937,7 @@ impl Parser {
             self.block()?
         };
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, body, span })
+        Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, decreases, body, span })
     }
 
     // -- blocks and statements ----------------------------------------------

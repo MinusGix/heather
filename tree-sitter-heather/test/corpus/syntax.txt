@@ -314,3 +314,61 @@ assuming classical: Classical, Extensional {
       (identifier)
       (block
         (number)))))
+
+==================
+Termination measures
+==================
+
+fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() { xs }
+theorem t(n: Nat): Even(n) decreases n { trivial }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (identifier))))))
+    (declaration_type_application
+      (identifier)
+      (type_arguments
+        (identifier)))
+    (decreases_clause
+      (declaration_binary_type
+        (declaration_call_type
+          (declaration_member_type
+            (identifier)
+            (identifier))
+          (argument_list))
+        (declaration_call_type
+          (declaration_member_type
+            (identifier)
+            (identifier))
+          (argument_list))))
+    (block
+      (identifier)))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (declaration_call_type
+      (identifier)
+      (argument_list
+        (identifier)))
+    (decreases_clause
+      (identifier))
+    (block
+      (identifier))))

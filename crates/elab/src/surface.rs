@@ -548,6 +548,34 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
     }
     stmts(&decl.body.stmts, &mut n);
     expr(&decl.body.result, &mut n);
+    // Under `decreases`, every recursive call owes one obligation hole
+    // (measure.rs); calls are counted by name, which over-counts a shadowed
+    // name — an upper bound, as required.
+    if let Some(measure) = &decl.decreases {
+        expr(measure, &mut n);
+        let base = decl.name.rsplit("::").next().unwrap_or(&decl.name);
+        let mut calls = 0u32;
+        let mut count = |e: &Expr| {
+            walk_expr(e, &mut |x| {
+                if let ExprKind::App { head, .. } = &x.kind {
+                    let callee = match &head.kind {
+                        ExprKind::TyApp { head, .. } => &head.kind,
+                        other => other,
+                    };
+                    if matches!(callee, ExprKind::Var(v) if v == base || v == &decl.name) {
+                        calls += 1;
+                    }
+                }
+            });
+        };
+        for s in &decl.body.stmts {
+            match s {
+                Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } => count(expr),
+            }
+        }
+        count(&decl.body.result);
+        n += calls;
+    }
     for on in &decl.body.ons {
         if let OnTarget::Stmt(t) = &on.target {
             ty(t, &mut n);

@@ -949,6 +949,22 @@ fn nat_affine_syntax(
             source: int(value),
         });
     }
+    // An open successor is `inner + 1`: pattern variables arrive as `Succ(k)`
+    // from every `match` on a `Nat`, and a measure obligation is nothing but
+    // those (docs/termination-measures-design.md §3). `nat::add(k, 1)` reduces
+    // to `Succ(k)`, so a certificate stated over the sum checks at the goal.
+    if let Term::Succ(inner) = &**tm {
+        let left_nat = nat_term_source(elab, cx, inner)?;
+        return Ok(AffineSyntax::NatAdd {
+            left_nat,
+            right_nat: "1".into(),
+            left: Box::new(nat_affine_syntax(elab, cx, inner, atoms)?),
+            right: Box::new(AffineSyntax::Const {
+                value: 1,
+                source: int(1),
+            }),
+        });
+    }
     if let Some(args) = named_args(elab, tm, "nat::add") {
         if let [left, right] = args.as_slice() {
             let left_nat = nat_term_source(elab, cx, left)?;

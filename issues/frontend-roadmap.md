@@ -334,3 +334,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   re-lowering, and recursive generated shape references invert by registry
   lookup; ambiguous cases retain `<…>`. Bench 106/106, suite 1979 → 1980.
 - 2026-09-05: [[ih-generalization]] landed and closed (docs/ih-generalization-design.md): elaborator-computed generalized motives; library uncurried; residue at [[uncurried-recursions-library-sweep]]. Next: [[termination-measures]].
+- 2026-09-05: [[termination-measures]] landed and closed (docs/termination-measures-design.md): decreases clauses by strong induction on a Nat bound, obligations as goals or omega; residue at [[mutual-recursion-declarations]] and [[decreases-unfolding-equations]].

@@ -65,14 +65,16 @@ module.exports = grammar({
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
-      choice('->', '→'), field('return_type', $._declaration_type), field('body', $.block),
+      choice('->', '→'), field('return_type', $._declaration_type),
+      optional($.decreases_clause), field('body', $.block),
     ),
 
     theorem_declaration: $ => seq(
       'theorem', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
-      ':', field('return_type', $._declaration_type), field('body', $.block),
+      ':', field('return_type', $._declaration_type),
+      optional($.decreases_clause), field('body', $.block),
     ),
 
     axiom_declaration: $ => seq(
@@ -142,6 +144,12 @@ module.exports = grammar({
       optional(seq(':', commaSep1($._expression, '+'))),
     ),
     requires_clause: $ => seq('requires', commaSep1($.requirement)),
+
+    // `decreases e` — a termination measure between the result type and the
+    // body (docs/termination-measures-design.md).
+    // The measure is read with the declaration-type sub-grammar, which is the
+    // expression grammar minus the forms that would swallow the body's `{`.
+    decreases_clause: $ => seq('decreases', $._declaration_type),
     requirement: $ => choice(
       field('class', $.requirement_class_reference),
       seq(field('name', $.identifier), ':', field('class', $.requirement_class_reference)),

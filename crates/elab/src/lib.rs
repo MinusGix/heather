@@ -119,6 +119,7 @@ mod lgg;
 mod lint;
 pub use lint::{Lint, LintProfile};
 mod matching;
+mod measure;
 mod metaprograms;
 mod module_delta;
 mod module_image;
@@ -2447,8 +2448,21 @@ impl Elaborator {
             self.solve_goals(&[], &decl.name)?;
             None
         } else {
-            let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
-            let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
+            let body = if let Some(measure) = &decl.decreases {
+                // Termination by measure: the body is re-spelled as strong
+                // induction on a bound (`measure.rs`) and checked whole.
+                let self_name = cx
+                    .selfref
+                    .as_ref()
+                    .map_or_else(|| decl.name.clone(), |s| s.name.clone());
+                let (wrapped, obligations) =
+                    self.wrap_measure(&cx, decl, &self_name, measure)?;
+                self.elab_check(&cx, &wrapped, &res_ty, &res_lvl)
+                    .map_err(|error| obligations.explain(error))?
+            } else {
+                let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
+                self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?
+            };
             self.solve_goals(&decl.body.ons, &decl.name)?;
             Some(body)
         };

@@ -2079,6 +2079,93 @@
     }
   },
   {
+    "type": "decreases_clause",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "contextual_identifier",
+          "named": true
+        },
+        {
+          "type": "declaration_binary_type",
+          "named": true
+        },
+        {
+          "type": "declaration_call_type",
+          "named": true
+        },
+        {
+          "type": "declaration_function_type",
+          "named": true
+        },
+        {
+          "type": "declaration_index_type",
+          "named": true
+        },
+        {
+          "type": "declaration_member_type",
+          "named": true
+        },
+        {
+          "type": "declaration_prefix_type",
+          "named": true
+        },
+        {
+          "type": "declaration_quantified_type",
+          "named": true
+        },
+        {
+          "type": "declaration_type_application",
+          "named": true
+        },
+        {
+          "type": "hole",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "qualified_identifier",
+          "named": true
+        },
+        {
+          "type": "squash_type",
+          "named": true
+        },
+        {
+          "type": "universe",
+          "named": true
+        },
+        {
+          "type": "vector_expression",
+          "named": true
+        },
+        {
+          "type": "vector_type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "designation_declaration",
     "named": true,
     "fields": {
@@ -2351,6 +2438,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "decreases_clause",
+          "named": true
+        },
         {
           "type": "requires_clause",
           "named": true
@@ -4975,6 +5066,10 @@
       "required": false,
       "types": [
         {
+          "type": "decreases_clause",
+          "named": true
+        },
+        {
           "type": "requires_clause",
           "named": true
         },
@@ -5313,6 +5408,10 @@
   },
   {
     "type": "datarepr",
+    "named": false
+  },
+  {
+    "type": "decreases",
     "named": false
   },
   {

@@ -374,6 +374,11 @@ pub struct Decl {
     pub params: Vec<Param>,
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
+    /// `decreases e` — a `Nat` measure justifying recursion the structural
+    /// checker declines (docs/termination-measures-design.md). The body is
+    /// then elaborated as strong induction on a bound for `e`, and every
+    /// recursive call owes `e[args] < e`, a goal hole named `decN`.
+    pub decreases: Option<Expr>,
     pub body: Block,
     pub span: Span,
 }
