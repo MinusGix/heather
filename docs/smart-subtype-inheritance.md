@@ -1,8 +1,10 @@
 # Choosing what a subtype inherits
 
-Design sketch; the automatic behavior below is not implemented. The
+Design sketch; automatic discovery below is not implemented. The
 [positive-natural round](positive-subtype-round.md) supplies the checked manual
 expansion for the first case.
+The [explicit template round](explicit-subtype-lift-round.md) implements the
+narrow emission step with supplied closure evidence.
 
 For a new user: a subtype gives you values with an extra guarantee. Reusing an
 existing function can mean accepting those values as inputs, promising that

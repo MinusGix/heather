@@ -1,0 +1,28 @@
+import nat;
+import omega;
+import positive_subtype;
+import subtype;
+import lift_positive;
+
+// The arithmetic itself is already in Omega's affine fragment.
+theorem sum_positive(n, m: Nat, positive: 0 < n): 0 < n + m { omega }
+
+theorem projected_sum_positive(x, y: PositiveNat, positive: 0 < x.value):
+    0 < x.value + y.value
+{ omega }
+
+theorem record_sum_positive(x, y: PositiveNat): 0 < x.value + y.value {
+    let positive = x.valid;
+    omega
+}
+
+// Omega supplies the closure proof; the representation handles construction.
+fn omega_lifted_add(x, y: PositiveNat) → PositiveNat {
+    lift_binary(positive_repr(), nat::add, record_sum_positive, x, y)
+}
+
+theorem omega_lifted_add_value(x, y: PositiveNat):
+    omega_lifted_add(x, y).value = x.value + y.value
+{
+    lift_binary_value(positive_repr(), nat::add, record_sum_positive, x, y)
+}

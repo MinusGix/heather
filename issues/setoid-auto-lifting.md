@@ -106,6 +106,14 @@ must prevent instance registration.
 
 ## Log
 
+- 2026-09-05: Started [[explicit-subtype-code-template]]: a context-only named
+  template emission entry point and Heather templates for a binary wrapper
+  and its projection certificate, with explicitly supplied closure evidence.
+- 2026-09-05: [[explicit-subtype-code-template]] completed, including generated
+  positive addition, its projection proof, and resumable closure obligations.
+  The final Furnace suite passed (2,374 tests, 5 ignored). Body analysis,
+  automatic closure discovery, and structure/theorem discovery remain open.
+
 - 2026-07-23: Filed from foundations discussion (see [[kernel-v1-extensions]]
   log of the same date): quotients stay out of the kernel for now, setoids +
   this auto-lifting story are the plan of record.

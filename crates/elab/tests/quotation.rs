@@ -21,7 +21,86 @@ fn elab_err(src: &str) -> String {
     }
 }
 
+#[test]
+fn explicit_emission_runs_a_named_template_under_binders() {
+    elab(
+        "meta fn identity(g: Ctx) -> Code(g |- Nat -> Nat) { code { fun (n: Nat) => n } }
+        fn use_it(n: Nat) -> Nat { emit_code(identity)(n) }
+        theorem computes(n: Nat): use_it(n) = n { refl }",
+    );
+}
+
+#[test]
+fn explicit_emission_checks_shape_and_result() {
+    assert!(
+        elab_err(
+            "meta fn m(g: Ctx, c: Code(g |- Nat)) -> Code(g |- Nat) { code { $c } }
+        fn bad() -> Nat { emit_code(m) }"
+        )
+        .contains("exactly one Ctx")
+    );
+    assert!(
+        elab_err(
+            "meta fn m(g: Ctx) -> Code(g |- Nat) { code { 0 } }
+        fn bad(m: Nat) -> Nat { emit_code(m) }"
+        )
+        .contains("local value")
+    );
+    elab_err(
+        "meta fn m(g: Ctx) -> Code(g |- Nat) { code { 0 } }
+        theorem bad(): 0 = 1 { emit_code(m) }",
+    );
+}
+
+#[test]
+fn explicit_emission_rescopes_globals_and_respects_shadowing() {
+    elab(
+        "fn original(n: Nat) -> Nat { Succ(n) }
+        meta fn m(g: Ctx) -> Code(g |- Nat -> Nat) { code { original } }
+        fn intervening() -> Nat { 42 }
+        theorem kept(): emit_code(m)(2) = 3 { refl }",
+    );
+    elab(
+        "fn emit_code(n: Nat) -> Nat { n }
+        theorem ordinary(): emit_code(2) = 2 { refl }",
+    );
+}
+
 // -- the slice's mechanics, smallest first ---------------------------------
+
+#[test]
+fn explicit_emission_obeys_module_visibility() {
+    let mut e = Elaborator::with_prelude().unwrap();
+    for module in ["left", "right"] {
+        e.elab_module_source(
+            module,
+            "meta fn template(g: Ctx) -> Code(g |- Nat) { code { 2 } }",
+        )
+        .unwrap();
+    }
+    assert!(
+        e.elab_module_source("hidden", "fn f() -> Nat { emit_code(template) }")
+            .is_err()
+    );
+    assert!(
+        e.elab_module_source(
+            "ambiguous",
+            "import left; import right; fn f() -> Nat { emit_code(template) }"
+        )
+        .is_err()
+    );
+    assert!(
+        e.elab_module_source("self_shadow", "import left;
+            fn template() -> Nat { emit_code(template) }")
+            .is_err()
+    );
+    e.elab_module_source(
+        "qualified",
+        "import left; import right;
+        theorem works(): emit_code(left::template) = 2 { refl }",
+    )
+    .unwrap();
+}
 
 #[test]
 fn a_closed_template_checks_at_the_meta_layer() {

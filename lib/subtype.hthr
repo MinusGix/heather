@@ -1,0 +1,27 @@
+import subtype_code;
+
+// An explicit representation interface with ordinary relevant evidence.
+// The predicate is an index, so the record carries data and laws at Type<0>.
+record SubtypeRepr<A, S>(P: A → Type) {
+    project: S → A,
+    pack: (a: A) → P(a) → S,
+    holds: (x: S) → P(project(x)),
+    project_pack: (a: A) → (p: P(a)) → project(pack(a, p)) = a,
+}
+
+fn lift_binary<A, S>({P: A → Type}, repr: SubtypeRepr<A, S>(P),
+    op: A → A → A,
+    closed: (x, y: S) → P(op(repr.project(x), repr.project(y))),
+    x, y: S) → S
+{
+    emit_code(lift_binary_code)(A, S, P, repr.project, repr.pack, op, closed, x, y)
+}
+
+theorem lift_binary_value<A, S>({P: A → Type}, repr: SubtypeRepr<A, S>(P),
+    op: A → A → A,
+    closed: (x, y: S) → P(op(repr.project(x), repr.project(y))), x, y: S):
+    repr.project(lift_binary(repr, op, closed, x, y)) = op(repr.project(x), repr.project(y))
+{
+    emit_code(lift_binary_value_code)(A, S, P, repr.project, repr.pack, op,
+        closed, repr.project_pack, x, y)
+}

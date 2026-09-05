@@ -34,6 +34,156 @@ fn base() -> Elaborator {
 }
 
 #[test]
+fn explicit_subtype_template_builds_positive_addition() {
+    let mut e = positive_subtype_base();
+    check(
+        &mut e,
+        "subtype_code",
+        include_str!("../../../lib/subtype_code.hthr"),
+    );
+    check(&mut e, "subtype", include_str!("../../../lib/subtype.hthr"));
+    check(
+        &mut e,
+        "lift_positive",
+        include_str!("../../../docs/showcase/lift_positive.hthr"),
+    );
+    let missing = "import nat; import positive_subtype; import subtype; import lift_positive;
+        fn pending(x, y: PositiveNat) → PositiveNat {
+            lift_binary(positive_repr(), add, ?closure, x, y)
+        }";
+    let error = e
+        .elab_module_source("packaged_missing", missing)
+        .unwrap_err();
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = error else {
+        panic!("expected a packaged closure goal");
+    };
+    assert_eq!(goals.len(), 1);
+    let repaired = missing.replace(
+        "?closure, x, y)",
+        "?closure, x, y)\n on ?closure := positive_add_closed;",
+    );
+    check(&mut e, "packaged_repaired", &repaired);
+    let changes_value = include_str!("../../../docs/showcase/lift_positive.hthr").replace(
+        "λ n p => PositiveNat(n, p)",
+        "λ n p => PositiveNat(1, trivial)",
+    );
+    assert!(
+        e.elab_module_source("invalid_projection", &changes_value)
+            .is_err()
+    );
+}
+
+#[test]
+fn emitted_subtype_closure_is_resumable_and_checked() {
+    let mut e = positive_subtype_base();
+    check(
+        &mut e,
+        "subtype_code",
+        include_str!("../../../lib/subtype_code.hthr"),
+    );
+    let source = r#"
+import nat;
+import positive_subtype;
+import subtype_code;
+fn lifted(x, y: PositiveNat) -> PositiveNat {
+    emit_code(lift_binary_code)(Nat, PositiveNat, λ n => 0 < n,
+        λ z => z.value, λ n p => PositiveNat(n, p), add,
+        ?closure, x, y)
+}
+
+
+"#;
+    let error = e.elab_module_source("missing_lift", source).unwrap_err();
+    let heather_elab::ElabError::UnsolvedGoals { goals, .. } = &error else {
+        panic!("{}", error.render(source));
+    };
+    assert_eq!(goals.len(), 1);
+    assert!(goals[0].name.contains("closure"));
+    let repair = source.replace(
+        "?closure, x, y)",
+        "?closure, x, y)\n on ?closure := λ a b => add_positive(a.value, b.value, a.valid);",
+    );
+    check(&mut e, "repaired_lift", &repair);
+    let wrong = repair.replace("add_positive(a.value, b.value, a.valid)", "a.valid");
+    assert!(e.elab_module_source("wrong_lift", &wrong).is_err());
+    let zero = repair.replace(", add,", ", λ a b => 0,");
+    assert!(e.elab_module_source("zero_lift", &zero).is_err());
+}
+
+#[test]
+fn omega_proves_positive_subtype_closure() {
+    let mut e = positive_subtype_base();
+    for (name, source) in [
+        (
+            "subtype_code",
+            include_str!("../../../lib/subtype_code.hthr"),
+        ),
+        ("subtype", include_str!("../../../lib/subtype.hthr")),
+        (
+            "lift_positive",
+            include_str!("../../../docs/showcase/lift_positive.hthr"),
+        ),
+        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
+        ("int", include_str!("../../../lib/std/int.hthr")),
+        ("omega", include_str!("../../../lib/std/omega.hthr")),
+    ] {
+        check(&mut e, name, source);
+    }
+    check(
+        &mut e,
+        "positive_omega",
+        include_str!("../../../docs/showcase/positive_omega.hthr"),
+    );
+    let false_goal = "import nat; import logic; import int; import list; import omega;
+        theorem impossible(): 0 < 0 { omega }";
+    assert!(
+        e.elab_module_source("omega_positive_zero", false_goal)
+            .is_err()
+    );
+    check(
+        &mut e,
+        "omega_aliases",
+        r#"
+import nat;
+import omega;
+import positive_subtype;
+// Aliases keep their dependent types when another binder is introduced.
+theorem under_binder(x: PositiveNat): (m: Nat) → 0 < x.value + m {
+    let positive = x.valid;
+    λ m => omega
+}
+theorem alias_chain(x: PositiveNat): 0 < x.value {
+    let first = x.valid;
+    let second = first;
+    omega
+}
+// A binder introduced later takes precedence over the alias.
+theorem binder_wins(n, m: Nat, h: 0 < n): (h: 0 < m) → 0 < m {
+    let h = 0;
+    λ h => omega
+}
+// Caller names must not capture generated constructor or type references.
+theorem collisions(n, OfNat, Cons, Nil: Nat, Not: Nat, h: 0 < n):
+    0 < n + OfNat + Cons + Nil + Not { omega }
+"#,
+    );
+    let shadowed = "import nat; import omega;
+        theorem bad(n: Nat, positive: 0 < n): 0 < n {
+            let positive = 0; omega
+        }";
+    assert!(e.elab_module_source("omega_shadowed", shadowed).is_err());
+    let irrelevant = "import nat; import omega;
+        theorem bad(n: Nat, h: n = n): 0 < n { let irrelevant = h; omega }";
+    assert!(
+        e.elab_module_source("omega_irrelevant", irrelevant)
+            .is_err()
+    );
+    let hidden = "fn hidden(x: int::Int) → int::Int { x }";
+    let error = e.elab_module_source("omega_aliases", hidden).unwrap_err();
+    assert!(error.render(hidden).contains("neither an imported module"));
+}
+
+#[test]
 fn composed_context_showcase_checks() {
     let mut e = base();
     check(
@@ -1228,5 +1378,52 @@ fn raw_add(x, y: PositiveNat) -> PositiveNat { x.value + y.value }
     assert!(
         message.contains("Nat") && message.contains("PositiveNat"),
         "{message}"
+    );
+}
+
+#[test]
+fn witness_dependent_subtype_retains_computation_and_limits_transfer() {
+    let mut e = base();
+    check(
+        &mut e,
+        "subtype_code",
+        include_str!("../../../lib/subtype_code.hthr"),
+    );
+    check(&mut e, "subtype", include_str!("../../../lib/subtype.hthr"));
+    check(
+        &mut e,
+        "witness_subtype",
+        include_str!("../../../docs/showcase/witness_subtype.hthr"),
+    );
+    let observation = "import witness_subtype;
+        theorem invalid(x, y: WitnessedNat, same: SameNumber(x, y)):
+            chosen_bound(x) = chosen_bound(y) { same }";
+    assert!(
+        e.elab_module_source("invalid_bound_observation", observation)
+            .is_err()
+    );
+    let dependent = "import nat; import witness_subtype;
+        fn invalid(x, y: WitnessedNat, same: SameNumber(x, y),
+            index: Fin(Succ(chosen_bound(x)))) → Fin(Succ(chosen_bound(y))) { index }";
+    assert!(
+        e.elab_module_source("invalid_bound_transport", dependent)
+            .is_err()
+    );
+    check(
+        &mut e,
+        "fresh_bound_index",
+        &dependent.replace("{ index }", "{ FZ }"),
+    );
+}
+
+#[test]
+fn omega_missing_library_requests_an_import() {
+    let mut e = Elaborator::with_prelude().unwrap();
+    let source = "theorem missing(n: Nat): n = n { omega }";
+    let error = e.elab_module_source("missing_omega", source).unwrap_err();
+    assert!(
+        error.render(source).contains("add `import omega;`"),
+        "{}",
+        error.render(source)
     );
 }

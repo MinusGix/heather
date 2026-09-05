@@ -89,6 +89,11 @@ unambiguous. It is legal only on a `meta fn`.
 A `meta fn` **without** a `for` clause is never dispatched, whatever it is
 named. That is the point at which "the name is the contract" is retired.
 
+The later [explicit emission entry point](explicit-subtype-lift-round.md)
+allows a caller to request `emit_code(name)` for a context-only code template,
+including one without a slot. This is an explicit call by name; automatic
+dispatch at compiler-owned elaboration sites still uses the slot registry.
+
 ### 2.2 What the elaborator does at registration time
 
 `elab_meta_decl_inner` keeps everything it does today (elaborate the modal

@@ -3,7 +3,7 @@ title: Stress-test transfer through dependent families
 status: open
 labels: [stdlib,relations,dependent-types,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 Promote a small dependent example early so a successful first-order transfer
@@ -50,3 +50,4 @@ indexed families; cardinality-indexed vectors remain a stronger later probe.
 
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
 - 2026-09-04: Selected membership-bearing elements of equivalent finite sets as an early concrete dependent example.
+- 2026-09-05: Added the narrow witness-subtype probe: Fin indexed by the retained bound exposes why SameNumber alone cannot justify identity transport. This is a refusal boundary, not the successful dependent transport/coherence customer required by this issue.

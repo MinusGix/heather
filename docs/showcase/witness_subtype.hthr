@@ -1,0 +1,68 @@
+import logic;
+import nat;
+import subtype;
+
+// The evidence contains a usable upper bound, not just an erased assertion.
+fn HasBound(n: Nat) → Type { Exists<Nat>(λ bound => n <= bound) }
+record WitnessedNat { value: Nat, evidence: HasBound(value) }
+
+fn witnessed_repr() → SubtypeRepr<Nat, WitnessedNat>(HasBound) {
+    SubtypeRepr(
+        project := λ x => x.value,
+        pack := λ n evidence => WitnessedNat(n, evidence),
+        holds := λ x => x.evidence,
+        project_pack := λ n evidence => refl)
+}
+
+fn SameNumber(x, y: WitnessedNat) → Type { x.value = y.value }
+fn chosen_bound(x: WitnessedNat) → Nat { x.evidence.witness }
+
+fn sum_has_bound(x, y: WitnessedNat) → HasBound(x.value + y.value) {
+    Exists(
+        witness := chosen_bound(x) + chosen_bound(y),
+        proof := add_le_mono(x.value, chosen_bound(x), y.value, chosen_bound(y),
+            x.evidence.proof, y.evidence.proof))
+}
+
+fn witnessed_add(x, y: WitnessedNat) → WitnessedNat {
+    lift_binary(witnessed_repr(), add, sum_has_bound, x, y)
+}
+
+theorem witnessed_add_value(x, y: WitnessedNat):
+    witnessed_add(x, y).value = x.value + y.value
+{ lift_binary_value(witnessed_repr(), add, sum_has_bound, x, y) }
+
+// Witness computation survives the lift even though SameNumber ignores it.
+theorem witnessed_add_bound(x, y: WitnessedNat):
+    chosen_bound(witnessed_add(x, y)) = chosen_bound(x) + chosen_bound(y)
+{ refl }
+
+theorem witnessed_add_assoc(x, y, z: WitnessedNat):
+    SameNumber(witnessed_add(witnessed_add(x, y), z),
+        witnessed_add(x, witnessed_add(y, z)))
+{ add_assoc(x.value, y.value, z.value) }
+
+theorem witnessed_add_respects(x, x2: WitnessedNat, hx: SameNumber(x, x2),
+    y, y2: WitnessedNat, hy: SameNumber(y, y2)):
+    SameNumber(witnessed_add(x, y), witnessed_add(x2, y2))
+{
+    j(hx, λ n h => x.value + y.value = n + y2.value,
+        j(hy, λ m h => x.value + y.value = x.value + m, refl))
+}
+
+fn bound_zero() → WitnessedNat { WitnessedNat(0, Exists(0, trivial)) }
+fn bound_one() → WitnessedNat { WitnessedNat(0, Exists(1, trivial)) }
+theorem same_number(): SameNumber(bound_zero(), bound_one()) { refl }
+theorem different_bounds(): chosen_bound(bound_zero()) ≠ chosen_bound(bound_one()) {
+    zero_ne_succ(0)
+}
+
+theorem bound_reader_cannot_ignore_evidence(
+    respects: (x, y: WitnessedNat) → SameNumber(x, y) → chosen_bound(x) = chosen_bound(y)):
+    False
+{
+    different_bounds()(respects(bound_zero(), bound_one(), same_number()))
+}
+
+// A dependent result's type can also observe the retained witness.
+fn bound_index(x: WitnessedNat) → Fin(Succ(chosen_bound(x))) { FZ }

@@ -447,6 +447,12 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
     if !matches!(callee.kind, ExprKind::Var(_)) {
         return;
     }
+    // Template emission takes a name; the outer call applies its emitted
+    // payload. Flattening crosses that boundary and is not a valid rewrite.
+    // This syntax-only lint conservatively also skips user namesakes.
+    if matches!(&callee.kind, ExprKind::Var(name) if name == "emit_code") {
+        return;
+    }
     out.push(Finding {
         lint: Lint::NestedCall,
         msg: "consecutive calls to the same function can use one argument list; write `f(a, b)` instead of `f(a)(b)`".into(),
