@@ -286,11 +286,6 @@ struct ValueMetricCells {
     type_cache_inserts: Cell<u64>,
     type_cache_evictions: Cell<u64>,
     type_cache_peak: Cell<u64>,
-    app_domain_checks: Cell<u64>,
-    app_domain_fast_hits: Cell<u64>,
-    app_codomain_checks: Cell<u64>,
-    app_codomain_fast_hits: Cell<u64>,
-    app_shared_body_env_hits: Cell<u64>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -312,11 +307,6 @@ pub struct ValueMetricsSnapshot {
     pub type_cache_inserts: u64,
     pub type_cache_evictions: u64,
     pub type_cache_peak: u64,
-    pub app_domain_checks: u64,
-    pub app_domain_fast_hits: u64,
-    pub app_codomain_checks: u64,
-    pub app_codomain_fast_hits: u64,
-    pub app_shared_body_env_hits: u64,
 }
 
 impl ValueMetrics {
@@ -336,11 +326,6 @@ impl ValueMetrics {
             type_cache_inserts: self.inner.type_cache_inserts.get(),
             type_cache_evictions: self.inner.type_cache_evictions.get(),
             type_cache_peak: self.inner.type_cache_peak.get(),
-            app_domain_checks: self.inner.app_domain_checks.get(),
-            app_domain_fast_hits: self.inner.app_domain_fast_hits.get(),
-            app_codomain_checks: self.inner.app_codomain_checks.get(),
-            app_codomain_fast_hits: self.inner.app_codomain_fast_hits.get(),
-            app_shared_body_env_hits: self.inner.app_shared_body_env_hits.get(),
         }
     }
 
@@ -360,11 +345,6 @@ impl ValueMetrics {
         self.inner.type_cache_inserts.set(zero.type_cache_inserts);
         self.inner.type_cache_evictions.set(zero.type_cache_evictions);
         self.inner.type_cache_peak.set(zero.type_cache_peak);
-        self.inner.app_domain_checks.set(zero.app_domain_checks);
-        self.inner.app_domain_fast_hits.set(zero.app_domain_fast_hits);
-        self.inner.app_codomain_checks.set(zero.app_codomain_checks);
-        self.inner.app_codomain_fast_hits.set(zero.app_codomain_fast_hits);
-        self.inner.app_shared_body_env_hits.set(zero.app_shared_body_env_hits);
     }
 
     #[cfg(feature = "value-metrics")]
@@ -404,23 +384,52 @@ impl ValueMetricsSnapshot {
             type_cache_inserts: delta!(type_cache_inserts),
             type_cache_evictions: delta!(type_cache_evictions),
             type_cache_peak: delta!(type_cache_peak),
-            app_domain_checks: delta!(app_domain_checks),
-            app_domain_fast_hits: delta!(app_domain_fast_hits),
-            app_codomain_checks: delta!(app_codomain_checks),
-            app_codomain_fast_hits: delta!(app_codomain_fast_hits),
-            app_shared_body_env_hits: delta!(app_shared_body_env_hits),
         }
     }
 }
 
+/// The cache keys are closure addresses. `RandomState`'s SipHash on a
+/// pointer costs more than the lookup it protects, and there is nothing to
+/// protect: the keys are this region's own allocations, not attacker-chosen
+/// input, so a multiply-shift mix of the address is exactly as good a hash
+/// and an order of magnitude cheaper (it was ~7% of a generated x86 module's
+/// profile as `hash_one` + `DefaultHasher::write`).
+#[derive(Default, Clone, Copy)]
+struct PtrHasher(u64);
+
+impl std::hash::Hasher for PtrHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        // Fibonacci hashing; the low bits of an aligned pointer are zero and
+        // the multiply spreads the informative middle bits upward.
+        self.0 = (self.0 ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
+
 struct ValueCache<K, V> {
-    values: HashMap<K, Rc<V>>,
+    values: PtrMap<K, Rc<V>>,
     order: VecDeque<K>,
 }
 
 impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
     fn new() -> ValueCache<K, V> {
-        ValueCache { values: HashMap::new(), order: VecDeque::new() }
+        ValueCache { values: PtrMap::default(), order: VecDeque::new() }
     }
 
     fn get(&self, key: K) -> Option<Rc<V>> {
@@ -457,26 +466,6 @@ impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
 }
 
 impl<'v> ValueArena<'v> {
-    pub(crate) fn record_app_annotation(&self, codomain: bool, fast: bool, env_hit: bool) {
-        #[cfg(feature = "value-metrics")]
-        if let Some(m) = self.metrics {
-            let (checks, hits) = if codomain {
-                (&m.inner.app_codomain_checks, &m.inner.app_codomain_fast_hits)
-            } else {
-                (&m.inner.app_domain_checks, &m.inner.app_domain_fast_hits)
-            };
-            ValueMetrics::bump(checks);
-            if fast {
-                ValueMetrics::bump(hits);
-            }
-            if env_hit {
-                ValueMetrics::bump(&m.inner.app_shared_body_env_hits);
-            }
-        }
-        #[cfg(not(feature = "value-metrics"))]
-        let _ = (codomain, fast, env_hit);
-    }
-
     pub fn new() -> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]

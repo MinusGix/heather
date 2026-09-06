@@ -21,7 +21,7 @@ use heather_kernel::conv::conv_term;
 use heather_kernel::conv::conv_term_profiled;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 #[cfg(feature = "value-metrics")]
 use heather_kernel::value::ValueMetrics;
 
@@ -93,6 +93,18 @@ fn last_body(e: &Elaborator) -> (Term, Type, Level) {
     }
 }
 
+/// The Ψ a binding's body is scoped over: every binding *before* it. A body
+/// mentions only older globals, and with de Bruijn global indices the newest
+/// binding is index 0 — so reading the last binding's body against the full
+/// Ψ shifts every global by one (its own `add` resolves to itself). The
+/// stored-annotation application rule never consulted Ψ for a head's type and
+/// let that pass; the typed rule reads the head's declared type and does not.
+fn owning_psi(e: &Elaborator) -> GlobalCtx {
+    let mut bindings = e.psi().bindings.to_vec();
+    bindings.pop().expect("a binding");
+    GlobalCtx::new(bindings)
+}
+
 #[test]
 fn the_fixtures_elaborate_and_compute_through_the_hook() {
     elab_with_lib(&fixtures());
@@ -143,13 +155,13 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
         if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
             let metrics = ValueMetrics::default();
             conv_term_profiled(
-                hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000, &metrics,
+                &owning_psi(&hooked), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000, &metrics,
             )
             .unwrap_or_else(|e| panic!("hook and Rust `fold` disagree on:\n{fixture}\n{e:?}"));
             eprintln!("fold oracle metrics: {:?}", metrics.snapshot());
             continue;
         }
-        conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
+        conv_term(&owning_psi(&hooked), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| panic!("hook and Rust `fold` disagree on:\n{fixture}\n{e:?}"));
     }
 }
@@ -223,7 +235,7 @@ meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
     let (rt, _, _) = last_body(&rust);
     let empty = LocalCtx::nil();
     assert!(
-        conv_term(wrong.psi(), &empty, Layer::Prog, &wt, &rt, &wty, &wl, 1_000_000).is_err(),
+        conv_term(&owning_psi(&wrong), &empty, Layer::Prog, &wt, &rt, &wty, &wl, 1_000_000).is_err(),
         "the constant fold is not the right fold: the cross-check must reject it"
     );
 }

@@ -3,7 +3,7 @@ title: Generated-term oracle controls are not convertible on master
 status: closed
 labels: [kernel,conversion,elaboration,testing,regression]
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-06
 ---
 
 Three exact-term controls began failing individually with `NotConvertible`:
@@ -116,3 +116,4 @@ were also reverted.
   hits from 13.8% to 25.0% without helping—or bypassing—any fold/tabulate
   comparison. The remaining cost is tracked by
   [[application-annotation-sharing-cost]].
+- 2026-09-06: Diagnosis corrected (2026-09-06): the fold/tabulate/block refusals under the left-inferred rule were a test-harness bug, not an incompleteness. in_language_fold/tabulate/map/nth and let_and_blocks called conv_term with the elaborator's full Ψ while comparing the LAST binding's body, whose global indices are scoped over the prefix — index 0 resolved to the binding itself (probe: Π(Vec(Nat;3)). Nat) instead of add, so any rule that reads a head's declared type from Ψ refused; the annotation-directed rule never does and passed. The tests now compare in the owning prefix (owning_psi), and the typed application rule is in (docs in crates/kernel/DESIGN.md, Algorithms).

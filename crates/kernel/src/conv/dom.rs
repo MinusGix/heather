@@ -208,16 +208,12 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         rhs: D::TmC,
         tm: D::TmC,
     },
-    App {
-        dom_level: &'a Level,
-        cod_level: &'a Level,
-        dom: D::TyC,
-        cod: D::TyC,
-        fun: D::TmC,
-        arg: D::TmC,
-    },
-    Fst { fst_level: &'a Level, snd_level: &'a Level, fst_ty: D::TyC, snd_ty: D::TyC, pair: D::TmC },
-    Snd { fst_level: &'a Level, snd_level: &'a Level, fst_ty: D::TyC, snd_ty: D::TyC, pair: D::TmC },
+    // The stored Π / Σ annotations are not part of these views: the typed
+    // application and projection rules read the head's inferred type
+    // instead, so the view never builds closures for them.
+    App { dom_level: &'a Level, cod_level: &'a Level, fun: D::TmC, arg: D::TmC },
+    Fst { fst_level: &'a Level, snd_level: &'a Level, pair: D::TmC },
+    Snd { fst_level: &'a Level, snd_level: &'a Level, pair: D::TmC },
     UApp { levels: &'a [Level], fun: D::TmC },
     CtxApp { ctx: &'a LocalCtx, fun: D::TmC },
     TyApp { arg: &'a Rc<Type>, fun: D::TmC },
@@ -262,6 +258,38 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
 
     /// A canonical form no rule inspects: `λ`, `Λ`, a pair, `⟨⟩`, `srefl`.
     Opaque,
+}
+
+impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
+    /// A neutral form: a variable, a global, or an elimination stuck on one.
+    /// Every other view is canonical (an introduction form or an encoding).
+    pub(super) fn is_neutral(&self) -> bool {
+        matches!(
+            self,
+            TmView::Var(..)
+                | TmView::GlobalTm { .. }
+                | TmView::ElimNat { .. }
+                | TmView::ElimEmpty { .. }
+                | TmView::ElimSEmpty { .. }
+                | TmView::ElimSquash { .. }
+                | TmView::Case { .. }
+                | TmView::ElimW { .. }
+                | TmView::ElimWf { .. }
+                | TmView::J { .. }
+                | TmView::Transp { .. }
+                | TmView::App { .. }
+                | TmView::Fst { .. }
+                | TmView::Snd { .. }
+                | TmView::UApp { .. }
+                | TmView::CtxApp { .. }
+                | TmView::TyApp { .. }
+                | TmView::LetBoxTy { .. }
+                | TmView::LetBoxTm { .. }
+                | TmView::ElimCodeTy { .. }
+                | TmView::ElimCodeTm { .. }
+                | TmView::Opaque
+        )
+    }
 }
 
 impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
@@ -596,17 +624,6 @@ pub(super) trait Dom<'v>: Sized {
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
     fn ty_eq_fast(a: &Self::TyC, b: &Self::TyC) -> bool;
-    /// Observe the fast-identity result for one stored application annotation.
-    /// The syntax oracle ignores this; the value domain exposes it only through
-    /// optional allocation/performance metrics.
-    fn app_annotation_fast(
-        _env: &Env<'v>,
-        a: &Self::TyC,
-        b: &Self::TyC,
-        _codomain: bool,
-    ) -> bool {
-        Self::ty_eq_fast(a, b)
-    }
     /// Scoped pointer identity of two term sub-structures, for the general
     /// reflexivity shortcut. Unlike [`Dom::tm_eq_fast`], this must imply that
     /// the two carriers denote the same term in their present scope.
@@ -1108,28 +1125,18 @@ impl<'v> Dom<'v> for Syn {
                     tm: Rc::clone(tm),
                 }
             }
-            Term::App { fun, dom_level, cod_level, dom, cod, arg } => TmView::App {
+            Term::App { fun, dom_level, cod_level, arg, .. } => TmView::App {
                 dom_level,
                 cod_level,
-                dom: Rc::clone(dom),
-                cod: Rc::clone(cod),
                 fun: Rc::clone(fun),
                 arg: Rc::clone(arg),
             },
-            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => TmView::Fst {
-                fst_level,
-                snd_level,
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
-                pair: Rc::clone(pair),
-            },
-            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => TmView::Snd {
-                fst_level,
-                snd_level,
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
-                pair: Rc::clone(pair),
-            },
+            Term::Fst { fst_level, snd_level, pair, .. } => {
+                TmView::Fst { fst_level, snd_level, pair: Rc::clone(pair) }
+            }
+            Term::Snd { fst_level, snd_level, pair, .. } => {
+                TmView::Snd { fst_level, snd_level, pair: Rc::clone(pair) }
+            }
             Term::UApp { fun, levels } => {
                 TmView::UApp { levels, fun: Rc::clone(fun) }
             }
