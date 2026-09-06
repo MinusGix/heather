@@ -21,11 +21,14 @@
 //!
 //! - **Neutral comparison is inference**: `tm_ne`/`ty_ne` return the type /
 //!   universe level of the left input (left-biased — sound by ch. 08); the
-//!   normal-form judgments are checking. Application inference compares its
-//!   stored Π annotations before comparing the function spine: although
-//!   well-typedness forces those annotations convertible, their coherent
-//!   dependent spelling is operationally necessary for generated terms. The
-//!   judgment-level `l` inputs are threaded for rule
+//!   normal-form judgments are checking. Application and projection
+//!   inference are **typed**: they compare the heads, read the Π / Σ the
+//!   heads infer, and compare the argument at *its* domain — the stored
+//!   `x:S.T` / Σ annotations are not related to each other, the mirror
+//!   image of the ch. 06 note that ignores the *inferred* type instead
+//!   (both are redundant on the well-typed inputs conversion presupposes;
+//!   see the `App` arm of [`Conv::tm_ne`] for why the paper's choice was
+//!   the expensive one). The judgment-level `l` inputs are threaded for rule
 //!   fidelity but never branch the algorithm — every level the rules
 //!   actually check is an *annotation*, compared via [`Level::equiv`].
 //! - **η-directed** comparison at all four function types (`Π`, `ΠΠ`,
@@ -691,24 +694,23 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.ty_w(env, &mut wa, &mut wb, l)
     }
 
-    /// [`Conv::ty`] for an application's stored Π component, with the same
-    /// judgment and fuel accounting plus feature-gated fast-path metrics.
-    fn app_annotation_ty(
-        &mut self,
-        env: &Env<'v>,
-        a: &D::TyC,
-        b: &D::TyC,
-        l: &Level,
-        codomain: bool,
-    ) -> R {
-        self.spend()?;
-        let fast = D::app_annotation_fast(env, a, b, codomain);
-        if fast {
-            return Ok(());
+    /// Unfold a δ-stuck **neutral** type until its head is a former or a
+    /// spine no definition can advance — the type a comparison is *directed
+    /// by* (the η arms, the neutral-application rule's Π) must expose its
+    /// former, and one unfolding is not always enough: an alias of an alias,
+    /// or an `El` of a code that a definition computes, stays neutral after
+    /// one `delta_ty`. A former view (`Vec`, `Fin`, …) is left alone even
+    /// when a *component* is δ-stuck: the view is already decisive there and
+    /// forcing a length nobody reads would only spend fuel.
+    fn delta_to_head_ty(&mut self, env: &Env<'v>, mut w: D::Ty) -> R<D::Ty> {
+        if self.has_defs {
+            while D::view_ty(self, env, &w).is_neutral()
+                && D::delta_head_ty(self, env, &w).is_some()
+            {
+                w = D::delta_ty(self, env, &w)?;
+            }
         }
-        let mut wa = D::whnf_ty_opaque(self, env, a)?;
-        let mut wb = D::whnf_ty_opaque(self, env, b)?;
-        self.ty_w(env, &mut wa, &mut wb, l)
+        Ok(w)
     }
 
     /// [`Conv::ty`] at the **root** of a conversion, where the two sides are
@@ -1134,6 +1136,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // judge.
         if self.has_defs && D::delta_head_ty(self, env, w).is_some() {
             let w = D::delta_ty(self, env, w)?;
+            let w = self.delta_to_head_ty(env, w)?;
             return self.tm_nf(env, &wa, &wb, &w, l);
         }
         self.tm_nf(env, &wa, &wb, w, l)
@@ -1362,6 +1365,22 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // η arm, so it fires on literal pairs, neutrals, or mixtures.
             // Compare `fst a ≈ fst b : S` and `snd a ≈ snd b : T[fst a/x]`.
             TyView::Sigma { fst_level, snd_level, fst, snd } => {
+                // Neutral-first (extension): two stuck terms whose spines
+                // agree are convertible by congruence, and deciding that on
+                // the spines costs the spines. Projecting first instead
+                // costs the *type*: a `Vec` is a right-nested Σ, so η on two
+                // neutral 64-bit vectors compares 64 components, each a
+                // `fst (snd^k …)` whose own neutral comparison walks its k
+                // projections — quadratic in the length, and a machine word
+                // is the common case. A failed attempt falls through to η,
+                // which is what decides the η-equal-but-not-spine-equal
+                // pairs; the guard semantics are [`Conv::delta_lazy`]'s.
+                if D::view_tm(self, env, a).is_neutral()
+                    && D::view_tm(self, env, b).is_neutral()
+                    && self.delta_lazy(|c| c.tm_nee(env, a, b).map(drop))?.is_some()
+                {
+                    return Ok(());
+                }
                 let (fa, fb) =
                     D::eta_proj(self, env, true, a, b, fst_level, snd_level, fst, snd)?;
                 self.tm(env, &fa, &fb, fst, fst_level)?;
@@ -1871,88 +1890,91 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(b1))?, (*ml1).clone()))
             }
             (
-                TmView::App {
-                    dom_level: dl1,
-                    cod_level: cl1,
-                    dom: s1,
-                    cod: t1,
-                    fun: f1,
-                    arg: a1,
-                },
-                TmView::App {
-                    dom_level: dl2,
-                    cod_level: cl2,
-                    dom: s2,
-                    cod: t2,
-                    fun: f2,
-                    arg: a2,
-                },
+                TmView::App { dom_level: dl1, cod_level: cl1, fun: f1, arg: a1 },
+                TmView::App { dom_level: dl2, cod_level: cl2, fun: f2, arg: a2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                self.app_annotation_ty(env, s1, s2, dl1, false)?;
-                let e_x = D::push_entry(env, s1, dl1);
-                self.app_annotation_ty(&e_x, t1, t2, cl1, true)?;
-                // The inferred head type is redundant only after the stored Π
-                // annotations have been related. Besides checking the ch. 06
-                // premises, that comparison preserves the dependent spelling
-                // needed by generated terms on the right.
-                self.tm_nee_c(env, f1, f2)?;
-                self.tm(env, a1, a2, s1, dl1)?;
-                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(a1))?, (*cl1).clone()))
+                // Typed application rule (extension; the mirror image of the
+                // ch. 06 note below its application rule). The paper compares
+                // the two stored `x:S.T` annotations and *ignores* the type
+                // inferred for the heads, "because we already know ν and ν'
+                // are well-typed so the type annotations must be
+                // equivalent". That well-typedness runs the other way just
+                // as well: each annotation converts with the Π inferred for
+                // its own head, the heads convert, and convertible neutrals
+                // infer convertible types (ch. 08) — so relating the two
+                // annotations to each other adds nothing on the well-typed
+                // inputs conversion presupposes. What it *costs* is the
+                // whole per-node price of a spine: at every application node
+                // the codomain annotation is the entire remaining Π, whose
+                // domains are themselves neutral applications with their own
+                // annotations, so one n-ary spine compared n annotation
+                // suffixes and recursed into each — the `ty_nf`/`ty_w` stacks
+                // and the tens of millions of type closures of
+                // issues/application-annotation-sharing-cost.md.
+                //
+                // So: compare the heads, read the Π they infer, compare the
+                // arguments at *its* domain and return *its* codomain. The
+                // inferred type is fully δ-reduced ([`Conv::tm_nee`]) and
+                // then driven to its head ([`Conv::delta_to_head_ty`]) —
+                // the 2026-08-27 attempt viewed it as it came, which is what
+                // refused the dependent fold/tabulate instances
+                // (issues/generated-term-oracle-controls-not-convertible.md).
+                // The stored annotations are ignored here exactly as the
+                // inferred type was before; the typing seam still checks
+                // every annotation against its head's type once, at the
+                // term's own check.
+                let (w, _) = self.tm_nee_c(env, f1, f2)?;
+                let w = self.delta_to_head_ty(env, w)?;
+                let TyView::Pi { dom_level, cod_level, dom, cod } = D::view_ty(self, env, &w)
+                else {
+                    return Err(NC);
+                };
+                let (dom_level, cod_level) = (dom_level.clone(), cod_level.clone());
+                self.tm(env, a1, a2, &dom, &dom_level)?;
+                Ok((D::inst_ty(self, env, env, &cod, std::slice::from_ref(a1))?, cod_level))
             }
-            // fst/snd neutral congruence (extension; mirrors App — the Σ
-            // annotations forced by well-typedness are compared, the pair via
-            // tm_nee). These arms fire only when the projected pair is itself
-            // neutral (η already handled non-neutral pairs in tm_nf).
+            // fst/snd neutral congruence (extension; mirrors App — typed, at
+            // the Σ inferred for the pair). These arms fire only when the
+            // projected pair is itself neutral (η already handled non-neutral
+            // pairs in tm_nf).
             (
-                TmView::Fst {
-                    fst_level: dl1,
-                    snd_level: cl1,
-                    fst_ty: s1,
-                    snd_ty: t1,
-                    pair: p1,
-                },
-                TmView::Fst {
-                    fst_level: dl2,
-                    snd_level: cl2,
-                    fst_ty: s2,
-                    snd_ty: t2,
-                    pair: p2,
-                },
+                TmView::Fst { fst_level: dl1, snd_level: cl1, pair: p1 },
+                TmView::Fst { fst_level: dl2, snd_level: cl2, pair: p2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                self.ty(env, s1, s2, dl1)?;
-                let e_x = D::push_entry(env, s1, dl1);
-                self.ty(&e_x, t1, t2, cl1)?;
-                self.tm_nee_c(env, p1, p2)?; // inferred Σ: redundant, ignored
-                Ok((s1.clone(), (*dl1).clone()))
+                // Typed projection rule — the App arm's argument, verbatim:
+                // on well-typed inputs each stored Σ annotation converts with
+                // the Σ inferred for its own pair, so relating the two
+                // annotations to each other adds nothing, and costs the size
+                // of the remaining tuple type at *every* node of a projection
+                // chain (a Wf record's children tuple is exactly such a chain,
+                // and its annotations carry the whole shape).
+                let (w, _) = self.tm_nee_c(env, p1, p2)?;
+                let w = self.delta_to_head_ty(env, w)?;
+                let TyView::Sigma { fst_level, fst, .. } = D::view_ty(self, env, &w) else {
+                    return Err(NC);
+                };
+                Ok((fst, fst_level.clone()))
             }
             (
-                TmView::Snd {
-                    fst_level: dl1,
-                    snd_level: cl1,
-                    fst_ty: s1,
-                    snd_ty: t1,
-                    pair: p1,
-                },
-                TmView::Snd {
-                    fst_level: dl2,
-                    snd_level: cl2,
-                    fst_ty: s2,
-                    snd_ty: t2,
-                    pair: p2,
-                },
+                TmView::Snd { fst_level: dl1, snd_level: cl1, pair: p1 },
+                TmView::Snd { fst_level: dl2, snd_level: cl2, pair: p2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
-                self.ty(env, s1, s2, dl1)?;
-                let e_x = D::push_entry(env, s1, dl1);
-                self.ty(&e_x, t1, t2, cl1)?;
-                self.tm_nee_c(env, p1, p2)?;
-                let fst_p = D::proj(self, env, true, dl1, cl1, s1, t1, p1)?;
-                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(&fst_p))?, (*cl1).clone()))
+                // As for `fst`: the inferred Σ, not the stored annotations.
+                let (w, _) = self.tm_nee_c(env, p1, p2)?;
+                let w = self.delta_to_head_ty(env, w)?;
+                let TyView::Sigma { fst_level, snd_level, fst, snd } = D::view_ty(self, env, &w)
+                else {
+                    return Err(NC);
+                };
+                let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+                let fst_p = D::proj(self, env, true, &fst_level, &snd_level, &fst, &snd, p1)?;
+                Ok((D::inst_ty(self, env, env, &snd, std::slice::from_ref(&fst_p))?, snd_level))
             }
             (
                 TmView::UApp { levels: ls1, fun: f1 },

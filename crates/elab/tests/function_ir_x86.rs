@@ -573,12 +573,33 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     if report_value_metrics {
         e.enable_value_metrics();
     }
+    if let Some(path) = std::env::var_os("HEATHER_FUNCTION_IR_X86_DUMP") {
+        std::fs::write(path, &source).expect("dump generated module");
+    }
+    // `HEATHER_FUNCTION_IR_X86_PERF=<file>` records a `perf` profile of the
+    // module check alone (the base's replay is most of this binary's wall).
+    let mut perf = std::env::var_os("HEATHER_FUNCTION_IR_X86_PERF").map(|out| {
+        let child = std::process::Command::new("perf")
+            .args(["record", "-F", "499", "-g", "-o"])
+            .arg(out)
+            .args(["-p", &std::process::id().to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn perf");
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        child
+    });
     let started = Instant::now();
     if let Err(error) = e.elab_module_source("function_ir_mixed_alu_x86", &source) {
         panic!(
             "generated mixed binary ALU artifact did not check: {}",
             error.render(&source),
         );
+    }
+    if let Some(child) = perf.as_mut() {
+        let _ = std::process::Command::new("kill").args(["-INT", &child.id().to_string()]).status();
+        let _ = child.wait();
     }
     if report_timings {
         let total = started.elapsed();

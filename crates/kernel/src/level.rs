@@ -33,8 +33,33 @@ impl Level {
         Level::Succ(Rc::new(l))
     }
 
+    /// `a ⊔ b`, spelled exactly: the constructor. Substitution and every
+    /// other operation that must *preserve* a level's spelling goes through
+    /// here; inference goes through [`Level::join`].
     pub fn max(a: Level, b: Level) -> Level {
         Level::Max(Rc::new(a), Rc::new(b))
+    }
+
+    /// `a ⊔ b` as an *inferred* level, spelled as small as the operands
+    /// allow: `l ⊔ l`, `0 ⊔ l` and `l ⊔ 0` are `l`, and `ω` absorbs. These
+    /// are identities of the ≈-class (`normalize` sends both sides to the
+    /// same [`LevelNf`]), so the spelling changes no verdict — `equiv` still
+    /// decides the general case. What it changes is how often an inferred
+    /// level is syntactically the written one: the checker infers
+    /// `Ty (0 ⊔ 0)` for a `Π` whose components sit at `0`, and every
+    /// elaborator that writes `Ty 0` for the same type missed the `==`
+    /// reflexivity shortcut at the expected-vs-inferred seam and paid a
+    /// value-domain query for a level comparison (tens of thousands of
+    /// times on one generated module). Not for substitution: a substituted
+    /// level must keep its author's spelling.
+    pub fn join(a: Level, b: Level) -> Level {
+        match (&a, &b) {
+            (Level::Omega, _) | (_, Level::Omega) => Level::Omega,
+            (Level::Zero, _) => b,
+            (_, Level::Zero) => a,
+            _ if a == b => a,
+            _ => Level::max(a, b),
+        }
     }
 
     /// Constant level `n`.

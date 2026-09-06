@@ -3,7 +3,7 @@ title: The value domain costs a 1.5-3x constant where there is no sharing to win
 status: open
 labels: [kernel,conversion,performance]
 created: 2026-07-31
-updated: 2026-09-02
+updated: 2026-09-06
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -215,3 +215,4 @@ and should re-read this at the same time — conversion no longer calls
   and per-query constant improvements, consistent with the smallest queries
   benefiting most; they do not change the FunctionIR proof-composition slope
   or contradict the neutral end-to-end ALU measurement above.
+- 2026-09-06: Module-only profile datum (2026-09-06, five-node FunctionIR/x86 module, perf attached only around the module check): _int_malloc 16%, malloc_consolidate 7%, unlink_chunk 7% — ~30% of module wall in the allocator, plus map_type/map_term<ShiftGlobal> ~8% (every conversion query owns a fresh reduce::BodyCache, so a definition's rescoped body is rebuilt per query) and SubstGlobal ~4%. Levers, none taken: share the BodyCache per typing gate (Ψ is fixed within one binding's check), pool/reset ValueArena across a gate's queries instead of new/drop per query. SipHash on the cache's pointer keys (~7%) was replaced by a first-party pointer hasher in this round.

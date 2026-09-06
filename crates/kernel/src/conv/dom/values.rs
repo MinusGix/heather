@@ -36,7 +36,6 @@
 
 use std::rc::Rc;
 
-use crate::bounds;
 use crate::eval::Eval;
 use crate::level::Level;
 use crate::rec;
@@ -204,62 +203,6 @@ mod tests {
         let ta = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         let tb = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         assert!(Values::tm_identity_fast(&ta, &tb));
-    }
-
-    #[test]
-    fn application_annotation_identity_reads_only_free_captures() {
-        let psi = crate::term::GlobalCtx::default();
-        let gamma = LocalCtx::nil();
-        let arena = value::ValueArena::new();
-        let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-        let base = value::Env::empty();
-        let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left_env = base.push(&arena, left_outer).push(&arena, shared_inner);
-        let right_env = base.push(&arena, right_outer).push(&arena, shared_inner);
-
-        let inner_body = Rc::new(Type::El {
-            level: Level::Zero,
-            tm: Rc::new(Term::Var(LocalVar(0))),
-        });
-        let inner_left = TyC {
-            clo: arena.ty(TyClo::new(left_env, Rc::clone(&inner_body))),
-            home: 2,
-            sat: 2,
-        };
-        let inner_right = TyC {
-            clo: arena.ty(TyClo::new(right_env, inner_body)),
-            home: 2,
-            sat: 2,
-        };
-        assert!(Values::app_annotation_fast(
-            &env,
-            &inner_left,
-            &inner_right,
-            false,
-        ));
-
-        let outer_body = Rc::new(Type::El {
-            level: Level::Zero,
-            tm: Rc::new(Term::Var(LocalVar(1))),
-        });
-        let outer_left = TyC {
-            clo: arena.ty(TyClo::new(left_env, Rc::clone(&outer_body))),
-            home: 2,
-            sat: 2,
-        };
-        let outer_right = TyC {
-            clo: arena.ty(TyClo::new(right_env, outer_body)),
-            home: 2,
-            sat: 2,
-        };
-        assert!(!Values::app_annotation_fast(
-            &env,
-            &outer_left,
-            &outer_right,
-            false,
-        ));
     }
 
     #[test]
@@ -1265,26 +1208,6 @@ impl<'v> Dom<'v> for Values {
                 })
     }
 
-    fn app_annotation_fast(env: &Env<'v>, a: &TyC<'v>, b: &TyC<'v>, codomain: bool) -> bool {
-        let ordinary = Self::ty_eq_fast(a, b);
-        let env_hit = !ordinary
-            && a.home == b.home
-            && a.sat == b.sat
-            && matches!(
-                (a.clo.as_syn(), b.clo.as_syn()),
-                (Some((e1, b1)), Some((e2, b2)))
-                    if Rc::ptr_eq(b1, b2)
-                        && value::Env::values_ptr_eq_prefix(
-                            e1,
-                            e2,
-                            bounds::type_local_bound(b1),
-                        )
-            );
-        let fast = ordinary || env_hit;
-        env.arena.record_app_annotation(codomain, fast, env_hit);
-        fast
-    }
-
     /// Scoped identity ([`Values::ty_eq_fast`]) for terms: one closure — or
     /// one (environment, body) denotation — opened with the same pending
     /// binders denotes the same term on both sides.
@@ -1694,31 +1617,14 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
     };
     let head = TmC::value(env, spine_head(n));
     match last {
-        Elim::App { dom_level, cod_level, dom, cod, arg } => TmView::App {
-            dom_level,
-            cod_level,
-            dom: TyC::here(env, *dom),
-            cod: TyC::under(env, *cod, 1),
-            fun: head,
-            arg: TmC::here(env, *arg),
-        },
+        Elim::App { dom_level, cod_level, arg, .. } => {
+            TmView::App { dom_level, cod_level, fun: head, arg: TmC::here(env, *arg) }
+        }
         Elim::UApp { levels } => TmView::UApp { levels, fun: head },
         Elim::CtxApp { ctx } => TmView::CtxApp { ctx, fun: head },
         Elim::TyApp { arg } => TmView::TyApp { arg, fun: head },
-        Elim::Fst { fst_level, snd_level, fst_ty, snd_ty } => TmView::Fst {
-            fst_level,
-            snd_level,
-            fst_ty: TyC::here(env, *fst_ty),
-            snd_ty: TyC::under(env, *snd_ty, 1),
-            pair: head,
-        },
-        Elim::Snd { fst_level, snd_level, fst_ty, snd_ty } => TmView::Snd {
-            fst_level,
-            snd_level,
-            fst_ty: TyC::here(env, *fst_ty),
-            snd_ty: TyC::under(env, *snd_ty, 1),
-            pair: head,
-        },
+        Elim::Fst { fst_level, snd_level, .. } => TmView::Fst { fst_level, snd_level, pair: head },
+        Elim::Snd { fst_level, snd_level, .. } => TmView::Snd { fst_level, snd_level, pair: head },
         Elim::ElimNat { level, motive, base, step } => TmView::ElimNat {
             level,
             motive: TyC::under(env, *motive, 1),

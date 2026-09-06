@@ -3,7 +3,7 @@ title: Make large proof composition retain source sharing in the frontend
 status: open
 labels: [frontend,elaboration,performance,proofs,compiler]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-06
 ---
 
 The compact FunctionIR validity experiment isolated two costs that should not
@@ -42,3 +42,7 @@ directory/list spine.
 - **[[function-ir-validity-environment-scaling]]** owns the concrete compact
   validity representation and measurements. Assumed here: its staged source is
   the semantic and performance control.
+
+## Log
+
+- 2026-09-06: Datum (2026-09-06): after the kernel round on [[function-ir-x86-proof-scaling]], the generated x86 module's FRONTEND time is 1.5 s / 6.1 s / 20.3 s at 5 / 20 / 50 nodes (kernel 7.0 / 24.8 / 46.6 s), i.e. superlinear where the kernel is now ~linear; the boundary items (artifact, refines, protected) carry 11.8 s of frontend at 50 nodes. This is the next wall for the 100-node rail.

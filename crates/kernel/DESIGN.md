@@ -289,6 +289,21 @@ paper too).
   variable); boxed types/terms compare by **syntactic equality**; recursors
   block on neutral scrutinees *and* on boxed global variables `□(U^δ)` /
   `□(u^δ)`; neutral comparison is an inference step that returns a type.
+  **Application and projection are typed** (2026-09-06): two neutral
+  `app`s / `fst`s / `snd`s compare their heads, read the Π / Σ the heads
+  *infer* (fully δ-reduced, then driven to its former through
+  `Conv::delta_to_head_ty`), and compare the argument at that domain; the
+  stored `x:S.T` / Σ annotations are never related to each other. This is
+  the mirror image of ch. 06's own note, which compares the annotations and
+  ignores the inferred type "because ν, ν' are well-typed so the annotations
+  must be equivalent" — on the well-typed inputs conversion presupposes the
+  two are interderivable, and the paper's choice costs the size of the
+  remaining Π/Σ at every node of a spine (a 15-ary theorem application
+  compared 15 codomain suffixes, each recursing into its own neutral
+  domains; a Wf record's children tuple did the same through its `snd`
+  chain). At Σ types, two neutrals try their spines before η-expanding
+  (`Conv::tm_nf`'s Σ arm): η on two neutral 64-bit vectors was quadratic
+  in the length, and a failed spine attempt still falls through to η.
 - **Its reduction engine is an environment machine over a value domain**
   (`src/value.rs`, `src/eval.rs`; `docs/nbe-conversion-design.md`), not a
   term rewriter — adopted 2026-07-31 to kill the exponential of

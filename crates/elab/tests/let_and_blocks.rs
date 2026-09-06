@@ -19,7 +19,7 @@ use heather_elab::{ElabError, Elaborator};
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 
 const ADD: &str =
     "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
@@ -38,6 +38,18 @@ fn last_body(e: &Elaborator) -> (Term, Type, Level) {
         }
         other => panic!("expected a bodied Tm binding, found {other:?}"),
     }
+}
+
+/// The Ψ a binding's body is scoped over: every binding *before* it. A body
+/// mentions only older globals, and with de Bruijn global indices the newest
+/// binding is index 0 — so reading the last binding's body against the full
+/// Ψ shifts every global by one (its own `add` resolves to itself). The
+/// stored-annotation application rule never consulted Ψ for a head's type and
+/// let that pass; the typed rule reads the head's declared type and does not.
+fn owning_psi(e: &Elaborator) -> GlobalCtx {
+    let mut bindings = e.psi().bindings.to_vec();
+    bindings.pop().expect("a binding");
+    GlobalCtx::new(bindings)
 }
 
 fn ok(src: &str) {
@@ -231,7 +243,7 @@ fn a_block_is_the_program_without_it() {
     // expected outcome and inequality would mean the block minted something.
     assert!(a == b, "a block emitted a different term than the hoisted `let`");
     let empty = LocalCtx::nil();
-    conv_term(with_block.psi(), &empty, Layer::Prog,
+    conv_term(&owning_psi(&with_block), &empty, Layer::Prog,
               &a, &b, &aty, &alvl, 1_000_000)
         .expect("the two spellings must be convertible");
 }

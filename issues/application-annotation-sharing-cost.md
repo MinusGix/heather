@@ -1,9 +1,9 @@
 ---
 title: Reduce residual stored application annotation conversion cost
-status: open
+status: closed
 labels: [kernel,conversion,performance,representation]
 created: 2026-08-28
-updated: 2026-09-03
+updated: 2026-09-06
 ---
 
 Restoring the annotation-directed neutral application rule fixed
@@ -75,3 +75,4 @@ requires.
   and removed about 0.6 M of 48.4 M type-closure constructions (~1.25%). It
   is sound and useful but not the dominant lever; persistent neutral spines
   produced the material wall-time improvement in the same round.
+- 2026-09-06: FIXED by removing the comparison, not by sharing it (2026-09-06, x86 kernel round). Conversion's neutral-application rule is now typed: heads compared, the Π they infer read (fully δ-reduced and driven to its former by the new Conv::delta_to_head_ty), the argument compared at its domain — the stored annotations are never related to each other. The 2026-08-27 attempt failed not because a left-inferred Π is incomplete but because the three "controls" compared a binding's body in a Ψ that already contained the binding (global indices off by one, so the head's declared type was the wrong global's); the annotation rule never read a head's type from Ψ and masked it. Fixed the tests (owning_psi) and the same typed rule for fst/snd. On the five-node x86 module: type closures 47.9 M -> 21.7 M, wall 16.3 s -> 8.5 s with the sibling fixes of the round. The metrics fields this issue's rounds added (app_domain_*) went with the rule. Closing; the residual moved to [[inductive-spelling-codes-nonrecursive]].

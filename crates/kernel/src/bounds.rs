@@ -274,16 +274,6 @@ pub(crate) fn skip_type(t: &Rc<Type>, d: u32) -> bool {
     CACHE.with(|c| c.borrow_mut().type_query(t).is_some_and(|u| !u.touched_at(d)))
 }
 
-/// Number of innermost local-environment entries that can affect `t`.
-///
-/// Unlike the two-stage substitution query this is an eager exact query:
-/// conversion asks it only after discovering two closures over the very same
-/// syntax body, where avoiding a recursive annotation comparison immediately
-/// repays the cached walk.
-pub(crate) fn type_local_bound(t: &Rc<Type>) -> u32 {
-    CACHE.with(|c| c.borrow_mut().type_use(t).bound)
-}
-
 impl Cache {
     /// Every `δ` has a tail, and the local operations rewrite tails
     /// unconditionally; the payload terms live in the current scope.

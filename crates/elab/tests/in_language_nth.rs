@@ -23,7 +23,7 @@ use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 
 const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 
@@ -93,6 +93,18 @@ fn last_body(e: &Elaborator) -> (Term, Type, Level) {
     }
 }
 
+/// The Ψ a binding's body is scoped over: every binding *before* it. A body
+/// mentions only older globals, and with de Bruijn global indices the newest
+/// binding is index 0 — so reading the last binding's body against the full
+/// Ψ shifts every global by one (its own `add` resolves to itself). The
+/// stored-annotation application rule never consulted Ψ for a head's type and
+/// let that pass; the typed rule reads the head's declared type and does not.
+fn owning_psi(e: &Elaborator) -> GlobalCtx {
+    let mut bindings = e.psi().bindings.to_vec();
+    bindings.pop().expect("a binding");
+    GlobalCtx::new(bindings)
+}
+
 #[test]
 fn the_fixtures_elaborate_and_compute_through_the_hook() {
     elab_with_lib(&fixtures());
@@ -135,7 +147,7 @@ fn hook_output_is_convertible_with_the_kernel_oracle() {
              compare the kernel term with itself"
         );
         let empty = LocalCtx::nil();
-        conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
+        conv_term(&owning_psi(&hooked), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| panic!("hook and kernel `nth` disagree on:\n{fixture}\n{e:?}"));
     }
 }
@@ -205,7 +217,7 @@ meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
     let (rt, _, _) = last_body(&rust);
     let empty = LocalCtx::nil();
     assert!(
-        conv_term(wrong.psi(), &empty, Layer::Prog, &wt, &rt, &wty, &wl, 1_000_000).is_err(),
+        conv_term(&owning_psi(&wrong), &empty, Layer::Prog, &wt, &rt, &wty, &wl, 1_000_000).is_err(),
         "the constant projection is not `nth`: the cross-check must reject it"
     );
 }
