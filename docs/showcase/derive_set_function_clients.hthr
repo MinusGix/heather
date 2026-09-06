@@ -1,0 +1,24 @@
+import list;
+import relation_props;
+import algebra_rel;
+import finite_set;
+import list_setoid;
+import list_finite_set;
+import tree_finite_set;
+import derive_set_functions;
+
+theorem generated_list_update<A> requires sets: FiniteSets<List<A>, A>(SameMembers<A>, append<A>, list_operations<A>)
+    (f: A → A, xs, ys: List<A>, h: SameMembers(xs, ys)):
+    SameMembers(augment<A, List<A>>(append<A>, list_operations<A>, f, xs), augment<A, List<A>>(append<A>, list_operations<A>, f, ys))
+{
+    let certified = augment_compatible<A, List<A>>(f, ops := list_operations<A>);
+    certified(xs, ys, h)
+}
+
+theorem generated_tree_update<A> requires sets: FiniteSets<SetTree<A>, A>(TreeSame<A>, tree_union<A>, tree_operations<A>)
+    (f: A → A, xs, ys: SetTree<A>, h: TreeSame(xs, ys)):
+    TreeSame(augment<A, SetTree<A>>(tree_union<A>, tree_operations<A>, f, xs), augment<A, SetTree<A>>(tree_union<A>, tree_operations<A>, f, ys))
+{
+    let certified = augment_compatible<A, SetTree<A>>(f, ops := tree_operations<A>);
+    certified(xs, ys, h)
+}

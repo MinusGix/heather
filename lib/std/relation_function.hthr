@@ -1,0 +1,16 @@
+// Ordinary proof constructors for deriving compatibility of named functions.
+import bool;
+import relation;
+import relation_props;
+
+fn choose<A>(condition: Bool, yes, no: A) → A {
+    match condition { False => no, True => yes }
+}
+
+theorem choose_respects<A>(R: A → A → Type, first, second: Bool,
+    same: first = second, yes, yes2: A, hy: R(yes, yes2), no, no2: A, hn: R(no, no2)):
+    R(choose(first, yes, no), choose(second, yes2, no2))
+{
+    j(same, λ other eq => R(choose(first, yes, no), choose(other, yes2, no2)),
+        match first { False => hn, True => hy })
+}

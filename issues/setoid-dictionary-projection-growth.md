@@ -22,3 +22,7 @@ annotation/projection growth without relying on clients to discover the cheap
 layout. Reproducer/customer: `docs/showcase/finite_set_client.hthr`.
 Related: [[finite-set-client-design]], [[scoped-multi-parameter-type-projection]],
 [[application-annotation-sharing-cost]].
+
+## Log
+
+- 2026-09-05: Named compatibility theorem reuse exposed another cost boundary: a computational augment function carrying an unused FiniteSets dictionary caused concrete list/tree proof reuse to fail kernel checking with OutOfFuel. Passing only union and SetOperations to the function, while retaining laws on the compatibility theorem, makes both backend clients pass under ordinary fuel. Customer: docs/showcase/derive_set_function_clients.hthr. This is a library separation, not a general compiler cost fix.

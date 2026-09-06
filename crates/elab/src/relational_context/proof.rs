@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
-use heather_syntax::{Expr, Item, Span, parse_file};
+use heather_syntax::{parse_file, Expr, Item, Span};
 
-use crate::{Alias, Cx, ElabError, Elaborator, R, TyVar, err, goals};
+use crate::{err, goals, Alias, Cx, ElabError, Elaborator, TyVar, R};
 
 fn expression(text: &str, span: Span) -> R<Expr> {
     let source = format!("fn generated() -> Type {{ {text} }}");
@@ -72,6 +72,7 @@ struct Builder<'a> {
     serial: usize,
     nodes: usize,
     goals: usize,
+    derive: bool,
 }
 
 impl Builder<'_> {
@@ -231,12 +232,17 @@ impl Builder<'_> {
                     return err("`rel_cong` cannot create an obligation here", self.span);
                 }
             }
-            let key = format!("rel_cong:{}", self.goals);
+            let tactic = if self.derive {
+                "rel_derive"
+            } else {
+                "rel_cong"
+            };
+            let key = format!("{tactic}:{}", self.goals);
             self.goals += 1;
             let term = self.e.new_goal_key(
                 self.original,
                 None,
-                Some(("rel_cong", label)),
+                Some((tactic, label)),
                 ty.clone(),
                 level.clone(),
                 self.span,
@@ -254,13 +260,107 @@ impl Builder<'_> {
         Ok(self.alias(Rc::new(term), ty, level))
     }
 
+    // One transparent head-reduction step at a time. Re-entering walk gives
+    // registered/local certificates priority at every exposed application.
+    fn expand(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> Option<R<String>> {
+        let oracle = self.e.semantic_oracle();
+        let l = oracle.term_reducts(&self.cx.gamma, left, 1).next();
+        let r = oracle.term_reducts(&self.cx.gamma, right, 1).next();
+        if l.is_none() && r.is_none() {
+            return None;
+        }
+        let l = l.map(Rc::new).unwrap_or_else(|| left.clone());
+        let r = r.map(Rc::new).unwrap_or_else(|| right.clone());
+        if l == *left && r == *right {
+            return None;
+        }
+        Some(self.walk(l, r, depth + 1))
+    }
+
+    // Recognize only the resolved library combinator, never a spelling alone.
+    fn choice(&self, term: &Term) -> Option<Vec<Rc<Term>>> {
+        let mut args = Vec::new();
+        let mut head = term;
+        while let Term::App { fun, arg, .. } = head {
+            args.push(arg.clone());
+            head = fun;
+        }
+        let (definition, _, _) = self
+            .e
+            .resolve(&self.cx, "relation_function::choose", self.span)
+            .ok()?;
+        if head != &definition || args.len() != 4 {
+            return None;
+        }
+        args.reverse();
+        Some(args[1..].to_vec())
+    }
+
+    fn branch(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> R<Option<String>> {
+        let (Some(l), Some(r)) = (self.choice(left), self.choice(right)) else {
+            return Ok(None);
+        };
+        let (bool_ty, bool_level) = self.type_of("bool::Bool")?;
+        let first = self.alias(l[0].clone(), bool_ty.clone(), bool_level.clone());
+        let second = self.alias(r[0].clone(), bool_ty, bool_level);
+        let same = if l[0] == r[0] {
+            "refl".to_string()
+        } else if let (
+            Term::App {
+                fun: lf, arg: lx, ..
+            },
+            Term::App {
+                fun: rf, arg: rx, ..
+            },
+        ) = (l[0].as_ref(), r[0].as_ref())
+        {
+            let (op_ty, op_level) = self.type_of(&format!("{} → bool::Bool", self.carrier))?;
+            if lf == rf && self.core_checks(lf, &op_ty, &op_level) {
+                let test = self.alias(lf.clone(), op_ty, op_level);
+                let (ty, level) = self.type_of(&format!(
+                    "relation_props::PreservesRelation({}, relation::RelId<bool::Bool>, {test})",
+                    self.rel
+                ))?;
+                let stable = self.evidence(ty, level, "branch_choice")?;
+                let x = self.value(lx.clone());
+                let y = self.value(rx.clone());
+                let h = self.walk(lx.clone(), rx.clone(), depth + 1)?;
+                format!("{stable}({x}, {y}, {h})")
+            } else {
+                let (ty, level) = self.type_of(&format!("{first} = {second}"))?;
+                self.evidence(ty, level, "branch_choice")?
+            }
+        } else {
+            let (ty, level) = self.type_of(&format!("{first} = {second}"))?;
+            self.evidence(ty, level, "branch_choice")?
+        };
+        let yes = self.value(l[1].clone());
+        let yes2 = self.value(r[1].clone());
+        let no = self.value(l[2].clone());
+        let no2 = self.value(r[2].clone());
+        let hy = self.walk(l[1].clone(), r[1].clone(), depth + 1)?;
+        let hn = self.walk(l[2].clone(), r[2].clone(), depth + 1)?;
+        Ok(Some(format!("relation_function::choose_respects({}, {first}, {second}, {same}, {yes}, {yes2}, {hy}, {no}, {no2}, {hn})", self.rel)))
+    }
+
     fn walk(&mut self, left: Rc<Term>, right: Rc<Term>, depth: usize) -> R<String> {
         self.nodes += 1;
-        if self.nodes > 256 || depth > 32 {
+        if self.nodes > (if self.derive { 512 } else { 256 })
+            || depth > (if self.derive { 96 } else { 32 })
+        {
             return err(
-                "`rel_cong` context exceeds its 256-node / depth-32 bound",
+                if self.derive {
+                    "`rel_derive` exceeds its 512-node / depth-96 bound"
+                } else {
+                    "`rel_cong` context exceeds its 256-node / depth-32 bound"
+                },
                 self.span,
             );
+        }
+        if self.derive {
+            if let Some(proof) = self.branch(&left, &right, depth)? {
+                return Ok(proof);
+            }
         }
         // Identical occurrences stay fixed; equal endpoints never justify an
         // unrelated difference. Structural matching never unfolds operations.
@@ -313,6 +413,11 @@ impl Builder<'_> {
                         a = self.carrier,
                         r = self.rel
                     ))?;
+                    if self.derive && self.resolve(&ty, &level).is_none() {
+                        if let Some(result) = self.expand(&left, &right, depth) {
+                            return result;
+                        }
+                    }
                     let dictionary = self.evidence(ty, level, "compatibility")?;
                     let hx = self.walk(lx.clone(), rx.clone(), depth + 1)?;
                     let hy = self.walk(ly.clone(), ry.clone(), depth + 1)?;
@@ -348,6 +453,11 @@ impl Builder<'_> {
                 } else {
                     None
                 };
+                if self.derive && family.is_none() && self.resolve(&ty, &level).is_none() {
+                    if let Some(result) = self.expand(&left, &right, depth) {
+                        return result;
+                    }
+                }
                 let certificate = if let Some(proof) = family {
                     self.alias(Rc::new(proof), ty, level)
                 } else {
@@ -358,6 +468,15 @@ impl Builder<'_> {
                 let h = self.walk(lx.clone(), rx.clone(), depth + 1)?;
                 return Ok(format!("{certificate}({x}, {y}, {h})"));
             }
+        }
+        if self.derive {
+            if let Some(result) = self.expand(&left, &right, depth) {
+                return result;
+            }
+            let l = self.value(left);
+            let r = self.value(right);
+            let (ty, level) = self.type_of(&format!("{}({l}, {r})", self.rel))?;
+            return self.evidence(ty, level, "definition");
         }
         err(
             "`rel_cong` context mismatch: the supplied proof does not explain this change (only homogeneous unary/binary contexts are supported)",
@@ -373,6 +492,7 @@ pub(crate) fn check(
     expected: &Type,
     level: &Level,
     span: Span,
+    derive: bool,
 ) -> R<Term> {
     let (witness, proof_ty, proof_level) = e.elab_infer(cx, proof)?;
     let input = relation(&proof_ty, span)?;
@@ -395,6 +515,7 @@ pub(crate) fn check(
         serial: 0,
         nodes: 0,
         goals: 0,
+        derive,
     };
     b.carrier = b.fresh();
     b.cx.tyvars.push(TyVar {
@@ -415,4 +536,38 @@ pub(crate) fn check(
     let generated = b.walk(output.left, output.right, 0)?;
     let expr = expression(&generated, span)?;
     e.generated_scope(|e| e.elab_check(&b.cx, &expr, expected, level))
+}
+
+/// The expected preservation telescope supplies the function and relation.
+/// The generated lambda is checked normally; its pointwise request inspects
+/// transparent definitions and returns ordinary proof terms or scoped goals.
+pub(crate) fn derive(
+    e: &Elaborator,
+    cx: &Cx,
+    expected: &Type,
+    level: &Level,
+    span: Span,
+) -> R<Term> {
+    let mut serial = 0;
+    let mut fresh = || loop {
+        let name = format!("__derive_arg_{serial}");
+        serial += 1;
+        if !cx.names.contains(&name) && !cx.aliases.iter().any(|a| a.name == name) {
+            break name;
+        }
+    };
+    let x = fresh();
+    let y = fresh();
+    let h = fresh();
+    let mut body = expression(&format!("λ {x} {y} {h} => rel_derive({h})"), span)?;
+    // Goal identities belong to the user's request, not the synthetic lambda's
+    // identical source offsets. Two requests must retain independent goals.
+    body.span = span;
+    if let heather_syntax::ExprKind::Lam {
+        body: pointwise, ..
+    } = &mut body.kind
+    {
+        pointwise.span = span;
+    }
+    e.generated_scope(|e| e.elab_check(cx, &body, expected, level))
 }

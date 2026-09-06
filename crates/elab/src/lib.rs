@@ -3183,17 +3183,25 @@ impl Elaborator {
                 named,
                 explicit: false,
                 goal_oriented: false,
-            } if matches!(&head.kind, ExprKind::Var(name) if name == "rel_cong")
-                && !self.shadowed(cx, "rel_cong")
-                && self.ctor_here_expected(cx, "rel_cong", expected).is_none() =>
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "rel_cong" || name == "rel_derive")
+                && !self.shadowed(cx, e.as_named().unwrap().0)
+                && self.ctor_here_expected(cx, e.as_named().unwrap().0, expected).is_none() =>
             {
+                let tactic = e.as_named().unwrap().0;
                 let [proof] = args.as_slice() else {
-                    return err("`rel_cong` takes exactly one proof expression", e.span);
+                    return err(format!("`{tactic}` takes exactly one proof expression"), e.span);
                 };
                 if !named.is_empty() {
-                    return err("`rel_cong` takes a positional proof expression", e.span);
+                    return err(format!("`{tactic}` takes a positional proof expression"), e.span);
                 }
-                relational_context::proof::check(self, cx, proof, expected, lvl, e.span)
+                relational_context::proof::check(
+                    self, cx, proof, expected, lvl, e.span, tactic == "rel_derive",
+                )
+            }
+            ExprKind::Var(name) if name == "rel_derive"
+                && !self.shadowed(cx, name)
+                && self.ctor_here_expected(cx, name, expected).is_none() => {
+                relational_context::proof::derive(self, cx, expected, lvl, e.span)
             }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
@@ -3718,11 +3726,11 @@ impl Elaborator {
             }
             return self.elab_emit_code(cx, &args[0], e.span);
         }
-        if matches!(e.as_named(), Some(("rel_cong", _, false)))
-            && !self.shadowed(cx, "rel_cong")
-            && self.ctor_here(cx, "rel_cong").is_none()
+        if matches!(e.as_named(), Some(("rel_cong" | "rel_derive", _, false)))
+            && !self.shadowed(cx, e.as_named().unwrap().0)
+            && self.ctor_here(cx, e.as_named().unwrap().0).is_none()
         {
-            return err("`rel_cong` needs an expected relation goal; annotate this proof position", e.span);
+            return err(format!("`{}` needs an expected relation goal; annotate this proof position", e.as_named().unwrap().0), e.span);
         }
         if let ExprKind::App {
             head,
@@ -5343,7 +5351,8 @@ impl Elaborator {
             ExprKind::Refl => !self.shadowed(cx, "refl"),
             ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.is_none()),
             ExprKind::Var(name) => {
-                (name == "FZ"
+                (name == "rel_derive" && !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none())
+                    || (name == "FZ"
                     && !self.shadowed(cx, name)
                     && self.ctor_here(cx, name).is_none())
                     || self.bare_implicit_prefix(cx, name).is_some()
@@ -5359,7 +5368,7 @@ impl Elaborator {
             }
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
-                Some(("rel_cong", _, false)) => !self.shadowed(cx, "rel_cong") && self.ctor_here(cx, "rel_cong").is_none(),
+                Some((name @ ("rel_cong" | "rel_derive"), _, false)) => !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none(),
                 Some(("FS", _, false)) => {
                     !self.shadowed(cx, "FS") && self.ctor_here(cx, "FS").is_none()
                 }

@@ -1613,3 +1613,142 @@ fn independent_set_backends_agree_and_preserve_selected_values() {
         include_str!("../../../docs/showcase/finite_set_backend_transfer.hthr"),
     );
 }
+
+#[test]
+fn named_set_function_derivation_and_branching() {
+    let mut e = base();
+    check(
+        &mut e,
+        "finite_set",
+        include_str!("../../../lib/std/finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "relation_function",
+        include_str!("../../../lib/std/relation_function.hthr"),
+    );
+    check(
+        &mut e,
+        "derive_set_functions",
+        include_str!("../../../docs/showcase/derive_set_functions.hthr"),
+    );
+}
+
+#[test]
+fn generated_function_certificate_is_reusable_on_both_backends() {
+    let mut e = base();
+    check(
+        &mut e,
+        "finite_set",
+        include_str!("../../../lib/std/finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "relation_function",
+        include_str!("../../../lib/std/relation_function.hthr"),
+    );
+    check(
+        &mut e,
+        "list_finite_set",
+        include_str!("../../../lib/std/list_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "tree_finite_set",
+        include_str!("../../../lib/std/tree_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "derive_set_functions",
+        include_str!("../../../docs/showcase/derive_set_functions.hthr"),
+    );
+    check(
+        &mut e,
+        "derive_set_function_clients",
+        include_str!("../../../docs/showcase/derive_set_function_clients.hthr"),
+    );
+}
+
+#[test]
+fn named_derivation_reports_and_resumes_branch_obligations() {
+    let mut e = base();
+    check(
+        &mut e,
+        "relation_function",
+        include_str!("../../../lib/std/relation_function.hthr"),
+    );
+    let source = r#"
+import bool;
+import relation;
+import relation_props;
+import relation_function;
+fn select<A>(test: A → Bool, op: A → A, x: A) → A { choose(test(x), op(x), x) }
+theorem certified<A: Reflexive(same)>(same: A → A → Type, test: A → Bool, op: A → A,
+    compatible: PreservesRelation(same, same, op),
+    supply: True → PreservesRelation(same, RelId<Bool>, test)):
+    PreservesRelation(same, same, λ x => select(test, op, x)) { rel_derive }
+"#;
+    let error = e
+        .elab_module_source("missing_branch", source)
+        .unwrap_err()
+        .render(source);
+    assert!(error.contains("branch_choice"), "{error}");
+    let repaired = source.replace(
+        "{ rel_derive }",
+        "{ rel_derive on ?branch_choice := supply(trivial); }",
+    );
+    check(&mut e, "repaired_branch", &repaired);
+    let wrong = source.replace(
+        "{ rel_derive }",
+        "{ rel_derive on ?branch_choice := compatible; }",
+    );
+    assert!(e.elab_module_source("wrong_branch", &wrong).is_err());
+}
+
+#[test]
+fn named_derivation_preserves_shadowing_and_requires_real_evidence() {
+    let mut e = base();
+    check(
+        &mut e,
+        "derive_shadow",
+        "fn rel_derive(n: Nat) → Nat { n } fn client() → Nat { rel_derive(3) }",
+    );
+    let mut e = base();
+    let source = r#"
+import relation_props;
+fn twice<A>(op: A → A, x: A) → A { let y = op(x); op(y) }
+theorem missing<A>(same: A → A → Type, op: A → A):
+    PreservesRelation(same, same, λ x => twice(op, x)) { rel_derive }
+"#;
+    let error = e
+        .elab_module_source("missing_op", source)
+        .unwrap_err()
+        .render(source);
+    assert!(error.contains("compatibility"), "{error}");
+    let repaired = source.replace(
+        "op: A → A):",
+        "op: A → A, compatible: PreservesRelation(same, same, op)):",
+    );
+    check(&mut e, "repaired_op", &repaired);
+}
+
+#[test]
+fn separate_derivation_requests_keep_separate_obligations() {
+    let mut e = base();
+    check(
+        &mut e,
+        "two_derived",
+        r#"
+import logic;
+import relation_props;
+theorem two<A>(same: A → A → Type, first, second: A → A,
+    supply_first: True → PreservesRelation(same, same, first),
+    supply_second: True → PreservesRelation(same, same, second)):
+    And<PreservesRelation(same, same, first), PreservesRelation(same, same, second)> {
+    And(rel_derive, rel_derive)
+    on ?compatibility := supply_first(trivial);
+    on ?compatibility.1 := supply_second(trivial);
+}
+"#,
+    );
+}

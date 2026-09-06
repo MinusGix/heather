@@ -1,0 +1,40 @@
+import bool;
+import relation;
+import relation_props;
+import algebra_rel;
+import finite_set;
+import relation_function;
+
+fn augment<A, S>(union as ⊔: S → S → S, ops: SetOperations<S, A>, f: A → A, xs: S) → S {
+    let mapped = ops.image(f, xs);
+    xs ⊔ mapped
+}
+
+theorem augment_compatible<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A):
+    PreservesRelation(≈, ≈, λ xs => augment<A, S>(⊔, ops, f, xs))
+{ rel_derive }
+
+// The generated theorem can be used without repeating the operation's body.
+theorem augment_inside_union<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A,
+    xs, ys, known: S, h: xs ≈ ys): known ⊔ augment<A, S>(⊔, ops, f, xs) ≈ known ⊔ augment<A, S>(⊔, ops, f, ys)
+{
+    let certified = augment_compatible<A, S>(f);
+    rel_cong(h)
+}
+
+fn conditional_augment<A, S>(union as ⊔: S → S → S, ops: SetOperations<S, A>, test: S → Bool, f: A → A, xs: S) → S {
+    choose(test(xs), augment<A, S>(⊔, ops, f, xs), xs)
+}
+
+theorem conditional_compatible<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, test: S → Bool, f: A → A,
+    stable: PreservesRelation(≈, RelId<Bool>, test)):
+    PreservesRelation(≈, ≈, λ xs => conditional_augment<A, S>(⊔, ops, test, f, xs))
+{ rel_derive }
+
+// Fixed choices need no relation-respecting observation of the input.
+fn optional_augment<A, S>(union as ⊔: S → S → S, ops: SetOperations<S, A>, enabled: Bool, f: A → A, xs: S) → S {
+    choose(enabled, augment<A, S>(⊔, ops, f, xs), xs)
+}
+theorem optional_compatible<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, enabled: Bool, f: A → A):
+    PreservesRelation(≈, ≈, λ xs => optional_augment<A, S>(⊔, ops, enabled, f, xs))
+{ rel_derive }
