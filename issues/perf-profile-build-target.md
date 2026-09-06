@@ -47,3 +47,4 @@ attribution from two improvised pieces that are worth keeping as tooling:
 ## Log
 
 - 2026-09-06: Item 3 of the shape is landed, by the [[inductive-spelling-codes-nonrecursive]] round: the Tc::conv_ty miss sampler lives in crates/kernel/src/typing.rs behind the value-metrics feature (every query past the syntactic shortcut and the gate memo is bucketed by (expected head, inferred head) — El split into named-code, code-literal and other — with count, total wall ns, and an exact write_exact first-difference excerpt of each bucket's first miss, rendering capped at 8 MB a side). The table hangs off ValueMetrics (conv_miss_report; reset clears it), Elaborator::value_conv_miss_report exposes it, and the x86 scaling rail prints it under HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1 with --features value-metrics. Items 1 and 2 (scripts/perf, the generalized attach hook) are still open.
+- 2026-09-06: Item attribution for the sampler: [[conv-miss-sampler-item-attribution]].
