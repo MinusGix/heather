@@ -1,0 +1,36 @@
+// The same abstract client, instantiated at a branching representation.
+import logic;
+import relation_props;
+import algebra_rel;
+import finite_set;
+import finite_set_client;
+import tree_finite_set;
+
+theorem tree_receive_duplicate<A>(known, incoming: SetTree<A>):
+    TreeSame(tree_union(tree_union(known, incoming), incoming), tree_union(known, incoming))
+{ union_twice<A, SetTree<A>>(known, incoming, ops := tree_operations<A>) }
+
+theorem tree_extend_distributes<A>(f: A → A, xs, ys: SetTree<A>):
+    TreeSame(tree_union(tree_union(xs, ys), tree_image(f, tree_union(xs, ys))),
+        tree_union(tree_union(xs, tree_image(f, xs)), tree_union(ys, tree_image(f, ys))))
+{ extend_union<A, SetTree<A>>(f, xs, ys, ops := tree_operations<A>) }
+
+theorem tree_fusion<A>(f, g: A → A, xs, ys: SetTree<A>):
+    TreeSame(tree_image(g, tree_image(f, tree_union(xs, ys))),
+        tree_union(tree_image<A, A>(λ a => g(f(a)), xs), tree_image<A, A>(λ a => g(f(a)), ys)))
+{ image_fusion<A, SetTree<A>>(f, g, xs, ys, ops := tree_operations<A>) }
+
+fn tree_move_member<A> requires sets: FiniteSets<SetTree<A>, A>(TreeSame<A>, tree_union<A>, tree_operations<A>)
+    (xs, ys: SetTree<A>, h: TreeSame(xs, ys),
+    selected: SetElement<SetTree<A>, A>(tree_member<A>, xs)) → SetElement<SetTree<A>, A>(tree_member<A>, ys)
+{ move_selected<A, SetTree<A>>(xs, ys, h, selected, ops := tree_operations<A>) }
+
+fn tree_map_member<A> requires sets: FiniteSets<SetTree<A>, A>(TreeSame<A>, tree_union<A>, tree_operations<A>)
+    (f: A → A, xs: SetTree<A>, selected: SetElement<SetTree<A>, A>(tree_member<A>, xs)) →
+    SetElement<SetTree<A>, A>(tree_member<A>, tree_image(f, xs))
+{ image_selected<A, SetTree<A>>(f, xs, selected, ops := tree_operations<A>) }
+
+// A concrete caller gets the pinned dictionary from the registered backend.
+fn mapped_singleton() → SetElement<SetTree<Nat>, Nat>(tree_member<Nat>, Item(0)) {
+    tree_map_member<Nat>(λ n => n, Item(0), SetElement(value := 0, belongs := refl))
+}

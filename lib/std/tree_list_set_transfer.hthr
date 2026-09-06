@@ -1,0 +1,85 @@
+// Conversion is a proved connection between two independent backends.
+import logic;
+import list;
+import relation_props;
+import algebra_rel;
+import finite_set;
+import list_setoid;
+import list_finite_set;
+import tree_finite_set;
+
+fn enumerate_tree<A>(xs: SetTree<A>) → List<A> {
+    match xs {
+        Vacant => Nil,
+        Item(a) => [a],
+        Join(left, right) => enumerate_tree(left) ++ enumerate_tree(right),
+    }
+}
+theorem enumerate_members<A>(xs: SetTree<A>, a: A): Iff<tree_member(a, xs), Mem(a, enumerate_tree(xs))> {
+    match xs {
+        Vacant => iff_refl(),
+        Item(b) => Iff(mp := λ h => Inl(h),
+            mpr := λ h => match h { Inl(p) => p, Inr(p) => false_elim(p) }),
+        Join(left, right) => Iff(
+            mp := λ h => match h {
+                Inl(p) => mem_append_l(enumerate_tree(left), enumerate_tree(right), a, enumerate_members(left, a).mp(p)),
+                Inr(p) => mem_append_r(enumerate_tree(left), enumerate_tree(right), a, enumerate_members(right, a).mp(p)),
+            },
+            mpr := λ h => match mem_append(enumerate_tree(left), enumerate_tree(right), a, h) {
+                Inl(p) => Inl(enumerate_members(left, a).mpr(p)),
+                Inr(p) => Inr(enumerate_members(right, a).mpr(p)),
+            }),
+    }
+}
+
+theorem enumerate_respects<A>(xs, ys: SetTree<A>, h: TreeSame(xs, ys)):
+    SameMembers(enumerate_tree(xs), enumerate_tree(ys))
+{ λ a => iff_trans(iff_sym(enumerate_members(xs, a)), iff_trans(h(a), enumerate_members(ys, a))) }
+
+theorem enumerate_reflects<A>(xs, ys: SetTree<A>, h: SameMembers(enumerate_tree(xs), enumerate_tree(ys))):
+    TreeSame(xs, ys)
+{ λ a => iff_trans(enumerate_members(xs, a), iff_trans(h(a), iff_sym(enumerate_members(ys, a)))) }
+
+fn tree_of_list<A>(xs: List<A>) → SetTree<A> {
+    match xs { Nil => Vacant, Cons(a, rest) => Join(Item(a), tree_of_list(rest)) }
+}
+theorem tree_of_list_members<A>(xs: List<A>, a: A): Iff<Mem(a, xs), tree_member(a, tree_of_list(xs))> {
+    match xs {
+        Nil => iff_refl(),
+        Cons(b, rest) => Iff(
+            mp := λ h => match h { Inl(p) => Inl(p), Inr(p) => Inr(tree_of_list_members(rest, a).mp(p)) },
+            mpr := λ h => match h { Inl(p) => Inl(p), Inr(p) => Inr(tree_of_list_members(rest, a).mpr(p)) }),
+    }
+}
+theorem tree_round_trip<A>(xs: SetTree<A>): TreeSame(tree_of_list(enumerate_tree(xs)), xs) {
+    λ a => iff_trans(iff_sym(tree_of_list_members(enumerate_tree(xs), a)), iff_sym(enumerate_members(xs, a)))
+}
+theorem list_round_trip<A>(xs: List<A>): SameMembers(enumerate_tree(tree_of_list(xs)), xs) {
+    λ a => iff_trans(iff_sym(enumerate_members(tree_of_list(xs), a)), iff_sym(tree_of_list_members(xs, a)))
+}
+
+// Imaging and enumeration agree semantically, even though they compute on
+// different data structures. Prove this through source witnesses, not identity.
+theorem enumerate_image_forward<A, B>(xs: SetTree<A>, f: A → B, b: B,
+    h: Mem(b, enumerate_tree(tree_image(f, xs)))): Mem(b, map(enumerate_tree(xs), f))
+{
+    let source = tree_image_source(xs, f, b, enumerate_members(tree_image(f, xs), b).mpr(h));
+    j(source.proof.right, λ value eq => Mem(value, map(enumerate_tree(xs), f)),
+        mem_map(enumerate_tree(xs), source.witness, f, enumerate_members(xs, source.witness).mp(source.proof.left)))
+}
+theorem enumerate_image_backward<A, B>(xs: SetTree<A>, f: A → B, b: B,
+    h: Mem(b, map(enumerate_tree(xs), f))): Mem(b, enumerate_tree(tree_image(f, xs)))
+{
+    let source = mem_image_source(enumerate_tree(xs), f, b, h);
+    enumerate_members(tree_image(f, xs), b).mp(tree_image_witness(xs, f, b,
+        Exists(source.witness, And(enumerate_members(xs, source.witness).mpr(source.proof.left), source.proof.right))))
+}
+theorem enumerate_image<A, B>(xs: SetTree<A>, f: A → B):
+    SameMembers(enumerate_tree(tree_image(f, xs)), map(enumerate_tree(xs), f))
+{ λ b => Iff(mp := λ h => enumerate_image_forward(xs, f, b, h), mpr := λ h => enumerate_image_backward(xs, f, b, h)) }
+
+fn enumerate_selected<A>(xs: SetTree<A>, selected: SetElement<SetTree<A>, A>(tree_member<A>, xs)) →
+    SetElement<List<A>, A>(Mem<A>, enumerate_tree(xs))
+{
+    SetElement(value := selected.value, belongs := enumerate_members(xs, selected.value).mp(selected.belongs))
+}

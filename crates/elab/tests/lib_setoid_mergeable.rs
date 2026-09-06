@@ -1558,3 +1558,58 @@ theorem nested<A, I> requires laws: Family<A, I>(same, op)
     );
     check(&mut e, "chosen_family", &chosen);
 }
+
+#[test]
+fn branching_backend_reuses_the_unchanged_abstract_client() {
+    let mut e = base();
+    check(
+        &mut e,
+        "finite_set",
+        include_str!("../../../lib/std/finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "finite_set_client",
+        include_str!("../../../docs/showcase/finite_set_client.hthr"),
+    );
+    check(
+        &mut e,
+        "tree_finite_set",
+        include_str!("../../../lib/std/tree_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "finite_set_tree_client",
+        include_str!("../../../docs/showcase/finite_set_tree_client.hthr"),
+    );
+}
+
+#[test]
+fn independent_set_backends_agree_and_preserve_selected_values() {
+    let mut e = base();
+    check(
+        &mut e,
+        "finite_set",
+        include_str!("../../../lib/std/finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "list_finite_set",
+        include_str!("../../../lib/std/list_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "tree_finite_set",
+        include_str!("../../../lib/std/tree_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "tree_list_set_transfer",
+        include_str!("../../../lib/std/tree_list_set_transfer.hthr"),
+    );
+    check(
+        &mut e,
+        "finite_set_backend_transfer",
+        include_str!("../../../docs/showcase/finite_set_backend_transfer.hthr"),
+    );
+}

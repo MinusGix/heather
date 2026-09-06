@@ -1,0 +1,158 @@
+// A branching finite-set representation. No list implementation is used.
+import logic;
+import relation_props;
+import algebra_rel;
+import finite_set;
+
+inductive SetTree<A> { Vacant, Item(value: A), Join(left: SetTree<A>, right: SetTree<A>) }
+
+fn tree_union<A>(xs, ys: SetTree<A>) → SetTree<A> { Join(xs, ys) }
+fn tree_member<A>(a: A, xs: SetTree<A>) → Type {
+    match xs {
+        Vacant => False,
+        Item(b) => a = b,
+        Join(left, right) => Or<tree_member(a, left), tree_member(a, right)>,
+    }
+}
+fn TreeSame<A>(xs, ys: SetTree<A>) → Type {
+    (a: A) → Iff<tree_member(a, xs), tree_member(a, ys)>
+}
+fn tree_image<A, B>(f: A → B, xs: SetTree<A>) → SetTree<B> {
+    match xs {
+        Vacant => Vacant,
+        Item(a) => Item(f(a)),
+        Join(left, right) => Join(tree_image(f, left), tree_image(f, right)),
+    }
+}
+
+theorem tree_same_refl<A>(xs: SetTree<A>): TreeSame(xs, xs) { λ a => iff_refl() }
+theorem tree_same_sym<A>(xs, ys: SetTree<A>, h: TreeSame(xs, ys)): TreeSame(ys, xs) {
+    λ a => iff_sym(h(a))
+}
+theorem tree_same_trans<A>(xs, ys, zs: SetTree<A>, h: TreeSame(xs, ys), k: TreeSame(ys, zs)):
+    TreeSame(xs, zs) { λ a => iff_trans(h(a), k(a)) }
+
+theorem tree_union_respects<A>(xs, xs2: SetTree<A>, hx: TreeSame(xs, xs2),
+    ys, ys2: SetTree<A>, hy: TreeSame(ys, ys2)): TreeSame(tree_union(xs, ys), tree_union(xs2, ys2))
+{
+    λ a => Iff(
+        mp := λ h => match h { Inl(p) => Inl(hx(a).mp(p)), Inr(p) => Inr(hy(a).mp(p)) },
+        mpr := λ h => match h { Inl(p) => Inl(hx(a).mpr(p)), Inr(p) => Inr(hy(a).mpr(p)) })
+}
+theorem tree_union_assoc<A>(xs, ys, zs: SetTree<A>):
+    TreeSame(tree_union(tree_union(xs, ys), zs), tree_union(xs, tree_union(ys, zs)))
+{
+    λ a => Iff(
+        mp := λ h => match h {
+            Inl(p) => match p { Inl(x) => Inl(x), Inr(y) => Inr(Inl(y)) },
+            Inr(z) => Inr(Inr(z)),
+        },
+        mpr := λ h => match h {
+            Inl(x) => Inl(Inl(x)),
+            Inr(p) => match p { Inl(y) => Inl(Inr(y)), Inr(z) => Inr(z) },
+        })
+}
+theorem tree_union_comm<A>(xs, ys: SetTree<A>): TreeSame(tree_union(xs, ys), tree_union(ys, xs)) {
+    λ a => Iff(mp := λ h => match h { Inl(p) => Inr(p), Inr(p) => Inl(p) },
+        mpr := λ h => match h { Inl(p) => Inr(p), Inr(p) => Inl(p) })
+}
+theorem tree_union_idem<A>(xs: SetTree<A>): TreeSame(tree_union(xs, xs), xs) {
+    λ a => Iff(mp := λ h => match h { Inl(p) => p, Inr(p) => p }, mpr := λ p => Inl(p))
+}
+
+// The forward and inverse image membership proofs recurse over both branches.
+theorem tree_image_member<A, B>(xs: SetTree<A>, f: A → B, a: A, h: tree_member(a, xs)):
+    tree_member(f(a), tree_image(f, xs))
+{
+    match xs {
+        Vacant => false_elim(h),
+        Item(b) => cong(h, f := f),
+        Join(left, right) => match h {
+            Inl(p) => Inl(tree_image_member(left, f, a, p)),
+            Inr(p) => Inr(tree_image_member(right, f, a, p)),
+        },
+    }
+}
+theorem tree_image_source<A, B>(xs: SetTree<A>, f: A → B, b: B,
+    h: tree_member(b, tree_image(f, xs))): Exists<A>(λ a => And<tree_member(a, xs), f(a) = b>)
+{
+    match xs {
+        Vacant => false_elim(h),
+        Item(a) => Exists(a, And(refl, sym(h))),
+        Join(left, right) => match h {
+            Inl(p) => {
+                let source = tree_image_source(left, f, b, p);
+                Exists(source.witness, And(Inl(source.proof.left), source.proof.right))
+            },
+            Inr(p) => {
+                let source = tree_image_source(right, f, b, p);
+                Exists(source.witness, And(Inr(source.proof.left), source.proof.right))
+            },
+        },
+    }
+}
+theorem tree_image_witness<A, B>(xs: SetTree<A>, f: A → B, b: B,
+    source: Exists<A>(λ a => And<tree_member(a, xs), f(a) = b>)):
+    tree_member(b, tree_image(f, xs))
+{
+    j(source.proof.right, λ value eq => tree_member(value, tree_image(f, xs)),
+        tree_image_member(xs, f, source.witness, source.proof.left))
+}
+theorem tree_image_transport<A, B>(xs, ys: SetTree<A>, h: TreeSame(xs, ys), f: A → B,
+    b: B, member: tree_member(b, tree_image(f, xs))): tree_member(b, tree_image(f, ys))
+{
+    let source = tree_image_source(xs, f, b, member);
+    tree_image_witness(ys, f, b, Exists(source.witness, And(h(source.witness).mp(source.proof.left), source.proof.right)))
+}
+theorem tree_image_respects<A, B>(f: A → B, xs, ys: SetTree<A>, h: TreeSame(xs, ys)):
+    TreeSame(tree_image(f, xs), tree_image(f, ys))
+{
+    λ b => Iff(mp := λ member => tree_image_transport(xs, ys, h, f, b, member),
+        mpr := λ member => tree_image_transport(ys, xs, tree_same_sym(xs, ys, h), f, b, member))
+}
+theorem tree_image_identity<A>(xs: SetTree<A>): TreeSame(tree_image<A, A>(λ a => a, xs), xs) {
+    match xs {
+        Vacant => tree_same_refl(Vacant<A>),
+        Item(a) => tree_same_refl(Item(a)),
+        Join(left, right) => tree_union_respects(tree_image<A, A>(λ a => a, left), left, tree_image_identity(left),
+            tree_image<A, A>(λ a => a, right), right, tree_image_identity(right)),
+    }
+}
+theorem tree_image_composition<A, B, C>(f: A → B, g: B → C, xs: SetTree<A>):
+    TreeSame(tree_image(g, tree_image(f, xs)), tree_image(λ a => g(f(a)), xs))
+{
+    match xs {
+        Vacant => tree_same_refl(Vacant<C>),
+        Item(a) => tree_same_refl(Item(g(f(a)))),
+        Join(left, right) => tree_union_respects(tree_image(g, tree_image(f, left)), tree_image(λ a => g(f(a)), left),
+            tree_image_composition(f, g, left), tree_image(g, tree_image(f, right)), tree_image(λ a => g(f(a)), right),
+            tree_image_composition(f, g, right)),
+    }
+}
+
+fn tree_operations<A>() → SetOperations<SetTree<A>, A> {
+    SetOperations(empty := Vacant, image := tree_image<A, A>, member := tree_member<A>, singleton := λ a => Item(a))
+}
+instance<A> FiniteSets<SetTree<A>, A>(TreeSame<A>, tree_union<A>, tree_operations<A>) {
+    rel_refl := tree_same_refl,
+    rel_sym := tree_same_sym,
+    rel_trans := tree_same_trans,
+    respects2 := tree_union_respects,
+    assoc := tree_union_assoc,
+    comm := tree_union_comm,
+    idem := tree_union_idem,
+    extensionality := λ xs ys h => h,
+    member_empty := λ a h => h,
+    member_union := λ a xs ys => iff_refl(),
+    member_singleton := λ a b => iff_refl(),
+    member_image := λ f xs b => Iff(mp := λ h => tree_image_source(xs, f, b, h),
+        mpr := λ h => tree_image_witness(xs, f, b, h)),
+    empty_left := λ xs a => Iff(mp := λ h => match h { Inl(p) => false_elim(p), Inr(p) => p },
+        mpr := λ p => Inr(p)),
+    member_same := λ xs ys h a => h(a),
+    image_respects := tree_image_respects,
+    image_union := λ f xs ys => tree_same_refl<A>(Join<A>(tree_image<A, A>(f, xs), tree_image<A, A>(f, ys))),
+    image_empty := λ f => tree_same_refl(Vacant<A>),
+    image_identity := tree_image_identity,
+    image_composition := tree_image_composition,
+}

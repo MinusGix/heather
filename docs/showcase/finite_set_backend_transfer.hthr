@@ -1,0 +1,45 @@
+import nat;
+import logic;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import finite_set;
+import list_setoid;
+import list_finite_set;
+import tree_finite_set;
+import tree_list_set_transfer;
+
+// Run an image update on either representation and compare the results.
+theorem update_agrees<A>(xs: SetTree<A>, f: A → A):
+    SameMembers(enumerate_tree(tree_union(xs, tree_image(f, xs))),
+        enumerate_tree(xs) ++ set_image(f, enumerate_tree(xs)))
+{
+    append_same_members(enumerate_tree(xs), enumerate_tree(xs), same_members_refl(enumerate_tree(xs)),
+        enumerate_tree(tree_image(f, xs)), set_image(f, enumerate_tree(xs)), enumerate_image(xs, f))
+}
+
+theorem selected_value_survives<A>(xs: SetTree<A>, selected: SetElement<SetTree<A>, A>(tree_member<A>, xs)):
+    enumerate_selected(xs, selected).value = selected.value { refl }
+
+// Shape is observable but cannot be used as an observation of the set.
+fn root_kind<A>(xs: SetTree<A>) → Nat {
+    match xs { Vacant => 0, Item(_) => 1, Join(_, _) => 2 }
+}
+fn singleton_tree() → SetTree<Nat> { Item(0) }
+fn redundant_tree() → SetTree<Nat> { Join(Item(0), Vacant) }
+
+theorem redundant_branch_is_semantic(): TreeSame(redundant_tree(), singleton_tree()) {
+    λ a => Iff(mp := λ h => match h { Inl(p) => p, Inr(p) => false_elim(p) }, mpr := λ p => Inl(p))
+}
+theorem redundant_branch_is_not_identity(): Not(redundant_tree() = singleton_tree()) {
+    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
+}
+theorem round_trip_can_change_shape(): Not(tree_of_list(enumerate_tree(singleton_tree())) = singleton_tree()) {
+    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
+}
+
+theorem root_kind_is_not_semantic(): Not(PreservesRelation(TreeSame<Nat>, RelId<Nat>, root_kind<Nat>)) {
+    λ respects => ne_of_gt(2, 1, trivial,
+        respects(redundant_tree(), singleton_tree(), redundant_branch_is_semantic()))
+}
