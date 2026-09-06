@@ -22,7 +22,12 @@ match Succ(e) as λ z => (x̄) -> nat::Lt(e, z) -> T {
 ```
 
 and is checked against `T` like anything else (`crates/elab/src/measure.rs`,
-`Elaborator::wrap_measure`). Read it from the outside in:
+`measure::lower`). Read it from the outside in — but note that the three
+layers are now **named** rather than nested inline: `f#body` is the `Succ`
+arm, `f#rec` the eliminator, `f` the application
+(`docs/decreases-unfolding-design.md` §2, which amends this section and §5).
+Nothing else changes: a `fn` is transparent, so closed arguments still
+compute through the indirection.
 
 - The recursor is on the bound `Succ(e)`, a `Nat`, so it is one `elim_Nat`
   and **closed arguments compute**: `gcd(12, 8) = 4` is `refl`, and the
@@ -54,6 +59,12 @@ Each recursive call, in source order, owes `e[ȳ] < e` under the name
 body, as any goal; where no `on` names it and the `omega` and `int` modules
 are in scope, the obligation is `omega`. Where they are not, the hole is
 reported as an ordinary unsolved goal with its statement.
+
+The obligation is not raised at the call: it is lifted into a generated
+declaration of its own, `f#obl_N`, which the body and both unfolding
+companions reference (`docs/decreases-unfolding-design.md` §4). Nothing the
+writer sees changes — the hole is still `?decN`, the `on` is still written at
+the end of the body, and it travels to `f#obl_N` with its obligation.
 
 An `omega` failure is reworded to name the obligation and the `on` that
 would discharge it: "this recursive call must decrease the measure, and
@@ -116,7 +127,9 @@ it cannot use. The names are unspellable by convention, not by the lexer.
   predecessor with a transported proof, not `f(ȳ)`, so a proof *about* a
   `decreases`-defined function by induction cannot rewrite `f(ȳ)` with its
   hypothesis. Every well-founded-recursion story owes an unfolding equation
-  here; ours is `issues/decreases-unfolding-equations.md`.
+  here; ours is generated — `f_unfold(x̄): f(x̄) = body`,
+  `docs/decreases-unfolding-design.md`, which also says which body shapes the
+  generator declines (a computed `match` scrutinee, a self-call under a `λ`).
 - **Mutual recursion** (the showcase parser's three functions) is not this
   round: it needs declaration groups before a shared recursion, and has its
   own issue, `issues/mutual-recursion-declarations.md`.
@@ -131,12 +144,17 @@ it cannot use. The names are unspellable by convention, not by the lexer.
   the result type (`fn f(…) -> T decreases e { … }`); the module image
   format carries it (magic bumped to `\x03`).
 - `crates/elab/src/measure.rs` — the wrapper, the self-call rewrite, the
-  refinement convoy, and the obligation diagnostics.
-- `crates/elab/src/lib.rs`, the declaration elaborator — the hook: a
-  declaration with a measure has its whole body re-spelled and checked.
+  refinement convoy, the obligation diagnostics, the lifted obligations, and
+  the unfolding companions (`docs/decreases-unfolding-design.md`).
+- `crates/elab/src/lib.rs`, `elab_measure_decl` — the hook: a declaration with
+  a measure is replaced by the family of declarations that lowering names,
+  each elaborated as an ordinary declaration; `ctor_fields_of` is the one
+  question the syntactic generator asks back (what an arm binder is typed at,
+  for a lifted obligation's parameters).
 - `crates/elab/src/surface.rs`, `count_holes` — the obligation holes are
   counted into the declaration's goal reservation.
 - `crates/elab/src/omega_cert.rs` — open successors as sums.
-- `crates/elab/tests/termination_measures.rs` — acceptance.
+- `crates/elab/tests/termination_measures.rs` — acceptance for the lowering;
+  `crates/elab/tests/decreases_unfolding.rs` for the companions.
 
 No kernel change.

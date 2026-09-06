@@ -35,3 +35,7 @@ Not a small round. The showcase row stays on this issue.
 ## What it assumes from elsewhere
 - **[[termination-measures]]** owns the single-declaration measure. Assumed
   here: only the lowering shape, so that a group can be one instance of it.
+
+## Log
+
+- 2026-09-05: Chartered (user, 2026-09-05) as Part B of the same managed round as [[decreases-unfolding-equations]], after it lands. Open design question the charter names: the idealized parser writes NO group keyword (three adjacent declarations), so adjacency-inferred groups vs an explicit block is the first thing the design pass settles.
