@@ -1,0 +1,36 @@
+// Semantic interface: the carrier and all operations are chosen by the author.
+// This first image family uses endofunctions; heterogeneous image is separate.
+import logic;
+import relation_props;
+import algebra_rel;
+
+class SetOperations<S, A> {
+    empty: S,
+    image: (A → A) → S → S,
+    member: A → S → Type,
+    singleton: A → S,
+}
+
+class FiniteSets<S, A>(same: S → S → Type, union: S → S → S, ops: SetOperations<S, A>)
+    extends Mergeable<S>(same, union)
+{
+    extensionality: (x, y: S) → ((a: A) → Iff<ops.member(a, x), ops.member(a, y)>) → same(x, y),
+    member_empty: (a: A) → Not(ops.member(a, ops.empty)),
+    member_union: (a: A) → (x, y: S) → Iff<ops.member(a, union(x, y)), Or<ops.member(a, x), ops.member(a, y)>>,
+    member_singleton: (a, b: A) → Iff<ops.member(a, ops.singleton(b)), a = b>,
+    member_image: (f: A → A) → (x: S) → (b: A) → Iff<ops.member(b, ops.image(f, x)), Exists<A>(λ a => And<ops.member(a, x), f(a) = b>)>,
+    empty_left: (x: S) → same(union(ops.empty, x), x),
+    member_same: (x, y: S) → same(x, y) → (a: A) → Iff<ops.member(a, x), ops.member(a, y)>,
+    image_respects: (f: A → A) → PreservesRelation(same, same, ops.image(f)),
+    image_union: (f: A → A) → (x, y: S) → same(ops.image(f, union(x, y)), union(ops.image(f, x), ops.image(f, y))),
+    image_empty: (f: A → A) → same(ops.image(f, ops.empty), ops.empty),
+    image_identity: (x: S) → same(ops.image(λ a => a, x), x),
+    image_composition: (f, g: A → A) → (x: S) → same(ops.image(g, ops.image(f, x)), ops.image(λ a => g(f(a)), x)),
+}
+
+
+// Dependent clients carry membership in the abstract interface, not in a list.
+record SetElement<S, A>(member: A → S → Type, collection: S) {
+    value: A,
+    belongs: member(value, collection),
+}

@@ -1,0 +1,50 @@
+// Concrete entry point: the laws above apply to a chosen implementation.
+import nat;
+import list;
+import logic;
+import relation;
+import relation_props;
+import algebra_rel;
+import list_setoid;
+import finite_set;
+import list_finite_set;
+import finite_set_client;
+
+// The expected relation and operations select the appropriate dictionaries.
+theorem receive_duplicate<A>(known, incoming: List<A>):
+    SameMembers((known ++ incoming) ++ incoming, known ++ incoming)
+{ union_twice<A, List<A>>(known, incoming, ops := list_operations<A>) }
+
+theorem map_distributes<A>(f: A → A, xs, ys: List<A>):
+    SameMembers((xs ++ ys) ++ set_image(f, xs ++ ys),
+        (xs ++ set_image(f, xs)) ++ (ys ++ set_image(f, ys)))
+{ extend_union<A, List<A>>(f, xs, ys, ops := list_operations<A>) }
+
+theorem image_ignores_duplicates<A>(f: A → A, xs: List<A>):
+    SameMembers(set_image(f, xs ++ xs), set_image(f, xs))
+{ image_duplicate<A, List<A>>(f, xs, ops := list_operations<A>) }
+
+theorem fusion<A>(f, g: A → A, xs, ys: List<A>):
+    SameMembers(set_image(g, set_image(f, xs ++ ys)),
+        set_image(λ a => g(f(a)), xs) ++ set_image(λ a => g(f(a)), ys))
+{ image_fusion<A, List<A>>(f, g, xs, ys, ops := list_operations<A>) }
+
+// The semantic interface doesn't make raw sequence observations disappear.
+// They remain available, but do not inherit finite-set compatibility.
+theorem raw_length_is_not_a_set_observation():
+    Not(PreservesRelation(SameMembers<Nat>, RelId<Nat>, list_len<Nat>))
+{
+    λ respects => ne_of_gt(2, 1, trivial,
+        respects([0, 0], [0], append_self_same_members<Nat>([0])))
+}
+
+theorem duplication_is_semantic(): SameMembers<Nat>([0, 0], [0]) {
+    append_self_same_members<Nat>([0])
+}
+
+fn repeated_zero() → List<Nat> { [0, 0] }
+fn single_zero() → List<Nat> { [0] }
+
+theorem duplication_is_not_list_identity(): Not(repeated_zero() = single_zero()) {
+    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := list_len<Nat>))
+}

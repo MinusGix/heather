@@ -405,3 +405,62 @@ fn f<A: Mag>(x: A, y: A) -> A {{ A.both(x, y) }}
     assert!(msg.contains("Pair2"), "{msg}");
     assert!(msg.contains("type parameters"), "{msg}");
 }
+
+#[test]
+fn multi_parameter_projection_uses_a_complete_local_dictionary() {
+    ok(r#"
+class Mapping<S, A> { send: A → S, witness: S }
+fn deliver<S, A> requires d: Mapping<S, A> (a: A) → S { S.send(a) }
+theorem same_projection<S, A> requires d: Mapping<S, A> (a: A):
+    S.send(a) = d.send(a) { refl }
+fn under_binder<S, A> requires d: Mapping<S, A> () → (a: A) → S { λ a => S.send(a) }
+fn alias<S, A>(d: Mapping<S, A>, a: A) → S {
+    let d: Mapping<S, A> = d;
+    S.send(a)
+}
+"#);
+    let ambiguous = bad(r#"
+class Mapping<S, A> { send: A → S }
+fn ambiguous<S, A, B> requires first: Mapping<S, A>, second: Mapping<S, B> (a: A) → S { S.send(a) }
+"#);
+    assert!(ambiguous.contains("each has an instance"), "{ambiguous}");
+    ok(r#"
+class Mapping<S, A> { send: A → S }
+fn explicit<S, A, B> requires first: Mapping<S, A>, second: Mapping<S, B> (a: A) → S { first.send(a) }
+"#);
+    let unrelated = bad(r#"
+class Mapping<S, A> { send: A → S }
+fn unrelated<S, T, A> requires d: Mapping<T, A> (a: A) → S { S.send(a) }
+"#);
+    assert!(unrelated.contains("type parameters"), "{unrelated}");
+    let shadowed = bad(r#"
+class Mapping<S, A> { send: A → S }
+fn shadowed<S, A> requires d: Mapping<S, A> (a: A) → S {
+    let d = 0;
+    S.send(a)
+}
+"#);
+    assert!(shadowed.contains("type parameters"), "{shadowed}");
+}
+
+#[test]
+fn multi_parameter_projection_follows_tagged_parents_without_guessing_carriers() {
+    ok(r#"
+class Mapping<S, A> { send: A → S }
+class WithOps<S, A> extends Mapping<S, A> as operations {}
+theorem inherited<S, A> requires d: WithOps<S, A> (a: A):
+    S.send(a) = d.operations.send(a) { refl }
+"#);
+    let ambiguous = bad(r#"
+class Mapping<S, A> { send: A → S }
+class Two<S, A, B> extends Mapping<S, A> as first, Mapping<S, B> as second {}
+fn ambiguous<S, A, B> requires d: Two<S, A, B> (a: A) → S { S.send(a) }
+"#);
+    assert!(ambiguous.contains("each has an instance"), "{ambiguous}");
+    let wrong_carrier = bad(r#"
+class Mapping<S, A> { send: A → S }
+class Swapped<S, A> extends Mapping<A, S> as operations {}
+fn wrong<S, A> requires d: Swapped<S, A> (s: S) → A { S.send(s) }
+"#);
+    assert!(wrong_carrier.contains("type parameters"), "{wrong_carrier}");
+}

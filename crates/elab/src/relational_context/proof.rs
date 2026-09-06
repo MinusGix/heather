@@ -145,6 +145,76 @@ impl Builder<'_> {
         )
     }
 
+    // A family operation such as image(f, xs) has a fixed first argument.
+    // Search only complete local dictionaries, applying at most one argument
+    // to a field. The kernel checks the resulting candidate at the exact
+    // compatibility goal; no field names or operation bodies are interpreted.
+    fn family_certificate(&self, fixed: &Rc<Term>, goal: &Type, level: &Level) -> Option<Term> {
+        let mut seen = std::collections::HashSet::new();
+        let mut examined = 0;
+        let mut found: Option<Term> = None;
+        for d in self.cx.dicts.iter().rev() {
+            if !seen.insert(d.name.clone()) {
+                continue;
+            }
+            let Ok((dict, ty, _)) = self.e.resolve(&self.cx, &d.name, self.span) else {
+                continue;
+            };
+            let Some(ind) = self.e.display_tag_of(&ty) else {
+                continue;
+            };
+            if self.e.key_of(&d.class) != self.e.key_of(&ind.name) {
+                continue;
+            }
+            let Some(ctor) = ind.ctors.first() else {
+                continue;
+            };
+            for index in 0..ctor.fields.len() {
+                examined += 1;
+                if examined > 64 {
+                    return None;
+                }
+                let Ok((field, field_ty, _)) = self.e.project_field(
+                    &self.cx,
+                    &ind,
+                    &ty,
+                    Rc::new(dict.clone()),
+                    index,
+                    self.span,
+                ) else {
+                    continue;
+                };
+                let Type::Pi {
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                } = field_ty
+                else {
+                    continue;
+                };
+                if !self.core_checks(fixed, &dom, &dom_level) {
+                    continue;
+                }
+                let candidate = Term::App {
+                    fun: Rc::new(field),
+                    arg: fixed.clone(),
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                };
+                if self.core_checks(&candidate, goal, level) {
+                    if found.as_ref().is_some_and(|prior| prior != &candidate) {
+                        return None;
+                    }
+                    found = Some(candidate);
+                }
+            }
+        }
+        found
+    }
+
     fn evidence(&mut self, ty: Type, level: Level, label: &str) -> R<String> {
         let term = if let Some(term) = self.resolve(&ty, &level) {
             term
@@ -269,7 +339,20 @@ impl Builder<'_> {
                     "relation_props::PreservesRelation({r}, {r}, {op})",
                     r = self.rel
                 ))?;
-                let certificate = self.evidence(ty, level, "compatibility")?;
+                let family = if self.resolve(&ty, &level).is_none() {
+                    if let Term::App { arg: fixed, .. } = lf.as_ref() {
+                        self.family_certificate(fixed, &ty, &level)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let certificate = if let Some(proof) = family {
+                    self.alias(Rc::new(proof), ty, level)
+                } else {
+                    self.evidence(ty, level, "compatibility")?
+                };
                 let x = self.value(lx.clone());
                 let y = self.value(rx.clone());
                 let h = self.walk(lx.clone(), rx.clone(), depth + 1)?;

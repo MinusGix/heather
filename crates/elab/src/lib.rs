@@ -846,7 +846,7 @@ impl statements::StatementElab for Elaborator {
 
     fn dictionary_alias(&self, name: &str, annotation: &Ty) -> Option<DictBinder> {
         let reference = self.class_ref_of_ty(annotation)?;
-        if reference.index.is_empty() || reference.args.is_empty() {
+        if reference.args.is_empty() {
             return None;
         }
         Some(DictBinder {
@@ -2374,7 +2374,6 @@ impl Elaborator {
             // slot that unification left open (§5's ladder step 2), for the dot
             // sugars here and for a call's goal in `apply_implicit`.
             if let Some(r) = self.class_ref_of_ty(&p.ty)
-                && !r.index.is_empty()
                 && !r.args.is_empty()
             {
                 cx.dicts.push(Rc::new(DictBinder {

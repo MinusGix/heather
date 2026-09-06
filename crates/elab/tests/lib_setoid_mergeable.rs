@@ -1466,3 +1466,95 @@ fn dependent_element_transport_preserves_values_but_retains_membership() {
         .is_err()
     );
 }
+
+#[test]
+fn finite_set_author_and_abstract_client() {
+    let mut e = base();
+    check(
+        &mut e,
+        "finite_set",
+        include_str!("../../../lib/std/finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "finite_set_client",
+        include_str!("../../../docs/showcase/finite_set_client.hthr"),
+    );
+    check(
+        &mut e,
+        "list_finite_set",
+        include_str!("../../../lib/std/list_finite_set.hthr"),
+    );
+    check(
+        &mut e,
+        "finite_set_list_client",
+        include_str!("../../../docs/showcase/finite_set_list_client.hthr"),
+    );
+}
+
+#[test]
+fn relational_calc_checks_endpoints_and_requires_transitivity() {
+    let mut e = base();
+    check(
+        &mut e,
+        "relational_calculation",
+        r#"
+import relation_props;
+theorem chain<A: Transitive(≈)>(a, b, c, d: A, ab: a ≈ b, bc: b ≈ c, cd: c ≈ d): a ≈ d {
+    calc { a ≈ b := ab, ≈ c := bc, ≈ d := cd }
+}
+theorem one<A>(same as ≈: A → A → Type, a, b: A, h: a ≈ b): a ≈ b {
+    calc { a ≈ b := h }
+}
+"#,
+    );
+    let wrong = "import relation_props;
+        theorem wrong<A>(same as ≈: A → A → Type, a, b, c: A, h: a ≈ b): a ≈ b {
+            calc { a ≈ c := h }
+        }";
+    assert!(e.elab_module_source("wrong_calc_endpoint", wrong).is_err());
+    let missing = "import relation_props;
+        theorem missing<A>(same as ≈: A → A → Type, a, b, c: A, h: a ≈ b, k: b ≈ c): a ≈ c {
+            calc { a ≈ b := h, ≈ c := k }
+        }";
+    assert!(e
+        .elab_module_source("missing_calc_transitivity", missing)
+        .is_err());
+    let mixed = "import relation_props;
+        theorem mixed<A: Transitive(≈)>(a, b, c: A, h: a ≈ b, k: b = c): a ≈ c {
+            calc { a ≈ b := h, = c := k }
+        }";
+    assert!(e.elab_module_source("mixed_calc_relation", mixed).is_err());
+}
+
+#[test]
+fn relational_congruence_uses_unique_local_family_certificates() {
+    let mut e = base();
+    let family = r#"
+import relation_props;
+class Family<A, I>(same: A → A → Type, op: I → A → A) {
+    certified: (i: I) → PreservesRelation(same, same, op(i)),
+}
+theorem nested<A, I> requires laws: Family<A, I>(same, op)
+    (same as ≈: A → A → Type, op: I → A → A, i: I, x, y: A, h: x ≈ y):
+    op(i, op(i, x)) ≈ op(i, op(i, y)) { rel_cong(h) }
+"#;
+    check(&mut e, "family_certificate", family);
+    let ambiguous = family.replace(
+        "certified: (i: I)",
+        "another: (i: I) → PreservesRelation(same, same, op(i)), certified: (i: I)",
+    );
+    let error = e
+        .elab_module_source("ambiguous_family", &ambiguous)
+        .unwrap_err();
+    assert!(
+        error.render(&ambiguous).contains("compatibility"),
+        "{}",
+        error.render(&ambiguous)
+    );
+    let chosen = ambiguous.replace(
+        "{ rel_cong(h) }",
+        "{ let chosen = laws.certified(i); rel_cong(h) }",
+    );
+    check(&mut e, "chosen_family", &chosen);
+}

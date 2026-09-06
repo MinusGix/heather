@@ -369,3 +369,22 @@ to which §9.3 adds one entry) — and it stays pinned in the test corpus by
 - **The subject's type is inferred once more** on the dot path, before the
   three inferences receiver-dispatch §7.3 already records. Same bound (the
   cheap negative test) and same file it is recorded in.
+
+## Complete local multi-parameter dictionaries (2026-09-05)
+
+The one-parameter narrowing above now has a scoped extension. A complete local
+`Mapping<S,A>` dictionary fixes both arguments, so `S.send` may project its
+`send` field. The subject must match its primary carrier. The actual local term
+must still have the declared class type; a shadowed name cannot supply evidence.
+Annotated local aliases are included, even for classes without value indices.
+
+Tagged parents also qualify when their recorded path preserves the primary
+carrier. Traversal uses ordinary field projections. Two matching dictionaries,
+including two differently indexed tagged parents, remain ambiguous. Explicit
+value-dictionary projection disambiguates them. No additional type parameters
+are inferred from global instances, and reordered carrier paths do not qualify.
+
+The finite-set client uses this for `S.image_union` under `FiniteSets<S,A>`.
+Tests in `traits_type_projection.rs` check the resulting term against explicit
+projection, beneath binders, through aliases and tagged parents, and against
+ambiguity, unrelated carriers, and shadowing.

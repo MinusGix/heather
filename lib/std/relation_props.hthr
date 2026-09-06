@@ -154,3 +154,11 @@ theorem preserves_relation_compose<A, B, C>(RA: A → A → Type,
 {
     λ x y h => hg(f(x), f(y), hf(x, y, h))
 }
+
+// Ordinary proof constructors used by relational calc. Each written endpoint
+// is checked, including in a one-step chain. No representative equality is used.
+theorem relation_exact<A>(R: A → A → Type, a, b: A, proof: R(a, b)): R(a, b) { proof }
+
+theorem relation_step<A: Transitive(R)>(R: A → A → Type,
+    a, b, c: A, first: R(a, b), rest: R(b, c)): R(a, c)
+{ A.rel_trans(a, b, c, first, rest) }

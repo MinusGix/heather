@@ -1,0 +1,163 @@
+// A client of the semantic interface. No list representation is in scope.
+import logic;
+import relation_props;
+import algebra_rel;
+import finite_set;
+
+fn extend<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S) → S {
+    xs ⊔ ops.image(f, xs)
+}
+
+theorem union_twice<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, xs, ys: S):
+    (xs ⊔ ys) ⊔ ys ≈ xs ⊔ ys
+{
+    calc {
+        (xs ⊔ ys) ⊔ ys ≈ xs ⊔ (ys ⊔ ys) := S.assoc(xs, ys, ys),
+        ≈ xs ⊔ ys := rel_cong(S.idem(ys)),
+    }
+}
+
+theorem empty_right<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, xs: S): xs ⊔ ops.empty ≈ xs {
+    calc {
+        xs ⊔ ops.empty ≈ ops.empty ⊔ xs := S.comm(xs, ops.empty),
+        ≈ xs := S.empty_left(xs),
+    }
+}
+
+theorem image_duplicate<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S):
+    ops.image(f, xs ⊔ xs) ≈ ops.image(f, xs)
+{
+    calc {
+        ops.image(f, xs ⊔ xs) ≈ ops.image(f, xs) ⊔ ops.image(f, xs) := S.image_union(f, xs, xs),
+        ≈ ops.image(f, xs) := S.idem(ops.image(f, xs)),
+    }
+}
+
+// Rearrange four collections by mathematical steps. rel_cong finds each context.
+theorem union_interchange<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, w, x, y, z: S):
+    (w ⊔ x) ⊔ (y ⊔ z) ≈ (w ⊔ y) ⊔ (x ⊔ z)
+{
+    calc {
+        (w ⊔ x) ⊔ (y ⊔ z) ≈ w ⊔ (x ⊔ (y ⊔ z)) := S.assoc(w, x, y ⊔ z),
+        ≈ w ⊔ ((x ⊔ y) ⊔ z) := rel_cong(S.rel_sym((x ⊔ y) ⊔ z, x ⊔ (y ⊔ z), S.assoc(x, y, z))),
+        ≈ w ⊔ ((y ⊔ x) ⊔ z) := rel_cong(S.comm(x, y)),
+        ≈ w ⊔ (y ⊔ (x ⊔ z)) := rel_cong(S.assoc(y, x, z)),
+        ≈ (w ⊔ y) ⊔ (x ⊔ z) := S.rel_sym((w ⊔ y) ⊔ (x ⊔ z), w ⊔ (y ⊔ (x ⊔ z)), S.assoc(w, y, x ⊔ z)),
+    }
+}
+
+theorem extend_union<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs, ys: S):
+    (xs ⊔ ys) ⊔ ops.image(f, xs ⊔ ys) ≈ (xs ⊔ ops.image(f, xs)) ⊔ (ys ⊔ ops.image(f, ys))
+{
+    calc {
+        (xs ⊔ ys) ⊔ ops.image(f, xs ⊔ ys)
+            ≈ (xs ⊔ ys) ⊔ (ops.image(f, xs) ⊔ ops.image(f, ys)) := rel_cong(S.image_union(f, xs, ys)),
+        ≈ (xs ⊔ ops.image(f, xs)) ⊔ (ys ⊔ ops.image(f, ys)) := union_interchange<A, S>(xs, ys, ops.image(f, xs), ops.image(f, ys)),
+    }
+}
+
+theorem image_then_union<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs, ys: S):
+    ops.image(f, xs ⊔ ys) ≈ ops.image(f, ys) ⊔ ops.image(f, xs)
+{
+    calc {
+        ops.image(f, xs ⊔ ys) ≈ ops.image(f, xs) ⊔ ops.image(f, ys) := S.image_union(f, xs, ys),
+        ≈ ops.image(f, ys) ⊔ ops.image(f, xs) := S.comm(ops.image(f, xs), ops.image(f, ys)),
+    }
+}
+
+theorem extend_identity<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, xs: S):
+    xs ⊔ ops.image(λ a => a, xs) ≈ xs
+{
+    calc {
+        xs ⊔ ops.image(λ a => a, xs) ≈ xs ⊔ xs := rel_cong(S.image_identity(xs)),
+        ≈ xs := S.idem(xs),
+    }
+}
+
+theorem extend_empty<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A):
+    ops.empty ⊔ ops.image(f, ops.empty) ≈ ops.empty
+{
+    calc {
+        ops.empty ⊔ ops.image(f, ops.empty) ≈ ops.empty ⊔ ops.empty := rel_cong(S.image_empty(f)),
+        ≈ ops.empty := S.idem(ops.empty),
+    }
+}
+
+theorem image_fusion<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f, g: A → A, xs, ys: S):
+    ops.image(g, ops.image(f, xs ⊔ ys)) ≈ ops.image(λ a => g(f(a)), xs) ⊔ ops.image(λ a => g(f(a)), ys)
+{
+    calc {
+        ops.image(g, ops.image(f, xs ⊔ ys)) ≈ ops.image(λ a => g(f(a)), xs ⊔ ys) := S.image_composition(f, g, xs ⊔ ys),
+        ≈ ops.image(λ a => g(f(a)), xs) ⊔ ops.image(λ a => g(f(a)), ys) := S.image_union(λ a => g(f(a)), xs, ys),
+    }
+}
+
+// An idempotent element transformation makes one extension enough.
+theorem extend_stable<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S,
+    stable: ops.image(f, ops.image(f, xs)) ≈ ops.image(f, xs)):
+    (xs ⊔ ops.image(f, xs)) ⊔ ops.image(f, xs ⊔ ops.image(f, xs)) ≈ xs ⊔ ops.image(f, xs)
+{
+    calc {
+        (xs ⊔ ops.image(f, xs)) ⊔ ops.image(f, xs ⊔ ops.image(f, xs))
+            ≈ (xs ⊔ ops.image(f, xs)) ⊔ (ops.image(f, xs) ⊔ ops.image(f, ops.image(f, xs))) := rel_cong(S.image_union(f, xs, ops.image(f, xs))),
+        ≈ (xs ⊔ ops.image(f, xs)) ⊔ (ops.image(f, xs) ⊔ ops.image(f, xs)) := rel_cong(stable),
+        ≈ (xs ⊔ ops.image(f, xs)) ⊔ ops.image(f, xs) := rel_cong(S.idem(ops.image(f, xs))),
+        ≈ xs ⊔ ops.image(f, xs) := union_twice<A, S>(xs, ops.image(f, xs)),
+    }
+}
+
+// A new user-defined operation inherits compatibility compositionally.
+theorem extend_respects<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs, ys: S, h: xs ≈ ys):
+    xs ⊔ ops.image(f, xs) ≈ ys ⊔ ops.image(f, ys)
+{
+    rel_cong(h)
+}
+
+theorem nested_image_rewrite<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs, ys, known: S, h: xs ≈ ys):
+    known ⊔ ops.image(f, xs ⊔ xs) ≈ known ⊔ ops.image(f, ys ⊔ ys)
+{
+    rel_cong(h)
+}
+
+theorem client_operation_computes<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S):
+    extend<A, S>(f, xs) ≈ xs ⊔ ops.image(f, xs)
+{ S.rel_refl(xs ⊔ ops.image(f, xs)) }
+
+// A selected element survives representation replacement through the interface.
+fn move_selected<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, xs, ys: S, h: xs ≈ ys,
+    selected: SetElement<S, A>(ops.member, xs)) → SetElement<S, A>(ops.member, ys)
+{
+    SetElement(value := selected.value,
+        belongs := S.member_same(xs, ys, h, selected.value).mp(selected.belongs))
+}
+
+fn image_selected<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S,
+    selected: SetElement<S, A>(ops.member, xs)) → SetElement<S, A>(ops.member, ops.image(f, xs))
+{
+    SetElement(value := f(selected.value),
+        belongs := S.member_image(f, xs, f(selected.value)).mpr(
+            Exists(selected.value, And(selected.belongs, refl))))
+}
+
+theorem member_after_update<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S,
+    a: A, member: ops.member(a, xs)): ops.member(a, xs ⊔ ops.image(f, xs))
+{ S.member_union(a, xs, ops.image(f, xs)).mpr(Inl(member)) }
+
+theorem generated_member_after_update<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, f: A → A, xs: S,
+    a: A, member: ops.member(a, xs)): ops.member(f(a), xs ⊔ ops.image(f, xs))
+{
+    S.member_union(f(a), xs, ops.image(f, xs)).mpr(Inr(
+        S.member_image(f, xs, f(a)).mpr(Exists(a, And(member, refl)))))
+}
+
+// A second style of proof: reason by membership, then invoke extensionality.
+theorem union_empty_by_membership<A, S: FiniteSets<A>(≈, ⊔, ops)>({ops: SetOperations<S, A>}, xs: S):
+    xs ⊔ ops.empty ≈ xs
+{
+    S.extensionality(xs ⊔ ops.empty, xs, λ a => Iff(
+        mp := λ member => match S.member_union(a, xs, ops.empty).mp(member) {
+            Inl(present) => present,
+            Inr(impossible) => false_elim(S.member_empty(a, impossible)),
+        },
+        mpr := λ present => S.member_union(a, xs, ops.empty).mpr(Inl(present))))
+}

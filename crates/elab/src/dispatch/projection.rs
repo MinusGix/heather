@@ -102,7 +102,74 @@ impl Elaborator {
             .filter(|(_, i)| i.params.len() == 1)
             .cloned()
             .collect();
-        if cands.is_empty() {
+        // A local dictionary already fixes every type argument. For a
+        // multi-parameter class, use that complete dictionary rather than
+        // guessing the missing arguments from the subject or global instances.
+        let mut scoped_hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for d in cx.dicts.iter().rev() {
+            if !seen.insert(d.name.clone()) {
+                continue;
+            }
+            let Some(dkey) = self.key_of(&d.class) else {
+                continue;
+            };
+            let Some(dinfo) = self.traits.class(&dkey) else {
+                continue;
+            };
+            let Ok((dc, dlvl)) = self.elab_ty(cx, &d.carrier) else {
+                continue;
+            };
+            if dlvl != clvl || !self.conv_types(cx, &dc, &carrier, &clvl) {
+                continue;
+            }
+            let Ok((dict, goal, _)) = self.resolve(cx, &d.name, span) else {
+                continue;
+            };
+            let Some(root) = self.lookup_inductive(&dinfo.name).cloned() else {
+                continue;
+            };
+            if self
+                .display_tag_of(&goal)
+                .is_none_or(|tag| tag.tag != root.tag)
+            {
+                continue;
+            }
+            for (key, info) in with_field.iter().filter(|(_, info)| info.params.len() > 1) {
+                let paths: Vec<Vec<String>> = if key == &dkey {
+                    vec![Vec::new()]
+                } else {
+                    // A tagged parent carries a complete dictionary too. Only
+                    // paths preserving the primary carrier can use this subject.
+                    dinfo.ancestors.iter().filter(|ancestor|
+                        !ancestor.path.is_empty() && self.key_of(&ancestor.name).as_deref() == Some(key.as_str())
+                        && matches!(ancestor.args.first().map(|a| &a.kind), Some(TyKind::Named { name, args })
+                            if args.is_empty() && dinfo.params.first() == Some(name)))
+                        .map(|ancestor| ancestor.path.clone()).collect()
+                };
+                for path in paths {
+                    let mut current = Some((root.clone(), goal.clone(), dict.clone()));
+                    for component in &path {
+                        current = current.and_then(|(ind, ty, term)| {
+                            let idx = ind.field_index(component)?;
+                            let (term, ty, _) = self
+                                .project_field(cx, &ind, &ty, Rc::new(term), idx, span)
+                                .ok()?;
+                            let ind = self.display_tag_of(&ty)?;
+                            Some((ind, ty, term))
+                        });
+                    }
+                    if let Some((ind, ty, term)) = current {
+                        if self.key_of(&ind.name) != self.key_of(&info.name) {
+                            continue;
+                        }
+                        let display = self.display_type(cx, &ty);
+                        scoped_hits.push((ind, ty, term, display, None));
+                    }
+                }
+            }
+        }
+        if cands.is_empty() && scoped_hits.is_empty() {
             // The multi-parameter refusal, verbatim from receiver dispatch
             // (§4 rule 7) and for the same reason: the subject fixes the
             // carrier and nothing fixes the rest.
@@ -129,7 +196,7 @@ impl Elaborator {
             .or_else(|| ns.clone())
             .unwrap_or_else(|| "_".into());
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
-        let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
+        let mut hits = scoped_hits;
         let mut tried: Vec<String> = Vec::new();
         let mut unpinned: Option<ElabError> = None;
         for (_, info) in &cands {

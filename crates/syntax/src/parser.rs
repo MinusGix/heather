@@ -4451,7 +4451,9 @@ impl Parser {
     /// (surface-v1 §1). Desugars to a right-nested `@trans` over the step
     /// proofs, carrying the step terms as the *explicit* endpoints so that
     /// `refl` steps still receive a checking type. Proves `e0 = e_last`;
-    /// a single step is just its proof.
+    /// a single identity step is just its proof. Homogeneous `≈` chains use
+    /// the locally selected relation and ordinary `relation_props` helpers;
+    /// their endpoints are checked even for a single step.
     fn calc_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `calc`
@@ -4463,7 +4465,12 @@ impl Parser {
         // separator, not the identity type (docs/surface-universe.md §13).
         let mut terms = vec![self.with_eq(true, |p| p.expr())?];
         let mut proofs = Vec::new();
-        self.expect_eq("calc step")?;
+        let relational = matches!(self.peek(), TokKind::Approx);
+        if relational {
+            self.bump();
+        } else {
+            self.expect_eq("calc step")?;
+        }
         loop {
             terms.push(self.with_eq(true, |p| p.expr())?);
             self.expect(&TokKind::ColonEq, "`:=` (calc step proof)")?;
@@ -4475,12 +4482,64 @@ impl Parser {
             if matches!(self.peek(), TokKind::RBrace) {
                 break; // trailing comma
             }
-            self.expect_eq("calc step")?;
+            if relational {
+                self.expect(
+                    &TokKind::Approx,
+                    "`≈` (all steps in this calc must use the same relation)",
+                )?;
+            } else {
+                self.expect_eq("calc step")?;
+            }
         }
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         let span = start.join(end);
         // Fold right: acc proves terms[i+1] = e_last; prepend step i.
         let m = proofs.len();
+        if relational {
+            let relation = Expr {
+                kind: ExprKind::OpSymbol {
+                    symbol: "≈".to_string(),
+                    fixity: OpFixity::Infix,
+                },
+                span,
+            };
+            let call = |name: &str, args: Vec<Expr>| Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr {
+                        kind: ExprKind::Var(name.into()),
+                        span,
+                    }),
+                    args,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            let mut acc = call(
+                "relation_props::relation_exact",
+                vec![
+                    relation.clone(),
+                    terms[m - 1].clone(),
+                    terms[m].clone(),
+                    proofs[m - 1].clone(),
+                ],
+            );
+            for i in (0..m - 1).rev() {
+                acc = call(
+                    "relation_props::relation_step",
+                    vec![
+                        relation.clone(),
+                        terms[i].clone(),
+                        terms[i + 1].clone(),
+                        terms[m].clone(),
+                        proofs[i].clone(),
+                        acc,
+                    ],
+                );
+            }
+            return Ok(acc);
+        }
         let last = &terms[m];
         let mut acc = proofs[m - 1].clone();
         for i in (0..m - 1).rev() {

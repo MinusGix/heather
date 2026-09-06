@@ -1,0 +1,79 @@
+// The author owns representation-dependent proofs. Clients import finite_set.
+import logic;
+import list;
+import relation_props;
+import algebra_rel;
+import list_setoid;
+import finite_set;
+
+fn ImageWitness<A, B>(xs: List<A>, f: A → B, b: B) → Type {
+    Exists<A>(λ a => And<Mem(a, xs), f(a) = b>)
+}
+
+theorem mem_image_source<A, B>(xs: List<A>, f: A → B, b: B):
+    Mem(b, map(xs, f)) → ImageWitness(xs, f, b)
+{
+    match xs {
+        Nil => λ impossible => false_elim(impossible),
+        Cons(x, tail) => λ member => match member {
+            Inl(eq) => Exists(x, And(Inl(refl), sym(eq))),
+            Inr(rest) => {
+                let source = mem_image_source(tail, f, b, rest);
+                Exists(source.witness, And(Inr(source.proof.left), source.proof.right))
+            },
+        },
+    }
+}
+
+theorem mem_image_transport<A, B>(xs, ys: List<A>, f: A → B,
+    same: SameMembers(xs, ys), b: B, member: Mem(b, map(xs, f))): Mem(b, map(ys, f))
+{
+    let source = mem_image_source(xs, f, b, member);
+    let mapped = mem_map(ys, source.witness, f, same(source.witness).mp(source.proof.left));
+    j(source.proof.right, λ value eq => Mem(value, map(ys, f)), mapped)
+}
+
+theorem image_same_members<A, B>(xs, ys: List<A>, same: SameMembers(xs, ys), f: A → B):
+    SameMembers(map(xs, f), map(ys, f))
+{
+    λ b => Iff(
+        mp := λ member => mem_image_transport(xs, ys, f, same, b, member),
+        mpr := λ member => mem_image_transport(ys, xs, f, same_members_sym(xs, ys, same), b, member))
+}
+
+fn set_image<A>(f: A → A, xs: List<A>) → List<A> { map(xs, f) }
+
+theorem image_preserves<A>(f: A → A):
+    PreservesRelation(SameMembers<A>, SameMembers<A>, λ xs => set_image(f, xs))
+{ λ xs ys same => image_same_members(xs, ys, same, f) }
+
+fn list_operations<A>() → SetOperations<List<A>, A> {
+    SetOperations(empty := Nil, image := set_image<A>, member := Mem<A>, singleton := λ a => [a])
+}
+
+instance<A> FiniteSets<List<A>, A>(SameMembers<A>, append<A>, list_operations<A>) {
+    rel_refl := same_members_refl,
+    rel_sym := same_members_sym,
+    rel_trans := same_members_trans,
+    respects2 := append_same_members,
+    assoc := append_assoc_same_members,
+    comm := append_comm_same_members,
+    idem := append_self_same_members,
+    extensionality := λ xs ys same => same,
+    member_empty := λ a member => member,
+    member_union := λ a xs ys => mem_append_iff(xs, ys, a),
+    member_singleton := λ a b => Iff(
+        mp := λ member => match member { Inl(eq) => eq, Inr(impossible) => false_elim(impossible) },
+        mpr := λ eq => Inl(eq)),
+    member_image := λ f xs b => Iff(
+        mp := λ member => mem_image_source(xs, f, b, member),
+        mpr := λ source => j(source.proof.right, λ value eq => Mem(value, map(xs, f)),
+            mem_map(xs, source.witness, f, source.proof.left))),
+    empty_left := λ xs => same_members_refl(xs),
+    member_same := λ xs ys same a => same(a),
+    image_respects := image_preserves,
+    image_union := λ f xs ys => same_members_of_eq(map(xs ++ ys, f), map(xs, f) ++ map(ys, f), map_append(xs, ys, f)),
+    image_empty := λ f => same_members_refl(Nil<A>),
+    image_identity := λ xs => same_members_of_eq(map<A, A>(xs, λ a => a), xs, map_id(xs)),
+    image_composition := λ f g xs => same_members_of_eq(map(map(xs, f), g), map(xs, λ a => g(f(a))), map_map(xs, f, g)),
+}
