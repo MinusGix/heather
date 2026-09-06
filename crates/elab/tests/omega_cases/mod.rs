@@ -731,7 +731,31 @@ pub fn omega_logic_suite() {
     proves_an_affine_nat_identity();
 }
 
+/// issues/omega-renders-member-by-base-name.md: a goal over `xs.len()`
+/// reconstructs a certificate that names the atom, and the atom's global is a
+/// **member** — whose base name (`len`) resolves to nothing outside `list`.
+/// The renderer whose output is re-parsed therefore spells a global qualified
+/// wherever the base name does not come back to it.
+fn reconstructs_over_a_member_atom_spelled_qualified() {
+    let source = format!(
+        r#"{PREFIX}
+theorem member_atom(xs: List<Int>, h: nat::Lt(0, list_len(xs))):
+    nat::Lt(0, nat::add(list_len(xs), 1)) {{ omega }}
+theorem member_atom_dotted(xs: List<Int>, h: nat::Lt(0, xs.len())):
+    nat::Lt(0, nat::add(xs.len(), 1)) {{ omega }}
+theorem member_atoms_two(xs, ys: List<Int>, h: nat::Le(xs.len(), ys.len())):
+    nat::Le(xs.len(), nat::add(ys.len(), 3)) {{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| {
+            panic!("a certificate over a member atom did not check: {}", message(error))
+        });
+}
+
 pub fn omega_reconstruction_suite() {
+    reconstructs_over_a_member_atom_spelled_qualified();
     reflects_negated_nat_relations();
     split_all_applies_omega_to_every_boolean_goal();
     reconstructs_easy_equality_elimination();

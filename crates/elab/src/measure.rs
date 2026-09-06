@@ -49,10 +49,11 @@ use heather_syntax::{
 use crate::{R, err};
 
 /// The obligations a wrapped body owes, one per recursive call in source
-/// order: the call's span, the hole's name, and the obligation rendered for
-/// a diagnostic.
+/// order: the call's span, the hole's name, the obligation rendered for a
+/// diagnostic, and — for a group site the rank rule explains —
+/// `docs/mutual-recursion-design.md` §8's sentence.
 pub(crate) struct Obligations {
-    pub(crate) sites: Vec<(Span, String, String)>,
+    pub(crate) sites: Vec<(Span, String, String, Option<String>)>,
 }
 
 impl Obligations {
@@ -66,14 +67,18 @@ impl Obligations {
         if !msg.starts_with("`omega` got stuck") {
             return error;
         }
-        let Some((_, hole, text)) = self.sites.iter().find(|(s, ..)| s == span) else {
+        let Some((_, hole, text, hint)) = self.sites.iter().find(|(s, ..)| s == span) else {
             return error;
+        };
+        let rank = match hint {
+            Some(h) => format!(". {h}"),
+            None => String::new(),
         };
         crate::ElabError::Elab {
             msg: format!(
                 "this recursive call must decrease the measure, and `{text}` was not \
                  proved automatically ({msg}). Discharge it by hand: \
-                 `on ?{hole} := …;` at the end of the body"
+                 `on ?{hole} := …;` at the end of the body{rank}"
             ),
             span: *span,
         }
@@ -174,6 +179,45 @@ pub(crate) fn obl_name(name: &str, site: usize) -> String {
 /// `f#rec` — the eliminator on the bound, lifted out of `f`.
 pub(crate) fn rec_name(name: &str) -> String {
     format!("{name}#rec")
+}
+
+/// `f#grp` — a mutual group's product motive, keyed on its first member
+/// (`docs/mutual-recursion-design.md` §3).
+pub(crate) fn grp_name(name: &str) -> String {
+    format!("{name}#grp")
+}
+
+/// `f#grp_rec` — the group's one eliminator on the shared bound (§3).
+pub(crate) fn grp_rec_name(name: &str) -> String {
+    format!("{name}#grp_rec")
+}
+
+/// One member of the recursion the walk may call: its self-name, the
+/// parameters a call has to saturate, the measure a call's obligation is
+/// stated at — both as written (`raw`) and scaled by §4's rank flattening —
+/// and the projection of the shared induction hypothesis that reaches it.
+///
+/// A singleton has exactly one of these, with `proj: None`, and everything
+/// below then spells what Part A spelled.
+struct Sibling {
+    name: String,
+    params: Vec<Param>,
+    raw: Expr,
+    measure: Expr,
+    /// `.snd` repeated `n` times then `.fst`/`.snd` (§3); `None` where the ih
+    /// *is* the member's own motive.
+    proj: Option<(usize, &'static str)>,
+    rank: usize,
+}
+
+/// The clean statement a group's obligation is *written* at (§4): the
+/// argument's own measure against the caller's, before the rank flattening,
+/// and whether the call owes a strict decrease.
+struct Clean {
+    args: Expr,
+    strict: bool,
+    /// §8's rank rule, where the site is one it explains.
+    hint: Option<String>,
 }
 
 fn var(name: &str, span: Span) -> Expr {
@@ -313,6 +357,49 @@ fn block(result: Expr, span: Span) -> Block {
     }
 }
 
+/// The one-member "group" a singleton recurses in: `f` itself, at the measure
+/// as written and with no projection, so every route below spells what Part A
+/// spelled.
+fn solo(decl: &Decl, name: &str, measure: &Expr) -> [Sibling; 1] {
+    [Sibling {
+        name: name.to_string(),
+        params: decl.params.clone(),
+        raw: measure.clone(),
+        measure: measure.clone(),
+        proj: None,
+        rank: 0,
+    }]
+}
+
+/// `recv(args…)`, or `recv.snd…​.fst(args…)` where the member is reached
+/// through the product motive (`docs/mutual-recursion-design.md` §3).
+fn project(recv: Expr, proj: Option<(usize, &'static str)>, args: Vec<Expr>, span: Span) -> Expr {
+    let Some((snds, last)) = proj else {
+        return app(recv, args, span);
+    };
+    let mut r = recv;
+    for _ in 0..snds {
+        r = Expr {
+            kind: ExprKind::Dot {
+                recv: Box::new(r),
+                name: "snd".into(),
+                args: None,
+                named: Vec::new(),
+            },
+            span,
+        };
+    }
+    Expr {
+        kind: ExprKind::Dot {
+            recv: Box::new(r),
+            name: last.to_string(),
+            args: Some(args),
+            named: Vec::new(),
+        },
+        span,
+    }
+}
+
 /// Whether the obligations of a body may be lifted at all (§4): the plan
 /// rests on each obligation being a *named* goal that one generated
 /// declaration discharges, so a body that discharges goals by statement
@@ -346,6 +433,7 @@ pub(crate) fn lower(
     let span = measure.span;
     let params = value_params(decl);
     let refs: Vec<&Param> = decl.params.iter().collect();
+    let solo = solo(decl, name, measure);
     let mut state = Rewrite {
         decl,
         name,
@@ -355,6 +443,8 @@ pub(crate) fn lower(
         omega_available,
         tys,
         lift: lift && liftable(decl),
+        members: &solo,
+        caller: 0,
         next: 1,
         eqs: 0,
         refinements: Vec::new(),
@@ -374,7 +464,7 @@ pub(crate) fn lower(
     // including one whose site could not be lifted — stays on the body.
     let moved: Vec<&str> = obligations
         .iter()
-        .flat_map(|o| o.obligations.sites.iter().map(|(_, h, _)| h.as_str()))
+        .flat_map(|o| o.obligations.sites.iter().map(|(_, h, ..)| h.as_str()))
         .collect();
     let body_ons = remaining_ons(&decl.body.ons, &moved);
 
@@ -565,6 +655,439 @@ pub(crate) fn lower(
     })
 }
 
+/// One member of a mutual `decreases` group, as the run scan of
+/// `docs/mutual-recursion-design.md` §1 found it.
+pub(crate) struct GroupMember<'a> {
+    pub(crate) decl: &'a Decl,
+    /// The base name the member recurses under, as `Cx.selfref` uses it.
+    pub(crate) self_name: String,
+    pub(crate) measure: Expr,
+}
+
+/// `e * N + r` — §4's flattening of the lexicographic `(measure, rank)` into
+/// the one `Nat` Part A already recurses on. Spelled at `nat::mul`/`nat::add`
+/// rather than through the operators, which is what `omega` reflects.
+fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
+    let span = e.span;
+    let num = |k: usize| Expr {
+        kind: ExprKind::Num(k as u64),
+        span,
+    };
+    app(
+        var("nat::add", span),
+        vec![
+            app(var("nat::mul", span), vec![e.clone(), num(n)], span),
+            num(r),
+        ],
+        span,
+    )
+}
+
+/// The group-shape guards of `docs/mutual-recursion-design.md` §§2–4, owed
+/// before anything is elaborated — including before the members' measures are
+/// checked, since a measure naming a member is an unbound name at that point
+/// and "unbound" is the wrong thing to say about it.
+pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
+    let first = members[0].decl;
+    let tyvars = |d: &Decl| {
+        d.tyvars
+            .iter()
+            .map(|t| t.name.clone())
+            .collect::<Vec<String>>()
+    };
+    // §3: the helpers are shared, and a surface function type cannot quantify
+    // a type parameter, so every member declares the same list.
+    let want = tyvars(first);
+    for m in &members[1..] {
+        let got = tyvars(m.decl);
+        if got != want {
+            return err(
+                format!(
+                    "the members of a mutual `decreases` group share one recursion, so \
+                     they declare the same type parameters: `{}` has <{}> and `{}` has \
+                     <{}> (docs/mutual-recursion-design.md §3)",
+                    first.name,
+                    want.join(", "),
+                    m.decl.name,
+                    got.join(", ")
+                ),
+                m.decl.span,
+            );
+        }
+    }
+    for m in members {
+        // §2: the motive quantifies over every member's measure, so a measure
+        // defined by the recursion would be circular.
+        if let Some(other) = members.iter().find(|o| mentions(&m.measure, &o.self_name)) {
+            return err(
+                format!(
+                    "a `decreases` measure may not call `{}`: it is a member of this \
+                     mutual group, and the group's motive is stated at every member's \
+                     measure (docs/mutual-recursion-design.md §2)",
+                    other.self_name
+                ),
+                m.measure.span,
+            );
+        }
+        // §4: the group's obligations are stated at the scaled measure and
+        // written at the unscaled one, which needs the lift.
+        if !liftable(m.decl) {
+            return err(
+                format!(
+                    "a mutual `decreases` group lifts every obligation into a \
+                     declaration of its own, so `{}` cannot discharge one by statement: \
+                     name the obligation instead (`on ?decN := …`, \
+                     docs/mutual-recursion-design.md §4)",
+                    m.decl.name
+                ),
+                m.decl.span,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Lower a mutual group of N > 1 adjacent `decreases` declarations into the
+/// one recursion of `docs/mutual-recursion-design.md` §3: the lifted
+/// obligations, the product motive `f#grp`, one `g#body` per member, the
+/// shared `f#grp_rec`, and each member as a projection of it. Keyed on the
+/// first member's name.
+///
+/// Purely syntactic, like [`lower`]: every declaration it returns is surface
+/// the writer could have written, checked the ordinary way.
+pub(crate) fn lower_group(
+    members: &[GroupMember<'_>],
+    omega_available: bool,
+    tys: &dyn BinderTys,
+) -> R<Family> {
+    let n = members.len();
+    debug_assert!(n > 1, "a singleton lowers by Part A");
+    let first = members[0].decl;
+    let span = members[0].measure.span;
+    check_group_shape(members)?;
+    if !omega_available {
+        return err(
+            "a mutual `decreases` group states its obligations at the flattened measure \
+             of docs/mutual-recursion-design.md §4 and closes the arithmetic with \
+             `omega`: `import omega;` and `import int;` first",
+            span,
+        );
+    }
+    let sibs: Vec<Sibling> = members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| Sibling {
+            name: m.self_name.clone(),
+            params: m.decl.params.clone(),
+            raw: m.measure.clone(),
+            measure: scaled(&m.measure, n, n - 1 - i),
+            // `.snd` down to this component, then `.fst` — except the last,
+            // which *is* the innermost `.snd` (§3).
+            proj: Some(if i + 1 == n {
+                (n - 2, "snd")
+            } else {
+                (i, "fst")
+            }),
+            rank: n - 1 - i,
+        })
+        .collect();
+
+    // Every member's body rewritten against the shared ih, in declaration
+    // order, and the obligations each one raises.
+    let mut obligations: Vec<Lowered> = Vec::new();
+    let mut bodies: Vec<(Vec<Stmt>, Expr, Vec<OnStmt>)> = Vec::new();
+    for (i, m) in members.iter().enumerate() {
+        let refs: Vec<&Param> = m.decl.params.iter().collect();
+        let mut state = Rewrite {
+            decl: m.decl,
+            name: &m.self_name,
+            params: &refs,
+            measure: &sibs[i].measure,
+            ons: &m.decl.body.ons,
+            omega_available,
+            tys,
+            lift: true,
+            members: &sibs,
+            caller: i,
+            next: 1,
+            eqs: 0,
+            refinements: Vec::new(),
+            scope: scope_of(m.decl),
+            sites: Vec::new(),
+            obls: Vec::new(),
+            error: None,
+        };
+        let stmts: Vec<Stmt> = m.decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
+        let result = state.expr(&m.decl.body.result);
+        if let Some(error) = state.error.take() {
+            return Err(error);
+        }
+        // §4: unlike Part A, the un-lifted spelling is not generally
+        // available to a group — `omega` inside `g#body` has the group's ih
+        // in context and renders it back as source — so a site that cannot be
+        // lifted is reported rather than worked around.
+        if let Some(k) = state.obls.iter().position(Option::is_none) {
+            let (site, ..) = state.sites[k];
+            return err(
+                "this recursive call's obligation names a binder the generator cannot \
+                 type, and a mutual group cannot fall back to stating it at the call \
+                 (docs/mutual-recursion-design.md §4): annotate the binder, or lift the \
+                 call out of the pattern that introduces it",
+                site,
+            );
+        }
+        let lifted: Vec<Lowered> = state.obls.into_iter().flatten().collect();
+        let moved: Vec<&str> = lifted
+            .iter()
+            .flat_map(|o| o.obligations.sites.iter().map(|(_, h, ..)| h.as_str()))
+            .collect();
+        let ons = remaining_ons(&m.decl.body.ons, &moved);
+        // The sites travel with their own `g#obl_N`; `g#body` raises none.
+        obligations.extend(lifted);
+        bodies.push((stmts, result, ons));
+    }
+
+    let grp = grp_name(&first.name);
+    let grp_rec = grp_rec_name(&first.name);
+    let grp_at = |e: Expr| of_expr(app(companion_ref(first, &grp, span), vec![e], span));
+    let nat_ty = Ty {
+        kind: TyKind::Nat,
+        span,
+    };
+    let binder = |n: &str| LamBinder {
+        name: n.to_string(),
+        ty: None,
+        implicit: false,
+        span,
+    };
+    // λ x̄_i __dec_h => body, at member i's own parameter names.
+    let lam_at = |i: usize, body: Expr| Expr {
+        kind: ExprKind::Lam {
+            binders: members[i]
+                .decl
+                .params
+                .iter()
+                .map(|p| p.name.as_str())
+                .chain([H])
+                .map(binder)
+                .collect(),
+            body: Box::new(body),
+        },
+        span,
+    };
+    // `Pair(a, Pair(b, c))` / `Pair<A, Pair<B, C>>` — the product is nested
+    // right, so member i's projection is `.snd`×i then `.fst` (§3).
+    let nest_ty = |mut parts: Vec<Ty>| {
+        let mut out = parts.pop().expect("a group has members");
+        while let Some(t) = parts.pop() {
+            out = Ty {
+                kind: TyKind::Named {
+                    name: "Pair".into(),
+                    args: vec![t, out],
+                },
+                span,
+            };
+        }
+        out
+    };
+    let nest = |mut parts: Vec<Expr>| {
+        let mut out = parts.pop().expect("a group has members");
+        while let Some(e) = parts.pop() {
+            out = app(var("Pair", span), vec![e, out], span);
+        }
+        out
+    };
+
+    // `f#grp(__dec_z) -> Type`, the product of the members' own motives.
+    let component = |i: usize, bound: Expr| {
+        pi_over(
+            &value_params(members[i].decl),
+            arrow(
+                None,
+                lt_ty(sibs[i].measure.clone(), bound, span),
+                members[i].decl.result.clone(),
+                span,
+            ),
+            span,
+        )
+    };
+    let product = nest_ty((0..n).map(|i| component(i, var(Z, span))).collect());
+    let grp_decl = Decl {
+        kind: DeclKind::Fn,
+        is_meta: false,
+        elaborates: None,
+        name: grp.clone(),
+        tyvars: first.tyvars.clone(),
+        params: vec![param(Z, nat_ty.clone(), span)],
+        result: Ty {
+            kind: TyKind::Univ { level: 0 },
+            span,
+        },
+        decreases: None,
+        body: block(
+            Expr {
+                kind: ExprKind::TyLit(Box::new(product)),
+                span,
+            },
+            span,
+        ),
+        span: first.span,
+    };
+
+    // One `g#body(__dec_k, __dec_ih: f#grp(__dec_k), x̄, __dec_h)` per member.
+    let body_decls: Vec<Decl> = members
+        .iter()
+        .enumerate()
+        .zip(bodies)
+        .map(|((i, m), (stmts, result, ons))| {
+            let mut ps = vec![
+                param(K, nat_ty.clone(), span),
+                param(IH, grp_at(var(K, span)), span),
+            ];
+            ps.extend(value_params(m.decl));
+            ps.push(param(
+                H,
+                lt_ty(sibs[i].measure.clone(), succ(var(K, span), span), span),
+                span,
+            ));
+            companion(
+                m.decl,
+                body_name(&m.decl.name),
+                ps,
+                m.decl.result.clone(),
+                Block {
+                    stmts,
+                    result: Box::new(result),
+                    ons,
+                    span: m.decl.body.span,
+                },
+            )
+        })
+        .collect();
+
+    // `f#grp_rec(__dec_z) -> f#grp(__dec_z)`, the group's one `elim_Nat`.
+    let absurd = Expr {
+        kind: ExprKind::Match {
+            form: MatchForm::Match,
+            generated: false,
+            scrut: Box::new(var(H, span)),
+            eqbind: None,
+            motive: None,
+            arms: Vec::new(),
+        },
+        span,
+    };
+    let pat = |x: &str| Pat::Var {
+        name: x.to_string(),
+        span,
+    };
+    let arm_call = |i: usize| {
+        let mut args = vec![var(K, span), var(IH, span)];
+        args.extend(members[i].decl.params.iter().map(|p| var(&p.name, span)));
+        args.push(var(H, span));
+        app(
+            companion_ref(first, &body_name(&members[i].decl.name), span),
+            args,
+            span,
+        )
+    };
+    let motive = Expr {
+        kind: ExprKind::Lam {
+            binders: vec![binder(Z)],
+            body: Box::new(Expr {
+                kind: ExprKind::TyLit(Box::new(grp_at(var(Z, span)))),
+                span,
+            }),
+        },
+        span,
+    };
+    let elim = Expr {
+        kind: ExprKind::Match {
+            form: MatchForm::Match,
+            // The result type `f#grp(__dec_z)` already says what the motive
+            // says, so the redundancy lint would fire on generated code.
+            generated: true,
+            scrut: Box::new(var(Z, span)),
+            eqbind: None,
+            motive: Some(Box::new(motive)),
+            arms: vec![
+                Arm {
+                    ctor: "Zero".into(),
+                    default: false,
+                    binders: Vec::new(),
+                    body: nest((0..n).map(|i| lam_at(i, absurd.clone())).collect()),
+                    span,
+                },
+                Arm {
+                    ctor: "Succ".into(),
+                    default: false,
+                    binders: vec![pat(K), pat(IH)],
+                    body: nest((0..n).map(|i| lam_at(i, arm_call(i))).collect()),
+                    span: first.body.span,
+                },
+            ],
+        },
+        span,
+    };
+    let rec_decl = Decl {
+        kind: DeclKind::Fn,
+        is_meta: false,
+        elaborates: None,
+        name: grp_rec.clone(),
+        tyvars: first.tyvars.clone(),
+        params: vec![param(Z, nat_ty, span)],
+        result: grp_at(var(Z, span)),
+        decreases: None,
+        body: block(elim, first.body.span),
+        span: first.span,
+    };
+
+    // Each member is a projection of the eliminator at its own bound (§3).
+    let member_decls: Vec<Decl> = members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let bound = sibs[i].measure.clone();
+            let mut args: Vec<Expr> = m.decl.params.iter().map(|p| var(&p.name, span)).collect();
+            args.push(app(
+                var("nat::lt_succ_self", span),
+                vec![bound.clone()],
+                span,
+            ));
+            Decl {
+                decreases: None,
+                body: block(
+                    project(
+                        app(
+                            companion_ref(first, &grp_rec, span),
+                            vec![succ(bound, span)],
+                            span,
+                        ),
+                        sibs[i].proj,
+                        args,
+                        span,
+                    ),
+                    m.decl.body.span,
+                ),
+                ..m.decl.clone()
+            }
+        })
+        .collect();
+
+    let plain = |decl: Decl| Lowered {
+        decl,
+        obligations: Obligations { sites: Vec::new() },
+    };
+    let mut decls = vec![plain(grp_decl)];
+    decls.extend(body_decls.into_iter().map(plain));
+    decls.push(plain(rec_decl));
+    decls.extend(member_decls.into_iter().map(plain));
+    Ok(Family {
+        obligations,
+        decls,
+    })
+}
+
 /// The discharges that stay where they were written: everything but the
 /// `on ?decN` of a site whose obligation moved into `f#obl_N` (§4).
 fn remaining_ons(ons: &[OnStmt], moved: &[&str]) -> Vec<OnStmt> {
@@ -620,6 +1143,11 @@ struct Rewrite<'a> {
     tys: &'a dyn BinderTys,
     /// Whether an obligation is lifted into `f#obl_N` (§4).
     lift: bool,
+    /// Every member of the recursion this body may call, in declaration
+    /// order, and which of them this body is
+    /// (`docs/mutual-recursion-design.md` §3). One entry for a singleton.
+    members: &'a [Sibling],
+    caller: usize,
     next: usize,
     eqs: usize,
     /// What the enclosing `match`es have established about the measure's
@@ -631,7 +1159,7 @@ struct Rewrite<'a> {
     refinements: Vec<(String, Expr, String)>,
     /// The binders in scope at the node being walked, outermost first.
     scope: Vec<Binder>,
-    sites: Vec<(Span, String, String)>,
+    sites: Vec<(Span, String, String, Option<String>)>,
     /// One entry per site in source order: the lifted `f#obl_N`, or `None`
     /// where the site's obligation stayed at the call (§4).
     obls: Vec<Option<Lowered>>,
@@ -645,19 +1173,23 @@ impl Rewrite<'_> {
         }
     }
 
-    /// `f(ȳ, spill…)` ↦ `ih(ȳ, proof, spill…)`. Arguments were rewritten by
+    /// `f(ȳ, spill…)` ↦ `ih(ȳ, proof, spill…)`, and for a group member
+    /// `j(ȳ, spill…)` ↦ `ih.<proj_j>(ȳ, proof, spill…)`
+    /// (`docs/mutual-recursion-design.md` §3). Arguments were rewritten by
     /// the caller already, so a nested self-call is handled inside out.
-    fn self_call(&mut self, call: &Expr, args: Vec<Expr>, explicit: bool) -> Expr {
+    fn self_call(&mut self, target: usize, call: &Expr, args: Vec<Expr>, explicit: bool) -> Expr {
         let span = call.span;
-        let positions: Vec<usize> = (0..self.params.len())
-            .filter(|&j| explicit || !self.params[j].implicit)
+        let to = &self.members[target];
+        let tname = to.name.clone();
+        let tparams = to.params.clone();
+        let positions: Vec<usize> = (0..tparams.len())
+            .filter(|&j| explicit || !tparams[j].implicit)
             .collect();
-        if positions.len() < self.params.len() {
+        if positions.len() < tparams.len() {
             self.fail(
                 format!(
-                    "a recursive call to `{}` under `decreases` passes every parameter, \
-                     implicit ones included: write `@{}(…)`",
-                    self.name, self.name
+                    "a recursive call to `{tname}` under `decreases` passes every parameter, \
+                     implicit ones included: write `@{tname}(…)`"
                 ),
                 span,
             );
@@ -665,9 +1197,8 @@ impl Rewrite<'_> {
         if args.len() < positions.len() {
             self.fail(
                 format!(
-                    "a recursive call to `{}` under `decreases` is saturated: it takes \
+                    "a recursive call to `{tname}` under `decreases` is saturated: it takes \
                      {} argument(s), found {}",
-                    self.name,
                     positions.len(),
                     args.len()
                 ),
@@ -676,15 +1207,43 @@ impl Rewrite<'_> {
             return call.clone();
         }
         let (passed, spill) = args.split_at(positions.len());
-        // e[ȳ]: the measure with each parameter replaced by the argument
-        // written at its position.
+        // e[ȳ]: the callee's measure with each of *its* parameters replaced by
+        // the argument written at that position.
         let map: Vec<(&str, &Expr)> = positions
             .iter()
             .zip(passed)
-            .map(|(&j, a)| (self.params[j].name.as_str(), a))
+            .map(|(&j, a)| (tparams[j].name.as_str(), a))
             .collect();
-        let at_args = subst(self.measure, &map, &mut Vec::new());
-        let acc = self.obligation(&at_args, span);
+        let to = &self.members[target];
+        let at_args = subst(&to.measure, &map, &mut Vec::new());
+        // §4: a group states the obligation at the *scaled* measure but writes
+        // it at the unscaled one, and a call that lowers the rank owes only
+        // `<=`. A singleton has neither notion.
+        let clean = (self.members.len() > 1).then(|| {
+            let raw_args = subst(&to.raw, &map, &mut Vec::new());
+            let strict = to.rank >= self.members[self.caller].rank;
+            let caller = &self.members[self.caller];
+            let hint = (to.rank > caller.rank
+                && crate::traits::render_expr(&self.refine(&raw_args).pop().expect("seeded"))
+                    == crate::traits::render_expr(
+                        &self.refine(&caller.raw).pop().expect("seeded"),
+                    ))
+            .then(|| {
+                format!(
+                    "`{tname}` is declared above `{}`, so a call at an unchanged measure \
+                     may only go forward in the group; reorder the declarations, or make \
+                     the measure strictly decrease",
+                    caller.name
+                )
+            });
+            Clean {
+                args: raw_args,
+                strict,
+                hint,
+            }
+        });
+        let proj = self.members[target].proj;
+        let acc = self.obligation(&at_args, clean, span);
         let var = |n: &str| Expr {
             kind: ExprKind::Var(n.to_string()),
             span,
@@ -714,7 +1273,7 @@ impl Rewrite<'_> {
         let mut all: Vec<Expr> = passed.to_vec();
         all.push(proof);
         all.extend(spill.iter().cloned());
-        app(var(IH), all)
+        project(var(IH), proj, all, span)
     }
 
     /// The obligation this self-call site owes, as the body will spell it: a
@@ -726,19 +1285,47 @@ impl Rewrite<'_> {
     /// exactly this term — same numbering, same reference — under their own
     /// bound and hypothesis, which is what makes the three spellings of a
     /// self-call identical.
-    fn obligation(&mut self, at_args: &Expr, span: Span) -> Expr {
+    fn obligation(&mut self, at_args: &Expr, clean: Option<Clean>, span: Span) -> Expr {
         // The measure as the enclosing arms know it: `e[Succ(k)/n]` inside
         // `match n { Succ(k) => … }`, and so on down.
         let stages = self.stages();
         let refined = stages.last().expect("stage 0 is the measure itself").clone();
+        // …and the *argument's* measure refined the same way
+        // (`docs/mutual-recursion-design.md` §4): a sibling call at an
+        // unchanged argument has `at_args` mentioning the scrutinee too, and
+        // the unrefined statement is then unprovable. Where `at_args` names no
+        // refined variable every stage is the same expression, which is the
+        // one-sided behaviour this generalizes.
+        let at_stages = self.refine(at_args);
+        let at_args = at_stages.last().expect("stage 0 is the argument's measure");
         let site = self.next;
         let hole = format!("dec{site}");
         self.next += 1;
-        let text = format!(
-            "{} < {}",
-            crate::traits::render_expr(at_args),
-            crate::traits::render_expr(&refined)
-        );
+        // What the writer is told they owe: for a group, the *unscaled*
+        // statement of §4 — the one they wrote the measure to make true —
+        // and not the flattening `omega` closes for them.
+        let clean = clean.map(|c| {
+            let refined_raw = self
+                .refine(&self.members[self.caller].raw)
+                .pop()
+                .expect("seeded");
+            let args = self.refine(&c.args).pop().expect("seeded");
+            (c, args, refined_raw)
+        });
+        let text = match &clean {
+            Some((c, args, raw)) => format!(
+                "{} {} {}",
+                crate::traits::render_expr(args),
+                if c.strict { "<" } else { "<=" },
+                crate::traits::render_expr(raw)
+            ),
+            None => format!(
+                "{} < {}",
+                crate::traits::render_expr(at_args),
+                crate::traits::render_expr(&refined)
+            ),
+        };
+        let hint = clean.as_ref().and_then(|(c, ..)| c.hint.clone());
         let on = self
             .ons
             .iter()
@@ -759,9 +1346,56 @@ impl Rewrite<'_> {
                 span,
             }
         };
+        // The lifted declaration's body. Without a clean statement it is the
+        // closer alone, as Part A had it; with one it binds the writer's
+        // statement to the closer and lets `omega` do §4's arithmetic on top.
+        let on_expr = on.as_ref().map(|o| o.expr.clone());
+        let body = match &clean {
+            None => Block {
+                stmts: Vec::new(),
+                result: Box::new(closer.clone()),
+                ons: on.clone().into_iter().collect(),
+                span,
+            },
+            Some((c, args, raw)) => Block {
+                stmts: vec![Stmt::Let {
+                    name: "__dec_clean".into(),
+                    ty: Some(of_expr(Expr {
+                        kind: ExprKind::App {
+                            head: Box::new(var(
+                                if c.strict { "nat::Lt" } else { "nat::Le" },
+                                span,
+                            )),
+                            args: vec![args.clone(), raw.clone()],
+                            named: Vec::new(),
+                            explicit: false,
+                            goal_oriented: false,
+                        },
+                        span,
+                    })),
+                    expr: closer.clone(),
+                    span,
+                }],
+                result: Box::new(var("omega", span)),
+                ons: on.clone().into_iter().collect(),
+                span,
+            },
+        };
         let lifted = self
             .lift
-            .then(|| self.lift_obligation(site, &hole, &text, at_args, &refined, on, &closer, span))
+            .then(|| {
+                self.lift_obligation(
+                    site,
+                    &hole,
+                    &text,
+                    at_args,
+                    &refined,
+                    on_expr,
+                    body,
+                    hint.clone(),
+                    span,
+                )
+            })
             .flatten();
         let obligation = match lifted {
             Some(reference) => reference,
@@ -770,7 +1404,7 @@ impl Rewrite<'_> {
                 closer
             }
         };
-        self.sites.push((span, hole, text));
+        self.sites.push((span, hole, text, hint));
         let var = |n: &str| Expr {
             kind: ExprKind::Var(n.to_string()),
             span,
@@ -795,6 +1429,7 @@ impl Rewrite<'_> {
             let below = &stages[i];
             let y = format!("__dec_y{i}");
             let at_y = subst(below, &[(v.as_str(), &var(&y))], &mut Vec::new());
+            let arg_y = subst(&at_stages[i], &[(v.as_str(), &var(&y))], &mut Vec::new());
             let motive = Expr {
                 kind: ExprKind::Lam {
                     binders: [y.as_str(), "__dec_q"]
@@ -806,7 +1441,7 @@ impl Rewrite<'_> {
                             span,
                         })
                         .collect(),
-                    body: Box::new(lt(at_args.clone(), at_y)),
+                    body: Box::new(lt(arg_y, at_y)),
                 },
                 span,
             };
@@ -839,8 +1474,9 @@ impl Rewrite<'_> {
         text: &str,
         at_args: &Expr,
         refined: &Expr,
-        on: Option<OnStmt>,
-        closer: &Expr,
+        on: Option<Expr>,
+        body: Block,
+        hint: Option<String>,
         span: Span,
     ) -> Option<Expr> {
         let mut params = Vec::new();
@@ -852,7 +1488,7 @@ impl Rewrite<'_> {
             }
             let named = mentions(at_args, &b.name)
                 || mentions(refined, &b.name)
-                || on.as_ref().is_some_and(|o| mentions(&o.expr, &b.name));
+                || on.as_ref().is_some_and(|o| mentions(o, &b.name));
             if !named {
                 continue;
             }
@@ -869,12 +1505,7 @@ impl Rewrite<'_> {
             params,
             result: lt_ty(at_args.clone(), refined.clone(), span),
             decreases: None,
-            body: Block {
-                stmts: Vec::new(),
-                result: Box::new(closer.clone()),
-                ons: on.into_iter().collect(),
-                span,
-            },
+            body,
             span: self.decl.span,
         };
         self.obls.push(Some(Lowered {
@@ -882,7 +1513,7 @@ impl Rewrite<'_> {
             // The site travels with the declaration, so an `omega` failure is
             // still reworded at the call it belongs to.
             obligations: Obligations {
-                sites: vec![(span, hole.to_string(), text.to_string())],
+                sites: vec![(span, hole.to_string(), text.to_string(), hint)],
             },
         }));
         let head = companion_ref(self.decl, &name, span);
@@ -934,7 +1565,13 @@ impl Rewrite<'_> {
 
     /// `e_0 = e`, `e_i = e_{i-1}[pat_i/v_i]` for each refinement in force.
     fn stages(&self) -> Vec<Expr> {
-        let mut stages = vec![self.measure.clone()];
+        self.refine(self.measure)
+    }
+
+    /// The same staging applied to any expression — the argument's measure as
+    /// well as the caller's (`docs/mutual-recursion-design.md` §4).
+    fn refine(&self, e: &Expr) -> Vec<Expr> {
+        let mut stages = vec![e.clone()];
         for (v, pat, _) in &self.refinements {
             let last = stages.last().expect("seeded");
             stages.push(subst(last, &[(v.as_str(), pat)], &mut Vec::new()));
@@ -982,20 +1619,28 @@ impl Rewrite<'_> {
                     ExprKind::TyApp { head, .. } => &head.kind,
                     other => other,
                 };
-                if matches!(callee, ExprKind::Var(n) if n == self.name)
-                    && !self.scope.iter().any(|b| b.name == self.name)
-                {
+                // A call to any member of the recursion — the caller itself
+                // included — is rewritten to the shared induction hypothesis
+                // (`docs/mutual-recursion-design.md` §3); a group has no
+                // separate self-call route.
+                let target = match callee {
+                    ExprKind::Var(n) if !self.scope.iter().any(|b| b.name == *n) => {
+                        self.members.iter().position(|m| m.name == *n)
+                    }
+                    _ => None,
+                };
+                if let Some(target) = target {
                     if !named.is_empty() {
                         self.fail(
                             format!(
                                 "a recursive call to `{}` under `decreases` takes positional \
                                  arguments only",
-                                self.name
+                                self.members[target].name
                             ),
                             span,
                         );
                     }
-                    return self.self_call(e, args, *explicit);
+                    return self.self_call(target, e, args, *explicit);
                 }
                 ExprKind::App {
                     head: Box::new(self.expr(head)),
@@ -1151,6 +1796,25 @@ impl Rewrite<'_> {
                 motive: Box::new(self.expr(motive)),
                 case: Box::new(self.expr(case)),
             },
+            // §2: a member's name outside a call the walk rewrites has no
+            // meaning here — the group's declarations do not exist yet — so
+            // it is refused where it is written rather than left to surface
+            // as an unbound name in generated code.
+            ExprKind::Var(n)
+                if self.members.len() > 1
+                    && self.members.iter().any(|m| m.name == *n)
+                    && !self.scope.iter().any(|b| b.name == *n) =>
+            {
+                self.fail(
+                    format!(
+                        "`{n}` is a member of this mutual `decreases` group, so it is \
+                         only usable as a saturated call here \
+                         (docs/mutual-recursion-design.md §2)"
+                    ),
+                    span,
+                );
+                ExprKind::Var(n.clone())
+            }
             leaf @ (ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
@@ -1984,7 +2648,9 @@ impl Respell<'_> {
         // below and the body's are the same one — which is what an
         // `omega`-defaulted obligation needs, `omega` being a function of its
         // context and not of the goal alone.
-        let mut acc = self.rw.obligation(&subst(self.rw.measure, &map, &mut Vec::new()), span);
+        let mut acc = self
+            .rw
+            .obligation(&subst(self.rw.measure, &map, &mut Vec::new()), None, span);
         if !self.rw.obls.last().is_some_and(Option::is_some) {
             return Err(
                 "a recursive call whose obligation cannot be lifted into a declaration \
@@ -2137,6 +2803,7 @@ pub(crate) fn companions(
     } else {
         subst(&source, &[(name, &qualified)], &mut Vec::new())
     };
+    let solo = solo(decl, name, measure);
     let fresh = || Rewrite {
         decl,
         name,
@@ -2146,6 +2813,8 @@ pub(crate) fn companions(
         omega_available,
         tys,
         lift: true,
+        members: &solo,
+        caller: 0,
         next: 1,
         eqs: 0,
         refinements: Vec::new(),
@@ -2184,7 +2853,7 @@ pub(crate) fn companions(
     // Every obligation moved into its own declaration (§4), so the discharges
     // that raised them are no part of a companion; anything else the writer
     // wrote about a goal in the body still is.
-    let moved: Vec<&str> = ext_sites.iter().map(|(_, h, _)| h.as_str()).collect();
+    let moved: Vec<&str> = ext_sites.iter().map(|(_, h, ..)| h.as_str()).collect();
     let companion_ons = remaining_ons(&decl.body.ons, &moved);
     let ext_body = Block {
         stmts: std::mem::take(&mut ext.lets),

@@ -624,6 +624,13 @@ pub struct Elaborator {
     /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
     /// the body shape that stopped the walk rather than an unknown name.
     unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
+    /// The base names the container being elaborated declares, and whether
+    /// each carries `decreases` — what `docs/mutual-recursion-design.md` §8's
+    /// sentence on an unbound forward reference needs.
+    container_decls: RefCell<Vec<(String, bool, usize)>>,
+    /// How far the container's item loop has got — only a declaration still
+    /// *ahead* of it is the forward reference §8 explains.
+    container_at: Cell<usize>,
     /// Exhausted Omega searches. Unlike successful certificate reports these
     /// are diagnostic history, so declaration rollback deliberately retains
     /// them for the caller that receives the corresponding error.
@@ -1303,6 +1310,8 @@ impl Elaborator {
             item_timings: None,
             omega_reports: RefCell::new(Vec::new()),
             unfold_refusals: RefCell::new(std::collections::HashMap::new()),
+            container_decls: RefCell::new(Vec::new()),
+            container_at: Cell::new(0),
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
@@ -1451,27 +1460,80 @@ impl Elaborator {
     /// IO: an `import m;` here requires that `m` has *already* been elaborated
     /// into this same accumulator, which is exactly what the CLI's topological
     /// walk guarantees (docs/modules-design.md §3.2).
+    /// What one container's item loop needs before it starts: the mutual
+    /// groups of `docs/mutual-recursion-design.md` §1, and the declaration
+    /// names §8's forward-reference message reads.
+    fn begin_container(&mut self, file: &heather_syntax::File) -> ItemPlan {
+        let groups = measure_groups(&file.items);
+        let mut in_group: HashMap<usize, usize> = HashMap::new();
+        for (g, members) in groups.iter().enumerate() {
+            for &idx in members {
+                in_group.insert(idx, g);
+            }
+        }
+        *self.container_decls.borrow_mut() = file
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| match it {
+                Item::Decl(d) => {
+                    Some((base_name(&d.name).to_string(), d.decreases.is_some(), i))
+                }
+                _ => None,
+            })
+            .collect();
+        self.container_at.set(0);
+        ItemPlan { groups, in_group }
+    }
+
+    /// One item, with a mutual group elaborated at its *first* member and the
+    /// rest of the group a no-op (§1).
+    fn elab_item_at(
+        &mut self,
+        file: &heather_syntax::File,
+        idx: usize,
+        item: &Item,
+        plan: &ItemPlan,
+    ) -> R<()> {
+        self.container_at.set(idx);
+        match item {
+            Item::Decl(d) => match plan.in_group.get(&idx) {
+                Some(&g) if plan.groups[g][0] == idx => {
+                    let members: Vec<&Decl> = plan.groups[g]
+                        .iter()
+                        .map(|&k| match &file.items[k] {
+                            Item::Decl(d) => d,
+                            _ => unreachable!("a group holds declarations"),
+                        })
+                        .collect();
+                    self.elab_measure_group(&members)
+                }
+                Some(_) => Ok(()),
+                None => self.elab_decl(d),
+            },
+            Item::Inductive(i) => self.elab_inductive(i),
+            Item::Class(c) => self.elab_class(c),
+            Item::Instance(i) => self.elab_instance(i),
+            Item::Designation(d) => self.elab_designation(d),
+            Item::Datarepr(d) => self.elab_datarepr(d),
+            Item::Impl(i) => self.elab_impl(i),
+            Item::Import(_) => Ok(()),
+        }
+    }
+
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
         let file = parse_file(src)?;
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
-        for item in &file.items {
+        let plan = self.begin_container(&file);
+        for (idx, item) in file.items.iter().enumerate() {
             let timing = self
                 .item_timings
                 .as_ref()
                 .map(|_| (Instant::now(), stats::kernel_ns(), self.value_metrics()));
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
-            let r = match item {
-                Item::Decl(d) => self.elab_decl(d),
-                Item::Inductive(i) => self.elab_inductive(i),
-                Item::Class(c) => self.elab_class(c),
-                Item::Instance(i) => self.elab_instance(i),
-                Item::Designation(d) => self.elab_designation(d),
-                Item::Datarepr(d) => self.elab_datarepr(d),
-                Item::Impl(i) => self.elab_impl(i),
-                Item::Import(_) => Ok(()),
-            };
+            let r = self.elab_item_at(&file, idx, item, &plan);
             // Canonical derived instances are minted **between** items, where
             // Ψ may grow (docs/traits-layer2-design.md §8). A failed item
             // mints nothing: its derivations are as speculative as the rest of
@@ -1501,8 +1563,12 @@ impl Elaborator {
                         value_metrics,
                     });
             }
+            if r.is_err() {
+                self.container_decls.borrow_mut().clear();
+            }
             r?;
         }
+        self.container_decls.borrow_mut().clear();
         Ok(())
     }
 
@@ -1603,9 +1669,16 @@ impl Elaborator {
         // "unknown name" is the wrong thing to say about an equation the
         // reader is right to expect.
         if let Some(why) = self.unfold_refusals.borrow().get(name) {
+            // A reason that already names the document that explains it — a
+            // group's, `docs/mutual-recursion-design.md` §6 — points there
+            // instead.
+            let see = if why.contains("docs/") {
+                ""
+            } else {
+                ", see docs/decreases-unfolding-design.md §3"
+            };
             return NameRes::Restricted(format!(
-                "no unfolding equation for `{}`: {why}, see \
-                 docs/decreases-unfolding-design.md §3",
+                "no unfolding equation for `{}`: {why}{see}",
                 name.strip_suffix("_unfold").unwrap_or(name)
             ));
         }
@@ -1759,8 +1832,30 @@ impl Elaborator {
     /// gets overridden when ambiguity is the real reason.
     fn name_miss(&self, name: &str, fallback: impl Into<String>, span: Span) -> ElabError {
         let res = self.resolve_name(name);
-        let msg = miss_msg(&res, name, fallback.into())
+        let mut msg = miss_msg(&res, name, fallback.into())
             .unwrap_or_else(|| format!("`{name}` cannot be used here"));
+        // §8 of `docs/mutual-recursion-design.md`: a member whose run was
+        // broken forward-references a name that *is* declared, further down.
+        // "unknown" is true and unhelpful; say what would have grouped them.
+        let later = self
+            .container_decls
+            .borrow()
+            .iter()
+            .find(|(n, _, i)| n == name && *i > self.container_at.get())
+            .map(|(_, d, _)| *d);
+        if matches!(res, NameRes::NotFound)
+            && let Some(measured) = later
+        {
+            msg.push_str(&format!(". `{name}` is declared below"));
+            if measured {
+                msg.push_str(
+                    "; adjacent `decreases` declarations share one recursion only when \
+                     each of them carries `decreases`, nothing else stands between them, \
+                     and they call *each other* (docs/mutual-recursion-design.md §1). \
+                     A call that is not answered needs the callee declared first",
+                );
+            }
+        }
         ElabError::Elab { msg, span }
     }
 
@@ -1933,19 +2028,11 @@ impl Elaborator {
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
+        let plan = self.begin_container(&file);
         let mut errs = Vec::new();
-        for item in &file.items {
+        for (idx, item) in file.items.iter().enumerate() {
             let warn_mark = self.warnings.borrow().len();
-            let r = match item {
-                Item::Decl(d) => self.elab_decl(d),
-                Item::Inductive(i) => self.elab_inductive(i),
-                Item::Class(c) => self.elab_class(c),
-                Item::Instance(i) => self.elab_instance(i),
-                Item::Designation(d) => self.elab_designation(d),
-                Item::Datarepr(d) => self.elab_datarepr(d),
-                Item::Impl(i) => self.elab_impl(i),
-                Item::Import(_) => Ok(()),
-            };
+            let r = self.elab_item_at(&file, idx, item, &plan);
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 // §4: a failed item's warnings are as speculative as the rest
@@ -1959,6 +2046,7 @@ impl Elaborator {
                 errs.push(e);
             }
         }
+        self.container_decls.borrow_mut().clear();
         errs
     }
 
@@ -2079,6 +2167,14 @@ impl Elaborator {
     pub(crate) fn global_name_at(&self, abs: usize) -> Option<String> {
         let key = self.names.global_name_at(abs as u32)?;
         Some(key.rsplit("::").next().unwrap_or(key).to_string())
+    }
+
+    /// Does `name`, read where the current context is, resolve back to the
+    /// binding at absolute Ψ index `abs`? What a renderer whose output is
+    /// re-parsed has to ask before it uses a base name
+    /// (issues/omega-renders-member-by-base-name.md).
+    pub(crate) fn base_name_resolves_to(&self, name: &str, abs: usize) -> bool {
+        self.lookup_global(name).is_some_and(|i| i.abs as usize == abs)
     }
 
     /// The canonical qualified spelling of a global. Generated modules use
@@ -2303,6 +2399,73 @@ impl Elaborator {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// N > 1 adjacent `decreases` declarations that call one another
+    /// (`docs/mutual-recursion-design.md` §1) are one recursion: the product
+    /// motive `f#grp`, one `g#body` per member, the shared `f#grp_rec`, and
+    /// each member as a projection (§3). Every generated declaration is
+    /// checked the ordinary way, so nothing the generator writes is trusted.
+    fn elab_measure_group(&mut self, members: &[&Decl]) -> R<()> {
+        let span = members[0].span;
+        let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
+        for d in members {
+            let measure = d.decreases.clone().expect("a measure declaration");
+            measure::check_shape(d, &measure)?;
+            gm.push(measure::GroupMember {
+                decl: d,
+                self_name: base_name(&d.name).to_string(),
+                measure,
+            });
+        }
+        // §2's circularity check runs before the measures are elaborated: a
+        // measure calling a member is an unbound name at this point, and
+        // "unbound" is the wrong thing to say about it.
+        measure::check_group_shape(&gm)?;
+        for m in &gm {
+            self.check_measure_is_nat(m.decl, &m.measure)?;
+        }
+        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+            return err(
+                "`decreases` states its obligations with `nat::Lt` and discharges them \
+                 through `nat::le_trans`: `import nat;` first",
+                span,
+            );
+        }
+        // §3: the group's motive is a nested `Pair`, and its members are
+        // reached by `.fst`/`.snd`.
+        if self.lookup_inductive("Pair").is_none() {
+            return err(
+                "a mutual `decreases` group shares one recursion whose motive is the \
+                 product of its members' (docs/mutual-recursion-design.md §3): \
+                 `import pair;` first",
+                span,
+            );
+        }
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+            .iter()
+            .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
+        let family = measure::lower_group(&gm, omega_available, self)?;
+        for part in &family.obligations {
+            self.elab_decl_one(&part.decl, Some(&part.obligations))?;
+        }
+        for part in &family.decls {
+            self.elab_decl_one(&part.decl, Some(&part.obligations))?;
+        }
+        // §6: the unfolding companions do not extend to a group this round.
+        // Each member records the refusal on its own `f_unfold`, so a citation
+        // reports the reason rather than an unknown name.
+        for d in members {
+            self.unfold_refusals.borrow_mut().insert(
+                measure::unfold_name(&d.name),
+                format!(
+                    "`{}` is a member of a mutual `decreases` group, whose unfolding \
+                     equations are deferred (docs/mutual-recursion-design.md §6)",
+                    base_name(&d.name)
+                ),
+            );
         }
         Ok(())
     }
@@ -6132,4 +6295,117 @@ impl Elaborator {
         );
         *self.delta_psi = GlobalCtx::new(bindings);
     }
+}
+
+/// The base name a declaration recurses under, as `Cx.selfref` uses it.
+fn base_name(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+/// Does `block` call one of `names` at a position the measure walk rewrites —
+/// the head of a saturated application (`docs/mutual-recursion-design.md` §1)?
+/// Shadowing is not tracked here: an over-approximated edge only groups two
+/// declarations that did not need grouping, which §1 says costs nothing, while
+/// the rewrite itself does track it and leaves a shadowed call alone.
+fn calls_in(block: &heather_syntax::Block, names: &[String], out: &mut Vec<usize>) {
+    let mut scan = |e: &Expr| {
+        surface::walk_expr(e, &mut |x| {
+            let ExprKind::App { head, .. } = &x.kind else {
+                return;
+            };
+            let callee = match &head.kind {
+                ExprKind::TyApp { head, .. } => &head.kind,
+                other => other,
+            };
+            if let ExprKind::Var(n) = callee
+                && let Some(j) = names.iter().position(|m| m == n)
+                && !out.contains(&j)
+            {
+                out.push(j);
+            }
+        });
+    };
+    for s in &block.stmts {
+        match s {
+            heather_syntax::Stmt::Let { expr, .. }
+            | heather_syntax::Stmt::LetRecord { expr, .. }
+            | heather_syntax::Stmt::LetCode { expr, .. } => {
+                scan(expr)
+            }
+        }
+    }
+    scan(&block.result);
+}
+
+/// The mutual groups of `docs/mutual-recursion-design.md` §1: within each
+/// maximal run of *consecutive* `decreases` declarations, the strongly
+/// connected components of size > 1, as item indices in declaration order.
+///
+/// Nothing here is trusted — a wrong grouping costs an uglier obligation or a
+/// refused generated term, never a wrong proof (§1).
+fn measure_groups(items: &[Item]) -> Vec<Vec<usize>> {
+    let mut groups = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        let start = i;
+        while i < items.len()
+            && matches!(&items[i], Item::Decl(d) if d.decreases.is_some() && !d.is_meta)
+        {
+            i += 1;
+        }
+        if i == start {
+            i += 1;
+            continue;
+        }
+        let run: Vec<&Decl> = items[start..i]
+            .iter()
+            .map(|it| match it {
+                Item::Decl(d) => d,
+                _ => unreachable!("the run holds declarations only"),
+            })
+            .collect();
+        let n = run.len();
+        let names: Vec<String> = run.iter().map(|d| base_name(&d.name).to_string()).collect();
+        // `reach[a][b]`: `a` calls `b`, transitively. The runs are a handful
+        // of declarations, so the closure is cheaper than a Tarjan.
+        let mut reach = vec![vec![false; n]; n];
+        for (a, d) in run.iter().enumerate() {
+            let mut hits = Vec::new();
+            calls_in(&d.body, &names, &mut hits);
+            for b in hits {
+                reach[a][b] = true;
+            }
+        }
+        for k in 0..n {
+            for a in 0..n {
+                for b in 0..n {
+                    if reach[a][k] && reach[k][b] {
+                        reach[a][b] = true;
+                    }
+                }
+            }
+        }
+        let mut taken = vec![false; n];
+        for a in 0..n {
+            if taken[a] {
+                continue;
+            }
+            let comp: Vec<usize> = (a..n)
+                .filter(|&b| b == a || (reach[a][b] && reach[b][a]))
+                .collect();
+            for &b in &comp {
+                taken[b] = true;
+            }
+            if comp.len() > 1 {
+                groups.push(comp.into_iter().map(|b| start + b).collect());
+            }
+        }
+    }
+    groups
+}
+
+/// The per-container facts the item loops share (`begin_container`).
+struct ItemPlan {
+    groups: Vec<Vec<usize>>,
+    in_group: HashMap<usize, usize>,
 }
