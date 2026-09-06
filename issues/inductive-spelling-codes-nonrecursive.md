@@ -55,3 +55,7 @@ the constructor count per literal, paid in the value domain.
 - **[[wf-shape-annotation-slots]]** owns the shape-code machinery. Assumed
   here: only its registration boundary, which this issue widens.
 - **[[function-ir-x86-proof-scaling]]** owns the workload.
+
+## Log
+
+- 2026-09-06: The invariant this boundary is a slice of: [[elaborator-canonical-type-spelling]].
