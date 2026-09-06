@@ -13,7 +13,7 @@ use heather_kernel::typing::{self, TypeError};
 use heather_syntax::OpFixity;
 
 use crate::datarepr::{DatareprInfo, DatareprKey, ImplEntry, Obligation};
-use crate::gendefs::{GenDef, WfSlots};
+use crate::gendefs::{GenDef, WfSlots, SpineCodes};
 use crate::inductive::Inductive;
 use crate::metaprograms::MetaDef;
 use crate::names::{GlobalRegistration, NameKind, Scope};
@@ -133,6 +133,10 @@ pub(crate) enum DeltaEvent {
         tag: u32,
         slots: WfSlots,
     },
+    GenSpineCodes {
+        tag: u32,
+        codes: SpineCodes,
+    },
     GenFamLevels {
         tag: u32,
         level: Level,
@@ -235,6 +239,14 @@ impl Elaborator {
             slots: slots.clone(),
         });
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
+    }
+
+    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes) {
+        self.record_module_event(|| DeltaEvent::GenSpineCodes {
+            tag,
+            codes: codes.clone(),
+        });
+        self.types.gdefs_mut().insert_spine_codes(tag, codes);
     }
 
     pub(crate) fn semantic_commit_gen_fam_levels(
@@ -467,6 +479,9 @@ impl Elaborator {
             DeltaEvent::GenWfSlots { tag, slots } => {
                 self.semantic_commit_gen_wf_slots(tag, slots);
             }
+            DeltaEvent::GenSpineCodes { tag, codes } => {
+                self.semantic_commit_gen_spine_codes(tag, codes);
+            }
             DeltaEvent::GenFamLevels { tag, level, index_level } => {
                 self.semantic_commit_gen_fam_levels(tag, level, index_level);
             }
@@ -504,6 +519,8 @@ impl Elaborator {
                 if self.types.gdefs().has_ty_code(*tag) => Some("generated type-code"),
             DeltaEvent::GenWfSlots { tag, .. }
                 if self.types.gdefs().has_wf_slot_entry(*tag) => Some("generated Wf-slot"),
+            DeltaEvent::GenSpineCodes { tag, .. }
+                if self.types.gdefs().has_spine_code_entry(*tag) => Some("generated spine-code"),
             DeltaEvent::GenFamLevels { tag, .. }
                 if self.types.gdefs().has_fam_level_entry(*tag) => Some("generated family-level"),
             DeltaEvent::Inductive { module, info }
@@ -597,6 +614,7 @@ mod tests {
             "self.types.gdefs_mut().insert_binding(",
             "self.types.gdefs_mut().insert_ty_code(",
             "self.types.gdefs_mut().insert_wf_slots(",
+            "self.types.gdefs_mut().insert_spine_codes(",
             "self.types.gdefs_mut().insert_fam_levels(",
             "self.traits.commit_class(",
             "self.traits.commit_instance(",
@@ -666,6 +684,7 @@ mod tests {
                 "features",
                 r#"
 inductive Z { Z0 }
+inductive Two { TA, TB(n: Nat) }
 inductive Chain { End, Link(tail: Chain) }
 fn zop(x: Z, y: Z) -> Z { x }
 class Mag<A> { op: A -> A -> A }
@@ -681,6 +700,7 @@ datarepr NatN for Nat := repr::naive();
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::GenDef { .. })));
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::GenTyCode { .. })));
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::GenWfSlots { .. })));
+        assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::GenSpineCodes { .. })));
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::Inductive { .. })));
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::Class { .. })));
         assert!(delta.events.iter().any(|event| matches!(event, DeltaEvent::Instance { .. })));

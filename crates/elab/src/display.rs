@@ -370,9 +370,10 @@ impl Speller<'_> {
                 ..
             } => (&**label, Some(&**children), self.el.display_tag_of(shape)?),
             // Tier 0: the value *is* the injection, and either summand type
-            // carries the nominal tag.
-            Term::Inl { lhs, .. } => (t, None, self.el.tag_of(lhs)?),
-            Term::Inr { rhs, .. } => (t, None, self.el.tag_of(rhs)?),
+            // carries the nominal tag — behind a spine-code reference for a
+            // flat declaration, which the display lookup sees through.
+            Term::Inl { lhs, .. } => (t, None, self.el.display_tag_of(lhs)?),
+            Term::Inr { rhs, .. } => (t, None, self.el.display_tag_of(rhs)?),
             _ => return None,
         };
         // Walk the injection path: `Inr` steps past a constructor, `Inl`

@@ -239,6 +239,13 @@ per branch.
   constructor payload type). The predecessor rejected this once on measurement
   and it stays rejected: the payload types' mass is the embedded field types,
   which `TyCode` already names, and §3.4 collects it with no new key.
+  *(2026-09-06: the rejection was measured on **recursive** declarations,
+  whose `Wf` has a `D#shape`. A **flat** declaration has no shape code, so
+  the whole type was its only name and every `inl`/`inr` level below it
+  spelled its suffix sum out; `issues/inductive-spelling-codes-nonrecursive.md`
+  names flat declarations' payloads and suffix sums — `GenDef::PayloadCode`/
+  `SuffixCode` — and spells the whole-type code over those names. Recursive
+  declarations are unchanged.)*
 
 ## 6. Correctness, and the tests
 

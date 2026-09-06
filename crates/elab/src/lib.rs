@@ -1346,6 +1346,13 @@ impl Elaborator {
     /// Reset the active collector without changing whether instrumentation is
     /// enabled. Useful for measuring one source fragment after its imports;
     /// call only between checks, when no profiled arena is still active.
+    /// The typing seam's conversion-miss table, heaviest bucket first
+    /// (`ValueMetrics::conv_miss_report`). Empty unless the `value-metrics`
+    /// feature is on and metrics were enabled.
+    pub fn value_conv_miss_report(&self) -> Option<String> {
+        self.value_metrics.as_deref().map(ValueMetrics::conv_miss_report)
+    }
+
     pub fn reset_value_metrics(&self) {
         if let Some(metrics) = &self.value_metrics {
             metrics.reset();
@@ -6276,12 +6283,19 @@ impl Elaborator {
         if let Some(inline) = self.unspell_here(ty) {
             return Ok(inline);
         }
-        self.expr_elab()
+        let head = self
+            .expr_elab()
             .whnf_type(cx, ty)
             .map_err(|_| ElabError::Elab {
                 msg: "out of fuel reducing a type".into(),
                 span,
-            })
+            })?;
+        // …and one level down a sum, for the same reason: a flat
+        // declaration's whole-type code is spelled over its spine's names,
+        // so the kernel's reduct of a code that *computes* to it stops at
+        // `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))`, which no structural
+        // reader can see the tag through (`unspell_sum_components`).
+        Ok(self.unspell_sum_components(&head).unwrap_or(head))
     }
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.

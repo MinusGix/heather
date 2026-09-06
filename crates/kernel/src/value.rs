@@ -42,6 +42,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "value-metrics")]
+use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 use typed_arena::Arena;
@@ -272,6 +274,15 @@ pub struct ValueMetrics {
 
 #[derive(Default)]
 struct ValueMetricCells {
+    /// The typing seam's conversion **misses** — every `Tc::conv_ty` query
+    /// that got past the syntactic shortcut and the gate memo and paid for a
+    /// value-domain comparison — bucketed by the (expected, inferred) head
+    /// pair, with the count, the total wall nanoseconds, and an exact
+    /// first-difference excerpt of the first miss in each bucket
+    /// (issues/perf-profile-build-target.md). Compiled in only with the
+    /// feature; the ordinary build has neither the table nor the clock.
+    #[cfg(feature = "value-metrics")]
+    conv_misses: RefCell<BTreeMap<(&'static str, &'static str), ConvMissBucket>>,
     arenas: Cell<u64>,
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
@@ -286,6 +297,15 @@ struct ValueMetricCells {
     type_cache_inserts: Cell<u64>,
     type_cache_evictions: Cell<u64>,
     type_cache_peak: Cell<u64>,
+}
+
+/// One bucket of [`ValueMetrics`]'s conversion-miss table.
+#[cfg(feature = "value-metrics")]
+#[derive(Default)]
+struct ConvMissBucket {
+    count: u64,
+    ns: u64,
+    first: Option<String>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -345,6 +365,60 @@ impl ValueMetrics {
         self.inner.type_cache_inserts.set(zero.type_cache_inserts);
         self.inner.type_cache_evictions.set(zero.type_cache_evictions);
         self.inner.type_cache_peak.set(zero.type_cache_peak);
+        #[cfg(feature = "value-metrics")]
+        self.inner.conv_misses.borrow_mut().clear();
+    }
+
+    /// Record one typing-seam conversion miss (see
+    /// [`ValueMetricCells::conv_misses`]). `excerpt` is rendered only for the
+    /// first miss of a bucket, so its cost is paid once per head pair.
+    #[cfg(feature = "value-metrics")]
+    pub fn record_conv_miss(
+        &self,
+        heads: (&'static str, &'static str),
+        ns: u64,
+        excerpt: impl FnOnce() -> String,
+    ) {
+        let mut misses = self.inner.conv_misses.borrow_mut();
+        let bucket = misses.entry(heads).or_default();
+        bucket.count += 1;
+        bucket.ns = bucket.ns.saturating_add(ns);
+        if bucket.first.is_none() {
+            bucket.first = Some(excerpt());
+        }
+    }
+
+    /// The conversion-miss table as text, heaviest bucket first: one line per
+    /// (expected, inferred) head pair with its count and total seconds, then
+    /// the first miss's exact first-difference excerpt. Empty without the
+    /// feature.
+    pub fn conv_miss_report(&self) -> String {
+        #[cfg(feature = "value-metrics")]
+        {
+            use std::fmt::Write as _;
+            let misses = self.inner.conv_misses.borrow();
+            let mut rows: Vec<_> = misses.iter().collect();
+            rows.sort_by_key(|(_, b)| std::cmp::Reverse(b.ns));
+            let mut out = String::new();
+            for ((expected, inferred), bucket) in rows {
+                let _ = writeln!(
+                    out,
+                    "conv miss expected={expected} inferred={inferred} count={} total={:.3}s",
+                    bucket.count,
+                    bucket.ns as f64 / 1e9,
+                );
+                if let Some(first) = &bucket.first {
+                    for line in first.lines() {
+                        let _ = writeln!(out, "    {line}");
+                    }
+                }
+            }
+            out
+        }
+        #[cfg(not(feature = "value-metrics"))]
+        {
+            String::new()
+        }
     }
 
     #[cfg(feature = "value-metrics")]

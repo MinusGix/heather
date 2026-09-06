@@ -24,7 +24,7 @@ use heather_syntax::{
 
 use crate::application::{ParamMeta, Skel, SkelBinder};
 use crate::datarepr::{CtorView, DatareprInfo, FieldView, ImplEntry, Obligation, Provenance};
-use crate::gendefs::{GenDef, WfSlots};
+use crate::gendefs::{GenDef, SpineCodes, WfSlots};
 use crate::inductive::{Ctor, FieldKind, IdxPat, IdxTy, Inductive};
 use crate::metaprograms::MetaDef;
 use crate::module_delta::{DeltaEvent, ModuleDelta, ModuleDependencyIdentity};
@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x03";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x03";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x04";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x04";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1250,6 +1250,8 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
         GenDef::RecProj(tag, field) => { w.byte(9); w.u32(tag); w.usize(field); }
         GenDef::RecTail(tag, field) => { w.byte(10); w.u32(tag); w.usize(field); }
         GenDef::RecFam(tag, field) => { w.byte(11); w.u32(tag); w.usize(field); }
+        GenDef::PayloadCode(tag, ctor) => { w.byte(12); w.u32(tag); w.usize(ctor); }
+        GenDef::SuffixCode(tag, ctor) => { w.byte(13); w.u32(tag); w.usize(ctor); }
     }
 }
 
@@ -1263,6 +1265,8 @@ fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
         9 => GenDef::RecProj(r.u32()?, r.usize()?),
         10 => GenDef::RecTail(r.u32()?, r.usize()?),
         11 => GenDef::RecFam(r.u32()?, r.usize()?),
+        12 => GenDef::PayloadCode(r.u32()?, r.usize()?),
+        13 => GenDef::SuffixCode(r.u32()?, r.usize()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "generated definition", tag }),
     })
 }
@@ -1530,6 +1534,11 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(15); w.string(module); w.string(name); w.option(slot.as_ref(), |w, slot| put_slot(w, *slot));
             put_meta(w, definition);
         }
+        DeltaEvent::GenSpineCodes { tag, codes } => {
+            w.byte(16); w.u32(*tag);
+            w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
+            w.vec(&codes.tails, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
+        }
     }
 }
 
@@ -1570,6 +1579,10 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         15 => DeltaEvent::Meta {
             module: r.string()?, name: r.string()?, slot: r.option(get_slot)?, definition: get_meta(r)?,
         },
+        16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
+            ctors: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
+            tails: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
+        } },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
 }
@@ -1603,6 +1616,7 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
     let mut gen_positions = HashSet::new();
     let mut ty_codes = HashSet::new();
     let mut wf_slots = HashSet::new();
+    let mut spine_codes = HashSet::new();
     let mut fam_levels = HashSet::new();
     let mut inductives = HashSet::new();
     let mut inductive_tags = HashSet::new();
@@ -1646,6 +1660,14 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
             }
             DeltaEvent::GenWfSlots { tag, .. } if !wf_slots.insert(*tag) => {
                 return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated Wf-slot guard"));
+            }
+            DeltaEvent::GenSpineCodes { tag, codes } => {
+                if !spine_codes.insert(*tag) {
+                    return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated spine-code guard"));
+                }
+                if codes.ctors.len() < 2 || codes.tails.len() + 1 != codes.ctors.len() {
+                    return Err(ModuleImageDecodeError::InvalidStructure("generated spine-code guard is not a spine"));
+                }
             }
             DeltaEvent::GenFamLevels { tag, .. } if !fam_levels.insert(*tag) => {
                 return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated family-level entry"));

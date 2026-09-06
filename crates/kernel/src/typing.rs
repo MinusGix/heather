@@ -585,16 +585,32 @@ impl Tc {
         }
         let at = env.layer.type_layer();
         #[cfg(feature = "value-metrics")]
-        conv_type_with_metrics(
-            &env.psi,
-            &env.gamma,
-            at,
-            expected,
-            inferred,
-            l,
-            self.fuel,
-            env.value_metrics.as_ref(),
-        )?;
+        {
+            // The miss sampler (issues/perf-profile-build-target.md): every
+            // query reaching here missed both shortcuts above, and what it
+            // then costs is what the elaborator's spelling choices are paid
+            // for. Bucketed by head pair, so "El^δ against an inline Σ" and
+            // "Sum against Sum" are separate rows with their own clocks.
+            let started = std::time::Instant::now();
+            let result = conv_type_with_metrics(
+                &env.psi,
+                &env.gamma,
+                at,
+                expected,
+                inferred,
+                l,
+                self.fuel,
+                env.value_metrics.as_ref(),
+            );
+            if let Some(metrics) = env.value_metrics.as_ref() {
+                metrics.record_conv_miss(
+                    (type_head(expected), type_head(inferred)),
+                    started.elapsed().as_nanos() as u64,
+                    || first_difference_excerpt(expected, inferred),
+                );
+            }
+            result?;
+        }
         #[cfg(not(feature = "value-metrics"))]
         conv_type(&env.psi, &env.gamma, at, expected, inferred, l, self.fuel)?;
         // A gate-wide cap bounds adversarial all-distinct input. Once full,
@@ -2099,6 +2115,106 @@ impl Tc {
 /// the complete judgment has been compared. Cloning Heather syntax preserves
 /// these child `Rc`s, which distinguishes the mostly-fresh types produced by
 /// inference without recursively hashing them.
+/// The head of a type for the miss sampler's buckets. `El` is split three
+/// ways because that is the distinction the buckets exist to make: a
+/// **named** code (`El (u^δ)`), a code **literal** (`El ⌜…⌝`, the lazy
+/// decode's spelling), and anything else.
+#[cfg(feature = "value-metrics")]
+fn type_head(ty: &Type) -> &'static str {
+    match ty {
+        Type::Nat => "Nat",
+        Type::Pi { .. } => "Pi",
+        Type::Ty(_) => "Ty",
+        Type::UPi { .. } => "UPi",
+        Type::El { tm, .. } => match &**tm {
+            Term::GlobalTm { .. } => "El^δ",
+            Term::TmNat
+            | Term::TmTy(_)
+            | Term::TmPi { .. }
+            | Term::TmId { .. }
+            | Term::TmSigma { .. }
+            | Term::TmUnit { .. }
+            | Term::TmEmpty { .. }
+            | Term::TmSum { .. }
+            | Term::TmW { .. }
+            | Term::TmVec { .. }
+            | Term::TmFin { .. }
+            | Term::TmWf { .. }
+            | Term::TmSEq { .. } => "El⌜⌝",
+            _ => "El(?)",
+        },
+        Type::Id { .. } => "Id",
+        Type::SEq { .. } => "SEq",
+        Type::SEmpty { .. } => "SEmpty",
+        Type::Squash { .. } => "Squash",
+        Type::Sigma { .. } => "Sigma",
+        Type::Unit { .. } => "Unit",
+        Type::Empty { .. } => "Empty",
+        Type::Sum { .. } => "Sum",
+        Type::W { .. } => "W",
+        Type::Vec { .. } => "Vec",
+        Type::Fin { .. } => "Fin",
+        Type::Wf { .. } => "Wf",
+        _ => "other",
+    }
+}
+
+/// The exact renderings of both sides around their first difference, with
+/// each side's total rendered length — enough to see *which* spelling of a
+/// type met which, without printing either whole. Rendering is capped so a
+/// pathological type cannot turn the sampler into the OOM it is diagnosing.
+#[cfg(feature = "value-metrics")]
+fn first_difference_excerpt(expected: &Type, inferred: &Type) -> String {
+    use std::fmt::Write as _;
+    const CAP: usize = 8 << 20;
+    const WINDOW: usize = 160;
+    struct Capped(String);
+    impl std::fmt::Write for Capped {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            if self.0.len() + s.len() > CAP {
+                return Err(std::fmt::Error);
+            }
+            self.0.push_str(s);
+            Ok(())
+        }
+    }
+    let render = |ty: &Type| {
+        let mut sink = Capped(String::new());
+        let capped = crate::fmt::write_exact(&mut sink, ty).is_err();
+        (sink.0, capped)
+    };
+    let (a, a_capped) = render(expected);
+    let (b, b_capped) = render(inferred);
+    let diff = a
+        .bytes()
+        .zip(b.bytes())
+        .position(|(x, y)| x != y)
+        .unwrap_or(a.len().min(b.len()));
+    let window = |s: &str| {
+        let mut start = diff.saturating_sub(WINDOW / 4).min(s.len());
+        while !s.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = (diff + WINDOW).min(s.len());
+        while !s.is_char_boundary(end) {
+            end += 1;
+        }
+        s[start..end].replace('\n', " ")
+    };
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "expected len={}{} inferred len={}{} first difference at {diff}",
+        a.len(),
+        if a_capped { "+" } else { "" },
+        b.len(),
+        if b_capped { "+" } else { "" },
+    );
+    let _ = writeln!(out, "expected: …{}…", window(&a));
+    let _ = writeln!(out, "inferred: …{}…", window(&b));
+    out
+}
+
 fn type_anchor(ty: &Type) -> TypeAnchor {
     match ty {
         Type::Pi { dom, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(dom))),

@@ -1479,18 +1479,35 @@ impl Elaborator {
     /// references, for **emission** (`inject`'s annotations at a constructor
     /// value). Components that respell nothing keep their `Rc` identity, so
     /// a small-field declaration pays two pointer walks and no allocation.
+    ///
+    /// A **flat** declaration with spine codes registered
+    /// (`issues/inductive-spelling-codes-nonrecursive.md`) takes them by
+    /// position first — `El (D#payloadₖ^δ)` for `ctors[k]`, `El (D#suffixₖ^δ)`
+    /// for `tails[k]` — under the same structural guard as every other
+    /// reference; a component the guard declines (a monomorphized or
+    /// otherwise re-spelled copy) falls back to the deep respell as before.
     pub(crate) fn respell_spine(&self, cx: &Cx, spine: &Spine) -> Spine {
-        let re = |v: &Vec<(Rc<Type>, Level)>| {
+        let by_position = spine
+            .ctors
+            .first()
+            .and_then(|(c, _)| self.tag_of(c))
+            .and_then(|ind| self.spine_refs_by_position(cx, ind.tag, spine));
+        let (ctor_refs, tail_refs) = match by_position {
+            Some((c, t)) => (c, t),
+            None => (vec![None; spine.ctors.len()], vec![None; spine.tails.len()]),
+        };
+        let re = |v: &Vec<(Rc<Type>, Level)>, refs: Vec<Option<Type>>| {
             v.iter()
-                .map(|(t, l)| match self.respell_ty_deep(cx, t, 0) {
+                .zip(refs)
+                .map(|((t, l), r)| match r.or_else(|| self.respell_ty_deep(cx, t, 0)) {
                     Some(r) => (Rc::new(r), l.clone()),
                     None => (Rc::clone(t), l.clone()),
                 })
                 .collect()
         };
         Spine {
-            ctors: re(&spine.ctors),
-            tails: re(&spine.tails),
+            ctors: re(&spine.ctors, ctor_refs),
+            tails: re(&spine.tails, tail_refs),
         }
     }
 
@@ -1511,12 +1528,20 @@ impl Elaborator {
     /// values and types may carry `D#shape` rather than the shape itself; no
     /// ordinary structural reader unfolds generated globals, so display uses
     /// the registry's exact inverse lookup and nothing more.
+    ///
+    /// A flat declaration's emitted annotations carry `El (D#payload^δ)` /
+    /// `El (D#suffix^δ)` — as a whole (`inl`/`inr` slots) or as the two
+    /// components of a sum (the decode of its whole-type code) — and the same
+    /// exact inverse lookup restores those
+    /// (`issues/inductive-spelling-codes-nonrecursive.md`).
     fn display_shape(&self, ty: &Type) -> Type {
         let shape = match ty {
             Type::Wf { shape, .. } => &**shape,
             _ => ty,
         };
         self.unspell_shape_here(shape)
+            .or_else(|| self.unspell_here(shape))
+            .or_else(|| self.unspell_sum_components(shape))
             .unwrap_or_else(|| shape.clone())
     }
 
@@ -1810,10 +1835,12 @@ impl Elaborator {
         // `Inr` annotations of a constructor value carry `⟦c_j⟧` and the sum
         // tails verbatim, and their mass is the embedded field types — a
         // value of an `⟦Ir⟧`-field declaration writes `⟦Ir⟧` once per payload
-        // *per injection step*. The tails themselves are not nameable (a sum
-        // suffix is not a declared type), but their components respell. The
-        // structural spine above — `build_fields`' checking, the container
-        // projection — is untouched.
+        // *per injection step*. For a **flat** declaration the components
+        // and the tails themselves are named (`D#payloadₖ`/`D#suffixₖ`,
+        // `issues/inductive-spelling-codes-nonrecursive.md`); for a
+        // recursive one the tails stay inline and only their embedded
+        // field types respell. The structural spine above — `build_fields`'
+        // checking, the container projection — is untouched.
         let spine_e = self.respell_spine(cx, &spine);
         let val = inject(&spine_e, i, ind.ctors.len(), fields, 0);
         if !ind.recursive {

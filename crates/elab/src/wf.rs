@@ -1137,6 +1137,7 @@ mod tycode {
 inductive T { T0, T1(x: Nat, r: T), T2(y: Nat, r: T) }
 inductive U { U0, U1(x: Nat, r: U), U2(y: Nat, r: U) }
 inductive Flat { FA, FB(n: Nat), FC(m: Nat, k: Nat) }
+inductive Flat2 { GA, GB(n: Nat), GC(m: Nat, k: Nat) }
 inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
 ";
 
@@ -1787,6 +1788,354 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         .expect("a container declaration elaborates with slot references");
         let r =
             e.el.elab_source("theorem rlabel_wrong(): rlabel(RNode(4, 0, [])) = 5 { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    // -- a flat declaration's spine codes -----------------------------------
+    // (`issues/inductive-spelling-codes-nonrecursive.md`)
+
+    /// The registration boundary: a **non-recursive** declaration with at
+    /// least two constructors names every payload and every suffix sum but
+    /// the last (which *is* the last payload); a recursive one keeps its
+    /// `D#shape`/`D#arity` pair and gets none of these (docs/wf-shape-code-
+    /// design.md §5.1's rejection stands); a parameterized one is `TyCode`'s
+    /// boundary, inherited.
+    #[test]
+    fn a_flat_declaration_names_its_payloads_and_suffixes_and_a_recursive_one_does_not() {
+        let e = env();
+        let flat = e.ind("Flat").tag;
+        for k in 0..3 {
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::PayloadCode(flat, k)).is_some(),
+                "`Flat` should have a `#payload{k}`"
+            );
+        }
+        assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(flat, 0)).is_some());
+        // `tails[1]` is `⟦FC⟧` itself: no definition of its own.
+        assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(flat, 1)).is_none());
+        assert!(e.el.types.gdefs().has_spine_code_entry(flat));
+        for name in ["T", "U", "Box"] {
+            let tag = e.ind(name).tag;
+            assert!(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).is_none(), "`{name}`");
+            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_none(), "`{name}`");
+            assert!(!e.el.types.gdefs().has_spine_code_entry(tag));
+        }
+    }
+
+    /// What the references *are*: the emission spine of `⟦Flat⟧` carries
+    /// `El (Flat#payloadₖ^δ)` at every constructor, `El (Flat#suffix₀^δ)` at
+    /// the first tail and the *last payload's* reference at the last tail —
+    /// each convertible with the inline component it replaces, in both
+    /// directions (conservativity at the spine's granularity). The scan-based
+    /// `respell_ty` agrees with the positional answer, and the whole type
+    /// still respells to `TyCode`, never to a component.
+    #[test]
+    fn the_spine_references_are_the_components_codes() {
+        let e = env();
+        let (flat_ty, l) = e.lowered("Flat");
+        let flat = e.ind("Flat").tag;
+        let spine = e.el.spine(&flat_ty, &l, 3, SPAN).expect("a spine");
+        let emit = e.el.respell_spine(&e.cx, &spine);
+        for (k, ((inline, lk), (r, _))) in spine.ctors.iter().zip(&emit.ctors).enumerate() {
+            let Type::El { tm, level } = &**r else {
+                panic!("payload {k} takes `El` of a code")
+            };
+            assert_eq!(level, lk);
+            assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat, k)));
+            assert!(e.el.conv_types(&e.cx, r, inline, lk));
+            assert!(e.el.conv_types(&e.cx, inline, r, lk));
+            assert_eq!(e.el.spine_type_ref(&e.cx, flat, inline).as_ref(), Some(&**r));
+            // …but never from the deep walk: a component is named only by
+            // position at emission (the tag-type look-alike, below).
+            assert!(e.el.respell_ty(&e.cx, inline).is_none());
+        }
+        let Type::El { tm, .. } = &*emit.tails[0].0 else {
+            panic!("the first tail takes `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(flat, 0)));
+        assert!(e.el.conv_types(&e.cx, &emit.tails[0].0, &spine.tails[0].0, &spine.tails[0].1));
+        assert!(e.el.conv_types(&e.cx, &spine.tails[0].0, &emit.tails[0].0, &spine.tails[0].1));
+        assert_eq!(
+            e.el.spine_type_ref(&e.cx, flat, &spine.tails[0].0).as_ref(),
+            Some(&*emit.tails[0].0)
+        );
+        let Type::El { tm, .. } = &*emit.tails[1].0 else {
+            panic!("the last tail takes `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat, 2)));
+        // The whole is still the whole.
+        let Type::El { tm, .. } = e.el.respell_ty(&e.cx, &flat_ty).expect("respells") else {
+            panic!("`El` of a code")
+        };
+        assert!(e.el.is_gen_ref(&tm, GenDef::TyCode(flat)));
+    }
+
+    /// The whole-type code of a flat declaration is spelled over its spine's
+    /// names: the kernel's δ + decode of `El (Flat#tycode^δ)` stops at a sum
+    /// of two **neutral** references — which is what makes a label check
+    /// against it one δ and an `==` — and the elaborator's own `whnf` of that
+    /// reduct is the inline `⟦Flat⟧` again, so no structural reader sees the
+    /// names (docs/wf-shape-code-design.md §3.3's line, one level down).
+    #[test]
+    fn a_flat_whole_type_code_decodes_through_its_spine_and_unspells_at_whnf() {
+        let e = env();
+        let (flat_ty, _) = e.lowered("Flat");
+        let flat = e.ind("Flat").tag;
+        let whole = e.el.respell_ty(&e.cx, &flat_ty).expect("respells");
+        let stepped = heather_kernel::reduce::whnf_type_delta(
+            &whole,
+            &e.cx.gamma,
+            heather_kernel::reduce::Defs::transparent(&e.el.psi),
+            e.el.fuel,
+        )
+        .expect("the reference reduces");
+        let Type::Sum { lhs, rhs, .. } = &stepped else {
+            panic!("a flat declaration decodes to a sum")
+        };
+        let (Type::El { tm: l, .. }, Type::El { tm: r, .. }) = (&**lhs, &**rhs) else {
+            panic!("both components are `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(l, GenDef::PayloadCode(flat, 0)));
+        assert!(e.el.is_gen_ref(r, GenDef::SuffixCode(flat, 0)));
+        assert_eq!(e.el.whnf(&e.cx, &stepped, SPAN).expect("whnf"), flat_ty);
+        assert_eq!(e.el.whnf(&e.cx, &whole, SPAN).expect("whnf"), flat_ty);
+        assert_eq!(e.el.tag_of(&e.el.whnf(&e.cx, &stepped, SPAN).unwrap()).map(|i| i.tag), Some(flat));
+    }
+
+    /// The look-alike negatives, in `mod fingerprint`'s discipline. `Flat2`
+    /// differs from `Flat` only in its tag: its spine takes **its own** names
+    /// by position, and offering one declaration's component under the
+    /// other's tag declines. A forged payload (the right tag, a wrong field)
+    /// and a forged suffix (`⟦FB⟧ + Unit`) decline too — without the
+    /// structural guard those would be spelled as `Flat`'s references and
+    /// mean a different type.
+    #[test]
+    fn a_component_that_is_not_the_registered_one_declines() {
+        let e = env();
+        let (flat_ty, l) = e.lowered("Flat");
+        let (flat2_ty, l2) = e.lowered("Flat2");
+        let (flat, flat2) = (e.ind("Flat").tag, e.ind("Flat2").tag);
+        let spine2 = e.el.spine(&flat2_ty, &l2, 3, SPAN).expect("a spine");
+        let emit2 = e.el.respell_spine(&e.cx, &spine2);
+        let Type::El { tm, .. } = &*emit2.ctors[1].0 else {
+            panic!("`Flat2`'s payload respells")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat2, 1)));
+        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.ctors[1].0).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.tails[0].0).is_none());
+        let spine = e.el.spine(&flat_ty, &l, 3, SPAN).expect("a spine");
+        // `⟦FB⟧` with its `Nat` field replaced: `Σ(tag). Σ(Unit). Unit`.
+        let Type::Sigma { fst_level, snd_level, fst, snd } = &*spine.ctors[1].0 else {
+            panic!("a payload is a Σ")
+        };
+        let Type::Sigma { snd: rest, .. } = &**snd else {
+            panic!("`FB` has a field")
+        };
+        let forged = Type::Sigma {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst: Rc::clone(fst),
+            snd: Rc::new(Type::Sigma {
+                fst_level: Level::Zero,
+                snd_level: Level::Zero,
+                fst: Rc::new(Type::Unit { level: Level::Zero }),
+                snd: Rc::clone(rest),
+            }),
+        };
+        assert_eq!(e.el.tag_of(&forged).map(|i| i.tag), Some(flat));
+        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, flat, &forged).is_none());
+        let forged_suffix = Type::Sum {
+            lhs_level: spine.ctors[1].1.clone(),
+            rhs_level: Level::Zero,
+            lhs: Rc::clone(&spine.ctors[1].0),
+            rhs: Rc::new(Type::Unit { level: Level::Zero }),
+        };
+        assert_eq!(e.el.tag_of(&forged_suffix).map(|i| i.tag), Some(flat));
+        assert!(e.el.respell_ty(&e.cx, &forged_suffix).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, flat, &forged_suffix).is_none());
+    }
+
+    /// The tag-type look-alike that made the scan unsafe as a fallback of
+    /// `respell_ty`: the declaration with nominal tag 0 has a nullary payload
+    /// `Σ(Unit). Unit`, which is the digit-1 component of every later tag
+    /// type. A monomorphized instance whose tag type carries that digit must
+    /// respell nothing inside its tags, and its constructor values must still
+    /// build at the respelled statement type.
+    #[test]
+    fn a_tag_types_digit_is_never_spelled_as_a_payload() {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.elab_source(
+            "
+inductive Bool { True, False }
+inductive Option<A> { None, Some(A) }
+fn or_else(d: Nat, o: Option<Nat>) -> Nat { match o { None => d, Some(x) => x } }
+theorem s1(): or_else(3, Some(5)) = 5 { refl }
+theorem s2(): or_else(3, None) = 3 { refl }
+",
+        )
+        .expect("a monomorphized instance elaborates beside a coded tag-0 declaration");
+    }
+
+    /// A constructor **value** of a flat declaration carries the spine
+    /// references at every level of its injection path — pinned structurally
+    /// at a literal value, in the checking position a `fn`'s declared return
+    /// type provides (the expected type arrives as `El (Flat#tycode^δ)` and
+    /// is read back through `whnf`'s unspell).
+    #[test]
+    fn a_flat_constructor_value_carries_the_spine_references() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source("fn mk() -> Flat { FB(1) }").expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let flat = e.ind("Flat").tag;
+        let is_ref = |ty: &Type, key: GenDef| {
+            let Type::El { tm, .. } = ty else { return false };
+            e.el.is_gen_ref(&tm.shift_global(grew), key)
+        };
+        let Term::Inr { lhs, rhs, val, .. } = &**body else {
+            panic!("`FB` is the second constructor: `inr`")
+        };
+        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 0)));
+        assert!(is_ref(rhs, GenDef::SuffixCode(flat, 0)));
+        let Term::Inl { lhs, rhs, .. } = &**val else {
+            panic!("…of `inl`")
+        };
+        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 1)));
+        assert!(is_ref(rhs, GenDef::PayloadCode(flat, 2)));
+    }
+
+    /// …and a `match` on a flat declaration carries them in every `Case` of
+    /// its tag tree, over a **neutral** scrutinee.
+    #[test]
+    fn a_flat_match_carries_the_spine_references_in_its_cases() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source(
+            "fn sel(x: Flat) -> Nat { match x { FA => 0, FB(n) => n, FC(m, k) => m } }",
+        )
+        .expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let flat = e.ind("Flat").tag;
+        let is_ref = |ty: &Type, key: GenDef| {
+            let Type::El { tm, .. } = ty else { return false };
+            e.el.is_gen_ref(&tm.shift_global(grew), key)
+        };
+        let mut cur: &Term = body;
+        while let Term::Lam { body, .. } = cur {
+            cur = body;
+        }
+        let Term::Case { lhs, rhs, case_r, .. } = cur else {
+            panic!("tier 0 lowers to a `case` tree")
+        };
+        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 0)));
+        assert!(is_ref(rhs, GenDef::SuffixCode(flat, 0)));
+        let Term::Case { lhs, rhs, .. } = &**case_r else {
+            panic!("the inner `case`")
+        };
+        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 1)));
+        assert!(is_ref(rhs, GenDef::PayloadCode(flat, 2)));
+    }
+
+    /// A **monomorphized** recursive `Wf` — `Box<Flat>`, which no code names —
+    /// respells its shape's components *and* its arity's `Case` annotations
+    /// alike, or not at all (the parameterized slice of
+    /// `issues/inductive-spelling-codes-nonrecursive.md`): a respelled shape
+    /// over an inline arity is the mismatch the kernel paid at every `Wf`
+    /// occurrence of a `List<Instruction>` value. Pinned structurally, and
+    /// convertible with the inline lowering both ways.
+    #[test]
+    fn a_monomorphized_wf_respells_its_shape_and_arity_alike() {
+        let e = env();
+        let (flat_ty, fl) = e.lowered("Flat");
+        let (box_ty, l) =
+            e.el.lower_instance(&e.cx, &e.ind("Box"), &[(flat_ty.clone(), fl)], &[], SPAN)
+                .expect("`Box<Flat>` lowers");
+        let r = e.el.respell_ty_deep(&e.cx, &box_ty, 0).expect("its components respell");
+        let Type::Wf { shape, arity, .. } = &r else {
+            panic!("a recursive lowering is a `Wf`")
+        };
+        // The shape's `BCons` payload carries the field as `El (Flat#tycode^δ)`…
+        let Type::Sum { rhs, .. } = &**shape else {
+            panic!("two constructors: a sum")
+        };
+        let Type::Sigma { snd, .. } = &**rhs else {
+            panic!("a payload is a Σ")
+        };
+        let Type::Sigma { fst, .. } = &**snd else {
+            panic!("`BCons` has a field")
+        };
+        let Type::El { tm, .. } = &**fst else {
+            panic!("the field respells to `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+        // …and so does the arity's `Case` annotation for the same summand,
+        // one binder deeper (the shape's own).
+        let Term::Case { rhs: case_rhs, .. } = &**arity else {
+            panic!("the arity is a case tree")
+        };
+        let Type::Sigma { snd, .. } = &**case_rhs else {
+            panic!("the `Case`'s right summand is the payload")
+        };
+        let Type::Sigma { fst, .. } = &**snd else {
+            panic!("`BCons` has a field")
+        };
+        let Type::El { tm, .. } = &**fst else {
+            panic!("the arity's annotation respells with the shape")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+        assert!(e.el.conv_types(&e.cx, &r, &box_ty, &l));
+        assert!(e.el.conv_types(&e.cx, &box_ty, &r, &l));
+        // …and the spelling checks and computes end to end.
+        let mut e = e;
+        e.el.elab_source(
+            "
+fn bhead(b: Box<Flat>) -> Flat { match b { BNil => FA, BCons(a, r) => a } }
+fn bmk(n: Nat) -> Box<Flat> { BCons(FB(n), BCons(FA, BNil)) }
+theorem bhead_literal(): bhead(BCons(FC(1, 2), BNil)) = FC(1, 2) { refl }
+theorem bhead_neutral(n: Nat): bhead(bmk(n)) = FB(n) { refl }
+",
+        )
+        .expect("a monomorphized `Wf` elaborates with the consistent spelling");
+        let r = e.el.elab_source("theorem bhead_wrong(): bhead(bmk(1)) = FA { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    /// The four axes with the spine spelling in place: a literal and a
+    /// neutral scrutinee, a checking position (a value built at the declared
+    /// return type, and one built at a *match arm's* expected type), an open
+    /// element type (a parameterized flat declaration, which names nothing
+    /// and elaborates beside the coded ones), a computation pinned by `refl`,
+    /// and a false-equation negative control.
+    #[test]
+    fn the_spine_spelling_checks_and_computes_across_the_axes() {
+        let mut e = env();
+        e.el.elab_source(
+            "
+fn sel(x: Flat) -> Nat { match x { FA => 0, FB(n) => n, FC(m, k) => m } }
+fn swap(x: Flat) -> Flat { match x { FA => FA, FB(n) => FB(n), FC(m, k) => FC(k, m) } }
+inductive Opt<A> { ONone, OSome(a: A) }
+fn omap<A>(x: Opt<A>) -> Opt<A> { match x { ONone => ONone, OSome(a) => OSome(a) } }
+fn oflat(x: Opt<Flat>) -> Flat { match x { ONone => FA, OSome(f) => swap(f) } }
+theorem sel_literal(): sel(FB(3)) = 3 { refl }
+theorem sel_neutral(n: Nat): sel(FB(n)) = n { refl }
+theorem swap_literal(): swap(FC(1, 2)) = FC(2, 1) { refl }
+theorem swap_neutral(m: Nat, k: Nat): sel(swap(FC(m, k))) = k { refl }
+theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
+",
+        )
+        .expect("a flat declaration elaborates with spine references");
+        let r = e.el.elab_source("theorem sel_wrong(): sel(FB(3)) = 4 { refl }");
         assert!(r.is_err(), "a false equation must still be refused");
     }
 }

@@ -147,6 +147,28 @@ pub(crate) enum GenDef {
     /// reduced, so the earlier projections it mentions stay folded until a
     /// conversion actually needs the type behind them.
     RecFam(u32, usize),
+    /// `D#payloadₖ : Trm_c(· ⊢ Ty lₖ) := ⌜⟦cₖ⟧⌝` — the `k`-th constructor's
+    /// **payload type** of a **non-recursive**, unparameterized declaration
+    /// with at least two constructors, consumed as `El (D#payloadₖ^δ)` in the
+    /// `Inl`/`Inr` annotations of a constructor value and in a `Case`'s
+    /// component slots (`issues/inductive-spelling-codes-nonrecursive.md`).
+    /// Keyed by the declaration's tag and the constructor's position.
+    ///
+    /// The shape-code round rejected this key for **recursive** declarations
+    /// on measurement (docs/wf-shape-code-design.md §5.1: their payloads'
+    /// mass is embedded field types `TyCode` already names). A flat sum is
+    /// different in kind: it has no `Wf` and no `D#shape`, so without these
+    /// the only name it has is the whole type, and every `inl`/`inr` level
+    /// below the whole writes its suffix sum out — Θ(n²) per literal.
+    PayloadCode(u32, usize),
+    /// `D#suffixₖ : Trm_c(· ⊢ Ty l) := D#payload_{k+1}^δ + D#suffix_{k+1}^δ`
+    /// — the same declaration's **suffix sum** past constructor `k`, the
+    /// right operand of the `k`-th `+` (`Spine::tails[k]`), spelled over the
+    /// names of its own components so that each level of an injection costs
+    /// the kernel one δ and a syntactic comparison. Registered for
+    /// `k < n - 2` only: the last tail *is* the last payload, and takes
+    /// [`GenDef::PayloadCode`]`(tag, n - 1)`.
+    SuffixCode(u32, usize),
 }
 
 impl GenDef {
@@ -166,6 +188,8 @@ impl GenDef {
             GenDef::RecProj(_, j) => format!("{owner}#proj{j}"),
             GenDef::RecTail(_, j) => format!("{owner}#tail{j}"),
             GenDef::RecFam(_, j) => format!("{owner}#fam{j}"),
+            GenDef::PayloadCode(_, k) => format!("{owner}#payload{k}"),
+            GenDef::SuffixCode(_, k) => format!("{owner}#suffix{k}"),
         }
     }
 }
@@ -190,6 +214,20 @@ pub(crate) struct WfSlots {
     pub(crate) arity: Rc<Term>,
     /// The declaration's level, which is also its shape's.
     pub(crate) level: Level,
+}
+
+/// The guard copies of one non-recursive declaration's spine codes
+/// ([`GenDef::PayloadCode`]/[`GenDef::SuffixCode`]): the **inline** spine
+/// the codes were minted from, exactly as `Elaborator::spine` reads it off
+/// the registered lowering, so a reference can only ever stand for the
+/// component it decodes to — the same structural guard as [`WfSlots`] and
+/// [`GenDefLayer::ty_code`], at the spine's granularity.
+#[derive(Clone)]
+pub(crate) struct SpineCodes {
+    /// `(⟦cₖ⟧, lₖ)` per constructor.
+    pub(crate) ctors: Vec<(Rc<Type>, Level)>,
+    /// `(R_{k+1}, its level)` per `+`; `tails[n-2]` is `ctors[n-1]`.
+    pub(crate) tails: Vec<(Rc<Type>, Level)>,
 }
 
 /// One append-only generated-definition delta. Its lookup views are sealed
@@ -231,6 +269,10 @@ struct GenDefLayer {
     /// correct but is never useful, and the pairing is what lets every use
     /// site ask one question (design §2.3).
     wf_slots: HashMap<u32, WfSlots>,
+    /// Per non-recursive declaration tag whose whole spine registered
+    /// ([`Elaborator::register_spine_codes`]), the inline spine the codes
+    /// were minted from — the use-site guard, written all-or-nothing.
+    spine_codes: HashMap<u32, SpineCodes>,
 }
 
 /// The registry: immutable image layers plus one suffix delta. The two
@@ -302,6 +344,22 @@ impl GenDefs {
 
     fn has_wf_slots(&self) -> bool {
         self.layers().any(|layer| !layer.wf_slots.is_empty())
+    }
+
+    fn spine_codes(&self, tag: &u32) -> Option<&SpineCodes> {
+        self.layers().find_map(|layer| layer.spine_codes.get(tag))
+    }
+
+    fn has_spine_codes(&self) -> bool {
+        self.layers().any(|layer| !layer.spine_codes.is_empty())
+    }
+
+    pub(crate) fn has_spine_code_entry(&self, tag: u32) -> bool {
+        self.spine_codes(&tag).is_some()
+    }
+
+    pub(crate) fn insert_spine_codes(&mut self, tag: u32, value: SpineCodes) {
+        Rc::make_mut(&mut self.current).spine_codes.insert(tag, value);
     }
 
     pub(crate) fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
@@ -466,8 +524,24 @@ impl Elaborator {
         if self.tag_of(&d_ty).map(|i| i.tag) != Some(ind.tag) {
             return;
         }
-        let Some(body) = crate::code::code_of(&d_ty) else {
+        let Some(inline_body) = crate::code::code_of(&d_ty) else {
             return;
+        };
+        // A flat declaration names its spine *first*, and its whole-type code
+        // is then spelled over those names rather than as the inline literal
+        // (`issues/inductive-spelling-codes-nonrecursive.md`): `El (D#tycode^δ)`
+        // meets the injection spellings at every constructor label the
+        // kernel checks, and with the literal body that comparison decoded
+        // and walked the whole sum-of-Σs in the value domain, once per
+        // label — measured as the largest single bucket of the five-node
+        // FunctionIR/x86 module. With the named body, one δ exposes the same
+        // `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))` the label carries.
+        // The guard copy is the inline lowering either way.
+        let body = if ind.recursive {
+            inline_body
+        } else {
+            self.register_spine_codes(ind, &d_ty, &l, span)
+                .unwrap_or(inline_body)
         };
         let ty = Type::Ty(l.clone());
         if self
@@ -477,6 +551,96 @@ impl Elaborator {
             self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone());
         }
         self.register_wf_slots(ind, &d_ty, &l, span);
+    }
+
+    /// `D#payloadₖ := ⌜⟦cₖ⟧⌝` per constructor and `D#suffixₖ :=
+    /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a **non-recursive**
+    /// declaration's sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`),
+    /// registered off [`Self::register_ty_code`]'s own lowering under its
+    /// boundary (unparameterized, unindexed, `tag_of` routes back) and only
+    /// for a declaration with at least two constructors — with one, the
+    /// whole type already names the only payload there is.
+    ///
+    /// Returns the **named** spelling of the whole type's code,
+    /// `D#payload₀^δ + D#suffix₀^δ`, for the caller to register as
+    /// `D#tycode`'s body; `None` when anything declined, in which case the
+    /// guard entry is not written and every use site keeps the inline spine
+    /// exactly as before. Best-effort and **all-or-nothing** like the `Wf`
+    /// slot pair: a definition that passed the gate before a later one
+    /// failed stays in Ψ, unreferenced and harmless, but no guard entry means
+    /// no reference is ever handed out.
+    ///
+    /// Each payload's body is the emission spelling
+    /// ([`Self::respell_ty_deep`] of the inline payload): its embedded field
+    /// types are `El (F#tycode^δ)` where `F` has a code, so the definition is
+    /// small and decodes to what a respelled field tuple is annotated with.
+    /// The suffixes reference the payloads and each other, never a literal,
+    /// so every level of an `inr` chain costs one δ and an `==`.
+    fn register_spine_codes(
+        &mut self,
+        ind: &Rc<Inductive>,
+        d_ty: &Type,
+        l: &Level,
+        span: Span,
+    ) -> Option<Term> {
+        let n = ind.ctors.len();
+        if n < 2 || self.types.gdefs().has_spine_code_entry(ind.tag) {
+            return None;
+        }
+        let spine = self.spine(d_ty, l, n, span).ok()?;
+        let cx = Cx::empty();
+        for (k, (ctor, lk)) in spine.ctors.iter().enumerate() {
+            let emit = self.respell_ty_deep(&cx, ctor, 0);
+            let body = crate::code::code_of(emit.as_ref().unwrap_or(ctor))?;
+            self.push_gen_def(
+                GenDef::PayloadCode(ind.tag, k),
+                &ind.name,
+                Type::Ty(lk.clone()),
+                Level::succ(lk.clone()),
+                body,
+                span,
+            )
+            .ok()?;
+        }
+        // `suffix_k` mentions `suffix_{k+1}`, so the walk is from the right;
+        // the last tail is the last payload and gets no definition of its own.
+        let suffix_ref = |me: &Self, k: usize| -> Option<Term> {
+            if k + 2 == n {
+                me.gen_ref(&cx, GenDef::PayloadCode(ind.tag, n - 1))
+            } else {
+                me.gen_ref(&cx, GenDef::SuffixCode(ind.tag, k))
+            }
+        };
+        let sum_body = |me: &Self, k: usize| -> Option<Term> {
+            Some(Term::TmSum {
+                lhs_level: spine.ctors[k].1.clone(),
+                rhs_level: spine.tails[k].1.clone(),
+                lhs: Rc::new(me.gen_ref(&cx, GenDef::PayloadCode(ind.tag, k))?),
+                rhs: Rc::new(suffix_ref(me, k)?),
+            })
+        };
+        for k in (0..n - 2).rev() {
+            let body = sum_body(self, k + 1)?;
+            let lk = &spine.tails[k].1;
+            self.push_gen_def(
+                GenDef::SuffixCode(ind.tag, k),
+                &ind.name,
+                Type::Ty(lk.clone()),
+                Level::succ(lk.clone()),
+                body,
+                span,
+            )
+            .ok()?;
+        }
+        let whole = sum_body(self, 0)?;
+        self.semantic_commit_gen_spine_codes(
+            ind.tag,
+            SpineCodes {
+                ctors: spine.ctors,
+                tails: spine.tails,
+            },
+        );
+        Some(whole)
     }
 
     /// `D#projⱼ := λ(v : ⟦D⟧). fst(sndʲ v)`, one per field of a **record**
@@ -1003,6 +1167,86 @@ impl Elaborator {
         self.ty_type_ref(cx, ind.tag, ty)
     }
 
+    /// `El (D#payloadₖ^δ)` or `El (D#suffixₖ^δ)` for `ty`, if and only if
+    /// `ty` **is** the `k`-th component of the spine `D`'s codes were minted
+    /// from ([`GenDefLayer::spine_codes`]'s guard) — the spine-level twin of
+    /// [`Self::ty_type_ref`], found by a scan over the registered components.
+    /// `None` is the cue to keep the inline spelling.
+    ///
+    /// **Not** a fallback of [`Self::respell_ty`], deliberately: a nullary
+    /// payload of the declaration with nominal tag 0 is `Σ(Unit). Unit`, which
+    /// is also the digit-1 component of every other declaration's *tag type*
+    /// — so a scan reached from a deep walk spelled the tag types inside
+    /// every later lowering as `El (Bool#payload₀^δ)`, convertible and
+    /// unreadable (81 failures on the 2026-09-06 full suite). Only
+    /// [`Self::spine_refs_by_position`] hands these out at emission, where
+    /// the whole spine's tag says whose components they are.
+    pub(crate) fn spine_type_ref(&self, cx: &Cx, tag: u32, ty: &Type) -> Option<Type> {
+        let codes = self.types.gdefs().spine_codes(&tag)?;
+        if let Some((k, (_, l))) = codes.ctors.iter().enumerate().find(|(_, (c, _))| **c == *ty) {
+            return self.gen_type_ref(cx, GenDef::PayloadCode(tag, k), l);
+        }
+        let (k, (_, l)) = codes.tails.iter().enumerate().find(|(_, (t, _))| **t == *ty)?;
+        self.spine_tail_ref(cx, tag, codes.ctors.len(), k, l)
+    }
+
+    /// The reference for `Spine::tails[k]` of a declaration with `n`
+    /// constructors: the last tail is the last payload.
+    fn spine_tail_ref(&self, cx: &Cx, tag: u32, n: usize, k: usize, l: &Level) -> Option<Type> {
+        let key = if k + 2 == n {
+            GenDef::PayloadCode(tag, n - 1)
+        } else {
+            GenDef::SuffixCode(tag, k)
+        };
+        self.gen_type_ref(cx, key, l)
+    }
+
+    /// [`Self::spine_type_ref`] **by position**, for the emission copy of a
+    /// spine ([`Elaborator::respell_spine`]): component `k` of `spine` takes
+    /// its reference when it is structurally the registered component `k`,
+    /// so the guard is one comparison per component rather than a scan, and
+    /// two constructors with identical payloads keep their own names. `None`
+    /// when the declaration has no spine codes or the spines disagree in
+    /// length, which is every caller's cue to fall back to the deep respell.
+    pub(crate) fn spine_refs_by_position(
+        &self,
+        cx: &Cx,
+        tag: u32,
+        spine: &crate::inductive::Spine,
+    ) -> Option<(Vec<Option<Type>>, Vec<Option<Type>>)> {
+        if !self.types.gdefs().has_spine_codes() {
+            return None;
+        }
+        let codes = self.types.gdefs().spine_codes(&tag)?;
+        let n = codes.ctors.len();
+        if spine.ctors.len() != n || spine.tails.len() != codes.tails.len() {
+            return None;
+        }
+        let ctors = spine
+            .ctors
+            .iter()
+            .zip(&codes.ctors)
+            .enumerate()
+            .map(|(k, ((c, _), (reg, l)))| {
+                (*c == *reg)
+                    .then(|| self.gen_type_ref(cx, GenDef::PayloadCode(tag, k), l))
+                    .flatten()
+            })
+            .collect();
+        let tails = spine
+            .tails
+            .iter()
+            .zip(&codes.tails)
+            .enumerate()
+            .map(|(k, ((t, _), (reg, l)))| {
+                (*t == *reg)
+                    .then(|| self.spine_tail_ref(cx, tag, n, k, l))
+                    .flatten()
+            })
+            .collect();
+        Some((ctors, tails))
+    }
+
     /// [`Self::respell_ty`] applied **component-wise**
     /// (`docs/annotation-component-respell-design.md`): rebuild `ty` with
     /// every sub-type that *is* a registered declaration's lowering replaced
@@ -1110,11 +1354,26 @@ impl Elaborator {
                 // Reached only for a lowering the registry does not name
                 // (parameterized, hence monomorphized — `Box<Ir>`), whose
                 // *components* may still be registered lowerings.
+                //
+                // The arity goes with the shape, or neither goes: the arity
+                // is a constant case tree whose `Case` annotations are the
+                // shape's own components, and the kernel checks that tree
+                // under `x : shape` at every occurrence of this `Wf` — so a
+                // respelled shape over an inline arity is a *mismatch* the
+                // kernel pays in the value domain, once per annotation, over
+                // the whole inline component (a `List<Instruction>` value's
+                // every `Wf` copy walked `⟦Instruction⟧`: 813 queries, 3.1 s
+                // of the five-node FunctionIR/x86 module, measured
+                // 2026-09-06; `issues/inductive-spelling-codes-nonrecursive.md`).
+                // Spelled alike, the two compare syntactically. An arity of
+                // any other form keeps the whole `Wf` inline, which is also
+                // consistent.
                 let ns = self.respell_deep_at(cx, shape, d)?;
+                let na = self.respell_arity_at(cx, arity, d + 1).ok()??;
                 Some(Type::Wf {
                     level: level.clone(),
                     shape: Rc::new(ns),
-                    arity: Rc::clone(arity),
+                    arity: Rc::new(na),
                 })
             }
             Type::Id {
@@ -1149,6 +1408,103 @@ impl Elaborator {
         }
     }
 
+    /// The arity term of a monomorphized `Wf` with the `Case` annotations of
+    /// its constant case tree respelled by [`Self::respell_deep_at`] at the
+    /// binder depth each sits under, so that `Wf(shape_e). arity_e` is one
+    /// spelling end to end (the `Wf` arm above). `d` is the depth of the
+    /// arity's own scope (the shape's binder included).
+    ///
+    /// `Ok(None)` when nothing respelled, `Err(())` when the term is not of
+    /// the form `lower_arity` writes — a case tree over literals, `Succ`s and
+    /// variables; a container's length projection is a `fst`/`snd` chain
+    /// with its own Σ annotations and is declined rather than walked. Either
+    /// way the caller keeps the whole `Wf` inline.
+    fn respell_arity_at(&self, cx: &Cx, t: &Term, d: u32) -> Result<Option<Term>, ()> {
+        match t {
+            Term::Case {
+                lhs_level,
+                rhs_level,
+                motive_level,
+                lhs,
+                rhs,
+                motive,
+                case_l,
+                case_r,
+                scrut,
+            } => {
+                if **motive != Type::Nat {
+                    return Err(());
+                }
+                let nl = self.respell_deep_at(cx, lhs, d);
+                let nr = self.respell_deep_at(cx, rhs, d);
+                let cl = self.respell_arity_at(cx, case_l, d + 1)?;
+                let cr = self.respell_arity_at(cx, case_r, d + 1)?;
+                if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
+                    return Ok(None);
+                }
+                Ok(Some(Term::Case {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    motive_level: motive_level.clone(),
+                    lhs: nl.map_or_else(|| Rc::clone(lhs), Rc::new),
+                    rhs: nr.map_or_else(|| Rc::clone(rhs), Rc::new),
+                    motive: Rc::clone(motive),
+                    case_l: cl.map_or_else(|| Rc::clone(case_l), Rc::new),
+                    case_r: cr.map_or_else(|| Rc::clone(case_r), Rc::new),
+                    scrut: Rc::clone(scrut),
+                }))
+            }
+            Term::Succ(p) => Ok(self
+                .respell_arity_at(cx, p, d)?
+                .map(|np| Term::Succ(Rc::new(np)))),
+            Term::Var(_) | Term::Zero | Term::NatLit(_) => Ok(None),
+            _ => Err(()),
+        }
+    }
+
+    /// The inverse of [`Self::respell_arity_at`] for [`Self::unspell_ty_deep`]:
+    /// every reference inside a case tree's annotations back to the registry's
+    /// inline copy. `None` when nothing unspelled; a term that is not a case
+    /// tree is left as it is (it carried no references in the first place).
+    fn unspell_arity_deep(&self, len_at: u32, t: &Term) -> Option<Term> {
+        match t {
+            Term::Case {
+                lhs_level,
+                rhs_level,
+                motive_level,
+                lhs,
+                rhs,
+                motive,
+                case_l,
+                case_r,
+                scrut,
+            } => {
+                let nl = self.unspell_ty_deep(len_at, lhs);
+                let nr = self.unspell_ty_deep(len_at, rhs);
+                let cl = self.unspell_arity_deep(len_at, case_l);
+                let cr = self.unspell_arity_deep(len_at, case_r);
+                if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
+                    return None;
+                }
+                Some(Term::Case {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    motive_level: motive_level.clone(),
+                    lhs: nl.map_or_else(|| Rc::clone(lhs), Rc::new),
+                    rhs: nr.map_or_else(|| Rc::clone(rhs), Rc::new),
+                    motive: Rc::clone(motive),
+                    case_l: cl.map_or_else(|| Rc::clone(case_l), Rc::new),
+                    case_r: cr.map_or_else(|| Rc::clone(case_r), Rc::new),
+                    scrut: Rc::clone(scrut),
+                })
+            }
+            Term::Succ(p) => self
+                .unspell_arity_deep(len_at, p)
+                .map(|np| Term::Succ(Rc::new(np))),
+            _ => None,
+        }
+    }
+
     /// `El (D#tycode^δ)` back to the registry's inline `⟦D⟧`, at the head only
     /// and in the **current** Ψ world (goal and meta padding included, which is
     /// what [`Self::gen_def_of`] knows and [`Self::unspell_ty_deep`]'s explicit
@@ -1168,13 +1524,58 @@ impl Elaborator {
         let Term::GlobalTm { var, .. } = &**tm else {
             return None;
         };
-        let GenDef::TyCode(tag) = self.gen_def_of(*var)? else {
+        self.inline_of_code_key(self.gen_def_of(*var)?)
+    }
+
+    /// The registry's inline copy behind a code key that names a type
+    /// occurrence — the whole lowering, a payload, or a suffix sum. `None`
+    /// for every other key.
+    fn inline_of_code_key(&self, key: GenDef) -> Option<Type> {
+        let gdefs = self.types.gdefs();
+        match key {
+            GenDef::TyCode(tag) => gdefs.ty_code(&tag).map(|(inline, _)| (**inline).clone()),
+            GenDef::PayloadCode(tag, k) => {
+                gdefs.spine_codes(&tag).map(|codes| (*codes.ctors[k].0).clone())
+            }
+            GenDef::SuffixCode(tag, k) => {
+                gdefs.spine_codes(&tag).map(|codes| (*codes.tails[k].0).clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// [`Self::unspell_here`] one level down a **sum**: the kernel's whnf of
+    /// `El (D#tycode^δ)` for a flat declaration — or of any code that
+    /// computes to one — stops at `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))`,
+    /// whose components are `El` of *neutral* codes that `decoded` rightly
+    /// leaves alone, so `tag_of`/`spine` would not see the tag. Restoring the
+    /// inline components at the `whnf` choke point keeps every structural
+    /// reader spelling-insensitive, exactly as the top-level unspell does
+    /// (docs/wf-shape-code-design.md §3.3). `None` when nothing unspelled.
+    pub(crate) fn unspell_sum_components(&self, ty: &Type) -> Option<Type> {
+        if !self.types.gdefs().has_spine_codes() {
+            return None;
+        }
+        let Type::Sum {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+        } = ty
+        else {
             return None;
         };
-        self.types
-            .gdefs()
-            .ty_code(&tag)
-            .map(|(inline, _)| (**inline).clone())
+        let nl = self.unspell_here(lhs);
+        let nr = self.unspell_here(rhs);
+        if nl.is_none() && nr.is_none() {
+            return None;
+        }
+        Some(Type::Sum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: nl.map_or_else(|| Rc::clone(lhs), Rc::new),
+            rhs: nr.map_or_else(|| Rc::clone(rhs), Rc::new),
+        })
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive
@@ -1227,10 +1628,10 @@ impl Elaborator {
         if let Type::El { tm, .. } = ty
             && let Term::GlobalTm { var, .. } = &**tm
             && let Some(abs) = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))
-            && let Some(GenDef::TyCode(tag)) = self.types.gdefs().key_for_abs(&abs).copied()
-            && let Some((inline, _)) = self.types.gdefs().ty_code(&tag)
+            && let Some(key) = self.types.gdefs().key_for_abs(&abs).copied()
+            && let Some(inline) = self.inline_of_code_key(key)
         {
-            return Some((**inline).clone());
+            return Some(inline);
         }
         let or = |orig: &Rc<Type>, new: Option<Type>| match new {
             Some(t) => Rc::new(t),
@@ -1304,11 +1705,15 @@ impl Elaborator {
                 shape,
                 arity,
             } => {
-                let ns = self.unspell_ty_deep(len_at, shape)?;
+                let ns = self.unspell_ty_deep(len_at, shape);
+                let na = self.unspell_arity_deep(len_at, arity);
+                if ns.is_none() && na.is_none() {
+                    return None;
+                }
                 Some(Type::Wf {
                     level: level.clone(),
-                    shape: Rc::new(ns),
-                    arity: Rc::clone(arity),
+                    shape: ns.map_or_else(|| Rc::clone(shape), Rc::new),
+                    arity: na.map_or_else(|| Rc::clone(arity), Rc::new),
                 })
             }
             Type::Id {

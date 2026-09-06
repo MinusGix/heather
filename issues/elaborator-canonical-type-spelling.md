@@ -43,3 +43,8 @@ where the fallbacks are paid for.
   guards. Assumed here: only that guards decline site by site today.
 - **[[inductive-spelling-codes-nonrecursive]]** owns the first concrete
   slice; this issue is not a prerequisite for it.
+
+## Log
+
+- 2026-09-06: First slice landed ([[inductive-spelling-codes-nonrecursive]], 2026-09-06): flat declarations' payloads and suffix sums are named and the whole-type code is spelled over the names; monomorphized Wf copies respell shape and arity alike. The sampler that produces this issue's datum is landed behind value-metrics ([[perf-profile-build-target]]); its residual rows are on [[unnameable-annotation-occurrences]].
+- 2026-09-06: Latent look-alike found by [[inductive-spelling-codes-nonrecursive]]'s round: the structural guards compare against lowerings, and a lowering can coincide with a *tag type* (a nullary payload at tag 0 is `Σ(Unit). Unit`, the digit-1 component of every later tag type). Any future guard that names sub-declaration components must be positional or must exclude tag types explicitly; the whole-type guard is safe only because no fieldless single-constructor declaration holds tag 0.

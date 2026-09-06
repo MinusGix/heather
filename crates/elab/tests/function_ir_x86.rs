@@ -640,6 +640,9 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     }
     if report_value_metrics {
         eprintln!("mixed ALU value metrics: {:?}", e.value_metrics().unwrap());
+        // The typing seam's conversion misses by head pair (needs the
+        // `value-metrics` feature; empty otherwise).
+        eprint!("{}", e.value_conv_miss_report().unwrap());
     }
 }
 
