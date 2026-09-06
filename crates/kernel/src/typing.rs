@@ -454,6 +454,28 @@ struct Tc {
     /// they identify, so allocator reuse cannot create an aliasing key.
     conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
     conv_memo_entries: Cell<usize>,
+    /// The miss sampler's *site* columns (issues/perf-profile-build-target.md):
+    /// the variant names of the terms on the checker's own stack, innermost
+    /// last, and the innermost term whose type is being compared. Both are
+    /// per-gate state on the checker — the value machine's rule that there is
+    /// no global or thread-local instrumentation state holds here too — and
+    /// are compiled in only with the feature.
+    #[cfg(feature = "value-metrics")]
+    diag_stack: RefCell<Vec<&'static str>>,
+    #[cfg(feature = "value-metrics")]
+    diag_term: RefCell<Option<Term>>,
+}
+
+/// Pops the checker's diagnostic stack when a `tm_check`/`tm_infer` frame
+/// returns (see [`Tc::diag_stack`]).
+#[cfg(feature = "value-metrics")]
+struct DiagFrame<'t>(&'t Tc);
+
+#[cfg(feature = "value-metrics")]
+impl Drop for DiagFrame<'_> {
+    fn drop(&mut self) {
+        self.0.diag_stack.borrow_mut().pop();
+    }
 }
 
 struct RcIdentity<T>(Rc<T>);
@@ -520,7 +542,60 @@ impl Tc {
             fuel,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
+            #[cfg(feature = "value-metrics")]
+            diag_stack: RefCell::new(Vec::new()),
+            #[cfg(feature = "value-metrics")]
+            diag_term: RefCell::new(None),
         }
+    }
+
+    /// Push `t`'s variant name for the sampler's site column; the frame pops
+    /// it. `mode` is `"check"` or `"infer"`.
+    #[cfg(feature = "value-metrics")]
+    fn diag_enter(&self, t: &Term, mode: &'static str) -> DiagFrame<'_> {
+        self.diag_stack.borrow_mut().push(term_head(t));
+        let _ = mode;
+        DiagFrame(self)
+    }
+
+    /// The sampler's site excerpt: the checker's stack innermost first, the
+    /// innermost compared term (budget-bounded `Debug`), and the elaborator
+    /// frames of a backtrace — which name the emission site that wrote the
+    /// annotation being paid for, the thing the head-pair table cannot say.
+    /// Rendered once per bucket, so the backtrace's cost is paid once.
+    #[cfg(feature = "value-metrics")]
+    fn diag_site(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let stack = self.diag_stack.borrow();
+        let _ = writeln!(
+            out,
+            "site: {}",
+            stack.iter().rev().take(16).copied().collect::<Vec<_>>().join(" < ")
+        );
+        if let Some(t) = self.diag_term.borrow().as_ref() {
+            let mut r = format!("{t:?}");
+            if r.len() > 600 {
+                let cut = r.char_indices().map(|(i, _)| i).take_while(|&i| i <= 600).last().unwrap_or(0);
+                r.truncate(cut);
+                r.push('…');
+            }
+            let _ = writeln!(out, "term: {r}");
+        }
+        let bt = std::backtrace::Backtrace::force_capture().to_string();
+        let frames: Vec<&str> = bt
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains("heather_elab") && !l.contains("closure"))
+            .take(12)
+            .collect();
+        if !frames.is_empty() {
+            let _ = writeln!(out, "elaborator frames:");
+            for f in frames {
+                let _ = writeln!(out, "  {f}");
+            }
+        }
+        out
     }
 
     // -- premise helpers ----------------------------------------------------
@@ -606,7 +681,7 @@ impl Tc {
                 metrics.record_conv_miss(
                     (type_head(expected), type_head(inferred)),
                     started.elapsed().as_nanos() as u64,
-                    || first_difference_excerpt(expected, inferred),
+                    || format!("{}{}", self.diag_site(), first_difference_excerpt(expected, inferred)),
                 );
             }
             result?;
@@ -924,6 +999,12 @@ impl Tc {
     /// the function intro forms (so checking-only `box` bodies work), else
     /// infer + conversion at `typeof(i)`.
     fn tm_check(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
+        #[cfg(feature = "value-metrics")]
+        let _frame = self.diag_enter(t, "check");
+        self.tm_check_inner(env, t, ty, l)
+    }
+
+    fn tm_check_inner(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
         match t {
             // box T : □(Δ ⊢ Ty l) @ 0 ⟸ Ψ; Δ ⊢_c T @ l
             Term::BoxTy(code) => {
@@ -1021,6 +1102,12 @@ impl Tc {
             _ => {
                 let (inferred, li) = self.tm_infer(env, t)?;
                 self.lev_eq(l, &li)?;
+                // A shallow clone (`Rc` children): the sampler's innermost
+                // term, for the site excerpt.
+                #[cfg(feature = "value-metrics")]
+                {
+                    *self.diag_term.borrow_mut() = Some(t.clone());
+                }
                 self.conv_ty(env, ty, &inferred, l)
             }
         }
@@ -1028,6 +1115,12 @@ impl Tc {
 
     /// `⊢_i t : ? @ ?` — infer the canonical type and level.
     fn tm_infer(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
+        #[cfg(feature = "value-metrics")]
+        let _frame = self.diag_enter(t, "infer");
+        self.tm_infer_inner(env, t)
+    }
+
+    fn tm_infer_inner(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
         match t {
             // The two forms layer v admits.
             Term::Var(x) => {
@@ -2115,6 +2208,67 @@ impl Tc {
 /// the complete judgment has been compared. Cloning Heather syntax preserves
 /// these child `Rc`s, which distinguishes the mostly-fresh types produced by
 /// inference without recursively hashing them.
+/// The variant name of a term, for the sampler's site column.
+#[cfg(feature = "value-metrics")]
+fn term_head(t: &Term) -> &'static str {
+    match t {
+        Term::Var(..) => "Var",
+        Term::TmNat => "TmNat",
+        Term::TmPi { .. } => "TmPi",
+        Term::TmTy(..) => "TmTy",
+        Term::TmId { .. } => "TmId",
+        Term::TmSEq { .. } => "TmSEq",
+        Term::TmSEmpty { .. } => "TmSEmpty",
+        Term::TmSquash { .. } => "TmSquash",
+        Term::TmSigma { .. } => "TmSigma",
+        Term::TmUnit { .. } => "TmUnit",
+        Term::TmEmpty { .. } => "TmEmpty",
+        Term::TmSum { .. } => "TmSum",
+        Term::TmW { .. } => "TmW",
+        Term::TmVec { .. } => "TmVec",
+        Term::TmFin { .. } => "TmFin",
+        Term::TmWf { .. } => "TmWf",
+        Term::Zero => "Zero",
+        Term::NatLit(..) => "NatLit",
+        Term::Succ(..) => "Succ",
+        Term::ElimNat { .. } => "ElimNat",
+        Term::Refl { .. } => "Refl",
+        Term::J { .. } => "J",
+        Term::SRefl { .. } => "SRefl",
+        Term::Squash { .. } => "Squash",
+        Term::Transp { .. } => "Transp",
+        Term::ElimSEmpty { .. } => "ElimSEmpty",
+        Term::ElimSquash { .. } => "ElimSquash",
+        Term::Pair { .. } => "Pair",
+        Term::Fst { .. } => "Fst",
+        Term::Snd { .. } => "Snd",
+        Term::Triv { .. } => "Triv",
+        Term::ElimEmpty { .. } => "ElimEmpty",
+        Term::Inl { .. } => "Inl",
+        Term::Inr { .. } => "Inr",
+        Term::Case { .. } => "Case",
+        Term::Sup { .. } => "Sup",
+        Term::ElimW { .. } => "ElimW",
+        Term::Supf { .. } => "Supf",
+        Term::ElimWf { .. } => "ElimWf",
+        Term::Lam { .. } => "Lam",
+        Term::App { .. } => "App",
+        Term::ULam { .. } => "ULam",
+        Term::UApp { .. } => "UApp",
+        Term::GlobalTm { .. } => "GlobalTm",
+        Term::CtxLam { .. } => "CtxLam",
+        Term::CtxApp { .. } => "CtxApp",
+        Term::TyLam { .. } => "TyLam",
+        Term::TyApp { .. } => "TyApp",
+        Term::BoxTy(..) => "BoxTy",
+        Term::BoxTm(..) => "BoxTm",
+        Term::LetBoxTy { .. } => "LetBoxTy",
+        Term::LetBoxTm { .. } => "LetBoxTm",
+        Term::ElimCodeTy { .. } => "ElimCodeTy",
+        Term::ElimCodeTm { .. } => "ElimCodeTm",
+    }
+}
+
 /// The head of a type for the miss sampler's buckets. `El` is split three
 /// ways because that is the distinction the buckets exist to make: a
 /// **named** code (`El (u^δ)`), a code **literal** (`El ⌜…⌝`, the lazy

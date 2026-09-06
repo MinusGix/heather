@@ -440,6 +440,10 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
 /// of a *neutral* code, `Id` endpoints, `Vec` lengths — are left as they
 /// are: decoding is a rewrite on canonical formers only, exactly
 /// [`decoded`]'s guard.
+///
+/// The property the adjacent-link argument rests on — this decode commutes
+/// with local substitution — is a kernel law, tested against `step_type`
+/// directly on random terms in `crates/kernel/tests/decode_laws.rs`.
 pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
     let head = decoded(t);
     let changed_head = matches!(head, Cow::Owned(_));
