@@ -180,8 +180,13 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let _ = span;
+        // A monomorphized `Wf` has no whole-type reference; its components
+        // respell the way the child's own `sup_f` slots do (`build_ctor`), so
+        // the tuple's stated element type and the child's inferred type are
+        // one spelling (issues/emission-site-respell-audit.md).
         let emit = self
             .ty_type_ref(cx, tag, d_ty)
+            .or_else(|| self.respell_ty_deep(cx, d_ty, 0))
             .unwrap_or_else(|| d_ty.clone());
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
@@ -404,9 +409,24 @@ impl Elaborator {
         // the inline slots otherwise. The structural reads a few lines down —
         // `cx3`'s `#a` entry, `spine` — take `shape`/`arity` themselves, per
         // §4's line.
+        //
+        // A **monomorphized** `Wf` (`List<Node>`) has no pair to name; its
+        // slots then take the same component respell the spine's emission
+        // copy takes below (`respell_spine`), or neither does. The kernel
+        // rebuilds `Fin(n[ℓ/x])` for the ih from *this* arity at every
+        // reduction of the eliminator, and a projection chain written off
+        // that reduct met the label's respelled injections with the inline
+        // `Case` annotations of an inline arity (`Sum` vs `Sum`, 300 queries
+        // of the five-node FunctionIR/x86 module after the value sites
+        // agreed, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => (Rc::clone(shape), Rc::clone(arity)),
+            None => match self.respell_emitted(cx, scrut_ty, 0) {
+                Some(Type::Wf {
+                    shape: s, arity: a, ..
+                }) => (s, a),
+                _ => (Rc::clone(shape), Rc::clone(arity)),
+            },
         };
         let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
             &cx.gamma,
@@ -2136,6 +2156,302 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
         )
         .expect("a flat declaration elaborates with spine references");
         let r = e.el.elab_source("theorem sel_wrong(): sel(FB(3)) = 4 { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    // -- emission-site audit (issues/emission-site-respell-audit.md) -------
+
+    /// An application of a **local** callee spells its `dom`/`cod`
+    /// annotations with the same references a global's statement carries:
+    /// the two spellings met at every use of a lemma whose statement embeds
+    /// `operation(…)` over a binder (`Sigma`/`Sigma`, `Pi`/`Pi` on the x86
+    /// rail). Pinned structurally on a closed and an *open* domain (`[T; n]`
+    /// under `n`, so the reference's tail has to be right at depth), then
+    /// checked and computed at a literal and a neutral argument, with the
+    /// "both sides alike" case itself — a section substituted into a
+    /// statement's embedded application — and a false-equation control.
+    #[test]
+    fn a_local_callees_application_respells_its_annotations() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source("fn app_local(f: T -> Flat, t: T) -> Flat { f(t) }")
+            .expect("elaborates");
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let mut cur: &Term = body;
+        while let Term::Lam { body, .. } = cur {
+            cur = body;
+        }
+        let Term::App { fun, dom, cod, .. } = cur else {
+            panic!("the body is the call")
+        };
+        assert!(matches!(&**fun, Term::Var(_)), "a local callee");
+        let Type::El { tm, .. } = &**dom else {
+            panic!("a local callee's `dom` annotation is the reference, not the inline `Wf`")
+        };
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
+        let Type::El { tm, .. } = &**cod else {
+            panic!("…and so is its `cod`")
+        };
+        // `cod` sits one binder deeper (the argument's), so the reference's
+        // tail is one longer; `is_gen_ref` reads the variable only.
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
+
+        // An open domain: the element type respells inside the `Vec`, at a
+        // depth of three binders, and the kernel agrees with the binder's own
+        // (cascade-respelled) type — a wrong tail here is a rejection.
+        e.el.elab_source("fn app_open(n: Nat, f: [T; n] -> Nat, v: [T; n]) -> Nat { f(v) }")
+            .expect("an open domain respells at depth");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let mut cur: &Term = body;
+        while let Term::Lam { body, .. } = cur {
+            cur = body;
+        }
+        let Term::App { dom, .. } = cur else {
+            panic!("the body is the call")
+        };
+        let Type::Vec { elem, .. } = &**dom else {
+            panic!("the domain is the vector")
+        };
+        assert!(
+            matches!(&**elem, Type::El { .. }),
+            "the element type is the reference inside the `Vec`"
+        );
+
+        // The statement side of the same pair: a lemma whose hypothesis
+        // embeds `op(a)` carries the reference in that application's `dom`…
+        e.el.elab_source(
+            "theorem eq_op(op: Flat -> Flat, a: Flat, h: op(a) = FA): op(a) = FA { h }",
+        )
+        .expect("elaborates");
+        let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.last().expect("a binding") else {
+            panic!("a theorem is a term binding")
+        };
+        let mut cur: &Type = ty;
+        for _ in 0..2 {
+            let Type::Pi { cod, .. } = cur else { panic!("three Πs") };
+            cur = cod;
+        }
+        let Type::Pi { dom, .. } = cur else { panic!("the hypothesis binder") };
+        let Type::Id { lhs, .. } = &**dom else { panic!("`h` is an equation") };
+        let Term::App { dom, .. } = &**lhs else { panic!("its left side is `op(a)`") };
+        assert!(
+            matches!(&**dom, Type::El { .. }),
+            "an application embedded in a statement spells its `dom` as the reference"
+        );
+        // …so a section substituted for `op` — whose binder type is copied off
+        // the respelled Π — meets its own spelling at the use, and everything
+        // still checks and computes.
+        e.el.elab_source(
+            "
+theorem use_eq(): FA = FA { eq_op(λ (x: Flat) => FA, FB(1), refl) }
+theorem app_local_literal(): app_local(λ (x: T) => FA, T0) = FA { refl }
+theorem app_local_neutral(t: T): app_local(λ (x: T) => FB(1), t) = FB(1) { refl }
+theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v) = n { refl }
+",
+        )
+        .expect("local applications check and compute with the respelled annotations");
+        let r = e.el.elab_source("theorem app_wrong(): app_local(λ (x: T) => FA, T0) = FB(0) { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    /// A constructor value of a **monomorphized** recursive declaration —
+    /// `Box<Flat>`, which has no slots to name — spells its `sup_f`'s shape
+    /// and arity with the same component respell its label's injection
+    /// annotations take, so the label checks against the shape syntactically
+    /// (`Sum` vs `Sum` on the x86 rail: the inline shape against a respelled
+    /// `Inr`). Pinned as *equality* of the two spellings, on a closed and an
+    /// open instance, then checked and computed with a negative control.
+    #[test]
+    fn a_monomorphized_constructor_value_spells_its_shape_and_label_alike() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source("fn bmk1(n: Nat) -> Box<Flat> { BCons(FB(n), BNil) }")
+            .expect("elaborates");
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let Term::Lam { body, .. } = &**body else { panic!("one λ") };
+        let Term::Supf { shape, label, children, .. } = &**body else {
+            panic!("a recursive constructor value is a `sup_f`")
+        };
+        let Type::Sum { lhs, rhs, .. } = &**shape else {
+            panic!("two constructors: the shape is a sum")
+        };
+        // The shape's `BCons` payload carries the field as the reference…
+        let Type::Sigma { snd, .. } = &**rhs else { panic!("a payload is a Σ") };
+        let Type::Sigma { fst, .. } = &**snd else { panic!("`BCons` has a field") };
+        let Type::El { tm, .. } = &**fst else {
+            panic!("the `sup_f`'s shape respells with the label, not inline")
+        };
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
+        // …and the label's `inr` annotations are *those* components.
+        let Term::Inr { lhs: il, rhs: ir, .. } = &**label else {
+            panic!("`BCons` is the second constructor: one `inr`")
+        };
+        assert_eq!(**il, **lhs, "the injection's left annotation is the shape's left summand");
+        assert_eq!(**ir, **rhs, "…and its right annotation the right summand");
+        // The child `BNil` is built at the inline expected type and spells
+        // its own `sup_f` the same way.
+        let mut child: &Term = children;
+        while let Term::Lam { body, .. } = child {
+            child = body;
+        }
+        let mut found = false;
+        let mut stack = vec![child];
+        while let Some(t) = stack.pop() {
+            match t {
+                Term::Supf { shape: s, label: l, .. } => {
+                    let Term::Inl { lhs: il, rhs: ir, .. } = &**l else {
+                        panic!("`BNil` is the first constructor: one `inl`")
+                    };
+                    let Type::Sum { lhs, rhs, .. } = &**s else { panic!("a sum") };
+                    assert_eq!(**il, **lhs);
+                    assert_eq!(**ir, **rhs);
+                    found = true;
+                }
+                Term::Case { case_l, case_r, .. } => {
+                    stack.push(case_l);
+                    stack.push(case_r);
+                }
+                Term::Pair { fst, snd, .. } => {
+                    stack.push(fst);
+                    stack.push(snd);
+                }
+                Term::App { fun, arg, .. } => {
+                    stack.push(fun);
+                    stack.push(arg);
+                }
+                _ => {}
+            }
+        }
+        assert!(found, "the child `BNil` is in the children function");
+
+        e.el.elab_source(
+            "
+fn bhead1(b: Box<Flat>) -> Flat { match b { BNil => FA, BCons(a, r) => a } }
+fn bmk_open(n: Nat, v: [T; n]) -> Box<[T; n]> { BCons(v, BNil) }
+fn bhead_open(n: Nat, b: Box<[T; n]>, d: [T; n]) -> [T; n] {
+    match b { BNil => d, BCons(a, r) => a }
+}
+theorem bmk1_literal(): bhead1(bmk1(3)) = FB(3) { refl }
+theorem bmk1_neutral(n: Nat): bhead1(bmk1(n)) = FB(n) { refl }
+theorem bmk_open_neutral(n: Nat, v: [T; n], d: [T; n]): bhead_open(n, bmk_open(n, v), d) = v { refl }
+",
+        )
+        .expect("monomorphized values check and compute with shape and label alike");
+        let r = e.el.elab_source("theorem bmk1_wrong(): bhead1(bmk1(3)) = FA { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    /// A projection off a record type that arrives as a **code literal** —
+    /// the quote of a `→ Type` body — spells every link of its `fst`/`snd`
+    /// chain inline (`decode_deep`), so the pair type one link writes is
+    /// exactly the type the next link's pair infers (`Sigma` vs `El⌜⌝` on
+    /// the x86 rail, one whole-literal evaluation per link). Pinned as the
+    /// equality of adjacent links, then checked and computed at a literal
+    /// and a neutral field, with a negative control.
+    #[test]
+    fn a_projection_off_a_code_literal_spells_adjacent_links_alike() {
+        let mut e = env();
+        e.el.elab_source(
+            "
+record Pr { a: Flat, b: T }
+fn PrT() -> Type { Pr }
+fn getb(p: PrT()) -> T { p.b }
+",
+        )
+        .expect("a projection off `El ⌜⟦Pr⟧⌝` elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let Term::Lam { dom, body, .. } = &**body else { panic!("one λ") };
+        let mut cx = Cx::empty();
+        cx.push("p".into(), (**dom).clone(), Level::Zero);
+        // `p.b` is entry 2 of the spine: `fst(snd(snd(p)))`.
+        let Term::Fst {
+            fst_ty: f2,
+            snd_ty: s2,
+            pair: p2,
+            fst_level,
+            snd_level,
+        } = &**body
+        else {
+            panic!("a projection is a `fst`")
+        };
+        let Term::Snd {
+            fst_ty: f1,
+            snd_ty: s1,
+            pair: p1,
+            ..
+        } = &**p2
+        else {
+            panic!("…of a `snd`")
+        };
+        let Term::Snd {
+            fst_ty: f0,
+            snd_ty: s0,
+            pair: p0,
+            ..
+        } = &**p1
+        else {
+            panic!("…of a `snd`")
+        };
+        assert!(matches!(&**p0, Term::Var(_)));
+        // No link's annotation is an undecoded literal.
+        for ann in [f0, s0, f1, s1, f2, s2] {
+            assert!(
+                !matches!(&**ann, Type::El { tm, .. } if matches!(&**tm, Term::TmSigma { .. } | Term::TmUnit { .. })),
+                "an annotation is spelled inline, not as `El` of a code literal"
+            );
+        }
+        // Adjacent links agree exactly: the pair type link `k+1` states is
+        // link `k`'s `snd_ty` instantiated at link `k`'s own projection.
+        let link = |fst_ty: &Rc<Type>, snd_ty: &Rc<Type>, pair: &Rc<Term>| Term::Fst {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: Rc::clone(fst_ty),
+            snd_ty: Rc::clone(snd_ty),
+            pair: Rc::clone(pair),
+        };
+        let stated = |fst_ty: &Rc<Type>, snd_ty: &Rc<Type>| Type::Sigma {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst: Rc::clone(fst_ty),
+            snd: Rc::clone(snd_ty),
+        };
+        let inst = |snd_ty: &Rc<Type>, proj: Term| {
+            snd_ty.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(proj)))
+        };
+        assert_eq!(stated(f1, s1), inst(s0, link(f0, s0, p0)));
+        assert_eq!(stated(f2, s2), inst(s1, link(f1, s1, p1)));
+
+        e.el.elab_source(
+            "
+fn mkpr(x: T) -> PrT() { Pr(a := FA, b := x) }
+theorem getb_literal(): getb(mkpr(T0)) = T0 { refl }
+theorem getb_neutral(x: T): getb(mkpr(x)) = x { refl }
+",
+        )
+        .expect("the projection checks and computes");
+        let r = e.el.elab_source("theorem getb_wrong(): getb(mkpr(T0)) = T1(0, T0) { refl }");
         assert!(r.is_err(), "a false equation must still be refused");
     }
 }

@@ -380,6 +380,29 @@ pub(crate) fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
 pub(crate) trait ExplicitArgElab {
     fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type>;
 
+    /// The emission spelling of an `App`'s `dom`/`cod` annotations
+    /// (issues/emission-site-respell-audit.md): every component that is a
+    /// registered declaration's lowering as its `El (D#tycode^δ)` reference.
+    /// A global callee's annotations arrive that way already, off its
+    /// respelled Ψ statement; a **local** callee's arrive off the binder's
+    /// inline type, and an inline annotation embedded in a statement — the
+    /// `equation: … = operation(…)` of a lemma, a record field's
+    /// `run(state.gprs)` — then met its respelled twin at every use
+    /// (`Sigma`/`Sigma` 450 and `Pi`/`Pi` 150 queries of the five-node
+    /// FunctionIR/x86 module, 2026-09-06). `scratch` is the width of the
+    /// application's metavariable world, zero in the committed one. `None`
+    /// keeps the originals; only the emitted term changes — the type the
+    /// application continues with stays the structural copy.
+    fn respell_application_annotations(
+        &self,
+        _cx: &Cx,
+        _dom: &Type,
+        _cod: &Type,
+        _scratch: u32,
+    ) -> Option<(Option<Type>, Option<Type>)> {
+        None
+    }
+
     fn check_explicit_argument(
         &self,
         cx: &Cx,
@@ -389,6 +412,25 @@ pub(crate) trait ExplicitArgElab {
         hint: Option<(&str, &str)>,
         skel: Option<&Skel>,
     ) -> R<Term>;
+}
+
+/// `dom`/`cod` as an emitted `App` spells them
+/// ([`ExplicitArgElab::respell_application_annotations`]), sharing the
+/// originals wherever nothing respells.
+fn emitted_annotations(
+    elab: &impl ExplicitArgElab,
+    cx: &Cx,
+    dom: Rc<Type>,
+    cod: Rc<Type>,
+    scratch: u32,
+) -> (Rc<Type>, Rc<Type>) {
+    match elab.respell_application_annotations(cx, &dom, &cod, scratch) {
+        Some((nd, nc)) => (
+            nd.map_or(dom, Rc::new),
+            nc.map_or(cod, Rc::new),
+        ),
+        None => (dom, cod),
+    }
 }
 
 /// Apply an already-elaborated head to explicit surface arguments.
@@ -431,6 +473,7 @@ pub(crate) fn apply_explicit(
         let arg = Rc::new(arg);
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
         lvl = cod_level.clone();
+        let (dom, cod) = emitted_annotations(elab, cx, dom, cod, 0);
         term = Term::App {
             fun: Rc::new(term),
             dom_level,
@@ -579,6 +622,7 @@ pub(crate) fn apply_implicit(
         };
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
         level = cod_level.clone();
+        let (dom, cod) = emitted_annotations(elab, cx, dom, cod, n);
         term = Term::App {
             fun: Rc::new(term),
             dom_level,
@@ -618,6 +662,7 @@ pub(crate) fn apply_implicit(
             let argument = Rc::new(inferred.shift_global(n));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
             level = cod_level.clone();
+            let (dom, cod) = emitted_annotations(elab, cx, dom, cod, n);
             term = Term::App {
                 fun: Rc::new(term),
                 dom_level,

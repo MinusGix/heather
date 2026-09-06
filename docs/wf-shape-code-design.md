@@ -185,6 +185,13 @@ own `z` binder), which shifts the *references* rather than the result.
   slot references there would reach `tag_of`/`spine` through a path §3.3's
   unspell does not cover (the head is a `Wf`, not a reference). The slot
   references are emitted only where the emission is final.
+  *Superseded in part (2026-09-06):* the arm now respells a monomorphized
+  `Wf`'s shape components and its arity's `Case` annotations together
+  (`issues/inductive-spelling-codes-nonrecursive.md`) — still no slot
+  *references*, so the sentence about `tag_of`/`spine` stands — and the
+  `sup_f`/`elim_Wf` slots of a monomorphized instance take that same
+  respell when `wf_slot_refs` declines
+  (`docs/annotation-component-respell-design.md` §2.4).
 - **Structural readers learn nothing.** No reader of `Type::Wf`'s shape slot
   was taught the new spelling, and none needs to be: `decoded` leaves an `El` of
   a *neutral* code exactly as it is, which is the correct answer for a reader

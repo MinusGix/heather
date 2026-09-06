@@ -125,6 +125,51 @@ trees) are **left alone**: the draft measures them at 38 k nodes of 21 M, and
 the charter says not to chase them. If this round's counters show them
 dominating what remains, that is the successor's first line, not a rider.
 
+### 2.4 Applications, eliminator slots, and decoded code literals (2026-09-06)
+
+`issues/emission-site-respell-audit.md`'s round, driven by the `Tc::conv_ty`
+miss sampler with per-declaration attribution
+(`issues/conv-miss-sampler-item-attribution.md`). Every one of its four rows
+was two emission sites disagreeing about the same type, and the fix at each
+is the line above applied to one more site — no new definitions:
+
+- **Applications.** §2.1's "`apply_explicit`/`apply_implicit` are not
+  touched" no longer holds. A callee that is a *local* binder copies its
+  `dom`/`cod` off the binder's inline type, and an application embedded in
+  a statement — a lemma's `equation: … = operation(…)` hypothesis, a record
+  field's `run(state.gprs)` — then met the cascade-respelled twin of that
+  type at every use (a section substituted for `operation`, the Σ binder's
+  own respelled type). The emitted `App`'s annotations now go through
+  `respell_ty_deep` (`ExplicitArgElab::respell_application_annotations`;
+  in `apply_implicit`'s scratch world the minted references are shifted past
+  the metavariables, `respell_ty_deep_in`). The type the application
+  *continues with* is still computed from the structural `cod`.
+- **Decoded code literals.** A type that arrives as `El ⌜Σ…⌝` — the quote of
+  a `→ Type` body such as `Valuation()` or `RegionHolds(…)` — whnf's one
+  level at a time, and a projection chain or field tuple that copied the
+  components verbatim spelled each link as the *un*decoded literal of a tail
+  whose own annotations, one link down, were its decode; the kernel
+  evaluated the whole literal at every link. `inductive::decode_deep` gives
+  the fully inline spelling, and `respell_emitted` (decode, then respell) is
+  what §2.2's and §2.3's sites, `respell_spine`, and the application
+  annotations now write. Emission only: nothing structural reads a decoded
+  copy it did not already read.
+- **Monomorphized `Wf` slots.** A `sup_f`'s shape/arity (`build_ctor`), an
+  `elim_Wf`'s (`build_elim_wf`) and the children tuple's element type
+  (`build_children`) have no registered pair to name for a monomorphized
+  instance (`List<Node>`) and stayed inline, while the label's injections and
+  the field tuples around them respelled — so a constructor value's label
+  was checked against an inline shape, and the eliminator's inline arity met
+  the value's respelled label inside every `Fin(n[ℓ/x])` the kernel rebuilt.
+  They take the same `respell_ty_deep` (its `Wf` arm respells shape and
+  arity together or not at all) when `wf_slot_refs` declines.
+
+What the audit found *not* to be a spelling pair, left where it was: the
+`Id` vs `Id` row is `refl` at a statement whose endpoints genuinely need
+computing, and the `El^δ` vs `Σ` row is a constructor literal checked against
+a respelled field type — one δ and a compare each, the cost the reference
+spelling is meant to have. Both are logged on the audit issue.
+
 ## 3. Rejected shapes, with reasons
 
 - **A projection-chain code (`GenDef` per constructor component / sum tail),

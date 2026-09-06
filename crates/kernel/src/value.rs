@@ -283,6 +283,13 @@ struct ValueMetricCells {
     /// feature; the ordinary build has neither the table nor the clock.
     #[cfg(feature = "value-metrics")]
     conv_misses: RefCell<BTreeMap<(&'static str, &'static str), ConvMissBucket>>,
+    /// The declaration currently being checked, as the elaborator names it
+    /// around its item bracket (`Elaborator::elab_module_source`); every miss
+    /// recorded while it is set is attributed to it
+    /// (issues/conv-miss-sampler-item-attribution.md). `None` outside any
+    /// item, and always `None` without the feature.
+    #[cfg(feature = "value-metrics")]
+    current_item: RefCell<Option<Rc<str>>>,
     arenas: Cell<u64>,
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
@@ -306,6 +313,11 @@ struct ConvMissBucket {
     count: u64,
     ns: u64,
     first: Option<String>,
+    /// Per-item share of this bucket: (count, total ns) keyed by the item
+    /// name current when the miss was recorded. Misses outside any item
+    /// (imports, replay, generated definitions minted between items) are
+    /// keyed by the empty name.
+    items: BTreeMap<Rc<str>, (u64, u64)>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -386,6 +398,28 @@ impl ValueMetrics {
         if bucket.first.is_none() {
             bucket.first = Some(excerpt());
         }
+        let item = self
+            .inner
+            .current_item
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| Rc::from(""));
+        let share = bucket.items.entry(item).or_default();
+        share.0 += 1;
+        share.1 = share.1.saturating_add(ns);
+    }
+
+    /// Name the declaration whose misses are recorded from now on (`None`
+    /// between items). A no-op without the `value-metrics` feature, so the
+    /// elaborator's item bracket can call it unconditionally when a
+    /// collector is enabled.
+    pub fn set_current_item(&self, item: Option<Rc<str>>) {
+        #[cfg(feature = "value-metrics")]
+        {
+            *self.inner.current_item.borrow_mut() = item;
+        }
+        #[cfg(not(feature = "value-metrics"))]
+        let _ = item;
     }
 
     /// The conversion-miss table as text, heaviest bucket first: one line per
@@ -400,6 +434,10 @@ impl ValueMetrics {
             let mut rows: Vec<_> = misses.iter().collect();
             rows.sort_by_key(|(_, b)| std::cmp::Reverse(b.ns));
             let mut out = String::new();
+            // Per item: its heaviest bucket, gathered while walking the
+            // buckets below. Keyed by name; the value is (ns in that bucket,
+            // its heads, count) so the print is one line per item.
+            let mut per_item: BTreeMap<Rc<str>, (u64, (&str, &str), u64, u64)> = BTreeMap::new();
             for ((expected, inferred), bucket) in rows {
                 let _ = writeln!(
                     out,
@@ -407,11 +445,41 @@ impl ValueMetrics {
                     bucket.count,
                     bucket.ns as f64 / 1e9,
                 );
+                let mut items: Vec<_> = bucket.items.iter().collect();
+                items.sort_by_key(|(_, (_, ns))| std::cmp::Reverse(*ns));
+                for (item, (count, ns)) in items.iter().take(3) {
+                    let name = if item.is_empty() { "<no item>" } else { item };
+                    let _ = writeln!(
+                        out,
+                        "    item {name} count={count} total={:.3}s",
+                        *ns as f64 / 1e9,
+                    );
+                }
+                for (item, (count, ns)) in &bucket.items {
+                    let entry = per_item
+                        .entry(item.clone())
+                        .or_insert((0, (expected, inferred), 0, 0));
+                    entry.3 = entry.3.saturating_add(*ns);
+                    if *ns > entry.0 {
+                        *entry = (*ns, (expected, inferred), *count, entry.3);
+                    }
+                }
                 if let Some(first) = &bucket.first {
                     for line in first.lines() {
                         let _ = writeln!(out, "    {line}");
                     }
                 }
+            }
+            let mut items: Vec<_> = per_item.into_iter().collect();
+            items.sort_by_key(|(_, (_, _, _, total))| std::cmp::Reverse(*total));
+            for (item, (ns, (expected, inferred), count, total)) in items {
+                let name = if item.is_empty() { "<no item>" } else { &item };
+                let _ = writeln!(
+                    out,
+                    "conv miss item {name} total={:.3}s top expected={expected} inferred={inferred} count={count} total={:.3}s",
+                    total as f64 / 1e9,
+                    ns as f64 / 1e9,
+                );
             }
             out
         }

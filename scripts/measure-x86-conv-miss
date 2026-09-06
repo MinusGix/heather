@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# The five-node FunctionIR/x86 module with the `Tc::conv_ty` miss sampler on
+# (issues/perf-profile-build-target.md, issues/conv-miss-sampler-item-attribution.md):
+# item timings, value metrics, and the conversion-miss table with its item
+# column, ulimit-wrapped so a runaway build dies alone. Meant for
+# `furnace run -- scripts/measure-x86-conv-miss`; `DUMP=<path>` also writes the
+# generated module there and prints it after the run.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+echo "== measure start $(date -u +%FT%TZ) rev=$(git rev-parse --short HEAD 2>/dev/null) =="
+( ulimit -v 16777216 -t 3600
+  if [ -n "${DUMP:-}" ]; then export HEATHER_FUNCTION_IR_X86_DUMP="$DUMP"; fi
+  HEATHER_FUNCTION_IR_X86_NODES=5 HEATHER_FUNCTION_IR_X86_TIMINGS=1 HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1 \
+  cargo test -p heather-elab --features value-metrics --test function_ir_x86_scaling \
+    generated_20_node_mixed_binary_alu_dag_checks -- --ignored --nocapture --exact 2>&1 )
+echo "exit=$?"
+echo "== measure end $(date -u +%FT%TZ) =="
+if [ -n "${DUMP:-}" ]; then echo "== dump =="; cat "$DUMP"; echo "== dump end =="; fi

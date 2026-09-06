@@ -998,6 +998,29 @@ impl application::ExplicitArgElab for Elaborator {
         self.whnf(cx, ty, span)
     }
 
+    fn respell_application_annotations(
+        &self,
+        cx: &Cx,
+        dom: &Type,
+        cod: &Type,
+        scratch: u32,
+    ) -> Option<(Option<Type>, Option<Type>)> {
+        // The inline spelling first where the callee's type was a decoded
+        // code — `values(64, id)` off `Valuation()`'s quoted body otherwise
+        // states its result as `El ⌜⟦BitVec(64)⟧⌝` — then the references;
+        // `cod` binds the argument, hence depth 1.
+        let respell = |ty: &Type, depth: u32| match inductive::decode_deep(ty) {
+            Some(inline) => Some(
+                self.respell_ty_deep_in(cx, &inline, depth, scratch)
+                    .unwrap_or(inline),
+            ),
+            None => self.respell_ty_deep_in(cx, ty, depth, scratch),
+        };
+        let nd = respell(dom, 0);
+        let nc = respell(cod, 1);
+        (nd.is_some() || nc.is_some()).then_some((nd, nc))
+    }
+
     fn check_explicit_argument(
         &self,
         cx: &Cx,
@@ -1538,6 +1561,14 @@ impl Elaborator {
                 .item_timings
                 .as_ref()
                 .map(|_| (Instant::now(), stats::kernel_ns(), self.value_metrics()));
+            // The miss sampler's item column
+            // (issues/conv-miss-sampler-item-attribution.md): every
+            // conversion miss the kernel records until the item ends is
+            // charged to this declaration. A no-op without `value-metrics`.
+            #[cfg(feature = "value-metrics")]
+            if let Some(metrics) = &self.value_metrics {
+                metrics.set_current_item(Some(Rc::from(item_timing_name(item).as_str())));
+            }
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
             let r = self.elab_item_at(&file, idx, item, &plan);
@@ -1569,6 +1600,10 @@ impl Elaborator {
                         kernel_ns,
                         value_metrics,
                     });
+            }
+            #[cfg(feature = "value-metrics")]
+            if let Some(metrics) = &self.value_metrics {
+                metrics.set_current_item(None);
             }
             if r.is_err() {
                 self.container_decls.borrow_mut().clear();

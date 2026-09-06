@@ -423,6 +423,177 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
     cur
 }
 
+/// [`decoded`] pushed through every **type** component: the fully inline
+/// spelling of a type the kernel's lazy decode handed back one level at a
+/// time. `None` when nothing was a code literal, so callers keep their
+/// original and its sharing.
+///
+/// For **emitted annotations** only (issues/emission-site-respell-audit.md).
+/// A record type that arrives as `El ⌜Σ…⌝` — the quote of a `→ Type` body,
+/// or a type argument — whnf's to `Σ(El ⌜A⌝). El ⌜B⌝`, and a projection
+/// chain that writes those components verbatim spells every `snd_ty` as the
+/// *un*decoded literal of a tail whose own annotations, one node down, are
+/// its decode: the kernel then evaluates the whole literal at every link
+/// (`MachineState<M>`'s 216 K-character instance, 154 queries of the
+/// five-node FunctionIR/x86 module, 2026-09-06). Spelled inline at every
+/// link, adjacent links compare syntactically. Terms inside types — `El`
+/// of a *neutral* code, `Id` endpoints, `Vec` lengths — are left as they
+/// are: decoding is a rewrite on canonical formers only, exactly
+/// [`decoded`]'s guard.
+pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
+    let head = decoded(t);
+    let changed_head = matches!(head, Cow::Owned(_));
+    let or = |orig: &Rc<Type>, new: Option<Type>| match new {
+        Some(t) => Rc::new(t),
+        None => Rc::clone(orig),
+    };
+    let rebuilt = match &*head {
+        Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } => {
+            let nd = decode_deep(dom);
+            let nc = decode_deep(cod);
+            (nd.is_some() || nc.is_some()).then(|| Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: or(dom, nd),
+                cod: or(cod, nc),
+            })
+        }
+        Type::Sigma {
+            fst_level,
+            snd_level,
+            fst,
+            snd,
+        } => {
+            let nf = decode_deep(fst);
+            let ns = decode_deep(snd);
+            (nf.is_some() || ns.is_some()).then(|| Type::Sigma {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst: or(fst, nf),
+                snd: or(snd, ns),
+            })
+        }
+        Type::Sum {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+        } => {
+            let nl = decode_deep(lhs);
+            let nr = decode_deep(rhs);
+            (nl.is_some() || nr.is_some()).then(|| Type::Sum {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: or(lhs, nl),
+                rhs: or(rhs, nr),
+            })
+        }
+        Type::Vec { level, elem, len } => decode_deep(elem).map(|ne| Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(ne),
+            len: Rc::clone(len),
+        }),
+        Type::Wf {
+            level,
+            shape,
+            arity,
+        } => {
+            // The arity goes with the shape: its constant case tree's `Case`
+            // annotations are the shape's own components, and a respell
+            // downstream (`respell_ty_deep`'s `Wf` arm) treats the two as one
+            // spelling, so a decoded shape over literal-spelled annotations
+            // would be the very mismatch that arm exists to avoid.
+            let ns = decode_deep(shape);
+            let na = decode_arity_deep(arity);
+            (ns.is_some() || na.is_some()).then(|| Type::Wf {
+                level: level.clone(),
+                shape: or(shape, ns),
+                arity: match na {
+                    Some(a) => Rc::new(a),
+                    None => Rc::clone(arity),
+                },
+            })
+        }
+        Type::Id {
+            level,
+            ty,
+            lhs,
+            rhs,
+        } => decode_deep(ty).map(|nt| Type::Id {
+            level: level.clone(),
+            ty: Rc::new(nt),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        }),
+        Type::SEq {
+            level,
+            ty,
+            lhs,
+            rhs,
+        } => decode_deep(ty).map(|nt| Type::SEq {
+            level: level.clone(),
+            ty: Rc::new(nt),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        }),
+        Type::Squash { level, ty } => decode_deep(ty).map(|nt| Type::Squash {
+            level: level.clone(),
+            ty: Rc::new(nt),
+        }),
+        _ => None,
+    };
+    match (rebuilt, changed_head) {
+        (Some(t), _) => Some(t),
+        (None, true) => Some(head.into_owned()),
+        (None, false) => None,
+    }
+}
+
+/// [`decode_deep`] over the `Case` annotations of a `Wf` arity's constant
+/// case tree (the form `lower_arity` writes); any other term is left as it
+/// is. `None` when nothing changed.
+fn decode_arity_deep(t: &Term) -> Option<Term> {
+    match t {
+        Term::Case {
+            lhs_level,
+            rhs_level,
+            motive_level,
+            lhs,
+            rhs,
+            motive,
+            case_l,
+            case_r,
+            scrut,
+        } => {
+            let nl = decode_deep(lhs);
+            let nr = decode_deep(rhs);
+            let cl = decode_arity_deep(case_l);
+            let cr = decode_arity_deep(case_r);
+            if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
+                return None;
+            }
+            Some(Term::Case {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                motive_level: motive_level.clone(),
+                lhs: nl.map_or_else(|| Rc::clone(lhs), Rc::new),
+                rhs: nr.map_or_else(|| Rc::clone(rhs), Rc::new),
+                motive: Rc::clone(motive),
+                case_l: cl.map_or_else(|| Rc::clone(case_l), Rc::new),
+                case_r: cr.map_or_else(|| Rc::clone(case_r), Rc::new),
+                scrut: Rc::clone(scrut),
+            })
+        }
+        Term::Succ(p) => decode_arity_deep(p).map(|np| Term::Succ(Rc::new(np))),
+        _ => None,
+    }
+}
+
 /// The injection path into a tag spine (§3.2/§4): `Inl` unless this is the
 /// last constructor, under `i` `Inr`s. `d` weakens the spine's components,
 /// which are scoped where the spine was read back — 0 at a constructor, and
@@ -1475,6 +1646,17 @@ impl Elaborator {
         Ok(Spine { ctors, tails })
     }
 
+    /// The emission spelling of an annotation component: its inline form
+    /// where the decode handed back a code literal ([`decode_deep`]), with
+    /// registered sub-lowerings then respelled as references
+    /// ([`Elaborator::respell_ty_deep`]). `None` when both leave it alone.
+    pub(crate) fn respell_emitted(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
+        match decode_deep(ty) {
+            Some(inline) => Some(self.respell_ty_deep(cx, &inline, depth).unwrap_or(inline)),
+            None => self.respell_ty_deep(cx, ty, depth),
+        }
+    }
+
     /// The spine with every component's registered sub-lowerings respelled as
     /// references, for **emission** (`inject`'s annotations at a constructor
     /// value). Components that respell nothing keep their `Rc` identity, so
@@ -1499,7 +1681,7 @@ impl Elaborator {
         let re = |v: &Vec<(Rc<Type>, Level)>, refs: Vec<Option<Type>>| {
             v.iter()
                 .zip(refs)
-                .map(|((t, l), r)| match r.or_else(|| self.respell_ty_deep(cx, t, 0)) {
+                .map(|((t, l), r)| match r.or_else(|| self.respell_emitted(cx, t, 0)) {
                     Some(r) => (Rc::new(r), l.clone()),
                     None => (Rc::clone(t), l.clone()),
                 })
@@ -1869,9 +2051,23 @@ impl Elaborator {
         // them and hands the agreement to conversion — a spelling choice like
         // every other one here. `build_children` below keeps reading the
         // *inline* `expected`, per §4's line.
+        //
+        // A **monomorphized** `Wf` (`List<Node>`) has no slots to name; its
+        // two slots then take the same component respell the label's
+        // `Inl`/`Inr` annotations just took (`respell_spine`), or neither
+        // does — `respell_ty_deep`'s `Wf` arm respells shape and arity
+        // together. Left inline, the kernel checked the label's respelled
+        // annotations against the inline shape at every constructor value
+        // (`Sum` vs `Sum`, 312 queries of the five-node FunctionIR/x86
+        // module, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => (Rc::clone(shape), Rc::clone(arity)),
+            None => match self.respell_emitted(cx, &expected, 0) {
+                Some(Type::Wf {
+                    shape: s, arity: a, ..
+                }) => (s, a),
+                _ => (Rc::clone(shape), Rc::clone(arity)),
+            },
         };
         Ok(Term::Supf {
             level: level.clone(),
@@ -1966,11 +2162,14 @@ impl Elaborator {
         // *value* of an `⟦Ir⟧`-field declaration otherwise carries the field
         // type verbatim in its label tuple. The field arguments themselves
         // were checked against the inline components above, per the line.
-        let fst_e = match self.respell_ty_deep(cx, &fst, 0) {
+        // …and the inline spelling of a component the decode handed back as
+        // a code literal (`decode_deep`), so a tuple built at an `El ⌜Σ…⌝`
+        // record type spells each link as the next link's own type does.
+        let fst_e = match self.respell_emitted(cx, &fst, 0) {
             Some(r) => Rc::new(r),
             None => fst,
         };
-        let snd_e = match self.respell_ty_deep(cx, &snd, 1) {
+        let snd_e = match self.respell_emitted(cx, &snd, 1) {
             Some(r) => Rc::new(r),
             None => snd,
         };
@@ -2388,7 +2587,15 @@ impl Elaborator {
                     };
                     (fst, snd)
                 }
-                None => (Rc::clone(&fst), Rc::clone(&snd)),
+                // A record type that arrived as a code literal (`El ⌜Σ…⌝`,
+                // a `→ Type` body's quote) whnf's one level at a time, and
+                // the components it hands back are the *un*decoded tails;
+                // the annotations take their inline spelling so each link
+                // agrees with the next (`decode_deep`).
+                None => (
+                    decode_deep(&fst).map_or_else(|| Rc::clone(&fst), Rc::new),
+                    decode_deep(&snd).map_or_else(|| Rc::clone(&snd), Rc::new),
+                ),
             };
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
@@ -3872,12 +4079,12 @@ impl Elaborator {
             // chain aliases. The loop's own `cur` and the **returned** field
             // type stay inline — the return becomes a `match` binder's alias
             // type, a structural-read position (family-code design §10.3).
-            let fst_e = match self.respell_ty_deep(cx, &fst, 0) {
+            let fst_e = match self.respell_emitted(cx, &fst, 0) {
                 Some(r) => Rc::new(r),
                 None => Rc::clone(&fst),
             };
             // `snd` binds the Σ's first component, hence depth 1.
-            let snd_e = match self.respell_ty_deep(cx, &snd, 1) {
+            let snd_e = match self.respell_emitted(cx, &snd, 1) {
                 Some(r) => Rc::new(r),
                 None => Rc::clone(&snd),
             };

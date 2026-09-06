@@ -1267,14 +1267,32 @@ impl Elaborator {
     /// the source. An `El`-headed reference declines at the top (`respell_ty`
     /// is idempotent) and has no walked components, so this is idempotent too.
     pub(crate) fn respell_ty_deep(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
+        self.respell_ty_deep_in(cx, ty, depth, 0)
+    }
+
+    /// [`Self::respell_ty_deep`] for a type living in an application's
+    /// **scratch world** (`application.rs`'s `apply_implicit`): `scratch`
+    /// metavariables sit below the committed globals there, so every
+    /// reference this mints is shifted past them, while the walk compares
+    /// the components exactly as they are. A component that mentions a
+    /// committed global compares unequal to the registry's copy in that
+    /// world and simply declines — conservative, never a wrong reference.
+    pub(crate) fn respell_ty_deep_in(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        depth: u32,
+        scratch: u32,
+    ) -> Option<Type> {
         if !self.types.gdefs().has_ty_codes() {
             return None;
         }
-        self.respell_deep_at(cx, ty, depth)
+        self.respell_deep_at(cx, ty, depth, scratch)
     }
 
-    fn respell_deep_at(&self, cx: &Cx, ty: &Type, d: u32) -> Option<Type> {
+    fn respell_deep_at(&self, cx: &Cx, ty: &Type, d: u32, g: u32) -> Option<Type> {
         if let Some(r) = self.respell_ty(cx, ty) {
+            let r = if g == 0 { r } else { r.shift_global(g) };
             return Some(if d == 0 { r } else { r.shift_local(d) });
         }
         // One arm per former with type components; `or` keeps the sibling
@@ -1290,8 +1308,8 @@ impl Elaborator {
                 dom,
                 cod,
             } => {
-                let ndom = self.respell_deep_at(cx, dom, d);
-                let ncod = self.respell_deep_at(cx, cod, d + 1);
+                let ndom = self.respell_deep_at(cx, dom, d, g);
+                let ncod = self.respell_deep_at(cx, cod, d + 1, g);
                 if ndom.is_none() && ncod.is_none() {
                     return None;
                 }
@@ -1308,8 +1326,8 @@ impl Elaborator {
                 fst,
                 snd,
             } => {
-                let nfst = self.respell_deep_at(cx, fst, d);
-                let nsnd = self.respell_deep_at(cx, snd, d + 1);
+                let nfst = self.respell_deep_at(cx, fst, d, g);
+                let nsnd = self.respell_deep_at(cx, snd, d + 1, g);
                 if nfst.is_none() && nsnd.is_none() {
                     return None;
                 }
@@ -1326,8 +1344,8 @@ impl Elaborator {
                 lhs,
                 rhs,
             } => {
-                let nl = self.respell_deep_at(cx, lhs, d);
-                let nr = self.respell_deep_at(cx, rhs, d);
+                let nl = self.respell_deep_at(cx, lhs, d, g);
+                let nr = self.respell_deep_at(cx, rhs, d, g);
                 if nl.is_none() && nr.is_none() {
                     return None;
                 }
@@ -1339,7 +1357,7 @@ impl Elaborator {
                 })
             }
             Type::Vec { level, elem, len } => {
-                let ne = self.respell_deep_at(cx, elem, d)?;
+                let ne = self.respell_deep_at(cx, elem, d, g)?;
                 Some(Type::Vec {
                     level: level.clone(),
                     elem: Rc::new(ne),
@@ -1368,8 +1386,8 @@ impl Elaborator {
                 // Spelled alike, the two compare syntactically. An arity of
                 // any other form keeps the whole `Wf` inline, which is also
                 // consistent.
-                let ns = self.respell_deep_at(cx, shape, d)?;
-                let na = self.respell_arity_at(cx, arity, d + 1).ok()??;
+                let ns = self.respell_deep_at(cx, shape, d, g)?;
+                let na = self.respell_arity_at(cx, arity, d + 1, g).ok()??;
                 Some(Type::Wf {
                     level: level.clone(),
                     shape: Rc::new(ns),
@@ -1382,7 +1400,7 @@ impl Elaborator {
                 lhs,
                 rhs,
             } => {
-                let nt = self.respell_deep_at(cx, ty, d)?;
+                let nt = self.respell_deep_at(cx, ty, d, g)?;
                 Some(Type::Id {
                     level: level.clone(),
                     ty: Rc::new(nt),
@@ -1396,7 +1414,7 @@ impl Elaborator {
                 lhs,
                 rhs,
             } => {
-                let nt = self.respell_deep_at(cx, ty, d)?;
+                let nt = self.respell_deep_at(cx, ty, d, g)?;
                 Some(Type::SEq {
                     level: level.clone(),
                     ty: Rc::new(nt),
@@ -1419,7 +1437,7 @@ impl Elaborator {
     /// variables; a container's length projection is a `fst`/`snd` chain
     /// with its own Σ annotations and is declined rather than walked. Either
     /// way the caller keeps the whole `Wf` inline.
-    fn respell_arity_at(&self, cx: &Cx, t: &Term, d: u32) -> Result<Option<Term>, ()> {
+    fn respell_arity_at(&self, cx: &Cx, t: &Term, d: u32, g: u32) -> Result<Option<Term>, ()> {
         match t {
             Term::Case {
                 lhs_level,
@@ -1435,10 +1453,10 @@ impl Elaborator {
                 if **motive != Type::Nat {
                     return Err(());
                 }
-                let nl = self.respell_deep_at(cx, lhs, d);
-                let nr = self.respell_deep_at(cx, rhs, d);
-                let cl = self.respell_arity_at(cx, case_l, d + 1)?;
-                let cr = self.respell_arity_at(cx, case_r, d + 1)?;
+                let nl = self.respell_deep_at(cx, lhs, d, g);
+                let nr = self.respell_deep_at(cx, rhs, d, g);
+                let cl = self.respell_arity_at(cx, case_l, d + 1, g)?;
+                let cr = self.respell_arity_at(cx, case_r, d + 1, g)?;
                 if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
                     return Ok(None);
                 }
@@ -1455,7 +1473,7 @@ impl Elaborator {
                 }))
             }
             Term::Succ(p) => Ok(self
-                .respell_arity_at(cx, p, d)?
+                .respell_arity_at(cx, p, d, g)?
                 .map(|np| Term::Succ(Rc::new(np)))),
             Term::Var(_) | Term::Zero | Term::NatLit(_) => Ok(None),
             _ => Err(()),
