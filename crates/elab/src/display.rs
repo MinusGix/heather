@@ -110,6 +110,19 @@ impl Elaborator {
         (sp.fallbacks.get() == 0).then_some(out)
     }
 
+    /// [`Self::spell_term_clean`], but spelling a global **qualified** wherever
+    /// its base name does not resolve back to it here. For a caller that
+    /// re-*parses* what it renders — `omega`'s certificate route — the base
+    /// name is not a presentation choice but a silent hole: `xs.len()` came
+    /// back as `len(…)`, unbound outside `list`
+    /// (issues/omega-renders-member-by-base-name.md).
+    pub(crate) fn spell_term_source(&self, cx: &Cx, t: &Term) -> Option<String> {
+        let mut sp = self.speller(cx);
+        sp.qualified = true;
+        let out = sp.tm(t, 0);
+        (sp.fallbacks.get() == 0).then_some(out)
+    }
+
     fn spell_within(&self, cx: &Cx, ty: &Type, fallbacks: u32) -> Option<String> {
         let sp = self.speller(cx);
         let out = sp.ty(ty, 0);
@@ -123,6 +136,7 @@ impl Elaborator {
             names: RefCell::new(cx.names.clone()),
             nodes: Cell::new(SPELL_NODES),
             fallbacks: Cell::new(0),
+            qualified: false,
         }
     }
 }
@@ -136,6 +150,8 @@ struct Speller<'a> {
     names: RefCell<Vec<String>>,
     nodes: Cell<u32>,
     fallbacks: Cell<u32>,
+    /// Spell globals so the result can be **re-parsed** rather than only read.
+    qualified: bool,
 }
 
 impl Speller<'_> {
@@ -515,7 +531,14 @@ impl Speller<'_> {
             return None;
         }
         let abs = self.el.global_abs_of(var)?;
-        let name = self.el.global_name_at(abs)?;
+        let mut name = self.el.global_name_at(abs)?;
+        // A member's base name is the presentation choice, and re-parsing it
+        // elsewhere resolves to nothing (or, worse, to something else). Fall
+        // back to the qualified spelling exactly where the base one does not
+        // come back here.
+        if self.qualified && !self.el.base_name_resolves_to(&name, abs) {
+            name = self.el.global_qualified_name_at(abs)?;
+        }
         let implicit = self.el.params_at(abs).iter().map(|p| p.implicit).collect();
         Some((name, implicit))
     }

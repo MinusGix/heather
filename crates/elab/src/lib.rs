@@ -620,6 +620,17 @@ pub struct Elaborator {
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
+    /// `f_unfold` names the `decreases` walk declined to generate, and why
+    /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
+    /// the body shape that stopped the walk rather than an unknown name.
+    unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
+    /// The base names the container being elaborated declares, and whether
+    /// each carries `decreases` — what `docs/mutual-recursion-design.md` §8's
+    /// sentence on an unbound forward reference needs.
+    container_decls: RefCell<Vec<(String, bool, usize)>>,
+    /// How far the container's item loop has got — only a declaration still
+    /// *ahead* of it is the forward reference §8 explains.
+    container_at: Cell<usize>,
     /// Exhausted Omega searches. Unlike successful certificate reports these
     /// are diagnostic history, so declaration rollback deliberately retains
     /// them for the caller that receives the corresponding error.
@@ -1270,6 +1281,15 @@ impl Default for Elaborator {
     }
 }
 
+/// What a lifted obligation quantifies its arm binders at
+/// (`docs/decreases-unfolding-design.md` §4): the constructor's stored field
+/// types, instantiated at the scrutinee's type arguments.
+impl measure::BinderTys for Elaborator {
+    fn ctor_fields(&self, scrut: &Ty, ctor: &str) -> Option<Vec<Ty>> {
+        self.ctor_fields_of(scrut, ctor)
+    }
+}
+
 impl Elaborator {
     /// An empty elaborator (no prelude).
     pub fn new() -> Self {
@@ -1289,6 +1309,9 @@ impl Elaborator {
             value_metrics: None,
             item_timings: None,
             omega_reports: RefCell::new(Vec::new()),
+            unfold_refusals: RefCell::new(std::collections::HashMap::new()),
+            container_decls: RefCell::new(Vec::new()),
+            container_at: Cell::new(0),
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
@@ -1437,27 +1460,80 @@ impl Elaborator {
     /// IO: an `import m;` here requires that `m` has *already* been elaborated
     /// into this same accumulator, which is exactly what the CLI's topological
     /// walk guarantees (docs/modules-design.md §3.2).
+    /// What one container's item loop needs before it starts: the mutual
+    /// groups of `docs/mutual-recursion-design.md` §1, and the declaration
+    /// names §8's forward-reference message reads.
+    fn begin_container(&mut self, file: &heather_syntax::File) -> ItemPlan {
+        let groups = measure_groups(&file.items);
+        let mut in_group: HashMap<usize, usize> = HashMap::new();
+        for (g, members) in groups.iter().enumerate() {
+            for &idx in members {
+                in_group.insert(idx, g);
+            }
+        }
+        *self.container_decls.borrow_mut() = file
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| match it {
+                Item::Decl(d) => {
+                    Some((base_name(&d.name).to_string(), d.decreases.is_some(), i))
+                }
+                _ => None,
+            })
+            .collect();
+        self.container_at.set(0);
+        ItemPlan { groups, in_group }
+    }
+
+    /// One item, with a mutual group elaborated at its *first* member and the
+    /// rest of the group a no-op (§1).
+    fn elab_item_at(
+        &mut self,
+        file: &heather_syntax::File,
+        idx: usize,
+        item: &Item,
+        plan: &ItemPlan,
+    ) -> R<()> {
+        self.container_at.set(idx);
+        match item {
+            Item::Decl(d) => match plan.in_group.get(&idx) {
+                Some(&g) if plan.groups[g][0] == idx => {
+                    let members: Vec<&Decl> = plan.groups[g]
+                        .iter()
+                        .map(|&k| match &file.items[k] {
+                            Item::Decl(d) => d,
+                            _ => unreachable!("a group holds declarations"),
+                        })
+                        .collect();
+                    self.elab_measure_group(&members)
+                }
+                Some(_) => Ok(()),
+                None => self.elab_decl(d),
+            },
+            Item::Inductive(i) => self.elab_inductive(i),
+            Item::Class(c) => self.elab_class(c),
+            Item::Instance(i) => self.elab_instance(i),
+            Item::Designation(d) => self.elab_designation(d),
+            Item::Datarepr(d) => self.elab_datarepr(d),
+            Item::Impl(i) => self.elab_impl(i),
+            Item::Import(_) => Ok(()),
+        }
+    }
+
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
         let file = parse_file(src)?;
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
-        for item in &file.items {
+        let plan = self.begin_container(&file);
+        for (idx, item) in file.items.iter().enumerate() {
             let timing = self
                 .item_timings
                 .as_ref()
                 .map(|_| (Instant::now(), stats::kernel_ns(), self.value_metrics()));
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
-            let r = match item {
-                Item::Decl(d) => self.elab_decl(d),
-                Item::Inductive(i) => self.elab_inductive(i),
-                Item::Class(c) => self.elab_class(c),
-                Item::Instance(i) => self.elab_instance(i),
-                Item::Designation(d) => self.elab_designation(d),
-                Item::Datarepr(d) => self.elab_datarepr(d),
-                Item::Impl(i) => self.elab_impl(i),
-                Item::Import(_) => Ok(()),
-            };
+            let r = self.elab_item_at(&file, idx, item, &plan);
             // Canonical derived instances are minted **between** items, where
             // Ψ may grow (docs/traits-layer2-design.md §8). A failed item
             // mints nothing: its derivations are as speculative as the rest of
@@ -1487,8 +1563,12 @@ impl Elaborator {
                         value_metrics,
                     });
             }
+            if r.is_err() {
+                self.container_decls.borrow_mut().clear();
+            }
             r?;
         }
+        self.container_decls.borrow_mut().clear();
         Ok(())
     }
 
@@ -1583,6 +1663,24 @@ impl Elaborator {
         }
         if let Some(msg) = self.unknown_access_path(name) {
             return NameRes::Restricted(msg);
+        }
+        // An unfolding equation the walk declined to generate: say which body
+        // shape stopped it (docs/decreases-unfolding-design.md §3), since
+        // "unknown name" is the wrong thing to say about an equation the
+        // reader is right to expect.
+        if let Some(why) = self.unfold_refusals.borrow().get(name) {
+            // A reason that already names the document that explains it — a
+            // group's, `docs/mutual-recursion-design.md` §6 — points there
+            // instead.
+            let see = if why.contains("docs/") {
+                ""
+            } else {
+                ", see docs/decreases-unfolding-design.md §3"
+            };
+            return NameRes::Restricted(format!(
+                "no unfolding equation for `{}`: {why}{see}",
+                name.strip_suffix("_unfold").unwrap_or(name)
+            ));
         }
         self.resolve_declared(name)
     }
@@ -1734,8 +1832,30 @@ impl Elaborator {
     /// gets overridden when ambiguity is the real reason.
     fn name_miss(&self, name: &str, fallback: impl Into<String>, span: Span) -> ElabError {
         let res = self.resolve_name(name);
-        let msg = miss_msg(&res, name, fallback.into())
+        let mut msg = miss_msg(&res, name, fallback.into())
             .unwrap_or_else(|| format!("`{name}` cannot be used here"));
+        // §8 of `docs/mutual-recursion-design.md`: a member whose run was
+        // broken forward-references a name that *is* declared, further down.
+        // "unknown" is true and unhelpful; say what would have grouped them.
+        let later = self
+            .container_decls
+            .borrow()
+            .iter()
+            .find(|(n, _, i)| n == name && *i > self.container_at.get())
+            .map(|(_, d, _)| *d);
+        if matches!(res, NameRes::NotFound)
+            && let Some(measured) = later
+        {
+            msg.push_str(&format!(". `{name}` is declared below"));
+            if measured {
+                msg.push_str(
+                    "; adjacent `decreases` declarations share one recursion only when \
+                     each of them carries `decreases`, nothing else stands between them, \
+                     and they call *each other* (docs/mutual-recursion-design.md §1). \
+                     A call that is not answered needs the callee declared first",
+                );
+            }
+        }
         ElabError::Elab { msg, span }
     }
 
@@ -1908,19 +2028,11 @@ impl Elaborator {
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
+        let plan = self.begin_container(&file);
         let mut errs = Vec::new();
-        for item in &file.items {
+        for (idx, item) in file.items.iter().enumerate() {
             let warn_mark = self.warnings.borrow().len();
-            let r = match item {
-                Item::Decl(d) => self.elab_decl(d),
-                Item::Inductive(i) => self.elab_inductive(i),
-                Item::Class(c) => self.elab_class(c),
-                Item::Instance(i) => self.elab_instance(i),
-                Item::Designation(d) => self.elab_designation(d),
-                Item::Datarepr(d) => self.elab_datarepr(d),
-                Item::Impl(i) => self.elab_impl(i),
-                Item::Import(_) => Ok(()),
-            };
+            let r = self.elab_item_at(&file, idx, item, &plan);
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 // §4: a failed item's warnings are as speculative as the rest
@@ -1934,6 +2046,7 @@ impl Elaborator {
                 errs.push(e);
             }
         }
+        self.container_decls.borrow_mut().clear();
         errs
     }
 
@@ -2056,6 +2169,14 @@ impl Elaborator {
         Some(key.rsplit("::").next().unwrap_or(key).to_string())
     }
 
+    /// Does `name`, read where the current context is, resolve back to the
+    /// binding at absolute Ψ index `abs`? What a renderer whose output is
+    /// re-parsed has to ask before it uses a base name
+    /// (issues/omega-renders-member-by-base-name.md).
+    pub(crate) fn base_name_resolves_to(&self, name: &str, abs: usize) -> bool {
+        self.lookup_global(name).is_some_and(|i| i.abs as usize == abs)
+    }
+
     /// The canonical qualified spelling of a global. Generated modules use
     /// this rather than [`Self::global_name_at`]'s deliberately presentation-
     /// oriented base name when they refer across a module boundary.
@@ -2130,6 +2251,20 @@ impl Elaborator {
         if decl.is_meta {
             return self.elab_meta_decl(decl);
         }
+        // `decreases e` is not one declaration but a family of them
+        // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
+        // the declaration itself, and — for a `fn` whose body the walk of §3
+        // handles — the unfolding companions.
+        if decl.decreases.is_some() {
+            return self.elab_measure_decl(decl);
+        }
+        self.elab_decl_one(decl, None)
+    }
+
+    /// One ordinary declaration, with `obligations` the measure-obligation
+    /// table to reword errors through where this declaration was generated by
+    /// [`measure`] (`None` for source declarations).
+    fn elab_decl_one(&mut self, decl: &Decl, obligations: Option<&measure::Obligations>) -> R<()> {
         let warn_mark = self.warnings.borrow().len();
         let mut reserved = 0;
         self.attempt.goal_arena.enable_restarts();
@@ -2174,9 +2309,265 @@ impl Elaborator {
             }
             Err(error) => {
                 self.attempt.op_fallback_uses.borrow_mut().clear();
-                Err(error)
+                Err(match obligations {
+                    Some(o) => o.explain(error),
+                    None => error,
+                })
             }
         }
+    }
+
+    /// `fn f(x̄) -> T decreases e { body }` is not one declaration but the
+    /// family of `docs/decreases-unfolding-design.md` §2 — `f#body`, `f#rec`,
+    /// `f` — elaborated in order. Each member is an ordinary declaration
+    /// checked the ordinary way, so nothing the generator writes is trusted.
+    fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
+        let measure = decl.decreases.clone().expect("a measure declaration");
+        measure::check_shape(decl, &measure)?;
+        // The wrapper spells `nat::Lt`, `nat::le_trans` and `nat::lt_succ_self`;
+        // the default closer spells `omega`'s certificates, which name the
+        // `omega` module. Neither is the prelude's, so the module has to import
+        // them — checked here so the message says so.
+        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+            return err(
+                "`decreases` states its obligations with `nat::Lt` and discharges them \
+                 through `nat::le_trans`: `import nat;` first",
+                measure.span,
+            );
+        }
+        // `omega`'s certificates name `omega::` and `int::` lemmas, so the
+        // default closer is available only where both modules are imported;
+        // otherwise every obligation is an ordinary unsolved goal, reported
+        // with its statement.
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+            .iter()
+            .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
+        self.check_measure_is_nat(decl, &measure)?;
+        // A member recurses under its **base** name, as `SelfRef` does.
+        let self_name = decl.name.rsplit("::").next().unwrap_or(&decl.name).to_string();
+        // §4: each self-call site's obligation is a declaration of its own,
+        // elaborated first because the body and both companions reference it.
+        // A lifted obligation the *checker* refuses is not an error on `f` —
+        // the generated statement may be one this syntactic pass got wrong —
+        // so the declaration is re-lowered with its obligations back at the
+        // calls, exactly as it was before this round, and the companions are
+        // declined with the reason. An obligation that is genuinely unprovable
+        // fails again there, with the message §2 of the measures doc pins.
+        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true)?;
+        let mut lifted = true;
+        for part in &family.obligations {
+            if let Err(why) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
+                self.unfold_refusals.borrow_mut().insert(
+                    measure::unfold_name(&decl.name),
+                    format!("the lifted `{}` was refused ({why})", part.decl.name),
+                );
+                lifted = false;
+                break;
+            }
+        }
+        if !lifted {
+            family = measure::lower(decl, &self_name, &measure, omega_available, self, false)?;
+        }
+        for part in &family.decls {
+            self.elab_decl_one(&part.decl, Some(&part.obligations))?;
+        }
+        // §7: the unfolding companions are **always attempted** and silently
+        // skipped where §3's walk refuses the body — a hard error would
+        // regress programs that are accepted today for the sake of a theorem
+        // they never cite. The refusal is recorded so a later reference to
+        // `f_unfold` reports the shape rather than an unknown name.
+        //
+        // A companion that the walk builds but the *checker* refuses is
+        // treated the same way (amends §3): the generator is untrusted, so a
+        // term it got wrong must not take `f` down with it. The recorded
+        // reason quotes the checker, so the case stays diagnosable.
+        let unfold = measure::unfold_name(&decl.name);
+        if !lifted {
+            return Ok(());
+        }
+        match measure::companions(decl, &self_name, &measure, omega_available, self) {
+            Err(why) => {
+                self.unfold_refusals.borrow_mut().insert(unfold, why);
+            }
+            Ok(parts) => {
+                for part in parts {
+                    if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
+                        self.unfold_refusals
+                            .borrow_mut()
+                            .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// N > 1 adjacent `decreases` declarations that call one another
+    /// (`docs/mutual-recursion-design.md` §1) are one recursion: the product
+    /// motive `f#grp`, one `g#body` per member, the shared `f#grp_rec`, and
+    /// each member as a projection (§3). Every generated declaration is
+    /// checked the ordinary way, so nothing the generator writes is trusted.
+    fn elab_measure_group(&mut self, members: &[&Decl]) -> R<()> {
+        let span = members[0].span;
+        let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
+        for d in members {
+            let measure = d.decreases.clone().expect("a measure declaration");
+            measure::check_shape(d, &measure)?;
+            gm.push(measure::GroupMember {
+                decl: d,
+                self_name: base_name(&d.name).to_string(),
+                measure,
+            });
+        }
+        // §2's circularity check runs before the measures are elaborated: a
+        // measure calling a member is an unbound name at this point, and
+        // "unbound" is the wrong thing to say about it.
+        measure::check_group_shape(&gm)?;
+        for m in &gm {
+            self.check_measure_is_nat(m.decl, &m.measure)?;
+        }
+        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+            return err(
+                "`decreases` states its obligations with `nat::Lt` and discharges them \
+                 through `nat::le_trans`: `import nat;` first",
+                span,
+            );
+        }
+        // §3: the group's motive is a nested `Pair`, and its members are
+        // reached by `.fst`/`.snd`.
+        if self.lookup_inductive("Pair").is_none() {
+            return err(
+                "a mutual `decreases` group shares one recursion whose motive is the \
+                 product of its members' (docs/mutual-recursion-design.md §3): \
+                 `import pair;` first",
+                span,
+            );
+        }
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+            .iter()
+            .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
+        let family = measure::lower_group(&gm, omega_available, self)?;
+        for part in &family.obligations {
+            self.elab_decl_one(&part.decl, Some(&part.obligations))?;
+        }
+        for part in &family.decls {
+            self.elab_decl_one(&part.decl, Some(&part.obligations))?;
+        }
+        // §6: the unfolding companions do not extend to a group this round.
+        // Each member records the refusal on its own `f_unfold`, so a citation
+        // reports the reason rather than an unknown name.
+        for d in members {
+            self.unfold_refusals.borrow_mut().insert(
+                measure::unfold_name(&d.name),
+                format!(
+                    "`{}` is a member of a mutual `decreases` group, whose unfolding \
+                     equations are deferred (docs/mutual-recursion-design.md §6)",
+                    base_name(&d.name)
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// A written type as the declaration it names, where it names one.
+    fn ctor_fields_of(&self, scrut: &Ty, ctor: &str) -> Option<Vec<Ty>> {
+        match &scrut.kind {
+            TyKind::Nat => match ctor {
+                "Zero" => Some(Vec::new()),
+                "Succ" => Some(vec![scrut.clone()]),
+                _ => None,
+            },
+            TyKind::Named { name, args } => {
+                let ind = self.lookup_inductive(name)?;
+                // Only the plain parameterized shape: an index or a value
+                // parameter puts the field types under binders this
+                // substitution does not carry.
+                if ind.index.is_some() || !ind.valparams.is_empty() || ind.params.len() != args.len()
+                {
+                    return None;
+                }
+                let c = ind.ctors.iter().find(|c| c.name == ctor)?;
+                let m: Vec<(String, Ty)> = ind
+                    .params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect();
+                Some(
+                    c.fields
+                        .iter()
+                        .map(|(_, t)| measure::instantiate_ty(t, &m))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// The measure is a `Nat`, checked in the declaration's own parameter
+    /// context and *before* anything is generated, so the message says so
+    /// rather than surfacing as a mismatch inside a generated `nat::Lt`.
+    fn check_measure_is_nat(&mut self, decl: &Decl, measure: &Expr) -> R<()> {
+        self.attempt.prepare();
+        self.attempt.goal_arena.configure(count_holes(decl), 0);
+        self.refresh_delta_psi();
+        let r = self.decl_head_cx(decl).map(|cx| {
+            self.elab_check(&cx, measure, &Type::Nat, &Level::Zero)
+                .map(|_| ())
+                .map_err(|error| match error {
+                    ElabError::Elab { msg, span } => ElabError::Elab {
+                        msg: format!("a `decreases` measure is a `Nat`: {msg}"),
+                        span,
+                    },
+                    other => other,
+                })
+        });
+        self.attempt.finish();
+        self.refresh_delta_psi();
+        r?
+    }
+
+    /// The binders a declaration's *measure* is written against: its type
+    /// parameters, then its value parameters. This is the prefix of
+    /// [`Self::check_decl`]'s telescope builder, as `instance_head_cx` is —
+    /// used only for the `decreases` preflight, where the constraint slots and
+    /// notation installations a body needs are not yet in play.
+    fn decl_head_cx(&self, decl: &Decl) -> R<Cx> {
+        let mut cx = Cx::empty();
+        for tv in &decl.tyvars {
+            let level = Level::constant(tv.level);
+            cx.push(
+                tv.name.clone(),
+                Type::Ty(level.clone()),
+                Level::constant(tv.level + 1),
+            );
+            cx.tyvars.push(TyVar {
+                name: tv.name.clone(),
+                ty: Type::El {
+                    level: level.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
+                level,
+                depth: cx.names.len(),
+            });
+        }
+        for p in &decl.params {
+            let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
+            cx.push_skel(p.name.clone(), ty.clone(), lvl, skel_of_ty(&p.ty));
+            if let Type::Ty(level) = &ty {
+                cx.tyvars.push(TyVar {
+                    name: p.name.clone(),
+                    ty: Type::El {
+                        level: level.clone(),
+                        tm: Rc::new(Term::Var(LocalVar(0))),
+                    },
+                    level: level.clone(),
+                    depth: cx.names.len(),
+                });
+            }
+        }
+        Ok(cx)
     }
 
     /// The sole commit point for a checked ordinary declaration.
@@ -2457,18 +2848,10 @@ impl Elaborator {
             self.solve_goals(&[], &decl.name)?;
             None
         } else {
-            let body = if let Some(measure) = &decl.decreases {
-                // Termination by measure: the body is re-spelled as strong
-                // induction on a bound (`measure.rs`) and checked whole.
-                let self_name = cx
-                    .selfref
-                    .as_ref()
-                    .map_or_else(|| decl.name.clone(), |s| s.name.clone());
-                let (wrapped, obligations) =
-                    self.wrap_measure(&cx, decl, &self_name, measure)?;
-                self.elab_check(&cx, &wrapped, &res_ty, &res_lvl)
-                    .map_err(|error| obligations.explain(error))?
-            } else {
+            // A `decreases` declaration never reaches here: `elab_measure_decl`
+            // has already replaced it by the family of `measure.rs`.
+            debug_assert!(decl.decreases.is_none());
+            let body = {
                 let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
                 self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?
             };
@@ -5920,4 +6303,117 @@ impl Elaborator {
         );
         *self.delta_psi = GlobalCtx::new(bindings);
     }
+}
+
+/// The base name a declaration recurses under, as `Cx.selfref` uses it.
+fn base_name(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+/// Does `block` call one of `names` at a position the measure walk rewrites —
+/// the head of a saturated application (`docs/mutual-recursion-design.md` §1)?
+/// Shadowing is not tracked here: an over-approximated edge only groups two
+/// declarations that did not need grouping, which §1 says costs nothing, while
+/// the rewrite itself does track it and leaves a shadowed call alone.
+fn calls_in(block: &heather_syntax::Block, names: &[String], out: &mut Vec<usize>) {
+    let mut scan = |e: &Expr| {
+        surface::walk_expr(e, &mut |x| {
+            let ExprKind::App { head, .. } = &x.kind else {
+                return;
+            };
+            let callee = match &head.kind {
+                ExprKind::TyApp { head, .. } => &head.kind,
+                other => other,
+            };
+            if let ExprKind::Var(n) = callee
+                && let Some(j) = names.iter().position(|m| m == n)
+                && !out.contains(&j)
+            {
+                out.push(j);
+            }
+        });
+    };
+    for s in &block.stmts {
+        match s {
+            heather_syntax::Stmt::Let { expr, .. }
+            | heather_syntax::Stmt::LetRecord { expr, .. }
+            | heather_syntax::Stmt::LetCode { expr, .. } => {
+                scan(expr)
+            }
+        }
+    }
+    scan(&block.result);
+}
+
+/// The mutual groups of `docs/mutual-recursion-design.md` §1: within each
+/// maximal run of *consecutive* `decreases` declarations, the strongly
+/// connected components of size > 1, as item indices in declaration order.
+///
+/// Nothing here is trusted — a wrong grouping costs an uglier obligation or a
+/// refused generated term, never a wrong proof (§1).
+fn measure_groups(items: &[Item]) -> Vec<Vec<usize>> {
+    let mut groups = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        let start = i;
+        while i < items.len()
+            && matches!(&items[i], Item::Decl(d) if d.decreases.is_some() && !d.is_meta)
+        {
+            i += 1;
+        }
+        if i == start {
+            i += 1;
+            continue;
+        }
+        let run: Vec<&Decl> = items[start..i]
+            .iter()
+            .map(|it| match it {
+                Item::Decl(d) => d,
+                _ => unreachable!("the run holds declarations only"),
+            })
+            .collect();
+        let n = run.len();
+        let names: Vec<String> = run.iter().map(|d| base_name(&d.name).to_string()).collect();
+        // `reach[a][b]`: `a` calls `b`, transitively. The runs are a handful
+        // of declarations, so the closure is cheaper than a Tarjan.
+        let mut reach = vec![vec![false; n]; n];
+        for (a, d) in run.iter().enumerate() {
+            let mut hits = Vec::new();
+            calls_in(&d.body, &names, &mut hits);
+            for b in hits {
+                reach[a][b] = true;
+            }
+        }
+        for k in 0..n {
+            for a in 0..n {
+                for b in 0..n {
+                    if reach[a][k] && reach[k][b] {
+                        reach[a][b] = true;
+                    }
+                }
+            }
+        }
+        let mut taken = vec![false; n];
+        for a in 0..n {
+            if taken[a] {
+                continue;
+            }
+            let comp: Vec<usize> = (a..n)
+                .filter(|&b| b == a || (reach[a][b] && reach[b][a]))
+                .collect();
+            for &b in &comp {
+                taken[b] = true;
+            }
+            if comp.len() > 1 {
+                groups.push(comp.into_iter().map(|b| start + b).collect());
+            }
+        }
+    }
+    groups
+}
+
+/// The per-container facts the item loops share (`begin_container`).
+struct ItemPlan {
+    groups: Vec<Vec<usize>>,
+    in_group: HashMap<usize, usize>,
 }

@@ -550,7 +550,10 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
     expr(&decl.body.result, &mut n);
     // Under `decreases`, every recursive call owes one obligation hole
     // (measure.rs); calls are counted by name, which over-counts a shadowed
-    // name — an upper bound, as required.
+    // name — an upper bound, as required. The hole itself is raised in the
+    // site's own `f#obl_N` (`docs/decreases-unfolding-design.md` §4), whose
+    // count comes from the ordinary body walk above; this stays for the
+    // measure preflight, which reserves against the *written* declaration.
     if let Some(measure) = &decl.decreases {
         expr(measure, &mut n);
         let base = decl.name.rsplit("::").next().unwrap_or(&decl.name);

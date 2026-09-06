@@ -710,14 +710,14 @@ fn reflect_assumption(
     };
     let (coeff_term, atoms, interval) = if let Some((coeffs, atoms)) = dot_args(elab, right) {
         let lower_source = elab
-            .spell_term_clean(cx, left)
+            .spell_term_source(cx, left)
             .ok_or_else(|| format!("Omega could not spell the lower bound in `{}`", name))?;
         let lower = integer_source(&lower_source)
             .ok_or_else(|| format!("Omega requires a literal lower bound, got `{lower_source}`"))?;
         (coeffs, atoms, Interval::lower(lower))
     } else if let Some((coeffs, atoms)) = dot_args(elab, left) {
         let upper_source = elab
-            .spell_term_clean(cx, right)
+            .spell_term_source(cx, right)
             .ok_or_else(|| format!("Omega could not spell the upper bound in `{}`", name))?;
         let upper = integer_source(&upper_source)
             .ok_or_else(|| format!("Omega requires a literal upper bound, got `{upper_source}`"))?;
@@ -726,7 +726,7 @@ fn reflect_assumption(
         return Ok(None);
     };
     let coeff_source = elab
-        .spell_term_clean(cx, coeff_term)
+        .spell_term_source(cx, coeff_term)
         .ok_or_else(|| format!("Omega could not spell the coefficient row in `{}`", name))?;
     let coeffs = coefficient_source(&coeff_source).ok_or_else(|| {
         format!(
@@ -738,7 +738,7 @@ fn reflect_assumption(
         return Err("Omega cannot reconstruct the minimum `i128` literal".into());
     }
     let atoms_source = elab
-        .spell_term_clean(cx, atoms)
+        .spell_term_source(cx, atoms)
         .ok_or_else(|| format!("Omega could not spell the atom row in `{}`", name))?;
     Ok(Some(ReflectedAssumption {
         name: name.to_string(),
@@ -793,8 +793,8 @@ fn affine_syntax(
     }
     if let Some(args) = named_args(elab, tm, "int::mul") {
         if let [left, right] = args.as_slice() {
-            let left_source = elab.spell_term_clean(cx, left);
-            let right_source = elab.spell_term_clean(cx, right);
+            let left_source = elab.spell_term_source(cx, left);
+            let right_source = elab.spell_term_source(cx, right);
             if let Some(factor) = left_source.as_deref().and_then(integer_source) {
                 if factor == Z::MIN {
                     return Err("Omega cannot reconstruct the minimum `i128` literal".into());
@@ -936,7 +936,7 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
             return Ok(format!("{}({})", name, args.join(", ")));
         }
     }
-    elab.spell_term_clean(cx, tm)
+    elab.spell_term_source(cx, tm)
         .ok_or_else(|| "Omega could not spell an integer expression".to_string())
 }
 
@@ -959,7 +959,7 @@ fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
             ));
         }
     }
-    elab.spell_term_clean(cx, tm)
+    elab.spell_term_source(cx, tm)
         .ok_or_else(|| "Omega could not spell a natural expression".to_string())
 }
 
@@ -2671,7 +2671,12 @@ pub(crate) fn reconstruct(
         } else {
             let mut explicit = Vec::new();
             for (name, ty) in local_facts(elab, cx) {
-                if let Some(fact) = reflect_assumption(elab, cx, &name, &ty)? {
+                // A hypothesis this renderer cannot spell is one Omega cannot
+                // use, not a reason to abandon the goal: skip it and reflect
+                // the rest (issues/omega-renders-member-by-base-name.md). The
+                // context of a generated body holds entries with no surface
+                // form at all — a `decreases` group's ih is one.
+                if let Ok(Some(fact)) = reflect_assumption(elab, cx, &name, &ty) {
                     explicit.push(fact);
                 }
             }

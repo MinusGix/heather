@@ -1,0 +1,25 @@
+---
+title: Unfolding equations for a decreases body that matches on a computed scrutinee
+status: open
+labels: [frontend,elaboration,proofs]
+created: 2026-09-05
+updated: 2026-09-05
+---
+
+
+
+Residue of [[decreases-unfolding-equations]] (landed 2026-09-05,
+docs/decreases-unfolding-design.md §3). The companion walk re-matches on a
+*variable* scrutinee under a motive in which both anchors reduce into the arm;
+a `match` on a **computed** scrutinee (`merge`'s `match nat::le_dec(x, y)`)
+reduces neither anchor, so equating the arms would need the body rendered into
+the motive twice, with its obligation references. `merge` therefore gets no
+`merge_unfold` today (pinned as a negative control in
+crates/elab/tests/decreases_unfolding.rs). Routes: generalize the scrutinee
+(`match s as λ s => …` over a fresh variable with an equation, the same convoy
+the lowering already uses for refinement) so the walk sees a variable; or
+state the equation per outer arm. The first is the natural one.
+
+## What it assumes from elsewhere
+- **[[decreases-unfolding-equations]]** owns the walk. Assumed here: only that
+  a variable-scrutinee `match` is in the fragment and a computed one is not.
