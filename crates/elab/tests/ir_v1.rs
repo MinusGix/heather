@@ -103,6 +103,60 @@ fn decls() -> &'static str {
     &LIB[..cut]
 }
 
+/// Slots the walker still lists on this library, recorded rather than fixed
+/// (`issues/emission-walker-residual-sites.md`, filed by the round that
+/// landed the walker). Each is written either by an emitter the chokepoint
+/// does not yet govern — a rewrite's `J`, a generated eliminator motive, a
+/// schema's `App`, the tier-0 match arm's alias projections — or by a
+/// governed one that re-reads components off the whnf of a whole-type
+/// reference (`project_field`'s fallback walk), and each carries either a
+/// whole declaration lowering inline where a `#tycode` reference exists or a
+/// `⌜…⌝` quote of one. Routing them is that issue's work; this list is a
+/// **regression guard** instead: a slot outside it means an emitter the
+/// chokepoint *does* govern today — the statement cascade, a constructor
+/// label's injections, a `Wf` slot pair, a field tuple's own annotations, a
+/// written `λ`'s domain, `refl`'s element type — started disagreeing again.
+/// It only ever shrinks.
+const WALK_RESIDUE: &[&str] = &[
+    "App.cod",
+    "App.dom",
+    "Case.motive",
+    "ElimEmpty.motive",
+    "ElimNat.motive",
+    "Fst.fst_ty",
+    "Fst.snd_ty",
+    "J.motive",
+    "J.ty",
+    "Pair.fst_ty",
+    "Pair.snd_ty",
+    "Refl.ty",
+    "Snd.fst_ty",
+    "Snd.snd_ty",
+];
+
+/// The emission walker's findings, one line per `(slot, depth)` with a count
+/// and the first declaration and spelling seen at it: the ones outside
+/// [`WALK_RESIDUE`] first (empty is the assertion), then all of them.
+fn emission_walk_residue(e: &Elaborator) -> (String, String) {
+    let mut by_site = std::collections::BTreeMap::<(&str, u32), (usize, String)>::new();
+    for f in e.take_emission_findings() {
+        let entry = by_site
+            .entry((f.slot, f.depth))
+            .or_insert_with(|| (0, f.decl.clone()));
+        entry.0 += 1;
+    }
+    let line = |(slot, depth): (&str, u32), (count, decl): &(usize, String)| {
+        format!("  {slot} depth={depth} count={count} first={decl}\n")
+    };
+    let outside = by_site
+        .iter()
+        .filter(|((slot, _), _)| !WALK_RESIDUE.contains(slot))
+        .map(|(k, v)| line(*k, v))
+        .collect();
+    let all = by_site.iter().map(|(k, v)| line(*k, v)).collect();
+    (outside, all)
+}
+
 /// `refl` at a false equation dies in the kernel as `NotConvertible`; a
 /// mis-typed proof argument dies as an elaboration error. Either way the
 /// point of a negative control is that the claim does **not** land.
@@ -207,8 +261,28 @@ fn declarations_check_and_wrong_claims_are_refuted() {
 #[test]
 fn the_full_ir_library_checks() {
     let mut e = ir_v1_elaborator();
+    // The emission audit rides on the broadest load there is, rather than
+    // paying for a whole-library elaboration of its own
+    // (issues/emission-spelling-chokepoint.md;
+    // docs/annotation-component-respell-design.md §2.5): every emitted
+    // annotation slot of every declaration below is asked whether the one
+    // chokepoint would still respell it.
+    e.enable_emission_walk();
     e.elab_module_source("ir_v1", LIB)
         .unwrap_or_else(|err| panic!("{}", err.render(LIB)));
+    // Drained here, before the negative controls: a refused declaration is
+    // walked before the kernel refuses it, and its slots are not the
+    // library's.
+    let (residue, all) = emission_walk_residue(&e);
+    // Printed, not only asserted: the point of the audit is the list, and a
+    // green run that says nothing about it is how the last four rows of
+    // `issues/emission-site-respell-audit.md` went unnoticed. `--nocapture`
+    // shows it.
+    eprint!("emission walk over `ir_v1`:\n{all}");
+    assert!(
+        residue.is_empty(),
+        "the emission walker found slots outside the recorded residue:\n{residue}"
+    );
 
     // The *wrong* answer at the right program and the right witness: refused.
     // If the `vs` parameter were captured under the Σ binder rather than

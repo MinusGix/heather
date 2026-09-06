@@ -1650,17 +1650,6 @@ impl Elaborator {
         Ok(Spine { ctors, tails })
     }
 
-    /// The emission spelling of an annotation component: its inline form
-    /// where the decode handed back a code literal ([`decode_deep`]), with
-    /// registered sub-lowerings then respelled as references
-    /// ([`Elaborator::respell_ty_deep`]). `None` when both leave it alone.
-    pub(crate) fn respell_emitted(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
-        match decode_deep(ty) {
-            Some(inline) => Some(self.respell_ty_deep(cx, &inline, depth).unwrap_or(inline)),
-            None => self.respell_ty_deep(cx, ty, depth),
-        }
-    }
-
     /// The spine with every component's registered sub-lowerings respelled as
     /// references, for **emission** (`inject`'s annotations at a constructor
     /// value). Components that respell nothing keep their `Rc` identity, so
@@ -1685,7 +1674,7 @@ impl Elaborator {
         let re = |v: &Vec<(Rc<Type>, Level)>, refs: Vec<Option<Type>>| {
             v.iter()
                 .zip(refs)
-                .map(|((t, l), r)| match r.or_else(|| self.respell_emitted(cx, t, 0)) {
+                .map(|((t, l), r)| match r.or_else(|| self.emit_ty(cx, t, 0)) {
                     Some(r) => (Rc::new(r), l.clone()),
                     None => (Rc::clone(t), l.clone()),
                 })
@@ -2066,7 +2055,7 @@ impl Elaborator {
         // module, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => match self.respell_emitted(cx, &expected, 0) {
+            None => match self.emit_ty(cx, &expected, 0) {
                 Some(Type::Wf {
                     shape: s, arity: a, ..
                 }) => (s, a),
@@ -2169,11 +2158,11 @@ impl Elaborator {
         // …and the inline spelling of a component the decode handed back as
         // a code literal (`decode_deep`), so a tuple built at an `El ⌜Σ…⌝`
         // record type spells each link as the next link's own type does.
-        let fst_e = match self.respell_emitted(cx, &fst, 0) {
+        let fst_e = match self.emit_ty(cx, &fst, 0) {
             Some(r) => Rc::new(r),
             None => fst,
         };
-        let snd_e = match self.respell_emitted(cx, &snd, 1) {
+        let snd_e = match self.emit_ty(cx, &snd, 1) {
             Some(r) => Rc::new(r),
             None => snd,
         };
@@ -2560,7 +2549,7 @@ impl Elaborator {
         // respell and keep this as `None`, so their old path stays allocation-
         // free; a parameterized law record such as `IrPassLaws(R, alg)` gets
         // the exact component spelling its closed Π binder received.
-        let mut cur_emit = self.respell_ty_deep(cx, record_ty, 0);
+        let mut cur_emit = self.emit_ty(cx, record_ty, 0);
         let mut pair = value;
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
         for step in 0..=idx + 1 {
@@ -4083,12 +4072,12 @@ impl Elaborator {
             // chain aliases. The loop's own `cur` and the **returned** field
             // type stay inline — the return becomes a `match` binder's alias
             // type, a structural-read position (family-code design §10.3).
-            let fst_e = match self.respell_emitted(cx, &fst, 0) {
+            let fst_e = match self.emit_ty(cx, &fst, 0) {
                 Some(r) => Rc::new(r),
                 None => Rc::clone(&fst),
             };
             // `snd` binds the Σ's first component, hence depth 1.
-            let snd_e = match self.respell_emitted(cx, &snd, 1) {
+            let snd_e = match self.emit_ty(cx, &snd, 1) {
                 Some(r) => Rc::new(r),
                 None => Rc::clone(&snd),
             };

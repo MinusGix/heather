@@ -186,7 +186,7 @@ impl Elaborator {
         // one spelling (issues/emission-site-respell-audit.md).
         let emit = self
             .ty_type_ref(cx, tag, d_ty)
-            .or_else(|| self.respell_ty_deep(cx, d_ty, 0))
+            .or_else(|| self.emit_ty(cx, d_ty, 0))
             .unwrap_or_else(|| d_ty.clone());
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
@@ -395,7 +395,7 @@ impl Elaborator {
         // motive's own `z` binder: `respell_ty_deep` shifts the *references* by
         // it rather than the result, which is why this is not the
         // `shift_local(1)` the whole-type version needed.
-        let motive = Rc::new(self.respell_ty_deep(cx, &motive, 1).unwrap_or(motive));
+        let motive = Rc::new(self.emit_ty(cx, &motive, 1).unwrap_or(motive));
         // The one lookup: `El (D#tycode^δ)` if this declaration has a code and
         // `scrut_ty` *is* the lowering it was minted from, the inline type
         // otherwise. Everything emitted below reads `tel.d_emit`; the
@@ -421,7 +421,7 @@ impl Elaborator {
         // agreed, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => match self.respell_emitted(cx, scrut_ty, 0) {
+            None => match self.emit_ty(cx, scrut_ty, 0) {
                 Some(Type::Wf {
                     shape: s, arity: a, ..
                 }) => (s, a),
@@ -2454,4 +2454,142 @@ theorem getb_neutral(x: T): getb(mkpr(x)) = x { refl }
         let r = e.el.elab_source("theorem getb_wrong(): getb(mkpr(T0)) = T1(0, T0) { refl }");
         assert!(r.is_err(), "a false equation must still be refused");
     }
+
+    // -- the emission walker (design §2.5) ----------------------------------
+
+    /// The fast-lane twin of the whole-library audit
+    /// (`crates/elab/tests/ir_v1.rs::the_full_ir_library_checks`): a corpus
+    /// small enough to run every round, over the three sites
+    /// `issues/emission-spelling-chokepoint.md` names — a theorem whose
+    /// `refl` fills a `Refl.ty`, a constructor literal of a coded declaration
+    /// in a checking position, and a **written** lambda binder — on
+    /// `docs/testing-generated-terms.md`'s axes: a literal and a neutral
+    /// scrutinee, an open element type (`Box<[T; n]>`, whose monomorphized
+    /// `Wf` has no whole-type reference), and a checking position.
+    ///
+    /// The positive half is "no slot listed". The negative controls are
+    /// hand-built terms carrying the registry's **inline** copy where a
+    /// reference exists: without them "no findings" is equally consistent
+    /// with a walker that visits nothing.
+    #[test]
+    fn the_emission_walk_lists_nothing_on_a_small_corpus_and_lists_a_planted_slot() {
+        let mut e = env();
+        e.el.enable_emission_walk();
+        e.el.elab_source(
+            "
+fn tid3(t: T) -> T { t }
+fn tlam() -> T -> T { λ (t: T) => t }
+fn bmk3(n: Nat, v: [T; n]) -> Box<[T; n]> { BCons(v, BNil) }
+fn fnext3(f: Flat) -> Flat { match f { FA => FB(1), FB(n) => FC(n, n), FC(m, k) => FA } }
+record R3 { f: Flat }
+fn mkr3() -> R3 { R3(f := FB(1)) }
+theorem tid3_neutral(t: T): tid3(t) = t { refl }
+theorem tlam_neutral(t: T): tlam()(t) = t { refl }
+theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
+",
+        )
+        .expect("the corpus elaborates");
+        let findings = e.el.take_emission_findings();
+        let listed: Vec<String> = findings
+            .iter()
+            .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+            .collect();
+        assert!(
+            findings.is_empty(),
+            "every emitted slot already carries the chokepoint's spelling:\n{}",
+            listed.join("\n")
+        );
+
+        // Control 1: a `Refl` whose element type is the inline lowering, the
+        // spelling `read_expected_type`'s whnf hands back.
+        let (t_ty, l) = e.lowered("T");
+        let planted = Term::Refl {
+            level: l.clone(),
+            ty: Rc::new(t_ty.clone()),
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let found = crate::emission_walk::walk_decl(&e.el, "planted", &Type::Nat, Some(&planted));
+        assert_eq!(found.len(), 1, "exactly the planted slot");
+        assert_eq!(found[0].slot, "Refl.ty");
+        assert_eq!(found[0].depth, 0);
+
+        // Control 2: the statement half, and a slot **under a binder** — the
+        // depth is what a wrong shift would get wrong, and a closed type
+        // hides one (axis 2).
+        let stmt = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::new(t_ty.clone()),
+            cod: Rc::new(Type::Nat),
+        };
+        let under = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: l.clone(),
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Refl {
+                level: l,
+                ty: Rc::new(t_ty),
+                tm: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        };
+        let found = crate::emission_walk::walk_decl(&e.el, "planted", &stmt, Some(&under));
+        let slots: Vec<(&str, u32)> = found.iter().map(|f| (f.slot, f.depth)).collect();
+        assert_eq!(slots, vec![("stmt", 0), ("Refl.ty", 1)]);
+        // …and what it would write there is `T`'s own reference, minted at
+        // the binder's depth rather than the statement's — a closed type
+        // hides the shift, so the depth is asserted rather than assumed.
+        let (lowered, _) = e.lowered("T");
+        let at0 = e.el.emit_ty(&e.cx, &lowered, 0).expect("`T`'s lowering respells");
+        let Type::El { tm, .. } = &at0 else {
+            panic!("the reference is an `El` of the code")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        let at1 = e.el.emit_ty(&e.cx, &lowered, 1).expect("…at the binder's depth too");
+        assert_ne!(at0, at1, "the substitution tail is one longer under a binder");
+        assert_eq!(found[1].emitted, format!("{at1:?}"));
+    }
+
+    /// The two residual sampler rows of `issues/conv-miss-residual-rows.md`
+    /// (`El^δ` against `Sum`/`Sigma` at a constructor literal) pinned as the
+    /// **designed** shape rather than a defect: a field's stated type is the
+    /// declaration's whole-type reference, while the literal filling it
+    /// synthesizes its type from its own injection annotations, which are the
+    /// spine components. There is no slot in which the inferred side could
+    /// carry the reference, so the rows are one δ and a compare each — and
+    /// what this pins is that both sides are already exactly what `emit_ty`
+    /// writes, so neither is a spelling *disagreement*.
+    #[test]
+    fn a_constructor_literal_and_the_field_type_it_fills_are_each_the_chokepoints_spelling() {
+        let mut e = env();
+        e.el.elab_source("record R4 { f: Flat }\nfn mkr4() -> R4 { R4(f := FB(1)) }")
+            .expect("a record literal at a coded field type elaborates");
+        let GlobalBinding::Tm {
+            body: Some(body), ..
+        } = e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        // `pair(tag_refl, pair(FB(1), ⟨⟩))`: the field's stated type is the
+        // inner pair's `fst_ty`.
+        let Term::Pair { snd, .. } = &**body else { panic!("a record value is a tuple") };
+        let Term::Pair { fst_ty, fst, .. } = &**snd else { panic!("…with a field link") };
+        assert_ne!(
+            **fst_ty,
+            e.lowered("Flat").0,
+            "the field's stated type is a reference, not the inline lowering"
+        );
+        // …and the value's own annotations are the spine's components, each
+        // already spelled the way the chokepoint would spell it.
+        let (lhs, rhs) = match &**fst {
+            Term::Inl { lhs, rhs, .. } | Term::Inr { lhs, rhs, .. } => (lhs, rhs),
+            _ => panic!("a flat constructor value is an injection"),
+        };
+        for ann in [fst_ty, lhs, rhs] {
+            assert!(
+                e.el.emit_ty(&e.cx, ann, 0).is_none(),
+                "an annotation the chokepoint would still respell: {ann:?}"
+            );
+        }
+    }
+
 }

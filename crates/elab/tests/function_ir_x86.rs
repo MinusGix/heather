@@ -572,6 +572,11 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     }
     if report_value_metrics {
         e.enable_value_metrics();
+        // The emission-slot audit rides with the sampler
+        // (issues/emission-spelling-chokepoint.md): a row of the miss table
+        // and a slot the chokepoint would respell are the same finding seen
+        // from two ends, so they are read together.
+        e.enable_emission_walk();
     }
     if let Some(path) = std::env::var_os("HEATHER_FUNCTION_IR_X86_DUMP") {
         std::fs::write(path, &source).expect("dump generated module");
@@ -643,6 +648,20 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
         // The typing seam's conversion misses by head pair (needs the
         // `value-metrics` feature; empty otherwise).
         eprint!("{}", e.value_conv_miss_report().unwrap());
+        let findings = e.take_emission_findings();
+        let mut by_site = std::collections::BTreeMap::<(&str, u32), (usize, String, String)>::new();
+        for f in &findings {
+            let entry = by_site
+                .entry((f.slot, f.depth))
+                .or_insert_with(|| (0, f.decl.clone(), format!("{} => {}", f.found, f.emitted)));
+            entry.0 += 1;
+        }
+        eprintln!("mixed ALU emission-walk findings: {}", findings.len());
+        for ((slot, depth), (count, decl, what)) in by_site {
+            eprintln!(
+                "mixed ALU emission slot {slot} depth={depth} count={count} first={decl} {what}"
+            );
+        }
     }
 }
 

@@ -1247,6 +1247,33 @@ impl Elaborator {
         Some((ctors, tails))
     }
 
+    /// **The one emission chokepoint** for an annotation slot's spelling
+    /// (`docs/annotation-component-respell-design.md` §2.5): the inline form
+    /// where the decode handed back a code literal
+    /// ([`crate::inductive::decode_deep`]), with registered sub-lowerings then
+    /// respelled as references ([`Self::respell_ty_deep`]). `None` when both
+    /// leave it alone, so the caller keeps its original and its sharing.
+    ///
+    /// Every constructor of a `Term`/`Type` **annotation** slot in the
+    /// elaborator goes through this; a structural read keeps the inline copy
+    /// (`docs/wf-shape-code-design.md` §4). `emission_walk` reports any slot
+    /// this would still change.
+    pub(crate) fn emit_ty(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
+        self.emit_ty_in(cx, ty, depth, 0)
+    }
+
+    /// [`Self::emit_ty`] for a slot living in an application's **scratch
+    /// world** ([`Self::respell_ty_deep_in`]'s `scratch`).
+    pub(crate) fn emit_ty_in(&self, cx: &Cx, ty: &Type, depth: u32, scratch: u32) -> Option<Type> {
+        match crate::inductive::decode_deep(ty) {
+            Some(inline) => Some(
+                self.respell_ty_deep_in(cx, &inline, depth, scratch)
+                    .unwrap_or(inline),
+            ),
+            None => self.respell_ty_deep_in(cx, ty, depth, scratch),
+        }
+    }
+
     /// [`Self::respell_ty`] applied **component-wise**
     /// (`docs/annotation-component-respell-design.md`): rebuild `ty` with
     /// every sub-type that *is* a registered declaration's lowering replaced

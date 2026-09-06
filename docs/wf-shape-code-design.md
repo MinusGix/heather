@@ -197,7 +197,11 @@ own `z` binder), which shifts the *references* rather than the result.
   a *neutral* code exactly as it is, which is the correct answer for a reader
   that must not see through a reference. The predecessor's §6 finding 4 is the
   cautionary tale, and the discipline that avoids it is that nothing structural
-  is ever handed a slot reference in the first place.
+  is ever handed a slot reference in the first place — which is now a
+  mechanism rather than a habit: emission goes through `emit_ty` and is
+  audited by the emission walker
+  (`docs/annotation-component-respell-design.md` §2.5), and neither knows
+  about a structural read.
 - **The reflection boundary is unchanged.** `fn_type_code` and `sig_peel`
   unspell `TyCode` references out of *statements*; slot references never enter a
   statement (they enter emitted terms), so the inverse walk has nothing new to

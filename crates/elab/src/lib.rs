@@ -108,6 +108,8 @@ mod patterns;
 mod provenance;
 pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
+mod emission_walk;
+pub use emission_walk::EmissionFinding;
 mod forded;
 mod gendefs;
 mod generalize;
@@ -617,6 +619,10 @@ pub struct Elaborator {
     /// enabled collector, matching `value_metrics`; ordinary elaborators pay
     /// only the `Option` branch at item boundaries.
     item_timings: Option<Rc<RefCell<Vec<ItemTiming>>>>,
+    /// Optional emission-slot audit (`emission_walk`). Off by default and
+    /// shared by clones, exactly like the two collectors above: ordinary
+    /// elaboration pays one `Option` branch per declaration.
+    emission_findings: Option<Rc<RefCell<Vec<EmissionFinding>>>>,
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
@@ -751,6 +757,12 @@ impl expr::UniverseElab for Elaborator {
             indexed: ind.index.is_some(),
             value_parameters: ind.valparams.len(),
         })
+    }
+}
+
+impl expr::EmissionElab for Elaborator {
+    fn emit_ty(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
+        Elaborator::emit_ty(self, cx, ty, depth)
     }
 }
 
@@ -1005,19 +1017,11 @@ impl application::ExplicitArgElab for Elaborator {
         cod: &Type,
         scratch: u32,
     ) -> Option<(Option<Type>, Option<Type>)> {
-        // The inline spelling first where the callee's type was a decoded
-        // code — `values(64, id)` off `Valuation()`'s quoted body otherwise
-        // states its result as `El ⌜⟦BitVec(64)⟧⌝` — then the references;
-        // `cod` binds the argument, hence depth 1.
-        let respell = |ty: &Type, depth: u32| match inductive::decode_deep(ty) {
-            Some(inline) => Some(
-                self.respell_ty_deep_in(cx, &inline, depth, scratch)
-                    .unwrap_or(inline),
-            ),
-            None => self.respell_ty_deep_in(cx, ty, depth, scratch),
-        };
-        let nd = respell(dom, 0);
-        let nc = respell(cod, 1);
+        // The one chokepoint, in the application's scratch world
+        // (`docs/annotation-component-respell-design.md` §2.5); `cod` binds
+        // the argument, hence depth 1.
+        let nd = self.emit_ty_in(cx, dom, 0, scratch);
+        let nc = self.emit_ty_in(cx, cod, 1, scratch);
         (nd.is_some() || nc.is_some()).then_some((nd, nc))
     }
 
@@ -1331,6 +1335,7 @@ impl Elaborator {
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             item_timings: None,
+            emission_findings: None,
             omega_reports: RefCell::new(Vec::new()),
             unfold_refusals: RefCell::new(std::collections::HashMap::new()),
             container_decls: RefCell::new(Vec::new()),
@@ -1398,6 +1403,21 @@ impl Elaborator {
         self.item_timings
             .as_ref()
             .map_or_else(Vec::new, |timings| timings.borrow_mut().drain(..).collect())
+    }
+
+    /// Begin auditing every emitted annotation slot against the chokepoint
+    /// (`emission_walk`; docs/annotation-component-respell-design.md §2.5).
+    /// Each checked declaration is walked once more, so this is a debugging
+    /// and test-time switch, not a default.
+    pub fn enable_emission_walk(&mut self) {
+        self.emission_findings = Some(Rc::new(RefCell::new(Vec::new())));
+    }
+
+    /// Drain emission-slot findings without disabling the walk.
+    pub fn take_emission_findings(&self) -> Vec<EmissionFinding> {
+        self.emission_findings
+            .as_ref()
+            .map_or_else(Vec::new, |f| f.borrow_mut().drain(..).collect())
     }
 
     pub(crate) fn record_omega_failure_report(&self, report: OmegaReport) {
@@ -2915,17 +2935,22 @@ impl Elaborator {
         // copies its `dom`/`cod` annotations out of the callee's statement,
         // so respelling the statement once shrinks every later application
         // for free. References are minted against the empty context (the
-        // statement's own) at each binder's depth.
+        // statement's own) at each binder's depth. Through the one emission
+        // chokepoint (§2.5), so a statement component that arrived as a code
+        // literal is spelled the way every slot copied off it is; the
+        // reflection boundary reads a statement back through
+        // `unspell_ty_deep`, which is the inverse of the reference half and
+        // sees a decoded literal exactly as it would have seen an inline one.
         let empty_cx = Cx::empty();
         let n_params = param_info.len() as u32;
-        let mut stmt = match self.respell_ty_deep(&empty_cx, &res_ty, n_params) {
+        let mut stmt = match self.emit_ty(&empty_cx, &res_ty, n_params) {
             Some(r) => r,
             None => res_ty,
         };
         let mut stmt_lvl = res_lvl;
         let mut term = body;
         for (i, (dom, dom_lvl)) in param_info.into_iter().enumerate().rev() {
-            let dom = match self.respell_ty_deep(&empty_cx, &dom, i as u32) {
+            let dom = match self.emit_ty(&empty_cx, &dom, i as u32) {
                 Some(r) => r,
                 None => dom,
             };
@@ -2949,6 +2974,14 @@ impl Elaborator {
         // instantiation semantics). With no holes it is the identity.
         let term = term.map(|term| term.apply_global(&sigma));
         let stmt = stmt.apply_global(&sigma);
+
+        // The emission audit, on exactly the pair the kernel is about to be
+        // handed (`emission_walk`; design §2.5). Off unless asked for.
+        if let Some(found) = self.emission_findings.as_ref() {
+            let findings =
+                emission_walk::walk_decl(self, &decl.name, &stmt, term.as_ref());
+            found.borrow_mut().extend(findings);
+        }
 
         // The kernel is the gate: check the statement, then the term.
         // `stats::time_kernel` attributes exactly this to the kernel half of

@@ -1859,9 +1859,26 @@ impl Elaborator {
                 // branches. Not a measured workload of that round, so no claim
                 // is made about the fixtures' exponent; the spelling is the
                 // same one every other `Supf` takes.
+                // …and the chokepoint as the fallback, exactly as `build_ctor`
+                // has it: a monomorphized index has no pair to name, and its
+                // two slots then take the component respell together or not at
+                // all (`docs/annotation-component-respell-design.md` §2.5).
                 let (shape, arity) = match self.wf_slot_refs(bcx2, &shape, &arity) {
                     Some((s, a)) => (Rc::new(s), Rc::new(a)),
-                    None => (shape, arity),
+                    None => match self.emit_ty(
+                        bcx2,
+                        &Type::Wf {
+                            level: level.clone(),
+                            shape: Rc::clone(&shape),
+                            arity: Rc::clone(&arity),
+                        },
+                        0,
+                    ) {
+                        Some(Type::Wf {
+                            shape: s, arity: a, ..
+                        }) => (s, a),
+                        _ => (shape, arity),
+                    },
                 };
                 let zj = Term::Supf {
                     level,

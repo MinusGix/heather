@@ -79,9 +79,11 @@ This is the high-leverage half, because it **cascades**: once a callee's Ψ
 statement spells its `Π` components as references, *every* later application
 of it — in bodies, in theorem statements, in other statements — reads its
 `dom`/`cod` annotations off that statement and emits them small, with no
-per-`App` work at all. `apply_explicit`/`apply_implicit` are not touched; the
-annotations they copy have already shrunk at the source. Within-file
-declaration order does the rest (a callee is declared before its callers).
+per-`App` work at all. Within-file declaration order does the rest (a callee
+is declared before its callers). `apply_explicit`/`apply_implicit` were
+originally not touched at all because of that cascade; they now take the one
+chokepoint like every other emitter (§2.4's first bullet, §2.5), which is
+cheap precisely because the source has already shrunk.
 
 Two consequences, both acceptable and both recorded:
 
@@ -133,27 +135,22 @@ miss sampler with per-declaration attribution
 was two emission sites disagreeing about the same type, and the fix at each
 is the line above applied to one more site — no new definitions:
 
-- **Applications.** §2.1's "`apply_explicit`/`apply_implicit` are not
-  touched" no longer holds. A callee that is a *local* binder copies its
-  `dom`/`cod` off the binder's inline type, and an application embedded in
-  a statement — a lemma's `equation: … = operation(…)` hypothesis, a record
-  field's `run(state.gprs)` — then met the cascade-respelled twin of that
-  type at every use (a section substituted for `operation`, the Σ binder's
-  own respelled type). The emitted `App`'s annotations now go through
-  `respell_ty_deep` (`ExplicitArgElab::respell_application_annotations`;
-  in `apply_implicit`'s scratch world the minted references are shifted past
-  the metavariables, `respell_ty_deep_in`). The type the application
-  *continues with* is still computed from the structural `cod`.
+- **Applications.** A callee that is a *local* binder copies its `dom`/`cod`
+  off the binder's inline type, and an application embedded in a statement —
+  a lemma's `equation: … = operation(…)` hypothesis, a record field's
+  `run(state.gprs)` — then met the cascade-respelled twin of that type at
+  every use (a section substituted for `operation`, the Σ binder's own
+  respelled type). The type the application *continues with* is still
+  computed from the structural `cod`.
 - **Decoded code literals.** A type that arrives as `El ⌜Σ…⌝` — the quote of
   a `→ Type` body such as `Valuation()` or `RegionHolds(…)` — whnf's one
   level at a time, and a projection chain or field tuple that copied the
   components verbatim spelled each link as the *un*decoded literal of a tail
   whose own annotations, one link down, were its decode; the kernel
   evaluated the whole literal at every link. `inductive::decode_deep` gives
-  the fully inline spelling, and `respell_emitted` (decode, then respell) is
-  what §2.2's and §2.3's sites, `respell_spine`, and the application
-  annotations now write. Emission only: nothing structural reads a decoded
-  copy it did not already read.
+  the fully inline spelling, and decode-then-respell is what an emitted slot
+  writes. Emission only: nothing structural reads a decoded copy it did not
+  already read.
 - **Monomorphized `Wf` slots.** A `sup_f`'s shape/arity (`build_ctor`), an
   `elim_Wf`'s (`build_elim_wf`) and the children tuple's element type
   (`build_children`) have no registered pair to name for a monomorphized
@@ -161,14 +158,67 @@ is the line above applied to one more site — no new definitions:
   the field tuples around them respelled — so a constructor value's label
   was checked against an inline shape, and the eliminator's inline arity met
   the value's respelled label inside every `Fin(n[ℓ/x])` the kernel rebuilt.
-  They take the same `respell_ty_deep` (its `Wf` arm respells shape and
-  arity together or not at all) when `wf_slot_refs` declines.
+  They respell shape and arity together or not at all, when `wf_slot_refs`
+  declines.
+
+Every site named above — the application annotations (in `apply_implicit`'s
+scratch world too), §2.2's and §2.3's, `respell_spine`, and the three `Wf`
+slot fallbacks — writes its slot through the one function §2.5 names, so the
+list is a history of where the rule was learned rather than a list to keep in
+step.
 
 What the audit found *not* to be a spelling pair, left where it was: the
 `Id` vs `Id` row is `refl` at a statement whose endpoints genuinely need
 computing, and the `El^δ` vs `Σ` row is a constructor literal checked against
 a respelled field type — one δ and a compare each, the cost the reference
 spelling is meant to have. Both are logged on the audit issue.
+
+### 2.5 The chokepoint and the walker (2026-09-06)
+
+The four rows of §2.4 and both of its riders were one failure repeated —
+a site copied a type from wherever it read it while a sibling respelled the
+same type — and every fix was the same edit. So the rule stopped living in a
+dozen call sites and became one function
+(`issues/emission-spelling-chokepoint.md`):
+
+```text
+Elaborator::emit_ty(cx, ty, depth) — decode_deep, then respell_ty_deep;
+None keeps the caller's original and its sharing.
+```
+
+**Every** constructor of a `Term` or `Type` annotation slot in the elaborator
+goes through it — the statement cascade of §2.1, the projection chains of
+§2.2, the field tuples of §2.3, the application annotations and `Wf` slot
+fallbacks of §2.4, a `match` motive, a `Supf` rebuilt by a fording inversion,
+and `refl`'s element type — and `emit_ty_in` is the same function in an
+application's scratch world. §3.1's line is unchanged and is what the
+chokepoint is *not*: a structural read keeps the inline copy (the type a
+checking position continues with, `build_fields`' per-field expected,
+`projection`'s returned field type, a binder's alias type).
+
+The other half is a walker (`crates/elab/src/emission_walk.rs`) that asks the
+same question after the fact. Behind a runtime flag
+(`Elaborator::enable_emission_walk`) it visits, for each checked declaration,
+the statement and term the kernel is about to be handed and calls `emit_ty`
+at every emitted slot; a `Some` is a site still writing a spelling the
+chokepoint would not, reported with the variant, the field, the binder depth
+and both spellings. Its scope is exactly the chokepoint's, so that "the
+walker lists this" and "routing this site through `emit_ty` changes this" are
+the same statement: a slot is checked whole and never descended into, terms
+inside types are not walked, and code payloads are not walked at all. The
+traversal is exhaustive over the kernel's variants with no wildcard arm, so a
+new former with an annotation slot does not compile until someone answers for
+its spelling.
+
+It runs in two places: the whole-library acceptance load
+(`crates/elab/tests/ir_v1.rs`), where the assertion is "no slot outside the
+recorded residue" — the slots the round that landed it found and did not
+route, listed there by name and owned by
+`issues/emission-walker-residual-sites.md`, so that the list only ever
+shrinks — and the x86 conversion-miss measurement
+(`scripts/measure-x86-conv-miss`), beside the sampler table: a sampler row
+and a walker finding are the same disagreement seen from the kernel's end
+and the elaborator's.
 
 ## 3. Rejected shapes, with reasons
 

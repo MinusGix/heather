@@ -74,8 +74,21 @@ pub(crate) struct TypeFormerShape {
     pub(crate) value_parameters: usize,
 }
 
+/// The one emission chokepoint, for the annotation slots this module fills in
+/// (`docs/annotation-component-respell-design.md` §2.5). Its own trait rather
+/// than a method on the two that need it: a `Refl`'s element type and a
+/// `Lam`'s domain are reached through different services, and one method on
+/// one supertrait is what keeps them one spelling.
+pub(crate) trait EmissionElab {
+    /// `None` keeps the caller's original. The structural view has no
+    /// registry, so it keeps every original.
+    fn emit_ty(&self, _cx: &Cx, _ty: &Type, _depth: u32) -> Option<Type> {
+        None
+    }
+}
+
 /// Registry-aware access to the expected type's structural spelling.
-pub(crate) trait ExpectedTypeElab {
+pub(crate) trait ExpectedTypeElab: EmissionElab {
     /// Read an expected type through any registry-aware structural spelling.
     fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type>;
 }
@@ -110,7 +123,7 @@ pub(crate) trait RecursiveCheckingElab {
 }
 
 /// Annotation lowering shared by the two lambda modes.
-pub(crate) trait LambdaBinderElab {
+pub(crate) trait LambdaBinderElab: EmissionElab {
     fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)>;
 }
 
@@ -512,6 +525,12 @@ impl<'a> ExprElab<'a> {
                 let Type::Id { level, ty, lhs, .. } = head else {
                     return err("`refl` needs an `=` expected type", e.span);
                 };
+                // The element type is copied off the *whnf* of the expected
+                // `Id`, i.e. off wherever the elaborator happened to read it,
+                // while the kernel's expected is the cascade-respelled
+                // statement: the slot goes through the chokepoint like every
+                // other emitted one (design §2.5).
+                let ty = elab.emit_ty(cx, &ty, 0).map_or(ty, Rc::new);
                 Ok(Term::Refl { level, ty, tm: lhs })
             })()),
             ExprKind::AutoRefl => Some({
@@ -523,6 +542,9 @@ impl<'a> ExprElab<'a> {
                 }) = elab.read_expected_type(cx, expected, e.span)
                     && elab.goal_endpoints_convert(cx, &lhs, &rhs, &ty, &level)
                 {
+                    // Same slot, same chokepoint as `refl`'s above; the
+                    // conversion check just above reads the structural `ty`.
+                    let ty = elab.emit_ty(cx, &ty, 0).map_or(ty, Rc::new);
                     Ok(Term::Refl { level, ty, tm: lhs })
                 } else {
                     self.goals
@@ -735,6 +757,13 @@ impl<'a> ExprElab<'a> {
             let rest_skel = skel_at.map(|positions| positions.get(1..).unwrap_or(&[]));
             self.check_lambda_at(elab, &inner, rest, body, &cod, &cod_level, rest_skel, span)?
         };
+        // The binder's own annotation is copied off the expected `Π`, which is
+        // itself emitted — so this agreed by luck rather than by rule, and the
+        // luck ran out wherever the `Π` was not the cascade-respelled one
+        // (`emission_walk` listed the site on `lib/ir_v1.hthr`; the numbers
+        // are on issues/emission-spelling-chokepoint.md). The context
+        // extended above keeps the structural copy, per §3.1's line.
+        let dom = elab.emit_ty(cx, &dom, 0).map_or(dom, Rc::new);
         Ok(Term::Lam {
             dom_level,
             cod_level,
@@ -776,11 +805,15 @@ impl<'a> ExprElab<'a> {
         let inner =
             Self::extend_lambda_context(cx, binder, &dom, &dom_level, skel_of_ty(annotation));
         let (body, cod, cod_level) = self.infer_lambda(elab, &inner, rest, body, mode)?;
+        // The λ's emitted domain takes the chokepoint; the `Π` this
+        // synthesizes is the type the caller continues with and stays
+        // structural (§2.5, §3.1).
+        let dom_e = elab.emit_ty(cx, &dom, 0).unwrap_or_else(|| dom.clone());
         Ok((
             Term::Lam {
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
-                dom: Rc::new(dom.clone()),
+                dom: Rc::new(dom_e),
                 body: Rc::new(body),
             },
             Type::Pi {
@@ -1036,6 +1069,8 @@ mod tests {
             })
         }
     }
+
+    impl EmissionElab for StructuralFake {}
 
     impl ExpectedTypeElab for StructuralFake {
         fn read_expected_type(&self, _cx: &Cx, expected: &Type, _span: Span) -> R<Type> {
