@@ -134,6 +134,96 @@ pub struct LexError {
     pub span: Span,
 }
 
+/// One numeral starting at `start` (an ASCII digit). Returns the value and
+/// the byte offset just past the numeral.
+///
+/// Grammar: `0x` hexadecimal, `0o` octal, `0b` binary (lowercase prefix;
+/// hex digits in either case), else decimal. A `_` may separate two digits
+/// and may appear nowhere else — not after the prefix, not doubled, not
+/// trailing. A numeral ends at the first byte that is not a digit,
+/// letter, or `_`; a letter or `_` that cannot continue it is an error
+/// rather than the start of the next token, so `0b12`, `0xfg`, `12abc`
+/// and `1_` are all refused with the offending character named. The
+/// value is bounded by `u64` exactly as the decimal form always was; the
+/// bound is the token's, not any carrier's (a numeral above it is refused
+/// in every radix with the same message).
+fn lex_numeral(src: &str, start: usize) -> Result<(u64, usize), LexError> {
+    let bytes = src.as_bytes();
+    let (radix, name, mut i) = match (bytes[start], bytes.get(start + 1)) {
+        (b'0', Some(b'x')) => (16u64, "hexadecimal", start + 2),
+        (b'0', Some(b'o')) => (8, "octal", start + 2),
+        (b'0', Some(b'b')) => (2, "binary", start + 2),
+        _ => (10, "decimal", start),
+    };
+    let digits_start = i;
+    let mut value: u64 = 0;
+    let mut digits = 0usize;
+    let mut previous_was_separator = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'_' {
+            // Between two digits, or nowhere: the byte before must be a
+            // digit (rules out `0x_1` and `1__0`) and so must the byte
+            // after (rules out `1_`).
+            let after_digit = digits > 0 && !previous_was_separator;
+            let before_digit = bytes.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric());
+            if !after_digit || !before_digit {
+                return Err(LexError {
+                    msg: format!("a `_` in a numeral must sit between two digits: {}", &src[start..=i]),
+                    span: Span { start: i, end: i + 1 },
+                });
+            }
+            previous_was_separator = true;
+            i += 1;
+            continue;
+        }
+        if !(b.is_ascii_alphanumeric()) {
+            break;
+        }
+        let digit = match (b as char).to_digit(36) {
+            Some(d) if u64::from(d) < radix => u64::from(d),
+            _ => {
+                let bad = b as char;
+                let msg = if radix == 10 && digits > 0 {
+                    // `12abc`: a letter glued to a decimal numeral is
+                    // not a suffix Heather knows.
+                    format!("invalid digit `{bad}` in a decimal numeral: {}", &src[start..=i])
+                } else {
+                    format!("invalid digit `{bad}` in {} {name} numeral: {}", if name == "octal" { "an" } else { "a" }, &src[start..=i])
+                };
+                return Err(LexError { msg, span: Span { start: i, end: i + 1 } });
+            }
+        };
+        value = value
+            .checked_mul(radix)
+            .and_then(|v| v.checked_add(digit))
+            .ok_or_else(|| {
+                // Run to the numeral's end so the span covers all of it.
+                let mut end = i;
+                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                    end += 1;
+                }
+                LexError {
+                    msg: format!("numeral out of range: {}", &src[start..end]),
+                    span: Span { start, end },
+                }
+            })?;
+        digits += 1;
+        previous_was_separator = false;
+        i += 1;
+    }
+    if digits == 0 {
+        // Only a radix prefix can get here: a decimal numeral starts with
+        // a digit, which is its first digit.
+        debug_assert!(radix != 10);
+        return Err(LexError {
+            msg: format!("`{}` needs at least one {name} digit", &src[start..digits_start]),
+            span: Span { start, end: digits_start },
+        });
+    }
+    Ok((value, i))
+}
+
 pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
     let bytes = src.as_bytes();
     let mut toks = Vec::new();
@@ -197,16 +287,14 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             });
             continue;
         }
-        // numerals
+        // numerals: decimal, or `0x`/`0o`/`0b` radix forms, with `_`
+        // separators between digits (docs/radix-numerals-design.md). The
+        // token carries only the value: a radix form is a *spelling* of the
+        // same numeral, and everything downstream (carrier choice, the
+        // emitted kernel term) is decided by the value alone.
         if c.is_ascii_digit() {
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            let text = &src[start..i];
-            let n: u64 = text.parse().map_err(|_| LexError {
-                msg: format!("numeral out of range: {text}"),
-                span: Span { start, end: i },
-            })?;
+            let (n, end) = lex_numeral(src, start)?;
+            i = end;
             toks.push(Tok { kind: TokKind::Num(n), span: Span { start, end: i } });
             continue;
         }
@@ -361,4 +449,99 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
     }
     toks.push(Tok { kind: TokKind::Eof, span: Span { start: i, end: i } });
     Ok(toks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn num(src: &str) -> u64 {
+        let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert_eq!(toks.len(), 2, "{src}: one numeral then Eof, got {toks:?}");
+        let TokKind::Num(n) = toks[0].kind else { panic!("{src}: not a numeral: {:?}", toks[0]) };
+        assert_eq!(toks[0].span, Span { start: 0, end: src.len() });
+        n
+    }
+
+    fn refused(src: &str) -> String {
+        match lex(src) {
+            Ok(toks) => panic!("{src} lexed: {toks:?}"),
+            Err(e) => e.msg,
+        }
+    }
+
+    #[test]
+    fn radix_forms_denote_the_decimal_value() {
+        assert_eq!(num("72"), 72);
+        assert_eq!(num("0x48"), 72);
+        assert_eq!(num("0xFF"), 255);
+        assert_eq!(num("0xfF"), 255);
+        assert_eq!(num("0b1001000"), 72);
+        assert_eq!(num("0o110"), 72);
+        assert_eq!(num("0"), 0);
+        assert_eq!(num("0x0"), 0);
+        assert_eq!(num("0b0"), 0);
+    }
+
+    #[test]
+    fn separators_sit_between_digits_in_every_radix() {
+        assert_eq!(num("1_000_000"), 1_000_000);
+        assert_eq!(num("0xFFFF_FFFF"), 0xFFFF_FFFF);
+        assert_eq!(num("0b0000_0111"), 7);
+        assert_eq!(num("0o7_7"), 63);
+    }
+
+    #[test]
+    fn misplaced_separators_are_named() {
+        for src in ["1_", "1__0", "0x_1", "0b_", "0x1_"] {
+            let msg = refused(src);
+            assert!(msg.contains("must sit between two digits"), "{src}: {msg}");
+        }
+        // `_1` is an identifier, not a numeral with a leading separator.
+        let toks = lex("_1").unwrap();
+        assert!(matches!(&toks[0].kind, TokKind::Ident(s) if s == "_1"));
+    }
+
+    #[test]
+    fn invalid_digits_are_named_with_the_radix() {
+        assert!(refused("0b12").contains("invalid digit `2` in a binary numeral"));
+        assert!(refused("0o8").contains("invalid digit `8` in an octal numeral"));
+        assert!(refused("0xfg").contains("invalid digit `g` in a hexadecimal numeral"));
+        assert!(refused("12abc").contains("invalid digit `a` in a decimal numeral"));
+        // An uppercase prefix is not a prefix.
+        assert!(refused("0X48").contains("invalid digit `X` in a decimal numeral"));
+    }
+
+    #[test]
+    fn a_bare_prefix_needs_a_digit() {
+        assert_eq!(refused("0x"), "`0x` needs at least one hexadecimal digit");
+        assert_eq!(refused("0b"), "`0b` needs at least one binary digit");
+        assert_eq!(refused("0o"), "`0o` needs at least one octal digit");
+        assert!(refused("0x)").starts_with("`0x` needs"));
+    }
+
+    #[test]
+    fn the_token_bound_is_the_same_in_every_radix() {
+        assert_eq!(num("18446744073709551615"), u64::MAX);
+        assert_eq!(num("0xFFFF_FFFF_FFFF_FFFF"), u64::MAX);
+        assert_eq!(num("0b1111111111111111111111111111111111111111111111111111111111111111"), u64::MAX);
+        assert_eq!(num("0o1777777777777777777777"), u64::MAX);
+        for src in [
+            "18446744073709551616",
+            "0x1_0000_0000_0000_0000",
+            "0b10000000000000000000000000000000000000000000000000000000000000000",
+            "0o2000000000000000000000",
+        ] {
+            let msg = refused(src);
+            assert_eq!(msg, format!("numeral out of range: {src}"), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_numeral_ends_at_punctuation() {
+        let toks = lex("f(0x48, 0b1)").unwrap();
+        let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[2], TokKind::Num(72)), "{kinds:?}");
+        assert!(matches!(kinds[4], TokKind::Num(1)), "{kinds:?}");
+    }
 }
