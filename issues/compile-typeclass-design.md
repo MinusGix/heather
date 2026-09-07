@@ -4,7 +4,7 @@ status: open
 labels: [compiler, typeclass, design]
 blocked-by: [ir-simulate-design]
 created: 2026-07-22
-updated: 2026-08-25
+updated: 2026-09-07
 ---
 
 The certifying-compilation contract: a function is compilable iff it has a
@@ -12,6 +12,15 @@ The certifying-compilation contract: a function is compilable iff it has a
 that the IR simulates to the same result as the kerneltime function. The
 compiler consumes only proof-carrying instances — privileged operationally,
 never logically.
+
+## Current runtime eligibility policy (2026-09-07)
+
+A function must have a handwritten `Compile` instance or an explicit marker that
+synthesizes one. There is no automatic derivation for unmarked functions. This
+supersedes the 2026-08-13 log's “annotate nothing” proposal and its interpretation
+of the marker as merely an optional eager assertion. [[runtime-compile-opt-in]]
+owns implementation; marker spelling remains open. [[runtime-extern-c-abi]] owns
+explicit foreign ABI selection, independently of the native default convention.
 
 Settled so far:
 

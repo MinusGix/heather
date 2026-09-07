@@ -41,3 +41,15 @@ The profile, proof boundaries, source references, and invocation are in
 ## Log
 
 - 2026-09-07: Implemented build-x86, the restricted StaticElf64Image specification, concrete entry valuations, LinuxInlineTrace/exit-request certificates, and exact serialized-header/payload checks. The 233-byte standalone mix executable exits with 27; native integration builds with no toolchain on PATH and also checks 505 truncated to exit status 249. All 27 header mutations are kernel-rejected. Full verification via HEATHER_TEST_JOBS=3 scripts/test: 2469 passed, 0 failed, 5 ignored; issue and diff checks clean. Loader/fetch/syscall assumptions and the subsequent memory/call milestones remain explicit in docs/x86-64-static-elf.md.
+
+## Follow-up owners
+
+- [[x86-loaded-memory-fetch]] — Connect loaded ELF memory to canonical x86 instruction fetch.
+- [[x86-calls-stack-frames]] — Certify x86 calls and concrete stack frames.
+- [[elf64-structured-image]] — Represent ELF64 headers and images with structured records.
+- [[binary-encoding-trait]] — Define reusable explicit binary wire-encoding contracts.
+- [[derive-binary-encoding]] — Synthesize binary encoders from record field instances.
+- [[elf64-typed-flags]] — Model ELF flags and segment kinds with explicit wire values.
+- [[runtime-compile-opt-in]] — Require explicit Compile instances or runtime derivation markers.
+- [[runtime-extern-c-abi]] — Define explicit C ABI imports and runtime exports.
+- [[x86-symbolic-fragment-layout]] — Lay out certified code fragments and resolve symbolic references.
