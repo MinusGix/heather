@@ -1,0 +1,80 @@
+// Exact instruction-span fetch from a supplied memory and access policy.
+// This is an adapter to the canonical x86 decoder/execution relation, not a
+// loader or a second machine semantics. Addresses advance without wrapping.
+import x86_64;
+import bitvec;
+import bool;
+import nat;
+import option;
+import list;
+import logic;
+import relation;
+
+record FetchAccess<M> {
+    read_byte: M → BitVec(64) → Option<BitVec(8)>,
+    executable: M → BitVec(64) → Bool,
+}
+
+inductive InstructionFetch {
+    FetchedBytes(bytes: List<BitVec(8)>),
+    FetchDenied(address: BitVec(64)),
+    FetchMissing(address: BitVec(64)),
+    FetchAddressWrap,
+}
+
+fn prepend_fetched(byte: BitVec(8), rest: InstructionFetch) → InstructionFetch {
+    match rest {
+        FetchedBytes(bytes) => FetchedBytes(Cons(byte, bytes)),
+        FetchDenied(address) => FetchDenied(address),
+        FetchMissing(address) => FetchMissing(address),
+        FetchAddressWrap => FetchAddressWrap,
+    }
+}
+
+// The caller supplies the exact span length. This does not speculatively read
+// 15 bytes across a page boundary. DecodedAt separately validates the length
+// and encoding. Permission is checked before reading each requested byte.
+fn fetch_instruction_bytes<M>(access: FetchAccess<M>, memory: M, count: Nat) →
+    BitVec(64) → InstructionFetch
+{
+    match count {
+        Zero => start ⊢ FetchedBytes(Nil),
+        Succ(rest, ih) => start ⊢ match access.executable(memory, start) {
+            False => FetchDenied(start),
+            True => match access.read_byte(memory, start) {
+                None => FetchMissing(start),
+                Some(byte) => match rest {
+                    Zero => FetchedBytes(Cons(byte, Nil)),
+                    Succ(_) => match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
+                        True => FetchAddressWrap,
+                        False => prepend_fetched(byte, ih(next_rip(start, 1))),
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn FetchedFrom<M>(access: FetchAccess<M>, memory: M,
+    span: InstructionBytes) → Type
+{
+    fetch_instruction_bytes(access, memory, span.bytes.len(), span.start)
+        = FetchedBytes(span.bytes)
+}
+
+// Memory comes from the same before-state used by ExecuteAt. Fetch failure,
+// unsupported decoding, and architectural execution outcomes remain distinct.
+fn ExecuteFetched<M>(access: FetchAccess<M>, span: InstructionBytes,
+    decoded: DecodedInstruction, before: MachineState<M>,
+    outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
+{
+    FetchedFrom(access, before.memory, span) ∧ ExecuteAt(span, decoded, before, outcome)
+}
+
+theorem execute_fetched_from_execute_at<M>(access: FetchAccess<M>,
+    span: InstructionBytes, decoded: DecodedInstruction, before: MachineState<M>,
+    outcome: SemanticOutcome<MachineState<M>, Exception>,
+    fetched: FetchedFrom(access, before.memory, span),
+    execution: ExecuteAt(span, decoded, before, outcome)):
+    ExecuteFetched(access, span, decoded, before, outcome)
+{ ⟨fetched, execution⟩ }

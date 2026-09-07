@@ -33,3 +33,17 @@ not yet connect those two through loaded memory and fetch.
 - [[byte-memory-access-model]] owns byte-store and access-policy semantics.
 - [[x86-64-machine-model]] owns canonical decoding and execution.
 - [[x86-static-elf-executable]] supplies the initial image and entry certificate.
+
+
+## Log
+
+- 2026-09-07: First slice implemented in `lib/std/arch/x86_64/fetch.hthr`:
+  explicit byte-reader/execute-policy interface, exact-span fetch outcomes,
+  nonwrapping address advancement, and `ExecuteFetched` connecting the same
+  before-state memory to canonical `ExecuteAt`. Focused x86 checks pass,
+  including neutral/open inputs and negative controls. ELF placement and
+  whole-program fetched execution remain open; no loader proof is claimed.
+
+- 2026-09-07: Full validation: `HEATHER_TEST_JOBS=3 scripts/test` passed
+  (2469 passed, 0 failed, 5 ignored; runner wall time 428s). The focused x86
+  target also passed independently. Issue and whitespace checks are clean.

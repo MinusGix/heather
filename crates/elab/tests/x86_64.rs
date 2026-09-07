@@ -90,6 +90,7 @@ fn x86_64_suite() {
     if report_metrics {
         base.reset_value_metrics();
     }
+    fetched_instruction_boundary_checks(&base);
     register_and_execution_laws_check(&base);
     mov_ri_encoding_decoding_and_execution_check(&base);
     setcc_encoding_decoding_and_execution_check(&base);
@@ -729,5 +730,78 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
             e.elab_module_source("bad_bytes", src).is_err(),
             "an unsupported or malformed byte span was accepted:\n{src}"
         );
+    }
+}
+
+
+fn fetched_instruction_boundary_checks(base: &Elaborator) {
+    let mut e = base.clone();
+    let library = include_str!("../../../lib/std/arch/x86_64/fetch.hthr");
+    if let Err(err) = e.elab_module_source("x86_64_fetch", library) {
+        panic!("fetch library: {}", err.render(library));
+    }
+    let source = r#"
+import x86_64;
+import x86_64_fetch;
+import bitvec;
+import bool;
+import list;
+import nat;
+import option;
+import logic;
+import relation;
+fn test_read(bytes: List<BitVec(8)>, address: BitVec(64)) -> Option<BitVec(8)> {
+    bytes.nth(bitvec::toNat(64, address))
+}
+fn test_access() -> FetchAccess<List<BitVec(8)>> {
+    FetchAccess(test_read, λ memory address => True)
+}
+fn bytes() -> List<BitVec(8)> { canonical_bytes(MovRR(Rax, Rbx)) }
+fn start() -> BitVec(64) { bitvec::ofNat(64, 0) }
+theorem read_exact(): fetch_instruction_bytes(test_access(), bytes(), 3, start())
+    = FetchedBytes(bytes()) { refl }
+theorem missing_tail(): fetch_instruction_bytes(test_access(), bytes(), 4, start())
+    = FetchMissing(bitvec::ofNat(64, 3)) { refl }
+theorem denied_before_read(): fetch_instruction_bytes(
+    FetchAccess<List<BitVec(8)>>(test_read, λ memory address => False), Nil, 1, start())
+    = FetchDenied(start()) { refl }
+fn constant_access() -> FetchAccess<Nat> {
+    FetchAccess(λ memory address => Some(bitvec::ofNat(8, 72)), λ memory address => True)
+}
+fn last_address() -> BitVec(64) { bitvec::all_ones(64) }
+theorem last_byte(): fetch_instruction_bytes(constant_access(), 0, 1, last_address())
+    = FetchedBytes([bitvec::ofNat(8, 72)]) { refl }
+theorem wrap_rejected(): fetch_instruction_bytes(constant_access(), 0, 2, last_address())
+    = FetchAddressWrap { refl }
+theorem neutral_byte<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
+    fetch_instruction_bytes(FetchAccess<M>(λ m a => Some(byte), λ m a => True),
+        memory, 1, address) = FetchedBytes([byte]) { refl }
+theorem unsupported_bytes_still_fetch(): fetch_instruction_bytes(
+    test_access(), [bitvec::ofNat(8, 0)], 1, start())
+    = FetchedBytes([bitvec::ofNat(8, 0)]) { refl }
+theorem unsupported_decode(): decode_instruction([bitvec::ofNat(8, 0)]) = None { refl }
+theorem no_read_for_empty(): fetch_instruction_bytes(test_access(), Nil, 0, start())
+    = FetchedBytes(Nil) { refl }
+fn before() -> MachineState<List<BitVec(8)>> {
+    MachineState(zero_gprs(), clear_flags(), start(), bytes())
+}
+theorem fetched_executes(): ExecuteFetched(test_access(),
+    encoded_at(start(), MovRR(Rax, Rbx)), decoded_canonical(MovRR(Rax, Rbx)),
+    before(), Returned(execute_normal(decoded_canonical(MovRR(Rax, Rbx)), before())))
+{ ⟨refl, canonical_encoding_executes(MovRR(Rax, Rbx), before())⟩ }
+"#;
+    if let Err(err) = e.elab_module_source("fetch_checks", source) {
+        panic!("fetch checks: {}", err.render(source));
+    }
+    for (name, claim) in [
+        ("wrong_byte", "FetchedFrom(test_access(), [bitvec::ofNat(8, 0)], InstructionBytes(start(), [bitvec::ofNat(8, 72)]))"),
+        ("wrong_address", "FetchedFrom(test_access(), bytes(), InstructionBytes(bitvec::ofNat(64, 1), bytes()))"),
+        ("non_executable", "FetchedFrom(FetchAccess<List<BitVec(8)>>(test_read, λ memory address => False), bytes(), InstructionBytes(start(), bytes()))"),
+    ] {
+        let bad = format!("import fetch_checks;\nimport x86_64_fetch;\nimport x86_64;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): {claim} {{ refl }}");
+        let error = e.clone().elab_module_source(name, &bad).expect_err("accepted invalid fetch");
+        let rendered = error.render(&bad);
+        assert!(!rendered.contains("unbound") && !rendered.contains("parse error"),
+            "{name} failed before checking its proof: {rendered}");
     }
 }

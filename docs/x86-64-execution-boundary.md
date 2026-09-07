@@ -127,3 +127,43 @@ The direct executable path now checks a restricted ELF64 image and a typed
 entry/body/exit-request trace. Its exact claims and environmental assumptions
 are owned by [the static ELF design](x86-64-static-elf.md). It does not yet
 supply the architectural memory-fetch bridge described above.
+
+
+## Exact-span memory fetch (2026-09-07)
+
+`lib/std/arch/x86_64/fetch.hthr` adds the first memory-to-byte-span adapter.
+`FetchAccess<M>` supplies a byte reader returning `Option<BitVec(8)>` and a
+separate execute-permission predicate, both applied to the actual memory value.
+The caller chooses these implementations; this interface does not itself prove
+that a host OS provided the claimed memory or permissions.
+
+`fetch_instruction_bytes` reads exactly the requested number of bytes. It checks
+execute permission before attempting each byte read, reports the first denied
+or missing address, and rejects a span crossing the end of the 64-bit address
+space. A one-byte read at the last address is allowed; no successor address is
+needed. An empty request reads nothing. Successful byte fetching alone places
+no restriction on instruction encoding or length.
+
+`FetchedFrom` identifies a supplied instruction span with those fetched bytes.
+`ExecuteFetched` conjoins that fact, using `before.memory`, with the existing
+`ExecuteAt` relation. Thus RIP equality, supported decoding, valid instruction
+length, and architectural execution still come from the canonical model. Missing
+memory and denied permission are fetch results; unsupported bytes can fetch
+successfully but cannot satisfy the supported decoding relation. No new CPU
+exception semantics is inferred from these adapter results.
+
+This is an exact-span certificate boundary, not an incremental instruction-length
+discovery algorithm. It avoids requiring all 15 possible instruction bytes to be
+readable when a shorter instruction ends at a mapping boundary. The current
+profile deliberately excludes wrapping instruction spans; canonical-address,
+paging, and privilege rules still need a richer access implementation.
+
+The x86 test rail checks concrete MOV fetch/execution, neutral bytes with an open
+memory type, exact reads, missing tails, permission denial, unsupported decoding,
+and the last-address/wrap distinction. Wrong byte, address, and permission proofs
+are rejected.
+
+Remaining work belongs to `issues/x86-loaded-memory-fetch.md`: instantiate this
+interface from the restricted ELF PT_LOAD mapping, prove the placed image supplies
+its certified spans, and connect fetched steps throughout the emitted program.
+The standalone ELF certificate has not yet gained those guarantees.
