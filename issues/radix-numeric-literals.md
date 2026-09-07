@@ -1,9 +1,9 @@
 ---
 title: Add radix-aware numeric literals
-status: open
+status: closed
 labels: [frontend,syntax,ergonomics]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-09-07
 ---
 
 Heather accepts decimal natural-number syntax only. Binary formats and
@@ -43,3 +43,4 @@ carrier-directed numerals, not introduce new numeric semantics.
 - 2026-08-27: Filed alongside [[list-literal-syntax]]: list punctuation removes
   the constructor noise from byte strings, while radix literals separately
   expose prefix/opcode/ModRM bit structure for review.
+- 2026-09-07: Landed: `0x`/`0o`/`0b` numerals with `_` separators between digits, lexer-level refusals naming the offending character, and the token/AST unchanged (value only) so every carrier route is shared with decimal by construction. Octal included. The u64 token bound is kept in every radix (it was already the decimal form's and the kernel's NatLit's); a wider literal is a separate decision. Written spelling is not carried past the lexer (render_expr prints decimal) — judged not worth touching every Num site. Design: docs/radix-numerals-design.md; controls: crates/syntax/src/lexer.rs tests, crates/elab/tests/radix_numerals.rs. Respelling binary-format fixtures remains the readability follow-up the issue already excludes.
