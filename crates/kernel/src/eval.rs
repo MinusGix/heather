@@ -195,6 +195,18 @@ pub struct Eval<'a, 'v> {
     /// scrutinee evaluated before its elimination is built) use it as a
     /// stack of stacks: each records the height it entered at.
     frames: Vec<Frame<'v>>,
+    /// Set while a caller has asked for the **δ-transparent** weak head
+    /// value ([`Eval::delta_whnf`]). An eliminator stuck on a glued
+    /// scrutinee then unfolds the scrutinee and retries, instead of
+    /// stalling as a spine for the caller to δ-step from the outside —
+    /// each such outside step replays the whole pending spine, which made
+    /// a structural consumer over a computed producer cubic in the width
+    /// (and, once the replays' throwaway memos evicted the shared ones,
+    /// exponential). The unfoldings performed are exactly those the outside
+    /// loop would perform, in the same order, each charged one δ-step; only
+    /// the replays are gone. Off by default: opaque evaluation is what the
+    /// δ-lazy rendezvous in conversion needs (see `step_elim`).
+    transparent: bool,
 }
 
 impl<'a, 'v> Eval<'a, 'v> {
@@ -206,7 +218,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         base: CtxBase,
         arena: &'v ValueArena<'v>,
     ) -> Eval<'a, 'v> {
-        Eval { fuel, defs, base, arena, frames: Vec::new() }
+        Eval { fuel, defs, base, arena, frames: Vec::new(), transparent: false }
     }
 
     /// The unspent budget.
@@ -461,14 +473,26 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Conversion's δ-lazy stage deliberately does *not* call this until the
     /// opaque comparison has failed (design §5); it is the second stage, and
     /// the differential oracle's counterpart to `whnf_term_delta`.
+    ///
+    /// Runs **transparently** (`Eval::transparent`): a stuck eliminator met
+    /// while replaying the spine unfolds its glued scrutinee in place. The
+    /// loop is still needed — an application spine over a glued head is
+    /// left glued by the replay — and it terminates because every round
+    /// unfolds at least the innermost definition.
     pub fn delta_whnf(&mut self, mut v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
-        loop {
-            let next = self.delta_step(Rc::clone(&v))?;
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = loop {
+            let next = match self.delta_step(Rc::clone(&v)) {
+                Ok(next) => next,
+                Err(e) => break Err(e),
+            };
             if Rc::ptr_eq(&next, &v) {
-                return Ok(v);
+                break Ok(v);
             }
             v = next;
-        }
+        };
+        self.transparent = saved;
+        out
     }
 
     /// [`Eval::delta_step`] for types: advance exactly one definition in the
@@ -519,13 +543,19 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Force the glued unfoldings at a type's δ-stuck term until none
     /// remains.
     pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
-        loop {
-            let next = self.delta_step_ty(Rc::clone(&v))?;
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = loop {
+            let next = match self.delta_step_ty(Rc::clone(&v)) {
+                Ok(next) => next,
+                Err(e) => break Err(e),
+            };
             if Rc::ptr_eq(&next, &v) {
-                return Ok(v);
+                break Ok(v);
             }
             v = next;
-        }
+        };
+        self.transparent = saved;
+        out
     }
 
     // -- types --------------------------------------------------------------
@@ -1350,6 +1380,18 @@ impl<'a, 'v> Eval<'a, 'v> {
             // it eagerly exhausts fuel on the dispatch it hides.
             if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
                 if nat_step_successors(step).is_some() || nat_step_synchronizes(step) {
+                    self.spend()?;
+                    self.frames.push(Frame::Elim(Rc::new(e)));
+                    return Ok(Work::Force(unfold));
+                }
+            }
+            // Under a δ-transparent request (`Eval::delta_whnf`) every
+            // eliminator that would be stuck on a glued scrutinee unfolds
+            // it instead. Applications are not stuck — they extend the
+            // spine, keeping the glued `f a⃗` shape — and the transparent
+            // loop unfolds that spine's head next if it has to.
+            if self.transparent && !e.is_application() {
+                if let Some(unfold) = n.unfold {
                     self.spend()?;
                     self.frames.push(Frame::Elim(Rc::new(e)));
                     return Ok(Work::Force(unfold));

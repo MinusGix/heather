@@ -574,6 +574,10 @@ impl<'v> Dom<'v> for Values {
         run(cv, env, |ev| ev.delta_step(w))
     }
 
+    fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: Rc<Val<'v>>) -> R<Rc<Val<'v>>> {
+        run(cv, env, |ev| ev.delta_whnf(w))
+    }
+
     fn delta_head(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &Rc<Val<'v>>) -> Option<GlobalVar> {
         glued(w)
     }

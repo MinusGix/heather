@@ -248,8 +248,21 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let mut root_ok = true;
         let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
             .with_freshness(opts.images);
+        // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
+        // per module (meaningful with the `value-metrics` feature; zeros
+        // otherwise). Observational only — it cannot change a verdict.
+        let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+        if report_metrics {
+            elab.enable_value_metrics();
+        }
         for m in &modules {
+            elab.reset_value_metrics();
             let outcome = semantic.check(&mut elab, m, lint_profile);
+            if report_metrics {
+                if let Some(snapshot) = elab.value_metrics() {
+                    eprintln!("value metrics {}: {snapshot:?}", display_path(&m.path, path));
+                }
+            }
             for notice in &outcome.notices {
                 eprintln!("{notice}");
             }

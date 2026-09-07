@@ -20,5 +20,8 @@ heather-syntax = { path = "../syntax" }
 heather-elab = { path = "../elab" }
 heather-cache = { path = "../cache" }
 
+[features]
+value-metrics = ["heather-elab/value-metrics"]
+
 [lints]
 workspace = true

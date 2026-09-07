@@ -109,3 +109,4 @@ carry/borrow code plus the cases above are sufficient to start from a worktree.
   lib_std_bitvec ripple` (2 passed) and the plain full `scripts/test` on
   furnace: 2488 passed, 0 failed, 5 ignored. Left open for the coordinator's
   API review and x86 integration; nothing else in scope remains.
+- 2026-09-07: The consumer-over-producer limitation above is lifted by the kernel round logged in [[bitvec-closed-reduction-cost]] (transparent δ-whnf for a side with no defined head to meet): `sign_bit`, `toNat`, `toInt`, `complement`, `carry_add_bit`, `borrow_sub_bit`, `signed_overflow_add`, the comparison bits, and a ripple over a ripple all check over width-64 ripple results in seconds under the ordinary rail, pinned by `consumers_over_computed_machine_width_producers_cost_the_width`. x86 integration may chain structural consumers over ripple results at machine width; transporting to `add`/`sub` remains the way to state canonical facts.

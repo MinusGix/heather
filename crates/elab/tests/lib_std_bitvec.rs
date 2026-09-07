@@ -488,6 +488,66 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
     }
 }
 
+/// Structural consumers over a computed width-64 producer. Until 2026-09-07
+/// every one of these exhausted fuel or gigabytes while the same consumer
+/// over an `ofNat` literal was cheap: conversion drove the δ-unfoldings
+/// from outside one definition at a time, and each step replayed the
+/// consumer's whole stuck spine over the producer (cubic in the width, then
+/// exponential once the replays' throwaway memos evicted the shared ones).
+/// A side with no defined head to meet now unfolds transparently inside the
+/// machine (`Eval::delta_whnf`), and these check in seconds under the
+/// ordinary rail (issues/bitvec-closed-reduction-cost.md). A *negative*
+/// `toInt` at width 64 is deliberately absent: its `int::sub(OfNat(2^63),
+/// OfNat(2^64))` is unary magnitude arithmetic, the family of
+/// issues/nat-order-large-run-comparison.md, not a consumer cost. Likewise
+/// `signed_overflow_add` is stated with a count-one right operand: it goes
+/// through the old `add`, whose `iterate_increment` over a `2^63` count is
+/// the excessive unary computation the resource-diagnostic clause of
+/// issues/bitvec-closed-reduction-cost.md still owns (a stack overflow, not
+/// `OutOfFuel`).
+#[test]
+fn consumers_over_computed_machine_width_producers_cost_the_width() {
+    const M: u128 = 1 << 64;
+    const HIGH: u128 = 1 << 63;
+    const ADDRESS: u128 = 0x0000_7FFF_FFFF_F000;
+    let of = |v: u128| format!("ofNat(64, {v})");
+    let high_sum = format!("ripple_add(64, {}, {})", of(5), of(HIGH - 5));
+    let src = format!(
+        "import nat;\n\
+         theorem sign_of_sum(): sign_bit(64, {high_sum}) = True {{ refl }}\n\
+         theorem value_of_sum(): toNat(64, {high_sum}) = {HIGH} {{ refl }}\n\
+         theorem signed_value_of_sum(): toInt(64, ripple_add(64, {a}, {b})) = OfNat({}) {{ refl }}\n\
+         theorem complement_of_sum(): complement(64, {high_sum}) = {} {{ refl }}\n\
+         theorem sum_of_sums(): ripple_add(64, ripple_add(64, {a}, {b}), ripple_sub(64, {c}, one(64))) = {} {{ refl }}\n\
+         theorem carry_of_sum(): carry_add_bit(64, ripple_add(64, all_ones(64), zero(64)), one(64)) = True {{ refl }}\n\
+         theorem borrow_of_difference(): borrow_sub_bit(64, ripple_sub(64, {a}, {a}), one(64)) = True {{ refl }}\n\
+         theorem overflow_of_difference(): signed_overflow_add(64, ripple_sub(64, {h}, one(64)), one(64)) = True {{ refl }}\n\
+         theorem sum_below_its_negation(): unsigned_lt_bit(64, {a}, ripple_neg(64, {a})) = True {{ refl }}\n\
+         theorem boundary_unsigned(): unsigned_lt_bit(64, zero(64), {h}) = True {{ refl }}\n\
+         theorem boundary_signed(): signed_lt_bit(64, {h}, zero(64)) = True {{ refl }}\n\
+         theorem value_of_old_add(): toNat(64, bitvec::add(64, {a}, ofNat(64, 8))) = {} {{ refl }}\n",
+        ADDRESS + 1024,
+        bit_vector_literal_at(64, (M - 1) ^ HIGH),
+        of(ADDRESS + 1024 + 99),
+        ADDRESS + 8,
+        a = of(ADDRESS), b = of(1024), c = of(100), h = of(HIGH),
+    );
+    ok(&src);
+
+    for (name, wrong) in [
+        ("sign_of_sum", format!("sign_bit(64, {high_sum}) = False")),
+        ("value_of_sum", format!("toNat(64, {high_sum}) = {}", HIGH + 1)),
+        ("sum_of_sums", format!(
+            "ripple_add(64, ripple_add(64, {a}, {b}), ripple_sub(64, {c}, one(64))) = {}",
+            of(ADDRESS + 1024 + 100), a = of(ADDRESS), b = of(1024), c = of(100))),
+        ("boundary_unsigned", format!("unsigned_lt_bit(64, {}, zero(64)) = True", of(HIGH))),
+    ] {
+        let msg = run(&format!("import nat;\ntheorem {name}(): {wrong} {{ refl }}"))
+            .expect_err("a wrong consumer result must be refused");
+        assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+    }
+}
+
 #[test]
 fn open_symbolic_bitvector_wrappers_stop_at_matching_definition_heads() {
     // These transparent wrappers used to normalize their structural bodies

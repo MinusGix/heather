@@ -714,12 +714,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// one `delta_ty`. A former view (`Vec`, `Fin`, …) is left alone even
     /// when a *component* is δ-stuck: the view is already decisive there and
     /// forcing a length nobody reads would only spend fuel.
-    /// Unfold a term's defined heads until none remains.
-    fn delta_to_head_tm(&mut self, env: &Env<'v>, mut w: D::Tm) -> R<D::Tm> {
-        while D::delta_head(self, env, &w).is_some() {
-            w = D::delta_tm(self, env, &w)?;
+    /// Unfold a term's defined heads until none remains
+    /// ([`Dom::delta_whnf_tm`]).
+    fn delta_to_head_tm(&mut self, env: &Env<'v>, w: D::Tm) -> R<D::Tm> {
+        if D::delta_head(self, env, &w).is_none() {
+            return Ok(w);
         }
-        Ok(w)
+        D::delta_whnf_tm(self, env, w)
     }
 
     fn delta_to_head_ty(&mut self, env: &Env<'v>, mut w: D::Ty) -> R<D::Ty> {
@@ -1139,8 +1140,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 match heads {
                     (None, None) => break,
-                    (Some(_), None) => wa = D::delta_tm(self, env, &wa)?,
-                    (None, Some(_)) => wb = D::delta_tm(self, env, &wb)?,
+                    // The other side has no defined head, so no rendezvous
+                    // at one is possible and this side unfolds until it
+                    // has none either — the sequence of single steps the
+                    // loop would otherwise take, done as one transparent
+                    // reduction (`Dom::delta_whnf_tm`) so that a spine
+                    // stuck on a glued scrutinee is not replayed per step.
+                    (Some(_), None) => wa = self.delta_to_head_tm(env, wa)?,
+                    (None, Some(_)) => wb = self.delta_to_head_tm(env, wb)?,
                     // A body can mention only older globals. With de Bruijn
                     // global indices, the newer declaration has the smaller
                     // index in the current Ψ. Advance only that side: if it
