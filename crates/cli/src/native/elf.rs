@@ -328,6 +328,7 @@ mod tests {
     use super::*;
     #[test]
     fn elf_header_mutations_are_rejected_by_heather() {
+        let _guard = super::super::CERTIFICATE_TEST_LOCK.lock().unwrap();
         use heather_elab::Elaborator;
         use heather_cli::{loader, semantic::SemanticSession};
         use std::path::PathBuf;
@@ -363,6 +364,7 @@ mod tests {
 
     #[test]
     fn loaded_mapping_and_fetch_refusals() {
+        let _guard = super::super::CERTIFICATE_TEST_LOCK.lock().unwrap();
         use heather_elab::Elaborator;
         use heather_cli::{loader, semantic::SemanticSession};
         use std::path::PathBuf;

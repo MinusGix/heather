@@ -241,12 +241,18 @@ fn assembly(symbol: &str, bytes: &[u8]) -> String {
     out
 }
 
+// Each certificate test loads the complete proof library. Keep these loads
+// serial so two elaborators do not exceed the test process's 4 GiB cap.
+#[cfg(test)]
+static CERTIFICATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn native_encoder_is_checked_and_corruption_is_rejected() {
+        let _guard = CERTIFICATE_TEST_LOCK.lock().unwrap();
         let mut elab = Elaborator::with_prelude().unwrap();
         let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
         for &(name, src) in SUPPORT {
