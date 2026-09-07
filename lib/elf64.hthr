@@ -20,49 +20,49 @@ fn elf_size16(low, high: BitVec(8)) → Nat {
 fn static_elf64_header(low, high: BitVec(8)) → List<BitVec(8)> {
     [
         // 0x00: e_ident: magic, ELF64, little endian, current version, System V
-        elf_byte(127), elf_byte(69), elf_byte(76), elf_byte(70), elf_byte(2), elf_byte(1), elf_byte(1), elf_byte(0),
+        elf_byte(0x7f), elf_byte(0x45), elf_byte(0x4c), elf_byte(0x46), elf_byte(0x02), elf_byte(0x01), elf_byte(0x01), elf_byte(0x00),
         // 0x08: e_ident: ABI version and reserved bytes
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x10: e_type = ET_EXEC; e_machine = EM_X86_64; e_version = 1
-        elf_byte(2), elf_byte(0), elf_byte(62), elf_byte(0), elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x02), elf_byte(0x00), elf_byte(0x3e), elf_byte(0x00), elf_byte(0x01), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x18: e_entry = 0x4000b0
-        elf_byte(176), elf_byte(0), elf_byte(64), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0xb0), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x20: e_phoff = 64
-        elf_byte(64), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x28: e_shoff = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x30: e_flags = 0; e_ehsize = 64; e_phentsize = 56
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(64), elf_byte(0), elf_byte(56), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x38), elf_byte(0x00),
         // 0x38: e_phnum = 2; no section table or section strings
-        elf_byte(2), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x02), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x40: PT_LOAD; PF_R | PF_X
-        elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(5), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x01), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x05), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x48: p_offset = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x50: p_vaddr = 0x400000
-        elf_byte(0), elf_byte(0), elf_byte(64), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x58: p_paddr = 0x400000 (ignored by Linux)
-        elf_byte(0), elf_byte(0), elf_byte(64), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x60: p_filesz
-        low, high, elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        low, high, elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x68: p_memsz = p_filesz
-        low, high, elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        low, high, elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x70: p_align = 4096
-        elf_byte(0), elf_byte(16), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x10), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x78: PT_GNU_STACK; PF_R | PF_W
-        elf_byte(81), elf_byte(229), elf_byte(116), elf_byte(100), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x51), elf_byte(0xe5), elf_byte(0x74), elf_byte(0x64), elf_byte(0x06), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x80: p_offset = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x88: p_vaddr = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x90: p_paddr = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0x98: p_filesz = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0xa0: p_memsz = 0
-        elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0),
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
         // 0xa8: p_align = 16
-        elf_byte(16), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(0)
+        elf_byte(0x10), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00)
     ]
 }
 
