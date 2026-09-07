@@ -28,7 +28,8 @@ evidence, not kernel features.
 
 ## Native x86_64 example
 
-`heather compile-x86` exports a supported two-argument Heather function as
-checked x86 bytes in assembly. A C wrapper and the system linker turn it into
-a runnable Linux executable. See [the example](examples/x86-native/README.md)
-for commands, supported expressions, and the formal proof boundary.
+`heather build-x86` writes a standalone Linux executable directly from a
+supported two-argument Heather function. `heather compile-x86` exports checked
+x86 bytes in assembly for use with an external wrapper/toolchain. See
+[the example](examples/x86-native/README.md) for commands, supported
+expressions, and the formal proof boundary.

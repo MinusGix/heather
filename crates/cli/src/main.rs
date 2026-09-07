@@ -87,11 +87,13 @@ fn main() -> ExitCode {
             None => usage(),
         },
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
+        Some((cmd, rest)) if cmd == "build-x86" => native::build(rest),
         _ => usage(),
     }
 }
 
-const USAGE: &str = "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]\n\
+const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>]\n\
+                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]\n\
                      usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";

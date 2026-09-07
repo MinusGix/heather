@@ -120,3 +120,10 @@ have no `DecodedAt` proof in this slice. Nor does `InstructionBytes` claim that
 a read from architectural memory succeeded: fetch and its faults wait for the
 byte memory model. Invalid encoding, unsupported coverage, failed fetch, and
 architectural execution fault remain four different outcomes.
+
+## Standalone image export
+
+The direct executable path now checks a restricted ELF64 image and a typed
+entry/body/exit-request trace. Its exact claims and environmental assumptions
+are owned by [the static ELF design](x86-64-static-elf.md). It does not yet
+supply the architectural memory-fetch bridge described above.

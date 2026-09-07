@@ -58,3 +58,23 @@ normal loader with `lib/std`, `lib`, and additional `-L` directories. A source
 module with a bundled library name must have identical contents. Optional
 `--cache-dir` uses kernel-rechecked semantic images with exact build identity;
 it does not enable the trusted declaration cache or stale-image replay.
+
+## Direct executable, with no assembler or linker
+
+```sh
+cargo build -p heather-cli
+(ulimit -v 8388608 -t 180; target/debug/heather build-x86 \
+  examples/x86-native/mix.hthr mix --arg 0x14 --arg 0b10110 \
+  -o target/x86-native/mix-direct --cache-dir target/native-images)
+./target/x86-native/mix-direct
+printf 'exit status: %s\n' "$?"
+```
+
+The exit status is 27. The two arguments are compiled into the executable;
+there is no runtime argument parser. The example is a 233-byte ELF64 file,
+with a companion `mix-direct.certificate.hthr`. It performs no output and
+needs no C wrapper. Build to a fresh path when rebuilding.
+
+The checked entry/body/exit-register trace and exact file image are described
+in [the ELF design](../../docs/x86-64-static-elf.md), including the remaining
+Linux loading, instruction-fetch, and syscall-delivery assumptions.

@@ -10,6 +10,8 @@ use heather_elab::function_ir_x86_lower::{Gpr, Instruction, LowByteGpr};
 use heather_elab::heather_emit::{Block, Declaration, Expr, Module};
 use heather_cli::{loader, semantic::SemanticSession};
 
+mod elf;
+
 const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),
     ("bool", include_str!("../../../lib/std/bool.hthr")),
@@ -29,10 +31,20 @@ const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_control_flow", include_str!("../../../lib/std/arch/x86_64/control_flow.hthr")),
     ("function_ir", include_str!("../../../lib/function_ir.hthr")),
     ("function_ir_x86_support", include_str!("../../../lib/function_ir_x86_support.hthr")),
+    ("elf64", include_str!("../../../lib/elf64.hthr")),
+    ("linux_x86_64_entry", include_str!("../../../lib/linux_x86_64_entry.hthr")),
 ];
 
 pub fn run(args: &[String]) -> ExitCode {
-    match compile(args) {
+    report(compile(args, false))
+}
+
+pub fn build(args: &[String]) -> ExitCode {
+    report(compile(args, true))
+}
+
+fn report(result: Result<(), String>) -> ExitCode {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -47,14 +59,18 @@ fn symbol_ok(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn compile(args: &[String]) -> Result<(), String> {
+fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
+    let mut inputs = Vec::new();
     let mut cache = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--arg" if executable => {
+                inputs.push(elf::parse_argument(args.next().ok_or("--arg needs an unsigned integer")?)?);
+            }
             "-o" | "-L" | "--cache-dir" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
@@ -67,7 +83,13 @@ fn compile(args: &[String]) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
+    if executable && inputs.len() != 2 {
+        return Err("build-x86 needs exactly two --arg values for the source function".into());
+    }
     if positional.len() != 2 || output.is_none() {
+        if executable {
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>]".into());
+        }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]".into());
     }
     let source = Path::new(positional[0]);
@@ -76,10 +98,14 @@ fn compile(args: &[String]) -> Result<(), String> {
         return Err("function must be an ASCII C/assembly identifier".into());
     }
     let output = output.unwrap();
-    if output.extension().and_then(|s| s.to_str()) != Some("s") {
+    if !executable && output.extension().and_then(|s| s.to_str()) != Some("s") {
         return Err("assembly output must have the .s extension".into());
     }
-    let certificate = output.with_extension("certificate.hthr");
+    let certificate = if executable {
+        let mut name = output.as_os_str().to_os_string();
+        name.push(".certificate.hthr");
+        PathBuf::from(name)
+    } else { output.with_extension("certificate.hthr") };
     // Refuse replacement, including symlinks: failed builds cannot leave a
     // previous executable body looking like the newly checked result.
     for path in [&output, &certificate] {
@@ -113,24 +139,38 @@ fn compile(args: &[String]) -> Result<(), String> {
     let bytes = encode(&emission.instructions);
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
-        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic"] {
+        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry"] {
         proof.raw(format!("import {name};"));
     }
-    proof.raw(emission.text);
+    proof.raw(emission.text.clone());
     proof.declaration(Declaration::theorem(
         format!("{prefix}_exported_bytes"),
         Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::list(bytes.iter().map(|b|
             Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))),
         Block::expression(Expr::name("refl")),
     ));
+    let image = if executable {
+        Some(elf::certify(&mut proof, &prefix, &emission, [inputs[0], inputs[1]], &bytes)?)
+    } else { None };
     let proof = proof.render();
     eprintln!("checking source refinement and {} exported body bytes", bytes.len());
     elab.elab_module_source(&format!("{prefix}_certificate"), &proof)
         .map_err(|e| e.render(&proof))?;
-    let assembly = assembly(symbol, &bytes);
-    write_new(&certificate, &proof)?;
-    write_new(&output, &assembly)?;
-    println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+    write_new(&certificate, proof.as_bytes())?;
+    if let Some(image) = image {
+        write_new(&output, &image)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("{}: {e}", output.display()))?;
+        }
+        println!("{}: {}-byte ELF64 executable; checked image and Linux exit request", output.display(), image.len());
+        println!("Linux loading, instruction fetch, and syscall delivery remain environment assumptions");
+    } else {
+        write_new(&output, assembly(symbol, &bytes).as_bytes())?;
+        println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+    }
     println!("certificate: {}", certificate.display());
     Ok(())
 }
@@ -143,11 +183,11 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
     }
 }
 
-fn write_new(path: &Path, contents: &str) -> Result<(), String> {
+fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    file.write_all(contents.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    file.write_all(contents).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn reg(register: Gpr) -> u8 {
