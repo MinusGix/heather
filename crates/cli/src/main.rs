@@ -45,6 +45,7 @@ use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
 
 mod color;
+mod native;
 
 /// Where the standard library lives when nobody says otherwise
 /// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
@@ -85,11 +86,13 @@ fn main() -> ExitCode {
             },
             None => usage(),
         },
+        Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
         _ => usage(),
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]\n\
+                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";
 

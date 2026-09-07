@@ -3,7 +3,7 @@ title: Generate certified x86 lowering for pure FunctionIR Add DAGs
 status: closed
 labels: [compiler,function-ir,x86,proofs,codegen]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-07
 ---
 
 FunctionIR validity certificates are generated and scale to ordinary compiler
@@ -87,3 +87,7 @@ instruction-selection rule that carries operand permutation evidence.
   this backend.
 - **[[function-ir-conditional-regions]]** is the first structured-control
   customer after the straight-line core.
+
+## Log
+
+- 2026-09-07: Native assembly export of checked source lowering is owned by [[x86-native-export]].

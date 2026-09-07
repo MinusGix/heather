@@ -25,3 +25,10 @@ evidence, not kernel features.
 - `crates/cli` — `heather` driver binary
 - `docs/` — papers; `docs/delam/` is the type-theory reference
 - `issues/` — repo-local issue tracker (`scripts/issue`, see `issues/README.md`)
+
+## Native x86_64 example
+
+`heather compile-x86` exports a supported two-argument Heather function as
+checked x86 bytes in assembly. A C wrapper and the system linker turn it into
+a runnable Linux executable. See [the example](examples/x86-native/README.md)
+for commands, supported expressions, and the formal proof boundary.
