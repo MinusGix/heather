@@ -285,6 +285,20 @@ so the decoder rendezvous is untouched; a memo written transparently can
 later answer an opaque single step with more than one step, which can
 only cost a rendezvous, never a verdict.
 
+**Acceleration policy** (`issues/kernel-acceleration-policy.md`). The
+kernel accelerates in three ways, and only two of them may grow:
+*representation changes with an adequacy argument* (saturated runs — the
+same values, the same relation up to bisimulation, generic over the type)
+and *strategy changes with no semantic content* (everything in the δ-lazy
+paragraphs above — the same unfoldings, the same fuel, checked by the
+differential oracle). The third, *pattern-matching on a definition's
+shape* (`nat_step_successors`, `nat_step_synchronizes`), is a standing
+exception to retire behind a general run algebra, not a template: a cost
+the calculus itself charges (unary iteration over a magnitude) is answered
+in the library by a definition whose reduction cost matches its meaning,
+or by reflection, never by a kernel case for that definition — and what is
+not accelerated is refused with `OutOfFuel`, never a process abort.
+
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see
