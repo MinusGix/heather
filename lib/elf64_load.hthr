@@ -1,0 +1,54 @@
+// Logical loaded-memory interpretation of the restricted static ELF profile.
+// This specifies the mapping supplied by the OS; it does not verify Linux.
+// The whole file is RX at 0x400000, with p_memsz = p_filesz (no zero-fill).
+// The unused process stack and all other mappings lie outside this view.
+import elf64;
+import x86_64;
+import x86_64_fetch;
+import bitvec;
+import bool;
+import nat;
+import list;
+import option;
+import logic;
+
+// The profile fits inside a single 64-KiB address window. Splitting the
+// address avoids unary subtraction of the 0x400000 mapping base.
+fn static_elf64_address(offset: BitVec(16)) → BitVec(64) {
+    bitvec::concat(16, 48, offset, bitvec::ofNat(48, 64))
+}
+
+fn static_elf64_entry() → BitVec(64) {
+    static_elf64_address(bitvec::ofNat(16, 176))
+}
+
+fn static_elf64_read(file: List<BitVec(8)>, address: BitVec(64)) → Option<BitVec(8)> {
+    match is_zero_bits(48, bitvec::bxor(48,
+        bitvec::drop_low(16, 48, address), bitvec::ofNat(48, 64))) {
+        True => file.nth(bitvec::toNat(16, bitvec::take_low(16, 48, address))),
+        False => None,
+    }
+}
+
+// In this RX-only image view exactly the file-backed bytes are executable.
+// A missing byte denies fetch; there is no implicit executable padding.
+fn static_elf64_executable(file: List<BitVec(8)>, address: BitVec(64)) → Bool {
+    match static_elf64_read(file, address) { None => False, Some(_) => True }
+}
+
+fn static_elf64_access() → FetchAccess<List<BitVec(8)>> {
+    FetchAccess(static_elf64_read, static_elf64_executable)
+}
+
+fn static_elf64_initial(file: List<BitVec(8)>, gprs: Gprs, flags: Flags) →
+    MachineState<List<BitVec(8)>>
+{
+    MachineState(gprs, flags, static_elf64_entry(), file)
+}
+
+// This is a per-image certificate: the supplied file must be the bytes of a
+// valid restricted ELF, not merely an arbitrary list used as memory.
+record StaticElf64Loaded(code: List<BitVec(8)>, file: List<BitVec(8)>) {
+    image: StaticElf64Image(code),
+    file_correct: file = static_elf64_bytes(image),
+}

@@ -75,6 +75,6 @@ there is no runtime argument parser. The example is a 233-byte ELF64 file,
 with a companion `mix-direct.certificate.hthr`. It performs no output and
 needs no C wrapper. Build to a fresh path when rebuilding.
 
-The checked entry/body/exit-register trace and exact file image are described
-in [the ELF design](../../docs/x86-64-static-elf.md), including the remaining
-Linux loading, instruction-fetch, and syscall-delivery assumptions.
+The checked loaded-memory/fetch trace, source-result certificate, and exact
+file image are described in [the ELF design](../../docs/x86-64-static-elf.md),
+including the remaining Linux loading and syscall-delivery assumptions.

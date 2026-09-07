@@ -53,6 +53,12 @@ fn byte_list(bytes: &[u8]) -> Expr {
     Expr::list(bytes.iter().map(|b| Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))
 }
 
+fn loaded_address(offset: usize) -> String {
+    let bits = (0..16).map(|bit| if offset & (1 << bit) == 0 { "False" } else { "True" })
+        .collect::<Vec<_>>().join(", ");
+    format!("static_elf64_address(bitvec::from_bits(16, [{bits}]))")
+}
+
 fn function(module: &mut Module, name: &str, ty: &str, body: Expr) {
     module.declaration(Declaration::function(name, Expr::raw(ty), Block::expression(body)));
 }
@@ -172,7 +178,149 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
     theorem(module, &format!("{prefix}_elf_entry_code"), Expr::raw(format!(
         "list::drop({prefix}_elf_file(), 176) = {prefix}_image_code()")),
         Expr::call("static_elf64_entry_bytes", [Expr::nullary(format!("{prefix}_elf_image"))]));
+    certify_loaded_trace(module, prefix, &emission.instructions, inputs, &left, &right, &result);
     Ok(bytes)
+}
+
+fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
+    inputs: [u64; 2], left: &str, right: &str, result: &str)
+{
+    function(module, &format!("{prefix}_loaded_image"),
+        &format!("StaticElf64Loaded({prefix}_image_code(), {prefix}_elf_file())"),
+        Expr::raw(format!("StaticElf64Loaded({prefix}_elf_image(), {prefix}_elf_file_correct())")));
+    function(module, &format!("{prefix}_loaded_instructions"), "List<Instruction>",
+        Expr::raw(format!("linux_inline_instructions({prefix}_instructions(), {left}, {right})")));
+    let mut selected = vec![
+        Instruction::MovRI { destination: Gpr::Rdi, immediate: inputs[0] },
+        Instruction::MovRI { destination: Gpr::Rsi, immediate: inputs[1] },
+    ];
+    selected.extend_from_slice(body);
+    selected.extend([
+        Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax },
+        Instruction::MovRI { destination: Gpr::Rax, immediate: 60 },
+    ]);
+    let parameters = |decl: Declaration| decl
+        .parameter(Parameter::explicit("gprs", Expr::name("Gprs")))
+        .parameter(Parameter::explicit("flags", Expr::name("Flags")));
+    let state = |i| format!("{prefix}_loaded_state_{i}(gprs, flags)");
+    let suffix = |i| format!("{prefix}_loaded_suffix_{i}");
+    let fetches = |i| format!("{prefix}_loaded_fetches_{i}(gprs, flags)");
+    module.declaration(parameters(Declaration::function(format!("{prefix}_loaded_state_0"),
+        Expr::raw("MachineState<List<BitVec(8)>>"), Block::expression(Expr::raw(
+            format!("static_elf64_initial({prefix}_elf_file(), gprs, flags)"))))));
+    let mut offset = HEADER_SIZE;
+    for (i, instruction) in selected.iter().enumerate() {
+        offset += super::encode(&[*instruction]).len();
+        let step = format!("execute_normal(decoded_canonical({}), {})", instruction.render(), state(i));
+        // Expose memory and RIP directly so each byte lookup does not expand
+        // the preceding register computations. Conversion still checks that
+        // this state is the canonical successor when composing the trace.
+        module.declaration(parameters(Declaration::function(format!("{prefix}_loaded_state_{}", i + 1),
+            Expr::raw("MachineState<List<BitVec(8)>>"), Block::expression(Expr::raw(
+                format!("MachineState(gprs := ({step}).gprs, flags := ({step}).flags, rip := {}, memory := {prefix}_elf_file())", loaded_address(offset)))))));
+    }
+    function(module, &suffix(selected.len()), "List<Instruction>", Expr::list([]));
+    for (i, instruction) in selected.iter().enumerate().rev() {
+        function(module, &suffix(i), "List<Instruction>", Expr::call("Cons", [
+            instruction.heather_expr(), Expr::nullary(suffix(i + 1))]));
+    }
+    let mut instruction_offset = HEADER_SIZE;
+    let spans = selected.iter().map(|instruction| super::encode(&[*instruction]))
+        .chain(std::iter::once(vec![0x0f, 0x05]));
+    for (i, bytes) in spans.enumerate() {
+        for j in (0..bytes.len()).rev() {
+            let address = loaded_address(instruction_offset + j);
+            let byte = format!("elf_byte({})", bytes[j]);
+            let fact = |kind| format!("{prefix}_loaded_{kind}_{i}_{j}");
+            for (kind, claim) in [
+                ("permission", format!("static_elf64_executable({prefix}_elf_file(), {address}) = True")),
+                ("read", format!("static_elf64_read({prefix}_elf_file(), {address}) = Some({byte})")),
+            ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::name("refl")); }
+            let proof = if j + 1 == bytes.len() {
+                format!("fetch_span_one(static_elf64_access(), {prefix}_elf_file(), {address}, {byte}, {}(), {}())", fact("permission"), fact("read"))
+            } else {
+                let next = loaded_address(instruction_offset + j + 1);
+                for (kind, claim) in [
+                    ("no_wrap", format!("bitvec::carry_add_bit(64, {address}, bitvec::ofNat(64, 1)) = False")),
+                    ("next", format!("next_rip({address}, 1) = {next}")),
+                ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::name("refl")); }
+                format!("fetch_span_more(static_elf64_access(), {prefix}_elf_file(), {address}, {next}, {byte}, elf_byte({}), {}, {}(), {}(), {}(), {}(), {prefix}_loaded_byte_{i}_{}())",
+                    bytes[j + 1], byte_list(&bytes[j + 2..]).render(), fact("permission"), fact("read"), fact("no_wrap"), fact("next"), j + 1)
+            };
+            theorem(module, &format!("{prefix}_loaded_byte_{i}_{j}"),
+                Expr::raw(format!("FetchedFrom(static_elf64_access(), {prefix}_elf_file(), InstructionBytes({address}, {}))", byte_list(&bytes[j..]).render())),
+                Expr::raw(proof));
+        }
+        instruction_offset += bytes.len();
+    }
+    let final_state = state(selected.len());
+    module.declaration(parameters(Declaration::theorem(format!("{prefix}_loaded_execution_{}", selected.len()),
+        Expr::raw(format!("ExecuteFetchedBlock(static_elf64_access(), {}(), {final_state}, {final_state})", suffix(selected.len()))),
+        Block::expression(Expr::raw(format!("fetched_block_nil(static_elf64_access(), {final_state})"))))));
+    let mut offsets = vec![HEADER_SIZE];
+    for instruction in &selected { offsets.push(offsets.last().unwrap() + super::encode(&[*instruction]).len()); }
+    for (i, instruction) in selected.iter().enumerate().rev() {
+        let before = state(i);
+        let middle = state(i + 1);
+        let instruction = instruction.render();
+        let bytes = byte_list(&super::encode(&[selected[i]])).render();
+        let address = loaded_address(offsets[i]);
+        for (name, ty, proof) in [
+            (format!("{prefix}_loaded_fetches_{i}"),
+                format!("FetchedFrom(static_elf64_access(), ({before}).memory, encoded_at(({before}).rip, {instruction}))"),
+                format!("fetched_encoding_at_state(static_elf64_access(), {prefix}_elf_file(), {address}, {bytes}, {instruction}, {before}, refl, refl, refl, {prefix}_loaded_byte_{i}_0())")),
+            (format!("{prefix}_loaded_successor_{i}"),
+                format!("{middle} = execute_normal(decoded_canonical({instruction}), {before})"), "refl".to_string()),
+            (format!("{prefix}_loaded_execution_{i}"),
+                format!("ExecuteFetchedBlock(static_elf64_access(), {}(), {before}, {final_state})", suffix(i)),
+                format!("fetched_block_cons(static_elf64_access(), {instruction}, {}(), {before}, {middle}, {final_state}, canonical_fetched_step(static_elf64_access(), {instruction}, {before}, {middle}, {}, {prefix}_loaded_successor_{i}(gprs, flags)), {prefix}_loaded_execution_{}(gprs, flags))", suffix(i + 1), fetches(i), i + 1)),
+        ] {
+            module.declaration(parameters(Declaration::theorem(name, Expr::raw(ty), Block::expression(Expr::raw(proof)))));
+        }
+    }
+    let start = state(0);
+    let instructions = format!("{prefix}_loaded_instructions()");
+    theorem(module, &format!("{prefix}_loaded_instructions_agree"),
+        Expr::raw(format!("{}() = {instructions}", suffix(0))), Expr::name("refl"));
+    let original_final = format!("linux_exit_state({prefix}_after(linux_entry_state({left}, {right}, {start})))");
+    let reference = |i| format!("{prefix}_loaded_reference_{i}(gprs, flags)");
+    let begin = format!("linux_entry_state({left}, {right}, {start})");
+    for i in 0..=selected.len() {
+        let body = if i == 0 { start.clone() }
+            else if i == 1 { format!("execute_normal(decoded_canonical({}), {start})", selected[0].render()) }
+            else if i == 2 { begin.clone() }
+            else if i <= selected.len() - 2 { format!("{prefix}_state_{}({begin})", i - 2) }
+            else if i == selected.len() - 1 { format!("execute_normal(decoded_canonical({}), {prefix}_after({begin}))", selected[i - 1].render()) }
+            else { original_final.clone() };
+        module.declaration(parameters(Declaration::function(format!("{prefix}_loaded_reference_{i}"),
+            Expr::raw("MachineState<List<BitVec(8)>>"), Block::expression(Expr::raw(body)))));
+        let proof = if i == 0 { "refl".to_string() } else {
+            module.declaration(parameters(Declaration::theorem(format!("{prefix}_loaded_reference_step_{i}"),
+                Expr::raw(format!("{} = execute_normal(decoded_canonical({}), {})", reference(i), selected[i - 1].render(), reference(i - 1))),
+                Block::expression(Expr::name("refl")))));
+            format!("canonical_successor_cong({}, {}, {}, {}, {}, {prefix}_loaded_reference_agrees_{}(gprs, flags), {prefix}_loaded_successor_{}(gprs, flags), {prefix}_loaded_reference_step_{i}(gprs, flags))",
+                selected[i - 1].render(), state(i - 1), reference(i - 1), state(i), reference(i), i - 1, i - 1)
+        };
+        module.declaration(parameters(Declaration::theorem(format!("{prefix}_loaded_reference_agrees_{i}"),
+            Expr::raw(format!("{} = {}", state(i), reference(i))), Block::expression(Expr::raw(proof)))));
+    }
+    module.declaration(parameters(Declaration::theorem(format!("{prefix}_loaded_final_state_agrees"),
+        Expr::raw(format!("{original_final} = {final_state}")),
+        Block::expression(Expr::raw(format!("sym({prefix}_loaded_reference_agrees_{}(gprs, flags))", selected.len()))))));
+    for (name, ty, proof) in [
+        ("loaded_execution", format!("ExecuteFetchedBlock(static_elf64_access(), {instructions}, {start}, {final_state})"),
+            format!("fetched_block_instructions_cong(static_elf64_access(), {}(), {instructions}, {start}, {final_state}, {prefix}_loaded_instructions_agree(), {prefix}_loaded_execution_0(gprs, flags))", suffix(0))),
+        ("loaded_syscall", format!("FetchedFrom(static_elf64_access(), ({final_state}).memory, InstructionBytes(({final_state}).rip, linux_syscall_bytes()))"),
+            format!("fetched_span_at_state(static_elf64_access(), {prefix}_elf_file(), {}, [elf_byte(15), elf_byte(5)], linux_syscall_bytes(), {final_state}, refl, refl, refl, {prefix}_loaded_byte_{}_0())", loaded_address(offsets[selected.len()]), selected.len())),
+        ("loaded_request", format!("LinuxExitRequest<List<BitVec(8)>>({final_state}, {result})"),
+            format!("linux_exit_request_at_equal_state({original_final}, {final_state}, {result}, {prefix}_loaded_final_state_agrees(gprs, flags), {prefix}_exit_request({start}))")),
+    ] {
+        module.declaration(parameters(Declaration::theorem(format!("{prefix}_{name}"), Expr::raw(ty), Block::expression(Expr::raw(proof)))));
+    }
+    module.declaration(parameters(Declaration::theorem(format!("{prefix}_loaded_trace"),
+        Expr::raw(format!("LinuxFetchedTrace<List<BitVec(8)>>(static_elf64_access(), {instructions}, {start}, {result})")),
+        Block::expression(Expr::raw(format!("LinuxFetchedTrace(after := {final_state},\nexecution := {prefix}_loaded_execution(gprs, flags),\nsyscall_fetched := {prefix}_loaded_syscall(gprs, flags),\nrequest := {prefix}_loaded_request(gprs, flags))"))))));
+
 }
 
 #[cfg(test)]
@@ -210,6 +358,102 @@ mod tests {
                 let error = checked.expect_err("malformed header must be rejected");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{changed:?}: {}", error.render(&text));
             } else { checked.unwrap_or_else(|e| panic!("{}", e.render(&text))); }
+        }
+    }
+
+    #[test]
+    fn loaded_mapping_and_fetch_refusals() {
+        use heather_elab::Elaborator;
+        use heather_cli::{loader, semantic::SemanticSession};
+        use std::path::PathBuf;
+        let mut elab = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
+        for &(name, src) in super::super::SUPPORT {
+            super::super::check_module(&mut elab, &mut session, &loader::Module {
+                name: name.into(), path: PathBuf::from(name), src: src.into(),
+            }).unwrap();
+        }
+        let source = r#"
+import elf64;
+import elf64_load;
+import linux_x86_64_entry;
+import x86_64;
+import x86_64_fetch;
+import bitvec;
+import bool;
+import list;
+import option;
+import logic;
+fn code() -> List<BitVec(8)> {
+    canonical_bytes(MovRR(Rax, Rbx)) ++ linux_syscall_bytes()
+}
+fn image() -> StaticElf64Image(code()) {
+    StaticElf64Image(trivial, elf_byte(181), elf_byte(0), refl)
+}
+fn file() -> List<BitVec(8)> { static_elf64_bytes(image()) }
+fn address(n: Nat) -> BitVec(64) { static_elf64_address(bitvec::ofNat(16, n)) }
+theorem header_read(): static_elf64_read(file(), address(0)) = Some(elf_byte(127)) { refl }
+theorem code_read(): static_elf64_read(file(), static_elf64_entry()) = Some(elf_byte(72)) { refl }
+theorem exact_code(): FetchedFrom(static_elf64_access(), file(),
+    InstructionBytes(static_elf64_entry(), code())) { FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩) }
+theorem file_end(): static_elf64_read(file(), address(181)) = None { refl }
+theorem end_denied(): fetch_instruction_bytes(static_elf64_access(), file(), 1, address(181))
+    = FetchDenied(address(181)) { refl }
+theorem below_mapping(): static_elf64_read(file(),
+    bitvec::concat(16, 48, bitvec::ofNat(16, 176), bitvec::ofNat(48, 63))) = None { refl }
+theorem next_window(): static_elf64_read(file(),
+    bitvec::concat(16, 48, bitvec::ofNat(16, 0), bitvec::ofNat(48, 65))) = None { refl }
+theorem neutral_byte(byte: BitVec(8)):
+    static_elf64_read([byte], address(0)) = Some(byte) { refl }
+"#;
+        elab.elab_module_source("loaded_checks", source)
+            .unwrap_or_else(|e| panic!("{}", e.render(source)));
+        for (name, memory, address, expected, access) in [
+            ("changed_byte", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ [elf_byte(0), elf_byte(137), elf_byte(216), elf_byte(15), elf_byte(5)]", "static_elf64_entry()", "code()", "static_elf64_access()"),
+            ("entry_mismatch", "file()", "address(177)", "code()", "static_elf64_access()"),
+            ("wrong_base", "file()", "bitvec::concat(16, 48, bitvec::ofNat(16, 176), bitvec::ofNat(48, 65))", "code()", "static_elf64_access()"),
+            ("missing_tail", "static_elf64_header(elf_byte(180), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15)]", "static_elf64_entry()", "code()", "static_elf64_access()"),
+            ("syscall_mismatch", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15), elf_byte(4)]", "address(179)", "linux_syscall_bytes()", "static_elf64_access()"),
+            ("non_executable", "file()", "static_elf64_entry()", "code()", "FetchAccess<List<BitVec(8)>>(static_elf64_read, λ file address => False)"),
+        ] {
+            let count = if expected == "linux_syscall_bytes()" { 2 } else { 5 };
+            let mut witness = "⟨refl, ⟨refl, trivial⟩⟩".to_string();
+            for _ in 1..count { witness = format!("⟨refl, ⟨refl, ⟨refl, {witness}⟩⟩⟩"); }
+            let source = format!("import loaded_checks;\nimport elf64;\nimport elf64_load;\nimport linux_x86_64_entry;\nimport x86_64;\nimport x86_64_fetch;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): FetchedFrom({access}, {memory}, InstructionBytes({address}, {expected})) {{ FetchedFrom({witness}) }}");
+            let error = elab.clone().elab_module_source(name, &source).expect_err("invalid loaded fetch accepted");
+            assert!(format!("{error:?}").contains("NotConvertible"), "{name}: {}", error.render(&source));
+        }
+        // A valid fetch cannot authorize a successor that leaves RIP unchanged.
+        for valid in [true, false] {
+            let after = if valid { "execute_normal(decoded_canonical(MovRR(Rax, Rbx)), before())" }
+                else { "before()" };
+            let source = format!(r#"
+import loaded_checks;
+import elf64_load;
+import x86_64;
+import x86_64_fetch;
+import x86_64_fetch_block;
+import bitvec;
+import list;
+import logic;
+import relation;
+fn before() -> MachineState<List<BitVec(8)>> {{
+    static_elf64_initial(file(), zero_gprs(), clear_flags())
+}}
+fn after() -> MachineState<List<BitVec(8)>> {{ {after} }}
+theorem step(): ExecuteFetched(static_elf64_access(),
+    encoded_at(before().rip, MovRR(Rax, Rbx)), decoded_canonical(MovRR(Rax, Rbx)),
+    before(), Returned(after())) {{
+    canonical_fetched_step(static_elf64_access(), MovRR(Rax, Rbx), before(), after(),
+        FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩), refl)
+}}
+"#);
+            let checked = elab.clone().elab_module_source("loaded_step_check", &source);
+            if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
+            else {
+                let error = checked.expect_err("unadvanced successor accepted");
+                assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source));
+            }
         }
     }
 

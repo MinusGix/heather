@@ -46,7 +46,7 @@ fn source_to_standalone_elf_without_a_toolchain() {
     assert_eq!(u32::from_le_bytes(bytes[124..128].try_into().unwrap()), 6); // RW stack
     assert_eq!(Command::new(&binary).status().unwrap().code(), Some(27));
     let certificate = std::fs::read_to_string(output.join("mix.certificate.hthr")).unwrap();
-    for claim in ["_entry_graph", "_inline_trace", "_exit_request", "_elf_file_correct", "_elf_entry_code"] {
+    for claim in ["_entry_graph", "_inline_trace", "_exit_request", "_elf_file_correct", "_elf_entry_code", "_loaded_image", "_loaded_fetches", "_loaded_trace"] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     // The request carries the full result, while Linux reports its low byte.

@@ -53,3 +53,4 @@ The profile, proof boundaries, source references, and invocation are in
 - [[runtime-compile-opt-in]] — Require explicit Compile instances or runtime derivation markers.
 - [[runtime-extern-c-abi]] — Define explicit C ABI imports and runtime exports.
 - [[x86-symbolic-fragment-layout]] — Lay out certified code fragments and resolve symbolic references.
+- 2026-09-07: The restricted loaded-memory/fetch bridge is complete in [[x86-loaded-memory-fetch]]; Linux loading and syscall delivery remain explicit environment assumptions.

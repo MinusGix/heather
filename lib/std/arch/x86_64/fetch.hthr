@@ -31,6 +31,29 @@ fn prepend_fetched(byte: BitVec(8), rest: InstructionFetch) → InstructionFetch
     }
 }
 
+// A shared decision boundary lets certificates compose independently checked
+// byte reads without reducing a complete instruction span in one proof.
+fn fetch_with_byte(start: BitVec(64), allowed: Bool, read: Option<BitVec(8)>,
+    continuation: BitVec(8) → InstructionFetch) → InstructionFetch
+{
+    match allowed {
+        False => FetchDenied(start),
+        True => match read {
+            None => FetchMissing(start),
+            Some(byte) => continuation(byte),
+        },
+    }
+}
+
+theorem fetch_with_byte_success(start: BitVec(64), allowed: Bool,
+    read: Option<BitVec(8)>, continuation: BitVec(8) → InstructionFetch,
+    byte: BitVec(8), permission: allowed = True, present: read = Some(byte)):
+    fetch_with_byte(start, allowed, read, continuation) = continuation(byte)
+{
+    trans(cong_fn<Bool, InstructionFetch>(λ actual => fetch_with_byte(start, actual, read, continuation), permission),
+        cong_fn<Option<BitVec(8)>, InstructionFetch>(λ actual => fetch_with_byte(start, True, actual, continuation), present))
+}
+
 // The caller supplies the exact span length. This does not speculatively read
 // 15 bytes across a page boundary. DecodedAt separately validates the length
 // and encoding. Permission is checked before reading each requested byte.
@@ -39,27 +62,39 @@ fn fetch_instruction_bytes<M>(access: FetchAccess<M>, memory: M, count: Nat) →
 {
     match count {
         Zero => start ⊢ FetchedBytes(Nil),
-        Succ(rest, ih) => start ⊢ match access.executable(memory, start) {
-            False => FetchDenied(start),
-            True => match access.read_byte(memory, start) {
-                None => FetchMissing(start),
-                Some(byte) => match rest {
-                    Zero => FetchedBytes(Cons(byte, Nil)),
-                    Succ(_) => match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
-                        True => FetchAddressWrap,
-                        False => prepend_fetched(byte, ih(next_rip(start, 1))),
-                    },
+        Succ(rest, ih) => start ⊢ fetch_with_byte(start,
+            access.executable(memory, start), access.read_byte(memory, start),
+            λ byte => match rest {
+                Zero => FetchedBytes(Cons(byte, Nil)),
+                Succ(_) => match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
+                    True => FetchAddressWrap,
+                    False => prepend_fetched(byte, ih(next_rip(start, 1))),
                 },
-            },
-        },
+            }),
     }
 }
 
-fn FetchedFrom<M>(access: FetchAccess<M>, memory: M,
-    span: InstructionBytes) → Type
+// A structural witness keeps individual reads explicit. Its correspondence
+// with the executable reader is proved below; composing witnesses does not
+// normalize the entire fetch merely to compare equality propositions.
+fn ReadableBytes<M>(access: FetchAccess<M>, memory: M, bytes: List<BitVec(8)>) →
+    BitVec(64) → Type
 {
-    fetch_instruction_bytes(access, memory, span.bytes.len(), span.start)
-        = FetchedBytes(span.bytes)
+    match bytes {
+        Nil => start ⊢ True,
+        Cons(byte, rest) => start ⊢
+            access.executable(memory, start) = True ∧
+            access.read_byte(memory, start) = Some(byte) ∧
+            match rest as λ remaining => Type {
+                Nil => True,
+                Cons(_, _) => bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False ∧
+                    ReadableBytes(access, memory, rest, next_rip(start, 1)),
+            },
+    }
+}
+
+record FetchedFrom<M>(access: FetchAccess<M>, memory: M, span: InstructionBytes) {
+    reads: ReadableBytes(access, memory, span.bytes, span.start),
 }
 
 // Memory comes from the same before-state used by ExecuteAt. Fetch failure,
@@ -78,3 +113,100 @@ theorem execute_fetched_from_execute_at<M>(access: FetchAccess<M>,
     execution: ExecuteAt(span, decoded, before, outcome)):
     ExecuteFetched(access, span, decoded, before, outcome)
 { ⟨fetched, execution⟩ }
+
+
+theorem fetch_one_byte<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
+    byte: BitVec(8), permission: access.executable(memory, start) = True,
+    present: access.read_byte(memory, start) = Some(byte)):
+    fetch_instruction_bytes(access, memory, 1, start) = FetchedBytes([byte])
+{
+    fetch_with_byte_success(start, access.executable(memory, start),
+        access.read_byte(memory, start), λ found => FetchedBytes([found]),
+        byte, permission, present)
+}
+
+theorem fetch_more_bytes<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
+    byte: BitVec(8), rest_count: Nat, rest: List<BitVec(8)>,
+    permission: access.executable(memory, start) = True,
+    present: access.read_byte(memory, start) = Some(byte),
+    no_wrap: bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False,
+    tail: fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))
+        = FetchedBytes(rest)):
+    fetch_instruction_bytes(access, memory, Succ(Succ(rest_count)), start)
+        = FetchedBytes(Cons(byte, rest))
+{
+    trans(fetch_with_byte_success(start, access.executable(memory, start),
+        access.read_byte(memory, start), λ found =>
+            match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
+                True => FetchAddressWrap,
+                False => prepend_fetched(found,
+                    fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))),
+            }, byte, permission, present),
+        trans(cong_fn<Bool, InstructionFetch>(λ carry => match carry {
+            True => FetchAddressWrap,
+            False => prepend_fetched(byte,
+                fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))),
+        }, no_wrap), cong_fn<InstructionFetch, InstructionFetch>(λ fetched => prepend_fetched(byte, fetched), tail)))
+}
+
+// Name the next address explicitly, with a checked advancement equation.
+// This keeps a tail certificate's statement identical at its definition and
+// use sites instead of normalizing its memory reads to compare two addresses.
+theorem fetch_span_more<M>(access: FetchAccess<M>, memory: M,
+    start, next_start: BitVec(64), byte, next_byte: BitVec(8), rest: List<BitVec(8)>,
+    permission: access.executable(memory, start) = True,
+    present: access.read_byte(memory, start) = Some(byte),
+    no_wrap: bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False,
+    next_correct: next_rip(start, 1) = next_start,
+    tail: FetchedFrom(access, memory, InstructionBytes(next_start, Cons(next_byte, rest)))):
+    FetchedFrom(access, memory, InstructionBytes(start, Cons(byte, Cons(next_byte, rest))))
+{
+    FetchedFrom(⟨permission, ⟨present, ⟨no_wrap,
+        j(sym(next_correct), λ address _ =>
+            ReadableBytes(access, memory, Cons(next_byte, rest), address), tail.reads)⟩⟩⟩)
+}
+
+theorem fetch_span_one<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
+    byte: BitVec(8), permission: access.executable(memory, start) = True,
+    present: access.read_byte(memory, start) = Some(byte)):
+    FetchedFrom(access, memory, InstructionBytes(start, [byte]))
+{
+    FetchedFrom(⟨permission, ⟨present, trivial⟩⟩)
+}
+
+
+theorem readable_cons_fetch<M>(access: FetchAccess<M>, memory: M,
+    byte: BitVec(8), rest: List<BitVec(8)>):
+    ((start: BitVec(64)) → ReadableBytes(access, memory, rest, start) →
+        fetch_instruction_bytes(access, memory, rest.len(), start) = FetchedBytes(rest)) →
+    (start: BitVec(64)) → ReadableBytes(access, memory, Cons(byte, rest), start) →
+        fetch_instruction_bytes(access, memory, Cons(byte, rest).len(), start)
+            = FetchedBytes(Cons(byte, rest))
+{
+    match rest {
+        Nil => tail_proof start evidence ⊢
+            fetch_one_byte(access, memory, start, byte, evidence.left, evidence.right.left),
+        Cons(next_byte, remaining) => tail_proof start evidence ⊢
+            fetch_more_bytes(access, memory, start, byte, remaining.len(), Cons(next_byte, remaining),
+                evidence.left, evidence.right.left, evidence.right.right.left,
+                tail_proof(next_rip(start, 1), evidence.right.right.right)),
+    }
+}
+
+theorem readable_bytes_fetch<M>(access: FetchAccess<M>, memory: M,
+    bytes: List<BitVec(8)>): (start: BitVec(64)) → ReadableBytes(access, memory, bytes, start) →
+    fetch_instruction_bytes(access, memory, bytes.len(), start) = FetchedBytes(bytes)
+{
+    match bytes {
+        Nil => start evidence ⊢ refl,
+        Cons(byte, rest) => readable_cons_fetch(access, memory, byte, rest,
+            readable_bytes_fetch(access, memory, rest)),
+    }
+}
+
+theorem fetched_result<M>(access: FetchAccess<M>, memory: M, span: InstructionBytes,
+    certificate: FetchedFrom(access, memory, span)):
+    fetch_instruction_bytes(access, memory, span.bytes.len(), span.start) = FetchedBytes(span.bytes)
+{
+    readable_bytes_fetch(access, memory, span.bytes, span.start, certificate.reads)
+}

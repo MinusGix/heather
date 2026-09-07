@@ -33,6 +33,10 @@ const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_x86_support", include_str!("../../../lib/function_ir_x86_support.hthr")),
     ("elf64", include_str!("../../../lib/elf64.hthr")),
     ("linux_x86_64_entry", include_str!("../../../lib/linux_x86_64_entry.hthr")),
+    ("x86_64_fetch", include_str!("../../../lib/std/arch/x86_64/fetch.hthr")),
+    ("x86_64_fetch_block", include_str!("../../../lib/std/arch/x86_64/fetch_block.hthr")),
+    ("elf64_load", include_str!("../../../lib/elf64_load.hthr")),
+    ("linux_x86_64_fetch", include_str!("../../../lib/linux_x86_64_fetch.hthr")),
 ];
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -139,7 +143,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let bytes = encode(&emission.instructions);
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
-        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry"] {
+        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option"] {
         proof.raw(format!("import {name};"));
     }
     proof.raw(emission.text.clone());
@@ -165,8 +169,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        println!("{}: {}-byte ELF64 executable; checked image and Linux exit request", output.display(), image.len());
-        println!("Linux loading, instruction fetch, and syscall delivery remain environment assumptions");
+        println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
+        println!("Linux loading and syscall delivery remain environment assumptions");
     } else {
         write_new(&output, assembly(symbol, &bytes).as_bytes())?;
         println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());

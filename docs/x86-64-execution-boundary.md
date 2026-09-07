@@ -125,8 +125,7 @@ architectural execution fault remain four different outcomes.
 
 The direct executable path now checks a restricted ELF64 image and a typed
 entry/body/exit-request trace. Its exact claims and environmental assumptions
-are owned by [the static ELF design](x86-64-static-elf.md). It does not yet
-supply the architectural memory-fetch bridge described above.
+are owned by [the static ELF design](x86-64-static-elf.md). The restricted loaded-memory bridge is described below.
 
 
 ## Exact-span memory fetch (2026-09-07)
@@ -163,7 +162,23 @@ memory type, exact reads, missing tails, permission denial, unsupported decoding
 and the last-address/wrap distinction. Wrong byte, address, and permission proofs
 are rejected.
 
-Remaining work belongs to `issues/x86-loaded-memory-fetch.md`: instantiate this
-interface from the restricted ELF PT_LOAD mapping, prove the placed image supplies
-its certified spans, and connect fetched steps throughout the emitted program.
-The standalone ELF certificate has not yet gained those guarantees.
+`FetchedFrom` now carries structural `ReadableBytes` evidence. The generic
+`fetched_result` theorem derives equality with the executable reader, so the
+structural certificate and computational fetch agree. Byte composition checks
+next-address equations explicitly and does not treat wrapping as valid.
+
+## Restricted ELF loaded traces (2026-09-07)
+
+`lib/elf64_load.hthr` supplies the reader and execute policy for the fixed RX
+file mapping, with no zero-fill tail. `lib/std/arch/x86_64/fetch_block.hthr`
+composes canonical fetched steps, and `lib/linux_x86_64_fetch.hthr` ends the
+trace with fetched syscall bytes and an exit-request contract.
+
+The standalone producer now emits those witnesses against its actual file
+bytes. Each proposed flattened successor state is checked against canonical
+execution; a separately checked instruction-list equality connects the placed
+trace to entry/body/exit instructions. Initial memory and RIP are fixed by the
+image, while initial GPRs and flags remain arbitrary. See
+[x86-64-static-elf.md](x86-64-static-elf.md) for the full contract and remaining
+OS assumptions. Calls, writable memory, and other ELF profiles remain separate
+extensions.

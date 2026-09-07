@@ -43,6 +43,30 @@ concrete valuation and a RegionHolds witness, so this process theorem has no
 remaining caller-supplied graph assumption. Its initial machine state and
 memory type remain arbitrary.
 
+`lib/elf64_load.hthr` interprets that restricted image as file-backed RX bytes
+at absolute 64-bit addresses. The address's upper 48 bits select the fixed
+mapping window; the lower 16 bits select a byte within the file. Reads outside
+the window or past the file end are absent. There is no zero-fill tail because
+this profile requires p_memsz = p_filesz. This is a restricted view of the
+process's memory; it leaves the unused stack, page padding, and other mappings
+unspecified rather than claiming Linux lacks them.
+
+The generated `*_loaded_image` proves that the memory bytes are the checked ELF
+file. `*_loaded_trace` starts at its entry with those bytes as memory and with
+arbitrary GPRs and flags. It carries an `ExecuteFetchedBlock` trace through entry,
+body, and exit setup, a fetched witness for the terminal SYSCALL bytes, and a
+`LinuxExitRequest` whose full status equals the source function's result.
+Each ordinary step uses the same memory and RIP for fetching and canonical
+execution; syscall execution itself remains outside the architectural slice.
+
+Fetch certificates contain structural `ReadableBytes` witnesses for byte values,
+execute permission, and nonwrapping address advancement. `fetched_result` proves
+that these witnesses agree with the executable `fetch_instruction_bytes` reader.
+The producer proposes binary address literals and flattened successor states;
+separate checked facts establish each read and equality to the canonical
+successor. Naming byte facts and execution suffixes keeps composition from
+repeatedly expanding an entire prefix's memory and register computations.
+
 The companion certificate checks each emitted code span against the model,
 checks their layout, and equates the exact serialized file with the model
 image. Both header and payload literals come from the actual byte vector
@@ -52,21 +76,17 @@ only after certificate acceptance, and existing output paths are refused.
 
 ## Environment boundary
 
-The claim stops at a Linux exit request. Execution assumes that Linux maps
-this valid image at the specified address, enters at e_entry, permits the
-instruction fetches, and delivers the terminal 0F 05 transfer as syscall 60.
-The host also supplies faithful file writes and executable permissions.
-These are explicit environmental assumptions, not axioms installed in the
-Heather library. We do not yet prove a memory-fetch relation connecting the
-loaded image to each canonical instruction step, nor Linux syscall-entry
-behavior. Typed register execution and exact byte placement are checked
-separately at this milestone.
+The claim stops at a Linux exit request. Execution assumes Linux supplies the
+specified file-backed RX mapping and entry state, and delivers the terminal
+0F 05 transfer as syscall 60. The host also supplies faithful file writes and
+executable permissions. These are environmental assumptions, not axioms
+installed in the Heather library. Within that supplied mapping, byte fetch,
+supported decoding, typed execution, and the source result are now connected.
 
 There is no verified CPU implementation, Linux loader, or Linux kernel here.
-The next execution milestone is the loaded-memory/fetch bridge described in
-`docs/x86-64-execution-boundary.md`, followed by stack/call composition and
-memory-backed external interactions. Large argument/source literals retain
-the known `bitvec::ofNat` conversion limitation tracked by
+The next execution work is stack/call composition and memory-backed external
+interactions; the loaded view currently suffices for the register-only profile.
+Large argument/source literals retain the known `bitvec::ofNat` conversion limitation tracked by
 `issues/bitvec-ofnat-large-literals.md`.
 
 ## Validation
@@ -77,8 +97,12 @@ to the Linux exit-status byte. The existing C-wrapper differential test still
 checks 10005 input pairs through assembly export. Kernel negative controls
 mutate 27 ELF header locations covering identity, entry, sizes, mapping,
 permissions, and stack policy; the accepted header and every rejected mutant
-are checked against the same Heather model. Host tests cover argument errors,
-empty code, and the file-size bound.
+are checked against the same Heather model. Loaded-memory controls reject
+changed payload bytes, wrong entry/base addresses,
+truncated spans, altered syscall bytes, non-executable access, and an unadvanced
+successor RIP. Positive checks
+cover header/code addressing, bounds, a neighboring address window, and neutral
+byte values. Host tests cover argument errors, empty code, and the file-size bound.
 
 ## References
 

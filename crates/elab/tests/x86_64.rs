@@ -776,6 +776,15 @@ theorem wrap_rejected(): fetch_instruction_bytes(constant_access(), 0, 2, last_a
 theorem neutral_byte<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
     fetch_instruction_bytes(FetchAccess<M>(λ m a => Some(byte), λ m a => True),
         memory, 1, address) = FetchedBytes([byte]) { refl }
+theorem neutral_certificate<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
+    FetchedFrom(FetchAccess<M>(λ m a => Some(byte), λ m a => True), memory,
+        InstructionBytes(address, [byte]))
+{ fetch_span_one(FetchAccess<M>(λ m a => Some(byte), λ m a => True), memory, address, byte, refl, refl) }
+theorem certificate_agrees<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
+    fetch_instruction_bytes(FetchAccess<M>(λ m a => Some(byte), λ m a => True), memory, 1, address)
+        = FetchedBytes([byte])
+{ fetched_result(FetchAccess<M>(λ m a => Some(byte), λ m a => True), memory,
+    InstructionBytes(address, [byte]), neutral_certificate(memory, address, byte)) }
 theorem unsupported_bytes_still_fetch(): fetch_instruction_bytes(
     test_access(), [bitvec::ofNat(8, 0)], 1, start())
     = FetchedBytes([bitvec::ofNat(8, 0)]) { refl }
@@ -788,7 +797,7 @@ fn before() -> MachineState<List<BitVec(8)>> {
 theorem fetched_executes(): ExecuteFetched(test_access(),
     encoded_at(start(), MovRR(Rax, Rbx)), decoded_canonical(MovRR(Rax, Rbx)),
     before(), Returned(execute_normal(decoded_canonical(MovRR(Rax, Rbx)), before())))
-{ ⟨refl, canonical_encoding_executes(MovRR(Rax, Rbx), before())⟩ }
+{ ⟨FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩), canonical_encoding_executes(MovRR(Rax, Rbx), before())⟩ }
 "#;
     if let Err(err) = e.elab_module_source("fetch_checks", source) {
         panic!("fetch checks: {}", err.render(source));
@@ -798,7 +807,10 @@ theorem fetched_executes(): ExecuteFetched(test_access(),
         ("wrong_address", "FetchedFrom(test_access(), bytes(), InstructionBytes(bitvec::ofNat(64, 1), bytes()))"),
         ("non_executable", "FetchedFrom(FetchAccess<List<BitVec(8)>>(test_read, λ memory address => False), bytes(), InstructionBytes(start(), bytes()))"),
     ] {
-        let bad = format!("import fetch_checks;\nimport x86_64_fetch;\nimport x86_64;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): {claim} {{ refl }}");
+        let count = if name == "wrong_byte" { 1 } else { 3 };
+        let mut witness = "⟨refl, ⟨refl, trivial⟩⟩".to_string();
+        for _ in 1..count { witness = format!("⟨refl, ⟨refl, ⟨refl, {witness}⟩⟩⟩"); }
+        let bad = format!("import fetch_checks;\nimport x86_64_fetch;\nimport x86_64;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): {claim} {{ FetchedFrom({witness}) }}");
         let error = e.clone().elab_module_source(name, &bad).expect_err("accepted invalid fetch");
         let rendered = error.render(&bad);
         assert!(!rendered.contains("unbound") && !rendered.contains("parse error"),
