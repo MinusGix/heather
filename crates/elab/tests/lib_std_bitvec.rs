@@ -75,6 +75,68 @@ fn bad(src: &str) {
 #[test]
 fn the_bitvec_module_checks() { ok(""); }
 
+/// `from_bits(64, [...])` spelling `value`, least-significant bit first — an
+/// independent statement of the bits `ofNat` must produce.
+fn bit_vector_literal(value: u64) -> String {
+    let bits: Vec<&str> = (0..64)
+        .map(|i| if (value >> i) & 1 == 1 { "True" } else { "False" })
+        .collect();
+    format!("from_bits(64, [{}])", bits.join(", "))
+}
+
+/// `ofNat` at machine width costs the width, not the literal's magnitude
+/// (issues/bitvec-ofnat-large-literals.md). Each literal is checked against
+/// an independently written bit vector, and round-trips through `toNat`; the
+/// controls flip one bit of the expected vector and must be refused for the
+/// right reason (a conversion failure, not exhausted fuel, which is what the
+/// magnitude-recursive definition produced at these arguments).
+#[test]
+fn of_nat_at_machine_width_costs_the_width_not_the_magnitude() {
+    const ASYMMETRIC: u64 = 0x0123_4567_89AB_CDEF;
+    const HIGH_BIT: u64 = 0x8000_0000_0000_0001;
+    let mut src = String::from("import nat;\n");
+    for (name, value) in [
+        ("asymmetric", ASYMMETRIC),
+        ("high_bit", HIGH_BIT),
+        ("saturated", u64::MAX),
+        ("mid", 70_000),
+    ] {
+        src.push_str(&format!(
+            "theorem {name}_bits(): ofNat(64, {value}) = {} {{ refl }}\n\
+             theorem {name}_round_trip(): toNat(64, ofNat(64, {value})) = {value} {{ refl }}\n",
+            bit_vector_literal(value),
+        ));
+    }
+    // Truncation modulo the width survives the top-down reading.
+    src.push_str(
+        "theorem truncates(): ofNat(8, 261) = ofNat(8, 5) { refl }\n\
+         theorem truncates_to_nat(): toNat(8, ofNat(8, 261)) = 5 { refl }\n\
+         theorem powers_are_one_run(): nat::pow(2, 63) = 9223372036854775808 { refl }\n\
+         theorem doubling_is_one_run(): nat::twice(9223372036854775807) = 18446744073709551614 { refl }\n\
+         theorem run_scrutinee_chain(): nat::mul(2, 65536) = 131072 { refl }\n\
+         theorem hex_spelling(): ofNat(64, 0x0123_4567_89AB_CDEF) = ofNat(64, 81985529216486895) { refl }\n\
+         theorem hex_high_bit(): toNat(64, ofNat(64, 0x8000_0000_0000_0001)) = 9223372036854775809 { refl }\n\
+         theorem doubling_chain_under_a_consumer(): nat::leb(nat::pow(2, 40), 1099511627776) = True { refl }\n",
+    );
+    ok(&src);
+
+    for (value, flipped) in [(ASYMMETRIC, 0), (HIGH_BIT, 63), (u64::MAX, 31)] {
+        let src = format!(
+            "theorem wrong(): ofNat(64, {value}) = {} {{ refl }}",
+            bit_vector_literal(value ^ (1 << flipped)),
+        );
+        let msg = run(&src).expect_err("a flipped bit must be refused");
+        assert!(msg.contains("NotConvertible"), "{msg}");
+    }
+    let msg = run("theorem wrong(): toNat(64, ofNat(64, 81985529216486895)) = 81985529216486896 { refl }")
+        .expect_err("an off-by-one round trip must be refused");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    // A radix spelling is the same literal: one hex digit off is refused.
+    let msg = run("theorem wrong(): ofNat(64, 0x0123_4567_89AB_CDEE) = ofNat(64, 81985529216486895) { refl }")
+        .expect_err("a hex digit off must be refused");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
 #[test]
 fn widths_include_zero_machine_sizes_and_a_neutral() {
     ok(r#"

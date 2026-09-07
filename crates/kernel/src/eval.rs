@@ -105,6 +105,22 @@ fn nat_step_synchronizes(step: &TmClo<'_>) -> bool {
                 && matches!(&**arg, Term::Var(LocalVar(1))))
 }
 
+/// The fold step has the exact shape `λ k ih. su^p ih` for some `p ≥ 1`:
+/// the successor algebra, `p` constructors per input constructor. Over a run
+/// of `c` successors it is the run of `p·c`, mapped onto the fold at the
+/// tail; `Some(p)` is that count. `p = 1` (`add`) leaves the program itself
+/// in place; `p = 2` is `twice`.
+fn nat_step_successors(step: &TmClo<'_>) -> Option<u64> {
+    let Some((_, body)) = step.as_syn() else { return None };
+    let mut count = 0u64;
+    let mut cur = &**body;
+    while let Term::Succ(inner) = cur {
+        count += 1;
+        cur = &**inner;
+    }
+    (count >= 1 && matches!(cur, Term::Var(LocalVar(0)))).then_some(count)
+}
+
 // ---------------------------------------------------------------------------
 // The machine
 // ---------------------------------------------------------------------------
@@ -131,6 +147,30 @@ enum Work<'v> {
 enum Frame<'v> {
     Memo(&'v TmClo<'v>),
     Elim(Rc<Elim<'v>>),
+    /// A successor program waiting for the value its fold produced at the
+    /// run's tail. A run there is merged into one program rather than left
+    /// as the next fragment of a chain, so that `add`-shaped folds over
+    /// literals — `p + p`, `mul(p, 2)` — build one saturated run and not
+    /// one fragment per logical addition.
+    ///
+    /// Under conversion's δ-lazy evaluation the tail's fold is usually a
+    /// *glued* neutral (`mul(2, k)` unfolded once is `add(mul(2, k-1), 2)`,
+    /// whose tail is the still-glued `mul(2, k-1)`), so the frame unfolds
+    /// glued heads at the tail until a run, a constructor, or a stuck
+    /// neutral appears — each unfolding charged as a δ-step. `glued` keeps
+    /// the first glued neutral: if the unfoldings end stuck, that is the
+    /// tail conversion keeps, so an open wrapper is not normalized away.
+    NatRunTail {
+        program: Rc<ContextProgram<()>>,
+        glued: Option<Rc<Val<'v>>>,
+    },
+    /// A synchronous fold (`head`, a `NatSync`) waiting for its unfolded
+    /// right-hand counter; the application `app` is retried with the value
+    /// that flows back in place of its argument.
+    SyncArg {
+        head: Rc<Val<'v>>,
+        app: Rc<Elim<'v>>,
+    },
 }
 
 /// An evaluation run: the shared fuel budget, the δ-environment, and the
@@ -294,6 +334,39 @@ impl<'a, 'v> Eval<'a, 'v> {
                             Work::Val(v)
                         }
                         Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
+                        Some(Frame::SyncArg { head, app }) => {
+                            let Elim::App { dom_level, cod_level, dom, cod, .. } = &*app else {
+                                unreachable!("SyncArg stores an application")
+                            };
+                            let app = Elim::App {
+                                dom_level: dom_level.clone(),
+                                cod_level: cod_level.clone(),
+                                dom: *dom,
+                                cod: *cod,
+                                arg: self.vclo(v),
+                            };
+                            Work::Elim(head, app)
+                        }
+                        Some(Frame::NatRunTail { program, glued }) => match &*v {
+                            Val::NatRun { program: inner, tail } => {
+                                Work::Val(Rc::new(Val::NatRun {
+                                    program: ContextProgram::append(program, Rc::clone(inner)),
+                                    tail: *tail,
+                                }))
+                            }
+                            Val::Neutral(n) if n.unfold.is_some() => {
+                                self.spend()?;
+                                let unfold = n.unfold.unwrap();
+                                let glued = glued.or_else(|| Some(Rc::clone(&v)));
+                                self.frames.push(Frame::NatRunTail { program, glued });
+                                Work::Force(unfold)
+                            }
+                            Val::Neutral(_) => {
+                                let tail = glued.unwrap_or(v);
+                                Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(tail) }))
+                            }
+                            _ => Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(v) })),
+                        },
                     }
                 }
             };
@@ -1262,6 +1335,26 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// One step of [`Eval::elim`]; see [`Eval::drive`].
     fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
         if let Val::Neutral(n) = &*head {
+            // A Nat fold the run machinery accelerates — the successor
+            // algebra or the synchronous two-counter fold — whose scrutinee
+            // is a *glued* definition unfolds that scrutinee here rather
+            // than stalling as a spine for conversion to δ-step from the
+            // outside one definition at a time (each such step replays the
+            // whole pending spine, so a chain of `p + p` doublings under a
+            // literal consumer was cubic in the chain). Only these folds do
+            // so: their scrutinee is closed arithmetic whenever the fold
+            // can fire at all, and an open one stops at its variable. A
+            // general match or recursor must NOT: the x86 decoder's
+            // open-argument unfolding theorems meet at a *folded* scrutinee
+            // (`match decode_opcode_direct(…)` on both sides), and unfolding
+            // it eagerly exhausts fuel on the dispatch it hides.
+            if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
+                if nat_step_successors(step).is_some() || nat_step_synchronizes(step) {
+                    self.spend()?;
+                    self.frames.push(Frame::Elim(Rc::new(e)));
+                    return Ok(Work::Force(unfold));
+                }
+            }
             let n = Rc::clone(n);
             return Ok(Work::Val(self.push_elim(&n, e)));
         }
@@ -1271,6 +1364,20 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Elim::App { dom_level, cod_level, dom, cod, arg },
             ) => {
                 let right = self.force(arg)?;
+                if let Val::Neutral(rn) = &*right {
+                    if let Some(unfold) = rn.unfold {
+                        // The counter on the right is a glued definition
+                        // (`sub(x, p)` feeding the next comparison): unfold
+                        // it and retry, for the reason given at the neutral
+                        // scrutinee case above.
+                        self.spend()?;
+                        self.frames.push(Frame::SyncArg {
+                            head: Rc::clone(&head),
+                            app: Rc::new(e.clone()),
+                        });
+                        return Ok(Work::Force(unfold));
+                    }
+                }
                 if let Val::NatRun { program: right_program, tail: right_tail } = &*right {
                     let cancelled = ContextProgram::cancel_matching_prefix(
                         Rc::clone(program),
@@ -1364,19 +1471,24 @@ impl<'a, 'v> Eval<'a, 'v> {
                         elim: Rc::new(e.clone()),
                     })));
                 }
-                if matches!(
-                    step.as_syn(),
-                    Some((_, body)) if matches!(
-                        &**body,
-                        Term::Succ(ih)
-                            if matches!(&**ih, Term::Var(crate::term::LocalVar(0)))
-                    )
-                ) {
+                if let Some(mapped) = nat_step_successors(step).and_then(|p| {
+                    if p == 1 {
+                        return Some(Rc::clone(program));
+                    }
+                    // A wider algebra scales one saturated run's count; a
+                    // composed program, or a count that would overflow,
+                    // takes the ordinary one-step path below.
+                    let ContextProgram::Run { context, count } = &**program else { return None };
+                    let scaled = count.get().checked_mul(p)?;
+                    Some(ContextProgram::run(*context, NonZeroU64::new(scaled).unwrap()))
+                }) {
+                    // The fold at the tail is forced now rather than left
+                    // pending, so that a run it produces merges with this
+                    // one (`Frame::NatRunTail`). The value is the same
+                    // either way; only its fragment count differs.
                     let mapped_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
-                    return Ok(Work::Val(Rc::new(Val::NatRun {
-                        program: Rc::clone(program),
-                        tail: mapped_tail,
-                    })));
+                    self.frames.push(Frame::NatRunTail { program: mapped, glued: None });
+                    return Ok(Work::Force(mapped_tail));
                 }
                 let pred = Val::nat_run_pred(self.arena, program, tail);
                 let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
@@ -1852,6 +1964,91 @@ mod tests {
         let result = ev.elim(head, elim).unwrap();
         assert!(matches!(&*result,
             Val::NatRun { program: mapped, .. } if Rc::ptr_eq(mapped, &program)));
+    }
+
+    /// `add`-shaped folds chain: mapping a run onto a tail whose fold is
+    /// itself a run must yield one saturated run, not two fragments, or a
+    /// doubled literal (`p + p`, and so `pow(2, k)`) is `2^k` fragments.
+    #[test]
+    fn successor_algebra_merges_the_run_its_tail_produces() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let zero = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let inner = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(4).unwrap()),
+            tail: zero,
+        })));
+        let head = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(3).unwrap()),
+            tail: inner,
+        });
+        let elim = nat_elim(
+            &arena,
+            env,
+            Term::Succ(Rc::new(Term::Var(LocalVar(0)))),
+        );
+        let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(head, elim).unwrap();
+        assert!(matches!(&*result,
+            Val::NatRun { program, .. }
+                if matches!(&**program, ContextProgram::Run { count, .. } if count.get() == 7)));
+    }
+
+    /// `twice` is the successor algebra with two constructors per step: a
+    /// saturated run's count is scaled, in constant work.
+    #[test]
+    fn double_successor_algebra_scales_a_saturated_run() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let head = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(1 << 40).unwrap()),
+            tail,
+        });
+        let elim = nat_elim(
+            &arena,
+            env,
+            Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))))),
+        );
+        let mut ev = Eval::new(4, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(head, elim).unwrap();
+        assert!(matches!(&*result,
+            Val::NatRun { program, .. }
+                if matches!(&**program, ContextProgram::Run { count, .. } if count.get() == 1 << 41)));
+    }
+
+    /// A count the wider algebra cannot represent in one `u64` run is not
+    /// guessed: the fold takes the ordinary one-step path and obeys fuel.
+    #[test]
+    fn double_successor_algebra_declines_an_overflowing_count() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let head = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
+            tail,
+        });
+        let elim = nat_elim(
+            &arena,
+            env,
+            Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))))),
+        );
+        let mut ev = Eval::new(16, Defs::opaque(), CtxBase::Nil, &arena);
+        // The ordinary step exposes `su (su ih)` with the fold pending at
+        // the predecessor, one logical step at a time; descending the
+        // successors it produces is where fuel runs out, never a run.
+        let mut cur = ev.elim(head, elim).unwrap();
+        for _ in 0..64 {
+            match &*cur {
+                Val::Succ(inner) => match ev.force(inner) {
+                    Ok(next) => cur = next,
+                    Err(OutOfFuel) => return,
+                },
+                Val::NatRun { .. } => panic!("an overflowing count was scaled"),
+                other => panic!("unexpected head: {other:?}"),
+            }
+        }
+        panic!("fuel never ran out");
     }
 
     #[test]

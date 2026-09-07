@@ -155,3 +155,12 @@ Acceptance has two parts:
   Splitting the concrete conjunction into individual theorems did not help;
   the first unsigned `0 < 2^63` item alone exhausts fuel. Keep this with the
   closed producer/consumer investigation rather than raising compiler rails.
+- 2026-09-07: Two data from [[bitvec-ofnat-large-literals]]. The doubling
+  chain (`pow`, `twice`) that overflowed the native stack at exponent 20 is
+  fixed at the representation, under [[succinct-inductive-values]]. The
+  remaining resource-diagnostic clause still stands, with a sharper
+  reproducer than `carry_add`: `theorem t(): nat::half(1048576) = 524288
+  { refl }` through `heather check` aborts the process with a Rust stack
+  overflow rather than returning `OutOfFuel`, so a merely excessive unary
+  computation — course-of-values `half` is one fold step per successor —
+  still takes the checker down instead of being refused.

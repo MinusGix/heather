@@ -1,1 +1,5 @@
 fn f() -> Nat { 0 }
+fn rex_w() -> Nat { 0x48 }
+fn mask() -> Nat { 0b0000_0111 }
+fn perm() -> Nat { 0o644 }
+fn million() -> Nat { 1_000_000 }

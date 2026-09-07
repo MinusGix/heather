@@ -327,6 +327,26 @@ impl<C: Clone + Eq> ContextProgram<C> {
         Rc::new(ContextProgram::Compose { outer, inner })
     }
 
+    /// `outer` outside `inner`, merged into one saturated run when both are
+    /// runs of the same context whose `u64` counts add without overflow, and
+    /// composed otherwise. This is the construction-time counterpart of
+    /// [`ContextProgram::prepend`]: a fold that maps a run onto a tail which
+    /// turns out to be another run keeps one fragment, not a chain of them.
+    pub fn append(outer: Rc<Self>, inner: Rc<Self>) -> Rc<Self> {
+        if let (
+            ContextProgram::Run { context, count },
+            ContextProgram::Run { context: next, count: n },
+        ) = (&*outer, &*inner)
+        {
+            if context == next {
+                if let Some(sum) = count.get().checked_add(n.get()) {
+                    return Self::run(context.clone(), NonZeroU64::new(sum).unwrap());
+                }
+            }
+        }
+        Self::compose(outer, inner)
+    }
+
     /// A cheap sufficient test that two programs denote the same context.
     /// Object identity remains the broadest constant-time case; independently
     /// allocated runs are just as easy because their whole denotation is the

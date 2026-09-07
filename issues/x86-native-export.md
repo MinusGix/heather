@@ -47,3 +47,8 @@ remain owned by [[function-ir-x86-proof-scaling]].
 - 2026-09-07: Implemented compile-x86 with elaborated-source lowering, exact literal-byte equality, bundled proof support, and a caller-saved SysV register assignment. The 22-byte mix body links through the manual C wrapper and passes 10005 native cases. Focused encoding checks cover all ten instruction forms and reject corrupted encodings. Full-suite verification is in progress; full-width literal conversion residue is owned by [[bitvec-ofnat-large-literals]].
 - 2026-09-07: Validation complete for this scope: all x86 groups and both new native tests pass in the full suite; native execution passes 10005 cases. The full parallel run reported INCOMPLETE with 2453 passes and no assertion failures because mutual_recursion received SIGKILL; its isolated retry passed 13/13. This unrelated suite-reliability residue is owned by [[mutual-recursion-test-rail]].
 - 2026-09-07: Direct standalone ELF generation is owned by [[x86-static-elf-executable]]; assembly export remains the FFI path.
+- 2026-09-07: The deferred literal boundary is closed by
+  [[bitvec-ofnat-large-literals]]; `examples/x86-native/mix.hthr` now adds
+  the full-width asymmetric constant `0x0123456789ABCDEF`, so the exported
+  immediate's eight bytes are all distinct and the native cases check the
+  byte order as well as the arithmetic.

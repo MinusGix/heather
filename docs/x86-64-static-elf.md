@@ -86,8 +86,8 @@ supported decoding, typed execution, and the source result are now connected.
 There is no verified CPU implementation, Linux loader, or Linux kernel here.
 The next execution work is stack/call composition and memory-backed external
 interactions; the loaded view currently suffices for the register-only profile.
-Large argument/source literals retain the known `bitvec::ofNat` conversion limitation tracked by
-`issues/bitvec-ofnat-large-literals.md`.
+Full-width argument/source literals are supported; `bitvec::ofNat` conversion
+now performs work bounded by the width (see `issues/bitvec-ofnat-large-literals.md`).
 
 ## Validation
 

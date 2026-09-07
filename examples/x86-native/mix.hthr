@@ -3,5 +3,5 @@ import bitvec;
 fn mix(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     let shared = bitvec::add(64, left, right);
     bitvec::bxor(64, shared,
-        bitvec::add(64, shared, bitvec::ofNat(64, 7)))
+        bitvec::add(64, shared, bitvec::ofNat(64, 81985529216486895)))
 }

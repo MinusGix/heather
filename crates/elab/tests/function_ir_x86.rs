@@ -71,6 +71,7 @@ pub fn run_source_tests() {
     stale_source_function_ir_certificate_is_rejected();
     source_fragment_declines_nested_expressions();
     structured_source_emission_parses_as_a_complete_module();
+    elaborated_full_width_constants_reach_checked_x86_artifact();
 }
 
 pub fn run_alu_tests() {
@@ -342,6 +343,71 @@ fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
         panic!(
             "nested source-to-x86 artifact did not check: {}",
             error.render(&source),
+        );
+    }
+}
+
+/// Full-width constants through the whole source route: the reflector reads
+/// the literal, the lowering materializes it as `MovRI`, and the certificate
+/// checks under ordinary fuel (issues/bitvec-ofnat-large-literals.md). One
+/// asymmetric constant pins byte order; one high-bit constant pins the top.
+pub fn elaborated_full_width_constants_reach_checked_x86_artifact() {
+    const ASYMMETRIC: u64 = 0x0123_4567_89AB_CDEF;
+    const HIGH_BIT: u64 = 0x8000_0000_0000_0001;
+    let source = format!(
+        r#"
+import bitvec;
+
+fn wide_constants(left: BitVec(64), right: BitVec(64)) → BitVec(64) {{
+    let shared = bitvec::add(64, left, right);
+    bitvec::bxor(64,
+        bitvec::add(64, shared, bitvec::ofNat(64, {ASYMMETRIC})),
+        bitvec::band(64, shared, bitvec::ofNat(64, {HIGH_BIT})))
+}}
+"#
+    );
+    let mut source_base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    if let Err(error) = source_base.elab_module_source("wide_constants_x86_source", &source) {
+        panic!("wide-constant source did not elaborate: {}", error.render(&source));
+    }
+    let reflected = function_ir_source::reflect_elaborated(&source_base, "wide_constants")
+        .expect("reflect wide constants");
+    let constants: Vec<u64> = reflected
+        .region
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Const { value, .. } => Some(*value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(constants, vec![ASYMMETRIC, HIGH_BIT]);
+    let emission = function_ir_source::generate_elaborated_x86(
+        &source_base,
+        "wide_constants_x86",
+        "wide_constants",
+        [Gpr::Rdi, Gpr::Rsi],
+        &[Gpr::Rax, Gpr::R8, Gpr::R9],
+        Gpr::Rax,
+    )
+    .expect("compile wide constants");
+    for immediate in [ASYMMETRIC, HIGH_BIT] {
+        assert!(
+            emission
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction,
+                    lower::Instruction::MovRI { immediate: found, .. } if *found == immediate)),
+            "no MovRI materializes {immediate:#x}: {:?}",
+            emission.instructions,
+        );
+    }
+    let artifact = generated_module(&emission.text);
+    let mut checker = source_base;
+    if let Err(error) = checker.elab_module_source("wide_constants_x86_artifact", &artifact) {
+        panic!(
+            "wide-constant source-to-x86 artifact did not check: {}",
+            error.render(&artifact),
         );
     }
 }

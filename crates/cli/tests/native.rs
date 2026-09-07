@@ -44,7 +44,7 @@ fn source_to_standalone_elf_without_a_toolchain() {
     assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 0x4000b0);
     assert_eq!(u32::from_le_bytes(bytes[68..72].try_into().unwrap()), 5); // RX
     assert_eq!(u32::from_le_bytes(bytes[124..128].try_into().unwrap()), 6); // RW stack
-    assert_eq!(Command::new(&binary).status().unwrap().code(), Some(27));
+    assert_eq!(Command::new(&binary).status().unwrap().code(), Some(51));
     let certificate = std::fs::read_to_string(output.join("mix.certificate.hthr")).unwrap();
     for claim in ["_entry_graph", "_inline_trace", "_exit_request", "_elf_file_correct", "_elf_entry_code", "_loaded_image", "_loaded_fetches", "_loaded_trace"] {
         assert!(certificate.contains(claim), "missing {claim}");
@@ -57,7 +57,7 @@ fn source_to_standalone_elf_without_a_toolchain() {
         .arg(&wide_status).args(["--cache-dir", "target/native-test-images"])
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    assert_eq!(Command::new(&wide_status).status().unwrap().code(), Some(249)); // 255 xor 262 = 505
+    assert_eq!(Command::new(&wide_status).status().unwrap().code(), Some(17)); // Low byte of 255 xor (255 + 0x0123456789ABCDEF)
     // An invalid argument must fail before publishing either output.
     let rejected = output.join("bad");
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))

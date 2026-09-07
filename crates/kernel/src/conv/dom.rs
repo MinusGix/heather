@@ -332,6 +332,12 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
 /// explicitly, because the operations that differ between domains are the ones
 /// that spend fuel.
 pub(super) trait Dom<'v>: Sized {
+    /// Identity of a compared closure pair for [`Conv`]'s verdict memo;
+    /// `None` opts a domain out. A key must determine the pair's denotation:
+    /// the closures, the scope each is read in, and the Ψ they are read
+    /// under.
+    type MemoKey: std::hash::Hash + Eq;
+    fn tm_memo_key(env: &Env<'v>, a: &Self::TmC, b: &Self::TmC) -> Option<Self::MemoKey>;
     /// A **type** in weak head normal form.
     type Ty;
     /// A **term** in weak head normal form.
@@ -799,6 +805,11 @@ fn var0() -> Rc<Term> {
 }
 
 impl<'v> Dom<'v> for Syn {
+    type MemoKey = ();
+    fn tm_memo_key(_env: &Env<'v>, _a: &Rc<Term>, _b: &Rc<Term>) -> Option<()> {
+        None
+    }
+
     type Ty = Type;
     type Tm = Rc<Term>;
     type TyC = Rc<Type>;

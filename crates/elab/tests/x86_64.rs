@@ -542,6 +542,23 @@ theorem mov_ri_extended_ones_bytes():
          all_ones(8), all_ones(8), all_ones(8), all_ones(8)]
 { refl }
 
+// A full-width asymmetric immediate pins the little-endian byte order, and a
+// high-bit one the top byte; both check under ordinary fuel now that
+// `ofNat` is width-bounded (issues/bitvec-ofnat-large-literals.md).
+theorem mov_ri_full_width_asymmetric_bytes():
+    canonical_bytes(MovRI(R9, ofNat(64, 81985529216486895))) =
+        [ofNat(8, 73), ofNat(8, 185),
+         ofNat(8, 239), ofNat(8, 205), ofNat(8, 171), ofNat(8, 137),
+         ofNat(8, 103), ofNat(8, 69), ofNat(8, 35), ofNat(8, 1)]
+{ refl }
+
+theorem mov_ri_high_bit_bytes():
+    canonical_bytes(MovRI(Rax, ofNat(64, 9223372036854775809))) =
+        [ofNat(8, 72), ofNat(8, 184),
+         ofNat(8, 1), zero(8), zero(8), zero(8),
+         zero(8), zero(8), zero(8), ofNat(8, 128)]
+{ refl }
+
 theorem mov_ri_canonical_lengths():
     canonical_length(MovRI(Rax, zero(64))) = 10
     ∧ canonical_bytes(MovRI(R15, all_ones(64))).len() = 10
@@ -596,6 +613,29 @@ theorem mov_ri_executes_and_frames<M>(destination: Gpr,
             other => format!("{other}"),
         };
         panic!("MOV r64, imm64 laws did not check: {msg}");
+    }
+
+    // Byte order is load-bearing: the same bytes big-endian are refused by
+    // conversion, not by fuel.
+    let mut e = base.clone();
+    let swapped = r#"
+import x86_64;
+import bitvec;
+import list;
+
+theorem mov_ri_big_endian_is_wrong():
+    canonical_bytes(MovRI(R9, ofNat(64, 81985529216486895))) =
+        [ofNat(8, 73), ofNat(8, 185),
+         ofNat(8, 1), ofNat(8, 35), ofNat(8, 69), ofNat(8, 103),
+         ofNat(8, 137), ofNat(8, 171), ofNat(8, 205), ofNat(8, 239)]
+{ refl }
+"#;
+    match e.elab_module_source("mov_ri_swapped", swapped) {
+        Ok(()) => panic!("big-endian immediate bytes were accepted"),
+        Err(err) => {
+            let msg = err.render(swapped);
+            assert!(msg.contains("NotConvertible"), "{msg}");
+        }
     }
 }
 
