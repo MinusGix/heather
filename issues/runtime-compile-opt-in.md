@@ -38,3 +38,5 @@ logical execution mode or a privileged bypass of the compiler contract.
 - [[source-to-function-ir-certification]] owns the current source-to-FunctionIR
   certificate route; do not route it through legacy IR just to package instances.
 - [[runtime-extern-c-abi]] owns ABI selection and foreign boundary semantics.
+
+- 2026-09-07: The intended marker implementation is a Heather declaration generator, not a dedicated Rust annotation handler. [[scoped-declaration-generators]] owns that mechanism, using [[host-elaboration-interface]]. It generates the ordinary function/Compile instance through checked publication; runtime_fn remains a provisional library name.

@@ -32,3 +32,5 @@ instance, rather than a privileged serializer built into the compiler.
   owns only this bounded synthesis customer.
 - [[elf64-structured-image]] owns the initial ELF use case and can proceed with
   handwritten encoders before synthesis is available.
+
+- 2026-09-07: Use [[host-elaboration-interface]] and [[scoped-declaration-generators]] for reflection/elaboration and checked instance publication as needed. Initial trait/library work can use independent sample records, leaving ELF integration to its owner.
