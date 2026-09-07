@@ -549,6 +549,23 @@ impl<'v> Dom<'v> for Values {
         run(cv, env, |ev| ev.delta_step_ty(w))
     }
 
+    type MemoKey = (usize, u32, u32, usize, u32, u32, usize, u8);
+    fn tm_memo_key(env: &Env<'v>, a: &TmC<'v>, b: &TmC<'v>) -> Option<Self::MemoKey> {
+        // The arena keeps every closure alive for the whole run, so an
+        // address names one closure throughout. Ψ is by pointer: a
+        // telescope push rebuilds it, and verdicts do not cross that.
+        Some((
+            a.clo as *const TmClo<'v> as usize,
+            a.home,
+            a.sat,
+            b.clo as *const TmClo<'v> as usize,
+            b.home,
+            b.sat,
+            Rc::as_ptr(&env.psi) as usize,
+            env.layer as u8,
+        ))
+    }
+
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Val<'v>>) -> R<Rc<Val<'v>>> {
         let w = Rc::clone(w);
         run(cv, env, |ev| ev.delta_step(w))

@@ -56,6 +56,24 @@ special-case generated constructor names.
 
 ## Log
 
+- 2026-09-07: Two more consumers attributed as context homomorphisms, from
+  [[bitvec-ofnat-large-literals]]. The successor algebra `λ k ih. su^p ih`
+  is now recognized at any `p ≥ 1`, not only `p = 1`: a saturated run's
+  count is multiplied by `p` (so `twice` maps a run in constant work),
+  declining to the ordinary step on a composed program or an overflowing
+  count. And the mapped fold no longer leaves its tail pending: it is forced
+  through a `NatRunTail` frame, and a run it returns is merged by
+  `ContextProgram::append` (one saturated run when the counts add, composed
+  otherwise). Before, `add(p, p)` on a literal was two fragments and
+  `pow(2, k)` — `mul` is repeated `add` — a chain of `2^k` single-successor
+  fragments that overflowed the native stack at `k = 20`; now `pow(2, 63)`
+  is one run. Both fast folds also unfold a glued scrutinee (and the
+  synchronous fold a glued right-hand counter) rather than stalling for
+  conversion's outside δ-steps, which replay the pending spine each time —
+  the cost that made a doubling chain under a literal consumer quartic in
+  its length. The evaluator tests cover merge, scaling, and the decline; the
+  glued cases are pinned at the library level in `lib_std_bitvec`.
+
 - 2026-09-02: The first ordinary compact-literal producer exposed two
   compatibility omissions in certgen after landing. Its value reader still
   accepted only `Zero`/`Succ`, so the in-language signature checker failed on

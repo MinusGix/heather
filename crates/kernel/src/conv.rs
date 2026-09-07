@@ -67,6 +67,7 @@
 //! rules, the fuel accounting, the left-biased inference and the layer
 //! discipline are the same either way.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -564,6 +565,16 @@ struct RecSide<'a, 'v, D: Dom<'v>> {
 
 struct Conv<'v, D: Dom<'v>> {
     fuel: u64,
+    /// Verdicts of [`Conv::tm`] already reached in this run, keyed by the
+    /// two closures' identities ([`Dom::tm_memo_key`]). A closure denotes
+    /// one term in one scope, and a well-typed term has one type up to
+    /// conversion, so the verdict for a pair is a fact about the pair:
+    /// convertible, or definitely not. Exhaustion is not a verdict and is
+    /// never stored. Without this, comparing two definitions unfolded in
+    /// lockstep re-compares every glued argument chain from scratch on every
+    /// δ-round — factorial in the chain's depth (`ofNat(8, 15)` against
+    /// `ofNat(8, 14)` exhausted 2^20 units at width eight).
+    memo: HashMap<D::MemoKey, bool>,
     /// Does Ψ contain any definition at all? Decided once, because when it
     /// does not — every program before this feature, and every fixture that
     /// only declares — the δ-lazy stage below has nothing to find, and
@@ -580,7 +591,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             .bindings
             .iter()
             .any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -1055,10 +1066,30 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         if D::tm_identity_fast(a, b) {
             return Ok(());
         }
-        let w = D::whnf_ty(self, env, ty)?;
-        let wa = D::whnf_tm_opaque(self, env, a)?;
-        let wb = D::whnf_tm_opaque(self, env, b)?;
-        self.tm_w(env, wa, wb, &w, l)
+        let key = D::tm_memo_key(env, a, b);
+        if let Some(key) = &key {
+            if let Some(&verdict) = self.memo.get(key) {
+                return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
+            }
+        }
+        let result = (|| {
+            let w = D::whnf_ty(self, env, ty)?;
+            let wa = D::whnf_tm_opaque(self, env, a)?;
+            let wb = D::whnf_tm_opaque(self, env, b)?;
+            self.tm_w(env, wa, wb, &w, l)
+        })();
+        if let Some(key) = key {
+            match &result {
+                Ok(()) => {
+                    self.memo.insert(key, true);
+                }
+                Err(ConvError::NotConvertible) => {
+                    self.memo.insert(key, false);
+                }
+                Err(ConvError::OutOfFuel) => {}
+            }
+        }
+        result
     }
 
     /// [`Conv::tm`] at the **root**; see [`Conv::ty_root`].

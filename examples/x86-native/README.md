@@ -16,24 +16,27 @@ cc -std=c11 -Wall -Wextra -Werror examples/x86-native/main.c \
 Expected output:
 
 ```text
-mix(20, 22) = 27; 10005 native cases passed
+mix(20, 22) = 81985529216486963; 10005 native cases passed
 ```
 
 The command refuses existing assembly or certificate outputs. Remove those
 outputs deliberately before rebuilding, or choose a fresh output name.
 
-`mix.hthr` is the compiled program: it shares an addition, adds seven, and
-XORs the results. The C file supplies `main` and checks boundary values and
+`mix.hthr` is the compiled program: it shares an addition, adds a full-width
+constant, and XORs the results. The C file supplies `main` and checks boundary values and
 10,000 deterministic pseudorandom pairs against unsigned C arithmetic.
 
 The initial command accepts a transparent function with two `BitVec(64)`
 parameters and a supported binary expression as its result. The existing
 elaborated-source reflector supports shared/nested Add, Sub, AND, OR, XOR,
 and literal `bitvec::ofNat` constants within these expressions. Unsupported
-operations and exhausted registers produce errors. Large literals can currently
-exhaust proof fuel because `bitvec::ofNat` uses magnitude-dependent parity and
-halving; see [the tracked limitation](../../issues/bitvec-ofnat-large-literals.md). Source branches, loops,
-calls, memory, other signatures, and spilling are not part of this command.
+operations and exhausted registers produce errors. Literals of any magnitude
+below `2^64` check in work bounded by the width (`bitvec::ofNat` reads bits
+from the top against run-compressed powers of two; see
+[the closed issue](../../issues/bitvec-ofnat-large-literals.md)), and the
+example's own constant is a full-width asymmetric one so that every immediate
+byte is distinct. Source branches, loops, calls, memory, other signatures, and
+spilling are not part of this command.
 
 Arguments arrive in RDI/RSI and the result leaves in RAX. Temporaries use only
 SysV caller-saved registers. The assembly consists of literal `.byte`

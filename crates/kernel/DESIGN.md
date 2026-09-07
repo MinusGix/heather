@@ -245,6 +245,19 @@ whnf pass unconditionally cost 1.35–1.43× on the conversion fixtures. The
 value domain implements this order with glued neutrals rather than by
 walking syntax for the head — see the conversion bullets under *Algorithms*.
 
+Two refinements (2026-09-07, `issues/bitvec-ofnat-large-literals.md`).
+`Conv::tm` memoizes its verdicts per closure pair (address, scope, Ψ,
+layer): convertible or definitely not, never exhaustion. Two definitions
+unfolded in lockstep otherwise re-compare every glued argument chain on
+every δ-round, factorial in the chain's depth. And the evaluator's two
+run-accelerated Nat folds — the successor algebra `su^p ih` and the
+synchronous two-counter fold — unfold a *glued* scrutinee (or right-hand
+counter) themselves instead of stalling as a spine for conversion to
+δ-step from outside, which replays the pending spine each time. General
+matches deliberately do not: the x86 decoder's open-argument unfolding
+theorems meet at a folded `match decode_opcode_direct(…)`, and unfolding
+it eagerly exhausts fuel on the dispatch it hides.
+
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see
