@@ -9,8 +9,8 @@ updated: 2026-09-07
 ## Scope
 
 Replace the large literal header array in `lib/elf64.hthr` with explicit ELF
-header, program-header, and image records plus wire encoders. Keep the restricted
-static executable profile and its exact emitted-byte certificate.
+header, program-header, and image records plus wire encoders. Keep both the inline and owned-stack call executable profiles and their exact
+emitted-byte certificates.
 
 ## Acceptance
 
@@ -18,8 +18,9 @@ static executable profile and its exact emitted-byte certificate.
   and alignment explicitly. Host-language record layout is not the wire format.
 - Make the producer and logical model use structured fields, while continuing
   to certify the actual serialized bytes before publication.
-- Preserve the current executable bytes and behavior for the existing example;
-  retain malformed-header negative controls and size/entry constraints.
+- Preserve current executable bytes and behavior for both inline and nested-call
+  examples; retain malformed-header controls, size/entry constraints, and the
+  separate RW/NX stack segment of the call profile.
 - Document which ELF features remain unsupported. No section table or object-file
   pipeline is required merely to make the representation structured.
 

@@ -3,7 +3,7 @@ title: Closed BitVec computation over generated values exhausts stack and memory
 status: open
 labels: [stdlib,bitvectors,kernel,conversion,performance]
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-09-07
 ---
 
 The executable carry round exposed two different cost regimes which must not be
@@ -164,3 +164,5 @@ Acceptance has two parts:
   overflow rather than returning `OutOfFuel`, so a merely excessive unary
   computation — course-of-values `half` is one fold step per successor —
   still takes the checker down instead of being refused.
+- 2026-09-07: The nested x86 CALL certificate exposed another closed arithmetic producer: sub(64, zero(64), a small negative-rel32 magnitude) exhausted a 4 GiB direct-check rail when normalized as one expression. The call producer now checks literal decrement steps separately. Canonical signed CALL target addition is preserved through an add_negative theorem, avoiding iteration over a sign-extended unsigned count. This is proof staging, not a resource-diagnostic fix.
+- 2026-09-07: [[bitvec-bounded-add-sub]] now owns width-bounded executable arithmetic and generic equality proofs to existing add/sub. Safe refusal of excessive computations remains here.

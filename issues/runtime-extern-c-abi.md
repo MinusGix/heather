@@ -33,6 +33,10 @@ not solve imports.
 
 ## What it assumes from elsewhere
 
+- [[named-abi-contracts]] owns the named convention specification and the distinction
+  between checked conformance and explicitly assumed foreign conformance.
+- [[x86-call-memory-footprints]] owns frame/protected-memory obligations; imported
+  functions additionally need their own pointer and shared-memory effects.
 - [[runtime-compile-opt-in]] owns instance eligibility and the marker mechanism.
 - [[x86-calls-stack-frames]] owns concrete calling and frame semantics.
 - [[x86-symbolic-fragment-layout]] owns symbolic references and relocations.
