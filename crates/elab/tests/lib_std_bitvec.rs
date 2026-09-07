@@ -114,6 +114,8 @@ fn of_nat_at_machine_width_costs_the_width_not_the_magnitude() {
          theorem powers_are_one_run(): nat::pow(2, 63) = 9223372036854775808 { refl }\n\
          theorem doubling_is_one_run(): nat::twice(9223372036854775807) = 18446744073709551614 { refl }\n\
          theorem run_scrutinee_chain(): nat::mul(2, 65536) = 131072 { refl }\n\
+         theorem hex_spelling(): ofNat(64, 0x0123_4567_89AB_CDEF) = ofNat(64, 81985529216486895) { refl }\n\
+         theorem hex_high_bit(): toNat(64, ofNat(64, 0x8000_0000_0000_0001)) = 9223372036854775809 { refl }\n\
          theorem doubling_chain_under_a_consumer(): nat::leb(nat::pow(2, 40), 1099511627776) = True { refl }\n",
     );
     ok(&src);
@@ -128,6 +130,10 @@ fn of_nat_at_machine_width_costs_the_width_not_the_magnitude() {
     }
     let msg = run("theorem wrong(): toNat(64, ofNat(64, 81985529216486895)) = 81985529216486896 { refl }")
         .expect_err("an off-by-one round trip must be refused");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    // A radix spelling is the same literal: one hex digit off is refused.
+    let msg = run("theorem wrong(): ofNat(64, 0x0123_4567_89AB_CDEE) = ofNat(64, 81985529216486895) { refl }")
+        .expect_err("a hex digit off must be refused");
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
