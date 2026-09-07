@@ -1090,3 +1090,407 @@ theorem truncate_sign_extend(n, extra: Nat, x: BitVec(Succ(n))):
     split_concat_low(Succ(n), extra, x,
         repeat_bit(extra, get(Succ(n), x, last_index(n))))
 }
+
+// ---------------------------------------------------------------------------
+// Width-bounded addition and subtraction (issues/bitvec-bounded-add-sub.md).
+// `add` and `sub` iterate one increment or decrement per unit of the second
+// operand's unsigned value, so a machine-width operand — a sign-extended
+// negative displacement, say — asks for up to `2^64` steps. `ripple_add` and
+// `ripple_sub` instead run the carry and borrow ripples `carry_add_bit` and
+// `borrow_sub_bit` already use and keep each column's sum bit, so the work is
+// one column per bit of width whatever the operands are. They are proved
+// equal to `add` and `sub` at every width and every operand, open ones
+// included, so a proof may compute with the ripple and state its result in
+// the canonical operation (`add_eq_of_ripple_add` and its siblings).
+//
+// The incoming carry or borrow is part of the induction. Its meaning is the
+// unsigned count the column adds or removes: `add_bits(n, a, b, c)` is
+// `iterate_increment(n, a, toNat(n, b) + bit_value(c))` (`add_bits_spec`),
+// and `sub_bits(n, a, b, c)` is `iterate_decrement(n, toNat(n, b) +
+// bit_value(c), a)` (`sub_bits_spec`).
+
+fn sum_bit(a, b, carry: Bool) → Bool { xor_bit(a, xor_bit(b, carry)) }
+
+fn add_bits_next(n: Nat, a, b: BitVec(n), carry: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
+{
+    match carry {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
+// Ripple-carry addition with an incoming carry. The carry passed on is the
+// majority `carry_bits` uses, forced before the recursive call for the reason
+// given there.
+fn add_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
+        Zero => λ a b carry => from_bits(0, []),
+        Succ(k, ih) => λ a b carry => cons_bit(k,
+            sum_bit(head_bit(k, a), head_bit(k, b), carry),
+            add_bits_next(k, tail_bits(k, a), tail_bits(k, b),
+                carry_majority(head_bit(k, a), head_bit(k, b), carry), ih)),
+    }
+}
+
+fn ripple_add(n: Nat, a, b: BitVec(n)) → BitVec(n) { add_bits(n, a, b, False) }
+
+fn sub_bits_next(n: Nat, a, b: BitVec(n), borrow: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
+{
+    match borrow {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
+// Ripple-borrow subtraction with an incoming borrow; the borrow passed on is
+// the one `borrow_bits` uses.
+fn sub_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
+        Zero => λ a b borrow => from_bits(0, []),
+        Succ(k, ih) => λ a b borrow => cons_bit(k,
+            sum_bit(head_bit(k, a), head_bit(k, b), borrow),
+            sub_bits_next(k, tail_bits(k, a), tail_bits(k, b),
+                borrow_next(head_bit(k, a), head_bit(k, b), borrow), ih)),
+    }
+}
+
+fn ripple_sub(n: Nat, a, b: BitVec(n)) → BitVec(n) { sub_bits(n, a, b, False) }
+
+fn ripple_neg(n: Nat, a: BitVec(n)) → BitVec(n) { ripple_sub(n, zero(n), a) }
+
+theorem cons_bit_tail_cong(n: Nat, b: Bool, {xs, ys: BitVec(n)}, pt: xs = ys):
+    cons_bit(n, b, xs) = cons_bit(n, b, ys)
+{
+    j(pt, λ zs q => cons_bit(n, b, xs) = cons_bit(n, b, zs), refl)
+}
+
+// Two increments at a positive width advance the tail once and restore the
+// low bit, whatever it was; `iterate_increment_twice` is the low-bit-zero
+// instance.
+theorem increment_increment_cons(n: Nat, b: Bool, x: BitVec(n)):
+    increment(Succ(n), increment(Succ(n), cons_bit(n, b, x))) =
+    cons_bit(n, b, increment(n, x))
+{
+    match b { False => refl, True => refl }
+}
+
+theorem iterate_increment_twice_cons(n: Nat, b: Bool, x: BitVec(n), count: Nat):
+    iterate_increment(Succ(n), cons_bit(n, b, x), twice(count)) =
+    cons_bit(n, b, iterate_increment(n, x, count))
+{
+    match count {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_increment(Succ(n), cong_increment(Succ(n),
+                iterate_increment_twice_cons(n, b, x, k))),
+            increment_increment_cons(n, b, iterate_increment(n, x, k))),
+    }
+}
+
+// One column of the addition, at fully cased bits. The count is first put in
+// the `borrow_right_value` normal form (`twice(t)`, `Succ(twice(t))` or
+// `twice(Succ(t))` by the two low weights), after which every case is the
+// doubled-tail law above followed by zero, one or two low-bit increments.
+theorem add_bits_cons_leaf(k: Nat, ha, hb, carry: Bool, ta, tb: BitVec(k)):
+    (iterate_increment(k, ta,
+        toNat(k, tb) + bit_value(carry_majority(ha, hb, carry))) =
+        add_bits(k, ta, tb, carry_majority(ha, hb, carry))) →
+    iterate_increment(Succ(k), cons_bit(k, ha, ta),
+        borrow_right_value(hb, carry, toNat(k, tb))) =
+    add_bits(Succ(k), cons_bit(k, ha, ta), cons_bit(k, hb, tb), carry)
+{
+    match hb {
+        False => match carry {
+            False => match ha {
+                False => λ tail_law => trans(
+                    iterate_increment_twice_cons(k, False, ta, toNat(k, tb)),
+                    cons_bit_tail_cong(k, False, tail_law)),
+                True => λ tail_law => trans(
+                    iterate_increment_twice_cons(k, True, ta, toNat(k, tb)),
+                    cons_bit_tail_cong(k, True, tail_law)),
+            },
+            True => match ha {
+                False => λ tail_law => trans(
+                    cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, False, ta, toNat(k, tb))),
+                    cons_bit_tail_cong(k, True, tail_law)),
+                True => λ tail_law => trans(
+                    cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, True, ta, toNat(k, tb))),
+                    cons_bit_tail_cong(k, False, tail_law)),
+            },
+        },
+        True => match carry {
+            False => match ha {
+                False => λ tail_law => trans(
+                    cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, False, ta, toNat(k, tb))),
+                    cons_bit_tail_cong(k, True, tail_law)),
+                True => λ tail_law => trans(
+                    cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, True, ta, toNat(k, tb))),
+                    cons_bit_tail_cong(k, False, tail_law)),
+            },
+            True => match ha {
+                False => λ tail_law => trans(
+                    cong_increment(Succ(k), cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, False, ta, toNat(k, tb)))),
+                    cons_bit_tail_cong(k, False, tail_law)),
+                True => λ tail_law => trans(
+                    cong_increment(Succ(k), cong_increment(Succ(k),
+                        iterate_increment_twice_cons(k, True, ta, toNat(k, tb)))),
+                    cons_bit_tail_cong(k, True, tail_law)),
+            },
+        },
+    }
+}
+
+theorem add_bits_cons(k: Nat, ha, hb, carry: Bool, ta, tb: BitVec(k),
+    tail_law: iterate_increment(k, ta,
+        toNat(k, tb) + bit_value(carry_majority(ha, hb, carry))) =
+        add_bits(k, ta, tb, carry_majority(ha, hb, carry))):
+    iterate_increment(Succ(k), cons_bit(k, ha, ta),
+        toNat(Succ(k), cons_bit(k, hb, tb)) + bit_value(carry)) =
+    add_bits(Succ(k), cons_bit(k, ha, ta), cons_bit(k, hb, tb), carry)
+{
+    trans(
+        cong_iterate_increment_count(Succ(k), cons_bit(k, ha, ta),
+            borrow_right_normalize(hb, carry, toNat(k, tb))),
+        add_bits_cons_leaf(k, ha, hb, carry, ta, tb, tail_law))
+}
+
+theorem iterate_increment_add_bits(n: Nat): (a, b: BitVec(n)) → (carry: Bool) →
+    iterate_increment(n, a, toNat(n, b) + bit_value(carry)) = add_bits(n, a, b, carry)
+{
+    match n as λ k => (a, b: BitVec(k)) → (carry: Bool) →
+        iterate_increment(k, a, toNat(k, b) + bit_value(carry)) = add_bits(k, a, b, carry) {
+        Zero => λ a b carry => match carry { False => refl, True => refl },
+        Succ(k, ih) => λ a b carry => trans(
+            cong_iterate_increment(Succ(k), toNat(Succ(k), b) + bit_value(carry),
+                sym(cons_head_tail(k, a))),
+            add_bits_cons(k, head_bit(k, a), head_bit(k, b), carry,
+                tail_bits(k, a), tail_bits(k, b),
+                ih(tail_bits(k, a), tail_bits(k, b),
+                    carry_majority(head_bit(k, a), head_bit(k, b), carry)))),
+    }
+}
+
+// The meaning of the incoming carry, and the public equation.
+theorem add_bits_spec(n: Nat, a, b: BitVec(n), carry: Bool):
+    add_bits(n, a, b, carry) =
+    iterate_increment(n, a, toNat(n, b) + bit_value(carry))
+{
+    sym(iterate_increment_add_bits(n, a, b, carry))
+}
+
+theorem ripple_add_eq_add(n: Nat, a, b: BitVec(n)):
+    ripple_add(n, a, b) = add(n, a, b)
+{
+    sym(iterate_increment_add_bits(n, a, b, False))
+}
+
+// Two decrements at a positive width retreat the tail once and restore the
+// low bit.
+theorem decrement_decrement_cons(n: Nat, b: Bool, x: BitVec(n)):
+    decrement(Succ(n), decrement(Succ(n), cons_bit(n, b, x))) =
+    cons_bit(n, b, decrement(n, x))
+{
+    match b { False => refl, True => refl }
+}
+
+theorem iterate_decrement_twice_cons(n: Nat, b: Bool, count: Nat): (x: BitVec(n)) →
+    iterate_decrement(Succ(n), twice(count), cons_bit(n, b, x)) =
+    cons_bit(n, b, iterate_decrement(n, count, x))
+{
+    match count as λ c => (x: BitVec(n)) →
+        iterate_decrement(Succ(n), twice(c), cons_bit(n, b, x)) =
+        cons_bit(n, b, iterate_decrement(n, c, x)) {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => trans(
+            cong_iterate_decrement(Succ(n), twice(k),
+                decrement_decrement_cons(n, b, x)),
+            ih(decrement(n, x))),
+    }
+}
+
+// One column of the subtraction. `iterate_decrement` applies its decrements
+// innermost first, so a low weight of one or two is one or two decrements of
+// the cons before the doubled-tail law applies.
+theorem sub_bits_cons_leaf(k: Nat, ha, hb, borrow: Bool, ta, tb: BitVec(k)):
+    (iterate_decrement(k,
+        toNat(k, tb) + bit_value(borrow_next(ha, hb, borrow)), ta) =
+        sub_bits(k, ta, tb, borrow_next(ha, hb, borrow))) →
+    iterate_decrement(Succ(k), borrow_right_value(hb, borrow, toNat(k, tb)),
+        cons_bit(k, ha, ta)) =
+    sub_bits(Succ(k), cons_bit(k, ha, ta), cons_bit(k, hb, tb), borrow)
+{
+    match hb {
+        False => match borrow {
+            False => match ha {
+                False => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, False, toNat(k, tb), ta),
+                    cons_bit_tail_cong(k, False, tail_law)),
+                True => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, True, toNat(k, tb), ta),
+                    cons_bit_tail_cong(k, True, tail_law)),
+            },
+            True => match ha {
+                False => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, True, toNat(k, tb),
+                        decrement(k, ta)),
+                    cons_bit_tail_cong(k, True, tail_law)),
+                True => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, False, toNat(k, tb), ta),
+                    cons_bit_tail_cong(k, False, tail_law)),
+            },
+        },
+        True => match borrow {
+            False => match ha {
+                False => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, True, toNat(k, tb),
+                        decrement(k, ta)),
+                    cons_bit_tail_cong(k, True, tail_law)),
+                True => λ tail_law => trans(
+                    iterate_decrement_twice_cons(k, False, toNat(k, tb), ta),
+                    cons_bit_tail_cong(k, False, tail_law)),
+            },
+            True => match ha {
+                False => λ tail_law => trans(
+                    cong_iterate_decrement(Succ(k), twice(toNat(k, tb)),
+                        decrement_decrement_cons(k, False, ta)),
+                    trans(
+                        iterate_decrement_twice_cons(k, False, toNat(k, tb),
+                            decrement(k, ta)),
+                        cons_bit_tail_cong(k, False, tail_law))),
+                True => λ tail_law => trans(
+                    cong_iterate_decrement(Succ(k), twice(toNat(k, tb)),
+                        decrement_decrement_cons(k, True, ta)),
+                    trans(
+                        iterate_decrement_twice_cons(k, True, toNat(k, tb),
+                            decrement(k, ta)),
+                        cons_bit_tail_cong(k, True, tail_law))),
+            },
+        },
+    }
+}
+
+theorem cong_iterate_decrement_count(n: Nat, x: BitVec(n), {a, b: Nat}, p: a = b):
+    iterate_decrement(n, a, x) = iterate_decrement(n, b, x)
+{
+    j(p, λ k q => iterate_decrement(n, a, x) = iterate_decrement(n, k, x), refl)
+}
+
+theorem sub_bits_cons(k: Nat, ha, hb, borrow: Bool, ta, tb: BitVec(k),
+    tail_law: iterate_decrement(k,
+        toNat(k, tb) + bit_value(borrow_next(ha, hb, borrow)), ta) =
+        sub_bits(k, ta, tb, borrow_next(ha, hb, borrow))):
+    iterate_decrement(Succ(k),
+        toNat(Succ(k), cons_bit(k, hb, tb)) + bit_value(borrow),
+        cons_bit(k, ha, ta)) =
+    sub_bits(Succ(k), cons_bit(k, ha, ta), cons_bit(k, hb, tb), borrow)
+{
+    trans(
+        cong_iterate_decrement_count(Succ(k), cons_bit(k, ha, ta),
+            borrow_right_normalize(hb, borrow, toNat(k, tb))),
+        sub_bits_cons_leaf(k, ha, hb, borrow, ta, tb, tail_law))
+}
+
+theorem iterate_decrement_sub_bits(n: Nat): (a, b: BitVec(n)) → (borrow: Bool) →
+    iterate_decrement(n, toNat(n, b) + bit_value(borrow), a) = sub_bits(n, a, b, borrow)
+{
+    match n as λ k => (a, b: BitVec(k)) → (borrow: Bool) →
+        iterate_decrement(k, toNat(k, b) + bit_value(borrow), a) = sub_bits(k, a, b, borrow) {
+        Zero => λ a b borrow => match borrow { False => refl, True => refl },
+        Succ(k, ih) => λ a b borrow => trans(
+            cong_iterate_decrement(Succ(k), toNat(Succ(k), b) + bit_value(borrow),
+                sym(cons_head_tail(k, a))),
+            sub_bits_cons(k, head_bit(k, a), head_bit(k, b), borrow,
+                tail_bits(k, a), tail_bits(k, b),
+                ih(tail_bits(k, a), tail_bits(k, b),
+                    borrow_next(head_bit(k, a), head_bit(k, b), borrow)))),
+    }
+}
+
+theorem sub_bits_spec(n: Nat, a, b: BitVec(n), borrow: Bool):
+    sub_bits(n, a, b, borrow) =
+    iterate_decrement(n, toNat(n, b) + bit_value(borrow), a)
+{
+    sym(iterate_decrement_sub_bits(n, a, b, borrow))
+}
+
+theorem ripple_sub_eq_sub(n: Nat, a, b: BitVec(n)):
+    ripple_sub(n, a, b) = sub(n, a, b)
+{
+    sym(iterate_decrement_sub_bits(n, a, b, False))
+}
+
+theorem ripple_neg_eq_neg(n: Nat, a: BitVec(n)): ripple_neg(n, a) = neg(n, a) {
+    ripple_sub_eq_sub(n, zero(n), a)
+}
+
+// Transport. A closed `add` at machine width is up to `2^64` increments, so
+// a generator proves the ripple's equation instead — at closed operands that
+// is `refl` in work linear in the width — and restates it in the canonical
+// operation through these. The reverse direction lets a ripple result inherit
+// every law stated for `add` and `sub`.
+theorem add_eq_of_ripple_add(n: Nat, a, b, r: BitVec(n),
+    h: ripple_add(n, a, b) = r): add(n, a, b) = r
+{
+    trans(sym(ripple_add_eq_add(n, a, b)), h)
+}
+
+theorem ripple_add_eq_of_add(n: Nat, a, b, r: BitVec(n),
+    h: add(n, a, b) = r): ripple_add(n, a, b) = r
+{
+    trans(ripple_add_eq_add(n, a, b), h)
+}
+
+theorem sub_eq_of_ripple_sub(n: Nat, a, b, r: BitVec(n),
+    h: ripple_sub(n, a, b) = r): sub(n, a, b) = r
+{
+    trans(sym(ripple_sub_eq_sub(n, a, b)), h)
+}
+
+theorem ripple_sub_eq_of_sub(n: Nat, a, b, r: BitVec(n),
+    h: sub(n, a, b) = r): ripple_sub(n, a, b) = r
+{
+    trans(ripple_sub_eq_sub(n, a, b), h)
+}
+
+theorem neg_eq_of_ripple_neg(n: Nat, a, r: BitVec(n),
+    h: ripple_neg(n, a) = r): neg(n, a) = r
+{
+    trans(sym(ripple_neg_eq_neg(n, a)), h)
+}
+
+theorem cong_ripple_add(n: Nat, {a, b, c, d: BitVec(n)}, pa: a = b, pc: c = d):
+    ripple_add(n, a, c) = ripple_add(n, b, d)
+{
+    j(pa, λ z p => ripple_add(n, a, c) = ripple_add(n, z, d),
+        j(pc, λ w q => ripple_add(n, a, c) = ripple_add(n, a, w), refl))
+}
+
+theorem cong_ripple_sub(n: Nat, {a, b, c, d: BitVec(n)}, pa: a = b, pc: c = d):
+    ripple_sub(n, a, c) = ripple_sub(n, b, d)
+{
+    j(pa, λ z p => ripple_sub(n, a, c) = ripple_sub(n, z, d),
+        j(pc, λ w q => ripple_sub(n, a, c) = ripple_sub(n, a, w), refl))
+}
+
+// The laws of `add` and `sub` transfer across the equations.
+theorem ripple_add_comm(n: Nat, a, b: BitVec(n)):
+    ripple_add(n, a, b) = ripple_add(n, b, a)
+{
+    trans(ripple_add_eq_add(n, a, b),
+        trans(add_comm(n, a, b), sym(ripple_add_eq_add(n, b, a))))
+}
+
+theorem ripple_add_sub_cancel(n: Nat, a, b: BitVec(n)):
+    ripple_sub(n, ripple_add(n, a, b), b) = a
+{
+    trans(@cong_ripple_sub(n, ripple_add(n, a, b), add(n, a, b), b, b,
+            ripple_add_eq_add(n, a, b), refl),
+        trans(ripple_sub_eq_sub(n, add(n, a, b), b), add_sub_cancel(n, a, b)))
+}

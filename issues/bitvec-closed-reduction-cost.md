@@ -166,3 +166,28 @@ Acceptance has two parts:
   still takes the checker down instead of being refused.
 - 2026-09-07: The nested x86 CALL certificate exposed another closed arithmetic producer: sub(64, zero(64), a small negative-rel32 magnitude) exhausted a 4 GiB direct-check rail when normalized as one expression. The call producer now checks literal decrement steps separately. Canonical signed CALL target addition is preserved through an add_negative theorem, avoiding iteration over a sign-extended unsigned count. This is proof staging, not a resource-diagnostic fix.
 - 2026-09-07: [[bitvec-bounded-add-sub]] now owns width-bounded executable arithmetic and generic equality proofs to existing add/sub. Safe refusal of excessive computations remains here.
+- 2026-09-07: Consumer-over-producer reproducers from [[bitvec-bounded-add-sub]] (release
+  `heather check`, one furnace box, module baseline ≈3.0 s / 110 MB, 8 GiB
+  address cap). The width-64 ripple `ripple_add(64, ofNat(64, A), ofNat(64, B))`
+  compared against an `ofNat` literal costs ≈3.2 s / 210 MB. Put *any* consumer
+  over the same value and it falls off a cliff: `sign_bit` of it 6.8 s /
+  2.3 GB then `OutOfFuel`; `complement` of it `OutOfFuel`; `toNat` of it
+  `OutOfFuel`; a second `ripple_add` over the first `OutOfFuel`;
+  `carry_add_bit` / `borrow_sub_bit` with it as an operand `OutOfFuel`. The
+  same consumers over `ofNat(64, A)` or `band(64, ofNat, ofNat)` are cheap
+  (`complement` of `band`: 141 MB; `toNat` of `ofNat`: +0.3 s). `toNat` over
+  the ripple grows 111, 193, 463, 999, 1947, 3537 MB at widths 8, 16, …, 48 —
+  roughly ×2 per eight bits, exponential in width rather than polynomial —
+  and `toNat` over `band` shows the same law at a smaller constant (114, 209,
+  528 MB at widths 32, 48, 64). Operand magnitude is irrelevant (`ofNat(64, 1)`
+  and `ofNat(64, 2)` also exhaust fuel), and so is the ripple's spelling: a
+  direct recursion, a forced-carry helper, a fully forced eight-branch column,
+  and an accumulator over lists (closed result list, then `from_bit_list` —
+  the shape `ofNat` itself uses) all cost the same, and pre-forcing the operand
+  lists made it worse. What distinguishes the ripple from `band` as a producer
+  is that its spine cannot be produced without evaluating the operands' bits
+  (the carry chain), so a consumer that re-forces the producer pays for the
+  operands again. The old `add(64, x, 2^10)` is 12.6 s / 6.8 GB for the same
+  reason (an eight-deep `increment` chain is 418 MB). Minimize from
+  `sign_bit(64, ripple_add(64, ofNat(64, A), ofNat(64, B))) = True`; this is
+  the shape x86 flag and multi-instruction proofs will meet.
