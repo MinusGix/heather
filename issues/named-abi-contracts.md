@@ -55,3 +55,7 @@ Names and library API spelling remain design choices.
 - [[x86-call-memory-footprints]] owns frame and protected-memory obligations.
 - [[runtime-extern-c-abi]] owns actual foreign import/export adapters and C tests.
 - [[runtime-compile-opt-in]] owns runtime eligibility and marker syntax.
+
+## Log
+
+- 2026-09-07: The call-frame customer introduces the explicitly named NativeIntegerCallContract for the existing internal profile, with effect-based memory preservation and no scratch-register/flags preservation promise. Full ABI policy selection, SysV coverage and foreign-conformance assumptions remain owned here; the internal record does not claim complete SysV conformance.

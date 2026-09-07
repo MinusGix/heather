@@ -5,6 +5,10 @@ Heather function. The assembler and linker are absent from this path. It
 shares source reflection, instruction selection, and source-to-x86
 certification with `compile-x86`, which remains the assembly/FFI export path.
 
+The separate [call profile](x86-64-calls.md), selected with `--callee`, adds
+three code fragments and an owned writable stack page. The profile below
+describes the default inline build.
+
 ## First executable profile
 
 The input is the existing two-argument, 64-bit pure arithmetic fragment. Two
@@ -25,7 +29,7 @@ including the 176-byte header area. Code must be nonempty.
 
 This is an intentionally restricted profile, not a general ELF parser or an
 object-file linker. The layout layer is separate from source reflection and
-can grow to place multiple fragments when calls/data provide a customer.
+also has a first multi-fragment customer in the call profile.
 
 ## Checked claims
 
@@ -84,8 +88,9 @@ installed in the Heather library. Within that supplied mapping, byte fetch,
 supported decoding, typed execution, and the source result are now connected.
 
 There is no verified CPU implementation, Linux loader, or Linux kernel here.
-The next execution work is stack/call composition and memory-backed external
-interactions; the loaded view currently suffices for the register-only profile.
+The call profile extends this boundary with fetched near CALL/RET and byte-backed
+return slots. General call graphs and memory-backed external interactions remain
+future work; this loaded view suffices for the register-only inline profile.
 Full-width argument/source literals are supported; `bitvec::ofNat` conversion
 now performs work bounded by the width (see `issues/bitvec-ofnat-large-literals.md`).
 

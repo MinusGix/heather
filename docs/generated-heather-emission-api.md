@@ -10,7 +10,8 @@ Rust-side emission IR for that boundary.
 
 It is intentionally smaller than the surface AST and much higher-level than
 kernel terms. A generator constructs `Expr`, `Parameter`, `Statement`,
-`Block`, `Declaration`, and `Module` values. The module is serialized once,
+`Block`, `Declaration`, and `Module` values. `Module::extend` composes structured
+fragments in declaration order without a raw-text boundary. The module is serialized once,
 then passes through the ordinary parser, elaborator, and kernel checker.
 
 ## Current expression vocabulary

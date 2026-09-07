@@ -1,0 +1,9 @@
+import bitvec;
+
+fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    bitvec::bxor(64, bitvec::add(64, left, right), bitvec::ofNat(64, 0x0123456789abcdef))
+}
+
+fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    leaf(left, right)
+}

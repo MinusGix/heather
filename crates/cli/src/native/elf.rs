@@ -18,7 +18,7 @@ pub(super) fn parse_argument(text: &str) -> Result<u64, String> {
     u64::from_str_radix(digits, radix).map_err(|_| format!("argument `{text}` exceeds u64"))
 }
 
-fn image(code: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn image(code: &[u8]) -> Result<Vec<u8>, String> {
     if code.is_empty() { return Err("ELF entry must point to code inside the load segment".into()); }
     let size = HEADER_SIZE.checked_add(code.len()).ok_or("ELF size overflow")?;
     if size > u16::MAX as usize {
@@ -75,7 +75,7 @@ fn machine_theorem(module: &mut Module, name: &str, ty: String, body: String) {
 // A valuation built from the actual graph, at an arbitrary width. It gives
 // each node a named expression, so the concrete graph witness is a chain of
 // reflexivity proofs; no unproved RegionHolds assumption remains at entry.
-fn valuation(module: &mut Module, prefix: &str, region: &Region, inputs: [u64; 2]) -> Result<(), String> {
+pub(super) fn valuation(module: &mut Module, prefix: &str, region: &Region, inputs: [u64; 2]) -> Result<(), String> {
     let value_name = |id| format!("{prefix}_value_{id}");
     let value = |id| Expr::call(value_name(id), [Expr::name("width")]);
     let mut declarations = vec![(0, Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[0])])),

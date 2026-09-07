@@ -81,3 +81,31 @@ needs no C wrapper. Build to a fresh path when rebuilding.
 The checked loaded-memory/fetch trace, source-result certificate, and exact
 file image are described in [the ELF design](../../docs/x86-64-static-elf.md),
 including the remaining Linux loading and syscall-delivery assumptions.
+
+## Two functions with CALL and RET
+
+```sh
+(ulimit -v 4194304 -t 300; target/debug/heather build-x86 \
+  examples/x86-native/calls.hthr caller --callee leaf --arg 20 --arg 22 \
+  -o target/x86-native/calls --cache-dir target/native-images)
+./target/x86-native/calls
+printf 'exit status: %s\n' "$?"
+```
+
+Expected status: 197, the low byte of `(20 + 22) XOR 0x0123456789abcdef`.
+The entry calls the wrapper, the wrapper calls the leaf, and both return
+through an owned writable stack page. See [the call profile](../../docs/x86-64-calls.md)
+for the convention, checked claims, and current source restrictions.
+
+## A value kept across a call
+
+```sh
+(ulimit -v 4194304 -t 300; target/debug/heather build-x86 \
+  examples/x86-native/stack_local.hthr caller --callee leaf --arg 20 --arg 22 \
+  -o target/x86-native/stack-local --cache-dir target/native-images)
+./target/x86-native/stack-local
+printf 'exit status: %s\n' "$?"
+```
+
+Expected status: 40. The caller saves `left XOR right` in its own frame and
+reloads it after a callee that clears R11. See [call memory effects and locals](../../docs/x86-64-call-frames.md).

@@ -443,6 +443,11 @@ enum ModuleItem {
 }
 
 impl Module {
+    /// Compose structured fragments without rendering either one to raw text.
+    pub fn extend(&mut self, other: Module) {
+        self.items.extend(other.items);
+    }
+
     pub fn declaration(&mut self, declaration: Declaration) {
         self.items.push(ModuleItem::Declaration(declaration));
     }
@@ -502,7 +507,8 @@ mod tests {
             Expr::name("Nat"),
             Block::expression(Expr::nat(42)),
         ));
-        module.declaration(
+        let mut suffix = Module::default();
+        suffix.declaration(
             Declaration::theorem(
                 "answer_is_answer",
                 Expr::equal(Expr::nullary("answer"), Expr::nullary("answer")),
@@ -513,6 +519,7 @@ mod tests {
             )
             .parameter(Parameter::explicit("unused", Expr::name("True"))),
         );
+        module.extend(suffix);
         assert_eq!(
             module.render(),
             "fn answer() → Nat\n{\n    42\n}\n\n\

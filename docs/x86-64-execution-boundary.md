@@ -9,6 +9,11 @@ execution relation. An encoder-owned semantics would exclude raw binaries; a
 decoder-owned semantics would make compilation correctness depend on a second
 meaning for instructions.
 
+The [first certified call profile](x86-64-calls.md) extends the existing state
+with normal-path near CALL/RET rules and an owned stack page. It checks their
+canonical bytes directly; general CALL/RET decoding and fault outcomes remain
+future work.
+
 ## The layers
 
 The intended chain is:

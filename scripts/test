@@ -118,11 +118,28 @@ semantic_warmup() {
   )
 }
 
+native_warmup() {
+  # Native certificates use a separate SemanticSession cache. Populate its
+  # exact-build prefix before a child spends its budget on the generated
+  # certificate; replay still kernel-checks every cached declaration.
+  (
+    ulimit -v 4194304
+    ulimit -t 300
+    RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
+      cargo test "${CARGO_FLAGS[@]}" -p heather-cli --bin heather \
+        native::tests::native_encoder_is_checked_and_corruption_is_rejected -- --exact --format terse
+  )
+}
+
 if (( $# == 0 )); then
   semantic_warmup semantic_x86_warmup
   semantic_warmup semantic_omega_warmup
+  native_warmup
 else
   requested=" $* "
+  if [[ "$requested" == *"--test native"* ]]; then
+    native_warmup
+  fi
   whole_elab=false
   if { [[ "$requested" == *" -p heather-elab "* ]] ||
        [[ "$requested" == *" --package heather-elab "* ]]; } &&

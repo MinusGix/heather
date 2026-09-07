@@ -327,6 +327,52 @@ fn reflect_term(
     unsupported("the elaborated source calls an operation outside Add/Sub/AND/OR/XOR/ofNat")
 }
 
+/// Initial call fragment: a checked forwarding wrapper, with resolved identity.
+/// No surface-name matching, argument reordering, hidden captures, or inlining.
+pub fn reflect_forwarded_call(elaborator: &Elaborator, source_name: &str) -> Result<String, SourceError> {
+    let (callee, local) = reflect_call_wrapper(elaborator, source_name)?;
+    if local { return unsupported("expected a forwarding-only wrapper"); }
+    Ok(callee)
+}
+
+/// Bounded frame customer: caller = leaf(left, right) XOR (left XOR right).
+/// The producer saves the second expression before the call and reloads it.
+pub fn reflect_call_wrapper(elaborator: &Elaborator, source_name: &str) -> Result<(String, bool), SourceError> {
+    let caller = elaborator.global_abs(source_name)
+        .ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source_name}`")))?;
+    let (ty, body) = elaborator.global_body(source_name)
+        .ok_or_else(|| SourceError::Unsupported("caller must be a transparent function".into()))?;
+    if pi_arity(&ty) != 2 { return unsupported("call wrapper requires two parameters"); }
+    let Term::Lam { body, .. } = &*body else { return unsupported("expected first caller parameter"); };
+    let Term::Lam { body, .. } = &**body else { return unsupported("expected second caller parameter"); };
+    let abs = |head: &Term| match head {
+        Term::GlobalTm { var, .. } => caller.checked_sub(1 + var.0 as usize),
+        _ => None,
+    };
+    let (mut head, mut args) = application_spine(body);
+    let mut saved_local = false;
+    if abs(head) == elaborator.global_abs("bitvec::bxor") {
+        if args.len() != 3 || nat_literal(args[0]) != Some(64) { return unsupported("expected width-64 caller XOR"); }
+        let (saved, values) = application_spine(args[2]);
+        if abs(saved) != elaborator.global_abs("bitvec::bxor") || values.len() != 3
+            || nat_literal(values[0]) != Some(64) || !matches!(values[1], Term::Var(LocalVar(1)))
+            || !matches!(values[2], Term::Var(LocalVar(0))) {
+            return unsupported("supported frame expression is leaf(left, right) XOR (left XOR right)");
+        }
+        (head, args) = application_spine(args[1]);
+        saved_local = true;
+    }
+    let Term::GlobalTm { var, .. } = head else { return unsupported("caller must directly call one resolved function"); };
+    if args.len() != 2 || !matches!(args[0], Term::Var(LocalVar(1))) || !matches!(args[1], Term::Var(LocalVar(0))) {
+        return unsupported("initial call wrapper must forward its two arguments unchanged; expressions, spills, and recursion are unsupported");
+    }
+    let callee = caller.checked_sub(1 + var.0 as usize)
+        .ok_or_else(|| SourceError::Unsupported("callee escapes source scope".into()))?;
+    elaborator.global_qualified_name_at(callee)
+        .map(|name| (name, saved_local))
+        .ok_or_else(|| SourceError::Unsupported("callee has no qualified identity".into()))
+}
+
 fn application_spine(term: &Term) -> (&Term, Vec<&Term>) {
     let mut head = term;
     let mut arguments = Vec::new();

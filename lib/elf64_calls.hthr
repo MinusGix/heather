@@ -1,0 +1,117 @@
+// Fixed call-executable profile: RX file at 0x400000 and a separate zero-filled
+// RW, non-executable page at 0x401000. The producer starts RSP at 0x402000.
+// Linux's PT_LOAD implementation remains an environment assumption.
+import elf64;
+import elf64_load;
+import x86_64;
+import x86_64_calls;
+import x86_64_call_frame;
+import x86_64_fetch;
+import bitvec;
+import bool;
+import list;
+import option;
+import logic;
+import nat;
+
+fn call_elf_header(low, high: BitVec(8)) → List<BitVec(8)> {
+    let base = static_elf64_header(low, high);
+    list::append(list::take(base, 24), list::append(word_bytes(bitvec::ofNat(64, 0x4000e8)), list::append(list::take(list::drop(base, 32), 24), list::append([elf_byte(3), elf_byte(0)], list::append(list::drop(base, 58), list::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)], list::append(word_bytes(bitvec::ofNat(64, 0x1000)), list::append(word_bytes(bitvec::ofNat(64, 0x401000)), list::append(word_bytes(bitvec::ofNat(64, 0x401000)), list::append(word_bytes(bitvec::ofNat(64, 0)), list::append(word_bytes(bitvec::ofNat(64, 0x1000)), word_bytes(bitvec::ofNat(64, 0x1000)))))))))))))
+}
+record CallElfImage(code: List<BitVec(8)>) {
+    nonempty: 0 < code.len(),
+    low: BitVec(8), high: BitVec(8),
+    size_correct: 232 + code.len() = elf_size16(low, high),
+    disjoint_stack: elf_size16(low, high) <= 4096,
+}
+fn call_elf_bytes(code: List<BitVec(8)>, image: CallElfImage(code)) → List<BitVec(8)> {
+    list::append(call_elf_header(image.low, image.high), code)
+}
+record CallMemory {
+    file: List<BitVec(8)>,
+    stack: BitVec(64) → BitVec(8),
+}
+fn stack_page(address: BitVec(64)) → Bool {
+    is_zero_bits(52, bitvec::bxor(52, bitvec::drop_low(12, 52, address), bitvec::ofNat(52, 0x401)))
+}
+fn call_read_choice(file_byte: Option<BitVec(8)>, stack_address: Bool, stack_byte: BitVec(8)) → Option<BitVec(8)> {
+    match file_byte {
+        Some(byte) => Some(byte),
+        None => match stack_address { True => Some(stack_byte), False => None },
+    }
+}
+fn call_memory_read(memory: CallMemory, address: BitVec(64)) → Option<BitVec(8)> {
+    // Valid CallElfImage files end before the stack page.
+    call_read_choice(static_elf64_read(memory.file, address), stack_page(address), memory.stack(address))
+}
+fn call_memory_write(memory: CallMemory, address: BitVec(64), byte: BitVec(8)) → CallMemory {
+    CallMemory(memory.file, λ query =>
+        match is_zero_bits(64, bitvec::bxor(64, address, query)) {
+            True => byte,
+            False => memory.stack(query),
+        })
+}
+fn call_stack_access() → StackAccess<CallMemory> {
+    StackAccess(λ memory address => memory.stack(address), call_memory_write,
+        stack_page, stack_page)
+}
+fn call_fetch_access() → FetchAccess<CallMemory> {
+    FetchAccess(call_memory_read, λ memory address => static_elf64_executable(memory.file, address))
+}
+fn call_initial(file: List<BitVec(8)>, gprs: Gprs, flags: Flags,
+    stack: BitVec(64) → BitVec(8)) → MachineState<CallMemory> {
+    MachineState(gprs, flags, bitvec::ofNat(64, 0x4000e8), CallMemory(file, stack))
+}
+
+// Join file packaging and fetched execution. The generated exit request and
+// terminal syscall fetch use this same final state.
+record CallImageExecution(file: List<BitVec(8)>, code: List<BitVec(8)>,
+    instructions: List<CallInstruction>, before, after: MachineState<CallMemory>) {
+    image: CallElfImage(code),
+    file_correct: file = call_elf_bytes(code, image),
+    initial_memory: before.memory.file = file,
+    execution: FetchedCallTrace(call_fetch_access(), call_stack_access(), instructions, before, after),
+}
+
+theorem call_memory_write_cong(before, other: CallMemory, address, other_address: BitVec(64),
+    byte, other_byte: BitVec(8), memory_same: before = other, address_same: address = other_address,
+    byte_same: byte = other_byte):
+    call_memory_write(before, address, byte) = call_memory_write(other, other_address, other_byte)
+{
+    trans(cong_fn<CallMemory, CallMemory>(λ memory => call_memory_write(memory, address, byte), memory_same),
+        trans(cong_fn<BitVec(64), CallMemory>(λ pointer => call_memory_write(other, pointer, byte), address_same),
+            cong_fn<BitVec(8), CallMemory>(λ value => call_memory_write(other, other_address, value), byte_same)))
+}
+
+// The byte footprint uses exactly the address test used by the store.
+fn ByteWrite(pointer, address: BitVec(64)) → Type {
+    is_zero_bits(64, bitvec::bxor(64, pointer, address)) = True
+}
+theorem not_true_is_false(value: Bool): ¬(value = True) → value = False {
+    match value as λ bit => ¬(bit = True) → bit = False {
+        False => λ different => refl,
+        True => λ different => false_elim(different(refl)),
+    }
+}
+theorem stack_write_away(memory: CallMemory, pointer, address: BitVec(64), byte: BitVec(8),
+    different: is_zero_bits(64, bitvec::bxor(64, pointer, address)) = False):
+    call_memory_write(memory, pointer, byte).stack(address) = memory.stack(address) {
+    j(sym(different), λ decision _ =>
+        (match decision { True => byte, False => memory.stack(address) }) = memory.stack(address), refl)
+}
+theorem memory_write_away(memory: CallMemory, pointer, address: BitVec(64), byte: BitVec(8),
+    different: is_zero_bits(64, bitvec::bxor(64, pointer, address)) = False):
+    call_memory_read(call_memory_write(memory, pointer, byte), address) = call_memory_read(memory, address) {
+    cong_fn<BitVec(8), Option<BitVec(8)>>(λ value =>
+        call_read_choice(static_elf64_read(memory.file, address), stack_page(address), value),
+        stack_write_away(memory, pointer, address, byte, different))
+}
+theorem memory_write_effect(memory: CallMemory, pointer: BitVec(64), byte: BitVec(8)):
+    WritesOnly(call_memory_read, ByteWrite(pointer), memory, call_memory_write(memory, pointer, byte)) {
+    λ address outside => memory_write_away(memory, pointer, address, byte,
+        not_true_is_false(is_zero_bits(64, bitvec::bxor(64, pointer, address)), outside))
+}
+
+fn call_read_value(byte: Option<BitVec(8)>) → BitVec(8) {
+    match byte { Some(value) => value, None => bitvec::zero(8) }
+}

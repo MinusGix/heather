@@ -1,0 +1,84 @@
+// Relational memory effects for calls. Permissions and machine faults remain
+// separate: a write footprint describes permitted changes, not access rights.
+import x86_64;
+import x86_64_calls;
+import bitvec;
+import bool;
+import logic;
+import list;
+
+fn NoWrites(address: BitVec(64)) → Type { False }
+fn UnionWrites(first, second: BitVec(64) → Type, address: BitVec(64)) → Type {
+    first(address) ∨ second(address)
+}
+fn DisjointWrites(first, second: BitVec(64) → Type) → Type {
+    (address: BitVec(64)) → first(address) → second(address) → False
+}
+fn WritesOnly<M, A>(read: M → BitVec(64) → A, writes: BitVec(64) → Type,
+    before, after: M) → Type {
+    (address: BitVec(64)) → ¬writes(address) → read(after, address) = read(before, address)
+}
+theorem writes_only_equal<M, A>(read: M → BitVec(64) → A, writes: BitVec(64) → Type,
+    before, after: M, same: after = before): WritesOnly(read, writes, before, after) {
+    λ address outside => cong_fn<M, A>(λ memory => read(memory, address), same)
+}
+theorem writes_only_compose<M, A>(read: M → BitVec(64) → A,
+    first, second: BitVec(64) → Type, before, middle, after: M,
+    head: WritesOnly(read, first, before, middle), tail: WritesOnly(read, second, middle, after)):
+    WritesOnly(read, UnionWrites(first, second), before, after) {
+    λ address outside => trans(tail(address, λ witness => outside(Inr(witness))),
+        head(address, λ witness => outside(Inl(witness))))
+}
+theorem writes_only_weaken<M, A>(read: M → BitVec(64) → A,
+    small, large: BitVec(64) → Type, before, after: M,
+    inclusion: (address: BitVec(64)) → small(address) → large(address),
+    effects: WritesOnly(read, small, before, after)):
+    WritesOnly(read, large, before, after) {
+    λ address outside => effects(address, λ witness => outside(inclusion(address, witness)))
+}
+theorem protected_read<M, A>(read: M → BitVec(64) → A,
+    writes, protected: BitVec(64) → Type, before, after: M,
+    disjoint: DisjointWrites(writes, protected), effects: WritesOnly(read, writes, before, after),
+    address: BitVec(64), live: protected(address)):
+    read(after, address) = read(before, address) {
+    effects(address, λ changed => disjoint(address, changed, live))
+}
+// A child receives an explicit subset of its parent's allowed effects. Merely
+// restoring the stack pointer does not establish this inclusion or disjointness.
+record CallMemoryPolicy {
+    locals: BitVec(64) → Type,
+    shared: BitVec(64) → Type,
+    protected: BitVec(64) → Type,
+    locals_disjoint: DisjointWrites(locals, protected),
+    shared_disjoint: DisjointWrites(shared, protected),
+}
+fn permitted_writes(policy: CallMemoryPolicy, address: BitVec(64)) → Type {
+    policy.locals(address) ∨ policy.shared(address)
+}
+theorem policy_disjoint(policy: CallMemoryPolicy): DisjointWrites(permitted_writes(policy), policy.protected) {
+    λ address changed live => match changed {
+        Inl(local) => policy.locals_disjoint(address, local, live),
+        Inr(shared) => policy.shared_disjoint(address, shared, live),
+    }
+}
+// This names the initial internal integer convention, not full SysV conformance.
+// Flags and scratch registers have no preservation field; absence of a field
+// provides no guarantee about their post-call values.
+record NativeIntegerCallContract<M, A>(read: M → BitVec(64) → A,
+    writes: BitVec(64) → Type, before, after: MachineState<M>, result, return_address: BitVec(64)) {
+    result_correct: read_gpr(Rax, after.gprs) = result,
+    returned_to: after.rip = return_address,
+    stack_restored: read_gpr(Rsp, after.gprs) = bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)),
+    memory_effects: WritesOnly(read, writes, before.memory, after.memory),
+    preserved_rbx: read_gpr(Rbx, after.gprs) = read_gpr(Rbx, before.gprs),
+    preserved_rbp: read_gpr(Rbp, after.gprs) = read_gpr(Rbp, before.gprs),
+    preserved_r12: read_gpr(R12, after.gprs) = read_gpr(R12, before.gprs),
+    preserved_r13: read_gpr(R13, after.gprs) = read_gpr(R13, before.gprs),
+    preserved_r14: read_gpr(R14, after.gprs) = read_gpr(R14, before.gprs),
+    preserved_r15: read_gpr(R15, after.gprs) = read_gpr(R15, before.gprs),
+}
+
+theorem point_disjoint(writes: BitVec(64) → Type, point: BitVec(64), outside: ¬writes(point)):
+    DisjointWrites(writes, λ address => address = point) {
+    λ address changed same => outside(j(same, λ target _ => writes(target), changed))
+}

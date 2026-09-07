@@ -11,6 +11,7 @@ use heather_elab::heather_emit::{Block, Declaration, Expr, Module};
 use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
+mod calls;
 
 const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),
@@ -36,6 +37,9 @@ const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_fetch", include_str!("../../../lib/std/arch/x86_64/fetch.hthr")),
     ("x86_64_fetch_block", include_str!("../../../lib/std/arch/x86_64/fetch_block.hthr")),
     ("elf64_load", include_str!("../../../lib/elf64_load.hthr")),
+    ("x86_64_calls", include_str!("../../../lib/std/arch/x86_64/calls.hthr")),
+    ("x86_64_call_frame", include_str!("../../../lib/std/arch/x86_64/call_frame.hthr")),
+    ("elf64_calls", include_str!("../../../lib/elf64_calls.hthr")),
     ("linux_x86_64_fetch", include_str!("../../../lib/linux_x86_64_fetch.hthr")),
 ];
 
@@ -68,10 +72,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut output = None;
     let mut inputs = Vec::new();
     let mut cache = None;
+    let mut callee = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--callee" if executable => {
+                callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
+            }
             "--arg" if executable => {
                 inputs.push(elf::parse_argument(args.next().ok_or("--arg needs an unsigned integer")?)?);
             }
@@ -92,7 +100,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]".into());
     }
@@ -136,28 +144,35 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         }
     }
     let prefix = format!("{symbol}_native");
-    let emission = function_ir_source::generate_elaborated_x86(
-        &elab, &prefix, &format!("{root_name}::{symbol}"),
-        [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11], Gpr::Rax,
-    ).map_err(|e| e.to_string())?;
-    let bytes = encode(&emission.instructions);
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
         "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option"] {
         proof.raw(format!("import {name};"));
     }
-    proof.raw(emission.text.clone());
-    proof.declaration(Declaration::theorem(
-        format!("{prefix}_exported_bytes"),
-        Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::list(bytes.iter().map(|b|
-            Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))),
-        Block::expression(Expr::name("refl")),
-    ));
-    let image = if executable {
-        Some(elf::certify(&mut proof, &prefix, &emission, [inputs[0], inputs[1]], &bytes)?)
-    } else { None };
+    let (image, body_bytes) = if let Some(callee) = callee {
+        if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
+        (Some(calls::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"),
+            &format!("{root_name}::{callee}"), [inputs[0], inputs[1]])?), None)
+    } else {
+        let emission = function_ir_source::generate_elaborated_x86(
+            &elab, &prefix, &format!("{root_name}::{symbol}"),
+            [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11], Gpr::Rax,
+        ).map_err(|e| e.to_string())?;
+        let bytes = encode(&emission.instructions);
+        proof.raw(emission.text.clone());
+        proof.declaration(Declaration::theorem(
+            format!("{prefix}_exported_bytes"),
+            Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::list(bytes.iter().map(|b|
+                Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))),
+            Block::expression(Expr::name("refl")),
+        ));
+        let image = if executable {
+            Some(elf::certify(&mut proof, &prefix, &emission, [inputs[0], inputs[1]], &bytes)?)
+        } else { None };
+        (image, Some(bytes))
+    };
     let proof = proof.render();
-    eprintln!("checking source refinement and {} exported body bytes", bytes.len());
+    eprintln!("checking source refinement, exported bytes, and execution certificate");
     elab.elab_module_source(&format!("{prefix}_certificate"), &proof)
         .map_err(|e| e.render(&proof))?;
     write_new(&certificate, proof.as_bytes())?;
@@ -172,6 +187,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
         println!("Linux loading and syscall delivery remain environment assumptions");
     } else {
+        let bytes = body_bytes.expect("assembly path has a straight-line body");
         write_new(&output, assembly(symbol, &bytes).as_bytes())?;
         println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
     }
