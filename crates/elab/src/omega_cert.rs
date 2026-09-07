@@ -8,6 +8,8 @@
 
 use std::rc::Rc;
 
+use heather_kernel::layer::Layer;
+use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, Item, parse_file};
 
@@ -969,6 +971,19 @@ fn nat_affine_syntax(
     tm: &Rc<Term>,
     atoms: &mut AtomTable<ReflectedAtom>,
 ) -> Result<AffineSyntax, String> {
+    nat_affine_syntax_within(elab, cx, tm, atoms, MEASURE_REDUCTION_DEPTH)
+}
+
+/// [`nat_affine_syntax`] with the budget the atom fallback's reduce-and-name
+/// step spends (docs/omega-measure-reduction-design.md §2, §2.1): each
+/// re-entry on a reduct costs one.
+fn nat_affine_syntax_within(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    atoms: &mut AtomTable<ReflectedAtom>,
+    depth: u32,
+) -> Result<AffineSyntax, String> {
     let nat_source = nat_term_source(elab, cx, tm)?;
     if let Some(value) = integer_source(&nat_source).filter(|value| *value >= 0) {
         return Ok(AffineSyntax::Const {
@@ -985,7 +1000,7 @@ fn nat_affine_syntax(
         return Ok(AffineSyntax::NatAdd {
             left_nat,
             right_nat: "1".into(),
-            left: Box::new(nat_affine_syntax(elab, cx, inner, atoms)?),
+            left: Box::new(nat_affine_syntax_within(elab, cx, inner, atoms, depth)?),
             right: Box::new(AffineSyntax::Const {
                 value: 1,
                 source: int(1),
@@ -999,8 +1014,8 @@ fn nat_affine_syntax(
             return Ok(AffineSyntax::NatAdd {
                 left_nat,
                 right_nat,
-                left: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
-                right: Box::new(nat_affine_syntax(elab, cx, right, atoms)?),
+                left: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
+                right: Box::new(nat_affine_syntax_within(elab, cx, right, atoms, depth)?),
             });
         }
     }
@@ -1019,7 +1034,7 @@ fn nat_affine_syntax(
                     factor_nat: left_source.unwrap(),
                     inner_nat: right_source
                         .ok_or("Omega could not spell a natural multiplication operand")?,
-                    inner: Box::new(nat_affine_syntax(elab, cx, right, atoms)?),
+                    inner: Box::new(nat_affine_syntax_within(elab, cx, right, atoms, depth)?),
                 });
             }
             if let Some(factor) = right_source
@@ -1033,7 +1048,7 @@ fn nat_affine_syntax(
                     factor_nat: right_source.unwrap(),
                     inner_nat: left_source
                         .ok_or("Omega could not spell a natural multiplication operand")?,
-                    inner: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
+                    inner: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
                 });
             }
         }
@@ -1044,7 +1059,7 @@ fn nat_affine_syntax(
         let divisor_source = nat_term_source(elab, cx, divisor)?;
         if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value >= 0) {
             let dividend_source = nat_term_source(elab, cx, dividend)?;
-            let dividend_syntax = nat_affine_syntax(elab, cx, dividend, atoms)?;
+            let dividend_syntax = nat_affine_syntax_within(elab, cx, dividend, atoms, depth)?;
             let source = format!("int::OfNat({nat_source})");
             if divisor == 0 {
                 return Ok(AffineSyntax::NatModZero {
@@ -1103,7 +1118,7 @@ fn nat_affine_syntax(
                     dividend_source,
                 });
             }
-            let dividend_syntax = nat_affine_syntax(elab, cx, dividend, atoms)?;
+            let dividend_syntax = nat_affine_syntax_within(elab, cx, dividend, atoms, depth)?;
             let index = atoms.intern_by(
                 |atom| atom.nat_source.as_deref() == Some(nat_source.as_str()),
                 || ReflectedAtom {
@@ -1121,6 +1136,15 @@ fn nat_affine_syntax(
             return Ok(AffineSyntax::Atom { index, source });
         }
     }
+    // The atom fallback (docs/omega-measure-reduction-design.md §2): before a
+    // measure at a constructor pattern becomes an opaque atom, ask whether
+    // reduction reaches arithmetic, and name the reduct's leaves by conversion
+    // against the original's own spelling.
+    if depth > 0
+        && let Some(named) = reduce_and_name(elab, cx, tm, depth)
+    {
+        return nat_affine_syntax_within(elab, cx, &named, atoms, depth - 1);
+    }
     let source = format!("int::OfNat({nat_source})");
     let index = atoms.intern_by(
         |atom| atom.nat_source.as_deref() == Some(nat_source.as_str()),
@@ -1132,6 +1156,201 @@ fn nat_affine_syntax(
         },
     );
     Ok(AffineSyntax::Atom { index, source })
+}
+
+/// Re-entries the atom fallback may spend on a reduct
+/// (docs/omega-measure-reduction-design.md §2.1). Two, so a measure whose
+/// unfolding yields two successors still lands on a named leaf.
+const MEASURE_REDUCTION_DEPTH: u32 = 2;
+
+/// §2 steps 1–3. `None` leaves the original term to be interned unchanged,
+/// which is every case where reduction bought nothing.
+fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
+    let (head, args) = app_spine(tm);
+    // Cheap gate on step 1: the shape §2 is about is a call one of whose
+    // arguments is a constructor value. Everything else — a call at a
+    // variable, a projection out of a neutral — is left exactly as it was,
+    // and pays no reduction.
+    if !matches!(head, Term::GlobalTm { .. }) || !args.iter().any(|arg| is_ctor_value(arg)) {
+        return None;
+    }
+    let candidates = recursive_field_candidates(elab, cx, tm);
+    let named = named_arithmetic_reduct(elab, cx, tm, &candidates, depth)?;
+    (*named != **tm).then_some(named)
+}
+
+/// The applied spine of `tm`: its head and its arguments, outermost last.
+fn app_spine(tm: &Rc<Term>) -> (&Term, Vec<&Rc<Term>>) {
+    let mut args = Vec::new();
+    let mut head = &**tm;
+    while let Term::App { fun, arg, .. } = head {
+        args.push(arg);
+        head = fun;
+    }
+    args.reverse();
+    (head, args)
+}
+
+fn is_ctor_value(tm: &Rc<Term>) -> bool {
+    matches!(
+        &**tm,
+        Term::Supf { .. } | Term::Inl { .. } | Term::Inr { .. } | Term::Zero | Term::Succ(_)
+    )
+}
+
+/// The elements of a lowered constructor's children tuple — its *recursive*
+/// fields, in declaration order. A plain field sits in the label's Σ spine and
+/// is not one of these.
+fn children_fields(children: &Rc<Term>) -> Vec<&Rc<Term>> {
+    let mut out = Vec::new();
+    let mut cur = children;
+    while let Term::Pair { fst, snd, .. } = &**cur {
+        out.push(fst);
+        cur = snd;
+    }
+    out
+}
+
+/// §2 step 3's candidates: `g(ā[C(f̄) ↦ fᵢ])` for each recursive field `fᵢ` of
+/// each constructor argument. Built from the *original* term, so a candidate
+/// spells under a name the rest of the goal produces too (§5); one that does
+/// not spell is no use to interning and is dropped here.
+fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<Rc<Term>> {
+    let (_, args) = app_spine(tm);
+    let arity = args.len();
+    let mut out = Vec::new();
+    for (position, arg) in args.iter().enumerate() {
+        let fields = match &***arg {
+            Term::Supf { children, .. } => children_fields(children),
+            Term::Succ(inner) => vec![inner],
+            _ => continue,
+        };
+        for field in fields {
+            // `app_spine` counts from the head; `with_arg_at` from the outside.
+            let candidate = with_arg_at(tm, arity - 1 - position, field);
+            if nat_term_source(elab, cx, &candidate).is_ok() {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+/// `tm` with the argument `outward` applications from the outside replaced.
+fn with_arg_at(tm: &Rc<Term>, outward: usize, new: &Rc<Term>) -> Rc<Term> {
+    let Term::App {
+        fun,
+        dom_level,
+        cod_level,
+        dom,
+        cod,
+        arg,
+    } = &**tm
+    else {
+        return Rc::clone(tm);
+    };
+    let (fun, arg) = if outward == 0 {
+        (Rc::clone(fun), Rc::clone(new))
+    } else {
+        (with_arg_at(fun, outward - 1, new), Rc::clone(arg))
+    };
+    Rc::new(Term::App {
+        fun,
+        dom_level: dom_level.clone(),
+        cod_level: cod_level.clone(),
+        dom: Rc::clone(dom),
+        cod: Rc::clone(cod),
+        arg,
+    })
+}
+
+/// §2 steps 1–2 on `tm`, with step 3 applied to each leaf: the reduct is kept
+/// only when its head became arithmetic, and it is rebuilt so that every leaf
+/// spells.
+fn named_arithmetic_reduct(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    candidates: &[Rc<Term>],
+    depth: u32,
+) -> Option<Rc<Term>> {
+    if depth == 0 {
+        return None;
+    }
+    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
+    named_arithmetic_shape(elab, cx, &reduct, candidates, depth)
+}
+
+/// §2 step 2's test and step 3's rebuild, on a term already in weak head
+/// normal form: an arithmetic head is kept and each of its leaves named,
+/// anything else declines.
+fn named_arithmetic_shape(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    candidates: &[Rc<Term>],
+    depth: u32,
+) -> Option<Rc<Term>> {
+    match &**tm {
+        Term::Zero => return Some(Rc::clone(tm)),
+        Term::Succ(inner) => {
+            let named = name_leaf(elab, cx, inner, candidates, depth)?;
+            return Some(Rc::new(Term::Succ(named)));
+        }
+        _ => {}
+    }
+    for name in ["nat::add", "nat::mul", "nat::div", "nat::mod"] {
+        let Some(args) = named_args(elab, tm, name) else {
+            continue;
+        };
+        let [left, right] = args.as_slice() else {
+            continue;
+        };
+        let left = name_leaf(elab, cx, left, candidates, depth)?;
+        let right = name_leaf(elab, cx, right, candidates, depth)?;
+        let rebuilt = with_arg_at(tm, 0, &right);
+        return Some(with_arg_at(&rebuilt, 1, &left));
+    }
+    None
+}
+
+/// §2 step 3 at one leaf of the reduct, plus §2.1: a leaf no candidate
+/// converts against is reduced once more under the *same* candidates, since
+/// they are the only spellings the rest of the goal shares.
+fn name_leaf(
+    elab: &Elaborator,
+    cx: &Cx,
+    leaf: &Rc<Term>,
+    candidates: &[Rc<Term>],
+    depth: u32,
+) -> Option<Rc<Term>> {
+    if nat_term_source(elab, cx, leaf).is_ok() {
+        return Some(Rc::clone(leaf));
+    }
+    for candidate in candidates {
+        if elab
+            .goal_oracle()
+            .convert_term(
+                &cx.gamma,
+                Layer::Prog,
+                leaf,
+                candidate,
+                &Type::Nat,
+                &Level::Zero,
+            )
+            .is_ok()
+        {
+            return Some(Rc::clone(candidate));
+        }
+    }
+    // A leaf that is *already* arithmetic — `nat::add(u₁, u₂)` under the
+    // successor of a branching measure — is decomposed where it stands.
+    // Reducing it would only unfold `add` into its eliminator and lose the
+    // head this reflection is looking for.
+    if let Some(shaped) = named_arithmetic_shape(elab, cx, leaf, candidates, depth) {
+        return Some(shaped);
+    }
+    named_arithmetic_reduct(elab, cx, leaf, candidates, depth - 1)
 }
 
 fn atom_list_source(atoms: &AtomTable<ReflectedAtom>) -> String {

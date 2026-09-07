@@ -75,34 +75,24 @@ fn any_err(src: &str) -> String {
     }
 }
 
-/// `omega` does not reduce `list_len(Cons(h, t))` to `Succ(list_len(t))`
-/// (design §7, issues/omega-measure-at-constructor-pattern.md), so every
-/// obligation at a list tail below is discharged by hand at the `Succ` form —
-/// exactly as the singleton tests already do for `merge` and `runs`.
-const TAIL: &str = r#"
-theorem tail_lt(h: Nat, t: List<Nat>): nat::Lt(list_len(t), list_len(Cons(h, t))) {
-    nat::lt_succ_self(list_len(t))
-}
-"#;
-
 /// The customer (docs/showcase/idealized.hthr 55–105): three adjacent members,
 /// each `decreases list_len(ts)`, each calling the next forward — including
 /// `parse_expr`'s call to `parse_factor` on the **same** `ts`, which decreases
-/// nothing and is paid for by §4's declaration-order rank.
+/// nothing and is paid for by §4's declaration-order rank. Every obligation
+/// here is `omega`'s: the list-tail sites needed a lemma by hand until
+/// docs/omega-measure-reduction-design.md §6 took it out.
 const PARSER: &str = r#"
 fn parse_expr(ts: List<Nat>) -> Nat decreases list_len(ts) {
     match ts {
         Nil => 0,
         Cons(t, rest) => Succ(nat::add(parse_factor(ts), parse_expr(rest))),
     }
-    on ?dec2 := tail_lt(t, rest);
 }
 fn parse_factor(ts: List<Nat>) -> Nat decreases list_len(ts) {
     match ts { Nil => 0, Cons(t, rest) => parse_atom(ts) }
 }
 fn parse_atom(ts: List<Nat>) -> Nat decreases list_len(ts) {
     match ts { Nil => 1, Cons(t, rest) => parse_expr(rest) }
-    on ?dec1 := tail_lt(t, rest);
 }
 "#;
 
@@ -129,7 +119,7 @@ theorem ev7(): ev(7) = 0 { refl }
 #[test]
 fn the_parser_group_checks_and_computes() {
     ok(&format!(
-        "{TAIL}{PARSER}
+        "{PARSER}
 theorem pe_nil():  parse_expr([]) = 0 {{ refl }}
 theorem pe_one():  parse_expr([7]) = 1 {{ refl }}
 theorem pe_two():  parse_expr([7, 8]) = 3 {{ refl }}
@@ -139,6 +129,23 @@ theorem pa_two():  parse_atom([7, 8]) = 1 {{ refl }}
     ));
 }
 
+/// The companion assertion for the hand discharges
+/// docs/omega-measure-reduction-design.md §6 removed above: what closes the
+/// group's list-tail sites is `omega`, so without the closer's modules they
+/// are ordinary unsolved goals again.
+#[test]
+fn the_parser_groups_tail_sites_are_closed_by_the_closer() {
+    let mut e = base();
+    let err = e
+        .elab_module_source(
+            "m",
+            &format!("import logic;\nimport nat;\nimport list;\n{PARSER}"),
+        )
+        .expect_err("without `omega` the tail sites are ordinary goals");
+    let msg = format!("{err}");
+    assert!(msg.contains("dec"), "{msg}");
+}
+
 /// A member at a **neutral** argument, in a **checking** position: an ordinary
 /// singleton `decreases` declaration whose body applies `parse_expr` to its own
 /// open scrutinee. The group's members are ordinary globals once registered,
@@ -146,10 +153,9 @@ theorem pa_two():  parse_atom([7, 8]) = 1 {{ refl }}
 #[test]
 fn a_member_applies_to_a_neutral_argument_in_a_checking_position() {
     ok(&format!(
-        "{TAIL}{PARSER}
+        "{PARSER}
 fn total(ts: List<Nat>) -> Nat decreases list_len(ts) {{
     match ts {{ Nil => 0, Cons(t, rest) => nat::add(parse_expr(ts), total(rest)) }}
-    on ?dec1 := tail_lt(t, rest);
 }}
 theorem total_two(): total([7, 8]) = 4 {{ refl }}
 // an open *element* under a closed spine: nothing about `t` is scrutinized,
@@ -165,19 +171,11 @@ theorem pf_open(t: Nat): parse_factor([t]) = 0 {{ refl }}
 #[test]
 fn a_polymorphic_group_hoists_its_type_parameters() {
     ok(r#"
-theorem tail_lt<A>(h: A, t: List<A>): nat::Lt(list_len(t), list_len(Cons(h, t))) {
-    nat::lt_succ_self(list_len(t))
-}
-theorem tail_le<A>(h: A, t: List<A>): nat::Le(list_len(t), list_len(Cons(h, t))) {
-    nat::le_succ_r(list_len(t), list_len(t))(nat::le_refl(list_len(t)))
-}
 fn evens<A>(xs: List<A>) -> List<A> decreases list_len(xs) {
     match xs { Nil => Nil, Cons(h, t) => Cons(h, odds<A>(t)) }
-    on ?dec1 := tail_le<A>(h, t);
 }
 fn odds<A>(xs: List<A>) -> List<A> decreases list_len(xs) {
     match xs { Nil => Nil, Cons(h, t) => evens<A>(t) }
-    on ?dec1 := tail_lt<A>(h, t);
 }
 
 theorem ev_demo(): evens<Nat>([1, 2, 3, 4, 5]) = [1, 3, 5] { refl }

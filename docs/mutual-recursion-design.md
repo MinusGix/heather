@@ -298,7 +298,9 @@ they belong in the issue log.
   not `Succ(list_len(t))`. The existing tests all discharge such sites by hand
   (`merge`'s `succ_add_le`, `runs`'s `drop_eq_le`), which is why this was not
   visible. Every hand lowering here works around it the same way, with a lemma
-  stated at the `Succ` form.
+  stated at the `Succ` form. **Fixed 2026-09-06**
+  (`docs/omega-measure-reduction-design.md`): such a site now closes by
+  `omega` alone, and the hand lemmas came out of these tests.
 - **`omega` spells a member function by its base name.** A goal over
   `xs.len()` reconstructs a certificate naming `len(…)`, which is unbound
   outside `list`: `` error: unbound name `len` ``. Writing the measure
@@ -481,5 +483,5 @@ deviations and discoveries, each against the section it amends:
     reconstruction now uses it; the two display-only callers keep the base
     name. A context entry `reflect_assumption` cannot spell is now *skipped*
     rather than aborting the goal. §7's first bullet — a measure at a
-    constructor pattern — is untouched and still forces a one-line `on` at each
-    list-tail site.
+    constructor pattern — is untouched here and was closed separately
+    (`docs/omega-measure-reduction-design.md`).

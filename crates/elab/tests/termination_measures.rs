@@ -8,7 +8,9 @@
 //! What the positives vary (docs/testing-generated-terms.md): closed
 //! computation (`refl` at literals) and open proofs, the automatic closer
 //! (`omega`) and the by-hand discharge (`on ?decN`), a lemma-fed decrease
-//! (the parser shape), and a `theorem` recursing by measure.
+//! (the parser shape), and a `theorem` recursing by measure. A measure at a
+//! **constructor pattern** has a file of its own,
+//! `omega_measure_reduction.rs` (docs/omega-measure-reduction-design.md).
 
 use heather_elab::{ElabError, Elaborator};
 
@@ -70,6 +72,8 @@ fn any_err(src: &str) -> String {
 
 /// Euclid. The obligation `nat::mod(a, Succ(k)) < Succ(k)` is stated at the
 /// *pattern* — the `match b` was convoyed — so `mod_lt` proves it directly.
+/// The `on` stays: nothing here is at a constructor *measure*
+/// (docs/omega-measure-reduction-design.md §6).
 const GCD: &str = r#"
 fn gcd(a, b: Nat) -> Nat decreases b {
     match b {
@@ -89,33 +93,48 @@ fn gcd_by_hand_obligation_computes_and_steps() {
     ));
 }
 
+/// Two calls, two obligations, both at a **two-argument** measure, and each
+/// site has a constructor in one argument and a variable in the other. Both
+/// `on`s and the `succ_add_le` lemma they needed came out with
+/// docs/omega-measure-reduction-design.md §6: reduced, the obligations are
+/// `a + b < Succ(a) + Succ(b)` over the atoms `xt.len()` and `yt.len()`.
+const MERGE: &str = r#"
+fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
+    match xs {
+        Nil => ys,
+        Cons(x, xt) => match ys {
+            Nil => Cons(x, xt),
+            Cons(y, yt) => match nat::le_dec(x, y) {
+                Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+                Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+            },
+        },
+    }
+}
+"#;
+
 #[test]
 fn merge_with_two_obligations_at_a_sum_measure() {
-    // Two calls, two obligations, both about `len` — a function `omega` does
-    // not read — so both are discharged by hand; the first needs a lemma,
-    // the second is `le_refl` after reduction.
-    ok(r#"
-        theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
-            match b { Zero => nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
-        }
+    ok(&format!(
+        "{MERGE}\ntheorem merge_demo(): merge([1, 4], [2, 3]) = [1, 2, 3, 4] {{ refl }}"
+    ));
+}
 
-        fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
-            match xs {
-                Nil => ys,
-                Cons(x, xt) => match ys {
-                    Nil => Cons(x, xt),
-                    Cons(y, yt) => match nat::le_dec(x, y) {
-                        Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
-                        Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
-                    },
-                },
-            }
-            on ?dec1 := succ_add_le(xt.len(), yt.len());
-            on ?dec2 := nat::le_refl(Succ(xt.len()) + yt.len());
-        }
-
-        theorem merge_demo(): merge([1, 4], [2, 3]) = [1, 2, 3, 4] { refl }
-    "#);
+#[test]
+fn merges_hand_discharges_were_replaced_by_the_closer_not_by_nothing() {
+    // §6's companion assertion: `merge` above carries no `on`, and what
+    // discharges its two sites is `omega`. Without the closer's modules the
+    // same declaration is an ordinary unsolved goal again, so a regression
+    // shows up as a refusal rather than as dead scaffolding.
+    let mut e = base();
+    let err = e
+        .elab_module_source(
+            "m",
+            &format!("import logic;\nimport nat;\nimport list;\n{MERGE}"),
+        )
+        .expect_err("without `omega` the sites are ordinary goals");
+    let msg = format!("{err}");
+    assert!(msg.contains("dec1"), "{msg}");
 }
 
 #[test]
@@ -123,7 +142,9 @@ fn a_callee_postcondition_feeds_the_decrease() {
     // The parser shape (issue layer 2, the separate-lemma route): the
     // recursive call is on a suffix a callee returned, and the decrease is
     // that callee's lemma. `drop_eq(t, rest).len() <= rest.len()` is exactly
-    // the obligation after `Succ`/`Succ` reduction.
+    // the obligation after `Succ`/`Succ` reduction. The `on` stays: the
+    // measure head is opaque under any reduction
+    // (docs/omega-measure-reduction-design.md §6).
     ok(r#"
         fn drop_eq(t: Nat, ts: List<Nat>) -> List<Nat> {
             match ts {

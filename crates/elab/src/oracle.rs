@@ -140,6 +140,23 @@ impl SemanticOracle {
         reduce::whnf_term_delta(term, gamma, defs, self.fuel)
     }
 
+    /// [`Self::whnf_term`] under the stuck-spelling budget, for a *speculative*
+    /// probe: one that reads the reduct's head to decide whether reduction
+    /// bought anything and abandons it otherwise
+    /// (docs/omega-measure-reduction-design.md §2). Nothing here may pay the
+    /// oracle's full fuel for an answer it may discard.
+    pub(crate) fn whnf_term_bounded(
+        &self,
+        gamma: &LocalCtx,
+        term: &Term,
+    ) -> Result<Term, OutOfFuel> {
+        Self {
+            world: self.world.clone(),
+            fuel: self.fuel.min(STUCK_SPELLING_STEPS),
+        }
+        .whnf_term(gamma, term)
+    }
+
     /// Normalize without δ. Some structural encodings deliberately preserve
     /// global neutrals while reducing only their local computation.
     pub(crate) fn whnf_term_opaque(

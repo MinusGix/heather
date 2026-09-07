@@ -1,0 +1,362 @@
+# Reducing a measure at a constructor pattern before `omega` reflects it
+
+`issues/omega-measure-at-constructor-pattern.md`. The most common `decreases`
+obligation there is — `fn drop1(xs: List<Nat>) -> Nat decreases list_len(xs)`
+recursing on the tail — is refused, and every existing `decreases` test
+discharges its constructor-pattern site by hand
+(`docs/mutual-recursion-design.md` §7 records two of them).
+
+The charter framed this as a **reducer/conversion gap**: the small-step
+reducer stops at a stuck `elim_Wf` where conversion reaches
+`Succ(list_len(t))`. §1 shows that is false — the reducer reaches the `Succ`
+in six steps on the term that matters. What it does *not* reach is a
+**spelling**, and that, not reduction, is what the implementation has to
+solve. The fix is small and lives entirely in `omega`'s reflection.
+
+## 1. What the probe shows
+
+Instrumented `omega_cert::nat_term_source` and the atom fallback of
+`nat_affine_syntax`, over the std modules (scratch test, hand-run and
+removed). Skeletons below print term structure only; `Global(397)` is
+`list_len`, `Global(396)` is `list::List::len`, `Global(542)` is `nat::add`.
+
+### 1.1 The declaration is lowered twice, and the second message is the one you see
+
+`elab_measure_decl` (`crates/elab/src/lib.rs`) first lowers with `lift = true`:
+each site's obligation becomes a theorem of its own,
+`drop1#obl_1(h: Nat, t: List<Nat>) : nat::Lt(list_len(t), list_len(Cons(h, t)))`
+with body `omega` (`docs/termination-measures-design.md` §4). When the checker
+refuses one, the declaration is re-lowered with `lift = false`, obligations
+back at the calls. Both attempts fail here; the writer sees the **second**.
+
+- **Lifted attempt — the real failure.** `h` and `t` are Π-bound variables, so
+  `Cons(h, t)` is a `Term::Supf` and *both sides spell*. The atom probe fires
+  on ``list_len(Cons(h, t))`` and ``list_len(t)``, interns them as two
+  unrelated atoms, and `omega` reports no contradiction. The hand-written
+  control reproduces it exactly:
+
+  ```
+  theorem at_ctor(h: Nat, xs: List<Nat>): nat::Lt(list_len(xs), list_len(Cons(h, xs))) { omega }
+  // Omega's real shadow found no contradiction;
+  //   atoms [list_len(Cons(h, xs)), list_len(xs)]; residual [0 <= list_len(Cons(h, xs))]
+  ```
+
+  while the same statement handed the successor form checks:
+  `theorem reduced(xs: List<Nat>): nat::Lt(list_len(xs), Succ(list_len(xs))) { omega }`
+  passes. **Reaching the `Succ` is sufficient.**
+
+- **Un-lifted retry — the message that surfaces.** With the obligation back
+  inside the arm, `t` is not a binder: §6.3 of
+  `docs/inductive-tier1-wf-lowering.md` *aliases* a tier-1 arm's recursive
+  binder to `nth^l(⟦List⟧; 1; cs'; ι_0)`. The probe's failing argument is
+
+  ```
+  App(App(ElimNat(Succ(Zero)); Var 2); Inl(Triv))   -- nth(…; cs'; ι_0)
+    ⇝ … ⇝ Fst(Var 2)                                -- stuck: cs' is neutral
+  ```
+
+  so the whole left-hand side is `list_len(nth(…))`, whnf `ElimWf(Fst(Var 2))`
+  — a genuine neutral. `display.rs` spells a `Supf` through `ctor_value` but
+  has no case for a projection out of a neutral children tuple, so
+  `nat_term_source` raises "Omega could not spell a natural expression". **That
+  string is about the left-hand side `list_len(t)`, not about
+  `list_len(Cons(h, t))`.**
+
+### 1.2 There is no reducer/conversion gap
+
+The earlier hand-run read the un-lifted retry's terms and compared them with
+`tail_lt`'s (`crates/elab/tests/mutual_recursion.rs`), which is stated over a
+*variable* `t`. Different terms. On the un-lifted term both the small-step
+reducer and the value machine are stuck, and correctly so — `elim_Wf` on a
+neutral scrutinee has no rule in `reduce.rs` (line 622) or `eval.rs`
+(line 1427), and conversion cannot decide it either.
+
+On the term that matters, `SemanticOracle::term_reducts` walks straight
+through, and `whnf_term` agrees (value head `Succ`):
+
+```
+list_len(Cons(h, t))                                        δ list_len
+  ⇝ App(App(Lam(Lam(ElimWf(Var 0))); …); Supf(…))          β, β
+  ⇝ ElimWf(Supf(Inr(…); Pair(Var 1; Triv)))                 elim_Wf on Supf
+  ⇝ App(App(Case(Inr(…)); Pair(Var 1; Triv)); Lam(ElimWf(…)))   tag Case
+  ⇝ … ⇝ Succ(App(Lam(ElimWf(nth(…; Var 0))); Inl(Triv)))    6 steps, head Succ
+```
+
+`theorem step_len(h: Nat, xs: List<Nat>): list_len(Cons(h, xs)) = Succ(list_len(xs)) { refl }`
+checks today, and so does the `.len()` spelling of it. The reflection is
+handed a term whose head *is* a `Succ` after six δ/β/ι steps and interns it as
+an opaque atom without ever asking.
+
+### 1.3 The catch: the reduct does not spell, and its payload is not the atom
+
+The trace above ends at a **weak** head normal form. The `Succ`'s payload is
+the ih λ applied at the literal index, `(λi. elim_Wf(…; nth(…; cs; i))) ι_0`,
+and `spell_term_source` returns `None` for it at *every* step of the trace.
+Reducing it further reaches `ElimWf(Var 1)` — which is also what `list_len(t)`
+itself whnfs to, and which does not spell either: `list_len(t)` spells only in
+its **unreduced** form `App(App(Global(397); …); Var 1)`.
+
+So "reduce the atom, then reflect the reduct" fails twice over: the payload
+has no spelling at all, and even if it had one it would be `elim_Wf`-shaped
+and would not intern as the same atom as the goal's left-hand side. Atoms are
+interned **by their spelling** — `nat_affine_syntax` calls
+`atoms.intern_by(|atom| atom.nat_source == nat_source, …)` — so a reduct that
+respells is a *new* atom and closes nothing.
+
+The two are convertible, though, and conversion is what bridges them. §2 is
+built on that.
+
+## 2. Option A — reduce to discover the shape, convert to recover the spelling
+
+At the atom fallback of `nat_affine_syntax` (`crates/elab/src/omega_cert.rs`)
+— the one chokepoint every `Nat` side of every goal and every local fact
+passes through — a term that is about to become an opaque atom gets one more
+question:
+
+1. **Bounded whnf.** `SemanticOracle::whnf_term` under the
+   `STUCK_SPELLING_STEPS` budget of `crates/elab/src/oracle.rs` (the budget
+   that exists precisely for this hazard,
+   `issues/elaborator-whnf-probes-on-computing-types.md`). Keep the reduct only
+   when its head became **arithmetic** — `Succ`, `Zero`, a literal, or an
+   `add`/`mul`/`div`/`mod` application. Any other head means reduction bought
+   nothing; intern the original term unchanged and nothing moves.
+2. **Reflect the reduct structurally**, by re-entering `nat_affine_syntax`,
+   which already knows `Succ`, `nat::add`, `nat::mul`, `nat::div`, `nat::mod`.
+3. **Re-spell each unspellable leaf by conversion against a candidate.** The
+   candidates are generated from the *original* term, which does spell: it is a
+   call `g(ā)` one of whose arguments is a constructor value `C(f̄)` (spelled
+   by `ctor_value`, so its fields spell too). For each **recursive** field `fᵢ`
+   of `C`, the candidate is `g(ā[C(f̄) ↦ fᵢ])`. Accept the first candidate that
+   `SemanticOracle::convert_term` says is convertible with the leaf, and
+   reflect *it* — spelled, and therefore interned as the atom the other side of
+   the goal already has.
+
+### 2.1 A leaf no candidate converts against gets one more reduction
+
+A measure whose unfolding yields *two* successors — `Succ(Succ(size(t)))`, or
+`2 * len + 1` written by recursion — leaves the first reduct's leaf at
+`u ≡ Succ(size(t))`, which `size(t)` does not convert against. That leaf is
+therefore given step 1–3 once more, under a small fixed depth (two), and under
+the **same** candidates: they were built from the original term, and they are
+the only spellings the rest of the goal shares. Past the depth the original
+term is interned unchanged, exactly as when no candidate matched.
+
+Worked, on the three reproducer shapes:
+
+| original atom | whnf head | leaf(s) | candidate(s) accepted |
+|---|---|---|---|
+| `list_len(Cons(h, t))` | `Succ(u)` | `u` | `list_len(t)` |
+| `Cons(h, t).len()` | `Succ(u)` | `u` | `t.len()` |
+| `tnodes(Node(l, r))` | `Succ(nat::add(u₁, u₂))` | `u₁`, `u₂` | `tnodes(l)`, `tnodes(r)` |
+
+and the goal becomes `list_len(t) < Succ(list_len(t))` over one shared atom,
+which is `reduced` above — a certificate `omega` already produces.
+
+- **Blast radius.** `omega_cert.rs` only. No kernel change, no reduction rule
+  anywhere, no other elaborator `whnf` probe sees a different answer. This is
+  not one of the 46 probes that issue audited; it is a new call on a path taken
+  once per reflected side of an `omega` goal, after the spelling already
+  succeeded.
+- **Bounded twice over.** One `whnf_term` per atom under a fixed step budget,
+  and at most `arity(C)` conversion calls per unspellable leaf. Nothing here is
+  a search.
+- **Metatheory obligation: none.** Reduction and the conversion test are both
+  contained in the kernel's conversion, so the reflected form is convertible
+  with the goal's by construction; the certificate is checked at the unreduced
+  goal, which `tail_lt` already demonstrates by hand. The kernel re-checks the
+  certificate as always, so a wrong candidate is a refusal, never a false
+  theorem.
+- **Cost.** One guarded branch plus the tests. The charter's expensive half —
+  "close the reducer/conversion gap" — is not needed; §1.2 shows there is no
+  gap.
+
+## 3. Option B — synthesize the successor where the obligation is stated
+
+The refined measure is built syntactically in
+`crates/elab/src/measure.rs::Rewrite::refine` (`e_i = e_{i-1}[patᵢ/vᵢ]`,
+`docs/termination-measures-design.md` §3): at the `Cons(h, t)` arm the
+statement is the surface expression `list_len(Cons(h, t))`. Option B would
+unfold the measure's own definition there and state the obligation at
+`Succ(list_len(t))` instead.
+
+Wrong shape for this problem:
+
+- It has to unfold a **user `fn` at the surface**, matching the measure's body
+  against the arm's pattern — a second, syntactic evaluator inside a pass whose
+  whole discipline is that it only builds surface the writer could have
+  written, and whose correctness is otherwise guaranteed by the checker
+  refusing what it gets wrong.
+- It covers `list_len(xs)` and little else. `xs.len()` is a one-line wrapper
+  the reducer walks through in two steps; a measure through a helper (`tnodes`
+  above), a two-argument measure (`xs.len() + ys.len()`, `merge`), and a
+  non-structural measure (`nat::mod(a, Succ(k))`, `gcd`) each need another rule
+  or get nothing.
+- It restates the obligation at a form the writer did not write, so every
+  existing by-hand `on ?decN := …` is now stated against a different goal.
+- It does nothing for the identical failure outside `decreases`: `at_ctor` is
+  an ordinary theorem whose proof is `omega`.
+
+Option B is a worse special case of Option A, in a place that cannot see terms.
+
+## 4. Verdict
+
+**Take Option A.** The reduction the obligation needs is the kernel's own and
+already reaches the `Succ`; what is missing is that the reflection never asks,
+and that the reduct's payload has to be named by conversion rather than by
+readback. Option B reimplements a fragment of reduction in the syntactic
+lowering, covers one measure spelling, and leaves the non-`decreases`
+occurrence of the same defect standing.
+
+## 5. Atom identity
+
+Interning is by spelling (`intern_by` on `nat_source`), and §2 step 3 is what
+keeps that sound: a leaf is only ever replaced by a **candidate built from the
+original spelled term**, so the string it interns under is one the rest of the
+goal produces too. After `list_len(Cons(h, t))` becomes `Succ(list_len(t))`,
+the inner spelling is the byte-identical `list_len(t)` the left-hand side
+already interned, and the two share an atom.
+
+The hazard is admitting a reduct whose spelling *moves* without buying
+arithmetic: it would split one atom into two, or rename an atom that a
+writer's `on ?decN := lemma(…)` is stated against. Hence the two guards —
+keep the reduct only on an arithmetic head, and never intern a re-spelled
+leaf that no candidate matched. `runs`'s `drop_eq(t, rest).len()` reduces to a
+stuck `elim_Wf` on a neutral, buys nothing, and must intern exactly as it does
+today.
+
+Nothing in this round changes `AtomTable` or `intern_by`.
+
+## 6. Which hand discharges become removable
+
+- **`tail_lt`** (`mutual_recursion.rs`, cited by all three showcase-parser
+  members) — **removable**, and the customer: those sites are exactly
+  `list_len(rest) < list_len(Cons(t, rest))`.
+- **`merge`'s `succ_add_le` and both `on`s** (`termination_measures.rs`,
+  `merge_with_two_obligations_at_a_sum_measure`) — **removable**. With both
+  `Cons` measures reduced the obligations are `a + b < Succ(a) + Succ(b)` over
+  the atoms `a = xt.len()`, `b = yt.len()`: linear, `omega`'s own arithmetic.
+- **`runs`'s `drop_eq_le`** (`a_callee_postcondition_feeds_the_decrease`) —
+  **a genuine lemma site.** The recursive call is on a suffix a *callee*
+  returned; `drop_eq(t, rest)` is opaque under any reduction and the decrease
+  is that callee's postcondition. Layer 2 of the measures issue owns this
+  shape.
+- **`gcd`'s `nat::mod_lt`** (`gcd_by_hand_obligation_computes_and_steps`) —
+  **untouched.** The measure is the parameter `b`, refined to `Succ(k)` by the
+  convoy; nothing is at a constructor *measure*, and
+  `nat::mod(a, Succ(k)) < Succ(k)` is a fact about `mod`, not a reduction.
+  Whether `omega`'s division atoms close it is a separate question and not a
+  claim here.
+
+The removable ones lose their hand discharge *and* gain a companion assertion
+that the `on` is no longer needed, so a regression shows up as a refusal
+rather than as dead scaffolding.
+
+## 7. Negative controls
+
+Per `docs/testing-generated-terms.md`, all four axes, all required:
+
+1. **A non-decreasing measure at a constructor pattern is still refused, with
+   the obligation named.** `Cons(h, t) => f(Cons(h, t))` reduces both sides to
+   `Succ(list_len(t))`; `omega` finds no strict decrease and the message must
+   still be §2-of-the-measures-doc's — "this recursive call must decrease the
+   measure, and `…` was not proved automatically … Discharge it by hand: `on
+   ?dec1 := …;`". Reduction must not turn a refusal into an acceptance, and
+   must not lose the rewording.
+2. **A genuinely opaque measure head still reflects as an atom under its own
+   spelling.** `runs` is the live case; assert the atom label is
+   `drop_eq(t, rest).len` and not a partially reduced form.
+3. **An open element type.** Exercise the measure at `List<A>` with `A` a type
+   variable, not only `List<Nat>`; a closed element type hid three of the five
+   defects that document records.
+4. **A neutral scrutinee alongside the literal one, in a checking position.**
+   The obligation is closed inside a generated theorem, so `omega` is in
+   checking position already; pair each `Cons(h, t)` site with one whose
+   argument is a variable and assert *that* one is unchanged.
+
+One more, specific to §1.1: with `drop1#obl_1` accepted, the `lift = false`
+re-lowering must no longer run on the reproducer, so the arm-alias spelling
+failure stays latent. Assert it.
+
+## Filed separately
+
+Two defects a coordinator can file on their own; neither blocks this round,
+and neither is fixed by it.
+
+- **A tier-1 arm's recursive binder has no spelling.** Inside a `match` arm,
+  §6.3 of `docs/inductive-tier1-wf-lowering.md` aliases the recursive binder
+  `t` to `nth^l(⟦D⟧; mᵢ; cs'; ι_t)`, which reduces to `Fst(cs')` on a neutral
+  `cs'`. `spell_term_clean`/`spell_term_source`
+  (`crates/elab/src/display.rs`) spell a `Supf` through `ctor_value` but have
+  no case for a projection out of a neutral children tuple, so any route that
+  has to *name* such a binder fails. It surfaces here as `omega`'s "could not
+  spell a natural expression"; it is not an `omega` defect and it survives this
+  round, merely unreached on these programs. A fix maps the projection back to
+  the arm binder's surface name, which the elaborator knows when it builds the
+  arm.
+- **A refused lifted obligation reports the retry's error, not its own.**
+  `elab_measure_decl` re-lowers with `lift = false` when the checker refuses
+  `f#obl_N`, and the writer sees the second attempt's message. Here that turns
+  "Omega's real shadow found no contradiction; atoms […]" — accurate and
+  actionable — into "Omega could not spell a natural expression", which points
+  at nothing the writer wrote. The first attempt's reason is already recorded
+  (`unfold_refusals` keeps "the lifted `f#obl_1` was refused (…)"); the
+  diagnostic should prefer it when both attempts fail.
+
+Adjacent and already filed: the `.len()` measure renders as `t.len <
+Cons(h, t).len` (`issues/omega-renders-member-by-base-name.md`), and the probe
+shows `list::List::len(t)` respelling as `list_len(t)` after two δ/β steps —
+worth that issue's attention, not this round's.
+
+## Verdicts binding on implementation
+
+1. The fix is **Option A**, in `crates/elab/src/omega_cert.rs` only. No kernel
+   change, no new reduction rule, no change to any other elaborator `whnf`
+   probe.
+2. The reduction is `SemanticOracle::whnf_term` under the
+   `STUCK_SPELLING_STEPS` budget, at the **atom fallback** of
+   `nat_affine_syntax` — after the spelling already succeeded, never as a
+   general "normalize before reflecting".
+3. The reduct is kept **only when its head became arithmetic** (`Succ`, `Zero`,
+   a literal, or `add`/`mul`/`div`/`mod`); otherwise the original term is
+   interned unchanged.
+4. An unspellable leaf of the reduct is named by **conversion against a
+   candidate built from the original spelled term** — `g(ā[C(f̄) ↦ fᵢ])` for
+   each recursive field `fᵢ` — and never by respelling the reduct. If no
+   candidate converts, the original term is interned unchanged.
+5. Atom identity stays spelling-keyed; `AtomTable` and `intern_by` do not
+   change.
+6. `tail_lt`, `succ_add_le` and `merge`'s two `on`s come out; `drop_eq_le` and
+   `nat::mod_lt` stay, and the tests say which and why (§6).
+7. §7's five controls all land, including the assertion that the `lift = false`
+   retry is no longer reached on the reproducer.
+8. Neither item under "Filed separately" is fixed here.
+
+## 8. What implementing corrected
+
+Five things, none of which changes a verdict.
+
+- **§2.1 was implemented**, at depth two, and is exercised by a measure whose
+  arm is `Succ(Succ(dlen(t)))`.
+- **A leaf that is already arithmetic is decomposed where it stands, not
+  reduced.** The branching measure `tnodes(Node(l, r))` whnfs to
+  `Succ(nat::add(u₁, u₂))`, and reducing that leaf a second time — §2.1's
+  route — unfolds `nat::add` into its eliminator and *loses* the head step 2
+  is looking for. So step 3 tries, in order: the leaf's own spelling, each
+  candidate, the leaf's arithmetic shape, and only then another reduction.
+  Without this the two-leaf row of §2's table does not close.
+- **Step 1 is gated on the shape §2 is about**, before any reduction: a call
+  whose head is a global and one of whose arguments is a constructor value
+  (a `Supf`, an injection, or a `Succ`/`Zero`). Every other atom — `list_len(t)`
+  at a variable, `runs`'s `drop_eq(t, rest).len()` at a neutral — is interned
+  exactly as before and pays nothing, which is §5's requirement reached one
+  step earlier than §2 described it.
+- **`oracle.rs` gained one method**, `whnf_term_bounded`: `whnf_term` under the
+  `STUCK_SPELLING_STEPS` budget verdict 2 names, which the oracle did not
+  expose. No existing probe changed, so verdict 1's "no change to any other
+  elaborator `whnf` probe" holds; only its "`omega_cert.rs` only" is amended
+  by this one addition.
+- **§6–§7's new tests live in a file of their own**,
+  `crates/elab/tests/omega_measure_reduction.rs`. Added to
+  `termination_measures.rs` they took that binary past `scripts/test`'s
+  per-child address-space cap under the parallel bound, and it was `SIGKILL`ed
+  — an `INCOMPLETE` suite, not a failure. Two binaries, two peaks.

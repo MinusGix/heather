@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-09-05
+updated: 2026-09-06
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -338,3 +338,5 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-09-05: Next round chartered (2026-09-05): the termination residue — [[decreases-unfolding-equations]] then [[mutual-recursion-declarations]], one managed round, unfolding first because the group lowering owes the same bound-irrelevance lemma.
 - 2026-09-05: [[decreases-unfolding-equations]] landed and closed (docs/decreases-unfolding-design.md): generated f_unfold with generated extensionality and lifted obligations; residue [[unfolding-computed-scrutinee]]. Next: [[mutual-recursion-declarations]] (Part B of the same round).
 - 2026-09-05: [[mutual-recursion-declarations]] landed and closed (docs/mutual-recursion-design.md); the round chartered today is complete. Residue: [[group-unfolding-equations]], [[mutual-recursion-measure-synthesis]]; showcase blockers now [[omega-measure-at-constructor-pattern]] and Result/?.
+- 2026-09-06: Next round chartered (2026-09-06): [[omega-measure-at-constructor-pattern]], one managed round; the cheaper of the two remaining showcase-parser blockers, Result/? staying a design round on [[prelude-option-and-friends]] layer 2.
+- 2026-09-06: [[omega-measure-at-constructor-pattern]] landed and closed (docs/omega-measure-reduction-design.md); the premise was corrected in the design pass (a spelling gap, not a reducer gap). Showcase-parser blockers now: Result/? ([[prelude-option-and-friends]] layer 2) and the rest of [[omega-renders-member-by-base-name]]. Filed: [[tier1-arm-binder-has-no-spelling]], [[lifted-obligation-refusal-reports-retry-error]].
