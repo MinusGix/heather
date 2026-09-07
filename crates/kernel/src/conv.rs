@@ -570,10 +570,11 @@ struct Conv<'v, D: Dom<'v>> {
     /// one term in one scope, and a well-typed term has one type up to
     /// conversion, so the verdict for a pair is a fact about the pair:
     /// convertible, or definitely not. Exhaustion is not a verdict and is
-    /// never stored. Without this, comparing two definitions unfolded in
-    /// lockstep re-compares every glued argument chain from scratch on every
-    /// δ-round — factorial in the chain's depth (`ofNat(8, 15)` against
-    /// `ofNat(8, 14)` exhausted 2^20 units at width eight).
+    /// never stored. It carries the repeated sub-comparisons a δ-lazy
+    /// comparison makes of the same closures (loading the x86 model is
+    /// ~30% slower without it); it cannot carry a lockstep unfolding, whose
+    /// closures are fresh on every round — see the same-head arm of
+    /// [`Conv::tm_w`] for that case.
     memo: HashMap<D::MemoKey, bool>,
     /// Does Ψ contain any definition at all? Decided once, because when it
     /// does not — every program before this feature, and every fixture that
@@ -713,6 +714,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// one `delta_ty`. A former view (`Vec`, `Fin`, …) is left alone even
     /// when a *component* is δ-stuck: the view is already decisive there and
     /// forcing a length nobody reads would only spend fuel.
+    /// Unfold a term's defined heads until none remains.
+    fn delta_to_head_tm(&mut self, env: &Env<'v>, mut w: D::Tm) -> R<D::Tm> {
+        while D::delta_head(self, env, &w).is_some() {
+            w = D::delta_tm(self, env, &w)?;
+        }
+        Ok(w)
+    }
+
     fn delta_to_head_ty(&mut self, env: &Env<'v>, mut w: D::Ty) -> R<D::Ty> {
         if self.has_defs {
             while D::view_ty(self, env, &w).is_neutral()
@@ -1140,6 +1149,21 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // the other side past the rendezvous in lockstep.
                     (Some(u1), Some(u2)) if u1.0 < u2.0 => {
                         wa = D::delta_tm(self, env, &wa)?;
+                    }
+                    // The same head on both sides, and its spines just
+                    // failed to convert. Advancing one side a single step
+                    // and re-comparing would re-evaluate the body it
+                    // exposes on every round — with every closure beneath
+                    // it fresh each time, so nothing below is ever shared
+                    // or memoized — and two `ofNat(8, k)` at different `k`
+                    // exhausted 2^20 units that way. Nothing is lost by
+                    // unfolding both sides to their δ-heads instead: the
+                    // meet at *this* head has already failed, and a meet
+                    // at a sub-term is still found by the ordinary lazy
+                    // comparison of the canonical forms' components.
+                    (Some(u1), Some(u2)) if u1 == u2 => {
+                        wa = self.delta_to_head_tm(env, wa)?;
+                        wb = self.delta_to_head_tm(env, wb)?;
                     }
                     (Some(_), Some(_)) => {
                         wb = D::delta_tm(self, env, &wb)?;

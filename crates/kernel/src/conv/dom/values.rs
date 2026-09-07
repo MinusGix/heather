@@ -552,8 +552,11 @@ impl<'v> Dom<'v> for Values {
     type MemoKey = (usize, u32, u32, usize, u32, u32, usize, u8);
     fn tm_memo_key(env: &Env<'v>, a: &TmC<'v>, b: &TmC<'v>) -> Option<Self::MemoKey> {
         // The arena keeps every closure alive for the whole run, so an
-        // address names one closure throughout. Ψ is by pointer: a
-        // telescope push rebuilds it, and verdicts do not cross that.
+        // address names one closure throughout. Ψ is by length: within a
+        // run it only ever grows (a telescope push), so the length names
+        // it, where its handle's address does not — the handle is rebuilt
+        // along the way, and keying on it made the same pair miss on
+        // nearly every δ-round.
         Some((
             a.clo as *const TmClo<'v> as usize,
             a.home,
@@ -561,7 +564,7 @@ impl<'v> Dom<'v> for Values {
             b.clo as *const TmClo<'v> as usize,
             b.home,
             b.sat,
-            Rc::as_ptr(&env.psi) as usize,
+            env.psi.bindings.len(),
             env.layer as u8,
         ))
     }

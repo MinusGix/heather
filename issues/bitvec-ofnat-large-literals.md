@@ -77,15 +77,22 @@ owns scaling with graph size.
   pieces composed cheaply and a *literal* powers list made the whole thing
   cheap. With (3) the round trip is width-linear, and elaborating the x86
   model itself got faster, since its byte constants are the same shape.
-  (4) Conversion remembers its verdicts. Two `ofNat(8, k)` at different `k`
-  — the shape of every corrupted-encoding control, where a canonical byte
-  meets the wrong literal — are unfolded in lockstep, and each δ-round
-  re-compared every glued argument chain (`sub(sub(x, 8), 4)` over the
-  modulus) from scratch: factorial in the chain depth, `OutOfFuel` at width
-  eight. `Conv::tm` now keys its verdict on the two closures' identities
-  (closure address, scope, Ψ, layer); convertible or definitely not are
-  facts about the pair, exhaustion is never stored. Positive-and-negative
-  conversion caches are the standard remedy in NbE checkers.
+  (4) Conversion's same-head case. Two `ofNat(n, k)` at different `k` —
+  the shape of every corrupted-encoding control, where a canonical byte
+  meets the wrong literal — stop at the same defined head, fail the spine
+  comparison, and were then unfolded in lockstep one δ-step at a time with
+  everything re-compared each round. A per-conversion count showed why no
+  cache could help: 271k sub-comparisons on 271k *distinct* closure pairs,
+  because each round re-evaluates the exposed body and every closure
+  beneath it is fresh. Conversion now unfolds both sides to their δ-heads
+  once the meet at a shared head has failed (a meet at a sub-term is still
+  found lazily on the canonical forms' components); the dense width-8 and
+  width-64 cases went from `OutOfFuel` to an immediate `NotConvertible`. A
+  verdict memo in `Conv::tm` (closure identities, scope, Ψ length, layer;
+  never exhaustion) stays for the repeated sub-comparisons a lazy
+  comparison does make: the x86 model loads ~30% slower without it.
+  Radix spellings (merged from the hex/bin branch) are the same compact
+  literal, and a hex-digit-off control at width 64 pins this case.
   A broader rule — unfolding a glued scrutinee for *every* match — was
   tried and rejected: the x86 decoder's open-argument unfolding theorems
   meet at a folded `match decode_opcode_direct(…)`, and eager unfolding
