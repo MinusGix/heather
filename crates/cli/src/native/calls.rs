@@ -1,4 +1,4 @@
-//! Small final-image layout and proof producer for a forwarding caller and leaf.
+//! Final-image layout and proof producer for bounded callers and reusable leaf summaries.
 use std::collections::BTreeMap;
 use heather_elab::function_ir_source::{self, SourceX86Emission};
 use heather_elab::function_ir_x86_lower::{Gpr, Instruction};
@@ -10,9 +10,9 @@ const HEADER: usize = 232;
 const STACK_TOP: u64 = 0x402000;
 
 #[derive(Clone, Debug)]
-enum Op { Normal(Instruction), Call(String), Ret, Store, Load, Syscall }
+enum Op { Normal(Instruction), Call(String), Ret, Store, StoreArgument, Load, Syscall }
 impl Op {
-    fn len(&self) -> usize { match self { Self::Normal(i) => super::encode(&[*i]).len(), Self::Call(_) => 5, Self::Ret => 1, Self::Store | Self::Load => 4, Self::Syscall => 2 } }
+    fn len(&self) -> usize { match self { Self::Normal(i) => super::encode(&[*i]).len(), Self::Call(_) => 5, Self::Ret => 1, Self::Store | Self::StoreArgument | Self::Load => 4, Self::Syscall => 2 } }
 }
 #[derive(Clone)]
 struct Fragment { name: String, ops: Vec<Op> }
@@ -46,6 +46,7 @@ fn layout(fragments: &[Fragment]) -> Result<Layout, String> {
                 }
                 Op::Ret => (vec![0xc3], "NearReturn".into()),
                 Op::Syscall => (vec![0x0f, 0x05], String::new()),
+                Op::StoreArgument => (vec![0x48, 0x89, 0x3c, 0x24], "StoreStack64(Rdi)".into()),
                 Op::Store => (vec![0x4c, 0x89, 0x1c, 0x24], "StoreStack64(R11)".into()),
                 Op::Load => (vec![0x4c, 0x8b, 0x1c, 0x24], "LoadStack64(R11)".into()),
             };
@@ -56,7 +57,103 @@ fn layout(fragments: &[Fragment]) -> Result<Layout, String> {
     }
     Ok(Layout { bytes, symbols, placed })
 }
-// Certify subtraction through literal intermediate values, keeping each reduction small.
+fn selected_leaf_ops(leaf: &SourceX86Emission, clobber: bool, frame: bool) -> Vec<Op> {
+    let mut ops = Vec::new();
+    if frame {
+        ops.extend([Op::Normal(Instruction::MovRR { destination: Gpr::R10, source: Gpr::Rsp }),
+            Op::Normal(Instruction::MovRI { destination: Gpr::R11, immediate: 8 }),
+            Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, source: Gpr::R11 }), Op::StoreArgument]);
+    }
+    ops.extend(leaf.instructions.iter().copied().map(Op::Normal));
+    if frame { ops.push(Op::Normal(Instruction::MovRR { destination: Gpr::Rsp, source: Gpr::R10 })); }
+    if clobber { ops.push(Op::Normal(Instruction::XorRR { destination: Gpr::R11, source: Gpr::R11 })); }
+    ops.push(Op::Ret);
+    ops
+}
+fn summary_instructions(leaf: &SourceX86Emission, clobber: bool, frame: bool) -> Vec<String> {
+    selected_leaf_ops(leaf, clobber, frame).iter().map(|op| match op {
+        Op::Normal(i) => format!("Ordinary({})", i.heather_expr().render()),
+        Op::StoreArgument => "StoreStack64(Rdi)".into(),
+        Op::Ret => "NearReturn".into(),
+        _ => unreachable!("selected leaf operation"),
+    }).collect()
+}
+// Propose a literal for concrete byte stores; the emitted equality to the
+// source result is kernel-checked before any artifact is published.
+fn proposed_result(expr: &function_ir_source::SourceExpr, inputs: [u64; 2]) -> u64 {
+    use function_ir_source::{SourceExpr as E, SourceBinaryOperation as B};
+    match expr {
+        E::Input(i) => inputs[*i as usize],
+        E::Constant(n) => *n,
+        E::Binary { operation, left, right } => {
+            let a = proposed_result(left, inputs); let b = proposed_result(right, inputs);
+            match operation { B::Add => a.wrapping_add(b), B::Sub => a.wrapping_sub(b), B::BitAnd => a & b, B::BitOr => a | b, B::BitXor => a ^ b }
+        }
+    }
+}
+
+// Keep register/flag projections out of the accumulated whole-machine spine.
+// The successor equality still checks these proposed fields against the model.
+fn normal_effect_fields(instruction: Instruction, before: &str) -> Option<(Gpr, String, String)> {
+    let read = |r: Gpr| format!("read_gpr({}, {before}.gprs)", r.heather_name());
+    let (destination, value, flags) = match instruction {
+        Instruction::MovRR { destination, source } => (destination, read(source), format!("{before}.flags")),
+        Instruction::MovRI { destination, immediate } => (destination, format!("bitvec::ofNat(64, {immediate})"), format!("{before}.flags")),
+        Instruction::AddRR { destination, source } | Instruction::SubRR { destination, source }
+        | Instruction::AndRR { destination, source } | Instruction::OrRR { destination, source }
+        | Instruction::XorRR { destination, source } => {
+            let operation = match instruction { Instruction::AddRR { .. } => "add", Instruction::SubRR { .. } => "sub",
+                Instruction::AndRR { .. } => "band", Instruction::OrRR { .. } => "bor", _ => "bxor" };
+            let value = format!("bitvec::{operation}(64, {}, {})", read(destination), read(source));
+            let flags = match instruction {
+                Instruction::AddRR { .. } => format!("add_flags({}, {})", read(destination), read(source)),
+                Instruction::SubRR { .. } => format!("sub_flags({}, {})", read(destination), read(source)),
+                _ => format!("logic_flags({value})"),
+            };
+            (destination, value, flags)
+        },
+        _ => return None,
+    };
+    Some((destination, value, flags))
+}
+fn normal_fields(instruction: Instruction, before: &str) -> Option<String> {
+    let (destination, value, flags) = normal_effect_fields(instruction, before)?;
+    Some(format!("write_gpr({}, {value}, {before}.gprs), {flags}", destination.heather_name()))
+}
+
+fn normal_flat_proof(instruction: Instruction, before: &str, address: &str, advanced: &str) -> Option<String> {
+    let (name, destination, source) = match instruction {
+        Instruction::MovRI { destination, immediate } => ("mov_ri", destination, format!("bitvec::ofNat(64, {immediate})")),
+        Instruction::MovRR { destination, source } => ("mov_rr", destination, source.heather_name().into()),
+        Instruction::AddRR { destination, source } => ("add_rr", destination, source.heather_name().into()),
+        Instruction::SubRR { destination, source } => ("sub_rr", destination, source.heather_name().into()),
+        Instruction::AndRR { destination, source } => ("and_rr", destination, source.heather_name().into()),
+        Instruction::OrRR { destination, source } => ("or_rr", destination, source.heather_name().into()),
+        Instruction::XorRR { destination, source } => ("xor_rr", destination, source.heather_name().into()),
+        _ => return None,
+    };
+    Some(format!("call_{name}_flat({}, {source}, {before}, {address}, {advanced})", destination.heather_name()))
+}
+
+// Certify addition through literal intermediate values, keeping each reduction small.
+fn certify_add(module: &mut Module, words: &Words, name: &str, start: u64, count: u64) {
+    let word = |n| words.get(n);
+    let mut previous = 0;
+    for done in 0..=count {
+        if done != 0 && done % 4 != 0 && done != count { continue; }
+        let proof = if done == 0 { "refl".into() } else {
+            let chunk = done - previous;
+            thm(module, &format!("{name}_increment_{done}"),
+                format!("bitvec::iterate_increment(64, {}, {chunk}) = {}", word(start.wrapping_add(previous)), word(start.wrapping_add(done))), "refl".into());
+            format!("trans(sym(bitvec::iterate_increment_compose(64, {}, {previous}, {chunk})), trans(cong_fn<BitVec(64), BitVec(64)>(λ value => bitvec::iterate_increment(64, value, {chunk}), {name}_steps_{previous}()), {name}_increment_{done}()))", word(start))
+        };
+        thm(module, &format!("{name}_steps_{done}"),
+            format!("bitvec::iterate_increment(64, {}, {done}) = {}", word(start), word(start.wrapping_add(done))), proof);
+        previous = done;
+    }
+    thm(module, name, format!("bitvec::add(64, {}, {}) = {}", word(start), word(count), word(start.wrapping_add(count))), format!("{name}_steps_{count}()"));
+}
+
 fn certify_sub(module: &mut Module, words: &Words, name: &str, start: u64, count: u64) {
     let word = |n| words.get(n);
     let mut previous = 0;
@@ -108,30 +205,27 @@ fn state_decl(m: &mut Module, name: &str, ty: String, value: String, theorem: bo
         .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
 }
 fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize, memory: &str, pc: u64, encoding: &[u8]) -> String {
+    let actual_memory = memory;
+    let memory = format!("CallMemory({prefix}_file(), stack)");
+    let stack_decl = |module: &mut Module, name: &str, ty: String, body: String| {
+        module.declaration(Declaration::theorem(name, Expr::raw(ty), Block::expression(Expr::raw(body)))
+            .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
+    };
     let word = |n| words.get(n);
     for j in (0..encoding.len()).rev() {
         let address = word(pc + j as u64);
         let byte = format!("elf_byte({})", encoding[j]);
-        let fact = |kind| format!("{prefix}_{kind}_{index}_{j}");
-        for (kind, ty) in [
-            ("permission", format!("call_fetch_access().executable({memory}, {address}) = True")),
-            ("read", format!("call_fetch_access().read_byte({memory}, {address}) = Some({byte})")),
-        ] { state_decl(module, &fact(kind), ty, "refl".into(), true); }
         let proof = if j+1 == encoding.len() {
-            format!("fetch_span_one(call_fetch_access(), {memory}, {address}, {byte}, {}(gprs, flags, stack), {}(gprs, flags, stack))", fact("permission"), fact("read"))
+            format!("call_file_fetch_one({memory}, {address}, {byte}, refl)")
         } else {
             let next = word(pc + j as u64 + 1);
-            for (kind, ty) in [("nowrap", format!("bitvec::carry_add_bit(64, {address}, bitvec::ofNat(64, 1)) = False")),
-                ("next", format!("next_rip({address}, 1) = {next}"))] {
-                thm(module, &fact(kind), ty, "refl".into());
-            }
-            format!("fetch_span_more(call_fetch_access(), {memory}, {address}, {next}, {byte}, elf_byte({}), {}, {}(gprs, flags, stack), {}(gprs, flags, stack), {}(), {}(), {prefix}_byte_{index}_{}(gprs, flags, stack))",
-                encoding[j+1], bytes(&encoding[j+2..]).render(), fact("permission"), fact("read"), fact("nowrap"), fact("next"), j+1)
+            format!("call_file_fetch_more({memory}, {address}, {next}, {byte}, elf_byte({}), {}, refl, refl, refl, {prefix}_byte_{index}_{}(stack))",
+                encoding[j+1], bytes(&encoding[j+2..]).render(), j+1)
         };
-        state_decl(module, &format!("{prefix}_byte_{index}_{j}"),
-            format!("FetchedFrom(call_fetch_access(), {memory}, InstructionBytes({address}, {}))", bytes(&encoding[j..]).render()), proof, true);
+        stack_decl(module, &format!("{prefix}_byte_{index}_{j}"),
+            format!("FetchedFrom(call_fetch_access(), {memory}, InstructionBytes({address}, {}))", bytes(&encoding[j..]).render()), proof);
     }
-    format!("{prefix}_byte_{index}_0(gprs, flags, stack)")
+    format!("{prefix}_byte_{index}_0({actual_memory}.stack)")
 }
 
 fn certify_stack_permissions(module: &mut Module, words: &Words, prefix: &str, index: usize, sp: u64) -> String {
@@ -148,13 +242,14 @@ fn certify_stack_permissions(module: &mut Module, words: &Words, prefix: &str, i
     format!("{prefix}_stack_allowed_{index}_0()")
 }
 
-fn certify_call_memory(module: &mut Module, words: &Words, prefix: &str, i: usize, before: &str, sp: u64, pc: u64, delta: u32, local: Option<u64>) -> (String, String) {
+fn certify_call_memory(module: &mut Module, words: &Words, prefix: &str, i: usize, before: &str, sp: u64, pc: u64, delta: u32, local: Option<(u64, &str)>, value_proof: Option<String>) -> (String, String) {
     let word = |n| words.get(n);
     let slot = sp - if local.is_some() { 0 } else { 8 };
-    let stored = local.unwrap_or(pc + 5);
+    let stored = local.map_or(pc + 5, |(value, _)| value);
+    let register = local.map_or("R11", |(_, register)| register);
     let base = if local.is_some() { format!("read_gpr(Rsp, {before}.gprs)") }
         else { format!("bitvec::sub(64, read_gpr(Rsp, {before}.gprs), bitvec::ofNat(64, 8))") };
-    let value = if local.is_some() { format!("read_gpr(R11, {before}.gprs)") } else { format!("call_return_address({before})") };
+    let value = if local.is_some() { format!("read_gpr({register}, {before}.gprs)") } else { format!("call_return_address({before})") };
     let literal_base = word(slot);
     let literal_value = word(stored);
     let fact = |kind: &str| format!("{prefix}_store_{kind}_{i}(gprs, flags, stack)");
@@ -165,7 +260,7 @@ fn certify_call_memory(module: &mut Module, words: &Words, prefix: &str, i: usiz
     state_decl(module, &format!("{prefix}_store_base_{i}"), format!("{base} = {literal_base}"),
         format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ pointer => bitvec::sub(64, pointer, bitvec::ofNat(64, 8)), {prefix}_rsp_{i}(gprs, flags, stack)), {prefix}_store_sub_{i}())"), true);
     }
-    state_decl(module, &format!("{prefix}_store_value_{i}"), format!("{value} = {literal_value}"), "refl".into(), true);
+    state_decl(module, &format!("{prefix}_store_value_{i}"), format!("{value} = {literal_value}"), value_proof.unwrap_or_else(|| "refl".into()), true);
     let memory = |j| format!("{prefix}_store_memory_{i}_{j}(gprs, flags, stack)");
     state_decl(module, &format!("{prefix}_store_memory_{i}_0"), "CallMemory".into(), format!("{before}.memory"), false);
     state_decl(module, &format!("{prefix}_store_equal_{i}_0"), format!("word_write_0(call_stack_access(), {value}, {before}.memory, {base}) = {}", memory(0)), "refl".into(), true);
@@ -183,12 +278,37 @@ fn certify_call_memory(module: &mut Module, words: &Words, prefix: &str, i: usiz
             format!("word_write_{}(call_stack_access(), {value}, {before}.memory, {base}) = {}", j+1, memory(j+1)),
             format!("call_memory_write_cong(word_write_{j}(call_stack_access(), {value}, {before}.memory, {base}), {}, bitvec::add(64, {base}, bitvec::ofNat(64, {j})), {address}, imm_byte{j}({value}), elf_byte({byte}), {prefix}_store_equal_{i}_{j}(gprs, flags, stack), {prefix}_store_address_{i}_{j}(gprs, flags, stack), {prefix}_store_byte_{i}_{j}(gprs, flags, stack))", memory(j)), true);
     }
-    let model_memory = if local.is_some() { format!("stack_store_memory(call_stack_access(), R11, {before})") }
+    let model_memory = if local.is_some() { format!("stack_store_memory(call_stack_access(), {register}, {before})") }
         else { format!("call_after_memory(call_stack_access(), bitvec::ofNat(32, {delta}), {before})") };
     (memory(8), format!("sym(trans({model_memory}, {prefix}_store_equal_{i}_8(gprs, flags, stack)))"))
 }
 
-fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: usize, before: &str, sp: u64, target: u64, from_contract: bool) -> String {
+fn certify_word_outside(module: &mut Module, words: &Words, name: &str, slot: u64, protected: u64) {
+    let word = |n| words.get(n);
+    for j in 0..8 {
+        for (kind, base) in [("written", slot), ("protected", protected)] {
+            thm(module, &format!("{name}_{kind}_offset_{j}"),
+                format!("bitvec::add(64, {}, bitvec::ofNat(64, {j})) = {}", word(base), word(base+j)), "refl".into());
+        }
+    }
+    let mut fields = Vec::new();
+    for k in 0..8 {
+        let target = word(protected+k);
+        thm(module, &format!("{name}_excluded_{k}_0"), format!("¬WordPrefixWrites(0, {}, {target})", word(slot)), "λ hit => hit".into());
+        for j in 0..8 {
+            let pointer = word(slot+j);
+            thm(module, &format!("{name}_different_{k}_{j}"),
+                format!("is_zero_bits(64, bitvec::bxor(64, {pointer}, {target})) = False"), "refl".into());
+            thm(module, &format!("{name}_excluded_{k}_{}", j+1),
+                format!("¬WordPrefixWrites({}, {}, {target})", j+1, word(slot)),
+                format!("word_prefix_excluded({j}, {}, {target}, {name}_excluded_{k}_{j}(), j(sym({name}_written_offset_{j}()), λ pointer _ => ¬ByteWrite(pointer, {target}), byte_write_excluded({pointer}, {target}, {name}_different_{k}_{j}())))", word(slot)));
+        }
+        fields.push(format!("byte{k} := j(sym({name}_protected_offset_{k}()), λ target _ => ¬WordPrefixWrites(8, {}, target), {name}_excluded_{k}_8())", word(slot)));
+    }
+    fun(module, name, &format!("WordOutside({}, {})", word(slot), word(protected)), format!("WordOutside({})", fields.join(", ")));
+}
+
+fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: usize, before: &str, sp: u64, target: u64, from_contract: Option<(&str, bool)>) -> String {
     let word = |n| words.get(n);
     let base = word(sp); let value = word(target);
     let mut fields = Vec::new();
@@ -196,8 +316,9 @@ fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: us
         let query = if j == 0 { base.clone() } else { format!("bitvec::add(64, {base}, bitvec::ofNat(64, {j}))") };
         let literal = word(sp+j as u64);
         thm(module, &format!("{prefix}_read_address_{i}_{j}"), format!("{query} = {literal}"), "refl".into());
-        let read_proof = if from_contract {
-            format!("trans(cong_fn<Option<BitVec(8)>, BitVec(8)>(call_read_value, {prefix}_callee_memory_effects(gprs, flags, stack)({literal}, λ impossible => impossible)), refl)")
+        let read_proof = if let Some((contract, frame)) = from_contract {
+            let outside = if frame { format!("{contract}_callee_local_outside_{j}(gprs, flags, stack)") } else { "λ impossible => impossible".into() };
+            format!("trans(cong_fn<Option<BitVec(8)>, BitVec(8)>(call_read_value, {contract}_callee_memory_effects(gprs, flags, stack)({literal}, {outside})), refl)")
         } else { "refl".into() };
         state_decl(module, &format!("{prefix}_read_literal_{i}_{j}"),
             format!("call_stack_access().read({before}.memory, {literal}) = imm_byte{j}({value})"), read_proof, true);
@@ -217,30 +338,32 @@ fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: us
 pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, caller: &str,
     requested_callee: &str, inputs: [u64; 2]) -> Result<Vec<u8>, String>
 {
-    let (callee, local) = function_ir_source::reflect_call_wrapper(elab, caller).map_err(|e| e.to_string())?;
+    let (callee, local, twice) = function_ir_source::reflect_call_plan(elab, caller).map_err(|e| e.to_string())?;
     if callee != requested_callee { return Err(format!("caller resolves to `{callee}`, not opted-in callee `{requested_callee}`")); }
     let leaf_prefix = format!("{prefix}_leaf");
+    let mut registers = vec![Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11];
+    if twice { registers.retain(|r| *r != Gpr::R10); }
     let leaf = function_ir_source::generate_elaborated_x86(elab, &leaf_prefix, &callee,
-        [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11], Gpr::Rax)
+        [Gpr::Rdi, Gpr::Rsi], &registers, Gpr::Rax)
         .map_err(|e| format!("callee: {e}"))?;
     let normal = |i| Op::Normal(i);
     let mov = |r, value| normal(Instruction::MovRI { destination: r, immediate: value });
-    let mut leaf_ops = leaf.instructions.iter().copied().map(normal).collect::<Vec<_>>();
-    if local { leaf_ops.push(normal(Instruction::XorRR { destination: Gpr::R11, source: Gpr::R11 })); }
-    leaf_ops.push(Op::Ret);
+    let leaf_ops = selected_leaf_ops(&leaf, local && !twice, twice);
     let mut caller_ops = vec![mov(Gpr::R11, 8), normal(Instruction::SubRR { destination: Gpr::Rsp, source: Gpr::R11 })];
     if local { caller_ops.extend([normal(Instruction::MovRR { destination: Gpr::R11, source: Gpr::Rdi }),
         normal(Instruction::XorRR { destination: Gpr::R11, source: Gpr::Rsi }), Op::Store]); }
     caller_ops.push(Op::Call("leaf".into()));
+    if twice { caller_ops.extend([normal(Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax }), Op::Call("leaf_again".into())]); }
     if local { caller_ops.extend([Op::Load, normal(Instruction::XorRR { destination: Gpr::Rax, source: Gpr::R11 })]); }
     caller_ops.extend([mov(Gpr::R11, 8), normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::R11 }), Op::Ret]);
     // Place the leaf before the wrapper: its call deliberately exercises a negative rel32.
-    let fragments = vec![
+    let mut fragments = vec![
         Fragment { name: "entry".into(), ops: vec![mov(Gpr::Rsp, STACK_TOP), mov(Gpr::Rdi, inputs[0]), mov(Gpr::Rsi, inputs[1]),
             Op::Call("caller".into()), normal(Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax }), mov(Gpr::Rax, 60), Op::Syscall] },
-        Fragment { name: "leaf".into(), ops: leaf_ops },
+        Fragment { name: "leaf".into(), ops: leaf_ops.clone() },
         Fragment { name: "caller".into(), ops: caller_ops },
     ];
+    if twice { fragments.insert(2, Fragment { name: "leaf_again".into(), ops: leaf_ops }); }
     let layout = layout(&fragments)?;
     let mut file = super::elf::image(&layout.bytes)?;
     // Extend the existing fixed profile with a zero-filled RW PT_LOAD.
@@ -253,11 +376,18 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     file.extend(1u32.to_le_bytes()); file.extend(6u32.to_le_bytes());
     for n in [0x1000u64, 0x401000, 0x401000, 0, 0x1000, 0x1000] { file.extend(n.to_le_bytes()); }
     file.extend(&layout.bytes);
-    for name in ["x86_64_calls", "x86_64_call_frame", "elf64_calls"] { module.raw(format!("import {name};")); }
+    for name in ["x86_64_calls", "x86_64_call_frame", "x86_64_call_summary", "elf64_calls"] { module.raw(format!("import {name};")); }
     module.raw(leaf.text.clone());
+    emit_leaf_summary(module, &leaf_prefix, &leaf, local && !twice, twice);
     super::elf::valuation(module, &leaf_prefix, &leaf.reflected.region, inputs)?;
+    if twice {
+        super::elf::valuation_expressions(module, &format!("{leaf_prefix}_second"), &leaf_prefix, &leaf.reflected.region,
+            [Expr::call(format!("{leaf_prefix}_value_{}", leaf.reflected.region.outputs[0].id), [Expr::name("width")]),
+             Expr::call(format!("{leaf_prefix}_value_1"), [Expr::name("width")])])?;
+    }
+    let left = if twice { format!("{callee}(left, right)") } else { "left".into() };
     module.declaration(Declaration::theorem(format!("{prefix}_source_call"),
-        Expr::raw(format!("{caller}(left, right) = {}", if local { format!("bitvec::bxor(64, {callee}(left, right), bitvec::bxor(64, left, right))") } else { format!("{callee}(left, right)") })), Block::expression(Expr::name("refl")))
+        Expr::raw(format!("{caller}(left, right) = {}", if local { format!("bitvec::bxor(64, {callee}({left}, right), bitvec::bxor(64, left, right))") } else { format!("{callee}(left, right)") })), Block::expression(Expr::name("refl")))
         .parameter(Parameter::explicit("left", Expr::raw("BitVec(64)")))
         .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
     module.declaration(Declaration::function(format!("{prefix}_code"), Expr::raw("List<BitVec(8)>"), Block::expression(bytes(&layout.bytes))));
@@ -268,7 +398,7 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     thm(module, &format!("{prefix}_file_correct"), format!("{prefix}_file() = call_elf_bytes({prefix}_code(), {prefix}_image())"), "refl".into());
     let words = Words { prefix: prefix.into(), values: Default::default() };
     let mut trace = Module::default();
-    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local)?;
+    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local, twice)?;
     for value in words.values.into_inner() {
         fun(module, &format!("{prefix}_word_{value:x}"), "BitVec(64)", word(value));
     }
@@ -276,24 +406,69 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     Ok(file)
 }
 
+// This theorem is checked once for arbitrary arguments, memory and placement.
+// Call sites discharge graph/input, fetch and stack-access premises separately.
+fn emit_leaf_summary(module: &mut Module, prefix: &str, leaf: &SourceX86Emission, clobber: bool, frame: bool) {
+    let code = summary_instructions(leaf, clobber, frame);
+    fun(module, &format!("{prefix}_summary_code"), "List<CallInstruction>", format!("[{}]", code.join(", ")));
+    for i in 0..=code.len() {
+        fun(module, &format!("{prefix}_summary_suffix_{i}"), "List<CallInstruction>", format!("[{}]", code[i..].join(", ")));
+        let body = if i == 0 { "before".into() } else {
+            format!("call_next(call_stack_access(), {}, {prefix}_summary_state_{}(before))", code[i-1], i-1)
+        };
+        module.declaration(Declaration::function(format!("{prefix}_summary_state_{i}"), Expr::raw("MachineState<CallMemory>"), Block::expression(Expr::raw(body)))
+            .parameter(Parameter::explicit("before", Expr::raw("MachineState<CallMemory>"))));
+    }
+    let result = format!("{}(values(64, 0), values(64, 1))", leaf.reflected.source_name);
+    let pointer = "bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))";
+    let footprint = if frame { format!("λ address => WordPrefixWrites(8, {pointer}, address)") } else { "NoWrites".into() };
+    module.declaration(Declaration::function(format!("{prefix}_summary_post"), Expr::name("Type"),
+        Block::expression(Expr::raw(format!("NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, {footprint}, before, after, {result}, stack_word(call_stack_access(), before.memory, read_gpr(Rsp, before.gprs))) ∧ read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs)"))))
+        .parameter(Parameter::explicit("values", Expr::raw("Valuation()")))
+        .parameter(Parameter::explicit("before", Expr::raw("MachineState<CallMemory>")))
+        .parameter(Parameter::explicit("after", Expr::raw("MachineState<CallMemory>"))));
+    let body_start = if frame { format!("{prefix}_summary_state_4(before)") } else { "before".into() };
+    let graph = if frame { "entry.right.right.left" } else { "entry.right.right" };
+    let core = format!("trans({prefix}_refines_function_ir(values, {body_start}, entry.left, entry.right.left, {graph}), {prefix}_denotes_source(values, {graph}))");
+    let result_proof = if clobber { format!("trans(xor_r11_preserves_rax({prefix}_summary_state_{}(before)), {core})", code.len()-2) } else { core };
+    let extra = if frame { format!(" ∧ bitvec::borrow_sub_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧ WordOutside({pointer}, read_gpr(Rsp, before.gprs))") } else { String::new() };
+    let returned = if frame { format!("stored_word_preserves_return(before.memory, {pointer}, read_gpr(Rdi, before.gprs), read_gpr(Rsp, before.gprs), entry.right.right.right.right)") } else { "refl".into() };
+    let effects = if frame { format!("word_memory_effect_8(before.memory, {pointer}, read_gpr(Rdi, before.gprs))") }
+        else { format!("writes_only_equal(call_memory_read, NoWrites, before.memory, call_run(call_stack_access(), {prefix}_summary_code(), before).memory, refl)") };
+    module.declaration(Declaration::function(format!("{prefix}_summary"),
+        Expr::raw(format!("CallSummary<CallMemory>(call_stack_access(), {prefix}_summary_code(), λ before after => {prefix}_summary_post(values, before, after))")),
+        Block::expression(Expr::raw(format!("CallSummary(requires := λ before => values(64, 0) = read_gpr(Rdi, before.gprs) ∧ values(64, 1) = read_gpr(Rsi, before.gprs) ∧ RegionHolds({prefix}_raw(), values){extra}, ensures := λ before entry => ⟨NativeIntegerCallContract(result_correct := {result_proof}, returned_to := {returned}, stack_restored := refl, memory_effects := {effects}, preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl), refl⟩)"))))
+        .parameter(Parameter::explicit("values", Expr::raw("Valuation()"))));
+}
+
 fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str, inputs: [u64;2], leaf: &SourceX86Emission,
-    leaf_prefix: &str, layout: &Layout, local: bool) -> Result<(), String>
+    leaf_prefix: &str, layout: &Layout, local: bool, twice: bool) -> Result<(), String>
 {
     let word = |n| words.get(n);
     let state = |i| format!("{prefix}_state_{i}(gprs, flags, stack)");
     state_decl(module, &format!("{prefix}_state_0"), "MachineState<CallMemory>".into(),
         format!("call_initial({prefix}_file(), gprs, flags, stack)"), false);
+    if twice {
+        for (name, protected) in [("return", STACK_TOP-24), ("local", STACK_TOP-16)] {
+            certify_word_outside(module, words, &format!("{prefix}_{name}_outside"), STACK_TOP-32, protected);
+        }
+    }
     let mut pc = ENTRY;
     let mut returns = Vec::new();
     let mut rsp = STACK_TOP;
     let mut trace = Vec::new();
+    let mut operations = Vec::new();
+    let leaf_count = selected_leaf_ops(leaf, local && !twice, twice).len();
     let mut leaf_start = 0;
     let mut leaf_end = 0;
+    let mut instances = Vec::new();
+    let mut current_instance = prefix.to_string();
     loop {
         let (op, encoding, instruction) = layout.placed.get(&pc).ok_or("execution escaped laid-out fragments")?;
         let i = trace.len();
         if matches!(op, Op::Syscall) { break; }
-        if pc == layout.symbols["leaf"] { leaf_start = i; }
+        if pc == layout.symbols["leaf"] || layout.symbols.get("leaf_again") == Some(&pc) { leaf_start = i; }
+        let in_leaf = leaf_start != 0 && i < leaf_start + leaf_count;
         let before = state(i);
         let (after_expr, next) = match op {
             Op::Normal(instruction) => (format!("execute_normal(decoded_canonical({}), {before})", instruction.heather_expr().render()), pc + encoding.len() as u64),
@@ -303,9 +478,10 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
                 (format!("call_after(call_stack_access(), bitvec::ofNat(32, {delta}), {before})"), target)
             }
             Op::Ret => {
-                if i == leaf_start + leaf.instructions.len() + usize::from(local) { leaf_end = i; }
+                if i + 1 == leaf_start + leaf_count { leaf_end = i; }
                 (format!("return_after(call_stack_access(), {before})"), returns.pop().ok_or("return with empty static frame chain")?)
             }
+            Op::StoreArgument => (format!("stack_store_after(call_stack_access(), Rdi, {before})"), pc + 4),
             Op::Store => (format!("stack_store_after(call_stack_access(), R11, {before})"), pc + 4),
             Op::Load => (format!("stack_load_after(call_stack_access(), R11, {before})"), pc + 4),
             Op::Syscall => unreachable!(),
@@ -315,20 +491,33 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         state_decl(module, &format!("{prefix}_computed_{i}"), "MachineState<CallMemory>".into(), after_expr, false);
         let computed = format!("{prefix}_computed_{i}(gprs, flags, stack)");
         let (memory, memory_proof) = match op {
-            Op::Call(symbol) => certify_call_memory(module, words, prefix, i, &before, rsp, pc, displacement(pc, layout.symbols[symbol])? as u32, None),
+            Op::Call(symbol) => certify_call_memory(module, words, prefix, i, &before, rsp, pc, displacement(pc, layout.symbols[symbol])? as u32, None, None),
             Op::Normal(normal) => (format!("{before}.memory"), format!("sym(normal_memory({}, {before}))", normal.heather_expr().render())),
             Op::Ret => (format!("{before}.memory"), format!("sym(return_memory(call_stack_access(), {before}))")),
-            Op::Store => certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some(inputs[0] ^ inputs[1])),
+            Op::Store => certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some((inputs[0] ^ inputs[1], "R11")), None),
+            Op::StoreArgument => {
+                let (value, proof) = if instances.is_empty() { (inputs[0], None) } else {
+                    let value = proposed_result(&leaf.reflected.result, inputs);
+                    thm(module, &format!("{prefix}_stored_source_result"),
+                        format!("{}({}, {}) = {}", leaf.reflected.source_name, word(inputs[0]), word(inputs[1]), word(value)), "refl".into());
+                    (value, Some(format!("trans({current_instance}_callee_result(gprs, flags, stack), {prefix}_stored_source_result())")))
+                };
+                certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some((value, "Rdi")), proof)
+            },
             Op::Load => (format!("{before}.memory"), "refl".into()),
             _ => unreachable!(),
         };
-        state_decl(module, &format!("{prefix}_memory_same_{i}"), format!("{memory} = {computed}.memory"), memory_proof, true);
+        let direct_normal = matches!(op, Op::Normal(normal) if normal_fields(*normal, &before).is_some());
+        if !direct_normal {
+            state_decl(module, &format!("{prefix}_memory_same_{i}"), format!("{memory} = {computed}.memory"), memory_proof, true);
+        }
         let fields = match op {
             Op::Call(_) => format!("write_gpr(Rsp, {}, {before}.gprs), {before}.flags", word(rsp-8)),
             Op::Ret => format!("write_gpr(Rsp, {}, {before}.gprs), {before}.flags", word(rsp+8)),
-            Op::Store => format!("{before}.gprs, {before}.flags"),
+            Op::Store | Op::StoreArgument => format!("{before}.gprs, {before}.flags"),
             Op::Load => format!("write_gpr(R11, {}, {before}.gprs), {before}.flags", word(inputs[0] ^ inputs[1])),
-            _ => format!("{computed}.gprs, {computed}.flags"),
+            Op::Normal(normal) => normal_fields(*normal, &before).unwrap_or_else(|| format!("{computed}.gprs, {computed}.flags")),
+            _ => unreachable!(),
         };
         state_decl(module, &format!("{prefix}_state_{}", i+1), "MachineState<CallMemory>".into(),
             format!("MachineState({fields}, {}, {memory})", word(next)), false);
@@ -336,7 +525,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         // normalizing the preceding register updates inside every address check.
         let next_rsp = match op {
             Op::Call(_) | Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, .. }) => rsp-8,
-            Op::Ret | Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, .. }) => rsp+8,
+            Op::Ret | Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, .. }) | Op::Normal(Instruction::MovRR { destination: Gpr::Rsp, source: Gpr::R10 }) => rsp+8,
             _ => rsp,
         };
         let read_before = format!("read_gpr(Rsp, {before}.gprs)");
@@ -349,10 +538,20 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             Op::Normal(Instruction::MovRI { destination: Gpr::Rsp, immediate }) => { rhs = format!("bitvec::ofNat(64, {immediate})"); "refl".into() }
             Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, .. }) => { rhs = format!("bitvec::sub(64, {read_before}, bitvec::ofNat(64, 8))"); "refl".into() }
             Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, .. }) => { rhs = format!("bitvec::add(64, {read_before}, bitvec::ofNat(64, 8))"); "refl".into() }
+            Op::Normal(Instruction::MovRR { destination: Gpr::Rsp, source: Gpr::R10 }) => { rhs = format!("read_gpr(R10, {before}.gprs)"); "refl".into() }
             _ => "refl".into(),
         };
+        let write = match op {
+            Op::Normal(instruction) => normal_effect_fields(*instruction, &before).map(|(register, value, _)| (register, value)),
+            Op::Load => Some((Gpr::R11, word(inputs[0] ^ inputs[1]))),
+            _ => None,
+        };
+        let step_proof = if let Some((register, value)) = write {
+            if register == Gpr::Rsp { format!("read_gpr_after_write(Rsp, {value}, {before}.gprs)") }
+            else { format!("read_gpr_after_other_write(Rsp, {}, {value}, {before}.gprs, refl)", register.heather_name()) }
+        } else { step_proof };
         state_decl(module, &format!("{prefix}_rsp_step_{i}"), format!("read_gpr(Rsp, {after}.gprs) = {rhs}"), step_proof, true);
-        let rhs_proof = if i == 0 || matches!(op, Op::Call(_) | Op::Ret) { "refl".into() } else if next_rsp == rsp {
+        let rhs_proof = if i == 0 || matches!(op, Op::Call(_) | Op::Ret | Op::Normal(Instruction::MovRR { destination: Gpr::Rsp, source: Gpr::R10 })) { "refl".into() } else if next_rsp == rsp {
             format!("{prefix}_rsp_{i}(gprs, flags, stack)")
         } else {
             let operation = if next_rsp < rsp { "sub" } else { "add" };
@@ -362,11 +561,11 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         state_decl(module, &format!("{prefix}_rsp_rhs_{i}"), format!("{rhs} = {}", word(next_rsp)), rhs_proof, true);
         state_decl(module, &format!("{prefix}_rsp_{}", i+1), format!("read_gpr(Rsp, {after}.gprs) = {}", word(next_rsp)),
             format!("trans({prefix}_rsp_step_{i}(gprs, flags, stack), {prefix}_rsp_rhs_{i}(gprs, flags, stack))"), true);
-        if matches!(op, Op::Call(_) | Op::Ret | Op::Store | Op::Load) {
-            if matches!(op, Op::Call(_) | Op::Store) {
-                let slot = rsp - if matches!(op, Op::Store) { 0 } else { 8 };
+        if matches!(op, Op::Call(_) | Op::Ret | Op::Store | Op::StoreArgument | Op::Load) {
+            if matches!(op, Op::Call(_) | Op::Store | Op::StoreArgument) {
+                let slot = rsp - if matches!(op, Op::Store | Op::StoreArgument) { 0 } else { 8 };
                 let base = word(slot);
-                let actual_base = if matches!(op, Op::Store) { format!("read_gpr(Rsp, {before}.gprs)") }
+                let actual_base = if matches!(op, Op::Store | Op::StoreArgument) { format!("read_gpr(Rsp, {before}.gprs)") }
                     else { format!("bitvec::sub(64, read_gpr(Rsp, {before}.gprs), bitvec::ofNat(64, 8))") };
                 let mut fields = vec!["canonical := refl".to_string(), format!("end_canonical := j(sym({prefix}_store_offset_{i}_7()), λ address _ => LowCanonical(address), refl)"), "no_wrap := refl".into()];
                 for j in 0..8 {
@@ -402,13 +601,16 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
                     certify_sub(module, words, &format!("{prefix}_negative_offset_{i}"), 0, -(delta as i32 as i64) as u64);
                     certify_sub(module, words, &format!("{prefix}_target_sub_{i}"), pc + 5, -(delta as i32 as i64) as u64);
                     format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ offset => bitvec::add(64, {}, offset), sym({prefix}_negative_offset_{i}())), trans(add_negative(64, {}, {magnitude}), {prefix}_target_sub_{i}()))", word(pc+5), word(pc+5))
-                } else { "refl".into() };
+                } else {
+                    certify_add(module, words, &format!("{prefix}_positive_offset_{i}"), pc+5, delta as u64);
+                    format!("{prefix}_positive_offset_{i}()")
+                };
                 thm(module, &format!("{prefix}_target_add_{i}"), format!("bitvec::add(64, {}, {extended}) = {}", word(pc+5), word(next)), add_proof);
                 state_decl(module, &format!("{prefix}_target_arithmetic_{i}"),
                     format!("{} = call_target({before}.rip, bitvec::ofNat(32, {delta}))", word(next)),
                     format!("sym(trans(cong_fn<BitVec(64), BitVec(64)>(λ pointer => bitvec::add(64, pointer, bitvec::sign_extend(31, 32, bitvec::ofNat(32, {delta}))), {prefix}_store_value_{i}(gprs, flags, stack)), trans(cong_fn<BitVec(64), BitVec(64)>(λ offset => bitvec::add(64, {}, offset), {prefix}_displacement_{i}()), {prefix}_target_add_{i}())))", word(pc+5)), true);
                 format!("trans({prefix}_target_arithmetic_{i}(gprs, flags, stack), sym(call_after_target(call_stack_access(), bitvec::ofNat(32, {delta}), {before})))")
-            } else { certify_return_target(module, words, prefix, i, &before, rsp, next, false) };
+            } else { certify_return_target(module, words, prefix, i, &before, rsp, next, None) };
             state_decl(module, &format!("{prefix}_target_{i}"), format!("{} = {computed}.rip", word(next)), target_proof, true);
             let successor_proof = if let Op::Call(symbol) = op {
                 let delta = displacement(pc, layout.symbols[symbol])? as u32;
@@ -426,17 +628,21 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             let decoded = format!("decoded_canonical({})", normal.heather_expr().render());
             state_decl(module, &format!("{prefix}_target_arithmetic_{i}"),
                 format!("{} = next_rip({before}.rip, {decoded}.length)", word(next)), "refl".into(), true);
-            state_decl(module, &format!("{prefix}_target_{i}"), format!("{} = {computed}.rip", word(next)),
-                format!("trans({prefix}_target_arithmetic_{i}(gprs, flags, stack), sym(execute_normal_advances_rip({decoded}, {before})))"), true);
-            state_decl(module, &format!("{prefix}_successor_{i}"), format!("{after} = {computed}"),
-                format!("machine_rebuild({computed}, {}, {memory}, {prefix}_target_{i}(gprs, flags, stack), {prefix}_memory_same_{i}(gprs, flags, stack))", word(next)), true);
+            let proof = if let Some(proof) = normal_flat_proof(*normal, &before, &word(next), &format!("{prefix}_target_arithmetic_{i}(gprs, flags, stack)")) {
+                proof
+            } else {
+                state_decl(module, &format!("{prefix}_target_{i}"), format!("{} = {computed}.rip", word(next)),
+                    format!("trans({prefix}_target_arithmetic_{i}(gprs, flags, stack), sym(execute_normal_advances_rip({decoded}, {before})))"), true);
+                format!("machine_rebuild({computed}, {}, {memory}, {prefix}_target_{i}(gprs, flags, stack), {prefix}_memory_same_{i}(gprs, flags, stack))", word(next))
+            };
+            state_decl(module, &format!("{prefix}_successor_{i}"), format!("{after} = {computed}"), proof, true);
         }
-        if matches!(op, Op::Store | Op::Load) {
+        if matches!(op, Op::Store | Op::StoreArgument | Op::Load) {
             state_decl(module, &format!("{prefix}_target_{i}"), format!("{} = next_rip({before}.rip, 4)", word(next)), "refl".into(), true);
-            let proof = if matches!(op, Op::Store) {
+            let proof = if matches!(op, Op::Store | Op::StoreArgument) {
                 format!("machine_rebuild({computed}, {}, {memory}, {prefix}_target_{i}(gprs, flags, stack), {prefix}_memory_same_{i}(gprs, flags, stack))", word(next))
             } else {
-                certify_return_target(module, words, prefix, i, &before, rsp, inputs[0] ^ inputs[1], true);
+                certify_return_target(module, words, prefix, i, &before, rsp, inputs[0] ^ inputs[1], Some((&current_instance, twice)));
                 format!("stack_load_flat(call_stack_access(), R11, {before}, {}, {}, sym({prefix}_return_value_{i}(gprs, flags, stack)), {prefix}_target_{i}(gprs, flags, stack))", word(inputs[0] ^ inputs[1]), word(next))
             };
             state_decl(module, &format!("{prefix}_successor_{i}"), format!("{after} = {computed}"), proof, true);
@@ -462,15 +668,24 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         let step = match op {
             Op::Normal(normal) => format!("ordinary_call_step(call_stack_access(), {}, {before}, {after}, {prefix}_successor_{i}(gprs, flags, stack))", normal.heather_expr().render()),
             Op::Call(_) => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_return_canonical_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩⟩"),
-            Op::Store | Op::Load => format!("⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩"),
+            Op::Store | Op::StoreArgument | Op::Load => format!("⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩"),
             Op::Ret => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩"),
             _ => unreachable!(),
         };
         let fetched = certify_fetch(module, words, prefix, i, &format!("{before}.memory"), pc, encoding);
         let fetched = format!("fetched_span_at_state(call_fetch_access(), {before}.memory, {}, {}, call_instruction_bytes({instruction}), {before}, refl, refl, refl, {fetched})", word(pc), bytes(encoding).render());
-        state_decl(module, &format!("{prefix}_step_{i}"),
-            format!("FetchedCallStep(call_fetch_access(), call_stack_access(), {instruction}, {before}, {after})"),
-            format!("⟨{fetched}, {step}⟩"), true);
+        if in_leaf {
+            let allowed = if matches!(op, Op::Ret) {
+                format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), {prefix}_stack_permissions_{i}(gprs, flags, stack)⟩⟩")
+            } else if matches!(op, Op::StoreArgument) { format!("{prefix}_stack_permissions_{i}(gprs, flags, stack)") } else { "trivial".into() };
+            state_decl(module, &format!("{prefix}_leaf_access_{i}"), format!("CallAccessAllowed(call_stack_access(), {instruction}, {before})"), allowed, true);
+            state_decl(module, &format!("{prefix}_leaf_fetch_{i}"),
+                format!("FetchedFrom(call_fetch_access(), {before}.memory, InstructionBytes({before}.rip, call_instruction_bytes({instruction})))"), fetched, true);
+        } else {
+            state_decl(module, &format!("{prefix}_step_{i}"),
+                format!("FetchedCallStep(call_fetch_access(), call_stack_access(), {instruction}, {before}, {after})"),
+                format!("⟨{fetched}, {step}⟩"), true);
+        }
         if matches!(op, Op::Call(_)) {
             state_decl(module, &format!("{prefix}_aligned_call_{i}"),
                 format!("bitvec::take_low(4, 60, read_gpr(Rsp, {before}.gprs)) = bitvec::zero(4)"),
@@ -480,13 +695,16 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             Op::Call(_) => rsp -= 8,
             Op::Ret => rsp += 8,
             Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, .. }) => rsp -= 8,
-            Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, .. }) => rsp += 8,
+            Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, .. }) | Op::Normal(Instruction::MovRR { destination: Gpr::Rsp, source: Gpr::R10 }) => rsp += 8,
             _ => {},
         }
         if matches!(op, Op::Ret) && i == leaf_end {
-            certify_callee_contract(module, words, prefix, inputs, leaf, leaf_prefix, leaf_start, leaf_end, local);
+            current_instance = if twice { format!("{prefix}_call_{leaf_start}") } else { prefix.into() };
+            let values = if instances.is_empty() { leaf_prefix.to_string() } else { format!("{leaf_prefix}_second") };
+            certify_callee_contract(module, words, prefix, &current_instance, &values, leaf, leaf_prefix, leaf_start, leaf_end, local, twice, instances.last().map(|(_, _, name): &(usize, usize, String)| name.as_str()));
+            instances.push((leaf_start, leaf_end, current_instance.clone()));
         }
-        trace.push(instruction.clone()); pc = next;
+        trace.push(instruction.clone()); operations.push(op.clone()); pc = next;
         if trace.len() > 128 { return Err("call trace exceeds the initial bounded profile".into()); }
     }
     let n = trace.len(); let end = state(n);
@@ -495,20 +713,83 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         format!("FetchedCallTrace(call_fetch_access(), call_stack_access(), {prefix}_trace_{n}(), {end}, {end})"), "refl".into(), true);
     for i in (0..n).rev() {
         fun(module, &format!("{prefix}_trace_{i}"), "List<CallInstruction>", format!("Cons({}, {prefix}_trace_{}())", trace[i], i+1));
+    }
+    for i in (0..n).rev() {
+        if instances.iter().any(|(start, end, _)| i > *start && i <= *end) { continue; }
+        let proof = if let Some((_, leaf_end, instance)) = instances.iter().find(|(start, _, _)| *start == i) {
+            format!("call_trace_append(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_code(), {prefix}_trace_{}(), {}, {}, {end}, {instance}_callee_execution(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", leaf_end+1, state(i), state(leaf_end+1), leaf_end+1)
+        } else {
+            format!("call_trace_cons(call_fetch_access(), call_stack_access(), {}, {prefix}_trace_{}(), {}, {}, {end}, {prefix}_step_{i}(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", trace[i], i+1, state(i), state(i+1), i+1)
+        };
         state_decl(module, &format!("{prefix}_execution_{i}"),
             format!("FetchedCallTrace(call_fetch_access(), call_stack_access(), {prefix}_trace_{i}(), {}, {end})", state(i)),
-            format!("call_trace_cons(call_fetch_access(), call_stack_access(), {}, {prefix}_trace_{}(), {}, {}, {end}, {prefix}_step_{i}(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", trace[i], i+1, state(i), state(i+1), i+1), true);
+            proof, true);
     }
     state_decl(module, &format!("{prefix}_loaded_execution"),
         format!("CallImageExecution({prefix}_file(), {prefix}_code(), {prefix}_trace_0(), {}, {end})", state(0)),
         format!("CallImageExecution(image := {prefix}_image(), file_correct := {prefix}_file_correct(), initial_memory := refl, execution := {prefix}_execution_0(gprs, flags, stack))"), true);
     let caller_result = format!("{caller}({}, {})", word(inputs[0]), word(inputs[1]));
-    let status = if local {
+    let source_left = if twice { format!("{}({}, {})", leaf.reflected.source_name, word(inputs[0]), word(inputs[1])) } else { word(inputs[0]) };
+    let result_start = instances.last().expect("callee instance").1 + 1;
+    let last_return = state(result_start);
+    let returned_source = format!("{}({source_left}, {})", leaf.reflected.source_name, word(inputs[1]));
+    let result_proof = if twice {
+        thm(module, &format!("{prefix}_first_source_result"),
+            format!("{leaf_prefix}_second_values()(64, 0) = {source_left}"),
+            format!("{leaf_prefix}_denotes_source({leaf_prefix}_values(), {leaf_prefix}_entry_graph())"));
+        thm(module, &format!("{prefix}_second_source_result"),
+            format!("{}({leaf_prefix}_second_values()(64, 0), {leaf_prefix}_second_values()(64, 1)) = {returned_source}", leaf.reflected.source_name),
+            format!("cong_fn<BitVec(64), BitVec(64)>(λ left => {}(left, {}), {prefix}_first_source_result())", leaf.reflected.source_name, word(inputs[1])));
+        format!("trans({current_instance}_callee_result(gprs, flags, stack), {prefix}_second_source_result())")
+    } else { format!("{current_instance}_callee_result(gprs, flags, stack)") };
+    state_decl(module, &format!("{prefix}_returned_source"),
+        format!("read_gpr(Rax, {last_return}.gprs) = {returned_source}"), result_proof, true);
+    let mut register = "Rax";
+    let mut expression = returned_source.clone();
+    let mut result_fact = format!("{prefix}_returned_source(gprs, flags, stack)");
+    for (i, op) in operations.iter().enumerate().skip(result_start) {
+        let before_read = format!("read_gpr({register}, {}.gprs)", state(i));
+        let xor = matches!(op, Op::Normal(Instruction::XorRR { destination: Gpr::Rax, source: Gpr::R11 }));
+        if matches!(op, Op::Normal(Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax })) { register = "Rdi"; }
+        let rhs = if xor { format!("bitvec::bxor(64, {before_read}, {})", word(inputs[0] ^ inputs[1])) } else { before_read };
+        let rhs_proof = if xor {
+            expression = format!("bitvec::bxor(64, {expression}, {})", word(inputs[0] ^ inputs[1]));
+            format!("cong_fn<BitVec(64), BitVec(64)>(λ value => bitvec::bxor(64, value, {}), {result_fact})", word(inputs[0] ^ inputs[1]))
+        } else { result_fact };
+        let after_read = format!("read_gpr({register}, {}.gprs)", state(i+1));
+        let (written, value) = match op {
+            Op::Load => (Gpr::R11, word(inputs[0] ^ inputs[1])),
+            Op::Ret => (Gpr::Rsp, word(STACK_TOP)),
+            Op::Normal(instruction) => normal_effect_fields(*instruction, &state(i))
+                .map(|(register, value, _)| (register, value)).ok_or("unsupported result-register epilogue")?,
+            _ => return Err("unsupported result-register epilogue".into()),
+        };
+        let step_proof = if written.heather_name() == register {
+            format!("read_gpr_after_write({register}, {value}, {}.gprs)", state(i))
+        } else {
+            format!("read_gpr_after_other_write({register}, {}, {value}, {}.gprs, refl)", written.heather_name(), state(i))
+        };
+        state_decl(module, &format!("{prefix}_result_step_{i}"), format!("{after_read} = {rhs}"), step_proof, true);
+        state_decl(module, &format!("{prefix}_result_rhs_{i}"), format!("{rhs} = {expression}"), rhs_proof, true);
+        state_decl(module, &format!("{prefix}_result_at_{}", i+1), format!("{after_read} = {expression}"),
+            format!("trans({prefix}_result_step_{i}(gprs, flags, stack), {prefix}_result_rhs_{i}(gprs, flags, stack))"), true);
+        result_fact = format!("{prefix}_result_at_{}(gprs, flags, stack)", i+1);
+    }
+    let source_proof = if local {
         thm(module, &format!("{prefix}_saved_value"), format!("bitvec::bxor(64, {}, {}) = {}", word(inputs[0]), word(inputs[1]), word(inputs[0] ^ inputs[1])), "refl".into());
-        format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ value => bitvec::bxor(64, value, {}), {prefix}_callee_contract(gprs, flags, stack).result_correct), trans(cong_fn<BitVec(64), BitVec(64)>(λ saved => bitvec::bxor(64, {}({}, {}), saved), sym({prefix}_saved_value())), sym({prefix}_source_call({}, {}))))", word(inputs[0] ^ inputs[1]), leaf.reflected.source_name, word(inputs[0]), word(inputs[1]), word(inputs[0]), word(inputs[1]))
-    } else { format!("trans({prefix}_callee_contract(gprs, flags, stack).result_correct, sym({prefix}_source_call({}, {})))", word(inputs[0]), word(inputs[1])) };
+        format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ saved => bitvec::bxor(64, {returned_source}, saved), sym({prefix}_saved_value())), sym({prefix}_source_call({}, {})))", word(inputs[0]), word(inputs[1]))
+    } else { format!("sym({prefix}_source_call({}, {}))", word(inputs[0]), word(inputs[1])) };
+    thm(module, &format!("{prefix}_combined_source"), format!("{expression} = {caller_result}"), source_proof);
+    state_decl(module, &format!("{prefix}_exit_status"), format!("read_gpr(Rdi, {end}.gprs) = {caller_result}"),
+        format!("trans({result_fact}, {prefix}_combined_source())"), true);
     state_decl(module, &format!("{prefix}_exit_request"), format!("LinuxExitRequest<CallMemory>({end}, {caller_result})"),
-        format!("LinuxExitRequest(number := refl, status := {status})"), true);
+        format!("LinuxExitRequest(number := refl, status := {prefix}_exit_status(gprs, flags, stack))"), true);
+    if twice {
+        let dead = word(STACK_TOP - 32);
+        let byte = proposed_result(&leaf.reflected.result, inputs) as u8;
+        state_decl(module, &format!("{prefix}_dead_frame_byte"),
+            format!("call_memory_read({end}.memory, {dead}) = Some(elf_byte({byte}))"), "refl".into(), true);
+    }
     let syscall_fetch = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05]);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
         format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), syscall_fetch, true);
@@ -516,31 +797,59 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
     Ok(())
 }
 
-fn certify_callee_contract(module: &mut Module, words: &Words, prefix: &str, inputs: [u64; 2], leaf: &SourceX86Emission,
-    leaf_prefix: &str, leaf_start: usize, leaf_end: usize, local: bool) {
-    let word = |n| words.get(n);
+fn certify_callee_contract(module: &mut Module, words: &Words, prefix: &str, instance: &str, values: &str, leaf: &SourceX86Emission,
+    leaf_prefix: &str, leaf_start: usize, leaf_end: usize, local: bool, frame: bool, previous: Option<&str>) {
     let state = |i| format!("{prefix}_state_{i}(gprs, flags, stack)");
-    let begin = state(leaf_start); let after_leaf = state(leaf_end);
-    // Export the leaf's result through a contract. The caller's result proof
-    // below consumes this field rather than reducing the leaf's source body.
-    let result_agrees = if local {
-        let core = state(leaf_end - 1);
-        state_decl(module, &format!("{prefix}_leaf_core_result_agrees"),
-            format!("read_gpr(Rax, {core}.gprs) = read_gpr(Rax, {leaf_prefix}_after({begin}).gprs)"), "refl".into(), true);
-        format!("trans(xor_r11_preserves_rax({core}), {prefix}_leaf_core_result_agrees(gprs, flags, stack))")
-    } else { "refl".into() };
-    state_decl(module, &format!("{prefix}_leaf_result_agrees"),
-        format!("read_gpr(Rax, {after_leaf}.gprs) = read_gpr(Rax, {leaf_prefix}_after({begin}).gprs)"), result_agrees, true);
-    let result = format!("{}({}, {})", leaf.reflected.source_name, word(inputs[0]), word(inputs[1]));
-    state_decl(module, &format!("{prefix}_callee_result"), format!("read_gpr(Rax, {after_leaf}.gprs) = {result}"),
-        format!("trans({prefix}_leaf_result_agrees(gprs, flags, stack), trans({leaf_prefix}_refines_function_ir({leaf_prefix}_values(), {begin}, refl, refl, {leaf_prefix}_entry_graph()), {leaf_prefix}_denotes_source({leaf_prefix}_values(), {leaf_prefix}_entry_graph())))"), true);
-    let returned = state(leaf_end+1);
-    state_decl(module, &format!("{prefix}_callee_contract"),
-        format!("NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, NoWrites, {begin}, {returned}, {result}, stack_word(call_stack_access(), {begin}.memory, read_gpr(Rsp, {begin}.gprs)))"),
-        format!("NativeIntegerCallContract(result_correct := {prefix}_callee_result(gprs, flags, stack), returned_to := {prefix}_target_{leaf_end}(gprs, flags, stack), stack_restored := refl, memory_effects := writes_only_equal(call_memory_read, NoWrites, {begin}.memory, {returned}.memory, refl), preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl)"), true);
-    state_decl(module, &format!("{prefix}_callee_memory_effects"),
-        format!("WritesOnly(call_memory_read, NoWrites, {begin}.memory, {returned}.memory)"),
-        format!("{prefix}_callee_contract(gprs, flags, stack).memory_effects"), true);
+    let begin = state(leaf_start); let returned = state(leaf_end+1);
+    let count = leaf_end + 1 - leaf_start;
+    let code = summary_instructions(leaf, local && !frame, frame);
+    for j in (0..=count).rev() {
+        let i = leaf_start+j;
+        let before = state(i);
+        let proof = if j == count { "refl".into() } else {
+            format!("call_premises_cons(call_fetch_access(), call_stack_access(), {}, {leaf_prefix}_summary_suffix_{}(), {before}, {}, {returned}, {prefix}_leaf_fetch_{i}(gprs, flags, stack), {prefix}_leaf_access_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack), {instance}_callee_ready_{}(gprs, flags, stack))", code[j], j+1, state(i+1), j+1)
+        };
+        state_decl(module, &format!("{instance}_callee_ready_{j}"),
+            format!("CallPremises(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_suffix_{j}(), {before}, {returned})"), proof, true);
+    }
+    let post = format!("λ before after => {leaf_prefix}_summary_post({values}_values(), before, after)");
+    let left = previous.map_or_else(|| "refl".into(), |name|
+        format!("trans({leaf_prefix}_denotes_source({leaf_prefix}_values(), {leaf_prefix}_entry_graph()), sym({name}_callee_result(gprs, flags, stack)))"));
+    let right = previous.map_or_else(|| "refl".into(), |name| format!("sym({name}_callee_preserved_rsi(gprs, flags, stack))"));
+    let entry = if frame {
+        state_decl(module, &format!("{instance}_callee_return_outside"),
+            format!("WordOutside(bitvec::sub(64, read_gpr(Rsp, {begin}.gprs), bitvec::ofNat(64, 8)), read_gpr(Rsp, {begin}.gprs))"),
+            format!("j(sym({prefix}_rsp_{leaf_start}(gprs, flags, stack)), λ rsp _ => WordOutside(bitvec::sub(64, rsp, bitvec::ofNat(64, 8)), rsp), {prefix}_return_outside())"), true);
+        for j in 0..8 {
+            let address = words.get(STACK_TOP-16+j);
+            state_decl(module, &format!("{instance}_callee_local_outside_{j}"),
+                format!("¬WordPrefixWrites(8, bitvec::sub(64, read_gpr(Rsp, {begin}.gprs), bitvec::ofNat(64, 8)), {address})"),
+                format!("j(sym({prefix}_rsp_{leaf_start}(gprs, flags, stack)), λ rsp _ => ¬WordPrefixWrites(8, bitvec::sub(64, rsp, bitvec::ofNat(64, 8)), {address}), {prefix}_local_outside().byte{j})"), true);
+        }
+        format!("⟨{left}, ⟨{right}, ⟨{values}_entry_graph(), ⟨refl, {instance}_callee_return_outside(gprs, flags, stack)⟩⟩⟩⟩")
+    } else { format!("⟨{left}, ⟨{right}, {values}_entry_graph()⟩⟩") };
+    let footprint = if frame { format!("λ address => WordPrefixWrites(8, bitvec::sub(64, read_gpr(Rsp, {begin}.gprs), bitvec::ofNat(64, 8)), address)") } else { "NoWrites".into() };
+    state_decl(module, &format!("{instance}_callee_applied"),
+        format!("FetchedCallTrace(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_code(), {begin}, {returned}) ∧ {leaf_prefix}_summary_post({values}_values(), {begin}, {returned})"),
+        format!("use_call_summary(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_code(), {post}, {leaf_prefix}_summary({values}_values()), {begin}, {returned}, {entry}, {instance}_callee_ready_0(gprs, flags, stack))"), true);
+    state_decl(module, &format!("{instance}_callee_execution"),
+        format!("FetchedCallTrace(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_code(), {begin}, {returned})"),
+        format!("{instance}_callee_applied(gprs, flags, stack).left"), true);
+    state_decl(module, &format!("{instance}_callee_post"),
+        format!("{leaf_prefix}_summary_post({values}_values(), {begin}, {returned})"),
+        format!("{instance}_callee_applied(gprs, flags, stack).right"), true);
+    state_decl(module, &format!("{instance}_callee_contract"),
+        format!("NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, {footprint}, {begin}, {returned}, {}({values}_values()(64, 0), {values}_values()(64, 1)), stack_word(call_stack_access(), {begin}.memory, read_gpr(Rsp, {begin}.gprs)))", leaf.reflected.source_name),
+        format!("{instance}_callee_post(gprs, flags, stack).left"), true);
+    state_decl(module, &format!("{instance}_callee_preserved_rsi"),
+        format!("read_gpr(Rsi, {returned}.gprs) = read_gpr(Rsi, {begin}.gprs)"),
+        format!("{instance}_callee_post(gprs, flags, stack).right"), true);
+    state_decl(module, &format!("{instance}_callee_result"),
+        format!("read_gpr(Rax, {returned}.gprs) = {}({values}_values()(64, 0), {values}_values()(64, 1))", leaf.reflected.source_name),
+        format!("{instance}_callee_contract(gprs, flags, stack).result_correct"), true);
+    state_decl(module, &format!("{instance}_callee_memory_effects"),
+        format!("WritesOnly(call_memory_read, {footprint}, {begin}.memory, {returned}.memory)"),
+        format!("{instance}_callee_contract(gprs, flags, stack).memory_effects"), true);
 }
 
 #[cfg(test)]
@@ -572,6 +881,21 @@ mod tests {
                 name: name.into(), path: PathBuf::from(name), src: src.into(),
             }).unwrap();
         }
+        let normal_forms = [
+            Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi },
+            Instruction::MovRI { destination: Gpr::Rax, immediate: 17 },
+            Instruction::AddRR { destination: Gpr::Rax, source: Gpr::Rsi },
+            Instruction::SubRR { destination: Gpr::Rax, source: Gpr::Rsi },
+            Instruction::AndRR { destination: Gpr::Rax, source: Gpr::Rsi },
+            Instruction::OrRR { destination: Gpr::Rax, source: Gpr::Rsi },
+            Instruction::XorRR { destination: Gpr::Rax, source: Gpr::Rsi },
+        ];
+        for (i, instruction) in normal_forms.into_iter().enumerate() {
+            let decoded = format!("decoded_canonical({})", instruction.heather_expr().render());
+            let fields = normal_fields(instruction, "before").unwrap();
+            let source = format!("import x86_64; import bitvec; theorem fields<M>(before: MachineState<M>): MachineState({fields}, next_rip(before.rip, {decoded}.length), before.memory) = execute_normal({decoded}, before) {{ refl }}");
+            elab.clone().elab_module_source(&format!("normal_fields_{i}"), &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        }
         let forwarding = "import bitvec; fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::add(64, left, right) } fn forward(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { leaf(left, right) } fn swapped(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { leaf(right, left) } fn expression(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::add(64, leaf(left, right), right) }";
         elab.elab_module_source("forwarding", forwarding).unwrap_or_else(|e| panic!("{}", e.render(forwarding)));
         assert_eq!(function_ir_source::reflect_forwarded_call(&elab, "forwarding::forward").unwrap(), "forwarding::leaf");
@@ -581,9 +905,110 @@ mod tests {
         let local_source = "import bitvec; import forwarding; fn local(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::bxor(64, forwarding::leaf(left, right), bitvec::bxor(64, left, right)) }";
         elab.elab_module_source("local_wrapper", local_source).unwrap_or_else(|e| panic!("{}", e.render(local_source)));
         assert_eq!(function_ir_source::reflect_call_wrapper(&elab, "local_wrapper::local").unwrap(), ("forwarding::leaf".into(), true));
+        let nested = "import bitvec; import forwarding; fn twice(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::bxor(64, forwarding::leaf(forwarding::leaf(left, right), right), bitvec::bxor(64, left, right)) } fn wrong(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::bxor(64, forwarding::leaf(forwarding::leaf(right, left), right), bitvec::bxor(64, left, right)) }";
+        elab.elab_module_source("nested_wrapper", nested).unwrap_or_else(|e| panic!("{}", e.render(nested)));
+        assert_eq!(function_ir_source::reflect_call_plan(&elab, "nested_wrapper::twice").unwrap(), ("forwarding::leaf".into(), true, true));
+        assert!(function_ir_source::reflect_call_plan(&elab, "nested_wrapper::wrong").is_err());
+        let leaf = function_ir_source::generate_elaborated_x86(&elab, "summary_leaf", "forwarding::leaf",
+            [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11], Gpr::Rax).unwrap();
+        let mut summary = Module::default();
+        for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block", "x86_64_calls", "x86_64_call_frame", "x86_64_call_summary", "elf64_calls", "bitvec", "list", "logic", "bool", "option"] {
+            summary.raw(format!("import {name};"));
+        }
+        summary.raw(leaf.text.clone());
+        emit_leaf_summary(&mut summary, "summary_leaf", &leaf, false, true);
+        let source = summary.render();
+        elab.elab_module_source("summary_check", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        let stale = "import list; import summary_check; import function_ir; import x86_64; import x86_64_calls; import x86_64_call_summary; import elf64_calls; fn stale(values: Valuation()) -> CallSummary<CallMemory>(call_stack_access(), [Ordinary(MovRR(Rax, Rsi)), NearReturn], λ before after => summary_leaf_summary_post(values, before, after)) { summary_leaf_summary(values) }";
+        let error = elab.clone().elab_module_source("stale_summary", stale).expect_err("summary accepted for different code");
+        assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(stale));
+        for (name, declaration) in [
+            ("wrong_summary_interface", "fn bad(values: Valuation()) -> CallSummary<CallMemory>(call_stack_access(), summary_leaf_summary_code(), λ before after => read_gpr(Rax, after.gprs) = bitvec::zero(64)) { summary_leaf_summary(values) }"),
+            ("missing_summary_fetch", "theorem bad(before: MachineState<CallMemory>): CallPremises(call_fetch_access(), call_stack_access(), [NearReturn], before, before) { trivial }"),
+        ] {
+            let source = format!("import list; import bitvec; import logic; import summary_check; import function_ir; import x86_64; import x86_64_calls; import x86_64_call_summary; import elf64_calls; {declaration}");
+            let error = elab.clone().elab_module_source(name, &source).expect_err("accepted an incompatible summary premise");
+            let expected = if name == "missing_summary_fetch" { error.render(&source).contains("`trivial` proves `True`") }
+                else { format!("{error:?}").contains("NotConvertible") };
+            assert!(expected, "{}", error.render(&source));
+        }
+        for (name, final_state, valid) in [("placed_successor", "call_next(call_stack_access(), Ordinary(MovRR(Rax, Rsi)), before)", true), ("invented_successor", "before", false)] {
+            let source = format!("import list; import logic; import x86_64; import x86_64_calls; import x86_64_fetch; import x86_64_call_summary; import elf64_calls; theorem check(before: MachineState<CallMemory>, fetched: FetchedFrom(call_fetch_access(), before.memory, InstructionBytes(before.rip, call_instruction_bytes(Ordinary(MovRR(Rax, Rsi)))))): CallPremises(call_fetch_access(), call_stack_access(), [Ordinary(MovRR(Rax, Rsi))], before, {final_state}) {{ ⟨{final_state}, ⟨fetched, ⟨trivial, ⟨refl, refl⟩⟩⟩⟩ }}");
+            let checked = elab.clone().elab_module_source(name, &source);
+            if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
+            else { let error = checked.expect_err("accepted an invented callee state"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
+        }
         let imports = "import x86_64; import x86_64_call_frame; import x86_64_calls; import elf64_calls; import bitvec; import bool; import list; import logic; import option;";
+        // Long instruction near the end of a file, with arbitrary stack bytes.
+        // Corrupting the requested byte must fail the file-observation proof.
+        let actual = super::super::encode(&[Instruction::MovRI { destination: Gpr::Rax, immediate: 0x0123456789abcdef }]);
+        let mut file = vec![0; 512]; file[496..496+actual.len()].copy_from_slice(&actual);
+        let words = Words { prefix: "fetch_fixture".into(), values: Default::default() };
+        let mut fetch_cases = Vec::new();
+        for valid in [true, false] {
+            let requested = if valid { actual.clone() } else { vec![actual[0] ^ 1] };
+            let mut proofs = Module::default();
+            certify_fetch(&mut proofs, &words, "fetch_fixture", 0, "memory", 0x4001f0, &requested);
+            fetch_cases.push((valid, proofs));
+        }
+        let mut fixture = Module::default(); fixture.raw(format!("{imports} import elf64;"));
+        fun(&mut fixture, "fetch_fixture_file", "List<BitVec(8)>", bytes(&file).render());
+        for value in words.values.into_inner() {
+            fun(&mut fixture, &format!("fetch_fixture_word_{value:x}"), "BitVec(64)", word(value));
+        }
+        let source = fixture.render();
+        elab.elab_module_source("file_fixture", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        for (valid, proofs) in fetch_cases {
+            let mut module = Module::default();
+            module.raw(format!("{imports} import x86_64_fetch; import elf64; import file_fixture;"));
+            module.extend(proofs);
+            let source = module.render();
+            let checked = elab.clone().elab_module_source(if valid { "file_fetch" } else { "wrong_file_fetch" }, &source);
+            if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
+            else { let error = checked.expect_err("accepted a corrupted file fetch"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
+        }
+        let offsets = Words { prefix: "offset_literal".into(), values: Default::default() };
+        let mut offset_proofs = Module::default();
+        certify_add(&mut offset_proofs, &offsets, "forward_offset", 0x4000fd, 112);
+        certify_add(&mut offset_proofs, &offsets, "wrapped_word_add", u64::MAX-2, 4);
+        let mut offset_module = Module::default();
+        offset_module.raw(imports);
+        for value in offsets.values.into_inner() {
+            fun(&mut offset_module, &format!("offset_literal_word_{value:x}"), "BitVec(64)", word(value));
+        }
+        offset_module.extend(offset_proofs);
+        let source = offset_module.render();
+        elab.elab_module_source("offset_checks", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        let source = format!("{imports} import offset_checks; theorem wrong_target(): bitvec::add(64, {}, {}) = {} {{ forward_offset() }}", word(0x4000fd), word(112), word(0x40016e));
+        let error = elab.clone().elab_module_source("wrong_forward_target", &source).expect_err("accepted the wrong positive displacement result");
+        assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source));
         let source = format!("{imports}\nfn start(rsp: BitVec(64)) -> MachineState<CallMemory> {{ MachineState(write_gpr(Rsp, rsp, zero_gprs()), clear_flags(), {}, CallMemory([], λ address => bitvec::ofNat(8, 0))) }}", word(0x400100));
         elab.elab_module_source("call_test", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        for (name, protected, valid) in [("private_word", 0x401fe8, true), ("overlapping_word", 0x401fe0, false)] {
+            let mut proofs = Module::default();
+            let words = Words { prefix: name.into(), values: Default::default() };
+            certify_word_outside(&mut proofs, &words, "outside", 0x401fe0, protected);
+            let mut declarations = Module::default();
+            declarations.raw(imports);
+            for value in words.values.into_inner() {
+                fun(&mut declarations, &format!("{name}_word_{value:x}"), "BitVec(64)", word(value));
+            }
+            declarations.extend(proofs);
+            let slot = word(0x401fe0); let protected = word(protected);
+            let changed_value = word(0x0700000000000000);
+            let last = format!("bitvec::add(64, {slot}, bitvec::ofNat(64, 7))");
+            thm(&mut declarations, "changed",
+                format!("word_write_8(call_stack_access(), {changed_value}, CallMemory([], λ address => bitvec::zero(8)), {slot}).stack({last}) = bitvec::ofNat(8, 7)"),
+                format!("stack_write_same(word_write_7(call_stack_access(), {changed_value}, CallMemory([], λ address => bitvec::zero(8)), {slot}), {last}, imm_byte7({changed_value}))"));
+            declarations.declaration(Declaration::theorem("preserved",
+                Expr::raw(format!("stack_word(call_stack_access(), word_write_8(call_stack_access(), bitvec::ofNat(64, 7), CallMemory([], stack), {slot}), {protected}) = stack_word(call_stack_access(), CallMemory([], stack), {protected})")),
+                Block::expression(Expr::raw(format!("stored_word_preserves_return(CallMemory([], stack), {slot}, bitvec::ofNat(64, 7), {protected}, outside())"))))
+                .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
+            let source = declarations.render();
+            let checked = elab.clone().elab_module_source(name, &source);
+            if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
+            else { let error = checked.expect_err("accepted a write over the protected return word"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
+        }
         // Test the exact access/underflow premises required by CallStep independently.
         for (name, claim, valid) in [
             ("writable_return_slot", format!("call_stack_access().writable({}) = True", word(0x401ff8)), true),

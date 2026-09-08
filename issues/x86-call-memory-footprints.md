@@ -3,7 +3,7 @@ title: Specify caller and callee memory footprints across calls
 status: open
 labels: [compiler,x86,memory,proofs]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 ## Scope
@@ -46,3 +46,5 @@ separation logic or an allocator.
 
 - 2026-09-07: Implemented WritesOnly over a generic observable read carrier, union composition, footprint inclusion, protected reads, and CallMemoryPolicy with disjoint private/shared writes. NativeIntegerCallContract now carries memory effects instead of whole-memory equality; the ELF instance preserves Option byte observations. Focused controls cover neutral memory, changed private bytes, combined shared effects, overlapping-policy rejection, protected live/return bytes, and missing RSP restoration. Generic frame allocation/release and extent/aliasing interfaces remain follow-up scope.
 - 2026-09-07: Validated the migrated contract and live-local customer with the full fresh-native-cache suite: 2,490 passed, 0 failed, 5 ignored. [[x86-caller-stack-locals]] is complete; this issue retains generic frame allocation/release and extent/aliasing obligations.
+
+- 2026-09-08: [[x86-reusable-callee-certificates]] adds a running two-call customer whose callee writes its own eight-byte frame and leaves the dead bytes changed. Generic frame allocation/release and extent/aliasing interfaces remain here.

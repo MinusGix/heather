@@ -1,9 +1,9 @@
 ---
 title: Compose reusable callee certificates across inputs and placements
-status: open
+status: closed
 labels: [compiler,x86,proofs]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 ## Scope
@@ -38,3 +38,9 @@ summaries while continuing to check actual bytes and resolved references.
 - [[named-abi-contracts]] owns convention identities and obligations.
 - [[x86-symbolic-fragment-layout]] owns placement/relocation checks.
 - [[runtime-compile-opt-in]] owns instance eligibility and artifact invalidation.
+
+## Log
+
+- 2026-09-07: Implemented a generic CallSummary/CallPremises boundary and fetched-trace composition. The producer emits a neutral-state source/contract summary once and uses it at two placements with distinct valuations, including explicit RSI preservation. Added a private-frame store to exercise memory effects. Focused generic checks pass; executable integration is being debugged under unchanged resource limits.
+
+- 2026-09-08: The two-placement executable passes under unchanged 4 GiB / 300 CPU-second limits, exits 3 for inputs 21 and 1, and certifies the retained caller local, restored RSP, and dead private byte 22. One neutral-state source/ABI summary serves both instances; concrete successor, fetch, and access witnesses are connected by generic composition lemmas. Ordinary field layouts, register preservation, and file-byte observations use reusable lemmas to avoid repeated whole-state conversion. Details and validation controls are in `docs/x86-64-call-summaries.md`; final plain `scripts/test` passed: 2491 passed, 0 failed, 5 ignored. The new integration passed again in the full run (269.62 seconds reported). Issue and whitespace checks are clean. General frame allocation remains owned by [[x86-call-memory-footprints]], and broader relocation forms by [[x86-symbolic-fragment-layout]].

@@ -39,6 +39,7 @@ const SUPPORT: &[(&str, &str)] = &[
     ("elf64_load", include_str!("../../../lib/elf64_load.hthr")),
     ("x86_64_calls", include_str!("../../../lib/std/arch/x86_64/calls.hthr")),
     ("x86_64_call_frame", include_str!("../../../lib/std/arch/x86_64/call_frame.hthr")),
+    ("x86_64_call_summary", include_str!("../../../lib/std/arch/x86_64/call_summary.hthr")),
     ("elf64_calls", include_str!("../../../lib/elf64_calls.hthr")),
     ("linux_x86_64_fetch", include_str!("../../../lib/linux_x86_64_fetch.hthr")),
 ];

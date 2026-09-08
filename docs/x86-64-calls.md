@@ -4,7 +4,9 @@
 compiles a forwarding caller and an arithmetic leaf to distinct code fragments.
 The forwarding source caller has two parameters and returns `leaf(left, right)`
 with its original arguments in order. The [live-local extension](x86-64-call-frames.md)
-also supports `leaf(left, right) XOR (left XOR right)`. The leaf supports the existing straight-line
+also supports `leaf(left, right) XOR (left XOR right)`. The
+[reusable-summary extension](x86-64-call-summaries.md) supports two calls with
+a live caller local and a callee-owned frame. The leaf supports the existing straight-line
 BitVec(64) arithmetic fragment. Both source identities come from elaborated
 terms; the certificate checks the caller/callee equation against the source.
 `--callee` explicitly opts that additional function into this initial driver.
@@ -31,10 +33,11 @@ processing. PT_GNU_STACK still requests a non-executable process stack.
 RSP is 16-byte aligned before each CALL. The entry's return address occupies
 0x401ff8–0x401fff. The wrapper reserves eight bytes for alignment, then the
 leaf's return address occupies 0x401fe8–0x401fef. The wrapper releases its slot
-before returning; the final RSP is 0x402000. No local values or spills inhabit
-the alignment slot. More general wrappers, nested source-call graphs, recursion,
-indirect calls, variadic functions, locals, and spills are rejected or outside
-this initial source fragment.
+before returning; the final RSP is 0x402000. The live-local extension uses
+the alignment slot for a value retained across calls. The two-call extension
+gives the leaf its own eight-byte slot below its return address. General call
+graphs, recursion, indirect calls, variadic functions, and arbitrary locals or
+spills remain outside the supported source fragment.
 
 ## Checked boundary
 
@@ -53,12 +56,15 @@ with the stack page. The certificate connects the emitted ELF header and code
 to the restricted image model, checks each fetched instruction against those
 bytes, and follows the execution order through calls and returns. The leaf
 exports a result/return/RSP/memory-effect/preserved-register contract; the caller's
-result proof uses that contract field. Fetch and execution proofs still cover
-the leaf instructions individually.
+result proof uses that contract field. A reusable summary now proves the
+leaf postcondition over arbitrary entry states and valuations. Each call site
+still supplies actual per-instruction fetch/access evidence and checked state
+equalities; summary execution is composed into the surrounding trace.
 
 The certificate names literal intermediate addresses and individual stack-byte
 writes and reads, then joins them with equality proofs. Backward CALL targets
-use a proved modular-add/subtract law and small literal decrement steps; directly
+use a proved modular-add/subtract law and small literal decrement steps; forward
+targets use small increment steps. Directly
 normalizing addition by a sign-extended negative displacement would demand an
 enormous unsigned iteration. This staging adds no axioms or kernel rules.
 

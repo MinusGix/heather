@@ -338,6 +338,14 @@ pub fn reflect_forwarded_call(elaborator: &Elaborator, source_name: &str) -> Res
 /// Bounded frame customer: caller = leaf(left, right) XOR (left XOR right).
 /// The producer saves the second expression before the call and reloads it.
 pub fn reflect_call_wrapper(elaborator: &Elaborator, source_name: &str) -> Result<(String, bool), SourceError> {
+    let (callee, local, twice) = reflect_call_plan(elaborator, source_name)?;
+    if twice { return unsupported("expected a single-call wrapper"); }
+    Ok((callee, local))
+}
+
+/// The two-call slice threads the first result into the second call's left
+/// argument, retaining the original right argument and caller XOR local.
+pub fn reflect_call_plan(elaborator: &Elaborator, source_name: &str) -> Result<(String, bool, bool), SourceError> {
     let caller = elaborator.global_abs(source_name)
         .ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source_name}`")))?;
     let (ty, body) = elaborator.global_body(source_name)
@@ -363,13 +371,21 @@ pub fn reflect_call_wrapper(elaborator: &Elaborator, source_name: &str) -> Resul
         saved_local = true;
     }
     let Term::GlobalTm { var, .. } = head else { return unsupported("caller must directly call one resolved function"); };
-    if args.len() != 2 || !matches!(args[0], Term::Var(LocalVar(1))) || !matches!(args[1], Term::Var(LocalVar(0))) {
-        return unsupported("initial call wrapper must forward its two arguments unchanged; expressions, spills, and recursion are unsupported");
+    if args.len() != 2 || !matches!(args[1], Term::Var(LocalVar(0))) {
+        return unsupported("call wrapper must retain its original right argument");
+    }
+    let twice = !matches!(args[0], Term::Var(LocalVar(1)));
+    if twice {
+        let (inner, values) = application_spine(args[0]);
+        if !saved_local || abs(inner) != abs(head) || values.len() != 2
+            || !matches!(values[0], Term::Var(LocalVar(1))) || !matches!(values[1], Term::Var(LocalVar(0))) {
+            return unsupported("two-call wrapper requires leaf(leaf(left, right), right) XOR (left XOR right)");
+        }
     }
     let callee = caller.checked_sub(1 + var.0 as usize)
         .ok_or_else(|| SourceError::Unsupported("callee escapes source scope".into()))?;
     elaborator.global_qualified_name_at(callee)
-        .map(|name| (name, saved_local))
+        .map(|name| (name, saved_local, twice))
         .ok_or_else(|| SourceError::Unsupported("callee has no qualified identity".into()))
 }
 

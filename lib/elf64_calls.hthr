@@ -51,13 +51,41 @@ fn call_memory_write(memory: CallMemory, address: BitVec(64), byte: BitVec(8)) �
             False => memory.stack(query),
         })
 }
+fn stack_observation(memory: CallMemory, address: BitVec(64)) → BitVec(8) { memory.stack(address) }
 fn call_stack_access() → StackAccess<CallMemory> {
-    StackAccess(λ memory address => memory.stack(address), call_memory_write,
+    StackAccess(stack_observation, call_memory_write,
         stack_page, stack_page)
 }
 fn call_fetch_access() → FetchAccess<CallMemory> {
     FetchAccess(call_memory_read, λ memory address => static_elf64_executable(memory.file, address))
 }
+// A file-backed byte establishes both RX permission and the observable byte.
+// Derive these together instead of reducing the same file lookup twice.
+theorem call_file_observation(memory: CallMemory, address: BitVec(64), byte: BitVec(8),
+    present: static_elf64_read(memory.file, address) = Some(byte)):
+    call_fetch_access().executable(memory, address) = True ∧
+    call_fetch_access().read_byte(memory, address) = Some(byte) {
+    j(sym(present), λ value _ =>
+        (match value as λ _ => Bool { None => False, Some(_) => True }) = True ∧
+        call_read_choice(value, stack_page(address), memory.stack(address)) = Some(byte), ⟨refl, refl⟩)
+}
+theorem call_file_fetch_one(memory: CallMemory, address: BitVec(64), byte: BitVec(8),
+    present: static_elf64_read(memory.file, address) = Some(byte)):
+    FetchedFrom(call_fetch_access(), memory, InstructionBytes(address, [byte])) {
+    let observed = call_file_observation(memory, address, byte, present);
+    fetch_span_one(call_fetch_access(), memory, address, byte, observed.left, observed.right)
+}
+theorem call_file_fetch_more(memory: CallMemory, address, next: BitVec(64), byte, next_byte: BitVec(8), rest: List<BitVec(8)>,
+    present: static_elf64_read(memory.file, address) = Some(byte),
+    no_wrap: bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 1)) = False,
+    next_correct: next_rip(address, 1) = next,
+    tail: FetchedFrom(call_fetch_access(), memory, InstructionBytes(next, Cons(next_byte, rest)))):
+    FetchedFrom(call_fetch_access(), memory, InstructionBytes(address, Cons(byte, Cons(next_byte, rest)))) {
+    let observed = call_file_observation(memory, address, byte, present);
+    fetch_span_more(call_fetch_access(), memory, address, next, byte, next_byte, rest,
+        observed.left, observed.right, no_wrap, next_correct, tail)
+}
+
 fn call_initial(file: List<BitVec(8)>, gprs: Gprs, flags: Flags,
     stack: BitVec(64) → BitVec(8)) → MachineState<CallMemory> {
     MachineState(gprs, flags, bitvec::ofNat(64, 0x4000e8), CallMemory(file, stack))
@@ -99,6 +127,11 @@ theorem stack_write_away(memory: CallMemory, pointer, address: BitVec(64), byte:
     j(sym(different), λ decision _ =>
         (match decision { True => byte, False => memory.stack(address) }) = memory.stack(address), refl)
 }
+theorem stack_write_same(memory: CallMemory, pointer: BitVec(64), byte: BitVec(8)):
+    call_memory_write(memory, pointer, byte).stack(pointer) = byte {
+    let same: (is_zero_bits(64, bitvec::bxor(64, pointer, pointer)) = True) = trans<Bool>(cong_fn<BitVec(64), Bool>(λ value => is_zero_bits(64, value), bitvec::xor_self(64, pointer)), refl);
+    j(sym(same), λ decision _ => (match decision { True => byte, False => memory.stack(pointer) }) = byte, refl)
+}
 theorem memory_write_away(memory: CallMemory, pointer, address: BitVec(64), byte: BitVec(8),
     different: is_zero_bits(64, bitvec::bxor(64, pointer, address)) = False):
     call_memory_read(call_memory_write(memory, pointer, byte), address) = call_memory_read(memory, address) {
@@ -114,4 +147,200 @@ theorem memory_write_effect(memory: CallMemory, pointer: BitVec(64), byte: BitVe
 
 fn call_read_value(byte: Option<BitVec(8)>) → BitVec(8) {
     match byte { Some(value) => value, None => bitvec::zero(8) }
+}
+
+// Exact byte footprint of a canonical little-endian word store.
+fn WordPrefixWrites(count: Nat, pointer, address: BitVec(64)) → Type {
+    match count {
+        Zero => False,
+        Succ(rest) => WordPrefixWrites(rest, pointer, address) ∨
+            ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, rest)), address),
+    }
+}
+theorem byte_write_excluded(pointer, address: BitVec(64),
+    different: is_zero_bits(64, bitvec::bxor(64, pointer, address)) = False): ¬ByteWrite(pointer, address) {
+    λ hit => absurd(trans<Bool>(sym(hit), different))
+}
+theorem word_prefix_excluded(count: Nat, pointer, address: BitVec(64),
+    previous: ¬WordPrefixWrites(count, pointer, address),
+    last: ¬ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, count)), address)):
+    ¬WordPrefixWrites(Succ(count), pointer, address) {
+    λ hit => match hit { Inl(old) => previous(old), Inr(byte) => last(byte) }
+}
+theorem stack_byte_write_effect(memory: CallMemory, pointer: BitVec(64), byte: BitVec(8)):
+    WritesOnly(stack_observation, ByteWrite(pointer), memory, call_memory_write(memory, pointer, byte)) {
+    λ address outside => stack_write_away(memory, pointer, address, byte,
+        not_true_is_false(is_zero_bits(64, bitvec::bxor(64, pointer, address)), outside))
+}
+theorem word_memory_effect_0(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(0, pointer, address), memory, word_write_0(call_stack_access(), value, memory, pointer)) {
+    writes_only_equal(call_memory_read, λ address => WordPrefixWrites(0, pointer, address), memory, memory, refl)
+}
+theorem word_memory_effect_1(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(1, pointer, address), memory, word_write_1(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(0, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 0))), memory, word_write_0(call_stack_access(), value, memory, pointer), word_write_1(call_stack_access(), value, memory, pointer), word_memory_effect_0(memory, pointer, value), memory_write_effect(word_write_0(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 0)), imm_byte0(value)))
+}
+theorem word_memory_effect_2(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(2, pointer, address), memory, word_write_2(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(1, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 1))), memory, word_write_1(call_stack_access(), value, memory, pointer), word_write_2(call_stack_access(), value, memory, pointer), word_memory_effect_1(memory, pointer, value), memory_write_effect(word_write_1(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 1)), imm_byte1(value)))
+}
+theorem word_memory_effect_3(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(3, pointer, address), memory, word_write_3(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(2, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 2))), memory, word_write_2(call_stack_access(), value, memory, pointer), word_write_3(call_stack_access(), value, memory, pointer), word_memory_effect_2(memory, pointer, value), memory_write_effect(word_write_2(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 2)), imm_byte2(value)))
+}
+theorem word_memory_effect_4(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(4, pointer, address), memory, word_write_4(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(3, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 3))), memory, word_write_3(call_stack_access(), value, memory, pointer), word_write_4(call_stack_access(), value, memory, pointer), word_memory_effect_3(memory, pointer, value), memory_write_effect(word_write_3(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 3)), imm_byte3(value)))
+}
+theorem word_memory_effect_5(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(5, pointer, address), memory, word_write_5(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(4, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 4))), memory, word_write_4(call_stack_access(), value, memory, pointer), word_write_5(call_stack_access(), value, memory, pointer), word_memory_effect_4(memory, pointer, value), memory_write_effect(word_write_4(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 4)), imm_byte4(value)))
+}
+theorem word_memory_effect_6(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(6, pointer, address), memory, word_write_6(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(5, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 5))), memory, word_write_5(call_stack_access(), value, memory, pointer), word_write_6(call_stack_access(), value, memory, pointer), word_memory_effect_5(memory, pointer, value), memory_write_effect(word_write_5(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 5)), imm_byte5(value)))
+}
+theorem word_memory_effect_7(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(7, pointer, address), memory, word_write_7(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(6, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 6))), memory, word_write_6(call_stack_access(), value, memory, pointer), word_write_7(call_stack_access(), value, memory, pointer), word_memory_effect_6(memory, pointer, value), memory_write_effect(word_write_6(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 6)), imm_byte6(value)))
+}
+theorem word_memory_effect_8(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(call_memory_read, λ address => WordPrefixWrites(8, pointer, address), memory, word_write_8(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(call_memory_read, λ address => WordPrefixWrites(7, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 7))), memory, word_write_7(call_stack_access(), value, memory, pointer), word_write_8(call_stack_access(), value, memory, pointer), word_memory_effect_7(memory, pointer, value), memory_write_effect(word_write_7(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 7)), imm_byte7(value)))
+}
+theorem word_stack_effect_0(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(0, pointer, address), memory, word_write_0(call_stack_access(), value, memory, pointer)) {
+    writes_only_equal(stack_observation, λ address => WordPrefixWrites(0, pointer, address), memory, memory, refl)
+}
+theorem word_stack_effect_1(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(1, pointer, address), memory, word_write_1(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(0, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 0))), memory, word_write_0(call_stack_access(), value, memory, pointer), word_write_1(call_stack_access(), value, memory, pointer), word_stack_effect_0(memory, pointer, value), stack_byte_write_effect(word_write_0(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 0)), imm_byte0(value)))
+}
+theorem word_stack_effect_2(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(2, pointer, address), memory, word_write_2(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(1, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 1))), memory, word_write_1(call_stack_access(), value, memory, pointer), word_write_2(call_stack_access(), value, memory, pointer), word_stack_effect_1(memory, pointer, value), stack_byte_write_effect(word_write_1(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 1)), imm_byte1(value)))
+}
+theorem word_stack_effect_3(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(3, pointer, address), memory, word_write_3(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(2, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 2))), memory, word_write_2(call_stack_access(), value, memory, pointer), word_write_3(call_stack_access(), value, memory, pointer), word_stack_effect_2(memory, pointer, value), stack_byte_write_effect(word_write_2(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 2)), imm_byte2(value)))
+}
+theorem word_stack_effect_4(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(4, pointer, address), memory, word_write_4(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(3, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 3))), memory, word_write_3(call_stack_access(), value, memory, pointer), word_write_4(call_stack_access(), value, memory, pointer), word_stack_effect_3(memory, pointer, value), stack_byte_write_effect(word_write_3(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 3)), imm_byte3(value)))
+}
+theorem word_stack_effect_5(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(5, pointer, address), memory, word_write_5(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(4, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 4))), memory, word_write_4(call_stack_access(), value, memory, pointer), word_write_5(call_stack_access(), value, memory, pointer), word_stack_effect_4(memory, pointer, value), stack_byte_write_effect(word_write_4(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 4)), imm_byte4(value)))
+}
+theorem word_stack_effect_6(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(6, pointer, address), memory, word_write_6(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(5, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 5))), memory, word_write_5(call_stack_access(), value, memory, pointer), word_write_6(call_stack_access(), value, memory, pointer), word_stack_effect_5(memory, pointer, value), stack_byte_write_effect(word_write_5(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 5)), imm_byte5(value)))
+}
+theorem word_stack_effect_7(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(7, pointer, address), memory, word_write_7(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(6, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 6))), memory, word_write_6(call_stack_access(), value, memory, pointer), word_write_7(call_stack_access(), value, memory, pointer), word_stack_effect_6(memory, pointer, value), stack_byte_write_effect(word_write_6(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 6)), imm_byte6(value)))
+}
+theorem word_stack_effect_8(memory: CallMemory, pointer, value: BitVec(64)):
+    WritesOnly(stack_observation, λ address => WordPrefixWrites(8, pointer, address), memory, word_write_8(call_stack_access(), value, memory, pointer)) {
+    writes_only_compose(stack_observation, λ address => WordPrefixWrites(7, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 7))), memory, word_write_7(call_stack_access(), value, memory, pointer), word_write_8(call_stack_access(), value, memory, pointer), word_stack_effect_7(memory, pointer, value), stack_byte_write_effect(word_write_7(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 7)), imm_byte7(value)))
+}
+
+record WordOutside(written, protected: BitVec(64)) {
+    byte0: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 0))),
+    byte1: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 1))),
+    byte2: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 2))),
+    byte3: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 3))),
+    byte4: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 4))),
+    byte5: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 5))),
+    byte6: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 6))),
+    byte7: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 7))),
+}
+theorem stack_word_agrees(access: StackAccess<CallMemory>, before, after: CallMemory, pointer: BitVec(64),
+    byte0: access.read(after, pointer) = access.read(before, pointer),
+    byte1: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 1))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+    byte2: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 2))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+    byte3: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 3))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+    byte4: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 4))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+    byte5: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+    byte6: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+    byte7: access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7))) = access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))):
+    stack_word(access, after, pointer) = stack_word(access, before, pointer) {
+    trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte0), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte1), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte2), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte3), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 3))), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte4), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 4))), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 6))),
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte5), trans<BitVec(64)>(
+        cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 5))), byte,
+            access.read(after, bitvec::add(64, pointer, bitvec::ofNat(64, 7)))), byte6), cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(
+            access.read(before, pointer),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 1))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 2))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 3))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 4))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 5))),
+            access.read(before, bitvec::add(64, pointer, bitvec::ofNat(64, 6))), byte), byte7))))))))
+}
+theorem stored_word_preserves_return(memory: CallMemory, pointer, value, protected: BitVec(64), outside: WordOutside(pointer, protected)):
+    stack_word(call_stack_access(), word_write_8(call_stack_access(), value, memory, pointer), protected) =
+    stack_word(call_stack_access(), memory, protected) {
+    stack_word_agrees(call_stack_access(), memory, word_write_8(call_stack_access(), value, memory, pointer), protected,
+        word_stack_effect_8(memory, pointer, value)(protected, outside.byte0),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 1)), outside.byte1),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 2)), outside.byte2),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 3)), outside.byte3),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 4)), outside.byte4),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 5)), outside.byte5),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 6)), outside.byte6),
+        word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 7)), outside.byte7))
 }

@@ -76,10 +76,18 @@ fn machine_theorem(module: &mut Module, name: &str, ty: String, body: String) {
 // each node a named expression, so the concrete graph witness is a chain of
 // reflexivity proofs; no unproved RegionHolds assumption remains at entry.
 pub(super) fn valuation(module: &mut Module, prefix: &str, region: &Region, inputs: [u64; 2]) -> Result<(), String> {
+    valuation_expressions(module, prefix, prefix, region, [
+        Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[0])]),
+        Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[1])]),
+    ])
+}
+
+pub(super) fn valuation_expressions(module: &mut Module, prefix: &str, graph_prefix: &str,
+    region: &Region, inputs: [Expr; 2]) -> Result<(), String> {
     let value_name = |id| format!("{prefix}_value_{id}");
     let value = |id| Expr::call(value_name(id), [Expr::name("width")]);
-    let mut declarations = vec![(0, Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[0])])),
-        (1, Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[1])]))];
+    let [left, right] = inputs;
+    let mut declarations = vec![(0, left), (1, right)];
     for &node in &region.nodes {
         let expr = match node {
             Node::Const { value: constant, .. } => Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(constant)]),
@@ -112,7 +120,7 @@ pub(super) fn valuation(module: &mut Module, prefix: &str, region: &Region, inpu
     let mut graph = "trivial".to_string();
     for _ in &region.nodes { graph = format!("⟨refl, {graph}⟩"); }
     theorem(module, &format!("{prefix}_entry_graph"),
-        Expr::raw(format!("RegionHolds({prefix}_raw(), {prefix}_values())")), Expr::raw(graph));
+        Expr::raw(format!("RegionHolds({graph_prefix}_raw(), {prefix}_values())")), Expr::raw(graph));
     Ok(())
 }
 

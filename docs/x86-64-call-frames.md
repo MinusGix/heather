@@ -44,7 +44,7 @@ The slot occupies the previously unused alignment reservation. The leaf's
 return slot is below it at 0x401fe8; the caller's return slot is above it at
 0x401ff8. CALL alignment and final RSP restoration are checked as before.
 The new canonical forms are 64-bit register stores/loads at `[RSP]`, with an
-explicit SIB byte and no displacement. The producer currently uses R11.
+explicit SIB byte and no displacement. The caller uses R11; the two-call leaf stores RDI in its own slot.
 
 The callee contract is emitted before the reload proof. Each reload byte uses
 its memory-effect field; the caller result proof uses its result field. The
@@ -55,13 +55,15 @@ effects over neutral initial memory.
 This source extension is deliberately bounded to the expression above with
 unchanged argument order. Other source expressions, general locals/spills,
 escaping stack addresses, and arbitrary call graphs are not inferred. Generic
-frame allocation and reusable relocated callee summaries remain follow-up work.
+frame allocation remains follow-up work. [Reusable callee summaries](x86-64-call-summaries.md)
+extend this with two calls at distinct placements, different inputs, and a
+private callee store whose dead bytes remain changed.
 
 The ELF and environment assumptions are those of [the call profile](x86-64-calls.md).
 
 ## Validation
 
-Final plain full suite (2026-09-07), starting with a fresh native cache:
+Initial live-local milestone, full suite (2026-09-07), starting with a fresh native cache:
 **2,490 passed, 0 failed, 5 ignored**. The forwarding and live-local integration
 targets passed in 219.79 and 257.02 seconds respectively.
 

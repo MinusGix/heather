@@ -109,3 +109,18 @@ printf 'exit status: %s\n' "$?"
 
 Expected status: 40. The caller saves `left XOR right` in its own frame and
 reloads it after a callee that clears R11. See [call memory effects and locals](../../docs/x86-64-call-frames.md).
+
+## One callee summary, two placements
+
+```sh
+(ulimit -v 4194304 -t 300; target/debug/heather build-x86 \
+  examples/x86-native/reused_callee.hthr caller --callee leaf --arg 21 --arg 1 \
+  -o target/x86-native/reused-callee --cache-dir target/native-images)
+./target/x86-native/reused-callee
+printf 'exit status: %s\n' "$?"
+```
+
+Expected status: 3. Both calls use one generic callee summary, with the first
+result feeding the second call. The caller retains its XOR local across both
+calls. Each leaf writes its own private stack slot and restores RSP, leaving
+the dead bytes changed. See [reusable callee summaries](../../docs/x86-64-call-summaries.md).

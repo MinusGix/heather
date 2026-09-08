@@ -1,0 +1,159 @@
+// Reusable execution summaries. The code and postcondition are part of the
+// summary's type; each placement still supplies actual fetch/access evidence.
+import x86_64;
+import x86_64_calls;
+import x86_64_fetch;
+import bitvec;
+import bool;
+import list;
+import logic;
+import relation;
+
+theorem read_gpr_after_other_write(query, register: Gpr, value: BitVec(64), registers: Gprs,
+    different: nat_same(gpr_index(register), gpr_index(query)) = False):
+    read_gpr(query, write_gpr(register, value, registers)) = read_gpr(query, registers) {
+    j(sym(different), λ decision _ =>
+        (match decision { False => read_gpr(query, registers), True => value }) = read_gpr(query, registers), refl)
+}
+
+// Check each ordinary field layout over an arbitrary state once.
+theorem call_mov_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(MovRR(destination, source)).length)):
+    MachineState(write_gpr(destination, read_gpr(source, before.gprs), before.gprs), before.flags, address, before.memory) = execute_normal(decoded_canonical(MovRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(source, before.gprs), before.gprs), before.flags, address, before.memory) = execute_normal(decoded_canonical(MovRR(destination, source)), before), refl)
+}
+theorem call_mov_ri_flat<M>(destination: Gpr, immediate: BitVec(64), before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(MovRI(destination, immediate)).length)):
+    MachineState(write_gpr(destination, immediate, before.gprs), before.flags, address, before.memory) = execute_normal(decoded_canonical(MovRI(destination, immediate)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, immediate, before.gprs), before.flags, address, before.memory) = execute_normal(decoded_canonical(MovRI(destination, immediate)), before), refl)
+}
+theorem call_add_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(AddRR(destination, source)).length)):
+    MachineState(write_gpr(destination, bitvec::add(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::add(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before), refl)
+}
+theorem call_sub_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(SubRR(destination, source)).length)):
+    MachineState(write_gpr(destination, bitvec::sub(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::sub(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before), refl)
+}
+theorem call_and_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(AndRR(destination, source)).length)):
+    MachineState(write_gpr(destination, bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before), refl)
+}
+theorem call_or_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(OrRR(destination, source)).length)):
+    MachineState(write_gpr(destination, bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before), refl)
+}
+theorem call_xor_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
+    advanced: address = next_rip(before.rip, decoded_canonical(XorRR(destination, source)).length)):
+    MachineState(write_gpr(destination, bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before), refl)
+}
+
+fn call_next<M>(access: StackAccess<M>, instruction: CallInstruction, before: MachineState<M>) → MachineState<M> {
+    match instruction {
+        Ordinary(op) => execute_normal(decoded_canonical(op), before),
+        CallRelative(delta) => call_after(access, delta, before),
+        NearReturn => return_after(access, before),
+        StoreStack64(register) => stack_store_after(access, register, before),
+        LoadStack64(register) => stack_load_after(access, register, before),
+    }
+}
+fn CallAccessAllowed<M>(access: StackAccess<M>, instruction: CallInstruction, before: MachineState<M>) → Type {
+    match instruction {
+        Ordinary(op) => True,
+        CallRelative(delta) =>
+            bitvec::borrow_sub_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            LowCanonical(call_return_address(before)) ∧ LowCanonical(call_target(before.rip, delta)) ∧
+            WordWritesAllowed<M>(access, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))),
+        NearReturn =>
+            bitvec::carry_add_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            LowCanonical(stack_word(access, before.memory, read_gpr(Rsp, before.gprs))) ∧
+            StackReadsAllowed(access, 8, read_gpr(Rsp, before.gprs)),
+        StoreStack64(register) => WordWritesAllowed<M>(access, read_gpr(Rsp, before.gprs)),
+        LoadStack64(register) => StackReadsAllowed(access, 8, read_gpr(Rsp, before.gprs)),
+    }
+}
+theorem call_next_allowed<M>(access: StackAccess<M>, instruction: CallInstruction):
+    (before: MachineState<M>) → CallAccessAllowed(access, instruction, before) →
+    CallStep(access, instruction, before, call_next(access, instruction, before)) {
+    match instruction {
+        Ordinary(op) => λ before allowed => canonical_execute_normal_is_allowed(op, before),
+        CallRelative(delta) => λ before allowed =>
+            ⟨allowed.left, ⟨allowed.right.left, ⟨allowed.right.right.left,
+                ⟨allowed.right.right.right, refl⟩⟩⟩⟩,
+        NearReturn => λ before allowed =>
+            ⟨allowed.left, ⟨allowed.right.left, ⟨allowed.right.right, refl⟩⟩⟩,
+        StoreStack64(register) => λ before allowed => ⟨allowed, refl⟩,
+        LoadStack64(register) => λ before allowed => ⟨allowed, refl⟩,
+    }
+}
+fn call_run<M>(access: StackAccess<M>, code: List<CallInstruction>) → MachineState<M> → MachineState<M> {
+    execute_steps(λ instruction before => call_next(access, instruction, before), code)
+}
+// Concrete intermediate states keep a placement proof local. Each edge must
+// equal the functional successor; the states cannot be producer assumptions.
+fn CallPremises<M>(fetch: FetchAccess<M>, access: StackAccess<M>, code: List<CallInstruction>) → MachineState<M> → MachineState<M> → Type {
+    match code {
+        Nil => λ before after => before = after,
+        Cons(instruction, rest) => λ before after =>
+            Exists<MachineState<M>>(λ next =>
+                FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, call_instruction_bytes(instruction))) ∧
+                CallAccessAllowed(access, instruction, before) ∧
+                next = call_next(access, instruction, before) ∧
+                CallPremises(fetch, access, rest, next, after)),
+    }
+}
+theorem call_premises_cons<M>(fetch: FetchAccess<M>, access: StackAccess<M>, instruction: CallInstruction,
+    rest: List<CallInstruction>, before, next, after: MachineState<M>,
+    fetched: FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, call_instruction_bytes(instruction))),
+    allowed: CallAccessAllowed(access, instruction, before), successor: next = call_next(access, instruction, before),
+    tail: CallPremises(fetch, access, rest, next, after)):
+    CallPremises(fetch, access, Cons(instruction, rest), before, after) {
+    ⟨next, ⟨fetched, ⟨allowed, ⟨successor, tail⟩⟩⟩⟩
+}
+theorem call_run_checked<M>(fetch: FetchAccess<M>, access: StackAccess<M>, code: List<CallInstruction>):
+    (before, after: MachineState<M>) → CallPremises(fetch, access, code, before, after) →
+    FetchedCallTrace(fetch, access, code, before, after) ∧ after = call_run(access, code, before) {
+    match code {
+        Nil => λ before after premises => ⟨premises, sym(premises)⟩,
+        Cons(instruction, rest) => λ before after premises => {
+            let tail = call_run_checked(fetch, access, rest, premises.witness, after, premises.proof.right.right.right);
+            ⟨call_trace_cons(fetch, access, instruction, rest, before, premises.witness, after,
+                ⟨premises.proof.left,
+                    j(sym(premises.proof.right.right.left), λ next _ => CallStep(access, instruction, before, next),
+                        call_next_allowed(access, instruction, before, premises.proof.right.left))⟩, tail.left),
+             trans(tail.right, cong_fn<MachineState<M>, MachineState<M>>(
+                 λ next => call_run(access, rest, next), premises.proof.right.right.left))⟩
+        },
+    }
+}
+record CallSummary<M>(access: StackAccess<M>, code: List<CallInstruction>,
+    post: MachineState<M> → MachineState<M> → Type) {
+    requires: MachineState<M> → Type,
+    ensures: (before: MachineState<M>) → requires(before) → post(before, call_run(access, code, before)),
+}
+theorem use_call_summary<M>(fetch: FetchAccess<M>, access: StackAccess<M>, code: List<CallInstruction>,
+    post: MachineState<M> → MachineState<M> → Type, summary: CallSummary<M>(access, code, post),
+    before, after: MachineState<M>, entry: summary.requires(before), fetched: CallPremises(fetch, access, code, before, after)):
+    FetchedCallTrace(fetch, access, code, before, after) ∧ post(before, after) {
+    let checked = call_run_checked(fetch, access, code, before, after, fetched);
+    ⟨checked.left, j(sym(checked.right), λ after _ => post(before, after), summary.ensures(before, entry))⟩
+}
+
+theorem call_trace_append<M>(fetch: FetchAccess<M>, access: StackAccess<M>, first: List<CallInstruction>):
+    (second: List<CallInstruction>) → (before, middle, after: MachineState<M>) →
+    FetchedCallTrace(fetch, access, first, before, middle) →
+    FetchedCallTrace(fetch, access, second, middle, after) →
+    FetchedCallTrace(fetch, access, first ++ second, before, after) {
+    match first {
+        Nil => λ second before middle after head tail =>
+            j(sym(head), λ state _ => FetchedCallTrace(fetch, access, second, state, after), tail),
+        Cons(instruction, rest) => λ second before middle after head tail =>
+            call_trace_cons(fetch, access, instruction, rest ++ second, before, head.witness, after,
+                head.proof.left, call_trace_append(fetch, access, rest, second, head.witness, middle, after, head.proof.right, tail)),
+    }
+}
