@@ -3,7 +3,7 @@ title: Expose a scoped host elaboration interface usable from Heather
 status: open
 labels: [metaprogramming,elaboration,design]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 Own the public interface between user metafunctions and the active compiler:
@@ -35,3 +35,7 @@ string. Identity and correctness are separate claims.
 
 - [[generators-in-the-language]] owns moving generators into Heather.
 - [[scoped-declaration-generators]] owns invocation and module expansion.
+
+## Log
+
+- 2026-09-08: [[heather-checked-construction-api]] owns the first bounded Heather-side construction customer; this issue retains the host capability boundary.

@@ -120,3 +120,9 @@ See `docs/finite-set-client-design.md` §6 for candidate examples.
 
 - 2026-08-15: Two items from the obligation-records round (2026-08-15). (1) DELIVERED, small: 'heather obligations [--json] <file>' — one row per obligation-bearing field of every such declaration, with owner, the '::' path, field, state (supplied|defaulted), provenance (inline|named|derived|via) and the STATEMENT, printed as the synthesized source text rather than decoded from a kernel term. That is the property worth keeping: because the statement schema is built as surface source, the listing is legible without goal-display-decodes, and any future path that renders a statement from kernel terms inherits that problem while this one does not. The --json emitter is hand-rolled (dependency-policy) and is a fine template for the 'heather check --json' this issue owns. (2) WANT, recorded not built (round-5 verdict, 'not too important right now'): checking should CONTINUE past a failed obligation clause so that downstream breakage — a caller of the interface whose use no longer typechecks — surfaces before the proof is written. Today a '?' clause (the reporting hole: fails at its own span printing the statement it owes) stops the file there, which is exactly one fix per round-trip. This is error-tolerant elaboration, a diagnostics-mode change, and it belongs with the search-state-as-data thesis: a failure should return everything the file still has to say, not only the first thing it could not say.
 - 2026-09-04: Added conditional proof opportunities and explicit benefits, shared by lifting and optimization; finite sets provide the first concrete design examples.
+
+## Generated proof cost attribution
+
+[[generated-proof-cost-diagnostics]] owns bounded declaration/conversion cost
+diagnostics motivated by the x86 certificate round. This issue owns the shared
+structured-output conventions.

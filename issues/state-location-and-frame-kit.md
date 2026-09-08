@@ -3,7 +3,7 @@ title: Develop state locations, updates, and frame reasoning
 status: open
 labels: [stdlib,logic,semantics,design]
 created: 2026-08-25
-updated: 2026-08-26
+updated: 2026-09-08
 ---
 
 Specifications that update structured state repeatedly need a common way to
@@ -63,3 +63,5 @@ syntax.  The round should decide from written proofs, not from terminology.
   and partial access is not disguised as a total lens. The issue remains open:
   composition of law records, concrete nested/disjoint fields, overlapping
   bit slices, and the partial-access bridge are still its acceptance residue.
+
+- 2026-09-08: The reusable callee customer (`cb877f2`) needed generic read-after-write/read-after-other-write and seven explicit instruction-field lemmas. Generalize these into the core location kit where appropriate; [[state-projection-conversion-cost]] separately investigates whether the kernel unnecessarily revisits state history.

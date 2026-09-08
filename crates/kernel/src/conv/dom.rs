@@ -381,6 +381,12 @@ pub(super) trait Dom<'v>: Sized {
     /// newly exposed same-head spine before unfolding further.
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::Ty>;
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> R<Self::Tm>;
+    /// Unfold a term's defined heads until none remains: the δ-transparent
+    /// weak head normal form. Exactly the unfoldings that iterating
+    /// [`Dom::delta_tm`] performs, and the same fuel; the value domain
+    /// runs it inside the machine so that a spine stuck on a glued
+    /// scrutinee is replayed once rather than once per unfolding.
+    fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: Self::Tm) -> R<Self::Tm>;
     /// The definition at the head of a δ-stuck spine, if any.
     fn delta_head(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> Option<GlobalVar>;
     fn delta_head_ty(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> Option<GlobalVar>;
@@ -876,6 +882,13 @@ impl<'v> Dom<'v> for Syn {
         };
         cv.spend()?;
         step_tm(cv, env, &Rc::new(first), step_term)
+    }
+
+    fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, mut w: Rc<Term>) -> R<Rc<Term>> {
+        while Self::delta_head(cv, env, &w).is_some() {
+            w = Self::delta_tm(cv, env, &w)?;
+        }
+        Ok(w)
     }
 
     #[inline]

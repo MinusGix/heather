@@ -260,9 +260,48 @@ run-accelerated Nat folds — the successor algebra `su^p ih` and the
 synchronous two-counter fold — unfold a *glued* scrutinee (or right-hand
 counter) themselves instead of stalling as a spine for conversion to
 δ-step from outside, which replays the pending spine each time. General
-matches deliberately do not: the x86 decoder's open-argument unfolding
-theorems meet at a folded `match decode_opcode_direct(…)`, and unfolding
-it eagerly exhausts fuel on the dispatch it hides.
+matches do not, under opaque evaluation: the x86 decoder's open-argument
+unfolding theorems meet at a folded `match decode_opcode_direct(…)`, and
+unfolding it eagerly exhausts fuel on the dispatch it hides.
+
+A fourth (2026-09-07, `issues/bitvec-closed-reduction-cost.md`): **a side
+with no defined head to meet unfolds transparently.** When one side of a
+term comparison is δ-stuck and the other has no defined head (a canonical
+form, or a neutral at a variable), no rendezvous at a definition is
+possible, and the stuck side's single steps continue until it has no
+defined head either — the same unfoldings, in the same order, charged the
+same fuel. They now run as one `Eval::delta_whnf` in **transparent** mode:
+while it is set, an eliminator stuck on a glued scrutinee unfolds the
+scrutinee in place instead of stalling as a spine. Applications still
+extend the spine, so `f a⃗` keeps its glued shape and the outer loop
+unfolds it. Driving the same unfoldings from outside had replayed the
+whole pending spine per step — a structural consumer (`sign_bit`,
+`toNat`, a second ripple) over a computed width-64 producer was cubic in
+the width, then exponential once the replays' throwaway memos evicted the
+shared ones from the bounded cache: 3.8M closures and 2.1 GB for one
+`sign_bit` of a ripple sum, against 34K and the module baseline now.
+Same-head spine comparison and the newer-head single step are unchanged,
+so the decoder rendezvous is untouched; a memo written transparently can
+later answer an opaque single step with more than one step, which can
+only cost a rendezvous, never a verdict.
+
+**Acceleration policy proposal, under review**
+(`issues/kernel-acceleration-policy.md`). The incoming architecture notes
+propose distinguishing three kinds of acceleration, with future growth confined
+to the first two:
+*representation changes with an adequacy argument* (saturated runs — the
+same values, the same relation up to bisimulation, generic over the type)
+and *strategy changes with no semantic content* (everything in the δ-lazy
+paragraphs above — the same unfoldings, the same fuel, checked by the
+differential oracle). The third, *pattern-matching on a definition's
+shape* (`nat_step_successors`, `nat_step_synchronizes`), is a standing
+exception to retire behind a general run algebra, not a template: a cost
+the calculus itself charges (unary iteration over a magnitude) is answered
+in the library by a definition whose reduction cost matches its meaning,
+or by reflection, never by a kernel case for that definition — and what is
+not accelerated is refused with `OutOfFuel`, never a process abort. This proposed
+division is not a ratified restriction on future kernel work: the adequacy and cost model of general arithmetic acceleration,
+and any proof-backed evaluation boundary, remain open design questions.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
@@ -416,7 +455,11 @@ paper too).
   next closure, so they no longer form the recursive destruction chain. This
   also removes the evaluator's former thread-local destruction worklist.
   Successful thunk results live in bounded FIFO caches owned by the arena
-  (16K term values and 16K type values). Consumers share a cached value, but
+  (64K term values and 64K type values; 16K until 2026-09-07, when a
+  width-64 structural consumer's working set measured ≈20K values and the
+  FIFO's evictions of shared carries turned its cost from linear to
+  thrashing — a cache entry retains one `Rc` value, so the bound is a
+  retention bound, not a working-set claim). Consumers share a cached value, but
   eviction reclaims old forced payloads while their stable closure skeletons
   remain. (Unbounded strong memos made the first arena version exceed the
   4 GiB test cap on `lib_std_bitvec`; per-node weak memos still retained every

@@ -48,3 +48,5 @@ separation logic or an allocator.
 - 2026-09-07: Validated the migrated contract and live-local customer with the full fresh-native-cache suite: 2,490 passed, 0 failed, 5 ignored. [[x86-caller-stack-locals]] is complete; this issue retains generic frame allocation/release and extent/aliasing obligations.
 
 - 2026-09-08: [[x86-reusable-callee-certificates]] adds a running two-call customer whose callee writes its own eight-byte frame and leaves the dead bytes changed. Generic frame allocation/release and extent/aliasing interfaces remain here.
+
+- 2026-09-08: The private-frame customer required staged byte-address exclusions for eight-byte words. Investigate reusable region-disjointness and word-preservation interfaces so callers do not manually assemble byte-pair obligations. Include overlap, wraparound, and access-right premises; byte-level effects remain the checked foundation.

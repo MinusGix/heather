@@ -135,42 +135,18 @@ fn normal_flat_proof(instruction: Instruction, before: &str, address: &str, adva
     Some(format!("call_{name}_flat({}, {source}, {before}, {address}, {advanced})", destination.heather_name()))
 }
 
-// Certify addition through literal intermediate values, keeping each reduction small.
+// Check width-bounded arithmetic, then transport to the canonical operations.
+// Host arithmetic proposes the result; the ripple equality is kernel-checked.
 fn certify_add(module: &mut Module, words: &Words, name: &str, start: u64, count: u64) {
-    let word = |n| words.get(n);
-    let mut previous = 0;
-    for done in 0..=count {
-        if done != 0 && done % 4 != 0 && done != count { continue; }
-        let proof = if done == 0 { "refl".into() } else {
-            let chunk = done - previous;
-            thm(module, &format!("{name}_increment_{done}"),
-                format!("bitvec::iterate_increment(64, {}, {chunk}) = {}", word(start.wrapping_add(previous)), word(start.wrapping_add(done))), "refl".into());
-            format!("trans(sym(bitvec::iterate_increment_compose(64, {}, {previous}, {chunk})), trans(cong_fn<BitVec(64), BitVec(64)>(λ value => bitvec::iterate_increment(64, value, {chunk}), {name}_steps_{previous}()), {name}_increment_{done}()))", word(start))
-        };
-        thm(module, &format!("{name}_steps_{done}"),
-            format!("bitvec::iterate_increment(64, {}, {done}) = {}", word(start), word(start.wrapping_add(done))), proof);
-        previous = done;
-    }
-    thm(module, name, format!("bitvec::add(64, {}, {}) = {}", word(start), word(count), word(start.wrapping_add(count))), format!("{name}_steps_{count}()"));
+    let (a, b, result) = (words.get(start), words.get(count), words.get(start.wrapping_add(count)));
+    thm(module, name, format!("bitvec::add(64, {a}, {b}) = {result}"),
+        format!("bitvec::add_eq_of_ripple_add(64, {a}, {b}, {result}, refl)"));
 }
 
 fn certify_sub(module: &mut Module, words: &Words, name: &str, start: u64, count: u64) {
-    let word = |n| words.get(n);
-    let mut previous = 0;
-    for remaining in 0..=count {
-        if remaining != 0 && remaining % 4 != 0 && remaining != count { continue; }
-        let value = start.wrapping_sub(count - remaining);
-        let body = if remaining == 0 { "refl".into() } else {
-            let chunk = remaining - previous;
-            thm(module, &format!("{name}_decrement_{remaining}"),
-                format!("bitvec::iterate_decrement(64, {chunk}, {}) = {}", word(value), word(value.wrapping_sub(chunk))), "refl".into());
-            format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ value => bitvec::iterate_decrement(64, {previous}, value), {name}_decrement_{remaining}()), {name}_steps_{previous}())")
-        };
-        thm(module, &format!("{name}_steps_{remaining}"),
-            format!("bitvec::iterate_decrement(64, {remaining}, {}) = {}", word(value), word(start.wrapping_sub(count))), body);
-        previous = remaining;
-    }
-    thm(module, name, format!("bitvec::sub(64, {}, {}) = {}", word(start), word(count), word(start.wrapping_sub(count))), format!("{name}_steps_{count}()"));
+    let (a, b, result) = (words.get(start), words.get(count), words.get(start.wrapping_sub(count)));
+    thm(module, name, format!("bitvec::sub(64, {a}, {b}) = {result}"),
+        format!("bitvec::sub_eq_of_ripple_sub(64, {a}, {b}, {result}, refl)"));
 }
 
 // Intern concrete words per certificate. Each dependent vector constructor is
@@ -204,7 +180,7 @@ fn state_decl(m: &mut Module, name: &str, ty: String, value: String, theorem: bo
         .parameter(Parameter::explicit("flags", Expr::name("Flags")))
         .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
 }
-fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize, memory: &str, pc: u64, encoding: &[u8]) -> String {
+fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize, memory: &str, pc: u64, encoding: &[u8], header_size: usize) -> String {
     let actual_memory = memory;
     let memory = format!("CallMemory({prefix}_file(), stack)");
     let stack_decl = |module: &mut Module, name: &str, ty: String, body: String| {
@@ -215,11 +191,12 @@ fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize,
     for j in (0..encoding.len()).rev() {
         let address = word(pc + j as u64);
         let byte = format!("elf_byte({})", encoding[j]);
+        let present = format!("call_file_read_split({prefix}_header(), {prefix}_code(), {header_size}, {}, {address}, {byte}, {prefix}_header_length(), refl, refl, refl)", pc + j as u64 - 0x400000 - header_size as u64);
         let proof = if j+1 == encoding.len() {
-            format!("call_file_fetch_one({memory}, {address}, {byte}, refl)")
+            format!("call_file_fetch_one({memory}, {address}, {byte}, {present})")
         } else {
             let next = word(pc + j as u64 + 1);
-            format!("call_file_fetch_more({memory}, {address}, {next}, {byte}, elf_byte({}), {}, refl, refl, refl, {prefix}_byte_{index}_{}(stack))",
+            format!("call_file_fetch_more({memory}, {address}, {next}, {byte}, elf_byte({}), {}, {present}, refl, refl, {prefix}_byte_{index}_{}(stack))",
                 encoding[j+1], bytes(&encoding[j+2..]).render(), j+1)
         };
         stack_decl(module, &format!("{prefix}_byte_{index}_{j}"),
@@ -392,6 +369,7 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
         .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
     module.declaration(Declaration::function(format!("{prefix}_code"), Expr::raw("List<BitVec(8)>"), Block::expression(bytes(&layout.bytes))));
     module.declaration(Declaration::function(format!("{prefix}_header"), Expr::raw("List<BitVec(8)>"), Block::expression(bytes(&file[..HEADER]))));
+    thm(module, &format!("{prefix}_header_length"), format!("{prefix}_header().len() = {HEADER}"), "refl".into());
     fun(module, &format!("{prefix}_file"), "List<BitVec(8)>", format!("{prefix}_header() ++ {prefix}_code()"));
     fun(module, &format!("{prefix}_image"), &format!("CallElfImage({prefix}_code())"),
         format!("CallElfImage(trivial, elf_byte({}), elf_byte({}), refl, trivial)", size & 255, size >> 8));
@@ -672,7 +650,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             Op::Ret => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩"),
             _ => unreachable!(),
         };
-        let fetched = certify_fetch(module, words, prefix, i, &format!("{before}.memory"), pc, encoding);
+        let fetched = certify_fetch(module, words, prefix, i, &format!("{before}.memory"), pc, encoding, HEADER);
         let fetched = format!("fetched_span_at_state(call_fetch_access(), {before}.memory, {}, {}, call_instruction_bytes({instruction}), {before}, refl, refl, refl, {fetched})", word(pc), bytes(encoding).render());
         if in_leaf {
             let allowed = if matches!(op, Op::Ret) {
@@ -790,7 +768,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         state_decl(module, &format!("{prefix}_dead_frame_byte"),
             format!("call_memory_read({end}.memory, {dead}) = Some(elf_byte({byte}))"), "refl".into(), true);
     }
-    let syscall_fetch = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05]);
+    let syscall_fetch = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
         format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), syscall_fetch, true);
     state_decl(module, &format!("{prefix}_stack_restored"), format!("read_gpr(Rsp, {end}.gprs) = {}", word(STACK_TOP)), format!("{prefix}_rsp_{n}(gprs, flags, stack)"), true);
@@ -948,11 +926,14 @@ mod tests {
         for valid in [true, false] {
             let requested = if valid { actual.clone() } else { vec![actual[0] ^ 1] };
             let mut proofs = Module::default();
-            certify_fetch(&mut proofs, &words, "fetch_fixture", 0, "memory", 0x4001f0, &requested);
+            certify_fetch(&mut proofs, &words, "fetch_fixture", 0, "memory", 0x4001f0, &requested, 256);
             fetch_cases.push((valid, proofs));
         }
         let mut fixture = Module::default(); fixture.raw(format!("{imports} import elf64;"));
-        fun(&mut fixture, "fetch_fixture_file", "List<BitVec(8)>", bytes(&file).render());
+        fun(&mut fixture, "fetch_fixture_header", "List<BitVec(8)>", bytes(&file[..256]).render());
+        fun(&mut fixture, "fetch_fixture_code", "List<BitVec(8)>", bytes(&file[256..]).render());
+        fun(&mut fixture, "fetch_fixture_file", "List<BitVec(8)>", "fetch_fixture_header() ++ fetch_fixture_code()".into());
+        thm(&mut fixture, "fetch_fixture_header_length", "fetch_fixture_header().len() = 256".into(), "refl".into());
         for value in words.values.into_inner() {
             fun(&mut fixture, &format!("fetch_fixture_word_{value:x}"), "BitVec(64)", word(value));
         }
@@ -971,6 +952,8 @@ mod tests {
         let mut offset_proofs = Module::default();
         certify_add(&mut offset_proofs, &offsets, "forward_offset", 0x4000fd, 112);
         certify_add(&mut offset_proofs, &offsets, "wrapped_word_add", u64::MAX-2, 4);
+        certify_add(&mut offset_proofs, &offsets, "large_word_add", 1 << 63, 1 << 63);
+        certify_sub(&mut offset_proofs, &offsets, "wrapped_word_sub", 0, 1 << 63);
         let mut offset_module = Module::default();
         offset_module.raw(imports);
         for value in offsets.values.into_inner() {

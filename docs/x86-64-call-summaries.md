@@ -35,7 +35,9 @@ by a claim that the producer selected the right instruction.
 
 An instruction's fetch proof quantifies over arbitrary stack contents with the
 exact emitted file. A single checked file-byte observation supplies both
-execute permission and byte contents. Its call site instantiates that proof with the actual
+execute permission and byte contents. `call_file_read_split` uses the checked
+header length and `list::nth_append_r` to obtain a code byte without traversing
+the header again; page, offset, and code-byte premises remain explicit. Its call site instantiates that proof with the actual
 memory's stack projection. The unchanged file projection is checked by
 conversion; stack writes remain visible to stack reads and callee effects.
 Ordinary states also name their register and flag fields directly. Their
@@ -63,8 +65,10 @@ from the callee footprint before reloading it. Access rights, underflow,
 canonical addresses, and wrap conditions remain distinct obligations.
 
 Concrete exclusion proofs build the footprint one byte at a time from checked
-address differences. Forward CALL offsets likewise use small proved increment
-steps. The second store's proposed literal value is connected to the first
+address differences. CALL displacement proofs use width-bounded ripple arithmetic
+and checked transport lemmas to state results in the canonical add/sub operations.
+This replaces the initial producer's staged increment/decrement chains.
+The second store's proposed literal value is connected to the first
 callee's result and checked source evaluation. These named intermediate facts
 keep checking local without adding trusted arithmetic or changing kernel limits.
 
@@ -84,8 +88,8 @@ The Linux x86_64 integration test builds with an empty `PATH`, checks the
 certificate, and runs the ELF with exit status 3. The certificate contains one
 callee summary definition, two summary applications, two trace compositions,
 and the final private-byte and stack-restoration claims. The focused integration
-passes under the standard 4 GiB / 300 CPU-second limits (277.08 seconds reported
-by the test runner).
+passes under the standard 4 GiB / 300 CPU-second limits (223.75 seconds reported
+by the focused test runner after integrating ripple arithmetic and prefix lookup).
 
 Focused controls cover neutral machine states and memory, all seven ordinary
 field layouts, preserved return words, changed dead bytes, and a file fetch near
@@ -93,6 +97,9 @@ the end of a 512-byte fixture. Wrong bytes, invented successor states, missing
 fetch evidence, incompatible postconditions, stale instruction lists,
 overlapping footprints, and incorrect displacement results are rejected.
 
-Final validation on 2026-09-08: plain `scripts/test` passed with **2491 passed,
-0 failed, 5 ignored**. The two-call integration passed again in that run
-(269.62 seconds reported). `scripts/issue check` and `git diff --check` are clean.
+Final merge validation on 2026-09-08: plain `scripts/test` passed with
+**2494 passed, 0 failed, 5 ignored**, including both native targets that hit the
+CPU cap in earlier merge attempts. Extended kernel checks passed 333 tests;
+the repeat `scripts/bench --check` passed all 106 comparisons. The host was busy,
+so these are acceptance results, not a controlled performance comparison.
+`scripts/issue check` and `git diff --check` are clean.

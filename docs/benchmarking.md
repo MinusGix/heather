@@ -33,6 +33,10 @@ elaborator acceptance tests honor `HEATHER_VALUE_METRICS=1` when built with
 feature and environment flag change observation only, not fuel, cache capacity, or the
 checked program. These counters are the stable evidence for working-set shape;
 wall times from such a diagnostic run remain issue-log data, not baselines.
+The same flag makes `heather check` (built with `-p heather-cli --features
+value-metrics`) print one snapshot per checked module, which is the quickest
+way to read the working set of a single probe theorem: reset before each
+module, so the root module's line excludes its imports.
 
 **Always through `scripts/bench`, never bare `cargo bench`** — same rule as
 `scripts/test`, and for a sharper reason: benchmarks deliberately push

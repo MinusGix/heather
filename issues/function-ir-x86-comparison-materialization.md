@@ -4,7 +4,7 @@ status: closed
 labels: [compiler,function-ir,x86,flags,comparisons,proofs]
 blocked-by: [function-ir-x86-constants]
 created: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-07
 ---
 
 FunctionIR signed and unsigned less-than consume two BitVec(width) operands and
@@ -79,3 +79,7 @@ Concrete closed reduction of the `2^63` boundary still exhausts ordinary
 kernel fuel; the symbolic all-operands theorem is stronger and the staged
 compiler certificates remain green. That representation/performance flaw is
 recorded under [[bitvec-closed-reduction-cost]], not hidden by raising fuel.
+
+## Log
+
+- 2026-09-07: The `2^63` boundary clause is resolved by the kernel round in [[bitvec-closed-reduction-cost]]: `unsigned_lt_bit(64, ofNat(64, 0), ofNat(64, 2^63)) = True` and `signed_lt_bit(64, ofNat(64, 2^63), zero(64)) = True` now check by `refl` under ordinary fuel (28K term closures, ≈0.6 s over the module baseline); both are pinned in `crates/elab/tests/lib_std_bitvec.rs`.

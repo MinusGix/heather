@@ -63,10 +63,11 @@ equalities; summary execution is composed into the surrounding trace.
 
 The certificate names literal intermediate addresses and individual stack-byte
 writes and reads, then joins them with equality proofs. Backward CALL targets
-use a proved modular-add/subtract law and small literal decrement steps; forward
-targets use small increment steps. Directly
-normalizing addition by a sign-extended negative displacement would demand an
-enormous unsigned iteration. This staging adds no axioms or kernel rules.
+use a proved modular-add/subtract law. Concrete add/sub results are checked with
+width-bounded ripple arithmetic and transported to the canonical operations by
+proved bridge lemmas. This replaces the initial small increment/decrement chains
+and avoids normalizing a sign-extended displacement by unsigned iteration.
+The transport adds no axioms or kernel rules.
 
 The final request carries the full source result in RDI and Linux's exit
 syscall number in RAX. The terminal syscall bytes are fetched from the same

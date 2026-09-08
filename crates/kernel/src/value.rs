@@ -258,7 +258,7 @@ pub struct ValueArena<'v> {
     types: Arena<TyClo<'v>>,
 }
 
-const VALUE_CACHE_CAPACITY: usize = 16 * 1024;
+const VALUE_CACHE_CAPACITY: usize = 64 * 1024;
 
 /// Aggregate, observational counters for value-machine regions.
 ///
@@ -1507,6 +1507,12 @@ pub enum Elim<'v> {
 }
 
 impl Elim<'_> {
+    /// An application of any of the four kinds: the eliminations that extend
+    /// a neutral's spine without ever being *stuck* on its head.
+    pub fn is_application(&self) -> bool {
+        matches!(self, Elim::App { .. } | Elim::UApp { .. } | Elim::CtxApp { .. } | Elim::TyApp { .. })
+    }
+
     /// A stable name for the elimination form — the head discriminant a
     /// shape comparison keys on.
     pub fn tag(&self) -> &'static str {

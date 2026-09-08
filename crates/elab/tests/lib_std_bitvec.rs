@@ -310,6 +310,244 @@ theorem commutativity_is_not_absorption(n: Nat, left, right: BitVec(n)):
 "#);
 }
 
+/// `from_bits(width, [...])` spelling the low `width` bits of `value`,
+/// least-significant first.
+fn bit_vector_literal_at(width: u32, value: u128) -> String {
+    let bits: Vec<&str> = (0..width)
+        .map(|i| if (value >> i) & 1 == 1 { "True" } else { "False" })
+        .collect();
+    format!("from_bits({width}, [{}])", bits.join(", "))
+}
+
+/// The ripple operations are equal to `add`/`sub`/`neg` at an open width and
+/// open operands (issues/bitvec-bounded-add-sub.md), the incoming carry and
+/// borrow mean the extra unit they add or remove, and the transport lemmas
+/// move a fact between the two spellings in both directions. The controls
+/// are a misstated theorem and a bare `refl` between the two definitions at
+/// open operands: the equation is a theorem, not a computation.
+#[test]
+fn ripple_arithmetic_equals_add_and_sub_at_open_widths_and_operands() {
+    ok(r#"
+import nat;
+theorem ripple_add_is_add(n: Nat, x, y: BitVec(n)):
+    ripple_add(n, x, y) = bitvec::add(n, x, y) { ripple_add_eq_add(n, x, y) }
+theorem ripple_sub_is_sub(n: Nat, x, y: BitVec(n)):
+    ripple_sub(n, x, y) = bitvec::sub(n, x, y) { ripple_sub_eq_sub(n, x, y) }
+theorem ripple_neg_is_neg(n: Nat, x: BitVec(n)):
+    ripple_neg(n, x) = bitvec::neg(n, x) { ripple_neg_eq_neg(n, x) }
+theorem carry_in_meaning(n: Nat, x, y: BitVec(n), c: Bool):
+    add_bits(n, x, y, c) = iterate_increment(n, x, toNat(n, y) + bit_value(c))
+{ add_bits_spec(n, x, y, c) }
+theorem borrow_in_meaning(n: Nat, x, y: BitVec(n), c: Bool):
+    sub_bits(n, x, y, c) = iterate_decrement(n, toNat(n, y) + bit_value(c), x)
+{ sub_bits_spec(n, x, y, c) }
+theorem machine_width_add(x, y: BitVec(64)):
+    ripple_add(64, x, y) = bitvec::add(64, x, y) { ripple_add_eq_add(64, x, y) }
+theorem machine_width_sub(x, y: BitVec(64)):
+    ripple_sub(64, x, y) = bitvec::sub(64, x, y) { ripple_sub_eq_sub(64, x, y) }
+theorem width_zero_carry(x, y: BitVec(0), c: Bool): add_bits(0, x, y, c) = zero(0) { refl }
+theorem transport_forward(n: Nat, x, y, r: BitVec(n), h: ripple_add(n, x, y) = r):
+    bitvec::add(n, x, y) = r { add_eq_of_ripple_add(n, x, y, r, h) }
+theorem transport_backward(n: Nat, x, y, r: BitVec(n), h: bitvec::sub(n, x, y) = r):
+    ripple_sub(n, x, y) = r { ripple_sub_eq_of_sub(n, x, y, r, h) }
+theorem transport_neg(n: Nat, x, r: BitVec(n), h: ripple_neg(n, x) = r):
+    bitvec::neg(n, x) = r { neg_eq_of_ripple_neg(n, x, r, h) }
+theorem inherited_comm(n: Nat, x, y: BitVec(n)):
+    ripple_add(n, x, y) = ripple_add(n, y, x) { ripple_add_comm(n, x, y) }
+theorem inherited_cancel(n: Nat, x, y: BitVec(n)):
+    ripple_sub(n, ripple_add(n, x, y), y) = x { ripple_add_sub_cancel(n, x, y) }
+theorem congruence(n: Nat, x, y, z: BitVec(n), p: x = y):
+    ripple_add(n, x, z) = ripple_add(n, y, z) { cong_ripple_add(n, p, refl) }
+theorem consumer_transport(n: Nat, x, y: BitVec(n)):
+    sign_bit(n, ripple_add(n, x, y)) = sign_bit(n, bitvec::add(n, x, y))
+{ j(ripple_add_eq_add(n, x, y), λ z q => sign_bit(n, ripple_add(n, x, y)) = sign_bit(n, z), refl) }
+"#);
+    bad(r#"
+theorem misstated(n: Nat, x, y: BitVec(n)):
+    ripple_add(n, x, y) = bitvec::add(n, y, x) { ripple_add_eq_add(n, x, y) }
+"#);
+    let msg = run(r#"
+theorem not_by_computation(n: Nat, x, y: BitVec(n)):
+    ripple_add(n, x, y) = bitvec::add(n, x, y) { refl }
+"#)
+    .expect_err("the two definitions are not convertible at open operands");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
+/// The ripple's closed cost is the width, not the operand
+/// (issues/bitvec-bounded-add-sub.md): every machine-width case below —
+/// wraparound, underflow, the high-bit boundary, mixed bits, and the
+/// full-width negative-offset pattern a sign-extended displacement produces —
+/// is checked against an independently written bit vector and against the
+/// `ofNat` literal, and the canonical `add`/`sub`/`neg` facts are proved by
+/// transporting the ripple's `refl`. Small widths compare the ripple with
+/// the old definitions directly, but only at small counts: `add(8, _, 248)`
+/// is 248 increments and already costs gigabytes, which is the very
+/// iteration this issue removes. The controls flip one bit or miss by one
+/// and must be refused as `NotConvertible`, not as exhausted fuel.
+#[test]
+fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
+    const M: u128 = 1 << 64;
+    const ASYMMETRIC: u128 = 0x0123_4567_89AB_CDEF;
+    const REVERSED: u128 = 0xFEDC_BA98_7654_3210;
+    const HIGH: u128 = 1 << 63;
+    const ADDRESS: u128 = 0x0000_7FFF_FFFF_F000;
+    const MINUS_EIGHT: u128 = M - 8;
+    let of = |v: u128| format!("ofNat(64, {v})");
+    let mut src = String::from("import nat;\n");
+    for (name, expr, value) in [
+        ("neg_offset_add", format!("ripple_add(64, {}, {})", of(ADDRESS), of(MINUS_EIGHT)), ADDRESS - 8),
+        ("neg_offset_sub", format!("ripple_sub(64, {}, {})", of(ADDRESS), of(MINUS_EIGHT)), ADDRESS + 8),
+        ("neg_rel32_from_zero", format!("ripple_sub(64, zero(64), {})", of(0x1234)), M - 0x1234),
+        ("neg_rel32", format!("ripple_neg(64, {})", of(0x1234)), M - 0x1234),
+        ("wrap", "ripple_add(64, all_ones(64), one(64))".to_string(), 0),
+        ("underflow", "ripple_sub(64, zero(64), one(64))".to_string(), M - 1),
+        ("saturated_pair", "ripple_add(64, all_ones(64), all_ones(64))".to_string(), M - 2),
+        ("high_bit_up", format!("ripple_add(64, {}, one(64))", of(HIGH - 1)), HIGH),
+        ("high_bit_down", format!("ripple_sub(64, {}, one(64))", of(HIGH)), HIGH - 1),
+        ("high_bit_double", format!("ripple_add(64, {}, {})", of(HIGH), of(HIGH)), 0),
+        ("mixed_add", format!("ripple_add(64, {}, {})", of(ASYMMETRIC), of(REVERSED)), (ASYMMETRIC + REVERSED) % M),
+        ("mixed_sub", format!("ripple_sub(64, {}, {})", of(ASYMMETRIC), of(REVERSED)), (M + ASYMMETRIC - REVERSED) % M),
+        ("magnitude_small", format!("ripple_add(64, {}, {})", of(ADDRESS), of(1024)), ADDRESS + 1024),
+        ("magnitude_huge", format!("ripple_add(64, {}, {})", of(ADDRESS), of(HIGH)), ADDRESS + HIGH),
+    ] {
+        src.push_str(&format!(
+            "theorem {name}(): {expr} = {} {{ refl }}\n\
+             theorem {name}_of_nat(): {expr} = {} {{ refl }}\n",
+            bit_vector_literal_at(64, value), of(value),
+        ));
+    }
+    src.push_str(&format!(
+        "theorem canonical_add(): bitvec::add(64, {a}, {b}) = {r} {{ add_eq_of_ripple_add(64, {a}, {b}, {r}, refl) }}\n\
+         theorem canonical_sub(): bitvec::sub(64, {a}, {b}) = {s} {{ sub_eq_of_ripple_sub(64, {a}, {b}, {s}, refl) }}\n\
+         theorem canonical_neg(): bitvec::neg(64, {c}) = {n} {{ neg_eq_of_ripple_neg(64, {c}, {n}, refl) }}\n\
+         theorem neg_offset_is_old_sub(): ripple_add(64, {a}, {b}) = bitvec::sub(64, {a}, {e}) {{ refl }}\n\
+         theorem minus_one_is_old_sub(): ripple_add(64, {a}, {m}) = bitvec::sub(64, {a}, one(64)) {{ refl }}\n\
+         theorem sub_minus_one_is_old_add(): ripple_sub(64, {a}, {m}) = bitvec::add(64, {a}, one(64)) {{ refl }}\n",
+        a = of(ADDRESS), b = of(MINUS_EIGHT), r = of(ADDRESS - 8), s = of(ADDRESS + 8),
+        c = of(0x1234), n = of(M - 0x1234), e = of(8), m = of(M - 1),
+    ));
+    src.push_str(&format!(
+        "theorem w32_neg_offset(): ripple_add(32, ofNat(32, 2147479552), ofNat(32, 4294967288)) = ofNat(32, 2147479544) {{ refl }}\n\
+         theorem w32_wrap(): ripple_add(32, all_ones(32), one(32)) = zero(32) {{ refl }}\n\
+         theorem w32_high(): ripple_sub(32, ofNat(32, 2147483648), one(32)) = {} {{ refl }}\n",
+        bit_vector_literal_at(32, (1 << 31) - 1),
+    ));
+    src.push_str(
+        "theorem w0_add(): ripple_add(0, zero(0), zero(0)) = bitvec::add(0, zero(0), zero(0)) { refl }\n\
+         theorem w0_sub(): ripple_sub(0, zero(0), zero(0)) = bitvec::sub(0, zero(0), zero(0)) { refl }\n\
+         theorem w1_wrap(): ripple_add(1, one(1), one(1)) = bitvec::add(1, one(1), one(1)) { refl }\n\
+         theorem w1_underflow(): ripple_sub(1, zero(1), one(1)) = bitvec::sub(1, zero(1), one(1)) { refl }\n\
+         theorem w8_wrap(): ripple_add(8, ofNat(8, 250), ofNat(8, 9)) = bitvec::add(8, ofNat(8, 250), ofNat(8, 9)) { refl }\n\
+         theorem w8_underflow(): ripple_sub(8, ofNat(8, 3), ofNat(8, 5)) = bitvec::sub(8, ofNat(8, 3), ofNat(8, 5)) { refl }\n\
+         theorem w8_high_bit(): ripple_add(8, ofNat(8, 127), one(8)) = bitvec::add(8, ofNat(8, 127), one(8)) { refl }\n\
+         theorem w8_neg_offset(): ripple_add(8, ofNat(8, 100), ofNat(8, 248)) = bitvec::sub(8, ofNat(8, 100), ofNat(8, 8)) { refl }\n\
+         theorem w8_mixed(): ripple_add(8, ofNat(8, 0x5A), ofNat(8, 0xA7)) = ofNat(8, 1) { refl }\n\
+         theorem w8_neg(): ripple_neg(8, ofNat(8, 1)) = bitvec::neg(8, ofNat(8, 1)) { refl }\n\
+         theorem w1_wrap_value(): toNat(1, ripple_add(1, one(1), one(1))) = 0 { refl }\n\
+         theorem w8_wrap_value(): toNat(8, ripple_add(8, ofNat(8, 250), ofNat(8, 9))) = 3 { refl }\n\
+         theorem w8_underflow_value(): toNat(8, ripple_sub(8, ofNat(8, 3), ofNat(8, 5))) = 254 { refl }\n\
+         theorem w8_neg_offset_value(): toNat(8, ripple_add(8, ofNat(8, 100), ofNat(8, 248))) = 92 { refl }\n\
+         theorem w8_signed(): toInt(8, ripple_sub(8, zero(8), ofNat(8, 5))) = NegSucc(4) { refl }\n",
+    );
+    ok(&src);
+
+    for (name, wrong) in [
+        ("flipped_bit", format!(
+            "ripple_add(64, {}, {}) = {}",
+            of(ADDRESS), of(MINUS_EIGHT), bit_vector_literal_at(64, (ADDRESS - 8) ^ (1 << 40)))),
+        ("off_by_one", format!("ripple_sub(64, zero(64), one(64)) = {}", of(M - 2))),
+        ("transported_wrong", format!(
+            "bitvec::add(64, {a}, {b}) = {r} {{ add_eq_of_ripple_add(64, {a}, {b}, {r}, refl) }}",
+            a = of(ADDRESS), b = of(MINUS_EIGHT), r = of((ADDRESS - 8) ^ (1 << 40)))),
+        ("small_width", "ripple_add(8, ofNat(8, 250), ofNat(8, 9)) = ofNat(8, 4)".to_string()),
+    ] {
+        let src = if wrong.contains('{') {
+            format!("theorem {name}(): {wrong}")
+        } else {
+            format!("theorem {name}(): {wrong} {{ refl }}")
+        };
+        let msg = run(&src).expect_err("a wrong result must be refused");
+        assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+    }
+
+    // Working-set evidence (docs/benchmarking.md): the counters separate width
+    // from magnitude — the same width-64 ripple at a small and at a huge
+    // operand, the width-32 ripple, and the old `add` at a count of eight.
+    if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
+        for (label, probe) in [
+            ("ripple_add w64 operand 2^10", format!("ripple_add(64, {}, {}) = {}", of(ADDRESS), of(1024), of(ADDRESS + 1024))),
+            ("ripple_add w64 operand 2^63", format!("ripple_add(64, {}, {}) = {}", of(ADDRESS), of(HIGH), of(ADDRESS + HIGH))),
+            ("ripple_sub w64 operand -8", format!("ripple_sub(64, {}, {}) = {}", of(ADDRESS), of(MINUS_EIGHT), of(ADDRESS + 8))),
+            ("ripple_add w32 operand 2^31", "ripple_add(32, ofNat(32, 2147479552), ofNat(32, 2147483648)) = ofNat(32, 4294963200)".to_string()),
+            ("old add w64 count 8", format!("bitvec::add(64, {}, {}) = {}", of(ADDRESS), of(8), of(ADDRESS + 8))),
+        ] {
+            eprintln!("bitvec probe: {label}");
+            ok(&format!("import nat;\ntheorem t(): {probe} {{ refl }}\n"));
+        }
+    }
+}
+
+/// Structural consumers over a computed width-64 producer. Until 2026-09-07
+/// every one of these exhausted fuel or gigabytes while the same consumer
+/// over an `ofNat` literal was cheap: conversion drove the δ-unfoldings
+/// from outside one definition at a time, and each step replayed the
+/// consumer's whole stuck spine over the producer (cubic in the width, then
+/// exponential once the replays' throwaway memos evicted the shared ones).
+/// A side with no defined head to meet now unfolds transparently inside the
+/// machine (`Eval::delta_whnf`), and these check in seconds under the
+/// ordinary rail (issues/bitvec-closed-reduction-cost.md). A *negative*
+/// `toInt` at width 64 is deliberately absent: its `int::sub(OfNat(2^63),
+/// OfNat(2^64))` is unary magnitude arithmetic, the family of
+/// issues/nat-order-large-run-comparison.md, not a consumer cost. Likewise
+/// `signed_overflow_add` is stated with a count-one right operand: it goes
+/// through the old `add`, whose `iterate_increment` over a `2^63` count is
+/// the excessive unary computation the resource-diagnostic clause of
+/// issues/bitvec-closed-reduction-cost.md still owns (a stack overflow, not
+/// `OutOfFuel`).
+#[test]
+fn consumers_over_computed_machine_width_producers_cost_the_width() {
+    const M: u128 = 1 << 64;
+    const HIGH: u128 = 1 << 63;
+    const ADDRESS: u128 = 0x0000_7FFF_FFFF_F000;
+    let of = |v: u128| format!("ofNat(64, {v})");
+    let high_sum = format!("ripple_add(64, {}, {})", of(5), of(HIGH - 5));
+    let src = format!(
+        "import nat;\n\
+         theorem sign_of_sum(): sign_bit(64, {high_sum}) = True {{ refl }}\n\
+         theorem value_of_sum(): toNat(64, {high_sum}) = {HIGH} {{ refl }}\n\
+         theorem signed_value_of_sum(): toInt(64, ripple_add(64, {a}, {b})) = OfNat({}) {{ refl }}\n\
+         theorem complement_of_sum(): complement(64, {high_sum}) = {} {{ refl }}\n\
+         theorem sum_of_sums(): ripple_add(64, ripple_add(64, {a}, {b}), ripple_sub(64, {c}, one(64))) = {} {{ refl }}\n\
+         theorem carry_of_sum(): carry_add_bit(64, ripple_add(64, all_ones(64), zero(64)), one(64)) = True {{ refl }}\n\
+         theorem borrow_of_difference(): borrow_sub_bit(64, ripple_sub(64, {a}, {a}), one(64)) = True {{ refl }}\n\
+         theorem overflow_of_difference(): signed_overflow_add(64, ripple_sub(64, {h}, one(64)), one(64)) = True {{ refl }}\n\
+         theorem sum_below_its_negation(): unsigned_lt_bit(64, {a}, ripple_neg(64, {a})) = True {{ refl }}\n\
+         theorem boundary_unsigned(): unsigned_lt_bit(64, zero(64), {h}) = True {{ refl }}\n\
+         theorem boundary_signed(): signed_lt_bit(64, {h}, zero(64)) = True {{ refl }}\n\
+         theorem value_of_old_add(): toNat(64, bitvec::add(64, {a}, ofNat(64, 8))) = {} {{ refl }}\n",
+        ADDRESS + 1024,
+        bit_vector_literal_at(64, (M - 1) ^ HIGH),
+        of(ADDRESS + 1024 + 99),
+        ADDRESS + 8,
+        a = of(ADDRESS), b = of(1024), c = of(100), h = of(HIGH),
+    );
+    ok(&src);
+
+    for (name, wrong) in [
+        ("sign_of_sum", format!("sign_bit(64, {high_sum}) = False")),
+        ("value_of_sum", format!("toNat(64, {high_sum}) = {}", HIGH + 1)),
+        ("sum_of_sums", format!(
+            "ripple_add(64, ripple_add(64, {a}, {b}), ripple_sub(64, {c}, one(64))) = {}",
+            of(ADDRESS + 1024 + 100), a = of(ADDRESS), b = of(1024), c = of(100))),
+        ("boundary_unsigned", format!("unsigned_lt_bit(64, {}, zero(64)) = True", of(HIGH))),
+    ] {
+        let msg = run(&format!("import nat;\ntheorem {name}(): {wrong} {{ refl }}"))
+            .expect_err("a wrong consumer result must be refused");
+        assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+    }
+}
+
 #[test]
 fn open_symbolic_bitvector_wrappers_stop_at_matching_definition_heads() {
     // These transparent wrappers used to normalize their structural bodies
