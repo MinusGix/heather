@@ -25,18 +25,28 @@ stack overflow; `toInt(64, ·)` of a negative value exhausts fuel, and so does
   `sub := ripple_sub`, `neg` through `ripple_sub`; keep the iterated forms as
   `iter_add`/`iter_sub` with `ripple_add_eq_add`/`ripple_sub_eq_sub` renamed to
   the equations between them, so `toNat`-counted reasoning stays available.
-- `toInt(n, x) := match sign_bit(n, x) { False => OfNat(toNat(n, x)),
-  True => NegSucc(toNat(n, complement(n, x))) }`, proved equal to the current
-  definition through `toNat(n, x) + toNat(n, complement(n, x)) + 1 = 2^n`
-  (structural induction on the width). `signed_le`/`signed_lt` and the x86
-  comparison materialization inherit it.
-- `mul` is out of scope unless a width-bounded shift-and-add spelling is
-  cheap to prove; note it if left.
-- Fallout: proofs that leaned on the iterated forms' definitional behaviour
-  (`iter_add(n, a, zero)` reduces to `a`; the ripple does not) — `add_comm`,
-  `add_sub_cancel`, `lib/std/arch/x86_64/{model,block}.hthr`,
-  `lib/function_ir_x86*.hthr`, and the lowering/certificate generators in
-  `crates/elab/src`. Expect transports through the equations, not new proofs.
+- `toInt` stays as it is. Its negative branch stopped costing the magnitude
+  when [[int-arithmetic-over-nat-primitives]] landed (one synchronous
+  `subNatNat` descent), so the `complement` respelling this plan once carried
+  — and the structural-induction proof it owed — is dropped (2026-09-09).
+- `mul` is out of scope. The reason is not `mul`'s own spelling — `nat::mul`
+  is one run multiplication since [[nat-run-algebra-primitives]] — but
+  `ofNat` above `2^n`: `mod_succ` is a `decreases` loop subtracting `2^n` once
+  per iteration, so a product above the width costs up to `2^n` iterations,
+  and `nat::mod` is not a run class either. A width-bounded `mul` therefore
+  wants either a shift-and-add spelling or a run-friendly `ofNat`; note which
+  if left.
+- Fallout, smaller than first expected (survey 2026-09-09): `ripple_add_comm`
+  and `ripple_add_sub_cancel` already exist, so the two named transports are
+  pre-paid. The x86 and FunctionIR customers (`lib/std/arch/x86_64/{block,
+  calls,model}.hthr`, `crates/elab/src/function_ir_x86_lower.rs`) name
+  `iterate_increment` directly with small literal counts for RIP advances, and
+  it keeps its name, so those proofs do not move; the native call emitter
+  (`crates/cli/src/native/calls.rs`) already goes through
+  `add_eq_of_ripple_add`, which becomes definitional. What remains unknown
+  until the build says: which proofs lean on the iterated forms' definitional
+  behaviour (`iter_add(n, a, zero)` reduces to `a`; the ripple does not) and
+  need a transport through the equations.
 
 ## Acceptance
 
@@ -64,3 +74,4 @@ stack overflow; `toInt(64, ·)` of a negative value exhausts fuel, and so does
 
 - 2026-09-08: Merge integration is exercising `add_eq_of_ripple_add` and `sub_eq_of_ripple_sub` for native CALL displacement certificates, replacing staged increment/decrement chains without changing the canonical instruction semantics. This is an explicit proof consumer, not the default-operation swap owned here.
 - 2026-09-09: The negative branch of `toInt` no longer costs the magnitude: `int::sub(OfNat(toNat(x)), OfNat(2^n))` is one synchronous `subNatNat` descent since [[int-arithmetic-over-nat-primitives]]; width-64 negative `toInt` is a rail in `lib_std_bitvec.rs`. `bitvec::add`/`sub`'s own `iterate_increment` is unchanged.
+- 2026-09-09: Plan re-evaluated against the Nat/Int run work (coordinator survey): the toInt respelling is dropped (already cheap), mul stays out with the cause named as ofNat above 2^n, and the fallout list shrinks — the comm/cancel transports exist, the x86/FunctionIR customers name iterate_increment (unrenamed) with literal counts. The depth budget ([[kernel-native-depth-budget]], f5d73da) now refuses the 2^63 cases with OutOfFuel, so the acceptance rail's refusal control (nested_scrutinee_values_are_refused_rather_than_aborting in lib_std_bitvec.rs) must flip to a success control when the swap lands. Round chartered.
