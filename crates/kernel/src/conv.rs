@@ -74,7 +74,7 @@ use std::rc::Rc;
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
-use crate::reduce::{BodyCache, Defs};
+use crate::reduce::{BodyCache, Defs, NATIVE_DEPTH_LIMIT};
 use crate::term::{
     Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
@@ -583,6 +583,11 @@ struct Conv<'v, D: Dom<'v>> {
     /// pushes never introduce definitions, so the answer cannot change while
     /// a comparison runs.
     has_defs: bool,
+    /// Live native frames of [`Conv::tm`]/[`Conv::ty`], bounded by
+    /// [`NATIVE_DEPTH_LIMIT`] and handed on to every evaluator run from
+    /// inside them, so that one budget bounds the whole stack
+    /// (docs/native-depth-budget-design.md).
+    depth: u32,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -592,7 +597,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             .bindings
             .iter()
             .any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -600,6 +605,18 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             return Err(ConvError::OutOfFuel);
         }
         self.fuel -= 1;
+        Ok(())
+    }
+
+    /// Take one native frame of the depth budget; the caller gives it back
+    /// with `self.depth -= 1` once its recursive call has returned. Paired by
+    /// hand rather than by a guard type because the two comparison nodes are
+    /// the only callers and a guard would borrow `self` across their bodies.
+    fn descend(&mut self) -> R {
+        if self.depth >= NATIVE_DEPTH_LIMIT {
+            return Err(ConvError::OutOfFuel);
+        }
+        self.depth += 1;
         Ok(())
     }
 
@@ -701,9 +718,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         if D::ty_eq_fast(a, b) {
             return Ok(());
         }
-        let mut wa = D::whnf_ty_opaque(self, env, a)?;
-        let mut wb = D::whnf_ty_opaque(self, env, b)?;
-        self.ty_w(env, &mut wa, &mut wb, l)
+        self.descend()?;
+        let out = (|| {
+            let mut wa = D::whnf_ty_opaque(self, env, a)?;
+            let mut wb = D::whnf_ty_opaque(self, env, b)?;
+            self.ty_w(env, &mut wa, &mut wb, l)
+        })();
+        self.depth -= 1;
+        out
     }
 
     /// Unfold a δ-stuck **neutral** type until its head is a former or a
@@ -1082,12 +1104,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
             }
         }
+        self.descend()?;
         let result = (|| {
             let w = D::whnf_ty(self, env, ty)?;
             let wa = D::whnf_tm_opaque(self, env, a)?;
             let wb = D::whnf_tm_opaque(self, env, b)?;
             self.tm_w(env, wa, wb, &w, l)
         })();
+        self.depth -= 1;
         if let Some(key) = key {
             match &result {
                 Ok(()) => {

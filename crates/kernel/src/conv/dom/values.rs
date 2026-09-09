@@ -437,6 +437,12 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
 /// account (design §6): the evaluator spends from it and hands back what is
 /// left, so a reduction step and a comparison node cost the same one unit
 /// they cost today.
+///
+/// The **depth** budget is shared the same way and for a more literal reason:
+/// this call stands on conversion's own native frames, so the machine is told
+/// how many there are and counts its re-entries on top of them
+/// (docs/native-depth-budget-design.md). It is not handed back — the frames
+/// are gone when the run returns.
 fn run<'v, T>(
     cv: &mut Conv<'v, Values>,
     env: &Env<'v>,
@@ -444,6 +450,7 @@ fn run<'v, T>(
 ) -> R<T> {
     let defs = cv.defs(env);
     let mut ev = Eval::new(cv.fuel, defs, env.gamma.base, env.arena);
+    ev.reserve_depth(cv.depth);
     let out = f(&mut ev);
     cv.fuel = ev.fuel();
     out.map_err(|_| crate::conv::ConvError::OutOfFuel)

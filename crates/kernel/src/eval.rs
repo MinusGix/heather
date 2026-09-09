@@ -50,7 +50,9 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use crate::level::Level;
-use crate::reduce::{beta_elim_ty, beta_elim_tm, step_type_delta, Defs, OutOfFuel, Rec};
+use crate::reduce::{
+    beta_elim_ty, beta_elim_tm, step_type_delta, Defs, OutOfFuel, Rec, NATIVE_DEPTH_LIMIT,
+};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     nth, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
@@ -161,6 +163,12 @@ pub struct Eval<'a, 'v> {
     /// scrutinee evaluated before its elimination is built) use it as a
     /// stack of stacks: each records the height it entered at.
     frames: Vec<Frame<'v>>,
+    /// Native frames already standing under this machine: one per live
+    /// re-entry of [`Eval::drive`], plus whatever the caller reserved with
+    /// [`Eval::reserve_depth`]. Bounded by
+    /// [`crate::reduce::NATIVE_DEPTH_LIMIT`]
+    /// (docs/native-depth-budget-design.md).
+    depth: u32,
     /// Set while a caller has asked for the **δ-transparent** weak head
     /// value ([`Eval::delta_whnf`]). An eliminator stuck on a glued
     /// scrutinee then unfolds the scrutinee and retries, instead of
@@ -184,12 +192,20 @@ impl<'a, 'v> Eval<'a, 'v> {
         base: CtxBase,
         arena: &'v ValueArena<'v>,
     ) -> Eval<'a, 'v> {
-        Eval { fuel, defs, base, arena, frames: Vec::new(), transparent: false }
+        Eval { fuel, defs, base, arena, frames: Vec::new(), depth: 0, transparent: false }
     }
 
     /// The unspent budget.
     pub fn fuel(&self) -> u64 {
         self.fuel
+    }
+
+    /// Declare the native frames the *caller* is already standing on, so that
+    /// the depth budget bounds the whole stack and not this machine's share
+    /// of it. Conversion runs the evaluator from inside its own recursion
+    /// (`conv/dom/values.rs`), and the two interleave on one native stack.
+    pub fn reserve_depth(&mut self, frames: u32) {
+        self.depth = frames;
     }
 
     fn vclo(&self, value: Rc<Val<'v>>) -> &'v TmClo<'v> {
@@ -250,10 +266,17 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// waiting for its memo, an elimination waiting for its head — become
     /// explicit [`Frame`]s on the heap. Non-tail recursion (a scrutinee, an
     /// application's function, a type annotation) stays on the native stack,
-    /// where its depth is the syntax's and the rewriter's own.
+    /// where its depth is the syntax's and the rewriter's own — *except* when
+    /// a value nests scrutinees, which is why each re-entry is counted
+    /// against [`NATIVE_DEPTH_LIMIT`] (docs/native-depth-budget-design.md).
     fn drive(&mut self, start: Work<'v>) -> Res<Rc<Val<'v>>> {
+        if self.depth >= NATIVE_DEPTH_LIMIT {
+            return Err(OutOfFuel);
+        }
+        self.depth += 1;
         let floor = self.frames.len();
         let out = self.drive_from(start, floor);
+        self.depth -= 1;
         // An error unwinds whatever this drive had pending; a thunk that
         // never reached its frame keeps no memo (design §6).
         self.frames.truncate(floor);

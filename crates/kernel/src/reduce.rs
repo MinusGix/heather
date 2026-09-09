@@ -50,6 +50,24 @@ use crate::term::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutOfFuel;
 
+/// How deep the checker's **native** recursion may go before it reports
+/// [`OutOfFuel`] instead of overflowing the thread's stack.
+///
+/// Fuel bounds the *steps* a reduction takes; it does not bound the frames a
+/// reduction stands on, and the two are unrelated when a value nests
+/// scrutinees (docs/native-depth-budget-design.md). The account is shared
+/// across conversion's recursion and the evaluator's re-entries for the same
+/// reason fuel is: they interleave on one native stack.
+///
+/// Like fuel, this is an invariant on *whether* the machine answers and never
+/// a cost model — an answer given under it agrees with the answer the deeper
+/// stack gives. The value sits between what the deepest known good workload
+/// needs and what the 8 MiB rail (`RUST_MIN_STACK` in `scripts/test`)
+/// measurably holds — a narrower gap than it sounds, because a re-entry costs
+/// kilobytes of stack. Both ends are measured in the design doc, and moving
+/// this number without re-reading them will break one end or the other.
+pub const NATIVE_DEPTH_LIMIT: u32 = 1024;
+
 // ---------------------------------------------------------------------------
 // δ: definition unfolding, and the layer that owns it
 // ---------------------------------------------------------------------------

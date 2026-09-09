@@ -1,9 +1,9 @@
 ---
 title: Refuse excessive computation with OutOfFuel before the native stack overflows
-status: open
+status: closed
 labels: [kernel,evaluator,diagnostics]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-09
 ---
 
 The evaluator keeps its tail positions on a trampoline (`Eval::drive`), so a
@@ -58,3 +58,8 @@ checker is meant to be total on ill-typed input.
   (syntactic) depth.
 - **[[bitvec-width-bounded-defaults]]** removes the library's largest source
   of such computations; this issue is about what happens when one remains.
+
+## Log
+
+- 2026-09-09: Round landed (tree left dirty for review). Probed first: the `half(2^20)` reproducer no longer reproduces — run-program arithmetic classifies the fold and iterates it over the run, so it checks in the module baseline and is pinned as a *success* control in `nat_parity.rs`. The nested-scrutinee reproducer is live and minimizes to the count alone: `toNat(64, bitvec::add(64, ofNat(64,0), ofNat(64,N)))` answers at N=256, exhausts fuel at N=1024, and aborts the release checker at N>=2560 (debug N>=2048) on the 8 MiB rail. Depth carried entirely by `Eval::drive` re-entries; conversion's `Conv::tm`/`Conv::ty` recursion is counted too because it interleaves with the evaluator on one stack (`conv/dom/values.rs::run` now calls `Eval::reserve_depth`). Cost per counted level ~3.5 KB release / ~4 KB debug, linear in the stack (largest answering bound: 1024 at 4 MiB, 2304/2048 at 8 MiB, >=5120 at 16 MiB) — nearly no debug/release gap, unlike [[numeral-stack-depth]]'s 18x, because these are `drive_from`'s own `Work`/`Elim` locals. `NATIVE_DEPTH_LIMIT = 512` (~2 MiB, a quarter of the rail) leaves the uncounted elaborator and `typing.rs` frames three quarters; `heather check lib/std` needs 64 and fails at 32, an 8x margin. Reporting stays plain `OutOfFuel`: a reason field ripples across 42 construction/pattern sites in three crates plus the `ConvError`/`TypeError` variants, and the counter alternative would land on `drive`, the hottest function. Design: docs/native-depth-budget-design.md.
+- 2026-09-09: Bound corrected during verification: 512 broke two live workloads (the `conv/computed-numeral` bench family at n=512 and the x86 native-certificate CLI tests, both with the conversion counter pinned high, so the requirement is evaluator depth), and 576 fixed both. `NATIVE_DEPTH_LIMIT` is 1024 — about 1.8x the deepest known good workload and about 2x under what an 8 MiB stack holds. That whole usable range is one decade wide, which is a finding about the frame, not about the bound: filed as [[eval-native-frame-size]].

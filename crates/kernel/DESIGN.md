@@ -450,6 +450,17 @@ paper too).
   native, where its depth is the syntax's. And fuel thresholds are asserted
   as **invariants, never as a cost model**: a budget that answers must agree
   with the answer full budget gives.
+- **A depth budget beside the fuel**, on the same policy
+  (`reduce::NATIVE_DEPTH_LIMIT`, docs/native-depth-budget-design.md). "Its
+  depth is the syntax's" is true of a term and false of a *value* that nests
+  scrutinees: forcing the head bit of an iterated increment re-enters
+  `Eval::drive` once per unit of the count, from shallow syntax, and the fuel
+  is spent on the way back out — so the machine went deep first and aborted.
+  Live `drive` re-entries and live `Conv::tm`/`Conv::ty` nodes are counted
+  against one bound, shared the way fuel is because they interleave on one
+  native stack (`Eval::reserve_depth`). Exceeding it is `OutOfFuel`; the bound
+  is a fraction of what the 8 MiB rail measurably holds, so the frames the
+  counter does not see have room.
 - **A conversion owns one arena-backed value graph.** Rust's ordinary `Rc`
   destruction recursively follows a unique child. Evaluator thunks made that
   ownership path proportional to the forced computation even though

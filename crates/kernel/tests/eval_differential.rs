@@ -57,7 +57,7 @@ use common::Rng;
 use heather_kernel::eval::Eval;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{whnf_term_delta, whnf_type_delta, Defs};
+use heather_kernel::reduce::{whnf_term_delta, whnf_type_delta, Defs, NATIVE_DEPTH_LIMIT};
 use heather_kernel::term::{
     CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     SubstTail, Term, Type,
@@ -1448,6 +1448,75 @@ fn a_failed_thunk_is_not_poisoned() {
         "re-forcing the same unfolding under a larger budget must succeed"
     );
     let _ = psi;
+}
+
+/// `f(f(… f(su ze)))` for `f = λx. elim_Nat(_. Nat; ze; a b. b; x)`, nested
+/// `d` deep. Every layer is `ze`, so the answer does not depend on `d`; what
+/// depends on `d` is the **native** depth, and that is the point.
+///
+/// Nesting the eliminations in the *syntax* would not do it: `step_eval`
+/// walks a syntactic scrutinee chain to the bottom before the first `drive`
+/// starts, so the machines run one after another. Here each scrutinee is a
+/// *variable* standing for the argument thunk, so forcing it re-enters
+/// `drive` while the enclosing `drive` is still in its loop — one live frame
+/// per layer, from syntax of fixed depth. That is the shape
+/// `iterate_increment` builds (docs/native-depth-budget-design.md §1).
+fn nested_scrutinee_value(d: u32) -> Rc<Term> {
+    let drain = Rc::new(Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::new(Type::Nat),
+        body: Rc::new(Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::Var(LocalVar(0))),
+            scrut: Rc::new(Term::Var(LocalVar(0))),
+        }),
+    });
+    let mut t = numeral(1);
+    for _ in 0..d {
+        t = Rc::new(Term::App {
+            fun: Rc::clone(&drain),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: t,
+        });
+    }
+    t
+}
+
+/// The **depth** budget is the fuel policy applied to the other resource a
+/// reduction spends (docs/native-depth-budget-design.md): a machine that
+/// answers under it answers what the deeper stack answers, and a machine that
+/// cannot answer says `OutOfFuel` rather than aborting the process. Fuel does
+/// not stand in for it — the budget here is exhausted with the full fuel
+/// budget untouched, which is precisely the case that used to overflow.
+///
+/// The small budget is expressed the way conversion expresses it: reserve the
+/// frames the caller is already standing on (`Eval::reserve_depth`), leaving
+/// the machine a handful of its own.
+#[test]
+fn a_deep_value_is_refused_rather_than_overflowing_the_stack() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    let gamma = LocalCtx::nil();
+    let t = nested_scrutinee_value(64);
+    let arena = ValueArena::new();
+
+    let mut small = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
+    small.reserve_depth(NATIVE_DEPTH_LIMIT - 8);
+    assert!(
+        small.eval_tm(&t, &Env::empty()).is_err(),
+        "a value 64 scrutinees deep must not answer on eight frames"
+    );
+
+    let mut large = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
+    let v = large
+        .eval_tm(&t, &Env::empty())
+        .expect("the same value must answer on the full budget");
+    assert!(matches!(&*v, Val::Zero), "and it must be the same answer");
 }
 
 /// The rewriter and the evaluator agree on *which* inputs are cheap: with a

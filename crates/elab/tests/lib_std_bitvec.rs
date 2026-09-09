@@ -503,9 +503,10 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
 /// now one synchronous `subNatNat` descent the kernel cancels in a step.
 /// `signed_overflow_add` is stated with a count-one right operand: it goes
 /// through the old `add`, whose `iterate_increment` over a `2^63` count is
-/// the excessive unary computation the resource-diagnostic clause of
-/// issues/bitvec-closed-reduction-cost.md still owns (a stack overflow, not
-/// `OutOfFuel`).
+/// the excessive unary computation issues/bitvec-width-bounded-defaults.md
+/// owns. That computation is now *refused* rather than aborting the process —
+/// see `nested_scrutinee_values_are_refused_rather_than_aborting` below — but
+/// a refusal is still not a proof, so the rail keeps the count-one form.
 #[test]
 fn consumers_over_computed_machine_width_producers_cost_the_width() {
     const M: u128 = 1 << 64;
@@ -549,6 +550,38 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
         let msg = run(&format!("import nat;\ntheorem {name}(): {wrong} {{ refl }}"))
             .expect_err("a wrong consumer result must be refused");
         assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+    }
+}
+
+/// The computations the rail above had to state around, because they did not
+/// return a verdict at all: they aborted the test binary with a native stack
+/// overflow. The old `add` builds `increment(n, ih)` with `ih` the *pending*
+/// elimination of the previous increment, so forcing the result's head bit
+/// re-enters the evaluator natively once per unit of the count — a depth the
+/// syntax does not show and the fuel does not bound. A depth budget beside
+/// the fuel makes them ordinary refusals
+/// (docs/native-depth-budget-design.md, issues/kernel-native-depth-budget.md).
+///
+/// The second case is the shape minimized to the count alone: it is the same
+/// `bitvec::add` the rail exercises at count 8 without coming near the
+/// budget, so the pair also says the budget separates the two.
+#[test]
+fn nested_scrutinee_values_are_refused_rather_than_aborting() {
+    const HIGH: u128 = 1 << 63;
+    let high_sum = format!("ripple_add(64, ofNat(64, 5), ofNat(64, {}))", HIGH - 5);
+    for (name, goal) in [
+        (
+            "signed_overflow_of_two_high_sums",
+            format!("signed_overflow_add(64, {high_sum}, {high_sum}) = True"),
+        ),
+        (
+            "old_add_over_a_deep_count",
+            "toNat(64, bitvec::add(64, ofNat(64, 0), ofNat(64, 4096))) = 4096".to_string(),
+        ),
+    ] {
+        let msg = run(&format!("import nat;\ntheorem {name}(): {goal} {{ refl }}"))
+            .expect_err("an excessive computation must be refused, not abort the process");
+        assert!(msg.contains("OutOfFuel"), "{name}: {msg}");
     }
 }
 

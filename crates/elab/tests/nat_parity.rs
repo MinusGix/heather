@@ -70,6 +70,18 @@ theorem d(): half(7) = 3 { refl }
 theorem e(): half(8) = 4 { refl }");
 }
 
+/// A course-of-values `half` at a large closed argument was the first
+/// reproducer of issues/kernel-native-depth-budget.md — one native re-entry
+/// of the evaluator per level, and an abort long before the fuel was spent.
+/// It is a *success* control rather than a refusal one: the run-program
+/// arithmetic (issues/nat-run-algebra-primitives.md) classifies this fold and
+/// iterates it over the run instead of descending it, so the depth this used
+/// to cost is no longer spent at all (docs/native-depth-budget-design.md §2).
+#[test]
+fn half_computes_at_a_large_closed_argument() {
+    ok("theorem t(): half(1048576) = 524288 { refl }");
+}
+
 /// The control that says the window slides the right way. A tuple assembled
 /// one component off computes something at every argument — it is only *which*
 /// value that gives it away, and `half(7)` is where an off-by-one shows.
