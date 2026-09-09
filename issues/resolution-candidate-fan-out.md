@@ -3,7 +3,7 @@ title: Resolution tries every instance of a class; Decide makes that the widest 
 status: open
 labels: [elaboration,performance,traits]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-09-09
 ---
 
 Selection filters the registry on the **class key alone** and then elaborates
@@ -63,3 +63,7 @@ outcome.
 - The derived-instance table (`resolve.rs`'s canonical minting) already
   short-circuits repeat goals, so this is about distinct goals, not repeated
   ones.
+
+## Log
+
+- 2026-09-09: 2026-09-09: Ordering landed, set unchanged (docs/reflection-through-decide-instances-design.md §3): Traits::candidates(class, prefer) puts the instances registered at the goal carrier's head first, the head read off the solver parameter's written type at the call site (ResolveOb::applied carries the application's type arguments) and carried into the canonical-derivation mint. Datum for the narrowing this issue owns: over computed width-64 operands every Decide candidate whose head differs from the goal's costs ~6.5 GB to unify, won or rejected ([[type-level-reduction-over-computed-operands]]); with 15 instances the order alone took the closed fact from that to the library's footprint.

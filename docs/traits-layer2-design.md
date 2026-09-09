@@ -120,6 +120,18 @@ trace: the failures are what the diagnostic reports (§7).
 Determinism: the candidate order is the sorted canonical-name order, not the
 declaration order and not a `HashMap` iteration order.
 
+*Amended 2026-09-09.* The order is canonical-name order **within** two groups:
+the instances registered at the goal carrier's head first, then the rest. The
+head is not recovered from the lowered goal — the paragraph above still holds
+— but read off the solver parameter's *written* type at the call site, where
+its type argument is either a type parameter the application has already
+applied or an applied former spelled out. Where nothing can be read the order
+is the plain one. Ordering rather than keying, because a candidate at another
+head can still fit by unfolding the goal, and that fit is kept; what changed
+is that it is no longer built *first*, since building it is where the cost
+went over computed operands (`docs/reflection-through-decide-instances-design.md`
+§2–§3).
+
 ### 3.2 Backchaining is the existing insertion machinery
 
 A candidate is built by elaborating the bare reference `InstanceGlobal` in

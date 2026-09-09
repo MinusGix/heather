@@ -141,6 +141,7 @@ impl Builder<'_> {
             ty,
             level,
             &self.e.display_type(self.original, ty),
+            None,
             self.span,
             &mut Vec::new(),
         )

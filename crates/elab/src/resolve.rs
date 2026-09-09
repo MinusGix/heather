@@ -25,7 +25,7 @@ use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, Subst
 use heather_kernel::typing;
 use heather_syntax::{Expr, ExprKind, Span};
 
-use crate::{Cx, ElabError, Elaborator, stats};
+use crate::{Cx, ElabError, Elaborator, oracle, stats};
 
 /// How deep backchaining may go before it refuses. Declaration-time
 /// structural decrease (design §6) is what makes this unreachable; the cap is
@@ -33,6 +33,16 @@ use crate::{Cx, ElabError, Elaborator, stats};
 /// check (a class whose instances were declared before this round) must still
 /// terminate.
 const MAX_DEPTH: usize = 32;
+
+/// The reduction allowance for a derived-table lookup
+/// ([`Elaborator::derived_hit`]) and for the pending queue's duplicate check.
+/// The table is keyed by conversion, and a conversion that has to reduce two
+/// closed goals' operands to find them *unequal* can cost a proof's whole
+/// budget (`issues/type-level-reduction-over-computed-operands.md`); the
+/// table is an optimization, so its lookup is bounded and an inconclusive
+/// comparison is a miss, which costs the registry route and a second mint,
+/// never correctness.
+const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 
 /// One record of a resolution search — the trace is a flat list of these, not
 /// a prose paragraph (design §7, `issues/ai-facing-tooling.md` §7). `key` is
@@ -43,6 +53,15 @@ pub struct TraceLine {
     pub depth: usize,
     pub key: &'static str,
     pub value: String,
+}
+
+/// Two goals whose carrier heads are both known and differ are not compared
+/// by conversion in the derived table (see [`DerivedInst::head`]).
+fn heads_may_agree(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
 }
 
 fn line(depth: usize, key: &'static str, value: impl Into<String>) -> TraceLine {
@@ -80,6 +99,14 @@ pub(crate) struct DerivedInst {
     /// are relative to the Ψ that was, and Ψ only grows, so a lookup rebases
     /// by the difference (the same bookkeeping the pending queue does).
     pub at: u32,
+    /// The goal carrier's head the search was ordered by, when it was read
+    /// ([`Elaborator::solver_carrier_head`]). A lookup at a goal with a
+    /// *different* known head skips the conversion: two goals at different
+    /// heads can still convert, but deciding that means unfolding both, which
+    /// over computed operands is the cost the head order exists to avoid
+    /// (docs/reflection-through-decide-instances-design.md §3); a miss here
+    /// costs the registry route, never correctness.
+    pub head: Option<String>,
 }
 
 impl Elaborator {
@@ -87,16 +114,21 @@ impl Elaborator {
     ///
     /// `display` is what the diagnostic calls the goal (the parameter's
     /// written type). It is a display and never a key.
+    ///
+    /// `prefer` is the goal carrier's head key when the caller could read it
+    /// off the solver parameter's written type ([`Elaborator::solver_carrier_head`]);
+    /// it orders the registry's candidates and decides nothing.
     pub(crate) fn resolve_goal(
         &self,
         cx: &Cx,
         goal: &Type,
         lvl: &Level,
         display: &str,
+        prefer: Option<&str>,
         span: Span,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
-        self.resolve_goal_from(cx, goal, lvl, display, span, tr, &mut None)
+        self.resolve_goal_from(cx, goal, lvl, display, prefer, span, tr, &mut None)
     }
 
     /// [`Self::resolve_goal`], reporting **where an upcast came from**.
@@ -113,12 +145,14 @@ impl Elaborator {
     /// makes the whole mechanism inert — including the recursive one, since
     /// backchaining recurses through `elab_check` into [`Self::resolve_goal`]
     /// and so can never leak a nested search's provenance into an outer one.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_goal_from(
         &self,
         cx: &Cx,
         goal: &Type,
         lvl: &Level,
         display: &str,
+        prefer: Option<&str>,
         span: Span,
         tr: &mut Vec<TraceLine>,
         up: &mut Option<(Term, Type)>,
@@ -138,7 +172,7 @@ impl Elaborator {
         //    because a hit is a *reference to the very value* the registry
         //    route would rebuild: it cannot shadow anything, since a local of
         //    the goal type would have been minted from nothing.
-        if let Some(t) = self.derived_hit(cx, goal) {
+        if let Some(t) = self.derived_hit(cx, goal, prefer) {
             return Some(t);
         }
 
@@ -204,8 +238,13 @@ impl Elaborator {
             return None;
         }
         // Candidates in a *stated* order — sorted by canonical name, never
-        // declaration order and never `HashMap` order (design §3.1).
-        let cands = self.traits.candidates(&ckey);
+        // declaration order and never `HashMap` order (design §3.1) — with
+        // the instances keyed at the goal carrier's own head first, when the
+        // caller could name it.
+        let cands = self.traits.candidates(&ckey, prefer);
+        if let Some(head) = prefer {
+            tr.push(line(depth, "head", head.to_string()));
+        }
         if cands.is_empty() {
             tr.push(line(
                 depth,
@@ -260,7 +299,7 @@ impl Elaborator {
                         // application directly; open indices are unmintable in
                         // any case. This costs optional sharing, never
                         // correctness, and avoids one global per literal length.
-                        self.record_derived(goal, lvl);
+                        self.record_derived(goal, lvl, prefer);
                     }
                     return Some(t);
                 }
@@ -480,13 +519,24 @@ impl Elaborator {
     /// A reference to the already-minted derivation of this goal, if there is
     /// one. Keyed by conversion, which is the right notion of "the same goal"
     /// and needs no encoding of a kernel type (design §9.2).
-    fn derived_hit(&self, cx: &Cx, goal: &Type) -> Option<Term> {
+    /// Conversion under [`DERIVED_LOOKUP_FUEL`]: the table's notion of "the
+    /// same goal", with an inconclusive answer counted as "not".
+    fn derived_conv(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
+        stats::time_kernel(|| {
+            oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel.min(DERIVED_LOOKUP_FUEL))
+                .convert_type(&cx.gamma, Layer::Prog, ty, goal, lvl)
+                .is_ok()
+        })
+    }
+
+    fn derived_hit(&self, cx: &Cx, goal: &Type, prefer: Option<&str>) -> Option<Term> {
         let now = self.psi.bindings.len() as u32;
         let d = self
             .traits
             .derived()
             .iter()
-            .find(|d| self.conv_here(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
+            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .find(|d| self.derived_conv(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
         Some(self.derived_ref(cx, d.abs))
     }
 
@@ -524,22 +574,30 @@ impl Elaborator {
     /// the registry (this is called from that branch alone), and only while no
     /// goals are in flight (`goal_base == 0`), which is what keeps the queued
     /// type in a world the mint can still read.
-    fn record_derived(&self, goal: &Type, lvl: &Level) {
+    ///
+    /// `prefer` travels with the goal: the mint re-runs the search in the
+    /// empty context, and the head that ordered the first search is what
+    /// keeps the second from building the general candidates first.
+    fn record_derived(&self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
         if self.attempt.goal_arena.base() != 0 || !self.type_is_closed(goal, lvl) {
             return;
         }
         let mut pending = self.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, l, _)| {
-            self.goal_oracle()
-                .convert_type(&LocalCtx::nil(), Layer::Prog, t, goal, l)
-                .is_ok()
+        if pending.iter().any(|(t, l, _, head)| {
+            heads_may_agree(head.as_deref(), prefer)
+                && self.derived_conv(&Cx::empty(), t, goal, l)
         }) {
             return;
         }
         // With the Ψ length at capture: the item that recorded this goal goes
         // on to push its own globals, and a stored type's `GlobalVar`s are
         // relative to the Ψ that was (see [`Self::mint_pending`]).
-        pending.push((goal.clone(), lvl.clone(), self.psi.bindings.len() as u32));
+        pending.push((
+            goal.clone(),
+            lvl.clone(),
+            self.psi.bindings.len() as u32,
+            prefer.map(str::to_string),
+        ));
     }
 
     /// Is this type closed? Asked of the kernel, in the empty context — the
@@ -579,30 +637,31 @@ impl Elaborator {
         // mint either registers a table entry (and the goal that produced it
         // now hits) or fails and is dropped.
         for _ in 0..MAX_DEPTH {
-            let pending: Vec<(Type, Level, u32)> =
+            let pending: Vec<(Type, Level, u32, Option<String>)> =
                 std::mem::take(&mut self.pending_derived.borrow_mut());
             if pending.is_empty() {
                 return;
             }
-            for (goal, lvl, at) in pending {
+            for (goal, lvl, at, prefer) in pending {
                 // The item pushed its own globals after this goal was
                 // captured, so every `GlobalVar` in it now points that much
                 // further out.
                 let grew = self.psi.bindings.len() as u32 - at;
-                self.mint_one(&goal.shift_global(grew), &lvl);
+                self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref());
             }
         }
         self.pending_derived.borrow_mut().clear();
     }
 
-    fn mint_one(&mut self, goal: &Type, lvl: &Level) {
+    fn mint_one(&mut self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
         let cx = Cx::empty();
-        if self.derived_hit(&cx, goal).is_some() {
+        if self.derived_hit(&cx, goal, prefer).is_some() {
             return;
         }
         let mut tr = Vec::new();
         let span = Span { start: 0, end: 0 };
-        let Some(term) = self.resolve_goal(&cx, goal, lvl, "a derived instance", span, &mut tr)
+        let Some(term) =
+            self.resolve_goal(&cx, goal, lvl, "a derived instance", prefer, span, &mut tr)
         else {
             return;
         };
@@ -648,6 +707,7 @@ impl Elaborator {
             // The Ψ length *before* the push above — the world the stored
             // type is scoped in.
             at: abs,
+            head: prefer.map(str::to_string),
         };
         self.semantic_commit_derived(derived);
         self.refresh_delta_psi();

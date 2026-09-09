@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x04";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x04";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x05";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x05";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1441,11 +1441,13 @@ fn get_designation(r: &mut Reader<'_>) -> Result<DesignationInfo, ModuleImageDec
 
 fn put_derived(w: &mut Writer, info: &DerivedInst) {
     w.string(&info.name); w.u32(info.abs); put_type(w, &info.ty); put_level(w, &info.level); w.u32(info.at);
+    w.option(info.head.as_ref(), |w, head| w.string(head));
 }
 
 fn get_derived(r: &mut Reader<'_>) -> Result<DerivedInst, ModuleImageDecodeError> {
     Ok(DerivedInst {
         name: r.string()?, abs: r.u32()?, ty: get_type(r)?, level: get_level(r)?, at: r.u32()?,
+        head: r.option(|r| r.string())?,
     })
 }
 

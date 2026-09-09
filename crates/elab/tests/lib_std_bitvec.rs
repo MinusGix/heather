@@ -595,6 +595,53 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
     }
 }
 
+/// Closed order facts stated as the *specification* and discharged by
+/// `decide` (issues/reflection-through-decide-instances.md,
+/// docs/reflection-through-decide-instances-design.md): the `Decide`
+/// instances keyed at `unsigned_lt`/`unsigned_le`/`signed_lt`/`signed_le` run
+/// the ripple borrow or `int::le_dec` over `toInt`, and resolution builds
+/// them before the derived `Le` instances that fit the same goals by
+/// unfolding. The literal cases were already within reach of the derived
+/// route; the *computed*-operand cases are the ones the head-keyed instances
+/// and the candidate order exist for — the unfolding candidate exhausted
+/// gigabytes over these operands. The refusal controls are false
+/// specifications: refused by the kernel, reported at the `decide`, naming
+/// the instance that decided them.
+#[test]
+fn closed_order_specifications_are_discharged_by_decide() {
+    const HIGH: u128 = 1 << 63;
+    let of = |v: u128| format!("ofNat(64, {v})");
+    let high_sum = format!("ripple_add(64, {}, {})", of(5), of(HIGH - 5));
+    let above = format!("ripple_add(64, {}, {})", of(HIGH), of(1));
+    let one_sum = format!("ripple_add(64, {}, {})", of(0), of(1));
+    ok(&format!(
+        "import nat;\nimport int;\n\
+         theorem unsigned_boundary(): unsigned_lt(64, {z}, {h}) {{ decide }}\n\
+         theorem unsigned_le_boundary(): unsigned_le(64, {h}, {h}) {{ decide }}\n\
+         theorem signed_boundary(): signed_lt(64, {h}, {z}) {{ decide }}\n\
+         theorem signed_le_boundary(): signed_le(64, {h}, {m}) {{ decide }}\n\
+         theorem composed(): unsigned_lt(64, {z}, one(64)) ∧ ¬signed_lt(64, {z}, {h}) {{ decide }}\n\
+         theorem computed_unsigned(): unsigned_lt(64, {high_sum}, {above}) {{ decide }}\n\
+         theorem computed_unsigned_le(): unsigned_le(64, {high_sum}, {above}) {{ decide }}\n\
+         theorem computed_signed(): signed_lt(64, {high_sum}, {one_sum}) {{ decide }}\n\
+         theorem computed_signed_le(): signed_le(64, {high_sum}, {one_sum}) {{ decide }}\n",
+        z = "zero(64)", h = of(HIGH), m = of(HIGH - 1),
+    ));
+    for (name, wrong, instance) in [
+        ("unsigned_false", format!("unsigned_lt(64, {}, zero(64))", of(HIGH)), "bitvec::unsigned_lt::Decide"),
+        ("unsigned_false_computed", format!("unsigned_lt(64, {above}, {high_sum})"), "bitvec::unsigned_lt::Decide"),
+        ("signed_false", format!("signed_lt(64, zero(64), {})", of(HIGH)), "bitvec::signed_lt::Decide"),
+        ("signed_le_false", format!("signed_le(64, {}, {})", of(HIGH - 1), of(HIGH)), "bitvec::signed_le::Decide"),
+        ("narrow_false", "unsigned_le(4, ofNat(4, 9), ofNat(4, 3))".to_string(), "bitvec::unsigned_le::Decide"),
+    ] {
+        let msg = run(&format!("import nat;\nimport int;\ntheorem {name}(): {wrong} {{ decide }}"))
+            .expect_err("a false specification must be refused");
+        assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+        assert!(msg.contains("`decide` resolved `Decide<"), "{name}: {msg}");
+        assert!(msg.contains(instance), "{name}: {msg}");
+    }
+}
+
 /// The iterated form's depth, and the pair that separates it from the
 /// width-bounded `add`. `iter_add` builds `increment(n, ih)` with `ih` the
 /// *pending* elimination of the previous increment, so forcing the result's

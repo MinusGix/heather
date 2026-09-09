@@ -20,6 +20,9 @@ use heather_syntax::{
     Param, RecordLitField, Span, Stmt, Ty, TyKind,
 };
 
+use heather_kernel::term::Term;
+
+use crate::application::ParamMeta;
 use crate::names::qkey;
 use crate::resolve::DerivedInst;
 use crate::{ElabError, Elaborator, R, err};
@@ -246,15 +249,34 @@ impl Traits {
         self.instances.insert(key, info);
     }
 
-    pub(crate) fn candidates(&self, class_key: &str) -> Vec<(String, bool, String)> {
+    /// The candidates of a class in the order resolution tries them
+    /// (`docs/traits-layer2-design.md` §3.1): sorted by canonical name, except
+    /// that the instances keyed at `prefer` — the head of the goal's carrier,
+    /// when the caller could read it off the solver parameter's written type —
+    /// come first, in that same order. A head-keyed instance is the specific
+    /// one; a candidate at another head can still fit by unfolding the goal,
+    /// and building it costs that unfolding whether or not it wins
+    /// (docs/reflection-through-decide-instances-design.md §3).
+    pub(crate) fn candidates(
+        &self,
+        class_key: &str,
+        prefer: Option<&str>,
+    ) -> Vec<(String, bool, String)> {
         let mut out: Vec<_> = self
             .instances
             .iter()
             .filter(|((class, _, _), _)| class == class_key)
-            .map(|(_, info)| (info.global.clone(), info.parameterized, info.index.clone()))
+            .map(|((_, head, _), info)| {
+                (
+                    prefer.is_none_or(|p| p != head),
+                    info.global.clone(),
+                    info.parameterized,
+                    info.index.clone(),
+                )
+            })
             .collect();
         out.sort();
-        out
+        out.into_iter().map(|(_, g, p, i)| (g, p, i)).collect()
     }
 
     pub(crate) fn instances_answering(
@@ -1348,6 +1370,58 @@ impl Elaborator {
     /// that might mean two things.
     pub(crate) fn carrier_key(&self, head: &str) -> String {
         self.key_of(head).unwrap_or_else(|| head.to_string())
+    }
+
+    /// The registry head key of a solver parameter's carrier at a call
+    /// site, read off the parameter's **written** type — `Decide<P>` with
+    /// `P` a type parameter the call has already solved, or `Decide<Le(n, m)>`
+    /// spelled out — so that resolution can try the instances keyed there
+    /// first (`docs/reflection-through-decide-instances-design.md` §3).
+    /// `None` whenever the head is not one identifier: the order then stays
+    /// the plain canonical one, and nothing is decided here either way.
+    ///
+    /// A solved type parameter is applied to the callee as a *term* (the
+    /// carrier's code) before any solver parameter is reached, so it is read
+    /// off `applied`'s spine — the type arguments lead it — and its own spine
+    /// head is a global the current Ψ names. A written applied former
+    /// resolves the way an instance head does at declaration.
+    pub(crate) fn solver_carrier_head(
+        &self,
+        written: &Ty,
+        params: &[ParamMeta],
+        applied: &Term,
+    ) -> Option<String> {
+        let TyKind::Named { args, .. } = &written.kind else {
+            return None;
+        };
+        let [carrier] = args.as_slice() else {
+            return None;
+        };
+        if let TyKind::Named { name, args } = &carrier.kind
+            && args.is_empty()
+            && let Some(position) = params
+                .iter()
+                .filter(|p| p.is_type)
+                .position(|p| p.name == *name)
+        {
+            let mut type_args = Vec::new();
+            let mut head = applied;
+            while let Term::App { fun, arg, .. } = head {
+                type_args.push(&**arg);
+                head = fun;
+            }
+            type_args.reverse();
+            let mut head = *type_args.get(position)?;
+            while let Term::App { fun, .. } = head {
+                head = fun;
+            }
+            let Term::GlobalTm { var, .. } = head else {
+                return None;
+            };
+            let abs = self.global_abs_of(*var)?;
+            return self.names.global_name_at(abs as u32).map(str::to_string);
+        }
+        head_name(carrier).map(|h| self.carrier_key(h))
     }
 
     /// The **index spelling** of an instance head

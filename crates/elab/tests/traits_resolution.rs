@@ -361,3 +361,42 @@ fn an_unknown_solver_is_refused_by_name() {
     let e = bad("theorem t(n: Nat, h: n = n := omega) : n = n { h }\n");
     assert!(e.contains("omega") && e.contains("solver"), "{e}");
 }
+
+/// Candidates keyed at the goal carrier's own head are tried before the
+/// rest (docs/reflection-through-decide-instances-design.md §3). Both
+/// instances below *fit* `Tag<Wrap(3)>` — `Wrap(3)` unfolds to `Nat`, so the
+/// `Nat` instance verifies too — and canonical order (`Nat::Tag` before
+/// `Wrap::Tag`) would pick the general one. The head-keyed instance is the
+/// specific one and wins; where no instance is keyed at the head, the
+/// unfolding fit still answers, so nothing that resolved before stops.
+///
+/// The two general goals come first on purpose: the value-generic winner is
+/// minted as the canonical derivation of `Tag<Wrap(3)>`, and the table is
+/// keyed by *conversion* (design §9.2), under which `Tag<Nat>` is the same
+/// goal — two instances that fit one goal are an overlap the head key does
+/// not see, and this test wants the order, not that overlap.
+#[test]
+fn a_head_keyed_instance_is_tried_before_one_that_fits_by_unfolding() {
+    // `id` is what puts the carrier into the lowered goal: a class whose
+    // fields never mention `T` lowers to the same Σ at every carrier, and then
+    // no instance's parameter has anything to unify against.
+    ok("class Tag<T> { tag: Nat, id: T -> T }
+fn Wrap(n: Nat) -> Type { Nat }
+fn Wrap2(n: Nat) -> Type { Nat }
+instance Tag<Nat> { tag := 1, id := λ x => x }
+instance(n: Nat) Tag<Wrap(n)> { tag := 2, id := λ x => x }
+fn get<T: Tag>() -> Nat { T.tag }
+theorem plain(): get<Nat>() = 1 { refl }
+theorem unfolding_still_answers(): get<Wrap2(3)>() = 1 { refl }
+theorem head_keyed_wins(): get<Wrap(3)>() = 2 { refl }
+");
+    // The preference is a trace line, so a failed search shows what it read.
+    let e = bad(
+        "class Tag<T> { tag: Nat, id: T -> T }
+fn Wrap(n: Nat) -> Type { Nat }
+fn get<T: Tag>() -> Nat { T.tag }
+fn oops() -> Nat { get<Wrap(3)>() }
+",
+    );
+    assert!(e.contains("head: main::Wrap"), "{e}");
+}

@@ -39,3 +39,23 @@ form adds a trusted rule or a new kernel term.
 `all_goals` is intentionally named for the general operation rather than tied
 to Omega. Other goal producers and more concise sequencing syntax can reuse it
 later without teaching individual solvers about finite case analysis.
+
+## `decide`
+
+`decide` is a leaf, not a goal producer: at a goal `P` with a `Decide<P>`
+instance in scope it elaborates `logic::decide_yes(refl)`, so resolution picks
+the instance and the kernel runs its decision to judge the `refl`
+(`docs/reflection-through-decide-instances-design.md` §4). It composes with
+the pair above like any other leaf:
+
+```text
+theorem every_bool(b: Bool): bool::Le(b, True) {
+    split_all;
+    all_goals { decide }
+}
+```
+
+A false closed goal is refused by the kernel as `NotConvertible`, reported at
+the `decide` with the instance named. The name gives way to anything the
+writer bound under it; the library's `decide<P>()` keeps its meaning where it
+is applied.

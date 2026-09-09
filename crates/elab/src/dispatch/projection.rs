@@ -221,7 +221,7 @@ impl Elaborator {
             // Every candidate is tried even once one has succeeded: the
             // ambiguity is the point (§4 rule 3).
             let mut up = None;
-            match self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up) {
+            match self.resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up) {
                 Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
             }
@@ -465,7 +465,7 @@ impl Elaborator {
             }
         );
         let mut tr = Vec::new();
-        match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
+        match self.resolve_goal(cx, &goal, &glvl, &display, None, span, &mut tr) {
             Some(t) => Some(Ok((t, goal, glvl))),
             None => Some(Err(ElabError::Resolution {
                 goal: display,

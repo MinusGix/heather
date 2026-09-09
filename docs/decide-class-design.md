@@ -223,3 +223,17 @@ never a `theorem`" discipline exists to protect.
 - **`Iff` has no composition instance.** Nothing wanted one yet; it is
   `And<P -> Q, Q -> P>` in content, and deciding implications is a bigger
   question than this class settled.
+
+## 6. Instance ordering (added 2026-09-09)
+
+Resolution now tries the instances registered at the goal carrier's own head
+before the rest, when the head can be read off the solver parameter's written
+type at the call site; the mechanism, why it is an ordering and not a keying,
+and the measurement that made it load-bearing are
+`docs/reflection-through-decide-instances-design.md` §2–§3. For `Decide` the
+consequence is that a value-generic instance keyed at a specification's head
+— `Decide<unsigned_lt(n, a, b)>` in `std/bitvec` — is built before the
+derived `Le`/`int::Le` instances that fit the same goal by unfolding it, which
+is the "more specific wins" that `issues/decidable-relations-and-comparison.md`
+was asked to settle. The `decide` goal combinator (§4 there) is what consumes
+the instance at a closed goal.

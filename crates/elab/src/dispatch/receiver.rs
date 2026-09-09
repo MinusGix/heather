@@ -124,7 +124,7 @@ impl Elaborator {
             // goal is answered from a child dictionary, the child is what the
             // projection below reads from.
             let mut up = None;
-            let found = self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up);
+            let found = self.resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up);
             match found {
                 Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),

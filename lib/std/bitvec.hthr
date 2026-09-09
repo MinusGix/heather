@@ -800,6 +800,66 @@ fn signed_lt_bit(n: Nat, a, b: BitVec(n)) → Bool {
     xor_bit(sign_bit(n, sub(n, a, b)), signed_overflow_sub(n, a, b))
 }
 
+fn unsigned_le_bit(n: Nat, a, b: BitVec(n)) → Bool { bool::not(unsigned_lt_bit(n, b, a)) }
+
+// ---------------------------------------------------------------------------
+// Decision instances (issues/reflection-through-decide-instances.md). The
+// specification stays the notion at every proof site — `unsigned_lt(n, a, b)`
+// is `toNat(n, a) < toNat(n, b)` and nothing here changes that — and the
+// instance is where the *procedure* is chosen: the unsigned orders decide by
+// the ripple borrow, transported through `borrow_sub_bit_true_iff`, so a
+// closed fact costs the width and never the operands' magnitude; the signed
+// orders decide through `toInt` and `int::le_dec`, which is one synchronous
+// descent since `toInt`'s negative branch stopped costing the magnitude
+// (issues/int-arithmetic-over-nat-primitives.md), so no bridge to
+// `signed_lt_bit` is needed for cost. Keyed at the specification's own head,
+// the instance is the one resolution tries first
+// (docs/reflection-through-decide-instances-design.md §3), so the derived
+// `nat::Le` decision — which also fits, by unfolding `unsigned_lt` — is never
+// built for these goals.
+//
+// `fn`s and not `theorem`s, for `nat::le_dec`'s reason: a decision has to
+// unfold in conversion, or `decide` has nothing to run.
+
+fn unsigned_lt_dec(n: Nat, a, b: BitVec(n)) → unsigned_lt(n, a, b) ∨ ¬unsigned_lt(n, a, b) {
+    match unsigned_lt_bit(n, a, b) as λ c =>
+        (unsigned_lt_bit(n, a, b) = c) → (unsigned_lt(n, a, b) ∨ ¬unsigned_lt(n, a, b)) {
+        True => λ h => Inl(borrow_sub_bit_true_iff(n, a, b).mp(h)),
+        False => λ h => Inr(λ p => absurd(trans(sym(h), borrow_sub_bit_true_iff(n, a, b).mpr(p)))),
+    }(refl)
+}
+
+// `a <= b` is `¬(b < a)`, so the same bit read the other way round; the
+// `False` arm is trichotomy with the `b < a` case refuted by the bit.
+fn unsigned_le_dec(n: Nat, a, b: BitVec(n)) → unsigned_le(n, a, b) ∨ ¬unsigned_le(n, a, b) {
+    match unsigned_lt_bit(n, b, a) as λ c =>
+        (unsigned_lt_bit(n, b, a) = c) → (unsigned_le(n, a, b) ∨ ¬unsigned_le(n, a, b)) {
+        True => λ h => Inr(λ p => nat::lt_irrefl(toNat(n, b))(
+            nat::le_trans(Succ(toNat(n, b)), toNat(n, a), toNat(n, b))(
+                borrow_sub_bit_true_iff(n, b, a).mp(h))(p))),
+        False => λ h => Inl(match nat::lt_trichotomy(toNat(n, a))(toNat(n, b)) {
+            Inl(lt) => nat::le_of_lt(toNat(n, a))(toNat(n, b))(lt),
+            Inr(rest) => match rest {
+                Inl(eq) => j(eq, λ z p => toNat(n, a) <= z, nat::le_refl(toNat(n, a))),
+                Inr(gt) => absurd(trans(sym(h), borrow_sub_bit_true_iff(n, b, a).mpr(gt))),
+            },
+        }),
+    }(refl)
+}
+
+fn signed_lt_dec(n: Nat, a, b: BitVec(n)) → signed_lt(n, a, b) ∨ ¬signed_lt(n, a, b) {
+    int::le_dec(int::isucc(toInt(n, a)), toInt(n, b))
+}
+
+fn signed_le_dec(n: Nat, a, b: BitVec(n)) → signed_le(n, a, b) ∨ ¬signed_le(n, a, b) {
+    int::le_dec(toInt(n, a), toInt(n, b))
+}
+
+instance(n: Nat, a, b: BitVec(n)) Decide<unsigned_lt(n, a, b)> { dec := unsigned_lt_dec(n, a, b) }
+instance(n: Nat, a, b: BitVec(n)) Decide<unsigned_le(n, a, b)> { dec := unsigned_le_dec(n, a, b) }
+instance(n: Nat, a, b: BitVec(n)) Decide<signed_lt(n, a, b)> { dec := signed_lt_dec(n, a, b) }
+instance(n: Nat, a, b: BitVec(n)) Decide<signed_le(n, a, b)> { dec := signed_le_dec(n, a, b) }
+
 // ---------------------------------------------------------------------------
 // Shifts. Vacated bits are zero except for arithmetic right shift.
 

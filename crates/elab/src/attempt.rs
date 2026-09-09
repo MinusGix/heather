@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 
+use heather_kernel::term::{LocalCtx, Term};
 use heather_syntax::Span;
 
 use crate::{OperatorFallbackUse, goals::GoalArena};
@@ -29,6 +30,11 @@ pub(super) struct DeclAttempt {
     /// and appends the two sides
     /// (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
     pub(super) pending_refl_note: RefCell<Option<(String, Span)>>,
+    /// Every `decide` the declaration wrote, with the decision the kernel
+    /// will run. Consulted only if the gate says `NotConvertible`: the one
+    /// whose decision then re-reduces to the wrong side is the refusal, and
+    /// the report names its instance (`docs/reflection-through-decide-instances-design.md` §4).
+    pub(super) decide_uses: RefCell<Vec<DecideUse>>,
     /// Resolved ordinary globals actually inserted while elaborating the
     /// declaration body. Stored by qualified identity, never basename.
     pub(super) direct_dependencies: RefCell<BTreeSet<String>>,
@@ -49,6 +55,7 @@ impl DeclAttempt {
         self.op_fallback_uses.get_mut().clear();
         self.pending_mismatch.get_mut().take();
         self.pending_refl_note.get_mut().take();
+        self.decide_uses.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
         self.goal_arena.prepare();
     }
@@ -64,5 +71,17 @@ impl DeclAttempt {
         self.op_fallback_notes.get_mut().clear();
         self.pending_mismatch.get_mut().take();
         self.pending_refl_note.get_mut().take();
+        self.decide_uses.get_mut().clear();
     }
+}
+
+/// One written `decide`: the `or_index(inst.dec)` its `refl` claims is `0`,
+/// the context it was checked in, and what to call the goal and the instance.
+#[derive(Clone)]
+pub(super) struct DecideUse {
+    pub(super) span: Span,
+    pub(super) gamma: LocalCtx,
+    pub(super) index: Term,
+    pub(super) goal: String,
+    pub(super) instance: String,
 }

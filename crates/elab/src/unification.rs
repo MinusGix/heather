@@ -27,6 +27,12 @@ pub(crate) struct ResolveOb {
     pub(crate) dom_level: Level,
     /// Parameter index, for the hint and the message.
     pub(crate) param: usize,
+    /// The application as built up to this parameter, scratch world: its
+    /// leading arguments are the callee's type arguments, which is where a
+    /// solver parameter's carrier lives once its type parameter is solved
+    /// ([`Elaborator::solver_carrier_head`]). `None` where no application
+    /// was being built.
+    pub(crate) applied: Option<Term>,
 }
 
 pub(crate) struct DeferredArg<'a> {

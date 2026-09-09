@@ -553,6 +553,7 @@ pub(crate) fn apply_implicit(
                     dom: (*dom).clone(),
                     dom_level: dom_level.clone(),
                     param: parameter,
+                    applied: Some(term.clone()),
                 });
             }
             meta_doms.push((*dom).clone());
@@ -1079,6 +1080,7 @@ mod tests {
             dom: Type::Nat,
             dom_level: Level::Zero,
             param: 0,
+            applied: None,
         }];
         let deferred = [DeferredArg {
             slot: 1,

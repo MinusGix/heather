@@ -592,7 +592,7 @@ pub struct Elaborator {
     /// the item is rolled back, the queue drained, the item elaborated again
     /// (§8). Empty for every program that resolves nothing, which is what
     /// keeps the whole mechanism free.
-    pending_derived: RefCell<Vec<(Type, Level, u32)>>,
+    pending_derived: RefCell<Vec<(Type, Level, u32, Option<String>)>>,
     /// Non-fatal diagnostics raised so far, in the order they were raised
     /// (`docs/diagnostic-warnings-design.md` §3). A `RefCell` because the
     /// places that raise one hold `&self` — the pattern compiler is the first
@@ -1164,13 +1164,27 @@ impl application::ImplicitApplicationElab for Elaborator {
                 application::ObligationProgress::Blocked
             });
         };
-        let display = params
-            .get(obligation.param)
-            .and_then(|p| p.solver.as_deref())
+        let written = params.get(obligation.param).and_then(|p| p.solver.as_deref());
+        let display = written
             .map(traits::render_ty)
             .unwrap_or_else(|| "a solver parameter".to_string());
+        let applied = obligation
+            .applied
+            .as_ref()
+            .map(|t| zonked_tm(t, n, sols).unwrap_or_else(|| t.clone()));
+        let prefer = written
+            .zip(applied.as_ref())
+            .and_then(|(w, applied)| self.solver_carrier_head(w, params, applied));
         let mut trace = Vec::new();
-        match self.resolve_goal(cx, &goal, &obligation.dom_level, &display, span, &mut trace) {
+        match self.resolve_goal(
+            cx,
+            &goal,
+            &obligation.dom_level,
+            &display,
+            prefer.as_deref(),
+            span,
+            &mut trace,
+        ) {
             Some(term) => {
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 Ok(application::ObligationProgress::Solved)
@@ -3647,6 +3661,22 @@ impl Elaborator {
             {
                 self.expr_elab().check_unit_form(self, cx, expected, e.span)
             }
+            // `decide` — proof by reflection at a decided goal
+            // (docs/reflection-through-decide-instances-design.md §4). Sugar
+            // for `logic::decide_yes(refl)`: resolution picks the `Decide`
+            // instance, the kernel runs its decision and judges the `refl`.
+            // The name is also `logic::decide`'s, so the shadowing guard is
+            // narrower than `trivial`'s: a local, an alias, the declaration
+            // itself, or a user global of that name wins; the library's own
+            // `decide` does not, since a bare `decide` at a goal that is not
+            // a function was never that value.
+            ExprKind::Var(name)
+                if name == "decide"
+                    && !self.decide_shadowed(cx)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.elab_decide(cx, expected, lvl, e.span)
+            }
             ExprKind::App {
                 head,
                 args,
@@ -5427,7 +5457,8 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, span, &mut trace)
+            let Some(dict) =
+                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
             else {
                 return Err(ElabError::Resolution {
                     goal: display,
@@ -5510,7 +5541,7 @@ impl Elaborator {
         let carrier = self.display_type(cx, expected);
         let display = format!("CollectionLiteral<{carrier}>({})", elems.len());
         let mut trace = Vec::new();
-        let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, span, &mut trace)
+        let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
         else {
             return Err(ElabError::Resolution { goal: display, span, trace });
         };
@@ -5630,6 +5661,16 @@ impl Elaborator {
     /// the conversion the gate refused.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
         if e == TypeError::NotConvertible
+            && let Some((note, at)) = self.refused_decide()
+        {
+            return ElabError::Kernel {
+                decl: decl.to_string(),
+                span: at,
+                err: e,
+                note: Some(note),
+            };
+        }
+        if e == TypeError::NotConvertible
             && let Some((msg, at)) = self.attempt.pending_mismatch.borrow().clone()
         {
             let msg = match self.operator_fallback_note() {
@@ -5656,6 +5697,109 @@ impl Elaborator {
             err: e,
             note,
         }
+    }
+
+    /// Is a bare `decide` something the writer bound, rather than the goal
+    /// combinator? The library's own `logic::decide` is the one global that
+    /// does not count (see the checking arm).
+    fn decide_shadowed(&self, cx: &Cx) -> bool {
+        cx.names.iter().any(|n| n == "decide")
+            || cx.aliases.iter().any(|a| a.name == "decide")
+            || cx.selfref.as_ref().is_some_and(|s| s.name == "decide")
+            || self
+                .key_of("decide")
+                .is_some_and(|key| key != names::qkey("logic", "decide"))
+    }
+
+    /// The `decide` goal combinator: elaborate `logic::decide_yes(refl)` at
+    /// the goal and remember what it resolved to, so a gate refusal can be
+    /// reported at this `decide` with the instance named.
+    fn elab_decide(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let Some(yes) = self.key_of("logic::decide_yes") else {
+            return err(
+                "`decide` proves a closed goal by running its `Decide` instance, and needs \
+                 the class in scope: add `import logic;`",
+                span,
+            );
+        };
+        let e = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::Var(yes),
+                    span,
+                }),
+                args: vec![Expr {
+                    kind: ExprKind::Refl,
+                    span,
+                }],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let t = self.elab_check(cx, &e, expected, lvl)?;
+        // `decide_yes(P, inst, refl)`, outermost argument first: the `refl`,
+        // whose left side is `or_index(inst.dec)`, then the dictionary.
+        let mut args = Vec::new();
+        let mut head = &t;
+        while let Term::App { fun, arg, .. } = head {
+            args.push(&**arg);
+            head = fun;
+        }
+        if let [Term::Refl { tm, .. }, inst, ..] = args.as_slice() {
+            // The instance as the registry names it — module-qualified, the
+            // way a resolution trace names a candidate — when the dictionary
+            // is a declared instance's global; a minted derivation is spelled.
+            let mut head = *inst;
+            while let Term::App { fun, .. } = head {
+                head = fun;
+            }
+            let instance = match head {
+                Term::GlobalTm { var, .. } => self
+                    .global_abs_of(*var)
+                    .and_then(|abs| self.names.global_name_at(abs as u32))
+                    .map(str::to_string),
+                _ => None,
+            }
+            .or_else(|| self.spell_term_clean(cx, inst))
+            .unwrap_or_else(|| "its `Decide` instance".to_string());
+            self.attempt.decide_uses.borrow_mut().push(attempt::DecideUse {
+                span,
+                gamma: cx.gamma.clone(),
+                index: (**tm).clone(),
+                goal: self.display_type(cx, expected),
+                instance,
+            });
+        }
+        Ok(t)
+    }
+
+    /// After a `NotConvertible` at the gate: the first written `decide` whose
+    /// decision reduces to the wrong side, with the note that names it. The
+    /// re-reduction runs only on the failure path and under the gate's own
+    /// budget; an inconclusive one stays silent, like a `refl`'s note.
+    fn refused_decide(&self) -> Option<(String, Span)> {
+        let uses = self.attempt.decide_uses.borrow();
+        if uses.is_empty() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel);
+        let zero = inductive::nat_lit(0);
+        uses.iter().find_map(|u| {
+            (oracle.convert_term(&u.gamma, Layer::Prog, &u.index, &zero, &Type::Nat, &Level::Zero)
+                == Err(ConvError::NotConvertible))
+            .then(|| {
+                (
+                    format!(
+                        "`decide` resolved `Decide<{}>` to `{}`, whose decision here is not \
+                         `Inl`: the goal is false, or not closed enough to decide",
+                        u.goal, u.instance
+                    ),
+                    u.span,
+                )
+            })
+        })
     }
 
     /// Explain a failed `let` annotation that turned out to name a **term**.

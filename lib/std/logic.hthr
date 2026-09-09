@@ -290,3 +290,22 @@ fn decide_pick<P: Decide, A>(x, y: A) → A { or_pick(P.dec, x, y) }
 theorem decide_pick_yes<P: Decide, A>(x, y: A, p: P): decide_pick<P, A>(x, y) = y {
     or_pick_dec(P.dec, x, y, p)
 }
+
+// Reflection (issues/reflection-through-decide-instances.md): a closed
+// decided proposition is *proved* by running its decision and reading the
+// side it took. `or_index` is that reading — a `Nat` and not a `Bool`, because
+// `bool` is declared above this module — and `or_of_index_zero` is the
+// elimination back into `P`. `decide_yes` is the whole of what the `decide`
+// goal combinator writes: `decide_yes(refl)` at the goal, with the kernel
+// judging the `refl` by reducing the instance's `dec`. Nothing else is
+// trusted, and the decision procedure never appears at the proof site.
+fn or_index<P, Q>(d: P ∨ Q) → Nat { match d { Inl(_) => 0, Inr(_) => 1 } }
+
+theorem or_of_index_zero<P, Q>(d: P ∨ Q, h: or_index(d) = 0): P {
+    match d as λ x => or_index(x) = 0 → P {
+        Inl(p) => λ _ => p,
+        Inr(_) => λ bad => absurd(bad),
+    }(h)
+}
+
+theorem decide_yes<P: Decide>(h: or_index(P.dec) = 0): P { or_of_index_zero(P.dec, h) }
