@@ -104,6 +104,29 @@ pub(crate) trait EqualityCheckingElab: ExpectedTypeElab {
         ty: &Type,
         level: &Level,
     ) -> bool;
+
+    /// Record — never raise — that a written `refl` stands at a goal whose two
+    /// sides do not convert (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
+    ///
+    /// `refl` is a checking form that emits `Refl(lhs)` and compares nothing:
+    /// the kernel is the judge of the equation, as it is of everything else.
+    /// That is the design, and it is not changed here — what is changed is
+    /// what the reader is told when the judgement goes against them. Left to
+    /// itself the gate says `NotConvertible` at the whole declaration, with
+    /// neither side shown; this note, like [`crate::Elaborator::note_check_mismatch`]'s,
+    /// is read only when the gate itself rejects.
+    ///
+    /// The structural view has no oracle to ask, so it notes nothing.
+    fn note_refl_mismatch(
+        &self,
+        _cx: &Cx,
+        _lhs: &Term,
+        _rhs: &Term,
+        _ty: &Type,
+        _level: &Level,
+        _span: Span,
+    ) {
+    }
 }
 
 /// Diagnostic spelling for checking forms that inspect an expected type.
@@ -522,9 +545,17 @@ impl<'a> ExprElab<'a> {
             )),
             ExprKind::Refl => Some((|| {
                 let head = elab.read_expected_type(cx, expected, e.span)?;
-                let Type::Id { level, ty, lhs, .. } = head else {
+                let Type::Id {
+                    level,
+                    ty,
+                    lhs,
+                    rhs,
+                } = head
+                else {
                     return err("`refl` needs an `=` expected type", e.span);
                 };
+                // Not a check: a note for the gate, should the gate reject.
+                elab.note_refl_mismatch(cx, &lhs, &rhs, &ty, &level, e.span);
                 // The element type is copied off the *whnf* of the expected
                 // `Id`, i.e. off wherever the elaborator happened to read it,
                 // while the kernel's expected is the cascade-respelled

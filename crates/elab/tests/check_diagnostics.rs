@@ -74,17 +74,22 @@ fn parse_error_is_wholesale() {
 
 #[test]
 fn kernel_rejection_renders_with_the_declaration_position() {
-    let src = "fn id_nat(n: Nat) -> Nat {\n\
-                   n\n\
+    // A level-1 record under the prelude's `Type<0>` `sym`. Not a `refl`:
+    // that one carries a note of its own and is reported at the `refl`
+    // ([[elab-refl-accepts-match-eta-kernel-rejects]]), so it could no longer
+    // witness the *declaration* position this test is about.
+    let src = "record Wrap {\n\
+                   c: Type,\n\
+                   w: c\n\
                }\n\
-               theorem broken(n: Nat): n = Succ(n) {\n\
-                   refl\n\
+               theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {\n\
+                   sym(h)\n\
                }\n";
     let errs = check(src);
     assert_eq!(errs.len(), 1, "{errs:?}");
     let rendered = errs[0].render(src);
     assert!(
-        rendered.starts_with("4:1:"),
+        rendered.starts_with("5:1:"),
         "a kernel rejection should point at its declaration: {rendered}"
     );
 }
@@ -114,12 +119,17 @@ fn snippet_caret_stays_aligned_past_non_ascii() {
 #[test]
 fn multi_line_span_carets_only_its_first_line() {
     // The kernel rejection's span is the whole declaration; the caret run
-    // must stop at the end of the first line rather than spill.
-    let src = "theorem broken(n: Nat): n = Succ(n) {\n    refl\n}\n";
+    // must stop at the end of the first line rather than spill. (A `refl`'s
+    // rejection is spanned at the `refl` and is one line, so it cannot be the
+    // fixture: this is the same level-1 record as above.)
+    let src = "record Wrap { c: Type, w: c }\n\
+               theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {\n\
+                   sym(h)\n\
+               }\n";
     let errs = check(src);
     let s = errs[0].render_snippet(src, "f.hthr");
     let caret_line = s.lines().last().unwrap();
-    let source_line = "theorem broken(n: Nat): n = Succ(n) {";
+    let source_line = "theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {";
     assert_eq!(
         caret_line.trim_start_matches([' ', '|']).len(),
         source_line.len(),

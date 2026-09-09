@@ -209,4 +209,15 @@ fn the_gate_rejects_the_near_misses() {
         assert!(m.contains("the kernel rejected"), "{m}");
         assert!(m.contains("NotConvertible"), "{m}");
     }
+
+    // The verdict is the gate's; the `refl` that claimed the conversion is
+    // named alongside it, with both sides
+    // ([[elab-refl-accepts-match-eta-kernel-rejects]]).
+    assert!(
+        m1.contains(
+            "`refl` needs both sides to be definitionally equal, \
+             but `append(xs, Nil)` and `xs` are not"
+        ),
+        "{m1}"
+    );
 }

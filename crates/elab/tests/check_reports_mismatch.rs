@@ -7,10 +7,19 @@
 //! elaborator typechecks". The mismatch is *recorded* during checking and read
 //! only by the kernel gate, only when the gate itself rejects — so nothing is
 //! reported that the kernel did not refuse, and a more specific diagnostic
-//! raised further down the same declaration still wins the message. Three of the
-//! six tests below are the controls that pin that boundary: a mismatch the
-//! display cannot state, a false equation caught by `refl`'s own arm, and a type
-//! that converts only after δ and β.
+//! raised further down the same declaration still wins the message. Four of the
+//! ten tests below are the controls that pin that boundary: a mismatch the
+//! display cannot state, a type that converts only after δ and β, a `refl`
+//! whose sides likewise meet only after δ and β, and a kernel refusal of
+//! another class, which keeps the kernel's own report.
+//!
+//! `refl` joined the same mechanism in
+//! `issues/elab-refl-accepts-match-eta-kernel-rejects.md`, one step short of
+//! it: it is the checking form that compares *nothing*, so a false equation
+//! was the last bare `NotConvertible` at a declaration. Its note does not
+//! replace the gate's report — the certifying pipeline's mutation controls
+//! read that verdict, and their `refl` pins have sides no display can spell —
+//! it moves the report to the `refl` and appends the two sides.
 
 use heather_elab::{ElabError, Elaborator};
 
@@ -124,16 +133,80 @@ fn wrong() -> Phantom<Nat> { 0 }
     assert!(!rendered.contains("Phantom<Nat>"), "{rendered}");
 }
 
-/// **Negative control, and the architectural one.** The elaborator reports what
-/// it can see; it does not become the judge. A declaration it accepts and the
-/// kernel refuses still reports as a kernel rejection — `refl` has its own
-/// checking arm, so it never reaches the fallback, and the gate is what
-/// catches a false equation.
+/// A false equation under `refl`
+/// (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`). `refl` is a
+/// checking form that emits `Refl(lhs)` and compares nothing, so the verdict
+/// is the gate's and stays spelled as the gate's — what the note adds is the
+/// span of the `refl` that claimed the conversion, and the two sides.
+#[test]
+fn a_false_equation_reports_at_the_refl() {
+    let src = "theorem broken(n: Nat): n = Succ(n) { refl }\n";
+    let r = reject(src);
+    let rendered = r.render(src);
+    assert!(rendered.contains("the kernel rejected `broken`: NotConvertible"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "`refl` needs both sides to be definitionally equal, \
+             but `n` and `Succ(n)` are not"
+        ),
+        "{rendered}"
+    );
+    // At the `refl`, not at the declaration.
+    let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "refl");
+}
+
+/// The shape the issue was filed on: a `match` on a **neutral** scrutinee
+/// whose arms each rebuild the constructor they matched. Neither the kernel
+/// nor the elaborator has a match-eta, so this is refused — the round's claim
+/// is only that the refusal says which two sides failed to meet, at the
+/// `refl`. (`int::add(x, OfNat(0)) = x` is this, one library away.)
+#[test]
+fn a_match_eta_names_both_sides() {
+    let src = "
+inductive Two { L(n: Nat), R(n: Nat) }
+fn id2(a: Two) -> Two { match a { L(m) => L(m), R(m) => R(m) } }
+theorem eta(a: Two): id2(a) = a { refl }
+";
+    let rendered = reject(src).render(src);
+    assert!(
+        rendered.contains(
+            "`refl` needs both sides to be definitionally equal, \
+             but `id2(a)` and `a` are not"
+        ),
+        "{rendered}"
+    );
+}
+
+/// **Negative control, and the architectural one.** The note is a report, not
+/// a check: a `refl` whose sides meet only after δ and β is still accepted,
+/// and nothing about the equation is decided before the kernel sees it.
+#[test]
+fn a_refl_that_only_converts_is_still_accepted() {
+    ok("
+        fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+        theorem four(): dbl(2) = 4 { refl }
+        ");
+}
+
+/// **Negative control, the architectural one at the other end.** The
+/// elaborator does not become the judge: a kernel refusal it holds no note
+/// about keeps the kernel's own report, class and all.
 #[test]
 fn the_kernel_is_still_the_judge() {
-    let src = "theorem broken(n: Nat): n = Succ(n) { refl }\n";
-    let rendered = reject(src).render(src);
-    assert!(rendered.contains("the kernel rejected"), "{rendered}");
+    // A level-1 record (its `c` field is a `Type`) under the prelude's
+    // `sym`, which is stated at `Type<0>`: nothing in checking holds a note
+    // about levels, so the gate's own report stands, class and all.
+    let src = "
+record Wrap { c: Type, w: c }
+theorem s(x: Wrap, y: Wrap, h: x = y): y = x { sym(h) }
+";
+    let r = reject(src);
+    let rendered = r.render(src);
+    assert!(rendered.contains("the kernel rejected `s`: LevelMismatch"), "{rendered}");
+    // No note, so the span stays where the gate put it: the declaration.
+    let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
+    assert!(src[span.start as usize..span.end as usize].starts_with("theorem s("), "{rendered}");
 }
 
 /// **Negative control, the one that would break real programs.** The comparison

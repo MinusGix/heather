@@ -22,6 +22,13 @@ pub(super) struct DeclAttempt {
     pub(super) op_fallback_uses: RefCell<Vec<OperatorFallbackUse>>,
     /// First checking mismatch held for a possible kernel diagnostic.
     pub(super) pending_mismatch: RefCell<Option<(String, Span)>>,
+    /// First written `refl` whose two sides were found not to convert. Unlike
+    /// [`Self::pending_mismatch`] this does not *replace* the gate's report —
+    /// `NotConvertible` at a named declaration is what the mutation controls
+    /// of the certifying pipeline read — it moves that report to the `refl`
+    /// and appends the two sides
+    /// (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
+    pub(super) pending_refl_note: RefCell<Option<(String, Span)>>,
     /// Resolved ordinary globals actually inserted while elaborating the
     /// declaration body. Stored by qualified identity, never basename.
     pub(super) direct_dependencies: RefCell<BTreeSet<String>>,
@@ -41,6 +48,7 @@ impl DeclAttempt {
         self.op_fallback_notes.get_mut().clear();
         self.op_fallback_uses.get_mut().clear();
         self.pending_mismatch.get_mut().take();
+        self.pending_refl_note.get_mut().take();
         self.direct_dependencies.get_mut().clear();
         self.goal_arena.prepare();
     }
@@ -55,5 +63,6 @@ impl DeclAttempt {
         self.goal_arena.finish();
         self.op_fallback_notes.get_mut().clear();
         self.pending_mismatch.get_mut().take();
+        self.pending_refl_note.get_mut().take();
     }
 }

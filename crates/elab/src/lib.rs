@@ -785,6 +785,18 @@ impl expr::EqualityCheckingElab for Elaborator {
             .convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
             .is_ok()
     }
+
+    fn note_refl_mismatch(
+        &self,
+        cx: &Cx,
+        lhs: &Term,
+        rhs: &Term,
+        ty: &Type,
+        level: &Level,
+        span: Span,
+    ) {
+        Elaborator::note_refl_mismatch(self, cx, lhs, rhs, ty, level, span);
+    }
 }
 
 impl expr::ExpectedTypeDiagnosticsElab for Elaborator {
@@ -4037,6 +4049,80 @@ impl Elaborator {
         }
     }
 
+    /// [`Self::note_check_mismatch`] at the one checking form that compares
+    /// nothing (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
+    ///
+    /// A written `refl` emits `Refl(lhs)` against the goal's `lhs = rhs` and
+    /// leaves the equation to the kernel — deliberately, and still. The cost
+    /// was the message: a false equation came back as `NotConvertible` at the
+    /// whole declaration, naming neither side, which is how three library
+    /// proofs about `int::add` were debugged the hard way. The note is filled
+    /// here and read only by the gate, only when the gate rejects, so nothing
+    /// is reported that the kernel did not refuse.
+    ///
+    /// **It adds to the gate's report; it does not replace it**, which is
+    /// where this parts company with [`Self::note_check_mismatch`]. A refusal
+    /// spelled `NotConvertible` at a named declaration is what the certifying
+    /// pipeline's mutation controls read — a corrupted ELF header must be
+    /// refused *by conversion*, not by a parse slip — and those refusals are
+    /// `refl` pins whose sides are far too large to spell. So the verdict and
+    /// its class stay, the span moves to the `refl`, and the two sides are
+    /// appended when they can be shown.
+    ///
+    /// **Budgeted, and silent when the budget runs out.** Unlike the checking
+    /// note, this conversion is work the kernel is about to do again, and the
+    /// sides of an expensive `refl` — a certificate pinned against its
+    /// transcription — are exactly where repeating it would be felt. A small
+    /// budget keeps the cost of the note proportional to what it can say: a
+    /// disagreement between a stuck `match` and its scrutinee is decided in a
+    /// handful of steps, and anything that outruns the budget is inconclusive
+    /// (`OutOfFuel`, never a wrong `NotConvertible`) and says nothing. Two
+    /// syntactically identical sides skip even the world the oracle needs.
+    fn note_refl_mismatch(
+        &self,
+        cx: &Cx,
+        lhs: &Term,
+        rhs: &Term,
+        ty: &Type,
+        level: &Level,
+        span: Span,
+    ) {
+        if lhs == rhs {
+            return;
+        }
+        let oracle = oracle::SemanticOracle::in_world(
+            self.goal_psi(),
+            self.fuel.min(diagnostics::REFL_NOTE_FUEL),
+        );
+        if oracle.convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
+            != Err(ConvError::NotConvertible)
+        {
+            return;
+        }
+        // Readable or silent, for [`Self::note_check_mismatch`]'s reason: two
+        // sides the reader cannot check, or that spell alike, are worse than
+        // the gate's honest `NotConvertible`.
+        let (Some(lhs_s), Some(rhs_s)) = (
+            self.spell_term_clean(cx, lhs),
+            self.spell_term_clean(cx, rhs),
+        ) else {
+            return;
+        };
+        if lhs_s == rhs_s {
+            return;
+        }
+        let mut slot = self.attempt.pending_refl_note.borrow_mut();
+        if slot.is_none() {
+            *slot = Some((
+                format!(
+                    "`refl` needs both sides to be definitionally equal, \
+                     but `{lhs_s}` and `{rhs_s}` are not"
+                ),
+                span,
+            ));
+        }
+    }
+
     /// Inference mode: returns the elaborated term with its canonical type
     /// and level.
     fn elab_infer(&self, cx: &Cx, e: &Expr) -> R<(Term, Type, Level)> {
@@ -5536,6 +5622,12 @@ impl Elaborator {
     /// The operator note travels either way: it explains a designation that was
     /// resolved by fallback, which is as relevant to the precise message as to
     /// the bare one.
+    ///
+    /// A written `refl`'s note ([`Self::note_refl_mismatch`]) travels a third
+    /// way: it neither replaces the report nor merely annotates the
+    /// declaration. The verdict stays the kernel's, and the *span* becomes the
+    /// `refl` that stands for it — the one expression in the body that claimed
+    /// the conversion the gate refused.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
         if e == TypeError::NotConvertible
             && let Some((msg, at)) = self.attempt.pending_mismatch.borrow().clone()
@@ -5546,11 +5638,23 @@ impl Elaborator {
             };
             return ElabError::Elab { msg, span: at };
         }
+        let refl = (e == TypeError::NotConvertible)
+            .then(|| self.attempt.pending_refl_note.borrow().clone())
+            .flatten();
+        let (span, refl_note) = match refl {
+            Some((msg, at)) => (at, Some(msg)),
+            None => (span, None),
+        };
+        let note = match (refl_note, self.operator_fallback_note()) {
+            (Some(refl), Some(op)) => Some(format!("{refl} (note: {op})")),
+            (Some(refl), None) => Some(refl),
+            (None, op) => op,
+        };
         ElabError::Kernel {
             decl: decl.to_string(),
             span,
             err: e,
-            note: self.operator_fallback_note(),
+            note,
         }
     }
 

@@ -1,6 +1,6 @@
 ---
 title: Elaborator accepts `refl` for `add(x, OfNat(0)) = x` at open `x`; the kernel rejects it
-status: open
+status: closed
 labels: [elab,kernel,conversion,diagnostics]
 created: 2026-09-09
 updated: 2026-09-09
@@ -37,3 +37,24 @@ declaration.
 
 - The kernel's conversion (`crates/kernel/DESIGN.md`) is the definition of
   definitional equality; the elaborator may be *stricter*, never looser.
+
+## Log
+
+- 2026-09-09: Resolved as a *reporting* change; the premise was wrong in an
+instructive way. There is no match-eta in the elaborator's conversion, because
+`refl` never reaches a conversion: `ExprKind::Refl` in `check_form`
+(`crates/elab/src/expr.rs`) reads the expected `Id`, emits `Refl(lhs)` and
+compares the two sides **never** — so every false equation under `refl` went
+to the kernel unexamined, and `n = Succ(n)` was the same defect wearing a
+smaller hat. The kernel keeps the rule it has, and the elaborator keeps the
+rule it never had. What changed is the message: `Elaborator::note_refl_mismatch`
+records — never raises — a budgeted conversion verdict at each written `refl`,
+and the gate reads it only when the gate itself rejects with `NotConvertible`.
+Unlike `note_check_mismatch`'s note it does not *replace* the gate's report:
+`NotConvertible` at a named declaration is what the certifying pipeline's
+mutation controls read, and their `refl` pins have sides no display can spell.
+The verdict and class stay, the span moves to the `refl`, and the two sides are
+appended when both spell cleanly and differently. The filed case now reads
+"the kernel rejected `open_right_unit`: NotConvertible. `refl` needs both sides
+to be definitionally equal, but `add(x, OfNat(0))` and `x` are not", carets
+under the `refl`.

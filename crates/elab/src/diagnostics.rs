@@ -71,6 +71,12 @@ pub enum GoalSource {
 /// Diagnostics get a small, independent reduction allowance.
 pub(crate) const DISPLAY_DECODE_STEPS: usize = 32;
 
+/// The reduction allowance for a written `refl`'s mismatch note
+/// (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`). Deliberately far
+/// below the kernel's own budget: the note repeats work the gate is about to
+/// do, so it may only pay for the disagreements that are cheap to decide.
+pub(crate) const REFL_NOTE_FUEL: u64 = 1 << 12;
+
 /// Maximum stuck positions considered during goal motive synthesis.
 pub(crate) const STUCK_CANDIDATES: u32 = 64;
 

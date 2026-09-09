@@ -1,7 +1,15 @@
-// A file with two independent failures around a good declaration, so the
-// CLI test sees accumulation and recovery, not just "nonzero exit".
+// A file with three independent failures around a good declaration, so the
+// CLI test sees accumulation and recovery, not just "nonzero exit". The first
+// two are the two rejection *renderings*: one the elaborator can explain at
+// the expression that failed, one it can only hand over as the kernel's own.
 theorem broken(n: Nat): n = Succ(n) {
     refl
+}
+
+record Wrap { c: Type, w: c }
+
+theorem levels(x: Wrap, y: Wrap, h: x = y): y = x {
+    sym(h)
 }
 
 fn id_nat(n: Nat) -> Nat {

@@ -26,10 +26,19 @@ fn bad_file_prints_all_diagnostics_exit_one() {
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("error: the kernel rejected `broken`"), "{err}");
-    assert!(err.contains("--> bad.hthr:3:1"), "{err}");
+    // A false `refl` keeps the kernel's verdict and is pointed at the `refl`,
+    // with both sides (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`) …
+    assert!(err.contains("error: the kernel rejected `broken`: NotConvertible"), "{err}");
+    assert!(
+        err.contains("`refl` needs both sides to be definitionally equal"),
+        "{err}"
+    );
+    assert!(err.contains("--> bad.hthr:6:5"), "{err}");
+    // … while a refusal checking holds no note about stays at its declaration.
+    assert!(err.contains("error: the kernel rejected `levels`: LevelMismatch"), "{err}");
+    assert!(err.contains("--> bad.hthr:11:1"), "{err}");
     assert!(err.contains("unsolved goals in `open_goal`"), "{err}");
-    assert!(err.contains("bad.hthr: 2 errors"), "{err}");
+    assert!(err.contains("bad.hthr: 3 errors"), "{err}");
 }
 
 #[test]
