@@ -102,3 +102,7 @@ Classes are memoized per step closure in the arena.
   [[int-arithmetic-over-nat-primitives]].
 - `div`/`mod` iterate a two-field state with a decision inside: a state
   machine, not an affine algebra. Not attempted here.
+
+## Log
+
+- 2026-09-09: The `toInt` width-64 negative rail the acceptance list deferred now passes: [[int-arithmetic-over-nat-primitives]] redefined `int::add` over `nat::add` and a synchronous `subNatNat`, both classes this issue built, with no kernel change.

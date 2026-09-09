@@ -3,7 +3,7 @@ title: Make add, sub, neg, and toInt width-bounded by definition
 status: open
 labels: [library,bitvec,x86,performance]
 created: 2026-09-07
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 [[bitvec-bounded-add-sub]] proved `ripple_add`/`ripple_sub` equal to the
@@ -63,3 +63,4 @@ stack overflow; `toInt(64, ·)` of a negative value exhausts fuel, and so does
 - 2026-09-08: The reusable callee round (`cb877f2`) staged CALL displacement arithmetic in small proved increment/decrement steps and chose inputs 21 and 1 for its executable, while keeping the summary arbitrary-input. This predates the incoming kernel strategy fix; re-evaluate this customer before attributing residual cost or migrating its arithmetic.
 
 - 2026-09-08: Merge integration is exercising `add_eq_of_ripple_add` and `sub_eq_of_ripple_sub` for native CALL displacement certificates, replacing staged increment/decrement chains without changing the canonical instruction semantics. This is an explicit proof consumer, not the default-operation swap owned here.
+- 2026-09-09: The negative branch of `toInt` no longer costs the magnitude: `int::sub(OfNat(toNat(x)), OfNat(2^n))` is one synchronous `subNatNat` descent since [[int-arithmetic-over-nat-primitives]]; width-64 negative `toInt` is a rail in `lib_std_bitvec.rs`. `bitvec::add`/`sub`'s own `iterate_increment` is unchanged.

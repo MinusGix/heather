@@ -497,9 +497,10 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
 /// A side with no defined head to meet now unfolds transparently inside the
 /// machine (`Eval::delta_whnf`), and these check in seconds under the
 /// ordinary rail (issues/bitvec-closed-reduction-cost.md). A *negative*
-/// `toInt` at width 64 is deliberately absent: its `int::sub(OfNat(2^63),
-/// OfNat(2^64))` is unary magnitude arithmetic, the family of
-/// issues/nat-order-large-run-comparison.md, not a consumer cost. Likewise
+/// `toInt` at width 64 is `int::sub(OfNat(2^63 - 5), OfNat(2^64))`, which
+/// was unary magnitude arithmetic until `int::add` became the payload
+/// operations by sign case (issues/int-arithmetic-over-nat-primitives.md):
+/// now one synchronous `subNatNat` descent the kernel cancels in a step.
 /// `signed_overflow_add` is stated with a count-one right operand: it goes
 /// through the old `add`, whose `iterate_increment` over a `2^63` count is
 /// the excessive unary computation the resource-diagnostic clause of
@@ -517,6 +518,8 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
          theorem sign_of_sum(): sign_bit(64, {high_sum}) = True {{ refl }}\n\
          theorem value_of_sum(): toNat(64, {high_sum}) = {HIGH} {{ refl }}\n\
          theorem signed_value_of_sum(): toInt(64, ripple_add(64, {a}, {b})) = OfNat({}) {{ refl }}\n\
+         theorem signed_value_of_difference(): toInt(64, ripple_sub(64, zero(64), {c})) = NegSucc(99) {{ refl }}\n\
+         theorem signed_value_of_high_sum(): toInt(64, {high_sum}) = NegSucc({}) {{ refl }}\n\
          theorem complement_of_sum(): complement(64, {high_sum}) = {} {{ refl }}\n\
          theorem sum_of_sums(): ripple_add(64, ripple_add(64, {a}, {b}), ripple_sub(64, {c}, one(64))) = {} {{ refl }}\n\
          theorem carry_of_sum(): carry_add_bit(64, ripple_add(64, all_ones(64), zero(64)), one(64)) = True {{ refl }}\n\
@@ -527,6 +530,7 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
          theorem boundary_signed(): signed_lt_bit(64, {h}, zero(64)) = True {{ refl }}\n\
          theorem value_of_old_add(): toNat(64, bitvec::add(64, {a}, ofNat(64, 8))) = {} {{ refl }}\n",
         ADDRESS + 1024,
+        HIGH - 1,
         bit_vector_literal_at(64, (M - 1) ^ HIGH),
         of(ADDRESS + 1024 + 99),
         ADDRESS + 8,

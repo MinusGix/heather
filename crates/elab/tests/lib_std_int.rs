@@ -287,6 +287,33 @@ theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
     );
 }
 
+/// A closed sum costs one `Nat` operation on the payloads, not the
+/// magnitude: `add` is the four sign cases over `nat::add` and the
+/// synchronous `subNatNat`, both of which the kernel iterates over runs in
+/// one program application (issues/int-arithmetic-over-nat-primitives.md).
+/// Every quadrant at `2^63`/`2^64`, including the mixed ones that used to
+/// peel one `ipred` per unit, and `sub` through `neg`. The negative control
+/// is the false-equation test below, which refuses at small operands; here
+/// the cost is the datum, and a wrong answer would fail `refl`.
+#[test]
+fn addition_at_machine_magnitudes_costs_a_payload_operation() {
+    probe(
+        "large integer addition did not compute",
+        r#"
+import int;
+import nat;
+
+theorem big_sub(): int::sub(OfNat(nat::pow(2, 63)), OfNat(nat::pow(2, 64))) = NegSucc(nat::sub(nat::pow(2, 63), 1)) { refl }
+theorem big_sub_over(): int::sub(OfNat(nat::pow(2, 64)), OfNat(nat::pow(2, 63))) = OfNat(nat::pow(2, 63)) { refl }
+theorem big_add(): int::add(OfNat(nat::pow(2, 63)), OfNat(nat::pow(2, 63))) = OfNat(nat::pow(2, 64)) { refl }
+theorem big_neg_neg(): int::add(NegSucc(nat::pow(2, 63)), NegSucc(nat::pow(2, 63))) = NegSucc(nat::add(nat::pow(2, 64), 1)) { refl }
+theorem big_mixed(): int::add(NegSucc(nat::pow(2, 63)), OfNat(nat::pow(2, 64))) = OfNat(nat::sub(nat::pow(2, 63), 1)) { refl }
+theorem big_mixed_under(): int::add(OfNat(nat::pow(2, 63)), NegSucc(nat::pow(2, 64))) = NegSucc(nat::pow(2, 63)) { refl }
+theorem big_cancel(): int::sub(OfNat(nat::pow(2, 64)), OfNat(nat::pow(2, 64))) = OfNat(0) { refl }
+"#,
+    );
+}
+
 #[test]
 fn euclidean_division_computes_in_every_sign_quadrant() {
     probe(

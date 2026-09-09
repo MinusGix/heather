@@ -1,6 +1,7 @@
 // Integers, represented canonically as `OfNat(n)` for `n` and `NegSucc(n)` for
-// `-(n+1)`. Addition iterates `isucc`/`ipred`; multiplication uses sign and
-// magnitude; the order is propositional and decided by `le_dec`.
+// `-(n+1)`. Addition and multiplication are the payload operations by sign
+// case, so a closed sum or product is one `Nat` operation; the order is
+// propositional and decided by `le_dec`.
 //
 // `Int` itself is non-recursive, so proofs over all integers use `int_ind`,
 // which performs the two inductions over constructor payloads. Local names such
@@ -143,18 +144,41 @@ theorem neg_ipred(a: Int): neg(ipred(a)) = isucc(neg(a)) {
 }
 
 // ---------------------------------------------------------------------------
-// Addition. `add` recurses on its SECOND argument's payload, like `nat::add`
-// and for the same reason: it keeps `add(a, OfNat(0))` definitional, so the
-// right unit is `refl` and the left one is the lemma.
+// Addition, on the four constructor cases, so that a closed sum is one `Nat`
+// operation on the payloads: `nat::add` between like signs and `subNatNat` —
+// the difference of two naturals read as an integer — between unlike ones.
+// Both are folds the kernel iterates as one program application over runs
+// (issues/nat-run-algebra-primitives.md), which is what makes
+// `sub(OfNat(2^63), OfNat(2^64))` a step rather than a magnitude
+// (issues/int-arithmetic-over-nat-primitives.md). The earlier definition —
+// `isucc`/`ipred` iterated over the second payload — survives as the theorems
+// `add_isucc`/`add_ipred`, which is the shape every `int_ind` proof below
+// consumes; what is lost is that they held by computation at an open left
+// operand, so an induction step now rewrites by them where it used to be
+// `refl`. What is gained besides the cost: `add_ofnat_ofnat` and the mixed
+// case of `add_comm` ARE `refl`.
 
-fn addNat(a: Int, n: Nat) → Int { match n { Zero => a, Succ(k) => isucc(addNat(a, k)) } }
-
-fn subNat(a: Int, n: Nat) → Int { match n { Zero => a, Succ(k) => ipred(subNat(a, k)) } }
+// `m - n` as an integer. Structural on `m` with `n` synchronized, exactly as
+// `nat::sub` is, so that `subNatNat(Succ(m), Succ(n))` IS `subNatNat(m, n)`
+// and a closed difference cancels its common prefix in one step; the two base
+// rows read a one-sided remainder with its sign.
+fn subNatNat(m, n: Nat) → Int {
+    match m {
+        Zero => negOfNat(n),
+        Succ(k) => match n { Zero => OfNat(Succ(k)), Succ(l) => subNatNat(k, l) },
+    }
+}
 
 fn add(a, b: Int) → Int {
-    match b {
-        OfNat(n) => addNat(a, n),
-        NegSucc(n) => subNat(a, Succ(n)),
+    match a {
+        OfNat(m) => match b {
+            OfNat(n) => OfNat(m + n),
+            NegSucc(n) => subNatNat(m, Succ(n)),
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => subNatNat(n, Succ(m)),
+            NegSucc(n) => NegSucc(Succ(m + n)),
+        },
     }
 }
 
@@ -162,94 +186,132 @@ designation + at Int := add
 
 fn sub(a, b: Int) → Int { add(a, neg(b)) }
 
-theorem add_zero(a: Int): a + OfNat(0) = a { refl }
+// `subNatNat`'s own facts: the right zero, `isucc`/`ipred` moving a `Succ`
+// between the payloads, and the diagonal. The synchronized spelling asks for
+// an induction on `m` with `n` generalized, and the `Succ`/`Succ` arm of each
+// is the hypothesis by computation.
 
-theorem addNat_zero_l(n: Nat): addNat(OfNat(0), n) = OfNat(n) {
-    match n { Zero => refl, Succ(k) => cong_int(isucc, addNat_zero_l(k)) }
+theorem subNatNat_zero(m: Nat): subNatNat(m, 0) = OfNat(m) {
+    match m { Zero => refl, Succ(_) => refl }
 }
 
-theorem subNat_zero_l(n: Nat): subNat(OfNat(0), Succ(n)) = NegSucc(n) {
-    match n { Zero => refl, Succ(k) => cong_int(ipred, subNat_zero_l(k)) }
-}
-
-theorem zero_add(a: Int): OfNat(0) + a = a {
-    match a {
-        OfNat(n) => addNat_zero_l(n),
-        NegSucc(n) => subNat_zero_l(n),
+theorem isucc_subNatNat(m: Nat): (n: Nat) → isucc(subNatNat(m, Succ(n))) = subNatNat(m, n) {
+    match m {
+        Zero => λ n => match n { Zero => refl, Succ(_) => refl },
+        Succ(k, ih) => λ n =>
+            match n {
+                Zero => cong_int(isucc, subNatNat_zero(k)),
+                Succ(l) => ih(l),
+            },
     }
 }
 
+theorem ipred_subNatNat(m: Nat): (n: Nat) → ipred(subNatNat(m, n)) = subNatNat(m, Succ(n)) {
+    match m {
+        Zero => λ n => ipred_negOfNat(n),
+        Succ(k, ih) => λ n =>
+            match n {
+                Zero => sym(subNatNat_zero(k)),
+                Succ(l) => ih(l),
+            },
+    }
+}
+
+theorem subNatNat_self(n: Nat): subNatNat(n, n) = OfNat(0) {
+    match n { Zero => refl, Succ(k) => subNatNat_self(k) }
+}
+
+theorem add_zero(a: Int): a + OfNat(0) = a {
+    match a { OfNat(_) => refl, NegSucc(_) => refl }
+}
+
+theorem zero_add(a: Int): OfNat(0) + a = a {
+    match a { OfNat(n) => cong_ofnat(nat::add_left_zero(n)), NegSucc(_) => refl }
+}
+
+theorem add_ofnat_ofnat(m, n: Nat): OfNat(m) + OfNat(n) = OfNat(m + n) { refl }
+
 // The four push lemmas: `isucc` and `ipred` cross an `add` from either side.
-// Everything arithmetical below is these four plus `int_ind`.
+// Everything arithmetical below is these four plus `int_ind`. The two on the
+// right operand are the former definition of `add` read as a theorem: four
+// constructor cases, of which the ones that do not compute are a `subNatNat`
+// fact; the two on the left are those through commutativity.
 
 theorem add_isucc(a, b: Int): a + isucc(b) = isucc(a + b) {
-    match b {
-        OfNat(_) => refl,
-        NegSucc(n) =>
-            match n {
-                Zero => sym(isucc_ipred(a)),
-                Succ(k) => sym(isucc_ipred(subNat(a, Succ(k)))),
+    match a {
+        OfNat(m) => match b {
+            OfNat(_) => refl,
+            NegSucc(n) => match n {
+                Zero => sym(trans(isucc_subNatNat(m, 0), subNatNat_zero(m))),
+                Succ(l) => sym(isucc_subNatNat(m, Succ(l))),
             },
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => sym(isucc_subNatNat(n, m)),
+            NegSucc(n) => match n { Zero => refl, Succ(_) => refl },
+        },
     }
 }
 
 theorem add_ipred(a, b: Int): a + ipred(b) = ipred(a + b) {
-    match b {
-        OfNat(n) =>
-            match n {
-                Zero => refl,
-                Succ(k) => sym(ipred_isucc(addNat(a, k))),
+    match a {
+        OfNat(m) => match b {
+            OfNat(n) => match n {
+                Zero => sym(trans(cong_int(ipred, sym(subNatNat_zero(m))), ipred_subNatNat(m, 0))),
+                Succ(_) => refl,
             },
-        NegSucc(_) => refl,
+            NegSucc(n) => sym(ipred_subNatNat(m, Succ(n))),
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => match n {
+                Zero => refl,
+                Succ(l) => sym(ipred_subNatNat(l, m)),
+            },
+            NegSucc(_) => refl,
+        },
     }
 }
 
-theorem addNat_isucc(a: Int, n: Nat): addNat(isucc(a), n) = isucc(addNat(a, n)) {
-    match n { Zero => refl, Succ(k) => cong_int(isucc, addNat_isucc(a, k)) }
-}
-
-theorem subNat_isucc(a: Int, n: Nat): subNat(isucc(a), n) = isucc(subNat(a, n)) {
-    match n {
-        Zero => refl,
-        Succ(k) =>
-            apply trans;
-            give cong_int(ipred, subNat_isucc(a, k));
-            apply trans;
-            give ipred_isucc(subNat(a, k));
-            sym(isucc_ipred(subNat(a, k))),
+// Commutativity is four cases and no induction: the mixed cases are the same
+// `subNatNat` by definition, and the like-signed ones are `nat::add_comm`.
+theorem add_comm(a, b: Int): a + b = b + a {
+    match a {
+        OfNat(m) => match b {
+            OfNat(n) => cong_ofnat(nat::add_comm(m, n)),
+            NegSucc(_) => refl,
+        },
+        NegSucc(m) => match b {
+            OfNat(_) => refl,
+            NegSucc(n) => cong_negsucc(cong_succ(nat::add_comm(m, n))),
+        },
     }
-}
-
-theorem addNat_ipred(a: Int, n: Nat): addNat(ipred(a), n) = ipred(addNat(a, n)) {
-    match n {
-        Zero => refl,
-        Succ(k) =>
-            apply trans;
-            give cong_int(isucc, addNat_ipred(a, k));
-            apply trans;
-            give isucc_ipred(addNat(a, k));
-            sym(ipred_isucc(addNat(a, k))),
-    }
-}
-
-theorem subNat_ipred(a: Int, n: Nat): subNat(ipred(a), n) = ipred(subNat(a, n)) {
-    match n { Zero => refl, Succ(k) => cong_int(ipred, subNat_ipred(a, k)) }
 }
 
 theorem isucc_add(a, b: Int): isucc(a) + b = isucc(a + b) {
-    match b {
-        OfNat(n) => addNat_isucc(a, n),
-        NegSucc(n) => subNat_isucc(a, Succ(n)),
-    }
+    apply trans;
+    give add_comm(isucc(a), b);
+    apply trans;
+    give add_isucc(b, a);
+    cong_int(isucc, add_comm(b, a))
 }
 
 theorem ipred_add(a, b: Int): ipred(a) + b = ipred(a + b) {
-    match b {
-        OfNat(n) => addNat_ipred(a, n),
-        NegSucc(n) => subNat_ipred(a, Succ(n)),
-    }
+    apply trans;
+    give add_comm(ipred(a), b);
+    apply trans;
+    give add_ipred(b, a);
+    cong_int(ipred, add_comm(b, a))
 }
 
+// The two unit steps, which are the push lemmas at `OfNat(0)`: an `int_ind`
+// whose base case used to be `refl` reads through these.
+theorem add_one(a: Int): a + OfNat(1) = isucc(a) {
+    trans(add_isucc(a, OfNat(0)), cong_int(isucc, add_zero(a)))
+}
+
+theorem add_neg_one(a: Int): a + NegSucc(0) = ipred(a) {
+    trans(add_ipred(a, OfNat(0)), cong_int(ipred, add_zero(a)))
+}
 // ---------------------------------------------------------------------------
 // The induction principle. `Int` has no structural recursion of its own — it is
 // a two-constructor NON-recursive declaration whose payloads are `Nat`s — so
@@ -295,80 +357,44 @@ theorem int_ind(P: Int → Type,
 }
 
 // ---------------------------------------------------------------------------
-// The two laws that make `add` a commutative monoid, and the two that make it a
-// group. Each is one `int_ind` whose four arms are the push lemmas above; no arm
-// does any arithmetic of its own, and none mentions `nat::sub`.
-//
-// Induction-hypothesis rewrites use the congruence helpers above; `calc` is used
-// where naming intermediate endpoints makes the chain clearer.
-
-theorem add_comm(a, b: Int): a + b = b + a {
-    int_ind(λ (z: Int) => a + z = z + a,
-        sym(zero_add(a)),
-        (k: Nat) (ih: a + OfNat(k) = OfNat(k) + a) ⊢
-            apply trans;
-            give cong_int(isucc, ih);
-            sym(isucc_add(OfNat(k), a)),
-        apply sym;
-        apply trans;
-        give ipred_add(OfNat(0), a);
-        cong_int(ipred, zero_add(a)),
-        (k: Nat) (ih: a + NegSucc(k) = NegSucc(k) + a) ⊢
-            apply trans;
-            give cong_int(ipred, ih);
-            sym(ipred_add(NegSucc(k), a)),
-        b)
-}
+// Associativity, and the two laws that make `add` a group. Associativity is one
+// `int_ind` whose four arms are the push lemmas above; the inverse is
+// `subNatNat`'s diagonal, in both signs.
 
 theorem add_assoc(a, b, c: Int): (a + b) + c = a + (b + c) {
     int_ind(λ (z: Int) => (a + b) + z = a + (b + z),
-        refl,
+        trans(add_zero(a + b), sym(cong_int(λ (w: Int) => add(a, w), add_zero(b)))),
         (k: Nat) (ih: (a + b) + OfNat(k) = a + (b + OfNat(k))) ⊢
             apply trans;
+            give add_isucc(a + b, OfNat(k));
+            apply trans;
             give cong_int(isucc, ih);
-            sym(add_isucc(a, add(b, OfNat(k)))),
-        sym(add_ipred(a, b)),
+            apply trans;
+            give sym(add_isucc(a, add(b, OfNat(k))));
+            cong_int(λ (w: Int) => add(a, w), sym(add_isucc(b, OfNat(k)))),
+        apply trans;
+        give add_neg_one(a + b);
+        apply trans;
+        give sym(add_ipred(a, b));
+        cong_int(λ (w: Int) => add(a, w), sym(add_neg_one(b))),
         (k: Nat) (ih: (a + b) + NegSucc(k) = a + (b + NegSucc(k))) ⊢
             apply trans;
+            give add_ipred(a + b, NegSucc(k));
+            apply trans;
             give cong_int(ipred, ih);
-            sym(add_ipred(a, add(b, NegSucc(k)))),
+            apply trans;
+            give sym(add_ipred(a, add(b, NegSucc(k))));
+            cong_int(λ (w: Int) => add(a, w), sym(add_ipred(b, NegSucc(k)))),
         c)
-}
-
-// The inverse. Both halves are a `Nat` recursion at a fixed sign, and each is
-// the one place a `subNat`/`addNat` is walked against itself.
-
-theorem subNat_self(n: Nat): subNat(OfNat(n), n) = OfNat(0) {
-    match n {
-        Zero => refl,
-        Succ(k) =>
-            apply trans;
-            give cong_int(ipred, subNat_isucc(OfNat(k), k));
-            apply trans;
-            give ipred_isucc(subNat(OfNat(k), k));
-            subNat_self(k),
-    }
-}
-
-theorem addNat_negsucc_self(n: Nat): addNat(NegSucc(n), Succ(n)) = OfNat(0) {
-    match n {
-        Zero => refl,
-        Succ(k) =>
-            apply cong_int;
-            give isucc;
-            apply trans;
-            give addNat_ipred(NegSucc(k), Succ(k));
-            cong_int(ipred, addNat_negsucc_self(k)),
-    }
 }
 
 theorem add_neg(a: Int): a + neg(a) = OfNat(0) {
     match a {
         OfNat(n) => match n {
             Zero => refl,
-            Succ(k) => subNat_self(Succ(k)),
+            Succ(k) => subNatNat_self(k),
         },
-        NegSucc(n) => addNat_negsucc_self(n),
+        NegSucc(n) => subNatNat_self(n),
     }
 }
 
@@ -380,17 +406,24 @@ theorem neg_add_self(a: Int): neg(a) + a = OfNat(0) {
 // because that is the direction a rewrite wants it.
 theorem neg_add(a, b: Int): neg(a + b) = neg(a) + neg(b) {
     int_ind(λ (z: Int) => neg(a + z) = neg(a) + neg(z),
-        refl,
+        trans(cong_int(neg, add_zero(a)), sym(add_zero(neg(a)))),
         λ (k: Nat) (ih: neg(a + OfNat(k)) = neg(a) + neg(OfNat(k))) =>
             calc {
                 neg(a + OfNat(Succ(k)))
+                    = neg(isucc(a + OfNat(k)))      := cong_int(neg, add_isucc(a, OfNat(k))),
                     = ipred(neg(a + OfNat(k)))      := neg_isucc(a + OfNat(k)),
                     = ipred(neg(a) + neg(OfNat(k))) := cong(ih),
                     = neg(a) + ipred(negOfNat(k))   := sym(add_ipred(neg(a), negOfNat(k))),
                     = neg(a) + NegSucc(k)           := cong(ipred_negOfNat(k)),
             },
-        neg_ipred(a),
+        apply trans;
+        give cong_int(neg, add_neg_one(a));
+        apply trans;
+        give neg_ipred(a);
+        sym(add_one(neg(a))),
         (k: Nat) (ih: neg(a + NegSucc(k)) = neg(a) + neg(NegSucc(k))) ⊢
+            apply trans;
+            give cong_int(neg, add_ipred(a, NegSucc(k)));
             apply trans;
             give neg_ipred(add(a, NegSucc(k)));
             apply trans;
@@ -403,7 +436,7 @@ theorem neg_add(a, b: Int): neg(a + b) = neg(a) + neg(b) {
 // everything else about it is an `add` law read through that.
 theorem sub_self(a: Int): sub(a, a) = OfNat(0) { add_neg(a) }
 
-theorem sub_zero(a: Int): sub(a, OfNat(0)) = a { refl }
+theorem sub_zero(a: Int): sub(a, OfNat(0)) = a { add_zero(a) }
 
 // ---------------------------------------------------------------------------
 // Multiplication, as the sign-and-magnitude product: the payloads multiply in
@@ -637,14 +670,10 @@ theorem mul_assoc(a, b, c: Int): (a * b) * c = a * (b * c) {
 
 // ---------------------------------------------------------------------------
 // Distributivity, which is where the two definitions meet: `mul` is the
-// sign-and-magnitude product and `add` is iterated `isucc`/`ipred`, so the law
-// is an `int_ind` over the summand whose step needs `mul` at a successor and at
-// a predecessor. Those two are the section's real content; the law itself is
-// four lines of chaining once they exist.
-
-theorem add_ofnat_ofnat(m, n: Nat): OfNat(m) + OfNat(n) = OfNat(m + n) {
-    match n { Zero => refl, Succ(k) => cong_int(isucc, add_ofnat_ofnat(m, k)) }
-}
+// sign-and-magnitude product and `add` is `isucc`/`ipred` iterated up to the
+// push lemmas, so the law is an `int_ind` over the summand whose step needs
+// `mul` at a successor and at a predecessor. Those two are the section's real
+// content; the law itself is four lines of chaining once they exist.
 
 theorem ofNat_add(m, n: Nat): OfNat(m + n) = OfNat(m) + OfNat(n) {
     sym(add_ofnat_ofnat(m, n))
@@ -663,13 +692,17 @@ theorem mul_neg_one(a: Int): a * NegSucc(0) = neg(a) {
 theorem add_neg_cancel_r(x, y: Int): (x + y) + neg(y) = x {
     apply trans;
     give add_assoc(x, y, neg(y));
-    cong_int(λ (w: Int) => add(x, w), add_neg(y))
+    apply trans;
+    give cong_int(λ (w: Int) => add(x, w), add_neg(y));
+    add_zero(x)
 }
 
 theorem add_neg_cancel_l(x, y: Int): (x + neg(y)) + y = x {
     apply trans;
     give add_assoc(x, neg(y), y);
-    cong_int(λ (w: Int) => add(x, w), neg_add_self(y))
+    apply trans;
+    give cong_int(λ (w: Int) => add(x, w), neg_add_self(y));
+    add_zero(x)
 }
 
 // `a * (n+1) = a * n + a`, at a NON-negative multiplier — the `mul` step that
@@ -732,8 +765,14 @@ theorem mul_ipred(a, x: Int): a * ipred(x) = a * x + neg(a) {
 
 theorem mul_add_distr(a, b, c: Int): a * (b + c) = a * b + a * c {
     int_ind(λ (z: Int) => mul(a, add(b, z)) = add(mul(a, b), mul(a, z)),
+        apply trans;
+        give cong_int(λ (w: Int) => mul(a, w), add_zero(b));
+        apply trans;
+        give sym(add_zero(mul(a, b)));
         sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_zero(a))),
         (k: Nat) (ih: mul(a, add(b, OfNat(k))) = add(mul(a, b), mul(a, OfNat(k)))) ⊢
+            apply trans;
+            give cong_int(λ (w: Int) => mul(a, w), add_isucc(b, OfNat(k)));
             apply trans;
             give mul_isucc(a, add(b, OfNat(k)));
             apply trans;
@@ -742,9 +781,13 @@ theorem mul_add_distr(a, b, c: Int): a * (b + c) = a * b + a * c {
             give add_assoc(mul(a, b), mul(a, OfNat(k)), a);
             sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ofnat_succ(a, k))),
         apply trans;
+        give cong_int(λ (w: Int) => mul(a, w), add_neg_one(b));
+        apply trans;
         give mul_ipred(a, b);
         sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_neg_one(a))),
         (k: Nat) (ih: mul(a, add(b, NegSucc(k))) = add(mul(a, b), mul(a, NegSucc(k)))) ⊢
+            apply trans;
+            give cong_int(λ (w: Int) => mul(a, w), add_ipred(b, NegSucc(k)));
             apply trans;
             give mul_ipred(a, add(b, NegSucc(k)));
             apply trans;
@@ -1012,10 +1055,9 @@ theorem lt_of_not_le(a, b: Int, h: ¬(b <= a)): a < b {
 
 // ---------------------------------------------------------------------------
 // Where the order meets the arithmetic. `isucc` and `ipred` are monotone, and
-// `add` is monotone because it is their iteration — which is the one place this
-// file's definition of `add` pays a dividend in the ORDER kit rather than in the
-// arithmetic one: `add_le_mono_r` is an `int_ind` whose two step arms are
-// exactly these two lemmas.
+// `add` is monotone because it is their iteration up to the push lemmas:
+// `add_le_mono_r` is an `int_ind` whose two step arms are these two lemmas,
+// transported across `add_isucc`/`add_ipred` on each side.
 
 theorem le_isucc(a: Int): (b: Int) → a <= b → isucc(a) <= isucc(b) {
     match a {
@@ -1093,12 +1135,18 @@ theorem le_ipred(a: Int): (b: Int) → a <= b → ipred(a) <= ipred(b) {
 
 theorem add_le_mono_r(a, b, c: Int, h: a <= b): a + c <= b + c {
     int_ind(λ (z: Int) => a + z <= b + z,
-        h,
+        j(sym(add_zero(a)), λ y q => y <= b + OfNat(0),
+          j(sym(add_zero(b)), λ y q => a <= y, h)),
         λ (k: Nat) (ih: a + OfNat(k) <= b + OfNat(k)) =>
-            le_isucc(a + OfNat(k), b + OfNat(k), ih),
-        le_ipred(a, b, h),
+            j(sym(add_isucc(a, OfNat(k))), λ y q => y <= b + OfNat(Succ(k)),
+              j(sym(add_isucc(b, OfNat(k))), λ y q => isucc(a + OfNat(k)) <= y,
+                le_isucc(a + OfNat(k), b + OfNat(k), ih))),
+        j(sym(add_neg_one(a)), λ y q => y <= b + NegSucc(0),
+          j(sym(add_neg_one(b)), λ y q => ipred(a) <= y, le_ipred(a, b, h))),
         λ (k: Nat) (ih: a + NegSucc(k) <= b + NegSucc(k)) =>
-            le_ipred(a + NegSucc(k), b + NegSucc(k), ih),
+            j(sym(add_ipred(a, NegSucc(k))), λ y q => y <= b + NegSucc(Succ(k)),
+              j(sym(add_ipred(b, NegSucc(k))), λ y q => ipred(a + NegSucc(k)) <= y,
+                le_ipred(a + NegSucc(k), b + NegSucc(k), ih))),
         c)
 }
 
@@ -1283,7 +1331,7 @@ instance CommMonoid<Int>(add) {
     unit := OfNat(0),
     assoc := add_assoc,
     unit_l := zero_add,
-    unit_r := λ (x: Int) => refl,
+    unit_r := add_zero,
     comm := add_comm,
 }
 

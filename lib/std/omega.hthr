@@ -112,7 +112,7 @@ theorem dot_add(left: List<Int>): (right, atoms: List<Int>) →
     match left {
         Nil => λ right atoms => sym(zero_add(dot(right, atoms))),
         Cons(a, as) => λ right atoms => match right {
-            Nil => add_zero(dot(Cons(a, as), atoms)),
+            Nil => sym(add_zero(dot(Cons(a, as), atoms))),
             Cons(b, bs) => match atoms {
                 Nil => sym(add_zero(OfNat(0))),
                 Cons(x, xs) =>
@@ -427,7 +427,7 @@ theorem div_lower_nonzero(dividend, divisor: Int,
 {
     let product = int::div(dividend, divisor) * divisor;
     let remainder = int::mod(dividend, divisor);
-    j(sym(int::add_zero(product)),
+    j(int::add_zero(product),
       λ left _ => left <= dividend,
       j(int::div_mul_add_mod(dividend, divisor),
         λ right _ => product + OfNat(0) <= right,

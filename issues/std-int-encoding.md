@@ -3,7 +3,7 @@ title: "Int: the encoding choice, and the arithmetic/order kit it costs"
 status: closed
 labels: [stdlib,design,proofs,performance]
 created: 2026-08-16
-updated: 2026-08-17
+updated: 2026-09-09
 ---
 
 **Status (2026-08-17): LANDED and closed** — `lib/std/int.hthr` exists, the
@@ -253,3 +253,4 @@ sequencing-relevant surprises:
   settled now even though the round is not scheduled.
 - 2026-08-17: LANDED: lib/std/int.hthr (1093 lines, 97 declarations) + crates/elab/tests/lib_std_int.rs (4 tests), and a Group class + op_inv_unique added to lib/std/algebra.hthr. The ENCODING survived contact unchanged, and the unpredicted reason it is cheap is that NegSucc(n) is definitionally neg(OfNat(Succ(n))), which is what makes mul's sign cases need no case analysis on a stuck product. The PREDICTION about the operations did NOT survive: add is iterated isucc/ipred rather than the four-way subNatNat split, so no truncated subtraction appears in the file at all and nat's sub cancellation kit is never cashed (reason 3 of the original cost argument is void). Int has no structural recursion of its own, so the file states int_ind once and every law that needs induction is one application of it. Group exists and Int is its only carrier. Checking cost: ~0.5 s of the file's own elaboration+kernel work on top of a 0.85 s import closure -- no pathology. Full narrative, the kit as written, what was cut, and the six-item ranking are in the body above.
 - 2026-08-17: The round's one stalled row LANDED (2026-08-17): `instance(a, b: Int) Decide<Le(a, b)>` is in `lib/std/int.hthr` and the stall comment is out. [[instance-key-collides-across-modules]] carries the narrative.
+- 2026-09-09: The original prediction has come true after all: `add` is now the four-way `subNatNat` split (issue [[int-arithmetic-over-nat-primitives]]), because iterated `isucc`/`ipred` cost the magnitude at closed arguments once the kernel could do Nat arithmetic on runs in one step. `subNatNat` is structural on its first argument with the second synchronized, so its cancellation is definitional; nat's `sub` kit is still never cashed.
