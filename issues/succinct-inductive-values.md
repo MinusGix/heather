@@ -3,7 +3,7 @@ title: Represent repeated inductive construction as saturated shared programs
 status: open
 labels: [kernel, inductives, conversion, performance, representation]
 created: 2026-08-28
-updated: 2026-09-02
+updated: 2026-09-09
 ---
 
 Large canonical inductive values need not be materialized as one native node
@@ -55,6 +55,15 @@ special-case generated constructor names.
   a program's runtime layout.
 
 ## Log
+
+- 2026-09-09: The generalized run algebra landed
+  ([[nat-run-algebra-primitives]]): any step that evaluates to successors
+  and projections of the induction hypothesis — including `mul`'s
+  `add(ih, a)` through the nested fold and `half`'s course-of-values
+  window — is iterated over the program's DAG by exponentiation, with
+  program-valued increments that compose past `u64` instead of declining.
+  The synchronous fragment is likewise recognized by probing the algebra at
+  `Succ x`, so `sub`, `min`, `max` join `Le`/`leb` without a spelling.
 
 - 2026-09-07: Two more consumers attributed as context homomorphisms, from
   [[bitvec-ofnat-large-literals]]. The successor algebra `λ k ih. su^p ih`

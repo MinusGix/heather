@@ -23,6 +23,10 @@ pub enum ContextProgram<C> {
 pub struct CancelledPrefix<C> {
     pub left: Option<Rc<ContextProgram<C>>>,
     pub right: Option<Rc<ContextProgram<C>>>,
+    /// The prefix both sides lost, as a program over the shared fragments
+    /// it was made of: a fold that produces `q` constructors per cancelled
+    /// pair (`max`) iterates its algebra over exactly this.
+    pub cancelled: Option<Rc<ContextProgram<C>>>,
     pub changed: bool,
     /// Unique program-pair and cursor nodes inspected. Callers charge this
     /// against their ordinary reduction/conversion budget.
@@ -383,6 +387,7 @@ impl<C: Clone + Eq> ContextProgram<C> {
             return Ok(CancelledPrefix {
                 left: None,
                 right: None,
+                cancelled: Some(left),
                 changed: true,
                 inspected: 0,
             });
@@ -391,6 +396,8 @@ impl<C: Clone + Eq> ContextProgram<C> {
         let mut right = Cursor::new(right);
         let mut bisimulation = Bisimulation::new();
         let mut changed = false;
+        // The cancelled fragments, outermost first.
+        let mut cancelled: Vec<Rc<Self>> = Vec::new();
         loop {
             while left.run.is_none() && right.run.is_none() {
                 let (Some(l), Some(r)) = (left.front(), right.front()) else {
@@ -399,6 +406,7 @@ impl<C: Clone + Eq> ContextProgram<C> {
                 if !bisimulation.equivalent(l, r, &mut budget)? {
                     break;
                 }
+                cancelled.push(Rc::clone(l));
                 left.pop_front();
                 right.pop_front();
                 changed = true;
@@ -421,13 +429,19 @@ impl<C: Clone + Eq> ContextProgram<C> {
                 break;
             }
             let count = ln.get().min(rn.get());
+            cancelled.push(Self::run(lc, NonZeroU64::new(count).unwrap()));
             left.consume(count);
             right.consume(count);
             changed = true;
         }
+        let cancelled = cancelled
+            .into_iter()
+            .rev()
+            .reduce(|inner, outer| Self::append(outer, inner));
         Ok(CancelledPrefix {
             left: left.remainder(),
             right: right.remainder(),
+            cancelled,
             changed,
             inspected: budget.inspected,
         })
@@ -540,6 +554,29 @@ mod tests {
         assert!(cancelled.right.is_none());
         assert!(matches!(cancelled.left.as_deref(),
             Some(ContextProgram::Run { count, .. }) if count.get() == 7));
+    }
+
+    #[test]
+    fn the_cancelled_prefix_is_returned_as_a_program() {
+        let full = ContextProgram::run('s', n(u64::MAX));
+        let left = ContextProgram::compose(ContextProgram::run('s', n(3)), Rc::clone(&full));
+        let right = ContextProgram::compose(ContextProgram::run('s', n(1)), full);
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 32).unwrap();
+        // One saturated run, then the shared fragment: `u64::MAX + 1`,
+        // composed because it does not fit one run.
+        let program = cancelled.cancelled.expect("something cancelled");
+        assert_eq!(ContextProgram::repetition_count_up_to(&program, u64::MAX), None);
+        let (_, rest) = ContextProgram::uncons(&program);
+        assert_eq!(
+            ContextProgram::repetition_count_up_to(&rest.unwrap(), u64::MAX),
+            Some(u64::MAX),
+        );
+
+        let seven = ContextProgram::run('s', n(7));
+        let three = ContextProgram::run('s', n(3));
+        let cancelled = ContextProgram::cancel_matching_prefix(seven, three, 8).unwrap();
+        assert!(matches!(cancelled.cancelled.as_deref(),
+            Some(ContextProgram::Run { count, .. }) if count.get() == 3));
     }
 
     #[test]

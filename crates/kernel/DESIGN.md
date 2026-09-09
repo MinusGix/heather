@@ -255,11 +255,12 @@ the budget that way. A meet at a sub-term is still found by the lazy
 comparison of the canonical forms' components. `Conv::tm` memoizes its
 verdicts per closure pair (address, scope, Ψ length, layer): convertible or
 definitely not, never exhaustion; it carries the repeated sub-comparisons
-of the same closures (~30% of the x86 model's load). And the evaluator's two
-run-accelerated Nat folds — the successor algebra `su^p ih` and the
-synchronous two-counter fold — unfold a *glued* scrutinee (or right-hand
-counter) themselves instead of stalling as a spine for conversion to
-δ-step from outside, which replays the pending spine each time. General
+of the same closures (~30% of the x86 model's load). And the evaluator's
+run-accelerated Nat folds — every fold whose step classifies as an affine
+or synchronous algebra (the policy paragraph below) — unfold a *glued*
+scrutinee (or right-hand counter) themselves instead of stalling as a
+spine for conversion to δ-step from outside, which replays the pending
+spine each time. General
 matches do not, under opaque evaluation: the x86 decoder's open-argument
 unfolding theorems meet at a folded `match decode_opcode_direct(…)`, and
 unfolding it eagerly exhausts fuel on the dispatch it hides.
@@ -285,23 +286,30 @@ so the decoder rendezvous is untouched; a memo written transparently can
 later answer an opaque single step with more than one step, which can
 only cost a rendezvous, never a verdict.
 
-**Acceleration policy proposal, under review**
-(`issues/kernel-acceleration-policy.md`). The incoming architecture notes
-propose distinguishing three kinds of acceleration, with future growth confined
-to the first two:
+**Acceleration policy** (`issues/kernel-acceleration-policy.md`). Three
+kinds of acceleration are distinguished, and only the first two grow:
 *representation changes with an adequacy argument* (saturated runs — the
 same values, the same relation up to bisimulation, generic over the type)
 and *strategy changes with no semantic content* (everything in the δ-lazy
 paragraphs above — the same unfoldings, the same fuel, checked by the
 differential oracle). The third, *pattern-matching on a definition's
-shape* (`nat_step_successors`, `nat_step_synchronizes`), is a standing
-exception to retire behind a general run algebra, not a template: a cost
-the calculus itself charges (unary iteration over a magnitude) is answered
-in the library by a definition whose reduction cost matches its meaning,
-or by reflection, never by a kernel case for that definition — and what is
-not accelerated is refused with `OutOfFuel`, never a process abort. This proposed
-division is not a ratified restriction on future kernel work: the adequacy and cost model of general arithmetic acceleration,
-and any proof-backed evaluation boundary, remain open design questions.
+spelling*, was retired on 2026-09-09
+(`issues/nat-run-algebra-primitives.md`): a `Nat` fold's step is now
+**classified by evaluating it** on fresh neutral variables (`eval/probe.rs`)
+into an affine tree of successors and projections, a synchronous
+two-counter algebra, or opaque, and the first two are iterated over the
+run's program by the arithmetic in `value/algebra.rs` (`eval/runs.rs`).
+The class is a fact about the algebra as a function on runs — the
+substitution property of reduction is the adequacy argument: a probe value
+with no case split on the probe variables was reached by a reduction that
+holds at every instantiation — so `mul` of two runs is one multiplication,
+`sub`/`leb`/`min`/`max` cancel run against run however they are spelled,
+and `half`'s course-of-values window is a permutation iterated by
+exponentiation. A cost the calculus itself charges that no class covers
+(`div`'s state machine, an `Int`-valued fold) is answered in the library
+by a definition whose reduction cost matches its meaning, or by
+reflection, never by a kernel case for that definition — and what is not
+accelerated is refused with `OutOfFuel`, never a process abort.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental

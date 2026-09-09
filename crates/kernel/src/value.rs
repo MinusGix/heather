@@ -52,6 +52,7 @@ use crate::fmt::node;
 use crate::level::Level;
 use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
 
+pub mod algebra;
 pub mod program;
 pub mod shift;
 
@@ -251,6 +252,11 @@ pub struct ValueArena<'v> {
     metrics: Option<&'v ValueMetrics>,
     term_cache: RefCell<ValueCache<*const TmClo<'v>, Val<'v>>>,
     type_cache: RefCell<ValueCache<*const TyClo<'v>, VTy<'v>>>,
+    /// The probed class of each `Nat` fold step (`eval/probe.rs`), by the
+    /// step closure's identity. Closures live as long as the arena, so a
+    /// key is never reused; the class depends on nothing but the closure
+    /// and the definitions, which are fixed for one arena.
+    fold_classes: RefCell<HashMap<*const TmClo<'v>, Rc<algebra::FoldClass>>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -614,6 +620,7 @@ impl<'v> ValueArena<'v> {
             metrics: None,
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
+            fold_classes: RefCell::new(HashMap::new()),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
@@ -631,6 +638,7 @@ impl<'v> ValueArena<'v> {
                 metrics: Some(metrics),
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
+                fold_classes: RefCell::new(HashMap::new()),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
@@ -689,6 +697,14 @@ impl<'v> ValueArena<'v> {
 
     /// The cached value for `clo`, if it is currently retained by this
     /// query's bounded cache.
+    pub fn fold_class(&self, step: &'v TmClo<'v>) -> Option<Rc<algebra::FoldClass>> {
+        self.fold_classes.borrow().get(&(step as *const TmClo<'v>)).cloned()
+    }
+
+    pub fn cache_fold_class(&self, step: &'v TmClo<'v>, class: Rc<algebra::FoldClass>) {
+        self.fold_classes.borrow_mut().insert(step as *const TmClo<'v>, class);
+    }
+
     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
         match clo {
             TmClo::Val(value) => Some(Rc::clone(value)),

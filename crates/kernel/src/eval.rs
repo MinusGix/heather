@@ -59,7 +59,11 @@ use crate::value::{
     Elim, ElimSpine, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail,
     VTy, Val, ValueArena,
 };
+use crate::value::algebra::{AffineTree, FoldClass};
 use crate::value::program::ContextProgram;
+
+mod probe;
+mod runs;
 
 type Res<T> = Result<T, OutOfFuel>;
 
@@ -81,44 +85,6 @@ fn neutral<'v>(
 fn stuck<'v>(arena: &'v ValueArena<'v>, head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
     let spine = arena.elim(ElimSpine::empty(), e.clone());
     neutral(Head::Stuck(Rc::clone(head)), spine, None)
-}
-
-/// The fold step has the exact shape
-///
-/// `λ m. elim_Nat ... m ... (λ l _. ih l)`.
-///
-/// Here `ih` is the outer fold's recursive result. This is a structural
-/// homomorphism for a *pair* of matching successor contexts: one constructor
-/// from each side reduces to the same fold at both predecessors. Types,
-/// motives, and zero branches may be arbitrary; they remain in the original
-/// eliminators and are evaluated once cancellation reaches a residual.
-fn nat_step_synchronizes(step: &TmClo<'_>) -> bool {
-    let Some((_, body)) = step.as_syn() else { return false };
-    let Term::Lam { body, .. } = &**body else { return false };
-    let Term::ElimNat { scrut, step, .. } = &**body else { return false };
-    if !matches!(&**scrut, Term::Var(LocalVar(0))) {
-        return false;
-    }
-    matches!(&**step,
-        Term::App { fun, arg, .. }
-            if matches!(&**fun, Term::Var(LocalVar(3)))
-                && matches!(&**arg, Term::Var(LocalVar(1))))
-}
-
-/// The fold step has the exact shape `λ k ih. su^p ih` for some `p ≥ 1`:
-/// the successor algebra, `p` constructors per input constructor. Over a run
-/// of `c` successors it is the run of `p·c`, mapped onto the fold at the
-/// tail; `Some(p)` is that count. `p = 1` (`add`) leaves the program itself
-/// in place; `p = 2` is `twice`.
-fn nat_step_successors(step: &TmClo<'_>) -> Option<u64> {
-    let Some((_, body)) = step.as_syn() else { return None };
-    let mut count = 0u64;
-    let mut cur = &**body;
-    while let Term::Succ(inner) = cur {
-        count += 1;
-        cur = &**inner;
-    }
-    (count >= 1 && matches!(cur, Term::Var(LocalVar(0)))).then_some(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -1365,8 +1331,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// One step of [`Eval::elim`]; see [`Eval::drive`].
     fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
         if let Val::Neutral(n) = &*head {
-            // A Nat fold the run machinery accelerates — the successor
-            // algebra or the synchronous two-counter fold — whose scrutinee
+            // A Nat fold the run machinery accelerates — one whose step
+            // classifies as an affine or synchronous algebra (`probe.rs`,
+            // memoized per closure) — whose scrutinee
             // is a *glued* definition unfolds that scrutinee here rather
             // than stalling as a spine for conversion to δ-step from the
             // outside one definition at a time (each such step replays the
@@ -1379,7 +1346,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // (`match decode_opcode_direct(…)` on both sides), and unfolding
             // it eagerly exhausts fuel on the dispatch it hides.
             if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
-                if nat_step_successors(step).is_some() || nat_step_synchronizes(step) {
+                if !matches!(&*self.classify_step(step)?, FoldClass::Opaque) {
                     self.spend()?;
                     self.frames.push(Frame::Elim(Rc::new(e)));
                     return Ok(Work::Force(unfold));
@@ -1433,6 +1400,21 @@ impl<'a, 'v> Eval<'a, 'v> {
                     self.fuel -= cancelled.inspected;
                     if cancelled.changed {
                         self.spend()?;
+                        // `inc` successors per cancelled pair (`max`):
+                        // the successor algebra iterated over the cancelled
+                        // prefix, wrapped around the residual fold.
+                        let Elim::ElimNat { step, .. } = &**elim else {
+                            unreachable!("NatSync stores a Nat eliminator")
+                        };
+                        if let FoldClass::Sync { inc: Some(inc) } = &*self.classify_step(step)? {
+                            let prefix = cancelled.cancelled.as_ref().expect("changed cancels");
+                            let by = AffineTree::Leaf { inc: Some(Rc::clone(inc)), path: Vec::new() };
+                            let Some(AffineTree::Leaf { inc: Some(total), .. }) = by.iterate(prefix)
+                            else {
+                                unreachable!("a successor leaf iterates to one")
+                            };
+                            self.frames.push(Frame::NatRunTail { program: total, glued: None });
+                        }
                         let left = self.nat_residual(cancelled.left, tail);
                         let right = self.nat_residual(cancelled.right, right_tail);
                         let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
@@ -1506,31 +1488,8 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             (Val::NatRun { program, tail }, Elim::ElimNat { step, .. }) => {
                 self.spend()?;
-                if nat_step_synchronizes(step) {
-                    return Ok(Work::Val(Rc::new(Val::NatSync {
-                        program: Rc::clone(program),
-                        tail,
-                        elim: Rc::new(e.clone()),
-                    })));
-                }
-                if let Some(mapped) = nat_step_successors(step).and_then(|p| {
-                    if p == 1 {
-                        return Some(Rc::clone(program));
-                    }
-                    // A wider algebra scales one saturated run's count; a
-                    // composed program, or a count that would overflow,
-                    // takes the ordinary one-step path below.
-                    let ContextProgram::Run { context, count } = &**program else { return None };
-                    let scaled = count.get().checked_mul(p)?;
-                    Some(ContextProgram::run(*context, NonZeroU64::new(scaled).unwrap()))
-                }) {
-                    // The fold at the tail is forced now rather than left
-                    // pending, so that a run it produces merges with this
-                    // one (`Frame::NatRunTail`). The value is the same
-                    // either way; only its fragment count differs.
-                    let mapped_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
-                    self.frames.push(Frame::NatRunTail { program: mapped, glued: None });
-                    return Ok(Work::Force(mapped_tail));
+                if let Some(work) = self.fold_run(&head, program, tail, &e)? {
+                    return Ok(work);
                 }
                 let pred = Val::nat_run_pred(self.arena, program, tail);
                 let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
@@ -1896,7 +1855,8 @@ pub fn whnf_value_ty<'v>(
 
 #[cfg(test)]
 mod tests {
-    use super::{nat_step_synchronizes, Elim, Eval};
+    use super::{Elim, Eval};
+    use crate::value::algebra::FoldClass;
     use crate::level::Level;
     use crate::reduce::{Defs, OutOfFuel};
     use crate::term::{CtxBase, LocalVar, Term, Type};
@@ -2059,10 +2019,11 @@ mod tests {
                 if matches!(&**program, ContextProgram::Run { count, .. } if count.get() == 1 << 41)));
     }
 
-    /// A count the wider algebra cannot represent in one `u64` run is not
-    /// guessed: the fold takes the ordinary one-step path and obeys fuel.
+    /// A count the wider algebra cannot represent in one `u64` run is a
+    /// composed program, exact and still constant work: nothing is
+    /// materialized and nothing is guessed.
     #[test]
-    fn double_successor_algebra_declines_an_overflowing_count() {
+    fn double_successor_algebra_composes_an_overflowing_count() {
         let arena = ValueArena::new();
         let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
@@ -2076,21 +2037,30 @@ mod tests {
             Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))))),
         );
         let mut ev = Eval::new(16, Defs::opaque(), CtxBase::Nil, &arena);
-        // The ordinary step exposes `su (su ih)` with the fold pending at
-        // the predecessor, one logical step at a time; descending the
-        // successors it produces is where fuel runs out, never a run.
-        let mut cur = ev.elim(head, elim).unwrap();
-        for _ in 0..64 {
-            match &*cur {
-                Val::Succ(inner) => match ev.force(inner) {
-                    Ok(next) => cur = next,
-                    Err(OutOfFuel) => return,
-                },
-                Val::NatRun { .. } => panic!("an overflowing count was scaled"),
-                other => panic!("unexpected head: {other:?}"),
+        let result = ev.elim(head, elim).unwrap();
+        let Val::NatRun { program, .. } = &*result else { panic!("not a run: {result:?}") };
+        assert!(matches!(&**program, ContextProgram::Compose { .. }));
+        assert_eq!(ContextProgram::repetition_count_up_to(program, u64::MAX), None);
+        assert_eq!(exact_count(program), 2 * (u64::MAX as u128));
+    }
+
+    /// The whole count, beyond the kernel's bounded view; a test may hold it.
+    fn exact_count(program: &Rc<ContextProgram<()>>) -> u128 {
+        fn go(
+            program: &Rc<ContextProgram<()>>,
+            memo: &mut std::collections::HashMap<*const ContextProgram<()>, u128>,
+        ) -> u128 {
+            if let Some(n) = memo.get(&Rc::as_ptr(program)) {
+                return *n;
             }
+            let n = match &**program {
+                ContextProgram::Run { count, .. } => count.get() as u128,
+                ContextProgram::Compose { outer, inner } => go(outer, memo) + go(inner, memo),
+            };
+            memo.insert(Rc::as_ptr(program), n);
+            n
         }
-        panic!("fuel never ran out");
+        go(program, &mut std::collections::HashMap::new())
     }
 
     #[test]
@@ -2099,10 +2069,17 @@ mod tests {
         let env = Env::empty();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
         let head = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
-        // Return the induction hypothesis: observing the result genuinely
+        // Match on the induction hypothesis: observing the result genuinely
         // asks to traverse the logical spine, so compression must not claim
-        // a constant-time answer.
-        let elim = nat_elim(&arena, env, Term::Var(LocalVar(0)));
+        // a constant-time answer. (Returning `ih` unchanged is the identity
+        // algebra, which *is* affine: that fold is the base in one step.)
+        let elim = nat_elim(&arena, env, Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::Zero),
+            scrut: Rc::new(Term::Var(LocalVar(0))),
+        });
         let mut ev = Eval::new(32, Defs::opaque(), CtxBase::Nil, &arena);
         assert_eq!(ev.elim(head, elim).unwrap_err(), OutOfFuel);
     }
@@ -2162,7 +2139,264 @@ mod tests {
         let Term::ElimNat { step: inner, .. } = Rc::make_mut(body) else { unreachable!() };
         let Term::App { fun, .. } = Rc::make_mut(inner) else { unreachable!() };
         *fun = Rc::new(Term::Var(LocalVar(0)));
-        let closure = TmClo::syn(env, Rc::new(step));
-        assert!(!nat_step_synchronizes(&closure));
+        let arena = ValueArena::new();
+        let closure = arena.tm(TmClo::syn(env, Rc::new(step)));
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        assert!(matches!(&*ev.classify_step(closure).unwrap(), FoldClass::Opaque));
+    }
+
+    /// A weak head `Nat` value's count, walking successors and runs through
+    /// their tails; only a test may hold the whole number.
+    fn nat_value<'v>(ev: &mut Eval<'_, 'v>, value: Rc<Val<'v>>) -> u128 {
+        let mut total = 0u128;
+        let mut cur = value;
+        loop {
+            let next = match &*cur {
+                Val::Zero => return total,
+                Val::Succ(pred) => {
+                    total += 1;
+                    *pred
+                }
+                Val::NatRun { program, tail } => {
+                    total += exact_count(program);
+                    *tail
+                }
+                other => panic!("not a closed natural: {other:?}"),
+            };
+            cur = ev.force(next).unwrap();
+        }
+    }
+
+    fn run_over_zero<'v>(arena: &'v ValueArena<'v>, count: u64) -> Rc<Val<'v>> {
+        Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(count).unwrap()),
+            tail: arena.tm(TmClo::val(Rc::new(Val::Zero))),
+        })
+    }
+
+    /// `add(ih, a)` as a step body over binders `k, ih` with `a` the outer
+    /// environment's one entry: `elim_Nat(a; ih; λ _ ih'. su ih')`.
+    fn add_env_step() -> Term {
+        Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Var(LocalVar(0))),
+            step: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0))))),
+            scrut: Rc::new(Term::Var(LocalVar(2))),
+        }
+    }
+
+    /// `mul(a, b)` folds `add(ih, a)` over `b`; the step probes to
+    /// `Succ^{|a|}(ih)` through the nested fold, so two runs multiply in one
+    /// iteration — here past `u64`, into a composed program, under a fuel
+    /// that could not have paid for `2^32` additions.
+    #[test]
+    fn multiplication_of_two_runs_is_one_iteration() {
+        let arena = ValueArena::new();
+        let a = arena.tm(TmClo::val(run_over_zero(&arena, 1 << 32)));
+        let env = Env::empty().push(&arena, a);
+        let elim = nat_elim(&arena, env, add_env_step());
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(run_over_zero(&arena, 1 << 32), elim).unwrap();
+        let Val::NatRun { program, .. } = &*result else { panic!("not a run: {result:?}") };
+        assert_eq!(exact_count(program), 1u128 << 64);
+        assert_eq!(nat_value(&mut ev, result), 1u128 << 64);
+    }
+
+    /// A step whose result sits on `k` rather than `ih` is not affine.
+    #[test]
+    fn a_step_returning_the_predecessor_is_opaque() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))));
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
+        // A constant step is affine (a literal at every step): the fold is
+        // that literal in one step.
+        let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Zero)))));
+        assert!(matches!(&*ev.classify_step(step).unwrap(),
+            FoldClass::Affine { tree: crate::value::algebra::AffineTree::Lit { .. }, uniform: true }));
+    }
+
+    fn pair_nat_ty() -> Type {
+        Type::Sigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: Rc::new(Type::Nat),
+            snd: Rc::new(Type::Nat),
+        }
+    }
+
+    fn fst_nat(pair: Term) -> Term {
+        Term::Fst {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: Rc::new(Type::Nat),
+            snd_ty: Rc::new(Type::Nat),
+            pair: Rc::new(pair),
+        }
+    }
+
+    fn snd_nat(pair: Term) -> Term {
+        Term::Snd {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: Rc::new(Type::Nat),
+            snd_ty: Rc::new(Type::Nat),
+            pair: Rc::new(pair),
+        }
+    }
+
+    fn pair_nat(fst: Term, snd: Term) -> Term {
+        Term::Pair {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: Rc::new(Type::Nat),
+            snd_ty: Rc::new(Type::Nat),
+            fst: Rc::new(fst),
+            snd: Rc::new(snd),
+        }
+    }
+
+    /// `half` as the elaborator lowers it: a window `(half n, half (n-1))`
+    /// whose step is `λ k F. ⟨match k { 0 => 0; su _ => su (π₁ F) }, π₀ F⟩`.
+    /// The step matches on `k`, so the class is peeled: a permutation with
+    /// an increment at every step but the innermost.
+    fn half_elim<'v>(arena: &'v ValueArena<'v>) -> Elim<'v> {
+        let env = Env::empty();
+        // Binders at the step: k = 1, F = 0; inside the inner step two more.
+        let step = pair_nat(
+            Term::ElimNat {
+                level: Level::Zero,
+                motive: Rc::new(Type::Nat),
+                base: Rc::new(Term::Zero),
+                step: Rc::new(Term::Succ(Rc::new(snd_nat(Term::Var(LocalVar(2)))))),
+                scrut: Rc::new(Term::Var(LocalVar(1))),
+            },
+            fst_nat(Term::Var(LocalVar(0))),
+        );
+        Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(pair_nat_ty()))),
+            base: arena.tm(TmClo::syn(env, Rc::new(pair_nat(Term::Zero, Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(step))),
+        }
+    }
+
+    #[test]
+    fn a_course_of_values_window_is_iterated_as_a_permutation() {
+        let arena = ValueArena::new();
+        for count in [1u64, 2, 3, 7, 8, 1 << 40, u64::MAX] {
+            let mut ev = Eval::new(96, Defs::opaque(), CtxBase::Nil, &arena);
+            let window = ev.elim(run_over_zero(&arena, count), half_elim(&arena)).unwrap();
+            let Val::Pair { fst, snd, .. } = &*window else { panic!("not a window: {window:?}") };
+            let half = ev.force(fst).unwrap();
+            assert_eq!(nat_value(&mut ev, half), (count / 2) as u128, "half({count})");
+            let previous = ev.force(snd).unwrap();
+            assert_eq!(nat_value(&mut ev, previous), ((count - 1) / 2) as u128, "half({count} - 1)");
+        }
+    }
+
+    /// The peeled window over an *open* tail: eight peeled steps swap the
+    /// window four times, so `half(x + 9)` is four successors on the first
+    /// component of the innermost step's window, which is stuck on `x`.
+    #[test]
+    fn a_peeled_window_over_an_open_tail_stops_at_the_innermost_step() {
+        let arena = ValueArena::new();
+        let x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
+        let head = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
+            tail: x,
+        });
+        let mut ev = Eval::new(96, Defs::opaque(), CtxBase::Nil, &arena);
+        let window = ev.elim(head, half_elim(&arena)).unwrap();
+        let Val::Pair { fst, .. } = &*window else { panic!("not a window: {window:?}") };
+        let half = ev.force(fst).unwrap();
+        let Val::NatRun { program, tail } = &*half else { panic!("no successors: {half:?}") };
+        assert_eq!(exact_count(program), 4);
+        let inner = ev.force(tail).unwrap();
+        assert!(matches!(&*inner, Val::Neutral(_)), "{inner:?}");
+    }
+
+    /// `max` as a fold: `λ k ih. λ m. elim_Nat(m; su k; λ l _. su (ih l))`
+    /// at binders k = 1, ih = 0; m = 0 under the lambda; l = 1, _ = 0 in the
+    /// inner step. The synchronous algebra with one successor per
+    /// cancelled pair.
+    fn max_elim<'v>(arena: &'v ValueArena<'v>) -> Elim<'v> {
+        let env = Env::empty();
+        let step = dummy_lam(Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(2))))),
+            step: Rc::new(Term::Succ(Rc::new(Term::App {
+                fun: Rc::new(Term::Var(LocalVar(3))),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Nat),
+                cod: Rc::new(Type::Nat),
+                arg: Rc::new(Term::Var(LocalVar(1))),
+            }))),
+            scrut: Rc::new(Term::Var(LocalVar(0))),
+        });
+        Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::syn(env, Rc::new(dummy_lam(Term::Var(LocalVar(0)))))),
+            step: arena.tm(TmClo::syn(env, Rc::new(step))),
+        }
+    }
+
+    /// `max(7, 3)`: three pairs cancel under three successors, and the
+    /// residual takes the ordinary step. At `u64::MAX` the prefix is
+    /// cancelled, not walked.
+    #[test]
+    fn synchronous_algebra_with_successors_iterates_them_over_the_cancelled_prefix() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        let elim = max_elim(&arena);
+        assert!(matches!(&*ev.classify_step(elim_step(&elim)).unwrap(),
+            FoldClass::Sync { inc: Some(_) }));
+        let three = arena.tm(TmClo::val(run_over_zero(&arena, 3)));
+        let folded = ev.elim(run_over_zero(&arena, 7), elim).unwrap();
+        let result = ev.elim(folded, app_elim(&arena, three)).unwrap();
+        assert_eq!(nat_value(&mut ev, result), 7);
+
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        let big = arena.tm(TmClo::val(run_over_zero(&arena, u64::MAX - 1)));
+        let folded = ev.elim(run_over_zero(&arena, u64::MAX), max_elim(&arena)).unwrap();
+        let result = ev.elim(folded, app_elim(&arena, big)).unwrap();
+        assert_eq!(nat_value(&mut ev, result), u64::MAX as u128);
+    }
+
+    /// A uniform window over an *open* tail projects the stuck fold: the
+    /// projections are a spine on it, annotated from the motive. The swap
+    /// `λ k F. ⟨π₁ F, π₀ F⟩` over nine successors swaps once.
+    #[test]
+    fn a_window_over_an_open_tail_projects_the_stuck_fold() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
+        let head = Rc::new(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
+            tail: x,
+        });
+        let swap = pair_nat(snd_nat(Term::Var(LocalVar(0))), fst_nat(Term::Var(LocalVar(0))));
+        let elim = Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(pair_nat_ty()))),
+            base: arena.tm(TmClo::syn(env, Rc::new(pair_nat(Term::Zero, Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(swap))),
+        };
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        let window = ev.elim(head, elim).unwrap();
+        let Val::Pair { fst, .. } = &*window else { panic!("not a window: {window:?}") };
+        let first = ev.force(fst).unwrap();
+        assert!(matches!(&*first, Val::Neutral(n)
+            if matches!(n.spine.last(), Some(Elim::Snd { .. }))), "{first:?}");
+    }
+
+    fn elim_step<'v>(elim: &Elim<'v>) -> &'v TmClo<'v> {
+        let Elim::ElimNat { step, .. } = elim else { unreachable!() };
+        step
     }
 }

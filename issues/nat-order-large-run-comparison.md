@@ -3,7 +3,7 @@ title: Make closed Nat order cancel large shared run prefixes
 status: closed
 labels: [kernel,frontend,performance,nat,representation]
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-09-09
 ---
 
 The compact FunctionIR hardening round found that compact numeral storage is
@@ -67,6 +67,11 @@ FunctionIR special case.
   not merely recognize one numeral spelling.
 
 ## Log
+
+- 2026-09-09: The synchronous fold is recognized semantically now
+  ([[nat-run-algebra-primitives]]): `nat::sub`, whose spelling the
+  syntactic recognizer did not match, cancels run against run, as do
+  `min`/`max` with their one successor per cancelled pair.
 
 - 2026-08-31: Closed with two generic consumers of the shared context-program
   primitive. `ContextProgram::cancel_matching_prefix` walks run/composition

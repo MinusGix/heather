@@ -3,7 +3,7 @@ title: Kernel acceleration policy: representations with adequacy and strategies,
 status: open
 labels: [kernel,design,evaluator,conversion,performance]
 created: 2026-09-07
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 The kernel now carries three different kinds of "acceleration", and the
@@ -108,6 +108,13 @@ in the incoming architecture discussion.
   than forcing every caller to manually supply a favorable proof spelling.
 
 ## Log
+
+- 2026-09-09: The two definition-shape cases are retired
+  ([[nat-run-algebra-primitives]]): a fold step is classified by evaluating
+  it on fresh neutrals (`eval/probe.rs`) and the class is iterated by the
+  run arithmetic in `value/algebra.rs`. The policy paragraph in
+  `crates/kernel/DESIGN.md` now records the division as the standing rule
+  rather than a proposal under review, with the third kind gone.
 
 - 2026-09-08: Merged as a proposal under review. These open questions preserve the
   useful distinctions without treating the accompanying discussion as settled

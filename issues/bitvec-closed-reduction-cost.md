@@ -3,7 +3,7 @@ title: Closed BitVec computation over generated values exhausts stack and memory
 status: open
 labels: [stdlib,bitvectors,kernel,conversion,performance]
 created: 2026-08-26
-updated: 2026-09-07
+updated: 2026-09-09
 ---
 
 The executable carry round exposed two different cost regimes which must not be
@@ -56,6 +56,13 @@ Acceptance has two parts:
   of that class rather than assume a new mechanism.
 
 ## Log
+
+- 2026-09-09: `half` over a run is no longer magnitude-linear
+  ([[nat-run-algebra-primitives]]): its window is an affine permutation the
+  kernel iterates by exponentiation, so `half(pow(2, 64))` is a few
+  compositions. The remaining magnitude-linear customers are `Int`'s
+  `isucc`/`ipred` folds ([[int-arithmetic-over-nat-primitives]]) and
+  `div`/`mod`'s state machine.
 
 - 2026-08-26: Filed from bounded probes after the carry correspondence landed.
   Times exclude cached standard-library declarations and attribute only the
