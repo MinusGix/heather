@@ -1118,12 +1118,14 @@ pub fn generate_prefixed_conditional(
          \x20   short_branch_target(start, bitvec::ofNat(8, {false_displacement})) =\n\
          \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
          \x20     {false_displacement})\n\
-         {{ refl }}\n\n\
+         {{ sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),\n\
+         \x20     bitvec::sign_extend(7, 56, bitvec::ofNat(8, {false_displacement})))) }}\n\n\
          theorem {linked_name}_join_span(start: BitVec(64)):\n\
          \x20   short_branch_target(start, bitvec::ofNat(8, {join_displacement})) =\n\
          \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
          \x20     {join_displacement})\n\
-         {{ refl }}\n\n\
+         {{ sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),\n\
+         \x20     bitvec::sign_extend(7, 56, bitvec::ofNat(8, {join_displacement})))) }}\n\n\
          theorem {linked_name}_prefix_span(start: BitVec(64)):\n\
          \x20   {prefix_name}_final_rip(start) =\n\
          \x20     after_canonical_block(start, {prefix_name}_instructions())\n\
@@ -1796,7 +1798,10 @@ pub fn generate_control_region(
             "short_branch_target(linked_branch_start({linked_name}(), start), bitvec::ofNat(8, {false_displacement})) = linked_false_start({linked_name}(), start)"
         ),
         format!(
-            "trans(refl, sym(bitvec::iterate_increment_compose(64,\n\
+            "trans(sym(bitvec::iter_add_eq_add(64,\n\
+                 next_rip(linked_branch_start({linked_name}(), start), 2),\n\
+                 bitvec::sign_extend(7, 56, bitvec::ofNat(8, {false_displacement})))),\n\
+             sym(bitvec::iterate_increment_compose(64,\n\
                  linked_true_start({linked_name}(), start), {true_bytes}, 2)))"
         ),
     ));
@@ -1807,7 +1812,11 @@ pub fn generate_control_region(
         format!(
             "short_branch_target(linked_join_jump_start({linked_name}(), start), bitvec::ofNat(8, {join_displacement})) = linked_join_start({linked_name}(), start)"
         ),
-        "refl",
+        format!(
+            "sym(bitvec::iter_add_eq_add(64,\n\
+                 next_rip(linked_join_jump_start({linked_name}(), start), 2),\n\
+                 bitvec::sign_extend(7, 56, bitvec::ofNat(8, {join_displacement}))))"
+        ),
     ));
     module.declaration(emitted_theorem(
         format!("{linked_name}_layout"),

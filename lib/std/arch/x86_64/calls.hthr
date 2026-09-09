@@ -303,9 +303,19 @@ theorem increments_decrements(n, downs, ups: Nat): (value: BitVec(n)) →
 theorem add_negative(n: Nat, value, magnitude: BitVec(n)):
     bitvec::add(n, value, bitvec::sub(n, zero(n), magnitude)) = bitvec::sub(n, value, magnitude)
 {
-    trans(add_comm(n, value, bitvec::sub(n, zero(n), magnitude)),
-        trans(increments_decrements(n, toNat(n, magnitude), toNat(n, value), zero(n)),
-            cong_iterate_decrement(n, toNat(n, magnitude), iterate_increment_toNat(n, value))))
+    // `add` and `sub` are the ripples now, so the increment/decrement
+    // bookkeeping below is stated over `iter_add`/`iter_sub` and transported
+    // back (docs/bitvec-width-bounded-defaults-design.md).
+    trans(@cong_ripple_add(n, value, value,
+            bitvec::sub(n, zero(n), magnitude), iter_sub(n, zero(n), magnitude),
+            refl, sym(iter_sub_eq_sub(n, zero(n), magnitude))),
+        trans(sym(iter_add_eq_add(n, value, iter_sub(n, zero(n), magnitude))),
+            trans(trans(iter_add_comm(n, value, iter_sub(n, zero(n), magnitude)),
+                    trans(increments_decrements(n, toNat(n, magnitude),
+                            toNat(n, value), zero(n)),
+                        cong_iterate_decrement(n, toNat(n, magnitude),
+                            iterate_increment_toNat(n, value)))),
+                iter_sub_eq_sub(n, value, magnitude))))
 }
 
 theorem call_after_flat<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>,

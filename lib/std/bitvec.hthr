@@ -5,10 +5,14 @@
 // equality, so no quotient or proof field is hidden in the carrier.
 //
 // Arithmetic interpretation is explicit. `toNat` is unsigned and `toInt` is
-// two's-complement signed. Construction and arithmetic reduce modulo `2^n`;
-// bitwise operations, slicing, and extension agree pointwise with those
-// interpretations. Shift counts are mathematical counts and are never masked
-// to an instruction-set-specific width.
+// two's-complement signed. `add`, `sub`, and `neg` are ripple-carry: their
+// reduction cost is the width, not the operands' magnitude
+// (`docs/bitvec-width-bounded-defaults-design.md`); the iterated spellings
+// remain as `iter_add`/`iter_sub`/`iter_neg` for `toNat`-counted reasoning.
+// Construction and arithmetic reduce modulo `2^n`; bitwise operations,
+// slicing, and extension agree pointwise with those interpretations. Shift
+// counts are mathematical counts and are never masked to an
+// instruction-set-specific width.
 
 import bool;
 import logic;
@@ -296,16 +300,106 @@ fn iterate_decrement(n: Nat, count: Nat) → BitVec(n) → BitVec(n) {
     }
 }
 
-fn add(n: Nat, a, b: BitVec(n)) → BitVec(n) {
+// The iterated forms. One increment or decrement per unit of the second
+// operand's unsigned value, so a machine-width operand asks for up to `2^n`
+// steps; they are kept because `toNat`-counted reasoning is stated over them
+// (`iter_add_comm`, `iter_add_sub_cancel`, the `iterate_increment_*` lemmas),
+// and `iter_add_eq_add` and its siblings connect them to the operations below.
+fn iter_add(n: Nat, a, b: BitVec(n)) → BitVec(n) {
     iterate_increment(n, a, toNat(n, b))
 }
 
-fn sub(n: Nat, a, b: BitVec(n)) → BitVec(n) {
+fn iter_sub(n: Nat, a, b: BitVec(n)) → BitVec(n) {
     iterate_decrement(n, toNat(n, b), a)
 }
 
-fn neg(n: Nat, a: BitVec(n)) → BitVec(n) { sub(n, zero(n), a) }
+fn iter_neg(n: Nat, a: BitVec(n)) → BitVec(n) { iter_sub(n, zero(n), a) }
 
+// ---------------------------------------------------------------------------
+// Ripple-carry addition and subtraction, and the canonical operations
+// (docs/bitvec-width-bounded-defaults-design.md). The ripples run the carry
+// and borrow `carry_bits` and `borrow_bits` already use and keep each column's
+// sum bit, so the work is one column per bit of width whatever the operands
+// are. `add`, `sub`, and `neg` *are* those ripples; the iterated forms above
+// are proved equal to them at every width and every operand, open ones
+// included.
+//
+// The incoming carry or borrow is part of the induction. Its meaning is the
+// unsigned count the column adds or removes: `add_bits(n, a, b, c)` is
+// `iterate_increment(n, a, toNat(n, b) + bit_value(c))` (`add_bits_spec`),
+// and `sub_bits(n, a, b, c)` is `iterate_decrement(n, toNat(n, b) +
+// bit_value(c), a)` (`sub_bits_spec`).
+
+fn sum_bit(a, b, carry: Bool) → Bool { xor_bit(a, xor_bit(b, carry)) }
+
+fn carry_majority(a, b, carry: Bool) → Bool {
+    (a && b) || ((a && carry) || (b && carry))
+}
+
+fn borrow_next(a, b, borrow: Bool) → Bool {
+    (bool::not(a) && b) || (bool::not(xor_bit(a, b)) && borrow)
+}
+
+fn add_bits_next(n: Nat, a, b: BitVec(n), carry: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
+{
+    match carry {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
+// Ripple-carry addition with an incoming carry. The carry passed on is the
+// majority `carry_bits` uses, forced before the recursive call for the reason
+// given there.
+fn add_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
+        Zero => λ a b carry => from_bits(0, []),
+        Succ(k, ih) => λ a b carry => cons_bit(k,
+            sum_bit(head_bit(k, a), head_bit(k, b), carry),
+            add_bits_next(k, tail_bits(k, a), tail_bits(k, b),
+                carry_majority(head_bit(k, a), head_bit(k, b), carry), ih)),
+    }
+}
+
+fn ripple_add(n: Nat, a, b: BitVec(n)) → BitVec(n) { add_bits(n, a, b, False) }
+
+fn sub_bits_next(n: Nat, a, b: BitVec(n), borrow: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
+{
+    match borrow {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
+// Ripple-borrow subtraction with an incoming borrow; the borrow passed on is
+// the one `borrow_bits` uses.
+fn sub_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
+        Zero => λ a b borrow => from_bits(0, []),
+        Succ(k, ih) => λ a b borrow => cons_bit(k,
+            sum_bit(head_bit(k, a), head_bit(k, b), borrow),
+            sub_bits_next(k, tail_bits(k, a), tail_bits(k, b),
+                borrow_next(head_bit(k, a), head_bit(k, b), borrow), ih)),
+    }
+}
+
+fn ripple_sub(n: Nat, a, b: BitVec(n)) → BitVec(n) { sub_bits(n, a, b, False) }
+
+fn ripple_neg(n: Nat, a: BitVec(n)) → BitVec(n) { ripple_sub(n, zero(n), a) }
+
+// The canonical operations. `ripple_add` and `add` are the same definition
+// under two names; the `ripple_*` spelling stays because proofs and emitted
+// certificates name it.
+fn add(n: Nat, a, b: BitVec(n)) → BitVec(n) { ripple_add(n, a, b) }
+
+fn sub(n: Nat, a, b: BitVec(n)) → BitVec(n) { ripple_sub(n, a, b) }
+
+fn neg(n: Nat, a: BitVec(n)) → BitVec(n) { ripple_neg(n, a) }
+
+// `mul` still routes through `ofNat` above `2^n`, whose `mod_succ` loop costs
+// the quotient; see the design doc for why it is left.
 fn mul(n: Nat, a, b: BitVec(n)) → BitVec(n) {
     ofNat(n, toNat(n, a) * toNat(n, b))
 }
@@ -318,10 +412,8 @@ fn carry_add(n: Nat, a, b: BitVec(n)) → Type {
 // by proofs; instruction semantics and other evaluators need the same fact as
 // a Boolean without deciding an open comparison involving `2^n`. This ripple
 // runs structurally over the bits and therefore remains linear at width 64.
-fn carry_majority(a, b, carry: Bool) → Bool {
-    (a && b) || ((a && carry) || (b && carry))
-}
-
+// The column function itself is `carry_majority`, defined with the ripples
+// above.
 fn carry_bits_next(n: Nat, a, b: BitVec(n), carry: Bool,
     rest: BitVec(n) → BitVec(n) → Bool → Bool) → Bool
 {
@@ -505,10 +597,7 @@ fn borrow_sub(n: Nat, a, b: BitVec(n)) → Type { toNat(n, a) < toNat(n, b) }
 
 // Executable ripple-borrow view for subtraction. Like `carry_add_bit`, this
 // runs over the vector structure rather than deciding an open Nat comparison.
-fn borrow_next(a, b, borrow: Bool) → Bool {
-    (bool::not(a) && b) || (bool::not(xor_bit(a, b)) && borrow)
-}
-
+// The column function itself is `borrow_next`, defined with the ripples above.
 fn borrow_bits_next(n: Nat, a, b: BitVec(n), borrow: Bool,
     rest: BitVec(n) → BitVec(n) → Bool → Bool) → Bool
 {
@@ -932,10 +1021,12 @@ theorem iterate_increment_toNat(n: Nat): (x: BitVec(n)) →
     }
 }
 
-theorem add_comm(n: Nat, left, right: BitVec(n)):
-        add(n, left, right) = add(n, right, left) {
+// Commutativity of the iterated form, by the `toNat` count. `add_comm` for the
+// canonical operation is this transported along `iter_add_eq_add`, below.
+theorem iter_add_comm(n: Nat, left, right: BitVec(n)):
+        iter_add(n, left, right) = iter_add(n, right, left) {
     calc {
-        add(n, left, right)
+        iter_add(n, left, right)
             = iterate_increment(n,
                 iterate_increment(n, zero(n), toNat(n, left)),
                 toNat(n, right)) :=
@@ -954,7 +1045,7 @@ theorem add_comm(n: Nat, left, right: BitVec(n)):
                 toNat(n, left)) :=
                 sym(iterate_increment_compose(n, zero(n),
                     toNat(n, right), toNat(n, left))),
-            = add(n, right, left) :=
+            = iter_add(n, right, left) :=
                 cong_iterate_increment(n, toNat(n, left),
                     iterate_increment_toNat(n, right)),
     }
@@ -1015,7 +1106,8 @@ theorem iterate_add_sub_cancel(n: Nat, count: Nat): (x: BitVec(n)) →
     }
 }
 
-theorem add_sub_cancel(n: Nat, a, b: BitVec(n)): sub(n, add(n, a, b), b) = a {
+theorem iter_add_sub_cancel(n: Nat, a, b: BitVec(n)):
+        iter_sub(n, iter_add(n, a, b), b) = a {
     iterate_add_sub_cancel(n, toNat(n, b), a)
 }
 
@@ -1092,73 +1184,11 @@ theorem truncate_sign_extend(n, extra: Nat, x: BitVec(Succ(n))):
 }
 
 // ---------------------------------------------------------------------------
-// Width-bounded addition and subtraction (issues/bitvec-bounded-add-sub.md).
-// `add` and `sub` iterate one increment or decrement per unit of the second
-// operand's unsigned value, so a machine-width operand — a sign-extended
-// negative displacement, say — asks for up to `2^64` steps. `ripple_add` and
-// `ripple_sub` instead run the carry and borrow ripples `carry_add_bit` and
-// `borrow_sub_bit` already use and keep each column's sum bit, so the work is
-// one column per bit of width whatever the operands are. They are proved
-// equal to `add` and `sub` at every width and every operand, open ones
-// included, so a proof may compute with the ripple and state its result in
-// the canonical operation (`add_eq_of_ripple_add` and its siblings).
-//
-// The incoming carry or borrow is part of the induction. Its meaning is the
-// unsigned count the column adds or removes: `add_bits(n, a, b, c)` is
-// `iterate_increment(n, a, toNat(n, b) + bit_value(c))` (`add_bits_spec`),
-// and `sub_bits(n, a, b, c)` is `iterate_decrement(n, toNat(n, b) +
-// bit_value(c), a)` (`sub_bits_spec`).
-
-fn sum_bit(a, b, carry: Bool) → Bool { xor_bit(a, xor_bit(b, carry)) }
-
-fn add_bits_next(n: Nat, a, b: BitVec(n), carry: Bool,
-    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
-{
-    match carry {
-        False => rest(a, b, False),
-        True => rest(a, b, True),
-    }
-}
-
-// Ripple-carry addition with an incoming carry. The carry passed on is the
-// majority `carry_bits` uses, forced before the recursive call for the reason
-// given there.
-fn add_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
-    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
-        Zero => λ a b carry => from_bits(0, []),
-        Succ(k, ih) => λ a b carry => cons_bit(k,
-            sum_bit(head_bit(k, a), head_bit(k, b), carry),
-            add_bits_next(k, tail_bits(k, a), tail_bits(k, b),
-                carry_majority(head_bit(k, a), head_bit(k, b), carry), ih)),
-    }
-}
-
-fn ripple_add(n: Nat, a, b: BitVec(n)) → BitVec(n) { add_bits(n, a, b, False) }
-
-fn sub_bits_next(n: Nat, a, b: BitVec(n), borrow: Bool,
-    rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)) → BitVec(n)
-{
-    match borrow {
-        False => rest(a, b, False),
-        True => rest(a, b, True),
-    }
-}
-
-// Ripple-borrow subtraction with an incoming borrow; the borrow passed on is
-// the one `borrow_bits` uses.
-fn sub_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → BitVec(n) {
-    match n as λ k => BitVec(k) → BitVec(k) → Bool → BitVec(k) {
-        Zero => λ a b borrow => from_bits(0, []),
-        Succ(k, ih) => λ a b borrow => cons_bit(k,
-            sum_bit(head_bit(k, a), head_bit(k, b), borrow),
-            sub_bits_next(k, tail_bits(k, a), tail_bits(k, b),
-                borrow_next(head_bit(k, a), head_bit(k, b), borrow), ih)),
-    }
-}
-
-fn ripple_sub(n: Nat, a, b: BitVec(n)) → BitVec(n) { sub_bits(n, a, b, False) }
-
-fn ripple_neg(n: Nat, a: BitVec(n)) → BitVec(n) { ripple_sub(n, zero(n), a) }
+// The ripples are equal to the iterated forms
+// (issues/bitvec-bounded-add-sub.md). The definitions live above, next to
+// `add`; what follows is the induction that identifies them with
+// `iterate_increment` and `iterate_decrement` over `toNat`, and the transports
+// between the two spellings.
 
 theorem cons_bit_tail_cong(n: Nat, b: Bool, {xs, ys: BitVec(n)}, pt: xs = ys):
     cons_bit(n, b, xs) = cons_bit(n, b, ys)
@@ -1285,10 +1315,19 @@ theorem add_bits_spec(n: Nat, a, b: BitVec(n), carry: Bool):
     sym(iterate_increment_add_bits(n, a, b, carry))
 }
 
+// The iterated form agrees with `add` at every width and every operand. This
+// is the equation the swap of definitions turned around: `add` is the ripple,
+// so `ripple_add_eq_add` is `refl` and this carries the induction's content.
+theorem iter_add_eq_add(n: Nat, a, b: BitVec(n)):
+    iter_add(n, a, b) = add(n, a, b)
+{
+    iterate_increment_add_bits(n, a, b, False)
+}
+
 theorem ripple_add_eq_add(n: Nat, a, b: BitVec(n)):
     ripple_add(n, a, b) = add(n, a, b)
 {
-    sym(iterate_increment_add_bits(n, a, b, False))
+    refl
 }
 
 // Two decrements at a positive width retreat the tail once and restore the
@@ -1420,21 +1459,62 @@ theorem sub_bits_spec(n: Nat, a, b: BitVec(n), borrow: Bool):
     sym(iterate_decrement_sub_bits(n, a, b, borrow))
 }
 
+theorem iter_sub_eq_sub(n: Nat, a, b: BitVec(n)):
+    iter_sub(n, a, b) = sub(n, a, b)
+{
+    iterate_decrement_sub_bits(n, a, b, False)
+}
+
+theorem iter_neg_eq_neg(n: Nat, a: BitVec(n)): iter_neg(n, a) = neg(n, a) {
+    iter_sub_eq_sub(n, zero(n), a)
+}
+
 theorem ripple_sub_eq_sub(n: Nat, a, b: BitVec(n)):
     ripple_sub(n, a, b) = sub(n, a, b)
 {
-    sym(iterate_decrement_sub_bits(n, a, b, False))
+    refl
 }
 
 theorem ripple_neg_eq_neg(n: Nat, a: BitVec(n)): ripple_neg(n, a) = neg(n, a) {
-    ripple_sub_eq_sub(n, zero(n), a)
+    refl
 }
 
-// Transport. A closed `add` at machine width is up to `2^64` increments, so
-// a generator proves the ripple's equation instead — at closed operands that
-// is `refl` in work linear in the width — and restates it in the canonical
-// operation through these. The reverse direction lets a ripple result inherit
-// every law stated for `add` and `sub`.
+// Transport between the iterated and canonical spellings. A closed `iter_add`
+// at machine width is up to `2^64` increments, so a proof that wants the count
+// works with `iter_add`/`iter_sub` and restates its result in `add`/`sub`
+// through these; the ripple direction below is definitional.
+theorem add_eq_of_iter_add(n: Nat, a, b, r: BitVec(n),
+    h: iter_add(n, a, b) = r): add(n, a, b) = r
+{
+    trans(sym(iter_add_eq_add(n, a, b)), h)
+}
+
+theorem iter_add_eq_of_add(n: Nat, a, b, r: BitVec(n),
+    h: add(n, a, b) = r): iter_add(n, a, b) = r
+{
+    trans(iter_add_eq_add(n, a, b), h)
+}
+
+theorem sub_eq_of_iter_sub(n: Nat, a, b, r: BitVec(n),
+    h: iter_sub(n, a, b) = r): sub(n, a, b) = r
+{
+    trans(sym(iter_sub_eq_sub(n, a, b)), h)
+}
+
+theorem iter_sub_eq_of_sub(n: Nat, a, b, r: BitVec(n),
+    h: sub(n, a, b) = r): iter_sub(n, a, b) = r
+{
+    trans(iter_sub_eq_sub(n, a, b), h)
+}
+
+theorem neg_eq_of_iter_neg(n: Nat, a, r: BitVec(n),
+    h: iter_neg(n, a) = r): neg(n, a) = r
+{
+    trans(sym(iter_neg_eq_neg(n, a)), h)
+}
+
+// The ripple transports kept for the generators and proofs that name them.
+// Since `add` *is* `ripple_add`, each is now the identity on its hypothesis.
 theorem add_eq_of_ripple_add(n: Nat, a, b, r: BitVec(n),
     h: ripple_add(n, a, b) = r): add(n, a, b) = r
 {
@@ -1479,18 +1559,39 @@ theorem cong_ripple_sub(n: Nat, {a, b, c, d: BitVec(n)}, pa: a = b, pc: c = d):
         j(pc, λ w q => ripple_sub(n, a, c) = ripple_sub(n, a, w), refl))
 }
 
-// The laws of `add` and `sub` transfer across the equations.
+// The `toNat`-counted laws transfer to the canonical operations across the
+// equations. Their statements are the ones they always had.
+theorem add_comm(n: Nat, a, b: BitVec(n)): add(n, a, b) = add(n, b, a) {
+    trans(sym(iter_add_eq_add(n, a, b)),
+        trans(iter_add_comm(n, a, b), iter_add_eq_add(n, b, a)))
+}
+
+theorem add_sub_cancel(n: Nat, a, b: BitVec(n)): sub(n, add(n, a, b), b) = a {
+    trans(sym(iter_sub_eq_sub(n, add(n, a, b), b)),
+        trans(cong_iterate_decrement(n, toNat(n, b),
+                sym(iter_add_eq_add(n, a, b))),
+            iter_add_sub_cancel(n, a, b)))
+}
+
+// The iterated form absorbed a zero second operand definitionally; the ripple
+// does not, because it runs its columns whatever the operands are. Customers
+// that added a literal zero offset — a byte-offset idiom with the offset zero,
+// say — need this instead of `refl`.
+theorem add_of_toNat_zero(n: Nat, a, b: BitVec(n), zero_count: toNat(n, b) = 0):
+    add(n, a, b) = a
+{
+    trans(sym(iter_add_eq_add(n, a, b)),
+        cong_iterate_increment_count(n, a, zero_count))
+}
+
 theorem ripple_add_comm(n: Nat, a, b: BitVec(n)):
     ripple_add(n, a, b) = ripple_add(n, b, a)
 {
-    trans(ripple_add_eq_add(n, a, b),
-        trans(add_comm(n, a, b), sym(ripple_add_eq_add(n, b, a))))
+    add_comm(n, a, b)
 }
 
 theorem ripple_add_sub_cancel(n: Nat, a, b: BitVec(n)):
     ripple_sub(n, ripple_add(n, a, b), b) = a
 {
-    trans(@cong_ripple_sub(n, ripple_add(n, a, b), add(n, a, b), b, b,
-            ripple_add_eq_add(n, a, b), refl),
-        trans(ripple_sub_eq_sub(n, add(n, a, b), b), add_sub_cancel(n, a, b)))
+    add_sub_cancel(n, a, b)
 }

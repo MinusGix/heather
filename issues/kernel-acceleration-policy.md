@@ -120,3 +120,4 @@ in the incoming architecture discussion.
   useful distinctions without treating the accompanying discussion as settled
   policy. [[state-projection-conversion-cost]] supplies a concrete investigation;
   [[heather-checked-construction-api]] owns a bounded construction customer.
+- 2026-09-09: Attribution question from [[bitvec-width-bounded-defaults]]: whether add-vs-sub at width 64 over open operands failing by OutOfFuel is calculus-inherent (64 columns must be compared) or a strategy artefact (the mismatch is in the carry function and could be found without normalizing the sum bits). Owner for the fix is [[kernel-failed-conversion-cost]]; this issue only classifies it.

@@ -335,6 +335,20 @@ theorem ripple_sub_is_sub(n: Nat, x, y: BitVec(n)):
     ripple_sub(n, x, y) = bitvec::sub(n, x, y) { ripple_sub_eq_sub(n, x, y) }
 theorem ripple_neg_is_neg(n: Nat, x: BitVec(n)):
     ripple_neg(n, x) = bitvec::neg(n, x) { ripple_neg_eq_neg(n, x) }
+theorem iter_add_is_add(n: Nat, x, y: BitVec(n)):
+    iter_add(n, x, y) = bitvec::add(n, x, y) { iter_add_eq_add(n, x, y) }
+theorem iter_sub_is_sub(n: Nat, x, y: BitVec(n)):
+    iter_sub(n, x, y) = bitvec::sub(n, x, y) { iter_sub_eq_sub(n, x, y) }
+theorem iter_neg_is_neg(n: Nat, x: BitVec(n)):
+    iter_neg(n, x) = bitvec::neg(n, x) { iter_neg_eq_neg(n, x) }
+theorem iter_transport_forward(n: Nat, x, y, r: BitVec(n), h: iter_add(n, x, y) = r):
+    bitvec::add(n, x, y) = r { add_eq_of_iter_add(n, x, y, r, h) }
+theorem iter_transport_backward(n: Nat, x, y, r: BitVec(n), h: bitvec::sub(n, x, y) = r):
+    iter_sub(n, x, y) = r { iter_sub_eq_of_sub(n, x, y, r, h) }
+theorem iter_transport_neg(n: Nat, x, r: BitVec(n), h: iter_neg(n, x) = r):
+    bitvec::neg(n, x) = r { neg_eq_of_iter_neg(n, x, r, h) }
+theorem zero_offset_is_not_computation(n: Nat, x, y: BitVec(n), h: toNat(n, y) = 0):
+    bitvec::add(n, x, y) = x { add_of_toNat_zero(n, x, y, h) }
 theorem carry_in_meaning(n: Nat, x, y: BitVec(n), c: Bool):
     add_bits(n, x, y, c) = iterate_increment(n, x, toNat(n, y) + bit_value(c))
 { add_bits_spec(n, x, y, c) }
@@ -368,10 +382,33 @@ theorem misstated(n: Nat, x, y: BitVec(n)):
 "#);
     let msg = run(r#"
 theorem not_by_computation(n: Nat, x, y: BitVec(n)):
-    ripple_add(n, x, y) = bitvec::add(n, x, y) { refl }
+    iter_add(n, x, y) = bitvec::add(n, x, y) { refl }
 "#)
     .expect_err("the two definitions are not convertible at open operands");
     assert!(msg.contains("NotConvertible"), "{msg}");
+    ok(r#"
+theorem ripple_is_add_by_definition(n: Nat, x, y: BitVec(n)):
+    ripple_add(n, x, y) = bitvec::add(n, x, y) { refl }
+"#);
+}
+
+/// `add` and `sub` are distinct, and how the kernel says so depends on the
+/// width. Both are ripples that agree on every sum bit and differ only in the
+/// column carry (`carry_majority` against `borrow_next`), so at width 8 over
+/// open operands the difference is found in a few columns and reported as
+/// `NotConvertible`, while at width 64 the budget runs out first. That is why
+/// the stale-source control in `function_ir_x86.rs` accepts either refusal.
+/// Before docs/bitvec-width-bounded-defaults-design.md the two had different
+/// heads (`iterate_increment` against `iterate_decrement`) and both widths
+/// were immediate.
+#[test]
+fn add_and_sub_differ() {
+    let msg = run("theorem narrow(x, y: BitVec(8)): bitvec::add(8, x, y) = bitvec::sub(8, x, y) { refl }")
+        .expect_err("add and sub are not the same operation");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let msg = run("theorem wide(x, y: BitVec(64)): bitvec::add(64, x, y) = bitvec::sub(64, x, y) { refl }")
+        .expect_err("add and sub are not the same operation");
+    assert!(msg.contains("OutOfFuel") || msg.contains("NotConvertible"), "{msg}");
 }
 
 /// The ripple's closed cost is the width, not the operand
@@ -380,10 +417,12 @@ theorem not_by_computation(n: Nat, x, y: BitVec(n)):
 /// full-width negative-offset pattern a sign-extended displacement produces —
 /// is checked against an independently written bit vector and against the
 /// `ofNat` literal, and the canonical `add`/`sub`/`neg` facts are proved by
-/// transporting the ripple's `refl`. Small widths compare the ripple with
-/// the old definitions directly, but only at small counts: `add(8, _, 248)`
-/// is 248 increments and already costs gigabytes, which is the very
-/// iteration this issue removes. The controls flip one bit or miss by one
+/// transporting the ripple's `refl` — since
+/// [[bitvec-width-bounded-defaults]] those transports are definitional.
+/// Small widths compare the ripple with the iterated definitions
+/// (`iter_add`/`iter_sub`/`iter_neg`) directly, but only at small counts:
+/// `iter_add(8, _, 248)` is 248 increments and already costs gigabytes,
+/// which is the very iteration `add` no longer performs. The controls flip one bit or miss by one
 /// and must be refused as `NotConvertible`, not as exhausted fuel.
 #[test]
 fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
@@ -421,9 +460,9 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
         "theorem canonical_add(): bitvec::add(64, {a}, {b}) = {r} {{ add_eq_of_ripple_add(64, {a}, {b}, {r}, refl) }}\n\
          theorem canonical_sub(): bitvec::sub(64, {a}, {b}) = {s} {{ sub_eq_of_ripple_sub(64, {a}, {b}, {s}, refl) }}\n\
          theorem canonical_neg(): bitvec::neg(64, {c}) = {n} {{ neg_eq_of_ripple_neg(64, {c}, {n}, refl) }}\n\
-         theorem neg_offset_is_old_sub(): ripple_add(64, {a}, {b}) = bitvec::sub(64, {a}, {e}) {{ refl }}\n\
-         theorem minus_one_is_old_sub(): ripple_add(64, {a}, {m}) = bitvec::sub(64, {a}, one(64)) {{ refl }}\n\
-         theorem sub_minus_one_is_old_add(): ripple_sub(64, {a}, {m}) = bitvec::add(64, {a}, one(64)) {{ refl }}\n",
+         theorem neg_offset_is_old_sub(): ripple_add(64, {a}, {b}) = bitvec::iter_sub(64, {a}, {e}) {{ refl }}\n\
+         theorem minus_one_is_old_sub(): ripple_add(64, {a}, {m}) = bitvec::iter_sub(64, {a}, one(64)) {{ refl }}\n\
+         theorem sub_minus_one_is_old_add(): ripple_sub(64, {a}, {m}) = bitvec::iter_add(64, {a}, one(64)) {{ refl }}\n",
         a = of(ADDRESS), b = of(MINUS_EIGHT), r = of(ADDRESS - 8), s = of(ADDRESS + 8),
         c = of(0x1234), n = of(M - 0x1234), e = of(8), m = of(M - 1),
     ));
@@ -434,16 +473,16 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
         bit_vector_literal_at(32, (1 << 31) - 1),
     ));
     src.push_str(
-        "theorem w0_add(): ripple_add(0, zero(0), zero(0)) = bitvec::add(0, zero(0), zero(0)) { refl }\n\
-         theorem w0_sub(): ripple_sub(0, zero(0), zero(0)) = bitvec::sub(0, zero(0), zero(0)) { refl }\n\
-         theorem w1_wrap(): ripple_add(1, one(1), one(1)) = bitvec::add(1, one(1), one(1)) { refl }\n\
-         theorem w1_underflow(): ripple_sub(1, zero(1), one(1)) = bitvec::sub(1, zero(1), one(1)) { refl }\n\
-         theorem w8_wrap(): ripple_add(8, ofNat(8, 250), ofNat(8, 9)) = bitvec::add(8, ofNat(8, 250), ofNat(8, 9)) { refl }\n\
-         theorem w8_underflow(): ripple_sub(8, ofNat(8, 3), ofNat(8, 5)) = bitvec::sub(8, ofNat(8, 3), ofNat(8, 5)) { refl }\n\
-         theorem w8_high_bit(): ripple_add(8, ofNat(8, 127), one(8)) = bitvec::add(8, ofNat(8, 127), one(8)) { refl }\n\
-         theorem w8_neg_offset(): ripple_add(8, ofNat(8, 100), ofNat(8, 248)) = bitvec::sub(8, ofNat(8, 100), ofNat(8, 8)) { refl }\n\
+        "theorem w0_add(): ripple_add(0, zero(0), zero(0)) = bitvec::iter_add(0, zero(0), zero(0)) { refl }\n\
+         theorem w0_sub(): ripple_sub(0, zero(0), zero(0)) = bitvec::iter_sub(0, zero(0), zero(0)) { refl }\n\
+         theorem w1_wrap(): ripple_add(1, one(1), one(1)) = bitvec::iter_add(1, one(1), one(1)) { refl }\n\
+         theorem w1_underflow(): ripple_sub(1, zero(1), one(1)) = bitvec::iter_sub(1, zero(1), one(1)) { refl }\n\
+         theorem w8_wrap(): ripple_add(8, ofNat(8, 250), ofNat(8, 9)) = bitvec::iter_add(8, ofNat(8, 250), ofNat(8, 9)) { refl }\n\
+         theorem w8_underflow(): ripple_sub(8, ofNat(8, 3), ofNat(8, 5)) = bitvec::iter_sub(8, ofNat(8, 3), ofNat(8, 5)) { refl }\n\
+         theorem w8_high_bit(): ripple_add(8, ofNat(8, 127), one(8)) = bitvec::iter_add(8, ofNat(8, 127), one(8)) { refl }\n\
+         theorem w8_neg_offset(): ripple_add(8, ofNat(8, 100), ofNat(8, 248)) = bitvec::iter_sub(8, ofNat(8, 100), ofNat(8, 8)) { refl }\n\
          theorem w8_mixed(): ripple_add(8, ofNat(8, 0x5A), ofNat(8, 0xA7)) = ofNat(8, 1) { refl }\n\
-         theorem w8_neg(): ripple_neg(8, ofNat(8, 1)) = bitvec::neg(8, ofNat(8, 1)) { refl }\n\
+         theorem w8_neg(): ripple_neg(8, ofNat(8, 1)) = bitvec::iter_neg(8, ofNat(8, 1)) { refl }\n\
          theorem w1_wrap_value(): toNat(1, ripple_add(1, one(1), one(1))) = 0 { refl }\n\
          theorem w8_wrap_value(): toNat(8, ripple_add(8, ofNat(8, 250), ofNat(8, 9))) = 3 { refl }\n\
          theorem w8_underflow_value(): toNat(8, ripple_sub(8, ofNat(8, 3), ofNat(8, 5))) = 254 { refl }\n\
@@ -501,12 +540,12 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
 /// was unary magnitude arithmetic until `int::add` became the payload
 /// operations by sign case (issues/int-arithmetic-over-nat-primitives.md):
 /// now one synchronous `subNatNat` descent the kernel cancels in a step.
-/// `signed_overflow_add` is stated with a count-one right operand: it goes
-/// through the old `add`, whose `iterate_increment` over a `2^63` count is
-/// the excessive unary computation issues/bitvec-width-bounded-defaults.md
-/// owns. That computation is now *refused* rather than aborting the process —
-/// see `nested_scrutinee_values_are_refused_rather_than_aborting` below — but
-/// a refusal is still not a proof, so the rail keeps the count-one form.
+/// `signed_overflow_add` and `signed_lt_bit` over two computed sign-1
+/// operands were the cases this rail had to state around: they went through
+/// `add`, whose `iterate_increment` asked for `2^63` steps. Since
+/// issues/bitvec-width-bounded-defaults.md `add` *is* the ripple, so they are
+/// ordinary `refl`s here; `signed_value_of_high_sum` already covered the
+/// negative width-64 `toInt` of a ripple sum and is left where it is.
 #[test]
 fn consumers_over_computed_machine_width_producers_cost_the_width() {
     const M: u128 = 1 << 64;
@@ -529,7 +568,10 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
          theorem sum_below_its_negation(): unsigned_lt_bit(64, {a}, ripple_neg(64, {a})) = True {{ refl }}\n\
          theorem boundary_unsigned(): unsigned_lt_bit(64, zero(64), {h}) = True {{ refl }}\n\
          theorem boundary_signed(): signed_lt_bit(64, {h}, zero(64)) = True {{ refl }}\n\
-         theorem value_of_old_add(): toNat(64, bitvec::add(64, {a}, ofNat(64, 8))) = {} {{ refl }}\n",
+         theorem value_of_small_offset_add(): toNat(64, bitvec::add(64, {a}, ofNat(64, 8))) = {} {{ refl }}\n\
+         theorem overflow_of_two_high_sums(): signed_overflow_add(64, {high_sum}, {high_sum}) = True {{ refl }}\n\
+         theorem signed_lt_at_the_boundary(): signed_lt_bit(64, {high_sum}, zero(64)) = True {{ refl }}\n\
+         theorem signed_lt_of_computed_pair(): signed_lt_bit(64, {high_sum}, ripple_add(64, {a}, {b})) = True {{ refl }}\n",
         ADDRESS + 1024,
         HIGH - 1,
         bit_vector_literal_at(64, (M - 1) ^ HIGH),
@@ -553,36 +595,42 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
     }
 }
 
-/// The computations the rail above had to state around, because they did not
-/// return a verdict at all: they aborted the test binary with a native stack
-/// overflow. The old `add` builds `increment(n, ih)` with `ih` the *pending*
-/// elimination of the previous increment, so forcing the result's head bit
-/// re-enters the evaluator natively once per unit of the count — a depth the
-/// syntax does not show and the fuel does not bound. A depth budget beside
-/// the fuel makes them ordinary refusals
+/// The iterated form's depth, and the pair that separates it from the
+/// width-bounded `add`. `iter_add` builds `increment(n, ih)` with `ih` the
+/// *pending* elimination of the previous increment, so forcing the result's
+/// head bit re-enters the evaluator natively once per unit of the count — a
+/// depth the syntax does not show and the fuel does not bound. A depth budget
+/// beside the fuel makes that an ordinary refusal
 /// (docs/native-depth-budget-design.md, issues/kernel-native-depth-budget.md).
 ///
-/// The second case is the shape minimized to the count alone: it is the same
-/// `bitvec::add` the rail exercises at count 8 without coming near the
-/// budget, so the pair also says the budget separates the two.
+/// The same computation through `add` succeeds, because `add` is the ripple
+/// (docs/bitvec-width-bounded-defaults-design.md). The refusal is a property
+/// of the definition, not of the arguments.
 #[test]
 fn nested_scrutinee_values_are_refused_rather_than_aborting() {
     const HIGH: u128 = 1 << 63;
     let high_sum = format!("ripple_add(64, ofNat(64, 5), ofNat(64, {}))", HIGH - 5);
     for (name, goal) in [
         (
-            "signed_overflow_of_two_high_sums",
-            format!("signed_overflow_add(64, {high_sum}, {high_sum}) = True"),
+            "iterated_sum_of_two_high_sums",
+            format!("sign_bit(64, bitvec::iter_add(64, {high_sum}, {high_sum})) = False"),
         ),
         (
-            "old_add_over_a_deep_count",
-            "toNat(64, bitvec::add(64, ofNat(64, 0), ofNat(64, 4096))) = 4096".to_string(),
+            "iterated_add_over_a_deep_count",
+            "toNat(64, bitvec::iter_add(64, ofNat(64, 0), ofNat(64, 4096))) = 4096".to_string(),
         ),
     ] {
         let msg = run(&format!("import nat;\ntheorem {name}(): {goal} {{ refl }}"))
             .expect_err("an excessive computation must be refused, not abort the process");
         assert!(msg.contains("OutOfFuel"), "{name}: {msg}");
     }
+    // The headline of issues/bitvec-width-bounded-defaults.md: the same two
+    // computations through the width-bounded `add` are ordinary successes.
+    ok(&format!(
+        "import nat;\n\
+         theorem sum_of_two_high_sums(): sign_bit(64, bitvec::add(64, {high_sum}, {high_sum})) = False {{ refl }}\n\
+         theorem add_over_a_deep_count(): toNat(64, bitvec::add(64, ofNat(64, 0), ofNat(64, 4096))) = 4096 {{ refl }}\n"
+    ));
 }
 
 #[test]

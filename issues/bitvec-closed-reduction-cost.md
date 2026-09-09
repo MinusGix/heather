@@ -1,6 +1,6 @@
 ---
 title: Closed BitVec computation over generated values exhausts stack and memory below machine widths
-status: open
+status: closed
 labels: [stdlib,bitvectors,kernel,conversion,performance]
 created: 2026-08-26
 updated: 2026-09-09
@@ -204,3 +204,4 @@ Acceptance has two parts:
 - 2026-09-07: Resource-diagnostic datum from the rail: `signed_overflow_add(64, s, s)` with `s` a width-64 ripple sum of sign 1 goes through the old `add(64, s, s)`, i.e. `iterate_increment` over a `2^63` count, and aborts the release checker with a native stack overflow at every stack size tried (512 KB–8 MiB) while every other width-64 consumer in the rail fits in 512 KB. The nested-scrutinee recursion (`increment` forcing the pending `ih` of the previous increment) is native, so its depth is the count, and the process dies before the 2^20 fuel is spent — the same clause as `half(2^20)`. The rail states signed overflow with a count-one right operand instead.
 - 2026-09-07: Follow-ups filed: [[bitvec-width-bounded-defaults]] (swap `add`/`sub`/`neg`/`toInt` to width-bounded definitions, keeping the iterated forms under new names) and [[kernel-native-depth-budget]] (return `OutOfFuel` before a nested-scrutinee computation overflows the native stack).
 - 2026-09-09: The resource-diagnostic clause is implemented by [[kernel-native-depth-budget]]: a depth budget beside the fuel counts live `Eval::drive` re-entries and `Conv::tm`/`Conv::ty` nodes against one bound, so `signed_overflow_add(64, s, s)` over two sign-1 width-64 ripple sums — and the minimized `toNat(64, bitvec::add(64, ofNat(64,0), ofNat(64,4096)))` — now report `OutOfFuel` instead of aborting the process. Permanent rail: `nested_scrutinee_values_are_refused_rather_than_aborting` in crates/elab/tests/lib_std_bitvec.rs. The clause asked only for a verdict rather than a crash; the excessive computation itself is still excessive and [[bitvec-width-bounded-defaults]] owns removing it.
+- 2026-09-09: Both acceptance parts hold: the structural carry computes at widths 32/64 (2026-08-26 fixes) and an excessive unary computation is refused with OutOfFuel by [[kernel-native-depth-budget]] (f5d73da); the library's largest source of such computations is gone with [[bitvec-width-bounded-defaults]]. Closing; asymptotic representation questions live in [[kernel-acceleration-policy]].

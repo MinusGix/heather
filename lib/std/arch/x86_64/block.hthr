@@ -330,14 +330,16 @@ theorem short_branch_target_8(start: BitVec(64)):
     short_branch_target(start, bitvec::ofNat(8, 8)) =
         bitvec::iterate_increment(64, next_rip(start, 2), 8)
 {
-    refl
+    sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),
+        bitvec::sign_extend(7, 56, bitvec::ofNat(8, 8))))
 }
 
 theorem short_branch_target_6(start: BitVec(64)):
     short_branch_target(start, bitvec::ofNat(8, 6)) =
         bitvec::iterate_increment(64, next_rip(start, 2), 6)
 {
-    refl
+    sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),
+        bitvec::sign_extend(7, 56, bitvec::ofNat(8, 6))))
 }
 
 theorem advance_3_3(x: BitVec(64)):

@@ -3,7 +3,7 @@ title: Reject false large conversions without spending a successful proof's budg
 status: open
 labels: [kernel,conversion,performance,diagnostics,testing]
 created: 2026-09-03
-updated: 2026-09-03
+updated: 2026-09-09
 ---
 
 The full x86 `ControlRegion` honesty control first forged a semantic execution
@@ -40,3 +40,7 @@ application comparison.
   stored-annotation comparison. This issue owns the asymmetric failed path.
 - **[[generated-term-oracle-controls-not-convertible]]** establishes why an
   incomplete inferred-Π shortcut or fuel-refunded fallback is not acceptable.
+
+## Log
+
+- 2026-09-09: New member of the family from [[bitvec-width-bounded-defaults]]: bitvec::add(64, x, y) = bitvec::sub(64, x, y) over open x, y is NotConvertible at width 8 but OutOfFuel at width 64 — both are ripples agreeing on every sum bit and differing only in the column carry (carry_majority vs borrow_next), so the disagreement sits behind 64 columns of shared structure. Pinned as add_and_sub_differ in crates/elab/tests/lib_std_bitvec.rs; the stale-source control in function_ir_x86.rs accepts either refusal until this is fixed.

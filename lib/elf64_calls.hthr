@@ -351,8 +351,16 @@ theorem stack_word_agrees(access: StackAccess<CallMemory>, before, after: CallMe
 theorem stored_word_preserves_return(memory: CallMemory, pointer, value, protected: BitVec(64), outside: WordOutside(pointer, protected)):
     stack_word(call_stack_access(), word_write_8(call_stack_access(), value, memory, pointer), protected) =
     stack_word(call_stack_access(), memory, protected) {
+    // The zero offset is spelled out: `bitvec::add` is the ripple, which does
+    // not absorb a zero second operand definitionally
+    // (docs/bitvec-width-bounded-defaults-design.md).
     stack_word_agrees(call_stack_access(), memory, word_write_8(call_stack_access(), value, memory, pointer), protected,
-        word_stack_effect_8(memory, pointer, value)(protected, outside.byte0),
+        j(bitvec::add_of_toNat_zero(64, protected, bitvec::ofNat(64, 0), refl),
+            λ target _ =>
+                call_stack_access().read(word_write_8(call_stack_access(), value, memory, pointer), target) =
+                call_stack_access().read(memory, target),
+            word_stack_effect_8(memory, pointer, value)(
+                bitvec::add(64, protected, bitvec::ofNat(64, 0)), outside.byte0)),
         word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 1)), outside.byte1),
         word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 2)), outside.byte2),
         word_stack_effect_8(memory, pointer, value)(bitvec::add(64, protected, bitvec::ofNat(64, 3)), outside.byte3),

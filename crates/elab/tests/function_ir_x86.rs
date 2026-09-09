@@ -184,8 +184,18 @@ fn stale_source_function_ir_certificate_is_rejected() {
             panic!("stale-source control failed in the parser: {}", error.msg)
         }
         Err(error) => {
+            // Either refusal is the control passing. Since
+            // docs/bitvec-width-bounded-defaults-design.md `bitvec::add` and
+            // `bitvec::sub` are both ripples that agree on every sum bit and
+            // differ only in the column carry, so at width 64 over open
+            // operands the kernel spends the budget before it can say
+            // `NotConvertible` — `add_and_sub_differ` in
+            // crates/elab/tests/lib_std_bitvec.rs pins both reasons.
             let message = format!("{error:?}");
-            assert!(message.contains("NotConvertible"), "{message}");
+            assert!(
+                message.contains("NotConvertible") || message.contains("OutOfFuel"),
+                "{message}",
+            );
         }
     }
 }
