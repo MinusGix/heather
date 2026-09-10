@@ -2592,4 +2592,90 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
         }
     }
 
+    /// A record with no named projections — a non-dependent spine,
+    /// `register_rec_projs`'s boundary — is projected by `project_field`'s
+    /// inline walk, whose annotations are read off the `whnf` of the record's
+    /// own `El (D#tycode^δ)` reference: the registry's **inline** lowering,
+    /// until 2026-09-10, while the tuple such a projection meets
+    /// (`build_fields_skel`) spells every component through the chokepoint.
+    /// Where a record *definition* projects one of its value parameters in a
+    /// field type, every instance of that record then carried the inline
+    /// spelling against the literal's — the `Sigma`/`Sigma` bucket of the x86
+    /// fetch certificates (issues/unnameable-annotation-occurrences.md).
+    /// Pinned three ways: the walker lists nothing on a projection body; the
+    /// field type's `Fst` annotation *equals* the literal's `Pair` annotation
+    /// at an instance; and the instance checks, computes, and refuses.
+    #[test]
+    fn a_projection_off_an_unnamed_spine_takes_the_chokepoints_spelling() {
+        let mut e = env();
+        e.el.enable_emission_walk();
+        #[cfg(feature = "value-metrics")]
+        e.el.enable_value_metrics();
+        e.el.elab_source(
+            "
+record S5 { a: Flat, b: Nat }
+fn s5a(s: S5) -> Flat { s.a }
+record H5(s: S5) { ok: s.a = FA }
+theorem h5_use(h: H5(S5(FA, 1))): H5(S5(FA, 1)) { h }
+theorem s5a_literal(): s5a(S5(FB(2), 0)) = FB(2) { refl }
+theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
+",
+        )
+        .expect("a projection off an unnamed spine elaborates, checks and computes");
+        let findings = e.el.take_emission_findings();
+        let listed: Vec<String> = findings
+            .iter()
+            .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+            .collect();
+        assert!(
+            findings.is_empty(),
+            "the walk's `Fst`/`Snd` annotations are already the chokepoint's:\n{}",
+            listed.join("\n")
+        );
+        // `h5_use`'s binder is the inline instance `Σ(tag). Σ(ok : s.a = FA). Unit`
+        // at `s := S5(FA, 1)`: the equation's left side is the walk's
+        // `fst(snd(⟨tag, ⟨FA, ⟨1, ⟨⟩⟩⟩⟩))`, and its `Fst` annotation must be
+        // the very type the literal's own field link states.
+        let abs = e.el.lookup_global("h5_use").expect("`h5_use` is registered").abs as usize;
+        let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.get(abs).expect("…and bound") else {
+            panic!("a theorem is a term binding")
+        };
+        let Type::Pi { dom, .. } = &**ty else { panic!("`h5_use` binds `h`") };
+        let Type::Sigma { snd, .. } = &**dom else { panic!("the instance is a Σ (tag first)") };
+        let Type::Sigma { fst, .. } = &**snd else { panic!("…then the field") };
+        let Type::Id { lhs, .. } = &**fst else { panic!("`ok` is an equation") };
+        let Term::Fst { fst_ty, pair, .. } = &**lhs else { panic!("its left side projects `a`") };
+        let Term::Snd { pair, .. } = &**pair else { panic!("…past the tag") };
+        let Term::Pair { snd, .. } = &**pair else { panic!("…off the literal") };
+        let Term::Pair { fst_ty: stated, .. } = &**snd else { panic!("the literal's `a` link") };
+        assert_eq!(
+            fst_ty, stated,
+            "the projection states the field's type exactly as the literal does"
+        );
+        assert!(
+            e.el.emit_ty(&e.cx, fst_ty, 0).is_none(),
+            "…and that spelling is the chokepoint's: {fst_ty:?}"
+        );
+        assert_ne!(
+            **fst_ty,
+            e.lowered("Flat").0,
+            "the field's type is a reference, not the inline lowering"
+        );
+        // With the two spellings equal, the kernel's `tm_check` of the literal
+        // against the projection's Σ is the syntactic shortcut, not a
+        // conversion: no `Sigma`/`Sigma` row in the module's miss table.
+        #[cfg(feature = "value-metrics")]
+        {
+            let report = e.el.value_conv_miss_report().unwrap_or_default();
+            assert!(
+                !report.contains("expected=Sigma inferred=Sigma"),
+                "a projection annotation still meets a differently spelled literal:\n{report}"
+            );
+        }
+        // Negative control: an instance at a different literal is a different
+        // type, spelling or no spelling.
+        let r = e.el.elab_source("theorem h5_wrong(h: H5(S5(FA, 1))): H5(S5(FB(1), 1)) { h }");
+        assert!(r.is_err(), "a mismatched instance must still be refused");
+    }
+
 }

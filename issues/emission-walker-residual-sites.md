@@ -3,7 +3,7 @@ title: The slots the emission walker still lists on the library: route each emit
 status: open
 labels: [elaboration,representation,performance]
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-10
 ---
 
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
@@ -73,3 +73,7 @@ slots, or the next time the library test's residue list would have to
 *grow*. Each drained family is one `WALK_RESIDUE` entry removed and the
 test proving it stays gone; the probe above is the fast-lane reproducer for
 rows 1–2.
+
+## Log
+
+- 2026-09-10: Item 1 (`project_field`'s fallback walk) landed by [[unnameable-annotation-occurrences]]'s round (2026-09-10), in the fix shape written here: each link's `fst`/`snd` read off `whnf(cur_emit)` now goes through `emit_ty` (depth 0 and 1). Measured on the x86 fetch certificates rather than the library: the chain met the literal at every `FetchedFrom` instance (numbers on that issue). Item 2 (`elab_arm`'s alias projections) is untouched.

@@ -2578,7 +2578,25 @@ impl Elaborator {
                     let Type::Sigma { fst, snd, .. } = self.whnf(cx, emitted, span)? else {
                         return err("internal: respelling changed a record spine's shape", span);
                     };
-                    (fst, snd)
+                    // The emitted copy of an unparameterized record is its
+                    // `El (D#tycode^δ)` reference, and what `whnf` hands
+                    // back from behind it is the registry's *inline*
+                    // lowering — `Vec(⟦Bool⟧; 64)` where every other site,
+                    // the constructor tuple (`build_fields_skel`) first among
+                    // them, spells `Vec(El (Bool#tycode^δ); 64)`. A record
+                    // with no named projections (a non-dependent spine,
+                    // `register_rec_projs`) reaches this walk for its
+                    // parameters' fields inside a record *definition*, and
+                    // the chain's annotations then met the tuple's at every
+                    // instance of the defined record: the `Sigma`/`Sigma`
+                    // bucket of the x86 fetch certificates
+                    // (issues/unnameable-annotation-occurrences.md,
+                    // 2026-09-10). Respell the components, as the tuple
+                    // does; idempotent when nothing is left to respell.
+                    (
+                        self.emit_ty(cx, &fst, 0).map_or(fst, Rc::new),
+                        self.emit_ty(cx, &snd, 1).map_or(snd, Rc::new),
+                    )
                 }
                 // A record type that arrived as a code literal (`El ⌜Σ…⌝`,
                 // a `→ Type` body's quote) whnf's one level at a time, and
