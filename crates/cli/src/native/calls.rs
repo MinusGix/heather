@@ -166,35 +166,7 @@ fn word(n: u64) -> String {
     let bits = (0..64).map(|i| if n & (1 << i) == 0 { "False" } else { "True" }).collect::<Vec<_>>().join(", ");
     format!("bitvec::from_bits(64, [{bits}])")
 }
-// A file-sized `[…]` literal is a dependent-vector fold: building it costs
-// seconds on its own, and every lookup inside it re-runs the fold from the
-// front. The same bytes as a chain of one-cons definitions cost a δ-step per
-// element, and the chain gives every suffix a name for the lookups below.
-// `{name}()` is the whole list; `{name}_from_{k}()` is the k-th suffix.
-fn byte_chain(m: &mut Module, name: &str, list: &[u8]) {
-    fun(m, &format!("{name}_from_{}", list.len()), "List<BitVec(8)>", "[]".into());
-    for (k, byte) in list.iter().enumerate().rev() {
-        fun(m, &format!("{name}_from_{k}"), "List<BitVec(8)>",
-            format!("Cons(elf_byte({byte}), {name}_from_{}())", k+1));
-    }
-    fun(m, name, "List<BitVec(8)>", format!("{name}_from_0()"));
-}
-// Name the suffix each index reaches, once, in one forward pass: step `k+1`
-// is `drop_succ` at step `k`, and `list::drop({name}_from_{k}(), 1)` is the
-// next name by one unfolding. Without this every byte lookup re-traverses the
-// whole file prefix (issues/native-summary-test-cpu-margin.md).
-fn drop_chain(m: &mut Module, name: &str, len: usize) {
-    thm(m, &format!("{name}_drop_0"), format!("list::drop({name}(), 0) = {name}_from_0()"), "refl".into());
-    for k in 1..=len {
-        thm(m, &format!("{name}_drop_{k}"), format!("list::drop({name}(), {k}) = {name}_from_{k}()"),
-            format!("trans(drop_succ({name}(), {}), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ suffix => list::drop(suffix, 1), {name}_drop_{}()))", k-1, k-1));
-    }
-}
-// The `found` premise of `call_file_read_split` at one code offset: the named
-// suffix, plus one head read. Both steps are constant work.
-fn byte_at(name: &str, index: usize) -> String {
-    format!("trans(nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
-}
+use super::{byte_chain, drop_chain, byte_at};
 fn fun(m: &mut Module, name: &str, ty: &str, value: String) {
     m.declaration(Declaration::function(name, Expr::raw(ty), Block::expression(Expr::raw(value))));
 }
@@ -242,7 +214,7 @@ fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize,
             format!("{prefix}_code().nth({offset}) = Some({byte})"), byte_at(&format!("{prefix}_code"), offset));
         thm(module, &format!("{prefix}_byte_present_{index}_{j}"),
             format!("static_elf64_read({prefix}_header() ++ {prefix}_code(), {address}) = Some({byte})"),
-            format!("call_file_read_split({prefix}_header(), {prefix}_code(), {header_size}, {offset}, {address}, {byte}, {prefix}_header_length(), {prefix}_byte_page_{index}_{j}(), {prefix}_byte_offset_{index}_{j}(), {prefix}_byte_found_{index}_{j}())"));
+            format!("static_elf64_read_split({prefix}_header(), {prefix}_code(), {header_size}, {offset}, {address}, {byte}, {prefix}_header_length(), {prefix}_byte_page_{index}_{j}(), {prefix}_byte_offset_{index}_{j}(), {prefix}_byte_found_{index}_{j}())"));
         let present = format!("{prefix}_byte_present_{index}_{j}()");
         proof = if j+1 == encoding.len() {
             format!("call_file_fetch_one({memory}, {address}, {byte}, {present})")

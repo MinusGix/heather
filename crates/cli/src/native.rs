@@ -136,7 +136,16 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // it on here rather than at the certificate separates a module actually
     // elaborated (a cache miss, or the root source) from the generated
     // certificate by the `module` column.
-    if timings.is_some() { elab.enable_item_timings(); }
+    if timings.is_some() {
+        elab.enable_item_timings();
+        // The same opt-in also turns on the value-machine counters (the
+        // TSV's last four columns) and, under the `value-metrics` feature,
+        // the typing seam's conversion-miss sampler with its item column
+        // (issues/conv-miss-sampler-item-attribution.md), written beside
+        // the table. Without the feature the report is empty and no file
+        // is written.
+        elab.enable_value_metrics();
+    }
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -185,7 +194,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let checked = elab.elab_module_source(&format!("{prefix}_certificate"), &proof);
     // A refused certificate is the case worth attributing, so the table is
     // written before the failure is reported.
-    if let Some(path) = &timings { write_item_timings(path, &elab.take_item_timings())?; }
+    if let Some(path) = &timings {
+        write_item_timings(path, &elab.take_item_timings())?;
+        if let Some(report) = elab.value_conv_miss_report().filter(|r| !r.is_empty()) {
+            let beside = path.with_extension("conv-miss.txt");
+            std::fs::write(&beside, report).map_err(|e| format!("{}: {e}", beside.display()))?;
+            eprintln!("conversion-miss report in {}", beside.display());
+        }
+    }
     checked.map_err(|e| e.render(&proof))?;
     write_new(&certificate, proof.as_bytes())?;
     if let Some(image) = image {
@@ -205,6 +221,39 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+// A file-sized `[…]` literal is a dependent-vector fold: building it costs
+// seconds on its own, and every lookup inside it re-runs the fold from the
+// front. The same bytes as a chain of one-cons definitions cost a δ-step per
+// element, and the chain gives every suffix a name for the lookups below.
+// `{name}()` is the whole list; `{name}_from_{k}()` is the k-th suffix.
+pub(super) fn byte_chain(m: &mut Module, name: &str, list: &[u8]) {
+    let list_fn = |m: &mut Module, name: &str, value: String| m.declaration(
+        Declaration::function(name, Expr::raw("List<BitVec(8)>"), Block::expression(Expr::raw(value))));
+    list_fn(m, &format!("{name}_from_{}", list.len()), "[]".into());
+    for (k, byte) in list.iter().enumerate().rev() {
+        list_fn(m, &format!("{name}_from_{k}"), format!("Cons(elf_byte({byte}), {name}_from_{}())", k+1));
+    }
+    list_fn(m, name, format!("{name}_from_0()"));
+}
+// Name the suffix each index reaches, once, in one forward pass: step `k+1`
+// is `drop_succ` at step `k`, and `list::drop({name}_from_{k}(), 1)` is the
+// next name by one unfolding. Without this every byte lookup re-traverses the
+// whole file prefix (issues/native-summary-test-cpu-margin.md).
+pub(super) fn drop_chain(m: &mut Module, name: &str, len: usize) {
+    let thm = |m: &mut Module, name: &str, ty: String, value: String| m.declaration(
+        Declaration::theorem(name, Expr::raw(ty), Block::expression(Expr::raw(value))));
+    thm(m, &format!("{name}_drop_0"), format!("list::drop({name}(), 0) = {name}_from_0()"), "refl".into());
+    for k in 1..=len {
+        thm(m, &format!("{name}_drop_{k}"), format!("list::drop({name}(), {k}) = {name}_from_{k}()"),
+            format!("trans(drop_succ({name}(), {}), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ suffix => list::drop(suffix, 1), {name}_drop_{}()))", k-1, k-1));
+    }
+}
+// The `found` premise of `static_elf64_read_split` at one code offset: the named
+// suffix, plus one head read. Both steps are constant work.
+pub(super) fn byte_at(name: &str, index: usize) -> String {
+    format!("trans(nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
 }
 
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {

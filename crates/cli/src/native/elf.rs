@@ -165,7 +165,11 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
         theorem(module, &format!("{prefix}_{suffix}_correct"), Expr::equal(
             Expr::nullary(format!("{prefix}_{suffix}")), Expr::raw(expected)), Expr::name("refl"));
     }
-    function(module, &format!("{prefix}_image_code"), "List<BitVec(8)>", byte_list(&bytes[HEADER_SIZE..]));
+    // Chains of named suffixes rather than `[…]` literals, and one forward
+    // pass naming every `drop` of the code: a byte lookup below is then a
+    // step, not a re-traversal of the file (see `super::byte_chain`).
+    super::byte_chain(module, &format!("{prefix}_image_code"), &bytes[HEADER_SIZE..]);
+    super::drop_chain(module, &format!("{prefix}_image_code"), bytes.len() - HEADER_SIZE);
     theorem(module, &format!("{prefix}_image_code_layout"),
         Expr::raw(format!("{prefix}_image_code() = {prefix}_entry_bytes() ++ {prefix}_bytes() ++ {prefix}_exit_bytes() ++ {prefix}_syscall_bytes()")),
         Expr::name("refl"));
@@ -178,7 +182,9 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
         ]));
     // Avoid duplicating the payload in the source while still taking every
     // header byte from the exact Vec that will be written to disk.
-    function(module, &format!("{prefix}_elf_header"), "List<BitVec(8)>", byte_list(&bytes[..HEADER_SIZE]));
+    super::byte_chain(module, &format!("{prefix}_elf_header"), &bytes[..HEADER_SIZE]);
+    theorem(module, &format!("{prefix}_elf_header_length"),
+        Expr::raw(format!("{prefix}_elf_header().len() = {HEADER_SIZE}")), Expr::name("refl"));
     function(module, &format!("{prefix}_elf_file"), "List<BitVec(8)>",
         Expr::raw(format!("{prefix}_elf_header() ++ {prefix}_image_code()")));
     theorem(module, &format!("{prefix}_elf_file_correct"), Expr::raw(format!(
@@ -235,30 +241,42 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
     let mut instruction_offset = HEADER_SIZE;
     let spans = selected.iter().map(|instruction| super::encode(&[*instruction]))
         .chain(std::iter::once(vec![0x0f, 0x05]));
+    let file = format!("{prefix}_elf_file()");
     for (i, bytes) in spans.enumerate() {
+        // The span as a chain of named suffixes, the per-byte premises as
+        // named theorems (attributable, and measurably cheaper than inlining
+        // them), and the fetch chain nested in one declaration: stating a
+        // `FetchedFrom` is work proportional to the span left.
+        let span = format!("{prefix}_loaded_span_{i}");
+        super::byte_chain(module, &span, &bytes);
+        let mut proof = String::new();
         for j in (0..bytes.len()).rev() {
             let address = loaded_address(instruction_offset + j);
             let byte = format!("elf_byte({})", bytes[j]);
+            let offset = instruction_offset + j - HEADER_SIZE;
             let fact = |kind| format!("{prefix}_loaded_{kind}_{i}_{j}");
-            for (kind, claim) in [
-                ("permission", format!("static_elf64_executable({prefix}_elf_file(), {address}) = True")),
-                ("read", format!("static_elf64_read({prefix}_elf_file(), {address}) = Some({byte})")),
-            ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::name("refl")); }
-            let proof = if j + 1 == bytes.len() {
-                format!("fetch_span_one(static_elf64_access(), {prefix}_elf_file(), {address}, {byte}, {}(), {}())", fact("permission"), fact("read"))
+            for (kind, claim, proof) in [
+                ("page", format!("is_zero_bits(48, bitvec::bxor(48, bitvec::drop_low(16, 48, {address}), bitvec::ofNat(48, 64))) = True"), "refl".to_string()),
+                ("offset", format!("bitvec::toNat(16, bitvec::take_low(16, 48, {address})) = {offset} + {HEADER_SIZE}"), "refl".to_string()),
+                ("found", format!("{prefix}_image_code().nth({offset}) = Some({byte})"), super::byte_at(&format!("{prefix}_image_code"), offset)),
+                ("read", format!("static_elf64_read({file}, {address}) = Some({byte})"),
+                    format!("static_elf64_read_split({prefix}_elf_header(), {prefix}_image_code(), {HEADER_SIZE}, {offset}, {address}, {byte}, {prefix}_elf_header_length(), {}(), {}(), {}())", fact("page"), fact("offset"), fact("found"))),
+            ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::raw(proof)); }
+            proof = if j + 1 == bytes.len() {
+                format!("static_elf64_fetch_one({file}, {address}, {byte}, {}())", fact("read"))
             } else {
                 let next = loaded_address(instruction_offset + j + 1);
                 for (kind, claim) in [
                     ("no_wrap", format!("bitvec::carry_add_bit(64, {address}, bitvec::ofNat(64, 1)) = False")),
                     ("next", format!("next_rip({address}, 1) = {next}")),
                 ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::name("refl")); }
-                format!("fetch_span_more(static_elf64_access(), {prefix}_elf_file(), {address}, {next}, {byte}, elf_byte({}), {}, {}(), {}(), {}(), {}(), {prefix}_loaded_byte_{i}_{}())",
-                    bytes[j + 1], byte_list(&bytes[j + 2..]).render(), fact("permission"), fact("read"), fact("no_wrap"), fact("next"), j + 1)
+                format!("static_elf64_fetch_more({file}, {address}, {next}, {byte}, elf_byte({}), {span}_from_{}(), {}(), {}(), {}(), {proof})",
+                    bytes[j + 1], j + 2, fact("read"), fact("no_wrap"), fact("next"))
             };
-            theorem(module, &format!("{prefix}_loaded_byte_{i}_{j}"),
-                Expr::raw(format!("FetchedFrom(static_elf64_access(), {prefix}_elf_file(), InstructionBytes({address}, {}))", byte_list(&bytes[j..]).render())),
-                Expr::raw(proof));
         }
+        theorem(module, &format!("{prefix}_loaded_byte_{i}_0"),
+            Expr::raw(format!("FetchedFrom(static_elf64_access(), {file}, InstructionBytes({}, {span}()))", loaded_address(instruction_offset))),
+            Expr::raw(proof));
         instruction_offset += bytes.len();
     }
     let final_state = state(selected.len());
@@ -271,7 +289,7 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
         let before = state(i);
         let middle = state(i + 1);
         let instruction = instruction.render();
-        let bytes = byte_list(&super::encode(&[selected[i]])).render();
+        let bytes = format!("{prefix}_loaded_span_{i}()");
         let address = loaded_address(offsets[i]);
         for (name, ty, proof) in [
             (format!("{prefix}_loaded_fetches_{i}"),
@@ -319,7 +337,7 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
         ("loaded_execution", format!("ExecuteFetchedBlock(static_elf64_access(), {instructions}, {start}, {final_state})"),
             format!("fetched_block_instructions_cong(static_elf64_access(), {}(), {instructions}, {start}, {final_state}, {prefix}_loaded_instructions_agree(), {prefix}_loaded_execution_0(gprs, flags))", suffix(0))),
         ("loaded_syscall", format!("FetchedFrom(static_elf64_access(), ({final_state}).memory, InstructionBytes(({final_state}).rip, linux_syscall_bytes()))"),
-            format!("fetched_span_at_state(static_elf64_access(), {prefix}_elf_file(), {}, [elf_byte(15), elf_byte(5)], linux_syscall_bytes(), {final_state}, refl, refl, refl, {prefix}_loaded_byte_{}_0())", loaded_address(offsets[selected.len()]), selected.len())),
+            format!("fetched_span_at_state(static_elf64_access(), {prefix}_elf_file(), {}, {prefix}_loaded_span_{}(), linux_syscall_bytes(), {final_state}, refl, refl, refl, {prefix}_loaded_byte_{}_0())", loaded_address(offsets[selected.len()]), selected.len(), selected.len())),
         ("loaded_request", format!("LinuxExitRequest<List<BitVec(8)>>({final_state}, {result})"),
             format!("linux_exit_request_at_equal_state({original_final}, {final_state}, {result}, {prefix}_loaded_final_state_agrees(gprs, flags), {prefix}_exit_request({start}))")),
     ] {

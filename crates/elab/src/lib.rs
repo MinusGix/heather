@@ -2120,7 +2120,19 @@ impl Elaborator {
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
             let warn_mark = self.warnings.borrow().len();
+            // The miss sampler's item column, the same bracket as
+            // `elab_module_source` (issues/conv-miss-sampler-item-attribution.md):
+            // `heather check` with `HEATHER_VALUE_METRICS` attributes by
+            // declaration too. A no-op without `value-metrics`.
+            #[cfg(feature = "value-metrics")]
+            if let Some(metrics) = &self.value_metrics {
+                metrics.set_current_item(Some(Rc::from(item_timing_name(item).as_str())));
+            }
             let r = self.elab_item_at(&file, idx, item, &plan);
+            #[cfg(feature = "value-metrics")]
+            if let Some(metrics) = &self.value_metrics {
+                metrics.set_current_item(None);
+            }
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 // §4: a failed item's warnings are as speculative as the rest

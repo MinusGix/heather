@@ -59,23 +59,6 @@ fn call_stack_access() → StackAccess<CallMemory> {
 fn call_fetch_access() → FetchAccess<CallMemory> {
     FetchAccess(call_memory_read, λ memory address => static_elf64_executable(memory.file, address))
 }
-// Skip a checked file prefix when reading code. This avoids traversing the
-// ELF header independently for every fetched byte.
-theorem call_file_read_split(header, code: List<BitVec(8)>, count, index: Nat,
-    address: BitVec(64), byte: BitVec(8), length: header.len() = count,
-    page: is_zero_bits(48, bitvec::bxor(48, bitvec::drop_low(16, 48, address), bitvec::ofNat(48, 64))) = True,
-    offset: bitvec::toNat(16, bitvec::take_low(16, 48, address)) = index + count,
-    found: code.nth(index) = Some(byte)):
-    static_elf64_read(header ++ code, address) = Some(byte) {
-    let indexed = j(length, λ size _ => (header ++ code).nth(index + size) = code.nth(index), nth_append_r(header, code, index));
-    let read = trans(cong_fn<Nat, Option<BitVec(8)>>(λ position => (header ++ code).nth(position), offset), trans(indexed, found));
-    j(sym(page), λ decision _ =>
-        (match decision as λ _ => Option<BitVec(8)> {
-            True => (header ++ code).nth(bitvec::toNat(16, bitvec::take_low(16, 48, address))),
-            False => None,
-        }) = Some(byte), read)
-}
-
 // A file-backed byte establishes both RX permission and the observable byte.
 // Derive these together instead of reducing the same file lookup twice.
 theorem call_file_observation(memory: CallMemory, address: BitVec(64), byte: BitVec(8),

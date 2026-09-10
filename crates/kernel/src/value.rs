@@ -419,6 +419,12 @@ impl ValueMetrics {
     /// between items). A no-op without the `value-metrics` feature, so the
     /// elaborator's item bracket can call it unconditionally when a
     /// collector is enabled.
+    /// The item named by [`ValueMetrics::set_current_item`], if any.
+    #[cfg(feature = "value-metrics")]
+    pub fn current_item(&self) -> Option<Rc<str>> {
+        self.inner.current_item.borrow().clone()
+    }
+
     pub fn set_current_item(&self, item: Option<Rc<str>>) {
         #[cfg(feature = "value-metrics")]
         {

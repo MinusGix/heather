@@ -262,6 +262,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 if let Some(snapshot) = elab.value_metrics() {
                     eprintln!("value metrics {}: {snapshot:?}", display_path(&m.path, path));
                 }
+                // The typing seam's conversion-miss table for this module
+                // (non-empty only under the `value-metrics` feature). A
+                // replayed import records nothing, so with `--cache` the
+                // excerpts are the root module's own.
+                if let Some(report) = elab.value_conv_miss_report().filter(|r| !r.is_empty()) {
+                    eprint!("{report}");
+                }
             }
             for notice in &outcome.notices {
                 eprintln!("{notice}");

@@ -678,11 +678,21 @@ impl Tc {
                 env.value_metrics.as_ref(),
             );
             if let Some(metrics) = env.value_metrics.as_ref() {
+                let ns = started.elapsed().as_nanos() as u64;
                 metrics.record_conv_miss(
                     (type_head(expected), type_head(inferred)),
-                    started.elapsed().as_nanos() as u64,
+                    ns,
                     || format!("{}{}", self.diag_site(), first_difference_excerpt(expected, inferred)),
                 );
+                // `HEATHER_CONV_MISS_TRACE=<item>`: every miss of that one
+                // item, with its site and excerpt, where the table keeps one
+                // excerpt per head pair. A diagnosis switch under the feature.
+                if let Some(item) = metrics.current_item()
+                    && std::env::var_os("HEATHER_CONV_MISS_TRACE").is_some_and(|want| *want == *item.as_ref())
+                {
+                    eprintln!("conv miss trace {item} {}/{} {:.3}ms\n{}{}", type_head(expected), type_head(inferred),
+                        ns as f64 / 1e6, self.diag_site(), first_difference_excerpt(expected, inferred));
+                }
             }
             result?;
         }
