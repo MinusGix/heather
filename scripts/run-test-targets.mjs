@@ -31,11 +31,18 @@ export function parseArtifacts(text, root = process.cwd()) {
       executable: msg.executable,
       name: msg.target.name,
       label: msg.target.kind.includes("test") ? src : `${packageName} (${src})`,
-      exclusive: msg.target.name === "frontend_bench_smoke",
+      // Exclusive targets run alone, after the parallel phase: the bench
+      // smoke needs a quiet box to time, and the two-placement native
+      // summary gate sits within 25% of the 300 s CPU rail when run alone
+      // and tips over it under suite contention
+      // (issues/native-summary-test-cpu-margin.md).
+      exclusive: EXCLUSIVE_TARGETS.has(msg.target.name),
     });
   }
   return artifacts;
 }
+
+export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke", "native_summary"]);
 
 export function parseResults(text) {
   const total = { passed: 0, failed: 0, ignored: 0, duration: 0, resultLines: 0 };

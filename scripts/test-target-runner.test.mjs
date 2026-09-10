@@ -9,6 +9,9 @@ test("artifact discovery keeps test-profile executables once", () => {
   const found = parseArtifacts(`${JSON.stringify(artifact)}\n${JSON.stringify(artifact)}\nnot json`, "/work");
   assert.deepEqual(found, [{ executable: "/tmp/example", name: "surface",
     label: "crates/elab/tests/surface.rs", exclusive: false }]);
+  const summary = { ...artifact, executable: "/tmp/summary",
+    target: { name: "native_summary", kind: ["test"], src_path: "/work/crates/cli/tests/native_summary.rs" } };
+  assert.equal(parseArtifacts(JSON.stringify(summary), "/work")[0].exclusive, true);
 });
 
 test("libtest summaries aggregate exactly", () => {

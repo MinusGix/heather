@@ -16,7 +16,9 @@
 # mutation controls (issues/certgen-harness-cost.md, the 2026-08-12 lever:
 # each control elaborates a `match code` shell, and their whole content is
 # kernel-refusal of mutants — acceptance-class, nothing an inner loop
-# iterates on) — the inner loop while iterating. The fast lane also disables
+# iterates on) and the native x86 certificate gates (crates/cli/tests/native*.rs
+# and their prefix warmup; issues/native-summary-test-cpu-margin.md, ~1200
+# CPU-s that no elaborator edit iterates on) — the inner loop while iterating. The fast lane also disables
 # Cargo's cross-target fail-fast, so a red run shows every failing test
 # binary while the expensive acceptance tests stay skipped.
 # --long additionally runs every slow kernel self-check on every occasion
@@ -73,7 +75,22 @@ if [[ "${1:-}" == --fast ]]; then
         --skip a_perturbed_transcriber_is_refused_by_the_kernel
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
         --skip a_perturbed_fold_is_refused_by_the_kernel
-        --skip a_perturbed_field_merge_is_refused_by_the_kernel)
+        --skip a_perturbed_field_merge_is_refused_by_the_kernel
+        # The native x86 certificate gates (crates/cli/tests/native*.rs and
+        # the four certificate-bearing unit tests in crates/cli/src/native):
+        # each spawns a whole `build-x86` and kernel-checks the generated
+        # certificate, ~150-300 CPU-s apiece and ~1200 CPU-s together
+        # (2026-09-09), which an elaborator or kernel edit's inner loop
+        # cannot iterate on. Acceptance-class; the full lane runs them.
+        --skip source_to_native_binary
+        --skip source_to_standalone_elf_without_a_toolchain
+        --skip nested_calls_return_the_source_result
+        --skip caller_reloads_its_live_stack_local
+        --skip two_placed_calls_share_one_summary
+        --skip native_encoder_is_checked_and_corruption_is_rejected
+        --skip loaded_mapping_and_fetch_refusals
+        --skip elf_header_mutations_are_rejected_by_heather
+        --skip call_stack_semantics_and_refusals)
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long
@@ -134,7 +151,11 @@ native_warmup() {
 if (( $# == 0 )); then
   semantic_warmup semantic_x86_warmup
   semantic_warmup semantic_omega_warmup
-  native_warmup
+  # The fast lane skips every native certificate gate, so it has no prefix
+  # to warm; the warmup alone is ~150 CPU-s.
+  if [[ "$TEST_LANE" != fast ]]; then
+    native_warmup
+  fi
 else
   requested=" $* "
   if [[ "$requested" == *"--test native"* ]]; then

@@ -5,8 +5,10 @@
   Debug-formatted kernel term can OOM the whole machine, not just the process.
   `scripts/test --fast` (minutes, not seconds; what it skips and what
   dominates what remains live in `issues/certgen-harness-cost.md`) skips the
-  whole-library acceptance tests and the perturbed-library mutation controls
-  (~4.7 CPU-min) for the inner loop, and replays semantic test images that
+  whole-library acceptance tests, the perturbed-library mutation controls
+  (~4.7 CPU-min), and the native x86 certificate gates
+  (`crates/cli/tests/native*.rs` plus their warmup, ~20 CPU-min;
+  `issues/native-summary-test-cpu-margin.md`) for the inner loop, and replays semantic test images that
   an earlier build of the compiler wrote (kernel-rechecked, but the current
   frontend is not re-run on unchanged library modules); a round's **final**
   verification, and any change touching `lib/`, the kit, or the generators,
