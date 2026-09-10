@@ -8,12 +8,15 @@ fn source_to_native_binary() {
     let output = root.join(format!("target/native-integration-{}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
     let assembly = output.join("mix.s");
+    let tsv = output.join("timings.tsv");
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/x86-native/mix.hthr", "mix", "-o"])
         .arg(&assembly).args(["--cache-dir", "target/native-test-images"])
+        .arg("--item-timings").arg(&tsv)
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    item_timings_cover_the_certificate(&tsv, &output.join("mix.certificate.hthr"));
     let binary = output.join("mix");
     let linked = Command::new("cc").current_dir(&root)
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "examples/x86-native/main.c"])
@@ -23,6 +26,41 @@ fn source_to_native_binary() {
     assert!(native.status.success(), "{}", String::from_utf8_lossy(&native.stdout));
     assert!(String::from_utf8_lossy(&native.stdout).contains("10005 native cases passed"));
     std::fs::remove_dir_all(output).unwrap();
+}
+
+/// `--item-timings` is attribution, so its table must account for every
+/// declaration of the certificate it was asked about — a table that silently
+/// omits the expensive ones would mislead exactly where it is consulted.
+fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::path::Path) {
+    let table = std::fs::read_to_string(tsv).unwrap();
+    let mut lines = table.lines();
+    let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    assert_eq!(&header[..4], ["module", "item", "total_ms", "kernel_ms"]);
+    let mut rows = std::collections::HashSet::new();
+    for line in lines {
+        let cells: Vec<&str> = line.split('\t').collect();
+        assert_eq!(cells.len(), header.len(), "row {line:?}");
+        cells[2].parse::<f64>().unwrap();
+        cells[3].parse::<f64>().unwrap();
+        if cells[0] == "mix_native_certificate" { rows.insert(cells[1].to_string()); }
+    }
+    let source = std::fs::read_to_string(certificate).unwrap();
+    let mut declarations = 0;
+    for line in source.lines() {
+        let Some(rest) = line.strip_prefix("theorem ").or_else(|| line.strip_prefix("fn ")) else { continue };
+        let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        assert!(rows.contains(&name), "no timing row for `{name}`");
+        declarations += 1;
+    }
+    assert!(declarations > 1, "the certificate declares more than one item");
+    let mut imports = std::collections::HashSet::new();
+    for line in source.lines() {
+        let Some(module) = line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) else { continue };
+        assert!(rows.contains(&format!("import {module}")), "no timing row for `import {module}`");
+        imports.insert(module);
+    }
+    assert!(rows.len() >= declarations + imports.len(), "{} rows for {declarations} declarations", rows.len());
+    assert!(rows.iter().any(|name| name == "mix_native_exported_bytes"));
 }
 
 #[test]

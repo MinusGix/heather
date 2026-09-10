@@ -3,7 +3,7 @@ title: Restore native certificate acceptance within the existing CPU budget
 status: closed
 labels: [x86,kernel,elaboration,performance,testing]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 Merging `df25c3f` into the reusable-callee baseline `cb877f2` exposed CPU-limit
@@ -71,3 +71,4 @@ passed all 106 comparisons. Neither establishes that the host was quiet.
   repeat benchmark gate passed all 106 comparisons. The concrete acceptance
   failure is resolved. No controlled speedup or kernel-regression claim is made;
   general conversion attribution remains with [[state-projection-conversion-cost]].
+- 2026-09-09: Re-measured this issue's byte-fetch datum with permanent tooling rather than a temporary instrumented build ([[generated-proof-cost-diagnostics]]'s `--item-timings`): on the two-placement certificate, release profile, byte-fetch declarations were 88.6 s of 192.1 s of item time (the 2026-09-08 partial trace's ~125 s of 275 s, now measured end to end). [[native-summary-test-cpu-margin]] owns what was done about it and the after numbers; the file-prefix lookup helper this issue installed is still in place, now fed a named-suffix proof instead of a `refl` that re-traversed the code list.

@@ -74,6 +74,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut inputs = Vec::new();
     let mut cache = None;
     let mut callee = None;
+    let mut timings = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -84,11 +85,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             "--arg" if executable => {
                 inputs.push(elf::parse_argument(args.next().ok_or("--arg needs an unsigned integer")?)?);
             }
-            "-o" | "-L" | "--cache-dir" => {
+            "-o" | "-L" | "--cache-dir" | "--item-timings" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
                     "-o" => output = Some(value),
                     "-L" => { if !search.contains(&value) { search.push(value); } }
+                    "--item-timings" => timings = Some(value),
                     _ => cache = Some(value),
                 }
             }
@@ -101,9 +103,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]".into());
         }
-        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>]".into());
+        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]".into());
     }
     let source = Path::new(positional[0]);
     let symbol = positional[1];
@@ -129,6 +131,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let sources = loader::load(source, &search).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
+    // Observation only: the collector changes no judgment, no fuel, and no
+    // cache entry, and stays off unless `--item-timings` names a file. Turning
+    // it on here rather than at the certificate separates a module actually
+    // elaborated (a cache miss, or the root source) from the generated
+    // certificate by the `module` column.
+    if timings.is_some() { elab.enable_item_timings(); }
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -147,7 +155,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let prefix = format!("{symbol}_native");
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
-        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option"] {
+        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
         proof.raw(format!("import {name};"));
     }
     let (image, body_bytes) = if let Some(callee) = callee {
@@ -174,8 +182,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     };
     let proof = proof.render();
     eprintln!("checking source refinement, exported bytes, and execution certificate");
-    elab.elab_module_source(&format!("{prefix}_certificate"), &proof)
-        .map_err(|e| e.render(&proof))?;
+    let checked = elab.elab_module_source(&format!("{prefix}_certificate"), &proof);
+    // A refused certificate is the case worth attributing, so the table is
+    // written before the failure is reported.
+    if let Some(path) = &timings { write_item_timings(path, &elab.take_item_timings())?; }
+    checked.map_err(|e| e.render(&proof))?;
     write_new(&certificate, proof.as_bytes())?;
     if let Some(image) = image {
         write_new(&output, &image)?;
@@ -202,6 +213,24 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
     if outcome.errors.is_empty() { Ok(()) } else {
         Err(outcome.errors.iter().map(|e| e.render(&module.src)).collect::<Vec<_>>().join("\n"))
     }
+}
+
+/// One row per surface item the elaborator actually ran, in emission order.
+/// The value-metric columns are empty unless the build carries the
+/// `value-metrics` feature, which is what makes them collected at all.
+fn write_item_timings(path: &Path, timings: &[heather_elab::ItemTiming]) -> Result<(), String> {
+    let ms = |ns: u64| format!("{:.3}", ns as f64 / 1e6);
+    let mut out = String::from("module\titem\ttotal_ms\tkernel_ms\tterm_cache_lookups\tterm_cache_hits\ttype_cache_lookups\ttype_cache_hits\n");
+    for timing in timings {
+        let cells = timing.value_metrics.map_or_else(|| "\t\t\t".to_string(), |m| {
+            format!("{}\t{}\t{}\t{}", m.term_cache_lookups, m.term_cache_hits, m.type_cache_lookups, m.type_cache_hits)
+        });
+        writeln!(out, "{}\t{}\t{}\t{}\t{cells}", timing.module, timing.item, ms(timing.total_ns), ms(timing.kernel_ns))
+            .expect("writing to a string");
+    }
+    std::fs::write(path, out).map_err(|e| format!("{}: {e}", path.display()))?;
+    eprintln!("item timings: {} rows in {}", timings.len(), path.display());
+    Ok(())
 }
 
 fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {

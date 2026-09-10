@@ -449,6 +449,20 @@ theorem take_append_drop<A>(xs: List<A>):
     }
 }
 
+// One more element dropped is one element dropped from what is left. A
+// generated certificate that names every suffix of a concrete list uses this
+// to walk the names in one pass: each step is this theorem at the previous
+// one, so the k-th suffix costs a step and not a k-long re-traversal.
+theorem drop_succ<A>(xs: List<A>, n: Nat): drop(xs, n + 1) = drop(drop(xs, n), 1) {
+    match xs {
+        Nil => {},
+        Cons(_, t) => match n {
+            Zero => {},
+            Succ(k) => drop_succ(t, k),
+        },
+    }
+}
+
 // Filtering cannot increase length. Both inner branches return `List<A>`, so
 // the match needs no written motive.
 theorem len_filter<A>(xs: List<A>, p: A → Bool): filter(xs, p).len() <= xs.len() {
@@ -836,6 +850,19 @@ theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
     match xs {
         Nil => {},
         Cons(_, t) => nth_append_r(t, ys, i),
+    }
+}
+
+// Reading at an index is reading the head of what remains after dropping it.
+// The companion to `drop_succ`: with the suffixes already named, a lookup
+// deep in a concrete list is this theorem plus one head read.
+theorem nth_drop<A>(xs: List<A>, n: Nat): xs.nth(n) = drop(xs, n).nth(0) {
+    match xs {
+        Nil => {},
+        Cons(_, t) => match n {
+            Zero => {},
+            Succ(k) => nth_drop(t, k),
+        },
     }
 }
 

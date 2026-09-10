@@ -166,7 +166,35 @@ fn word(n: u64) -> String {
     let bits = (0..64).map(|i| if n & (1 << i) == 0 { "False" } else { "True" }).collect::<Vec<_>>().join(", ");
     format!("bitvec::from_bits(64, [{bits}])")
 }
-fn bytes(bytes: &[u8]) -> Expr { Expr::list(bytes.iter().map(|b| Expr::call("elf_byte", [Expr::nat(u64::from(*b))]))) }
+// A file-sized `[…]` literal is a dependent-vector fold: building it costs
+// seconds on its own, and every lookup inside it re-runs the fold from the
+// front. The same bytes as a chain of one-cons definitions cost a δ-step per
+// element, and the chain gives every suffix a name for the lookups below.
+// `{name}()` is the whole list; `{name}_from_{k}()` is the k-th suffix.
+fn byte_chain(m: &mut Module, name: &str, list: &[u8]) {
+    fun(m, &format!("{name}_from_{}", list.len()), "List<BitVec(8)>", "[]".into());
+    for (k, byte) in list.iter().enumerate().rev() {
+        fun(m, &format!("{name}_from_{k}"), "List<BitVec(8)>",
+            format!("Cons(elf_byte({byte}), {name}_from_{}())", k+1));
+    }
+    fun(m, name, "List<BitVec(8)>", format!("{name}_from_0()"));
+}
+// Name the suffix each index reaches, once, in one forward pass: step `k+1`
+// is `drop_succ` at step `k`, and `list::drop({name}_from_{k}(), 1)` is the
+// next name by one unfolding. Without this every byte lookup re-traverses the
+// whole file prefix (issues/native-summary-test-cpu-margin.md).
+fn drop_chain(m: &mut Module, name: &str, len: usize) {
+    thm(m, &format!("{name}_drop_0"), format!("list::drop({name}(), 0) = {name}_from_0()"), "refl".into());
+    for k in 1..=len {
+        thm(m, &format!("{name}_drop_{k}"), format!("list::drop({name}(), {k}) = {name}_from_{k}()"),
+            format!("trans(drop_succ({name}(), {}), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ suffix => list::drop(suffix, 1), {name}_drop_{}()))", k-1, k-1));
+    }
+}
+// The `found` premise of `call_file_read_split` at one code offset: the named
+// suffix, plus one head read. Both steps are constant work.
+fn byte_at(name: &str, index: usize) -> String {
+    format!("trans(nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
+}
 fn fun(m: &mut Module, name: &str, ty: &str, value: String) {
     m.declaration(Declaration::function(name, Expr::raw(ty), Block::expression(Expr::raw(value))));
 }
@@ -180,29 +208,57 @@ fn state_decl(m: &mut Module, name: &str, ty: String, value: String, theorem: bo
         .parameter(Parameter::explicit("flags", Expr::name("Flags")))
         .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
 }
-fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize, memory: &str, pc: u64, encoding: &[u8], header_size: usize) -> String {
+/// Returns the fetch proof for the whole instruction and the name of its byte
+/// span. The span is a chain of named suffixes rather than a `[…]` literal for
+/// the same reason the file is (`byte_chain`): the fetch lemmas state their
+/// spans in `Cons` form, and a literal has to be re-folded at every link.
+fn certify_fetch(module: &mut Module, words: &Words, prefix: &str, index: usize, memory: &str, pc: u64, encoding: &[u8], header_size: usize) -> (String, String) {
     let actual_memory = memory;
     let memory = format!("CallMemory({prefix}_file(), stack)");
+    let span = format!("{prefix}_span_{index}");
+    byte_chain(module, &span, encoding);
+    let suffix = |j: usize| format!("{span}_from_{j}()");
     let stack_decl = |module: &mut Module, name: &str, ty: String, body: String| {
         module.declaration(Declaration::theorem(name, Expr::raw(ty), Block::expression(Expr::raw(body)))
             .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
     };
     let word = |n| words.get(n);
+    // The span's `FetchedFrom` type is `ReadableBytes` unfolded over the
+    // remaining bytes, so *stating* one is work proportional to what is left
+    // of the instruction. The chain is therefore nested in one declaration —
+    // stated once, for the whole instruction — while the premises each byte
+    // needs stay named: those statements are small, and naming them is what
+    // lets `--item-timings` attribute the fetch cost.
+    let mut proof = String::new();
     for j in (0..encoding.len()).rev() {
         let address = word(pc + j as u64);
         let byte = format!("elf_byte({})", encoding[j]);
-        let present = format!("call_file_read_split({prefix}_header(), {prefix}_code(), {header_size}, {}, {address}, {byte}, {prefix}_header_length(), refl, refl, refl)", pc + j as u64 - 0x400000 - header_size as u64);
-        let proof = if j+1 == encoding.len() {
+        let offset = (pc + j as u64 - 0x400000) as usize - header_size;
+        thm(module, &format!("{prefix}_byte_page_{index}_{j}"),
+            format!("is_zero_bits(48, bitvec::bxor(48, bitvec::drop_low(16, 48, {address}), bitvec::ofNat(48, 64))) = True"), "refl".into());
+        thm(module, &format!("{prefix}_byte_offset_{index}_{j}"),
+            format!("bitvec::toNat(16, bitvec::take_low(16, 48, {address})) = {offset} + {header_size}"), "refl".into());
+        thm(module, &format!("{prefix}_byte_found_{index}_{j}"),
+            format!("{prefix}_code().nth({offset}) = Some({byte})"), byte_at(&format!("{prefix}_code"), offset));
+        thm(module, &format!("{prefix}_byte_present_{index}_{j}"),
+            format!("static_elf64_read({prefix}_header() ++ {prefix}_code(), {address}) = Some({byte})"),
+            format!("call_file_read_split({prefix}_header(), {prefix}_code(), {header_size}, {offset}, {address}, {byte}, {prefix}_header_length(), {prefix}_byte_page_{index}_{j}(), {prefix}_byte_offset_{index}_{j}(), {prefix}_byte_found_{index}_{j}())"));
+        let present = format!("{prefix}_byte_present_{index}_{j}()");
+        proof = if j+1 == encoding.len() {
             format!("call_file_fetch_one({memory}, {address}, {byte}, {present})")
         } else {
             let next = word(pc + j as u64 + 1);
-            format!("call_file_fetch_more({memory}, {address}, {next}, {byte}, elf_byte({}), {}, {present}, refl, refl, {prefix}_byte_{index}_{}(stack))",
-                encoding[j+1], bytes(&encoding[j+2..]).render(), j+1)
+            thm(module, &format!("{prefix}_byte_wrap_{index}_{j}"),
+                format!("bitvec::carry_add_bit(64, {address}, bitvec::ofNat(64, 1)) = False"), "refl".into());
+            thm(module, &format!("{prefix}_byte_next_{index}_{j}"),
+                format!("next_rip({address}, 1) = {next}"), "refl".into());
+            format!("call_file_fetch_more({memory}, {address}, {next}, {byte}, elf_byte({}), {}, {present}, {prefix}_byte_wrap_{index}_{j}(), {prefix}_byte_next_{index}_{j}(), {proof})",
+                encoding[j+1], suffix(j+2))
         };
-        stack_decl(module, &format!("{prefix}_byte_{index}_{j}"),
-            format!("FetchedFrom(call_fetch_access(), {memory}, InstructionBytes({address}, {}))", bytes(&encoding[j..]).render()), proof);
     }
-    format!("{prefix}_byte_{index}_0({actual_memory}.stack)")
+    stack_decl(module, &format!("{prefix}_byte_{index}_0"),
+        format!("FetchedFrom(call_fetch_access(), {memory}, InstructionBytes({}, {}))", word(pc), suffix(0)), proof);
+    (format!("{prefix}_byte_{index}_0({actual_memory}.stack)"), format!("{span}()"))
 }
 
 fn certify_stack_permissions(module: &mut Module, words: &Words, prefix: &str, index: usize, sp: u64) -> String {
@@ -367,8 +423,9 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
         Expr::raw(format!("{caller}(left, right) = {}", if local { format!("bitvec::bxor(64, {callee}({left}, right), bitvec::bxor(64, left, right))") } else { format!("{callee}(left, right)") })), Block::expression(Expr::name("refl")))
         .parameter(Parameter::explicit("left", Expr::raw("BitVec(64)")))
         .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
-    module.declaration(Declaration::function(format!("{prefix}_code"), Expr::raw("List<BitVec(8)>"), Block::expression(bytes(&layout.bytes))));
-    module.declaration(Declaration::function(format!("{prefix}_header"), Expr::raw("List<BitVec(8)>"), Block::expression(bytes(&file[..HEADER]))));
+    byte_chain(module, &format!("{prefix}_code"), &layout.bytes);
+    drop_chain(module, &format!("{prefix}_code"), layout.bytes.len());
+    byte_chain(module, &format!("{prefix}_header"), &file[..HEADER]);
     thm(module, &format!("{prefix}_header_length"), format!("{prefix}_header().len() = {HEADER}"), "refl".into());
     fun(module, &format!("{prefix}_file"), "List<BitVec(8)>", format!("{prefix}_header() ++ {prefix}_code()"));
     fun(module, &format!("{prefix}_image"), &format!("CallElfImage({prefix}_code())"),
@@ -650,8 +707,8 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             Op::Ret => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩"),
             _ => unreachable!(),
         };
-        let fetched = certify_fetch(module, words, prefix, i, &format!("{before}.memory"), pc, encoding, HEADER);
-        let fetched = format!("fetched_span_at_state(call_fetch_access(), {before}.memory, {}, {}, call_instruction_bytes({instruction}), {before}, refl, refl, refl, {fetched})", word(pc), bytes(encoding).render());
+        let (fetched, span) = certify_fetch(module, words, prefix, i, &format!("{before}.memory"), pc, encoding, HEADER);
+        let fetched = format!("fetched_span_at_state(call_fetch_access(), {before}.memory, {}, {span}, call_instruction_bytes({instruction}), {before}, refl, refl, refl, {fetched})", word(pc));
         if in_leaf {
             let allowed = if matches!(op, Op::Ret) {
                 format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), {prefix}_stack_permissions_{i}(gprs, flags, stack)⟩⟩")
@@ -768,7 +825,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         state_decl(module, &format!("{prefix}_dead_frame_byte"),
             format!("call_memory_read({end}.memory, {dead}) = Some(elf_byte({byte}))"), "refl".into(), true);
     }
-    let syscall_fetch = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
+    let (syscall_fetch, _) = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
         format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), syscall_fetch, true);
     state_decl(module, &format!("{prefix}_stack_restored"), format!("read_gpr(Rsp, {end}.gprs) = {}", word(STACK_TOP)), format!("{prefix}_rsp_{n}(gprs, flags, stack)"), true);
@@ -916,7 +973,7 @@ mod tests {
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("accepted an invented callee state"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
-        let imports = "import x86_64; import x86_64_call_frame; import x86_64_calls; import elf64_calls; import bitvec; import bool; import list; import logic; import option;";
+        let imports = "import x86_64; import x86_64_call_frame; import x86_64_calls; import elf64_calls; import bitvec; import bool; import list; import logic; import option; import nat; import elf64_load;";
         // Long instruction near the end of a file, with arbitrary stack bytes.
         // Corrupting the requested byte must fail the file-observation proof.
         let actual = super::super::encode(&[Instruction::MovRI { destination: Gpr::Rax, immediate: 0x0123456789abcdef }]);
@@ -930,8 +987,9 @@ mod tests {
             fetch_cases.push((valid, proofs));
         }
         let mut fixture = Module::default(); fixture.raw(format!("{imports} import elf64;"));
-        fun(&mut fixture, "fetch_fixture_header", "List<BitVec(8)>", bytes(&file[..256]).render());
-        fun(&mut fixture, "fetch_fixture_code", "List<BitVec(8)>", bytes(&file[256..]).render());
+        byte_chain(&mut fixture, "fetch_fixture_header", &file[..256]);
+        byte_chain(&mut fixture, "fetch_fixture_code", &file[256..]);
+        drop_chain(&mut fixture, "fetch_fixture_code", file.len()-256);
         fun(&mut fixture, "fetch_fixture_file", "List<BitVec(8)>", "fetch_fixture_header() ++ fetch_fixture_code()".into());
         thm(&mut fixture, "fetch_fixture_header_length", "fetch_fixture_header().len() = 256".into(), "refl".into());
         for value in words.values.into_inner() {

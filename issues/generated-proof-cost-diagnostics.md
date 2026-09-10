@@ -3,7 +3,7 @@ title: Attribute expensive generated proofs to declarations and conversion reque
 status: open
 labels: [tooling,kernel,elaboration,performance,diagnostics]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 The reusable callee round (`cb877f2`) repeatedly reached resource failures late
@@ -33,3 +33,7 @@ then took about 270 seconds; this is an observation, not a timing threshold.
 
 [[test-target-immediate-outcomes]] separately owns prompt reporting of completed
 test failures during a long suite; that does not require checker instrumentation.
+
+## Log
+
+- 2026-09-09: First acceptance item landed: `heather build-x86`/`compile-x86` take `--item-timings <file.tsv>` (crates/cli/src/native.rs), which turns on the elaborator's existing `ItemTiming` collector and writes one row per surface item actually elaborated — module, item, total_ms, kernel_ms, and four value-metric columns that fill in only under the `value-metrics` feature. Off by default and nothing is collected when off; the table is written before a failed certificate's error is reported, so a refused check still attributes. crates/cli/tests/native.rs asserts every declaration of a compile-x86 certificate has a row. Used it the same round on examples/x86-native/reused_callee.hthr (release, one furnace box): 1866 rows, 192.1 s of item time, 140.9 s of it kernel, and byte-fetch declarations 88.6 s of that — the first attribution of this certificate that is not a temporary instrumented build. Still owed by this issue: conversion-request attribution (fuel/memo/reduction counters) and bounded summaries of compared terms.
