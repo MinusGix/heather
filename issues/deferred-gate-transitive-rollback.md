@@ -33,3 +33,7 @@ Only if failing-module latency in the dev loop matters: today's failure cost is 
 
 - **[[parallel-kernel-gate]]** owns the pool, the checkpoint (`module_pass_checkpoint`/`restore_module_pass`), the early abort, and the drop guard on the pool. Assumed here: those are the primitives this would build on, and the width-independence contract is the invariant to preserve.
 - **[[parallel-checking-and-caching]]** owns the verified-invalidation theorem; the cone rule here is its in-process instance.
+
+## Log
+
+- 2026-09-11: 2026-09-11: since §5.2 verdict reuse landed, a failing module's remaining duplicated cost is the frontend replay itself (elaboration of every declaration up to the failure, plus check_type at every gate site) — the kernel is asked once per obligation at any width. That duplicated elaboration is the datum this issue's trigger should watch: heather-cli certificate unit tests, W=8 warm, 139 s CPU against a 146 s serial gate, so today the replay is already net cheaper than serial and the trigger is not near.
