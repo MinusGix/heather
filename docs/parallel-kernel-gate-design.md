@@ -114,8 +114,16 @@ For N > 1 the pool is `std::thread` plus one `Mutex`/`Condvar` pair (the
 kernel keeps zero dependencies, and the elaborator gains none): a job deque,
 an outcome vector, an outstanding count. A worker loops — wait for work, pop,
 check, push an outcome, notify — and exits on a shutdown flag set when the
-`Elaborator` is dropped. Threads are spawned lazily on the first submission,
-so a run that queues nothing spawns nothing.
+`Elaborator` is dropped.
+
+Threads are spawned lazily and **one per submission**, up to N: a run that
+queues nothing spawns nothing, a module with one proof obligation spawns one
+thread, and a module wide enough to use eight workers has eight by its eighth
+declaration — before the width could have been what was holding it up. The
+rule exists because a thread is not free: it carries the process's configured
+stack (`RUST_MIN_STACK` is 8 MiB in the suite), and the dev loop is made of
+one- and two-declaration probe modules, of which the certificate unit tests
+alone check dozens per run.
 
 Per-worker checker state is per-worker by construction: `Tc`, its `RefCell`
 conversion memo, the `ValueArena`, `BodyCache` and the diagnostic stacks are
@@ -225,6 +233,8 @@ nothing else:
 1. **Serial fallback.** If any deferred check fails — a rejection or a worker
    panic — the pass is discarded whole and the module is re-run with the pool
    inline. What the caller receives is exactly what the serial run returns.
+   The *verdicts* the discarded pass earned are not discarded with it (§5.2);
+   only what it registered, reported and vouched for is.
    `Elaborator::module_pass_checkpoint` (`session.rs`) marks everything a pass
    can leave behind: the committed world (`SessionCheckpoint` — Ψ, δΨ, names,
    types, traits, representations, provenance, meta programs), the module
@@ -265,12 +275,13 @@ nothing else:
    this way says so instead of going quiet under load.
 
 The cost is that a failing module pays the parallel attempt plus the serial
-run. That is the right place to put the cost. Failing modules are the dev
-loop, and the dev loop is what the fallback is protecting: the serial run is
-what a failing module cost before any of this existed, and the parallel
-attempt on top of it is bounded by the early abort. A module that is
-*accepted* — the certificate workload, the library, every module in a green
-build — pays nothing, because the fallback is never entered.
+run — its *elaboration* twice, and, until §5.2, its kernel twice. That is the
+right place to put the cost. Failing modules are the dev loop, and the dev
+loop is what the fallback is protecting: the serial run is what a failing
+module cost before any of this existed, and the parallel attempt on top of it
+is bounded by the early abort. A module that is *accepted* — the certificate
+workload, the library, every module in a green build — pays nothing, because
+the fallback is never entered.
 
 Two smaller consequences, recorded rather than chosen. A discarded pass's
 `admits` calls have already moved the declaration cache's hit/miss counters,
@@ -279,6 +290,81 @@ in the *counter* columns; no verdict and no stored entry is affected. And the
 fallback is per module, so a run whose every module fails pays the attempt
 twice over — which is the same sentence as the first paragraph of this one,
 at run scale.
+
+## 5.2 The replay reuses the verdicts the discarded pass earned
+
+The fallback's cost model bites the dev loop's most common module: a probe of
+one or two declarations, one of which is meant to be refused. Under §5.1 alone
+that module pays the parallel pass and then the serial replay, and for a
+one-item module that is exactly twice the kernel.
+
+It need not be. **Elaboration is deterministic.** Replaying the same source
+over the same committed world in the same order reproduces the same bindings
+for every declaration up to and including the first failure: each of that
+declaration's predecessors passed and was committed identically, so the Ψ
+prefix it faces is identical too. A verdict the parallel pass earned for such
+a declaration is a verdict for the *same question*, and the kernel is a
+function of its arguments.
+
+So a discarded pass hands the replay its outcomes (`pool.rs`, `Replay`): for
+each deferred item, in submission order, the binding the worker checked, the
+length of the Ψ prefix it was checked against, and the kernel's answer —
+`Ok`, or the exact `TypeError` the worker recorded. A worker *panic* is not an
+answer and is never recorded; recording stops there.
+
+The replay consults the list at each inline gate site, by position, before it
+calls the kernel:
+
+- if the site's binding is structurally equal (`==` on context, statement,
+  level, body, opacity, layer and fuel) to the recorded one **and** the Ψ
+  lengths match **and** every earlier item also matched, the verdict is
+  reused: `Ok` skips the kernel call, `Err(e)` raises exactly the error the
+  serial gate would have raised, through the same `kernel_error` that
+  reconstructs the declaration's notes;
+- otherwise the kernel is called as before, and — this is the load-bearing
+  half — **reuse is switched off for the whole tail**. A single mismatch at
+  index *j* means the prefixes may have diverged, and past that point Ψ's
+  length no longer witnesses its contents.
+
+After the first reused *failure* the two passes diverge by construction: the
+serial pass does not commit the declaration it refuses, so every later item
+faces a Ψ one binding shorter than the worker's did, mismatches, and is
+checked normally. Reuse ends itself; nothing has to detect the end.
+
+**Why this is not a new trust seam.** A verdict is reused only for a kernel
+call whose inputs are structurally identical to a call the same kernel already
+answered *in this process*, in this module's own discarded pass. Nothing is
+stored, nothing crosses a process boundary, and nothing survives the replay
+that consumes it. The declaration gate (`KernelGate::accepted`) is untouched:
+its verdicts are still recorded only by the serial pass, reuse or no reuse, so
+the cache still sees exactly the set §5.1 promised it. The kernel gains
+nothing and is not consulted about any of this; `crates/kernel/DESIGN.md` is
+unchanged except for the counter §8 mentions.
+
+What is left on the table, deliberately: the *statement* check (`check_type`)
+is re-run by the replay, because it is the cheap half and synchronous at both
+widths; and the replay re-elaborates the module, which for a probe module is
+often the larger half of the bill. Reuse removes the duplicated kernel, not
+the duplicated frontend.
+
+**Attribution.** A reused verdict charges the replayed item's row the
+*worker's* clock and counter delta, not zero: the item row is what says what a
+declaration cost, and the pass whose row held those numbers was dropped. The
+kernel counters are not merged a second time — the discarded pass's join
+already merged them into this thread, and only the item rows were rolled back
+— so `stats::fold_reused_kernel` patches the row and nothing else. The rows
+are patched after the fact, at the end of the replay, because a row is created
+when its scope closes; `total_ns` grows with the phases, so `phases <= total`
+survives exactly as it does for a deferred item (§7).
+
+**What it costs to hold.** A recorded verdict keeps its binding alive — an
+`Arc` bump per component, not a copy — while the replay builds the module's
+second copy of the same terms from source, so the two overlap. Three things
+keep that bounded: the Ψ *snapshot* is not kept (only its length), each entry
+is dropped the moment the comparison that retires it returns, and the whole
+list is dropped at the first mismatch. Peak RSS over the certificate unit
+tests came out slightly **below** the no-reuse pass, because the parallel
+pass's terms die with the items rather than with the module.
 
 ## 6. What had to be `Send`
 
@@ -353,8 +439,10 @@ immutable once built and reachable only behind `Arc`, so two threads reading
 the same subtree observe the same tree; the only mutation of Ψ is an append
 on the elaborator's thread to a *copy* the worker does not share.
 
-Two counters and one merge were added to `crates/kernel/src/stats.rs`
-(`Snapshot::plus`, `merge`), which remain inert by the module's own rule:
+Two functions and one counter were added to `crates/kernel/src/stats.rs`
+(`Snapshot::plus`, `merge`, and `check_terms` — one bump per call of the
+`check_term` entry points, which is how a test says that a reused verdict is a
+kernel call that did not happen). They remain inert by the module's own rule:
 nothing in the kernel reads them.
 
 `crates/kernel/DESIGN.md` carries this paragraph.

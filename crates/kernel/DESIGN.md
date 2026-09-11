@@ -642,9 +642,14 @@ bounds memo, the `fmt.rs` budget cells, the `checks.rs` sampling counter and
 `stats.rs` are `thread_local!`. Nothing is shared across workers but
 immutable terms behind atomic refcounts.
 
-The kernel's own diff for this was two functions in `stats.rs`
+The kernel's own diff for this was two functions and one counter in `stats.rs`
 (`Snapshot::plus` and `merge`, so a joining thread can absorb a worker's
-counter delta), which remain inert by the rule immediately below.
+counter delta, and `check_terms`, one bump per call of the `check_term` entry
+points), which remain inert by the rule immediately below. The elaborator's
+serial replay may reuse a verdict this process's kernel already gave for a
+structurally identical (Ψ prefix, binding) pair rather than ask again
+(`docs/parallel-kernel-gate-design.md` §5.2); that is a caller's bookkeeping
+about its own calls, and the kernel is neither consulted nor changed by it.
 
 **Inert counters.** `stats.rs` holds thread-local `Cell<u64>` counters — how
 many conversion queries each shortcut answered, how a miss failed, how many

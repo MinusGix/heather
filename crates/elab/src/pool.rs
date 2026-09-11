@@ -13,6 +13,13 @@
 //! cells, both stats registries — is per-thread by construction, because it is
 //! either created inside `check_term` or declared `thread_local!`.
 //!
+//! A pass the join refuses is discarded and replayed serially, and its
+//! *verdicts* travel with it: [`Replay`] lets the replay reuse a kernel answer
+//! wherever its own inputs are structurally the ones a worker was handed, so
+//! the dev loop's commonest module — a probe of one or two declarations, one
+//! of them meant to be refused — pays for one kernel pass and not two
+//! (`docs/parallel-kernel-gate-design.md` §5.2).
+//!
 //! `workers == 1` spawns nothing: the gate sites run the code they always ran,
 //! in the order they always ran it, and the pool exists in that configuration
 //! only to answer `is_inline()`. It is what a clone gets, and what the serial
@@ -108,6 +115,246 @@ fn run(index: usize, item: Rc<Deferred>) -> Outcome {
     };
     let ns = started.elapsed().as_nanos() as u64;
     Outcome { index, item, verdict, ns, kernel: kstats::snapshot().since(&before) }
+}
+
+// ---------------------------------------------------------------------------
+// Verdict reuse across the discard (`docs/parallel-kernel-gate-design.md` §5.2)
+// ---------------------------------------------------------------------------
+
+/// One verdict a discarded parallel pass already earned, and exactly the
+/// inputs it was earned for.
+///
+/// Copied out of the [`Deferred`] rather than holding it: what has to survive
+/// the discard is the binding (an `Arc` bump per component — the term graph is
+/// shared, not copied) and the Ψ prefix's *length*, not the prefix itself, and
+/// not the span or the timing row. A replayed module holds one of these per
+/// obligation while its own pass rebuilds the same terms from source, so what
+/// this struct does not carry is memory the two passes do not overlap on.
+struct Recorded {
+    psi_len: usize,
+    name: String,
+    ctx: LocalCtx,
+    ty: Type,
+    level: Level,
+    body: Term,
+    opaque: bool,
+    layer: Layer,
+    lands_in_psi: bool,
+    fuel: u64,
+    /// A worker *panic* is not a verdict and is never recorded, so this is the
+    /// kernel's own answer and nothing else.
+    verdict: Result<(), TypeError>,
+    ns: u64,
+    kernel: kstats::Snapshot,
+}
+
+/// What a discarded pass leaves the serial replay: its verdicts, in submission
+/// order, reusable exactly as far as the replay's inputs are identical.
+///
+/// **Why this is not a second trust seam.** A verdict is reused only for a
+/// kernel call whose inputs — the binding (context, statement, level, body,
+/// opacity, layer, fuel) and the length of the Ψ prefix it is checked against
+/// — are structurally identical to a call the same kernel already answered in
+/// this process. Elaboration is deterministic, so replaying the same source in
+/// the same order reproduces the same bindings up to and including the first
+/// failure: if every obligation before index *j* matched, the replay's Ψ
+/// prefix at *j* is the prefix the worker saw, entry for entry, and the
+/// kernel is a function of (Ψ, binding). One mismatch is therefore fatal to
+/// the whole tail — [`Replay::live`] goes false and stays false — because
+/// after it the prefixes may have diverged and Ψ's *length* alone no longer
+/// witnesses its contents. The first reused rejection diverges by
+/// construction (the serial pass does not commit the declaration it refuses),
+/// which is what turns reuse off for everything after it.
+///
+/// Nothing crosses a process boundary and nothing is stored: this list dies
+/// with the replay that consumes it. `KernelGate::accepted` is still recorded
+/// only by the serial pass, verdict reused or not.
+pub(crate) struct Replay {
+    /// Each entry is **taken** the moment it is compared, and the whole list is
+    /// dropped at the first mismatch: the replay is re-elaborating the same
+    /// declarations, so a recorded binding and its replacement are alive at the
+    /// same time only across the comparison that retires it.
+    entries: Vec<Option<Recorded>>,
+    /// How far the replay has got, while `live`.
+    at: usize,
+    /// Whether the inputs have matched at every index so far.
+    live: bool,
+    /// Set while the serial pass is the one running. A recorded-but-unarmed
+    /// replay answers nothing.
+    armed: bool,
+    /// Worker clocks owed to item rows that have not closed yet. Charged at
+    /// [`Replay::finish`], because a row is patched in place and only exists
+    /// once its scope has closed. Empty unless `--timings` is collecting.
+    folds: Vec<(String, String, u64, kstats::Snapshot)>,
+}
+
+impl Replay {
+    /// The verdicts of a pass that is about to be discarded. `None` when there
+    /// is nothing to reuse.
+    ///
+    /// The outcomes are the whole of one pass, from its first submission: the
+    /// only join that can reach this is the pass's last, because the two
+    /// mid-pass joins (`elab_module_pass`'s failed-item branch) return from
+    /// the pass immediately after. Recording stops at the first gap or panic
+    /// rather than guessing which index a later outcome belongs to.
+    pub(crate) fn record(outcomes: &[Outcome]) -> Option<Replay> {
+        let mut entries = Vec::new();
+        for (at, outcome) in outcomes.iter().enumerate() {
+            if outcome.index != at {
+                break;
+            }
+            let verdict = match &outcome.verdict {
+                Ok(()) => Ok(()),
+                Err(Some(err)) => Err(*err),
+                // A panic says nothing about the declaration; the replay
+                // checks it, and everything after it, itself.
+                Err(None) => break,
+            };
+            let item = outcome.item.as_ref();
+            entries.push(Some(Recorded {
+                psi_len: item.psi.bindings.len(),
+                name: item.name.clone(),
+                ctx: item.ctx.clone(),
+                ty: item.ty.clone(),
+                level: item.level.clone(),
+                body: item.body.clone(),
+                opaque: item.opaque,
+                layer: item.layer,
+                lands_in_psi: item.lands_in_psi,
+                fuel: item.fuel,
+                verdict,
+                ns: outcome.ns,
+                kernel: outcome.kernel,
+            }));
+        }
+        (!entries.is_empty()).then_some(Replay {
+            entries,
+            at: 0,
+            live: true,
+            armed: false,
+            folds: Vec::new(),
+        })
+    }
+
+    fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    /// The verdict already earned for this obligation, if its inputs are the
+    /// ones the worker was handed. `None` means "ask the kernel", which is
+    /// always allowed and is what a single mismatch condemns the rest of the
+    /// replay to.
+    fn reuse(
+        &mut self,
+        psi_len: usize,
+        fuel: u64,
+        item: &crate::gate::GateItem<'_>,
+    ) -> Option<Result<(), TypeError>> {
+        if !self.armed || !self.live {
+            return None;
+        }
+        let Some(entry) = self.entries.get(self.at).and_then(|e| e.as_ref()) else {
+            self.stop();
+            return None;
+        };
+        let same = entry.psi_len == psi_len
+            && entry.fuel == fuel
+            && entry.name == item.name
+            && entry.opaque == item.opaque
+            && entry.layer == item.layer
+            && entry.lands_in_psi == item.lands_in_psi
+            && &entry.ctx == item.ctx
+            && &entry.ty == item.ty
+            && &entry.level == item.level
+            && &entry.body == item.body;
+        if !same {
+            self.stop();
+            return None;
+        }
+        // Retire the entry here: its terms have served their one purpose, and
+        // the replay is about to go on building the module's second copy of
+        // everything after it.
+        let entry = self.entries[self.at].take().expect("just matched");
+        self.at += 1;
+        // The kernel gate ran for this declaration — on a worker, in the pass
+        // this one replaces — so the counter column says so at either width.
+        crate::stats::count(crate::stats::Counter::DeclsGated);
+        if let Some((module, item)) = crate::stats::current_item() {
+            self.folds.push((module, item, entry.ns, entry.kernel));
+        }
+        Some(entry.verdict)
+    }
+
+    /// Reuse is over for this replay: nothing after a mismatch is answerable,
+    /// so the rest of the list is dead weight and goes now.
+    fn stop(&mut self) {
+        self.live = false;
+        self.entries = Vec::new();
+    }
+
+    /// Charge the reused verdicts' worker clocks to the rows they belong to
+    /// and drop the list.
+    ///
+    /// The kernel *counters* are deliberately not merged again: the discarded
+    /// pass's own join already merged every worker's delta into this thread
+    /// (`stats::fold_deferred_kernel`), and the enclosing module and run rows
+    /// were never rolled back. What is missing after the replay is only the
+    /// per-declaration row, which `stats::truncate_rows` threw away with the
+    /// pass and the replay has just re-created empty.
+    fn finish(&mut self) {
+        for (module, item, ns, kernel) in std::mem::take(&mut self.folds) {
+            crate::stats::fold_reused_kernel(&(module, item), ns, &kernel);
+        }
+    }
+}
+
+/// The elaborator's slot for a [`Replay`]: interior-mutable, because the gate
+/// sites consult it while holding a borrow of Ψ, and **never inherited**, for
+/// the same reason a clone gets a fresh pool (a clone is a different module's
+/// work, and a verdict is about one pass of one module).
+#[derive(Default)]
+pub(crate) struct ReplaySlot(std::cell::RefCell<Option<Replay>>);
+
+impl Clone for ReplaySlot {
+    fn clone(&self) -> Self {
+        ReplaySlot::default()
+    }
+}
+
+impl ReplaySlot {
+    /// Keep a discarded pass's verdicts for the replay that follows.
+    pub(crate) fn record(&self, replay: Option<Replay>) {
+        *self.0.borrow_mut() = replay;
+    }
+
+    /// Forget whatever is held, charging nothing.
+    pub(crate) fn clear(&self) {
+        *self.0.borrow_mut() = None;
+    }
+
+    /// The serial pass is starting: the recorded verdicts become answerable.
+    pub(crate) fn arm(&self) {
+        if let Some(replay) = self.0.borrow_mut().as_mut() {
+            replay.arm();
+        }
+    }
+
+    /// The serial pass is over: fold the attribution back and drop the list.
+    pub(crate) fn finish(&self) {
+        if let Some(mut replay) = self.0.borrow_mut().take() {
+            replay.finish();
+        }
+    }
+
+    /// [`Replay::reuse`], or `None` when nothing is armed.
+    pub(crate) fn reuse(
+        &self,
+        psi_len: usize,
+        fuel: u64,
+        item: &crate::gate::GateItem<'_>,
+    ) -> Option<Result<(), TypeError>> {
+        self.0.borrow_mut().as_mut()?.reuse(psi_len, fuel, item)
+    }
 }
 
 struct State {
@@ -226,8 +473,15 @@ impl KernelPool {
         self.workers <= 1
     }
 
-    /// Queue one proof obligation. Threads are spawned on the first
-    /// submission, so a run that queues nothing spawns nothing.
+    /// Queue one proof obligation.
+    ///
+    /// The pool **grows one worker per submission**, up to the configured
+    /// width, so a run that queues nothing spawns nothing and a module with
+    /// one proof obligation pays for one thread rather than for eight. A
+    /// thread is not free — it carries the process's whole configured stack,
+    /// and the dev loop is full of one- and two-declaration probe modules —
+    /// while a module wide enough to use eight workers reaches eight by its
+    /// eighth declaration, before any of them could have been the bottleneck.
     pub(crate) fn submit(&mut self, item: Deferred) {
         let shared = match &self.shared {
             Some(shared) => Arc::clone(shared),
@@ -243,23 +497,23 @@ impl KernelPool {
                     done: Condvar::new(),
                     failed: AtomicBool::new(false),
                 });
-                for n in 0..self.workers {
-                    let mine = Arc::clone(&shared);
-                    let handle = std::thread::Builder::new()
-                        .name(format!("heather-kernel-{n}"))
-                        .spawn(move || mine.worker());
-                    match handle {
-                        Ok(handle) => self.handles.push(handle),
-                        // A thread the OS will not give us is not a reason to
-                        // fail a check: the remaining workers (or, with none,
-                        // the join's own thread) do the work.
-                        Err(_) => break,
-                    }
-                }
                 self.shared = Some(Arc::clone(&shared));
                 shared
             }
         };
+        if self.handles.len() < self.workers {
+            let n = self.handles.len();
+            let mine = Arc::clone(&shared);
+            // A thread the OS will not give us is not a reason to fail a
+            // check: the workers already running (or, with none, this thread)
+            // do the work.
+            if let Ok(handle) = std::thread::Builder::new()
+                .name(format!("heather-kernel-{n}"))
+                .spawn(move || mine.worker())
+            {
+                self.handles.push(handle);
+            }
+        }
         let index = self.next;
         self.next += 1;
         let item = Rc::new(item);

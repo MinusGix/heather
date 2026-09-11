@@ -52,6 +52,7 @@ Counters, and where each is bumped:
 
 | counter | site |
 | --- | --- |
+| `check_terms` | `typing::check_term` and `check_term_profiled`, one per gate call |
 | `conv_shortcut_hits` | `Tc::conv_ty`, syntactic reflexivity return |
 | `conv_memo_hits` | `Tc::conv_ty`, gate memo return |
 | `conv_misses` | `Tc::conv_ty`, every query that pays for a value-domain comparison |

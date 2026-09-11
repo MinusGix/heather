@@ -878,7 +878,6 @@ mod tests {
     }
     #[test]
     fn call_stack_semantics_and_refusals() {
-        let _guard = super::super::CERTIFICATE_TEST_LOCK.lock().unwrap();
         use heather_cli::{loader, semantic::SemanticSession};
         use std::path::PathBuf;
         let mut elab = Elaborator::with_prelude().unwrap();
@@ -901,7 +900,7 @@ mod tests {
             let decoded = format!("decoded_canonical({})", instruction.heather_expr().render());
             let fields = normal_fields(instruction, "before").unwrap();
             let source = format!("import x86_64; import bitvec; theorem fields<M>(before: MachineState<M>): MachineState({fields}, next_rip(before.rip, {decoded}.length), before.memory) = execute_normal({decoded}, before) {{ refl }}");
-            elab.clone().elab_module_source(&format!("normal_fields_{i}"), &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+            elab.fork().elab_module_source(&format!("normal_fields_{i}"), &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
         }
         let forwarding = "import bitvec; fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::add(64, left, right) } fn forward(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { leaf(left, right) } fn swapped(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { leaf(right, left) } fn expression(left: BitVec(64), right: BitVec(64)) -> BitVec(64) { bitvec::add(64, leaf(left, right), right) }";
         elab.elab_module_source("forwarding", forwarding).unwrap_or_else(|e| panic!("{}", e.render(forwarding)));
@@ -927,21 +926,21 @@ mod tests {
         let source = summary.render();
         elab.elab_module_source("summary_check", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
         let stale = "import list; import summary_check; import function_ir; import x86_64; import x86_64_calls; import x86_64_call_summary; import elf64_calls; fn stale(values: Valuation()) -> CallSummary<CallMemory>(call_stack_access(), [Ordinary(MovRR(Rax, Rsi)), NearReturn], λ before after => summary_leaf_summary_post(values, before, after)) { summary_leaf_summary(values) }";
-        let error = elab.clone().elab_module_source("stale_summary", stale).expect_err("summary accepted for different code");
+        let error = elab.fork().elab_module_source("stale_summary", stale).expect_err("summary accepted for different code");
         assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(stale));
         for (name, declaration) in [
             ("wrong_summary_interface", "fn bad(values: Valuation()) -> CallSummary<CallMemory>(call_stack_access(), summary_leaf_summary_code(), λ before after => read_gpr(Rax, after.gprs) = bitvec::zero(64)) { summary_leaf_summary(values) }"),
             ("missing_summary_fetch", "theorem bad(before: MachineState<CallMemory>): CallPremises(call_fetch_access(), call_stack_access(), [NearReturn], before, before) { trivial }"),
         ] {
             let source = format!("import list; import bitvec; import logic; import summary_check; import function_ir; import x86_64; import x86_64_calls; import x86_64_call_summary; import elf64_calls; {declaration}");
-            let error = elab.clone().elab_module_source(name, &source).expect_err("accepted an incompatible summary premise");
+            let error = elab.fork().elab_module_source(name, &source).expect_err("accepted an incompatible summary premise");
             let expected = if name == "missing_summary_fetch" { error.render(&source).contains("`trivial` proves `True`") }
                 else { format!("{error:?}").contains("NotConvertible") };
             assert!(expected, "{}", error.render(&source));
         }
         for (name, final_state, valid) in [("placed_successor", "call_next(call_stack_access(), Ordinary(MovRR(Rax, Rsi)), before)", true), ("invented_successor", "before", false)] {
             let source = format!("import list; import logic; import x86_64; import x86_64_calls; import x86_64_fetch; import x86_64_call_summary; import elf64_calls; theorem check(before: MachineState<CallMemory>, fetched: FetchedFrom(call_fetch_access(), before.memory, InstructionBytes(before.rip, call_instruction_bytes(Ordinary(MovRR(Rax, Rsi)))))): CallPremises(call_fetch_access(), call_stack_access(), [Ordinary(MovRR(Rax, Rsi))], before, {final_state}) {{ ⟨{final_state}, ⟨fetched, ⟨trivial, ⟨refl, refl⟩⟩⟩⟩ }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("accepted an invented callee state"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
@@ -974,7 +973,7 @@ mod tests {
             module.raw(format!("{imports} import x86_64_fetch; import elf64; import file_fixture;"));
             module.extend(proofs);
             let source = module.render();
-            let checked = elab.clone().elab_module_source(if valid { "file_fetch" } else { "wrong_file_fetch" }, &source);
+            let checked = elab.fork().elab_module_source(if valid { "file_fetch" } else { "wrong_file_fetch" }, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("accepted a corrupted file fetch"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
@@ -993,7 +992,7 @@ mod tests {
         let source = offset_module.render();
         elab.elab_module_source("offset_checks", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
         let source = format!("{imports} import offset_checks; theorem wrong_target(): bitvec::add(64, {}, {}) = {} {{ forward_offset() }}", word(0x4000fd), word(112), word(0x40016e));
-        let error = elab.clone().elab_module_source("wrong_forward_target", &source).expect_err("accepted the wrong positive displacement result");
+        let error = elab.fork().elab_module_source("wrong_forward_target", &source).expect_err("accepted the wrong positive displacement result");
         assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source));
         let source = format!("{imports}\nfn start(rsp: BitVec(64)) -> MachineState<CallMemory> {{ MachineState(write_gpr(Rsp, rsp, zero_gprs()), clear_flags(), {}, CallMemory([], λ address => bitvec::ofNat(8, 0))) }}", word(0x400100));
         elab.elab_module_source("call_test", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
@@ -1018,7 +1017,7 @@ mod tests {
                 Block::expression(Expr::raw(format!("stored_word_preserves_return(CallMemory([], stack), {slot}, bitvec::ofNat(64, 7), {protected}, outside())"))))
                 .parameter(Parameter::explicit("stack", Expr::raw("BitVec(64) → BitVec(8)"))));
             let source = declarations.render();
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("accepted a write over the protected return word"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
@@ -1031,19 +1030,19 @@ mod tests {
             ("noncanonical_stack", format!("LowCanonical({})", word(1u64 << 47)), false),
         ] {
             let source = format!("{imports} import call_test; theorem check(): {claim} {{ refl }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("invalid stack premise accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
         for (name, opcode, delta, valid) in [("call_encoding", 0xe8, 0x20, true), ("wrong_call_opcode", 0xe9, 0x20, false), ("wrong_call_displacement", 0xe8, 0x21, false)] {
             let source = format!("{imports} fn actual() -> List<BitVec(8)> {{ [bitvec::ofNat(8, {opcode}), bitvec::ofNat(8, {delta}), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0)] }} theorem encoding(): actual() = call_instruction_bytes(CallRelative(bitvec::ofNat(32, 0x20))) {{ refl }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("corrupted CALL encoding accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
         for (name, opcode, sib, valid) in [("stack_store_encoding", 0x89, 0x24, true), ("wrong_stack_opcode", 0x8b, 0x24, false), ("wrong_stack_address", 0x89, 0x25, false)] {
             let source = format!("{imports} fn actual() -> List<BitVec(8)> {{ [bitvec::ofNat(8, 0x4c), bitvec::ofNat(8, {opcode}), bitvec::ofNat(8, 0x1c), bitvec::ofNat(8, {sib})] }} theorem encoding(): actual() = call_instruction_bytes(StoreStack64(R11)) {{ refl }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("invalid stack encoding accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
@@ -1053,24 +1052,24 @@ mod tests {
         elab.elab_module_source("frame_checks", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
         for (name, address, valid) in [("dead_local_may_change", local.clone(), true), ("live_slot_cannot_change", live.clone(), false), ("return_slot_cannot_change", word(0x401ff8), false)] {
             let source = format!("{imports} import frame_checks; theorem check(): call_memory_read(changed(λ address => bitvec::ofNat(8, 0), bitvec::ofNat(8, 7)), {address}) = Some(bitvec::ofNat(8, 7)) {{ refl }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("protected byte changed"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
         let source = format!("{imports} import frame_checks; fn overlapping() -> CallMemoryPolicy {{ CallMemoryPolicy(ByteWrite({local}), NoWrites, λ address => address = {local}, outside(), λ address impossible live => impossible) }}");
-        let error = elab.clone().elab_module_source("overlapping_policy", &source).expect_err("overlapping frame accepted");
+        let error = elab.fork().elab_module_source("overlapping_policy", &source).expect_err("overlapping frame accepted");
         assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source));
         for (name, restored, valid) in [("contract_restores_rsp", 0x401ff8, true), ("missing_frame_release", 0x401ff0, false)] {
             let before = format!("start({})", word(0x401ff0)); let after = format!("start({})", word(restored));
             let source = format!("{imports} import call_test; theorem contract(): NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, NoWrites, {before}, {after}, bitvec::zero(64), {before}.rip) {{ NativeIntegerCallContract(result_correct := refl, returned_to := refl, stack_restored := refl, memory_effects := writes_only_equal(call_memory_read, NoWrites, {before}.memory, {after}.memory, refl), preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl) }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("unrestored frame accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
         // The extra ELF segment must remain RW, never executable.
         for (name, flags, valid) in [("stack_segment_flags", 6, true), ("executable_stack_segment", 7, false)] {
             let source = format!("{imports} fn expected() -> List<BitVec(8)> {{ [bitvec::ofNat(8, {flags}), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0)] }} theorem flags(): list::take(list::drop(call_elf_header(bitvec::ofNat(8, 233), bitvec::ofNat(8, 0)), 180), 4) = expected() {{ refl }}");
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("executable stack header accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }
@@ -1080,7 +1079,7 @@ mod tests {
         elab.elab_module_source("first_write", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
         for (name, expected, valid) in [("return_byte", 5, true), ("corrupted_return_byte", 6, false)] {
             let source = format!("{imports} import first_write; theorem check(): actual().stack({}) = bitvec::ofNat(8, {expected}) {{ trans(cong_fn<CallMemory, BitVec(8)>(λ memory => memory.stack({}), first_write()), refl) }}", word(0x401ff8), word(0x401ff8));
-            let checked = elab.clone().elab_module_source(name, &source);
+            let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("corrupted return byte accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }
         }

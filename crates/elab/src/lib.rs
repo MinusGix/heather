@@ -649,6 +649,10 @@ pub struct Elaborator {
     /// Not shared by clones: a clone gets a fresh pool with the same worker
     /// count, like the rest of the transient scratch state.
     kernel_pool: pool::KernelPool,
+    /// The verdicts a discarded parallel pass earned, held for the serial
+    /// replay that follows it (`docs/parallel-kernel-gate-design.md` §5.2).
+    /// Empty everywhere else, and never inherited by a clone.
+    kernel_replay: pool::ReplaySlot,
 }
 
 impl Deref for Elaborator {
@@ -1399,6 +1403,7 @@ impl Elaborator {
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
             kernel_pool: pool::KernelPool::default(),
+            kernel_replay: pool::ReplaySlot::default(),
         }
     }
 
@@ -1432,6 +1437,20 @@ impl Elaborator {
         self.kernel_pool.workers()
     }
 
+    /// A clone that checks at this elaborator's width.
+    ///
+    /// `clone()` is deliberately inline (`pool.rs`, the `Clone` note): a
+    /// clone is usually speculative or nested work, and a pool per candidate
+    /// would cost more than it saves. A driver that forks off a *whole
+    /// module* per probe — the certificate unit tests do — wants the width
+    /// it configured, and says so here. Nothing else is shared with the
+    /// original: the fork's pool starts empty and joins on its own.
+    pub fn fork(&self) -> Self {
+        let mut forked = self.clone();
+        forked.set_kernel_workers(self.kernel_workers());
+        forked
+    }
+
     /// Roll this elaborator back to a clone of itself taken earlier —
     /// `*self = snapshot`, the whole-elaborator undo a speculative declaration
     /// form uses — **keeping the live kernel gate**.
@@ -1453,8 +1472,17 @@ impl Elaborator {
     /// answer, which is the contract.
     pub(crate) fn restore_from_clone(&mut self, snapshot: Self) {
         let live = std::mem::replace(&mut self.kernel_pool, pool::KernelPool::inline());
+        // The replay cursor is the module's too, and for the same reason: it
+        // counts the gate sites this *pass* has reached, and a clone's is
+        // empty by construction. Restoring one over it would rewind the
+        // cursor to a declaration the replay has already passed, which costs
+        // the rest of the module's reuse (never a wrong verdict — a rewound
+        // cursor mismatches and stops — but the same silent, load-dependent
+        // shape the pool's note is about).
+        let replayed = std::mem::take(&mut self.kernel_replay);
         *self = snapshot;
         self.kernel_pool = live;
+        self.kernel_replay = replayed;
     }
 
     /// Wait for every queued proof obligation and report the first failure in
@@ -1513,6 +1541,14 @@ impl Elaborator {
             }
         }
         if failure.is_some() {
+            // The pass that queued these is about to be discarded and replayed
+            // serially (§5.1). Its verdicts are not (§5.2): every one of
+            // them is the kernel's answer for a (Ψ prefix, binding) pair, and
+            // the replay reproduces those pairs exactly until the
+            // declaration this failure names. Keeping them is what makes a
+            // rejected module cost one kernel pass rather than two — which is
+            // the dev loop's most common module.
+            self.kernel_replay.record(pool::Replay::record(&outcomes));
             return failure;
         }
         if let Some(g) = self.gate.as_ref() {
@@ -1812,6 +1848,7 @@ impl Elaborator {
         if self.gate_is_inline() {
             return self.elab_module_pass(module, src, &mut deferred_failed);
         }
+        self.kernel_replay.clear();
         let mark = self.module_pass_checkpoint();
         let parallel = self.elab_module_pass(module, src, &mut deferred_failed);
         if !deferred_failed {
@@ -1827,7 +1864,11 @@ impl Elaborator {
     fn serially<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let width = self.kernel_pool.workers();
         self.kernel_pool.set_workers(1);
+        // The discarded pass's verdicts become answerable exactly here, for
+        // exactly this pass (§5.2).
+        self.kernel_replay.arm();
         let out = f(self);
+        self.kernel_replay.finish();
         self.kernel_pool.set_workers(width);
         out
     }
@@ -2363,6 +2404,7 @@ impl Elaborator {
         if self.gate_is_inline() {
             return self.check_module_pass(module, src, &mut deferred_failed);
         }
+        self.kernel_replay.clear();
         let mark = self.module_pass_checkpoint();
         let parallel = self.check_module_pass(module, src, &mut deferred_failed);
         if !deferred_failed {
@@ -3348,23 +3390,34 @@ impl Elaborator {
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 if self.gate_is_inline() {
-                    stats::time_kernel(|| {
-                        self.kernel_check_term(
-                            &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
-                        )
-                    })
-                    .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
+                    let item = gate::GateItem {
+                        name: &decl.name,
+                        ctx: &empty,
+                        ty: &stmt,
+                        level: &stmt_lvl,
+                        body: term,
+                        opaque,
+                        layer: Layer::Code,
+                        lands_in_psi: true,
+                    };
+                    // A serial replay may already hold this exact obligation's
+                    // verdict, earned by a worker of the pass it replaces
+                    // (`docs/parallel-kernel-gate-design.md` §5.2). `None` —
+                    // which is every ordinary run — asks the kernel.
+                    let verdict = match self.kernel_replay.reuse(
+                        self.psi.bindings.len(),
+                        self.fuel,
+                        &item,
+                    ) {
+                        Some(verdict) => verdict,
+                        None => stats::time_kernel(|| {
+                            self.kernel_check_term(
+                                &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
+                            )
+                        }),
+                    };
+                    verdict.map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                     if let Some(g) = self.gate.as_ref() {
-                        let item = gate::GateItem {
-                            name: &decl.name,
-                            ctx: &empty,
-                            ty: &stmt,
-                            level: &stmt_lvl,
-                            body: term,
-                            opaque,
-                            layer: Layer::Code,
-                            lands_in_psi: true,
-                        };
                         g.accepted(&self.psi, &item);
                     }
                 } else {

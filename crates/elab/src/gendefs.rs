@@ -2772,26 +2772,38 @@ impl Elaborator {
                     note: None,
                 })?;
                 if self.gate_is_inline() {
-                    crate::stats::time_kernel(|| {
-                        self.kernel_check_term(&self.psi, Layer::Code, &empty, &body, &ty, &level)
-                    })
-                    .map_err(|err| crate::ElabError::Kernel {
+                    let item = crate::gate::GateItem {
+                        name: &name,
+                        ctx: &empty,
+                        ty: &ty,
+                        level: &level,
+                        body: &body,
+                        opaque: false,
+                        layer: Layer::Code,
+                        lands_in_psi: true,
+                    };
+                    // The serial replay's reused verdict, if this obligation
+                    // is the one a worker of the discarded pass already
+                    // answered (`docs/parallel-kernel-gate-design.md` §5.2).
+                    let verdict = match self.kernel_replay.reuse(
+                        self.psi.bindings.len(),
+                        self.fuel,
+                        &item,
+                    ) {
+                        Some(verdict) => verdict,
+                        None => crate::stats::time_kernel(|| {
+                            self.kernel_check_term(
+                                &self.psi, Layer::Code, &empty, &body, &ty, &level,
+                            )
+                        }),
+                    };
+                    verdict.map_err(|err| crate::ElabError::Kernel {
                         decl: name.clone(),
                         span,
                         err,
                         note: None,
                     })?;
                     if let Some(g) = self.gate.as_ref() {
-                        let item = crate::gate::GateItem {
-                            name: &name,
-                            ctx: &empty,
-                            ty: &ty,
-                            level: &level,
-                            body: &body,
-                            opaque: false,
-                            layer: Layer::Code,
-                            lands_in_psi: true,
-                        };
                         g.accepted(&self.psi, &item);
                     }
                 } else {

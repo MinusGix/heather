@@ -354,7 +354,6 @@ mod tests {
     use super::*;
     #[test]
     fn elf_header_mutations_are_rejected_by_heather() {
-        let _guard = super::super::CERTIFICATE_TEST_LOCK.lock().unwrap();
         use heather_elab::Elaborator;
         use heather_cli::{loader, semantic::SemanticSession};
         use std::path::PathBuf;
@@ -380,7 +379,7 @@ mod tests {
                 Expr::call("static_elf64_header", [Expr::call("elf_byte", [Expr::nat(good.len() as u64)]),
                     Expr::call("elf_byte", [Expr::nat(0)])])), Expr::name("refl"));
             let text = proof.render();
-            let checked = elab.clone().elab_module_source("elf_header_test", &text);
+            let checked = elab.fork().elab_module_source("elf_header_test", &text);
             if changed.is_some() {
                 let error = checked.expect_err("malformed header must be rejected");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{changed:?}: {}", error.render(&text));
@@ -390,7 +389,6 @@ mod tests {
 
     #[test]
     fn loaded_mapping_and_fetch_refusals() {
-        let _guard = super::super::CERTIFICATE_TEST_LOCK.lock().unwrap();
         use heather_elab::Elaborator;
         use heather_cli::{loader, semantic::SemanticSession};
         use std::path::PathBuf;
@@ -448,7 +446,7 @@ theorem neutral_byte(byte: BitVec(8)):
             let mut witness = "⟨refl, ⟨refl, trivial⟩⟩".to_string();
             for _ in 1..count { witness = format!("⟨refl, ⟨refl, ⟨refl, {witness}⟩⟩⟩"); }
             let source = format!("import loaded_checks;\nimport elf64;\nimport elf64_load;\nimport linux_x86_64_entry;\nimport x86_64;\nimport x86_64_fetch;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): FetchedFrom({access}, {memory}, InstructionBytes({address}, {expected})) {{ FetchedFrom({witness}) }}");
-            let error = elab.clone().elab_module_source(name, &source).expect_err("invalid loaded fetch accepted");
+            let error = elab.fork().elab_module_source(name, &source).expect_err("invalid loaded fetch accepted");
             assert!(format!("{error:?}").contains("NotConvertible"), "{name}: {}", error.render(&source));
         }
         // A valid fetch cannot authorize a successor that leaves RIP unchanged.
@@ -476,7 +474,7 @@ theorem step(): ExecuteFetched(static_elf64_access(),
         FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩), refl)
 }}
 "#);
-            let checked = elab.clone().elab_module_source("loaded_step_check", &source);
+            let checked = elab.fork().elab_module_source("loaded_step_check", &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else {
                 let error = checked.expect_err("unadvanced successor accepted");

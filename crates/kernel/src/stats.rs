@@ -92,6 +92,13 @@ macro_rules! counters {
 }
 
 counters! {
+    /// Calls to the gate entry point `typing::check_term` (and its profiled
+    /// twin) — one per proof obligation the kernel was actually asked to
+    /// judge. The one counter here that is about the *caller's* schedule
+    /// rather than the checker's internals: a verdict the serial replay
+    /// reused (`docs/parallel-kernel-gate-design.md` §5.2) is a call that did
+    /// not happen, and this column is how a test says so.
+    check_terms,
     /// `Tc::conv_ty` queries answered by the syntactic reflexivity test.
     conv_shortcut_hits,
     /// `Tc::conv_ty` queries answered by the gate's cross-head memo.

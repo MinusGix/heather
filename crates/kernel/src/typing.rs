@@ -318,6 +318,7 @@ pub fn check_term(
     level: &Level,
     fuel: u64,
 ) -> R {
+    crate::stats::check_terms(1);
     let env = Env {
         psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
@@ -340,6 +341,7 @@ pub fn check_term_profiled(
     fuel: u64,
     _metrics: &ValueMetrics,
 ) -> R {
+    crate::stats::check_terms(1);
     let env = Env {
         psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]

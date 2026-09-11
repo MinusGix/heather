@@ -16,6 +16,7 @@ use std::sync::Arc as Rc;
 use heather_elab::gate::{GateItem, KernelGate};
 use heather_elab::stats::{self, ScopeKind};
 use heather_elab::{ElabError, Elaborator, ModuleDependencyIdentity};
+use heather_kernel::stats as kstats;
 use heather_kernel::term::GlobalCtx;
 
 /// Six independent theorems: nothing here depends on another's proof, which is
@@ -118,6 +119,83 @@ fn registered(elab: &Elaborator, names: &[&str]) -> Vec<String> {
         .filter(|n| elab.axiom_report(n).is_ok())
         .map(|n| n.to_string())
         .collect()
+}
+
+/// One declaration, refused by the kernel: the dev loop's most common module,
+/// and the case §5.1's discard-and-replay charged twice over, until §5.2.
+const ONE_BAD_THEOREM: &str = "theorem broken(n: Nat): n = Succ(n) { refl }\n";
+
+/// A rejected module pays for **one** kernel pass, not two.
+///
+/// The parallel pass is discarded and replayed serially (§5.1), and the
+/// replay used to re-ask the kernel every question a worker had already
+/// answered. It does not any more: a verdict is reused wherever the replay's
+/// inputs — the binding and the length of the Ψ prefix it is checked against —
+/// are identical to the ones the worker was handed, which for the prefix up to
+/// the first failure they are, because elaboration is deterministic (§5.2). So the
+/// `check_terms` counter, summed across the worker and this thread (the join
+/// merges the worker's delta), reads exactly what width one reads.
+///
+/// And the saving is not bought with the contract: the error is still the
+/// serial gate's, to the note.
+#[test]
+fn a_rejected_module_asks_the_kernel_once_per_obligation() {
+    let mut serial = with_workers(1);
+    let before = kstats::snapshot();
+    let serial_errors = serial.check_module_source("pool_once", ONE_BAD_THEOREM);
+    let serial_checks = kstats::snapshot().since(&before).check_terms;
+    assert!(!serial_errors.is_empty(), "the fixture must fail");
+    assert_eq!(
+        serial_checks, 1,
+        "the fixture is one proof obligation: {serial_errors:?}",
+    );
+
+    let mut wide = with_workers(4);
+    let before = kstats::snapshot();
+    let errors = wide.check_module_source("pool_once", ONE_BAD_THEOREM);
+    let checks = kstats::snapshot().since(&before).check_terms;
+    assert_eq!(
+        checks, serial_checks,
+        "the replay reuses the worker's verdict instead of re-earning it",
+    );
+    assert_eq!(
+        errors.iter().map(render).collect::<Vec<_>>(),
+        serial_errors.iter().map(render).collect::<Vec<_>>(),
+        "and the module's answer is still the serial gate's",
+    );
+}
+
+/// The reuse rule is *prefix* reuse, and a mismatch has to turn it off rather
+/// than answer from the wrong row. `LATE_FAILURE` is the fixture: the
+/// declarations after `broken` are elaborated in the replay against a Ψ that
+/// never got `broken`'s binding, so their obligations are not the ones the
+/// workers answered and the kernel is asked about them again.
+#[test]
+fn reuse_stops_at_the_first_failure_and_the_rest_is_rechecked() {
+    let mut serial = with_workers(1);
+    let before = kstats::snapshot();
+    let serial_errors = serial.check_module_source("pool_tail", LATE_FAILURE);
+    let serial_checks = kstats::snapshot().since(&before).check_terms;
+
+    let mut wide = with_workers(4);
+    let before = kstats::snapshot();
+    let errors = wide.check_module_source("pool_tail", LATE_FAILURE);
+    let checks = kstats::snapshot().since(&before).check_terms;
+
+    assert_eq!(
+        errors.iter().map(render).collect::<Vec<_>>(),
+        serial_errors.iter().map(render).collect::<Vec<_>>(),
+    );
+    // Six obligations serially. The parallel pass asks about at most all six
+    // (the early abort may stop it sooner); the replay reuses every one up to
+    // and including `broken` and re-asks about the two declarations after it,
+    // whose Ψ prefix really did diverge. So the total is at most `serial + 2`,
+    // where re-earning the whole replay would put it at ten or more.
+    assert!(
+        checks <= serial_checks + 2,
+        "only the declarations past the failure are checked twice: \
+         {checks} at four workers against {serial_checks} at one",
+    );
 }
 
 /// The same module, checked twice at different widths, must reach the same

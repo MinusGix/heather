@@ -355,10 +355,11 @@ fn assembly(symbol: &str, bytes: &[u8]) -> String {
     out
 }
 
-// Each certificate test loads the complete proof library. Keep these loads
-// serial so two elaborators do not exceed the test process's 4 GiB cap.
-#[cfg(test)]
-static CERTIFICATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Each certificate test loads the complete proof library (~1 GB resident)
+// and checks its probe modules on forks of that elaborator, at the default
+// worker width. libtest runs two of them at once under the suite's 6 GiB
+// address-space rail; the lock that once serialized them dates from the
+// 4 GiB rail and the serial gate.
 
 #[cfg(test)]
 mod tests {
@@ -366,7 +367,6 @@ mod tests {
 
     #[test]
     fn native_encoder_is_checked_and_corruption_is_rejected() {
-        let _guard = CERTIFICATE_TEST_LOCK.lock().unwrap();
         let mut elab = Elaborator::with_prelude().unwrap();
         let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
         for &(name, src) in SUPPORT {
@@ -397,7 +397,7 @@ mod tests {
                     Expr::list(bytes.iter().map(|b| Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))]))),
                 ), Block::expression(Expr::name("refl"))));
                 let text = module.render();
-                let result = elab.clone().elab_module_source("native_encoder_check", &text);
+                let result = elab.fork().elab_module_source("native_encoder_check", &text);
                 if corrupted {
                     let error = result.expect_err("wrong encoding must fail");
                     assert!(format!("{error:?}").contains("NotConvertible"), "case {index}: {}", error.render(&text));

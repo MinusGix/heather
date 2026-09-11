@@ -270,6 +270,24 @@ pub(crate) fn fold_deferred_kernel(
     kernel: &kstats::Snapshot,
 ) {
     kstats::merge(kernel);
+    patch_item_row(row, ns, kernel);
+}
+
+/// The same patch for a verdict the serial replay *reused* rather than
+/// re-earned (`docs/parallel-kernel-gate-design.md` §5.2): the declaration's
+/// row still says what its proof cost, and the cost is the worker's, since
+/// that is who paid it.
+///
+/// The counters are deliberately **not** merged here. The discarded pass's own
+/// join already merged every worker's delta into this thread, and the
+/// enclosing module and run rows kept it — a discarded pass's timer cells are
+/// not rolled back (§7). Only the item rows were thrown away with the pass,
+/// and those are exactly what this restores.
+pub(crate) fn fold_reused_kernel(row: &(String, String), ns: u64, kernel: &kstats::Snapshot) {
+    patch_item_row(Some(row), ns, kernel);
+}
+
+fn patch_item_row(row: Option<&(String, String)>, ns: u64, kernel: &kstats::Snapshot) {
     REG.with(|r| {
         let Some((module, item)) = row else { return };
         let mut rows = r.rows.borrow_mut();
