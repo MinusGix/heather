@@ -1,0 +1,8 @@
+# Link with mold. The elab crate has ~150 integration test binaries, each
+# linking the whole compiler, so link time is most of a cold compile; mold
+# is installed on the desktop (NixOS) and on the furnace box (cloud-init
+# symlinks ld.mold into /usr/local/bin). Every host that builds this repo
+# needs `ld.mold` on PATH; drop the flag with CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=""
+# for a host without it.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
