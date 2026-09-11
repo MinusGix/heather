@@ -143,23 +143,6 @@ pub fn conv_type(
     Conv::<Values>::new(fuel, psi).ty_root(&Env::new(&arena, psi, gamma, layer), a, b, level)
 }
 
-#[cfg(feature = "value-metrics")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn conv_type_with_metrics(
-    psi: &GlobalCtx,
-    gamma: &LocalCtx,
-    layer: Layer,
-    a: &Type,
-    b: &Type,
-    level: &Level,
-    fuel: u64,
-    metrics: Option<&ValueMetrics>,
-) -> R {
-    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
-    Conv::<Values>::new(fuel, psi).ty_root(&Env::new(&arena, psi, gamma, layer), a, b, level)
-}
-
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
 #[allow(clippy::too_many_arguments)]
 pub fn conv_term(
@@ -211,18 +194,81 @@ pub fn conv_local_ctx(
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
+// -- entry points that borrow the caller's body cache ------------------------
+//
+// The four below are the entries `typing.rs` uses. They differ from the public
+// ones above in one argument: a [`BodyCache`] the *checker* owns, so the
+// rescoped bodies a gate's definitions unfold to survive from one conversion
+// query to the next instead of being rebuilt per query. The cache belongs to
+// one Ψ (see [`BodyCache`]), and the caller is the one that knows its Ψ is the
+// same — `typing::Env` rebuilds it exactly where conversion's own `push_tele`
+// does. `docs/conversion-query-arena-pooling-design.md` §3.
+
+#[cfg(not(feature = "value-metrics"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv_type_cached(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Type,
+    b: &Type,
+    level: &Level,
+    fuel: u64,
+    bodies: Rc<BodyCache>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = ValueArena::new();
+    let env = Env::new_with(&arena, psi, gamma, layer, bodies);
+    Conv::<Values>::new(fuel, psi).ty_root(&env, a, b, level)
+}
+
 #[cfg(feature = "value-metrics")]
-pub(crate) fn conv_local_ctx_with_metrics(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv_type_cached_with_metrics(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Type,
+    b: &Type,
+    level: &Level,
+    fuel: u64,
+    metrics: Option<&ValueMetrics>,
+    bodies: Rc<BodyCache>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    let env = Env::new_with(&arena, psi, gamma, layer, bodies);
+    Conv::<Values>::new(fuel, psi).ty_root(&env, a, b, level)
+}
+
+#[cfg(not(feature = "value-metrics"))]
+pub(crate) fn conv_local_ctx_cached(
+    psi: &GlobalCtx,
+    layer: Layer,
+    a: &LocalCtx,
+    b: &LocalCtx,
+    fuel: u64,
+    bodies: Rc<BodyCache>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = ValueArena::new();
+    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, bodies);
+    Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
+}
+
+#[cfg(feature = "value-metrics")]
+pub(crate) fn conv_local_ctx_cached_with_metrics(
     psi: &GlobalCtx,
     layer: Layer,
     a: &LocalCtx,
     b: &LocalCtx,
     fuel: u64,
     metrics: Option<&ValueMetrics>,
+    bodies: Rc<BodyCache>,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
-    let env = Env::new(&arena, psi, &LocalCtx::nil(), layer);
+    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, bodies);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -413,11 +459,23 @@ impl<'v> Env<'v> {
         gamma: &LocalCtx,
         layer: Layer,
     ) -> Env<'v> {
+        Env::new_with(arena, psi, gamma, layer, Rc::new(BodyCache::new()))
+    }
+
+    /// As [`Env::new`], but over a [`BodyCache`] the caller keeps: the checker
+    /// owns one per gate, so the rescoping survives the query that paid for it.
+    fn new_with(
+        arena: &'v ValueArena<'v>,
+        psi: &GlobalCtx,
+        gamma: &LocalCtx,
+        layer: Layer,
+        bodies: Rc<BodyCache>,
+    ) -> Env<'v> {
         let (rho, vtys) = value_scope(arena, gamma);
         Env {
             arena,
             psi: Rc::new(psi.clone()),
-            bodies: Rc::new(BodyCache::new()),
+            bodies,
             gamma: gamma.clone(),
             layer,
             rho,

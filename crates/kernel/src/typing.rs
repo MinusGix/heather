@@ -69,13 +69,13 @@ use std::rc::Rc;
 
 use crate::conv::ConvError;
 #[cfg(not(feature = "value-metrics"))]
-use crate::conv::{conv_local_ctx, conv_type};
+use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
-use crate::conv::{conv_local_ctx_with_metrics, conv_type_with_metrics};
+use crate::conv::{conv_local_ctx_cached_with_metrics, conv_type_cached_with_metrics};
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
-use crate::reduce::{whnf_type_delta, Defs};
+use crate::reduce::{whnf_type_delta, BodyCache, Defs};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, CtxBase, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
@@ -168,6 +168,7 @@ fn check_global_bindings<'a>(
     for b in bindings {
         let env = Env {
             psi: prefix.clone(),
+            bodies: Rc::new(BodyCache::new()),
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs,
@@ -221,6 +222,7 @@ pub fn check_local_ctx(
 ) -> R {
     let env = Env {
         psi: psi.clone(),
+        bodies: Rc::new(BodyCache::new()),
         gamma: LocalCtx::nil(),
         layer,
         univs,
@@ -242,7 +244,7 @@ pub fn check_type(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -263,7 +265,7 @@ pub fn check_type_profiled(
     _metrics: &ValueMetrics,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -281,7 +283,7 @@ pub fn infer_type(
     fuel: u64,
 ) -> R<Level> {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -302,7 +304,7 @@ pub fn check_term(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -324,7 +326,7 @@ pub fn check_term_profiled(
     _metrics: &ValueMetrics,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -343,7 +345,7 @@ pub fn infer_term(
     fuel: u64,
 ) -> R<(Type, Level)> {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -365,7 +367,7 @@ pub fn check_local_subst(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -382,6 +384,12 @@ pub fn check_local_subst(
 #[derive(Clone)]
 struct Env {
     psi: GlobalCtx,
+    /// Rescoped definition bodies for **this** Ψ (`reduce::BodyCache`), shared
+    /// by every conversion and whnf query of one gate rather than rebuilt per
+    /// query (`docs/conversion-query-arena-pooling-design.md` §3). Inherited by
+    /// every scope that keeps Ψ and rebuilt by the one that does not,
+    /// `push_tele`.
+    bodies: Rc<BodyCache>,
     gamma: LocalCtx,
     layer: Layer,
     univs: u32,
@@ -411,6 +419,10 @@ impl Env {
         psi.extend(globals);
         Env {
             psi,
+            // Ψ changed, so a cached body's index denotes a different binding:
+            // keeping the old cache here would be a soundness bug, not a
+            // slowdown. Conversion's `push_tele` rebuilds for the same reason.
+            bodies: Rc::new(BodyCache::new()),
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             univs: self.univs + tu,
@@ -667,7 +679,7 @@ impl Tc {
             // for. Bucketed by head pair, so "El^δ against an inline Σ" and
             // "Sum against Sum" are separate rows with their own clocks.
             let started = std::time::Instant::now();
-            let result = conv_type_with_metrics(
+            let result = conv_type_cached_with_metrics(
                 &env.psi,
                 &env.gamma,
                 at,
@@ -676,6 +688,7 @@ impl Tc {
                 l,
                 self.fuel,
                 env.value_metrics.as_ref(),
+                Rc::clone(&env.bodies),
             );
             if let Some(metrics) = env.value_metrics.as_ref() {
                 let ns = started.elapsed().as_nanos() as u64;
@@ -697,7 +710,9 @@ impl Tc {
             result?;
         }
         #[cfg(not(feature = "value-metrics"))]
-        conv_type(&env.psi, &env.gamma, at, expected, inferred, l, self.fuel)?;
+        conv_type_cached(
+            &env.psi, &env.gamma, at, expected, inferred, l, self.fuel, Rc::clone(&env.bodies),
+        )?;
         // A gate-wide cap bounds adversarial all-distinct input. Once full,
         // misses retain the ordinary checker behavior rather than evicting a
         // potentially hot positive judgment.
@@ -728,7 +743,7 @@ impl Tc {
     /// exposing a former from behind a definition is p's business even
     /// while the term being checked is at c.
     fn whnf(&self, env: &Env, t: &Type) -> R<Type> {
-        whnf_type_delta(t, &env.gamma, Defs::transparent(&env.psi), self.fuel)
+        whnf_type_delta(t, &env.gamma, Defs::transparent_cached(&env.psi, &env.bodies), self.fuel)
             .map_err(|_| TypeError::OutOfFuel)
     }
 
@@ -1092,16 +1107,19 @@ impl Tc {
                 self.lev_eq(l, body_level)?;
                 self.ctx_wf(env, Layer::Prog, ctx)?;
                 #[cfg(feature = "value-metrics")]
-                conv_local_ctx_with_metrics(
+                conv_local_ctx_cached_with_metrics(
                     &env.psi,
                     Layer::Prog,
                     &pctx,
                     ctx,
                     self.fuel,
                     env.value_metrics.as_ref(),
+                    Rc::clone(&env.bodies),
                 )?;
                 #[cfg(not(feature = "value-metrics"))]
-                conv_local_ctx(&env.psi, Layer::Prog, &pctx, ctx, self.fuel)?;
+                conv_local_ctx_cached(
+                    &env.psi, Layer::Prog, &pctx, ctx, self.fuel, Rc::clone(&env.bodies),
+                )?;
                 let e = env.push_global(GlobalBinding::Ty {
                     ctx: ctx.clone(),
                     layer: Layer::Prog,
@@ -2415,6 +2433,7 @@ mod memo_tests {
     fn env(psi: GlobalCtx) -> Env {
         Env {
             psi,
+            bodies: Rc::new(BodyCache::new()),
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs: 0,
@@ -2467,5 +2486,63 @@ mod memo_tests {
             Err(TypeError::OutOfFuel),
         );
         Tc::new(1).conv_ty(&e, &Type::Nat, &Type::Nat, &Level::Zero).unwrap();
+    }
+
+    /// A `Ty 0`-coded definition whose body is `code`.
+    fn code_def(code: Term) -> GlobalBinding {
+        GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(Type::Ty(Level::Zero)),
+            level: Level::constant(1),
+            body: Some(Rc::new(code)),
+        }
+    }
+
+    fn el_of_global(v: u32) -> Type {
+        Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::GlobalTm {
+                var: GlobalVar(v),
+                subst: LocalSubst {
+                    tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                    terms: vec![],
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn a_telescope_push_rebuilds_the_body_cache() {
+        // `Env::bodies` is keyed by a Ψ-index, and `push_tele` is the one
+        // operation that makes those keys mean something else: after a push,
+        // index 1 below denotes the *inner* definition, not the outer one. A
+        // cache shared across the push would answer with the body it cached
+        // before it, which is a wrong-body soundness bug and not a slowdown.
+        let psi = GlobalCtx::new(vec![
+            code_def(Term::TmNat),
+            code_def(Term::TmUnit { level: Level::Zero }),
+        ]);
+        let tc = Tc::new(DEFAULT_FUEL);
+        let outer = env(psi);
+        // Index 1 is the outer definition, `⌜Nat⌝`; warm the cache at it.
+        assert_eq!(tc.whnf(&outer, &el_of_global(1)), Ok(Type::Nat));
+        // One more binding, and index 1 is the inner definition, `⌜Unit⁰⌝`.
+        let pushed = outer.push_global(GlobalBinding::Ctx);
+        assert_eq!(
+            tc.whnf(&pushed, &el_of_global(1)),
+            Ok(Type::Unit { level: Level::Zero }),
+            "the body cache survived a telescope push",
+        );
+        // And index 2 is the outer one again, now needing `shift_global(3)`.
+        assert_eq!(tc.whnf(&pushed, &el_of_global(2)), Ok(Type::Nat));
+        // Conversion agrees through its own `Env::push_tele`, which is the
+        // other half of the invariant: the two must rebuild together.
+        tc.conv_ty(&pushed, &el_of_global(1), &Type::Unit { level: Level::Zero }, &Level::Zero)
+            .unwrap();
+        assert_eq!(
+            tc.conv_ty(&pushed, &el_of_global(1), &Type::Nat, &Level::Zero),
+            Err(TypeError::NotConvertible),
+        );
     }
 }
