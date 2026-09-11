@@ -73,7 +73,16 @@ scripts/issue log <slug> "note"                            # dated entry under #
 scripts/issue threads                                      # per-thread status counts
 scripts/issue check                                        # lint links/blocked-by/index
 scripts/issue index                                        # regenerate INDEX.md
+scripts/issue serve [--port 8765] [--open]                 # read-only web viewer
 ```
+
+`serve` (page: `scripts/issue-web.html`, stdlib server, localhost only) is for
+the human view of the whole tracker: facet filters over status and labels, an
+**Areas** overview per label, and a **Graph** of `[[links]]` and `blocked-by`
+edges with a focus-on-neighbourhood mode. The detail pane shows links in both
+directions. It re-reads `issues/` on every request and the page reloads itself
+when a file changes, so it can stay open while rounds edit the tracker. Filter
+and selection state lives in the URL hash, so a view can be bookmarked.
 
 Mutating commands (`new`, `close`, `reopen`) update `updated:` and regenerate
 `INDEX.md` automatically.
