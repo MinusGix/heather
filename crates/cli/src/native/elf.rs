@@ -490,6 +490,7 @@ theorem step(): ExecuteFetched(static_elf64_access(),
         assert!(image(&[]).is_err());
         assert!(image(&vec![0; 65535 - HEADER_SIZE]).is_ok());
         assert!(image(&vec![0; 65536 - HEADER_SIZE]).is_err());
+        assert_eq!(parse_argument("42"), Ok(42));
         assert_eq!(parse_argument("0x2a"), Ok(42));
         assert_eq!(parse_argument("0b101010"), Ok(42));
         for bad in ["", "-1", "+1", "0x", "0b2", "18446744073709551616"] {

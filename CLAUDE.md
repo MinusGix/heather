@@ -35,6 +35,10 @@
   the compiler's Rust, `--cache --accept-stale-images` replays the library's
   module images instead of re-elaborating them (same trade as the fast
   lane; drop the flag for a final check).
+- **Builds link with mold** (`.cargo/config.toml`), which reserves ~8 GiB of
+  address space per link, so build (`cargo … --no-run`) *before* entering a
+  `ulimit -v` cap; the scripts already do. A cap on a command that still has
+  to link fails with `mold: cannot reserve … bytes of virtual memory`.
 - **Never run `cargo fmt`** (any scope): the repo is deliberately not
   rustfmt-formatted (`issues/fmt-not-enforced-decision.md`); a formatting
   pass buries a real diff under ~18k lines of churn (it happened,

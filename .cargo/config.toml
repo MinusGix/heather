@@ -3,6 +3,9 @@
 # is installed on the desktop (NixOS) and on the furnace box (cloud-init
 # symlinks ld.mold into /usr/local/bin). Every host that builds this repo
 # needs `ld.mold` on PATH; drop the flag with CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=""
-# for a host without it.
+# for a host without it. mold reserves ~8 GiB of address space per link, so
+# never link inside a `ulimit -v` below that: the repo scripts build with
+# `--no-run` first and enter the 4 GiB test cap afterwards; an ad-hoc
+# `(ulimit -v 4194304; cargo test …)` fails with "cannot reserve … bytes".
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
