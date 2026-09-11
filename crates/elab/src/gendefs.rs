@@ -37,12 +37,12 @@ use std::rc::Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
+    CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 use heather_syntax::ast::Span;
 
 use crate::inductive::{ConstBody, IdxTy, Inductive};
-use crate::{Cx, Elaborator, R};
+use crate::{Alias, Cx, Elaborator, R, TyVar};
 
 /// The key of a machine-named definition. Keys are **nominal**: a declaration
 /// tag plus, where the device is per-constructor, its position. That is what
@@ -84,6 +84,20 @@ pub(crate) enum GenDef {
     /// declaration's **own** lowering. The two boundaries differ too — see
     /// [`Elaborator::register_ty_code`].
     TyCode(u32),
+    /// `D#tycode_fn : Π(A₁ : Ty l₁)…(v_m : T_m). Ty l :=
+    /// λ(A₁ : Ty l₁)…(v_m : T_m). ⌜⟦D<El A₁,…>(v̄)⟧⌝` — a **parameterized or
+    /// value-indexed**, unindexed declaration's lowering, abstracted over its
+    /// own telescope, consumed as `El l (app(D#tycode_fn^δ; ā))`
+    /// (`docs/per-instantiation-type-codes-design.md` §2). Keyed by the
+    /// declaration's tag: one definition per declaration, not one per
+    /// instantiation (§2.3).
+    ///
+    /// The complement of [`GenDef::TyCode`], which names the whole lowering of
+    /// the declarations this one cannot reach. Registered at the
+    /// **all-parameters-`Ty 0`** level profile and at no other (§2.1); a
+    /// higher-level instantiation fails §4.1's guard and keeps the inline
+    /// spelling.
+    TyCodeFn(u32),
     /// `D#shape : Trm_c(· ⊢ Ty l)` — a **recursive** declaration's `Wf`
     /// **shape component** (the sum-of-Σs with the recursive fields deleted),
     /// consumed as `El (D#shape^δ)` in a `Supf`/`ElimWf`/`Type::Wf` shape slot
@@ -182,6 +196,7 @@ impl GenDef {
             GenDef::IdxCode(_) => format!("{owner}#icode"),
             GenDef::SkelCode(_) => format!("{owner}#code"),
             GenDef::TyCode(_) => format!("{owner}#tycode"),
+            GenDef::TyCodeFn(_) => format!("{owner}#tycode_fn"),
             GenDef::ShapeCode(_) => format!("{owner}#shape"),
             GenDef::ArityFn(_) => format!("{owner}#arity"),
             GenDef::Fam(_) => format!("{owner}#fam"),
@@ -214,6 +229,264 @@ pub(crate) struct WfSlots {
     pub(crate) arity: Rc<Term>,
     /// The declaration's level, which is also its shape's.
     pub(crate) level: Level,
+}
+
+/// The guard copy of one parameterized or value-indexed declaration's code
+/// function (`docs/per-instantiation-type-codes-design.md` §2.2): the **open
+/// template** the body was quoted from, and the definition's own statement.
+///
+/// The template is what §4.1 hole-matches an inline instantiation against, and
+/// the statement is what a use site walks to build the application spine — its
+/// `Π` domains are the arguments' types (dependent in general: a value
+/// parameter's type may mention an earlier parameter), so one entry answers
+/// both "is this that declaration's lowering" and "what does the spine
+/// annotate with".
+#[derive(Clone)]
+pub(crate) struct TyCodeFn {
+    /// `⟦D<El A₁,…>(v̄)⟧` under the definition's own binders.
+    pub(crate) template: Rc<Type>,
+    /// `Π(A₁ : Ty l₁)…(v_m : T_m). Ty l`, closed.
+    pub(crate) stmt: Rc<Type>,
+    /// The parameter level profile the definition was registered at — all
+    /// `Ty 0` today (§2.1), kept explicit so widening is a data change.
+    pub(crate) param_levels: Vec<Level>,
+    /// The instantiation's own level.
+    pub(crate) level: Level,
+}
+
+/// The state of §4.1's positional hole-match: which argument each template
+/// hole recovered, and the scoping the subject's own position imposes on it.
+///
+/// Positional, never a scan, which is `issues/tag-types-collide-with-lowerings.md`
+/// answered by construction — a declaration's tag Σ is compared for *equality*
+/// against the template's own tag Σ at the position the template puts it, so
+/// no payload can be mistaken for a tag digit and no tag digit for a payload.
+/// A type parameter and a value parameter may be spelled with the same index
+/// at their own depths and are never confused, because they are matched by
+/// position in the template and live in different sorts of slot.
+struct Holes {
+    /// The subject's context base and length, for [`strengthened_ty`]: a hole
+    /// hit `md` binders inside the subject is scoped `md` deeper than the
+    /// reference that will carry it.
+    base: CtxBase,
+    outer: u32,
+    /// The definition's whole telescope, and how much of it is type
+    /// parameters — the template spells parameter `i` as `Var(total - 1 - i)`
+    /// at its own base depth.
+    total: u32,
+    np: u32,
+    types: Vec<Option<Type>>,
+    values: Vec<Option<Rc<Term>>>,
+}
+
+impl Holes {
+    /// Which parameter, if any, a template variable at walk depth `md` is.
+    fn hole(&self, v: u32, md: u32) -> Option<u32> {
+        (v >= md && v - md < self.total).then(|| self.total - 1 - (v - md))
+    }
+
+    /// `template` against `subject`, both `md` binders inside their own
+    /// scopes. Every occurrence of a hole must agree, and everything outside
+    /// a hole must be syntactically identical, levels included.
+    fn ty(&mut self, template: &Type, subject: &Type, md: u32) -> Option<()> {
+        if let Type::El { tm, .. } = template
+            && let Term::Var(LocalVar(v)) = &**tm
+            && let Some(i) = self.hole(*v, md)
+            && i < self.np
+        {
+            let here = strengthened_ty(subject, self.base, self.outer, md)?;
+            return match &self.types[i as usize] {
+                Some(prev) => (*prev == here).then_some(()),
+                None => {
+                    self.types[i as usize] = Some(here);
+                    Some(())
+                }
+            };
+        }
+        match (template, subject) {
+            (
+                Type::Sum { lhs: a1, rhs: b1, lhs_level: l1, rhs_level: r1 },
+                Type::Sum { lhs: a2, rhs: b2, lhs_level: l2, rhs_level: r2 },
+            ) => {
+                (l1 == l2 && r1 == r2).then_some(())?;
+                self.ty(a1, a2, md)?;
+                self.ty(b1, b2, md)
+            }
+            (
+                Type::Sigma { fst: a1, snd: b1, fst_level: l1, snd_level: r1 },
+                Type::Sigma { fst: a2, snd: b2, fst_level: l2, snd_level: r2 },
+            ) => {
+                (l1 == l2 && r1 == r2).then_some(())?;
+                self.ty(a1, a2, md)?;
+                self.ty(b1, b2, md + 1)
+            }
+            (
+                Type::Pi { dom: a1, cod: b1, dom_level: l1, cod_level: r1 },
+                Type::Pi { dom: a2, cod: b2, dom_level: l2, cod_level: r2 },
+            ) => {
+                (l1 == l2 && r1 == r2).then_some(())?;
+                self.ty(a1, a2, md)?;
+                self.ty(b1, b2, md + 1)
+            }
+            (
+                Type::Wf { shape: s1, arity: _, level: v1 },
+                Type::Wf { shape: s2, arity: _, level: v2 },
+            ) => {
+                // The arity is a term under the shape's binder and a function
+                // of the shape; the re-lowering derives it, so declining to
+                // descend costs nothing and matching it would be a second
+                // syntax to keep in step (§4.1).
+                (v1 == v2).then_some(())?;
+                self.ty(s1, s2, md)
+            }
+            (
+                Type::Vec { elem: e1, len: n1, level: v1 },
+                Type::Vec { elem: e2, len: n2, level: v2 },
+            ) => {
+                (v1 == v2).then_some(())?;
+                self.tm(n1, n2, md)?;
+                self.ty(e1, e2, md)
+            }
+            (
+                Type::Id { ty: t1, lhs: a1, rhs: b1, level: v1 },
+                Type::Id { ty: t2, lhs: a2, rhs: b2, level: v2 },
+            )
+            | (
+                Type::SEq { ty: t1, lhs: a1, rhs: b1, level: v1 },
+                Type::SEq { ty: t2, lhs: a2, rhs: b2, level: v2 },
+            ) if std::mem::discriminant(template) == std::mem::discriminant(subject) => {
+                (v1 == v2).then_some(())?;
+                self.ty(t1, t2, md)?;
+                self.tm(a1, a2, md)?;
+                self.tm(b1, b2, md)
+            }
+            (Type::El { tm: c1, level: v1 }, Type::El { tm: c2, level: v2 }) => {
+                (v1 == v2).then_some(())?;
+                self.tm(c1, c2, md)
+            }
+            (a, b) => (a == b).then_some(()),
+        }
+    }
+
+    /// A **term** slot of the template: a value parameter's hole, or syntax
+    /// that must match exactly. The walk stops at the first `Var` that is not
+    /// a hole rather than descending further into terms — a value index the
+    /// matcher cannot place is a decline, which is today's inline spelling.
+    fn tm(&mut self, template: &Term, subject: &Term, md: u32) -> Option<()> {
+        if let Term::Var(LocalVar(v)) = template
+            && let Some(i) = self.hole(*v, md)
+            && i >= self.np
+        {
+            let here = Rc::new(strengthened_tm(subject, self.base, self.outer, md)?);
+            let slot = (i - self.np) as usize;
+            return match &self.values[slot] {
+                Some(prev) => (*prev == here).then_some(()),
+                None => {
+                    self.values[slot] = Some(here);
+                    Some(())
+                }
+            };
+        }
+        (template == subject).then_some(())
+    }
+}
+
+/// `t`, scoped in a context of `m + d` binders, as it is scoped in the first
+/// `m` alone; `None` when it mentions any of the innermost `d`.
+///
+/// [`crate::unification::strengthen_ty`]'s trick, keyed by the context's
+/// *length* rather than the context itself: the emission walk that produced
+/// `d` crosses binders without carrying their types, and the substitution
+/// only ever reads the length and the base.
+fn strengthened_ty(t: &Type, base: CtxBase, m: u32, d: u32) -> Option<Type> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_innermost(base, m, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
+
+/// [`strengthened_ty`] for a term.
+fn strengthened_tm(t: &Term, base: CtxBase, m: u32, d: u32) -> Option<Term> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_innermost(base, m, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
+
+fn drop_innermost(base: CtxBase, m: u32, d: u32) -> LocalSubst {
+    let tail = match base {
+        CtxBase::Nil => SubstTail::Empty {
+            len: m,
+            base: CtxBase::Nil,
+        },
+        CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
+    };
+    let terms = (0..m)
+        .map(|k| Rc::new(Term::Var(LocalVar(m - 1 - k))))
+        .chain((0..d).map(|_| Rc::new(Term::Zero)))
+        .collect();
+    LocalSubst { tail, terms }
+}
+
+/// The identity substitution of `cx` extended by `d` binders — the
+/// β-substitution [`Elaborator::gen_spine`] needs to walk a dependent
+/// telescope at the depth the subject sits at.
+fn id_subst_at(cx: &Cx, d: u32) -> LocalSubst {
+    let m = cx.gamma.entries.len() as u32 + d;
+    let tail = match cx.gamma.base {
+        CtxBase::Nil => SubstTail::Empty {
+            len: m,
+            base: CtxBase::Nil,
+        },
+        CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
+    };
+    LocalSubst {
+        tail,
+        terms: (0..m)
+            .map(|k| Rc::new(Term::Var(LocalVar(m - 1 - k))))
+            .collect(),
+    }
+}
+
+/// A closed definition statement weakened into `cx` plus `d` binders.
+fn weakened(stmt: &Type, cx: &Cx, d: u32) -> Type {
+    let by = cx.gamma.entries.len() as u32 + d;
+    if by == 0 {
+        stmt.clone()
+    } else {
+        stmt.shift_local(by)
+    }
+}
+
+/// How many arguments a code function's statement takes.
+fn pi_arity(stmt: &Type) -> usize {
+    let mut n = 0;
+    let mut cur = stmt;
+    while let Type::Pi { cod, .. } = cur {
+        n += 1;
+        cur = cod;
+    }
+    n
+}
+
+/// The template at `args` — the inline lowering behind a saturated
+/// `app(D#tycode_fn^δ; ā)` (`docs/per-instantiation-type-codes-design.md`
+/// §4.2). Substituting the arguments for the definition's own binders puts a
+/// **code** where the template has `El (Var i)`, which is the kernel's own
+/// decode spelling; `decode_deep` is what turns that back into the identity
+/// every structural reader anchors on.
+fn instance_of_template(entry: &TyCodeFn, args: &[Rc<Term>]) -> Type {
+    let subst = LocalSubst {
+        tail: SubstTail::Empty {
+            len: args.len() as u32,
+            base: CtxBase::Nil,
+        },
+        terms: args.to_vec(),
+    };
+    let at = entry.template.apply_local(&subst);
+    crate::inductive::decode_deep(&at).unwrap_or(at)
 }
 
 /// The guard copies of one non-recursive declaration's spine codes
@@ -257,6 +530,13 @@ struct GenDefLayer {
     /// unparameterized declarations, so this can only ever *decline*; it costs
     /// one structural comparison per `match` and buys the property outright.)
     ty_code: HashMap<u32, (Rc<Type>, Level)>,
+    /// Per declaration tag with a registered [`GenDef::TyCodeFn`], the open
+    /// template and statement the definition was minted from
+    /// ([`TyCodeFn`]) — the use-site guard, exactly as
+    /// [`GenDefLayer::ty_code`]'s inline copy is, with the hole-matching and
+    /// re-lowering of `docs/per-instantiation-type-codes-design.md` §4.1 in
+    /// place of one structural comparison.
+    ty_code_fn: HashMap<u32, TyCodeFn>,
     /// Per declaration tag with a registered [`GenDef::ShapeCode`] **and**
     /// [`GenDef::ArityFn`], the **inline** `Wf` slot pair the two were minted
     /// from and the declaration's level.
@@ -320,6 +600,22 @@ impl GenDefs {
 
     fn has_ty_codes(&self) -> bool {
         self.layers().any(|layer| !layer.ty_code.is_empty())
+    }
+
+    fn ty_code_fn(&self, tag: &u32) -> Option<&TyCodeFn> {
+        self.layers().find_map(|layer| layer.ty_code_fn.get(tag))
+    }
+
+    fn has_ty_code_fns(&self) -> bool {
+        self.layers().any(|layer| !layer.ty_code_fn.is_empty())
+    }
+
+    pub(crate) fn has_ty_code_fn(&self, tag: u32) -> bool {
+        self.ty_code_fn(&tag).is_some()
+    }
+
+    pub(crate) fn insert_ty_code_fn(&mut self, tag: u32, value: TyCodeFn) {
+        Rc::make_mut(&mut self.current).ty_code_fn.insert(tag, value);
     }
 
     fn wf_slots(&self, tag: &u32) -> Option<&WfSlots> {
@@ -411,6 +707,10 @@ impl Elaborator {
             // instead of writing it out ~21 times per arm
             // ([[wf-field-conversion-cost]], design §10).
             self.register_ty_code(ind, span);
+            // …and, for exactly the declarations that one returns from, the
+            // code *function* over the declaration's own telescope
+            // (`docs/per-instantiation-type-codes-design.md` §2).
+            self.register_ty_code_fn(ind, span);
             // …and a record's fields get their projections, which is the one
             // device here that a *user-written* term reaches directly.
             self.register_rec_projs(ind, span);
@@ -553,6 +853,163 @@ impl Elaborator {
         self.register_wf_slots(ind, &d_ty, &l, span);
     }
 
+    /// `D#tycode_fn := λ(A₁ : Ty 0)…(v_m : T_m). ⌜⟦D<El A₁,…>(v̄)⟧⌝`, a
+    /// **parameterized or value-indexed** declaration's lowering abstracted
+    /// over its own telescope (`docs/per-instantiation-type-codes-design.md`
+    /// §2). The complement of [`Self::register_ty_code`]'s boundary: reached
+    /// off the same unindexed branch, for exactly the declarations that one
+    /// returns from.
+    ///
+    /// Registration is at the **all-parameters-`Ty 0`** profile (§2.1) — the
+    /// elaborator mints no level variables, so one closed λ fixes one
+    /// profile, and a higher-level instantiation declines at §4.1's guard and
+    /// keeps today's inline spelling. Best-effort like every other `GenDef`.
+    fn register_ty_code_fn(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if ind.params.is_empty() && ind.valparams.is_empty() {
+            return;
+        }
+        let key = GenDef::TyCodeFn(ind.tag);
+        if self.types.gdefs().contains_key(&key) {
+            return;
+        }
+        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+            return;
+        };
+        let Ok((template, l)) = self.lower_instance(&cx, ind, &targs, &vargs, span) else {
+            return;
+        };
+        // `register_ty_code`'s precondition, for the same reason (§2.2): the
+        // guard finds this entry by running `tag_of` over an instantiation, so
+        // a template whose own tag read does not route back here must not be
+        // registered.
+        if self.tag_of(&template).map(|i| i.tag) != Some(ind.tag) {
+            return;
+        }
+        let Some(code) = crate::code::code_of(&template) else {
+            return;
+        };
+        let mut ty = Type::Ty(l.clone());
+        let mut ty_level = Level::succ(l.clone());
+        let mut body = code;
+        for (dom, dom_level) in binders.iter().rev() {
+            body = Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: ty_level.clone(),
+                dom: Rc::new(dom.clone()),
+                body: Rc::new(body),
+            };
+            ty = Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: ty_level.clone(),
+                dom: Rc::new(dom.clone()),
+                cod: Rc::new(ty),
+            };
+            ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
+        }
+        if self
+            .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
+            .is_ok()
+        {
+            self.semantic_commit_gen_ty_code_fn(
+                ind.tag,
+                TyCodeFn {
+                    template: Rc::new(template),
+                    stmt: Rc::new(ty),
+                    param_levels: targs.iter().map(|(_, l)| l.clone()).collect(),
+                    level: l,
+                },
+            );
+        }
+    }
+
+    /// The code function's own telescope: the context its body is built in,
+    /// each binder's `(dom, dom_level)` **scoped under the binders before it**
+    /// (which is what a `Π` domain is), and the argument lists that lower the
+    /// open template in the full context.
+    ///
+    /// The type parameters install the `Cx::tyvars` entry a `(A : Type<l>)`
+    /// binder already installs (`expr.rs`'s `extend_lambda_context`); the
+    /// value parameters install the binder *and* the alias, so that a later
+    /// value parameter's declared type reads the earlier ones by name exactly
+    /// as [`Elaborator::valparam_args`] lets a use site read them (§2). `None`
+    /// when a declared value-parameter type does not elaborate here, which is
+    /// this device's only decline.
+    #[allow(clippy::type_complexity)]
+    fn tycode_fn_telescope(
+        &self,
+        ind: &Rc<Inductive>,
+        span: Span,
+    ) -> Option<(
+        Cx,
+        Vec<(Type, Level)>,
+        Vec<(Type, Level)>,
+        Vec<(Term, Type, Level)>,
+    )> {
+        let _ = span;
+        let np = ind.params.len();
+        let nv = ind.valparams.len();
+        let total = np + nv;
+        let mut cx = Cx::empty();
+        let mut binders: Vec<(Type, Level)> = Vec::with_capacity(total);
+        for (i, p) in ind.params.iter().enumerate() {
+            // §2.1: one profile, all `Ty 0`.
+            let l = Level::Zero;
+            binders.push((Type::Ty(l.clone()), Level::succ(l.clone())));
+            cx.push(format!("#p{i}"), Type::Ty(l.clone()), Level::succ(l.clone()));
+            cx.tyvars.push(TyVar {
+                name: p.clone(),
+                ty: Type::El {
+                    level: l.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
+                level: l,
+                depth: cx.names.len(),
+            });
+        }
+        for (j, (pname, pty)) in ind.valparams.iter().enumerate() {
+            let (ty, level) = {
+                let _scope = self.use_inductive_scope(ind);
+                self.elab_ty(&cx, pty).ok()?
+            };
+            binders.push((ty.clone(), level.clone()));
+            cx.push(format!("#v{j}"), ty.clone(), level.clone());
+            cx.aliases.push(Rc::new(Alias {
+                skel: None,
+                name: pname.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(Term::Var(LocalVar(0))),
+                ty,
+                level,
+            }));
+            if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
+                cx.op_locals.push((sym.clone(), pname.clone()));
+            }
+        }
+        let targs = (0..np)
+            .map(|i| {
+                (
+                    Type::El {
+                        level: Level::Zero,
+                        tm: Rc::new(Term::Var(LocalVar((total - 1 - i) as u32))),
+                    },
+                    Level::Zero,
+                )
+            })
+            .collect();
+        let vargs = (0..nv)
+            .map(|j| {
+                let k = np + j;
+                let (ty, level) = &binders[k];
+                (
+                    Term::Var(LocalVar((total - 1 - k) as u32)),
+                    ty.shift_local((total - k) as u32),
+                    level.clone(),
+                )
+            })
+            .collect();
+        Some((cx, binders, targs, vargs))
+    }
+
     /// `D#payloadₖ := ⌜⟦cₖ⟧⌝` per constructor and `D#suffixₖ :=
     /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a **non-recursive**
     /// declaration's sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`),
@@ -664,20 +1121,33 @@ impl Elaborator {
     /// [`GenDef::RecProj`] the field, [`GenDef::RecTail`] the pair the entry
     /// above is taken of.
     ///
-    /// **Boundaries.** An unparameterized record only, [`GenDef::TyCode`]'s
-    /// reason verbatim: `⟦D⟧` of a parameterized one is monomorphized per
-    /// instantiation, and a definition is registered where the instantiations
-    /// are not yet known. A parameterized record keeps the inline walk (and
-    /// its exponent) — see the issue's log. And a record whose spine is not
-    /// *dependent* is left alone entirely
-    /// ([`Elaborator::record_spine_is_dependent`]): its walk is linear
-    /// already, so the definitions would be all cost.
+    /// **Boundaries (§13 of
+    /// `docs/per-instantiation-type-codes-design.md` widened them).** A record
+    /// only. A *parameterized or value-indexed* one is registered over its own
+    /// telescope, with the record binder typed by the instantiation's
+    /// **reference** — `Π(A₁ : Ty l₁)…(v : El l (app(D#tycode_fn^δ; ā))). Fⱼ`
+    /// — so that the domain instantiated at a use site's `ā` *is* the
+    /// receiver's own type and the kernel's `App` rule matches it
+    /// syntactically. That needs the code function, so a declaration whose
+    /// `register_ty_code_fn` declined keeps the inline walk.
+    ///
+    /// The **dependency** gate ([`Elaborator::record_spine_is_dependent`])
+    /// applies to a *closed* record only. There it is the whole precondition:
+    /// the inline walk's exponent comes from substituting a payload into the
+    /// tails, so a non-dependent spine is linear already and the definitions
+    /// would be all cost. At a telescope the reason to name is a different
+    /// one — the receiver's type is a reference, and every `Fst`/`Snd` the
+    /// inline walk builds makes the kernel reconstitute `Σ(fst). snd` and
+    /// convert the reference against it (§10's regression, and by measurement
+    /// its dominant payers — `MachineState<M>`, `StackAccess<M>`, `And<P, Q>`
+    /// — are exactly the *non*-dependent ones). So a telescope registers
+    /// whatever its spine does.
     ///
     /// Best-effort, like everything here: a failure at field `j` stops the
     /// walk, leaves fields `< j` registered (they are correct and useful on
     /// their own), and every later field's projection is inlined as before.
     fn register_rec_projs(&mut self, ind: &Rc<Inductive>, span: Span) {
-        if !ind.is_record || !ind.params.is_empty() || !ind.valparams.is_empty() {
+        if !ind.is_record {
             return;
         }
         let nfields = ind.ctors[0].fields.len();
@@ -689,24 +1159,72 @@ impl Elaborator {
         {
             return;
         }
-        let cx = Cx::empty();
-        let Ok((d_ty, l)) = self.lower_instance(&cx, ind, &[], &[], span) else {
+        let telescoped = !ind.params.is_empty() || !ind.valparams.is_empty();
+        // The declaration's own telescope and the context it lowers in —
+        // `register_ty_code_fn`'s, verbatim, which is what makes the two
+        // definitions' arguments the same `ā` at every use site.
+        let (mut tel, cx, targs, vargs) = if telescoped {
+            let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+                return;
+            };
+            (binders, cx, targs, vargs)
+        } else {
+            (Vec::new(), Cx::empty(), Vec::new(), Vec::new())
+        };
+        let Ok((template, l)) = self.lower_instance(&cx, ind, &targs, &vargs, span) else {
             return;
         };
         // The use site finds these by the tag it read off the receiver's type,
         // exactly as `register_ty_code`'s reference does; a lowering whose tag
         // does not route back here must not be named.
-        if self.tag_of(&d_ty).map(|i| i.tag) != Some(ind.tag) {
+        if self.tag_of(&template).map(|i| i.tag) != Some(ind.tag) {
             return;
         }
-        let mut d_ty = Rc::new(d_ty);
-        // The definitions' own context: `·, v : ⟦D⟧`, which is where the whole
-        // walk lives — the field types come out of it scoped exactly as a Π's
-        // codomain needs them.
-        let mut vcx = Cx::empty();
+        // The record binder's type. At a telescope it is the reference and
+        // nothing else will do: the domain a use site's argument is checked
+        // against is this type at `ā`, and the receiver's own type is the
+        // reference at `ā`. `respell_ty` recovers the telescope's binders as
+        // its arguments — the identity spine — and proves the reference means
+        // the template, so a decline here is exactly the case with no name to
+        // use.
+        let mut d_ty = Rc::new(if telescoped {
+            let Some(r) = self.respell_ty(&cx, &template) else {
+                return;
+            };
+            r
+        } else {
+            template.clone()
+        });
+        // The definitions' own context: `·, θ̄, v : R`, which is where the
+        // whole walk lives — the field types come out of it scoped exactly as
+        // a Π's codomain needs them.
+        let mut vcx = cx;
         vcx.push("v".to_string(), (*d_ty).clone(), l.clone());
-        let mut cur = weaken(&d_ty, &vcx.gamma);
-        if !self.record_spine_is_dependent(&vcx, &cur, nfields, span) {
+        // `cur` stays the **inline** spine: it is what the Σ components are
+        // read off, and reading them off the reference would only mean
+        // decoding it again at every entry.
+        let mut cur = template.shift_local(1);
+        // Two devices, two shapes, and one gate that points opposite ways on
+        // them (§13.3 and §13.6 of
+        // `docs/per-instantiation-type-codes-design.md`).
+        //
+        // **Closed, dependent.** The named tail family: the reason to name is
+        // the inline walk's *exponent*, which comes from substituting a
+        // payload into the tails, so a non-dependent closed spine is linear
+        // already and the definitions would be all cost.
+        //
+        // **Telescoped, non-dependent.** The simple shape: the reason to name
+        // is keeping the receiver's own reference off the kernel's `Fst`/`Snd`
+        // rule, which any spine pays and whose measured payers
+        // (`MachineState<M>`, `StackAccess<M>`, `And<P, Q>`) are the
+        // non-dependent ones. Its bodies write the tail out, so a dependent
+        // telescoped spine would put the exponent *inside* the definitions;
+        // and the alternative — the closed device's named tails at a
+        // telescope — is what `reused_callee`'s certificate could not compute
+        // through (§13.6). So a dependent telescope keeps the inline walk,
+        // and §13.9 records what that leaves unnamed.
+        let simple = telescoped;
+        if self.record_spine_is_dependent(&vcx, &cur, nfields, span) == telescoped {
             return;
         }
         let mut pair: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
@@ -722,6 +1240,24 @@ impl Elaborator {
             else {
                 return;
             };
+            // The field type the *definitions* carry takes the emission
+            // spelling, exactly as `project_field`'s fallback walk respells
+            // the ones its `Fst`/`Snd` nodes carry: `Fⱼ` is read back out of
+            // the projection's own statement at every use site, so a
+            // monomorphized one here is a monomorphized `App.cod` at every
+            // field read (the emission walker's residue rose 260 → 328
+            // before this line, §13.7 item 3).
+            //
+            // The **tail** is deliberately not respelled with it. It is the
+            // whole rest of the record at every entry, and `emit_ty` tries
+            // the instance guard at every node it walks: on the eleven-field
+            // cross-referencing record of
+            // `crates/elab/tests/record_projection_size.rs` that walk is
+            // itself the blow-up the device exists to prevent (§13.10). The
+            // tail only ever reaches a use site through `D#recfamⱼ`'s code,
+            // which the use site does not read annotations off.
+            let fst = self.emit_ty(&vcx, &fst, 0).map_or(fst, Rc::new);
+            let structural = Rc::clone(&snd);
             // The Σ's *tail family* — the whole rest of the record, as a type
             // family over this entry — named as a code, and the annotation
             // every node below carries is the decode of it. That is what keeps
@@ -729,39 +1265,63 @@ impl Elaborator {
             // checked by looking one binding up in Ψ, where the spelled-out
             // one is checked by walking the rest of the record and reducing
             // every reference it meets, once per entry of the spine.
-            let Some(tail_fam) = self.push_tail_fam(
-                ind, step, &d_ty, &l, &fst, &fst_level, &snd, &snd_level, &vcx, span,
-            ) else {
-                return;
+            //
+            // **Not at a telescope** (§13.6, amended by the fix pass). There
+            // the definitions are the *simple* ones: the tail is written out
+            // and no `D#recfam`/`D#tail` is registered, so the body of
+            // `D#projⱼ` is one `fst(sndʲ v)` the kernel walks in `j + 1`
+            // steps. The named tail's whole point is to bound what a
+            // **dependent** spine copies, and a telescope registers only
+            // non-dependent spines; what the chain costs instead is δ per
+            // entry per read *at evaluation*, which is what a certificate
+            // that computes through a field read pays. It is 510 exhausted
+            // 2²⁰-step evaluator budgets on `reused_callee`'s certificate —
+            // see §13.6.
+            let tail_ann = if simple {
+                Rc::clone(&snd)
+            } else {
+                let Some(tf) = self.push_tail_fam(
+                    ind, step, &tel, &d_ty, &l, &fst, &fst_level, &snd, &snd_level, &vcx, span,
+                ) else {
+                    return;
+                };
+                d_ty = Rc::new(d_ty.shift_global(1));
+                shift_tel(&mut tel);
+                tf
             };
-            d_ty = Rc::new(d_ty.shift_global(1));
-            let fst = Rc::new(fst.shift_global(1));
-            let snd = Rc::new(snd.shift_global(1));
-            let pair_g = Rc::new(pair.shift_global(1));
+            let (fst, mut structural, pair_g) = if simple {
+                (fst, structural, Rc::clone(&pair))
+            } else {
+                (
+                    Rc::new(fst.shift_global(1)),
+                    Rc::new(structural.shift_global(1)),
+                    Rc::new(pair.shift_global(1)),
+                )
+            };
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&tail_fam),
+                snd_ty: Rc::clone(&tail_ann),
                 pair: Rc::clone(&pair_g),
             });
             let rest = Rc::new(Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&tail_fam),
+                snd_ty: Rc::clone(&tail_ann),
                 pair: pair_g,
             });
             // The field's own projection. The tag (entry 0) is nobody's field
             // and gets none: it is a closed numeral, and nothing later refers
             // to it.
-            let (payload, snd, rest, tail_fam) = if step == 0 {
-                (proj, snd, rest, tail_fam)
+            let (payload, rest, tail_ann) = if step == 0 {
+                (proj, rest, tail_ann)
             } else {
                 let key = GenDef::RecProj(ind.tag, step - 1);
-                let Some(payload) =
-                    self.push_proj_def(key, ind, &d_ty, &l, &fst, &fst_level, &proj, &vcx, span)
-                else {
+                let Some(payload) = self.push_proj_def(
+                    key, ind, &tel, &d_ty, &l, &fst, &fst_level, &proj, &vcx, span,
+                ) else {
                     return;
                 };
                 // Ψ just grew by one, so everything carried past the push is
@@ -771,32 +1331,43 @@ impl Elaborator {
                 // families, projections and tails already registered —
                 // pointing at what they did.
                 d_ty = Rc::new(d_ty.shift_global(1));
+                shift_tel(&mut tel);
+                structural = Rc::new(structural.shift_global(1));
                 (
                     payload,
-                    Rc::new(snd.shift_global(1)),
                     Rc::new(rest.shift_global(1)),
-                    Rc::new(tail_fam.shift_global(1)),
+                    Rc::new(tail_ann.shift_global(1)),
                 )
             };
             if step == nfields {
                 return;
             }
+            if simple {
+                // No tail definition: the chain is the `Snd` node itself, and
+                // the walk's own copy of the tail advances by substitution as
+                // it always did. Ψ did not grow past the projection, so
+                // nothing shifts here.
+                cur = structural.apply_local(&LocalSubst::id(&vcx.gamma).extended(payload));
+                pair = rest;
+                continue;
+            }
             // The tail past this entry. Its statement is the family applied to
             // this entry's projection — one node, where the kernel's own `snd`
             // rule would produce the family's whole body with the projection
             // substituted through it.
-            let cod = instantiate_fam(&tail_fam, &payload, &vcx.gamma);
+            let cod = instantiate_fam(&tail_ann, &payload, &vcx.gamma);
             let key = GenDef::RecTail(ind.tag, step);
-            let Some(next) =
-                self.push_proj_def(key, ind, &d_ty, &l, &cod, &snd_level, &rest, &vcx, span)
-            else {
+            let Some(next) = self.push_proj_def(
+                key, ind, &tel, &d_ty, &l, &cod, &snd_level, &rest, &vcx, span,
+            ) else {
                 return;
             };
             d_ty = Rc::new(d_ty.shift_global(1));
+            shift_tel(&mut tel);
             // The walk itself keeps the spelled-out tail: it is what the next
             // entry's components are read off, and reading them off the code
             // would only mean decoding it again.
-            cur = snd
+            cur = structural
                 .apply_local(&LocalSubst::id(&vcx.gamma).extended(payload))
                 .shift_global(1);
             pair = next;
@@ -860,11 +1431,19 @@ impl Elaborator {
     /// long as the spine, copying the annotations at every link. Behind a code
     /// they are terms in a body nobody unfolds until a conversion actually
     /// needs the type.
+    ///
+    /// **At a telescope (§13).** `tel` is the declaration's own
+    /// `(A₁ : Ty l₁)…(v_m : T_m)`, empty for a closed record; the statement is
+    /// `Π tel. Π(v : R). Π(x : Fⱼ). Ty l'` and the occurrence applies the
+    /// definition to the telescope's binders before `v` and `x`. `R` is the
+    /// record's binder type — the *reference* `El (app(D#tycode_fn^δ; θ̄))`
+    /// for a parameterized declaration, which is the whole point of §13.
     #[allow(clippy::too_many_arguments)]
     fn push_tail_fam(
         &mut self,
         ind: &Rc<Inductive>,
         step: usize,
+        tel: &[(Type, Level)],
         d_ty: &Rc<Type>,
         l: &Level,
         fst: &Rc<Type>,
@@ -878,56 +1457,54 @@ impl Elaborator {
         let code_ty = Type::Ty(snd_level.clone());
         let code_level = Level::succ(snd_level.clone());
         let inner_level = Level::max(fst_level.clone(), code_level.clone());
-        // `Π(x : Fⱼ). Ty l'` — scoped in `·, v`, where `Fⱼ` is.
+        // `Π(x : Fⱼ). Ty l'` — scoped in `·, θ̄, v`, where `Fⱼ` is.
         let inner = Type::Pi {
             dom_level: fst_level.clone(),
             cod_level: code_level.clone(),
             dom: Rc::clone(fst),
             cod: Rc::new(code_ty.clone()),
         };
-        let ty = Type::Pi {
-            dom_level: l.clone(),
-            cod_level: inner_level.clone(),
-            dom: Rc::clone(d_ty),
-            cod: Rc::new(inner.clone()),
-        };
-        let body = Term::Lam {
-            dom_level: l.clone(),
-            cod_level: inner_level.clone(),
-            dom: Rc::clone(d_ty),
-            body: Rc::new(Term::Lam {
-                dom_level: fst_level.clone(),
-                cod_level: code_level.clone(),
-                dom: Rc::clone(fst),
-                body: Rc::new(crate::code::code_of(snd)?),
-            }),
-        };
-        let level = Level::max(l.clone(), inner_level.clone());
-        self.push_gen_def(key, &ind.name, ty, level, body, span)
+        let (ty, level) = wrap_tel(
+            tel,
+            Type::Pi {
+                dom_level: l.clone(),
+                cod_level: inner_level.clone(),
+                dom: Rc::clone(d_ty),
+                cod: Rc::new(inner),
+            },
+            Level::max(l.clone(), inner_level.clone()),
+        );
+        let body = wrap_tel_lam(
+            tel,
+            Term::Lam {
+                dom_level: l.clone(),
+                cod_level: inner_level.clone(),
+                dom: Rc::clone(d_ty),
+                body: Rc::new(Term::Lam {
+                    dom_level: fst_level.clone(),
+                    cod_level: code_level.clone(),
+                    dom: Rc::clone(fst),
+                    body: Rc::new(crate::code::code_of(snd)?),
+                }),
+            },
+            Level::max(l.clone(), inner_level),
+        );
+        self.push_gen_def(key, &ind.name, ty.clone(), level, body, span)
             .ok()?;
-        // The occurrence, scoped in `·, v, x` — one binder past `vcx`, which
-        // is where the Σ's tail lives.
+        // The occurrence, scoped in `·, θ̄, v, x` — one binder past `vcx`,
+        // which is where the Σ's tail lives.
         let mut xcx = vcx.clone();
         xcx.push("x".to_string(), (**fst).clone(), fst_level.clone());
         let fun = self.gen_ref(&xcx, key)?;
-        let at_v = Term::App {
-            fun: Rc::new(fun),
-            dom_level: l.clone(),
-            cod_level: inner_level,
-            dom: Rc::new(weaken(&d_ty.shift_global(1), &xcx.gamma)),
-            cod: Rc::new(under_binder(&inner.shift_global(1), &xcx.gamma)),
-            arg: Rc::new(Term::Var(LocalVar(1))),
-        };
+        let (tm, _, _) = saturate(
+            &xcx.gamma,
+            fun,
+            &ty.shift_global(1),
+            &tel_self_args(tel.len(), 2),
+        )?;
         Some(Rc::new(Type::El {
             level: snd_level.clone(),
-            tm: Rc::new(Term::App {
-                fun: Rc::new(at_v),
-                dom_level: fst_level.clone(),
-                cod_level: code_level,
-                dom: Rc::new(fst.shift_global(1).shift_local(1)),
-                cod: Rc::new(code_ty.shift_local(1)),
-                arg: Rc::new(Term::Var(LocalVar(0))),
-            }),
+            tm: Rc::new(tm),
         }))
     }
 
@@ -946,6 +1523,7 @@ impl Elaborator {
         &mut self,
         key: GenDef,
         ind: &Rc<Inductive>,
+        tel: &[(Type, Level)],
         dom: &Rc<Type>,
         dom_level: &Level,
         cod: &Type,
@@ -954,42 +1532,51 @@ impl Elaborator {
         vcx: &Cx,
         span: Span,
     ) -> Option<Rc<Term>> {
-        let ty = Type::Pi {
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::clone(dom),
-            cod: Rc::new(cod.clone()),
-        };
-        let body = Term::Lam {
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::clone(dom),
-            body: Rc::clone(node),
-        };
-        let level = Level::max(dom_level.clone(), cod_level.clone());
-        self.push_gen_def(key, &ind.name, ty, level, body, span)
+        let (ty, level) = wrap_tel(
+            tel,
+            Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::new(cod.clone()),
+            },
+            Level::max(dom_level.clone(), cod_level.clone()),
+        );
+        let body = wrap_tel_lam(
+            tel,
+            Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                body: Rc::clone(node),
+            },
+            Level::max(dom_level.clone(), cod_level.clone()),
+        );
+        self.push_gen_def(key, &ind.name, ty.clone(), level, body, span)
             .ok()?;
         let fun = self.gen_ref(vcx, key)?;
-        Some(Rc::new(Term::App {
-            fun: Rc::new(fun),
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::new(weaken(&dom.shift_global(1), &vcx.gamma)),
-            // The `App`'s codomain is scoped under its own binder, one entry
-            // past `vcx`.
-            cod: Rc::new(under_binder(&cod.shift_global(1), &vcx.gamma)),
-            arg: Rc::new(Term::Var(LocalVar(0))),
-        }))
+        let (tm, _, _) = saturate(
+            &vcx.gamma,
+            fun,
+            &ty.shift_global(1),
+            &tel_self_args(tel.len(), 1),
+        )?;
+        Some(Rc::new(tm))
     }
 
-    /// `D#projⱼ^δ v` and its type, for a projection of field `idx` off `value`
-    /// (`issues/theorem-field-projection-oom.md`). `None` when the record has
-    /// no registered projection — every such site keeps the inline walk.
-    pub(crate) fn rec_proj_ref(
+    /// `app(D#projⱼ^δ; ā, v)` and its type, for a projection of field `idx`
+    /// off `value` at the instantiation `ā`
+    /// (`issues/theorem-field-projection-oom.md`;
+    /// `docs/per-instantiation-type-codes-design.md` §13). `ā` is empty for a
+    /// closed record, and `None` comes back whenever the record has no
+    /// registered projection or the arguments do not saturate its telescope —
+    /// every such site keeps the inline walk.
+    pub(crate) fn rec_proj_ref_at(
         &self,
         cx: &Cx,
         tag: u32,
         idx: usize,
+        args: &[Rc<Term>],
         value: &Rc<Term>,
     ) -> Option<(Term, Type, Level)> {
         let key = GenDef::RecProj(tag, idx);
@@ -1006,25 +1593,38 @@ impl Elaborator {
         let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
-        let Type::Pi {
-            dom_level,
-            cod_level,
-            dom,
-            cod,
-        } = ty.shift_global(var.0 + 1)
-        else {
-            return None;
-        };
-        let tm = Term::App {
-            fun: Rc::new(fun),
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::new(weaken(&dom, &cx.gamma)),
-            cod: Rc::new(under_binder(&cod, &cx.gamma)),
-            arg: Rc::clone(value),
-        };
-        let ty = instantiate(&cod, Rc::clone(value), &cx.gamma);
-        Some((tm, ty, cod_level))
+        let stmt = ty.shift_global(var.0 + 1);
+        let mut spine: Vec<Rc<Term>> = args.to_vec();
+        spine.push(Rc::clone(value));
+        saturate(&cx.gamma, fun, &stmt, &spine)
+    }
+
+    /// The arguments a use site must apply `D`'s telescoped definitions to,
+    /// for a receiver whose type is `D` at an instantiation (§13). Two routes,
+    /// and both hand back the *emitted* spelling — the same `ā` the type's own
+    /// reference carries, so the definition's domain at `ā` and the receiver's
+    /// type are one term:
+    ///
+    /// - the type is already `El (app(D#tycode_fn^δ; ā))`, and its own spine
+    ///   is the answer;
+    /// - the type is the inline instantiation, and §4.1's hole-match (with
+    ///   its proof) recovers them — the arguments [`Self::instance_ref`] would
+    ///   build the reference from, exposed rather than re-matched.
+    ///
+    /// `Some(vec![])` for an unparameterized declaration, which takes no
+    /// arguments and needs no recovery.
+    pub(crate) fn instance_args(&self, cx: &Cx, ind: &Inductive, ty: &Type) -> Option<Vec<Rc<Term>>> {
+        if ind.params.is_empty() && ind.valparams.is_empty() {
+            return Some(Vec::new());
+        }
+        if let Type::El { tm, .. } = ty
+            && let Some((GenDef::TyCodeFn(tag), args)) = self.gen_app_of(tm)
+            && tag == ind.tag
+        {
+            return Some(args);
+        }
+        let (_, args) = self.instance_match(cx, ind, ty, 0, 0)?;
+        Some(args)
     }
 
     /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
@@ -1162,9 +1762,142 @@ impl Elaborator {
     /// reference. And `tag_of` goes through `decoded`, which leaves an `El` of
     /// a neutral code exactly as it is — so an already-reference-spelled type
     /// declines here too, and this is idempotent.
+    /// A second route follows it when it declines
+    /// (`docs/per-instantiation-type-codes-design.md` §4.1): the same tag read
+    /// naming a declaration with a code *function*, whose instantiation is
+    /// recovered by positional hole-matching and **proved** by re-lowering.
     pub(crate) fn respell_ty(&self, cx: &Cx, ty: &Type) -> Option<Type> {
+        self.respell_ty_at(cx, ty, 0, 0)
+    }
+
+    /// [`Self::respell_ty`] for an occurrence sitting `d` binders past `cx` in
+    /// a world with `g` scratch globals. The closed route mints against `cx`
+    /// and shifts (a type equal to the registry's closed copy is itself
+    /// closed, so only the substitution tail's length moves); the instance
+    /// route mints **at depth**, because an open instance's recovered
+    /// arguments mention the binders the walk has crossed and must be carried
+    /// verbatim (§4.1's depth paragraph).
+    pub(crate) fn respell_ty_at(&self, cx: &Cx, ty: &Type, d: u32, g: u32) -> Option<Type> {
         let ind = self.tag_of(ty)?;
-        self.ty_type_ref(cx, ind.tag, ty)
+        if let Some(r) = self.ty_type_ref(cx, ind.tag, ty) {
+            let r = if g == 0 { r } else { r.shift_global(g) };
+            return Some(if d == 0 { r } else { r.shift_local(d) });
+        }
+        self.instance_ref(cx, &ind, ty, d, g)
+    }
+
+    /// `El l (app(D#tycode_fn^δ; ā))` for an inline instantiation of a
+    /// parameterized or value-indexed declaration (§4.1). Two steps, and the
+    /// second is what makes the first sound: the arguments are **guessed** by
+    /// positional hole-matching against the registered open template, and the
+    /// template at that guess is then required to be the subject
+    /// syntactically.
+    /// The matcher may be as incomplete as convenient and can never be wrong,
+    /// so every shape it cannot place — an unfamiliar former, a value
+    /// parameter at a slot the type walk does not pass, a level profile other
+    /// than the registered one — is today's inline spelling.
+    ///
+    /// The recovered arguments are themselves emitted before the spine is
+    /// built, so a nested instantiation composes references at every level
+    /// and no literal is left anywhere.
+    fn instance_ref(&self, cx: &Cx, ind: &Inductive, ty: &Type, d: u32, g: u32) -> Option<Type> {
+        let (level, args) = self.instance_match(cx, ind, ty, d, g)?;
+        Some(Type::El {
+            level,
+            tm: Rc::new(self.gen_spine(cx, ind.tag, &args, d, g)?),
+        })
+    }
+
+    /// [`Self::instance_ref`]'s two steps without the spine: the recovered
+    /// arguments, **emitted**, and the instantiation's level. Split out so
+    /// that a use site which needs the same `ā` for a *different* definition
+    /// over the same telescope — a record's projections (§13) — asks the one
+    /// question rather than re-matching.
+    fn instance_match(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        ty: &Type,
+        d: u32,
+        g: u32,
+    ) -> Option<(Level, Vec<Rc<Term>>)> {
+        let entry = self.types.gdefs().ty_code_fn(&ind.tag)?;
+        let np = entry.param_levels.len();
+        let arity = pi_arity(&entry.stmt);
+        if arity != np + ind.valparams.len() {
+            return None;
+        }
+        let mut holes = Holes {
+            base: cx.gamma.base,
+            outer: cx.gamma.entries.len() as u32 + d,
+            total: arity as u32,
+            np: np as u32,
+            types: vec![None; np],
+            values: vec![None; arity - np],
+        };
+        holes.ty(&entry.template, ty, 0)?;
+        let Holes { types, values, .. } = holes;
+        let types: Vec<Type> = types.into_iter().collect::<Option<_>>()?;
+        let values: Vec<Rc<Term>> = values.into_iter().collect::<Option<_>>()?;
+        // Step 2, the proof. What has to be true is that the reference's own
+        // meaning is this type, and the reference's meaning is exactly the
+        // template at the recovered arguments — so that is what is compared,
+        // rather than a second lowering that would have to agree with the
+        // template anyway (§4.1, amended 2026-09-10). The arity slot the
+        // matcher declined to walk is compared here with everything else.
+        let mut inline: Vec<Rc<Term>> = Vec::with_capacity(types.len() + values.len());
+        for t in &types {
+            inline.push(Rc::new(crate::code::code_of(t)?));
+        }
+        inline.extend(values.iter().map(Rc::clone));
+        if instance_of_template(entry, &inline) != *ty {
+            return None;
+        }
+        // The arguments the reference will carry: a type argument goes
+        // through `emit_ty_in` and `code_of` first (§4.1), so
+        // `List<BitVec(8)>` becomes `app(List#tycode_fn^δ;
+        // app(BitVec#tycode_fn^δ; 8))` with no literal at any level.
+        let mut args: Vec<Rc<Term>> = Vec::with_capacity(types.len() + values.len());
+        for t in &types {
+            let emitted = self.emit_ty_in(cx, t, d, g);
+            args.push(Rc::new(crate::code::code_of(emitted.as_ref().unwrap_or(t))?));
+        }
+        args.extend(values.iter().map(Rc::clone));
+        Some((entry.level.clone(), args))
+    }
+
+    /// The application spine of a code function at recovered arguments, with
+    /// each `App`'s annotations read off the definition's own `Π` as it is
+    /// walked — which is where a dependent telescope's later domains come
+    /// from.
+    fn gen_spine(&self, cx: &Cx, tag: u32, args: &[Rc<Term>], d: u32, g: u32) -> Option<Term> {
+        let entry = self.types.gdefs().ty_code_fn(&tag)?;
+        let mut head = self.gen_ref_deeper(cx, GenDef::TyCodeFn(tag), d)?;
+        if g != 0 {
+            head = head.shift_global(g);
+        }
+        let mut cur = weakened(&entry.stmt, cx, d);
+        for arg in args {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = cur
+            else {
+                return None;
+            };
+            head = Term::App {
+                fun: Rc::new(head),
+                dom_level,
+                cod_level,
+                dom,
+                cod: Rc::clone(&cod),
+                arg: Rc::clone(arg),
+            };
+            cur = cod.apply_local(&id_subst_at(cx, d).extended(Rc::clone(arg)));
+        }
+        matches!(cur, Type::Ty(_)).then_some(head)
     }
 
     /// `El (D#payloadₖ^δ)` or `El (D#suffixₖ^δ)` for `ty`, if and only if
@@ -1247,6 +1980,27 @@ impl Elaborator {
         Some((ctors, tails))
     }
 
+    /// The `Wf` slot **pair** in the emission spelling: the two components
+    /// respelled together or not at all.
+    ///
+    /// Not [`Self::emit_ty`] of the former they reconstitute: a slot holds the
+    /// *component*, and since
+    /// `docs/per-instantiation-type-codes-design.md` a monomorphized `Wf` has
+    /// a name for the whole — which is exactly what may not stand here
+    /// (`docs/wf-shape-code-design.md` §2, §8). `None` keeps both slots as
+    /// they are, which is what every caller does with it.
+    pub(crate) fn emit_wf_slots(
+        &self,
+        cx: &Cx,
+        shape: &Type,
+        arity: &Term,
+        depth: u32,
+    ) -> Option<(Rc<Type>, Rc<Term>)> {
+        let shape = self.emit_ty(cx, shape, depth)?;
+        let arity = self.respell_arity_at(cx, arity, depth + 1, 0).ok()??;
+        Some((Rc::new(shape), Rc::new(arity)))
+    }
+
     /// **The one emission chokepoint** for an annotation slot's spelling
     /// (`docs/annotation-component-respell-design.md` §2.5): the inline form
     /// where the decode handed back a code literal
@@ -1311,16 +2065,16 @@ impl Elaborator {
         depth: u32,
         scratch: u32,
     ) -> Option<Type> {
-        if !self.types.gdefs().has_ty_codes() {
+        let gdefs = self.types.gdefs();
+        if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         self.respell_deep_at(cx, ty, depth, scratch)
     }
 
     fn respell_deep_at(&self, cx: &Cx, ty: &Type, d: u32, g: u32) -> Option<Type> {
-        if let Some(r) = self.respell_ty(cx, ty) {
-            let r = if g == 0 { r } else { r.shift_global(g) };
-            return Some(if d == 0 { r } else { r.shift_local(d) });
+        if let Some(r) = self.respell_ty_at(cx, ty, d, g) {
+            return Some(r);
         }
         // One arm per former with type components; `or` keeps the sibling
         // untouched (sharing preserved) when only one side respells.
@@ -1562,14 +2316,86 @@ impl Elaborator {
     /// use-site guard is written against. Closed by construction, so nothing
     /// is shifted.
     pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
-        if !self.types.gdefs().has_ty_codes() {
+        let gdefs = self.types.gdefs();
+        if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
-        let Term::GlobalTm { var, .. } = &**tm else {
+        if let Term::GlobalTm { var, .. } = &**tm {
+            return self.inline_of_code_key(self.gen_def_of(*var)?);
+        }
+        // `El (app(D#tycode_fn^δ; ā))`, the applied spelling
+        // (`docs/per-instantiation-type-codes-design.md` §4.2). Without this
+        // arm a structural reader gets the kernel's lazy *decode* of the
+        // instantiation instead of the registry's own copy, and every
+        // use-site guard declines silently.
+        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of(tm)? else {
             return None;
         };
-        self.inline_of_code_key(self.gen_def_of(*var)?)
+        let entry = self.types.gdefs().ty_code_fn(&tag)?;
+        let args = self.inlined_arguments(entry, &args, |el| self.unspell_here(el))?;
+        Some(instance_of_template(entry, &args))
+    }
+
+    /// A code function's arguments with every **type** argument replaced by a
+    /// code of the registry's own inline copy, so that substituting them into
+    /// the template and decoding gives the inline lowering and not a spelling
+    /// with a reference still inside it (§4.2). A value argument stands as it
+    /// is. `None` when the spine is not saturated — a partial application
+    /// names no type and this is not its inverse.
+    fn inlined_arguments(
+        &self,
+        entry: &TyCodeFn,
+        args: &[Rc<Term>],
+        unspell: impl Fn(&Type) -> Option<Type>,
+    ) -> Option<Vec<Rc<Term>>> {
+        if args.len() != pi_arity(&entry.stmt) {
+            return None;
+        }
+        Some(
+            args.iter()
+                .enumerate()
+                .map(|(i, arg)| {
+                    let Some(level) = entry.param_levels.get(i) else {
+                        return Rc::clone(arg);
+                    };
+                    let el = Type::El {
+                        level: level.clone(),
+                        tm: Rc::clone(arg),
+                    };
+                    match unspell(&el).as_ref().and_then(crate::code::code_of) {
+                        Some(code) => Rc::new(code),
+                        None => Rc::clone(arg),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Which definition a `GlobalVar` denotes in a type whose globals count
+    /// from `len_at` — [`Self::unspell_ty_deep`]'s explicit anchor, which
+    /// deliberately does not go through [`Self::gen_def_of`]'s padding.
+    fn code_key_at(&self, len_at: u32, var: GlobalVar) -> Option<GenDef> {
+        let abs = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))?;
+        self.types.gdefs().key_for_abs(&abs).copied()
+    }
+
+    /// [`Self::gen_app_of`] at [`Self::unspell_ty_deep`]'s anchor.
+    fn gen_app_of_at(&self, len_at: u32, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
+        let mut args = Vec::new();
+        let mut cur = t;
+        while let Term::App { fun, arg, .. } = cur {
+            args.push(Rc::clone(arg));
+            cur = fun;
+        }
+        if args.is_empty() {
+            return None;
+        }
+        args.reverse();
+        let Term::GlobalTm { var, .. } = cur else {
+            return None;
+        };
+        Some((self.code_key_at(len_at, *var)?, args))
     }
 
     /// The registry's inline copy behind a code key that names a type
@@ -1645,6 +2471,28 @@ impl Elaborator {
             .map(|slots| (*slots.shape).clone())
     }
 
+    /// [`Self::unspell_ty_deep`] anchored at the **current** world — goal and
+    /// meta padding included, as [`Self::gen_def_of`] counts it — plus
+    /// `scratch` metavariables.
+    ///
+    /// The spelling a structural reader that is *not* the `whnf` choke point
+    /// needs: [`crate::unification::unify_ty`] is a syntactic congruence, so a
+    /// reference standing where it expects a former hides the very structure
+    /// an implicit is solved from (`docs/per-instantiation-type-codes-design.md`
+    /// §4.2, amended 2026-09-10). One walk per unification attempt, `None`
+    /// when nothing unspelled.
+    pub(crate) fn unspell_deep_now(&self, ty: &Type, scratch: u32) -> Option<Type> {
+        let gdefs = self.types.gdefs();
+        if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
+            return None;
+        }
+        let len_at = self.psi.bindings.len() as u32
+            + self.attempt.goal_arena.base()
+            + self.meta_offset()
+            + scratch;
+        self.unspell_ty_deep(len_at, ty)
+    }
+
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
     /// boundary (`Elaborator::fn_type_code`): rebuild `ty` with every
     /// `El (D#tycode^δ)` reference replaced by the registry's inline lowering.
@@ -1667,16 +2515,28 @@ impl Elaborator {
     /// meta padding never applies to either, which is why this does not go
     /// through [`Self::gen_def_of`].
     pub(crate) fn unspell_ty_deep(&self, len_at: u32, ty: &Type) -> Option<Type> {
-        if !self.types.gdefs().has_ty_codes() {
+        let gdefs = self.types.gdefs();
+        if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         if let Type::El { tm, .. } = ty
             && let Term::GlobalTm { var, .. } = &**tm
-            && let Some(abs) = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))
-            && let Some(key) = self.types.gdefs().key_for_abs(&abs).copied()
+            && let Some(key) = self.code_key_at(len_at, *var)
             && let Some(inline) = self.inline_of_code_key(key)
         {
             return Some(inline);
+        }
+        // The applied spelling, at the reflection boundary (§4.2): a statement
+        // carrying `El (app(D#tycode_fn^δ; ā))` hands a `meta` analyzer the
+        // inline instantiation, exactly as it hands it the inline `⟦D⟧` behind
+        // a closed code.
+        if let Type::El { tm, .. } = ty
+            && let Some((GenDef::TyCodeFn(tag), args)) = self.gen_app_of_at(len_at, tm)
+            && let Some(entry) = self.types.gdefs().ty_code_fn(&tag)
+            && let Some(args) =
+                self.inlined_arguments(entry, &args, |el| self.unspell_ty_deep(len_at, el))
+        {
+            return Some(instance_of_template(entry, &args));
         }
         let or = |orig: &Rc<Type>, new: Option<Type>| match new {
             Some(t) => Rc::new(t),
@@ -2007,6 +2867,30 @@ impl Elaborator {
         matches!(t, Term::GlobalTm { var, .. } if self.gen_def_of(*var) == Some(key))
     }
 
+    /// The definition and arguments of an application spine `u^δ ā`, when its
+    /// head is a registered definition — the application-aware sibling of
+    /// [`Self::is_gen_ref`]/[`Self::gen_def_of`]
+    /// (`docs/per-instantiation-type-codes-design.md` §4.2). `None` for
+    /// anything whose head is not a registered global, the bare reference
+    /// included (that is [`Self::gen_def_of`]'s business, and this returning
+    /// `Some` with no arguments would make every caller check the length).
+    pub(crate) fn gen_app_of(&self, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
+        let mut args = Vec::new();
+        let mut cur = t;
+        while let Term::App { fun, arg, .. } = cur {
+            args.push(Rc::clone(arg));
+            cur = fun;
+        }
+        if args.is_empty() {
+            return None;
+        }
+        args.reverse();
+        let Term::GlobalTm { var, .. } = cur else {
+            return None;
+        };
+        Some((self.gen_def_of(*var)?, args))
+    }
+
     /// A non-dependent application of a registered definition. `dom`/`cod` are
     /// the annotations the kernel's `App` carries; both are scoped where `arg`
     /// is, and `cod` is weakened under the (vacuous) binder for it.
@@ -2281,18 +3165,6 @@ fn weaken(ty: &Type, gamma: &LocalCtx) -> Type {
     })
 }
 
-/// A type scoped in `·, x`, seen in `Γ, x` — the annotation an `App` carries
-/// for a *dependent* codomain.
-fn under_binder(ty: &Type, gamma: &LocalCtx) -> Type {
-    ty.apply_local(&LocalSubst {
-        tail: SubstTail::Empty {
-            len: gamma.entries.len() as u32 + 1,
-            base: gamma.base,
-        },
-        terms: vec![Rc::new(Term::Var(LocalVar(0)))],
-    })
-}
-
 /// `El (D#famⱼ^δ v x)` with `x` instantiated at `arg` — the tail family's
 /// annotation applied, which is the type of the `snd` node at that entry.
 /// Both are scoped in `Γ = ·, v`.
@@ -2300,13 +3172,112 @@ fn instantiate_fam(fam: &Rc<Type>, arg: &Rc<Term>, gamma: &LocalCtx) -> Type {
     fam.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg)))
 }
 
-/// A type scoped in `·, x`, instantiated at `arg` in `Γ`.
-fn instantiate(ty: &Type, arg: Rc<Term>, gamma: &LocalCtx) -> Type {
-    ty.apply_local(&LocalSubst {
-        tail: SubstTail::Empty {
-            len: gamma.entries.len() as u32,
-            base: gamma.base,
-        },
-        terms: vec![arg],
-    })
+/// `head` applied to `args`, with every `App`'s annotations read off `stmt` —
+/// the head's own **closed** `Π` — as the walk instantiates it. That is where
+/// a dependent telescope's later domains come from, and it is the one place
+/// the shape of a definition's statement is turned into a spine
+/// (`docs/per-instantiation-type-codes-design.md` §13).
+///
+/// `None` unless the statement has a `Π` for **every** argument: a spine
+/// short of the definition's own binders would come back as a partial
+/// application, and every caller here means to hand its own caller a value.
+///
+/// The check is `<`, not `!=`, and the difference is a defect the fix pass
+/// paid for: what a caller saturates is the definition's *telescope*, whose
+/// length it knows, while `pi_arity` counts every `Π` in the statement —
+/// including the ones a **function-typed field** contributes to a
+/// `D#projⱼ : Π Θ. Π(v : R). Fⱼ` whose `Fⱼ` is itself an arrow. With `!=`
+/// every such field declined at registration, which sent a record whose
+/// fields are laws (`repr`'s `abs`, `Monoid`'s `op`) back to
+/// `project_field`'s exponential walk and aborted two test binaries on the
+/// allocator. The loop below already refuses a spine the statement cannot
+/// take, which is the guard that was meant.
+fn saturate(
+    gamma: &LocalCtx,
+    head: Term,
+    stmt: &Type,
+    args: &[Rc<Term>],
+) -> Option<(Term, Type, Level)> {
+    if pi_arity(stmt) < args.len() {
+        return None;
+    }
+    let mut cur = weaken(stmt, gamma);
+    let mut head = head;
+    let mut level = None;
+    for arg in args {
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = cur
+        else {
+            return None;
+        };
+        head = Term::App {
+            fun: Rc::new(head),
+            dom_level,
+            cod_level: cod_level.clone(),
+            dom,
+            cod: Rc::clone(&cod),
+            arg: Rc::clone(arg),
+        };
+        cur = cod.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg)));
+        level = Some(cod_level);
+    }
+    Some((head, cur, level?))
 }
+
+/// A definition's statement wrapped in the declaration's telescope:
+/// `Π(θ₀)…(θ_{t−1}). inner`, each binder scoped under the ones before it, and
+/// the whole `Π`'s level with it (§13).
+fn wrap_tel(tel: &[(Type, Level)], inner: Type, inner_level: Level) -> (Type, Level) {
+    let mut ty = inner;
+    let mut level = inner_level;
+    for (dom, dom_level) in tel.iter().rev() {
+        ty = Type::Pi {
+            dom_level: dom_level.clone(),
+            cod_level: level.clone(),
+            dom: Rc::new(dom.clone()),
+            cod: Rc::new(ty),
+        };
+        level = Level::max(dom_level.clone(), level).normalize().canonical();
+    }
+    (ty, level)
+}
+
+/// [`wrap_tel`] for the body: `λ(θ₀)…(θ_{t−1}). inner`, with the codomain
+/// levels the `Π` it inhabits carries.
+fn wrap_tel_lam(tel: &[(Type, Level)], inner: Term, inner_level: Level) -> Term {
+    let mut body = inner;
+    let mut level = inner_level;
+    for (dom, dom_level) in tel.iter().rev() {
+        body = Term::Lam {
+            dom_level: dom_level.clone(),
+            cod_level: level.clone(),
+            dom: Rc::new(dom.clone()),
+            body: Rc::new(body),
+        };
+        level = Level::max(dom_level.clone(), level).normalize().canonical();
+    }
+    body
+}
+
+/// The telescope's own binders, as the arguments a definition registered over
+/// it is applied to from **inside** its own scope: in `·, θ̄, x₁…x_k` the
+/// telescope entry `i` is `Var(t − 1 − i + k)` (§13).
+fn tel_self_args(t: usize, extra: usize) -> Vec<Rc<Term>> {
+    (0..t + extra)
+        .rev()
+        .map(|i| Rc::new(Term::Var(LocalVar(i as u32))))
+        .collect()
+}
+
+/// Move a telescope one Ψ binding out, after a push
+/// ([`Elaborator::register_rec_projs`] keeps it across every one of them).
+fn shift_tel(tel: &mut [(Type, Level)]) {
+    for (ty, _) in tel.iter_mut() {
+        *ty = ty.shift_global(1);
+    }
+}
+

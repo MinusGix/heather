@@ -76,7 +76,9 @@ fn same_source_elaborates_identically() {
 /// refactor quietly reshapes every emitted term and nothing says so.
 ///
 /// Set 2026-08-06, over the prelude's 4 theorems + the suite's `fn add` and
-/// 4 theorems (9 Ψ bindings).
+/// 4 theorems; re-taken 2026-09-10 over the 10 Ψ bindings that are those plus
+/// the prelude's `CollectionLiteral#tycode_fn`
+/// (docs/per-instantiation-type-codes-design.md §2).
 ///
 /// Unmoved by the same day's fix to the kernel's `Debug` for `Branches`,
 /// which went from printing 37 of the 52 recursor branches to all 52 and
@@ -85,7 +87,7 @@ fn same_source_elaborates_identically() {
 /// that it did not is the measurement that this suite — and today's
 /// elaborator at all, which constructs no `ElimCodeTy`/`ElimCodeTm` — emits
 /// no code recursor. The golden's blind spot was real but unexercised.
-const NAT_SUITE_GOLDEN: u64 = 0x697538d142d9c471;
+const NAT_SUITE_GOLDEN: u64 = 0x90997a26fc0d6c4e;
 
 #[test]
 fn nat_suite_golden_hash() {

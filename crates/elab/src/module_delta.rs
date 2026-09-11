@@ -13,7 +13,7 @@ use heather_kernel::typing::{self, TypeError};
 use heather_syntax::OpFixity;
 
 use crate::datarepr::{DatareprInfo, DatareprKey, ImplEntry, Obligation};
-use crate::gendefs::{GenDef, WfSlots, SpineCodes};
+use crate::gendefs::{GenDef, TyCodeFn, WfSlots, SpineCodes};
 use crate::inductive::Inductive;
 use crate::metaprograms::MetaDef;
 use crate::names::{GlobalRegistration, NameKind, Scope};
@@ -129,6 +129,10 @@ pub(crate) enum DeltaEvent {
         inline: Rc<Type>,
         level: Level,
     },
+    GenTyCodeFn {
+        tag: u32,
+        entry: TyCodeFn,
+    },
     GenWfSlots {
         tag: u32,
         slots: WfSlots,
@@ -231,6 +235,14 @@ impl Elaborator {
             level: level.clone(),
         });
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
+    }
+
+    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn) {
+        self.record_module_event(|| DeltaEvent::GenTyCodeFn {
+            tag,
+            entry: entry.clone(),
+        });
+        self.types.gdefs_mut().insert_ty_code_fn(tag, entry);
     }
 
     pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots) {
@@ -476,6 +488,9 @@ impl Elaborator {
             DeltaEvent::GenTyCode { tag, inline, level } => {
                 self.semantic_commit_gen_ty_code(tag, inline, level);
             }
+            DeltaEvent::GenTyCodeFn { tag, entry } => {
+                self.semantic_commit_gen_ty_code_fn(tag, entry);
+            }
             DeltaEvent::GenWfSlots { tag, slots } => {
                 self.semantic_commit_gen_wf_slots(tag, slots);
             }
@@ -517,6 +532,8 @@ impl Elaborator {
                 if self.types.gdefs().has_binding(key, *abs) => Some("generated-definition"),
             DeltaEvent::GenTyCode { tag, .. }
                 if self.types.gdefs().has_ty_code(*tag) => Some("generated type-code"),
+            DeltaEvent::GenTyCodeFn { tag, .. }
+                if self.types.gdefs().has_ty_code_fn(*tag) => Some("generated type-code function"),
             DeltaEvent::GenWfSlots { tag, .. }
                 if self.types.gdefs().has_wf_slot_entry(*tag) => Some("generated Wf-slot"),
             DeltaEvent::GenSpineCodes { tag, .. }

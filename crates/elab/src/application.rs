@@ -145,6 +145,22 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         span: Span,
     ) -> R<()>;
 
+    /// The **emission spelling** of a solved type metavariable's code, at the
+    /// discharge (`docs/per-instantiation-type-codes-design.md` §5, amended
+    /// 2026-09-10): the solution is quoted from the type the emission sites
+    /// would write, so `M := List<BitVec(8)>` enters the spine's annotations
+    /// as `El (app(List#tycode_fn^δ; …))` and the kernel's own instantiation
+    /// of the callee's codomain at it yields that same reference instead of a
+    /// third spelling. `dom` is the metavariable's declared domain, so only a
+    /// slot at `Ty l` is a type argument at all. `None` keeps the solution.
+    ///
+    /// The solution is scoped in the **committed** world, not the scratch one:
+    /// `apply_global`'s payloads are the substitution's target, and the
+    /// identity region below them is renumbered past the metavariables.
+    fn respell_solution(&self, _cx: &Cx, _dom: &Type, _solution: &Term) -> Option<Term> {
+        None
+    }
+
     fn blocked_solver_error(
         &self,
         name: &str,
@@ -771,7 +787,7 @@ pub(crate) fn apply_implicit(
     let mut entries = Vec::with_capacity(n as usize);
     for reverse in 0..n {
         let slot = (n - 1 - reverse) as usize;
-        let solution = sols[slot]
+        let mut solution = sols[slot]
             .solved()
             .cloned()
             .ok_or_else(|| ElabError::Elab {
@@ -785,6 +801,13 @@ pub(crate) fn apply_implicit(
                 ),
                 span,
             })?;
+        // The discharge writes this solution through the whole spine's
+        // annotations, so it is written in the emission spelling (§5).
+        if let Some(dom) = meta_doms.get(slot)
+            && let Some(respelled) = elab.respell_solution(cx, dom, &solution)
+        {
+            solution = Rc::new(respelled);
+        }
         entries.push(GlobalEntry::Tm(solution));
     }
     let substitution = GlobalSubst { entries };

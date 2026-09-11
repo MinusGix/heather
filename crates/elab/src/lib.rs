@@ -1095,6 +1095,22 @@ impl vec::SurfaceVecElab for Elaborator {
 }
 
 impl application::ImplicitApplicationElab for Elaborator {
+    fn respell_solution(&self, cx: &Cx, dom: &Type, solution: &Term) -> Option<Term> {
+        // Only a *type* argument is a code: the metavariable's declared
+        // domain is `Ty l` exactly there.
+        let Type::Ty(level) = dom else { return None };
+        let coded = Type::El {
+            level: level.clone(),
+            tm: Rc::new(solution.clone()),
+        };
+        // The committed world, per the trait note — the payloads of the
+        // discharge's `apply_global` are scoped there and not in the scratch
+        // world the annotations live in.
+        let emitted = self.emit_ty(cx, &coded, 0)?;
+        let code = code::code_of(&emitted)?;
+        (code != *solution).then_some(code)
+    }
+
     fn classify_application_argument(
         &self,
         cx: &Cx,
@@ -5982,7 +5998,12 @@ impl Elaborator {
                 return err(IMPLICIT_MARK_REFUSED, a.span);
             }
             let (a_ty, _) = self.elab_ty(cx, a)?;
-            let Some(c) = code::code_of(&a_ty) else {
+            // Quoted from the type the emission sites would write
+            // (`docs/per-instantiation-type-codes-design.md` §5): a written
+            // `f<List<Nat>>` carries `El (List#tycode_fn^δ ⌜Nat⌝)` rather than
+            // the boxed literal every emission walk still finds here.
+            let emitted = self.emit_ty(cx, &a_ty, 0);
+            let Some(c) = code::code_of(emitted.as_ref().unwrap_or(&a_ty)) else {
                 return err("this type cannot be a type argument", a.span);
             };
             let head = self.whnf(cx, &ty, span)?;
@@ -6168,7 +6189,7 @@ impl Elaborator {
     fn unify_arg_ty(
         &self,
         cx: &Cx,
-        dom: &Type,
+        dom_orig: &Type,
         arg_ty: &Type,
         n: u32,
         sols: &mut [Sol],
@@ -6176,11 +6197,25 @@ impl Elaborator {
     ) {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
         let before = learned(sols);
+        // Both sides in the **inline** spelling first
+        // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
+        // 2026-09-10): the congruence below is syntactic, and a callee's
+        // domain arrives off its respelled statement, where a parameterized
+        // instantiation is `El (app(D#tycode_fn^δ; ā))` and the argument's own
+        // type is the former. Unspelled, `Iff<P, ?Q>` meets `Σ…` and solves;
+        // spelled, it solves nothing and the writer is told to give the type
+        // argument. The pattern is in the call's scratch world and the subject
+        // in the committed one, which is the whole of the bookkeeping.
+        let dom_inline = self.unspell_deep_now(dom_orig, n);
+        let dom = dom_inline.as_ref().unwrap_or(dom_orig);
+        let arg_inline = self.unspell_deep_now(arg_ty, 0);
+        let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
         unify_ty(&cx.gamma, dom, arg_ty, n, 0, sols);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
         if let Ok(head) = self.whnf(cx, arg_ty, span) {
+            let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
             unify_ty(&cx.gamma, dom, &head, n, 0, sols);
         }
     }
@@ -6264,11 +6299,18 @@ impl Elaborator {
         // the old "nothing else gets to consult the expected type" comment —
         // solving result-only implicits in general *was*
         // elab-unifier-completeness's question, and this round answered it.
+        // The same inline-spelling pre-pass `unify_arg_ty` takes, for the same
+        // reason (§4.2, amended 2026-09-10).
+        let inline_result = self.unspell_deep_now(result_ty, n);
+        let result_ty = inline_result.as_ref().unwrap_or(result_ty);
+        let inline_expected = self.unspell_deep_now(expected, 0);
+        let expected = inline_expected.as_ref().unwrap_or(expected);
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
             // unfolding a transparent relation into its definition.
             unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
             let head = self.whnf(cx, expected, span)?;
+            let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
             unify_ty(&cx.gamma, result_ty, &head, n, 0, sols);
             return Ok(());
         };
@@ -6279,6 +6321,7 @@ impl Elaborator {
         sols[m] = Sol::Withheld;
         unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
         let expected_head = self.whnf(cx, expected, span)?;
+        let expected_head = self.unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
         unify_ty(&cx.gamma, result_ty, &expected_head, n, 0, sols);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are

@@ -102,12 +102,22 @@ impl Walk<'_> {
         arity: &std::rc::Rc<Term>,
         d: u32,
     ) {
-        let wf = Type::Wf {
-            level: level.clone(),
-            shape: std::rc::Rc::clone(shape),
-            arity: std::rc::Rc::clone(arity),
-        };
-        self.slot(name, &wf, d);
+        // The question a slot asks is the *component* respell
+        // (`Elaborator::emit_wf_slots`), not `emit_ty` of the former the two
+        // reconstitute: since
+        // `docs/per-instantiation-type-codes-design.md` a monomorphized `Wf`
+        // has a name for the whole, and that name may not stand in a slot
+        // that holds the component (§8).
+        let _ = level;
+        if let Some((s, a)) = self.el.emit_wf_slots(&self.cx, shape, arity, d) {
+            self.out.push(EmissionFinding {
+                decl: self.decl.to_string(),
+                slot: name,
+                depth: d,
+                found: format!("{shape:?} / {arity:?}"),
+                emitted: format!("{s:?} / {a:?}"),
+            });
+        }
     }
 
     fn terms(&mut self, ts: &[std::rc::Rc<Term>], d: u32) {

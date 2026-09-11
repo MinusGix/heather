@@ -24,7 +24,7 @@ use heather_syntax::{
 
 use crate::application::{ParamMeta, Skel, SkelBinder};
 use crate::datarepr::{CtorView, DatareprInfo, FieldView, ImplEntry, Obligation, Provenance};
-use crate::gendefs::{GenDef, SpineCodes, WfSlots};
+use crate::gendefs::{GenDef, SpineCodes, TyCodeFn, WfSlots};
 use crate::inductive::{Ctor, FieldKind, IdxPat, IdxTy, Inductive};
 use crate::metaprograms::MetaDef;
 use crate::module_delta::{DeltaEvent, ModuleDelta, ModuleDependencyIdentity};
@@ -1252,6 +1252,7 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
         GenDef::RecFam(tag, field) => { w.byte(11); w.u32(tag); w.usize(field); }
         GenDef::PayloadCode(tag, ctor) => { w.byte(12); w.u32(tag); w.usize(ctor); }
         GenDef::SuffixCode(tag, ctor) => { w.byte(13); w.u32(tag); w.usize(ctor); }
+        GenDef::TyCodeFn(tag) => { w.byte(14); w.u32(tag); }
     }
 }
 
@@ -1267,6 +1268,7 @@ fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
         11 => GenDef::RecFam(r.u32()?, r.usize()?),
         12 => GenDef::PayloadCode(r.u32()?, r.usize()?),
         13 => GenDef::SuffixCode(r.u32()?, r.usize()?),
+        14 => GenDef::TyCodeFn(r.u32()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "generated definition", tag }),
     })
 }
@@ -1536,6 +1538,10 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(15); w.string(module); w.string(name); w.option(slot.as_ref(), |w, slot| put_slot(w, *slot));
             put_meta(w, definition);
         }
+        DeltaEvent::GenTyCodeFn { tag, entry } => {
+            w.byte(17); w.u32(*tag); put_type(w, &entry.template); put_type(w, &entry.stmt);
+            w.vec(&entry.param_levels, put_level); put_level(w, &entry.level);
+        }
         DeltaEvent::GenSpineCodes { tag, codes } => {
             w.byte(16); w.u32(*tag);
             w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
@@ -1581,6 +1587,10 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         15 => DeltaEvent::Meta {
             module: r.string()?, name: r.string()?, slot: r.option(get_slot)?, definition: get_meta(r)?,
         },
+        17 => DeltaEvent::GenTyCodeFn { tag: r.u32()?, entry: TyCodeFn {
+            template: Rc::new(get_type(r)?), stmt: Rc::new(get_type(r)?),
+            param_levels: r.vec(get_level)?, level: get_level(r)?,
+        } },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
             ctors: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
             tails: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
@@ -1617,6 +1627,7 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
     let mut gen_defs = HashSet::new();
     let mut gen_positions = HashSet::new();
     let mut ty_codes = HashSet::new();
+    let mut ty_code_fns = HashSet::new();
     let mut wf_slots = HashSet::new();
     let mut spine_codes = HashSet::new();
     let mut fam_levels = HashSet::new();
@@ -1659,6 +1670,9 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
             }
             DeltaEvent::GenTyCode { tag, .. } if !ty_codes.insert(*tag) => {
                 return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated type-code guard"));
+            }
+            DeltaEvent::GenTyCodeFn { tag, .. } if !ty_code_fns.insert(*tag) => {
+                return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated type-code function guard"));
             }
             DeltaEvent::GenWfSlots { tag, .. } if !wf_slots.insert(*tag) => {
                 return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated Wf-slot guard"));

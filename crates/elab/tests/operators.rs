@@ -58,8 +58,10 @@ fn nat_suite_ergonomic() {
     e.elab_source(NAT_SUITE_ERGONOMIC)
         .expect("operator/method/calc Nat suite must elaborate and kernel-check");
     // The `fn` counts too: it is a *defined* Ψ-global since
-    // issues/simulate-conversion-cost.md.
-    assert_eq!(e.psi().bindings.len(), 9);
+    // issues/simulate-conversion-cost.md, and so does the prelude's
+    // `CollectionLiteral#tycode_fn`
+    // (`docs/per-instantiation-type-codes-design.md` §2).
+    assert_eq!(e.psi().bindings.len(), 10);
 }
 
 #[test]

@@ -77,3 +77,4 @@ rows 1–2.
 ## Log
 
 - 2026-09-10: Item 1 (`project_field`'s fallback walk) landed by [[unnameable-annotation-occurrences]]'s round (2026-09-10), in the fix shape written here: each link's `fst`/`snd` read off `whnf(cur_emit)` now goes through `emit_ty` (depth 0 and 1). Measured on the x86 fetch certificates rather than the library: the chain met the literal at every `FetchedFrom` instance (numbers on that issue). Item 2 (`elab_arm`'s alias projections) is untouched.
+- 2026-09-10: Five-node listing 578 → 260 after [[per-instantiation-type-codes]] (2026-09-10): the Supf shape/arity and the whole Fst/Snd chain are gone; Pair.fst_ty/snd_ty 236 → 120 each, App.cod/dom and ElimNat.motive 20 — all pre-existing slots, the closed boxed literal.

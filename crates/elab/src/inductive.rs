@@ -1710,6 +1710,17 @@ impl Elaborator {
     /// exact inverse lookup restores those
     /// (`issues/inductive-spelling-codes-nonrecursive.md`).
     fn display_shape(&self, ty: &Type) -> Type {
+        // A whole-type reference first — since
+        // `docs/per-instantiation-type-codes-design.md` a *parameterized*
+        // instantiation has one too, and the constructor spine display reads
+        // lives behind it (`List<A>` rather than `List<…>`).
+        let inline = self.unspell_here(ty);
+        let ty = inline.as_ref().unwrap_or(ty);
+        // …and the kernel's lazy *decode* of one, which is what a type
+        // reduced outside `Elaborator::whnf` arrives as: `Wf(El ⌜S⌝). n`,
+        // `docs/wf-shape-code-design.md` §1.4's look-alike.
+        let decoded = decode_deep(ty);
+        let ty = decoded.as_ref().unwrap_or(ty);
         let shape = match ty {
             Type::Wf { shape, .. } => &**shape,
             _ => ty,
@@ -2055,12 +2066,9 @@ impl Elaborator {
         // module, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => match self.emit_ty(cx, &expected, 0) {
-                Some(Type::Wf {
-                    shape: s, arity: a, ..
-                }) => (s, a),
-                _ => (Rc::clone(shape), Rc::clone(arity)),
-            },
+            None => self
+                .emit_wf_slots(cx, shape, arity, 0)
+                .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
         };
         Ok(Term::Supf {
             level: level.clone(),
@@ -2282,12 +2290,13 @@ impl Elaborator {
         // substituted into every arm's obligation, so it is this lowering's
         // one Θ(arms)-copied whole type; the scrutinee's own `⟦D⟧` never
         // appears here at all (the spine's components do, and they stay
-        // inline for `spine`/`tag_of` to read). `shift_local(1)`: the motive
-        // is scoped over `(Γ, z : ⟦D⟧)` and `gen_ref` stamps `Γ`'s length.
-        let motive = self
-            .respell_ty(cx, &motive)
-            .map(|t| t.shift_local(1))
-            .unwrap_or(motive);
+        // inline for `spine`/`tag_of` to read). The depth is 1, the motive's
+        // own `z` binder: it is scoped over `(Γ, z : ⟦D⟧)` and a reference
+        // minted for it is stamped one past `Γ`'s length. Passed as a depth
+        // rather than shifted afterwards, because the instance route mints an
+        // *open* reference whose arguments are already scoped there
+        // (`docs/per-instantiation-type-codes-design.md` §4.1).
+        let motive = self.respell_ty_at(cx, &motive, 1, 0).unwrap_or(motive);
         // The emission copy of the spine, beside the structural one — the same
         // split the tier-1 lowering takes (`docs/wf-shape-code-design.md`
         // §3.4). A tier-0 `match` writes the constructor payload types into
@@ -2536,11 +2545,30 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         // The named projection, where the declaration registered one
-        // (`gendefs.rs`, `issues/theorem-field-projection-oom.md`). It is the
-        // walk below with its exponent removed, so it comes first and the walk
-        // stays as the fallback for the records that have no definition — a
-        // parameterized one, or one whose registration declined.
-        if let Some(t) = self.rec_proj_ref(cx, ind.tag, idx, &value) {
+        // (`gendefs.rs`, `issues/theorem-field-projection-oom.md`, and
+        // `docs/per-instantiation-type-codes-design.md` §13 for the
+        // telescoped case). It is the walk below with its exponent removed
+        // *and* with no `Σ` ever reconstituted against the receiver's own
+        // reference, so it comes first; the walk stays as the fallback for
+        // the records whose registration declined.
+        //
+        // A telescoped record's definition is applied to the instantiation's
+        // arguments first, and those come off the receiver's type — its own
+        // reference spine, or §4.1's hole-match of the inline copy. The
+        // definition's domain at those arguments *is* the receiver's type,
+        // which is the whole difference: the kernel's `App` rule matches it
+        // syntactically where the `Fst`/`Snd` rule below would reconstitute
+        // `Σ(fst). snd` and convert the reference against it.
+        // The closed device fires whatever the receiver is: there the
+        // definitions exist to remove the walk's *exponent*, and a literal
+        // receiver is exactly the case that blows up without them. The
+        // telescoped one asks first, because there the definitions buy a
+        // syntactic comparison and charge δ + β for a computation.
+        let telescoped = !ind.params.is_empty() || !ind.valparams.is_empty();
+        if (!telescoped || receiver_is_neutral(&value))
+            && let Some(args) = self.instance_args(cx, ind, record_ty)
+            && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, &args, &value)
+        {
             return Ok(t);
         }
         let mut cur = record_ty.clone();
@@ -2549,7 +2577,19 @@ impl Elaborator {
         // respell and keep this as `None`, so their old path stays allocation-
         // free; a parameterized law record such as `IrPassLaws(R, alg)` gets
         // the exact component spelling its closed Π binder received.
-        let mut cur_emit = self.emit_ty(cx, record_ty, 0);
+        let mut cur_emit = match self.emit_ty(cx, record_ty, 0) {
+            Some(emitted) => Some(emitted),
+            // The type may **already** be the emission spelling: since
+            // `docs/per-instantiation-type-codes-design.md` a parameterized
+            // record's instantiation has a name, so a receiver's inferred
+            // type arrives as `El (app(D#tycode_fn^δ; ā))` — and `emit_ty` is
+            // idempotent, so "nothing left to change" and "nothing to name"
+            // look alike here. Without this the walk fell to the inline
+            // branch and every `Fst`/`Snd` annotation of the chain met the
+            // reference the value's own type carries (`Sigma`/`El(?)`, the
+            // largest row of the x86 certificates before this line).
+            None => self.unspell_here(record_ty).map(|_| record_ty.clone()),
+        };
         let mut pair = value;
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
         for step in 0..=idx + 1 {
@@ -2575,28 +2615,49 @@ impl Elaborator {
             // lowering's established split.
             let (fst_e, snd_e) = match &cur_emit {
                 Some(emitted) => {
+                    // Did this entry come from *behind* something — a whole-type
+                    // reference, a code — or is the emission copy already the
+                    // `Σ` it hands back? Only the first case has components in
+                    // a spelling this walk did not choose, and only it may
+                    // pay a respell. The second is every entry after the
+                    // first, where the tail is the previous entry's *already
+                    // emitted* `snd` with the previous projection substituted
+                    // in — and that substitution is the walk's own exponent
+                    // (`issues/theorem-field-projection-oom.md`), so calling
+                    // `emit_ty` on it per entry re-walks and re-materializes
+                    // an exponentially large type once per field. That is a
+                    // 4 GiB abort on the eleven-field cross-referencing record
+                    // of `crates/elab/tests/record_projection_size.rs`
+                    // (§13.10 of `docs/per-instantiation-type-codes-design.md`,
+                    // and §13.8 is the same sentence at the registration side:
+                    // the field type is respelled, the tail never).
+                    let behind_a_name = !matches!(emitted, Type::Sigma { .. });
                     let Type::Sigma { fst, snd, .. } = self.whnf(cx, emitted, span)? else {
                         return err("internal: respelling changed a record spine's shape", span);
                     };
-                    // The emitted copy of an unparameterized record is its
-                    // `El (D#tycode^δ)` reference, and what `whnf` hands
-                    // back from behind it is the registry's *inline*
-                    // lowering — `Vec(⟦Bool⟧; 64)` where every other site,
-                    // the constructor tuple (`build_fields_skel`) first among
-                    // them, spells `Vec(El (Bool#tycode^δ); 64)`. A record
-                    // with no named projections (a non-dependent spine,
-                    // `register_rec_projs`) reaches this walk for its
-                    // parameters' fields inside a record *definition*, and
-                    // the chain's annotations then met the tuple's at every
-                    // instance of the defined record: the `Sigma`/`Sigma`
-                    // bucket of the x86 fetch certificates
-                    // (issues/unnameable-annotation-occurrences.md,
-                    // 2026-09-10). Respell the components, as the tuple
-                    // does; idempotent when nothing is left to respell.
-                    (
-                        self.emit_ty(cx, &fst, 0).map_or(fst, Rc::new),
-                        self.emit_ty(cx, &snd, 1).map_or(snd, Rc::new),
-                    )
+                    if !behind_a_name {
+                        (fst, snd)
+                    } else {
+                        // The emitted copy of an unparameterized record is its
+                        // `El (D#tycode^δ)` reference, and what `whnf` hands
+                        // back from behind it is the registry's *inline*
+                        // lowering — `Vec(⟦Bool⟧; 64)` where every other site,
+                        // the constructor tuple (`build_fields_skel`) first
+                        // among them, spells `Vec(El (Bool#tycode^δ); 64)`. A
+                        // record with no named projections (a non-dependent
+                        // spine, `register_rec_projs`) reaches this walk for
+                        // its parameters' fields inside a record *definition*,
+                        // and the chain's annotations then met the tuple's at
+                        // every instance of the defined record: the
+                        // `Sigma`/`Sigma` bucket of the x86 fetch certificates
+                        // (issues/unnameable-annotation-occurrences.md,
+                        // 2026-09-10). Respell the components, as the tuple
+                        // does; idempotent when nothing is left to respell.
+                        (
+                            self.emit_ty(cx, &fst, 0).map_or(fst, Rc::new),
+                            self.emit_ty(cx, &snd, 1).map_or(snd, Rc::new),
+                        )
+                    }
                 }
                 // A record type that arrived as a code literal (`El ⌜Σ…⌝`,
                 // a `→ Type` body's quote) whnf's one level at a time, and
@@ -4764,5 +4825,31 @@ fn match_targs(
             }
         }
         _ => {}
+    }
+}
+
+/// Does this receiver bottom out in a **local** — so that a field read off it
+/// is something the kernel compares, not something it computes?
+///
+/// The use-site half of §13's boundary
+/// (`docs/per-instantiation-type-codes-design.md` §13.6, amended by the fix
+/// pass). A named projection is a *reference*: two of them are compared
+/// syntactically, which is the whole win, and §13.1's measured payers are
+/// reads off a binder — `Var < Sndᵏ < Fst < …` at an open instance. But a
+/// reference has to be **computed through** by δ + β where the inline
+/// `fst(sndʲ v)` is one elimination the evaluator fires on the receiver's own
+/// value, and a certificate that chains twenty-eight machine states through
+/// `state.memory` pays that once per read per level: `reused_callee`'s
+/// `caller_native_memory_same_28` needs between 8× and 64× `DEFAULT_FUEL` with
+/// the reference and checks inside it without. So the reference is minted
+/// exactly where the receiver is a local — the shape the measurement
+/// attributes the misses to — and a receiver the kernel will reduce anyway
+/// keeps the inline walk.
+fn receiver_is_neutral(value: &Term) -> bool {
+    match value {
+        Term::Var(_) => true,
+        Term::Fst { pair, .. } | Term::Snd { pair, .. } => receiver_is_neutral(pair),
+        Term::App { fun, .. } => receiver_is_neutral(fun),
+        _ => false,
     }
 }

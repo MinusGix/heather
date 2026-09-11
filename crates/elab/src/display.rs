@@ -469,15 +469,20 @@ impl Speller<'_> {
         }
         args.reverse();
 
-        // Closed record projections have a nominal generated-definition key.
-        // Recover only the single-receiver form; do not unfold definitions or
-        // guess how an applied function-valued field hides implicit arguments.
+        // Record projections have a nominal generated-definition key. The
+        // spine is the declaration's telescope and then the receiver
+        // (`docs/per-instantiation-type-codes-design.md` §13), so the
+        // receiver is the last argument and the arguments before it are the
+        // instantiation — dropped, exactly as a call's implicits are. Do not
+        // unfold definitions or guess how an applied function-valued field
+        // hides implicit arguments.
         if let Term::GlobalTm { var, subst } = head
             && subst.terms.is_empty()
-            && let [receiver] = args.as_slice()
             && let Some(crate::gendefs::GenDef::RecProj(tag, field)) = self.el.gen_def_of(*var)
             && let Some(record) = self.el.types.by_tag(tag)
             && record.is_record
+            && args.len() == record.params.len() + record.valparams.len() + 1
+            && let Some(receiver) = args.last()
             && let Some((Some(name), _)) = record.ctors[0].fields.get(field)
         {
             let shown = self.tm(receiver, d + 1);

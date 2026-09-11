@@ -157,6 +157,15 @@ impl Elaborator {
         tr: &mut Vec<TraceLine>,
         up: &mut Option<(Term, Type)>,
     ) -> Option<Term> {
+        // The goal in the **inline** spelling: it may arrive off a respelled
+        // binder type or statement, where a parameterized class instantiation
+        // is `El (app(C#tycode_fn^δ; ā))`, and every structural read below —
+        // starting with the class lookup — is written against the lowering
+        // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
+        // 2026-09-10; `docs/wf-shape-code-design.md` §4). One head unspell at
+        // the entry, so the whole search sees one spelling.
+        let inline = self.unspell_here(goal);
+        let goal = inline.as_ref().unwrap_or(goal);
         let depth = self.resolve_depth.get();
         tr.push(line(depth, "goal", display.to_string()));
         if depth >= MAX_DEPTH {

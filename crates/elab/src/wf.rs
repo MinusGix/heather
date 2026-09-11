@@ -421,12 +421,9 @@ impl Elaborator {
         // agreed, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => match self.emit_ty(cx, scrut_ty, 0) {
-                Some(Type::Wf {
-                    shape: s, arity: a, ..
-                }) => (s, a),
-                _ => (Rc::clone(shape), Rc::clone(arity)),
-            },
+            None => self
+                .emit_wf_slots(cx, shape, arity, 0)
+                .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
         };
         let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
             &cx.gamma,
@@ -1153,12 +1150,26 @@ mod tycode {
     /// construction), one non-recursive declaration — whose lowering is a bare
     /// sum-of-Σs and which gets a code all the same — and one *parameterized*
     /// declaration, which must not.
+    ///
+    /// The records cover §13's four corners of the projection boundary:
+    /// `Cell<A, B>` telescoped and non-dependent (the `MachineState<M>`
+    /// shape), `Dep<A>(n)` telescoped and dependent, `Plain` closed and
+    /// non-dependent (which keeps the inline walk) and `DepC` closed and
+    /// dependent (which does not).
     const SRC: &str = "
 inductive T { T0, T1(x: Nat, r: T), T2(y: Nat, r: T) }
 inductive U { U0, U1(x: Nat, r: U), U2(y: Nat, r: U) }
 inductive Flat { FA, FB(n: Nat), FC(m: Nat, k: Nat) }
 inductive Flat2 { GA, GB(n: Nat), GC(m: Nat, k: Nat) }
 inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
+inductive Two<A, B> { MkTwo(a: A, b: B) }
+inductive Box2<A> { CNil, CCons(a: A, r: Box2<A>) }
+record BV(n: Nat) { bits: [Nat; n] }
+record Mixed<A>(n: Nat) { a: A, bits: [Nat; n] }
+record Cell<A, B> { l: A, r: B }
+record Dep<A>(n: Nat) { k: Nat, same: k = n, a: A }
+record Plain { p: Nat, q: Nat }
+record DepC { m: Nat, eq: m = m }
 ";
 
     struct Env {
@@ -2081,12 +2092,25 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let (box_ty, l) =
             e.el.lower_instance(&e.cx, &e.ind("Box"), &[(flat_ty.clone(), fl)], &[], SPAN)
                 .expect("`Box<Flat>` lowers");
-        let r = e.el.respell_ty_deep(&e.cx, &box_ty, 0).expect("its components respell");
-        let Type::Wf { shape, arity, .. } = &r else {
+        // Since `docs/per-instantiation-type-codes-design.md` the *whole*
+        // instantiation has a name, so the chokepoint hands back the code
+        // function's application — and the slot pair, which may not hold a
+        // reference to the whole (§8), asks its own question.
+        let whole = e.el.respell_ty_deep(&e.cx, &box_ty, 0).expect("the instance respells");
+        assert!(matches!(&whole, Type::El { .. }), "{whole:?}");
+        assert_eq!(e.el.unspell_here(&whole).as_ref(), Some(&box_ty));
+        let Type::Wf { shape: s0, arity: a0, .. } = &box_ty else {
             panic!("a recursive lowering is a `Wf`")
         };
+        let (shape, arity) =
+            e.el.emit_wf_slots(&e.cx, s0, a0, 0).expect("its components respell");
+        let r = Type::Wf {
+            level: l.clone(),
+            shape: Rc::clone(&shape),
+            arity: Rc::clone(&arity),
+        };
         // The shape's `BCons` payload carries the field as `El (Flat#tycode^δ)`…
-        let Type::Sum { rhs, .. } = &**shape else {
+        let Type::Sum { rhs, .. } = &*shape else {
             panic!("two constructors: a sum")
         };
         let Type::Sigma { snd, .. } = &**rhs else {
@@ -2101,7 +2125,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
         // …and so does the arity's `Case` annotation for the same summand,
         // one binder deeper (the shape's own).
-        let Term::Case { rhs: case_rhs, .. } = &**arity else {
+        let Term::Case { rhs: case_rhs, .. } = &*arity else {
             panic!("the arity is a case tree")
         };
         let Type::Sigma { snd, .. } = &**case_rhs else {
@@ -2678,4 +2702,593 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         assert!(r.is_err(), "a mismatched instance must still be refused");
     }
 
+    // -- the code *function* (docs/per-instantiation-type-codes-design.md) ---
+
+    mod tycode_fn {
+        //! `D#tycode_fn` — the per-instantiation spelling
+        //! (`docs/per-instantiation-type-codes-design.md`).
+        //!
+        //! The same two obligations as the module above and the same
+        //! discipline: emission is checked by elaborating real source, and
+        //! recognition structurally, with a look-alike and a wrong-argument
+        //! negative on every path.
+
+        use super::*;
+
+        fn code_fn_of(e: &Env, name: &str) -> Option<Term> {
+            e.el.gen_ref(&e.cx, GenDef::TyCodeFn(e.ind(name).tag))
+        }
+
+        /// The instantiation `D<args>` as `lower_instance` writes it.
+        fn instance(e: &Env, name: &str, args: &[(Type, Level)]) -> (Type, Level) {
+            e.el.lower_instance(&e.cx, &e.ind(name), args, &[], SPAN)
+                .expect("the instantiation lowers")
+        }
+
+        // -- registration boundary ------------------------------------------
+
+        #[test]
+        fn a_parameterized_declaration_gets_a_code_function_and_a_closed_one_does_not() {
+            let e = env();
+            for name in ["Box", "Two", "Box2"] {
+                assert!(
+                    code_fn_of(&e, name).is_some(),
+                    "`{name}` is parameterized and should have a `#tycode_fn`"
+                );
+            }
+            // The complement of `register_ty_code`'s boundary, exactly: a
+            // closed declaration has the whole-type code and no function.
+            for name in ["T", "U", "Flat"] {
+                assert!(code_fn_of(&e, name).is_none(), "`{name}` is closed");
+                assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind(name).tag)).is_some());
+            }
+            assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+        }
+
+        #[test]
+        fn a_value_indexed_declaration_gets_a_code_function() {
+            let e = env();
+            // §2's asymmetry: a value parameter is abstracted by an ordinary
+            // `Π` over its type, and a mixed telescope registers as one.
+            for name in ["BV", "Mixed"] {
+                assert!(code_fn_of(&e, name).is_some(), "`{name}` has value parameters");
+            }
+        }
+
+        // -- the reference at an instantiation -------------------------------
+
+        #[test]
+        fn an_instantiation_is_spelled_as_the_code_functions_application() {
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let (inline, il) = instance(&e, "Box", &[(flat, fl)]);
+            let r = e.el.respell_ty(&e.cx, &inline).expect("`Box<Flat>` respells");
+            let Type::El { level, tm } = &r else {
+                panic!("the spelling is `El` of an application")
+            };
+            assert_eq!(*level, il);
+            let (key, args) = e.el.gen_app_of(tm).expect("an application of a definition");
+            assert_eq!(key, GenDef::TyCodeFn(e.ind("Box").tag));
+            assert_eq!(args.len(), 1);
+            // Convertible both ways — the reference is a spelling change.
+            assert!(e.el.conv_types(&e.cx, &r, &inline, &il));
+            assert!(e.el.conv_types(&e.cx, &inline, &r, &il));
+            // Idempotent: `tag_of` leaves an `El` of a neutral alone.
+            assert!(e.el.respell_ty(&e.cx, &r).is_none());
+            // …and the inverse restores the registry's own copy, not the
+            // kernel's decode (§4.2): this is what every structural reader
+            // and every use-site guard sees.
+            assert_eq!(
+                e.el.unspell_here(&r).expect("the applied reference unspells"),
+                inline
+            );
+            assert_eq!(e.el.whnf(&e.cx, &r, SPAN).expect("whnf"), inline);
+            assert_eq!(e.el.tag_of(&r).map(|i| i.tag), None);
+        }
+
+        #[test]
+        fn a_wrong_argument_application_is_not_the_instance() {
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let (flat2, fl2) = e.lowered("Flat2");
+            let (inline, il) = instance(&e, "Box", &[(flat, fl)]);
+            let (other, _) = instance(&e, "Box", &[(flat2, fl2)]);
+            let wrong = e.el.respell_ty(&e.cx, &other).expect("`Box<Flat2>` respells");
+            assert!(
+                !e.el.conv_types(&e.cx, &wrong, &inline, &il),
+                "a wrong-argument application is a different type"
+            );
+            // …and the look-alike declaration's own instantiation is not this
+            // one either, tags being nominal.
+            let (look, ll) = instance(&e, "Box2", &[(e.lowered("Flat").0, e.lowered("Flat").1)]);
+            let look_r = e.el.respell_ty(&e.cx, &look).expect("`Box2<Flat>` respells");
+            let Type::El { tm, .. } = &look_r else { panic!("a reference") };
+            assert_eq!(
+                e.el.gen_app_of(tm).map(|(k, _)| k),
+                Some(GenDef::TyCodeFn(e.ind("Box2").tag))
+            );
+            assert!(!e.el.conv_types(&e.cx, &look_r, &inline, &ll));
+        }
+
+        #[test]
+        fn a_lookalike_declaration_does_not_match_the_template() {
+            let e = env();
+            // `Box` and `Box2` differ only in their nominal tags, and the
+            // template is compared for equality at the position it puts its
+            // own tag Σ (`issues/tag-types-collide-with-lowerings.md`).
+            let (flat, fl) = e.lowered("Flat");
+            let (b1, _) = instance(&e, "Box", &[(flat.clone(), fl.clone())]);
+            assert_eq!(e.el.tag_of(&b1).map(|i| i.tag), Some(e.ind("Box").tag));
+            // A closed declaration's lowering takes its *own* whole-type
+            // code and is nobody's instantiation…
+            let closed = e.el.respell_ty(&e.cx, &flat).expect("`Flat` has a code");
+            let Type::El { tm, .. } = &closed else { panic!("a reference") };
+            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+            assert!(e.el.gen_app_of(tm).is_none());
+            // …and a fieldless shape with no tag read declines outright.
+            assert!(
+                e.el.respell_ty(&e.cx, &Type::Unit { level: Level::Zero })
+                    .is_none()
+            );
+            // The two look-alikes' own instantiations name different definitions,
+            // which is the whole of the nominal guarantee.
+            let (b2, _) = instance(&e, "Box2", &[(flat, fl)]);
+            assert_ne!(
+                e.el.respell_ty(&e.cx, &b1),
+                e.el.respell_ty(&e.cx, &b2),
+                "structurally identical instantiations take their own names"
+            );
+        }
+
+        #[test]
+        fn a_nested_instantiation_composes_the_references() {
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let (inner, il) = instance(&e, "Box", &[(flat, fl)]);
+            let (outer, ol) = instance(&e, "Box", &[(inner, il)]);
+            let r = e.el.respell_ty(&e.cx, &outer).expect("`Box<Box<Flat>>` respells");
+            let Type::El { tm, .. } = &r else { panic!("a reference") };
+            let (key, args) = e.el.gen_app_of(tm).expect("an application");
+            assert_eq!(key, GenDef::TyCodeFn(e.ind("Box").tag));
+            // The argument is itself a reference — `code_of` of an `El` is the
+            // identity, so nothing is quoted twice (§3).
+            let (inner_key, _) = e.el.gen_app_of(&args[0]).expect("the argument is an application");
+            assert_eq!(inner_key, GenDef::TyCodeFn(e.ind("Box").tag));
+            assert!(e.el.conv_types(&e.cx, &r, &outer, &ol));
+            assert!(e.el.conv_types(&e.cx, &outer, &r, &ol));
+            assert_eq!(e.el.whnf(&e.cx, &r, SPAN).expect("whnf"), outer);
+        }
+
+        #[test]
+        fn an_open_instance_under_a_binder_shifts_as_a_unit() {
+            // Axis 2 of `docs/testing-generated-terms.md`, and the one that
+            // catches a depth error: the argument mentions a binder, so the
+            // reference is minted *at* that depth rather than minted closed
+            // and shifted (§4.1).
+            let e = env();
+            let mut cx = Cx::empty();
+            cx.push("#A".into(), Type::Ty(Level::Zero), Level::succ(Level::Zero));
+            let a = Type::El {
+                level: Level::Zero,
+                tm: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let (open, ol) = e
+                .el
+                .lower_instance(&cx, &e.ind("Box"), &[(a, Level::Zero)], &[], SPAN)
+                .expect("`Box<A>` lowers openly");
+            let r = e.el.respell_ty(&cx, &open).expect("the open instance respells");
+            assert!(
+                e.el
+                    .kernel_check_type(&e.el.psi, heather_kernel::layer::Layer::Prog, &cx.gamma, &r, &ol)
+                    .is_ok(),
+                "the open reference typechecks in that context: {r:?}"
+            );
+            assert!(e.el.conv_types(&cx, &r, &open, &ol));
+            assert!(e.el.conv_types(&cx, &open, &r, &ol));
+            assert_eq!(e.el.whnf(&cx, &r, SPAN).expect("whnf"), open);
+            // Tail and argument move together.
+            let deeper = r.shift_local(1);
+            assert_ne!(deeper, r);
+            // …and the same instance one binder further in respells to that.
+            assert_eq!(
+                e.el.respell_ty_at(&cx, &open.shift_local(1), 1, 0),
+                Some(deeper)
+            );
+        }
+
+        #[test]
+        fn a_higher_level_instantiation_declines_and_stays_inline() {
+            // §2.1's boundary: one definition, one level profile. A `Ty 1`
+            // argument fails the guard's level comparison and keeps today's
+            // spelling — a decline, never a wrong reference.
+            let e = env();
+            let one = Level::succ(Level::Zero);
+            let mut cx = Cx::empty();
+            cx.push("#A".into(), Type::Ty(one.clone()), Level::succ(one.clone()));
+            let a = Type::El {
+                level: one.clone(),
+                tm: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let (open, _) = e
+                .el
+                .lower_instance(&cx, &e.ind("Box"), &[(a, one)], &[], SPAN)
+                .expect("`Box<A>` lowers at level 1 too");
+            assert!(
+                e.el.respell_ty(&cx, &open).is_none(),
+                "a level-1 instantiation keeps the inline spelling"
+            );
+        }
+
+        // -- emission: real source, the four axes ---------------------------
+
+        #[test]
+        fn the_four_axes_on_a_monomorphized_container() {
+            let mut e = env();
+            e.el.elab_source(
+                "
+fn blen(b: Box<Flat>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(blen(r)) } }
+fn bhead(b: Box<Flat>, d: Flat) -> Flat { match b { BNil => d, BCons(a, r) => a } }
+fn bwrap<A>(a: A) -> Box<A> { BCons(a, BNil) }
+fn bnest(f: Flat) -> Box<Box<Flat>> { BCons(BCons(f, BNil), BNil) }
+theorem bhead_literal(): bhead(BCons(FB(1), BNil), FA) = FB(1) { refl }
+theorem bhead_neutral(b: Box<Flat>, d: Flat): bhead(BCons(FA, b), d) = FA { refl }
+theorem blen_computes(): blen(BCons(FA, BCons(FB(2), BNil))) = 2 { refl }
+theorem bwrap_open(f: Flat): bhead(bwrap(f), FA) = f { refl }
+",
+            )
+            .expect("the reference-spelled annotations check and compute");
+            // Axis 4, on the same path.
+            let r = e.el.elab_source(
+                "theorem bhead_wrong(): bhead(BCons(FB(1), BNil), FA) = FA { refl }",
+            );
+            assert!(r.is_err(), "a false equation must still be refused");
+        }
+
+        #[test]
+        fn a_value_indexed_instantiation_checks_and_computes() {
+            let mut e = env();
+            e.el.elab_source(
+                "
+fn bv0() -> BV(0) { BV([]) }
+fn mflat(n: Nat, bits: [Nat; n]) -> Mixed<Flat>(n) { Mixed(FA, bits) }
+theorem mflat_a(bits: [Nat; 2]): mflat(2, bits).a = FA { refl }
+",
+            )
+            .expect("a value-indexed instantiation elaborates, checks and computes");
+        }
+
+        #[test]
+        fn an_inferred_type_argument_discharges_the_reference() {
+            // The chartered row (§1): an implicit type argument solved as a
+            // *parameterized* instantiation is written into the whole spine's
+            // annotations by `apply_implicit`'s discharge, and with a name for
+            // it the kernel's own instantiation of the callee's codomain is
+            // the same reference rather than a third spelling.
+            let mut e = env();
+            e.el.enable_emission_walk();
+            e.el.elab_source(
+                "
+record Holder<M>(k: Nat) { item: M, tag: Nat, at: k = k }
+fn mk_box(n: Nat) -> Box<Flat> { BCons(FB(n), BCons(FA, BNil)) }
+fn hold(k: Nat) -> Holder<Box<Flat>>(k) { Holder(mk_box(k), k, refl) }
+fn peek<M>(k: Nat, h: Holder<M>(k)) -> Nat { h.tag }
+fn again<M>(k: Nat, h: Holder<M>(k), j: Nat) -> Nat { peek(k, h) }
+fn chain(k: Nat) -> Nat { again(k, hold(k), peek(k, hold(k))) }
+theorem chain_is_k(k: Nat): chain(k) = k { refl }
+",
+            )
+            .expect("the inferred instantiation elaborates and computes");
+            // `hold`'s statement names the instantiation the solution is:
+            // the codomain is `El (app(Holder#tycode_fn^δ; …))`, and the
+            // discharge writes that same term into the spine. (`Holder`'s
+            // value parameter has to *occur* in the lowering for the matcher
+            // to place it — §4.1's decline, and the reason `at: k = k` is
+            // there.)
+            let abs = e.el.lookup_global("hold").expect("`hold` is registered").abs as usize;
+            let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.get(abs).expect("…and bound")
+            else {
+                panic!("a `fn` is a term binding")
+            };
+            let Type::Pi { cod, .. } = &**ty else { panic!("one parameter, one Π") };
+            let Type::El { tm, .. } = &**cod else {
+                panic!("the result is the reference, not the inline instance: {cod:?}")
+            };
+            let grew = (e.el.psi.bindings.len() - abs) as u32;
+            assert_eq!(
+                e.el.gen_app_of(&tm.shift_global(grew)).map(|(k, _)| k),
+                Some(GenDef::TyCodeFn(e.ind("Holder").tag))
+            );
+            // …and the walker, which audits every emitted annotation slot,
+            // finds nothing the chokepoint would have written differently —
+            // including the slots the discharge filled.
+            let findings = e.el.take_emission_findings();
+            let listed: Vec<String> = findings
+                .iter()
+                .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                .collect();
+            assert!(
+                findings.is_empty(),
+                "the emission walker is empty on the inferred chain:\n{}",
+                listed.join("\n")
+            );
+        }
+
+        // -- §13: projections at an instantiation ---------------------------
+
+        /// A context holding one receiver of the closed type `ty`, and the
+        /// receiver itself.
+        fn receiver(ty: &Type, l: &Level) -> (Cx, Rc<Term>) {
+            let mut cx = Cx::empty();
+            cx.push("#v".into(), ty.clone(), l.clone());
+            (cx, Rc::new(Term::Var(LocalVar(0))))
+        }
+
+        #[test]
+        fn a_telescoped_records_projections_get_names_and_a_closed_flat_one_does_not() {
+            let e = env();
+            // §13's telescoped boundary: a record over a telescope whose
+            // spine is **not** dependent is named, because the reason to name
+            // there is the receiver's *reference* and not the spine's
+            // exponent — and its definitions write the tail out, which is
+            // what a dependent spine may not do (§13.6).
+            for name in ["Cell", "Mixed", "BV"] {
+                assert!(
+                    e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind(name).tag, 0))
+                        .is_some(),
+                    "`{name}` is telescoped and flat: its field 0 should have a `#proj`"
+                );
+            }
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("Dep").tag, 0))
+                    .is_none(),
+                "`Dep<A>(n)`'s spine is dependent: a telescope declines it"
+            );
+            // …and the closed side is exactly as it was: a dependent spine is
+            // named, a flat one is left to the (already linear) walk.
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("DepC").tag, 0))
+                    .is_some()
+            );
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("Plain").tag, 0))
+                    .is_none(),
+                "a closed non-dependent record keeps the inline walk"
+            );
+        }
+
+        #[test]
+        fn a_field_read_at_an_instance_is_the_application() {
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let (flat2, fl2) = e.lowered("Flat2");
+            let (inline, il) = e
+                .el
+                .lower_instance(
+                    &e.cx,
+                    &e.ind("Cell"),
+                    &[(flat, fl), (flat2.clone(), fl2)],
+                    &[],
+                    SPAN,
+                )
+                .expect("`Cell<Flat, Flat2>` lowers");
+            // The receiver's own type is the reference, which is what a
+            // binder respelled by §4.1 carries.
+            let r = e.el.respell_ty(&e.cx, &inline).expect("the instance respells");
+            let (cx, v) = receiver(&r, &il);
+            let (tm, ty, lvl) = e
+                .el
+                .project_field(&cx, &e.ind("Cell"), &r.shift_local(1), Rc::clone(&v), 1, SPAN)
+                .expect("the field reads");
+            // Structural: the telescope's arguments, then the receiver.
+            let (key, args) = e.el.gen_app_of(&tm).expect("an application of a definition");
+            assert_eq!(key, GenDef::RecProj(e.ind("Cell").tag, 1));
+            assert_eq!(args.len(), 3, "two type arguments and the receiver");
+            assert_eq!(*args[2], *v);
+            // It checks in that context, and its type is the field's.
+            e.el.kernel_check_term(
+                &e.el.psi,
+                heather_kernel::layer::Layer::Prog,
+                &cx.gamma,
+                &tm,
+                &ty,
+                &lvl,
+            )
+            .expect("the applied projection typechecks");
+            assert!(e.el.conv_types(&cx, &ty, &flat2.shift_local(1), &lvl));
+            // …and the *other* route of `instance_args` (§13.4) agrees: the
+            // same field of the same value, read off the inline spelling, so
+            // the hole-match and the reference's own spine recover one `ā`.
+            let (inline_tm, inline_ty, inline_lvl) = e
+                .el
+                .project_field(
+                    &cx,
+                    &e.ind("Cell"),
+                    &inline.shift_local(1),
+                    Rc::clone(&v),
+                    1,
+                    SPAN,
+                )
+                .expect("the inline read");
+            assert!(e.el.conv_types(&cx, &ty, &inline_ty, &inline_lvl));
+            // …and each is the other's term at the other's type, which is the
+            // conservativity claim the kernel decides — and which would fail
+            // if either route recovered different arguments.
+            for (t, at, al) in [(&tm, &inline_ty, &inline_lvl), (&inline_tm, &ty, &lvl)] {
+                e.el.kernel_check_term(
+                    &e.el.psi,
+                    heather_kernel::layer::Layer::Prog,
+                    &cx.gamma,
+                    t,
+                    at,
+                    al,
+                )
+                .expect("the named projection and the inline walk agree");
+            }
+        }
+
+        #[test]
+        fn a_wrong_instance_application_is_refused() {
+            // Axis 4. The definition's domain at `ā` *is* the instantiation,
+            // so a receiver from a different one is a kernel rejection rather
+            // than a silently wrong annotation.
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let (flat2, fl2) = e.lowered("Flat2");
+            let (inline, il) = e
+                .el
+                .lower_instance(
+                    &e.cx,
+                    &e.ind("Cell"),
+                    &[(flat.clone(), fl.clone()), (flat2.clone(), fl2.clone())],
+                    &[],
+                    SPAN,
+                )
+                .expect("`Cell<Flat, Flat2>` lowers");
+            let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+            let (cx, v) = receiver(&r, &il);
+            // The *swapped* instantiation's arguments, against this receiver.
+            let (swapped, _) = e
+                .el
+                .lower_instance(&e.cx, &e.ind("Cell"), &[(flat2, fl2), (flat, fl)], &[], SPAN)
+                .expect("`Cell<Flat2, Flat>` lowers");
+            let args =
+                e.el.instance_args(&cx, &e.ind("Cell"), &swapped.shift_local(1))
+                    .expect("the swapped instantiation's arguments");
+            let (tm, ty, lvl) =
+                e.el.rec_proj_ref_at(&cx, e.ind("Cell").tag, 1, &args, &v)
+                    .expect("the spine is built — it is the kernel that refuses it");
+            assert!(
+                e.el.kernel_check_term(
+                    &e.el.psi,
+                    heather_kernel::layer::Layer::Prog,
+                    &cx.gamma,
+                    &tm,
+                    &ty,
+                    &lvl,
+                )
+                .is_err(),
+                "a wrong-instance receiver must not typecheck"
+            );
+        }
+
+        #[test]
+        fn a_projection_under_a_binder_shifts_as_a_unit() {
+            // Axis 2: an *open* element type. The instantiation's argument is
+            // a binder the walk has crossed, so the whole spine — head tail,
+            // arguments and receiver — has to move together.
+            let e = env();
+            let (flat, fl) = e.lowered("Flat");
+            let mut acx = Cx::empty();
+            acx.push("#A".into(), Type::Ty(Level::Zero), Level::succ(Level::Zero));
+            let a = Type::El {
+                level: Level::Zero,
+                tm: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let (open, ol) = e
+                .el
+                .lower_instance(
+                    &acx,
+                    &e.ind("Cell"),
+                    &[(a, Level::Zero), (flat.shift_local(1), fl)],
+                    &[],
+                    SPAN,
+                )
+                .expect("`Cell<A, Flat>` lowers openly");
+            let r = e.el.respell_ty(&acx, &open).expect("the open instance respells");
+            let mut cx = acx.clone();
+            cx.push("#v".into(), r.clone(), ol.clone());
+            let v: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
+            let (tm, ty, lvl) = e
+                .el
+                .project_field(&cx, &e.ind("Cell"), &r.shift_local(1), v, 0, SPAN)
+                .expect("the open field reads");
+            e.el.kernel_check_term(
+                &e.el.psi,
+                heather_kernel::layer::Layer::Prog,
+                &cx.gamma,
+                &tm,
+                &ty,
+                &lvl,
+            )
+            .expect("the open applied projection typechecks in that context");
+            // The field is the parameter, at this depth.
+            assert!(e.el.conv_types(
+                &cx,
+                &ty,
+                &Type::El {
+                    level: Level::Zero,
+                    tm: Rc::new(Term::Var(LocalVar(1))),
+                },
+                &lvl
+            ));
+            let deeper = tm.shift_local(1);
+            assert_ne!(deeper, tm);
+            let (_, args) = e.el.gen_app_of(&deeper).expect("still an application");
+            assert_eq!(args.len(), 3);
+        }
+
+        #[test]
+        fn the_four_axes_on_telescoped_field_reads() {
+            // Emission, on real source: literal and neutral receivers, an open
+            // element type, a *checking* position (the annotated `fn` results),
+            // a dependent field type, and a false equation refused.
+            let mut e = env();
+            e.el.enable_emission_walk();
+            e.el.elab_source(
+                "
+fn cl(c: Cell<Flat, Flat2>) -> Flat { c.l }
+fn cr(c: Cell<Flat, Flat2>) -> Flat2 { c.r }
+fn copen<A, B>(c: Cell<A, B>) -> A { c.l }
+fn cnest(c: Cell<Cell<Flat, Flat2>, Flat>) -> Flat2 { c.l.r }
+fn mkdep<A>(n: Nat, a: A) -> Dep<A>(n) { Dep(n, refl, a) }
+fn dk<A>(n: Nat, d: Dep<A>(n)) -> Nat { d.k }
+fn da<A>(n: Nat, d: Dep<A>(n)) -> A { d.a }
+fn dsame<A>(n: Nat, d: Dep<A>(n)) -> d.k = n { d.same }
+theorem cl_literal(): cl(Cell(FA, GB(1))) = FA { refl }
+theorem cr_literal(): cr(Cell(FA, GB(1))) = GB(1) { refl }
+theorem cl_neutral(c: Cell<Flat, Flat2>): cl(Cell(FA, c.r)) = FA { refl }
+theorem copen_open(f: Flat, g: Flat2): copen(Cell(f, g)) = f { refl }
+theorem cnest_computes(): cnest(Cell(Cell(FA, GB(2)), FB(3))) = GB(2) { refl }
+theorem dk_computes(a: Flat): dk(3, mkdep(3, a)) = 3 { refl }
+theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
+",
+            )
+            .expect("telescoped field reads elaborate, check and compute");
+            let r = e.el.elab_source(
+                "theorem cl_wrong(): cl(Cell(FA, GB(1))) = FB(1) { refl }",
+            );
+            assert!(r.is_err(), "a false equation must still be refused");
+            // Every emitted annotation slot is one the chokepoint would have
+            // written the same way (§12 item 6).
+            let findings = e.el.take_emission_findings();
+            let listed: Vec<String> = findings
+                .iter()
+                .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                .collect();
+            assert!(
+                findings.is_empty(),
+                "the emission walker is empty on telescoped field reads:\n{}",
+                listed.join("\n")
+            );
+        }
+
+        #[test]
+        fn the_reflection_boundary_unspells_an_applied_reference() {
+            // §4.2's third edit: `fn_type_code` hands a `meta` analyzer the
+            // inline instantiation, exactly as it does for a closed code.
+            let mut e = env();
+            e.el.elab_source("fn bid(b: Box<Flat>) -> Box<Flat> { b }")
+                .expect("elaborates");
+            let (flat, fl) = e.lowered("Flat");
+            let (inline, _) = instance(&e, "Box", &[(flat, fl)]);
+            let Some(Term::BoxTy(stmt)) = e.el.fn_type_code("bid") else {
+                panic!("the statement reflects as a boxed type")
+            };
+            let Type::Pi { dom, cod, .. } = &*stmt else {
+                panic!("one parameter, one Π")
+            };
+            assert_eq!(**dom, inline, "the boundary sees the inline instantiation");
+            assert_eq!(**cod, inline.shift_local(1));
+        }
+    }
 }

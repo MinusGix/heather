@@ -170,20 +170,26 @@ fn a_deep_match_agrees_with_the_hand_written_tower_at_a_neutral_scrutinee() {
         }
         "#,
     );
-    // Both bodies are closed (their parameters are λ-bound), so the two
-    // committed terms are compared at the declaration's own type in the empty
-    // context. Convertible, not necessarily identical: the compiled tree binds
+    // Both bodies are locally closed (their parameters are λ-bound), so the
+    // two committed terms are compared at the declaration's own type in the
+    // empty context. Convertible, not necessarily identical: the compiled tree binds
     // its columns through `let` aliases, which are inlined, and the arm order
     // is the declaration's on both sides.
     let bindings = &e.psi().bindings;
     let n = bindings.len();
     let (deep, tower) = (&bindings[n - 2], &bindings[n - 1]);
-    let (GlobalBinding::Tm { body: Some(d), ty, level, .. }, GlobalBinding::Tm { body: Some(t), .. }) =
+    let (GlobalBinding::Tm { body: Some(d), .. }, GlobalBinding::Tm { body: Some(t), ty, level, .. }) =
         (deep, tower)
     else {
         panic!("expected two bodied bindings")
     };
-    conv_term(&e.psi(), &empty_ctx(), Layer::Prog, d, t, ty, level, DEFAULT_FUEL)
+    // `deep` was minted one binding earlier, and since
+    // docs/per-instantiation-type-codes-design.md its annotations *name*
+    // `Opt<Res3<A>>` — a Ψ-relative reference. Re-key it into `tower`'s world
+    // before comparing, exactly as every other nominal read here does; with
+    // both sides inline this used to be a no-op.
+    let d = d.shift_global(1);
+    conv_term(&e.psi(), &empty_ctx(), Layer::Prog, &d, t, ty, level, DEFAULT_FUEL)
         .expect("the compiled decision tree and the hand-written tower agree");
 }
 
