@@ -3,7 +3,7 @@
 //! Value indices are filled from the nearest compatible dictionary binder or
 //! an explicit designation. This module owns that ladder and its refusal.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

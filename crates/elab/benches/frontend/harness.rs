@@ -31,7 +31,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use std::time::Instant;
 
 thread_local! {

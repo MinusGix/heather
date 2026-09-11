@@ -22,7 +22,7 @@
 //! the elaborator, so a timed closure may never reuse one.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use std::time::Instant;
 
 use heather_elab::{Elaborator, IndexedRoute, SemanticImage, stats};

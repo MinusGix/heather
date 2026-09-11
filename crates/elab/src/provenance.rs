@@ -5,7 +5,7 @@
 //! and the dependency graph are recorded before theorem proofs are discarded.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssumptionKind {

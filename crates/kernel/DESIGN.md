@@ -572,7 +572,13 @@ paper too).
   Tarski split. Judgment functions will be similarly mutual.
 - `Rc` for sub-terms (substitution clones aggressively; sharing keeps that
   cheap; no interior mutability anywhere *in the terms* — which is exactly
-  what makes the bounds memo below sound).
+  what makes the bounds memo below sound). **`Rc` is `std::sync::Arc` under
+  an alias** since 2026-09-11: every workspace file spells
+  `use std::sync::Arc as Rc;`. The serial tax was measured first, as the
+  control the decision turned on (1.04× bench median, +2% at module scale,
+  1.20–1.28× on the refcount-dense nat micro-steps;
+  `issues/kernel-arena-terms-frozen-prefix.md`). A mechanical rename to
+  `Arc` is a later diff-hygiene follow-up, not a design question.
 - **Per-node free-local-variable bounds** (2026-07-31,
   issues/subst-visits-closed-subtrees.md route B): the local-namespace
   traversals skip subtrees that provably cannot change (loose de Bruijn
@@ -616,6 +622,29 @@ paper too).
 Mirror the Coq formalization's structure: same judgments, same rule names in
 comments, so divergences are auditable. Correctness over performance
 throughout; no `unsafe` (enforced workspace-wide).
+
+**Who calls `check_term`, and on which thread.** The elaborator may now
+defer a declaration's proof obligation to a pool of worker threads and join
+them before the module is accepted (`docs/parallel-kernel-gate-design.md`).
+**The kernel gains no judgement from this and no new rule**: `check_term` is
+the same function with the same arguments, run against a Ψ that is immutable
+for the duration of the call. What is new is only the caller's schedule.
+
+What the trusted base additionally rests on is already true of the
+representation and stated above: terms have no interior mutability, so a
+built term is immutable and two threads reading the same subtree observe the
+same tree; Ψ is persistent (sealed chunks plus a bounded tail), so a worker's
+snapshot is an `Arc` clone that the elaborator's next append copies away from
+rather than mutates under it. Every piece of checker state is per-call or
+per-thread by construction — `Tc`, its conversion memo, the `ValueArena`,
+`BodyCache` and the diagnostic stacks are created inside `check_term`; the
+bounds memo, the `fmt.rs` budget cells, the `checks.rs` sampling counter and
+`stats.rs` are `thread_local!`. Nothing is shared across workers but
+immutable terms behind atomic refcounts.
+
+The kernel's own diff for this was two functions in `stats.rs`
+(`Snapshot::plus` and `merge`, so a joining thread can absorb a worker's
+counter delta), which remain inert by the rule immediately below.
 
 **Inert counters.** `stats.rs` holds thread-local `Cell<u64>` counters — how
 many conversion queries each shortcut answered, how a miss failed, how many

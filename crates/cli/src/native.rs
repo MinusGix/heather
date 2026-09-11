@@ -75,6 +75,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut cache = None;
     let mut callee = None;
     let mut timings = None;
+    let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -94,6 +95,16 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
                     _ => cache = Some(value),
                 }
             }
+            "--kernel-workers" => {
+                let value = args.next().ok_or("--kernel-workers needs a count")?;
+                let n: usize = value
+                    .parse()
+                    .map_err(|_| "--kernel-workers needs a positive integer".to_string())?;
+                if n == 0 {
+                    return Err("--kernel-workers needs a positive integer".into());
+                }
+                kernel_workers = Some(n);
+            }
             _ if arg.starts_with('-') => return Err(format!("unknown option `{arg}`")),
             _ => positional.push(arg.as_str()),
         }
@@ -103,9 +114,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
-        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]".into());
+        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
     let source = Path::new(positional[0]);
     let symbol = positional[1];
@@ -131,6 +142,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let sources = loader::load(source, &search).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
+    // The deferred kernel gate (`docs/parallel-kernel-gate-design.md`). Set
+    // after the prelude, which is milliseconds and is checked serially; every
+    // module from here on joins before it is accepted, and the certificate —
+    // thousands of independent generated theorems — is the point.
+    elab.set_kernel_workers(
+        kernel_workers.or_else(heather_elab::kernel_workers_from_env).unwrap_or(1),
+    );
     // Observation only: the collector changes no judgment, no fuel, and no
     // cache entry, and stays off unless `--item-timings` names a file. Turning
     // it on here rather than at the certificate separates a module actually
@@ -144,7 +162,22 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         // (issues/conv-miss-sampler-item-attribution.md), written beside
         // the table. Without the feature the report is empty and no file
         // is written.
-        elab.enable_value_metrics();
+        //
+        // Not with a worker pool, though: the collector is an `Rc` this
+        // elaborator owns and the profiled checker entry points want, so
+        // having one pins the kernel gate to this thread
+        // (`docs/parallel-kernel-gate-design.md` §4). Asking for both used to
+        // mean silently getting neither — the serial gate, wearing the
+        // parallel flag — so the flag wins and the four value-machine columns
+        // go empty, out loud.
+        if elab.kernel_workers() == 1 {
+            elab.enable_value_metrics();
+        } else {
+            eprintln!(
+                "--kernel-workers {}: value-machine columns off (the collector is per-elaborator)",
+                elab.kernel_workers(),
+            );
+        }
     }
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {

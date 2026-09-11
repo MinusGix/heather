@@ -32,7 +32,7 @@
 //!   behavior verbatim rather than an error at a span the user never wrote.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -2751,11 +2751,12 @@ impl Elaborator {
                 layer: Layer::Code,
                 lands_in_psi: true,
             };
-            if !self
+            let admitted = self
                 .gate
                 .as_ref()
-                .is_some_and(|g| g.admits(&self.psi, &item))
-            {
+                .is_some_and(|g| g.admits(&self.psi, &item));
+            drop(item);
+            if !admitted {
                 // `stats::time_kernel`, as at the `elab_decl_inner` gate
                 // (lib.rs) and the `Layer::Meta` one (quote.rs): the frontend
                 // suite's `kernel` phase covers *every* finished declaration,
@@ -2770,17 +2771,36 @@ impl Elaborator {
                     err,
                     note: None,
                 })?;
-                crate::stats::time_kernel(|| {
-                    self.kernel_check_term(&self.psi, Layer::Code, &empty, &body, &ty, &level)
-                })
-                .map_err(|err| crate::ElabError::Kernel {
-                    decl: name.clone(),
-                    span,
-                    err,
-                    note: None,
-                })?;
-                if let Some(g) = self.gate.as_ref() {
-                    g.accepted(&self.psi, &item);
+                if self.gate_is_inline() {
+                    crate::stats::time_kernel(|| {
+                        self.kernel_check_term(&self.psi, Layer::Code, &empty, &body, &ty, &level)
+                    })
+                    .map_err(|err| crate::ElabError::Kernel {
+                        decl: name.clone(),
+                        span,
+                        err,
+                        note: None,
+                    })?;
+                    if let Some(g) = self.gate.as_ref() {
+                        let item = crate::gate::GateItem {
+                            name: &name,
+                            ctx: &empty,
+                            ty: &ty,
+                            level: &level,
+                            body: &body,
+                            opaque: false,
+                            layer: Layer::Code,
+                            lands_in_psi: true,
+                        };
+                        g.accepted(&self.psi, &item);
+                    }
+                } else {
+                    // The body is committed to Ψ below and the proof is
+                    // queued; the module joins before it is accepted
+                    // (`docs/parallel-kernel-gate-design.md` §5).
+                    self.defer_kernel_term(
+                        &name, span, &empty, &ty, &level, &body, false, Layer::Code, true,
+                    );
                 }
             }
         }

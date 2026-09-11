@@ -5,7 +5,7 @@
 //! maps or serializing their current storage layout.
 
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, Type};
@@ -580,7 +580,7 @@ impl Elaborator {
 mod tests {
     use std::fs;
     use std::path::Path;
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use heather_kernel::term::{GlobalBinding, Term};
 

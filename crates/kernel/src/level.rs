@@ -12,7 +12,7 @@
 //! in the lattice, and is equivalent only to itself.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 /// A universe variable: de Bruijn index into the universe context `L`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

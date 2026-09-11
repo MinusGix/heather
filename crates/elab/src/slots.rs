@@ -20,7 +20,7 @@
 //! re-checks every emitted term regardless. It decides *which* functions get
 //! the in-language path — nothing more.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};

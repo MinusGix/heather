@@ -1,6 +1,6 @@
 //! Proof-position relational congruence over resolved, non-dependent terms.
 //! Reconstruction uses ordinary class projections and ordinary local goals.
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

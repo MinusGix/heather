@@ -18,7 +18,7 @@
 //! `reduce.rs` also call. A fifth transcription here would be exactly the
 //! drift that arrangement exists to prevent.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalVar, Term, Type, nth, wf_step_telescope};

@@ -19,7 +19,7 @@
 //! is the differential pin for the transition: it fails on anything the
 //! scanner would have conflated.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_cache::merkle::{Hash, interface_hash, term_hash};
 use heather_cache::sha256::sha256;

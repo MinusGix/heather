@@ -6,7 +6,7 @@
 //! the one rollback boundary spanning every durable registry those ordinary
 //! commits can change.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::{CommittedWorld, Elaborator, R, Shared};
 
@@ -117,7 +117,7 @@ impl Elaborator {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use super::*;
 

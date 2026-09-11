@@ -18,7 +18,7 @@
 //! introduce errors, never reinterpretations.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_syntax::Decl;
 
@@ -543,7 +543,7 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
 
 #[cfg(test)]
 mod layered_tests {
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use super::*;
 

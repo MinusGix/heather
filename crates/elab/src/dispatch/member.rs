@@ -3,7 +3,7 @@
 //! This module owns record projection, nominal type-owned member selection,
 //! method desugaring, and the ordering in which class-backed routes are asked.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 

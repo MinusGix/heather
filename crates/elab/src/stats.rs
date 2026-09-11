@@ -245,6 +245,43 @@ pub(crate) fn time_kernel<T>(f: impl FnOnce() -> T) -> T {
     timed(Timer::KernelGate, f)
 }
 
+/// Fold a kernel worker's numbers for one deferred item back in
+/// (`docs/parallel-kernel-gate-design.md` §7).
+///
+/// Three things happen, and they do not double-count each other. The timer
+/// cell and the kernel counters gain the worker's delta, so every scope still
+/// *open* on this thread — the module row, the run row — accounts for work
+/// done off it; deliberately not through [`add`], because the exclusive-nesting
+/// accumulator belongs to whatever bracket is open here and a worker's time
+/// was never nested inside it. Then the item row named by `row`, which closed
+/// while the worker was still running, is patched in place, so `--timings`
+/// keeps its shape: one `kernel_gate_ns` per declaration.
+pub(crate) fn fold_deferred_kernel(
+    row: Option<&(String, String)>,
+    ns: u64,
+    kernel: &kstats::Snapshot,
+) {
+    kstats::merge(kernel);
+    REG.with(|r| {
+        let cell = &r.timers[Timer::KernelGate as usize];
+        cell.set(cell.get().saturating_add(ns));
+        let Some((module, item)) = row else { return };
+        let mut rows = r.rows.borrow_mut();
+        let Some(found) = rows.iter_mut().rev().find(|candidate| {
+            candidate.kind == ScopeKind::Item
+                && candidate.module == *module
+                && candidate.item == *item
+        }) else {
+            return;
+        };
+        found.total_ns = found.total_ns.saturating_add(ns);
+        found.kernel_ns = found.kernel_ns.saturating_add(ns);
+        let gate = &mut found.timers[Timer::KernelGate as usize];
+        *gate = gate.saturating_add(ns);
+        found.kernel = found.kernel.plus(kernel);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Scopes and rows
 // ---------------------------------------------------------------------------
@@ -319,9 +356,27 @@ struct Open {
     value_metrics: Option<ValueMetricsSnapshot>,
 }
 
+thread_local! {
+    /// The declaration scopes open on this thread, innermost last. Maintained
+    /// only while collection is on (a `ScopeGuard` with no `Open` touches
+    /// nothing), and read by the deferred kernel gate to remember which row a
+    /// queued check's numbers belong to.
+    static ITEMS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The innermost declaration scope open on this thread, if any.
+pub(crate) fn current_item() -> Option<(String, String)> {
+    ITEMS.with(|s| s.borrow().last().cloned())
+}
+
 impl Drop for ScopeGuard {
     fn drop(&mut self) {
         let Some(open) = self.open.take() else { return };
+        if open.kind == ScopeKind::Item {
+            ITEMS.with(|s| {
+                s.borrow_mut().pop();
+            });
+        }
         let total_ns = open.started.elapsed().as_nanos() as u64;
         let (timers, counters) = REG.with(|r| {
             let mut t = [0u64; TIMERS];
@@ -391,6 +446,9 @@ pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
         }
         (t, c)
     });
+    if kind == ScopeKind::Item {
+        ITEMS.with(|s| s.borrow_mut().push((module.to_string(), item.to_string())));
+    }
     ScopeGuard {
         open: Some(Open {
             kind,

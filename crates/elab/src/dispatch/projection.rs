@@ -3,7 +3,7 @@
 //! This owns declaring-class selection, type-subject recovery, competing
 //! readings, and the explicit `T::Class(index)` dictionary spelling.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

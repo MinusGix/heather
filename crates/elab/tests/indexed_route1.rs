@@ -21,7 +21,7 @@
 //! With those elided, single-constructor classes have no sum and one-field
 //! spines are the field itself.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

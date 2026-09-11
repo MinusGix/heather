@@ -17,7 +17,7 @@
 //! tail and at the scrutinee respectively, so a value built here is one the
 //! fold would have built; nothing from the probe survives into it.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::value::algebra::{AffineTree, FoldClass, Increment, Proj};
 use crate::value::program::ContextProgram;

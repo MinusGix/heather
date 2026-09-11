@@ -5,7 +5,7 @@
 //! against a computation of known length, and conversion over the widest
 //! available spread of term shapes.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

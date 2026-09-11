@@ -5,7 +5,7 @@
 //! record destructuring installs projections in declaration order, and a block
 //! contributes only the term synthesized or checked for its result.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

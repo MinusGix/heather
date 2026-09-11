@@ -14,7 +14,7 @@
 
 pub mod wt;
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};

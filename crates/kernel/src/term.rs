@@ -16,7 +16,7 @@
 //! can recurse into them.
 
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::layer::Layer;
 use crate::level::Level;
@@ -1882,7 +1882,7 @@ pub fn wf_step_telescope_at(
 
 #[cfg(test)]
 mod global_ctx_tests {
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use super::*;
 

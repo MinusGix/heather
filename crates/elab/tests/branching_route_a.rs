@@ -20,7 +20,7 @@
 //! `P (inl _) = Empty`, `P (inr _) = Unit + Unit`, via large elimination to
 //! `Ty 0` and `El`.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_elab::gate::{GateItem, KernelGate};
 use heather_elab::Elaborator;

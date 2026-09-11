@@ -36,7 +36,7 @@
 //! spelled in full, because they are what the tier-1 lowering actually
 //! emits and the composition with it is the thing under test.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

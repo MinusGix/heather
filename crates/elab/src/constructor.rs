@@ -5,7 +5,7 @@
 //! instantiation comes from. The `inductive` module remains the owner of the
 //! actual kernel encoding and constructor term construction.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

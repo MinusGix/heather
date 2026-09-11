@@ -20,7 +20,7 @@
 //! - **What a generated-term test must vary**: docs/testing-generated-terms.md.
 #![allow(dead_code)]
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::term::GlobalCtx;
 

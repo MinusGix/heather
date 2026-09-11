@@ -1,6 +1,6 @@
 //! The kernel local context and its parallel surface-level bindings.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxEntry, LocalCtx, Term, Type};

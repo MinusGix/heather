@@ -17,7 +17,7 @@
 //! converts with the value a definition would, and two definitions with
 //! different bodies stay apart.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::{conv_term, conv_type, ConvError};
 use heather_kernel::layer::Layer;

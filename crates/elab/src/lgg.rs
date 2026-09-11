@@ -50,7 +50,7 @@
 //! declining is the conservative answer.
 
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::term::{LocalVar, Term, Type};
 

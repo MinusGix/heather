@@ -45,7 +45,7 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "value-metrics")]
 use std::collections::BTreeMap;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use typed_arena::Arena;
 
 use crate::fmt::node;
@@ -1741,7 +1741,7 @@ impl fmt::Debug for Val<'_> {
 #[cfg(test)]
 mod tests {
     use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, Val, ValueArena, ValueMetrics};
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     #[test]
     #[cfg(target_pointer_width = "64")]

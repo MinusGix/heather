@@ -1967,7 +1967,7 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
 // reason), and a misread one produces an emission whose certificate the kernel
 // refuses. Neither can produce a wrong theorem.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::eval::Eval;
 use heather_kernel::level::Level;

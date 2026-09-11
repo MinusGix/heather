@@ -59,7 +59,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
@@ -104,6 +104,7 @@ pub use datarepr::{Obligation, Provenance};
 mod names;
 mod oracle;
 mod patterns;
+mod pool;
 mod provenance;
 pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
@@ -642,6 +643,12 @@ pub struct Elaborator {
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
     gate: Option<Rc<dyn gate::KernelGate>>,
+    /// The deferred kernel gate's worker pool
+    /// (`docs/parallel-kernel-gate-design.md`). One worker — the default — is
+    /// exactly today's serial behaviour, spawns no thread, and queues nothing.
+    /// Not shared by clones: a clone gets a fresh pool with the same worker
+    /// count, like the rest of the transient scratch state.
+    kernel_pool: pool::KernelPool,
 }
 
 impl Deref for Elaborator {
@@ -1339,6 +1346,22 @@ impl measure::BinderTys for Elaborator {
     }
 }
 
+/// The kernel worker count `HEATHER_KERNEL_WORKERS` asks for, if it names a
+/// usable one (`docs/parallel-kernel-gate-design.md` §4).
+///
+/// A `--kernel-workers` flag wins over this; an unparseable or zero value is
+/// ignored rather than refused, because instrumentation must never be the
+/// reason a check fails.
+pub fn kernel_workers_from_env() -> Option<usize> {
+    kernel_workers_from_spec(&std::env::var("HEATHER_KERNEL_WORKERS").ok()?)
+}
+
+/// [`kernel_workers_from_env`]'s rule, without the environment: a positive
+/// decimal is a width and everything else is nothing.
+pub fn kernel_workers_from_spec(spec: &str) -> Option<usize> {
+    spec.trim().parse::<usize>().ok().filter(|n| *n > 0)
+}
+
 impl Elaborator {
     /// An empty elaborator (no prelude).
     pub fn new() -> Self {
@@ -1366,6 +1389,7 @@ impl Elaborator {
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
+            kernel_pool: pool::KernelPool::default(),
         }
     }
 
@@ -1378,6 +1402,133 @@ impl Elaborator {
     /// implementation lives.
     pub fn set_gate(&mut self, gate: Rc<dyn gate::KernelGate>) {
         self.gate = Some(gate);
+    }
+
+    /// How many kernel worker threads a module's proof obligations are checked
+    /// on (`docs/parallel-kernel-gate-design.md`).
+    ///
+    /// 1 — the default, and what every test and the unflagged CLI use — means
+    /// the kernel runs inline at the gate, on this thread, in declaration
+    /// order, exactly as it always has. Above 1 the *statement* is still
+    /// checked synchronously and the binding still commits to Ψ immediately;
+    /// the proof is queued and joined before the module is accepted.
+    pub fn set_kernel_workers(&mut self, workers: usize) {
+        self.kernel_pool.set_workers(workers);
+    }
+
+    /// The configured worker count.
+    pub fn kernel_workers(&self) -> usize {
+        self.kernel_pool.workers()
+    }
+
+    /// Wait for every queued proof obligation and report the first failure in
+    /// declaration order.
+    ///
+    /// Called at the end of both module paths, before either returns, so that
+    /// nothing downstream — an accepted verdict, a published image, a written
+    /// executable — can observe a module whose proofs are still in flight
+    /// (`docs/parallel-kernel-gate-design.md` §5). Idempotent: with nothing
+    /// outstanding it is a branch.
+    pub fn join_kernel_gate(&mut self) -> Option<ElabError> {
+        let outcomes = self.kernel_pool.join();
+        if outcomes.is_empty() {
+            return None;
+        }
+        let mut failure = None;
+        for outcome in outcomes {
+            // Attribution first, and for every item: a failing module's table
+            // is the one worth having (`--timings` is written before the
+            // failure is reported).
+            stats::fold_deferred_kernel(
+                outcome.item.row.as_ref(),
+                outcome.ns,
+                &outcome.kernel,
+            );
+            match outcome.verdict {
+                // Only a prefix is vouched for, which is what the serial path
+                // did: everything before the first failure had been accepted
+                // by the time the failure was raised.
+                Ok(()) if failure.is_none() => {
+                    if let Some(g) = self.gate.as_ref() {
+                        let item = outcome.item.as_ref();
+                        g.accepted(
+                            &item.psi,
+                            &gate::GateItem {
+                                name: &item.name,
+                                ctx: &item.ctx,
+                                ty: &item.ty,
+                                level: &item.level,
+                                body: &item.body,
+                                opaque: item.opaque,
+                                layer: item.layer,
+                                lands_in_psi: item.lands_in_psi,
+                            },
+                        );
+                    }
+                }
+                Ok(()) => {}
+                Err(err) if failure.is_none() => {
+                    let item = outcome.item.as_ref();
+                    failure = Some(match err {
+                        Some(err) => ElabError::Kernel {
+                            decl: item.name.clone(),
+                            span: item.span,
+                            err,
+                            note: None,
+                        },
+                        None => ElabError::Elab {
+                            msg: format!(
+                                "the kernel worker checking `{}` panicked",
+                                item.name
+                            ),
+                            span: item.span,
+                        },
+                    });
+                }
+                Err(_) => {}
+            }
+        }
+        failure
+    }
+
+    /// Queue one proof obligation, or run it here when the pool is inline.
+    /// The statement has already been checked and the binding is about to be
+    /// (or has just been) committed.
+    pub(crate) fn defer_kernel_term(
+        &mut self,
+        name: &str,
+        span: Span,
+        ctx: &LocalCtx,
+        ty: &Type,
+        level: &Level,
+        body: &Term,
+        opaque: bool,
+        layer: Layer,
+        lands_in_psi: bool,
+    ) {
+        stats::count(stats::Counter::DeclsGated);
+        self.kernel_pool.submit(pool::Deferred {
+            name: name.to_string(),
+            span,
+            psi: Rc::clone(&self.psi.0),
+            ctx: ctx.clone(),
+            ty: ty.clone(),
+            level: level.clone(),
+            body: body.clone(),
+            opaque,
+            layer,
+            lands_in_psi,
+            fuel: self.fuel,
+            row: stats::current_item(),
+        });
+    }
+
+    /// Whether the kernel gate runs inline on this thread. False only when a
+    /// worker pool is configured *and* nothing else forces the serial path:
+    /// the `value-metrics` collector is an `Rc` this elaborator owns and the
+    /// profiled checker entry points want, so enabling it pins the gate here.
+    pub(crate) fn gate_is_inline(&self) -> bool {
+        self.kernel_pool.is_inline() || self.value_metrics.is_some()
     }
 
     /// Select project-local source conventions without changing what syntax
@@ -1643,11 +1794,20 @@ impl Elaborator {
             }
             if r.is_err() {
                 self.container_decls.borrow_mut().clear();
+                // Nothing may outlive the module with proofs in flight, the
+                // failure path included (`docs/parallel-kernel-gate-design.md`
+                // §5). The item's own error is the one reported.
+                let _ = self.join_kernel_gate();
             }
             r?;
         }
         self.container_decls.borrow_mut().clear();
-        Ok(())
+        // The join, before this returns and therefore before any caller can
+        // publish an image, record a verdict, or write an executable.
+        match self.join_kernel_gate() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Set the scope for a module about to be elaborated: its own name plus
@@ -2142,6 +2302,12 @@ impl Elaborator {
             }
         }
         self.container_decls.borrow_mut().clear();
+        // The join (`docs/parallel-kernel-gate-design.md` §5). This is the
+        // path `check_module_delta` runs inside, so the semantic image, the
+        // declaration cache and `heather check`'s verdict all sit behind it.
+        if let Some(e) = self.join_kernel_gate() {
+            errs.push(e);
+        }
         errs
     }
 
@@ -3035,21 +3201,54 @@ impl Elaborator {
                 layer: Layer::Code,
                 lands_in_psi: true,
             };
-            if !self
+            let admitted = self
                 .gate
                 .as_ref()
-                .is_some_and(|g| g.admits(&self.psi, &item))
-            {
+                .is_some_and(|g| g.admits(&self.psi, &item));
+            let opaque = item.opaque;
+            drop(item);
+            if !admitted {
+                // The statement is checked here, synchronously, whatever the
+                // pool is doing: every dependent needs it, and it is the cheap
+                // half (`docs/parallel-kernel-gate-design.md` §2).
                 stats::time_kernel(|| {
                     self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
-                stats::time_kernel(|| {
-                    self.kernel_check_term(&self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl)
-                })
-                .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
-                if let Some(g) = self.gate.as_ref() {
-                    g.accepted(&self.psi, &item);
+                if self.gate_is_inline() {
+                    stats::time_kernel(|| {
+                        self.kernel_check_term(
+                            &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
+                        )
+                    })
+                    .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
+                    if let Some(g) = self.gate.as_ref() {
+                        let item = gate::GateItem {
+                            name: &decl.name,
+                            ctx: &empty,
+                            ty: &stmt,
+                            level: &stmt_lvl,
+                            body: term,
+                            opaque,
+                            layer: Layer::Code,
+                            lands_in_psi: true,
+                        };
+                        g.accepted(&self.psi, &item);
+                    }
+                } else {
+                    // Queued against the Ψ the binding is about to extend;
+                    // `accepted` travels with it and is replayed at the join.
+                    self.defer_kernel_term(
+                        &decl.name,
+                        decl.span,
+                        &empty,
+                        &stmt,
+                        &stmt_lvl,
+                        term,
+                        opaque,
+                        Layer::Code,
+                        true,
+                    );
                 }
             }
         } else {

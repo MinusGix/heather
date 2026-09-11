@@ -113,7 +113,7 @@ fn nat_suite_golden_hash() {
 fn the_hash_sees_past_the_debug_budget() {
     use heather_kernel::level::Level;
     use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     fn deep(n: usize, tip: Term) -> GlobalCtx {
         let mut t = tip;

@@ -34,7 +34,7 @@
 //!   weaken itself: [`Values::under_tele_ty`] is where `value::shift` is
 //!   paid, and it is paid only there.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::eval::Eval;
 use crate::level::Level;

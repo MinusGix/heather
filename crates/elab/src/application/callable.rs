@@ -5,7 +5,7 @@
 //! not elaborate an application; the explicit and implicit spine engines own
 //! that mechanism.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 

@@ -16,7 +16,7 @@
 //! the componentwise Σ-η / Unit-irrelevance that `Wf`'s arm obligation
 //! will depend on.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::{conv_term, conv_type};
 use heather_kernel::layer::Layer;

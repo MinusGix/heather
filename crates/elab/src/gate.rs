@@ -22,7 +22,7 @@
 //! not run on that declaration and it is pushed to Ψ regardless. Whoever
 //! installs one owns the trust argument (`docs/cache-v1-design.md` §6).
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

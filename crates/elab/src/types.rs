@@ -6,7 +6,7 @@
 //! here rather than as parallel fields on `Elaborator`.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::gendefs::GenDefs;
 use crate::inductive::Inductive;
@@ -146,7 +146,7 @@ impl Types {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use crate::Elaborator;
     use crate::names::qkey;

@@ -26,7 +26,7 @@
 //!   because it *looks* like surface syntax while being neither.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::term::{CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
 

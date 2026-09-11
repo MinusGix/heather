@@ -18,7 +18,7 @@
 //! kernel. What it cannot validate (needs the former): definitional β,
 //! canonical-form uniqueness, neutral-arity behaviour — those are §13 step 3.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

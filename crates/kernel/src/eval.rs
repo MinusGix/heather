@@ -47,7 +47,7 @@
 //! [`OutOfFuel`] and is never a verdict.
 
 use std::num::NonZeroU64;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::level::Level;
 use crate::reduce::{
@@ -1916,7 +1916,7 @@ mod tests {
     use crate::value::program::ContextProgram;
     use crate::value::{Env, TmClo, TyClo, Val, ValueArena};
     use std::num::NonZeroU64;
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     fn two_to_64() -> Rc<ContextProgram<()>> {
         let full = ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap());

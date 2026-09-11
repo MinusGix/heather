@@ -17,7 +17,7 @@
 //! guess, and what keeps a wrong candidate from surfacing pages later as a
 //! declaration-gate rejection.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

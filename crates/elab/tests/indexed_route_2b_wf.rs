@@ -42,7 +42,7 @@
 //! compared against a written reduct rather than merely typed); and every
 //! encoding decision has a negative control (§13.1 items 4 and 6).
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

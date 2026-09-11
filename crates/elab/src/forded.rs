@@ -25,7 +25,7 @@
 //! the arm's head, §8.3). Which form a constructor gets is §8.4's rule: form A
 //! exactly when the constructor would have been route-1-eligible on its own.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[cfg(test)]
 use heather_kernel::conv::conv_term;

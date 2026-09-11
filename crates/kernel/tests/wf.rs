@@ -17,7 +17,7 @@
 //! `refl`, and the Node arm is `cong`, `cong`, `trans`. Route A's arms keep
 //! a funext-and-transport bridge in that same place forever.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

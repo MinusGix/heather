@@ -33,7 +33,7 @@
 //! motive**, and each branch receives them at its constructor-refined arity.
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

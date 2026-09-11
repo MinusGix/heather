@@ -33,7 +33,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_cache::Cache;
 use heather_cache::module_image::ImageFreshness;
@@ -92,9 +92,9 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]\n\
-                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]\n\
-                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--timings <file.tsv>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
+                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
+                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";
 
@@ -126,6 +126,10 @@ struct Opts {
     /// of rebuilding them. The inner-loop policy after editing the compiler's
     /// own sources; a final verification runs without it.
     images: ImageFreshness,
+    /// `--kernel-workers N` (or `HEATHER_KERNEL_WORKERS`): check declarations'
+    /// proofs on N kernel worker threads, joined before the module is accepted
+    /// (`docs/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
+    kernel_workers: Option<usize>,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -140,6 +144,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         deny_axioms: false,
         timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
+        kernel_workers: None,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -164,6 +169,23 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         if a == "--accept-stale-images" {
             opts.cache = true;
             opts.images = ImageFreshness::AcceptStale;
+            continue;
+        }
+        if let Some(rest) = a.strip_prefix("--kernel-workers") {
+            let spec = match rest.strip_prefix('=') {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ if rest.is_empty() => {
+                    it.next().ok_or("`--kernel-workers` needs a count")?.clone()
+                }
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            let n: usize = spec
+                .parse()
+                .map_err(|_| "`--kernel-workers` needs a positive integer".to_string())?;
+            if n == 0 {
+                return Err("`--kernel-workers` needs a positive integer".into());
+            }
+            opts.kernel_workers = Some(n);
             continue;
         }
         if a == "--deny-axioms" {
@@ -242,6 +264,11 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         let lint_profile = lint_profile_for_path(Path::new(path));
         elab.set_lint_profile(lint_profile);
+        elab.set_kernel_workers(
+            opts.kernel_workers
+                .or_else(heather_elab::kernel_workers_from_env)
+                .unwrap_or(1),
+        );
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never
         // cached (docs/cache-v1-design.md §4).
@@ -275,6 +302,16 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         // otherwise). Observational only — it cannot change a verdict.
         let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
         if report_metrics {
+            // The collector pins the kernel gate to this thread
+            // (`docs/parallel-kernel-gate-design.md` §4), so asking for both
+            // it and a worker pool silently yields the serial gate. Say which
+            // one won rather than leaving the flag looking honoured.
+            if elab.kernel_workers() > 1 {
+                eprintln!(
+                    "HEATHER_VALUE_METRICS with --kernel-workers {}: the kernel gate stays serial",
+                    elab.kernel_workers(),
+                );
+            }
             elab.enable_value_metrics();
         }
         for m in &modules {

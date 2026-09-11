@@ -193,7 +193,7 @@ fn elim_over_a_wf_lowered_inductive_computes_at_the_meta_layer() {
     );
     let e = elab(&src);
     let (psi, measured, ty, level) = last_body(&e);
-    let num = |n: u32| (0..n).fold(Term::Zero, |t, _| Term::Succ(std::rc::Rc::new(t)));
+    let num = |n: u32| (0..n).fold(Term::Zero, |t, _| Term::Succ(std::sync::Arc::new(t)));
     for layer in [Layer::Prog, Layer::Meta] {
         // 1 + ((1 + 1 + 1) + 1): the LetMatch, its two-cell arm chain, and the
         // two `Ret`s.
@@ -294,18 +294,18 @@ fn the_kernel_refuses_a_local_indexed_code_type_too() {
     let meta_gamma = {
         let mut g = LocalCtx::nil();
         g.entries.push(heather_kernel::term::CtxEntry {
-            ty: std::rc::Rc::new(Type::Nat),
+            ty: std::sync::Arc::new(Type::Nat),
             level: heather_kernel::level::Level::Zero,
         });
         g
     };
     let indexed_by_a_local = Type::CodeTm {
         ctx: LocalCtx::nil(),
-        ty: std::rc::Rc::new(Type::Id {
+        ty: std::sync::Arc::new(Type::Id {
             level: heather_kernel::level::Level::Zero,
-            ty: std::rc::Rc::new(Type::Nat),
-            lhs: std::rc::Rc::new(Term::Var(heather_kernel::term::LocalVar(0))),
-            rhs: std::rc::Rc::new(Term::Zero),
+            ty: std::sync::Arc::new(Type::Nat),
+            lhs: std::sync::Arc::new(Term::Var(heather_kernel::term::LocalVar(0))),
+            rhs: std::sync::Arc::new(Term::Zero),
         }),
         level: heather_kernel::level::Level::Zero,
     };
@@ -325,11 +325,11 @@ fn the_kernel_refuses_a_local_indexed_code_type_too() {
     // replaced by a closed term is a well-formed code type.
     let indexed_by_a_closed_term = Type::CodeTm {
         ctx: LocalCtx::nil(),
-        ty: std::rc::Rc::new(Type::Id {
+        ty: std::sync::Arc::new(Type::Id {
             level: heather_kernel::level::Level::Zero,
-            ty: std::rc::Rc::new(Type::Nat),
-            lhs: std::rc::Rc::new(Term::Zero),
-            rhs: std::rc::Rc::new(Term::Zero),
+            ty: std::sync::Arc::new(Type::Nat),
+            lhs: std::sync::Arc::new(Term::Zero),
+            rhs: std::sync::Arc::new(Term::Zero),
         }),
         level: heather_kernel::level::Level::Zero,
     };

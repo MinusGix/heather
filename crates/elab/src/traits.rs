@@ -12,7 +12,7 @@
 //! instance assembler only. Layer 2's resolver is the consumer they exist for.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_syntax::{
     Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, DesignationDecl, Expr, ExprKind,

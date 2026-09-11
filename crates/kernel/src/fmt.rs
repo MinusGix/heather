@@ -594,7 +594,7 @@ impl fmt::Debug for Branches {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     use crate::level::Level;
     use crate::term::{Term, Type};

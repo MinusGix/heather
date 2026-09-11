@@ -56,7 +56,7 @@
 //! traversal's dep table fails those tests; it cannot silently ship.
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::term::{Branches, LocalSubst, Motives, Term, Type};
 

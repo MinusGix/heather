@@ -5,7 +5,7 @@
 //! The implicit engine owns its complete scratch-world lifecycle and receives
 //! only the semantic effects in [`ImplicitApplicationElab`].
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};

@@ -18,7 +18,7 @@
 //! the whole telescope plus the previous locals, with the ambient Γ already
 //! weakened into the telescope).
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::layer::Layer;
 use crate::level::{Level, UnivVar};

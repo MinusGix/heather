@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::fmt::node;
 
@@ -480,7 +480,7 @@ impl<C: Clone + Eq> ContextProgram<C> {
 mod tests {
     use super::ContextProgram;
     use std::num::NonZeroU64;
-    use std::rc::Rc;
+    use std::sync::Arc as Rc;
 
     fn n(value: u64) -> NonZeroU64 {
         NonZeroU64::new(value).unwrap()

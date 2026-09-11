@@ -56,6 +56,17 @@ macro_rules! counters {
             CELLS.with(|c| { $(c.$name.set(0);)* });
         }
 
+        /// Add another thread's reading into this thread's counters.
+        ///
+        /// What a deferred kernel gate's join does with a worker's delta
+        /// (`docs/parallel-kernel-gate-design.md` §7), so that a scope still
+        /// open on the joining thread accounts for work done off it. Still
+        /// inert: this module writes counters and reads them only through
+        /// `snapshot`.
+        pub fn merge(delta: &Snapshot) {
+            CELLS.with(|c| { $(c.$name.set(c.$name.get().wrapping_add(delta.$name));)* });
+        }
+
         impl Snapshot {
             /// The counters' column names, in the order [`Snapshot::values`]
             /// reports them.
@@ -64,6 +75,12 @@ macro_rules! counters {
             /// This snapshot minus an earlier one: what happened in between.
             pub fn since(&self, earlier: &Snapshot) -> Snapshot {
                 Snapshot { $($name: self.$name.wrapping_sub(earlier.$name),)* }
+            }
+
+            /// Two readings added column-wise — one row's own numbers plus
+            /// what a worker did for it.
+            pub fn plus(&self, other: &Snapshot) -> Snapshot {
+                Snapshot { $($name: self.$name.wrapping_add(other.$name),)* }
             }
 
             /// The counters in [`Snapshot::NAMES`] order.

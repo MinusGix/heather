@@ -15,7 +15,7 @@
 //! 4. **Negative controls** — what a corrupted cache does, and (stated, not
 //!    tested, because it cannot be) what a forged one does.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_cache::store::{FORMAT, Rejected, Store};
 use heather_cache::{Cache, KERNEL_SEMANTICS};

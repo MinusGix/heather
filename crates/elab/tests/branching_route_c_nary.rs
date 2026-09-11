@@ -29,7 +29,7 @@
 //!    (see `sigma_eta_bridges_the_constructor_form`) — the arm obligation at
 //!    a generalized tuple IS the constructor-form obligation, no transport.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

@@ -14,7 +14,7 @@
 //! rejection when the declaration is re-checked, since the parameter's type
 //! is `El A` and the argument's is whatever `⌜·⌝` actually said.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::term::{Term, Type};
 

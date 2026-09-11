@@ -104,7 +104,7 @@
 //! the test suite (300-seed substitution laws included) instead of silently
 //! producing a wrong term in release.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::bounds;
 use crate::level::Level;

@@ -65,7 +65,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::{discriminant, Discriminant};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use crate::conv::ConvError;
 #[cfg(not(feature = "value-metrics"))]

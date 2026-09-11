@@ -6,7 +6,7 @@
 //! constraints remain as a low-level diagnostic boundary. Direct `<=`, `<`,
 //! and `=` goals reuse recursively certified order consequences.
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

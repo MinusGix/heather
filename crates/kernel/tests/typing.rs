@@ -11,7 +11,7 @@
 //! where a legitimate `Err` is indistinguishable from a bug (property tests
 //! against conversion are tracked in issues/kernel-conv-properties.md).
 
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
