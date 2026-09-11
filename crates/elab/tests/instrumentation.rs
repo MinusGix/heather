@@ -75,6 +75,106 @@ fn a_checked_module_attributes_by_declaration() {
     stats::disable();
 }
 
+/// A module that walks every phase of a declaration, so the columns added to
+/// name the `other` bucket (`issues/perf-instrumentation-consolidation.md`,
+/// 2026-09-11) can each be shown to move.
+const PHASES: &str = r#"
+inductive Colour { Red, Green }
+
+fn flip(c: Colour) -> Colour {
+    match c {
+        Red => Green,
+        Green => Red,
+    }
+}
+
+fn double(n: Nat) -> Nat {
+    match n {
+        Zero => Zero,
+        Succ(m) => Succ(Succ(double(m))),
+    }
+}
+
+theorem double_zero(): double(Zero) = Zero { refl }
+"#;
+
+/// Every phase column added to name `other` is populated by a module that
+/// exercises it, and no row claims more phase time than it took.
+///
+/// The assertions are about *which* column moved and about the nesting
+/// relation, never about a duration: a number here would be a benchmark
+/// pretending to be a test.
+#[test]
+fn the_declaration_phases_are_each_attributed() {
+    let mut elab = Elaborator::with_prelude().expect("prelude");
+    elab.enable_item_timings();
+    {
+        let _scope = stats::scope(ScopeKind::Run, "phases", "");
+        let errors = elab.check_module_source("phases", PHASES);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+    let rows = stats::take_rows();
+    let run = rows
+        .iter()
+        .find(|r| r.kind == ScopeKind::Run)
+        .expect("a run row");
+
+    // The four halves of a declaration, the non-`fn` forms' lowering, the
+    // elaborator's own head-shape probes, the diagnostic notes it runs for a
+    // message it may never print, and the source lints.
+    for timer in [
+        Timer::DeclType,
+        Timer::DeclBody,
+        Timer::DeclEmit,
+        Timer::DeclCommit,
+        Timer::Lower,
+        Timer::ElabWhnf,
+        Timer::DiagNote,
+        Timer::Lint,
+    ] {
+        assert!(
+            run.timers[timer as usize] > 0,
+            "{} is not populated by a module that exercises it",
+            Timer::NAMES[timer as usize],
+        );
+    }
+    // `refl` against a computing left-hand side runs the mismatch note, and
+    // the proof still succeeds — which is the point of counting them.
+    assert!(
+        run.counters[Counter::DiagNotes as usize] > 0,
+        "a successful proof still paid for a diagnostic probe",
+    );
+
+    // The exclusive rule, on every row of a real module and not only on the
+    // synthetic nesting fixture below.
+    for row in &rows {
+        let phases: u64 = row.timers.iter().sum();
+        assert!(
+            phases <= row.total_ns,
+            "{} {}:{} claims {phases} ns of phases in {} ns",
+            row.kind.as_str(),
+            row.module,
+            row.item,
+            row.total_ns,
+        );
+    }
+
+    // The declaration phases partition `check_decl`, so what a `fn`'s row
+    // leaves unattributed is bookkeeping, not its elaboration.
+    let double = rows
+        .iter()
+        .find(|r| r.kind == ScopeKind::Item && r.item == "double")
+        .expect("a row for `double`");
+    assert!(double.timers[Timer::DeclType as usize] > 0);
+    assert!(double.timers[Timer::DeclBody as usize] > 0);
+    assert!(
+        double.other_ns() < double.total_ns,
+        "a declaration's phases account for some of it",
+    );
+
+    stats::disable();
+}
+
 fn names(rows: &[stats::ItemTiming]) -> Vec<String> {
     rows.iter().map(|r| format!("{}:{}", r.kind.as_str(), r.item)).collect()
 }

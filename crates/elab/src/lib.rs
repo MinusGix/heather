@@ -1825,12 +1825,18 @@ impl Elaborator {
                 Some(_) => Ok(()),
                 None => self.elab_decl(d),
             },
-            Item::Inductive(i) => self.elab_inductive(i),
-            Item::Class(c) => self.elab_class(c),
-            Item::Instance(i) => self.elab_instance(i),
-            Item::Designation(d) => self.elab_designation(d),
-            Item::Datarepr(d) => self.elab_datarepr(d),
-            Item::Impl(i) => self.elab_impl(i),
+            // The declaration forms that are not a `fn`: each lowers to a
+            // family of generated definitions. `gendefs` already times
+            // *pushing* one; this brackets the lowering that builds them, so
+            // an `inductive`'s or an `instance`'s own work has a column
+            // instead of landing in `other`
+            // (`docs/instrumentation-design.md` §5).
+            Item::Inductive(i) => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
+            Item::Class(c) => stats::timed(stats::Timer::Lower, || self.elab_class(c)),
+            Item::Instance(i) => stats::timed(stats::Timer::Lower, || self.elab_instance(i)),
+            Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
+            Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
+            Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
             Item::Import(_) => Ok(()),
         }
     }
@@ -1914,7 +1920,7 @@ impl Elaborator {
                 self.omega_reports.borrow_mut().truncate(omega_mark);
             } else {
                 self.mint_pending();
-                self.run_source_lints(item, &lint_source);
+                stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
             }
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -2463,7 +2469,7 @@ impl Elaborator {
                 self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
-                self.run_source_lints(item, &lint_source);
+                stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
             }
             if let Err(e) = r {
                 errs.push(e);
@@ -3011,6 +3017,10 @@ impl Elaborator {
     /// become visible to later source unless `check_decl` returned a complete
     /// value after the kernel gate.
     fn commit_decl(&mut self, pending: PendingDecl) {
+        // Registration bookkeeping as its own column: the Ψ push, the name
+        // and provenance tables, the module journal's event, and the δ-world
+        // rebuild that follows them (`docs/instrumentation-design.md` §5).
+        let _commit = stats::guard(stats::Timer::DeclCommit);
         let PendingDecl {
             binding,
             registration,
@@ -3144,6 +3154,14 @@ impl Elaborator {
         // `cx.tyvars`, the same table an `inductive`'s parameters use while
         // its fields are lowered; the difference is only that these survive
         // into the kernel term.
+        //
+        // The telescope and the result type are one attributed phase
+        // (`docs/instrumentation-design.md` §5): everything a declaration's
+        // *statement* costs, as against what its proof costs. The bracket is
+        // exclusive, so the resolution, unification and generated-definition
+        // work it contains stays in those columns and this one is the walk's
+        // own share.
+        let decl_type = stats::guard(stats::Timer::DeclType);
         let mut cx = Cx::empty();
         cx.index_ambiguity = ambiguous;
         // The constraint slots' symbols, checked against each other on the way
@@ -3256,6 +3274,7 @@ impl Elaborator {
             return err(IMPLICIT_MARK_REFUSED, decl.result.span);
         }
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
+        drop(decl_type);
         // The graph records what the checked proof/body references, not names
         // appearing only in its public statement (issues/axiom-provenance.md).
         self.attempt.direct_dependencies.borrow_mut().clear();
@@ -3279,6 +3298,12 @@ impl Elaborator {
         }
         // An axiom has no term to check. Ordinary definitions and theorems
         // elaborate their block exactly as before.
+        //
+        // The proof/body walk, the other half of the declaration's own work
+        // and on every workload measured so far the larger one. Exclusive, so
+        // the diagnostic probes, the whnf probes, resolution and the
+        // generated definitions minted while walking keep their own columns.
+        let decl_body = stats::guard(stats::Timer::DeclBody);
         let body = if decl.kind == DeclKind::Axiom {
             self.solve_goals(&[], &decl.name)?;
             None
@@ -3294,6 +3319,7 @@ impl Elaborator {
             Some(body)
         };
         let sigma = self.goal_subst();
+        drop(decl_body);
 
         // Close over the telescope: statement = Π…, proof/body = λ….
         //
@@ -3314,6 +3340,12 @@ impl Elaborator {
         // reflection boundary reads a statement back through
         // `unspell_ty_deep`, which is the inverse of the reference half and
         // sees a decoded literal exactly as it would have seen an inline one.
+        //
+        // Respelling, closing the telescope and the one global substitution
+        // are one phase — what the elaborator spends turning a checked pair
+        // into the pair the kernel is handed
+        // (`docs/instrumentation-design.md` §5).
+        let decl_emit = stats::guard(stats::Timer::DeclEmit);
         let empty_cx = Cx::empty();
         let n_params = param_info.len() as u32;
         let mut stmt = match self.emit_ty(&empty_cx, &res_ty, n_params) {
@@ -3347,6 +3379,7 @@ impl Elaborator {
         // instantiation semantics). With no holes it is the identity.
         let term = term.map(|term| term.apply_global(&sigma));
         let stmt = stmt.apply_global(&sigma);
+        drop(decl_emit);
 
         // The emission audit, on exactly the pair the kernel is about to be
         // handed (`emission_walk`; design §2.5). Off unless asked for.
@@ -4434,6 +4467,13 @@ impl Elaborator {
     /// two types that might yet convert is worse than no message. Only
     /// `NotConvertible`, which is the decided answer, is reported.
     fn note_check_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) {
+        // A diagnostic probe is elaborator-side conversion run for the
+        // *message*, not for the judgement, and it runs whether or not the
+        // declaration turns out to be fine. That makes it its own column
+        // (`docs/instrumentation-design.md` §5) rather than a share of the
+        // body walk that happens to contain it.
+        stats::count(stats::Counter::DiagNotes);
+        let _phase = stats::guard(stats::Timer::DiagNote);
         if self
             .goal_oracle()
             .convert_type(&cx.gamma, Layer::Prog, got, expected, lvl)
@@ -4512,6 +4552,10 @@ impl Elaborator {
         if lhs == rhs {
             return;
         }
+        // [`Self::note_check_mismatch`]'s column, for the same reason: the
+        // conversion below is the note's, not the gate's.
+        stats::count(stats::Counter::DiagNotes);
+        let _phase = stats::guard(stats::Timer::DiagNote);
         let oracle = oracle::SemanticOracle::in_world(
             self.goal_psi(),
             self.fuel.min(diagnostics::REFL_NOTE_FUEL),

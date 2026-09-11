@@ -179,6 +179,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             );
         }
     }
+    // The run row these commands never wrote: `heather check` has opened a
+    // `Run` scope since the layer landed, so the two native commands reported
+    // per-declaration and per-module rows with nothing to total them against
+    // (`issues/perf-instrumentation-consolidation.md`, 2026-09-11).
+    let run_scope = timings
+        .as_ref()
+        .map(|_| heather_elab::stats::scope(heather_elab::stats::ScopeKind::Run, "", ""));
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -224,7 +231,21 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     };
     let proof = proof.render();
     eprintln!("checking source refinement, exported bytes, and execution certificate");
-    let checked = elab.elab_module_source(&format!("{prefix}_certificate"), &proof);
+    let certificate_module = format!("{prefix}_certificate");
+    // The certificate is a module like any other and gets a module row, the
+    // one `check_module` already opens for the library's: without it the
+    // thousands of generated theorems had no total.
+    let checked = {
+        let _module = timings.as_ref().map(|_| {
+            heather_elab::stats::scope(
+                heather_elab::stats::ScopeKind::Module,
+                &certificate_module,
+                "",
+            )
+        });
+        elab.elab_module_source(&certificate_module, &proof)
+    };
+    drop(run_scope);
     // A refused certificate is the case worth attributing, so the table is
     // written before the failure is reported.
     if let Some(path) = &timings {

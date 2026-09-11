@@ -78,6 +78,12 @@ impl SemanticOracle {
     /// differential tests) is what makes the first bullet's "same former"
     /// and the second's "no former" one claim.
     pub(crate) fn whnf_type(&self, gamma: &LocalCtx, ty: &Type) -> Result<Type, OutOfFuel> {
+        // The elaborator's own head-shape probes are a phase of elaboration
+        // and not of the gate (`docs/instrumentation-design.md` §5): nothing
+        // inside a `stats::time_kernel` bracket reaches here, so this column
+        // is drawn from the elaborate side of the split and `kernel_ns` keeps
+        // its meaning.
+        let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
         let defs = Defs::transparent(&self.world);
         if type_head_may_compute(ty) {
             let arena = ValueArena::new();
@@ -116,6 +122,7 @@ impl SemanticOracle {
     /// here after the type probe, so a stuck encoding has to be as cheap as
     /// the stuck type was.
     pub(crate) fn whnf_term(&self, gamma: &LocalCtx, term: &Term) -> Result<Term, OutOfFuel> {
+        let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
         let defs = Defs::transparent(&self.world);
         if term_head_may_compute(term) {
             let arena = ValueArena::new();
@@ -164,6 +171,7 @@ impl SemanticOracle {
         gamma: &LocalCtx,
         term: &Term,
     ) -> Result<Term, OutOfFuel> {
+        let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
         reduce::whnf_term(term, gamma, self.fuel)
     }
 

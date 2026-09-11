@@ -73,7 +73,10 @@ mismatch are different diagnoses and must not share a column.
 function written twice.
 
 ```rust
-pub enum Timer { Parse, Prelude, KernelGate, Unify, Resolve, Matching, Gendefs,
+pub enum Timer { Parse, Prelude, KernelGate,
+                 DeclType, DeclBody, DeclEmit, DeclCommit, Lower,
+                 ElabWhnf, DiagNote, Lint,
+                 Unify, Resolve, Matching, Gendefs,
                  OmegaReflect, OmegaSearch, OmegaCutsat, OmegaRender, OmegaParse,
                  OmegaReconstruct, OmegaCheck,
                  ImageDecode, ImageRecheck, ImagePublish, CacheHash, MerkleWalk }
@@ -168,10 +171,45 @@ sampler's item name and no bracket):
   sites in `lib.rs`, `quote.rs`, `gendefs.rs` and `resolve.rs`, unchanged in
   extent: `elaborate = total − parse − kernel_gate` still means what
   `docs/frontend-benchmarking.md` says it means.
+- `decl_type` — a declaration's *statement*: the parameter telescope and the
+  result type, from `Cx::empty()` to the elaborated result.
+- `decl_body` — its *proof or body*: the statement walk, the checking walk
+  against the result type, and goal solving.
+- `decl_emit` — turning the checked pair into the pair the kernel is handed:
+  the annotation respell, closing the telescope into `Π`/`λ`, and the one
+  global substitution that fills the goals.
+- `decl_commit` — the registration bookkeeping on the far side of the gate:
+  the Ψ push, the name and provenance tables, the module journal's event.
+- `lower` — the declaration forms that are not a `fn` (`inductive`, `class`,
+  `instance`, `impl`, `datarepr`, `designation`), which lower to a family of
+  generated definitions. `gendefs` times *pushing* one; this times building
+  them.
+- `elab_whnf` — the elaborator's own head-shape probes, at the one chokepoint
+  they share (`oracle::SemanticOracle`'s `whnf_*`). Nothing inside a
+  `time_kernel` bracket reaches it, so the column is drawn from the elaborate
+  side of the split and `kernel_ns` keeps its meaning.
+- `diag_note` — elaborator-side conversion run for a *message* rather than
+  for a judgement: the checking-mismatch and `refl`-mismatch notes, which run
+  whether or not the declaration turns out to be fine. Counted as well as
+  timed (`diag_notes`), because how often a successful build pays for a note
+  it will never print is the interesting half.
+- `lint` — the per-item source lints.
 - `unify`, `resolve`, `matching`, `gendefs` — the entry point of each
   subsystem, not its internals; the exclusive rule keeps a nested entry from
   double-counting.
 - `omega_*` — the existing `OmegaPhases` fields, folded in.
+
+The declaration phases are placed so that they partition `check_decl`: what
+they leave in `other` on an item row is the retry loop's bookkeeping and the
+per-attempt δ-world refresh, and on a module row the import scope, the
+container plan and the join.
+
+CLI, per command:
+
+- `heather check`, `build-x86` and `compile-x86` all open a `Run` scope, and
+  the native commands open a `Module` scope around the generated certificate.
+  Without them the thousands of certificate declarations had rows and no
+  total.
 
 CLI:
 
@@ -196,9 +234,12 @@ Suite:
 
 Counters: one `u64` increment each, on lines that already touch the cache line
 they live on. Timers: two `Instant::now()` per phase entry, where a phase is a
-whole declaration gate, a unification, a resolution, an omega stage or a module
-image operation — never a conversion step, never an evaluator step. Row
-collection: one branch per scope entry when off.
+whole declaration gate, one of the four parts of a declaration, a unification,
+a resolution, one head-shape probe, one diagnostic note, an omega stage or a
+module image operation — never a conversion step, never an evaluator step. The
+finest-grained of those, the whnf probe, still brackets a call that allocates a
+value arena and runs the machine. Row collection: one branch per scope entry
+when off.
 
 `scripts/bench --check` against `crates/kernel/benches/baseline.tsv` is the
 evidence; per the repo's policy no concrete numbers live in this file.

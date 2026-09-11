@@ -16,8 +16,9 @@
 //! publication.
 //!
 //! Cost when nobody is measuring: two `Instant::now()` per *phase* entry,
-//! where a phase is a whole declaration gate, one unification, one
-//! resolution, one omega stage or one module-image operation — never a
+//! where a phase is a whole declaration gate, one of the four parts of a
+//! declaration, one unification, one resolution, one head-shape probe, one
+//! diagnostic note, one omega stage or one module-image operation — never a
 //! conversion step and never an evaluator step (those are counted, in
 //! `heather_kernel::stats`). Row collection costs one branch per scope entry
 //! when it is off. Always compiled, never feature-gated, so the build that
@@ -76,6 +77,14 @@ registry! {
         Parse = "parse_ns",
         Prelude = "prelude_ns",
         KernelGate = "kernel_gate_ns",
+        DeclType = "decl_type_ns",
+        DeclBody = "decl_body_ns",
+        DeclEmit = "decl_emit_ns",
+        DeclCommit = "decl_commit_ns",
+        Lower = "lower_ns",
+        ElabWhnf = "elab_whnf_ns",
+        DiagNote = "diag_note_ns",
+        Lint = "lint_ns",
         Unify = "unify_ns",
         Resolve = "resolve_ns",
         Matching = "matching_ns",
@@ -99,6 +108,7 @@ registry! {
         ResolveGoals = "resolve_goals",
         UnifyCalls = "unify_calls",
         CacheHashes = "cache_hashes",
+        DiagNotes = "diag_notes",
     }
 }
 
