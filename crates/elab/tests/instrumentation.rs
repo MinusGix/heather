@@ -120,8 +120,10 @@ fn the_declaration_phases_are_each_attributed() {
         .expect("a run row");
 
     // The four halves of a declaration, the non-`fn` forms' lowering, the
-    // elaborator's own head-shape probes, the diagnostic notes it runs for a
-    // message it may never print, and the source lints.
+    // elaborator's own head-shape probes, and the source lints. `DiagNote` is
+    // deliberately **not** in this list: a successful module runs no
+    // diagnostic probe at all (`issues/elab-diagnostic-probe-cost.md`), which
+    // is the assertion below.
     for timer in [
         Timer::DeclType,
         Timer::DeclBody,
@@ -129,7 +131,6 @@ fn the_declaration_phases_are_each_attributed() {
         Timer::DeclCommit,
         Timer::Lower,
         Timer::ElabWhnf,
-        Timer::DiagNote,
         Timer::Lint,
     ] {
         assert!(
@@ -138,11 +139,22 @@ fn the_declaration_phases_are_each_attributed() {
             Timer::NAMES[timer as usize],
         );
     }
-    // `refl` against a computing left-hand side runs the mismatch note, and
-    // the proof still succeeds — which is the point of counting them.
+    // `refl` against a computing left-hand side *records* a mismatch
+    // candidate, and the proof succeeds — so the candidate is dropped unread
+    // and its conversion never runs. The two counters say exactly that, and
+    // they are the pair that named the cost
+    // (`issues/elab-diagnostic-probe-cost.md`).
     assert!(
-        run.counters[Counter::DiagNotes as usize] > 0,
-        "a successful proof still paid for a diagnostic probe",
+        run.counters[Counter::DiagCandidates as usize] > 0,
+        "this module writes a `refl` whose sides are not syntactically equal",
+    );
+    assert_eq!(
+        run.counters[Counter::DiagNotes as usize], 0,
+        "a successful module must not pay for a diagnostic probe",
+    );
+    assert_eq!(
+        run.timers[Timer::DiagNote as usize], 0,
+        "and therefore spends no time in one",
     );
 
     // The exclusive rule, on every row of a real module and not only on the

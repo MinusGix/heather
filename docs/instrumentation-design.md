@@ -189,10 +189,15 @@ sampler's item name and no bracket):
   `time_kernel` bracket reaches it, so the column is drawn from the elaborate
   side of the split and `kernel_ns` keeps its meaning.
 - `diag_note` — elaborator-side conversion run for a *message* rather than
-  for a judgement: the checking-mismatch and `refl`-mismatch notes, which run
-  whether or not the declaration turns out to be fine. Counted as well as
-  timed (`diag_notes`), because how often a successful build pays for a note
-  it will never print is the interesting half.
+  for a judgement: the checking-mismatch and `refl`-mismatch notes. Counted as
+  well as timed (`diag_notes`). The column is what found
+  `issues/elab-diagnostic-probe-cost.md`, where those probes ran on every
+  candidate of every declaration whether or not it turned out to be fine; they
+  now run only where the note is read — at the gate's rejection — so on a
+  module that checks, both the timer and the counter are **zero**, and a
+  nonzero `diag_note` means a declaration was refused. `diag_candidates`
+  counts what was *recorded* instead: the ratio of the two is how much a
+  successful build no longer pays.
 - `lint` — the per-item source lints.
 - `unify`, `resolve`, `matching`, `gendefs` — the entry point of each
   subsystem, not its internals; the exclusive rule keeps a nested entry from

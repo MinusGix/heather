@@ -3,9 +3,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 
-use heather_kernel::term::{LocalCtx, Term};
+use heather_kernel::level::Level;
+use heather_kernel::term::{LocalCtx, Term, Type};
 use heather_syntax::Span;
 
+use crate::context::Cx;
 use crate::{OperatorFallbackUse, goals::GoalArena};
 
 /// Scratch state for an ordinary declaration.
@@ -21,15 +23,23 @@ pub(super) struct DeclAttempt {
     pub(super) op_fallback_notes: RefCell<Vec<String>>,
     /// Successful fallbacks which become lints only if the declaration lands.
     pub(super) op_fallback_uses: RefCell<Vec<OperatorFallbackUse>>,
-    /// First checking mismatch held for a possible kernel diagnostic.
-    pub(super) pending_mismatch: RefCell<Option<(String, Span)>>,
-    /// First written `refl` whose two sides were found not to convert. Unlike
-    /// [`Self::pending_mismatch`] this does not *replace* the gate's report —
-    /// `NotConvertible` at a named declaration is what the mutation controls
-    /// of the certifying pipeline read — it moves that report to the `refl`
-    /// and appends the two sides
+    /// Checking sites whose inferred type may disagree with the expected one,
+    /// in the order they were met. **Candidates, not notes**: nothing is
+    /// converted and nothing is spelled here
+    /// (`issues/elab-diagnostic-probe-cost.md`). The gate probes them in this
+    /// order and stops at the first that has something to say, which is what
+    /// reproduces the old eager "first note to fill the slot wins"; on the
+    /// common path — the declaration checks — the whole list is dropped
+    /// unread.
+    pub(super) check_notes: RefCell<Vec<CheckNote>>,
+    /// Written `refl`s whose two sides are not syntactically equal, in the
+    /// order they were met — [`Self::check_notes`]' counterpart, deferred for
+    /// its reason and probed the same way. Unlike a checking mismatch this
+    /// does not *replace* the gate's report — `NotConvertible` at a named
+    /// declaration is what the mutation controls of the certifying pipeline
+    /// read — it moves that report to the `refl` and appends the two sides
     /// (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
-    pub(super) pending_refl_note: RefCell<Option<(String, Span)>>,
+    pub(super) refl_notes: RefCell<Vec<ReflNote>>,
     /// Every `decide` the declaration wrote, with the decision the kernel
     /// will run. Consulted only if the gate says `NotConvertible`: the one
     /// whose decision then re-reduces to the wrong side is the refusal, and
@@ -53,8 +63,8 @@ impl DeclAttempt {
     pub(super) fn prepare(&mut self) {
         self.op_fallback_notes.get_mut().clear();
         self.op_fallback_uses.get_mut().clear();
-        self.pending_mismatch.get_mut().take();
-        self.pending_refl_note.get_mut().take();
+        self.check_notes.get_mut().clear();
+        self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
         self.goal_arena.prepare();
@@ -69,8 +79,8 @@ impl DeclAttempt {
     pub(super) fn finish(&mut self) {
         self.goal_arena.finish();
         self.op_fallback_notes.get_mut().clear();
-        self.pending_mismatch.get_mut().take();
-        self.pending_refl_note.get_mut().take();
+        self.check_notes.get_mut().clear();
+        self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
     }
 }
@@ -84,4 +94,33 @@ pub(super) struct DecideUse {
     pub(super) index: Term,
     pub(super) goal: String,
     pub(super) instance: String,
+}
+
+/// One checking site met in checking-falls-back-to-inference position: what
+/// was inferred, what was expected, and where.
+///
+/// Everything the probe needs to reproduce its message exactly, and nothing
+/// more. The context is cloned because the spelling reads its names, aliases
+/// and type variables; the two types are `Rc`-shared kernel nodes, so what is
+/// really held alive is one declaration attempt's worth of terms that the
+/// attempt is holding anyway.
+#[derive(Clone)]
+pub(super) struct CheckNote {
+    pub(super) span: Span,
+    pub(super) cx: Cx,
+    pub(super) got: Type,
+    pub(super) expected: Type,
+    pub(super) level: Level,
+}
+
+/// One written `refl` and the equation it claimed, for the same deferred
+/// probe ([`CheckNote`]).
+#[derive(Clone)]
+pub(super) struct ReflNote {
+    pub(super) span: Span,
+    pub(super) cx: Cx,
+    pub(super) lhs: Term,
+    pub(super) rhs: Term,
+    pub(super) ty: Type,
+    pub(super) level: Level,
 }

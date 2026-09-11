@@ -222,3 +222,57 @@ fn a_type_that_only_converts_is_still_accepted() {
         fn uses(n: Nat) -> Nat { k(n) }
         ");
 }
+
+/// The note is **deferred to the verdict**, and the verdict is reported from
+/// the serial path at every width (`issues/elab-diagnostic-probe-cost.md`).
+///
+/// The candidate is recorded while the body walks and its conversion runs only
+/// if the gate rejects — so the one thing that could have been lost is the
+/// thing the note exists for: a span *inside* the body, which the
+/// declaration-level failure cannot name. Both notes are checked, at the
+/// inline width and at a real pool: under the parallel gate the join reports
+/// no note at all, the pass is discarded and replayed serially, and it is the
+/// replay's `kernel_error` that must produce the same message at the same
+/// span (`docs/parallel-kernel-gate-design.md` §5.1).
+#[test]
+fn a_deferred_note_survives_every_gate_width() {
+    let mismatch = format!("{LIST}fn d_w<A>(xs: List<A>, n: Nat) -> List<A> {{ n }}\n");
+    let refl = "
+fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+theorem three(): dbl(1) = 3 { refl }
+";
+    for workers in [1usize, 4] {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        let err = match e.elab_module_source("w", &mismatch) {
+            Ok(()) => panic!("expected a rejection at {workers} workers"),
+            Err(err) => err,
+        };
+        let rendered = err.render(&mismatch);
+        assert!(
+            rendered.contains("this has type `Nat`, but `List<A>` is expected here"),
+            "at {workers} workers: {rendered}"
+        );
+        let ElabError::Elab { span, .. } = err else {
+            panic!("expected an elaborator error at {workers} workers: {err}")
+        };
+        assert_eq!(&mismatch[span.start as usize..span.end as usize], "n");
+
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        let err = match e.elab_module_source("r", refl) {
+            Ok(()) => panic!("expected a rejection at {workers} workers"),
+            Err(err) => err,
+        };
+        let rendered = err.render(refl);
+        assert!(
+            rendered.contains("`refl` needs both sides to be definitionally equal"),
+            "at {workers} workers: {rendered}"
+        );
+        // The verdict stays the kernel's; only the span moves to the `refl`.
+        let ElabError::Kernel { span, .. } = err else {
+            panic!("expected a kernel rejection at {workers} workers: {err}")
+        };
+        assert_eq!(&refl[span.start as usize..span.end as usize], "refl");
+    }
+}

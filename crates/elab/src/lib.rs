@@ -147,7 +147,7 @@ mod wf;
 pub(crate) use application::{
     ParamMeta, Skel, has_implicit_mark, skel_of_lam_binders, skel_of_ty, skel_params,
 };
-use attempt::DeclAttempt;
+use attempt::{CheckNote, DeclAttempt, ReflNote};
 pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use inductive::Inductive;
 use metaprograms::{MetaDef, MetaPrograms};
@@ -4456,8 +4456,8 @@ impl Elaborator {
     /// no types, as a bare `NotConvertible`.
     ///
     /// The kernel stays the judge, and this method does not even raise an error:
-    /// it fills [`DeclAttempt::pending_mismatch`], which only the gate reads and only
-    /// when the gate itself rejects. `Layer::Prog` against
+    /// it records a candidate in [`DeclAttempt::check_notes`], which only the
+    /// gate reads and only when the gate itself rejects. `Layer::Prog` against
     /// [`Self::goal_psi`] is [[auto-refl-empty-block]]'s gate, for its reason
     /// (a type mentioning an outstanding goal must still be well-scoped).
     ///
@@ -4467,19 +4467,57 @@ impl Elaborator {
     /// two types that might yet convert is worse than no message. Only
     /// `NotConvertible`, which is the decided answer, is reported.
     fn note_check_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) {
-        // A diagnostic probe is elaborator-side conversion run for the
-        // *message*, not for the judgement, and it runs whether or not the
-        // declaration turns out to be fine. That makes it its own column
-        // (`docs/instrumentation-design.md` §5) rather than a share of the
-        // body walk that happens to contain it.
+        // **Recording is not probing** (`issues/elab-diagnostic-probe-cost.md`).
+        // The conversion below used to run here, on every checking site of
+        // every declaration, to find out whether there was anything to say —
+        // and on a run where nothing fails, every one of those answers was
+        // discarded. What is kept here is the *candidate*: the two types, the
+        // context they were compared in, and the span. The probe runs in
+        // [`Self::probed_check_note`], only when the gate has actually
+        // rejected the declaration.
+        //
+        // The one filter cheap enough to apply at record time is syntactic
+        // equality, which is a decision — identical types convert — and not a
+        // probe, so it costs nothing and shortens the list.
+        if got == expected {
+            return;
+        }
+        stats::count(stats::Counter::DiagCandidates);
+        self.attempt.check_notes.borrow_mut().push(CheckNote {
+            span,
+            cx: cx.clone(),
+            got: got.clone(),
+            expected: expected.clone(),
+            level: lvl.clone(),
+        });
+    }
+
+    /// The deferred half of [`Self::note_check_mismatch`]: run one recorded
+    /// candidate's conversion and spelling, and return the message if it has
+    /// one.
+    ///
+    /// A diagnostic probe is elaborator-side conversion run for the *message*,
+    /// not for the judgement. That is what makes it its own column
+    /// (`docs/instrumentation-design.md` §5) rather than a share of the body
+    /// walk that contains the site — and now that the probe runs only on
+    /// rejection, the column reads as what it always meant: on a successful
+    /// module it is zero.
+    fn probed_check_note(&self, note: &CheckNote) -> Option<(String, Span)> {
         stats::count(stats::Counter::DiagNotes);
         let _phase = stats::guard(stats::Timer::DiagNote);
+        let CheckNote {
+            span,
+            cx,
+            got,
+            expected,
+            level,
+        } = note;
         if self
             .goal_oracle()
-            .convert_type(&cx.gamma, Layer::Prog, got, expected, lvl)
+            .convert_type(&cx.gamma, Layer::Prog, got, expected, level)
             != Err(ConvError::NotConvertible)
         {
-            return;
+            return None;
         }
         // **Readable or silent.** This message makes a claim about two types,
         // and a claim the reader cannot check is worse than no claim: below the
@@ -4490,25 +4528,28 @@ impl Elaborator {
         // `And<…>` against `And<…>`, whose type arguments are the whole
         // difference ([[display-inductive-type-arguments]]). Both filters are
         // silence, not error: the declaration is still rejected, by the gate.
-        let Some(got_s) = self.display_type_clean(cx, got) else {
-            return;
-        };
-        let Some(want_s) = self.display_type_clean(cx, expected) else {
-            return;
-        };
+        let got_s = self.display_type_clean(cx, got)?;
+        let want_s = self.display_type_clean(cx, expected)?;
         if got_s == want_s {
-            return;
+            return None;
         }
-        // Recorded, not raised: see [`DeclAttempt::pending_mismatch`]. The gate is
-        // still the judge, and a more specific diagnostic downstream still
-        // wins the message.
-        let mut slot = self.attempt.pending_mismatch.borrow_mut();
-        if slot.is_none() {
-            *slot = Some((
-                format!("this has type `{got_s}`, but `{want_s}` is expected here"),
-                span,
-            ));
-        }
+        Some((
+            format!("this has type `{got_s}`, but `{want_s}` is expected here"),
+            *span,
+        ))
+    }
+
+    /// The first recorded checking mismatch that has something to say, probed
+    /// in the order the sites were met.
+    ///
+    /// Recording order plus "stop at the first" is exactly the eager version's
+    /// "the first note to fill the slot wins": the same candidates are tried in
+    /// the same order and the same one answers. What changed is that the ones
+    /// after it are never run — and that on a declaration the gate accepts,
+    /// none of them is.
+    fn pending_mismatch(&self) -> Option<(String, Span)> {
+        let notes = self.attempt.check_notes.borrow();
+        notes.iter().find_map(|n| self.probed_check_note(n))
     }
 
     /// [`Self::note_check_mismatch`] at the one checking form that compares
@@ -4552,10 +4593,37 @@ impl Elaborator {
         if lhs == rhs {
             return;
         }
-        // [`Self::note_check_mismatch`]'s column, for the same reason: the
+        // Recorded, not probed — [`Self::note_check_mismatch`]'s reason, and
+        // the expensive half of it: the certificate is thousands of `refl`
+        // pins whose two sides are large, and a budgeted conversion on every
+        // one of them was 18% of a successful build
+        // (`issues/elab-diagnostic-probe-cost.md`).
+        stats::count(stats::Counter::DiagCandidates);
+        self.attempt.refl_notes.borrow_mut().push(ReflNote {
+            span,
+            cx: cx.clone(),
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+            ty: ty.clone(),
+            level: level.clone(),
+        });
+    }
+
+    /// The deferred half of [`Self::note_refl_mismatch`]
+    /// ([`Self::probed_check_note`]'s counterpart at the `refl` form).
+    fn probed_refl_note(&self, note: &ReflNote) -> Option<(String, Span)> {
+        // [`Self::probed_check_note`]'s column, for the same reason: the
         // conversion below is the note's, not the gate's.
         stats::count(stats::Counter::DiagNotes);
         let _phase = stats::guard(stats::Timer::DiagNote);
+        let ReflNote {
+            span,
+            cx,
+            lhs,
+            rhs,
+            ty,
+            level,
+        } = note;
         let oracle = oracle::SemanticOracle::in_world(
             self.goal_psi(),
             self.fuel.min(diagnostics::REFL_NOTE_FUEL),
@@ -4563,7 +4631,7 @@ impl Elaborator {
         if oracle.convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
             != Err(ConvError::NotConvertible)
         {
-            return;
+            return None;
         }
         // Readable or silent, for [`Self::note_check_mismatch`]'s reason: two
         // sides the reader cannot check, or that spell alike, are worse than
@@ -4572,21 +4640,26 @@ impl Elaborator {
             self.spell_term_clean(cx, lhs),
             self.spell_term_clean(cx, rhs),
         ) else {
-            return;
+            return None;
         };
         if lhs_s == rhs_s {
-            return;
+            return None;
         }
-        let mut slot = self.attempt.pending_refl_note.borrow_mut();
-        if slot.is_none() {
-            *slot = Some((
-                format!(
-                    "`refl` needs both sides to be definitionally equal, \
-                     but `{lhs_s}` and `{rhs_s}` are not"
-                ),
-                span,
-            ));
-        }
+        Some((
+            format!(
+                "`refl` needs both sides to be definitionally equal, \
+                 but `{lhs_s}` and `{rhs_s}` are not"
+            ),
+            *span,
+        ))
+    }
+
+    /// The first recorded `refl` that has something to say, in the order the
+    /// `refl`s were met — [`Self::pending_mismatch`]'s counterpart, preserving
+    /// the same first-wins order for the same reason.
+    fn pending_refl_note(&self) -> Option<(String, Span)> {
+        let notes = self.attempt.refl_notes.borrow();
+        notes.iter().find_map(|n| self.probed_refl_note(n))
     }
 
     /// Inference mode: returns the elaborated term with its canonical type
@@ -6090,6 +6163,14 @@ impl Elaborator {
     /// resolved by fallback, which is as relevant to the precise message as to
     /// the bare one.
     ///
+    /// Both notes are *probed* here rather than read: the conversion that
+    /// decides whether either has anything to say runs at this verdict, not at
+    /// the site it was recorded at (`issues/elab-diagnostic-probe-cost.md`).
+    /// This is the only place a rejection is reported from — the parallel
+    /// gate's join reports no note, discards its pass and replays it serially
+    /// (`docs/parallel-kernel-gate-design.md` §5.1) — so the candidates are
+    /// always in hand, at every width.
+    ///
     /// A written `refl`'s note ([`Self::note_refl_mismatch`]) travels a third
     /// way: it neither replaces the report nor merely annotates the
     /// declaration. The verdict stays the kernel's, and the *span* becomes the
@@ -6107,7 +6188,7 @@ impl Elaborator {
             };
         }
         if e == TypeError::NotConvertible
-            && let Some((msg, at)) = self.attempt.pending_mismatch.borrow().clone()
+            && let Some((msg, at)) = self.pending_mismatch()
         {
             let msg = match self.operator_fallback_note() {
                 Some(note) => format!("{msg} (note: {note})"),
@@ -6116,7 +6197,7 @@ impl Elaborator {
             return ElabError::Elab { msg, span: at };
         }
         let refl = (e == TypeError::NotConvertible)
-            .then(|| self.attempt.pending_refl_note.borrow().clone())
+            .then(|| self.pending_refl_note())
             .flatten();
         let (span, refl_note) = match refl {
             Some((msg, at)) => (at, Some(msg)),

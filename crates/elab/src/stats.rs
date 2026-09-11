@@ -109,6 +109,7 @@ registry! {
         UnifyCalls = "unify_calls",
         CacheHashes = "cache_hashes",
         DiagNotes = "diag_notes",
+        DiagCandidates = "diag_candidates",
     }
 }
 
