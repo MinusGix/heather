@@ -248,14 +248,22 @@ pub(crate) fn time_kernel<T>(f: impl FnOnce() -> T) -> T {
 /// Fold a kernel worker's numbers for one deferred item back in
 /// (`docs/parallel-kernel-gate-design.md` §7).
 ///
-/// Three things happen, and they do not double-count each other. The timer
-/// cell and the kernel counters gain the worker's delta, so every scope still
-/// *open* on this thread — the module row, the run row — accounts for work
-/// done off it; deliberately not through [`add`], because the exclusive-nesting
-/// accumulator belongs to whatever bracket is open here and a worker's time
-/// was never nested inside it. Then the item row named by `row`, which closed
-/// while the worker was still running, is patched in place, so `--timings`
-/// keeps its shape: one `kernel_gate_ns` per declaration.
+/// The kernel *counters* gain the worker's delta on this thread, so every
+/// scope still open — the module row, the run row — accounts for work done
+/// off it; a count is a count at any width. The worker's **clock** is not
+/// added to the timer cell, and that is the width-independence rule: an
+/// enclosing row's phase columns are wall, its `total_ns` is wall, and CPU
+/// summed across eight workers does not fit inside either. What the enclosing
+/// rows are charged instead is the join's own wall — the time this thread
+/// really spent blocked — by [`add`] at the join
+/// (`docs/parallel-kernel-gate-design.md` §7).
+///
+/// The worker's clock goes where it was spent: the item row named by `row`,
+/// which closed while the worker was still running, is patched in place, its
+/// `total_ns` growing by the same amount as its phases so that the exclusive
+/// rule (`phases <= total`) survives the patch. `--timings` therefore keeps
+/// its shape at every width: one `kernel_gate_ns` per declaration, and no row
+/// claiming more phase time than it took.
 pub(crate) fn fold_deferred_kernel(
     row: Option<&(String, String)>,
     ns: u64,
@@ -263,8 +271,6 @@ pub(crate) fn fold_deferred_kernel(
 ) {
     kstats::merge(kernel);
     REG.with(|r| {
-        let cell = &r.timers[Timer::KernelGate as usize];
-        cell.set(cell.get().saturating_add(ns));
         let Some((module, item)) = row else { return };
         let mut rows = r.rows.borrow_mut();
         let Some(found) = rows.iter_mut().rev().find(|candidate| {
@@ -481,6 +487,27 @@ pub fn collecting() -> bool {
 /// Drain the collected rows without disabling collection.
 pub fn take_rows() -> Vec<ItemTiming> {
     REG.with(|r| r.rows.borrow_mut().drain(..).collect())
+}
+
+/// How many rows have been collected on this thread.
+pub(crate) fn rows_mark() -> usize {
+    REG.with(|r| r.rows.borrow().len())
+}
+
+/// Drop every row collected since [`rows_mark`]. The one caller is the
+/// deferred gate's serial fallback (`docs/parallel-kernel-gate-design.md`
+/// §5.1): a discarded pass leaves no declaration rows behind, so `--timings`
+/// has one row per declaration at every width rather than two for a module
+/// that had to be re-checked. The *cells* are deliberately not rolled back —
+/// the abandoned pass really did spend that wall, and the enclosing module
+/// row is the honest place for it.
+pub(crate) fn truncate_rows(mark: usize) {
+    REG.with(|r| {
+        let mut rows = r.rows.borrow_mut();
+        if rows.len() > mark {
+            rows.truncate(mark);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

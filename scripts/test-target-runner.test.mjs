@@ -21,13 +21,16 @@ test("libtest summaries aggregate exactly", () => {
 });
 
 test("automatic job bound reserves host memory and two CPUs per child", () => {
+  // Memory plans against BUDGET_KIB (3 GiB per child), not the 6 GiB cap:
+  // 10 GiB free - 2 GiB reserve = 8 GiB -> 2 jobs; a 16 GiB cgroup with
+  // 2 GiB used -> 14 - 2 = 12 GiB -> 4 jobs.
   const tenFree = "MemTotal: 33554432 kB\nMemAvailable: 10485760 kB\n";
   const thirtyFree = "MemTotal: 67108864 kB\nMemAvailable: 31457280 kB\n";
   assert.equal(jobBounds("auto", tenFree, 16).jobs, 2);
   assert.equal(jobBounds("auto", thirtyFree, 16).jobs, 7);
   assert.equal(jobBounds("auto", thirtyFree, 8).jobs, 3);
   assert.equal(jobBounds("8", "", 16).jobs, 1);
-  assert.equal(jobBounds("auto", thirtyFree, 16, String(16 * 1024 ** 3), String(2 * 1024 ** 3)).jobs, 3);
+  assert.equal(jobBounds("auto", thirtyFree, 16, String(16 * 1024 ** 3), String(2 * 1024 ** 3)).jobs, 4);
 });
 
 test("ordinary failures are red but only missing summaries are incomplete", () => {

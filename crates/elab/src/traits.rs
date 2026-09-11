@@ -2142,7 +2142,11 @@ impl Elaborator {
         let snapshot = self.clone();
         let r = self.elab_instance_inner(d);
         if r.is_err() {
-            *self = snapshot;
+            // Through `restore_from_clone`, never `*self = snapshot`: the
+            // kernel gate is the module's, not this declaration's, and a
+            // clone's is inline and empty (`lib.rs`, and
+            // `docs/parallel-kernel-gate-design.md` §5.1).
+            self.restore_from_clone(snapshot);
         }
         r
     }

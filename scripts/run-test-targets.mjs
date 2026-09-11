@@ -9,7 +9,16 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const LIMIT_KIB = 4 * 1024 * 1024;
+// Per-child address-space cap (`ulimit -v`): the machine-protection rail.
+// 6 GiB since 2026-09-11, when the default of eight kernel workers took the
+// x86 certificate builds to ~3.2 GB peak RSS (4 GiB was the first guess).
+const LIMIT_KIB = 6 * 1024 * 1024;
+// Per-child working-set budget the job count is planned against. Smaller
+// than the cap on purpose: the cap is what one runaway child may reach, the
+// budget is what the heaviest well-behaved one does reach (3.2 GB peak). A
+// box where every job hit the cap at once would still oversubscribe, which
+// is the trade for not halving the job count on a 32 GB box.
+const BUDGET_KIB = 3 * 1024 * 1024;
 const RESERVE_KIB = 2 * 1024 * 1024;
 const OUTPUT_LIMIT = 1024 * 1024;
 
@@ -69,7 +78,7 @@ export function jobBounds(requested, meminfo, cores, cgroupMax = "", cgroupCurre
     }
   }
   const memoryJobs = availableKib !== null
-    ? Math.max(1, Math.floor((availableKib - RESERVE_KIB) / LIMIT_KIB))
+    ? Math.max(1, Math.floor((availableKib - RESERVE_KIB) / BUDGET_KIB))
     : 1;
   // libtest itself gets two threads, so don't create more runnable test
   // threads than the CPUs the process is actually allowed to use. One
@@ -226,7 +235,7 @@ async function main() {
     return (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label);
   });
   if (!targets.length) throw new Error("Cargo manifest contained no test executables");
-  console.log(`\n== test targets: ${targets.length} binaries, ${jobs}-way bound (${jobs * 4} GiB maximum child address space) ==`);
+  console.log(`\n== test targets: ${targets.length} binaries, ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
   const reserveGib = (bounds.reserveKib / 1024 / 1024).toFixed(1);
   if (bounds.automatic) {
     console.log(`automatic bound: memory ${bounds.memoryJobs}, CPU ${bounds.cpuJobs}; reserving ${reserveGib} GiB for the host`);

@@ -13,11 +13,14 @@
 //! cells, both stats registries — is per-thread by construction, because it is
 //! either created inside `check_term` or declared `thread_local!`.
 //!
-//! `workers == 1` is the default and spawns nothing: the gate sites run the
-//! code they always ran, in the order they always ran it. The pool exists in
-//! that configuration only to answer `is_inline()`.
+//! `workers == 1` spawns nothing: the gate sites run the code they always ran,
+//! in the order they always ran it, and the pool exists in that configuration
+//! only to answer `is_inline()`. It is what a clone gets, and what the serial
+//! fallback (`docs/parallel-kernel-gate-design.md` §5.1) re-runs a failed
+//! module at — a module's answer never depends on the width.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
@@ -118,6 +121,13 @@ struct Shared {
     state: Mutex<State>,
     work: Condvar,
     done: Condvar,
+    /// Set by whichever worker first records a rejection or a panic, and read
+    /// without the lock by [`KernelPool::poll_failed`] between declarations.
+    /// That poll is the early abort: once a queued proof has failed the pass
+    /// is going to be discarded and re-run serially, so elaborating the rest
+    /// of the module is work nobody will look at
+    /// (`docs/parallel-kernel-gate-design.md` §5.1).
+    failed: AtomicBool,
 }
 
 impl Shared {
@@ -136,6 +146,9 @@ impl Shared {
                 }
             };
             let outcome = run(job.0, job.1);
+            if outcome.verdict.is_err() {
+                self.failed.store(true, Ordering::Relaxed);
+            }
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.outcomes.push(outcome);
             state.outstanding -= 1;
@@ -155,8 +168,14 @@ pub(crate) struct KernelPool {
 }
 
 impl Default for KernelPool {
+    /// A fresh elaborator runs as wide as `HEATHER_KERNEL_WORKERS` says, or
+    /// [`crate::DEFAULT_KERNEL_WORKERS`] wide: the deferral pipelines the
+    /// elaborator against the workers and total CPU is flat with width
+    /// (`docs/parallel-kernel-gate-design.md`), so there is no serial mode
+    /// to protect by default. `HEATHER_KERNEL_WORKERS=1` is the serial
+    /// build, for timing an item in isolation.
     fn default() -> Self {
-        KernelPool { workers: 1, shared: None, handles: Vec::new(), next: 0 }
+        KernelPool::with_workers(crate::kernel_workers_from_env().unwrap_or(crate::DEFAULT_KERNEL_WORKERS))
     }
 }
 
@@ -172,15 +191,27 @@ impl Default for KernelPool {
 /// a clone to run wide says so with `set_kernel_workers`.
 impl Clone for KernelPool {
     fn clone(&self) -> Self {
-        KernelPool::default()
+        KernelPool::with_workers(1)
     }
 }
 
 impl KernelPool {
-    /// Set the worker count. 1 (the default) is exactly today's serial
-    /// behaviour: no thread, no queue, the gate sites inline. Changing it with
-    /// checks outstanding is a caller error; the elaborator only sets it up
-    /// front.
+    fn with_workers(workers: usize) -> Self {
+        KernelPool { workers: workers.max(1), shared: None, handles: Vec::new(), next: 0 }
+    }
+
+    /// An inline pool with nothing queued: a placeholder, for a caller that
+    /// has to move the live pool out of an elaborator for a moment
+    /// ([`crate::Elaborator::restore_from_clone`]).
+    pub(crate) fn inline() -> Self {
+        KernelPool::with_workers(1)
+    }
+
+    /// Set the worker count. 1 is exactly the serial behaviour: no thread, no
+    /// queue, the gate sites inline — which is also what the serial fallback
+    /// (`docs/parallel-kernel-gate-design.md` §5.1) sets it to for the replay.
+    /// Changing it with checks outstanding is a caller error; the elaborator
+    /// sets it up front or between passes, both of which are quiescent.
     pub(crate) fn set_workers(&mut self, workers: usize) {
         debug_assert!(self.shared.is_none() || self.next == 0);
         self.workers = workers.max(1);
@@ -210,6 +241,7 @@ impl KernelPool {
                     }),
                     work: Condvar::new(),
                     done: Condvar::new(),
+                    failed: AtomicBool::new(false),
                 });
                 for n in 0..self.workers {
                     let mine = Arc::clone(&shared);
@@ -232,8 +264,12 @@ impl KernelPool {
         self.next += 1;
         let item = Rc::new(item);
         if self.handles.is_empty() {
+            let outcome = run(index, item);
+            if outcome.verdict.is_err() {
+                shared.failed.store(true, Ordering::Relaxed);
+            }
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.outcomes.push(run(index, item));
+            state.outcomes.push(outcome);
             return;
         }
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -241,6 +277,14 @@ impl KernelPool {
         state.outstanding += 1;
         drop(state);
         shared.work.notify_one();
+    }
+
+    /// Whether some *already finished* check has failed. Non-blocking: one
+    /// relaxed load, asked between declarations, and the only thing it is
+    /// allowed to decide is whether to stop elaborating early — the verdict
+    /// itself still comes from [`Self::join`].
+    pub(crate) fn poll_failed(&self) -> bool {
+        self.shared.as_ref().is_some_and(|s| s.failed.load(Ordering::Relaxed))
     }
 
     /// Wait for every outstanding check and take the outcomes, in submission
@@ -255,6 +299,9 @@ impl KernelPool {
         }
         let mut outcomes = std::mem::take(&mut state.outcomes);
         drop(state);
+        // Nothing is outstanding and the outcomes have left: the next pass
+        // starts from no known failure.
+        shared.failed.store(false, Ordering::Relaxed);
         outcomes.sort_by_key(|o| o.index);
         outcomes
     }
@@ -263,6 +310,23 @@ impl KernelPool {
 impl Drop for KernelPool {
     fn drop(&mut self) {
         let Some(shared) = self.shared.take() else { return };
+        // A pool is quiescent and drained when it dies: every module path
+        // joins before it returns, and the join takes the outcomes. Dropping
+        // one that still holds a verdict means some caller replaced a *live*
+        // pool, and the verdicts in it are the ones a module was about to be
+        // judged by — silently discarded, gate silently inline afterwards.
+        // That was a real defect (`restore_from_clone`), and it was invisible
+        // except under load, so the next one gets caught here instead.
+        #[cfg(debug_assertions)]
+        if !std::thread::panicking() {
+            let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            debug_assert!(
+                state.outstanding == 0 && state.outcomes.is_empty(),
+                "kernel pool dropped with {} check(s) outstanding and {} verdict(s) unread",
+                state.outstanding,
+                state.outcomes.len(),
+            );
+        }
         {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.shutdown = true;

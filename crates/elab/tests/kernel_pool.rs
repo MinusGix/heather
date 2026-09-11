@@ -69,6 +69,11 @@ fn four_workers_accept_independent_theorems() {
 /// is the function the semantic session, the module image and the declaration
 /// cache all run inside, so a proof that fails after its declaration committed
 /// must make *it* return `Err` — no delta, nothing to publish, nothing written.
+///
+/// And not only the verdict: a failing module's *diagnostics* and *bindings*
+/// are the serial gate's, because the parallel pass that committed `broken`
+/// before checking it is discarded whole and replayed serially
+/// (`docs/parallel-kernel-gate-design.md` §5.1).
 #[test]
 fn a_late_failure_rejects_the_module_before_anything_is_published() {
     let mut elab = with_workers(4);
@@ -81,6 +86,38 @@ fn a_late_failure_rejects_the_module_before_anything_is_published() {
             .any(|e| matches!(e, ElabError::Kernel { decl, .. } if decl == "broken")),
         "the failing declaration is named: {errors:?}",
     );
+
+    // The serial run, for comparison: same errors, in the same order, and the
+    // same set of names registered afterwards.
+    let mut serial = with_workers(1);
+    let serial_errors = serial
+        .check_module_delta("pool_bad", LATE_FAILURE, ModuleDependencyIdentity::new(Vec::new()))
+        .err()
+        .expect("the serial gate refuses it too");
+    assert_eq!(
+        errors.iter().map(render).collect::<Vec<_>>(),
+        serial_errors.iter().map(render).collect::<Vec<_>>(),
+        "the width is a scheduling decision and never a diagnostic one",
+    );
+    assert_eq!(
+        registered(&elab, &["id_nat", "one_one", "two_two", "broken", "five_five", "six_six"]),
+        registered(&serial, &["id_nat", "one_one", "two_two", "broken", "five_five", "six_six"]),
+        "a refused declaration stays unregistered at every width",
+    );
+}
+
+fn render(e: &ElabError) -> String {
+    format!("{e:?}")
+}
+
+/// Which of `names` the elaborator will resolve — the registration count the
+/// contract is about, asked through the ordinary name judgment.
+fn registered(elab: &Elaborator, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| elab.axiom_report(n).is_ok())
+        .map(|n| n.to_string())
+        .collect()
 }
 
 /// The same module, checked twice at different widths, must reach the same
@@ -122,28 +159,115 @@ impl KernelGate for Recorder {
 }
 
 /// Two properties at once: a verdict is recorded only after the deferred check
-/// passes, and a failing module vouches for exactly the prefix the serial gate
-/// vouched for — everything before the first failure, nothing after it.
+/// passes, and a failing module records exactly the verdicts the serial gate
+/// records — no more, because a discarded parallel pass vouches for nothing at
+/// all, and no fewer, because the serial replay is what the cache sees
+/// (`docs/parallel-kernel-gate-design.md` §5.1).
 #[test]
-fn a_verdict_is_recorded_only_for_the_prefix_before_the_failure() {
+fn a_failing_module_records_exactly_the_serial_gate_s_verdicts() {
     let recorder = Rc::new(Recorder::default());
     let mut elab = with_workers(4);
     elab.set_gate(Rc::clone(&recorder) as Rc<dyn KernelGate>);
     let errors = elab.check_module_source("pool_prefix", LATE_FAILURE);
     assert!(!errors.is_empty(), "the fixture must fail");
 
+    let serial_recorder = Rc::new(Recorder::default());
+    let mut serial = with_workers(1);
+    serial.set_gate(Rc::clone(&serial_recorder) as Rc<dyn KernelGate>);
+    let serial_errors = serial.check_module_source("pool_prefix", LATE_FAILURE);
+
     let accepted = recorder.accepted.borrow().clone();
-    assert!(accepted.contains(&"one_one".to_string()), "{accepted:?}");
-    assert!(accepted.contains(&"two_two".to_string()), "{accepted:?}");
     assert!(!accepted.contains(&"broken".to_string()), "a refused proof is never vouched for");
-    // Declaration order, and nothing past the failure.
-    let one = accepted.iter().position(|n| n == "one_one").expect("one_one");
-    let two = accepted.iter().position(|n| n == "two_two").expect("two_two");
-    assert!(one < two, "verdicts are replayed in declaration order: {accepted:?}");
+    assert_eq!(
+        accepted,
+        *serial_recorder.accepted.borrow(),
+        "the same verdicts, in the same order, at any width",
+    );
+    assert_eq!(
+        errors.iter().map(render).collect::<Vec<_>>(),
+        serial_errors.iter().map(render).collect::<Vec<_>>(),
+    );
+}
+
+/// The parallel pass a failure discards leaves the *oracle* untouched too: a
+/// gate that is told about a declaration and then never hears the module was
+/// abandoned would record a verdict nobody asked it to keep.
+#[test]
+fn a_discarded_pass_vouches_for_nothing_before_the_replay() {
+    let recorder = Rc::new(Recorder::default());
+    let mut elab = with_workers(4);
+    elab.set_gate(Rc::clone(&recorder) as Rc<dyn KernelGate>);
+    assert!(!elab.check_module_source("pool_discard", LATE_FAILURE).is_empty());
+    let accepted = recorder.accepted.borrow().clone();
+    let mut once = accepted.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), accepted.len(), "no declaration is vouched for twice: {accepted:?}");
+}
+
+/// A declaration form that rolls itself back by restoring a whole *clone* of
+/// the elaborator — `instance` is the one (`traits.rs`, `elab_instance`) — and
+/// that queues a false proof before it fails. The member loop elaborates in
+/// order, so `unit_l` is deferred and `nope` is refused after it: the rollback
+/// happens with a rejection in flight, which is the case
+/// `Elaborator::restore_from_clone` exists for.
+const ROLLED_BACK_INSTANCE: &str = r#"
+class Monoid<A> {
+  unit: A,
+  op: A -> A -> A,
+  unit_l: (x: A) -> op(unit, x) = x,
+}
+
+inductive Z { Z0, Z1 }
+
+instance Monoid<Z> {
+  fn unit() -> Z { Z0 }
+  fn op(x: Z, y: Z) -> Z { x }
+  theorem unit_l(x: Z): op(unit(), x) = x { refl }
+  fn nope() -> Z { Z0 }
+}
+
+theorem after(): Z::Monoid.op(Z0, Z1) = Z1 { refl }
+"#;
+
+/// A rolled-back declaration must not take the *module's* gate down with it.
+///
+/// The pool is not declaration state: it holds every proof the module has
+/// queued, and a clone's pool is inline and empty by construction. Restoring
+/// one over the live pool threw away the queued rejection of `unit_l` — so
+/// the join saw nothing, the module never took the serial fallback, and the
+/// gate ran inline for the rest of the module — which made the module's
+/// answer depend on how fast a worker was, the one thing §5.1 forbids. The
+/// false proof here is queued and the failing member refused inside *one*
+/// item, so no early abort can intervene and the loss is deterministic.
+#[test]
+fn a_rolled_back_declaration_keeps_the_modules_queued_verdicts() {
+    const NAMES: [&str; 4] = ["Z::Monoid", "Z::Monoid::op", "Z::Monoid::unit_l", "after"];
+    let mut elab = with_workers(4);
+    let errors = elab.check_module_source("pool_rollback", ROLLED_BACK_INSTANCE);
+    assert_eq!(
+        elab.kernel_workers(),
+        4,
+        "a declaration's rollback is not allowed to reconfigure the module's gate",
+    );
+
+    let mut serial = with_workers(1);
+    let serial_errors = serial.check_module_source("pool_rollback", ROLLED_BACK_INSTANCE);
     assert!(
-        !accepted.contains(&"five_five".to_string())
-            && !accepted.contains(&"six_six".to_string()),
-        "nothing after the first failure is vouched for: {accepted:?}",
+        serial_errors
+            .iter()
+            .any(|e| matches!(e, ElabError::Kernel { decl, .. } if decl.ends_with("unit_l"))),
+        "the fixture's point is a false proof: {serial_errors:?}",
+    );
+    assert_eq!(
+        errors.iter().map(render).collect::<Vec<_>>(),
+        serial_errors.iter().map(render).collect::<Vec<_>>(),
+        "the same errors, in the same order, at four workers as at one",
+    );
+    assert_eq!(
+        registered(&elab, &NAMES),
+        registered(&serial, &NAMES),
+        "and the same names registered afterwards",
     );
 }
 
@@ -200,10 +324,26 @@ fn a_worker_s_time_folds_back_into_its_declaration_s_row() {
         theorems.iter().any(|r| r.kernel.eval_steps > 0),
         "the worker's kernel counters come home with its clock",
     );
+    // The enclosing rows stay wall-shaped at every width: a worker's CPU goes
+    // to the declaration that spent it, and what the module row is charged for
+    // the deferral is the wall this thread really spent blocked at the join
+    // (`docs/parallel-kernel-gate-design.md` §7). So the exclusive rule —
+    // no row claiming more phase time than it took — holds at eight workers
+    // exactly as it holds at one, which is what `--timings` consumers read.
     let module_row = rows.iter().find(|r| r.kind == ScopeKind::Module).expect("a module row");
+    for row in &rows {
+        assert!(
+            row.kernel_ns <= row.total_ns,
+            "row {:?}/{:?} claims {}ns of kernel in {}ns",
+            row.kind,
+            row.item,
+            row.kernel_ns,
+            row.total_ns,
+        );
+    }
     assert!(
-        module_row.kernel_ns >= items.iter().map(|r| r.kernel_ns).max().unwrap_or(0),
-        "a still-open enclosing scope accounts for work done off-thread",
+        module_row.kernel.eval_steps > 0,
+        "a still-open enclosing scope still accounts for the *counters* moved off-thread",
     );
 }
 

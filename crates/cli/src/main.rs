@@ -267,7 +267,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         elab.set_kernel_workers(
             opts.kernel_workers
                 .or_else(heather_elab::kernel_workers_from_env)
-                .unwrap_or(1),
+                .unwrap_or(heather_elab::DEFAULT_KERNEL_WORKERS),
         );
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never

@@ -77,7 +77,65 @@ impl SessionCheckpoint {
     }
 }
 
+/// Everything one *module pass* can leave behind, and the marks it rolls back
+/// to.
+///
+/// [`SessionCheckpoint`] is the committed-state half and is deliberately
+/// narrow (see its own note). A module pass, though, is the unit the deferred
+/// kernel gate discards when a queued proof fails
+/// (`docs/parallel-kernel-gate-design.md` §5.1), and *nothing* a discarded
+/// pass did may be observable: not the bindings it registered, not the
+/// warnings it raised, not the Omega certificates it reported, not the delta
+/// events it journalled, not the `--timings` rows it pushed. So this is the
+/// wider boundary, and it exists for exactly one caller.
+pub(crate) struct ModulePassCheckpoint {
+    committed: SessionCheckpoint,
+    journal: Option<usize>,
+    warnings: usize,
+    omega_reports: usize,
+    omega_failure_reports: usize,
+    rows: usize,
+}
+
 impl Elaborator {
+    /// Mark everything a module pass could change, so that a pass whose
+    /// deferred proofs failed can be replayed serially from here.
+    pub(crate) fn module_pass_checkpoint(&self) -> ModulePassCheckpoint {
+        ModulePassCheckpoint {
+            committed: SessionCheckpoint::capture(self),
+            journal: self
+                .module_journal
+                .borrow()
+                .as_ref()
+                .map(|journal| journal.events.len()),
+            warnings: self.warnings.borrow().len(),
+            omega_reports: self.omega_reports.borrow().len(),
+            omega_failure_reports: self.omega_failure_reports.borrow().len(),
+            rows: crate::stats::rows_mark(),
+        }
+    }
+
+    /// Undo a module pass completely. The elaborator is left exactly as
+    /// [`Self::module_pass_checkpoint`] found it, so the replay re-enters the
+    /// module, re-registers its names and re-raises its diagnostics itself.
+    pub(crate) fn restore_module_pass(&mut self, mark: ModulePassCheckpoint) {
+        mark.committed.restore(self);
+        if let Some(at) = mark.journal
+            && let Some(journal) = self.module_journal.borrow_mut().as_mut()
+        {
+            journal.events.truncate(at);
+        }
+        self.warnings.borrow_mut().truncate(mark.warnings);
+        self.omega_reports.borrow_mut().truncate(mark.omega_reports);
+        self.omega_failure_reports
+            .borrow_mut()
+            .truncate(mark.omega_failure_reports);
+        self.pending_derived.borrow_mut().clear();
+        self.container_decls.borrow_mut().clear();
+        self.instance_scope.clear();
+        crate::stats::truncate_rows(mark.rows);
+    }
+
     /// Capture all committed semantic state and none of this session's
     /// transient checking state.
     ///

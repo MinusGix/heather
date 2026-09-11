@@ -128,7 +128,7 @@ compile_seconds=$((SECONDS - compile_started))
 semantic_warmup() {
   local target=$1
   (
-    ulimit -v 4194304
+    ulimit -v 6291456
     ulimit -t 300
     RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
       cargo test "${CARGO_FLAGS[@]}" -p heather-elab --test "$target" -- --format terse
@@ -140,7 +140,7 @@ native_warmup() {
   # exact-build prefix before a child spends its budget on the generated
   # certificate; replay still kernel-checks every cached declaration.
   (
-    ulimit -v 4194304
+    ulimit -v 6291456
     ulimit -t 300
     RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
       cargo test "${CARGO_FLAGS[@]}" -p heather-cli --bin heather \
@@ -192,8 +192,10 @@ fi
 # preserve, so run its independent binaries in bounded parallel. Focused
 # invocations retain Cargo's native serial path below. By default the runner
 # chooses the smaller of the available two-thread CPU slots minus one
-# (libtest gets two threads) and the number of 4 GiB children MemAvailable can
-# hold while leaving 2 GiB available for the host. HEATHER_TEST_JOBS
+# (libtest gets two threads) and the number of children a 3 GiB working-set
+# budget each fits in MemAvailable while leaving 2 GiB for the host (the
+# address-space cap is 6 GiB; LIMIT_KIB/BUDGET_KIB in run-test-targets.mjs).
+# HEATHER_TEST_JOBS
 # can lower or request a higher count; both safety caps remain authoritative.
 if (( $# == 0 )); then
   mkdir -p target
@@ -212,7 +214,7 @@ if (( $# == 0 )); then
 fi
 rm -f "$manifest"
 
-# ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
+# ...then run under them: 6 GiB address space, 5 CPU minutes, two threads.
 #
 # The awk pass-through counts per-binary `test result:` lines — cargo
 # scatters them across ~60 targets and prints no total, so callers (humans
@@ -229,7 +231,7 @@ rm -f "$manifest"
 # λs), so checking the `tm_elim_wf` branch of a 56-branch recursor recurses
 # deeper than 2 MiB allows. 8 MiB is comfortable; the cap above still bounds
 # total address space.
-ulimit -v 4194304
+ulimit -v 6291456
 ulimit -t 300
 counts=$(mktemp)
 timings=$(mktemp)

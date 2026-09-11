@@ -89,11 +89,14 @@ elaborator's thread: it is an `Rc<dyn KernelGate>` and stays one.
 `--kernel-workers N` on `heather check`, `build-x86` and `compile-x86`, and
 `HEATHER_KERNEL_WORKERS` in the environment; the flag wins.
 
-**N = 1 is the default and spawns no thread.** The pool reports itself
-inline, the gate sites run exactly the code they ran before, in the same
-order, with the same error timing and the same `stats::time_kernel` bracket.
-The test suite and its 4 GiB per-process rail are therefore unchanged until
-someone moves the default. Two other conditions also force inline: the
+**N = 1 spawns no thread.** The pool reports itself inline, the gate sites
+run exactly the code they ran before, in the same order, with the same error
+timing and the same `stats::time_kernel` bracket. That is what the serial
+fallback (§5.1) replays a failed module at, and it is what
+`HEATHER_KERNEL_WORKERS=1` asks for; the *default* moved to eight workers the
+same day the scaling was measured (`DEFAULT_KERNEL_WORKERS`), and the suite's
+per-process rail went from 4 to 6 GiB to hold the wider peak RSS. Two other
+conditions also force inline: the
 `value-metrics` collector being enabled (its `ValueMetrics` is an `Rc` the
 elaborator owns and the profiled checker entry points want), and a `meta fn`
 gate.
@@ -142,7 +145,7 @@ by reading two functions. Everything downstream is strictly after:
 | consumer | why it is covered |
 | --- | --- |
 | `SemanticSession::check` publishing an image | runs `check_module_delta` → `check_module_source_inner`; the extension is read from Ψ *after* the join, and an error short-circuits before publication |
-| `Cache::accepted` recording a verdict | `accepted` is itself deferred and replayed at the join, in declaration order, only for items before the first failure |
+| `Cache::accepted` recording a verdict | `accepted` is itself deferred and replayed at the join, in declaration order, and only when every queued check passed (§5.1) |
 | `build-x86` / `compile-x86` writing the ELF, the `.s` and the `.certificate.hthr` | every `write_new` is after `elab.elab_module_source(...)` has returned `Ok` |
 | `heather check` reporting a module accepted | the errors vector it reads is the one the join appended to |
 | `replay_module_delta` | replays a *stored* delta; it queues nothing |
@@ -158,7 +161,8 @@ between its commit and the join, is bounded but not nothing: a `fn`'s body is
 visible to dependents, so conversion can δ-unfold a term the kernel has not
 yet accepted. It cannot produce a wrong verdict — the module fails either way
 — but it can make a later check spend its fuel on nonsense. Fuel is what
-bounds it; the module's answer is unchanged; and a `theorem`, which is the
+bounds it, the early abort (§5.1) is what shortens it, the module's answer is
+unchanged because the whole pass is discarded — and a `theorem`, which is the
 whole of the certificate workload, is pushed opaque and so is invisible to
 every dependent in the first place.
 
@@ -166,31 +170,115 @@ Two things about the **declaration cache** as a consumer of the seam
 (`crates/cache/src/lib.rs`), both consequences of the deferral rather than
 choices:
 
-- *The prefix rule is a soundness rule, not a tidiness one.* The serial gate
-  never pushes a failed declaration to Ψ, so nothing is ever proved against a
-  bogus binding. The deferred gate does push it — that is the deferral — so a
-  later declaration in the same module may have been checked against an
-  unverified body. Vouching for it would record a cache entry that the kernel
-  did not earn. Hence: verdicts for the prefix before the first failure,
-  nothing after it. A failing module therefore records *fewer* entries under
-  N > 1 than under N = 1, which is the conservative direction.
+- *A discarded pass vouches for nothing.* The serial gate never pushes a
+  failed declaration to Ψ, so nothing is ever proved against a bogus binding.
+  The deferred gate does push it — that is the deferral — so a later
+  declaration in the same module may have been checked against an unverified
+  body, and a verdict recorded for it would be a cache entry the kernel did
+  not earn. §5.1 answers that by discarding the whole pass rather than by
+  vouching for a prefix of it: the verdicts a failing module records are the
+  serial replay's, which is the same set the serial gate would have recorded,
+  in the same order. (An earlier revision recorded the prefix before the first
+  failure. That was sound but width-dependent — the serial gate keeps checking
+  after a failure and vouches for the good declarations *after* it too — and
+  the fallback subsumes it.)
 - *The verdict is replayed against the item's own Ψ snapshot*, in declaration
   order, which is what `Inner::sync` needs to extend its Merkle prefix
   incrementally. The one cost is that the first replayed verdict of a module
   arrives with a Ψ *shorter* than the prefix the intervening `admits` calls
   grew, and `sync` answers a shrinking Ψ by clearing and rehashing — so
   `--cache` together with `--kernel-workers N > 1` pays one full prefix
-  rehash per module. Correct, and measurable, and not a combination anything
-  runs today (the default is 1, and the native commands do not install a
-  declaration gate at all). The proper fix is a third seam method that
+  rehash per module. Correct, and measurable, and now on by default for
+  `heather check --cache` (the native commands install no declaration gate at
+  all). The proper fix is a third seam method that
   computes an item's identity synchronously at submission and commits the
   verdict at the join; that is its own round.
 
-One behavioural difference under N > 1, recorded deliberately: a deferred
-failure loses the `kernel_error` notes (`refused_decide`, the pending
-mismatch and refl notes), because those are per-declaration elaborator state
-that has moved on by join time. The error, its item and its span are exact;
-the hint is not reconstructed. Under the default N = 1 nothing changes.
+A deferred failure's own `ElabError` carries no `kernel_error` notes
+(`refused_decide`, the pending mismatch and refl notes), because those are
+per-declaration elaborator state that has moved on by join time. That error
+is never what a caller sees: it is the signal that starts the serial replay
+(§5.1), and the replay reconstructs the notes by re-running the declaration
+where they live.
+
+## 5.1 The contract: a module's answer never depends on the width
+
+Everything a caller can observe about a module — which errors, in which
+order, with which spans and notes; what is registered in Ψ, in the name and
+type registries and in the provenance table; which verdicts the declaration
+gate records; the shape of the `--timings` rows — is identical at one worker
+and at eight. The width is a scheduling decision, and scheduling decisions do
+not get a vote on what a module means.
+
+The deferral cannot honour that on its own, and the three ways it cannot are
+all the same way: **a queued proof fails after its binding has been
+committed**. Then the parallel pass has registered a declaration the serial
+gate would have refused; it has reported the rejection at the join rather
+than in declaration order; and it has let the declarations after it be
+elaborated against a binding that was never earned. No amount of care at the
+join reconstructs the serial answer from that state, because the serial
+answer depends on state the parallel pass never had.
+
+So the parallel pass is an **accelerator for modules that are accepted**, and
+nothing else:
+
+1. **Serial fallback.** If any deferred check fails — a rejection or a worker
+   panic — the pass is discarded whole and the module is re-run with the pool
+   inline. What the caller receives is exactly what the serial run returns.
+   `Elaborator::module_pass_checkpoint` (`session.rs`) marks everything a pass
+   can leave behind: the committed world (`SessionCheckpoint` — Ψ, δΨ, names,
+   types, traits, representations, provenance, meta programs), the module
+   journal's event count, the warning and Omega-report lengths, and the
+   `--timings` row count; `restore_module_pass` puts all of it back, and
+   `elab_module_source` / `check_module_source_inner` then call
+   `elab_module_pass` / `check_module_pass` again through `serially`. The two
+   public entry points are wrappers; the pass bodies are what used to be in
+   them.
+2. **Early abort.** `KernelPool::poll_failed` is one relaxed load of an
+   `AtomicBool` a worker sets when it records a rejection. Both item loops ask
+   it between declarations and stop on the first `true`, so a failure near the
+   top of a big module does not pay for the rest of the parallel pass before
+   the replay starts.
+3. **Nothing escapes a discarded pass.** `join_kernel_gate` replays
+   `KernelGate::accepted` only when *every* queued check passed: a failing
+   join vouches for nothing at all, so the verdicts the cache records for a
+   failing module are the serial replay's and no others. Images are published
+   and files are written strictly after a module returns `Ok`, which a failing
+   module does not do at either width.
+
+4. **The pool is the module's, not a declaration's.** A declaration form may
+   undo itself by restoring a whole *clone* of the elaborator — `instance`
+   does (`elab_instance`) — and a clone's pool is inline and empty by
+   construction (`pool.rs`, the `Clone` note). Assigning one over the live
+   pool would discard every proof the module has queued, verdicts included:
+   the join then sees nothing, the fallback never runs, and the gate is
+   inline for the rest of the module — a module whose answer depends on
+   whether a worker beat the elaborator to the next declaration, which is
+   precisely what this section forbids. `Elaborator::restore_from_clone`
+   (`lib.rs`) is the only way to perform such a rollback: it moves the live
+   pool aside and puts it back. The obligations the rolled-back declaration
+   itself queued stay queued — they are checked against the frozen Ψ prefixes
+   they were submitted with, and a failure among them takes the module down
+   the ordinary discard-and-replay path, where the serial answer is the one
+   the caller sees. In debug builds `KernelPool::drop` asserts the pool it is
+   destroying is quiescent and drained, so a future site that loses a verdict
+   this way says so instead of going quiet under load.
+
+The cost is that a failing module pays the parallel attempt plus the serial
+run. That is the right place to put the cost. Failing modules are the dev
+loop, and the dev loop is what the fallback is protecting: the serial run is
+what a failing module cost before any of this existed, and the parallel
+attempt on top of it is bounded by the early abort. A module that is
+*accepted* — the certificate workload, the library, every module in a green
+build — pays nothing, because the fallback is never entered.
+
+Two smaller consequences, recorded rather than chosen. A discarded pass's
+`admits` calls have already moved the declaration cache's hit/miss counters,
+so `--cache --timings` over a failing module counts some declarations twice
+in the *counter* columns; no verdict and no stored entry is affected. And the
+fallback is per module, so a run whose every module fails pays the attempt
+twice over — which is the same sentence as the first paragraph of this one,
+at run scale.
 
 ## 6. What had to be `Send`
 
@@ -215,13 +303,28 @@ and returns both with the outcome. At join time, on the elaborator's thread:
 
 1. `kstats::merge` adds the worker's counter delta to the main thread's
    counters, so every *still-open* enclosing scope — the module row, the run
-   row — picks it up the way it always did;
-2. `stats::add_deferred_kernel` adds the nanoseconds to the `KernelGate`
-   timer cell (without touching the exclusive-nesting accumulator, which
-   belongs to whatever bracket is open) for the same reason; and
-3. the already-closed **item** row named by `Deferred::row` is patched in
+   row — picks it up the way it always did. A count is a count at any width;
+2. the already-closed **item** row named by `Deferred::row` is patched in
    place: `kernel_gate_ns`, `kernel_ns`, `total_ns` and the kernel counter
-   columns all gain the worker's numbers.
+   columns all gain the worker's numbers. `total_ns` grows by the same
+   nanoseconds as the phases do, so the exclusive rule survives the patch; and
+3. the enclosing scopes are charged the **join's own wall** — the time this
+   thread really spent blocked — through `stats::add`, once per join.
+
+The third point is the width-independence rule for `--timings`, and it is
+deliberately *not* the worker's clock. An enclosing row's phase columns are
+wall and its `total_ns` is wall, and CPU summed across eight workers does not
+fit inside either: charging it there makes a module row claim more kernel
+time than the module took, which is the shape `crates/cli/tests/timings.rs`
+and the frontend bench's phase split (`total >= parse + kernel`) both read.
+The worker's clock goes where it was spent — the declaration's own row — and
+the wall goes where the waiting happened. Every row then satisfies
+`phases <= total` at eight workers exactly as at one.
+
+The price is the honest one: a module row's `kernel_gate_ns` no longer sums
+its items' `kernel_gate_ns` under N > 1, because the items hold CPU and the
+module holds wall. That gap *is* the speedup, and it is readable by
+subtraction rather than by a column that overflows its own row.
 
 `Deferred::row` is the innermost `ScopeKind::Item` scope open at submission
 time, tracked by a thread-local stack that `stats::scope` maintains only when
@@ -232,9 +335,13 @@ it before.
 `decls_gated` is counted at submission, on the elaborator's thread, so the
 counter column is unchanged. The net effect: `--timings` has the same shape
 as today — `kernel_gate_ns` per item — and the per-module and per-run totals
-still sum. The one honest difference is that under N > 1 a module row's
-`kernel_gate_ns` can exceed its `total_ns` wall, because it is CPU across
-workers; that is the speedup, visible.
+still sum the same way at any width.
+
+A pass discarded by §5.1 also discards the rows it pushed
+(`stats::truncate_rows`), so a module that had to be re-checked has one row
+per declaration and not two. The timer *cells* are not rolled back with them:
+the abandoned pass really did spend that wall, and the enclosing module row
+is the honest place for it.
 
 ## 8. Trusted base
 

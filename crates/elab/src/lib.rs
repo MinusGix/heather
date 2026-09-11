@@ -1346,6 +1346,15 @@ impl measure::BinderTys for Elaborator {
     }
 }
 
+/// Kernel workers a fresh elaborator uses when `HEATHER_KERNEL_WORKERS` is
+/// unset. Eight: on the reused_callee certificate total CPU was flat from one
+/// to eight workers and the wall was bounded by the serial elaborator past
+/// four, so a wider default costs nothing but memory (peak RSS roughly tripled
+/// at eight; the suite's per-process rail is sized for that). The width is
+/// never a semantic decision — `docs/parallel-kernel-gate-design.md` §5.1 is
+/// what makes a default above 1 safe to ship.
+pub const DEFAULT_KERNEL_WORKERS: usize = 8;
+
 /// The kernel worker count `HEATHER_KERNEL_WORKERS` asks for, if it names a
 /// usable one (`docs/parallel-kernel-gate-design.md` §4).
 ///
@@ -1407,11 +1416,13 @@ impl Elaborator {
     /// How many kernel worker threads a module's proof obligations are checked
     /// on (`docs/parallel-kernel-gate-design.md`).
     ///
-    /// 1 — the default, and what every test and the unflagged CLI use — means
-    /// the kernel runs inline at the gate, on this thread, in declaration
-    /// order, exactly as it always has. Above 1 the *statement* is still
-    /// checked synchronously and the binding still commits to Ψ immediately;
-    /// the proof is queued and joined before the module is accepted.
+    /// 1 means the kernel runs inline at the gate, on this thread, in
+    /// declaration order, exactly as it always has. Above 1 — which is the
+    /// default ([`DEFAULT_KERNEL_WORKERS`]) — the *statement* is still checked
+    /// synchronously and the binding still commits to Ψ immediately; the proof
+    /// is queued and joined before the module is accepted, and a module whose
+    /// join fails is discarded and re-run at width 1, so the width changes
+    /// only how fast the answer arrives (§5.1).
     pub fn set_kernel_workers(&mut self, workers: usize) {
         self.kernel_pool.set_workers(workers);
     }
@@ -1419,6 +1430,31 @@ impl Elaborator {
     /// The configured worker count.
     pub fn kernel_workers(&self) -> usize {
         self.kernel_pool.workers()
+    }
+
+    /// Roll this elaborator back to a clone of itself taken earlier —
+    /// `*self = snapshot`, the whole-elaborator undo a speculative declaration
+    /// form uses — **keeping the live kernel gate**.
+    ///
+    /// The pool is the one field a declaration may not restore. Its queue
+    /// holds the *module's* outstanding proof obligations, not this
+    /// declaration's, and a clone's pool is inline and empty by construction
+    /// (`pool.rs`, the `Clone` note): assigning one over a live pool drops
+    /// every queued verdict on the floor — the join that follows sees no
+    /// outcomes, so a rejection already recorded by a worker is never
+    /// reported and the serial fallback never runs — and silently leaves the
+    /// gate inline for the rest of the module. That is a worker-count-visible
+    /// answer, which is exactly what §5.1 forbids.
+    ///
+    /// The obligations the rolled-back declaration itself queued stay queued.
+    /// They are checked against the frozen Ψ prefixes they were submitted
+    /// with, so checking them is sound; if one fails, the module takes the
+    /// ordinary discard-and-replay path and the caller sees the serial
+    /// answer, which is the contract.
+    pub(crate) fn restore_from_clone(&mut self, snapshot: Self) {
+        let live = std::mem::replace(&mut self.kernel_pool, pool::KernelPool::inline());
+        *self = snapshot;
+        self.kernel_pool = live;
     }
 
     /// Wait for every queued proof obligation and report the first failure in
@@ -1429,13 +1465,26 @@ impl Elaborator {
     /// executable — can observe a module whose proofs are still in flight
     /// (`docs/parallel-kernel-gate-design.md` §5). Idempotent: with nothing
     /// outstanding it is a branch.
+    ///
+    /// **A failing join vouches for nothing.** The pass that queued these
+    /// items is about to be discarded and re-run serially (§5.1), so recording
+    /// a verdict for its prefix would record a verdict the serial run is going
+    /// to record again — against a different Ψ, and without the caller ever
+    /// having seen the parallel pass's registrations. Verdicts are replayed
+    /// only when every queued check passed, which is exactly when the parallel
+    /// pass is the one the caller keeps.
     pub fn join_kernel_gate(&mut self) -> Option<ElabError> {
+        let waited = std::time::Instant::now();
         let outcomes = self.kernel_pool.join();
         if outcomes.is_empty() {
             return None;
         }
+        // The wall this thread really spent blocked is what the *enclosing*
+        // scopes are charged; the workers' own clocks go to their declaration
+        // rows below (`docs/parallel-kernel-gate-design.md` §7).
+        stats::add(stats::Timer::KernelGate, waited.elapsed().as_nanos() as u64);
         let mut failure = None;
-        for outcome in outcomes {
+        for outcome in &outcomes {
             // Attribution first, and for every item: a failing module's table
             // is the one worth having (`--timings` is written before the
             // failure is reported).
@@ -1444,51 +1493,47 @@ impl Elaborator {
                 outcome.ns,
                 &outcome.kernel,
             );
-            match outcome.verdict {
-                // Only a prefix is vouched for, which is what the serial path
-                // did: everything before the first failure had been accepted
-                // by the time the failure was raised.
-                Ok(()) if failure.is_none() => {
-                    if let Some(g) = self.gate.as_ref() {
-                        let item = outcome.item.as_ref();
-                        g.accepted(
-                            &item.psi,
-                            &gate::GateItem {
-                                name: &item.name,
-                                ctx: &item.ctx,
-                                ty: &item.ty,
-                                level: &item.level,
-                                body: &item.body,
-                                opaque: item.opaque,
-                                layer: item.layer,
-                                lands_in_psi: item.lands_in_psi,
-                            },
-                        );
-                    }
-                }
-                Ok(()) => {}
-                Err(err) if failure.is_none() => {
-                    let item = outcome.item.as_ref();
-                    failure = Some(match err {
-                        Some(err) => ElabError::Kernel {
-                            decl: item.name.clone(),
-                            span: item.span,
-                            err,
-                            note: None,
-                        },
-                        None => ElabError::Elab {
-                            msg: format!(
-                                "the kernel worker checking `{}` panicked",
-                                item.name
-                            ),
-                            span: item.span,
-                        },
-                    });
-                }
-                Err(_) => {}
+            if failure.is_some() {
+                continue;
+            }
+            if let Err(err) = &outcome.verdict {
+                let item = outcome.item.as_ref();
+                failure = Some(match err {
+                    Some(err) => ElabError::Kernel {
+                        decl: item.name.clone(),
+                        span: item.span,
+                        err: *err,
+                        note: None,
+                    },
+                    None => ElabError::Elab {
+                        msg: format!("the kernel worker checking `{}` panicked", item.name),
+                        span: item.span,
+                    },
+                });
             }
         }
-        failure
+        if failure.is_some() {
+            return failure;
+        }
+        if let Some(g) = self.gate.as_ref() {
+            for outcome in &outcomes {
+                let item = outcome.item.as_ref();
+                g.accepted(
+                    &item.psi,
+                    &gate::GateItem {
+                        name: &item.name,
+                        ctx: &item.ctx,
+                        ty: &item.ty,
+                        level: &item.level,
+                        body: &item.body,
+                        opaque: item.opaque,
+                        layer: item.layer,
+                        lands_in_psi: item.lands_in_psi,
+                    },
+                );
+            }
+        }
+        None
     }
 
     /// Queue one proof obligation, or run it here when the pool is inline.
@@ -1754,7 +1799,49 @@ impl Elaborator {
         }
     }
 
+    /// Elaborate a module, kernel-checking every declaration.
+    ///
+    /// A module's answer never depends on the worker count
+    /// (`docs/parallel-kernel-gate-design.md` §5.1): the parallel pass is an
+    /// accelerator for modules that are *accepted*, and any deferred failure
+    /// discards it whole and re-runs the module serially, so what the caller
+    /// receives is what the serial gate would have said — the same error, at
+    /// the same declaration, with the same notes, over the same Ψ.
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
+        let mut deferred_failed = false;
+        if self.gate_is_inline() {
+            return self.elab_module_pass(module, src, &mut deferred_failed);
+        }
+        let mark = self.module_pass_checkpoint();
+        let parallel = self.elab_module_pass(module, src, &mut deferred_failed);
+        if !deferred_failed {
+            return parallel;
+        }
+        self.restore_module_pass(mark);
+        self.serially(|me| me.elab_module_pass(module, src, &mut false))
+    }
+
+    /// Run `f` with the kernel gate inline, restoring the configured width
+    /// afterwards. The pool is quiescent at both ends: the fallback is entered
+    /// only after a join, and the inline pass queues nothing.
+    fn serially<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let width = self.kernel_pool.workers();
+        self.kernel_pool.set_workers(1);
+        let out = f(self);
+        self.kernel_pool.set_workers(width);
+        out
+    }
+
+    /// One pass over a module's items at whatever width the pool is set to.
+    /// `deferred_failed` is set when a *queued* proof was rejected or its
+    /// worker panicked — the one outcome a parallel pass can reach that the
+    /// serial gate could not, and therefore the one that costs a replay.
+    fn elab_module_pass(
+        &mut self,
+        module: &str,
+        src: &str,
+        deferred_failed: &mut bool,
+    ) -> R<()> {
         // Parse time is its own column: it is not elaboration, and a frontend
         // regression in one is not a regression in the other
         // (`docs/instrumentation-design.md` §5).
@@ -1796,16 +1883,30 @@ impl Elaborator {
                 self.container_decls.borrow_mut().clear();
                 // Nothing may outlive the module with proofs in flight, the
                 // failure path included (`docs/parallel-kernel-gate-design.md`
-                // §5). The item's own error is the one reported.
-                let _ = self.join_kernel_gate();
+                // §5). The item's own error is the one reported — unless a
+                // queued proof also failed, in which case this whole pass is
+                // discarded and replayed serially, and the error the caller
+                // sees is the replay's.
+                if self.join_kernel_gate().is_some() {
+                    *deferred_failed = true;
+                }
             }
             r?;
+            // The early abort (§5.1): a queued proof has already failed, so
+            // the rest of this pass is work the replay will do again. Stop
+            // here and let the join report it.
+            if self.kernel_pool.poll_failed() {
+                break;
+            }
         }
         self.container_decls.borrow_mut().clear();
         // The join, before this returns and therefore before any caller can
         // publish an image, record a verdict, or write an executable.
         match self.join_kernel_gate() {
-            Some(e) => Err(e),
+            Some(e) => {
+                *deferred_failed = true;
+                Err(e)
+            }
             None => Ok(()),
         }
     }
@@ -2258,6 +2359,31 @@ impl Elaborator {
     }
 
     pub(crate) fn check_module_source_inner(&mut self, module: &str, src: &str) -> Vec<ElabError> {
+        let mut deferred_failed = false;
+        if self.gate_is_inline() {
+            return self.check_module_pass(module, src, &mut deferred_failed);
+        }
+        let mark = self.module_pass_checkpoint();
+        let parallel = self.check_module_pass(module, src, &mut deferred_failed);
+        if !deferred_failed {
+            return parallel;
+        }
+        // §5.1: the recovery contract — report every bad declaration, keep
+        // checking the good ones — is a *serial* statement about declaration
+        // order, and a deferred rejection arrives out of that order and after
+        // its declaration has already been committed to Ψ. So the pass is
+        // discarded whole, down to the last registration and warning, and the
+        // module is re-checked serially. The caller sees the serial answer.
+        self.restore_module_pass(mark);
+        self.serially(|me| me.check_module_pass(module, src, &mut false))
+    }
+
+    fn check_module_pass(
+        &mut self,
+        module: &str,
+        src: &str,
+        deferred_failed: &mut bool,
+    ) -> Vec<ElabError> {
         let file = match stats::timed(stats::Timer::Parse, || parse_file(src)) {
             Ok(f) => f,
             Err(e) => return vec![e.into()],
@@ -2300,12 +2426,18 @@ impl Elaborator {
             if let Err(e) = r {
                 errs.push(e);
             }
+            // The early abort (§5.1): this pass is already doomed to be
+            // replayed serially, so stop elaborating declarations for it.
+            if self.kernel_pool.poll_failed() {
+                break;
+            }
         }
         self.container_decls.borrow_mut().clear();
         // The join (`docs/parallel-kernel-gate-design.md` §5). This is the
         // path `check_module_delta` runs inside, so the semantic image, the
         // declaration cache and `heather check`'s verdict all sit behind it.
         if let Some(e) = self.join_kernel_gate() {
+            *deferred_failed = true;
             errs.push(e);
         }
         errs

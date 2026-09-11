@@ -147,7 +147,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // module from here on joins before it is accepted, and the certificate —
     // thousands of independent generated theorems — is the point.
     elab.set_kernel_workers(
-        kernel_workers.or_else(heather_elab::kernel_workers_from_env).unwrap_or(1),
+        kernel_workers.or_else(heather_elab::kernel_workers_from_env).unwrap_or(heather_elab::DEFAULT_KERNEL_WORKERS),
     );
     // Observation only: the collector changes no judgment, no fuel, and no
     // cache entry, and stays off unless `--item-timings` names a file. Turning

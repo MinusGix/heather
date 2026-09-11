@@ -35,6 +35,10 @@
   the compiler's Rust, `--cache --accept-stale-images` replays the library's
   module images instead of re-elaborating them (same trade as the fast
   lane; drop the flag for a final check).
+- **The kernel gate runs eight workers by default** (`HEATHER_KERNEL_WORKERS`,
+  `--kernel-workers`); a proof's item timing is only comparable across runs
+  at the same width, and `HEATHER_KERNEL_WORKERS=1` is the serial build for
+  isolating one item. The suite's per-process address-space rail is 6 GiB.
 - **Builds link with mold** (`.cargo/config.toml`), which reserves ~8 GiB of
   address space per link, so build (`cargo … --no-run`) *before* entering a
   `ulimit -v` cap; the scripts already do. A cap on a command that still has
