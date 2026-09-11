@@ -181,6 +181,22 @@ pub struct Eval<'a, 'v> {
     /// the replays are gone. Off by default: opaque evaluation is what the
     /// δ-lazy rendezvous in conversion needs (see `step_elim`).
     transparent: bool,
+    /// Work done, for `crate::stats` (`docs/instrumentation-design.md` §2).
+    /// Plain fields rather than thread-locals: the fuel decrement is the
+    /// kernel's hottest line and a counter beside `fuel` costs what `fuel -=
+    /// 1` costs. Flushed to the thread-local totals when the run is dropped.
+    /// Nothing in the kernel reads them.
+    steps: u64,
+    delta_steps: u64,
+    drives: u64,
+}
+
+impl Drop for Eval<'_, '_> {
+    fn drop(&mut self) {
+        crate::stats::eval_steps(self.steps);
+        crate::stats::eval_delta_steps(self.delta_steps);
+        crate::stats::eval_drives(self.drives);
+    }
 }
 
 impl<'a, 'v> Eval<'a, 'v> {
@@ -192,7 +208,18 @@ impl<'a, 'v> Eval<'a, 'v> {
         base: CtxBase,
         arena: &'v ValueArena<'v>,
     ) -> Eval<'a, 'v> {
-        Eval { fuel, defs, base, arena, frames: Vec::new(), depth: 0, transparent: false }
+        Eval {
+            fuel,
+            defs,
+            base,
+            arena,
+            frames: Vec::new(),
+            depth: 0,
+            transparent: false,
+            steps: 0,
+            delta_steps: 0,
+            drives: 0,
+        }
     }
 
     /// The unspent budget.
@@ -228,6 +255,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Err(OutOfFuel);
         }
         self.fuel -= 1;
+        self.steps += 1;
         Ok(())
     }
 
@@ -274,6 +302,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Err(OutOfFuel);
         }
         self.depth += 1;
+        self.drives += 1;
         let floor = self.frames.len();
         let out = self.drive_from(start, floor);
         self.depth -= 1;
@@ -451,6 +480,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             None => Ok(v),
             Some(u) => {
                 self.spend()?;
+                self.delta_steps += 1;
                 self.force(u)
             }
         }

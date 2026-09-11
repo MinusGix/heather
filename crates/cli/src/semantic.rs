@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use heather_cache::module_image::{ImageFreshness, ModuleCacheKey, ModuleImageCache, SemanticsIdentity};
-use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity, Warning};
+use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity, Warning, stats};
 
 use crate::loader::Module;
 
@@ -117,6 +117,11 @@ impl SemanticSession {
         module: &Module,
         lint_profile: LintProfile,
     ) -> ModuleOutcome {
+        // One module scope, so the dump has a per-module row whose total covers
+        // the declarations inside it plus the module-level work — parse,
+        // imports, decode, replay, publication
+        // (`docs/instrumentation-design.md` §3).
+        let _module = stats::scope(stats::ScopeKind::Module, &module.name, "");
         if !self.images_usable {
             return ModuleOutcome {
                 errors: elab.check_module_source(&module.name, &module.src),
@@ -135,8 +140,17 @@ impl SemanticSession {
         );
         let images = self.images.as_ref().expect("usable images have a cache");
         let mut notices = Vec::new();
-        match images.load(key, elab.psi().clone(), module.src.len(), self.freshness) {
-            Ok(Some(loaded)) => match elab.replay_module_delta(&loaded.delta, &dependencies) {
+        // The three phases warm replay is made of — read/checksum/decode, the
+        // kernel recheck of the decoded delta, and publication (render plus
+        // hash). The fast lane's premise rests on these
+        // (`issues/semantic-replay-phase-attribution.md`).
+        let decoded = stats::timed(stats::Timer::ImageDecode, || {
+            images.load(key, elab.psi().clone(), module.src.len(), self.freshness)
+        });
+        match decoded {
+            Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
+                elab.replay_module_delta(&loaded.delta, &dependencies)
+            }) {
                 Ok(()) => {
                     self.interfaces.push(loaded.interface_hash);
                     self.hits += 1;
@@ -175,7 +189,12 @@ impl SemanticSession {
 
         let delta = match elab.check_module_delta(&module.name, &module.src, dependencies) {
             Ok(delta) => {
-                report_omega_phases(elab, &module.name);
+                // Drained, not printed: where an `omega` invocation's time went
+                // is the dump's `omega_*` columns now, attributed by
+                // declaration rather than by invocation
+                // (`docs/instrumentation-design.md` §4). The per-invocation
+                // reports stay available through `take_omega_reports`.
+                elab.take_omega_reports();
                 delta
             }
             Err(errors) => {
@@ -190,7 +209,9 @@ impl SemanticSession {
         };
         self.interfaces.push(ModuleImageCache::interface_hash(&delta));
         let warnings = elab.take_warnings();
-        if let Err(error) = images.publish(key, &delta, &warnings) {
+        if let Err(error) =
+            stats::timed(stats::Timer::ImagePublish, || images.publish(key, &delta, &warnings))
+        {
             notices.push(CacheNotice {
                 module: module.name.clone(),
                 kind: CacheNoticeKind::PublishFailed,
@@ -198,33 +219,5 @@ impl SemanticSession {
             });
         }
         ModuleOutcome { errors: Vec::new(), warnings, replayed: false, notices }
-    }
-}
-
-/// Attribution probe for `issues/omega-per-goal-elaboration-cost.md`: with
-/// `HEATHER_OMEGA_PHASES` set, print where every `omega` invocation in a
-/// freshly checked module spent its time. Innermost invocations print first
-/// (reports are pushed post-order); `check` is inclusive of nested ones.
-fn report_omega_phases(elab: &mut Elaborator, module: &str) {
-    let reports = elab.take_omega_reports();
-    if std::env::var_os("HEATHER_OMEGA_PHASES").is_none() {
-        return;
-    }
-    let s = |ns: u64| ns as f64 / 1e9;
-    for report in &reports {
-        let p = report.phases;
-        eprintln!(
-            "omega phases {module}: depth={} lemmas={:?} src={}B reflect={:.3}s omega_search={:.3}s cutsat_search={:.3}s render={:.3}s parse={:.3}s reconstruct={:.3}s check={:.3}s",
-            p.depth,
-            report.used_lemmas,
-            p.source_len,
-            s(p.reflect_ns),
-            s(p.omega_search_ns),
-            s(p.cutsat_search_ns),
-            s(p.render_ns),
-            s(p.parse_ns),
-            s(p.reconstruct_ns),
-            s(p.check_ns),
-        );
     }
 }

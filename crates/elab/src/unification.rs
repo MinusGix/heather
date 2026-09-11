@@ -110,6 +110,21 @@ impl Sol {
 /// x)` would happily solve a meta to a term mentioning `x`, which is
 /// ill-scoped where it lands (the kernel would reject it, but a rejection is
 /// a worse message than a refusal to guess).
+/// [`unify_ty`] as the elaborator enters it: one bracket per *root* attempt,
+/// so the timer measures unification and the recursive congruence below it
+/// carries no clock at all (`docs/instrumentation-design.md` §5).
+pub(super) fn unify_ty_root(
+    gamma: &LocalCtx,
+    pat: &Type,
+    subj: &Type,
+    n: u32,
+    d: u32,
+    sols: &mut [Sol],
+) {
+    crate::stats::count(crate::stats::Counter::UnifyCalls);
+    crate::stats::timed(crate::stats::Timer::Unify, || unify_ty(gamma, pat, subj, n, d, sols));
+}
+
 pub(super) fn unify_ty(
     gamma: &LocalCtx,
     pat: &Type,

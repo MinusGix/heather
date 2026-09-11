@@ -65,7 +65,9 @@ per node; these linear constants keep this issue open for the 100-node rail.
 
 The ordinary five-node acceptance remains fast enough for the default suite;
 the 20-node case is an explicit ignored stress test. Set
-`HEATHER_FUNCTION_IR_X86_TIMINGS=1` for item/category attribution and
+`HEATHER_TIMINGS=<file|->` for per-declaration attribution (the switch was
+`HEATHER_FUNCTION_IR_X86_TIMINGS` before [[perf-instrumentation-consolidation]];
+`docs/instrumentation-design.md` has the schema) and
 `HEATHER_FUNCTION_IR_X86_NODES=N` to probe another size.
 
 As an integration-level result, the complete serial `function_ir_x86` test

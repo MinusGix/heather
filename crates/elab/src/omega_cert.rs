@@ -49,7 +49,9 @@ pub(crate) struct Certificate {
 }
 
 fn parse_generated_expr(source: &str) -> Result<Expr, String> {
-    timed(|p| &mut p.parse_ns, || parse_generated_expr_untimed(source))
+    timed(|p| &mut p.parse_ns, crate::stats::Timer::OmegaParse, || {
+        parse_generated_expr_untimed(source)
+    })
 }
 
 fn parse_generated_expr_untimed(source: &str) -> Result<Expr, String> {
@@ -120,16 +122,31 @@ thread_local! {
 /// progress. Reconstructions never nest (nested `omega` uses happen while the
 /// outer certificate is *checked*, after its reconstruction returned), so one
 /// thread-local accumulator per thread is enough.
-fn timed<T>(phase: fn(&mut OmegaPhases) -> &mut u64, f: impl FnOnce() -> T) -> T {
-    let start = std::time::Instant::now();
+///
+/// The bracket is the registry's (`docs/instrumentation-design.md` §3), read
+/// twice: the registry gets the phase's **exclusive** self time, for the
+/// per-declaration columns of the dump, and the per-invocation accumulator
+/// keeps the **inclusive** elapsed time it always kept, so an `OmegaReport`
+/// still says what it said.
+fn timed<T>(
+    phase: fn(&mut OmegaPhases) -> &mut u64,
+    timer: crate::stats::Timer,
+    f: impl FnOnce() -> T,
+) -> T {
+    let guard = crate::stats::guard(timer);
     let out = f();
-    let ns = start.elapsed().as_nanos() as u64;
+    let ns = guard.finish();
+    add_phase(phase, ns);
+    out
+}
+
+/// Add `ns` to one field of the reconstruction in progress.
+fn add_phase(phase: fn(&mut OmegaPhases) -> &mut u64, ns: u64) {
     PHASES.with(|c| {
         let mut phases = c.get();
         *phase(&mut phases) = phase(&mut phases).saturating_add(ns);
         c.set(phases);
     });
-    out
 }
 
 /// Zero the phase accumulator; the dispatcher calls this before [`reconstruct`].
@@ -2705,6 +2722,7 @@ fn reconstruct_cutsat(
     }
     let (problem, outcome) = timed(
         |p| &mut p.cutsat_search_ns,
+        crate::stats::Timer::OmegaCutsat,
         || problem.solve(CutLimits::default()),
     )
     .map_err(|failure| failure.to_string())?;
@@ -2736,11 +2754,8 @@ fn reconstruct_cutsat(
         body,
     )?;
     let render_ns = render_started.elapsed().as_nanos() as u64;
-    PHASES.with(|c| {
-        let mut phases = c.get();
-        phases.render_ns = phases.render_ns.saturating_add(render_ns);
-        c.set(phases);
-    });
+    crate::stats::add(crate::stats::Timer::OmegaRender, render_ns);
+    add_phase(|p| &mut p.render_ns, render_ns);
     Ok(Some((
         source,
         reachable.len(),
@@ -2884,7 +2899,9 @@ pub(crate) fn reconstruct(
     }
 
     let (reflected, atoms_source, atom_labels, cut_atom_sources) =
-        if let Some(ordinary) = timed(|p| &mut p.reflect_ns, || reflect_ordinary(elab, cx))? {
+        if let Some(ordinary) = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
+            reflect_ordinary(elab, cx)
+        })? {
             let (facts, atoms_source, atom_labels, atom_sources) = ordinary;
             (facts, atoms_source, atom_labels, Some(atom_sources))
         } else {
@@ -2948,7 +2965,7 @@ pub(crate) fn reconstruct(
             .assume(fact.coeffs.as_slice().to_vec(), fact.interval)
             .map_err(|failure| failure.to_string())?;
     }
-    let (problem, outcome) = timed(|p| &mut p.omega_search_ns, || problem.solve())
+    let (problem, outcome) = timed(|p| &mut p.omega_search_ns, crate::stats::Timer::OmegaSearch, || problem.solve())
         .map_err(|failure| failure.to_string())?;
     let Outcome::Contradiction {
         derivation,

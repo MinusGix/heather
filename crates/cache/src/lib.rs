@@ -221,6 +221,11 @@ impl Inner {
         {
             return Some((iface, key));
         }
+        // Hashing a declaration is a full render of it — the one thing on this
+        // path that costs real time, and until now the only thing about it the
+        // cache reported was a count (`docs/instrumentation-design.md` §5).
+        heather_elab::stats::count(heather_elab::stats::Counter::CacheHashes);
+        let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::CacheHash);
         let binding = item.binding();
         let iface = merkle::interface_hash(&self.prefix, &binding);
         // Recorded for `sync` whether or not it succeeded: the binding lands

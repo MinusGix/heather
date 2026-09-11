@@ -1118,6 +1118,9 @@ impl<'a> Walk<'a> {
 /// `None` means "not hashable" — a reference this module could not resolve —
 /// and every caller treats that as "do not cache", never as an error.
 pub fn interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<Hash> {
+    // The walk itself, separate from the identity computation that drives it
+    // (`docs/instrumentation-design.md` §5).
+    let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::MerkleWalk);
     let mut w = Walk::new(DOMAIN_IFACE, prefix, prefix.len() as u32);
     w.binding(b);
     w.finish()
@@ -1145,6 +1148,7 @@ pub fn assumption_interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<H
 /// only a theorem pays a second walk, and the total walking cost of a
 /// declaration is its own content exactly once.
 pub fn check_key(prefix: &Prefix, body: &Term, opaque: bool, iface: &Hash) -> Option<Hash> {
+    let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::MerkleWalk);
     let mut w = Walk::new(DOMAIN_CHECK, prefix, prefix.len() as u32);
     w.buf.extend_from_slice(iface);
     if !opaque {

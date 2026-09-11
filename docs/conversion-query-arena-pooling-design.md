@@ -266,9 +266,11 @@ Do not commit the furnace-recorded baseline.
 `heather check` of that file against a `-L` directory of symlinks named for its
 imports reports one error: the module is only checkable inside the test
 harness's own module base. Use `scripts/measure-x86-conv-miss` (or the test
-binary directly with `HEATHER_FUNCTION_IR_X86_NODES=5
-HEATHER_FUNCTION_IR_X86_TIMINGS=1`, which is what §3's numbers came from) and read
-the `mixed ALU kernel=` line. `HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1` adds the
+binary directly with `HEATHER_FUNCTION_IR_X86_NODES=5 HEATHER_TIMINGS=-`, which
+is what §3's numbers came from — the switch was `HEATHER_FUNCTION_IR_X86_TIMINGS`
+before the instrumentation layer was consolidated,
+`docs/instrumentation-design.md`) and read the `kernel_gate_ns` column of the
+module row. `HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1` adds the
 sampler's own clocks and inflates the kernel column by ~50%; keep it off for
 timing and on only for attribution.
 

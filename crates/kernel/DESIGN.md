@@ -616,3 +616,16 @@ paper too).
 Mirror the Coq formalization's structure: same judgments, same rule names in
 comments, so divergences are auditable. Correctness over performance
 throughout; no `unsafe` (enforced workspace-wide).
+
+**Inert counters.** `stats.rs` holds thread-local `Cell<u64>` counters — how
+many conversion queries each shortcut answered, how a miss failed, how many
+steps and δ-unfoldings the evaluator spent — and nothing in the kernel ever
+reads one. They influence no judgment, are compiled in unconditionally (the
+build that ships is the build that was measured), and every bump is a
+one-liner at the site it describes; deleting the module would change no
+answer. Evaluator counts are plain fields on `Eval`, flushed to the
+thread-local totals on drop, because the fuel decrement is the hottest line in
+the kernel and must not grow a thread-local access. Anything that *formats* a
+term — the conversion-miss table and its excerpts — stays behind the
+`value-metrics` feature, where it always was. See
+`docs/instrumentation-design.md`.

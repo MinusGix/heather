@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 echo "== measure start $(date -u +%FT%TZ) rev=$(git rev-parse --short HEAD 2>/dev/null) =="
 ( ulimit -v 16777216 -t 3600
   if [ -n "${DUMP:-}" ]; then export HEATHER_FUNCTION_IR_X86_DUMP="$DUMP"; fi
-  HEATHER_FUNCTION_IR_X86_NODES=5 HEATHER_FUNCTION_IR_X86_TIMINGS=1 HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1 \
+  HEATHER_FUNCTION_IR_X86_NODES=5 HEATHER_TIMINGS=- HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1 \
   cargo test -p heather-elab --features value-metrics --test function_ir_x86_scaling \
     generated_20_node_mixed_binary_alu_dag_checks -- --ignored --nocapture --exact 2>&1 )
 echo "exit=$?"

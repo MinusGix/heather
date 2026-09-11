@@ -1,0 +1,97 @@
+//! Inert observational counters (`docs/instrumentation-design.md` §2).
+//!
+//! Thread-local `Cell<u64>`s that say how much work the checker did — how
+//! many conversion queries the syntactic shortcut answered, how many the gate
+//! memo answered, how many paid for a value-domain comparison and how each of
+//! those failed, how many steps and δ-unfoldings the evaluator spent.
+//!
+//! Two properties are load-bearing and must stay true of anything added here:
+//!
+//! 1. **Nothing in the kernel ever reads a counter.** `typing`, `conv`, `eval`
+//!    and `reduce` bump; only a caller outside the kernel snapshots. A counter
+//!    can therefore never influence a judgment, and deleting this module would
+//!    change no answer.
+//! 2. **Every bump is a one-liner**, and every counter is declared, bumped and
+//!    rendered through the one macro below, so the set is auditable by reading
+//!    the list.
+//!
+//! Always compiled, never feature-gated: the build that ships is the build
+//! that was measured. The expensive samplers — the `Tc::conv_ty` miss table,
+//! its excerpts, `HEATHER_CONV_MISS_TRACE` — stay behind `value-metrics`,
+//! because those format terms and these do not.
+//!
+//! Thread-local by design: a caller measures the checker it drives on its own
+//! thread and nothing else.
+
+use std::cell::Cell;
+
+macro_rules! counters {
+    ($($(#[$m:meta])* $name:ident),* $(,)?) => {
+        #[derive(Default)]
+        struct Cells { $($name: Cell<u64>,)* }
+
+        thread_local! {
+            static CELLS: Cells = Cells::default();
+        }
+
+        /// A copyable reading of every counter on this thread.
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+        pub struct Snapshot { $($(#[$m])* pub $name: u64,)* }
+
+        $(
+            $(#[$m])*
+            #[inline]
+            pub fn $name(n: u64) {
+                CELLS.with(|c| c.$name.set(c.$name.get().wrapping_add(n)));
+            }
+        )*
+
+        /// Read every counter on this thread.
+        pub fn snapshot() -> Snapshot {
+            CELLS.with(|c| Snapshot { $($name: c.$name.get(),)* })
+        }
+
+        /// Zero every counter on this thread.
+        pub fn reset() {
+            CELLS.with(|c| { $(c.$name.set(0);)* });
+        }
+
+        impl Snapshot {
+            /// The counters' column names, in the order [`Snapshot::values`]
+            /// reports them.
+            pub const NAMES: &'static [&'static str] = &[$(stringify!($name),)*];
+
+            /// This snapshot minus an earlier one: what happened in between.
+            pub fn since(&self, earlier: &Snapshot) -> Snapshot {
+                Snapshot { $($name: self.$name.wrapping_sub(earlier.$name),)* }
+            }
+
+            /// The counters in [`Snapshot::NAMES`] order.
+            pub fn values(&self) -> Vec<u64> {
+                vec![$(self.$name,)*]
+            }
+        }
+    };
+}
+
+counters! {
+    /// `Tc::conv_ty` queries answered by the syntactic reflexivity test.
+    conv_shortcut_hits,
+    /// `Tc::conv_ty` queries answered by the gate's cross-head memo.
+    conv_memo_hits,
+    /// `Tc::conv_ty` queries that paid for a value-domain comparison.
+    conv_misses,
+    /// Misses that failed for **exhausted fuel or depth** rather than for a
+    /// real mismatch. Kept apart from `conv_not_convertible` because the two
+    /// call for opposite responses: more budget against a better spelling
+    /// (`issues/generated-proof-cost-diagnostics.md`).
+    conv_out_of_fuel,
+    /// Misses that failed on a genuine mismatch.
+    conv_not_convertible,
+    /// Fuel units the evaluator spent — one per reduction step.
+    eval_steps,
+    /// Definition unfoldings (δ-steps) the evaluator performed.
+    eval_delta_steps,
+    /// Re-entries of the evaluator's trampoline.
+    eval_drives,
+}

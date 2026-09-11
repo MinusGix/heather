@@ -60,7 +60,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::time::Instant;
 
 use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
@@ -136,22 +135,7 @@ pub use session::SemanticImage;
 mod slots;
 mod statements;
 
-/// Opt-in attribution for one surface item, including generated declarations
-/// and elaborator-side conversion performed while processing that item.
-///
-/// `kernel_ns` is the final declaration-gate subset. The remainder is parser-
-/// independent frontend work because `elab_module_source` parses the complete
-/// file before item timing begins.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ItemTiming {
-    pub module: String,
-    pub item: String,
-    pub total_ns: u64,
-    pub kernel_ns: u64,
-    /// Value-machine activity attributable to this item when the opt-in
-    /// collector is enabled.
-    pub value_metrics: Option<ValueMetricsSnapshot>,
-}
+pub use stats::{ItemTiming, ScopeKind};
 mod surface;
 mod traits;
 mod types;
@@ -180,7 +164,7 @@ use surface::{
 };
 use traits::Traits;
 use types::Types;
-use unification::{ResolveOb, Sol, unify_ty, zonked, zonked_tm};
+use unification::{ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
@@ -615,10 +599,6 @@ pub struct Elaborator {
     /// share it so speculative and generated checking contribute to the same
     /// requested measurement; ordinary elaborators leave it absent.
     value_metrics: Option<Rc<ValueMetrics>>,
-    /// Optional item-level frontend attribution. Clones share an explicitly
-    /// enabled collector, matching `value_metrics`; ordinary elaborators pay
-    /// only the `Option` branch at item boundaries.
-    item_timings: Option<Rc<RefCell<Vec<ItemTiming>>>>,
     /// Optional emission-slot audit (`emission_walk`). Off by default and
     /// shared by clones, exactly like the two collectors above: ordinary
     /// elaboration pays one `Option` branch per declaration.
@@ -1376,7 +1356,6 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
-            item_timings: None,
             emission_findings: None,
             omega_reports: RefCell::new(Vec::new()),
             unfold_refusals: RefCell::new(std::collections::HashMap::new()),
@@ -1410,7 +1389,12 @@ impl Elaborator {
     /// Begin aggregating value-machine allocation and cache activity across
     /// kernel gates and in-language analyzer evaluation.
     pub fn enable_value_metrics(&mut self) {
-        self.value_metrics = Some(Rc::new(ValueMetrics::default()));
+        let metrics = Rc::new(ValueMetrics::default());
+        // Scope rows carry the value-machine columns too, so the registry
+        // needs to be able to read the collector this elaborator installed
+        // (`docs/instrumentation-design.md` §3).
+        stats::set_value_metrics_source(Some((*metrics).clone()));
+        self.value_metrics = Some(metrics);
     }
 
     /// Reset the active collector without changing whether instrumentation is
@@ -1435,16 +1419,18 @@ impl Elaborator {
             .map(|metrics| metrics.snapshot())
     }
 
-    /// Begin collecting per-surface-item frontend and final-gate time.
+    /// Begin collecting scope rows — per surface item here, plus whatever
+    /// module and run scopes the driver opens
+    /// (`docs/instrumentation-design.md` §3). Collection is per *thread*, not
+    /// per elaborator: a caller measures the elaborator it drives on its own
+    /// thread and nothing else.
     pub fn enable_item_timings(&mut self) {
-        self.item_timings = Some(Rc::new(RefCell::new(Vec::new())));
+        stats::enable();
     }
 
-    /// Drain item timings without disabling the collector.
+    /// Drain the collected rows without disabling collection.
     pub fn take_item_timings(&self) -> Vec<ItemTiming> {
-        self.item_timings
-            .as_ref()
-            .map_or_else(Vec::new, |timings| timings.borrow_mut().drain(..).collect())
+        stats::take_rows()
     }
 
     /// Begin auditing every emitted annotation slot against the chokepoint
@@ -1526,6 +1512,10 @@ impl Elaborator {
     /// implicitly imported by every other one.
     pub fn with_prelude() -> R<Self> {
         let mut e = Self::new();
+        // The prelude is elaborated on every fresh elaborator, in tests and in
+        // shipping code alike, and nothing said how much that cost
+        // (`issues/prelude-clone-cost-grew.md`).
+        let _prelude = stats::guard(stats::Timer::Prelude);
         e.elab_module_source(PRELUDE_MODULE, PRELUDE)?;
         Ok(e)
     }
@@ -1614,22 +1604,23 @@ impl Elaborator {
     }
 
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
-        let file = parse_file(src)?;
+        // Parse time is its own column: it is not elaboration, and a frontend
+        // regression in one is not a regression in the other
+        // (`docs/instrumentation-design.md` §5).
+        let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
         let plan = self.begin_container(&file);
         for (idx, item) in file.items.iter().enumerate() {
-            let timing = self
-                .item_timings
-                .as_ref()
-                .map(|_| (Instant::now(), stats::kernel_ns(), self.value_metrics()));
+            let name = item_timing_name(item);
+            let _item = stats::scope(stats::ScopeKind::Item, module, &name);
             // The miss sampler's item column
             // (issues/conv-miss-sampler-item-attribution.md): every
             // conversion miss the kernel records until the item ends is
             // charged to this declaration. A no-op without `value-metrics`.
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
-                metrics.set_current_item(Some(Rc::from(item_timing_name(item).as_str())));
+                metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
@@ -1645,23 +1636,6 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 self.run_source_lints(item, &lint_source);
-            }
-            if let Some((started, kernel_before, value_before)) = timing {
-                let kernel_ns = stats::kernel_ns().saturating_sub(kernel_before);
-                let value_metrics = self.value_metrics().zip(value_before).map(
-                    |(after, before)| after.saturating_sub(before),
-                );
-                self.item_timings
-                    .as_ref()
-                    .expect("item timing remains enabled during one item")
-                    .borrow_mut()
-                    .push(ItemTiming {
-                        module: module.to_string(),
-                        item: item_timing_name(item),
-                        total_ns: started.elapsed().as_nanos() as u64,
-                        kernel_ns,
-                        value_metrics,
-                    });
             }
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -2124,7 +2098,7 @@ impl Elaborator {
     }
 
     pub(crate) fn check_module_source_inner(&mut self, module: &str, src: &str) -> Vec<ElabError> {
-        let file = match parse_file(src) {
+        let file = match stats::timed(stats::Timer::Parse, || parse_file(src)) {
             Ok(f) => f,
             Err(e) => return vec![e.into()],
         };
@@ -2136,19 +2110,24 @@ impl Elaborator {
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
             let warn_mark = self.warnings.borrow().len();
-            // The miss sampler's item column, the same bracket as
-            // `elab_module_source` (issues/conv-miss-sampler-item-attribution.md):
-            // `heather check` with `HEATHER_VALUE_METRICS` attributes by
-            // declaration too. A no-op without `value-metrics`.
+            let name = item_timing_name(item);
+            // The declaration scope, the same bracket as `elab_module_source`
+            // — `heather check` is the primary command and had none
+            // (`docs/instrumentation-design.md` §5) — carrying the miss
+            // sampler's item column with it
+            // (issues/conv-miss-sampler-item-attribution.md). A no-op without
+            // `value-metrics`, and free without `--timings`.
+            let item_scope = stats::scope(stats::ScopeKind::Item, module, &name);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
-                metrics.set_current_item(Some(Rc::from(item_timing_name(item).as_str())));
+                metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
             let r = self.elab_item_at(&file, idx, item, &plan);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
                 metrics.set_current_item(None);
             }
+            drop(item_scope);
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 // §4: a failed item's warnings are as speculative as the rest
@@ -3753,7 +3732,7 @@ impl Elaborator {
                 let outer_depth = self.omega_depth.get();
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
                 omega_cert::reset_phases();
-                let reconstruct_started = Instant::now();
+                let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
                 let mut cert = omega_cert::reconstruct(
                     self,
                     cx,
@@ -3766,18 +3745,19 @@ impl Elaborator {
                     msg: format!("`omega` got stuck: {detail}"),
                     span: e.span,
                 })?;
+                let reconstruct_ns = reconstruct_guard.finish();
                 let mut phases = omega_cert::phases();
-                phases.reconstruct_ns = reconstruct_started.elapsed().as_nanos() as u64;
+                phases.reconstruct_ns = reconstruct_ns;
                 phases.depth = outer_depth;
                 phases.source_len = cert.source.len();
                 // The certificate is parsed from generated text: its spans index
                 // that text, not the user's file, and a lint about how the
                 // generator spells a list is the generator's problem, not the
                 // reader's. Same rule as datarepr emissions (`emit_lint`).
-                let check_started = Instant::now();
+                let check_guard = stats::guard(stats::Timer::OmegaCheck);
                 let checked = self
                     .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
-                phases.check_ns = check_started.elapsed().as_nanos() as u64;
+                phases.check_ns = check_guard.finish();
                 let term = checked.map_err(|error| ElabError::Elab {
                     msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
                     span: e.span,
@@ -6210,13 +6190,13 @@ impl Elaborator {
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
-        unify_ty(&cx.gamma, dom, arg_ty, n, 0, sols);
+        unify_ty_root(&cx.gamma, dom, arg_ty, n, 0, sols);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
         if let Ok(head) = self.whnf(cx, arg_ty, span) {
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            unify_ty(&cx.gamma, dom, &head, n, 0, sols);
+            unify_ty_root(&cx.gamma, dom, &head, n, 0, sols);
         }
     }
 
@@ -6308,10 +6288,10 @@ impl Elaborator {
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
             // unfolding a transparent relation into its definition.
-            unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
+            unify_ty_root(&cx.gamma, result_ty, expected, n, 0, sols);
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            unify_ty(&cx.gamma, result_ty, &head, n, 0, sols);
+            unify_ty_root(&cx.gamma, result_ty, &head, n, 0, sols);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -6319,10 +6299,10 @@ impl Elaborator {
         // spines it heads). The pattern is in the scratch world and the
         // subject in the committed one, exactly as at an argument's domain.
         sols[m] = Sol::Withheld;
-        unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
+        unify_ty_root(&cx.gamma, result_ty, expected, n, 0, sols);
         let expected_head = self.whnf(cx, expected, span)?;
         let expected_head = self.unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
-        unify_ty(&cx.gamma, result_ty, &expected_head, n, 0, sols);
+        unify_ty_root(&cx.gamma, result_ty, &expected_head, n, 0, sols);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an

@@ -93,6 +93,16 @@ What the three phases mean exactly:
 | `kernel` | the `typing::check_type` + `check_term` **gate** that every finished declaration passes (`crates/elab/src/stats.rs`) — all three gate sites, `gate.rs`'s list being the authority: an ordinary declaration, a `meta fn`, and a **generated** definition |
 | `elab` | the residue: everything the elaborator did, **including its own conversion and whnf calls into the kernel** |
 
+The three phases are now three of the registry's named timers
+(`docs/instrumentation-design.md`): `stats::kernel_ns` still means exactly
+what this table says, and the bench's split is unchanged, but the same
+brackets also feed the finer per-declaration columns that
+`heather check --timings` dumps — unification, trait resolution, match
+speculation, generated-declaration emission, the omega stages, image decode,
+replay and publication, cache hashing. When a `parse`/`elab`/`kernel` split
+says *which layer*, the dump says which declaration and which phase inside
+it.
+
 That last row is the one to remember. The elaborator calls the kernel while
 it works — unification, `whnf`, `conv_type` — and those calls are on the
 *elaborate* side, because they are elaboration deciding something rather than

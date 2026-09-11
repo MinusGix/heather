@@ -85,12 +85,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             "--arg" if executable => {
                 inputs.push(elf::parse_argument(args.next().ok_or("--arg needs an unsigned integer")?)?);
             }
-            "-o" | "-L" | "--cache-dir" | "--item-timings" => {
+            "-o" | "-L" | "--cache-dir" | "--item-timings" | "--timings" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
                     "-o" => output = Some(value),
                     "-L" => { if !search.contains(&value) { search.push(value); } }
-                    "--item-timings" => timings = Some(value),
+                    "--item-timings" | "--timings" => timings = Some(value),
                     _ => cache = Some(value),
                 }
             }
@@ -103,9 +103,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]".into());
         }
-        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]".into());
+        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]".into());
     }
     let source = Path::new(positional[0]);
     let symbol = positional[1];
@@ -195,7 +195,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // A refused certificate is the case worth attributing, so the table is
     // written before the failure is reported.
     if let Some(path) = &timings {
-        write_item_timings(path, &elab.take_item_timings())?;
+        heather_elab::stats::dump(
+            &heather_elab::stats::Dest::File(path.clone()),
+            &elab.take_item_timings(),
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
         if let Some(report) = elab.value_conv_miss_report().filter(|r| !r.is_empty()) {
             let beside = path.with_extension("conv-miss.txt");
             std::fs::write(&beside, report).map_err(|e| format!("{}: {e}", beside.display()))?;
@@ -262,24 +266,6 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
     if outcome.errors.is_empty() { Ok(()) } else {
         Err(outcome.errors.iter().map(|e| e.render(&module.src)).collect::<Vec<_>>().join("\n"))
     }
-}
-
-/// One row per surface item the elaborator actually ran, in emission order.
-/// The value-metric columns are empty unless the build carries the
-/// `value-metrics` feature, which is what makes them collected at all.
-fn write_item_timings(path: &Path, timings: &[heather_elab::ItemTiming]) -> Result<(), String> {
-    let ms = |ns: u64| format!("{:.3}", ns as f64 / 1e6);
-    let mut out = String::from("module\titem\ttotal_ms\tkernel_ms\tterm_cache_lookups\tterm_cache_hits\ttype_cache_lookups\ttype_cache_hits\n");
-    for timing in timings {
-        let cells = timing.value_metrics.map_or_else(|| "\t\t\t".to_string(), |m| {
-            format!("{}\t{}\t{}\t{}", m.term_cache_lookups, m.term_cache_hits, m.type_cache_lookups, m.type_cache_hits)
-        });
-        writeln!(out, "{}\t{}\t{}\t{}\t{cells}", timing.module, timing.item, ms(timing.total_ns), ms(timing.kernel_ns))
-            .expect("writing to a string");
-    }
-    std::fs::write(path, out).map_err(|e| format!("{}: {e}", path.display()))?;
-    eprintln!("item timings: {} rows in {}", timings.len(), path.display());
-    Ok(())
 }
 
 fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {

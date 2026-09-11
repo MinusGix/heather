@@ -35,14 +35,17 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
     let table = std::fs::read_to_string(tsv).unwrap();
     let mut lines = table.lines();
     let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
-    assert_eq!(&header[..4], ["module", "item", "total_ms", "kernel_ms"]);
+    assert_eq!(&header[..5], ["scope", "module", "item", "total_ns", "other_ns"]);
+    assert!(header.contains(&"kernel_gate_ns"), "the gate keeps a column of its own");
+    assert!(header.contains(&"conv_misses"), "the kernel's counters are columns too");
     let mut rows = std::collections::HashSet::new();
     for line in lines {
         let cells: Vec<&str> = line.split('\t').collect();
         assert_eq!(cells.len(), header.len(), "row {line:?}");
-        cells[2].parse::<f64>().unwrap();
-        cells[3].parse::<f64>().unwrap();
-        if cells[0] == "mix_native_certificate" { rows.insert(cells[1].to_string()); }
+        cells[3].parse::<u64>().unwrap();
+        if cells[0] == "item" && cells[1] == "mix_native_certificate" {
+            rows.insert(cells[2].to_string());
+        }
     }
     let source = std::fs::read_to_string(certificate).unwrap();
     let mut declarations = 0;

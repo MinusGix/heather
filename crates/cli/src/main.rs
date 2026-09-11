@@ -37,7 +37,7 @@ use std::rc::Rc;
 
 use heather_cache::Cache;
 use heather_cache::module_image::ImageFreshness;
-use heather_elab::{Elaborator, LintProfile};
+use heather_elab::{Elaborator, LintProfile, stats};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
@@ -92,9 +92,9 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]\n\
-                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--item-timings <file.tsv>]\n\
-                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]\n\
+                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>]\n\
+                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--timings <file.tsv>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...";
 
@@ -116,6 +116,11 @@ struct Opts {
     /// axiom. The axiom declaration itself is an explicit policy input, not a
     /// violation until something depends on it.
     deny_axioms: bool,
+    /// `--timings <path.tsv>` (`-` for stderr), or `HEATHER_TIMINGS` in the
+    /// environment: write the attribution table — one row per declaration, per
+    /// module and for the run (`docs/instrumentation-design.md` §4).
+    /// Diagnostic only; it can never change a verdict.
+    timings: Option<stats::Dest>,
     /// `--accept-stale-images`: replay semantic module images another build
     /// of this compiler wrote (kernel-rechecked, reported per module) instead
     /// of rebuilding them. The inner-loop policy after editing the compiler's
@@ -133,6 +138,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
         json: false,
         deny_axioms: false,
+        timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
     };
     let mut files = Vec::new();
@@ -164,6 +170,18 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.deny_axioms = true;
             continue;
         }
+        // `--item-timings` is the spelling `build-x86`/`compile-x86` grew
+        // first; it is the same flag and writes the same table.
+        if let Some(rest) = a.strip_prefix("--timings").or_else(|| a.strip_prefix("--item-timings"))
+        {
+            let spec = match rest.strip_prefix('=') {
+                Some(d) if !d.is_empty() => d.to_string(),
+                _ if rest.is_empty() => it.next().ok_or("`--timings` needs a file")?.clone(),
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            opts.timings = Some(stats::Dest::parse(&spec));
+            continue;
+        }
         // `--cache-dir` implies `--cache`: naming a cache and not using it is
         // never what anyone meant.
         if let Some(rest) = a.strip_prefix("--cache-dir") {
@@ -192,6 +210,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
 fn check(opts: &Opts, files: &[String]) -> ExitCode {
     let stderr_color = color::stderr_enabled();
     let stdout_color = color::stdout_enabled();
+    if opts.timings.is_some() {
+        stats::enable();
+    }
+    let run_scope = opts.timings.as_ref().map(|_| stats::scope(stats::ScopeKind::Run, "", ""));
     // One cache for the whole run, shared across roots: a declaration two
     // roots have in common is checked once. Loading says out loud when it
     // threw an existing file away (a stale kernel, a corrupted file) — the
@@ -364,6 +386,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 _ => println!("{path}: {}", color::success("ok", stdout_color)),
             }
         }
+    }
+    // Dumped before the cache is saved, and unconditionally: a run that ends
+    // in diagnostics is exactly when attribution is consulted.
+    drop(run_scope);
+    if let Some(dest) = &opts.timings
+        && let Err(e) = stats::dump(dest, &stats::take_rows())
+    {
+        eprintln!("timings: could not write: {e}");
     }
     if let Some(c) = &cache
         && let Err(e) = c.save()

@@ -5,7 +5,7 @@
 // scheduling, buffered output, and exact result accounting.
 
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -123,15 +123,31 @@ function collect(child) {
   });
 }
 
+// The file is an append-only history: one row per (run, target), oldest run
+// first (`docs/instrumentation-design.md` §5). Scheduling wants the *latest*
+// row per target, which is what a forward pass leaves in the map. Rows written
+// before the `run` column existed have two fields and still read.
 function loadHistory(path) {
   const timings = new Map();
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
-      const [seconds, label] = line.split("\t", 2);
+      const fields = line.split("\t");
+      const [seconds, label] = fields.length >= 3 ? fields.slice(1, 3) : fields;
       if (label) timings.set(label, Number(seconds));
     }
   } catch {}
   return timings;
+}
+
+// Cap the history so an append-only file cannot grow without bound; keeping
+// the tail keeps the latest run per target, which is all scheduling reads.
+function trimHistory(path, keepLines) {
+  try {
+    const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length);
+    if (lines.length > keepLines) {
+      writeFileSync(path, lines.slice(lines.length - keepLines).join("\n") + "\n");
+    }
+  } catch {}
 }
 
 function readOwnCgroupValue(name) {
@@ -255,7 +271,9 @@ async function main() {
   if (!visible.length) console.log("  (no target took at least 1 second)");
   for (const [seconds, label] of visible) console.log(`${seconds.toFixed(2).padStart(8)}s  ${label}`);
   console.log(`reported target time: ${timingRows.reduce((sum, row) => sum + row[0], 0).toFixed(2)}s across ${total.resultLines} targets`);
-  writeFileSync(timingsPath, runs.map((run) => `${(run.result.duration || run.wall).toFixed(3)}\t${run.target.label}`).join("\n") + "\n");
+  const runId = new Date().toISOString();
+  appendFileSync(timingsPath, runs.map((run) => `${runId}\t${(run.result.duration || run.wall).toFixed(3)}\t${run.target.label}`).join("\n") + "\n");
+  trimHistory(timingsPath, 4000);
 
   if (incomplete) {
     console.log(`\n== suite: INCOMPLETE (${total.passed} passed before death, ${total.failed} failed) ==`);

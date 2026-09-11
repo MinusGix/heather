@@ -24,6 +24,19 @@ scripts/bench --list                 # what is in the suite
 scripts/bench --stack-only           # only the stack probe (usable in a debug build)
 ```
 
+## Attribution, which is not a gate
+
+`scripts/bench --check` says *whether* something regressed. Where a check's
+time went is a different question, answered by one instrumentation layer:
+`heather check --timings <file.tsv>` (or `HEATHER_TIMINGS=<file|->` anywhere,
+including in a test binary) writes one row per declaration, per module and for
+the whole run, with a column per named phase and per counted event.
+`docs/instrumentation-design.md` has the schema, the nesting rule and the
+old→new mapping for the four environment switches it replaces
+(`HEATHER_OMEGA_PHASES`, `HEATHER_X86_PHASES`,
+`HEATHER_FUNCTION_IR_X86_TIMINGS`, `HEATHER_OMEGA_PREFIX_PHASES`) — all four
+are gone. Its output is diagnostic and never gates anything.
+
 For evaluator allocation/cache diagnosis rather than timing, selected
 elaborator acceptance tests honor `HEATHER_VALUE_METRICS=1` when built with
 `--features value-metrics`, and print an explicit `ValueMetricsSnapshot` under

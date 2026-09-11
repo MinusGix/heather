@@ -217,6 +217,10 @@ pub(crate) fn infer_match_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
+    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // a motive probe elaborates the arms and rolls them back, and that work is
+    // invisible in every other attribution.
+    let _phase = crate::stats::guard(crate::stats::Timer::Matching);
     let Some(probe) = MotiveProbe::begin(elab) else {
         return MotiveInference::Declined;
     };
@@ -277,6 +281,10 @@ pub(crate) fn infer_if_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
+    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // a motive probe elaborates the arms and rolls them back, and that work is
+    // invisible in every other attribution.
+    let _phase = crate::stats::guard(crate::stats::Timer::Matching);
     let ExprKind::App {
         head, args, named, ..
     } = &scrutinee.kind
@@ -494,6 +502,10 @@ pub(crate) fn synthesize_motive(
     expected: &Type,
     span: Span,
 ) -> Type {
+    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // a motive probe elaborates the arms and rolls them back, and that work is
+    // invisible in every other attribution.
+    let _phase = crate::stats::guard(crate::stats::Timer::Matching);
     let rewrap = field_rewrap(scrutinee);
     if let Some(motive) = abstract_scrut(expected, scrutinee, &rewrap) {
         return motive;

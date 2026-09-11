@@ -157,6 +157,13 @@ impl Elaborator {
         tr: &mut Vec<TraceLine>,
         up: &mut Option<(Term, Type)>,
     ) -> Option<Term> {
+        // Trait/instance resolution's own phase column
+        // (`docs/instrumentation-design.md` §5). Backchaining recurses through
+        // here; the registry's exclusive rule charges each nesting level only
+        // its own share, so the column is search time and not search time
+        // times depth.
+        crate::stats::count(crate::stats::Counter::ResolveGoals);
+        let _phase = crate::stats::guard(crate::stats::Timer::Resolve);
         // The goal in the **inline** spelling: it may arrive off a respelled
         // binder type or statement, where a parameterized class instantiation
         // is `El (app(C#tycode_fn^δ; ā))`, and every structural read below —

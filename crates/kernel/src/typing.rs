@@ -132,6 +132,21 @@ impl From<ConvError> for TypeError {
     }
 }
 
+/// Record how a conversion **miss** ended
+/// (`docs/instrumentation-design.md` §2). Exhausted fuel and a genuine
+/// mismatch call for opposite responses — more budget against a better
+/// spelling — so they never share a column
+/// (`issues/generated-proof-cost-diagnostics.md`). Observational: nothing in
+/// the kernel reads what this writes.
+#[inline]
+fn note_conv_outcome(result: &Result<(), ConvError>) {
+    match result {
+        Ok(()) => {}
+        Err(ConvError::OutOfFuel) => crate::stats::conv_out_of_fuel(1),
+        Err(ConvError::NotConvertible) => crate::stats::conv_not_convertible(1),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -628,6 +643,7 @@ impl Tc {
         // reflexivity test. Preserve that exact zero-fuel boundary while
         // avoiding an arena for the overwhelmingly common positive case.
         if self.fuel > 0 && expected == inferred {
+            crate::stats::conv_shortcut_hits(1);
             return Ok(());
         }
         // Cross-head conversions necessarily do semantic work before they can
@@ -668,8 +684,10 @@ impl Tc {
                 })
         })
         {
+            crate::stats::conv_memo_hits(1);
             return Ok(());
         }
+        crate::stats::conv_misses(1);
         let at = env.layer.type_layer();
         #[cfg(feature = "value-metrics")]
         {
@@ -707,12 +725,17 @@ impl Tc {
                         ns as f64 / 1e6, self.diag_site(), first_difference_excerpt(expected, inferred));
                 }
             }
+            note_conv_outcome(&result);
             result?;
         }
         #[cfg(not(feature = "value-metrics"))]
-        conv_type_cached(
-            &env.psi, &env.gamma, at, expected, inferred, l, self.fuel, Rc::clone(&env.bodies),
-        )?;
+        {
+            let result = conv_type_cached(
+                &env.psi, &env.gamma, at, expected, inferred, l, self.fuel, Rc::clone(&env.bodies),
+            );
+            note_conv_outcome(&result);
+            result?;
+        }
         // A gate-wide cap bounds adversarial all-distinct input. Once full,
         // misses retain the ordinary checker behavior rather than evicting a
         // potentially hot positive judgment.

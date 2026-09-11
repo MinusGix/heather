@@ -7,7 +7,6 @@
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use heather_elab::{ElabError, Elaborator, SemanticImage, stats};
 
@@ -46,7 +45,8 @@ fn load_image() -> SemanticImage {
     // and each spends the process's CPU rail checking the same arithmetic
     // prefix. The first worker fills it; the second waits and replays it.
     let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let report_phases = std::env::var_os("HEATHER_OMEGA_PREFIX_PHASES").is_some();
+    let timings = stats::Dest::from_env();
+    let report_phases = timings.is_some();
     if !report_phases {
         let elab = support::semantic_test_base(OMEGA_MODULES);
         elab.take_omega_reports();
@@ -61,38 +61,16 @@ fn load_image() -> SemanticImage {
     }
     support::with_decl_cache(&mut elab, |elab| {
         for &(name, source) in OMEGA_MODULES {
-            if report_phases {
-                stats::reset_kernel_ns();
-            }
-            let started = Instant::now();
+            // One module scope per module, so the dump's module rows say what
+            // each of the prefix's modules cost
+            // (`docs/instrumentation-design.md` §3).
+            let _module = stats::scope(stats::ScopeKind::Module, name, "");
             elab.elab_module_source(name, source)
                 .unwrap_or_else(|error| panic!("{name} did not check: {error}"));
-            if report_phases {
-                let total_ns = started.elapsed().as_nanos() as u64;
-                let kernel_ns = stats::kernel_ns();
-                eprintln!(
-                    "omega prefix {name}: total={:.3}s kernel={:.3}s frontend={:.3}s",
-                    total_ns as f64 / 1e9,
-                    kernel_ns as f64 / 1e9,
-                    total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
-                );
-            }
         }
     });
-    if report_phases {
-        let mut timings = elab.take_item_timings();
-        timings.sort_by(|left, right| right.total_ns.cmp(&left.total_ns));
-        eprintln!("omega prefix slowest surface items:");
-        for timing in timings.iter().take(20) {
-            eprintln!(
-                "  {}::{} total={:.3}s kernel={:.3}s frontend={:.3}s",
-                timing.module,
-                timing.item,
-                timing.total_ns as f64 / 1e9,
-                timing.kernel_ns as f64 / 1e9,
-                timing.total_ns.saturating_sub(timing.kernel_ns) as f64 / 1e9,
-            );
-        }
+    if let Some(dest) = &timings {
+        let _ = stats::dump(dest, &elab.take_item_timings());
     }
     elab.take_omega_reports();
     elab.semantic_image()
@@ -143,9 +121,37 @@ theorem eliminated_affine(x, y: Int,
 {{ omega }}
 "#
     );
+    // The same probe doubles as the instrumentation layer's omega case
+    // (`docs/instrumentation-design.md` §5): reconstruction, search, render
+    // and the certificate's own check are named columns attributed to the
+    // declaration that asked for them, which is what the four environment
+    // switches this replaced could never say.
+    stats::enable();
+    let _ = stats::take_rows();
     elaborator()
         .elab_module_source("probe", &source)
         .unwrap_or_else(|error| panic!("Omega certificate did not check: {}", message(error)));
+    let rows = stats::take_rows();
+    stats::disable();
+    let eliminated = rows
+        .iter()
+        .find(|row| row.item == "eliminated")
+        .expect("a declaration row for the omega theorem");
+    // `omega_render` and `omega_cutsat` belong to the cut-satisfaction route,
+    // which this Fourier-Motzkin probe does not take.
+    for timer in [
+        stats::Timer::OmegaReflect,
+        stats::Timer::OmegaSearch,
+        stats::Timer::OmegaParse,
+        stats::Timer::OmegaReconstruct,
+        stats::Timer::OmegaCheck,
+    ] {
+        assert!(
+            eliminated.timers[timer as usize] > 0,
+            "{timer:?} must be attributed to `eliminated`: {:?}",
+            eliminated.timers,
+        );
+    }
 }
 
 fn cutsat_certificate_closes_the_minimal_real_shadow_integrality_gap() {

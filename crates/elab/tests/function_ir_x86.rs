@@ -606,43 +606,19 @@ fn mixed_source_alu(node_count: usize) -> String {
     source
 }
 
+/// The one dump (`docs/instrumentation-design.md` §4): `HEATHER_TIMINGS`
+/// names a file, and stderr is the default because this rail exists to be
+/// read. The old hand-rolled category/top-N roll-up is gone — `scope`,
+/// `module` and `item` are columns, so a reader groups them however the
+/// question asks.
 fn report_scaling_timings(
     label: &str,
-    total: std::time::Duration,
-    mut timings: Vec<heather_elab::ItemTiming>,
+    _total: std::time::Duration,
+    timings: Vec<heather_elab::ItemTiming>,
 ) {
-    let mut categories = std::collections::BTreeMap::<&str, (usize, u64, u64)>::new();
-    for item in &timings {
-        let category = timing_category(&item.item);
-        let entry = categories.entry(category).or_default();
-        entry.0 += 1;
-        entry.1 += item.total_ns;
-        entry.2 += item.kernel_ns;
-    }
-    timings.sort_by_key(|item| std::cmp::Reverse(item.total_ns));
-    eprintln!(
-        "{label} check_total={:.3}s kernel={:.3}s frontend={:.3}s",
-        total.as_secs_f64(),
-        stats::kernel_ns() as f64 / 1e9,
-        (total.as_nanos() as u64).saturating_sub(stats::kernel_ns()) as f64 / 1e9,
-    );
-    for (category, (count, total_ns, kernel_ns)) in categories {
-        eprintln!(
-            "{label} category {category} count={count} total={:.3}s kernel={:.3}s frontend={:.3}s",
-            total_ns as f64 / 1e9,
-            kernel_ns as f64 / 1e9,
-            total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
-        );
-    }
-    for item in timings.into_iter().take(16) {
-        eprintln!(
-            "{label} item {} total={:.3}s kernel={:.3}s frontend={:.3}s",
-            item.item,
-            item.total_ns as f64 / 1e9,
-            item.kernel_ns as f64 / 1e9,
-            item.total_ns.saturating_sub(item.kernel_ns) as f64 / 1e9,
-        );
-    }
+    let dest = stats::Dest::from_env().unwrap_or(stats::Dest::Stderr);
+    eprintln!("timings: {label}");
+    let _ = stats::dump(&dest, &timings);
 }
 
 pub fn generated_20_node_mixed_binary_alu_dag_checks() {
@@ -670,7 +646,7 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     assert_eq!(emission.lowered.instructions.len(), node_count + 2);
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.clone();
-    let report_timings = std::env::var_os("HEATHER_FUNCTION_IR_X86_TIMINGS").is_some();
+    let report_timings = stats::Dest::from_env().is_some();
     let report_value_metrics = std::env::var_os("HEATHER_FUNCTION_IR_X86_VALUE_METRICS").is_some();
     if report_timings {
         e.enable_item_timings();
@@ -713,41 +689,7 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
         let _ = child.wait();
     }
     if report_timings {
-        let total = started.elapsed();
-        let mut timings = e.take_item_timings();
-        let mut categories = std::collections::BTreeMap::<&str, (usize, u64, u64)>::new();
-        for item in &timings {
-            let category = timing_category(&item.item);
-            let entry = categories.entry(category).or_default();
-            entry.0 += 1;
-            entry.1 += item.total_ns;
-            entry.2 += item.kernel_ns;
-        }
-        timings.sort_by_key(|item| std::cmp::Reverse(item.total_ns));
-        eprintln!(
-            "mixed ALU total={:.3}s kernel={:.3}s frontend={:.3}s",
-            total.as_secs_f64(),
-            stats::kernel_ns() as f64 / 1e9,
-            (total.as_nanos() as u64).saturating_sub(stats::kernel_ns()) as f64 / 1e9,
-        );
-        for (category, (count, total_ns, kernel_ns)) in categories {
-            eprintln!(
-                "mixed ALU category {category} count={count} total={:.3}s kernel={:.3}s frontend={:.3}s",
-                total_ns as f64 / 1e9,
-                kernel_ns as f64 / 1e9,
-                total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
-            );
-        }
-        for item in timings.into_iter().take(12) {
-            eprintln!(
-                "mixed ALU item {} total={:.3}s kernel={:.3}s frontend={:.3}s metrics={:?}",
-                item.item,
-                item.total_ns as f64 / 1e9,
-                item.kernel_ns as f64 / 1e9,
-                item.total_ns.saturating_sub(item.kernel_ns) as f64 / 1e9,
-                item.value_metrics,
-            );
-        }
+        report_scaling_timings("mixed ALU", started.elapsed(), e.take_item_timings());
     }
     if report_value_metrics {
         eprintln!("mixed ALU value metrics: {:?}", e.value_metrics().unwrap());
@@ -768,34 +710,6 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
                 "mixed ALU emission slot {slot} depth={depth} count={count} first={decl} {what}"
             );
         }
-    }
-}
-
-fn timing_category(item: &str) -> &'static str {
-    if item.contains("_source_nodes_") {
-        "source-node-list"
-    } else if item.contains("_source_graph_") {
-        "source-graph"
-    } else if item.contains("_source_value_") {
-        "source-value"
-    } else if item.contains("_source_expansion_") || item.contains("_source_expands") {
-        "source-expansion"
-    } else if item.contains("_denotes_source") || item.contains("_source_artifact") {
-        "source-boundary"
-    } else if item.contains("_execute_from_") {
-        "execution"
-    } else if item.contains("_graph_") || item.contains("_nodes_") {
-        "graph"
-    } else if item.contains("_step_") && item.contains("_preserves_") {
-        "machine-frame"
-    } else if item.contains("_step_") && item.contains("_result") {
-        "machine-result"
-    } else if item.contains("_after_node_") || item.contains("_before_add_node_") {
-        "value-placement"
-    } else if item.contains("_state_") || item.contains("_after") {
-        "machine-state"
-    } else {
-        "boundary"
     }
 }
 

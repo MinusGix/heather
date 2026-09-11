@@ -4,7 +4,6 @@
 mod support;
 
 use heather_elab::{ElabError, Elaborator, stats};
-use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -38,7 +37,8 @@ const X86_MODULES: &[(&str, &str)] = &[
 
 fn elaborated() -> Elaborator {
     let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
-    let report_phases = std::env::var_os("HEATHER_X86_PHASES").is_some();
+    let timings = stats::Dest::from_env();
+    let report_phases = timings.is_some();
     if !report_metrics && !report_phases {
         return support::semantic_test_base(X86_MODULES);
     }
@@ -54,22 +54,18 @@ fn elaborated() -> Elaborator {
     if report_metrics {
         e.enable_value_metrics();
     }
+    // One dump, from the one registry (`docs/instrumentation-design.md` §4).
     if report_phases {
-        stats::reset_kernel_ns();
+        e.enable_item_timings();
     }
-    let started = Instant::now();
-    if let Err(err) = e.elab_module_source("x86_64", X86_64) {
-        panic!("x86_64 did not check: {}", err.render(X86_64));
+    {
+        let _module = stats::scope(stats::ScopeKind::Module, "x86_64", "");
+        if let Err(err) = e.elab_module_source("x86_64", X86_64) {
+            panic!("x86_64 did not check: {}", err.render(X86_64));
+        }
     }
-    if report_phases {
-        let total_ns = started.elapsed().as_nanos() as u64;
-        let kernel_ns = stats::kernel_ns();
-        eprintln!(
-            "x86_64 phases: total={:.3}s kernel={:.3}s frontend={:.3}s",
-            total_ns as f64 / 1e9,
-            kernel_ns as f64 / 1e9,
-            total_ns.saturating_sub(kernel_ns) as f64 / 1e9,
-        );
+    if let Some(dest) = &timings {
+        let _ = stats::dump(dest, &e.take_item_timings());
     }
     if report_metrics {
         eprintln!(

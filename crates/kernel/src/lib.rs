@@ -15,6 +15,7 @@ pub mod layer;
 pub mod level;
 pub mod rec;
 pub mod reduce;
+pub mod stats;
 pub mod subst;
 pub mod term;
 pub mod typing;

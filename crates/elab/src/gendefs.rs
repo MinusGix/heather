@@ -2730,6 +2730,12 @@ impl Elaborator {
     ) -> R<()> {
         let empty = LocalCtx::nil();
         let name = key.name(owner);
+        // Generated-declaration emission, as its own column: a declaration's
+        // row says how much of it was spent minting the definitions it needed
+        // (`docs/instrumentation-design.md` §5). The kernel gate below keeps
+        // its own bracket, and the exclusive rule keeps the two apart.
+        crate::stats::count(crate::stats::Counter::GendefsPushed);
+        let _phase = crate::stats::guard(crate::stats::Timer::Gendefs);
         {
             // A generated definition faces the same gate as a `fn` and the same
             // oracle (`gate.rs`): it is an ordinary bodied binding, so it gets
