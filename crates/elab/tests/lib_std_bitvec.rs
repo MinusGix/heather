@@ -6,12 +6,17 @@
 //! probe, and the open law kit. The three closed computational cross-products
 //! are stable exhaustive acceptance and use the `slow_acceptance_` prefix.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage};
+use std::cell::OnceCell;
 use std::sync::Mutex;
 
 mod support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
+}
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -23,45 +28,47 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
 const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
 
+/// The first nine modules of `semantic_x86_warmup.rs`'s list, in its order,
+/// so the on-disk image keys this file reads are the ones the warmup wrote.
+const MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
+    ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
+    ("bitvec", BITVEC),
+];
+
 fn run(extra: &str) -> Result<(), String> {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    let mut prefix_error = None;
-    let mut load = |e: &mut Elaborator| {
-        for (name, src) in [
-            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
-            ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
-            ("bitvec", BITVEC),
-        ] {
+    if extra.is_empty() {
+        // The ungated front-to-back check of the module itself: deliberately
+        // source-only, so the full suite still checks this exact prefix
+        // against the real kernel once.
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        for &(name, src) in MODULES {
             if let Err(err) = e.elab_module_source(name, src) {
-                prefix_error = Some(format!("{name}: {}", err.render(src)));
-                break;
+                return Err(format!("{name}: {}", err.render(src)));
             }
         }
-    };
-    if extra.is_empty() {
-        load(&mut e);
-    } else {
-        support::with_decl_cache(&mut e, load);
+        return Ok(());
     }
-    if let Some(err) = prefix_error {
-        return Err(err);
+    // Every probe forks a fresh elaborator from one kernel-checked semantic
+    // image of the prefix instead of re-elaborating nine modules per case.
+    let mut e = BASE.with(|base| {
+        base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image())
+            .elaborator()
+    });
+    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+    if report_metrics {
+        e.enable_value_metrics();
     }
-    if !extra.is_empty() {
-        let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
-        if report_metrics {
-            e.enable_value_metrics();
-        }
-        let src = format!("import bitvec;\nimport bool;\nimport logic;\n{extra}");
-        if let Err(err) = e.elab_module_source("probe", &src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            });
-        }
-        if report_metrics {
-            eprintln!("bitvec probe value metrics: {:?}", e.value_metrics().unwrap());
-        }
+    let src = format!("import bitvec;\nimport bool;\nimport logic;\n{extra}");
+    if let Err(err) = e.elab_module_source("probe", &src) {
+        return Err(match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        });
+    }
+    if report_metrics {
+        eprintln!("bitvec probe value metrics: {:?}", e.value_metrics().unwrap());
     }
     Ok(())
 }

@@ -1,9 +1,9 @@
 ---
 title: Keep large setoid dictionaries practical to project from
-status: open
+status: closed
 labels: [frontend,traits,performance,setoids]
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-11
 ---
 
 The first flat `FiniteSets<S,A>` interface checked, but the abstract
@@ -26,3 +26,4 @@ Related: [[finite-set-client-design]], [[scoped-multi-parameter-type-projection]
 ## Log
 
 - 2026-09-05: Named compatibility theorem reuse exposed another cost boundary: a computational augment function carrying an unused FiniteSets dictionary caused concrete list/tree proof reuse to fail kernel checking with OutOfFuel. Passing only union and SetOperations to the function, while retaining laws on the compatibility theorem, makes both backend clients pass under ordinary fuel. Customer: docs/showcase/derive_set_function_clients.hthr. This is a library separation, not a general compiler cost fix.
+- 2026-09-11: Merged into [[per-instantiation-projection-boundaries]] item 1 (dependent telescoped spines) 2026-09-11; this file remains the customer/reproducer record. Closing.

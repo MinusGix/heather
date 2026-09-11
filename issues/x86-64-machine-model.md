@@ -3,7 +3,7 @@ title: Define the canonical scoped x86-64 machine model
 status: open
 labels: [compiler,semantics,x86,design]
 created: 2026-08-25
-updated: 2026-08-28
+updated: 2026-09-11
 ---
 
 Define Heather's one canonical x86-64 architectural step relation for the
@@ -178,3 +178,4 @@ access; it does not claim x86 memory is total.
 - 2026-08-28: [[x86-opcode-dispatch-scaling]] closed with a generic certified
   lookup and a nine-form descriptor/interpreter split; all direct-decoder
   soundness, completeness, and malformed/unsupported boundaries are preserved.
+- 2026-09-11: From [[x86-direct-bitfield-decoder]] (closed 2026-09-11 as perf-done): the residual obligation is exhaustive agreement between the direct bitfield decoder and the reference decoder on reference *failures* and malformed byte classes (all 256 REX/ModRM pairs). Owned here now.

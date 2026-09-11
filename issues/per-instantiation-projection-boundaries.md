@@ -3,7 +3,7 @@ title: Field reads still on the inline walk after per-instantiation projection n
 status: open
 labels: [elaboration,representation,performance]
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-11
 ---
 The three boundaries docs/per-instantiation-type-codes-design.md §13.9
 measured into place (2026-09-10), each leaving a family of field reads on
@@ -47,3 +47,5 @@ lost.
   only its dependency gate and its tail/fam companions.
 
 ## Log
+
+- 2026-09-11: Merged in [[setoid-dictionary-projection-growth]] as a second customer (2026-09-11): large dependent setoid dictionaries (docs/showcase/finite_set_client.hthr, derive_set_function_clients.hthr; flat client exhausted 4 GiB, tagged parent died at ~283 s, indexed layout checks in ~4 s) are the dependent-telescoped-spine family of item 1. That file stays as the reproducer.

@@ -14,6 +14,15 @@ unsafe_code = "forbid"
 # 300 CPU-second rail; unoptimized it pays ~6x over release for no diagnostic
 # gain. Optimize the hot crates even in dev builds — debug-assertions and
 # overflow-checks stay on (profile.dev defaults), only codegen changes.
+# Line tables only: the elab crate has ~150 integration test binaries, each
+# linking the whole compiler, and full DWARF made every one ~100 MB, so the
+# cold fast lane spent longer linking than testing (compile 323 s vs tests
+# 227 s, 2026-09-11). Backtraces and panic locations keep file:line; a
+# debugger session that needs variables sets CARGO_PROFILE_DEV_DEBUG=2 for
+# that one build.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package.heather-kernel]
 opt-level = 3
 

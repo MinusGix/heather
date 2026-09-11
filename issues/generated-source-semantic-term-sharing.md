@@ -3,7 +3,7 @@ title: Preserve sharing in generated source-semantic endpoints
 status: open
 labels: [compiler,elaboration,performance,proofs,codegen]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-09-11
 ---
 
 The elaborated source-to-FunctionIR frontend needs equality endpoints for each
@@ -37,3 +37,7 @@ through ordinary elaboration and kernel checking, and stale source bodies or
 operand edges must remain rejectable. Success should reduce generated size to
 roughly linear while materially lowering source-expansion and source-value
 checking, not merely remove the sub-100ms text parse.
+
+## Log
+
+- 2026-09-11: Merged in [[generated-heather-direct-elaboration]] (2026-09-11): its question — is the render-to-source-then-parse round trip material — is answered by this issue's own 100-node datum (reflection/generation <150 ms each, parse ~30 ms, against 199.3 s checking). A direct sink stays listed here as one experiment, to be pursued only if that ratio changes.

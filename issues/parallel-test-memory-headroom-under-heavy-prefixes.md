@@ -1,9 +1,9 @@
 ---
-title: Make adaptive parallel test jobs robust to simultaneous heavy semantic targets
+title: Keep concurrent heavy semantic test targets under the per-binary CPU rail (ulimit -t 300)
 status: open
 labels: [testing,tooling,performance,parallelism,memory]
 created: 2026-09-02
-updated: 2026-09-05
+updated: 2026-09-11
 ---
 
 The full FunctionIR block-argument verification selected five concurrent
@@ -39,3 +39,5 @@ detection.
 - 2026-09-05: 2026-09-05 full run ([[omega-per-goal-elaboration-cost]] round, 7 jobs): function_ir_x86_alu SIGKILLed at the rail (305 s reported) after passing at 241 s in the previous run of the same code. Serial it is 117 s on that branch (268 s at its base), so the kill is contention at ~2.5x, consistent with the entries above.
 - 2026-09-05: Datum (2026-09-05, decreases-unfolding round): on a host with ~23 GiB used by other sessions and swap exhausted, a CLEAN-tree full scripts/test came back INCOMPLETE with four targets SIGKILLed (function_ir_x86_alu/_conditionals/_control_flow, termination_measures), each passing standalone under the runner's exact ulimits (~100 s, 1.5-2.2 GiB). The round adds decreases_unfolding.rs (8 tests, ~100 s, ~1.5 GiB; same full-std prefix as termination_measures) — one more target of the shape that dies first under load. Lever unchanged: [[integration-test-prefix-reelaboration]] for the prefix cost.
 - 2026-09-05: 2026-09-05, end of round: with HEATHER_TEST_JOBS=4 the full run still came back INCOMPLETE with exactly the three decreases targets dead (termination_measures, decreases_unfolding, mutual_recursion; ~90-110 s wall each standalone, all green). The cap they hit is the per-binary CPU ulimit (-t 300) with the harness's in-binary test threads summing CPU under contention. Protocol used: rerun each standalone via scripts/test -p heather-elab --test <t>.
+- 2026-09-11: Retitled 2026-09-11: the last entry's diagnosis is that the cap the decreases/termination targets hit is the per-binary CPU ulimit (-t 300) with in-binary test threads summing CPU under contention, not memory. The title and three of four acceptance items said memory, which would send the work the wrong way; the runner still reads MemAvailable once at startup (scripts/run-test-targets.mjs), and that is a secondary rail. Fix direction: CPU-aware scheduling of the heavy prefixes, or fewer heavy prefixes (see [[integration-test-prefix-reelaboration]]).
+- 2026-09-11: 2026-09-11: the three decreases/termination targets that hit the rail (termination_measures 78 s, decreases_unfolding 77 s, omega_measure_reduction 66 s on this box) now share one image replay per worker and are off the slowest-16 list entirely. The rail-scheduling question stays open for the x86 shards and omega_div_mod, but the concrete failure this issue recorded no longer reproduces.

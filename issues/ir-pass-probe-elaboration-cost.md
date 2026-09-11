@@ -3,7 +3,7 @@ title: Attribute and reduce certified IR-pass probe elaboration cost
 status: open
 labels: [elaborator,kernel,performance,testing]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-09-11
 ---
 
 `crates/elab/tests/ir_pass_fuel.rs` is the longest irreducible fast-lane test:
@@ -82,3 +82,4 @@ customer is the certified-pass/library design, not the test runner.
   cover closed family types, while these parameterized/value-indexed record
   instantiations remain inline. Preserve this test unchanged until that
   mechanism can shrink the core it produces.
+- 2026-09-11: Triage 2026-09-11: the headline is stale on both counts. (a) ir_pass_fuel is no longer the longest fast-lane target — the 2026-09-11 fast-lane top is mutual_recursion 104 s, lib_std_bitvec 95, termination_measures 80, decreases_unfolding 78; it measured 44 s serial warm on 2026-09-04. (b) The mechanism it parks on (parameterized record instantiations staying inline, IrPassLawsProbe<M>) is what per-instantiation-type-codes fixed in 9ae0855 (2026-09-10). Next action is one re-measure of the PROBE gate against 9ae0855; expect to close or shrink.

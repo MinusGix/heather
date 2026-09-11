@@ -3,7 +3,7 @@ title: Keep projection and equality checking local across long state-update chai
 status: open
 labels: [kernel,conversion,performance,proofs]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-11
 ---
 
 During the reusable callee round (`cb877f2`), apparently small equalities such
@@ -37,3 +37,7 @@ success does not establish that the original conversion costs were necessary.
 
 [[x86-native-certificate-cpu-budget]] owns the concrete merge acceptance failure;
 this issue owns attribution and improvement of the general state-history family.
+
+## Log
+
+- 2026-09-11: Triage 2026-09-11: this issue's own re-evaluation trigger (transparent unfolding past a failed meet, 4afcaea) has landed, and two more changes on the same path followed (typed app/proj 43a743a; body cache per gate 335a722). Neither was re-measured here, and x86-native-certificate-cpu-budget (the concrete acceptance failure) is closed. Next action is the cheap re-measure of an RSP-preservation equality over a long update chain, not a design.

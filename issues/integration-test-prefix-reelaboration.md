@@ -3,7 +3,7 @@ title: Stop rebuilding the same prelude and library state in every integration t
 status: open
 labels: [testing,elaboration,performance,caching]
 created: 2026-08-25
-updated: 2026-09-04
+updated: 2026-09-11
 ---
 
 Many elaborator integration tests construct `Elaborator::with_prelude()` and
@@ -112,3 +112,4 @@ on a cached verdict.
   logic, and reconstruction took 241.88, 196.85, and 183.67 seconds under
   contention, all below the 300-second per-process limit.
 - 2026-09-04: Suite cost attribution from the 2026-09-02 full-run timing table (2,685 reported target-seconds over 167 targets): omega_div_mod 320 s, function_ir_x86_control_flow 319, function_ir_x86_alu 289, omega 218, ir_pass_fuel 124, function_ir_x86_source 120, omega_logic 90 -- the top seven are 55% of the suite. CORRECTION, same day: the Omega shards (omega/omega_logic/omega_reconstruction/omega_div_mod_scaling, via omega_cases/mod.rs) and every function_ir_x86 shard ALREADY use support::semantic_test_base; a first grep missed the subdirectory. Re-measured serially with warm images (dev test profile, this worktree): omega 72 s, omega_logic 25, omega_reconstruction 15, omega_div_mod 183 (its deliberate source backstop; ~60 s of that is the prefix), lib_std_bitvec 28 (with_decl_cache per test, ~1 s prefix each), ir_pass_fuel 44 (no cache; ir_v1 declarations), function_ir_x86_alu 142. So the remaining source-only prefixes are worth roughly 60-100 target-seconds in total, and the shards' cost is their own suffix work. The larger suite lever found in the same measurement is the kernel's debug-only bounds-skip re-walk (subst.rs sub_ty/sub_tm under cfg(debug_assertions)): see [[certgen-harness-cost]] log 2026-09-04.
+- 2026-09-11: 2026-09-11: the five per-case with_prelude() files now go through support::semantic_test_base plus a per-worker-thread OnceCell<SemanticImage> (the omega_cases pattern): mutual_recursion, termination_measures, decreases_unfolding, omega_measure_reduction (same nine-module prefix as semantic_omega_warmup), and lib_std_bitvec (first nine of the x86 list; the ungated run("") backstop stays on the source path). function_ir_x86 got a prefix-length-keyed memo over its 17 semantic_test_base sites, lib_setoid_mergeable a per-thread memo over its 28. scripts/test's focused warmup now covers those targets. Same-instance fast lane: 1095 -> 487 target-s, tests wall 202 -> 72 s; lib_std_bitvec 98 -> 12 s, so the 'half is its own conversions' estimate was wrong — the with_decl_cache prefix was nearly all of it. ir_pass_fuel (28 s, prefix 1%) deliberately untouched. Remaining source-only prefixes: warnings.rs (26 with_prelude calls), operators (12), implicit_args (11) — all prelude-only, cheap each.

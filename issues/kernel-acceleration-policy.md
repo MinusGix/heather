@@ -1,9 +1,9 @@
 ---
 title: Kernel acceleration policy: representations with adequacy and strategies, not definition shapes
-status: open
+status: closed
 labels: [kernel,design,evaluator,conversion,performance]
 created: 2026-09-07
-updated: 2026-09-09
+updated: 2026-09-11
 ---
 
 The kernel now carries three different kinds of "acceleration", and the
@@ -121,3 +121,4 @@ in the incoming architecture discussion.
   policy. [[state-projection-conversion-cost]] supplies a concrete investigation;
   [[heather-checked-construction-api]] owns a bounded construction customer.
 - 2026-09-09: Attribution question from [[bitvec-width-bounded-defaults]]: whether add-vs-sub at width 64 over open operands failing by OutOfFuel is calculus-inherent (64 columns must be compared) or a strategy artefact (the mismatch is in the carry function and could be found without normalizing the sum bits). Owner for the fix is [[kernel-failed-conversion-cost]]; this issue only classifies it.
+- 2026-09-11: Triage 2026-09-11: both acceptance items met (policy paragraph in crates/kernel/DESIGN.md, the two shape cases retired with [[nat-run-algebra-primitives]] as replacement). Closing as perf work; the 'Open questions from merge review' block below stays unratified and is the design residue — reopen or re-file when one of them is decided.

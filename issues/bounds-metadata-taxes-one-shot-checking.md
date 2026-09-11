@@ -1,9 +1,9 @@
 ---
-title: Free-variable bounds tax one-shot checking ~1.4x; accepted, with levers if it grows
+title: Free-variable bounds tax one-shot checking ~1.17x; accepted, with levers if it grows
 status: open
 labels: [kernel,performance]
 created: 2026-07-31
-updated: 2026-09-05
+updated: 2026-09-11
 ---
 
 [[subst-visits-closed-subtrees]]'s round left one deliberate regression:
@@ -77,3 +77,4 @@ THE PROFILE IS THE OPPOSITE OF THE OTHER CENTRE IN THAT FAMILY, which is why it 
 WHERE IT LANDS IN THE SUITE: the declaration cache gates it away for four of the five certgen binaries, so it is visible only where it must be -- once in certgen_emissions (the designated ungated backstop) and three times in certgen_controls (mutated shells files, uncacheable by construction), ~8 s family-wide of a ~32 s family. [[certgen-harness-cost]]'s 2026-08-11 rail entry predicted exactly this ("each new analyzer shell adds another gate"); this is the first measurement that separates the shell gate's cost from the conversion cost it used to be bundled with.
 - 2026-08-17: Trigger-adjacent observation from the 2026-08-17 kernel baseline re-record (bench-gate round): level/equiv-rebuilt is 1.33-1.43x against the 0674cac (2026-07-31) baseline, uniform across sizes with slopes unchanged -- a constant factor on one-shot-structured level equality, consistent with this issue's accepted ~1.4x rather than a new pathology. Recorded so the next baseline diff does not re-discover it; no lever pulled.
 - 2026-09-05: Trigger-adjacent (2026-09-05, [[omega-per-goal-elaboration-cost]]): under reduce::whnf_type_delta on a computing Int proposition, bounds::Cache::compute_term was ~50% of samples -- every substitution step's fresh subtree misses the memo and is walked whole. Fixed upstream by not reducing; recorded here as the shape a real trigger would take. Details: [[elaborator-whnf-probes-on-computing-types]].
+- 2026-09-11: Retitled 2026-09-11 to the current figure (1.17x, 476 vs 405 us on code/check-identity-recursor after the NbE round); the 1.4x in the old title was the pre-NbE number.

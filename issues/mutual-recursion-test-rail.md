@@ -1,9 +1,9 @@
 ---
 title: Keep mutual recursion acceptance inside the parallel suite resource rail
-status: open
+status: closed
 labels: [testing,performance,elaboration]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-11
 ---
 
 
@@ -27,3 +27,7 @@ examples. Identify whether remaining workload needs a split process rail.
 Acceptance: all cases run in the ordinary parallel full suite without
 weakening limits or losing literal, neutral, polymorphic, and refusal cases.
 [[mutual-recursion-declarations]] owns the language behavior being tested.
+
+## Log
+
+- 2026-09-11: 2026-09-11: base() now forks from one semantic image per worker thread instead of thirteen nine-module source builds; mutual_recursion dropped from 105 s (top of the fast lane) to under 10 s on the same instance. The CPU-rail exposure this issue was about is gone. Closing; [[integration-test-prefix-reelaboration]] owns the pattern.

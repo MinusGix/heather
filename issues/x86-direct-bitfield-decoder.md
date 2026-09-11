@@ -1,9 +1,9 @@
 ---
 title: Refine the x86 reference decoder to direct bitfield extraction
-status: open
+status: closed
 labels: [x86,semantics,performance,proofs]
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-11
 ---
 
 The first executable decoder is proof-producing and intentionally simple: for
@@ -75,3 +75,4 @@ shape that should scale to SIB, displacement, immediate, or prefix streams.
   all 256 register pairs raised it to about 41s. This is acceptance-test scale,
   not a benchmark threshold, but confirms direct field extraction is required
   before the supported encoding family grows.
+- 2026-09-11: Triage 2026-09-11: the performance acceptance is met and measured (focused consumer probe ~41 s -> ~19 s, direct path active since 2026-08-28). What remains is proof completeness (all-256-pair agreement on reference failures and malformed byte classes), which is [[x86-64-machine-model]]'s obligation, logged there. Closing here.

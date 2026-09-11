@@ -17,7 +17,12 @@
 //! a site whose obligation cannot be lifted, and a citation of a member's
 //! `f_unfold` (§6, deferred with the reason recorded).
 
-use heather_elab::{ElabError, Elaborator};
+use std::cell::OnceCell;
+use std::sync::Mutex;
+
+use heather_elab::{ElabError, Elaborator, SemanticImage};
+
+mod support;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -29,24 +34,39 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 const INT: &str = include_str!("../../../lib/std/int.hthr");
 const OMEGA: &str = include_str!("../../../lib/std/omega.hthr");
 
+/// The same prefix, in the same order, as `semantic_omega_warmup.rs`, so the
+/// on-disk image keys this file reads are the ones the warmup wrote.
+const MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("omega", OMEGA),
+];
+
+static PREFIX_LOAD: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
+}
+
+fn load_image() -> SemanticImage {
+    // Two libtest workers otherwise miss the cold image store together and
+    // each spends the process's CPU rail checking the same arithmetic
+    // prefix. The first worker fills it; the second waits and replays it.
+    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    support::semantic_test_base(MODULES).semantic_image()
+}
+
+/// A fresh elaborator over the checked library prefix. The semantic image is
+/// the committed-state boundary: every call forks its own attempt, report and
+/// gate state, so a test's module never leaks into the next one's base.
 fn base() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
-        ("logic", LOGIC),
-        ("bool", BOOL),
-        ("nat", NAT),
-        ("option", OPTION),
-        ("pair", PAIR),
-        ("list", LIST),
-        ("algebra", ALGEBRA),
-        ("int", INT),
-        ("omega", OMEGA),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            panic!("{name} did not check: {err}");
-        }
-    }
-    e
+    BASE.with(|base| base.get_or_init(load_image).elaborator())
 }
 
 /// §3: a module holding a group imports `pair`, whose `Pair` the motive is.

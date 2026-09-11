@@ -10,9 +10,12 @@ use heather_elab::function_ir_cert::{
 };
 use heather_elab::function_ir_source;
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
-use heather_elab::{stats, ElabError, Elaborator};
+use heather_elab::{stats, ElabError, Elaborator, SemanticImage};
 use heather_syntax::parse_file;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::sync::Mutex;
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -56,6 +59,33 @@ const MODULES: &[(&str, &str)] = &[
     ("function_ir_x86_support", FUNCTION_IR_X86_SUPPORT),
     ("function_ir_x86", FUNCTION_IR_X86),
 ];
+
+static PREFIX_LOAD: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    // One kernel-checked semantic image per prefix length this binary asks
+    // for, so a test function replays the prefix from the process-local image
+    // instead of re-reading the stored module images once per call.
+    static BASES: RefCell<HashMap<usize, SemanticImage>> = RefCell::new(HashMap::new());
+}
+
+/// A fresh elaborator over the first `n` modules of [`MODULES`].
+///
+/// `SemanticImage::elaborator` forks new attempt, report, policy, metric and
+/// gate state around the shared committed prefix, so a caller may mutate the
+/// result (the stale-source control does) without touching the memo. The fill
+/// is serialized so two libtest workers do not both replay a cold prefix.
+fn base_image(n: usize) -> Elaborator {
+    let ready = BASES.with(|bases| bases.borrow().get(&n).map(SemanticImage::elaborator));
+    if let Some(elab) = ready {
+        return elab;
+    }
+    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let image = support::semantic_test_base(&MODULES[..n]).semantic_image();
+    let elab = image.elaborator();
+    BASES.with(|bases| bases.borrow_mut().insert(n, image));
+    elab
+}
 
 pub fn run_model_tests() {
     function_ir_x86_suite();
@@ -102,7 +132,7 @@ pub fn run_comparison_tests() {
 }
 
 fn function_ir_x86_suite() {
-    let base = support::semantic_test_base(MODULES);
+    let base = base_image(MODULES.len());
     composed_artifact_is_available(&base);
     generic_normal_block_execution_is_available(&base);
     dishonest_normal_block_result_is_refused(&base);
@@ -146,7 +176,7 @@ fn source_bitvec_add_reaches_checked_x86_artifact() {
     );
     assert!(emission.text.contains("source_add_x86_source_artifact"));
 
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let source = generated_module(&format!("{ADD}\n\n{}", emission.text));
     let mut e = base.clone();
     if let Err(error) = e.elab_module_source("source_add_function_ir_x86", &source) {
@@ -177,7 +207,7 @@ fn stale_source_function_ir_certificate_is_rejected() {
         "bitvec::add(64, left, right)",
         "bitvec::sub(64, left, right)",
     );
-    let mut dishonest = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let mut dishonest = base_image(MODULES.len() - 1);
     match dishonest.elab_module_source("stale_source_add_function_ir_x86", &stale_source) {
         Ok(()) => panic!("a source theorem generated from a stale body checked"),
         Err(ElabError::Parse(error)) => {
@@ -256,7 +286,7 @@ fn unsupported_shift(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     bitvec::shift_left(64, left, 1)
 }
 "#;
-    let mut elaborator = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let mut elaborator = base_image(MODULES.len() - 1);
     if let Err(error) = elaborator.elab_module_source("shared_alu_source", SOURCE) {
         panic!("shared source did not elaborate: {}", error.render(SOURCE));
     }
@@ -328,7 +358,7 @@ fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
         bitvec::add(64, shared, bitvec::ofNat(64, 7)))
 }
 "#;
-    let mut source_base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let mut source_base = base_image(MODULES.len() - 1);
     if let Err(error) = source_base.elab_module_source("shared_alu_x86_source", SOURCE) {
         panic!("shared source did not elaborate: {}", error.render(SOURCE));
     }
@@ -376,7 +406,7 @@ fn wide_constants(left: BitVec(64), right: BitVec(64)) → BitVec(64) {{
 }}
 "#
     );
-    let mut source_base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let mut source_base = base_image(MODULES.len() - 1);
     if let Err(error) = source_base.elab_module_source("wide_constants_x86_source", &source) {
         panic!("wide-constant source did not elaborate: {}", error.render(&source));
     }
@@ -432,7 +462,7 @@ pub fn elaborated_source_x86_scaling() {
 
     let module_count = if frontend_only { 15 } else { MODULES.len() - 1 };
     let fixture_started = Instant::now();
-    let mut source_base = support::semantic_test_base(&MODULES[..module_count]);
+    let mut source_base = base_image(module_count);
     let fixture_elapsed = fixture_started.elapsed();
     let source_started = Instant::now();
     if let Err(error) = source_base.elab_module_source("scaled_source_alu", &source) {
@@ -620,7 +650,7 @@ pub fn generated_20_node_mixed_binary_alu_dag_checks() {
 }
 
 fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let node_count = std::env::var("HEATHER_FUNCTION_IR_X86_NODES")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -783,12 +813,12 @@ fn checked_example_x86_lowerings_are_current() {
 fn stale_generated_add_dag_lowering_is_rejected() {
     // The control generates its own module; do not pay to check the complete
     // generated golden first merely to prove that a dishonest one fails.
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     stale_lowering_model_is_rejected(&base);
 }
 
 fn generated_right_first_sum4_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let emission = lower::generate(
         "sum4_right_x86",
         "sum4_right_first_raw()",
@@ -809,7 +839,7 @@ fn generated_right_first_sum4_checks() {
 }
 
 fn generated_commutative_right_reuse_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let region = commutative_right_reuse();
     let raw = cert::render_region_function("commutative_right_reuse_raw", &region);
     let emission = lower::generate(
@@ -833,7 +863,7 @@ fn generated_commutative_right_reuse_checks() {
 }
 
 fn generated_constant_add_dag_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let region = constant_add();
     let raw = cert::render_region_function("constant_add_raw", &region);
     let emission = lower::generate(
@@ -861,7 +891,7 @@ fn generated_constant_add_dag_checks() {
 }
 
 fn generated_mixed_unsigned_comparison_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let region = mixed_unsigned_comparison();
     let raw = cert::render_region_function("mixed_unsigned_comparison_raw", &region);
     let emission = lower::generate(
@@ -889,7 +919,7 @@ fn generated_mixed_unsigned_comparison_checks() {
 }
 
 fn generated_signed_comparison_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let region = signed_comparison();
     let raw = cert::render_region_function("signed_comparison_raw", &region);
     let emission = lower::generate(
@@ -913,7 +943,7 @@ fn generated_signed_comparison_checks() {
 }
 
 fn generated_structured_conditional_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let branch = |node| Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
         nodes: vec![node],
@@ -982,7 +1012,7 @@ fn generated_structured_conditional_checks() {
 }
 
 fn generated_comparison_prefixed_conditional_checks() {
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let comparison = Region {
         inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }],
         nodes: vec![Node::UnsignedLessThan {
@@ -1184,7 +1214,7 @@ fn generated_control_region_x86_certificate_checks() {
         .expect("render max_plus ControlRegion");
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     parse_file(&source).expect("generated complete ControlRegion x86 artifact parses");
-    let base = support::semantic_test_base(&MODULES[..MODULES.len() - 1]);
+    let base = base_image(MODULES.len() - 1);
     let mut e = base.clone();
     e.enable_item_timings();
     stats::reset_kernel_ns();

@@ -204,13 +204,15 @@ And one of its own:
 
 - **A timed run must be repeatable, and `check_source` mutates.** So every
   run needs a fresh elaborator, and there are two honest ways to get one:
-  rebuild the prelude (~90 µs) or clone a prelude'd one (~108 ns — both
-  numbers are in the report, as `corpus/prelude`). The corpus rebuilds,
+  rebuild the prelude or clone a prelude'd one (both numbers are in the
+  report, as `corpus/prelude`; the clone is the cheaper by orders of
+  magnitude, though the ratio has narrowed as the elaborator grew —
+  `issues/prelude-clone-cost-grew.md` tracks it). The corpus rebuilds,
   because that is what `heather check <file>` does per file and the corpus
   number is meant to be the number a user waits for. Generated families
-  clone, because a 90 µs fixed cost against a fixture that starts at ~180 µs
-  does not merely add noise to the fit — it *flattens the exponent*, which is
-  the number this suite reports.
+  clone, because a fixed build cost of the same order as the smallest
+  fixture does not merely add noise to the fit — it *flattens the
+  exponent*, which is the number this suite reports.
 
 Generated fixtures are generated in memory, not committed as `.hthr` files: a
 swept family is five files differing in a loop bound, so committing them

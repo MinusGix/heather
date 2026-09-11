@@ -1,9 +1,9 @@
 ---
 title: Measure a direct elaborator sink for generated Heather
-status: open
+status: closed
 labels: [compiler,elaborator,metaprogramming,performance]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-09-11
 ---
 
 `heather_emit` currently renders its construction IR to source, then uses the
@@ -26,3 +26,7 @@ semantic surface.
   generated-module corpus.
 - Compiler clients construct only the shared emission IR and do not depend on
   sink-specific details.
+
+## Log
+
+- 2026-09-11: Merged into [[generated-source-semantic-term-sharing]] 2026-09-11: the measurement this issue asked for already exists there (parse ~30 ms of 199.3 s), so the acceptance criterion resolves to 'not pursued'. Closing.

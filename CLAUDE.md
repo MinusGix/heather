@@ -3,7 +3,8 @@
 - **Run tests only via `scripts/test`** (wraps `cargo test` in `ulimit -v/-t`
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
-  `scripts/test --fast` (minutes, not seconds; what it skips and what
+  `scripts/test --fast` (about a minute of tests on a warm furnace box, plus
+  whatever needs recompiling; what it skips and what
   dominates what remains live in `issues/certgen-harness-cost.md`) skips the
   whole-library acceptance tests, the perturbed-library mutation controls
   (~4.7 CPU-min), and the native x86 certificate gates

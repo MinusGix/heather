@@ -3,7 +3,7 @@ title: Cloning a prelude'd elaborator went 300 ns -> 6.9 us; the fixture argumen
 status: open
 labels: [elaboration,performance,tooling]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-09-11
 ---
 
 ## Log
@@ -19,3 +19,4 @@ So: (1) re-check what a clone actually copies now (is 23x explained by the prelu
 - **[[frontend-benchmarks]]** owns the fixture rule that generated families
   clone a prelude rather than build one. Assumed here: only that the rule's
   justification is the build/clone ratio.
+- 2026-09-11: 2026-09-11: docs/frontend-benchmarking.md's fixture-rule paragraph no longer quotes the 90 us / 108 ns figures (it now states the shape claim and points here); the dated baseline table further down still carries the 2026-08-05 row by design, labelled as a recorded baseline. The re-measure of corpus/prelude against the current elaborator, and the decision whether the generated families' clone rule still holds at the narrowed ratio, remain this issue's open items.

@@ -167,13 +167,23 @@ else
      [[ "$requested" != *" --test "* ]]; then
     whole_elab=true
   fi
-  if $whole_elab || [[ "$requested" == *"--test x86_64"* ]]; then
+  # Every target that replays a prefix of the x86 list through
+  # `support::semantic_test_base` (the bitvec kit reads its first nine
+  # modules; the function_ir_x86 family extends it) shares that store.
+  if $whole_elab || [[ "$requested" == *"--test x86_64"* ]] ||
+     [[ "$requested" == *"--test lib_std_bitvec"* ]] ||
+     [[ "$requested" == *"--test function_ir_x86"* ]]; then
     semantic_warmup semantic_x86_warmup
   fi
+  # `--test omega` also matches every `omega_*` target, including
+  # `omega_measure_reduction`; the `decreases` family replays the same list.
   if $whole_elab || [[ "$requested" == *"--test omega"* ]] ||
      [[ "$requested" == *"--test omega_logic"* ]] ||
      [[ "$requested" == *"--test omega_reconstruction"* ]] ||
-     [[ "$requested" == *"--test omega_div_mod_scaling"* ]]; then
+     [[ "$requested" == *"--test omega_div_mod_scaling"* ]] ||
+     [[ "$requested" == *"--test mutual_recursion"* ]] ||
+     [[ "$requested" == *"--test termination_measures"* ]] ||
+     [[ "$requested" == *"--test decreases_unfolding"* ]]; then
     semantic_warmup semantic_omega_warmup
   fi
 fi
