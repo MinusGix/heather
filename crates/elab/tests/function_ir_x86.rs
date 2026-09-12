@@ -111,12 +111,15 @@ pub fn run_alu_tests() {
     generated_constant_add_dag_checks();
 }
 
-/// The control-flow group is three processes, split by measured cost
-/// (2026-09-04, alone: control region 84 s, comparison-prefixed
-/// conditional 63 s, structured conditional 29 s, unsigned/signed
-/// comparisons 25 s + 20 s). Together they sat at the 300 CPU-second rail
-/// under the parallel full lane (the suite's contention factor is ~1.9x),
-/// and a killed shard makes every full run INCOMPLETE.
+/// The control-flow group is two processes and the dataflow groups one
+/// (`function_ir_x86_dataflow`): a binary pays one ~5 s replay of the
+/// 18-module prefix, so a group earns its own process only when its
+/// generated suffix is comparable — the linked-conditional items here are
+/// (2026-09-12, alone on furnace with the gate at the parent's width:
+/// control region 9.9 s, conditionals 10.8 s, both about half replay).
+/// The 2026-09-04 seven-way split answered suffixes of 20–84 s that sat at
+/// the 300 CPU-second rail under the parallel full lane; a killed shard
+/// makes every full run INCOMPLETE, so re-split before that recurs.
 pub fn run_control_region_tests() {
     generated_control_region_x86_certificate_checks();
 }
@@ -178,7 +181,7 @@ fn source_bitvec_add_reaches_checked_x86_artifact() {
 
     let base = base_image(MODULES.len() - 1);
     let source = generated_module(&format!("{ADD}\n\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("source_add_function_ir_x86", &source) {
         panic!(
             "source-to-x86 artifact did not check: {}",
@@ -645,7 +648,7 @@ fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     assert_eq!(emission.lowered.node_plans.len(), node_count);
     assert_eq!(emission.lowered.instructions.len(), node_count + 2);
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     let report_timings = stats::Dest::from_env().is_some();
     let report_value_metrics = std::env::var_os("HEATHER_FUNCTION_IR_X86_VALUE_METRICS").is_some();
     if report_timings {
@@ -743,7 +746,7 @@ fn generated_right_first_sum4_checks() {
     )
     .expect("lower right-first sum4");
     let source = generated_module(&emission.text);
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_right_first_x86", &source) {
         panic!(
             "generated right-first sum4 artifact did not check: {}",
@@ -767,7 +770,7 @@ fn generated_commutative_right_reuse_checks() {
     .expect("lower DAG by reusing its dying right operand");
     assert_eq!(emission.lowered.instructions.len(), 3);
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_commutative_reuse_x86", &source) {
         panic!(
             "generated commutative-reuse artifact did not check: {}",
@@ -795,7 +798,7 @@ fn generated_constant_add_dag_checks() {
         .contains("byte_length():\n    constant_add_x86_bytes().len() = 13"));
     assert!(emission.text.contains("next_rip(next_rip(start, 10), 3)"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_constant_add_x86", &source) {
         panic!(
             "generated constant/Add artifact did not check: {}",
@@ -823,7 +826,7 @@ fn generated_mixed_unsigned_comparison_checks() {
         .text
         .contains("bitvec::zero_extend(1, 63, values(1, 4))"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_unsigned_comparison_x86", &source) {
         panic!(
             "generated mixed unsigned-comparison artifact did not check: {}",
@@ -847,7 +850,7 @@ fn generated_signed_comparison_checks() {
     .expect("lower signed comparison");
     assert!(emission.text.contains("SetLess(Al)"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_signed_comparison_x86", &source) {
         panic!(
             "generated signed-comparison artifact did not check: {}",
@@ -916,7 +919,7 @@ fn generated_structured_conditional_checks() {
         cert::render_region_function("choose_sub_raw", &when_false),
     );
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_structured_conditional_x86", &source) {
         panic!(
             "generated structured conditional artifact did not check: {}",
@@ -1017,7 +1020,7 @@ fn generated_comparison_prefixed_conditional_checks() {
         cert::render_region_function("minmax_sub_raw", &when_false),
     );
     let source = generated_module(&format!("{raw}\n{}", emission.text));
-    let mut e = base.clone();
+    let mut e = base.fork();
     if let Err(error) =
         e.elab_module_source("function_ir_comparison_prefixed_conditional_x86", &source)
     {
@@ -1129,7 +1132,7 @@ fn generated_control_region_x86_certificate_checks() {
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     parse_file(&source).expect("generated complete ControlRegion x86 artifact parses");
     let base = base_image(MODULES.len() - 1);
-    let mut e = base.clone();
+    let mut e = base.fork();
     e.enable_item_timings();
     stats::reset_kernel_ns();
     let started = Instant::now();
@@ -1447,7 +1450,7 @@ fn stale_lowering_model_is_rejected(base: &Elaborator) {
     )
     .expect("the stale model is internally lowerable");
     let source = generated_module(&emission.text);
-    let mut e = base.clone();
+    let mut e = base.fork();
     match e.elab_module_source("function_ir_stale_x86", &source) {
         Ok(()) => panic!("a lowering certificate generated from a stale model checked"),
         Err(ElabError::Parse(error)) => {
@@ -1461,7 +1464,7 @@ fn stale_lowering_model_is_rejected(base: &Elaborator) {
 }
 
 fn composed_artifact_is_available(base: &Elaborator) {
-    let mut e = base.clone();
+    let mut e = base.fork();
     let src = r#"
 import function_ir_x86;
 import function_ir;
@@ -1501,7 +1504,7 @@ theorem selected_sum4_refines<M>(values: Valuation(), before: MachineState<M>,
 }
 
 fn generic_normal_block_execution_is_available(base: &Elaborator) {
-    let mut e = base.clone();
+    let mut e = base.fork();
     let src = r#"
 import x86_64;
 import x86_64_block;
@@ -1531,7 +1534,7 @@ theorem alternate_test_af_is_still_allowed<M>(before: MachineState<M>):
 }
 
 fn dishonest_normal_block_result_is_refused(base: &Elaborator) {
-    let mut e = base.clone();
+    let mut e = base.fork();
     let src = r#"
 import x86_64;
 import x86_64_block;
@@ -1559,7 +1562,7 @@ theorem dishonest_add_block<M>(before: MachineState<M>):
 }
 
 fn wrong_canonical_byte_length_is_refused(base: &Elaborator) {
-    let mut e = base.clone();
+    let mut e = base.fork();
     let src = r#"
 import function_ir_x86;
 import list;
