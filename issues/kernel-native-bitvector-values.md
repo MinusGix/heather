@@ -18,3 +18,7 @@ Questions the design round must answer before code:
 - Ordering against [[kernel-arena-terms-frozen-prefix]]: a `Val` constructor is value-domain and orthogonal to term indexing, so it should survive that rewrite, but it is one more variant that rewrite must carry — decide which lands first.
 
 Alternatives that do not need this: (K2) fewer compares per read on the library/generator side — a word-granular exclusion lemma so a read skips an 8-byte write in one compare instead of eight, and a contract route that does not compare two whole memories (read_literal_28_* compares state_28.memory with state_18.memory, 188 k steps vs 15 k). K2 is a spelling fix worth doing on its own merits and does not compete with this issue.
+
+## Log
+
+- 2026-09-12: Repriced by the K2 design pass (2026-09-12): on the reused_callee certificate the closed compares in the read chain are 0.7 ms each (addresses differ in their low bits, so is_zero_bits settles early) and the Id/Id bucket's big items were file-list walks ([[call-memory-read-file-walk]]), not compares. What is genuinely this issue's shape there is byte_page + byte_wrap: 298 closed 48/64-bit compares proved by refl, 4.1 s of kernel, each at a different address so no re-spelling applies. Size the payoff from those rows, not from the earlier 15.7 s figure.
