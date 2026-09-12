@@ -1578,6 +1578,56 @@ theorem nested<A, I> requires laws: Family<A, I>(same, op)
     check(&mut e, "chosen_family", &chosen);
 }
 
+// The family search projects each dictionary's fields once per derivation and
+// pre-converts a candidate's own type before checking it. Both are keyed by
+// what the search is actually looking at — the dictionary *binder*, and the
+// field type at this fixed argument — so the controls are two dictionaries of
+// one class whose operations differ, and a field that is about a different
+// operation while saying it in the goal's own words.
+#[test]
+fn family_certificates_stay_separate_per_dictionary_and_per_operation() {
+    let mut e = base();
+    let two = r#"
+import relation_props;
+class Family<A, I>(same: A → A → Type, op: I → A → A) {
+    certified: (i: I) → PreservesRelation(same, same, op(i)),
+}
+theorem nested<A, I>
+    requires left: Family<A, I>(same, op), right: Family<A, I>(same, other)
+    (same as ≈: A → A → Type, op, other: I → A → A, i: I, x, y: A, h: x ≈ y):
+    other(i, op(i, x)) ≈ other(i, op(i, y)) { rel_cong(h) }
+"#;
+    check(&mut e, "two_family_dictionaries", two);
+    // The same two dictionaries, with nothing to certify the outer operation:
+    // a cache that answered for `right` with `left`'s projections would find
+    // one anyway.
+    let mut e = base();
+    let missing = two.replace("op, other: I → A → A", "op, other, absent: I → A → A");
+    let missing = missing.replace("other(i, op(i, x)) ≈ other", "absent(i, op(i, x)) ≈ absent");
+    let error = e
+        .elab_module_source("uncertified_operation", &missing)
+        .unwrap_err();
+    assert!(
+        error.render(&missing).contains("compatibility"),
+        "{}",
+        error.render(&missing)
+    );
+    // A field whose codomain is a preservation statement like the goal's, but
+    // about another operation: the conversion, not the shape, decides.
+    let mut e = base();
+    let decoy = r#"
+import relation_props;
+class Decoy<A, I>(same: A → A → Type, op: I → A → A, other: I → A → A) {
+    misleading: (i: I) → PreservesRelation(same, same, other(i)),
+    certified: (i: I) → PreservesRelation(same, same, op(i)),
+}
+theorem nested<A, I> requires laws: Decoy<A, I>(same, op, other)
+    (same as ≈: A → A → Type, op, other: I → A → A, i: I, x, y: A, h: x ≈ y):
+    op(i, op(i, x)) ≈ op(i, op(i, y)) { rel_cong(h) }
+"#;
+    check(&mut e, "decoy_family", decoy);
+}
+
 #[test]
 fn branching_backend_reuses_the_unchanged_abstract_client() {
     let mut e = base();

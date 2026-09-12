@@ -1,9 +1,11 @@
 //! Proof-position relational congruence over resolved, non-dependent terms.
 //! Reconstruction uses ordinary class projections and ordinary local goals.
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{parse_file, Expr, Item, Span};
 
 use crate::{err, goals, Alias, Cx, ElabError, Elaborator, TyVar, R};
@@ -60,6 +62,13 @@ fn relation(ty: &Type, span: Span) -> R<Relation> {
     )
 }
 
+/// One field of a local dictionary, already projected and already known to
+/// take an argument: the projection term and the pieces of its `Π` type.
+/// `None` where the field declined to project or is not a `Π`, which is still
+/// a field the search *examines* (its budget counts declarations, not
+/// candidates).
+type Field = Option<(Rc<Term>, Level, Level, Rc<Type>, Rc<Type>)>;
+
 struct Builder<'a> {
     e: &'a Elaborator,
     original: &'a Cx,
@@ -73,6 +82,14 @@ struct Builder<'a> {
     nodes: usize,
     goals: usize,
     derive: bool,
+    /// The projected fields of each dictionary reachable by name from
+    /// `cx.dicts`, for this derivation's lifetime. Only the innermost binder
+    /// of a name is ever searched (the `seen` set below), and the walk pushes
+    /// nothing but freshly named aliases, so a name's projections are the
+    /// same term at every search — while recomputing them is the `Σ`-spine
+    /// walk of `project_field`, once per field per search
+    /// (issues/relational-derivation-cost.md).
+    fields: RefCell<HashMap<String, Rc<Vec<Field>>>>,
 }
 
 impl Builder<'_> {
@@ -111,16 +128,40 @@ impl Builder<'_> {
     }
 
     fn core_checks(&self, term: &Term, ty: &Type, level: &Level) -> bool {
-        self.e
-            .kernel_check_term(
-                self.e.semantic_oracle().world(),
-                heather_kernel::layer::Layer::Prog,
-                &self.cx.gamma,
-                term,
-                ty,
-                level,
-            )
-            .is_ok()
+        // A synchronous kernel check, charged to the kernel-gate timer like
+        // the deferred ones: the kernel's own counter column already says it
+        // ran, and without the bracket this was half of a `rel_derive`
+        // theorem's unattributed body time (issues/relational-derivation-cost.md).
+        crate::stats::timed(crate::stats::Timer::KernelGate, || {
+            self.e
+                .kernel_check_term(
+                    self.e.semantic_oracle().world(),
+                    heather_kernel::layer::Layer::Prog,
+                    &self.cx.gamma,
+                    term,
+                    ty,
+                    level,
+                )
+                .is_ok()
+        })
+    }
+
+    /// [`Builder::core_checks`]'s conversion half, in the same world and at
+    /// the same fuel: a candidate whose own type does not convert to the goal
+    /// cannot check at it.
+    fn core_converts(&self, ty: &Type, goal: &Type, level: &Level) -> bool {
+        crate::stats::timed(crate::stats::Timer::KernelGate, || {
+            self.e
+                .semantic_oracle()
+                .convert_type(
+                    &self.cx.gamma,
+                    heather_kernel::layer::Layer::Prog,
+                    ty,
+                    goal,
+                    level,
+                )
+                .is_ok()
+        })
     }
 
     fn type_of(&self, text: &str) -> R<(Type, Level)> {
@@ -147,6 +188,55 @@ impl Builder<'_> {
         )
     }
 
+    /// The argument-taking fields of the dictionary bound to `name`, computed
+    /// once per derivation (see [`Builder::fields`]). An empty vector stands
+    /// for "no dictionary here": a name that does not resolve, or resolves
+    /// away from its recorded class, is a settled answer too.
+    fn dictionary_fields(&self, name: &str, class: &str) -> Rc<Vec<Field>> {
+        if let Some(cached) = self.fields.borrow().get(name) {
+            return cached.clone();
+        }
+        let built = Rc::new(self.project_fields(name, class));
+        self.fields
+            .borrow_mut()
+            .insert(name.to_string(), built.clone());
+        built
+    }
+
+    fn project_fields(&self, name: &str, class: &str) -> Vec<Field> {
+        let Ok((dict, ty, _)) = self.e.resolve(&self.cx, name, self.span) else {
+            return Vec::new();
+        };
+        let Some(ind) = self.e.display_tag_of(&ty) else {
+            return Vec::new();
+        };
+        if self.e.key_of(class) != self.e.key_of(&ind.name) {
+            return Vec::new();
+        }
+        let Some(ctor) = ind.ctors.first() else {
+            return Vec::new();
+        };
+        let dict = Rc::new(dict);
+        (0..ctor.fields.len())
+            .map(|index| {
+                let (field, field_ty, _) = self
+                    .e
+                    .project_field(&self.cx, &ind, &ty, dict.clone(), index, self.span)
+                    .ok()?;
+                let Type::Pi {
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                } = field_ty
+                else {
+                    return None;
+                };
+                Some((Rc::new(field), dom_level, cod_level, dom, cod))
+            })
+            .collect()
+    }
+
     // A family operation such as image(f, xs) has a fixed first argument.
     // Search only complete local dictionaries, applying at most one argument
     // to a field. The kernel checks the resulting candidate at the exact
@@ -159,52 +249,39 @@ impl Builder<'_> {
             if !seen.insert(d.name.clone()) {
                 continue;
             }
-            let Ok((dict, ty, _)) = self.e.resolve(&self.cx, &d.name, self.span) else {
-                continue;
-            };
-            let Some(ind) = self.e.display_tag_of(&ty) else {
-                continue;
-            };
-            if self.e.key_of(&d.class) != self.e.key_of(&ind.name) {
-                continue;
-            }
-            let Some(ctor) = ind.ctors.first() else {
-                continue;
-            };
-            for index in 0..ctor.fields.len() {
+            for field in self.dictionary_fields(&d.name, &d.class).iter() {
                 examined += 1;
                 if examined > 64 {
                     return None;
                 }
-                let Ok((field, field_ty, _)) = self.e.project_field(
-                    &self.cx,
-                    &ind,
-                    &ty,
-                    Rc::new(dict.clone()),
-                    index,
-                    self.span,
-                ) else {
+                let Some((field, dom_level, cod_level, dom, cod)) = field else {
                     continue;
                 };
-                let Type::Pi {
-                    dom_level,
-                    cod_level,
-                    dom,
-                    cod,
-                } = field_ty
-                else {
+                if !self.core_checks(fixed, dom, dom_level) {
                     continue;
-                };
-                if !self.core_checks(fixed, &dom, &dom_level) {
+                }
+                // The candidate's own type, which is what the check below
+                // has to convert to the goal. Converting it *first* is the
+                // same question asked without re-checking the projection
+                // chain the candidate is applied to, and most fields of a
+                // laws dictionary take an operation and say something else
+                // entirely about it (`member_image`, `image_union`), so they
+                // fail here for a fraction of the check's cost. Conversion
+                // is a necessary condition of the check, in the check's own
+                // world and at the check's fuel: what it refuses, the kernel
+                // refuses.
+                let at_fixed =
+                    cod.apply_local(&LocalSubst::id(&self.cx.gamma).extended(fixed.clone()));
+                if !self.core_converts(&at_fixed, goal, level) {
                     continue;
                 }
                 let candidate = Term::App {
-                    fun: Rc::new(field),
+                    fun: field.clone(),
                     arg: fixed.clone(),
-                    dom_level,
-                    cod_level,
-                    dom,
-                    cod,
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: dom.clone(),
+                    cod: cod.clone(),
                 };
                 if self.core_checks(&candidate, goal, level) {
                     if found.as_ref().is_some_and(|prior| prior != &candidate) {
@@ -265,8 +342,12 @@ impl Builder<'_> {
     // registered/local certificates priority at every exposed application.
     fn expand(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> Option<R<String>> {
         let oracle = self.e.semantic_oracle();
-        let l = oracle.term_reducts(&self.cx.gamma, left, 1).next();
-        let r = oracle.term_reducts(&self.cx.gamma, right, 1).next();
+        let (l, r) = crate::stats::timed(crate::stats::Timer::ElabWhnf, || {
+            (
+                oracle.term_reducts(&self.cx.gamma, left, 1).next(),
+                oracle.term_reducts(&self.cx.gamma, right, 1).next(),
+            )
+        });
         if l.is_none() && r.is_none() {
             return None;
         }
@@ -517,6 +598,7 @@ pub(crate) fn check(
         nodes: 0,
         goals: 0,
         derive,
+        fields: RefCell::new(HashMap::new()),
     };
     b.carrier = b.fresh();
     b.cx.tyvars.push(TyVar {
