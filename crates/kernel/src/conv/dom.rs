@@ -402,6 +402,15 @@ pub(super) trait Dom<'v>: Sized {
     /// children. Fallibility lives one step earlier, in the operations that
     /// reach a head at all ([`Dom::whnf_ty`], [`Dom::head_tm`]).
     fn view_ty<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Ty) -> TyView<'a, 'v, Self>;
+    /// A sub-structure that is *spelled* `Vec^l(T; k)`, **before** any
+    /// reduction — its level and its two children as sub-structures, or
+    /// `None` when the carrier's head is anything else (a definition that
+    /// unfolds to a `Vec` is not one). `Conv::ty`'s `Vec` congruence reads
+    /// this so that two vectors at a canonical length are compared by length
+    /// and element once, instead of through the `Σ` encoding both reduce
+    /// to, which repeats the element comparison per level
+    /// (docs/wf-former-design.md §5).
+    fn vec_former(cv: &Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> Option<(Level, Self::TyC, Self::TmC)>;
     fn view_tm<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Tm) -> TmView<'a, 'v, Self>;
     /// The weak head form of a sub-structure that is **already** in weak head
     /// normal form because the form carrying it is: an eliminator's scrutinee,
@@ -907,6 +916,13 @@ impl<'v> Dom<'v> for Syn {
     }
 
     // -- views --------------------------------------------------------------
+
+    fn vec_former(_cv: &Conv<'v, Self>, _env: &Env<'v>, t: &Rc<Type>) -> Option<(Level, Rc<Type>, Rc<Term>)> {
+        match &**t {
+            Type::Vec { level, elem, len } => Some((level.clone(), Rc::clone(elem), Rc::clone(len))),
+            _ => None,
+        }
+    }
 
     #[inline]
     fn view_ty<'a>(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, w: &'a Type) -> TyView<'a, 'v, Self> {

@@ -10,7 +10,7 @@ use std::sync::Arc as Rc;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
+use heather_kernel::term::{CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
 use heather_kernel::typing::check_term;
 
 use super::terms::{add, nil_ctx, num};
@@ -20,7 +20,7 @@ use crate::common::Rng;
 use crate::harness::{Case, Family};
 
 pub fn families() -> Vec<Family> {
-    vec![computed_numeral(), perturbed_pairs()]
+    vec![computed_numeral(), perturbed_pairs(), vec_literal()]
 }
 
 /// `add n n ≡ 2n` at `Nat` — an equation discharged purely by computation,
@@ -149,6 +149,71 @@ fn perturbed_pairs() -> Family {
         what: "conv over generated well-typed pairs (the property-test corpus)",
         unit: "pairs",
         expect_slope: None,
+        cases,
+    }
+}
+
+/// `[x₀, …, xₙ₋₁] : [T; n]` as the elaborator emits it — a right-nested pair
+/// whose every level is annotated with its tail's `Vec` type — checked
+/// against the vector type, with an element type whose comparison is not
+/// free (a decoded record code's shape: a right-nested `Σ` of units).
+///
+/// The literal the ELF certificate tests state their 176-byte header with
+/// (`issues/elf-mutation-test-shape.md`). Linear since `Conv::vec_ty`
+/// (2026-09-11) compares two spelled `Vec` types by length and element once;
+/// through the encodings each level compared the element once per remaining
+/// level, and the family was quadratic.
+fn vec_literal() -> Family {
+    fn unit() -> Type {
+        Type::Unit { level: Level::Zero }
+    }
+    fn sigma(fst: Type, snd: Type) -> Type {
+        Type::Sigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: Rc::new(fst),
+            snd: Rc::new(snd),
+        }
+    }
+    fn vec(elem: Type, len: u64) -> Type {
+        let len = if len == 0 { Term::Zero } else { Term::NatLit(len) };
+        Type::Vec { level: Level::Zero, elem: Rc::new(elem), len: Rc::new(len) }
+    }
+    let mut elem = unit();
+    for _ in 0..8 {
+        elem = sigma(unit(), elem);
+    }
+    let cases = [32u64, 64, 128, 256, 512]
+        .iter()
+        .map(|&n| {
+            let mut acc = Term::Triv { level: Level::Zero };
+            for j in (0..n).rev() {
+                acc = Term::Pair {
+                    fst_level: Level::Zero,
+                    snd_level: Level::Zero,
+                    fst_ty: Rc::new(elem.clone()),
+                    snd_ty: Rc::new(vec(elem.shift_local(1), n - 1 - j)),
+                    fst: Rc::new(Term::Var(LocalVar(0))),
+                    snd: Rc::new(acc),
+                };
+            }
+            let ty = vec(elem.clone(), n);
+            // Γ = (x : T); the literal is `[x, …, x]`.
+            let mut gamma = nil_ctx();
+            gamma.entries.push(CtxEntry { ty: Rc::new(elem.clone()), level: Level::Zero });
+            let go = move || {
+                check_term(&GlobalCtx::default(), 0, Layer::Prog, &gamma, &acc, &ty, &Level::Zero, FUEL)
+                    .is_ok() as u64
+            };
+            assert!(go() == 1, "the {n}-element literal does not check");
+            Case::new(n, 1, go)
+        })
+        .collect();
+    Family {
+        name: "conv/vec-literal",
+        what: "check([x₀…xₙ₋₁] : [T; n]) — a nested-pair literal against its vector type",
+        unit: "elements",
+        expect_slope: Some((0.85, 1.35)),
         cases,
     }
 }

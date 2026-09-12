@@ -543,3 +543,103 @@ fn the_well_typed_generator_reaches_unit_at_a_nonzero_level() {
         seen.1,
     );
 }
+
+// -------------------------------------------------------------------------
+// Two sides both spelled `Vec` (`Conv::vec_ty`, 2026-09-11;
+// docs/wf-former-design.md §5). The verdicts here are the encoding's — every
+// case below held before the rule and is pinned so that the rule stays a
+// shortcut and never becomes a stricter or looser judgment than the
+// reductions give.
+// -------------------------------------------------------------------------
+
+fn unit() -> Type {
+    Type::Unit { level: c(0) }
+}
+
+fn lit(n: u64) -> Term {
+    if n == 0 { Term::Zero } else { Term::NatLit(n) }
+}
+
+#[test]
+fn spelled_vectors_at_length_zero_convert_whatever_their_elements() {
+    let g = nil_ctx();
+    // Both are `Unit`; the element types are not compared at all.
+    conv_ty(&g, &vec(Type::Nat, nat(0)), &vec(unit(), nat(0)), c(0));
+    conv_ty(&g, &vec(Type::Nat, lit(0)), &vec(sigma(unit(), unit()), Term::Zero), c(0));
+}
+
+#[test]
+fn spelled_vectors_at_equal_positive_length_need_convertible_elements() {
+    let g = nil_ctx();
+    conv_ty(&g, &vec(Type::Nat, nat(3)), &vec(Type::Nat, nat(3)), c(0));
+    // Packed against unary: the lengths are compared as `Nat` terms.
+    conv_ty(&g, &vec(Type::Nat, lit(3)), &vec(Type::Nat, nat(3)), c(0));
+    // The elements are compared as types, not spellings.
+    conv_ty(&g, &vec(vec(Type::Nat, nat(1)), nat(2)), &vec(sigma(Type::Nat, unit()), nat(2)), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, nat(3)), &vec(unit(), nat(3)), c(0));
+}
+
+#[test]
+fn spelled_vectors_at_different_canonical_lengths_do_not_convert() {
+    let g = nil_ctx();
+    not_conv_ty(&g, &vec(Type::Nat, nat(2)), &vec(Type::Nat, nat(3)), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, nat(0)), &vec(Type::Nat, nat(1)), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, lit(2)), &vec(Type::Nat, lit(3)), c(0));
+}
+
+#[test]
+fn spelled_vector_against_a_neutral_length_takes_the_reductions_verdict() {
+    let g = ext(&nil_ctx(), Type::Nat, c(0));
+    // A canonical length against a stuck one: `Σ` against a neutral `Vec`.
+    not_conv_ty(&g, &vec(Type::Nat, nat(1)), &vec(Type::Nat, v(0)), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, Term::Succ(rt(v(0)))), &vec(Type::Nat, nat(1)), c(0));
+    // Two stuck lengths: structural, as before.
+    conv_ty(&g, &vec(Type::Nat, Term::Succ(rt(v(0)))), &vec(Type::Nat, Term::Succ(rt(v(0)))), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, Term::Succ(rt(v(0)))), &vec(unit(), Term::Succ(rt(v(0)))), c(0));
+}
+
+#[test]
+fn spelled_vector_against_its_encoding_still_converts() {
+    let g = nil_ctx();
+    // Only one side is spelled `Vec`: the rule stands aside and the
+    // reductions decide.
+    conv_ty(&g, &vec(Type::Nat, nat(2)), &sigma(Type::Nat, sigma(Type::Nat, unit())), c(0));
+    conv_ty(&g, &sigma(Type::Nat, vec(Type::Nat, nat(1))), &vec(Type::Nat, lit(2)), c(0));
+    not_conv_ty(&g, &vec(Type::Nat, nat(2)), &sigma(Type::Nat, unit()), c(0));
+}
+
+/// The literal shape the elaborator emits for `[x, …, x] : [T; n]`: a
+/// right-nested pair whose every level is annotated with its tail's `Vec`
+/// type. The element is the variable `x : T` at the head of Γ.
+fn pair_literal(elem: &Type, n: usize) -> Term {
+    let mut acc = Term::Triv { level: c(0) };
+    for j in (0..n).rev() {
+        let tail = elem.shift_local(1);
+        acc = pair(elem.clone(), vec(tail, lit((n - 1 - j) as u64)), v(0), acc);
+    }
+    acc
+}
+
+/// An element type whose comparison is not free: a right-nested `Σ` of
+/// units, the shape a decoded record code has.
+fn wide_unit(depth: usize) -> Type {
+    let mut t = unit();
+    for _ in 0..depth {
+        t = sigma(unit(), t);
+    }
+    t
+}
+
+/// The literal at the elaborator's shape checks, at a length where the
+/// encodings' `n²/2` element comparisons were seconds. Its *scaling* is the
+/// bench family `conv/vec-literal`'s datum (quadratic through the encodings,
+/// linear now); fuel does not see the difference — the repeated work was the
+/// element type's forcing and weakening, not counted steps — so no fuel pin
+/// can stand in for the bench here.
+#[test]
+fn nested_pair_literal_at_the_elaborators_shape_checks() {
+    let elem = wide_unit(8);
+    let g = ext(&nil_ctx(), elem.clone(), c(0));
+    let t = pair_literal(&elem, 256);
+    ck(&g, &t, &vec(elem, lit(256)), c(0));
+}

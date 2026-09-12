@@ -211,6 +211,15 @@ with `sup_f(tag; cs)` for the *abstract* `cs` by Σ-η + Unit-η — pinned by
 - `elim_Wf` is neutral on a neutral scrutinee.
 - `Vec`/`Fin` are neutral at neutral length; two neutral `Vec` types
   compare by element type and length.
+- Two types both *spelled* `Vec` are compared by length and element
+  **before** either reduces (`Conv::vec_ty`, 2026-09-11): the verdict is
+  the encoding's — convertible iff the lengths are and, unless that length
+  is zero, the elements are — but reached once rather than once per `Σ`
+  level. Without it a nested-pair literal of `n` elements, each level
+  annotated `Vec(T; k)` against an expected `Vec(T; k)`, compared `T`
+  `n²/2` times; a 176-byte list literal cost two seconds to check
+  (`issues/elf-mutation-test-shape.md`). A side that reaches `Vec` only by
+  unfolding still takes the reductions.
 
 The `conv.rs` footprint is: two type-reduction cases (`Vec`, `Fin`), one
 structural type-compare case each (`Vec`, `Fin`, `Wf`), one neutral-elim

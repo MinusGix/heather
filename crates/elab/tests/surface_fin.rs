@@ -497,3 +497,23 @@ fn the_container_ih_still_takes_the_rust_path() {
             }
         }");
 }
+
+// -- Vector literal lengths are packed ---------------------------------------
+
+/// Every level of a vector literal is annotated with its tail's `[T; k]`, and
+/// `k` is spelled as the kernel spells a closed numeral — `NatLit`, `Zero`
+/// at the end — not as a `Succ` chain. In unary the annotations alone made
+/// the term quadratic in the literal (`issues/elf-mutation-test-shape.md`).
+#[test]
+fn vector_literal_tail_lengths_are_packed_numerals() {
+    let e = elab("fn three() -> [Nat; 3] { [1, 2, 3] }");
+    let (_, body) = last_binding(&e);
+    let mut at = &body;
+    for expected in [Term::NatLit(2), Term::NatLit(1), Term::Zero] {
+        let Term::Pair { snd_ty, snd, .. } = at else { panic!("expected a pair, found {at:?}") };
+        let Type::Vec { len, .. } = &**snd_ty else { panic!("expected a Vec tail type, found {snd_ty:?}") };
+        assert_eq!(**len, expected, "tail length spelled {len:?}");
+        at = snd;
+    }
+    assert!(matches!(at, Term::Triv { .. }), "expected the empty tail, found {at:?}");
+}

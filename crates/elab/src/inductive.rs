@@ -660,12 +660,13 @@ pub(crate) fn nat_head(t: &Term) -> NatHead {
     }
 }
 
+/// A closed numeral as the kernel spells one: `Zero`, or the packed
+/// `NatLit` that stands for `Succ^k(Zero)`. It was a unary `Succ` chain until
+/// 2026-09-11, which made every vector-literal annotation carry its length in
+/// unary and the annotated term quadratic in the literal
+/// (`issues/elf-mutation-test-shape.md`).
 pub(crate) fn nat_lit(k: usize) -> Term {
-    let mut t = Term::Zero;
-    for _ in 0..k {
-        t = Term::Succ(Rc::new(t));
-    }
-    t
+    if k == 0 { Term::Zero } else { Term::NatLit(k as u64) }
 }
 
 /// The tag's inhabitant: nested `⟨⟩`s matching the tag type's shape. Which

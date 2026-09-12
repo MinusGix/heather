@@ -605,6 +605,28 @@ impl<'v> Dom<'v> for Values {
 
     // -- views --------------------------------------------------------------
 
+    /// Both spellings a vector reaches conversion in: syntax under an
+    /// environment, and the unforced tail [`TyClo::Vec`] that `Eval::vec_ty`
+    /// leaves at every level of the encoding. The carrier is opened first —
+    /// its pending binders resolved against `env`, exactly as a forcing
+    /// would — so the children are read **here**, where the vector is.
+    fn vec_former(_cv: &Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> Option<(Level, TyC<'v>, TmC<'v>)> {
+        match open_ty(env, t, 0) {
+            TyClo::Vec { level, elem, len } => {
+                Some(((*level).clone(), TyC::here(env, elem), TmC::here(env, len)))
+            }
+            TyClo::Syn { env: e, body } => match &**body {
+                Type::Vec { level, elem, len } => Some((
+                    level.clone(),
+                    TyC::here(env, env.arena.ty(TyClo::new(e.clone(), Rc::clone(elem)))),
+                    TmC::here(env, env.arena.tm(TmClo::syn(e.clone(), Rc::clone(len)))),
+                )),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn view_ty<'a>(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Rc<VTy<'v>>) -> TyView<'a, 'v, Self> {
         match &**w {
             VTy::Nat => TyView::Nat,

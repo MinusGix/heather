@@ -778,12 +778,55 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
         self.descend()?;
         let out = (|| {
+            if let (Some((l1, e1, k1)), Some((l2, e2, k2))) =
+                (D::vec_former(self, env, a), D::vec_former(self, env, b))
+            {
+                return self.vec_ty(env, &l1, &e1, &k1, &l2, &e2, &k2);
+            }
             let mut wa = D::whnf_ty_opaque(self, env, a)?;
             let mut wb = D::whnf_ty_opaque(self, env, b)?;
             self.ty_w(env, &mut wa, &mut wb, l)
         })();
         self.depth -= 1;
         out
+    }
+
+    /// `Γ ⊢ Vec^l(T; k) ≈ Vec^l'(T'; k')` decided on the spelling, before
+    /// either side reduces (extension; docs/wf-former-design.md §5).
+    ///
+    /// The verdict is the one the reductions give, reached without them.
+    /// A vector at a canonical length *is* its right-nested `Σ` encoding,
+    /// `Unit` at zero; so two vectors are convertible exactly when their
+    /// lengths are and — unless that length is zero, where both are `Unit`
+    /// whatever the element — their element types are. A canonical length
+    /// against a neutral one never converts, and the encodings would not
+    /// have either (`Σ` against a stuck `Vec`); two neutral lengths reach
+    /// the same structural rule `ty_nf` applies to the neutral views. So no
+    /// case falls through: the rule is total on two vector spellings, and
+    /// nothing is retried on failure.
+    ///
+    /// What it saves is the shape: through the encodings the element type
+    /// is compared once per `Σ` level, so a nested-pair literal of `n`
+    /// elements — every level of which is annotated `Vec(T; k)` against the
+    /// expected `Vec(T; k)` — cost `n²/2` element comparisons
+    /// (`issues/elf-mutation-test-shape.md`); here it costs `n`.
+    fn vec_ty(
+        &mut self,
+        env: &Env<'v>,
+        l1: &Level,
+        e1: &D::TyC,
+        k1: &D::TmC,
+        l2: &Level,
+        e2: &D::TyC,
+        k2: &D::TmC,
+    ) -> R {
+        self.lev_eq(l1, l2)?;
+        self.tm_at_nat(env, k1, k2)?;
+        let w = D::whnf_tm(self, env, k1)?;
+        if matches!(D::view_tm(self, env, &w), TmView::Zero) {
+            return Ok(());
+        }
+        self.ty(env, e1, e2, l1)
     }
 
     /// Unfold a δ-stuck **neutral** type until its head is a former or a
@@ -949,7 +992,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // Vec/Fin congruence (extension): reached only at a *neutral*
             // length — a canonical one reduces away before `ty_nf` — so this
             // is the neutral-type comparison, structural in element and
-            // length (docs/wf-former-design.md §5).
+            // length (docs/wf-former-design.md §5). Two sides both *spelled*
+            // `Vec` are decided before reduction by [`Conv::vec_ty`]; this
+            // arm is what remains when one side reached `Vec` by unfolding.
             (
                 TyView::Vec { level: l1, elem: e1, len: k1 },
                 TyView::Vec { level: l2, elem: e2, len: k2 },

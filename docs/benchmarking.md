@@ -164,6 +164,7 @@ Two, and both have been paid for elsewhere in this tree:
 | `nat/check-numeral` | the checking walk of `issues/numeral-stack-depth.md`, timed |
 | `conv/computed-numeral` | an equation discharged purely by computation — the thesis-shaped fixture in miniature |
 | `conv/perturbed-pairs` | conversion over the generated well-typed corpus: representative shapes, not chosen ones |
+| `conv/vec-literal` | a nested-pair vector literal at the elaborator's shape checked against `[T; n]` — linear since the spelled-`Vec` congruence (2026-09-11); it was quadratic through the `Σ` encodings |
 | `wf/check-tree` | reading branching data — `Vec`/`Fin` unfolding per constructor |
 | `wf/mirror-involution` | `Wf` elimination at depth, twice, then compared |
 | `code/check-identity-recursor` | the 45-branch code recursor: the largest single thing the checker sees (a fixed cost, ~0.54 ms) |

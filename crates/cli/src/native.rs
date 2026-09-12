@@ -281,10 +281,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     Ok(())
 }
 
-// A file-sized `[…]` literal is a dependent-vector fold: building it costs
-// seconds on its own, and every lookup inside it re-runs the fold from the
-// front. The same bytes as a chain of one-cons definitions cost a δ-step per
-// element, and the chain gives every suffix a name for the lookups below.
+// A file-sized `[…]` literal is a dependent-vector fold, and every lookup
+// inside it re-runs the fold from the front. The same bytes as a chain of
+// one-cons definitions cost a δ-step per element, and the chain gives every
+// suffix a name for the lookups below. (Building the literal itself was also
+// quadratic in its length until the kernel's spelled-`Vec` congruence,
+// 2026-09-11 — issues/elf-mutation-test-shape.md; the chain's reason now is
+// the lookups.)
 // `{name}()` is the whole list; `{name}_from_{k}()` is the k-th suffix.
 pub(super) fn byte_chain(m: &mut Module, name: &str, list: &[u8]) {
     let list_fn = |m: &mut Module, name: &str, value: String| m.declaration(
