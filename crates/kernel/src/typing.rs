@@ -181,50 +181,81 @@ fn check_global_bindings<'a>(
     univs: u32,
 ) -> R {
     for b in bindings {
-        let env = Env {
-            psi: prefix.clone(),
-            bodies: Rc::new(BodyCache::new()),
-            gamma: LocalCtx::nil(),
-            layer: Layer::Prog,
-            univs,
-            #[cfg(feature = "value-metrics")]
-            value_metrics: None,
-        };
-        match b {
-            GlobalBinding::Ctx => {}
-            GlobalBinding::Ty { ctx, layer, level } => {
-                if !matches!(layer, Layer::Code | Layer::Prog) {
-                    return Err(TypeError::LayerMismatch);
-                }
-                tc.level_wf(&env, level)?;
-                tc.ctx_wf(&env, Layer::Prog, ctx)?;
-            }
-            GlobalBinding::Tm { ctx, layer, ty, level, body } => {
-                if !matches!(layer, Layer::Var | Layer::Code) {
-                    return Err(TypeError::LayerMismatch);
-                }
-                tc.level_wf(&env, level)?;
-                tc.ctx_wf(&env, Layer::Prog, ctx)?;
-                tc.ty_check(&env.in_ctx(ctx.clone(), Layer::Prog), ty, level)?;
-                // A definition's body (extension): `Ψ_{<i}; Δ ⊢_{i'} t : T @ l`
-                // — checked at the binding's *own* layer, which is what makes
-                // δ layer-preserving: unfolding `u` at a layer j ≥ i' can only
-                // produce a term that was already legal at j. Layer v admits
-                // no term but a variable, so a definition there would be a
-                // rename with extra steps; reject it and keep `v` meaning
-                // exactly what ch. 04 says.
-                if let Some(t) = body {
-                    if *layer != Layer::Code {
-                        return Err(TypeError::LayerMismatch);
-                    }
-                    tc.tm_check(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
-                }
-            }
+        let env = binding_env(&prefix, univs);
+        check_global_binding_declaration(tc, &env, b)?;
+        if let GlobalBinding::Tm { ctx, layer, ty, level, body: Some(t) } = b {
+            tc.tm_check(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
         }
         drop(env);
         prefix.push(b.clone());
     }
     Ok(())
+}
+
+fn binding_env(prefix: &GlobalCtx, univs: u32) -> Env {
+    Env {
+        psi: prefix.clone(),
+        bodies: Rc::new(BodyCache::new()),
+        gamma: LocalCtx::nil(),
+        layer: Layer::Prog,
+        univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    }
+}
+
+/// Everything [`check_global_ctx_extension`] asks of one binding **except a
+/// definition's body**: the layer, the level, the context and the statement,
+/// over `prefix`. A definition's body is then exactly a [`check_term`] of
+/// `body : ty @ level` in `ctx` at the binding's own layer over the same
+/// prefix, which is the shape a caller can hand to a worker.
+fn check_global_binding_declaration(tc: &Tc, env: &Env, b: &GlobalBinding) -> R {
+    match b {
+        GlobalBinding::Ctx => {}
+        GlobalBinding::Ty { ctx, layer, level } => {
+            if !matches!(layer, Layer::Code | Layer::Prog) {
+                return Err(TypeError::LayerMismatch);
+            }
+            tc.level_wf(env, level)?;
+            tc.ctx_wf(env, Layer::Prog, ctx)?;
+        }
+        GlobalBinding::Tm { ctx, layer, ty, level, body } => {
+            if !matches!(layer, Layer::Var | Layer::Code) {
+                return Err(TypeError::LayerMismatch);
+            }
+            tc.level_wf(env, level)?;
+            tc.ctx_wf(env, Layer::Prog, ctx)?;
+            tc.ty_check(&env.in_ctx(ctx.clone(), Layer::Prog), ty, level)?;
+            // A definition's body (extension): `Ψ_{<i}; Δ ⊢_{i'} t : T @ l`
+            // — checked at the binding's *own* layer, which is what makes
+            // δ layer-preserving: unfolding `u` at a layer j ≥ i' can only
+            // produce a term that was already legal at j. Layer v admits
+            // no term but a variable, so a definition there would be a
+            // rename with extra steps; reject it and keep `v` meaning
+            // exactly what ch. 04 says.
+            if body.is_some() && *layer != Layer::Code {
+                return Err(TypeError::LayerMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One binding of an extension, **statement only**: what
+/// [`check_global_ctx_extension`] checks of `b` over `prefix` before its
+/// body. `⊢_L Ψ` is presupposed. A definition's body is left to the caller
+/// as a [`check_term`] of `body : ty @ level` in `ctx` at the binding's layer
+/// over the same `prefix`; the two together, in order, are the extension
+/// check, and a caller that runs the bodies elsewhere (the elaborator's
+/// module replay, over its kernel worker pool) gets the same verdicts.
+pub fn check_global_binding_statement(
+    prefix: &GlobalCtx,
+    b: &GlobalBinding,
+    univs: u32,
+    fuel: u64,
+) -> R {
+    let tc = Tc::new(fuel);
+    check_global_binding_declaration(&tc, &binding_env(prefix, univs), b)
 }
 
 /// `⊢_i Γ` — well-formedness of a local context. Presupposes `⊢_L Ψ`.

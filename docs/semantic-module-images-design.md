@@ -374,8 +374,11 @@ and avoids duplicating the dependency world in every module artifact.
 identity; replay also compares the complete logical kernel prefix, so an
 independently rebuilt but equal dependency world is accepted while a merely
 same-sized or allocation-related world is not. Replay checks the ordered Ψ
-suffix with `check_global_ctx_extension`, constructs metadata in a private
-candidate, and swaps the committed world only after success. The delta remains
+suffix — as one `check_global_ctx_extension` call on an inline pool, or
+statement-by-statement with each definition body queued to the kernel
+worker pool (`docs/parallel-kernel-gate-design.md` §5.3) — constructs
+metadata in a private candidate, and swaps the committed world only after
+success. The delta remains
 opaque and process-local. Bounds-checked decoding, semantic/kernel/source
 fingerprints, and structural validation of decoded event payloads belong to
 Stage 4 rather than being smuggled into this representation.

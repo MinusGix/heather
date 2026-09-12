@@ -156,7 +156,7 @@ by reading two functions. Everything downstream is strictly after:
 | `Cache::accepted` recording a verdict | `accepted` is itself deferred and replayed at the join, in declaration order, and only when every queued check passed (§5.1) |
 | `build-x86` / `compile-x86` writing the ELF, the `.s` and the `.certificate.hthr` | every `write_new` is after `elab.elab_module_source(...)` has returned `Ok` |
 | `heather check` reporting a module accepted | the errors vector it reads is the one the join appended to |
-| `replay_module_delta` | replays a *stored* delta; it queues nothing |
+| `replay_module_delta` | replays a *stored* delta and rechecks it on the same pool (§5.3); it joins inside `recheck_extension`, before any metadata is installed |
 
 The failure rule: any queued check failing fails the module. Outcomes are
 sorted by submission index, which is declaration order, and the first failing
@@ -365,6 +365,50 @@ is dropped the moment the comparison that retires it returns, and the whole
 list is dropped at the first mismatch. Peak RSS over the certificate unit
 tests came out slightly **below** the no-reuse pass, because the parallel
 pass's terms die with the items rather than with the module.
+
+## 5.3 The image replay rechecks on the same pool
+
+A warm module — one whose image the semantic session accepted — is not
+elaborated at all: `Elaborator::replay_module_delta` (`module_delta.rs`)
+rechecks the stored Ψ suffix with the kernel and installs the stored
+metadata. That recheck was one serial `typing::check_global_ctx_extension`
+call, and it was where a warm prefix's time went: 4.5 s of the 5.4 s an
+18-module x86 test prefix costs per process, ~8 s of every warm `build-x86`
+(the 28-module native prefix), all of it on the elaborator's thread with
+the workers idle (`issues/semantic-replay-phase-attribution.md`, 2026-09-12).
+
+The judgement `⊢_L Ψ, Ψ'` is, binding by binding, the split §2 already makes
+for a fresh declaration: the statement (layer, level, context, type) over
+the prefix, then a definition's body as `check_term` of `body : ty @ level`
+in `ctx` at the binding's own layer over the *same* prefix. Bodies depend on
+nothing after their own prefix, so they are independent of one another
+exactly as the certificate's theorems are. The kernel exposes the statement
+half as `typing::check_global_binding_statement`, and `recheck_extension`
+runs it in order on the elaborator's thread, queues each body as a
+[`Deferred`](#3-the-queued-item) with an O(1) snapshot of its prefix, and
+joins before it returns. Nothing about the queued item is special: no gate
+row, no `accepted` (the replay never consulted the declaration gate), a
+placeholder name and span, because a replay failure is not reported to a
+user — it is the `ReplayRejected` notice that sends the module back to
+source elaboration.
+
+The contract of §5.1 holds trivially here, because a replay commits nothing
+until the whole recheck has passed: a rejected replay at either width leaves
+Ψ, the registries and the pool exactly as it found them, and the caller
+rebuilds from source. The one thing to keep straight is the order of
+failures when both kinds exist — a statement failure at binding *i* stops
+the loop, the outstanding bodies (all at indices below *i*) are still joined
+and their verdicts still read, and the statement's error is the one
+reported, which is what the serial loop would have reported first. A worker
+panic is `ModuleReplayError::KernelWorkerPanicked`, a rejection like any
+other from the session's point of view. An inline pool (`workers == 1`, a
+clone) runs the original serial call unchanged.
+
+**Attribution.** The join's wall is already inside the session's
+`image_recheck` bracket, so the workers' clocks are charged nowhere and only
+their kernel counters fold into the module row (`fold_deferred_kernel` with
+no item row). `image_recheck_ns` therefore keeps its meaning — the wall the
+recheck took — and its drop between widths is the speedup.
 
 ## 6. What had to be `Send`
 

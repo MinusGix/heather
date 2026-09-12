@@ -650,6 +650,12 @@ serial replay may reuse a verdict this process's kernel already gave for a
 structurally identical (Ψ prefix, binding) pair rather than ask again
 (`docs/parallel-kernel-gate-design.md` §5.2); that is a caller's bookkeeping
 about its own calls, and the kernel is neither consulted nor changed by it.
+The same schedule is applied to a stored module's recheck: `⊢_L Ψ, Ψ'` is
+exposed both whole (`check_global_ctx_extension`) and as its per-binding
+statement half (`check_global_binding_statement`), the body half being a
+`check_term` over the same prefix; the split is a refactor of one loop into
+the two calls the elaborator's replay makes, and the verdict is the same
+sequence of judgements in the same order.
 
 **Inert counters.** `stats.rs` holds thread-local `Cell<u64>` counters — how
 many conversion queries each shortcut answered, how a miss failed, how many

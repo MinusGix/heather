@@ -20,7 +20,7 @@ use crate::names::{GlobalRegistration, NameKind, Scope};
 use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo, InstKey};
-use crate::{ElabError, Elaborator, R};
+use crate::{pool, stats, ElabError, Elaborator, R};
 
 /// Ordered dependency-interface identities supplied by the module loader.
 /// The digest algorithm lives outside the elaborator; these stable bytes are
@@ -94,6 +94,7 @@ pub enum ModuleReplayError {
     DependencyIdentity,
     DependencyKernelPrefix,
     Kernel(TypeError),
+    KernelWorkerPanicked,
     MetadataConflict(&'static str),
 }
 
@@ -105,6 +106,9 @@ impl fmt::Display for ModuleReplayError {
                 write!(f, "module dependency kernel prefix does not match")
             }
             Self::Kernel(error) => write!(f, "stored module binding was rejected: {error:?}"),
+            Self::KernelWorkerPanicked => {
+                write!(f, "a kernel worker panicked rechecking a stored module binding")
+            }
             Self::MetadataConflict(registry) => {
                 write!(f, "stored module metadata conflicts with the accepted {registry} registry")
             }
@@ -456,8 +460,7 @@ impl Elaborator {
         if self.psi.bindings.iter().ne(delta.dependency_psi.bindings.iter()) {
             return Err(ModuleReplayError::DependencyKernelPrefix);
         }
-        typing::check_global_ctx_extension(&self.psi, &delta.extension, 0, self.fuel)
-            .map_err(ModuleReplayError::Kernel)?;
+        self.recheck_extension(&delta.extension)?;
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
@@ -476,6 +479,77 @@ impl Elaborator {
         self.committed = candidate.committed;
         self.result_only_memo.borrow_mut().clear();
         Ok(())
+    }
+
+    /// `⊢_L Ψ, Ψ'` for the stored suffix — the kernel recheck of a replayed
+    /// module, on the kernel worker pool when the elaborator has one.
+    ///
+    /// The serial form is one `typing::check_global_ctx_extension` call. The
+    /// wide form is the same judgement split the way the deferred gate splits
+    /// a fresh declaration (`docs/parallel-kernel-gate-design.md` §2): each
+    /// binding's *statement* is checked here, in order, and each definition's
+    /// *body* is queued as a `check_term` against the frozen prefix it sits
+    /// over. The prefix is an O(1) snapshot per binding (`GlobalBindings` is
+    /// persistent), and the bodies are independent of one another by
+    /// construction — a body is scoped over its own prefix and nothing after
+    /// it. Every queued body is joined before this returns, so a replay is
+    /// accepted only when the kernel accepted all of it, and the pool is
+    /// quiescent for whatever the caller does next. Nothing is committed
+    /// from a rejected replay at either width; the caller rebuilds the
+    /// module from source instead.
+    fn recheck_extension(&mut self, extension: &[GlobalBinding]) -> Result<(), ModuleReplayError> {
+        if self.kernel_pool.is_inline() {
+            return typing::check_global_ctx_extension(&self.psi, extension, 0, self.fuel)
+                .map_err(ModuleReplayError::Kernel);
+        }
+        let mut prefix = Rc::clone(&self.psi.0);
+        let mut statement = Ok(());
+        for (index, binding) in extension.iter().enumerate() {
+            if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
+                statement = Err(ModuleReplayError::Kernel(e));
+                break;
+            }
+            if let GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) } = binding {
+                self.kernel_pool.submit(pool::Deferred {
+                    name: format!("stored binding {index}"),
+                    span: heather_syntax::Span { start: 0, end: 0 },
+                    psi: Rc::clone(&prefix),
+                    ctx: ctx.clone(),
+                    ty: (**ty).clone(),
+                    level: level.clone(),
+                    body: (**body).clone(),
+                    opaque: false,
+                    layer: *layer,
+                    lands_in_psi: true,
+                    fuel: self.fuel,
+                    row: None,
+                });
+            }
+            Rc::make_mut(&mut prefix).push(binding.clone());
+        }
+        // Join even after a statement failure: the pool must be drained before
+        // the caller moves on, and a body verdict is still a verdict.
+        let outcomes = self.kernel_pool.join();
+        let mut body = Ok(());
+        for outcome in &outcomes {
+            // The workers' counters fold into the module row as the gate's do;
+            // their clocks are not charged anywhere, because the enclosing
+            // `image_recheck` bracket is wall and already holds this join.
+            stats::fold_deferred_kernel(None, outcome.ns, &outcome.kernel);
+            if body.is_ok() {
+                if let Err(err) = &outcome.verdict {
+                    body = Err(match err {
+                        Some(err) => ModuleReplayError::Kernel(*err),
+                        None => ModuleReplayError::KernelWorkerPanicked,
+                    });
+                }
+            }
+        }
+        // A statement failure at index i precedes any body failure at j ≥ i
+        // in the serial order, and every body before i passed the statement
+        // check; the first failure by binding order is what the serial form
+        // reports, and it is the statement's when both exist.
+        statement.and(body)
     }
 
     fn apply_module_event(&mut self, event: DeltaEvent) {
@@ -691,6 +765,85 @@ mod tests {
         target
             .elab_module_source("bad", "fn value() -> Nat { 0 }")
             .expect("the rejected delta exposed neither its name nor its binding");
+    }
+
+    /// The recheck of a stored suffix runs its definition bodies on the
+    /// kernel worker pool (`recheck_extension`); a module's answer never
+    /// depends on the width (`docs/parallel-kernel-gate-design.md` §5.1), so
+    /// the wide replay accepts what the serial one accepts, refuses what it
+    /// refuses, and the kernel is what did the refusing at both widths.
+    #[test]
+    fn a_wide_replay_answers_as_the_serial_one_does() {
+        let identity = ModuleDependencyIdentity::default();
+        let module = "fn value() -> Nat { 0 }\nfn other() -> Nat { 1 }\n\
+                      theorem value_is_zero(): value() = 0 { refl }";
+        let mut source = Elaborator::new();
+        let good = source.elab_module_delta("wide", module, identity.clone()).unwrap();
+        let bodies = good
+            .extension
+            .iter()
+            .filter(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+            .count();
+        // The two functions carry bodies; a theorem is pushed opaque.
+        assert!(bodies >= 2, "{bodies} definition bodies");
+
+        for workers in [1, 8] {
+            let mut target = Elaborator::new();
+            target.set_kernel_workers(workers);
+            let before = heather_kernel::stats::snapshot();
+            target.replay_module_delta(&good, &identity).expect("the stored suffix rechecks");
+            // Wide, one `check_term` per body, counted on this thread: the
+            // workers' counters fold into it at the join. (The serial form is
+            // one extension call, which the `check_terms` counter does not
+            // see — it counts the `check_term` entry points only.)
+            let checks = heather_kernel::stats::snapshot().since(&before).check_terms;
+            if workers > 1 {
+                assert!(checks >= bodies as u64, "width {workers}: {checks} checks for {bodies} bodies");
+            }
+            assert_eq!(target.psi(), source.psi());
+        }
+
+        // A body that does not inhabit its statement, behind two that do.
+        let mut bad_body = good.clone();
+        let last_body = bad_body
+            .extension
+            .iter()
+            .rposition(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+            .unwrap();
+        let GlobalBinding::Tm { body, .. } = &mut bad_body.extension[last_body] else {
+            unreachable!()
+        };
+        *body = Some(Rc::new(Term::TmNat));
+        // A statement that is not well-formed, ahead of bodies that are.
+        let mut bad_statement = good.clone();
+        let first_tm = bad_statement
+            .extension
+            .iter()
+            .position(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+            .unwrap();
+        let GlobalBinding::Tm { ty, .. } = &mut bad_statement.extension[first_tm] else {
+            unreachable!()
+        };
+        // `Ty 0` lives at level 1; the binding says level 0.
+        *ty = Rc::new(heather_kernel::term::Type::Ty(heather_kernel::level::Level::Zero));
+
+        for delta in [&bad_body, &bad_statement] {
+            let mut serial = Elaborator::new();
+            serial.set_kernel_workers(1);
+            let mut wide = Elaborator::new();
+            wide.set_kernel_workers(8);
+            let before = wide.psi().clone();
+            let (s, w) = (
+                serial.replay_module_delta(delta, &identity),
+                wide.replay_module_delta(delta, &identity),
+            );
+            let (Err(ModuleReplayError::Kernel(s)), Err(ModuleReplayError::Kernel(w))) = (&s, &w)
+            else {
+                panic!("both widths refuse through the kernel: {s:?} / {w:?}")
+            };
+            assert_eq!(s, w, "the wide replay names the serial replay's error");
+            assert_eq!(wide.psi(), &before, "nothing lands from a rejected replay");
+        }
     }
 
     #[test]
