@@ -323,7 +323,10 @@ fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: us
         thm(module, &format!("{prefix}_read_address_{i}_{j}"), format!("{query} = {literal}"), "refl".into());
         let read_proof = if let Some((contract, frame)) = from_contract {
             let outside = if frame { format!("{contract}_callee_local_outside_{j}(gprs, flags, stack)") } else { "λ impossible => impossible".into() };
-            format!("trans(cong_fn<Option<BitVec(8)>, BitVec(8)>(call_read_value, {contract}_callee_memory_effects(gprs, flags, stack)({literal}, {outside})), refl)")
+            // The contract observes the stack directly, so this is the equation
+            // the theorem states; reading it through `call_memory_read` would
+            // walk the file list on both memories before reaching the stack.
+            format!("trans({contract}_callee_memory_effects(gprs, flags, stack)({literal}, {outside}), refl)")
         } else { "refl".into() };
         state_decl(module, &format!("{prefix}_read_literal_{i}_{j}"),
             format!("call_stack_access().read({before}.memory, {literal}) = imm_byte{j}({value})"), read_proof, true);
@@ -430,7 +433,12 @@ fn emit_leaf_summary(module: &mut Module, prefix: &str, leaf: &SourceX86Emission
     let pointer = "bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))";
     let footprint = if frame { format!("λ address => WordPrefixWrites(8, {pointer}, address)") } else { "NoWrites".into() };
     module.declaration(Declaration::function(format!("{prefix}_summary_post"), Expr::name("Type"),
-        Block::expression(Expr::raw(format!("NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, {footprint}, before, after, {result}, stack_word(call_stack_access(), before.memory, read_gpr(Rsp, before.gprs))) ∧ read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs)"))))
+        // The footprint is stated over the stack observation, not over
+        // `call_memory_read`: a caller discharging it at a concrete address
+        // would otherwise pay a file lookup per byte. Constancy of the file is
+        // carried as its own conjunct, so `memory_writes_of_stack_writes`
+        // recovers the full observation whenever a caller wants it.
+        Block::expression(Expr::raw(format!("NativeIntegerCallContract<CallMemory, BitVec(8)>(stack_observation, {footprint}, before, after, {result}, stack_word(call_stack_access(), before.memory, read_gpr(Rsp, before.gprs))) ∧ read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs) ∧ after.memory.file = before.memory.file"))))
         .parameter(Parameter::explicit("values", Expr::raw("Valuation()")))
         .parameter(Parameter::explicit("before", Expr::raw("MachineState<CallMemory>")))
         .parameter(Parameter::explicit("after", Expr::raw("MachineState<CallMemory>"))));
@@ -440,11 +448,11 @@ fn emit_leaf_summary(module: &mut Module, prefix: &str, leaf: &SourceX86Emission
     let result_proof = if clobber { format!("trans(xor_r11_preserves_rax({prefix}_summary_state_{}(before)), {core})", code.len()-2) } else { core };
     let extra = if frame { format!(" ∧ bitvec::borrow_sub_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧ WordOutside({pointer}, read_gpr(Rsp, before.gprs))") } else { String::new() };
     let returned = if frame { format!("stored_word_preserves_return(before.memory, {pointer}, read_gpr(Rdi, before.gprs), read_gpr(Rsp, before.gprs), entry.right.right.right.right)") } else { "refl".into() };
-    let effects = if frame { format!("word_memory_effect_8(before.memory, {pointer}, read_gpr(Rdi, before.gprs))") }
-        else { format!("writes_only_equal(call_memory_read, NoWrites, before.memory, call_run(call_stack_access(), {prefix}_summary_code(), before).memory, refl)") };
+    let effects = if frame { format!("word_stack_effect_8(before.memory, {pointer}, read_gpr(Rdi, before.gprs))") }
+        else { format!("writes_only_equal(stack_observation, NoWrites, before.memory, call_run(call_stack_access(), {prefix}_summary_code(), before).memory, refl)") };
     module.declaration(Declaration::function(format!("{prefix}_summary"),
         Expr::raw(format!("CallSummary<CallMemory>(call_stack_access(), {prefix}_summary_code(), λ before after => {prefix}_summary_post(values, before, after))")),
-        Block::expression(Expr::raw(format!("CallSummary(requires := λ before => values(64, 0) = read_gpr(Rdi, before.gprs) ∧ values(64, 1) = read_gpr(Rsi, before.gprs) ∧ RegionHolds({prefix}_raw(), values){extra}, ensures := λ before entry => ⟨NativeIntegerCallContract(result_correct := {result_proof}, returned_to := {returned}, stack_restored := refl, memory_effects := {effects}, preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl), refl⟩)"))))
+        Block::expression(Expr::raw(format!("CallSummary(requires := λ before => values(64, 0) = read_gpr(Rdi, before.gprs) ∧ values(64, 1) = read_gpr(Rsi, before.gprs) ∧ RegionHolds({prefix}_raw(), values){extra}, ensures := λ before entry => ⟨NativeIntegerCallContract(result_correct := {result_proof}, returned_to := {returned}, stack_restored := refl, memory_effects := {effects}, preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl), ⟨refl, refl⟩⟩)"))))
         .parameter(Parameter::explicit("values", Expr::raw("Valuation()"))));
 }
 
@@ -846,16 +854,22 @@ fn certify_callee_contract(module: &mut Module, words: &Words, prefix: &str, ins
         format!("{leaf_prefix}_summary_post({values}_values(), {begin}, {returned})"),
         format!("{instance}_callee_applied(gprs, flags, stack).right"), true);
     state_decl(module, &format!("{instance}_callee_contract"),
-        format!("NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, {footprint}, {begin}, {returned}, {}({values}_values()(64, 0), {values}_values()(64, 1)), stack_word(call_stack_access(), {begin}.memory, read_gpr(Rsp, {begin}.gprs)))", leaf.reflected.source_name),
+        format!("NativeIntegerCallContract<CallMemory, BitVec(8)>(stack_observation, {footprint}, {begin}, {returned}, {}({values}_values()(64, 0), {values}_values()(64, 1)), stack_word(call_stack_access(), {begin}.memory, read_gpr(Rsp, {begin}.gprs)))", leaf.reflected.source_name),
         format!("{instance}_callee_post(gprs, flags, stack).left"), true);
     state_decl(module, &format!("{instance}_callee_preserved_rsi"),
         format!("read_gpr(Rsi, {returned}.gprs) = read_gpr(Rsi, {begin}.gprs)"),
-        format!("{instance}_callee_post(gprs, flags, stack).right"), true);
+        format!("{instance}_callee_post(gprs, flags, stack).right.left"), true);
+    // The callee leaves the loaded file alone. Together with the stack-level
+    // footprint this is what `memory_writes_of_stack_writes` needs to restate
+    // the footprint over the full memory observation.
+    state_decl(module, &format!("{instance}_callee_preserved_file"),
+        format!("{returned}.memory.file = {begin}.memory.file"),
+        format!("{instance}_callee_post(gprs, flags, stack).right.right"), true);
     state_decl(module, &format!("{instance}_callee_result"),
         format!("read_gpr(Rax, {returned}.gprs) = {}({values}_values()(64, 0), {values}_values()(64, 1))", leaf.reflected.source_name),
         format!("{instance}_callee_contract(gprs, flags, stack).result_correct"), true);
     state_decl(module, &format!("{instance}_callee_memory_effects"),
-        format!("WritesOnly(call_memory_read, {footprint}, {begin}.memory, {returned}.memory)"),
+        format!("WritesOnly(stack_observation, {footprint}, {begin}.memory, {returned}.memory)"),
         format!("{instance}_callee_contract(gprs, flags, stack).memory_effects"), true);
 }
 
@@ -1061,7 +1075,7 @@ mod tests {
         assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source));
         for (name, restored, valid) in [("contract_restores_rsp", 0x401ff8, true), ("missing_frame_release", 0x401ff0, false)] {
             let before = format!("start({})", word(0x401ff0)); let after = format!("start({})", word(restored));
-            let source = format!("{imports} import call_test; theorem contract(): NativeIntegerCallContract<CallMemory, Option<BitVec(8)>>(call_memory_read, NoWrites, {before}, {after}, bitvec::zero(64), {before}.rip) {{ NativeIntegerCallContract(result_correct := refl, returned_to := refl, stack_restored := refl, memory_effects := writes_only_equal(call_memory_read, NoWrites, {before}.memory, {after}.memory, refl), preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl) }}");
+            let source = format!("{imports} import call_test; theorem contract(): NativeIntegerCallContract<CallMemory, BitVec(8)>(stack_observation, NoWrites, {before}, {after}, bitvec::zero(64), {before}.rip) {{ NativeIntegerCallContract(result_correct := refl, returned_to := refl, stack_restored := refl, memory_effects := writes_only_equal(stack_observation, NoWrites, {before}.memory, {after}.memory, refl), preserved_rbx := refl, preserved_rbp := refl, preserved_r12 := refl, preserved_r13 := refl, preserved_r14 := refl, preserved_r15 := refl) }}");
             let checked = elab.fork().elab_module_source(name, &source);
             if valid { checked.unwrap_or_else(|e| panic!("{}", e.render(&source))); }
             else { let error = checked.expect_err("unrestored frame accepted"); assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&source)); }

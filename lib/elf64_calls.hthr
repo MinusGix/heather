@@ -244,6 +244,22 @@ theorem word_stack_effect_8(memory: CallMemory, pointer, value: BitVec(64)):
     WritesOnly(stack_observation, λ address => WordPrefixWrites(8, pointer, address), memory, word_write_8(call_stack_access(), value, memory, pointer)) {
     writes_only_compose(stack_observation, λ address => WordPrefixWrites(7, pointer, address), ByteWrite(bitvec::add(64, pointer, bitvec::ofNat(64, 7))), memory, word_write_7(call_stack_access(), value, memory, pointer), word_write_8(call_stack_access(), value, memory, pointer), word_stack_effect_7(memory, pointer, value), stack_byte_write_effect(word_write_7(call_stack_access(), value, memory, pointer), bitvec::add(64, pointer, bitvec::ofNat(64, 7)), imm_byte7(value)))
 }
+// A stack-level footprint is the cheap thing to state: a caller that reads the
+// stack through it never forces a file lookup. The full memory observation is
+// still derivable, and this is where that is paid for — once, open, with the
+// file untouched, instead of per byte read at a concrete address.
+theorem memory_writes_of_stack_writes(before, after: CallMemory, writes: BitVec(64) → Type,
+    files: after.file = before.file,
+    effects: WritesOnly(stack_observation, writes, before, after)):
+    WritesOnly(call_memory_read, writes, before, after) {
+    λ address outside => trans<Option<BitVec(8)>>(
+        cong_fn<BitVec(8), Option<BitVec(8)>>(λ byte =>
+            call_read_choice(static_elf64_read(after.file, address), stack_page(address), byte),
+            effects(address, outside)),
+        cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ file =>
+            call_read_choice(static_elf64_read(file, address), stack_page(address), before.stack(address)),
+            files))
+}
 
 record WordOutside(written, protected: BitVec(64)) {
     byte0: ¬WordPrefixWrites(8, written, bitvec::add(64, protected, bitvec::ofNat(64, 0))),
