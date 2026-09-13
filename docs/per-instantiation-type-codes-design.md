@@ -55,6 +55,15 @@ The body is `code_of` of `lower_instance` run with each type parameter bound to
 type may mention an earlier parameter — so the reference's application spine
 carries the *remaining* Π as its `cod`, not a constant.
 
+**Amended (2026-09-13).** The body quotes `emit_ty` of the template, not the
+template: the raw lowering behind the reference met the chokepoint's respelled
+annotations component by component at every projection out of a global-headed
+receiver, and the components' own δ was the whole `Sigma`/`El(?)` bucket of
+the x86 call certificates (`docs/record-projection-reference-design.md` §9.8).
+The stored `TyCodeFn.template` stays inline: it is what §4's inverse
+re-lowers against, and the elaborator's `whnf` of a reference never sees the
+kernel's decode.
+
 A value parameter is abstracted by an ordinary Π over its type — a value index
 is a `Term`, not a code, the same asymmetry `ArityFn` established. Unlike
 `ShapeCode`/`ArityFn` there is no pair: one function names the whole type.

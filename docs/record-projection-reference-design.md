@@ -776,3 +776,45 @@ The measured facts that survive, for whoever picks this up:
   attractive route, not the less: a `Fst`/`Snd` rule that does not reconstitute
   the `Σ` removes the 9.157 s without moving any read off the walk, and so
   cannot pay it back in evaluation.
+
+### 9.8 Addendum (2026-09-13): the owner was the quote, not the rule
+
+§9.7's third bullet — a `Fst`/`Snd` *typing* rule that reads Σ off the
+receiver and does not reconstitute — is **not available**. The certificate's
+proof terms are checked at layer c (`crates/elab/src/lib.rs`, the kernel
+gate's `check_term` call), and at layer c the annotations are load-bearing: the
+code recursor's `tm_fst`/`tm_snd` branches (`crates/kernel/src/reduce.rs`,
+`crates/kernel/src/rec.rs`) bind `u_p : □(g ⊢ Σ U_S U_T)` with the real pair
+substituted in, so a rule that accepted `fst^{S,T}(p)` with `p : Σ S' T'`
+unchecked would let the recursor's reduct fail to type. Conversion may ignore
+the annotations because it presupposes well-typedness; the typing rule is
+where that is established. The query stays.
+
+What the query *costs* is the other half of the datum, which §2.3's trace
+could not show because the sampler sees only the root pair: after the kernel
+unfolds the reference to a `Σ`, every component meets a differently spelled
+twin. The type-code function's body quoted the raw inline lowering
+(`register_ty_code_fn`, `code_of(template)`), while the walk's annotation is
+the emission chokepoint's respelling of the same components; each component
+compare then paid its own δ. Quoting the respelled template instead —
+`code_of(emit_ty(template))`, the `docs/per-instantiation-type-codes-design.md`
+§5 sentence "quote the type you would emit" applied to the one quote it had
+not reached — makes the components syntactically equal after the one unfold.
+
+Measured on one furnace instance (2026-09-13), same recipe as §1, warm
+cache, both columns from that box:
+
+| | before | after |
+| --- | --- | --- |
+| item total | 45.117 s | **35.179 s** |
+| `kernel_gate` | 35.296 s | **25.468 s** |
+| evaluator steps | 35.43 M | **16.07 M** |
+| conversion misses | 237 888 | 237 888 |
+| `Sigma` / `El(?)` | 14 682 / 8.622 s | 14 682 / **0.618 s** |
+| every other bucket | — | unchanged or slightly cheaper |
+
+The miss *count* is identical to the row: no read moved, no query was
+removed, and no bucket grew — the opposite of §9's table. The elaborator's
+predicate (`receiver_is_neutral`, §2.2) and the reference route are untouched;
+the certificate's global-headed receivers keep the walk, and the walk's query
+is now cheap. The 0.6 s that remains is the single δ + β + decode per read.

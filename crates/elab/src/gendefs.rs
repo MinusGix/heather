@@ -885,7 +885,16 @@ impl Elaborator {
         if self.tag_of(&template).map(|i| i.tag) != Some(ind.tag) {
             return;
         }
-        let Some(code) = crate::code::code_of(&template) else {
+        // Quote the spelling the emission chokepoint would emit — registered
+        // sub-lowerings as references — not the raw inline lowering: what the
+        // kernel decodes from behind the reference then matches, component
+        // for component, the annotation `project_field`'s walk writes, and
+        // the `Fst`/`Snd` rule's check of that annotation against the
+        // receiver's reference stops paying a δ per component
+        // (`docs/record-projection-reference-design.md` §9.8). The stored
+        // `template` stays inline: §4's inverse re-lowers against it.
+        let quoted = self.emit_ty(&cx, &template, 0).unwrap_or_else(|| template.clone());
+        let Some(code) = crate::code::code_of(&quoted) else {
             return;
         };
         let mut ty = Type::Ty(l.clone());

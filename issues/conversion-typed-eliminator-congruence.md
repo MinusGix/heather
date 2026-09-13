@@ -3,7 +3,7 @@ title: Typed neutral congruence for the eliminators: stop re-comparing annotatio
 status: open
 labels: [kernel,conversion,performance,design]
 created: 2026-09-06
-updated: 2026-09-12
+updated: 2026-09-13
 ---
 
 The 2026-09-06 round made conversion's `app`/`fst`/`snd` neutral rules
@@ -52,3 +52,4 @@ relational-context certificates — is the shape that pays.
 ## Log
 
 - 2026-09-12: New datum from [[elaborator-canonical-type-spelling]]'s refuted round (docs/record-projection-reference-design.md §9.7): the reused_callee certificate's `Sigma`/`El(?)` bucket — 14,682 misses / 9.16 s, 24.7% of a 37.1 s kernel gate — is the `Fst`/`Snd` *typing* rule reconstituting `Σ(fst_ty). snd_ty` and converting it against the reference `El (app(D#tycode_fn^δ; ā))` the receiver's inferred type carries, once per field read. The elaborator-side fix (spell the read as a reference) was measured and refuted: it moves the compare under evaluation, where chain depth multiplies it. A typing rule that reads the receiver's inferred Σ off its type (the typed-congruence shape this issue already owns for conversion) removes the bucket without moving any read; it is the surviving route and a kernel change, so it waits for a chartered kernel round.
+- 2026-09-13: The typing-rule route this issue was handed on 2026-09-12 is closed off, not by measurement but by the code recursor: the x86 certificates' proof terms are checked at layer c, where `tm_fst`/`tm_snd` (crates/kernel/src/reduce.rs, rec.rs) bind `u_p : □(g ⊢ Σ U_S U_T)` with the real pair, so the annotations must be checked against the receiver's Σ — conversion may skip what typing establishes, typing may not. The bucket's cost was the post-unfold component spelling, and it is gone elaborator-side (docs/record-projection-reference-design.md §9.8; [[elaborator-canonical-type-spelling]]). This issue keeps its own scope: the remaining eliminator arms of conversion, measured on a relational-transfer fixture.
