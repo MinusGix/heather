@@ -628,6 +628,10 @@ pub fn generated_20_node_mixed_binary_alu_dag_checks() {
     check_generated_mixed_binary_alu_dag(20);
 }
 
+pub fn generated_50_node_mixed_binary_alu_dag_checks() {
+    check_generated_mixed_binary_alu_dag(50);
+}
+
 fn check_generated_mixed_binary_alu_dag(default_node_count: usize) {
     let base = base_image(MODULES.len() - 1);
     let node_count = std::env::var("HEATHER_FUNCTION_IR_X86_NODES")

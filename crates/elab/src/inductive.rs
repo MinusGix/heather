@@ -2564,9 +2564,11 @@ impl Elaborator {
         // definitions exist to remove the walk's *exponent*, and a literal
         // receiver is exactly the case that blows up without them. The
         // telescoped one asks first, because there the definitions buy a
-        // syntactic comparison and charge δ + β for a computation.
+        // syntactic comparison and charge δ + β for a computation — and only
+        // at receiver shapes that survive substitution, which is what
+        // `receiver_admits_reference` is for.
         let telescoped = !ind.params.is_empty() || !ind.valparams.is_empty();
-        if (!telescoped || receiver_is_neutral(&value))
+        if (!telescoped || receiver_admits_reference(&value))
             && let Some(args) = self.instance_args(cx, ind, record_ty)
             && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, &args, &value)
         {
@@ -4829,23 +4831,40 @@ fn match_targs(
     }
 }
 
+/// May a field read off this receiver take the *reference*
+/// (`docs/per-instantiation-type-codes-design.md` §13.6, and
+/// `docs/x86-scaling-rail-out-of-fuel-design.md` §2.5, which narrowed it)?
+///
+/// Two conditions, and the second is the one the x86 scaling rail added.
+///
+/// 1. The receiver must bottom out in a **local** ([`receiver_is_neutral`]).
+///    A reference is cheap to *compare* and dear to **compute through** — δ +
+///    β where the inline `fst(sndʲ v)` is one elimination the evaluator fires
+///    on the receiver's own value — and a certificate that chains twenty-eight
+///    machine states through `state.memory` pays that once per read per level:
+///    `reused_callee`'s `caller_native_memory_same_28` is refused `OutOfFuel`
+///    with the reference and checks inside the default budget without.
+///
+/// 2. The receiver must not be the **bare local itself**. A reference minted
+///    at a binder does not stay at a binder: a record's field type is
+///    instantiated at every use, and `BlockArtifact`'s `after.memory` becomes
+///    a reference over a *computed* state the moment the constructor
+///    substitutes one — where condition 1 declines, so the record's field type
+///    and every statement written against the same state disagree, the
+///    shortcut cannot fire, and the kernel converts a 22-instruction symbolic
+///    execution instead (the 20-node rail, `OutOfFuel` since the device
+///    landed). A *chain* (`Sndᵏ`, an applied local) is §13.1's measured payer
+///    and keeps the reference; a bare binder's read is one `fst(sndʲ v)` node,
+///    which is what the walk costs anyway.
+///
+/// Together: the spelling of a field read is decided by shapes that survive
+/// substitution, so the two sides of a conversion agree.
+pub(crate) fn receiver_admits_reference(value: &Term) -> bool {
+    !matches!(value, Term::Var(_)) && receiver_is_neutral(value)
+}
+
 /// Does this receiver bottom out in a **local** — so that a field read off it
 /// is something the kernel compares, not something it computes?
-///
-/// The use-site half of §13's boundary
-/// (`docs/per-instantiation-type-codes-design.md` §13.6, amended by the fix
-/// pass). A named projection is a *reference*: two of them are compared
-/// syntactically, which is the whole win, and §13.1's measured payers are
-/// reads off a binder — `Var < Sndᵏ < Fst < …` at an open instance. But a
-/// reference has to be **computed through** by δ + β where the inline
-/// `fst(sndʲ v)` is one elimination the evaluator fires on the receiver's own
-/// value, and a certificate that chains twenty-eight machine states through
-/// `state.memory` pays that once per read per level: `reused_callee`'s
-/// `caller_native_memory_same_28` needs between 8× and 64× `DEFAULT_FUEL` with
-/// the reference and checks inside it without. So the reference is minted
-/// exactly where the receiver is a local — the shape the measurement
-/// attributes the misses to — and a receiver the kernel will reduce anyway
-/// keeps the inline walk.
 fn receiver_is_neutral(value: &Term) -> bool {
     match value {
         Term::Var(_) => true,

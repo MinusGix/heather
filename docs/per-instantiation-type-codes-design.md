@@ -743,7 +743,11 @@ count: a telescoped record that registers costs `nfields` more Ψ bindings
   (§13.2's and §13.3's amendments).
 - **Minting the reference at every receiver.** Tried, and it is what
   `caller_native_memory_same_28` rejected with `OutOfFuel` (§13.10). The
-  boundary is the receiver's own head.
+  boundary is the receiver's own head. **Re-measured 2026-09-13** on a tree
+  three spelling rounds newer, because the rejection was dated: still refused,
+  one item earlier (`…_27`). So is the weaker "one layer of computation"
+  bound — `reused_callee`'s own receivers are a single global over three
+  neutrals, with the twenty-eight levels inside the definitions.
 - **Widening the *closed* device's dependency gate in the same round.** The
   measurement says it would pay — `Sigma`/`El^δ` is 6.2 k / 6.6 s and the
   closed non-dependent payers (`InstructionBytes`, `Region`,
@@ -841,6 +845,24 @@ measured into place by the fix pass rather than argued:
    (§13.6). What that costs is not separated from boundary 1 in the counts
    above; `stack_word_agrees` and `stack_word_matches` remain the two
    `Sigma`/`El(?)` payers.
+
+   **Amended (2026-09-13), [[x86-scaling-rail-out-of-fuel]]: and neither does
+   a read off the *bare binder*.** This boundary was one-sided and therefore
+   not stable under substitution: a reference minted at a local is a reference
+   over a **computed** receiver the moment the local is instantiated, which is
+   the side this boundary declines — so a record's field type and every
+   statement written against the same computed state spelled one read two
+   ways, the shortcut could not fire, and the kernel converted by evaluation.
+   That is the 20-node x86 rail's `OutOfFuel`, refused since this round
+   landed. The gate is now `receiver_admits_reference`: neutral **and not a
+   bare `Var`**. A chain (`Sndᵏ v`, an applied local) is §13.1's measured
+   payer and keeps the reference; a bare binder's read is one `Fst`/`Snd`
+   node, which is what the walk costs anyway. The two alternatives — minting
+   at every receiver, and minting at one layer of computation — were both
+   hand-run on the 2026-09-13 tree and both re-broke
+   `caller_native_memory_same_27/28`, so §13.6's rejection of the first has
+   *not* expired. `docs/x86-scaling-rail-out-of-fuel-design.md` carries the
+   attribution, the table and the argument.
 3. **The closed non-dependent records** (`InstructionBytes`, `Region`,
    `ConditionalJoinRegion`, `LinkedConditionalBlock`) are §13.6's own
    deliberate omission, unchanged.

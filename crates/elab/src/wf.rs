@@ -3016,11 +3016,36 @@ theorem chain_is_k(k: Nat): chain(k) = k { refl }
         // -- §13: projections at an instantiation ---------------------------
 
         /// A context holding one receiver of the closed type `ty`, and the
-        /// receiver itself.
+        /// receiver itself — as a **chain** (`fst` of a pair whose first
+        /// component is `ty`), because the boundary keeps the inline walk at a
+        /// *bare* binder and takes the reference at a chain
+        /// (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5). These probes
+        /// are about the reference, so they hold one.
         fn receiver(ty: &Type, l: &Level) -> (Cx, Rc<Term>) {
             let mut cx = Cx::empty();
-            cx.push("#v".into(), ty.clone(), l.clone());
-            (cx, Rc::new(Term::Var(LocalVar(0))))
+            let unit = || Rc::new(Type::Unit { level: Level::Zero });
+            cx.push(
+                "#v".into(),
+                Type::Sigma {
+                    fst_level: l.clone(),
+                    snd_level: Level::Zero,
+                    fst: Rc::new(ty.clone()),
+                    snd: unit(),
+                },
+                Level::max(l.clone(), Level::Zero),
+            );
+            // The receiver lives *inside* `cx`, so its annotations are at
+            // that depth while the binder's own type is not.
+            (
+                cx,
+                Rc::new(Term::Fst {
+                    fst_level: l.clone(),
+                    snd_level: Level::Zero,
+                    fst_ty: Rc::new(ty.shift_local(1)),
+                    snd_ty: unit(),
+                    pair: Rc::new(Term::Var(LocalVar(0))),
+                }),
+            )
         }
 
         #[test]
@@ -3196,8 +3221,26 @@ theorem chain_is_k(k: Nat): chain(k) = k { refl }
                 .expect("`Cell<A, Flat>` lowers openly");
             let r = e.el.respell_ty(&acx, &open).expect("the open instance respells");
             let mut cx = acx.clone();
-            cx.push("#v".into(), r.clone(), ol.clone());
-            let v: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
+            // A chain, not the bare binder — the boundary keeps the walk at a
+            // bare `Var` (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5).
+            let unit = || Rc::new(Type::Unit { level: Level::Zero });
+            cx.push(
+                "#v".into(),
+                Type::Sigma {
+                    fst_level: ol.clone(),
+                    snd_level: Level::Zero,
+                    fst: Rc::new(r.clone()),
+                    snd: unit(),
+                },
+                Level::max(ol.clone(), Level::Zero),
+            );
+            let v: Rc<Term> = Rc::new(Term::Fst {
+                fst_level: ol.clone(),
+                snd_level: Level::Zero,
+                fst_ty: Rc::new(r.shift_local(1)),
+                snd_ty: unit(),
+                pair: Rc::new(Term::Var(LocalVar(0))),
+            });
             let (tm, ty, lvl) = e
                 .el
                 .project_field(&cx, &e.ind("Cell"), &r.shift_local(1), v, 0, SPAN)
@@ -3268,6 +3311,99 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
             assert!(
                 findings.is_empty(),
                 "the emission walker is empty on telescoped field reads:\n{}",
+                listed.join("\n")
+            );
+        }
+
+        #[test]
+        fn the_reference_is_minted_at_a_chain_and_not_at_a_binder() {
+            // `docs/x86-scaling-rail-out-of-fuel-design.md` §2.5: the boundary
+            // is on shapes that survive substitution. A bare binder is exactly
+            // what a use site replaces, so it keeps the walk; a chain over one
+            // is §13.1's measured payer and keeps the reference; a computed
+            // receiver is §13.10's refusal and stays out.
+            let g = || Term::GlobalTm {
+                var: GlobalVar(0),
+                subst: LocalSubst::id(&LocalCtx::nil()),
+            };
+            let app = |fun: Term, arg: Term| Term::App {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Ty(Level::Zero)),
+                cod: Rc::new(Type::Ty(Level::Zero)),
+                fun: Rc::new(fun),
+                arg: Rc::new(arg),
+            };
+            let snd = |pair: Term| Term::Snd {
+                fst_level: Level::Zero,
+                snd_level: Level::Zero,
+                fst_ty: Rc::new(Type::Ty(Level::Zero)),
+                snd_ty: Rc::new(Type::Ty(Level::Zero)),
+                pair: Rc::new(pair),
+            };
+            let x = || Term::Var(LocalVar(0));
+            let admits = crate::inductive::receiver_admits_reference;
+            assert!(!admits(&x()), "a bare binder keeps the walk");
+            assert!(admits(&snd(x())), "a chain over a binder takes the reference");
+            assert!(admits(&app(x(), x())), "an applied local is still a chain");
+            // A computed receiver, one layer or many: §13.10's refusal.
+            assert!(!admits(&app(g(), x())));
+            assert!(!admits(&app(g(), app(g(), x()))));
+            assert!(!admits(&snd(app(g(), x()))));
+        }
+
+        #[test]
+        fn a_record_field_type_and_its_use_site_spell_a_computed_receiver_alike() {
+            // The x86 rail's shape in a dozen lines
+            // (`docs/x86-scaling-rail-out-of-fuel-design.md` §1): a record
+            // whose later field type reads a field of an **earlier** one,
+            // constructed at a *computed* state — so the declaration's
+            // declaration's spelling meets a global-headed receiver while the
+            // accompanying theorem states the same read directly.
+            //
+            // The four axes of `docs/testing-generated-terms.md`: a neutral
+            // receiver (`pack`) and a literal one (`pack_lit`, whose argument
+            // is *not* neutral, so the boundary declines and the inline walk
+            // must still be right), an **open** element type (`A`, `B`), a
+            // **checking** position (each `Pack(…)`'s second field is checked
+            // against the substituted field type), and a negative control.
+            let mut e = env();
+            e.el.enable_emission_walk();
+            e.el.elab_source(
+                "
+fn bump<A, B>(c: Cell<A, B>) -> Cell<A, B> { Cell(c.l, c.r) }
+record Pack<A, B>(seed: Cell<A, B>) {
+    out: Cell<A, B>,
+    same_r: out.r = seed.r,
+}
+theorem bump_keeps_r<A, B>(c: Cell<A, B>): bump(c).r = c.r { refl }
+fn pack<A, B>(c: Cell<A, B>) -> Pack<A, B>(c) { Pack(bump(c), bump_keeps_r(c)) }
+fn pack_lit() -> Pack<Flat, Flat2>(Cell(FA, GB(1))) {
+    Pack(bump(Cell(FA, GB(1))), bump_keeps_r(Cell(FA, GB(1))))
+}
+theorem pack_out_r<A, B>(c: Cell<A, B>): pack(c).out.r = c.r { pack(c).same_r }
+theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
+",
+            )
+            .expect("a record field type over a computed receiver checks");
+            // Negative control, at the *same* type on both sides so it is a
+            // refuted equation and not a mismatched one.
+            let r = e.el.elab_source(
+                "theorem pack_wrong<A>(c: Cell<A, Flat2>): bump(c).r = GA { refl }",
+            );
+            assert!(r.is_err(), "a false equation must still be refused");
+            let r = e.el.elab_source(
+                "theorem pack_lit_wrong(): pack_lit().out.r = GB(2) { refl }",
+            );
+            assert!(r.is_err(), "a false literal equation must still be refused");
+            let findings = e.el.take_emission_findings();
+            let listed: Vec<String> = findings
+                .iter()
+                .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                .collect();
+            assert!(
+                findings.is_empty(),
+                "the emission walker is empty on a computed receiver:\n{}",
                 listed.join("\n")
             );
         }
