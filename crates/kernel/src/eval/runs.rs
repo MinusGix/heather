@@ -40,7 +40,11 @@ impl<'a, 'v> Eval<'a, 'v> {
         };
         let class = self.classify_step(step)?;
         match &*class {
-            FoldClass::Opaque => Ok(None),
+            // Not a `Nat` algebra — which is what every fold over a *width*
+            // is, its step returning a function. The bit-transducer class
+            // (`eval/transduce.rs`) is asked next, and `None` from it is the
+            // ordinary one-step path as before.
+            FoldClass::Opaque => self.fold_transduce(program, tail, e),
             FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
                 program: Rc::clone(program),
                 tail,

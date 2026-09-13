@@ -478,6 +478,20 @@ impl<'a, 'v> Agree<'a, 'v> {
                 let pred = Val::nat_run_pred(self.arena, program, tail);
                 self.lazy_tm(pred, b, gamma, d)
             }
+            // A machine word is a closed prefix of a `Vec`'s Σ-chain
+            // (`docs/native-bitvector-values-design.md` §3.3), so it is
+            // related to a `Pair` by **unpacking one bit** — the same
+            // one-step view every other consumer sees. The residual is a
+            // freshly built run, and the annotations are the ones the `Vec`
+            // rule itself produces, so the pair arm below compares them
+            // through `lazy_ty` rather than syntactically: this arm is where
+            // "the rule's own annotations" (§3.3) is put to the test.
+            (Val::BitRun { level, ty, width, bits, tail_len, tail }, Term::Pair { .. }) => {
+                let pair = Rc::new(Val::bit_run_unpack(
+                    self.arena, level, ty, *width, *bits, tail_len, tail,
+                ));
+                self.tm(&pair, &w, gamma, depth)
+            }
             (Val::Refl { level: a, ty, tm }, Term::Refl { level: b, ty: t2, tm: m2 })
             | (Val::SRefl { level: a, ty, tm }, Term::SRefl { level: b, ty: t2, tm: m2 }) => {
                 self.lev(a, b, "refl level")?;

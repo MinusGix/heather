@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-09-06
+updated: 2026-09-13
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -340,3 +340,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-09-05: [[mutual-recursion-declarations]] landed and closed (docs/mutual-recursion-design.md); the round chartered today is complete. Residue: [[group-unfolding-equations]], [[mutual-recursion-measure-synthesis]]; showcase blockers now [[omega-measure-at-constructor-pattern]] and Result/?.
 - 2026-09-06: Next round chartered (2026-09-06): [[omega-measure-at-constructor-pattern]], one managed round; the cheaper of the two remaining showcase-parser blockers, Result/? staying a design round on [[prelude-option-and-friends]] layer 2.
 - 2026-09-06: [[omega-measure-at-constructor-pattern]] landed and closed (docs/omega-measure-reduction-design.md); the premise was corrected in the design pass (a spelling gap, not a reducer gap). Showcase-parser blockers now: Result/? ([[prelude-option-and-friends]] layer 2) and the rest of [[omega-renders-member-by-base-name]]. Filed: [[tier1-arm-binder-has-no-spelling]], [[lifted-obligation-refusal-reports-retry-error]].
+- 2026-09-13: 2026-09-13: the K1 native-bitvector line ([[kernel-native-bitvector-values]]) is complete at three rounds: design, the BitRun word + conversion fast path, and the transducer/consumer classes. Verdict-preserving throughout (miss counts identical), evaluator steps on the closed-word families halved, certificate seconds flat — the seconds on that workload are the typing seam and the literal, not the fold. The line's next lever is [[bitvector-literal-entry-cost]] (a literal born a word; ofNat), then [[bitvector-fold-eagerness-at-demand-driven-consumers]]. Progress items behind x86 (Result/?, showcase parser) are unchanged.

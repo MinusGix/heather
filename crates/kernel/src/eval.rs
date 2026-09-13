@@ -67,6 +67,7 @@ use crate::value::program::ContextProgram;
 mod bits;
 mod probe;
 mod runs;
+mod transduce;
 
 type Res<T> = Result<T, OutOfFuel>;
 
@@ -257,6 +258,22 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
         self.fuel -= 1;
         self.steps += 1;
+        Ok(())
+    }
+
+    /// [`Eval::spend`] in bulk: one unit per bit a native step consumed or
+    /// produced (`docs/native-bitvector-values-design.md` §8). Charging
+    /// *something* proportional to the data keeps `eval_steps` an
+    /// interpretable measure and keeps a pathological width from being free;
+    /// charging at most what the structural path charged is what keeps a
+    /// verdict fuel allows today from becoming a refusal.
+    fn spend_n(&mut self, n: u64) -> Res<()> {
+        if self.fuel < n {
+            self.fuel = 0;
+            return Err(OutOfFuel);
+        }
+        self.fuel -= n;
+        self.steps += n;
         Ok(())
     }
 
@@ -1399,6 +1416,11 @@ impl<'a, 'v> Eval<'a, 'v> {
             // open-argument unfolding theorems meet at a *folded* scrutinee
             // (`match decode_opcode_direct(…)` on both sides), and unfolding
             // it eagerly exhausts fuel on the dispatch it hides.
+            // Only the `Nat` classes ask this: their scrutinee is closed
+            // arithmetic whenever the fold can fire at all. A width fold's
+            // scrutinee is the *width*, which reaches the eliminator as a
+            // literal; probing every glued-scrutinee fold for a transducer
+            // costs a motive walk per occurrence and buys nothing.
             if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
                 if !matches!(&*self.classify_step(step)?, FoldClass::Opaque) {
                     self.spend()?;
@@ -1422,6 +1444,11 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Ok(Work::Val(self.push_elim(&n, e)));
         }
         match (&*head, &e) {
+            // A width fold waiting for the arguments its class fires at
+            // (`docs/native-bitvector-values-design.md` §4).
+            (Val::BitFold { .. }, Elim::App { .. }) => {
+                return self.bit_fold_app(&head, e);
+            }
             (
                 Val::NatSync { program, tail, elim },
                 Elim::App { dom_level, cod_level, dom, cod, arg },

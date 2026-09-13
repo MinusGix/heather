@@ -325,20 +325,39 @@ the same closed-prefix-over-a-tail shape, the same virtual predecessor on
 the way out, and the same generality — nothing in it names a library type or
 definition.
 
-Adequacy is bisimulation. *Values mean the same*: a word unpacks to the pair
-the `Vec` rule builds, with the element type's own injections and their
-canonical payloads, so every consumer that matched on `Pair` sees what it
-saw before; a bit whose payload is not canonical does not pack. *Reduction
-is unchanged*: nothing in the evaluator produces a word yet — entry is
-**pack-on-demand at conversion**, where the type is in hand and the walk is
-the one η was about to perform. Conversion compares two vectors over such an
-element type by their words, before Σ-η, packing a structural side by the
-`fst`/`snd` η would have taken; a side that is two stuck spines is left to
-the neutral-first guard. Native steps charge one fuel unit per bit, which is
-strictly less than the structural path spent, so no verdict that fuel
-allowed becomes a refusal. What does not meet the criterion — an element
-type with a payload of its own, an open width, a chain that stops being a Σ
-— is compared exactly as it is today.
+Adequacy is bisimulation, in two parts. *Values mean the same*: a word
+unpacks to the pair the `Vec` rule builds, with the element type's own
+injections and their canonical payloads, so every consumer that matched on
+`Pair` sees what it saw before; a bit whose payload is not canonical does not
+pack. *Reduction is unchanged*: a fold over a **width** — which is what every
+bitvector operation is, `elim_Nat` whose motive at `Succ k` is a function
+type over vectors — is classified (`eval/transduce.rs`) as a **bit
+transducer** when, at every combination of closed head bits and of a finitely
+enumerable state, one application of its step reduces to `cons(closed bit,
+ih(tails, closed state))` with the tails reached by projection paths of
+neutral probe variables. Such a fold is iterated over the word instead of
+being taken one bit at a time. The neutral tails are the substitution
+property, as in the `Nat` classes: a probe value with no stuck case split on
+them was reached by a reduction that holds at every instantiation. The bits
+and the state are not an argument at all but a truth table, exhaustive
+because both types are finite. Consumers into `Nat`/`Bool` are the same
+machine with a different output algebra — a finite value, or a run
+endomorphism `ih ↦ q·ih + r`, which is the affine tree with a scale. The
+argument modes come from the eliminator's **motive**, never from a
+definition's spelling; the library's vectors sit inside a record, so a
+peeled argument is a `Vec` in a unit-like Σ-context and the class carries the
+projection path to it.
+
+Conversion compares two vectors over such an element type by their words,
+before Σ-η, packing a structural side by the `fst`/`snd` η would have taken;
+a side that is two stuck spines is left to the neutral-first guard, and a
+difference settles the comparison at the bit it appears on. Native steps
+charge one fuel unit per bit, which is strictly less than the structural path
+spent, so no verdict that fuel allowed becomes a refusal. What does not
+classify — an open `Fin` index, a recursion on a shift count, a state type
+above the cap — folds exactly as it does today, and what does not meet the
+criterion — an element type with a payload of its own, an open width, a chain
+that stops being a Σ — is compared exactly as it is today.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental

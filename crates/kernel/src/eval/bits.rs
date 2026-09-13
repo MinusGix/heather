@@ -36,7 +36,7 @@ use super::{Eval, Res};
 /// `O(log id_D)` deep and this is slack of several orders. The bound exists
 /// so that neither the criterion nor the payload check can recurse on the
 /// native stack over an adversarial type.
-const UNIT_NEST_LIMIT: u32 = 64;
+pub(crate) const UNIT_NEST_LIMIT: u32 = 64;
 
 /// A common prefix of two vectors, read as two machine words
 /// (design §7): at least one bit was consumed from each side, and
@@ -127,7 +127,7 @@ impl<'v> Eval<'_, 'v> {
     /// makes the reading total for a dependent nest as well as a constant
     /// one; the pair keeps the **uninstantiated** tail as its annotation,
     /// which is where a pair's `snd_ty` is scoped.
-    fn unit_inhabitant(
+    pub(crate) fn unit_inhabitant(
         &mut self,
         ty: &'v TyClo<'v>,
         depth: u32,
@@ -171,7 +171,7 @@ impl<'v> Eval<'_, 'v> {
     /// makes unpacking reproduce the same value rather than a merely
     /// convertible one (design §3.1); anything else does not pack and stays
     /// structural.
-    fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
+    pub(crate) fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
         let (bit, payload) = match &**v {
             Val::Inl { val, .. } => (false, *val),
             Val::Inr { val, .. } => (true, *val),
@@ -184,7 +184,7 @@ impl<'v> Eval<'_, 'v> {
         })
     }
 
-    fn is_canonical_unit(&mut self, c: &'v TmClo<'v>, depth: u32) -> Res<bool> {
+    pub(crate) fn is_canonical_unit(&mut self, c: &'v TmClo<'v>, depth: u32) -> Res<bool> {
         if depth == 0 {
             return Ok(false);
         }
@@ -277,6 +277,14 @@ impl<'v> Eval<'_, 'v> {
             left = l_rest;
             right = r_rest;
             out_ty = sigma.snd;
+            // Two canonical bits that differ settle the comparison: the
+            // element type has exactly two inhabitants and they are
+            // different injections, so no residual can rescue the pair.
+            // Stopping here is what makes a difference at bit 0 cost one
+            // projection and not a whole word's worth (design §8).
+            if l_bit != r_bit {
+                break;
+            }
             let w = self.force_ty(sigma.snd)?;
             let VTy::Sigma { fst, snd, .. } = &*w else { break };
             // The next component is a bit only if it is at the same element
@@ -313,5 +321,157 @@ impl<'v> Eval<'_, 'v> {
             tail_len,
             tail,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The round trips design §8 asks for, seed-only in the `law!` spirit:
+    //! a failing case is reported by its seed, because a disagreeing word is
+    //! exactly the value that would fill a log.
+
+    use super::*;
+    use crate::reduce::Defs;
+    use crate::term::{CtxBase, Type};
+    use crate::value::{Env, ValueArena, BIT_RUN_WIDTH_CAP};
+
+    const FUEL: u64 = 1_000_000;
+
+    /// `Unit + Unit`: the smallest type that meets the criterion.
+    fn elem_ty<'v>(arena: &'v ValueArena<'v>) -> &'v TyClo<'v> {
+        let unit = || Rc::new(Type::Unit { level: Level::Zero });
+        arena.ty(TyClo::new(
+            Env::empty(),
+            Rc::new(Type::Sum {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                lhs: unit(),
+                rhs: unit(),
+            }),
+        ))
+    }
+
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed >> 33
+    }
+
+    #[test]
+    fn unpacking_a_run_one_bit_at_a_time_reads_back_the_word() {
+        let arena = ValueArena::new();
+        let mut seed = 21;
+        for case in 0..64u64 {
+            let width = (lcg(&mut seed) % u64::from(BIT_RUN_WIDTH_CAP)) as u32 + 1;
+            let bits = lcg(&mut seed) & mask(width);
+            let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+            let elem = elem_ty(&arena);
+            let run = ev
+                .closed_bit_run(&Level::Zero, elem, width, bits)
+                .expect("fuel")
+                .expect("the criterion holds");
+            // Walk the Σ-chain the run stands for, one `Pair` at a time.
+            let mut read = 0u64;
+            let mut cur = Rc::new(run);
+            for i in 0..width {
+                let Val::BitRun { level, ty, width: w, bits: b, tail_len, tail } = &*cur else {
+                    panic!("seed {case}: chain ended at bit {i}");
+                };
+                let pair =
+                    Val::bit_run_unpack(&arena, level, ty, *w, *b, tail_len, tail);
+                let Val::Pair { fst, snd, .. } = pair else { unreachable!() };
+                let head = ev.force(fst).expect("fuel");
+                let bit = ev.bit_of(&head).expect("fuel").expect("a bit value");
+                read |= u64::from(bit) << i;
+                cur = ev.force(snd).expect("fuel");
+            }
+            assert_eq!(read, bits, "seed {case}");
+            assert!(matches!(&*cur, Val::Triv { .. }), "seed {case}: tail is not ⟨⟩");
+        }
+    }
+
+    #[test]
+    fn packing_two_runs_reads_both_words_and_stops_at_the_first_difference() {
+        let arena = ValueArena::new();
+        let mut seed = 33;
+        for case in 0..64u64 {
+            let width = (lcg(&mut seed) % u64::from(BIT_RUN_WIDTH_CAP)) as u32 + 1;
+            let a = lcg(&mut seed) & mask(width);
+            let b = lcg(&mut seed) & mask(width);
+            let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+            let elem = elem_ty(&arena);
+            let left = ev.closed_bit_run(&Level::Zero, elem, width, a).unwrap().unwrap();
+            let right = ev.closed_bit_run(&Level::Zero, elem, width, b).unwrap().unwrap();
+            // The Σ-tail of the *first* pair: a `Vec` at one less than the
+            // words' width, which is the type `pack_bit_prefix` walks in
+            // lockstep with the values.
+            let mut len = ev.vclo(Rc::new(Val::Zero));
+            for _ in 1..width {
+                len = ev.vclo(Rc::new(Val::Succ(len)));
+            }
+            let tail_ty = arena.ty_vec(Level::Zero, elem, len);
+            let prefix = ev
+                .pack_bit_prefix(&Level::Zero, elem, tail_ty, Rc::new(left), Rc::new(right))
+                .expect("fuel");
+            let prefix = prefix.expect("at least one bit packs");
+            let differ = a ^ b;
+            if differ == 0 {
+                assert_eq!(prefix.left_bits, a, "seed {case}");
+                assert_eq!(prefix.right_bits, b, "seed {case}");
+            } else {
+                // The walk stops one bit past the first difference, so the
+                // words differ — which is the verdict — and no more bits
+                // than that were ever projected.
+                assert_ne!(prefix.left_bits, prefix.right_bits, "seed {case}");
+                let taken = 64 - prefix.left_bits.leading_zeros().min(63);
+                assert!(taken <= differ.trailing_zeros() + 1, "seed {case}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_over_wide_by_one_keeps_its_last_bit_in_the_tail() {
+        // The cap is a *representation* bound, not a semantic one: the bit
+        // past it is the residual's, and it must still be there.
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+        let elem = elem_ty(&arena);
+        assert!(ev
+            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP, u64::MAX)
+            .unwrap()
+            .is_some());
+        // One more bit does not fit: `bit_run_cons` refuses at the cap, and
+        // the caller keeps a structural pair over the run.
+        let Some(Val::BitRun { ty, width, bits, tail_len, tail, .. }) = ev
+            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP, 0)
+            .unwrap()
+        else {
+            panic!("the criterion holds")
+        };
+        assert!(
+            Val::bit_run_cons(&Level::Zero, ty, true, width, bits, tail_len, tail).is_none()
+        );
+        // Below the cap it fits, and the new bit is the head.
+        let Some(Val::BitRun { bits, width, .. }) = ev
+            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP - 1, 0)
+            .unwrap()
+            .and_then(|v| {
+                let Val::BitRun { ty, width, bits, tail_len, tail, .. } = v else {
+                    unreachable!()
+                };
+                Val::bit_run_cons(&Level::Zero, ty, true, width, bits, tail_len, tail)
+            })
+        else {
+            panic!("one more bit fits below the cap")
+        };
+        assert_eq!(width, BIT_RUN_WIDTH_CAP);
+        assert_eq!(bits & 1, 1);
+    }
+
+    fn mask(width: u32) -> u64 {
+        if width >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << width) - 1
+        }
     }
 }

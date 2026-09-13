@@ -793,6 +793,7 @@ impl<'v> Dom<'v> for Values {
             Val::Lam { .. }
             | Val::BitRun { .. }
             | Val::NatSync { .. }
+            | Val::BitFold { .. }
             | Val::ULam { .. }
             | Val::CtxLam { .. }
             | Val::TyLam { .. }

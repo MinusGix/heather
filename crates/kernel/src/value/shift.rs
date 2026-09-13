@@ -565,6 +565,15 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             tail: tm_clo(tail, o),
             elim: Rc::new(elimination(elim, o)),
         },
+        // The class is pure data — a table of bits and state indices — so it
+        // is shared; everything scoped is shifted.
+        Val::BitFold { program, tail, elim, class, apps } => Val::BitFold {
+            program: Rc::clone(program),
+            tail: tm_clo(tail, o),
+            elim: Rc::new(elimination(elim, o)),
+            class: Rc::clone(class),
+            apps: Rc::new(apps.iter().map(|e| Rc::new(elimination(e, o))).collect()),
+        },
         Val::Refl { level: l, ty, tm } => Val::Refl {
             level: level(l, o),
             ty: ty_clo(ty, o),

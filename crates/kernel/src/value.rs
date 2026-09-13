@@ -55,6 +55,9 @@ use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Te
 pub mod algebra;
 pub mod program;
 pub mod shift;
+pub mod transducer;
+
+use self::transducer::Transducer;
 
 use program::ContextProgram;
 
@@ -104,6 +107,14 @@ impl<'v> Env<'v> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Object identity as a hashable key: the head node's address and the
+    /// length, which is exactly what [`Env::ptr_eq`] compares. Two closures
+    /// with the same body and the same key denote the same value, so a
+    /// verdict about one is a verdict about the other.
+    pub fn ident(&self) -> (usize, u32) {
+        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len)
     }
 
     /// Object identity: the same spine (both empty, or one shared head
@@ -263,7 +274,26 @@ pub struct ValueArena<'v> {
     /// classes and for the same reason: the verdict depends on nothing but
     /// the closure and the definitions, both fixed for one arena.
     bit_types: RefCell<HashMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
-    bit_tys: Arena<BitTy<'v>>,
+    /// Lazily made: `typed_arena::Arena::new` allocates its first chunk up
+    /// front, and a value arena is built per query — one more eager chunk
+    /// was a 1.27× constant on `nat/step-once`, a single β-step.
+    bit_tys: std::cell::OnceCell<Arena<BitTy<'v>>>,
+    /// The transducer class of a width fold, keyed on **both** the step and
+    /// the motive: the argument modes are read off the motive, so two
+    /// eliminations sharing a step but not a motive are two questions
+    /// (`eval/transduce.rs`).
+    ///
+    /// The key is the closures' [`TmClo::ident`], not their addresses: the
+    /// evaluator allocates a fresh closure cell at every `Term::ElimNat` it
+    /// evaluates, so an address key re-probes the same fold once per
+    /// occurrence — which for this class is a walk of the motive and one
+    /// application of the step per table entry. The identity's addresses are
+    /// a syntax `Rc` and an environment node, both of which the arena's own
+    /// closures keep alive for as long as this map lives, so neither can be
+    /// freed and reused underneath it. A [`PtrMap`], because the lookup sits
+    /// on every opaque `Nat` fold's step: the default hasher over five words
+    /// was a 1.27× constant on `nat/step-once`.
+    transducers: RefCell<PtrMap<(CloId, CloId), Option<Rc<Transducer>>>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -579,6 +609,10 @@ impl std::hash::Hasher for PtrHasher {
     fn write_u64(&mut self, n: u64) {
         self.0 = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(u64::from(n));
+    }
 }
 
 type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
@@ -635,7 +669,8 @@ impl<'v> ValueArena<'v> {
             type_cache: RefCell::new(ValueCache::new()),
             fold_classes: RefCell::new(HashMap::new()),
             bit_types: RefCell::new(HashMap::new()),
-            bit_tys: Arena::new(),
+            bit_tys: std::cell::OnceCell::new(),
+            transducers: RefCell::new(PtrMap::default()),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
@@ -655,7 +690,8 @@ impl<'v> ValueArena<'v> {
                 type_cache: RefCell::new(ValueCache::new()),
                 fold_classes: RefCell::new(HashMap::new()),
                 bit_types: RefCell::new(HashMap::new()),
-                bit_tys: Arena::new(),
+                bit_tys: std::cell::OnceCell::new(),
+                transducers: RefCell::new(PtrMap::default()),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
@@ -734,7 +770,24 @@ impl<'v> ValueArena<'v> {
     }
 
     pub fn bit_ty(&'v self, ty: BitTy<'v>) -> &'v BitTy<'v> {
-        self.bit_tys.alloc(ty)
+        self.bit_tys.get_or_init(Arena::new).alloc(ty)
+    }
+
+    pub fn transducer(
+        &self,
+        step: &'v TmClo<'v>,
+        motive: &'v TyClo<'v>,
+    ) -> Option<Option<Rc<Transducer>>> {
+        self.transducers.borrow().get(&(step.ident(), motive.ident())).cloned()
+    }
+
+    pub fn cache_transducer(
+        &self,
+        step: &'v TmClo<'v>,
+        motive: &'v TyClo<'v>,
+        class: Option<Rc<Transducer>>,
+    ) {
+        self.transducers.borrow_mut().insert((step.ident(), motive.ident()), class);
     }
 
     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
@@ -875,7 +928,23 @@ impl<'v> TmClo<'v> {
         }
     }
 
+    /// A hashable identity that survives re-evaluation: a syntactic closure
+    /// is its body and its environment, both of which outlive the closure
+    /// cell the evaluator allocates afresh at every `Term::ElimNat` it
+    /// meets. Anything else is only itself.
+    pub fn ident(&self) -> CloId {
+        match self {
+            TmClo::Syn { env, body } => {
+                let (node, len) = env.ident();
+                (Rc::as_ptr(body) as usize, node, len)
+            }
+            _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX),
+        }
+    }
 }
+
+/// See [`TmClo::ident`].
+pub type CloId = (usize, usize, u32);
 
 /// A type sub-structure of a value: the type mirror of [`TmClo`].
 ///
@@ -938,6 +1007,17 @@ impl<'v> TyClo<'v> {
     /// The environment and syntax, when this is a syntactic closure. See
     /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
     /// falls back to a stuck value rather than panicking.
+    /// See [`TmClo::ident`].
+    pub fn ident(&self) -> CloId {
+        match self {
+            TyClo::Syn { env, body } => {
+                let (node, len) = env.ident();
+                (Rc::as_ptr(body) as usize, node, len)
+            }
+            _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX),
+        }
+    }
+
     pub fn as_syn(&self) -> Option<(&Env<'v>, &Rc<Type>)> {
         match self {
             TyClo::Syn { env, body, .. } => Some((env, body)),
@@ -1290,6 +1370,22 @@ pub enum Val<'v> {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         elim: Rc<Elim<'v>>,
+    },
+    /// A fold over a *width* whose step is a bit transducer
+    /// (`eval/transduce.rs`), waiting for the arguments its class fires at.
+    ///
+    /// Every bitvector operation's motive is a Π, so the fold's own value is
+    /// a function and no word can be produced until the vectors arrive.
+    /// This is [`Val::NatSync`]'s shape for the other class: the run, its
+    /// tail, the eliminator, and the applications collected so far. It is a
+    /// function, so conversion compares it by η — which applies it, which is
+    /// what makes it fire.
+    BitFold {
+        program: Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        elim: Rc<Elim<'v>>,
+        class: Rc<Transducer>,
+        apps: Rc<Vec<Rc<Elim<'v>>>>,
     },
     Refl {
         level: Level,
@@ -1888,6 +1984,9 @@ impl fmt::Debug for Val<'_> {
                 ContextProgram::Run { count, .. } => write!(f, "sync^{}", count),
                 ContextProgram::Compose { .. } => f.write_str("sync^<shared>"),
             },
+            Val::BitFold { apps, class, .. } => {
+                write!(f, "bitfold[{}/{}]", apps.len(), class.modes.len())
+            }
             Val::Refl { tm, .. } => write!(f, "refl({tm:?})"),
             Val::SRefl { tm, .. } => write!(f, "srefl({tm:?})"),
             Val::Squash { tm, .. } => write!(f, "squash({tm:?})"),

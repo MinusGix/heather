@@ -779,3 +779,194 @@ is a small part — and the transducer class is not an accelerant on top of a
 conversion win but the whole of it. The conversion fast path in this tree is
 a correct prerequisite for round 3 (a fold that produces a word needs a
 comparison that reads one), not a measurable change on its own.
+
+---
+
+Round 3, 2026-09-13, same instance. The transducer class, the producer, the
+consumer modes and the shape operations. Corrections are listed with the
+section each amends.
+
+**§4.2 step 2 — a peeled argument's type is a `Vec` *in a unit-like Σ-context*,
+not a `Vec`.** §4.2 says each domain of `M(Succ k)` "whnfs to a `Vec` at a
+successor length". None of them does: the library's vectors arrive inside a
+**record**, and a record is a one-constructor tier-0 inductive — a Σ-nest
+whose other components are `Tag_D` spines
+(`docs/inductive-tier0-lowering.md` §3). So `BitVec(Succ k)` whnfs to
+`Σ(Tag). Σ(Vec(Bool; Succ k)). Unit`, and the class carries the **projection
+path** to the vector (`eval/transduce.rs`'s `Slot`) for each peeled argument
+and for its result. This is still the eliminator's own annotation and not a
+definition's shape: the path is found by walking the *type*, and every
+component it does not pass through must be the canonical inhabitant of a
+unit-like type — the same criterion `bits.rs` decides for a bit's payload,
+and proof-irrelevant for the same reason, which is what makes rebuilding the
+wrapper reproduce the value rather than a merely convertible one. §4.2's own
+`projection_path` idea survives intact for the *recursive* arguments: the
+value the step hands `ih` is projected through the same wrapper and must be
+the probe's own tail variable.
+
+**§4.2 step 2 — "a `Vec` at a successor length" has to be read
+δ-transparently.** `take_low`/`drop_low`/`concat` are indexed `BitVec(m + k)`,
+and `m + k` is `nat::add` — a *definition* — applied to the width. At
+`Succ k` it is a successor only after that definition unfolds. Reading the
+length with `force` alone classifies all three as **carried**, which is to say
+not at all; the shape operations of §6 were dark until this was fixed. As in
+§13's earlier note about the element type, this is not a δ-discipline change:
+the question is about the eliminator's annotation, asked once per class.
+
+**§4.2 — the class is memoized on `(step, motive)`, and on their *syntax*.**
+The argument modes come from the motive, so the step alone is not the
+question; and the evaluator allocates a fresh closure cell at every
+`Term::ElimNat` it evaluates, so an address key re-probes the same fold once
+per occurrence. The key is the closures' body pointer and environment
+identity, both of which the arena keeps alive for as long as the memo.
+
+**§4.1/§5 — `pass` is decided before the result type is consulted.** The
+design presents `pass` as one of the *word* output modes, alongside `cons`.
+It is not: a step that hands the recursive result back untouched is one
+whatever that result is, and the whole carry family —
+`carry_bits`/`borrow_bits`, which fold a carry over two vectors and return a
+`Bool` they never inspect — is exactly that shape. Asking "is the codomain a
+vector?" first refuses all of them; `byte_wrap` (131 items of the
+certificate) is `carry_add_bit`, and it did not move until the order was
+swapped.
+
+**§5 — the finite and scaled outputs admit no state argument.** A finite
+output is tabulated by probing the step with a *constant* `ih` at each
+enumerated value of its own type, and that pass cannot also observe where the
+arguments went. A state whose transition is invisible cannot be tabulated, so
+a step with one is declined rather than guessed at. Nothing in §5's list
+needs one (the ones that look like they do — the carries — are `pass`,
+above).
+
+**§5 — the scaled output needs a closed base, or a coefficient of one.**
+`toNat`'s fold is `ih ↦ q·ih + r` and the whole word's map is the
+composition; applying it to the fold at the tail is `Q·base + R`, and a
+`NatRun` can only spell that when `Q = 1` or `base` is a closed count.
+Anything else is the multiplication of an *open* term, which the run
+representation has no form for, and the fold declines. At a literal width the
+base is `Zero` and the answer is one run literal, which is what §5 predicted.
+
+**§5 — the finite output must keep the structural path's early exit.** §5
+says `is_zero_bits`'s early exit at a differing low bit "disappears — both
+become O(1)". The first implementation made it *worse*: it packed the whole
+word and forced the fold at the tail before consulting the table, where the
+structural path had stopped at the first set bit. The fix is in the machine,
+not the class: a combination whose table row is constant in `ih` settles the
+fold, so the bits are read one at a time and the walk stops at the first such
+row (`Transducer::run_finite_short`). The fold at the tail is then never
+built.
+
+**§3.2 route 1 — `Frame::BitRunTail` is not needed and was not added.** The
+producer builds its run with an **unforced** tail — the fold at the residual
+width, as a projection closure — which is what makes a chain of shape
+operations cost its last step and not its whole history. Nothing therefore
+forces a tail into a position where a merge could happen, and a merging frame
+would force exactly what the laziness exists to avoid. Round 2's
+`Val::bit_run_cons` stays what it was: the operation, exercised by the
+property tests. A width above the cap is the second run over the first's
+tail that §13 predicted, and the packing walk consumes such a chain without
+noticing it.
+
+**§8 — the oracle arm is in, and is not reachable from the generator.** The
+`BitRun`↔`Term::Pair` arm of `Agree` is added and is the `NatRun`↔`Succ` arm's
+shape exactly: unpack one bit, and let the pair arm compare the annotations
+through `lazy_ty`. It cannot fire from a random seed: `Agree` relates a value
+`eval` produced to the rewriter's whnf, and `eval` produces a `BitRun` only
+from a **classified fold**, which the well-typed generator does not build —
+generating `Vec` literals over a two-valued element type, which §8 asks for,
+exercises the *conversion* path, where no `Val` ever reaches the oracle. The
+standing evidence for the producer is therefore the in-crate fold tests
+(`eval/transduce.rs`'s `tests`, which run the eliminator on a run and read
+the word back) and the certificate; the arm is insurance for the day a
+generator does build one.
+
+**§9 — the bar, measured, and not met.** Same instance, both columns cold
+and back to back in **one** job, the before column the committed tree
+(reversed patch), the after column this one:
+
+| | items | total s | `kernel_gate` s | steps | misses |
+| --- | --- | --- | --- | --- | --- |
+| before | 5 001 | 100.067 | 71.540 | 51 909 608 | 361 706 |
+| after | 5 001 | 100.347 | 71.789 | 48 797 992 | 361 706 |
+
+The mechanism fires — 4 532 classified folds over the workload, every output
+mode among them — and evaluator steps fall **6.0 %** with the conversion miss
+count **identical**, which is the signature §7 predicted and the evidence
+that no verdict changed shape. Per family (steps, before → after):
+`byte_page` 1 461 584 → 726 116 (−50 %), `byte_wrap` 1 347 239 → 742 508
+(−45 %), `stack_allowed` 1 117 724 → 663 444 (−41 %), `store_offset`
+653 392 → 424 776 (−35 %), `write_literal` 455 664 → 228 192 (−50 %),
+`read_address` 384 344 → 250 920 (−35 %). The unit probes at width 64
+(evaluator steps): `bitvec::add` 13 914 → 9 444, `is_zero(bxor(x,x))`
+10 755 → 4 941, `toNat` 4 540 → 2 322, `is_zero` of a literal 3 016 → 365,
+`bxor` 10 099 → 8 742 — and A3, the literal floor, **3 481 → 3 481**, which
+is the right reading of the rest: A1's residue is its three 64-element
+`Bool` literals, not its fold.
+
+**But the seconds are flat, and §9's bar is the seconds.** Item total is
++0.28 % and `kernel_gate` +0.35 %; the round does not meet the bar, and per
+§9 it stops there rather than being tuned into it. The gap is smaller than
+this instance's own run-to-run spread (three before columns on the same tree
+came in at 100.067, 100.275 and, in round 2, 99.202), and a same-binary A/B
+on a desktop — the mechanism switched off and on in two back-to-back runs of
+one process image, which removes the rebuild from the comparison — reported
+92.166 → 90.924 s total and 67.901 → 66.232 s gate, i.e. the other sign. The
+honest statement is **flat**, not a win and not a regression, with the step
+count down 6 % and the miss count unmoved.
+
+**One family is worse, and it is the whole of the gap.** `read_literal` (32
+items) goes 410 379 → 435 235 steps and **0.682 → 1.398 s** — +0.72 s, more
+than the +0.28 s the whole workload moved; without it the after column is
+0.44 s *under* the before one. The cause is not overhead but **eagerness**: a
+classified `bxor` computes all 64 bits at once, where the structural
+cons-chain computed only the bits its consumer forced — and this family's
+consumer is a memory walk whose address comparison short-circuits at the
+first differing bit, so it forced one. Packing two structural literal
+arguments is what the family now pays. It cannot be fixed by making the
+producer lazier: a `BitRun` is its whole width by construction. What it
+points at is a design question this round did not have — *at what width
+should a classified fold fire when its consumer is demand-driven?* — whose
+cheap answers (fire only when every argument is already a word; fire in
+fixed chunks) are both tuning, and §9 forbids that here. It is recorded for
+the round that takes it up.
+
+Everything else the round found is above; the tree is otherwise complete, the
+suite is green twice, and the class is the one §4 specified.
+
+Coordinator review of round 3, 2026-09-13, two corrections found reading the
+diff and re-running the gates:
+
+**§5 — the finite output's table is read by *replaying*, not by
+substituting.** The first implementation tabulated a finite output by
+applying the step again with a constant function in place of `ih`, once per
+enumerated value of the result type. A constant function answers *every*
+call, so a step that reads `ih(tails)` and then, in a branch on it, calls
+`ih` at other arguments — `case(ih(tx, ty)) { False => ih(ty, tx), … }` —
+would have tabulated as if the second call returned the first's value: a
+fold that is not a function of `(bits, ih(tails))` at all, evaluated
+wrongly. No library step has that shape, which is why nothing measured it,
+and it is a soundness defect all the same. The probe now takes the
+eliminations that follow the recursive call in the neutral-`ih` value and
+replays them on the closed enumerated value with `ih` still neutral; a
+hidden second call is then a stuck neutral, does not read back as an
+enumerated value, and the step declines (`eval/transduce.rs`, with the
+regression test `a_second_recursive_call_hidden_in_a_branch_declines`).
+
+**§4.2 / §3.1 — two constant-factor changes made on a wrong diagnosis, kept
+because they are right anyway.** The desktop `scripts/bench --check` flagged
+`nat/step-once`, `nat/step-into-closed-body` and `nat/mul-normalize` at
+1.26–1.29×. Two causes were fixed in turn — the `(step, motive)` memo was
+hashed with SipHash on every opaque `Nat` fold's step (now the arena's
+pointer hasher, and a fold whose motive is *written* `Nat` skips the lookup:
+an annotation, not a spelling), and round 2's `ValueArena::bit_tys` was a
+`typed_arena::Arena::new()` that allocates its first chunk in the
+constructor of every per-query arena (now made lazily) — and the flag
+survived both. The control that should have come first: the same bench on
+the pre-K1 commit (8fc9ee8) reports the identical 1.26×. The constant is
+the desktop's drift against the 2026-08-17 baseline
+(`issues/kernel-bench-full-run-flags-drift.md`'s signature), and this line
+did not cause it. Both changes stay: neither costs anything and each
+removes a real per-step or per-arena cost, but the design records that the
+bench verdict was not evidence about this tree, and that a constant-factor
+flag gets a same-machine control on the parent commit before it gets a
+diagnosis.
