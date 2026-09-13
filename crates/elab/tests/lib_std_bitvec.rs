@@ -144,6 +144,35 @@ fn of_nat_at_machine_width_costs_the_width_not_the_magnitude() {
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
+/// `ofNat` where its consumers meet it. The rails above check the definition
+/// against a written-out vector; these check that the *bitwise and arithmetic*
+/// operations still see what they saw, and vary the two axes a respelling of a
+/// recursion loses first (`docs/testing-generated-terms.md`): a **neutral**
+/// argument, where the recursion is on the width and the low bit is whatever
+/// `odd_bit` is stuck at, and a **checking** position — the fold in the type a
+/// proof is checked against, not only in a value being computed.
+#[test]
+fn of_nat_meets_its_consumers() {
+    // No `import nat`: `add` is declared in both modules, and this file's
+    // subject is `bitvec`'s.
+    ok(r#"
+theorem xor_of_two(): bxor(64, ofNat(64, 0x0123_4567_89AB_CDEF), ofNat(64, 0xFFFF_FFFF_FFFF_FFFF))
+      = ofNat(64, 0xFEDC_BA98_7654_3210) { refl }
+theorem add_of_two(): add(8, ofNat(8, 200), ofNat(8, 100)) = ofNat(8, 44) { refl }
+theorem against_a_literal():
+    ofNat(8, 0xC0) = from_bits(8, [False, False, False, False, False, False, True, True]) { refl }
+theorem into_nat(): toNat(8, ofNat(8, 0xC0)) = 192 { refl }
+// A neutral argument: the width still drives the recursion, so the low bit
+// reduces to the argument's parity with nothing closed anywhere.
+theorem open_low_bit(x: Nat): head_bit(7, ofNat(8, Succ(Succ(x)))) = odd_bit(x) { refl }
+"#);
+    // The negative control at the consumer: one bit off is a conversion
+    // failure and not exhausted fuel.
+    let msg = run("theorem wrong(): bxor(64, ofNat(64, 1), ofNat(64, 0)) = ofNat(64, 3) { refl }")
+        .expect_err("a differing word must be refused");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
 #[test]
 fn widths_include_zero_machine_sizes_and_a_neutral() {
     ok(r#"

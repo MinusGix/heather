@@ -19,7 +19,6 @@ import logic;
 import nat;
 import int;
 import pair;
-import list;
 
 record BitVec(n: Nat) { bits: [Bool; n] }
 
@@ -178,70 +177,40 @@ fn toNat(n: Nat) → BitVec(n) → Nat {
 }
 
 // Construction from a natural, in work bounded by the WIDTH rather than the
-// magnitude (issues/bitvec-ofnat-large-literals.md). The obvious spelling —
-// low bit by parity, the rest at `half(x)` — peels the argument one successor
-// at a time, so a machine-width literal costs `2^64` steps. Reading the bits
-// from the top instead costs one comparison and one subtraction per bit, and
-// both of those are the two-counter folds the kernel cancels run against run
-// (`nat::le_dec`, `nat::sub`); the powers of two they are read at are built
-// by doubling, which is the successor-mapping fold. So a closed literal of
-// any magnitude below `2^n` is `n` cancellations, and the definition is still
-// ordinary structural recursion that reduces at every closed argument.
+// magnitude (issues/bitvec-ofnat-large-literals.md): the recursion is on the
+// width, taking the argument's low bit and continuing at `nat::half`.
 //
-// Truncation is kept: the argument is first reduced below `2^n`, so
-// `ofNat(n, x)` is the low `n` bits of `x` for every `x`, as `mul` and the
-// module header require. That reduction is by repeated subtraction, once per
-// multiple of `2^n` in `x` — nothing for a literal within the width, and the
-// honest measure-justified loop otherwise.
+// That is width-bounded, and not the naive peeling it looks like, because
+// neither window walks the argument. `odd_bit` and `nat::half` are the same
+// two-successor course-of-values fold, which the kernel classifies as a
+// permutation iterated by exponentiation rather than one successor at a time
+// (`crates/kernel/DESIGN.md`, the acceleration policy). So each of the `n`
+// steps costs one iteration whatever the magnitude — measured flat from `0`
+// to `2^60` and five times cheaper than reading the bits from the top,
+// `docs/bitvector-literal-entry-design.md` §4.3. The dependence is real: if
+// that classification is ever narrowed this definition reverts to costing the
+// magnitude, which is what the top-down spelling was written for in the first
+// place.
+//
+// Truncation is definitional. `ofNat(n, x)` is the low `n` bits of `x` for
+// every `x` by construction, as `mul` and the module header require — no
+// reduction below `2^n` first, and so no `2^n` built at all.
 
-// `x mod Succ(p)`, by subtracting `Succ(p)` while it fits.
-fn mod_succ(x, p: Nat) → Nat decreases x {
-    match nat::le_dec(Succ(p), x) {
-        Inl(h) => mod_succ(nat::sub(x, Succ(p)), p),
-        Inr(_) => x,
-    }
-    on ?dec1 := nat::sub_lt_of_pos(x, Succ(p), trivial, h);
-}
-
-// `[2^(n-1), …, 2, 1]` in front of `acc`, from `p = 2^0`: each step records
-// the current power and doubles it.
-fn powers_of_two_desc(n, p: Nat, acc: List<Nat>) → List<Nat> {
-    match n {
-        Zero => acc,
-        Succ(k) => powers_of_two_desc(k, p + p, Cons(p, acc)),
-    }
-}
-
-// The bits of `x` at the given powers, largest first, each consed onto `acc`
-// after its weight is taken out of `x`. The LAST decision is at weight one,
-// so the finished list is least-significant first — the vector's own order.
-fn bits_at_powers(powers: List<Nat>, x: Nat, acc: List<Bool>) → List<Bool> {
-    match powers {
-        Nil => acc,
-        Cons(p, rest) => match nat::le_dec(p, x) {
-            Inl(_) => bits_at_powers(rest, nat::sub(x, p), Cons(True, acc)),
-            Inr(_) => bits_at_powers(rest, x, Cons(False, acc)),
-        },
-    }
-}
-
-// A least-significant-first bit list as a vector of width `n`: padded with
-// zeros past its end and truncated past `n`, so it is total, though `ofNat`
-// only ever hands it exactly `n` bits.
-fn from_bit_list(n: Nat) → List<Bool> → BitVec(n) {
-    match n as λ k => List<Bool> → BitVec(k) {
-        Zero => λ bits => from_bits(0, []),
-        Succ(k, ih) => λ bits => match bits {
-            Nil => cons_bit(k, False, ih(Nil)),
-            Cons(b, rest) => cons_bit(k, b, ih(rest)),
-        },
+// The low bit of `x`. Its window is `half`'s (`lib/std/nat.hthr`), which is
+// what keeps `ofNat` bounded by the width; a one-successor parity recursion
+// through `bool::not` would not be.
+fn odd_bit(x: Nat) → Bool {
+    match x {
+        Zero => False,
+        Succ(k) => match k { Zero => True, Succ(l) => odd_bit(l) },
     }
 }
 
 fn ofNat(n: Nat) → Nat → BitVec(n) {
-    λ x => from_bit_list(n,
-        bits_at_powers(powers_of_two_desc(n, 1, Nil),
-            mod_succ(x, nat::pred(nat::pow(2, n))), Nil))
+    match n as λ k => Nat → BitVec(k) {
+        Zero => λ x => from_bits(0, []),
+        Succ(k, ih) => λ x => cons_bit(k, odd_bit(x), ih(nat::half(x))),
+    }
 }
 
 fn sign_bit(n: Nat) → BitVec(n) → Bool {
@@ -398,8 +367,10 @@ fn sub(n: Nat, a, b: BitVec(n)) → BitVec(n) { ripple_sub(n, a, b) }
 
 fn neg(n: Nat, a: BitVec(n)) → BitVec(n) { ripple_neg(n, a) }
 
-// `mul` still routes through `ofNat` above `2^n`, whose `mod_succ` loop costs
-// the quotient; see the design doc for why it is left.
+// `mul` still routes through `ofNat` above `2^n`; see the design doc for why
+// it is left. Its truncation is no longer a loop over the quotient — `ofNat`
+// takes the low `n` bits by construction — so what this costs is the product
+// and the width.
 fn mul(n: Nat, a, b: BitVec(n)) → BitVec(n) {
     ofNat(n, toNat(n, a) * toNat(n, b))
 }
