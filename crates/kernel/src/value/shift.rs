@@ -30,7 +30,7 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val, ValueArena,
+    BitTy, Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val, ValueArena,
 };
 
 /// How far to weaken: `univs` new universe variables, `globals` new global
@@ -543,6 +543,21 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
         Val::Succ(p) => Val::Succ(tm_clo(p, o)),
         Val::NatRun { program, tail } => Val::NatRun {
             program: Rc::clone(program),
+            tail: tm_clo(tail, o),
+        },
+        // The element type's injections are values in the same two outer
+        // namespaces, so a shifted run gets a shifted [`BitTy`]; sharing the
+        // memoized one would keep the unshifted injections.
+        Val::BitRun { level: l, ty, width, bits, tail_len, tail } => Val::BitRun {
+            level: level(l, o),
+            ty: o.arena.bit_ty(BitTy {
+                elem: ty_clo(ty.elem, o),
+                zero: tm_clo(ty.zero, o),
+                one: tm_clo(ty.one, o),
+            }),
+            width: *width,
+            bits: *bits,
+            tail_len: tm_clo(tail_len, o),
             tail: tm_clo(tail, o),
         },
         Val::NatSync { program, tail, elim } => Val::NatSync {

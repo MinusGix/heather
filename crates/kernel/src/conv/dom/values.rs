@@ -787,7 +787,11 @@ impl<'v> Dom<'v> for Values {
             Val::BoxTy(t) => TmView::BoxTy(t),
             Val::BoxTm(t) => TmView::BoxTm(t),
 
+            // A run is a `Vec` value, and `Vec` values are Σ-pairs: opaque
+            // exactly as `Val::Pair` is, with the Σ-η arm doing the work
+            // (`docs/native-bitvector-values-design.md` §3.3).
             Val::Lam { .. }
+            | Val::BitRun { .. }
             | Val::NatSync { .. }
             | Val::ULam { .. }
             | Val::CtxLam { .. }
@@ -1339,6 +1343,56 @@ impl<'v> Dom<'v> for Values {
             TmC::here(env, residual(cancelled.left, left_tail)),
             TmC::here(env, residual(cancelled.right, right_tail)),
         )))
+    }
+
+    fn bit_vec_eq(
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        a: &Rc<Val<'v>>,
+        b: &Rc<Val<'v>>,
+        fst_ty: &TyC<'v>,
+        snd_ty: &TyC<'v>,
+        snd_level: &Level,
+    ) -> R<Option<()>> {
+        // That this Σ came from the `Vec` type rule is read off the rule's
+        // own output (`Eval::vec_ty`): the tail is the *unforced* `Vec` at
+        // the predecessor length over the very element closure the head
+        // projects. No definition and no spelling is consulted.
+        let TyClo::Vec { elem, .. } = snd_ty.clo else { return Ok(None) };
+        if !std::ptr::eq(*elem, fst_ty.clo) {
+            return Ok(None);
+        }
+        // At least one side must already be canonical — then the *other*
+        // one is projected, which is what η was about to do to it anyway
+        // (design §7, "native against structural"). Two stuck spines are
+        // left alone: deciding those on their spines is what the
+        // neutral-first guard below exists for, and packing them would mean
+        // unfolding both.
+        if !matches!(&**a, Val::Pair { .. } | Val::BitRun { .. })
+            && !matches!(&**b, Val::Pair { .. } | Val::BitRun { .. })
+        {
+            return Ok(None);
+        }
+        let (elem, tail_ty) = (*elem, snd_ty.clo);
+        let (a, b) = (Rc::clone(a), Rc::clone(b));
+        let level = snd_level.clone();
+        let Some(prefix) =
+            run(cv, env, |ev| ev.pack_bit_prefix(&level, elem, tail_ty, a, b))?
+        else {
+            return Ok(None);
+        };
+        // Two canonical bits that differ are two different injections at the
+        // element type, which the Σ-η walk would have reached and refused —
+        // in as many projections as it took to get there.
+        if prefix.left_bits != prefix.right_bits {
+            return Err(NC);
+        }
+        let (left, right) = (
+            TmC::value(env, prefix.left),
+            TmC::value(env, prefix.right),
+        );
+        cv.tm(env, &left, &right, &TyC::here(env, prefix.ty), snd_level)?;
+        Ok(Some(()))
     }
 
     fn app(

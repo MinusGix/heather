@@ -64,6 +64,7 @@ use crate::value::{
 use crate::value::algebra::{AffineTree, FoldClass};
 use crate::value::program::ContextProgram;
 
+mod bits;
 mod probe;
 mod runs;
 
@@ -1561,6 +1562,20 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::Squash { tm, .. }, Elim::ElimSquash { case, .. }) => {
                 self.spend()?;
                 Ok(Work::Apply1(*case, *tm))
+            }
+            // A run's one-step view is the Σ-chain it stands for
+            // (`docs/native-bitvector-values-design.md` §3.3): unpack its
+            // first bit, with the annotations `Eval::vec_ty` gives that Σ,
+            // and let the ordinary pair arms fire on it. Costing one step
+            // per projection is what keeps `Fst`/`Snd` on a word O(1).
+            (
+                Val::BitRun { level, ty, width, bits, tail_len, tail },
+                Elim::Fst { .. } | Elim::Snd { .. },
+            ) => {
+                let pair = Val::bit_run_unpack(
+                    self.arena, level, ty, *width, *bits, tail_len, tail,
+                );
+                Ok(Work::Elim(Rc::new(pair), e.clone()))
             }
             (Val::Pair { fst, .. }, Elim::Fst { .. }) => {
                 self.spend()?;

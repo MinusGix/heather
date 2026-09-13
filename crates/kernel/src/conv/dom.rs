@@ -665,6 +665,28 @@ pub(super) trait Dom<'v>: Sized {
     ) -> R<Option<(Self::TmC, Self::TmC)>> {
         Ok(None)
     }
+    /// Decide two values at a Σ the `Vec` type rule produced by comparing a
+    /// common prefix of their **bits** as a machine word, instead of taking
+    /// the chain one η-projection at a time
+    /// (`docs/native-bitvector-values-design.md` §7).
+    ///
+    /// `Ok(None)` means only that this domain — or this Σ, or these values —
+    /// has no word to compare; the ordinary η arm follows and decides exactly
+    /// the pairs it decides today, so this is a fast path and never a new
+    /// verdict. `Err(NotConvertible)` is a verdict: two canonical bits that
+    /// differ, which is one comparison rather than a walk to the difference.
+    #[allow(clippy::too_many_arguments)]
+    fn bit_vec_eq(
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
+        _a: &Self::Tm,
+        _b: &Self::Tm,
+        _fst_ty: &Self::TyC,
+        _snd_ty: &Self::TyC,
+        _snd_level: &Level,
+    ) -> R<Option<()>> {
+        Ok(None)
+    }
     #[allow(clippy::too_many_arguments)]
     fn app(
         cv: &mut Conv<'v, Self>,

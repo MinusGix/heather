@@ -666,4 +666,116 @@ test. **If one refutes the design, STOP and report before working around it.**
 
 ## 13. What implementing corrected
 
-*(left empty for the implementing rounds)*
+Round 2, 2026-09-13. Furnace instance `…gvb5vvpq` (the same one §1 was
+measured on). Corrections are listed with the section each amends; the last
+one is the round's verdict and is why round 2 did not land.
+
+**§3.4 / §11.1 — the width cap is 64, not 128.** Measured: `size_of::<Val>()`
+is **88 bytes with alignment 8** before the variant and after it. A `u128`
+field would raise the enum's alignment to 16, and 88 is not a multiple of
+16, so the enum would round to **96** — eight bytes on every value in the
+machine to widen one variant. §11.1's own fallback rule applies: `u64`,
+`BIT_RUN_WIDTH_CAP = 64`, which covers every operation in
+`lib/std/arch/x86_64/model.hthr` today. The widening argument §3.4 made for
+128 is still real for round 3's `concat`/`zero_extend`; the answer there is
+a second run over the first's tail, not a wider field.
+
+**§3.1 — a run carries its element type's two injections, not just the
+element type.** Unpacking has to produce the element type's *own* `Inl`/`Inr`
+at their canonical payloads, and building those needs the evaluator: it has
+to force the sum's halves and construct their `Triv`-nests. The consumers
+that unpack — `value/shift.rs`, the conversion `TmView`, the `Fst`/`Snd`
+arms — have no evaluator in hand. So the criterion's verdict is a value:
+`BitTy { elem, zero, one }`, built once when the criterion is decided and
+memoized on the element closure, and `Val::BitRun` holds a pointer to it.
+This also keeps the variant small (a `Level`, a pointer, a width, a `u64`,
+two closures) rather than carrying four type annotations per bit.
+
+**§3.3 — a run stores its *tail's* length, not its own.** The unpacked
+pair's `snd_ty` is `Vec(elem; pred)`, which needs a length term; deriving it
+from the run's own length would mean forcing a `Nat` at every unpack.
+Storing the tail's length instead makes the residual length
+`Succ^{width-1}(tail_len)` — a `NatRun` built in O(1) with nothing forced —
+which is what keeps unpacking pure and lets `value/shift.rs` and `TmView`
+call it.
+
+**§3.2 — the merging frame has no producer in round 2, so it is the
+operation without its `Frame`.** Entry route 1 starts at a classified fold,
+which is round 3's; route 3 is round 3's by construction. What landed is
+`Val::bit_run_cons`, the merge step itself (one bit onto a run, capped),
+which is what `Frame::BitRunTail` will call. Adding the frame with nothing
+that pushes it would have been an untested enum variant.
+
+**§7 — the entry condition is "at least one side canonical", and the other
+side is walked by η's own projections.** The first implementation required
+*both* sides to be `Pair`/`BitRun`, on the reasoning that packing a neutral
+means δ-unfolding a spine the neutral-first guard decides on its spine. It
+fired almost nowhere: the certificate's shape is a *computed* vector against
+a literal, and the computed side is a glued projection. The rule that
+actually holds the guard's ground is: two stuck spines are left alone, and
+otherwise the non-canonical side is projected with the Σ's own annotations —
+which is exactly the `fst`/`snd` the η arm was about to take, in the same
+order, so it is not new δ.
+
+**§3.1 — the criterion must be decided δ-transparently.** An element type
+reached through the elaborator is an `El` of a glued code, so `force_ty`
+alone leaves a neutral and the criterion never fires on the library's
+`Bool`. `delta_whnf_ty` is right here and is not a δ-discipline change: the
+verdict is a question about a *type*, decided once per element closure and
+memoized, not a term comparison.
+
+**§10 — the `DESIGN.md` paragraph was applied amended, not verbatim.** Two
+changes: `u128` became `u64` (above), and the whole *Reduction is unchanged*
+half was rewritten. §10's draft describes the transducer class — the probe,
+the truth table, the consumer algebras — which is round 3's and is not in
+the kernel. What the applied paragraph says instead is what is true of this
+tree: nothing in the evaluator produces a word, entry is pack-on-demand at
+conversion, and what does not meet the criterion is compared exactly as it
+was. When round 3 lands, the missing half goes back in.
+
+**§7 — no packed-word memo.** §7's "the packed prefix is memoized on the
+value" is not implemented and was not needed: the walk's forces are already
+memoized in the arena's term cache, so a second packing of the same chain is
+a loop with no evaluation in it. It would be worth adding only if a profile
+showed the loop itself.
+
+**§2 and §11.7 — the A3 floor was misread, and this is the round's
+verdict.** §2 reads A3's 3 771 evaluator steps at width 64 as "59 steps per
+bit of Σ-η conversion", and §9 builds round 2's whole case on it: that a
+third of every closed machine-word item is the comparison, so the
+conversion fast path alone should move the closed-refl families. Measured
+with the fast path in place, A3's steps fall from **3 771 to 3 481** — the
+vector comparison is under **8%** of that item, not its floor. The rest of
+A3's per-bit cost is *elaborating and checking a 64-element `Bool` literal*
+(its 582 conversion misses at width 64 are ~9 per bit, one per list
+element), which no kernel conversion rule touches.
+
+The whole-workload measurement says the same thing. Cold cache, same recipe,
+5 001 item rows, same instance and session:
+
+| | items | total s | `kernel_gate` s | steps | misses |
+| --- | --- | --- | --- | --- | --- |
+| before | 5 001 | 99.202 | 70.834 | 52 390 787 | 361 706 |
+| after | 5 001 | 99.821 | 71.395 | 51 909 608 | 361 706 |
+
+Miss counts are **identical**, which is the signature §7 predicted and the
+evidence that no verdict changed shape. Evaluator steps fall by **0.9%**,
+and the fast path costs about what it saves. Per family (steps, before →
+after): `store_offset` 772 000 → 653 392 (−15%), `read_address` 453 532 →
+384 344 (−15%), `call_callee_local_outside` 528 256 → 449 184 (−15%),
+`stack_allowed` 1 217 212 → 1 117 724 (−8%) — and `byte_page` 1 461 584,
+`byte_wrap` 1 347 239, `write_literal` 455 664 **unchanged to the step**.
+
+So the mechanism fires, is correct, and is worth 8–15% on the three families
+whose items really do compare two vectors — but half the chartered rows
+contain no vector-against-vector comparison at all. Their cost is the fold,
+not the conversion. §9's bar is a whole-workload bound and it is not met;
+round 2 stops here, as §9 says it must.
+
+What this implies for round 3, stated so the next round does not inherit the
+same misattribution: the prize is where §2's A1/A4 rows put it — 177 steps
+per bit for `bxor` and 256 for `bitvec::add`, of which the conversion floor
+is a small part — and the transducer class is not an accelerant on top of a
+conversion win but the whole of it. The conversion fast path in this tree is
+a correct prerequisite for round 3 (a fold that produces a word needs a
+comparison that reads one), not a measurable change on its own.

@@ -257,6 +257,13 @@ pub struct ValueArena<'v> {
     /// key is never reused; the class depends on nothing but the closure
     /// and the definitions, which are fixed for one arena.
     fold_classes: RefCell<HashMap<*const TmClo<'v>, Rc<algebra::FoldClass>>>,
+    /// Whether each element type satisfies the bit criterion, and with what
+    /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
+    /// element closure's identity. Decided once per type, beside the fold
+    /// classes and for the same reason: the verdict depends on nothing but
+    /// the closure and the definitions, both fixed for one arena.
+    bit_types: RefCell<HashMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
+    bit_tys: Arena<BitTy<'v>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -627,6 +634,8 @@ impl<'v> ValueArena<'v> {
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
             fold_classes: RefCell::new(HashMap::new()),
+            bit_types: RefCell::new(HashMap::new()),
+            bit_tys: Arena::new(),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
@@ -645,6 +654,8 @@ impl<'v> ValueArena<'v> {
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
                 fold_classes: RefCell::new(HashMap::new()),
+                bit_types: RefCell::new(HashMap::new()),
+                bit_tys: Arena::new(),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
@@ -709,6 +720,21 @@ impl<'v> ValueArena<'v> {
 
     pub fn cache_fold_class(&self, step: &'v TmClo<'v>, class: Rc<algebra::FoldClass>) {
         self.fold_classes.borrow_mut().insert(step as *const TmClo<'v>, class);
+    }
+
+    /// The decided bit criterion for `elem`, if it has been decided; the
+    /// inner `None` is a type that is *not* a bit type, which is worth
+    /// remembering too.
+    pub fn bit_type(&self, elem: &'v TyClo<'v>) -> Option<Option<&'v BitTy<'v>>> {
+        self.bit_types.borrow().get(&(elem as *const TyClo<'v>)).copied()
+    }
+
+    pub fn cache_bit_type(&self, elem: &'v TyClo<'v>, ty: Option<&'v BitTy<'v>>) {
+        self.bit_types.borrow_mut().insert(elem as *const TyClo<'v>, ty);
+    }
+
+    pub fn bit_ty(&'v self, ty: BitTy<'v>) -> &'v BitTy<'v> {
+        self.bit_tys.alloc(ty)
     }
 
     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
@@ -1125,6 +1151,41 @@ pub enum VTy<'v> {
 // Term values
 // ---------------------------------------------------------------------------
 
+/// The widest `Vec` prefix one [`Val::BitRun`] holds
+/// (`docs/native-bitvector-values-design.md` §3.4, corrected by §11.1).
+///
+/// §3.4 preferred 128, so that round 3's widening shape operations
+/// (`concat`, `zero_extend`) could not silently fall off the fast path at 64.
+/// §11.1's own fallback rule decides otherwise: a `u128` field raises
+/// `Val`'s alignment to 16 and rounds the whole enum from 88 to 96 bytes —
+/// eight bytes on *every* value in the machine to widen one variant. 64
+/// covers every operation in `lib/std/arch/x86_64/model.hthr` today; a
+/// wider word, if round 3 wants one, is a second `tail_len`-linked run and
+/// not a wider field.
+pub const BIT_RUN_WIDTH_CAP: u32 = 64;
+
+/// An element type that satisfies the **bit criterion**
+/// (`docs/native-bitvector-values-design.md` §3.1): its whnf is `Sum(L, R)`
+/// with both halves *unit-like* — `Unit`, or a Σ-nest ending in `Unit`,
+/// which is exactly what a `Tag_D`-prefixed nullary constructor lowers to
+/// (`docs/inductive-tier0-lowering.md` §3) and is proof-irrelevant in
+/// `conv.rs` by Unit and Σ η.
+///
+/// The two injections are built **once**, when the criterion is decided, and
+/// a run unpacks to them verbatim. Storing them rather than rebuilding them
+/// is the round-2 correction recorded in design §13: reconstruction needs
+/// the evaluator (to force the halves and build their canonical
+/// inhabitants), and the consumers that unpack a run — `value/shift.rs`, the
+/// conversion `TmView`, the `Fst`/`Snd` arms — have no evaluator in hand.
+pub struct BitTy<'v> {
+    /// The element type itself: the unpacked pair's `fst_ty`.
+    pub elem: &'v TyClo<'v>,
+    /// `inl` at `elem` over the left half's canonical inhabitant: bit `0`.
+    pub zero: &'v TmClo<'v>,
+    /// `inr` at `elem` over the right half's canonical inhabitant: bit `1`.
+    pub one: &'v TmClo<'v>,
+}
+
 /// Weak head normal **terms**.
 pub enum Val<'v> {
     // -- encodings of types (decoded by `El`) --
@@ -1193,6 +1254,32 @@ pub enum Val<'v> {
     /// representation and is not a new source constructor.
     NatRun {
         program: Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+    },
+    /// A closed prefix of a `Vec` over a two-valued element type, held as a
+    /// machine word (`docs/native-bitvector-values-design.md` §3.1). Its
+    /// one-step view is the right-nested Σ-chain it stands for:
+    /// [`Val::bit_run_unpack`] produces the `Pair` the `Vec` type rule
+    /// itself builds, one bit at a time, so every consumer that matched on
+    /// `Pair` sees what it saw before. Like [`Val::NatRun`] it is an
+    /// evaluator representation and not a source constructor, and it names
+    /// no library type — only the element type's own two injections, which
+    /// [`BitTy`] holds.
+    BitRun {
+        /// The `Vec`'s level: the unpacked pair's `fst_level`/`snd_level`.
+        level: Level,
+        /// The element type and the two values a bit unpacks to.
+        ty: &'v BitTy<'v>,
+        /// How many bits are held: `1 ..= BIT_RUN_WIDTH_CAP`.
+        width: u32,
+        /// Bit `i` is element `i` — LSB first, index 0 is the `Vec`'s head.
+        /// A set bit is the element type's **second** injection; which
+        /// surface constructor that is, the kernel neither knows nor needs.
+        bits: u64,
+        /// The length of `tail`, so that the unpacked pair's `snd_ty` is the
+        /// `Vec` at the residual length without forcing anything.
+        tail_len: &'v TmClo<'v>,
+        /// The rest of the vector: `Triv`, a neutral, or another run.
         tail: &'v TmClo<'v>,
     },
     /// A Nat fold whose successor algebra is a function that synchronously
@@ -1298,6 +1385,86 @@ impl<'v> Val<'v> {
             None => tail,
             Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
         }
+    }
+
+    /// One step of a bitvector run (`docs/native-bitvector-values-design.md`
+    /// §3.3): the `Pair` its first bit sits in.
+    ///
+    /// The bit is the element type's own injection at its canonical payload,
+    /// and the Σ annotations are the ones [`crate::eval::Eval::vec_ty`]
+    /// produces for a `Vec` at a successor length — `fst_level = snd_level =
+    /// level`, `fst_ty = elem`, `snd_ty = Vec(elem; pred)`. The residual is a
+    /// *freshly built* run, exactly as [`Val::nat_run_pred`] builds a fresh
+    /// `NatRun` rather than reusing the value it came from; at width 1 it is
+    /// the tail itself. Nothing here forces: the residual length is
+    /// `Succ^{width-1}` over the stored tail length.
+    pub fn bit_run_unpack(
+        arena: &'v ValueArena<'v>,
+        level: &Level,
+        ty: &'v BitTy<'v>,
+        width: u32,
+        bits: u64,
+        tail_len: &'v TmClo<'v>,
+        tail: &'v TmClo<'v>,
+    ) -> Val<'v> {
+        debug_assert!(width >= 1 && width <= BIT_RUN_WIDTH_CAP);
+        let head = if bits & 1 == 0 { ty.zero } else { ty.one };
+        let (rest_len, rest) = match std::num::NonZeroU64::new(u64::from(width - 1)) {
+            None => (tail_len, tail),
+            Some(count) => (
+                arena.tm(TmClo::val(Rc::new(Val::NatRun {
+                    program: ContextProgram::run((), count),
+                    tail: tail_len,
+                }))),
+                arena.tm(TmClo::val(Rc::new(Val::BitRun {
+                    level: level.clone(),
+                    ty,
+                    width: width - 1,
+                    bits: bits >> 1,
+                    tail_len,
+                    tail,
+                }))),
+            ),
+        };
+        Val::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty: ty.elem,
+            snd_ty: arena.ty_vec(level.clone(), ty.elem, rest_len),
+            fst: head,
+            snd: rest,
+        }
+    }
+
+    /// Push one more bit onto the head of a run — the merging step
+    /// (design §3.2, route 1): a `Pair` whose `fst` is a bit value and whose
+    /// `snd` already is a run is one bit wider, up to [`BIT_RUN_WIDTH_CAP`],
+    /// above which the outer pair stays structural over a run tail.
+    ///
+    /// Round 2 has no *producer* of runs in the evaluator — entry route 1
+    /// starts at a classified fold, which is round 3's — so this is the
+    /// operation without its `Frame`; it is what the merging frame will call
+    /// and what the property tests exercise against [`Val::bit_run_unpack`].
+    pub fn bit_run_cons(
+        level: &Level,
+        ty: &'v BitTy<'v>,
+        bit: bool,
+        width: u32,
+        bits: u64,
+        tail_len: &'v TmClo<'v>,
+        tail: &'v TmClo<'v>,
+    ) -> Option<Val<'v>> {
+        if width >= BIT_RUN_WIDTH_CAP {
+            return None;
+        }
+        Some(Val::BitRun {
+            level: level.clone(),
+            ty,
+            width: width + 1,
+            bits: (bits << 1) | u64::from(bit),
+            tail_len,
+            tail,
+        })
     }
 
     /// The neutral variable at concrete level `lvl`.
@@ -1714,6 +1881,9 @@ impl fmt::Debug for Val<'_> {
                 ContextProgram::Run { count, .. } => write!(f, "su^{} {tail:?}", count),
                 ContextProgram::Compose { .. } => write!(f, "su^<shared> {tail:?}"),
             },
+            Val::BitRun { width, bits, tail, .. } => {
+                write!(f, "bits^{width}[{bits:#x}] {tail:?}")
+            }
             Val::NatSync { program, .. } => match &**program {
                 ContextProgram::Run { count, .. } => write!(f, "sync^{}", count),
                 ContextProgram::Compose { .. } => f.write_str("sync^<shared>"),
@@ -1750,6 +1920,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<EnvNode<'_>>(), 16);
         assert_eq!(std::mem::size_of::<TmClo<'_>>(), 32);
         assert_eq!(std::mem::size_of::<TyClo<'_>>(), 32);
+        // The bitvector run (`docs/native-bitvector-values-design.md` §11.1)
+        // must ride inside the enum `Val::Pair` already sizes: a `u128` would
+        // raise the alignment to 16 and round every value up, which is why
+        // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
+        assert_eq!(std::mem::size_of::<Val<'_>>(), 88);
     }
 
     #[test]

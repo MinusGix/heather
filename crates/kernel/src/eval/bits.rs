@@ -1,0 +1,317 @@
+//! The bit criterion, and packing a `Vec` prefix into a machine word
+//! (`docs/native-bitvector-values-design.md` §§3.1, 7).
+//!
+//! `Vec^l(T; n)` is a right-nested Σ (`docs/wf-former-design.md` §1.2), so a
+//! vector of `n` elements is `n` pair nodes. When `T` has exactly **two**
+//! canonical inhabitants and both payloads are proof-irrelevant — which is
+//! precisely what a two-constructor nullary inductive lowers to
+//! (`docs/inductive-tier0-lowering.md` §3: `Tag_D`-prefixed field spines
+//! under a sum) — the whole chain is `n` bits, and everything a consumer can
+//! observe about element `i` is which injection it is.
+//!
+//! Nothing here reads a definition's spelling. The criterion is a fact about
+//! the *type*, decided by forcing it, and memoized on the element closure in
+//! the value arena beside the fold classes. The canonical inhabitants of the
+//! two halves are built once, when the criterion is decided, because
+//! unpacking a run has to reproduce the element type's own injections and
+//! the consumers that unpack have no evaluator in hand (design §13).
+//!
+//! Packing is **on demand and type-directed** (design §3.2): it happens where
+//! the type is in hand and the walk is one the caller was going to perform
+//! anyway — conversion's Σ-η arm. It never δ-unfolds a chain's spine, so a
+//! neutral side is left to the comparison that decides neutrals on their
+//! spines; it does force the *element*, which is what comparing two bits at a
+//! sum type needs regardless.
+
+use std::sync::Arc as Rc;
+
+use crate::level::Level;
+use crate::value::{BitTy, Elim, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP};
+
+use super::{Eval, Res};
+
+/// How deep a unit-like Σ-nest, or a canonical payload, may be.
+///
+/// `Tag_D` is the binary representation of a declaration id, so the nest is
+/// `O(log id_D)` deep and this is slack of several orders. The bound exists
+/// so that neither the criterion nor the payload check can recurse on the
+/// native stack over an adversarial type.
+const UNIT_NEST_LIMIT: u32 = 64;
+
+/// A common prefix of two vectors, read as two machine words
+/// (design §7): at least one bit was consumed from each side, and
+/// `left`/`right` are what is left, at the type `ty`.
+pub(crate) struct BitPrefix<'v> {
+    pub left_bits: u64,
+    pub right_bits: u64,
+    pub left: Rc<Val<'v>>,
+    pub right: Rc<Val<'v>>,
+    /// The `Vec` at the residual length — the type the two residuals are
+    /// compared at, taken from the type walk and not reconstructed.
+    pub ty: &'v TyClo<'v>,
+}
+
+/// One node of the `Vec`'s Σ-chain: the annotations a projection out of it
+/// carries. A `Vec`'s Σ has one level on both sides and a tail that does not
+/// mention the binder, which is what lets the same record travel down the
+/// chain as an ordinary value.
+struct Sigma<'v> {
+    level: Level,
+    fst: &'v TyClo<'v>,
+    snd: &'v TyClo<'v>,
+}
+
+impl<'v> Sigma<'v> {
+    fn proj(&self, first: bool) -> Elim<'v> {
+        let (fst_level, snd_level) = (self.level.clone(), self.level.clone());
+        let (fst_ty, snd_ty) = (self.fst, self.snd);
+        if first {
+            Elim::Fst { fst_level, snd_level, fst_ty, snd_ty }
+        } else {
+            Elim::Snd { fst_level, snd_level, fst_ty, snd_ty }
+        }
+    }
+}
+
+impl<'v> Eval<'_, 'v> {
+    /// Whether `elem` is a *bit type*, and with what injections. Decided
+    /// once per element closure and memoized in the arena; the negative
+    /// verdict is memoized too, since it is the common one.
+    pub(crate) fn bit_ty(&mut self, elem: &'v TyClo<'v>) -> Res<Option<&'v BitTy<'v>>> {
+        if let Some(found) = self.arena.bit_type(elem) {
+            return Ok(found);
+        }
+        let decided = self.decide_bit_ty(elem)?;
+        self.arena.cache_bit_type(elem, decided);
+        Ok(decided)
+    }
+
+    fn decide_bit_ty(&mut self, elem: &'v TyClo<'v>) -> Res<Option<&'v BitTy<'v>>> {
+        // δ-transparently: an element type reached through the elaborator is
+        // an `El` of a *glued* code, and the criterion is a question about
+        // the type, decided once and memoized — not a term comparison whose
+        // δ discipline this could disturb.
+        let w = self.force_ty(elem)?;
+        let w = self.delta_whnf_ty(w)?;
+        let VTy::Sum { lhs_level, rhs_level, lhs, rhs } = &*w else {
+            return Ok(None);
+        };
+        let (lhs_level, rhs_level, lhs, rhs) =
+            (lhs_level.clone(), rhs_level.clone(), *lhs, *rhs);
+        let (Some(zero), Some(one)) = (
+            self.unit_inhabitant(lhs, UNIT_NEST_LIMIT)?,
+            self.unit_inhabitant(rhs, UNIT_NEST_LIMIT)?,
+        ) else {
+            return Ok(None);
+        };
+        let zero = self.vclo(Rc::new(Val::Inl {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs,
+            rhs,
+            val: zero,
+        }));
+        let one = self.vclo(Rc::new(Val::Inr {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+            val: one,
+        }));
+        Ok(Some(self.arena.bit_ty(BitTy { elem, zero, one })))
+    }
+
+    /// The canonical inhabitant of a *unit-like* type — `Unit`, or a Σ-nest
+    /// ending in `Unit` — and `None` for anything else. The Σ's tail is
+    /// instantiated at the first component's own inhabitant, which is what
+    /// makes the reading total for a dependent nest as well as a constant
+    /// one; the pair keeps the **uninstantiated** tail as its annotation,
+    /// which is where a pair's `snd_ty` is scoped.
+    fn unit_inhabitant(
+        &mut self,
+        ty: &'v TyClo<'v>,
+        depth: u32,
+    ) -> Res<Option<&'v TmClo<'v>>> {
+        if depth == 0 {
+            return Ok(None);
+        }
+        let w = self.force_ty(ty)?;
+        let w = self.delta_whnf_ty(w)?;
+        match &*w {
+            VTy::Unit { level } => {
+                let level = level.clone();
+                Ok(Some(self.vclo(Rc::new(Val::Triv { level }))))
+            }
+            VTy::Sigma { fst_level, snd_level, fst, snd } => {
+                let (fst_level, snd_level, fst, snd) =
+                    (fst_level.clone(), snd_level.clone(), *fst, *snd);
+                let Some(head) = self.unit_inhabitant(fst, depth - 1)? else {
+                    return Ok(None);
+                };
+                let rest_ty = self.apply_ty(snd, &[head])?;
+                let rest_ty = self.arena.ty(TyClo::val(rest_ty));
+                let Some(rest) = self.unit_inhabitant(rest_ty, depth - 1)? else {
+                    return Ok(None);
+                };
+                Ok(Some(self.vclo(Rc::new(Val::Pair {
+                    fst_level,
+                    snd_level,
+                    fst_ty: fst,
+                    snd_ty: snd,
+                    fst: head,
+                    snd: rest,
+                }))))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The bit a *bit value* stands for: `Inl`/`Inr` over the canonical
+    /// inhabitant of its half. Requiring the payload to be canonical is what
+    /// makes unpacking reproduce the same value rather than a merely
+    /// convertible one (design §3.1); anything else does not pack and stays
+    /// structural.
+    fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
+        let (bit, payload) = match &**v {
+            Val::Inl { val, .. } => (false, *val),
+            Val::Inr { val, .. } => (true, *val),
+            _ => return Ok(None),
+        };
+        Ok(if self.is_canonical_unit(payload, UNIT_NEST_LIMIT)? {
+            Some(bit)
+        } else {
+            None
+        })
+    }
+
+    fn is_canonical_unit(&mut self, c: &'v TmClo<'v>, depth: u32) -> Res<bool> {
+        if depth == 0 {
+            return Ok(false);
+        }
+        let v = self.force(c)?;
+        Ok(match &*v {
+            Val::Triv { .. } => true,
+            Val::Pair { fst, snd, .. } => {
+                self.is_canonical_unit(fst, depth - 1)?
+                    && self.is_canonical_unit(snd, depth - 1)?
+            }
+            _ => false,
+        })
+    }
+
+    /// One bit off the head of a vector value, with what is left of it.
+    ///
+    /// Three shapes, and the third is the point (design §7, "native against
+    /// structural"): a `Pair` reads its own fields, a run gives its first bit
+    /// through [`Val::bit_run_unpack`] — the same Σ-chain every other
+    /// consumer sees — and **anything else is projected**, with the Σ's own
+    /// annotations, which is exactly the `fst`/`snd` the η arm was about to
+    /// perform and in the same order. A computed vector is a stuck
+    /// projection until its definition unfolds, so the head is taken
+    /// δ-transparently; that is the same unfolding comparing this bit
+    /// against a canonical one at the sum type would force anyway.
+    fn bit_step(
+        &mut self,
+        bt: &'v BitTy<'v>,
+        sigma: &Sigma<'v>,
+        v: &Rc<Val<'v>>,
+    ) -> Res<Option<(bool, Rc<Val<'v>>)>> {
+        let (head, rest) = match &**v {
+            Val::Pair { fst, snd, .. } => (self.force(fst)?, self.force(snd)?),
+            Val::BitRun { level, ty, width, bits, tail_len, tail } => {
+                if !std::ptr::eq(ty.elem, bt.elem) {
+                    return Ok(None);
+                }
+                let pair = Val::bit_run_unpack(
+                    self.arena, level, ty, *width, *bits, tail_len, tail,
+                );
+                let Val::Pair { fst, snd, .. } = pair else {
+                    unreachable!("a run unpacks to a pair")
+                };
+                (self.force(fst)?, self.force(snd)?)
+            }
+            _ => {
+                let head = self.elim(Rc::clone(v), sigma.proj(true))?;
+                let rest = self.elim(Rc::clone(v), sigma.proj(false))?;
+                (head, rest)
+            }
+        };
+        let head = self.delta_whnf(head)?;
+        Ok(self.bit_of(&head)?.map(|bit| (bit, rest)))
+    }
+
+    /// Pack the longest common prefix of two vectors at `tail_ty`'s Σ-chain
+    /// into two words (design §7). `None` is "not one bit packed", which
+    /// leaves the caller's behaviour exactly as it is today.
+    ///
+    /// The value walk and the type walk go in lockstep: `tail_ty` is the Σ's
+    /// own tail, so each further bit costs one [`Eval::vec_ty`] — which is
+    /// what η would have paid for the *type* anyway — and the residual type
+    /// is the one the walk stopped at, never a reconstructed length.
+    pub(crate) fn pack_bit_prefix(
+        &mut self,
+        level: &Level,
+        elem: &'v TyClo<'v>,
+        tail_ty: &'v TyClo<'v>,
+        mut left: Rc<Val<'v>>,
+        mut right: Rc<Val<'v>>,
+    ) -> Res<Option<BitPrefix<'v>>> {
+        let Some(bt) = self.bit_ty(elem)? else { return Ok(None) };
+        let (mut left_bits, mut right_bits) = (0u64, 0u64);
+        let mut width = 0u32;
+        // The type of the values one bit further in; `out_ty` is recorded
+        // *before* the step, so a chain that stops being a Σ still hands
+        // back its residuals at the type it stopped at.
+        let mut sigma = Sigma { level: level.clone(), fst: elem, snd: tail_ty };
+        let mut out_ty = tail_ty;
+        while width < BIT_RUN_WIDTH_CAP {
+            let Some((l_bit, l_rest)) = self.bit_step(bt, &sigma, &left)? else { break };
+            let Some((r_bit, r_rest)) = self.bit_step(bt, &sigma, &right)? else { break };
+            // One fuel unit per bit consumed (design §8): strictly less than
+            // the η path spent on the same bit, so no verdict fuel allowed
+            // today becomes a refusal.
+            self.spend()?;
+            left_bits |= u64::from(l_bit) << width;
+            right_bits |= u64::from(r_bit) << width;
+            width += 1;
+            left = l_rest;
+            right = r_rest;
+            out_ty = sigma.snd;
+            let w = self.force_ty(sigma.snd)?;
+            let VTy::Sigma { fst, snd, .. } = &*w else { break };
+            // The next component is a bit only if it is at the same element
+            // type; a `Vec`'s chain always is, and nothing else continues.
+            if !std::ptr::eq(*fst, elem) {
+                break;
+            }
+            sigma = Sigma { level: sigma.level, fst: *fst, snd: *snd };
+        }
+        if width == 0 {
+            return Ok(None);
+        }
+        Ok(Some(BitPrefix { left_bits, right_bits, left, right, ty: out_ty }))
+    }
+
+    /// A run over a closed tail, for the tests and for round 3's merging
+    /// frame: `bits` of `width` over `Triv`, at `elem`'s injections.
+    #[cfg(test)]
+    pub(crate) fn closed_bit_run(
+        &mut self,
+        level: &Level,
+        elem: &'v TyClo<'v>,
+        width: u32,
+        bits: u64,
+    ) -> Res<Option<Val<'v>>> {
+        let Some(ty) = self.bit_ty(elem)? else { return Ok(None) };
+        let tail_len = self.vclo(Rc::new(Val::Zero));
+        let tail = self.vclo(Rc::new(Val::Triv { level: level.clone() }));
+        Ok(Some(Val::BitRun {
+            level: level.clone(),
+            ty,
+            width,
+            bits,
+            tail_len,
+            tail,
+        }))
+    }
+}

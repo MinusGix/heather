@@ -1554,6 +1554,21 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // η arm, so it fires on literal pairs, neutrals, or mixtures.
             // Compare `fst a ≈ fst b : S` and `snd a ≈ snd b : T[fst a/x]`.
             TyView::Sigma { fst_level, snd_level, fst, snd } => {
+                // Native bitvector words (extension;
+                // `docs/native-bitvector-values-design.md` §7), ahead of the
+                // guard below and for the same observation carried one step
+                // further: a `Vec` is a right-nested Σ, and when its element
+                // type has exactly two canonical inhabitants the whole chain
+                // is a machine word. Comparing two *canonical* 64-bit
+                // vectors component by component costs ~59 evaluator steps
+                // per bit before any operation has been performed at all
+                // (the design's §2 A3 floor); packing performs the same
+                // projections η would have performed and then compares in
+                // one instruction. Anything that does not pack falls through
+                // to η unchanged.
+                if D::bit_vec_eq(self, env, a, b, fst, snd, snd_level)?.is_some() {
+                    return Ok(());
+                }
                 // Neutral-first (extension): two stuck terms whose spines
                 // agree are convertible by congruence, and deciding that on
                 // the spines costs the spines. Projecting first instead

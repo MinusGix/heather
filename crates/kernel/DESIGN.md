@@ -311,6 +311,35 @@ by a definition whose reduction cost matches its meaning, or by
 reflection, never by a kernel case for that definition — and what is not
 accelerated is refused with `OutOfFuel`, never a process abort.
 
+**Native bitvector values** (`issues/kernel-native-bitvector-values.md`,
+`docs/native-bitvector-values-design.md`). The second representation change
+of the runs kind. A `Vec^l(T; n)` whose element type `T` has exactly two
+canonical inhabitants with proof-irrelevant payloads — which is what a
+tier-0 two-constructor nullary inductive lowers to — has canonical values
+that are right-nested Σ-pairs of injections, one pair node and one injection
+per bit. `Val::BitRun` holds a closed prefix of such a chain as a machine
+word: an element type, a width, `u64` bits, and a tail, standing for the
+Σ-chain that unpacks from it one bit at a time with the annotations the
+`Vec` type rule itself produces. It is `Val::NatRun` for a different former:
+the same closed-prefix-over-a-tail shape, the same virtual predecessor on
+the way out, and the same generality — nothing in it names a library type or
+definition.
+
+Adequacy is bisimulation. *Values mean the same*: a word unpacks to the pair
+the `Vec` rule builds, with the element type's own injections and their
+canonical payloads, so every consumer that matched on `Pair` sees what it
+saw before; a bit whose payload is not canonical does not pack. *Reduction
+is unchanged*: nothing in the evaluator produces a word yet — entry is
+**pack-on-demand at conversion**, where the type is in hand and the walk is
+the one η was about to perform. Conversion compares two vectors over such an
+element type by their words, before Σ-η, packing a structural side by the
+`fst`/`snd` η would have taken; a side that is two stuck spines is left to
+the neutral-first guard. Native steps charge one fuel unit per bit, which is
+strictly less than the structural path spent, so no verdict that fuel
+allowed becomes a refusal. What does not meet the criterion — an element
+type with a payload of its own, an open width, a chain that stops being a Σ
+— is compared exactly as it is today.
+
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see
