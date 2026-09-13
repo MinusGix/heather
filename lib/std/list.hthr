@@ -853,6 +853,23 @@ theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
     }
 }
 
+// Past the whole list there is nothing to read. The index is generalized
+// behind the arrow for the same reason as `nth_append_l`, and the order
+// hypothesis is bound *after* the match on it so the arm refines its type:
+// `Succ(t.len()) <= Zero` computes to `False`, `Succ(t.len()) <= Succ(k)` to
+// `t.len() <= k`. A certificate that reads at an address past a concrete
+// file proves `len <= index` by computation instead of walking the file
+// (issues/call-memory-read-file-walk.md).
+theorem nth_past_end<A>(xs: List<A>): (i: Nat) → xs.len() <= i → xs.nth(i) = None {
+    match xs {
+        Nil => λ _ _ => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ h => false_elim(h),
+            Succ(k) => λ h => nth_past_end(t, k, h),
+        },
+    }
+}
+
 // Reading at an index is reading the head of what remains after dropping it.
 // The companion to `drop_succ`: with the suffixes already named, a lookup
 // deep in a concrete list is this theorem plus one head read.

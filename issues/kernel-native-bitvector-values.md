@@ -3,7 +3,7 @@ title: Native closed-bitvector values in the evaluator, with an adequacy argumen
 status: open
 labels: [kernel,evaluator,representation,bitvec,performance,design]
 created: 2026-09-12
-updated: 2026-09-12
+updated: 2026-09-13
 ---
 
 Filed from the 2026-09-12 certificate-wide attribution ([[function-ir-x86-proof-scaling]] log): 15.7 s of the reused_callee certificate's 41.8 s kernel time is the Id/Id bucket, and its unit is one closed width-64 bitvector operation costing ~250 evaluator steps per bit (`is_zero_bits(64, bxor(64, a, b))` 16.8 k steps / 38 ms; `bitvec::add` 30.1 k / 54 ms). Every memory read walks the stack-write chain with one such compare per link, so the cost is multiplicative in chain length and appears everywhere machine words are computed at closed values, not only in this certificate.
@@ -22,3 +22,4 @@ Alternatives that do not need this: (K2) fewer compares per read on the library/
 ## Log
 
 - 2026-09-12: Repriced by the K2 design pass (2026-09-12): on the reused_callee certificate the closed compares in the read chain are 0.7 ms each (addresses differ in their low bits, so is_zero_bits settles early) and the Id/Id bucket's big items were file-list walks ([[call-memory-read-file-walk]]), not compares. What is genuinely this issue's shape there is byte_page + byte_wrap: 298 closed 48/64-bit compares proved by refl, 4.1 s of kernel, each at a different address so no re-spelling applies. Size the payoff from those rows, not from the earlier 15.7 s figure.
+- 2026-09-13: 2026-09-13 repriced again after the type-code quote fix (function-ir-x86-proof-scaling log): the closed-refl families of the reused_callee certificate are 8.4 s of a 27.8 s kernel gate (30%), 630 items at 13–44 ms each — byte_page 167 × 13 ms (48-bit window test), byte_wrap 131 × 16 ms (64-bit carry), stack_allowed 36 × 44 ms (eight 52-bit page tests), store_offset 48 × 19 ms (64-bit add), write_literal 48 × 13 ms, read_address 32 × 16 ms. That is the payoff to size this issue from: each such item is one closed machine-word operation the native value would settle in a handful of steps.
