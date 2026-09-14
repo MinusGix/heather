@@ -400,8 +400,13 @@ impl Elaborator {
         // `scrut_ty` *is* the lowering it was minted from, the inline type
         // otherwise. Everything emitted below reads `tel.d_emit`; the
         // structural reads a line down read `scrut_ty`.
+        // Parameterized declarations have a code function rather than a
+        // closed TyCode. Keep their instance named in the children telescope
+        // too: an inline List<CallInstruction> here repeats the entire
+        // instruction payload in Vec/nth annotations (call_run_checked).
         let d_emit = self
             .ty_type_ref(cx, ind.tag, scrut_ty)
+            .or_else(|| self.emit_ty(cx, scrut_ty, 0))
             .unwrap_or_else(|| scrut_ty.clone());
         // The `Wf` slot pair as it is **written into emitted terms**
         // (`docs/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
@@ -2920,6 +2925,46 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         }
 
         // -- emission: real source, the four axes ---------------------------
+
+        #[test]
+        fn a_parameterized_match_names_its_children_element_type() {
+            let mut e = env();
+            let before = e.el.psi.bindings.len();
+            e.el.elab_source(
+                "fn blen(b: Box<Flat>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(blen(r)) } }",
+            ).expect("a match on an instantiated recursive type checks");
+            let GlobalBinding::Tm { body: Some(body), .. } =
+                e.el.psi.bindings.last().expect("a binding")
+            else { panic!("a function body") };
+            let Term::Lam { body, .. } = &**body else { panic!("one parameter") };
+            let Term::ElimWf { step, .. } = &**body else { panic!("a recursive match") };
+            // The step applies its case tree to cs and then ih. Inspect the
+            // actual cs domain: an inline Wf here passes semantic tests but
+            // copies every payload into each child-vector annotation.
+            let Term::App { fun, .. } = &**step else { panic!("apply ih") };
+            let Term::App { dom, .. } = &**fun else { panic!("apply cs") };
+            let Type::Vec { elem, .. } = &**dom else { panic!("children vector") };
+            let Type::El { tm, .. } = &**elem else { panic!("named children element") };
+            let grew = (e.el.psi.bindings.len() - before) as u32;
+            assert_eq!(
+                e.el.gen_app_of(&tm.shift_global(grew)).map(|(key, _)| key),
+                Some(GenDef::TyCodeFn(e.ind("Box").tag)),
+            );
+            // Open element type, neutral and literal scrutinees, a checking
+            // position, and a false equation on the same computation path.
+            e.el.elab_source(
+                "
+fn bcopy<A>(b: Box<A>) -> Box<A> {
+    match b { BNil => BNil, BCons(a, r) => BCons(a, bcopy(r)) }
+}
+theorem bcopy_open<A>(a: A): bcopy(BCons(a, BNil)) = BCons(a, BNil) { refl }
+theorem blen_literal(): blen(BCons(FA, BCons(FB(2), BNil))) = 2 { refl }
+",
+            ).expect("the named telescope checks and computes at open and closed types");
+            assert!(e.el.elab_source(
+                "theorem bcopy_wrong(): bcopy(BCons(FA, BNil)) = BNil { refl }",
+            ).is_err(), "a false computation must still be refused");
+        }
 
         #[test]
         fn the_four_axes_on_a_monomorphized_container() {
