@@ -1,0 +1,78 @@
+// A runnable slice of idealized.hthr: parse two natural-number tokens joined
+// by +, with explicit success values and function-scoped error propagation.
+import nat;
+import list;
+import result;
+
+inductive Token { Number(value: Nat), Plus }
+inductive ParseError { ExpectedNumber, ExpectedPlus, UnexpectedEnd, TrailingInput }
+record Parsed { value: Nat, rest: List<Token> }
+
+fn parse_atom(tokens: List<Token>) -> Result<Parsed, ParseError> {
+    match tokens {
+        Nil => Err(UnexpectedEnd),
+        Cons(token, rest) => match token {
+            Number(value) => Ok(Parsed(value, rest)),
+            Plus => Err(ExpectedNumber),
+        },
+    }
+}
+
+fn parse_plus(tokens: List<Token>) -> Result<List<Token>, ParseError> {
+    match tokens {
+        Nil => Err(UnexpectedEnd),
+        Cons(token, rest) => match token {
+            Plus => Ok(rest),
+            Number(value) => Err(ExpectedPlus),
+        },
+    }
+}
+
+fn parse_sum(tokens: List<Token>) -> Result<Nat, ParseError> {
+    let left = parse_atom(tokens)?;
+    let right = parse_atom(parse_plus(left.rest)?)?;
+    match right.rest {
+        Nil => Ok(left.value + right.value),
+        Cons(token, rest) => Err(TrailingInput),
+    }
+}
+
+// The same parser before chaining sugar. The open-input equation below
+// checks that the sugar keeps the ordinary matching computation.
+fn parse_sum_explicit(tokens: List<Token>) -> Result<Nat, ParseError> {
+    match parse_atom(tokens) {
+        Err(error) => Err(error),
+        Ok(left) => match parse_plus(left.rest) {
+            Err(error) => Err(error),
+            Ok(rest) => match parse_atom(rest) {
+                Err(error) => Err(error),
+                Ok(right) => match right.rest {
+                    Nil => Ok(left.value + right.value),
+                    Cons(token, rest) => Err(TrailingInput),
+                },
+            },
+        },
+    }
+}
+
+theorem parser_same(tokens: List<Token>): parse_sum(tokens) = parse_sum_explicit(tokens) { refl }
+theorem sum(): parse_sum([Number(2), Plus, Number(3)]) = Ok(5) { refl }
+theorem empty(): parse_sum([]) = Err(UnexpectedEnd) { refl }
+theorem first_error(): parse_sum([Plus, Number(3)]) = Err(ExpectedNumber) { refl }
+theorem missing_plus(): parse_sum([Number(2), Number(3)]) = Err(ExpectedPlus) { refl }
+theorem missing_rhs(): parse_sum([Number(2), Plus]) = Err(UnexpectedEnd) { refl }
+theorem trailing(): parse_sum([Number(2), Plus, Number(3), Plus]) = Err(TrailingInput) { refl }
+
+// A recursive client: collect parsed atoms, stopping at the first error.
+fn collect<A, E>(values: List<Result<A, E>>) -> Result<List<A>, E> {
+    match values {
+        Nil => Ok(Nil),
+        Cons(value, rest) => {
+            let head = value?;
+            let tail = collect(rest)?;
+            Ok(Cons(head, tail))
+        },
+    }
+}
+theorem collected(): collect<Nat, Nat>([Ok(2), Ok(3)]) = Ok([2, 3]) { refl }
+theorem collect_first_error(): collect<Nat, Nat>([Ok(2), Err(7), Err(8)]) = Err(7) { refl }

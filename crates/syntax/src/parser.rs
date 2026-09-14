@@ -153,6 +153,8 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             motive_body: false,
             spec_failed: std::collections::HashSet::new(),
             next_hygienic: 0,
+            propagation_count: 0,
+            propagation_depth: 0,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -180,6 +182,10 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// Avoid a lowering walk for declarations and lambdas without postfix `?`.
+    propagation_count: usize,
+    /// Ordinary function/lambda bodies admit propagation; signatures do not.
+    propagation_depth: usize,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -1663,6 +1669,7 @@ impl Parser {
     }
 
     fn decl(&mut self) -> R<Decl> {
+        let propagation_start = self.propagation_count;
         let start = self.peek_span();
         // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
         // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
@@ -1934,8 +1941,17 @@ impl Parser {
                 span: end,
             }
         } else {
-            self.block()?
+            let saved = self.propagation_depth;
+            self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
+            let body = self.block();
+            self.propagation_depth = saved;
+            body?
         };
+        let body = if self.propagation_count != propagation_start {
+            crate::try_lower::reject_type(&result)?;
+            for p in &params { crate::try_lower::reject_type(&p.ty)?; }
+            crate::try_lower::block(body, &mut self.next_hygienic)?
+        } else { body };
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, decreases, body, span })
     }
@@ -2798,15 +2814,23 @@ impl Parser {
     /// dependent checking and every diagnostic after the spelling disappears
     /// are exactly the existing lambda path's behavior.
     fn sequent_expr(&mut self) -> R<Expr> {
+        let propagation_start = self.propagation_count;
         let (binders, start, _) = self.sequent_binders()?;
         let body = if std::mem::take(&mut self.motive_body) {
             let ty = self.ty()?;
             let span = ty.span;
             Expr { kind: ExprKind::TyLit(Box::new(ty)), span }
         } else {
-            self.expr()?
+            self.propagation_depth += 1;
+            let body = self.expr();
+            self.propagation_depth -= 1;
+            body?
         };
         let span = start.join(body.span);
+        let body = if self.propagation_count != propagation_start {
+            for binder in &binders { if let Some(t) = &binder.ty { crate::try_lower::reject_type(t)?; } }
+            crate::try_lower::expression(body, &mut self.next_hygienic)?
+        } else { body };
         Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 
@@ -3329,6 +3353,18 @@ impl Parser {
         }
         loop {
             match self.peek() {
+                TokKind::Hole(None) if self.tight(self.pos) => {
+                    if self.propagation_depth == 0 {
+                        return self.err("postfix `?` needs an enclosing function or lambda body");
+                    }
+                    self.propagation_count += 1;
+                    let end = self.bump().span;
+                    let span = e.span.join(end);
+                    e = Expr { kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(crate::try_lower::TRY.into()), span: end }),
+                        args: vec![e], named: Vec::new(), explicit: false, goal_oriented: false,
+                    }, span };
+                }
                 TokKind::Dot => {
                     self.bump();
                     let (field, fsp) = self.ident("field or method name")?;
@@ -3790,6 +3826,7 @@ impl Parser {
     /// so it extends as far as it can and stops at `,` `)` `}` `;` — none of
     /// which are infix operators.
     fn lambda(&mut self) -> R<Expr> {
+        let propagation_start = self.propagation_count;
         let start = self.bump().span; // `λ` or `fun`
         let mut binders = Vec::new();
         loop {
@@ -3848,9 +3885,16 @@ impl Parser {
             let span = ty.span;
             Expr { kind: ExprKind::TyLit(Box::new(ty)), span }
         } else {
-            self.expr()?
+            self.propagation_depth += 1;
+            let body = self.expr();
+            self.propagation_depth -= 1;
+            body?
         };
         let span = start.join(body.span);
+        let body = if self.propagation_count != propagation_start {
+            for binder in &binders { if let Some(t) = &binder.ty { crate::try_lower::reject_type(t)?; } }
+            crate::try_lower::expression(body, &mut self.next_hygienic)?
+        } else { body };
         Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 

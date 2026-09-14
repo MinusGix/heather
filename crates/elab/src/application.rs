@@ -95,6 +95,12 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
 
     fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
 
+    /// A generated propagation callback may infer its result once its input
+    /// domain is known. Ordinary source lambdas retain the existing policy.
+    fn infer_propagation_callback(
+        &self, _cx: &Cx, _argument: &Expr, _parameter: &Type, _n: u32, _sols: &[Sol],
+    ) -> Option<R<(Term, Type, Level)>> { None }
+
     fn unify_application_argument_type(
         &self,
         cx: &Cx,
@@ -240,6 +246,19 @@ pub(crate) fn retry_obligations(
             progressed = true;
         }
         if !progressed || !blocked {
+            if allow_fallback && blocked {
+                for obligation in deferred {
+                    if !matches!(sols[obligation.slot], Sol::Withheld) { continue; }
+                    if let Some(inferred) = elab.infer_propagation_callback(cx,obligation.expr,&obligation.dom,n,sols) {
+                        let (term,ty,_) = inferred?;
+                        elab.unify_application_argument_type(cx,&obligation.dom,&ty,n,sols,obligation.expr.span);
+                        sols[obligation.slot] = Sol::Solved(Rc::new(term));
+                        progressed = true;
+                        break;
+                    }
+                }
+                if progressed { continue; }
+            }
             if allow_fallback
                 && blocked
                 && let Some(obligation) = deferred.iter().find(|obligation| {

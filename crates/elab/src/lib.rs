@@ -1122,6 +1122,19 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.elab_infer(cx, argument)
     }
 
+    fn infer_propagation_callback(
+        &self, cx: &Cx, argument: &Expr, parameter: &Type, n: u32, sols: &[Sol],
+    ) -> Option<R<(Term, Type, Level)>> {
+        let ExprKind::Lam { binders,body } = &argument.kind else { return None; };
+        let [binder] = binders.as_slice() else { return None; };
+        if !binder.name.starts_with("#try") || binder.ty.is_some() || binder.implicit { return None; }
+        // Filter the private syntax before substituting any types: ordinary
+        // deferred source arguments pay no new type traversal here.
+        let Type::Pi { dom,dom_level,.. } = parameter else { return None; };
+        let dom = unification::zonked(dom,n,sols)?;
+        Some(self.expr_elab().infer_propagation_callback(self,cx,binder,body,&dom,dom_level))
+    }
+
     fn unify_application_argument_type(
         &self,
         cx: &Cx,

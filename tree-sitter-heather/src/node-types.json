@@ -100,6 +100,10 @@
         "named": true
       },
       {
+        "type": "propagation_expression",
+        "named": true
+      },
+      {
         "type": "qualified_identifier",
         "named": true
       },
@@ -2564,6 +2568,10 @@
             "named": true
           },
           {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
             "type": "head_type_application",
             "named": true
           },
@@ -2712,6 +2720,10 @@
             "named": true
           },
           {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
             "type": "head_type_application",
             "named": true
           },
@@ -2785,6 +2797,10 @@
         },
         {
           "type": "head_prefix_expression",
+          "named": true
+        },
+        {
+          "type": "head_propagation_expression",
           "named": true
         },
         {
@@ -2877,6 +2893,10 @@
             "named": true
           },
           {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
             "type": "head_type_application",
             "named": true
           },
@@ -2953,6 +2973,10 @@
           "named": true
         },
         {
+          "type": "head_propagation_expression",
+          "named": true
+        },
+        {
           "type": "head_type_application",
           "named": true
         },
@@ -3021,6 +3045,85 @@
         },
         {
           "type": "head_prefix_expression",
+          "named": true
+        },
+        {
+          "type": "head_propagation_expression",
+          "named": true
+        },
+        {
+          "type": "head_type_application",
+          "named": true
+        },
+        {
+          "type": "hole",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "qualified_identifier",
+          "named": true
+        },
+        {
+          "type": "universe",
+          "named": true
+        },
+        {
+          "type": "vector_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "head_propagation_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "anonymous_constructor_expression",
+          "named": true
+        },
+        {
+          "type": "argument_slot",
+          "named": true
+        },
+        {
+          "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "head_binary_expression",
+          "named": true
+        },
+        {
+          "type": "head_call_expression",
+          "named": true
+        },
+        {
+          "type": "head_index_expression",
+          "named": true
+        },
+        {
+          "type": "head_member_expression",
+          "named": true
+        },
+        {
+          "type": "head_prefix_expression",
+          "named": true
+        },
+        {
+          "type": "head_propagation_expression",
           "named": true
         },
         {
@@ -3133,6 +3236,10 @@
           },
           {
             "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
             "named": true
           },
           {
@@ -3273,6 +3380,10 @@
           },
           {
             "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
             "named": true
           },
           {
@@ -3829,6 +3940,10 @@
             "named": true
           },
           {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
             "type": "head_type_application",
             "named": true
           },
@@ -3929,6 +4044,10 @@
             "named": true
           },
           {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
             "type": "head_type_application",
             "named": true
           },
@@ -4004,6 +4123,10 @@
           },
           {
             "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
             "named": true
           },
           {
@@ -4433,6 +4556,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "propagation_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -5323,6 +5462,10 @@
   },
   {
     "type": ">",
+    "named": false
+  },
+  {
+    "type": "?",
     "named": false
   },
   {

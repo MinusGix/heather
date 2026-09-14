@@ -12,6 +12,7 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+mod try_lower;
 
 pub use ast::*;
 pub use parser::{class_ty, parse_file, ParseError};

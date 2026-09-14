@@ -1,0 +1,9 @@
+import result;
+fn chain(r: Result<Result<Nat,Nat>,Nat>) -> Result<Nat,Nat> {
+    let n = r??;
+    Ok(n)
+}
+fn branch(r: Result<Nat,Nat>) -> Result<Nat,Nat> {
+    match r? { Zero => Ok(0), Succ(n) => Ok(n) }
+}
+theorem goal(): 0 = 0 { ?proof on ?proof := refl; }

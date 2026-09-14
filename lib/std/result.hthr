@@ -1,0 +1,18 @@
+// A success value or an error. `?` propagates Err from a function or lambda.
+inductive Result<A, E> { Ok(value: A), Err(error: E) }
+
+fn map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
+    match r { Ok(value) => Ok(f(value)), Err(error) => Err(error) }
+}
+
+fn and_then<A, B, E>(self r: Result<A, E>, f: A → Result<B, E>) → Result<B, E> {
+    match r { Ok(value) => f(value), Err(error) => Err(error) }
+}
+
+fn map_err<A, E, F>(self r: Result<A, E>, f: E → F) → Result<A, F> {
+    match r { Ok(value) => Ok(value), Err(error) => Err(f(error)) }
+}
+
+fn unwrap_or<A, E>(self r: Result<A, E>, fallback: A) → A {
+    match r { Ok(value) => value, Err(error) => fallback }
+}

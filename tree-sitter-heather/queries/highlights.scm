@@ -93,3 +93,6 @@
 ] @keyword @preproc
 ((identifier) @keyword @preproc
   (#any-of? @preproc "apply" "give"))
+
+(propagation_expression "?" @operator)
+(head_propagation_expression "?" @operator)

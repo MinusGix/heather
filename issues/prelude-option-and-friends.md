@@ -3,7 +3,7 @@ title: Option/Result/List in the prelude, with helpers and chaining
 status: open
 labels: [frontend,stdlib,elaboration,design]
 created: 2026-07-31
-updated: 2026-08-16
+updated: 2026-09-14
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/ir_v1.hthr):
@@ -94,3 +94,5 @@ issue's open scope.
 - 2026-08-13: Also filed off the same critique: [[inline-enum-types]] — per-signature anonymous enums so narrow error types are cheap to declare; the `?` embedding story there is From-style and lands in this issue's chaining kit if taken.
 - 2026-08-16: Residency landed for `True` (2026-08-16, [[true-prop-trivial-hypotheses]] half 1). It does NOT live in `lib/std` and it is not a declaration: `True` is the kernel's `Unit^0` claimed as a surface type name in the elaborator (crates/elab/src/inductive.rs `lower_named`), with `trivial` its canonical inhabitant (crates/elab/src/lib.rs, alongside `refl`/`FZ`) — i.e. always in scope for the same reason `Nat` is, with no import. The reason is forced rather than chosen: `crates/elab/src/prelude.hthr` is surface source, and the surface has no spelling for kernel `Unit`, so a prelude-source `True` was not writable; and the whole point of `True := Unit` is η-as-proof-irrelevance, which a one-constructor `inductive True` in `lib/std` would not have. Shadowing follows the `FZ` rule in both namespaces: a declared `True` type wins, a local `trivial` wins, and `Bool`'s `True` **constructor** is untouched (a constructor is not a type name), pinned by crates/elab/tests/true_prop.rs. Nothing is owed here.
 - 2026-08-16: Layer 1's shopping list for `Nat`/`List` API content now has its own owner: [[std-api-waves]] holds the wave sequencing, with [[std-logic-module]], [[nat-order-kit]], [[decide-class]] and [[std-int-encoding]] owning the content. Nothing moves here — this issue keeps residency and layer 2 (chaining ergonomics, the `?`-shaped question), which is the half none of those touch.
+
+- 2026-09-14: Result residency and function/lambda-scoped `?` with explicit Ok are implemented by [[result-propagation]], including a runnable parser client. This issue retains Option chaining and any customer-driven generic propagation protocol; implicit success wrapping remains an unselected design option.

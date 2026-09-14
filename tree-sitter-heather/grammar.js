@@ -243,8 +243,10 @@ module.exports = grammar({
       $.anonymous_constructor_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
+      $.head_propagation_expression,
       $.head_prefix_expression, $.head_binary_expression,
     ),
+    head_propagation_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, token.immediate('?'))),
     head_call_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, $.argument_list)),
     head_member_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, choice('.', '::'), $.identifier, optional($.argument_list))),
     head_type_application: $ => prec.left(PREC.POSTFIX, seq(choice($.identifier, $.qualified_identifier), $.type_arguments)),
@@ -356,6 +358,7 @@ module.exports = grammar({
       $.call_expression,
       $.member_expression,
       $.index_expression,
+      $.propagation_expression,
       $.type_application_expression,
       $.prefix_expression,
       $.binary_expression,
@@ -441,6 +444,7 @@ module.exports = grammar({
     refl_expression: _ => 'refl',
 
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
+    propagation_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), token.immediate('?'))),
     call_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._expression), repeat1(field('arguments', $.argument_list)),
     )),
