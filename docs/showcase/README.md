@@ -21,6 +21,45 @@ checking, a brick landed; re-derive the realized file toward it and shrink
 the table. The idealized file is *not* a commitment — it is the current best
 guess, revised freely as taste and design rounds move.
 
+## Checked token parser
+
+[`calc_parser.hthr`](calc_parser.hthr) extends the realized calculator with
+numbers, `+`, `*`, and parentheses. Multiplication binds more tightly than
+addition; both operators associate to the right, as in the idealized parser.
+It imports the existing `Expr`, evaluator, RPN compiler, and compiler proof
+from `calc.hthr`.
+
+```text
+expr   := factor [ '+' expr ]
+factor := atom [ '*' factor ]
+atom   := number | '(' expr ')'
+```
+
+```sh
+(ulimit -v 8388608 -t 120; target/release/heather check \
+  -L lib/std -L docs/showcase docs/showcase/calc_parser.hthr)
+```
+
+The public entry points are `parse(tokens)`, `calculate(tokens)`, and
+`execute(tokens)`. For the tokens of `2 + 3 * 4`, they produce
+`Ok(Plus(Lit(2), Times(Lit(3), Lit(4))))`, `Ok(14)`, and `Ok(Some([14]))`.
+Parenthesizing the sum produces `Ok(Some([20]))`. Malformed input and tokens
+left after a complete expression produce explicit `ParseError` values.
+
+`parsed_compile_correct` proves for **every token list** that compiled RPN
+execution agrees with direct evaluation after parsing, preserving errors.
+The parser's `Parsed(limit)` record carries a bound on the remainder length;
+this supplies the termination evidence for recursive calls on returned
+remainders. AST equations check precedence, association, and nesting, including
+an open numeric payload. This is not a general grammar soundness/completeness
+proof. Character lexing, shell IO, and native compilation remain future work.
+
+Both realized files are checked by
+`crates/elab/tests/showcase_calculator.rs`, including controls that require the
+kernel to reject wrong precedence, association, arithmetic, leftover-input
+handling, and error priority. The smaller `result-parser.hthr` remains a
+standalone introduction to `?`.
+
 ## What already matches
 
 Worth saying first, because half the idealized file **is** the realized file:
@@ -46,7 +85,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 | `Result`, `?`-chaining, `.map` | **landed 2026-09-14** via `import result;`, function/lambda-scoped propagation and explicit `Ok`; runnable parser and recursive collection in `result-parser.hthr` | `issues/result-propagation.md`; remaining Option chaining: `issues/prelude-option-and-friends.md` |
 | `let b :: a :: s2 = s else { … }` | let-else (the one-non-absurd-branch match) | `issues/let-else-sugar.md` |
 | `String`, `.chars()`, `[c, ..rest]`, `if c.is_digit()` guards | strings, slice patterns, match guards | no owner yet |
-| `decreases ts.len()` on mutually recursive parsers | **measures landed 2026-09-05** (`docs/termination-measures-design.md`); **mutual recursion landed 2026-09-05** (`docs/mutual-recursion-design.md`): the three parsers group by *adjacency* with no keyword written, share one recursion over a product motive, and `parse_expr`'s call to `parse_factor` at the **same** `ts` is paid for by declaration-order rank — a three-member group of exactly this shape checks and computes. The omega-at-a-constructor-pattern site is closed (**2026-09-06**, `docs/omega-measure-reduction-design.md`): a list-tail obligation now needs no `on` at all. Still blocking the idealized *spelling*: the qualified-atom half of the renderer defect is fixed here, the rest remains (`issues/omega-renders-member-by-base-name.md`); and the bodies' `Result`/`?` shape is its own row. Unfolding equations for a group member are deferred with the reason recorded (design §6). | `issues/mutual-recursion-declarations.md`, `issues/omega-measure-at-constructor-pattern.md`, `issues/omega-renders-member-by-base-name.md` |
+| `decreases ts.len()` on mutually recursive parsers | **realized 2026-09-14** in `calc_parser.hthr`: three adjacent parsers, `Result`/`?`, and a length-bounded remainder. The checked spelling uses `list_len(ts)`, explicit local type annotations, and `on ?dec2 := small` for the returned-tail calls. Group unfolding equations and the remaining diagnostic renderer gap retain their own owners. | `issues/showcase-token-parser.md`, `issues/group-unfolding-equations.md`, `issues/omega-renders-member-by-base-name.md` |
 | `"{src} = {eval(e)}"` | string interpolation | no owner yet |
 | `datarepr Nat = repr::BigNat` | runtime representation chosen per type, linked by certified refinement | `issues/datarepr-separation.md` |
 | `derive instance Compile[Cpu] for eval` | **half landed 2026-08-14**: tier-1 source types are in the generator's fragment (`docs/certgen-tier1-source-types-design.md` — an `eval`-shaped recursion over an `Expr`-shaped type generates a kernel-checked `Compile` instance end to end). Still missing here: the `derive` surface and the `Compile` class (their own row), and `run` — blocked by four independent certgen declines even after hand-monomorphization (probed 2026-08-15: tier-1 constructor fields at a *third* inductive — the binding one; recursive tier-1 results; non-`Nat`-field results like `Option<List<Nat>>`; the curried result), not only the parameterized-instantiation name gap | `issues/compile-typeclass-design.md`; `run`: `issues/datarepr-separation.md` |
@@ -88,9 +127,9 @@ Recorded here because "it checks" hides them:
 
 ## Bookkeeping
 
-The realized file is checked by hand (command above), not by the test suite —
-so it can rot silently if the surface moves. If it earns keeping, wire it
-into a test; until then, re-check it when showing it to anyone.
+The realized calculator and its token parser are checked by the ordinary test
+suite as of 2026-09-14 (`crates/elab/tests/showcase_calculator.rs`). The
+idealized file remains a design sketch and is deliberately excluded.
 
 **`mul` moved to `std/nat` on 2026-08-13** (`issues/std-nat-multiplication.md`),
 with the lemma kit and the `CommMonoid<Nat>(mul)` instance the library wanted

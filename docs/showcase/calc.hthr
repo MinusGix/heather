@@ -6,6 +6,8 @@
 // (2026-08-13). Its idealized twin is `idealized.hthr` in this directory —
 // same program, written in the language we *want* — and the README maps each
 // gap between the two files to the issue that owns it.
+// `calc_parser.hthr` adds the checked token parser and pipeline theorem; both
+// realized files are checked by crates/elab/tests/showcase_calculator.rs.
 //
 // Check with:
 //   (ulimit -v 8388608 -t 120; \

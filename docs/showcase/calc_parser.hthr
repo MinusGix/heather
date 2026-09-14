@@ -1,0 +1,167 @@
+// Token-to-AST companion to calc.hthr. Check with:
+// (ulimit -v 8388608 -t 120; target/release/heather check -L lib/std -L docs/showcase docs/showcase/calc_parser.hthr)
+// No character lexer or native executable is involved: the checked target is
+// calc.hthr's RPN stack machine. See README.md for the remaining shell gap.
+
+import nat;
+import list;
+import result;
+import logic;
+import pair;
+import int;
+import omega;
+import option;
+import calc;
+
+inductive PTok { TNum(n: Nat), TPlusSym, TStarSym, TOpen, TClose }
+inductive ParseError { ExpectedAtom, UnexpectedEnd, BadParen, Trailing }
+
+// A successful parser returns the bound needed by its caller's recursion.
+// This proves termination; it does not by itself specify the grammar.
+record Parsed(limit: Nat) {
+    value: Expr,
+    rest: List<PTok>,
+    bounded: nat::Le(list_len(rest), limit),
+}
+
+// Removing a recognized operator or closing parenthesis strictly shrinks
+// the bounded remainder. The match equation transports the bound.
+theorem tail_bound(limit: Nat, xs: List<PTok>, head: PTok, tail: List<PTok>,
+    shape: xs = Cons(head, tail), bound: nat::Le(list_len(xs), limit)):
+    nat::Lt(list_len(tail), limit) {
+    j(shape, λ ys q => nat::Le(list_len(ys), limit), bound)
+}
+
+// Adjacent declarations form one mutual group. At unchanged input, calls
+// go forward (expr -> factor -> atom); the back edges consume a token.
+// Both operators associate to the right, matching the idealized showcase.
+fn parse_expr(ts: List<PTok>) -> Result<Parsed(list_len(ts)), ParseError> decreases list_len(ts) {
+    let left: Parsed(list_len(ts)) = parse_factor(ts)?;
+    let remaining: List<PTok> = left.rest;
+    match shape : remaining {
+        Cons(TPlusSym, tail) => {
+            let small: nat::Lt(list_len(tail), list_len(ts)) =
+                tail_bound(list_len(ts), remaining, TPlusSym, tail, shape, left.bounded);
+            let right: Parsed(list_len(tail)) = parse_expr(tail)?;
+            Ok(Parsed(Plus(left.value, right.value), right.rest,
+                nat::le_trans(list_len(right.rest), list_len(tail), list_len(ts),
+                    right.bounded, nat::le_of_lt(list_len(tail), list_len(ts), small))))
+        },
+        _ => Ok(left),
+    }
+    on ?dec2 := small;
+}
+
+fn parse_factor(ts: List<PTok>) -> Result<Parsed(list_len(ts)), ParseError> decreases list_len(ts) {
+    let left: Parsed(list_len(ts)) = parse_atom(ts)?;
+    let remaining: List<PTok> = left.rest;
+    match shape : remaining {
+        Cons(TStarSym, tail) => {
+            let small: nat::Lt(list_len(tail), list_len(ts)) =
+                tail_bound(list_len(ts), remaining, TStarSym, tail, shape, left.bounded);
+            let right: Parsed(list_len(tail)) = parse_factor(tail)?;
+            Ok(Parsed(Times(left.value, right.value), right.rest,
+                nat::le_trans(list_len(right.rest), list_len(tail), list_len(ts),
+                    right.bounded, nat::le_of_lt(list_len(tail), list_len(ts), small))))
+        },
+        _ => Ok(left),
+    }
+    on ?dec2 := small;
+}
+
+fn parse_atom(ts: List<PTok>) -> Result<Parsed(list_len(ts)), ParseError> decreases list_len(ts) {
+    match ts {
+        Nil => Err(UnexpectedEnd),
+        Cons(token, rest) => match token {
+            TNum(n) => Ok(Parsed(Lit(n), rest,
+                nat::le_succ_r(list_len(rest), list_len(rest), nat::le_refl(list_len(rest))))),
+            TOpen => {
+                let inner: Parsed(list_len(rest)) = parse_expr(rest)?;
+                let remaining: List<PTok> = inner.rest;
+                match shape : remaining {
+                    Cons(TClose, tail) => Ok(Parsed(inner.value, tail,
+                        nat::le_succ_r(list_len(tail), list_len(rest),
+                            nat::le_of_lt(list_len(tail), list_len(rest),
+                                tail_bound(list_len(rest), remaining, TClose, tail, shape, inner.bounded))))),
+                    _ => Err(BadParen),
+                }
+            },
+            _ => Err(ExpectedAtom),
+        },
+    }
+}
+
+// The public entry point requires the whole token stream to be consumed.
+fn parse(ts: List<PTok>) -> Result<Expr, ParseError> {
+    let p = parse_expr(ts)?;
+    match p.rest { Nil => Ok(p.value), _ => Err(Trailing) }
+}
+
+fn evaluate_parsed(parsed: Result<Expr, ParseError>) -> Result<Nat, ParseError> {
+    let e = parsed?;
+    Ok(e.eval())
+}
+
+fn execute_parsed(parsed: Result<Expr, ParseError>) -> Result<Option<List<Nat>>, ParseError> {
+    let e = parsed?;
+    Ok(run(compile(e), []))
+}
+
+fn calculate(ts: List<PTok>) -> Result<Nat, ParseError> { evaluate_parsed(parse(ts)) }
+fn execute(ts: List<PTok>) -> Result<Option<List<Nat>>, ParseError> { execute_parsed(parse(ts)) }
+
+// Prove agreement at an open parse result, then specialize to any token
+// stream. This only assumes the compiler theorem, not parser unfolding laws.
+theorem compile_result_correct(parsed: Result<Expr, ParseError>):
+    execute_parsed(parsed) = result::map<Nat, Option<List<Nat>>, ParseError>(evaluate_parsed(parsed), λ (n: Nat) => Some([n])) {
+    match parsed {
+        Err(_) => refl,
+        Ok(e) => j(compile_correct(e),
+            λ answer q => Ok<Option<List<Nat>>, ParseError>(run(compile(e), [])) = Ok(answer), refl),
+    }
+}
+
+theorem parsed_compile_correct(ts: List<PTok>):
+    execute(ts) = result::map<Nat, Option<List<Nat>>, ParseError>(calculate(ts), λ (n: Nat) => Some([n])) {
+    compile_result_correct(parse(ts))
+}
+
+// AST equations pin precedence, right association, and parentheses directly.
+theorem precedence():
+    parse([TNum(2), TPlusSym, TNum(3), TStarSym, TNum(4)]) =
+        Ok(Plus(Lit(2), Times(Lit(3), Lit(4)))) { refl }
+theorem product_before_sum():
+    parse([TNum(2), TStarSym, TNum(3), TPlusSym, TNum(4)]) =
+        Ok(Plus(Times(Lit(2), Lit(3)), Lit(4))) { refl }
+theorem sum_association():
+    parse([TNum(1), TPlusSym, TNum(2), TPlusSym, TNum(3)]) =
+        Ok(Plus(Lit(1), Plus(Lit(2), Lit(3)))) { refl }
+theorem product_association():
+    parse([TNum(1), TStarSym, TNum(2), TStarSym, TNum(3)]) =
+        Ok(Times(Lit(1), Times(Lit(2), Lit(3)))) { refl }
+theorem parentheses():
+    parse([TOpen, TNum(2), TPlusSym, TNum(3), TClose, TStarSym, TNum(4)]) =
+        Ok(Times(Plus(Lit(2), Lit(3)), Lit(4))) { refl }
+theorem nested_parentheses(n: Nat):
+    parse([TOpen, TOpen, TNum(n), TClose, TClose]) = Ok(Lit(n)) { refl }
+theorem single_number(n: Nat): parse([TNum(n)]) = Ok(Lit(n)) { refl }
+
+// The whole pipeline, with and without parentheses.
+theorem evaluated(): calculate([TNum(2), TPlusSym, TNum(3), TStarSym, TNum(4)]) = Ok(14) { refl }
+theorem executed(): execute([TNum(2), TPlusSym, TNum(3), TStarSym, TNum(4)]) = Ok(Some([14])) { refl }
+theorem executed_parentheses():
+    execute([TOpen, TNum(2), TPlusSym, TNum(3), TClose, TStarSym, TNum(4)]) = Ok(Some([20])) { refl }
+
+// Malformed input is an error, including leftover input after a valid prefix.
+theorem empty_input(): parse([]) = Err(UnexpectedEnd) { refl }
+theorem missing_rhs(): parse([TNum(2), TPlusSym]) = Err(UnexpectedEnd) { refl }
+theorem missing_product_rhs(): parse([TNum(2), TStarSym]) = Err(UnexpectedEnd) { refl }
+theorem leading_operator(): parse([TPlusSym, TNum(2)]) = Err(ExpectedAtom) { refl }
+theorem doubled_operator(): parse([TNum(2), TPlusSym, TStarSym, TNum(3)]) = Err(ExpectedAtom) { refl }
+theorem empty_parentheses(): parse([TOpen, TClose]) = Err(ExpectedAtom) { refl }
+theorem missing_close(): parse([TOpen, TNum(2)]) = Err(BadParen) { refl }
+theorem wrong_close(): parse([TOpen, TNum(2), TNum(3)]) = Err(BadParen) { refl }
+theorem extra_close(): parse([TNum(2), TClose]) = Err(Trailing) { refl }
+theorem trailing_number(): parse([TNum(2), TNum(3)]) = Err(Trailing) { refl }
+theorem first_error(): parse([TPlusSym, TOpen]) = Err(ExpectedAtom) { refl }
+theorem execution_error(): execute([TOpen, TNum(2)]) = Err(BadParen) { refl }
