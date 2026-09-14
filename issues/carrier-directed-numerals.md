@@ -1,9 +1,9 @@
 ---
 title: "Carrier-directed numerals: make 3 : Int solve the same problem as -3"
-status: open
+status: closed
 labels: [frontend,elaboration,notation,stdlib,traits]
 created: 2026-08-19
-updated: 2026-08-20
+updated: 2026-09-14
 ---
 
 Numerals currently infer `Nat` unconditionally, with one checking-position
@@ -87,3 +87,33 @@ prefix designation; there is no separate negative-literal semantic path.
   an expected carrier and prefix negation over a non-numeral carrier value, but
   not their composition. Acceptance still requires `-1 : Int` to flow the
   expected result carrier through prefix-operator resolution to the numeral.
+- 2026-09-14: Revisited against the current tree. The recorded direct
+  `as_int(-1)` refusal no longer reproduces; a lightweight independent Sign
+  carrier also accepts negative arguments, nested negation, record fields,
+  and generic local Numeral evidence. The remaining defect is the shared
+  leftmost-numeral criterion: `let b = -(1 + a)` misses an Int anchor inside
+  the operand, and `1 + a = 1` lets the right numeral impose Nat despite
+  `a : Int`. Replaced it with one search for the first inference-capable
+  non-numeral leaf under operator notation, used by both operator probing
+  and equation endpoint order. Ordinary calls remain leaves and all-numeral
+  inference keeps the Nat default. Design and boundaries updated in
+  `docs/carrier-directed-numerals-design.md`; acceptance is covered by
+  `carrier_numerals.rs` and the actual Int consumer in `lib_std_int.rs`.
+  Compatibility controls caught why a non-numeral leaf is not sufficient:
+  `one<A: Numeral>()` needs an expected result, and `identity(one())` hides
+  the same need from the syntactic checking-only classifier. Candidate
+  probes now run in isolated clones and skip failures; numeral-led checking
+  keeps its existing expected-result hint. No numeral metavariable queue or
+  general heterogeneous-operator solver is introduced (a deliberate boundary,
+  not remaining acceptance work).
+- 2026-09-14: Benchmark check: furnace reports shape-only, 18 comparisons
+  within thresholds and 93 timing comparisons skipped for the committed
+  desktop baseline's CPU/toolchain mismatch (exit 3). The desktop run against
+  that baseline reports 28 timing regressions (exit 1), including
+  `nat/step-once`, `nat/step-into-closed-body`, and arithmetic normalization.
+  This is not a green timing gate. Verified no diff in `crates/kernel`,
+  `Cargo.toml`, `Cargo.lock`, or `scripts/bench`; that script builds only the
+  kernel package, so these flags do not measure this elaborator change.
+  The existing owner of comparable timing gates is
+  [[perf-tracking-consistent-environment]]. No baseline was rewritten.
+- 2026-09-14: Final verification (2026-09-14): all six focused carrier-numeral tests pass, including direct and indirect result-only generic calls. The full scripts/test passes: 2,623 passed, 0 failed, 5 ignored. Existing operator, library Int, frontend benchmark smoke, and native certificate acceptance are included. Acceptance complete; the benchmark timing limitation is recorded above.

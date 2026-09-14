@@ -160,7 +160,7 @@ use representations::Representations;
 use slots::{Ingredient, Slot};
 pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
 use surface::{
-    expression_as_type, expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots,
+    expression_as_type, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
 };
 use traits::Traits;
@@ -695,6 +695,11 @@ impl expr::StructuralTypeElab for Elaborator {
 
     fn infer_type_endpoint(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, expression)
+    }
+
+    fn type_endpoint_can_anchor(&self, cx: &Cx, expression: &Expr) -> bool {
+        !self.is_checking_only(cx, expression)
+            && self.clone().elab_infer(cx, expression).is_ok()
     }
 
     fn lower_named_type(

@@ -8,19 +8,72 @@ use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, Span, Stmt, Ty, 
 
 use crate::{ElabError, R, err};
 
-/// Whether the leftmost carrier-selecting leaf of an expression is a numeral.
+/// The first non-numeral, inference-capable leaf of an operator expression.
+/// Otherwise prefer its first numeral, or its first checking-only leaf if
+/// there are no numerals. The caller classifies checking-only expressions;
+/// named calls remain leaves, owning their arguments and result type.
 ///
-/// A numeral has a `Nat` default rather than an intrinsic carrier. Equality
-/// and operator elaboration use this syntactic fact to let an available
-/// checking position choose the carrier before elaborating the numeral.
-pub(crate) fn expression_left_leaf_is_numeral(e: &Expr) -> bool {
+/// Search syntax, never infer an operator subtree here. Inferring the prefix
+/// afresh at every operator would restore exponential work on a left chain.
+/// The explicit stack also keeps a long operator spine off the Rust stack.
+pub(crate) fn operator_carrier_leaf(
+    e: &Expr,
+    mut checking_only: impl FnMut(&Expr) -> bool,
+) -> &Expr {
+    let mut leaf = e;
+    let mut pending = Vec::new();
+    let mut first_numeral = None;
+    let mut first_leaf = None;
+    loop {
+        if let ExprKind::App { head, args, .. } = &leaf.kind
+            && matches!(head.kind, ExprKind::OpSymbol { .. })
+            && let Some(first) = args.first()
+        {
+            pending.extend(args[1..].iter().rev());
+            leaf = first;
+            continue;
+        }
+        let numeral = matches!(leaf.kind, ExprKind::Num(_));
+        if !numeral && !checking_only(leaf) {
+            return leaf;
+        }
+        first_leaf.get_or_insert(leaf);
+        if numeral {
+            first_numeral.get_or_insert(leaf);
+        }
+        match pending.pop() {
+            Some(next) => leaf = next,
+            None => return first_numeral.or(first_leaf).expect("visited a leaf"),
+        }
+    }
+}
+
+/// Numerals with no inference-capable anchor need a checking carrier.
+/// `1 + a` can infer, while `1 + make()` still needs a carrier when `make`'s
+/// implicit type can only be recovered from its expected result.
+pub(crate) fn expression_needs_numeral_carrier(
+    e: &Expr,
+    checking_only: impl FnMut(&Expr) -> bool,
+) -> bool {
     match &e.kind {
         ExprKind::Num(_) => true,
-        ExprKind::App { head, args, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => {
-            operator_left_leaf_is_numeral(args)
+        ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => {
+            matches!(operator_carrier_leaf(e, checking_only).kind, ExprKind::Num(_))
         }
         _ => false,
     }
+}
+
+/// Preserve the existing expected-result hint for a numeral-led operator
+/// spine, even if a later ordinary call cannot infer without that hint.
+pub(crate) fn expression_left_leaf_is_numeral(mut e: &Expr) -> bool {
+    while let ExprKind::App { head, args, .. } = &e.kind
+        && matches!(head.kind, ExprKind::OpSymbol { .. })
+        && let Some(first) = args.first()
+    {
+        e = first;
+    }
+    matches!(e.kind, ExprKind::Num(_))
 }
 
 /// Read an expression as type syntax when its shape has that second reading.
@@ -60,25 +113,6 @@ pub(crate) fn expression_as_type(e: &Expr) -> Option<Ty> {
         _ => return None,
     };
     Some(Ty { kind, span: e.span })
-}
-
-fn operator_left_leaf_is_numeral(args: &[Expr]) -> bool {
-    let Some(mut leaf) = args.first() else {
-        return false;
-    };
-    loop {
-        let ExprKind::App { head, args, .. } = &leaf.kind else {
-            break;
-        };
-        if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
-            break;
-        }
-        let Some(first) = args.first() else {
-            break;
-        };
-        leaf = first;
-    }
-    matches!(leaf.kind, ExprKind::Num(_))
 }
 
 // -- anonymous argument-slot sections --------------------------------------

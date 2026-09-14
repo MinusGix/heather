@@ -9,7 +9,10 @@ use heather_kernel::term::Type;
 use heather_syntax::{Expr, ExprKind, OpFixity, Span};
 
 use super::Carrier;
-use crate::{Cx, Elaborator, OperatorFallbackUse, R, err, expression_left_leaf_is_numeral, traits};
+use crate::surface::{
+    expression_left_leaf_is_numeral, expression_needs_numeral_carrier, operator_carrier_leaf,
+};
+use crate::{Cx, Elaborator, OperatorFallbackUse, R, err, traits};
 
 impl Elaborator {
     // -- operator symbols ---------------------------------------------------
@@ -112,17 +115,16 @@ impl Elaborator {
         //    all, so a file that declares none pays one failed lookup in a
         //    usually-empty map and no inference.
         //
-        //    The two sources are exclusive, and this is the one place that
-        //    says so: only a **bare** symbol reads the expected type. An
-        //    applied one has an operand, which is the more specific evidence —
-        //    the value the operation will be applied to, where the expected
-        //    type is only what the surrounding position will accept — and
-        //    admitting a second source there would put something new in the
-        //    path of every operator expression that elaborates today
-        //    (docs/bare-symbol-checking-carrier-design.md §4.2).
+        //    A numeral-led operand keeps its existing expected-result hint;
+        //    an ordinary call nested inside it may need that hint too. Without
+        //    one, search for an inference-capable anchor under operator
+        //    notation: `-(1 + a)` has the same anchor as `1 + a`.
         let mut uncovered_carrier = None;
         if self.traits.has_designation_for(fixity, sym) {
-            let flexible_left = args.first().is_some_and(expression_left_leaf_is_numeral);
+            let flexible_left = args.first().is_some_and(|arg| {
+                expression_left_leaf_is_numeral(arg)
+                    || expression_needs_numeral_carrier(arg, |leaf| self.is_checking_only(cx, leaf))
+            });
             let expected_for_numeral = if flexible_left {
                 expected
                     .and_then(|t| self.carrier_of_ty(cx, t, span))
@@ -131,10 +133,12 @@ impl Elaborator {
             } else {
                 None
             };
-            let sibling_for_numeral = if flexible_left {
+            let sibling_for_numeral = if flexible_left && expected_for_numeral.is_none() {
                 args.iter()
                     .skip(1)
-                    .filter(|arg| !expression_left_leaf_is_numeral(arg))
+                    .filter(|arg| !expression_needs_numeral_carrier(arg, |leaf| {
+                        self.is_checking_only(cx, leaf)
+                    }))
                     .find_map(|arg| {
                         self.op_carrier_head(cx, std::slice::from_ref(arg), span)
                             .filter(|h| self.designated(sym, fixity, &h.key).is_some())
@@ -259,37 +263,34 @@ impl Elaborator {
     /// The head of the carrier an operator application is at — rung 2's probe
     /// (docs/operators-onto-classes-design.md §4.1).
     ///
-    /// Two rules, both load-bearing. It **descends the left spine** through
-    /// operator applications to the leftmost non-operator leaf and infers that
-    /// one: `a + b + c` is `(a + b) + c`, so naively inferring `args[0]` would
-    /// re-infer the whole prefix at every rung and cost 2^d on a chain of
-    /// length d, where the descent costs d. And it is a **proposal, never a
+    /// Two rules, both load-bearing. It searches the operand's operator tree
+    /// for one inference-capable non-numeral leaf (skipping checking-only
+    /// calls, with a numeral as the default). It probes leaves, never entire
+    /// operator prefixes: naively inferring `args[0]` would re-infer the whole
+    /// prefix at every rung and cost 2^d on a chain
+    /// of length d, where the syntax search costs d. It is a **proposal, never a
     /// decision**: a leaf that does not infer, or a head with no entry, falls
     /// through to the fallback rung, so a mis-probe costs a rung and never a
-    /// wrong term. The speculative inference's goals are rolled back for the
-    /// same reason.
+    /// wrong term. Each probe runs on a clone so goals and diagnostics cannot
+    /// leak from a failed candidate, including an indirect checking-only call.
     fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
-        let mut leaf = args.first()?;
-        loop {
-            let ExprKind::App { head, args, .. } = &leaf.kind else {
-                break;
+        let mut carrier = None;
+        let leaf = operator_carrier_leaf(args.first()?, |leaf| {
+            if self.is_checking_only(cx, leaf) {
+                return true;
+            }
+            let probe = self.clone();
+            let Ok((_, ty, _)) = probe.elab_infer(cx, leaf) else {
+                return true;
             };
-            if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
-                break;
-            }
-            match args.first() {
-                Some(a) => leaf = a,
-                None => break,
-            }
+            carrier = probe.carrier_of_ty(cx, &ty, span);
+            false
+        });
+        if matches!(leaf.kind, ExprKind::Num(_)) {
+            self.carrier_of_ty(cx, &Type::Nat, span)
+        } else {
+            carrier
         }
-        if self.is_checking_only(cx, leaf) {
-            return None;
-        }
-        let mark = self.attempt.goal_arena.mark();
-        let inferred = self.elab_infer(cx, leaf);
-        self.attempt.goal_arena.rollback(mark);
-        let (_, ty, _) = inferred.ok()?;
-        self.carrier_of_ty(cx, &ty, span)
     }
 
     /// The head of the carrier a **checking position** is asking for — rung

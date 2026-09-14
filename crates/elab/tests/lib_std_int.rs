@@ -232,10 +232,20 @@ theorem c_neg_n(): int::neg(NegSucc(3)) = OfNat(4) { refl }
 theorem c_neg_zero(): int::neg(OfNat(0)) = OfNat(0) { refl }
 fn c_positive_numeral() -> Int { 4 }
 fn c_negative_numeral() -> Int { -4 }
+fn c_as_int(a: Int) -> Int { a }
+fn c_negative_argument() -> Int { c_as_int(-1) }
+fn c_nested_negative_argument() -> Int { c_as_int(--1) }
+fn c_nested_numeral_anchor(a: Int) -> Int { let b = -(1 + a); b }
 fn c_generic_numeral<A: Numeral>() -> A { 1 }
 fn c_literal_left_infers_from_sibling(a: Int) -> Int { let x = 3 + a; x }
 theorem c_positive_numeral_computes(): c_positive_numeral() = OfNat(4) { refl }
 theorem c_negative_numeral_computes(): c_negative_numeral() = NegSucc(3) { refl }
+theorem c_negative_argument_computes(): c_negative_argument() = NegSucc(0) { refl }
+theorem c_negative_zero_literal(): c_as_int(-0) = OfNat(0) { refl }
+theorem c_negative_radix_literal(): c_as_int(-0x10) = NegSucc(15) { refl }
+theorem c_nested_negative_argument_computes(): c_nested_negative_argument() = OfNat(1) { refl }
+theorem c_nested_numeral_anchor_open(a: Int):
+    c_nested_numeral_anchor(a) = int::neg(int::add(OfNat(1), a)) { refl }
 theorem c_generic_int_numeral(): c_generic_numeral<Int>() = OfNat(1) { refl }
 theorem c_generic_nat_numeral(): c_generic_numeral<Nat>() = 1 { refl }
 theorem c_positive_literal_equation(): 4 = OfNat(4) { refl }

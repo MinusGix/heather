@@ -16,7 +16,7 @@ use crate::application::{Skel, SkelBinder, has_implicit_mark, skel_of_ty};
 use crate::code;
 use crate::goals::GoalAllocator;
 use crate::oracle::SemanticOracle;
-use crate::surface::{expression_as_type, expression_left_leaf_is_numeral};
+use crate::surface::{expression_as_type, expression_needs_numeral_carrier};
 use crate::{Cx, ElabError, IMPLICIT_MARK_REFUSED, R, TyVar, err};
 
 /// Recursive services required by primitive structural type forms.
@@ -33,6 +33,11 @@ pub(crate) trait StructuralTypeElab {
         span: Span,
     ) -> R<(Type, Level)>;
     fn infer_type_endpoint(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
+    /// Whether this leaf can supply an inferred carrier. The implementation
+    /// may probe in isolation: no speculative goals or diagnostics may leak.
+    fn type_endpoint_can_anchor(&self, _cx: &Cx, _expression: &Expr) -> bool {
+        true
+    }
     fn check_type_endpoint(
         &self,
         cx: &Cx,
@@ -304,7 +309,10 @@ impl<'a> ExprElab<'a> {
             TyKind::Eq(lhs, rhs) => Some((|| {
                 // Numerals have a `Nat` default, not an intrinsic carrier.
                 // Infer the other endpoint first when it can direct checking.
-                let (lhs_t, rhs_t, endpoint_ty, level) = if expression_left_leaf_is_numeral(lhs) {
+                let flexible = expression_needs_numeral_carrier(lhs, |leaf| {
+                    !elab.type_endpoint_can_anchor(cx, leaf)
+                });
+                let (lhs_t, rhs_t, endpoint_ty, level) = if flexible {
                     let (rhs_t, endpoint_ty, level) = elab.infer_type_endpoint(cx, rhs)?;
                     let lhs_t = elab.check_type_endpoint(cx, lhs, &endpoint_ty, &level)?;
                     (lhs_t, rhs_t, endpoint_ty, level)
