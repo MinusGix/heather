@@ -199,3 +199,15 @@ The API contract, caller audit and child-projection finding are recorded in
 lowering tests pass (60 passed). Full `scripts/test`: **2,626 passed, 0
 failed, 5 ignored** (189 s wall), including native summary and x86 scaling.
 `scripts/issue check` and `git diff --check` pass.
+
+
+### 2026-09-14 — typed telescope boundary
+
+Added separate structural/emitted wrappers to the shared recursive telescope;
+see `docs/annotation-component-respell-design.md` §2.7 for the guarantee,
+explicit raw-Type boundaries and the indexed-family audit. A temporary
+structural-for-emitted substitution at the actual telescope call is rejected
+by Rust (E0308), and was reverted. Focused `scripts/test -p heather-elab
+--lib wf::`: 61 passed. Full `scripts/test`: **2,627 passed, 0 failed,
+5 ignored** (245 s wall), including the indexed-family, native summary and
+x86 scaling tests. `scripts/issue check` and `git diff --check` pass.

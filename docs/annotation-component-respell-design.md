@@ -254,6 +254,42 @@ For the measured failure that motivated this API, see
 `issues/call-run-checked-theorem-cost.md`. This cleanup does not extend
 projection eligibility or change kernel conversion.
 
+
+### 2.7 Representation roles at the recursive telescope boundary (2026-09-14)
+
+`wf_types.rs` gives the shared `Tel` two distinct representations:
+
+- `StructuralWf` borrows a type validated to have a structural `Wf` head.
+  Structural readers explicitly call `as_type` or `shifted_structure`.
+- `EmittedType` is constructed through `StructuralWf::annotation`, which
+  applies `annotation_type`. Its fields are private and it has no `Deref`
+  or `From<Type>`. A shift returns another `EmittedType`; `into_type` marks
+  the explicit handoff to a raw kernel annotation slot.
+
+`StructuralWf::telescope` accepts `&EmittedType` for the children element
+annotation. It delegates to the kernel's existing `wf_step_telescope_at`,
+which remains the sole transcription of the telescope. A raw `Type` or a
+`StructuralWf` in the element position is a Rust type error. The structural
+and emitted `Tel` fields consequently cannot be swapped implicitly either.
+
+This guarantee is local to the telescope boundary. The kernel AST and its
+raw annotation slots still use `Type`; explicit accessors can cross back to
+that representation. The wrappers classify representation roles, not binder
+contexts or equality between two independently constructed types. The
+existing kernel checks retain those responsibilities.
+
+The three structural accesses in `indexed.rs` were made explicit, preserving
+their existing representations. Spine and Wf slot-pair APIs retain their
+existing contracts. The wrappers introduce no additional normalization:
+they call the same annotation policy and kernel telescope code as before.
+
+Validation includes a temporary mutation at the real telescope call site:
+substituting `&structural` for `&emitted` fails `cargo check` with E0308,
+“expected &EmittedType, found &StructuralWf”. The mutation was reverted.
+Unit coverage rejects non-Wf structural inputs (including named codes),
+checks that shifts retain the emitted representation, and retains the
+open-type child-projection and parameterized-match emission controls.
+
 ## 3. Rejected shapes, with reasons
 
 - **A projection-chain code (`GenDef` per constructor component / sum tail),

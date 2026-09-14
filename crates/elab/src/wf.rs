@@ -18,6 +18,10 @@
 //! `reduce.rs` also call. A fifth transcription here would be exactly the
 //! drift that arrangement exists to prevent.
 
+#[path = "wf_types.rs"]
+mod types;
+use types::{EmittedType, StructuralWf};
+
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
@@ -48,8 +52,8 @@ pub(crate) struct Tel<'a> {
     /// `⟦D⟧` **inline** — the `Type::Wf` itself, scoped in `gamma0`. This is
     /// the structural-read copy: `spine` reads the sum-of-Σs out of it and
     /// [`Elaborator::motive_head`] pushes it as a context entry. Never use it
-    /// for an emitted annotation; that is [`Tel::d_emit`].
-    pub d_ty: &'a Type,
+    /// for an emitted annotation; that is [`Tel::emitted`].
+    pub structural: StructuralWf<'a>,
     /// `⟦D⟧` as it is **written into emitted terms**, selected by
     /// [`Elaborator::annotation_type`]: a closed code or a parameterized code
     /// application where registered, with component respelling as fallback.
@@ -60,7 +64,7 @@ pub(crate) struct Tel<'a> {
     /// else. The split is [[wf-field-conversion-cost]]'s whole fix: a tier-1
     /// `match` writes `⟦D⟧` out ~21 times per arm, and each copy carried every
     /// field type verbatim.
-    pub d_emit: Type,
+    pub emitted: EmittedType,
     /// `l`: the declaration's level, which is also its shape's.
     pub level: Level,
     /// `l'`: the motive's level.
@@ -159,8 +163,7 @@ impl Elaborator {
     /// the literal, and `Vec` reduces on the whnf of its length — and the
     /// literal is the one the kernel can unfold to a Σ-chain.
     ///
-    /// `d_ty` is `⟦D⟧` (the whole `Wf`), scoped in `cx`; `tag` is the
-    /// declaration's, used to look up its code.
+    /// `d_ty` is `⟦D⟧` (the whole `Wf`), scoped in `cx`.
     ///
     /// The two spellings are split here for the reason §3.1 gives: the
     /// children are **checked** against `⟦D⟧`, and a checking position is a
@@ -323,7 +326,7 @@ impl Elaborator {
         }
         let mut gamma = tel.gamma0.clone();
         gamma.entries.push(heather_kernel::term::CtxEntry {
-            ty: Rc::new(tel.d_ty.clone()),
+            ty: Rc::new(tel.structural.as_type().clone()),
             level: tel.level.clone(),
         });
         match self.semantic_oracle().whnf_type(&gamma, &tel.motive) {
@@ -390,7 +393,8 @@ impl Elaborator {
         // telescope. An inline List<CallInstruction> here repeats the entire
         // instruction payload in Vec/nth annotations (call_run_checked).
         // Structural readers below keep scrut_ty.
-        let d_emit = self.annotation_type(cx, scrut_ty, 0);
+        let structural = StructuralWf::new(scrut_ty).expect("the Wf was checked above");
+        let emitted = structural.annotation(self, cx);
         // The `Wf` slot pair as it is **written into emitted terms**
         // (`docs/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
         // `app(D#arity^δ; x₀)` where this declaration has the pair registered,
@@ -413,22 +417,15 @@ impl Elaborator {
                 .emit_wf_slots(cx, shape, arity, 0)
                 .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
         };
-        let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
-            &cx.gamma,
-            level,
-            &mlvl,
-            shape,
-            arity,
-            &motive,
-            &d_emit,
-            Some((&shape_e, &arity_e)),
+        let (cs_ty, ih_ty, step_ty) = structural.telescope(
+            &cx.gamma, &mlvl, &motive, &emitted, (&shape_e, &arity_e),
         );
         let spine = self.spine(scrut_ty, level, ind.ctors.len(), span)?;
         let spine_emit = self.respell_spine(cx, &spine);
         let tel = Tel {
             gamma0: &cx.gamma,
-            d_ty: scrut_ty,
-            d_emit,
+            structural,
+            emitted,
             level: level.clone(),
             mlvl: mlvl.clone(),
             motive: Rc::clone(&motive),
@@ -704,8 +701,8 @@ impl Elaborator {
         // inline one only for the surface binders' *alias types*, which the
         // elaborator reads structurally (a nested `match` on a child binder,
         // `record_of`, `projection`) — §3.1's line, held per reader.
-        let d_ty_here = Rc::new(tel.d_emit.shift_local(d_body));
-        let d_inline_here = tel.d_ty.shift_local(d_body);
+        let d_ty_here = Rc::new(tel.emitted.shift_local(d_body).into_type());
+        let d_inline_here = tel.structural.shifted_structure(d_body);
         let ctor_ty_here = tel.spine.ctors[i].0.shift_local(d_body);
         let value_here = Rc::new(value.shift_local(2));
         // This branch's arity. Without a container it is the literal `m`;
@@ -792,7 +789,7 @@ impl Elaborator {
                                 fst_ty: Rc::clone(&d_ty_here),
                                 snd_ty: Rc::new(Type::Vec {
                                     level: tel.level.clone(),
-                                    elem: Rc::new(tel.d_emit.shift_local(d_body + 1)),
+                                    elem: Rc::new(tel.emitted.shift_local(d_body + 1).into_type()),
                                     len: Rc::new(rest.shift_local(1)),
                                 }),
                                 pair: term,
@@ -892,7 +889,7 @@ impl Elaborator {
                             .motive
                             .apply_local(&embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
                                 &tel.level,
-                                &Rc::new(tel.d_emit.shift_local(d_body + 1)),
+                                &Rc::new(tel.emitted.shift_local(d_body + 1).into_type()),
                                 &Rc::new(len.shift_local(1)),
                                 Rc::new(Term::Var(LocalVar(2))),
                                 Rc::new(Term::Var(LocalVar(0))),
@@ -1188,6 +1185,22 @@ record DepC { m: Nat, eq: m = m }
                 .lower_instance(&self.cx, &self.ind(name), &[], &[], SPAN)
                 .expect("the declaration lowers")
         }
+    }
+
+    #[test]
+    fn telescope_roles_validate_structure_and_preserve_emission_when_shifted() {
+        let e = env();
+        let (inline, _) = e.lowered("T");
+        let structural = StructuralWf::new(&inline).expect("a recursive lowering");
+        let emitted = structural.annotation(&e.el, &e.cx);
+        let Type::El { tm, .. } = emitted.as_type() else { panic!("named annotation") };
+        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(StructuralWf::new(&Type::Nat).is_none());
+        assert!(StructuralWf::new(emitted.as_type()).is_none(),
+            "a named code cannot enter the structural boundary without decoding");
+        assert_eq!(emitted.shift_local(1).into_type(),
+            e.el.annotation_type(&e.cx, &inline, 1));
+        assert_eq!(structural.shifted_structure(1), inline.shift_local(1));
     }
 
     // -- registration boundary ----------------------------------------------

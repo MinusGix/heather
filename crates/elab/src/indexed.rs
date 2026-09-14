@@ -329,7 +329,7 @@ pub(crate) fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
         .motive
         .apply_local(&crate::embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
             &tel.level,
-            &Rc::new(tel.d_ty.shift_local(d_body + 1)),
+            &Rc::new(tel.structural.shifted_structure(d_body + 1)),
             &len,
             Rc::new(Term::Var(LocalVar(2))),
             Rc::new(Term::Var(LocalVar(0))),
@@ -726,7 +726,7 @@ impl Elaborator {
     ) -> R<IdxBranch> {
         let ctor = &iind.ctors[k];
         let m = ctor.arity();
-        let d_ty_here = Rc::new(tel.d_ty.shift_local(d_body));
+        let d_ty_here = Rc::new(tel.structural.shifted_structure(d_body));
         let ctor_ty = tel.spine.ctors[k].0.shift_local(d_body);
         let cs_var = Rc::new(Term::Var(LocalVar(1)));
         let (mut t, mut p) = (0usize, 0usize);
@@ -1328,7 +1328,7 @@ impl Elaborator {
                         level,
                         shape,
                         arity,
-                    } = tel.d_ty.shift_local(d_body + 1)
+                    } = tel.structural.shifted_structure(d_body + 1)
                     else {
                         return err("internal: a recursive index did not lower to a `Wf`", span);
                     };
