@@ -188,3 +188,14 @@ the native summary test and the x86 scaling rail. `scripts/issue check` and
 `git diff --check` pass. Temporary kernel diagnostics were removed before
 the suite. Closed: the dominant cost is fixed; the general projection
 boundary work remains with its existing owner above.
+
+
+### 2026-09-14 — annotation API follow-up
+
+Added the total `annotation_type` API and renamed the closed-only lookup to
+`closed_type_ref`; audited and migrated its three production emission callers.
+The API contract, caller audit and child-projection finding are recorded in
+`docs/annotation-component-respell-design.md` §2.6. The focused recursive
+lowering tests pass (60 passed). Full `scripts/test`: **2,626 passed, 0
+failed, 5 ignored** (189 s wall), including native summary and x86 scaling.
+`scripts/issue check` and `git diff --check` pass.

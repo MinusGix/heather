@@ -2078,7 +2078,6 @@ impl Elaborator {
             label: Rc::new(val),
             children: Rc::new(self.build_children(
                 cx,
-                ind.tag,
                 &expected,
                 level,
                 &children,

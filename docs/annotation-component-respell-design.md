@@ -220,6 +220,40 @@ shrinks — and the x86 conversion-miss measurement
 and a walker finding are the same disagreement seen from the kernel's end
 and the elaborator's.
 
+
+### 2.6 Default annotation API (2026-09-14)
+
+`Elaborator::annotation_type(cx, ty, depth) -> Type` is the default for an
+emitter that needs an annotation. It applies `emit_ty` and preserves the
+original type when nothing changes. Callers do not select closed versus
+parameterized naming or write their own fallback chain. Structural readers
+keep their original type.
+
+`emit_ty` remains the optional rewrite query for the emission walker and
+callers preserving an existing `Rc` when no rewrite happens. Scratch-world
+annotations still use `emit_ty_in`. Wf shape/arity slots continue to use
+`emit_wf_slots` as a pair: a whole-type annotation is not a substitute for
+those two components.
+
+The narrower `ty_type_ref` is now called `closed_type_ref`. It recognizes
+only registered closed types; its only production caller is the naming
+registry's `respell_ty_at`. The three former external callers — children
+construction, child-projection motives and match telescopes — all use
+`annotation_type`, as does the match motive and code-function template
+emission. The constructor's now-unused tag argument was removed.
+
+The child-projection audit found no additional established performance bug:
+`build_elim_wf` already canonicalizes its incoming motive. Using the default
+API there removes a redundant closed-only policy choice. Regression coverage
+checks its emitted motive and kernel-checks it over a neutral `Box<A>` with
+an open element type. The API also has controls for plain types, closed
+references, parameterized references, idempotence and binder depth; the
+previous match-telescope regression remains in place.
+
+For the measured failure that motivated this API, see
+`issues/call-run-checked-theorem-cost.md`. This cleanup does not extend
+projection eligibility or change kernel conversion.
+
 ## 3. Rejected shapes, with reasons
 
 - **A projection-chain code (`GenDef` per constructor component / sum tail),

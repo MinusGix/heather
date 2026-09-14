@@ -50,14 +50,13 @@ pub(crate) struct Tel<'a> {
     /// [`Elaborator::motive_head`] pushes it as a context entry. Never use it
     /// for an emitted annotation; that is [`Tel::d_emit`].
     pub d_ty: &'a Type,
-    /// `⟦D⟧` as it is **written into emitted terms**: `El (D#tycode^δ)` where
-    /// the declaration has a registered code, and the inline `Type::Wf`
-    /// otherwise (`docs/family-type-code-defs-design.md`, 2026-08-12
-    /// extension).
+    /// `⟦D⟧` as it is **written into emitted terms**, selected by
+    /// [`Elaborator::annotation_type`]: a closed code or a parameterized code
+    /// application where registered, with component respelling as fallback.
     ///
     /// The two are convertible by construction — the code is `code_of` of
-    /// *this* type and [`Elaborator::ty_type_ref`] hands it out only after
-    /// checking that — so every use below is a spelling choice and nothing
+    /// *this* type and the naming registry hands it out only after checking
+    /// that — so every use below is a spelling choice and nothing
     /// else. The split is [[wf-field-conversion-cost]]'s whole fix: a tier-1
     /// `match` writes `⟦D⟧` out ~21 times per arm, and each copy carried every
     /// field type verbatim.
@@ -172,7 +171,6 @@ impl Elaborator {
     pub(crate) fn build_children(
         &self,
         cx: &Cx,
-        tag: u32,
         d_ty: &Type,
         level: &Level,
         args: &[Expr],
@@ -180,14 +178,9 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let _ = span;
-        // A monomorphized `Wf` has no whole-type reference; its components
-        // respell the way the child's own `sup_f` slots do (`build_ctor`), so
-        // the tuple's stated element type and the child's inferred type are
-        // one spelling (issues/emission-site-respell-audit.md).
-        let emit = self
-            .ty_type_ref(cx, tag, d_ty)
-            .or_else(|| self.emit_ty(cx, d_ty, 0))
-            .unwrap_or_else(|| d_ty.clone());
+        // Emitted tuple annotations use the same naming policy as matches;
+        // structural checking below still reads d_ty.
+        let emit = self.annotation_type(cx, d_ty, 0);
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
         // so the two are one code path (docs/container-fields.md §3.4).
@@ -295,10 +288,7 @@ impl Elaborator {
         // annotation (it lands in the `ElimWf`'s motive slot), so it takes the
         // reference where one exists; `d_ty` itself stays inline because
         // `build_elim_wf` destructures it.
-        let motive = self
-            .ty_type_ref(cx, ind.tag, d_ty)
-            .unwrap_or_else(|| d_ty.clone())
-            .shift_local(1);
+        let motive = self.annotation_type(cx, d_ty, 0).shift_local(1);
         self.build_elim_wf(
             cx,
             ind,
@@ -378,7 +368,7 @@ impl Elaborator {
         // `Case` node of the tag tree, twice more per branch (the two λ
         // domains), and twice again in `apply_cs_ih`. Respelling it needs no
         // tag from the caller — `tag_of` reads it out of the type, and
-        // `ty_type_ref` declines unless the type *is* that declaration's
+        // `closed_type_ref` declines unless the type *is* that declaration's
         // registered lowering.
         //
         // The `shift_local(1)` is not cosmetic: the motive is scoped over
@@ -395,19 +385,12 @@ impl Elaborator {
         // motive's own `z` binder: `respell_ty_deep` shifts the *references* by
         // it rather than the result, which is why this is not the
         // `shift_local(1)` the whole-type version needed.
-        let motive = Rc::new(self.emit_ty(cx, &motive, 1).unwrap_or(motive));
-        // The one lookup: `El (D#tycode^δ)` if this declaration has a code and
-        // `scrut_ty` *is* the lowering it was minted from, the inline type
-        // otherwise. Everything emitted below reads `tel.d_emit`; the
-        // structural reads a line down read `scrut_ty`.
-        // Parameterized declarations have a code function rather than a
-        // closed TyCode. Keep their instance named in the children telescope
-        // too: an inline List<CallInstruction> here repeats the entire
+        let motive = Rc::new(self.annotation_type(cx, &motive, 1));
+        // Name both closed and parameterized recursive types in the children
+        // telescope. An inline List<CallInstruction> here repeats the entire
         // instruction payload in Vec/nth annotations (call_run_checked).
-        let d_emit = self
-            .ty_type_ref(cx, ind.tag, scrut_ty)
-            .or_else(|| self.emit_ty(cx, scrut_ty, 0))
-            .unwrap_or_else(|| scrut_ty.clone());
+        // Structural readers below keep scrut_ty.
+        let d_emit = self.annotation_type(cx, scrut_ty, 0);
         // The `Wf` slot pair as it is **written into emitted terms**
         // (`docs/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
         // `app(D#arity^δ; x₀)` where this declaration has the pair registered,
@@ -1277,7 +1260,7 @@ record DepC { m: Nat, eq: m = m }
         assert!(e.el.respell_ty(&e.cx, &forgery).is_none());
         // …and the same read keyed by hand at the tag declines too, which is
         // the property `respell_ty` inherits rather than adds.
-        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forgery).is_none());
+        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forgery).is_none());
         let _ = l;
     }
 
@@ -1296,7 +1279,7 @@ record DepC { m: Nat, eq: m = m }
             tm: Rc::new(u_code),
         };
         // Neither by tag…
-        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
         // …nor by the structural read, which does not follow a neutral code.
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());
     }
@@ -1336,7 +1319,7 @@ record DepC { m: Nat, eq: m = m }
             level: l,
             tm: Rc::new(dup),
         };
-        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());
     }
 
@@ -2881,7 +2864,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
                 .el
                 .lower_instance(&cx, &e.ind("Box"), &[(a, Level::Zero)], &[], SPAN)
                 .expect("`Box<A>` lowers openly");
-            let r = e.el.respell_ty(&cx, &open).expect("the open instance respells");
+            let r = e.el.annotation_type(&cx, &open, 0);
             assert!(
                 e.el
                     .kernel_check_type(&e.el.psi, heather_kernel::layer::Layer::Prog, &cx.gamma, &r, &ol)
@@ -2896,8 +2879,8 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             assert_ne!(deeper, r);
             // …and the same instance one binder further in respells to that.
             assert_eq!(
-                e.el.respell_ty_at(&cx, &open.shift_local(1), 1, 0),
-                Some(deeper)
+                e.el.annotation_type(&cx, &open.shift_local(1), 1),
+                deeper
             );
         }
 
@@ -2925,6 +2908,45 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         }
 
         // -- emission: real source, the four axes ---------------------------
+
+        #[test]
+        fn annotation_types_name_closed_instances_and_preserve_plain_types() {
+            let e = env();
+            assert_eq!(e.el.annotation_type(&e.cx, &Type::Nat, 0), Type::Nat);
+            let (flat, fl) = e.lowered("Flat");
+            let named = e.el.annotation_type(&e.cx, &flat, 0);
+            let Type::El { tm, .. } = &named else { panic!("closed code") };
+            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+            let (boxed, level) = instance(&e, "Box", &[(flat, fl)]);
+            let named = e.el.annotation_type(&e.cx, &boxed, 0);
+            let Type::El { tm, .. } = &named else { panic!("instance code") };
+            assert_eq!(e.el.gen_app_of(tm).map(|(key, _)| key),
+                Some(GenDef::TyCodeFn(e.ind("Box").tag)));
+            assert_eq!(e.el.annotation_type(&e.cx, &named, 0), named);
+            assert!(e.el.conv_types(&e.cx, &named, &boxed, &level));
+        }
+
+        #[test]
+        fn a_parameterized_child_projection_has_a_named_motive() {
+            let e = env();
+            let mut cx = Cx::empty();
+            cx.push("A".into(), Type::Ty(Level::Zero), Level::succ(Level::Zero));
+            let a = Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) };
+            let ind = e.ind("Box");
+            let (boxed, level) = e.el.lower_instance(&cx, &ind, &[(a, Level::Zero)], &[], SPAN)
+                .expect("open Box<A>");
+            cx.push("b".into(), boxed.clone(), level.clone());
+            let boxed = boxed.shift_local(1);
+            let b = Rc::new(Term::Var(LocalVar(0)));
+            let projection = e.el.child_projection(&cx, &ind, &boxed, &level,
+                1, 0, Rc::clone(&b), (*b).clone(), SPAN).expect("child projection");
+            let Term::ElimWf { motive, .. } = &projection else { panic!("recursive projection") };
+            let Type::El { tm, .. } = &**motive else { panic!("named motive") };
+            assert_eq!(e.el.gen_app_of(tm).map(|(key, _)| key),
+                Some(GenDef::TyCodeFn(ind.tag)));
+            e.el.kernel_check_term(&e.el.psi, heather_kernel::layer::Layer::Prog,
+                &cx.gamma, &projection, &boxed, &level).expect("open neutral projection checks");
+        }
 
         #[test]
         fn a_parameterized_match_names_its_children_element_type() {

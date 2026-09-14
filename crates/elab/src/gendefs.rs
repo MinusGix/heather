@@ -522,7 +522,7 @@ struct GenDefLayer {
     /// **inline** `⟦D⟧` the code was minted from and its level.
     ///
     /// The inline copy is not a convenience: it is the use-site *guard*.
-    /// [`Elaborator::ty_type_ref`] hands out the reference only when the type
+    /// [`Elaborator::closed_type_ref`] hands out the reference only when the type
     /// in front of it is structurally that exact lowering, so a reference can
     /// never stand for a type it does not decode to — the tag alone would be
     /// a nominal claim about a type the emission site read from somewhere
@@ -893,7 +893,7 @@ impl Elaborator {
         // receiver's reference stops paying a δ per component
         // (`docs/record-projection-reference-design.md` §9.8). The stored
         // `template` stays inline: §4's inverse re-lowers against it.
-        let quoted = self.emit_ty(&cx, &template, 0).unwrap_or_else(|| template.clone());
+        let quoted = self.annotation_type(&cx, &template, 0);
         let Some(code) = crate::code::code_of(&quoted) else {
             return;
         };
@@ -1748,11 +1748,15 @@ impl Elaborator {
         Some((sref, aref))
     }
 
+    /// Closed-registration lookup, not the default API for annotations.
+    /// Parameterized declarations have a TyCodeFn and deliberately decline
+    /// here; emission callers should use [`Self::annotation_type`].
+    ///
     /// `El l (D#tycode^δ)` for `inline`, if and only if `inline` **is** the
     /// lowering `D#tycode` was minted from (design §1.3 + the guard note on
-    /// [`GenDefs::ty_code`]). `None` is every emission site's cue to keep
-    /// writing the type out, exactly as before.
-    pub(crate) fn ty_type_ref(&self, cx: &Cx, tag: u32, inline: &Type) -> Option<Type> {
+    /// [`GenDefs::ty_code`]). `None` means no closed registration matched;
+    /// parameterized or component naming may still apply.
+    pub(crate) fn closed_type_ref(&self, cx: &Cx, tag: u32, inline: &Type) -> Option<Type> {
         let (registered, level) = self.types.gdefs().ty_code(&tag)?;
         if **registered != *inline {
             return None;
@@ -1760,14 +1764,14 @@ impl Elaborator {
         self.gen_type_ref(cx, GenDef::TyCode(tag), level)
     }
 
-    /// [`Self::ty_type_ref`] with the tag read out of the type instead of
+    /// [`Self::closed_type_ref`] with the tag read out of the type instead of
     /// supplied: `Some(El (D#tycode^δ))` when `ty` **is** some declaration's
     /// registered lowering, `None` otherwise.
     ///
     /// Two filters, both needed. `tag_of` is a *structural* read and will walk
     /// into a `Sum`/`Σ` to find a tag, so it can name a declaration whose
     /// `⟦D⟧` is not `ty` at all; the structural comparison inside
-    /// `ty_type_ref` is what turns that into a decline rather than a wrong
+    /// `closed_type_ref` is what turns that into a decline rather than a wrong
     /// reference. And `tag_of` goes through `decoded`, which leaves an `El` of
     /// a neutral code exactly as it is — so an already-reference-spelled type
     /// declines here too, and this is idempotent.
@@ -1788,7 +1792,7 @@ impl Elaborator {
     /// verbatim (§4.1's depth paragraph).
     pub(crate) fn respell_ty_at(&self, cx: &Cx, ty: &Type, d: u32, g: u32) -> Option<Type> {
         let ind = self.tag_of(ty)?;
-        if let Some(r) = self.ty_type_ref(cx, ind.tag, ty) {
+        if let Some(r) = self.closed_type_ref(cx, ind.tag, ty) {
             let r = if g == 0 { r } else { r.shift_global(g) };
             return Some(if d == 0 { r } else { r.shift_local(d) });
         }
@@ -1912,7 +1916,7 @@ impl Elaborator {
     /// `El (D#payloadₖ^δ)` or `El (D#suffixₖ^δ)` for `ty`, if and only if
     /// `ty` **is** the `k`-th component of the spine `D`'s codes were minted
     /// from ([`GenDefLayer::spine_codes`]'s guard) — the spine-level twin of
-    /// [`Self::ty_type_ref`], found by a scan over the registered components.
+    /// [`Self::closed_type_ref`], found by a scan over the registered components.
     /// `None` is the cue to keep the inline spelling.
     ///
     /// **Not** a fallback of [`Self::respell_ty`], deliberately: a nullary
@@ -2021,8 +2025,23 @@ impl Elaborator {
     /// elaborator goes through this; a structural read keeps the inline copy
     /// (`docs/wf-shape-code-design.md` §4). `emission_walk` reports any slot
     /// this would still change.
+    /// Use [`Self::annotation_type`] when writing an annotation and only use
+    /// this optional form when the caller needs to distinguish a rewrite
+    /// from an unchanged type (e.g. the emission walker or shared Rc slots).
     pub(crate) fn emit_ty(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
         self.emit_ty_in(cx, ty, depth, 0)
+    }
+
+    /// Default representation for an emitted annotation: closed references,
+    /// parameterized instances and component respelling all go through the
+    /// same policy. A declined rewrite keeps the original type, so callers
+    /// cannot accidentally omit a naming route when choosing a fallback.
+    ///
+    /// `depth` counts binders beyond `cx`, exactly as in [`Self::emit_ty`].
+    /// This is for annotations only: structural readers keep their original
+    /// type, and Wf shape/arity slots use [`Self::emit_wf_slots`] together.
+    pub(crate) fn annotation_type(&self, cx: &Cx, ty: &Type, depth: u32) -> Type {
+        self.emit_ty(cx, ty, depth).unwrap_or_else(|| ty.clone())
     }
 
     /// [`Self::emit_ty`] for a slot living in an application's **scratch
