@@ -211,3 +211,53 @@ by Rust (E0308), and was reverted. Focused `scripts/test -p heather-elab
 --lib wf::`: 61 passed. Full `scripts/test`: **2,627 passed, 0 failed,
 5 ignored** (245 s wall), including the indexed-family, native summary and
 x86 scaling tests. `scripts/issue check` and `git diff --check` pass.
+
+
+### 2026-09-14 — independent guards and remaining-site probes
+
+Added independent registry-identity assertions across payload widths, a
+persistent positive/negative compilation test of the private telescope
+wrappers, and serial evaluator-count regression fixtures. Their contracts
+and limits are in `docs/annotation-component-respell-design.md` §2.8.
+
+The named `Box<Payload>` match takes **46/46/46** evaluator steps at payload
+widths **2/8/32**, excluding setup. The guard allows a 2× ratio.
+A temporary mutation making `StructuralWf::annotation` return its inline
+structural type changed the counts to **67/91/187**, failing that guard
+while all three declarations still kernel-checked. The mutation was reverted
+before final validation.
+
+The indexed audit used a three-constructor recursive index (`Shape`) and
+`Family<A> : Shape -> Type`, with zero/one/two recursive children. Checking
+the family declaration alone took **39/51/99** steps; its constant motive
+hides the induction-hypothesis child term. A dependent recursive `copy`
+took **57,768/77,568/156,768**. Temporarily naming the child annotations in
+`wf_ih_at` and `wf_branch_env`, while keeping pattern aliases structural,
+reduced this to **56,302/75,622/152,902**: roughly 2.5%, with the same linear
+payload trend. Reverted the experiment; this does not establish another
+instance of the dominant bug fixed here. The test retains a generous 4×
+endpoint bound and semantic controls, including an open element type.
+
+Projection substitution tests cover chains of 1/2/3 fields, a bare receiver,
+and 0/1/2/4/8 rebuilding steps. The `make` declaration's evaluator counts are:
+
+| Chain depth | Bare | 0 | 1 | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 54 | 63 | 75 | 81 | 93 | 117 |
+| 2 | 54 | 69 | 92 | 103 | 125 | 169 |
+| 3 | 108 | 127 | 163 | 176 | 202 | 254 |
+
+Open field-use proofs and literal equations check; false equations are
+refused. No projection policy change is justified by these cases. The
+existing broader boundary issue remains open. All counts use one kernel
+worker; raw logs are under `/tmp/call-run-investigation/` (`three-checks.log`,
+`indexed-consumer-before.log`, and `telescope-cost-mutant.log`).
+
+
+Validation: the final plain `scripts/test` completed with **2,632 passed,
+0 failed, 5 ignored** (205 s wall), including all five new checks, the native
+summary test and x86 scaling rail. `scripts/issue check` and
+`git diff --check` pass. The first full run caught a test-only mistake using
+an application lookup on a bare payload reference; the corrected registry
+assertion uses `is_gen_ref`, and the full suite was rerun. Final log:
+`/tmp/call-run-investigation/all-three-final.log`.

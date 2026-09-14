@@ -2962,6 +2962,35 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         }
 
         #[test]
+        fn children_annotations_name_both_the_container_and_varying_payload() {
+            for width in [2, 8, 32] {
+                let mut e = env();
+                let fields = (0..width).map(|i| format!("f{i}: Nat"))
+                    .collect::<Vec<_>>().join(", ");
+                e.el.elab_source(&format!("inductive Payload {{ P0, P1({fields}), P2 }}"))
+                    .expect("payload declaration");
+                let before = e.el.psi.bindings.len();
+                e.el.elab_source(
+                    "fn probe(b: Box<Payload>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(probe(r)) } }",
+                ).expect("recursive match");
+                let GlobalBinding::Tm { body: Some(body), .. } = e.el.psi.bindings.last().unwrap()
+                    else { panic!("function body") };
+                let Term::Lam { body, .. } = &**body else { panic!("parameter") };
+                let Term::ElimWf { step, .. } = &**body else { panic!("match") };
+                let Term::App { fun, .. } = &**step else { panic!("apply ih") };
+                let Term::App { dom, .. } = &**fun else { panic!("apply children") };
+                let Type::Vec { elem, .. } = &**dom else { panic!("children vector") };
+                let Type::El { tm, .. } = &**elem else { panic!("named element") };
+                let grew = (e.el.psi.bindings.len() - before) as u32;
+                let (key, args) = e.el.gen_app_of(&tm.shift_global(grew)).expect("registered container");
+                // Independent registry identities, never annotation_type(expected).
+                assert_eq!(key, GenDef::TyCodeFn(e.ind("Box").tag));
+                assert_eq!(args.len(), 1);
+                assert!(e.el.is_gen_ref(&args[0], GenDef::TyCode(e.ind("Payload").tag)));
+            }
+        }
+
+        #[test]
         fn a_parameterized_match_names_its_children_element_type() {
             let mut e = env();
             let before = e.el.psi.bindings.len();

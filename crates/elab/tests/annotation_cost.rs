@@ -1,0 +1,101 @@
+//! Small deterministic evaluator-count probes. Setup is excluded from the
+//! measured declaration, and the kernel gate runs serially. No wall-time gate.
+use heather_elab::{Elaborator, stats};
+
+fn measure(setup: &str, source: &str, item: &str, refusal: &str) -> u64 {
+    let mut el = Elaborator::with_prelude().expect("prelude");
+    el.set_kernel_workers(1);
+    el.elab_source(setup).unwrap_or_else(|e| panic!("{}", e.render(setup)));
+    el.enable_item_timings();
+    el.elab_source(source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    let rows = el.take_item_timings();
+    stats::disable();
+    if !refusal.is_empty() {
+        assert!(el.elab_source(refusal).is_err(), "false equation was accepted");
+    }
+    rows.iter().find(|r| r.item == item).expect("measured declaration").kernel.eval_steps
+}
+
+fn payload(width: usize) -> String {
+    let fields = (0..width).map(|i| format!("f{i}: Nat")).collect::<Vec<_>>().join(", ");
+    format!("inductive Payload {{ P0, P1({fields}), P2 }}")
+}
+
+#[test]
+fn named_recursive_telescope_cost_does_not_follow_payload_width() {
+    let counts: Vec<_> = [2, 8, 32].into_iter().map(|width| {
+        let setup = format!("{}\ninductive Box<A> {{ BNil, BCons(a: A, r: Box<A>) }}", payload(width));
+        measure(&setup,
+            "fn probe(b: Box<Payload>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(probe(r)) } }",
+            "probe", "")
+    }).collect();
+    eprintln!("telescope payload widths 2/8/32: {counts:?}");
+    assert!(counts.iter().all(|&n| n > 0));
+    assert!(counts[2] <= 2 * counts[0], "payload growth leaked into annotations: {counts:?}");
+}
+
+#[test]
+fn indexed_dependent_copy_cost_is_bounded_across_payload_widths() {
+    let counts: Vec<_> = [2, 8, 32].into_iter().map(|width| {
+        let setup = format!("{}\ninductive Shape {{ Leaf, Unary(p: Payload, s: Shape), Fork(l: Shape, r: Shape) }}", payload(width));
+        measure(&setup, "
+inductive Family<A> : (s: Shape) -> Type {
+    FLeaf(x: A): Family<A>(Leaf),
+    FUnary(p: Payload, s: Shape, xs: Family<A>(s)): Family<A>(Unary(p, s)),
+    FFork(l: Shape, r: Shape, x: Family<A>(l), y: Family<A>(r)): Family<A>(Fork(l, r)),
+}
+
+fn predecessor<A>(s: Shape, x: Family<A>(s)) -> Shape {
+    match x { FLeaf(a) => Leaf, FUnary(p, t, y) => t, FFork(l, r, x, y) => l }
+}
+fn copy<A>(s: Shape, x: Family<A>(s)) -> Family<A>(s) {
+    match x {
+        FLeaf(a) => FLeaf(a),
+        FUnary(p, t, y) => FUnary(p, t, copy(t, y)),
+        FFork(l, r, x, y) => FFork(l, r, copy(l, x), copy(r, y)),
+    }
+}
+theorem copy_open<A>(a: A): copy<A>(Leaf, FLeaf<A>(a)) = FLeaf(a) { refl }
+theorem copy_literal(): copy<Nat>(Unary(P0, Leaf), FUnary<Nat>(P0, Leaf, FLeaf<Nat>(7))) = FUnary(P0, Leaf, FLeaf(7)) { refl }
+theorem predecessor_literal(): predecessor<Nat>(Unary(P0, Leaf), FUnary<Nat>(P0, Leaf, FLeaf<Nat>(7))) = Leaf { refl }
+", "copy", "theorem copy_wrong(): copy<Nat>(Leaf, FLeaf<Nat>(7)) = FLeaf<Nat>(8) { refl }")
+    }).collect();
+    eprintln!("indexed payload widths 2/8/32: {counts:?}");
+    assert!(counts.iter().all(|&n| n > 0));
+    // The indexed family still carries structural payloads: a flat-cost
+    // promise would be false. Bound the measured linear trend with margin.
+    assert!(counts[2] <= 4 * counts[0], "indexed payload cost growth: {counts:?}");
+}
+
+#[test]
+fn projection_chains_check_after_neutral_and_computed_substitution() {
+    for depth in [1, 2, 3] {
+        let ty = format!("{}A{}", "Cell<".repeat(depth), ">".repeat(depth));
+        let path = ".value".repeat(depth);
+        let rebuilt = format!("{}c{path}{}", "Cell(".repeat(depth), ")".repeat(depth));
+        let setup = format!("
+record Cell<A> {{ value: A }}
+fn rebuild<A>(c: {ty}) -> {ty} {{ {rebuilt} }}
+fn repeat<A>(n: Nat, c: {ty}) -> {ty} {{
+    match n {{ Zero => c, Succ(k) => rebuild(repeat(k, c)) }}
+}}
+record Claim<A>(seed: {ty}) {{ out: {ty}, same: out{path} = seed{path} }}
+");
+        let counts: Vec<_> = [None, Some(0), Some(1), Some(2), Some(4), Some(8)].into_iter().map(|steps| {
+            let receiver = steps.map_or_else(|| "seed".to_owned(), |n| format!("repeat({n}, seed)"));
+            let literal = format!("{}7{}", "Cell(".repeat(depth), ")".repeat(depth));
+            let source = format!("
+fn make<A>(seed: {ty}) -> Claim<A>(seed) {{ Claim({receiver}, refl) }}
+theorem read<A>(seed: {ty}): make(seed).out{path} = seed{path} {{ make(seed).same }}
+");
+            let source = format!("{source}\ntheorem literal(): make({literal}).out{path} = 7 {{ refl }}");
+            let refusal = format!("theorem wrong(): make({literal}).out{path} = 8 {{ refl }}");
+            measure(&setup, &source, "make", &refusal)
+        }).collect();
+        eprintln!("projection chain {depth}, bare receiver, repeats 0/1/2/4/8: {counts:?}");
+        assert!(counts.iter().all(|&n| n > 0));
+        // Doubling rebuilding steps must stay within a generous growth bound.
+        // Leave room for changes in fixed kernel-checking overhead.
+        assert!(counts[5] <= 3 * counts[4], "projection cost growth: {counts:?}");
+    }
+}
