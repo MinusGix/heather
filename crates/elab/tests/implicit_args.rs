@@ -53,10 +53,12 @@ fn nat_suite_annotation_free() {
     e.elab_source(NAT_SUITE_IMPLICIT)
         .expect("annotation-free Nat suite must elaborate and kernel-check");
     // prelude's 5 (4 theorems and `CollectionLiteral#tycode_fn`,
-    // docs/per-instantiation-type-codes-design.md §2) + the suite's `fn add`
+    // docs/per-instantiation-type-codes-design.md §2) + `3·nfields + 1 = 7`
+    // for that declaration's projections (its spine is dependent;
+    // docs/telescoped-record-projections-design.md §3) + the suite's `fn add`
     // and 4 theorems, all landed as Ψ-globals (a `fn` is a *defined* one
     // since issues/simulate-conversion-cost.md).
-    assert_eq!(e.psi().bindings.len(), 10);
+    assert_eq!(e.psi().bindings.len(), 17);
 }
 
 #[test]

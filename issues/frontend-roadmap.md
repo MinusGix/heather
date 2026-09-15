@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-09-14
+updated: 2026-09-15
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -379,3 +379,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-09-15: The grammar-proof client exposed [[parser-certified-composition-cost]]; keep evidence-checking cost separate from cursor traversal optimization.
 
 - 2026-09-15: [[parser-grammar-soundness]] establishes the independent consumed-span and whole-input calculator success theorems; full suite 2672 passed. [[parser-certified-composition-cost]] and [[parser-certificate-ergonomics]] own the next improvements.
+- 2026-09-15: 2026-09-15: parser-library sequence item 4's cost follow-up: [[parser-certified-composition-cost]] attributed and its first slice landed (named projections for telescoped dependent records, docs/telescoped-record-projections-design.md; uncovered [[type-code-fn-template-stale]], fixed in the same slice). Next in this line: the two spelling slices on [[elaborator-canonical-type-spelling]], before [[parser-certificate-ergonomics]] is measured against a cost baseline.

@@ -87,7 +87,12 @@ fn same_source_elaborates_identically() {
 /// that it did not is the measurement that this suite — and today's
 /// elaborator at all, which constructs no `ElimCodeTy`/`ElimCodeTm` — emits
 /// no code recursor. The golden's blind spot was real but unexercised.
-const NAT_SUITE_GOLDEN: u64 = 0x90997a26fc0d6c4e;
+/// Moved 2026-09-15 by `docs/telescoped-record-projections-design.md`'s
+/// device: `CollectionLiteral<C>(n)` is telescoped and its spine is dependent
+/// (`fromLiteral` mentions `element`), so its projections are now named and Ψ
+/// carries `3·nfields + 1 = 7` more bindings. The hash is over Ψ's printed
+/// form, so it moves whenever Ψ does.
+const NAT_SUITE_GOLDEN: u64 = 0x9d693d5d3245eccb;
 
 #[test]
 fn nat_suite_golden_hash() {

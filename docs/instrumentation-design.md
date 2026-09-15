@@ -143,6 +143,17 @@ Environment and flag mapping, old → new:
 
 The `.conv-miss.txt` sidecar beside a timings file is unchanged.
 
+`HEATHER_GENDEF_DECLINES=1` (`value-metrics`, same rule as the samplers) prints
+one tab-separated `gendef-decline` line per *decline* of the generated-
+definition devices — site, declaration, reason, declaration scope — because a
+device that never registered and one that registered and lost look exactly
+alike from outside; group a run with `cut -f2,3,4 | sort | uniq -c`. The
+reason is specific enough to act on without re-deriving it from the source: a
+hole-match decline names the **former pair** the positional matcher stopped on
+(`hole-match-Wf/El`, `hole-match-type-hole/two-occurrences-disagree`), which is
+either the next former to teach it or the site where two spellings of one
+argument meet.
+
 **TSV schema.** A stable header, tab-separated, one row per scope:
 
 ```

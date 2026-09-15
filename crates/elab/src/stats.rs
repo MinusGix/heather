@@ -643,6 +643,67 @@ pub fn dump(dest: &Dest, rows: &[ItemTiming]) -> std::io::Result<()> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The decline listing
+// ---------------------------------------------------------------------------
+
+// `HEATHER_GENDEF_DECLINES=1`: one line per *decline* of the generated-
+// definition devices — the per-instantiation type code
+// (`docs/per-instantiation-type-codes-design.md` §4.1) and the record
+// projections over it (§13) — naming the site, the declaration and the
+// reason.
+//
+// It exists because a decline is **silent**: a device that never registered
+// and a device that registered and lost look exactly alike from outside, and
+// §13.7 asked for this listing twice and got a throwaway both times. So it is
+// permanent, and it takes the sampler's rule: behind `value-metrics`, inert
+// unless the environment asks, and compiled out of the build that ships.
+//
+// A decline is far more frequent than a conversion miss — every type the
+// emission walk passes asks — so the environment is read once per thread and
+// the reason's formatting happens only inside the switch.
+
+#[cfg(feature = "value-metrics")]
+thread_local! {
+    static DECLINES: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Whether `HEATHER_GENDEF_DECLINES` asked for the listing (cached per thread).
+#[cfg(feature = "value-metrics")]
+pub fn declines_wanted() -> bool {
+    DECLINES.with(|d| match d.get() {
+        Some(v) => v,
+        None => {
+            let v = std::env::var_os("HEATHER_GENDEF_DECLINES")
+                .is_some_and(|v| !v.is_empty() && v != "0");
+            d.set(Some(v));
+            v
+        }
+    })
+}
+
+/// One decline: the site that declined, the declaration it declined for, the
+/// reason, and the declaration scope it happened in. Tab-separated so a run is
+/// grouped with `cut`/`sort`.
+#[cfg(feature = "value-metrics")]
+pub fn note_decline(site: &str, decl: &str, reason: std::fmt::Arguments<'_>) {
+    let item = current_item().map_or_else(|| "-".to_string(), |(m, i)| format!("{m}::{i}"));
+    eprintln!("gendef-decline\t{site}\t{decl}\t{reason}\t{item}");
+}
+
+/// Record one decline (see above). Nothing is formatted, and none of the
+/// arguments are evaluated, unless the listing is on; without the
+/// `value-metrics` feature nothing is compiled at all.
+macro_rules! decline {
+    ($site:literal, $decl:expr, $($reason:tt)*) => {{
+        #[cfg(feature = "value-metrics")]
+        if $crate::stats::declines_wanted() {
+            $crate::stats::note_decline($site, $decl, format_args!($($reason)*));
+        }
+    }};
+}
+pub(crate) use decline;
+
 /// Collect (if `HEATHER_TIMINGS` asks) around `f`, then dump. What a test
 /// binary calls instead of hand-rolling a roll-up printer.
 pub fn with_env_timings<T>(label: &str, f: impl FnOnce() -> T) -> T {

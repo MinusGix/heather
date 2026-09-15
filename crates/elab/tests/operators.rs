@@ -60,8 +60,10 @@ fn nat_suite_ergonomic() {
     // The `fn` counts too: it is a *defined* Ψ-global since
     // issues/simulate-conversion-cost.md, and so does the prelude's
     // `CollectionLiteral#tycode_fn`
-    // (`docs/per-instantiation-type-codes-design.md` §2).
-    assert_eq!(e.psi().bindings.len(), 10);
+    // (`docs/per-instantiation-type-codes-design.md` §2) together with the
+    // `3·nfields + 1 = 7` projection definitions its dependent spine now gets
+    // (`docs/telescoped-record-projections-design.md` §3).
+    assert_eq!(e.psi().bindings.len(), 17);
 }
 
 #[test]

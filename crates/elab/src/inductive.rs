@@ -28,6 +28,7 @@ use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::names::{NameKind, Scope, qkey};
+use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar, embed, err};
 
 type Equation = (Term, Type, Level, Rc<Term>, Rc<Term>);
@@ -2567,12 +2568,49 @@ impl Elaborator {
         // at receiver shapes that survive substitution, which is what
         // `receiver_admits_reference` is for.
         let telescoped = !ind.params.is_empty() || !ind.valparams.is_empty();
-        if (!telescoped || receiver_admits_reference(&value))
-            && let Some(args) = self.instance_args(cx, ind, record_ty)
-            && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, &args, &value)
+        // The receiver gate first and the recovery only behind it, as before:
+        // asking `instance_args` for a receiver the reference cannot stand at
+        // would be the match's whole cost for nothing. Both answers are kept
+        // so that the listing below can tell the three declines apart without
+        // asking either question twice.
+        //
+        // The **dependent** telescoped device (`docs/telescoped-record-
+        // projections-design.md` §4) is exempt at every receiver, exactly as
+        // the closed device is and for its reason. The gate is a real trade
+        // only where the alternative is linear: a reference is cheap to
+        // compare and dear to compute through, δ + β per read per level, which
+        // is what `caller_native_memory_same_27/28` could not afford. On a
+        // dependent spine the alternative is the *exponent*, so a literal
+        // receiver is the case that needs the name most. The payers are on the
+        // other side of the same predicate — `MachineState<M>`,
+        // `StackAccess<M>`, `And<P, Q>` and `reused_callee`'s twenty-eight
+        // state chain all have non-dependent spines and keep the gate
+        // verbatim — and every read the parser library makes (`op.end`,
+        // `inner.end`, `close.forward`) is off a **bare** binder, which is
+        // precisely what the gate declines.
+        let admits = !telescoped
+            || self.rec_projs_are_dependent(ind.tag)
+            || receiver_admits_reference(&value);
+        let args = admits
+            .then(|| self.instance_args(cx, ind, record_ty))
+            .flatten();
+        if let Some(args) = args.as_ref()
+            && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, args, &value)
         {
             return Ok(t);
         }
+        decline!(
+            "project_field",
+            &ind.name,
+            "{}-{idx}",
+            if !admits {
+                "receiver-gate"
+            } else if args.is_none() {
+                "instance-args"
+            } else {
+                "no-projection-def"
+            }
+        );
         let mut cur = record_ty.clone();
         // Compute the declaration-binder spelling once, then walk it beside
         // the inline structural copy. Most fallback records have nothing to

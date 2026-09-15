@@ -3122,6 +3122,271 @@ theorem chain_is_k(k: Nat): chain(k) = k { refl }
             );
         }
 
+        // -- the stored template's own Ψ frame -------------------------------
+
+        /// `docs/telescoped-record-projections-design.md` §2.1: a stored
+        /// `TyCodeFn` is read through a rescoping, because it was computed
+        /// before its own binding was pushed.
+        mod stale_template {
+            //! [`Elaborator::register_ty_code_fn`] computes the template and
+            //! the statement, pushes `D#tycode_fn`, and commits them *as
+            //! computed* — so both sit in the Ψ prefix before the definition's
+            //! own binding, and `GlobalVar`s number from the end of Ψ. Every
+            //! declaration pushed since has moved them, so the entry is read
+            //! through a shift off the reference's own variable.
+            //!
+            //! Nothing the module above declares has a lowering that mentions
+            //! a global — `Box`, `Two`, `Cell`, `BV`, `Mixed` lower to tags,
+            //! `Σ`s, `Nat`s and `El (Var …)` — so for all of them the stale
+            //! frame and today's frame are the same characters, which is
+            //! exactly why the defect survived the device's own suite. Every
+            //! declaration here mentions one.
+            //!
+            //! **The second half, and what these tests pin about it.** The
+            //! shift alone is not enough: a template global also carries the
+            //! *telescope's* own substitution tail (`u^{·^{|Θ|+d}}`) where the
+            //! subject carries the use site's (`u^{·^{outer+d}}`), and
+            //! comparing those syntactically is comparing the two contexts'
+            //! lengths — so with the rescoping alone the match succeeded only
+            //! at the identity spine (the telescope's own length, which is
+            //! what `register_rec_projs` asks at) and declined at every
+            //! ordinary use site. A *closed* global is the same constant in
+            //! both frames and its tail says nothing about it, so `Holes::tm`
+            //! compares the index; `instance_of_template` then composes the
+            //! subject's frame into the copy the identity step checks, which
+            //! is what keeps the answer scoped where the subject is rather
+            //! than where the template was stored.
+
+            use super::*;
+
+            /// `Slot`'s `ok` field mentions the global `ident`, and it is
+            /// declared after thirteen other declarations and a function.
+            /// `Mimic` is the look-alike: the same spine, a different nominal
+            /// tag.
+            const EXTRA: &str = "
+inductive Tok { TA, TB(n: Nat) }
+fn ident(n: Nat) -> Nat { n }
+record Slot<A> { item: A, n: Nat, ok: n = ident(n) }
+record Mimic<A> { item: A, n: Nat, ok: n = ident(n) }
+";
+
+            fn env_with_globals() -> Env {
+                let mut e = env();
+                e.el
+                    .elab_source(EXTRA)
+                    .expect("the global-mentioning declarations elaborate");
+                e
+            }
+
+            /// A context of exactly one binder — `Slot`'s own telescope
+            /// length — and the type parameter as its `El (Var 0)`.
+            fn telescope_cx() -> Cx {
+                let mut cx = Cx::empty();
+                cx.push("#A".into(), Type::Ty(Level::Zero), Level::succ(Level::Zero));
+                cx
+            }
+
+            #[test]
+            fn a_lowering_that_mentions_a_global_matches_its_own_reference() {
+                let e = env_with_globals();
+                let cx = telescope_cx();
+                // Axis 2: an **open** element type, which is also the identity
+                // spine `register_rec_projs` proves its record binder with.
+                let a = Type::El {
+                    level: Level::Zero,
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let (open, ol) = e
+                    .el
+                    .lower_instance(&cx, &e.ind("Slot"), &[(a, Level::Zero)], &[], SPAN)
+                    .expect("`Slot<A>` lowers openly");
+                let r = e.el.respell_ty(&cx, &open).expect(
+                    "`Slot<A>` respells: the stored template is read into today's Ψ",
+                );
+                let Type::El { level, tm } = &r else {
+                    panic!("the spelling is `El` of an application")
+                };
+                assert_eq!(*level, ol);
+                let (key, args) = e.el.gen_app_of(tm).expect("an application of a definition");
+                assert_eq!(key, GenDef::TyCodeFn(e.ind("Slot").tag));
+                assert_eq!(args.len(), 1);
+                // A spelling change and nothing else, with the registry's own
+                // copy behind it — the `ident` inside that copy spelled for
+                // the Ψ the reader is in.
+                assert!(e.el.conv_types(&cx, &r, &open, &ol));
+                assert!(e.el.conv_types(&cx, &open, &r, &ol));
+                assert_eq!(e.el.unspell_here(&r).expect("the reference unspells"), open);
+                assert_eq!(e.el.whnf(&cx, &r, SPAN).expect("whnf"), open);
+                // A **closed** element type at the same spine, so the win is
+                // not a property of the argument being a bare binder.
+                let (flat, fl) = e.lowered("Flat");
+                let (closed, cl) = instance(&e, "Slot", &[(flat.clone(), fl.clone())]);
+                let here = closed.shift_local(1);
+                let rc = e
+                    .el
+                    .respell_ty(&cx, &here)
+                    .expect("`Slot<Flat>` respells at the telescope's own length");
+                let Type::El { tm: ctm, .. } = &rc else { panic!("`El` of an application") };
+                let (ckey, cargs) = e.el.gen_app_of(ctm).expect("an application");
+                assert_eq!(ckey, GenDef::TyCodeFn(e.ind("Slot").tag));
+                assert!(e.el.is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)));
+                assert!(e.el.conv_types(&cx, &rc, &here, &cl));
+                // The look-alike is a different declaration and gets its own
+                // name; neither is the other's.
+                let (mimic, _) = instance(&e, "Mimic", &[(flat, fl)]);
+                let m = e
+                    .el
+                    .respell_ty(&cx, &mimic.shift_local(1))
+                    .expect("`Mimic<Flat>` respells");
+                let Type::El { tm: mtm, .. } = &m else { panic!("`El` of an application") };
+                assert_eq!(
+                    e.el.gen_app_of(mtm).map(|(k, _)| k),
+                    Some(GenDef::TyCodeFn(e.ind("Mimic").tag))
+                );
+                assert_ne!(m, rc);
+                // The negative control, and the one that pins the fix as a
+                // *rescoping* rather than a matcher that stopped looking at
+                // globals: the stale spelling itself — this lowering with its
+                // `ident` pointing one binding over — is not this
+                // instantiation and must decline.
+                assert!(
+                    e.el.respell_ty(&cx, &open.shift_global(1)).is_none(),
+                    "a lowering whose global points one binding over is not this instance"
+                );
+            }
+
+            #[test]
+            fn the_axes_through_a_global_mentioning_record() {
+                let mut e = env_with_globals();
+                // A **checking** position through the record's own type at
+                // every annotated result and every `refl`, an **open** element
+                // type (`mkslot<A>`), a literal and a neutral receiver, and the
+                // computation pinned rather than merely built
+                // (`docs/testing-generated-terms.md`). This is the path the
+                // rescoping widened; it has to keep checking and computing.
+                e.el
+                    .elab_source(
+                        "
+fn mkslot<A>(a: A, n: Nat) -> Slot<A> { Slot(a, n, refl) }
+fn slot_n<A>(s: Slot<A>) -> Nat { s.n }
+fn slot_flat(n: Nat) -> Slot<Flat> { mkslot(FA, n) }
+theorem slot_open<A>(a: A, n: Nat): slot_n(mkslot(a, n)) = n { refl }
+theorem slot_neutral<A>(s: Slot<A>): slot_n(mkslot(slot_n(s), 1)) = 1 { refl }
+theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
+",
+                    )
+                    .expect("the telescope checks and computes, open and closed");
+                // Axis 4, on the same computation path.
+                assert!(
+                    e.el
+                        .elab_source("theorem slot_wrong(): slot_n(slot_flat(2)) = 3 { refl }")
+                        .is_err(),
+                    "a false equation must still be refused"
+                );
+            }
+
+            #[test]
+            fn the_entry_is_read_through_the_references_own_variable() {
+                let mut e = env_with_globals();
+                // The entry's `stmt` *is* the definition's Ψ statement, so the
+                // two independent reads — the rescoped entry and
+                // `rec_proj_ref_at`'s read of the binding off the reference's
+                // own variable — must be one term, at every Ψ length.
+                fn both_reads_agree(e: &Env) {
+                    for name in ["Box", "Two", "Box2", "BV", "Mixed", "Cell", "Slot", "Mimic"] {
+                        let tag = e.ind(name).tag;
+                        let key = GenDef::TyCodeFn(tag);
+                        let entry = e.el.ty_code_fn_now(tag, 0).expect("a registered entry");
+                        let fun = e.el.gen_ref(&e.cx, key).expect("a reference");
+                        let Term::GlobalTm { var, .. } = &fun else {
+                            panic!("a definition reference is a global")
+                        };
+                        let abs = *e.el.types.gdefs().abs_for(&key).expect("an index") as usize;
+                        let GlobalBinding::Tm { ty, .. } =
+                            e.el.psi.bindings.get(abs).expect("…and bound")
+                        else {
+                            panic!("a definition is a term binding")
+                        };
+                        assert_eq!(
+                            *entry.stmt,
+                            ty.shift_global(var.0 + 1),
+                            "`{name}`'s entry and its Ψ binding disagree"
+                        );
+                        // Read at the frame it was stored in — the prefix
+                        // before its own binding — the rescoping is the
+                        // identity. That is what makes a replayed image
+                        // self-correct instead of needing a codec change.
+                        let raw = e.el.ty_code_fn_at(tag, abs as u32).expect("a registered entry");
+                        assert_eq!(*raw.stmt, **ty, "`{name}`'s entry is stored unshifted");
+                    }
+                }
+                let open_slot = |e: &Env| {
+                    let cx = telescope_cx();
+                    let a = Type::El {
+                        level: Level::Zero,
+                        tm: Rc::new(Term::Var(LocalVar(0))),
+                    };
+                    let (open, _) = e
+                        .el
+                        .lower_instance(&cx, &e.ind("Slot"), &[(a, Level::Zero)], &[], SPAN)
+                        .expect("`Slot<A>` lowers openly");
+                    (cx, open)
+                };
+                both_reads_agree(&e);
+                let (cx, open) = open_slot(&e);
+                assert!(e.el.respell_ty(&cx, &open).is_some());
+                // …and again after several more pushes, which is the whole
+                // point: a stored copy is stale from the next push on.
+                e.el
+                    .elab_source(
+                        "
+inductive Later { LA, LB(n: Nat) }
+fn later(n: Nat) -> Nat { n }
+record Third<A> { a: A, n: Nat, ok: n = later(n) }
+",
+                    )
+                    .expect("more declarations elaborate");
+                both_reads_agree(&e);
+                let (cx, open) = open_slot(&e);
+                assert!(
+                    e.el.respell_ty(&cx, &open).is_some(),
+                    "the entry is read off today's Ψ, not the one it was stored in"
+                );
+                // The **tail** half, landed 2026-09-15 (implementation pass 2):
+                // a template global carries the telescope's own substitution
+                // tail (`u^{·^{|Θ|+d}}`) and the subject's carries the use
+                // site's (`u^{·^{outer+d}}`), so comparing them syntactically
+                // compared the two contexts' lengths and declined everywhere
+                // but the identity spine. `Holes::tm` compares a *closed*
+                // global by its index, and `instance_of_template` composes the
+                // subject's own frame into the copy step 2 checks — so the
+                // same instantiation is recovered at any outer depth, and the
+                // spelling it produces is scoped where the subject is.
+                let closed = instance(&e, "Slot", &[e.lowered("Flat")]).0;
+                let at0 = e
+                    .el
+                    .respell_ty(&Cx::empty(), &closed)
+                    .expect("a closed instantiation respells from the empty context");
+                assert!(e.el.conv_types(&Cx::empty(), &at0, &closed, &Level::Zero));
+                // …and from a context of a different length, which is the
+                // shape every ordinary use site has. The reference is the same
+                // one, weakened: the arguments are closed, so only the
+                // substitution tails' lengths move.
+                let mut deep = Cx::empty();
+                deep.push("#a".into(), Type::Nat, Level::Zero);
+                deep.push("#b".into(), Type::Nat, Level::Zero);
+                let at2 = e
+                    .el
+                    .respell_ty(&deep, &closed.shift_local(2))
+                    .expect("…and at outer depth 2");
+                assert_eq!(
+                    at2,
+                    at0.shift_local(2),
+                    "the same instantiation must respell to the same reference at every depth"
+                );
+            }
+        }
+
         // -- §13: projections at an instantiation ---------------------------
 
         /// A context holding one receiver of the closed type `ty`, and the
@@ -3172,11 +3437,26 @@ theorem chain_is_k(k: Nat): chain(k) = k { refl }
                     "`{name}` is telescoped and flat: its field 0 should have a `#proj`"
                 );
             }
-            assert!(
-                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("Dep").tag, 0))
-                    .is_none(),
-                "`Dep<A>(n)`'s spine is dependent: a telescope declines it"
-            );
+            // `Dep<A>(n)`'s spine **is** dependent, and since
+            // `docs/telescoped-record-projections-design.md` §3 that is the
+            // fourth cell rather than a decline: the closed triple with the
+            // declaration's own `Θ` in front. The tail family is the
+            // discriminator — the simple telescoped device writes its tails
+            // out and registers none.
+            for (name, fam) in [("Dep", true), ("Cell", false), ("Mixed", false), ("BV", false)] {
+                assert!(
+                    e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind(name).tag, 0))
+                        .is_some(),
+                    "`{name}` should have a `#proj` for field 0"
+                );
+                assert_eq!(
+                    e.el.gen_ref(&e.cx, GenDef::RecFam(e.ind(name).tag, 0))
+                        .is_some(),
+                    fam,
+                    "`{name}`'s shape is decided by its spine's dependency"
+                );
+                assert_eq!(e.el.rec_projs_are_dependent(e.ind(name).tag), fam);
+            }
             // …and the closed side is exactly as it was: a dependent spine is
             // named, a flat one is left to the (already linear) walk.
             assert!(
@@ -3515,6 +3795,435 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
                 "the emission walker is empty on a computed receiver:\n{}",
                 listed.join("\n")
             );
+        }
+
+        // -- the dependent telescoped device --------------------------------
+
+        /// `docs/telescoped-record-projections-design.md` §3/§4: the fourth
+        /// cell of the projection table — the closed `recfam`/`proj`/`tail`
+        /// triple with the declaration's own `Θ` in front — and §2.2/§2.3's
+        /// two extensions to the hole matcher, which are its prerequisites.
+        mod dependent_telescope {
+            //! `Dep<A>(n) { k, same: k = n, a: A }` is the module's telescoped
+            //! *dependent* record, and until 2026-09-15 it was the one cell
+            //! `register_rec_projs` declined — so every field read off every
+            //! record in `lib/std/parser` was `project_field`'s inline
+            //! `fst(sndʲ v)` walk with its tail-substitution exponent.
+            //!
+            //! The four axes of `docs/testing-generated-terms.md` are varied
+            //! here rather than asserted once: a **literal** receiver (an
+            //! assembled record value) and a **neutral** one (a parameter, and
+            //! a **bare binder**, which §4 newly admits); an **open** element
+            //! type, so nothing is fixed by the declaration; a **checking**
+            //! position — the projected field as the proof of a stated
+            //! theorem, so a wrong type is a rejection and not a different
+            //! term; and three negatives, the last of which is refused by the
+            //! kernel rather than by a guard.
+
+            use super::*;
+
+            fn nat(n: u32) -> Term {
+                let mut t = Term::Zero;
+                for _ in 0..n {
+                    t = Term::Succ(Rc::new(t));
+                }
+                t
+            }
+
+            /// `Dep<Flat>(n)` as `lower_instance` writes it, and its level.
+            fn dep_at(e: &Env, n: u32) -> (Type, Level) {
+                let (flat, fl) = e.lowered("Flat");
+                e.el.lower_instance(
+                    &e.cx,
+                    &e.ind("Dep"),
+                    &[(flat, fl)],
+                    &[(nat(n), Type::Nat, Level::Zero)],
+                    SPAN,
+                )
+                .expect("`Dep<Flat>(n)` lowers")
+            }
+
+            #[test]
+            fn a_dependent_telescope_registers_the_closed_triple_over_its_own_theta() {
+                let e = env();
+                let tag = e.ind("Dep").tag;
+                // Three definitions per spine entry and one more for the tag's
+                // own entry: `3·nfields + 1` (§7), which is what the
+                // `psi().bindings.len()` fixtures move by.
+                for j in 0..3 {
+                    assert!(
+                        e.el.gen_ref(&e.cx, GenDef::RecProj(tag, j)).is_some(),
+                        "field {j} is named"
+                    );
+                }
+                for step in 0..=3 {
+                    assert!(
+                        e.el.gen_ref(&e.cx, GenDef::RecFam(tag, step)).is_some(),
+                        "spine entry {step} has a tail family"
+                    );
+                }
+                for step in 1..3 {
+                    assert!(e.el.gen_ref(&e.cx, GenDef::RecTail(tag, step)).is_some());
+                }
+                // The statement is over the telescope: two arguments before
+                // the receiver, and the domain at them is the receiver's own
+                // *reference* (§13.2's load-bearing choice, unchanged).
+                let (inline, il) = dep_at(&e, 3);
+                let r = e.el.respell_ty(&e.cx, &inline).expect("the instance respells");
+                let (cx, v) = receiver(&r, &il);
+                let (tm, ty, lvl) = e
+                    .el
+                    .project_field(&cx, &e.ind("Dep"), &r.shift_local(1), Rc::clone(&v), 2, SPAN)
+                    .expect("the last field reads");
+                let (key, args) = e.el.gen_app_of(&tm).expect("an application of a definition");
+                assert_eq!(key, GenDef::RecProj(tag, 2));
+                assert_eq!(args.len(), 3, "one type argument, one value argument, the receiver");
+                assert_eq!(*args[2], *v);
+                e.el.kernel_check_term(
+                    &e.el.psi,
+                    heather_kernel::layer::Layer::Prog,
+                    &cx.gamma,
+                    &tm,
+                    &ty,
+                    &lvl,
+                )
+                .expect("the applied projection typechecks");
+                // …and it is the inline walk's term at the inline walk's type,
+                // which is the conservativity the kernel decides.
+                let (wtm, wty, wlvl) = e
+                    .el
+                    .project_field(&cx, &e.ind("Dep"), &inline.shift_local(1), v, 2, SPAN)
+                    .expect("the inline read");
+                for (t, at, al) in [(&tm, &wty, &wlvl), (&wtm, &ty, &lvl)] {
+                    e.el.kernel_check_term(
+                        &e.el.psi,
+                        heather_kernel::layer::Layer::Prog,
+                        &cx.gamma,
+                        t,
+                        at,
+                        al,
+                    )
+                    .expect("the named projection and the inline walk agree");
+                }
+            }
+
+            #[test]
+            fn the_dependent_device_fires_at_a_bare_binder_and_the_simple_one_does_not() {
+                // §4: the gate is a real trade only where the alternative is
+                // linear. `close_body`'s reads are all off bare binders, so
+                // keeping it for the dependent cell would register every
+                // definition the parser needs and use none of them.
+                let e = env();
+                let named = |name: &str, idx: usize| {
+                    let (inline, il) = if name == "Dep" {
+                        dep_at(&e, 3)
+                    } else {
+                        let (flat, fl) = e.lowered("Flat");
+                        let (flat2, fl2) = e.lowered("Flat2");
+                        e.el.lower_instance(
+                            &e.cx,
+                            &e.ind("Cell"),
+                            &[(flat, fl), (flat2, fl2)],
+                            &[],
+                            SPAN,
+                        )
+                        .expect("`Cell<Flat, Flat2>` lowers")
+                    };
+                    let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                    let mut cx = Cx::empty();
+                    cx.push("#v".into(), r.clone(), il.clone());
+                    let bare: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
+                    let (tm, ..) = e
+                        .el
+                        .project_field(&cx, &e.ind(name), &r.shift_local(1), bare, idx, SPAN)
+                        .expect("the bare-binder read elaborates either way");
+                    e.el.gen_app_of(&tm).map(|(k, _)| k)
+                };
+                assert_eq!(
+                    named("Dep", 0),
+                    Some(GenDef::RecProj(e.ind("Dep").tag, 0)),
+                    "the dependent device is exempt from the receiver gate"
+                );
+                assert_eq!(
+                    named("Cell", 0),
+                    None,
+                    "the non-dependent telescoped device keeps the gate verbatim"
+                );
+            }
+
+            #[test]
+            fn a_wrong_instance_dependent_projection_is_refused_by_the_kernel() {
+                // The control that says the reference means what it claims:
+                // `D#projⱼ` at the *wrong* `ā`. The spine is built — nothing
+                // here guards it — and the kernel refuses it, because the
+                // definition's domain at `ā` is the instantiation itself.
+                let e = env();
+                let (inline, il) = dep_at(&e, 3);
+                let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                let (cx, v) = receiver(&r, &il);
+                let (other, _) = dep_at(&e, 4);
+                let args =
+                    e.el.instance_args(&cx, &e.ind("Dep"), &other.shift_local(1))
+                        .expect("`Dep<Flat>(4)`'s arguments are recovered");
+                let (tm, ty, lvl) =
+                    e.el.rec_proj_ref_at(&cx, e.ind("Dep").tag, 1, &args, &v)
+                        .expect("the spine is built — it is the kernel that refuses it");
+                assert!(
+                    e.el.kernel_check_term(
+                        &e.el.psi,
+                        heather_kernel::layer::Layer::Prog,
+                        &cx.gamma,
+                        &tm,
+                        &ty,
+                        &lvl,
+                    )
+                    .is_err(),
+                    "a receiver from a different instantiation must not typecheck"
+                );
+            }
+
+            #[test]
+            fn the_axes_on_a_dependent_telescoped_records_field_reads() {
+                // Emission, on real source. A literal receiver (an assembled
+                // record value), a neutral one (a parameter and a bare
+                // binder), an open element type, and a **checking** position:
+                // `d.same` is offered as the proof of a stated equation, so a
+                // wrong field type is a rejection and not a different term.
+                let mut e = env();
+                e.el.enable_emission_walk();
+                e.el.elab_source(
+                    "
+fn mkd<A>(n: Nat, a: A) -> Dep<A>(n) { Dep(n, refl, a) }
+fn d_k<A>(n: Nat, d: Dep<A>(n)) -> Nat { d.k }
+fn d_a<A>(n: Nat, d: Dep<A>(n)) -> A { d.a }
+fn d_same<A>(n: Nat, d: Dep<A>(n)) -> d.k = n { d.same }
+fn d_lit() -> Dep<Flat>(2) { Dep(2, refl, FA) }
+theorem d_open<A>(n: Nat, a: A): d_k(n, mkd(n, a)) = n { refl }
+theorem d_open_a<A>(n: Nat, a: A): d_a(n, mkd(n, a)) = a { refl }
+theorem d_literal(): d_k(2, d_lit()) = 2 { refl }
+theorem d_literal_a(): d_a(2, d_lit()) = FA { refl }
+theorem d_neutral<A>(n: Nat, d: Dep<A>(n)): d_k(n, mkd(n, d_a(n, d))) = n { refl }
+theorem d_bare<A>(n: Nat, d: Dep<A>(n)): d.k = n { d.same }
+theorem d_bare_lit(): d_lit().k = 2 { d_lit().same }
+",
+                )
+                .expect("a dependent telescoped record's field reads check and compute");
+                // Axis 4, three ways.
+                assert!(
+                    e.el
+                        .elab_source("theorem d_false(): d_k(2, d_lit()) = 3 { refl }")
+                        .is_err(),
+                    "a false equation must be refused"
+                );
+                assert!(
+                    e.el
+                        .elab_source(
+                            "theorem d_neighbour<A>(n: Nat, d: Dep<A>(n)): d.k = n { d.a }"
+                        )
+                        .is_err(),
+                    "a neighbouring field must not prove this field's statement"
+                );
+                assert!(
+                    e.el
+                        .elab_source(
+                            "fn d_wrong_field<A>(n: Nat, d: Dep<A>(n)) -> A { d.same }"
+                        )
+                        .is_err(),
+                    "the equality field is not the element field"
+                );
+                let findings = e.el.take_emission_findings();
+                let listed: Vec<String> = findings
+                    .iter()
+                    .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                    .collect();
+                assert!(
+                    findings.is_empty(),
+                    "the emission walker is empty on dependent telescoped field reads:\n{}",
+                    listed.join("\n")
+                );
+            }
+
+            // -- §2.2 / §2.3: the two hole-matcher extensions ---------------
+
+            /// A value parameter that never occurs bare, a type parameter that
+            /// occurs as a **code** in a term slot, and a look-alike of each.
+            const HIDDEN: &str = "
+fn idn(n: Nat) -> Nat { n }
+fn idty<A>(a: A) -> A { a }
+record ByApp<A>(n: Nat) { a: A, ok: idn(n) = idn(n) }
+record ByAppLk<A>(n: Nat) { a: A, ok: idn(n) = idn(n) }
+record ByCode<A> { a: A, ok: idty(a) = a }
+record ByCodeLk<A> { a: A, ok: idty(a) = a }
+";
+
+            fn env_hidden() -> Env {
+                let mut e = env();
+                e.el
+                    .elab_source(HIDDEN)
+                    .expect("the hidden-parameter declarations elaborate");
+                e
+            }
+
+            #[test]
+            fn a_parameter_hidden_under_an_application_is_still_placed() {
+                // §2.2: `ByApp`'s `n` occurs only inside `app(idn^δ; n)` — the
+                // shape `Certified`'s `begin` (only `begin.offset`) and
+                // `Exists`'s `P` (only `P(witness)`) have. Without the `App`
+                // arm it is never placed and every use site declines.
+                let e = env_hidden();
+                let (flat, fl) = e.lowered("Flat");
+                let (inline, _) = e
+                    .el
+                    .lower_instance(
+                        &e.cx,
+                        &e.ind("ByApp"),
+                        &[(flat.clone(), fl.clone())],
+                        &[(nat(5), Type::Nat, Level::Zero)],
+                        SPAN,
+                    )
+                    .expect("`ByApp<Flat>(5)` lowers");
+                let args =
+                    e.el.instance_args(&e.cx, &e.ind("ByApp"), &inline)
+                        .expect("the hidden value parameter is recovered");
+                assert_eq!(args.len(), 2);
+                assert_eq!(*args[1], nat(5), "…as the numeral it is");
+                // And the look-alike is a different declaration: the same
+                // spine, its own tag, its own name.
+                let (lk, _) = e
+                    .el
+                    .lower_instance(
+                        &e.cx,
+                        &e.ind("ByAppLk"),
+                        &[(flat, fl)],
+                        &[(nat(5), Type::Nat, Level::Zero)],
+                        SPAN,
+                    )
+                    .expect("`ByAppLk<Flat>(5)` lowers");
+                let r = e.el.respell_ty(&e.cx, &lk).expect("the look-alike respells");
+                let Type::El { tm, .. } = &r else { panic!("`El` of an application") };
+                assert_eq!(
+                    e.el.gen_app_of(tm).map(|(k, _)| k),
+                    Some(GenDef::TyCodeFn(e.ind("ByAppLk").tag))
+                );
+                assert_ne!(
+                    r,
+                    e.el.respell_ty(&e.cx, &inline).expect("…and so does `ByApp`")
+                );
+                // The negative the matcher's incompleteness must not swallow:
+                // a *different* value argument is a different instantiation.
+                let (other, _) = e
+                    .el
+                    .lower_instance(
+                        &e.cx,
+                        &e.ind("ByApp"),
+                        &[e.lowered("Flat")],
+                        &[(nat(6), Type::Nat, Level::Zero)],
+                        SPAN,
+                    )
+                    .expect("`ByApp<Flat>(6)` lowers");
+                let other_args =
+                    e.el.instance_args(&e.cx, &e.ind("ByApp"), &other)
+                        .expect("…and recovers its own");
+                assert_ne!(*other_args[1], nat(5));
+            }
+
+            #[test]
+            fn a_type_parameter_occurring_as_a_code_in_a_term_slot_is_placed() {
+                // §2.3: `ByCode`'s `A` is `El (Var i)` in a type slot and the
+                // bare `Var i` — its *code* — inside `app(idty^δ; ⌜A⌝, a)`.
+                // Recovering a hole as a **code** is what makes the two slots
+                // one; recovering the type in one and the code in the other
+                // gives `Nat` against `El ⌜Nat⌝`, which disagree
+                // syntactically and decline for spelling.
+                let e = env_hidden();
+                // An **open** element type: both slots carry the parameter's
+                // own variable, so the two recoveries are the same code and
+                // the placement is the whole content of the test.
+                let mut acx = Cx::empty();
+                acx.push("#A".into(), Type::Ty(Level::Zero), Level::succ(Level::Zero));
+                let a = Type::El {
+                    level: Level::Zero,
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let (open, _) = e
+                    .el
+                    .lower_instance(&acx, &e.ind("ByCode"), &[(a.clone(), Level::Zero)], &[], SPAN)
+                    .expect("`ByCode<A>` lowers openly");
+                let oargs =
+                    e.el.instance_args(&acx, &e.ind("ByCode"), &open)
+                        .expect("the type parameter is recovered from both slots at once");
+                assert_eq!(oargs.len(), 1);
+                assert_eq!(*oargs[0], Term::Var(LocalVar(0)));
+                // The look-alike declines to be this one.
+                let (lk, _) = e
+                    .el
+                    .lower_instance(&acx, &e.ind("ByCodeLk"), &[(a, Level::Zero)], &[], SPAN)
+                    .expect("`ByCodeLk<A>` lowers openly");
+                assert!(
+                    e.el.instance_args(&acx, &e.ind("ByCodeLk"), &open).is_none(),
+                    "this declaration's lowering is not the look-alike's instantiation"
+                );
+                assert!(e.el.instance_args(&acx, &e.ind("ByCode"), &lk).is_none());
+                // **The boundary the code recovery does not reach**, stated as
+                // it stands so the round that closes it has something to flip.
+                // At a *closed* argument the subject spells the same parameter
+                // two ways: a binder's type is a **structural read** and keeps
+                // the inline lowering (`docs/annotation-component-respell-
+                // design.md` §2.5's own rule), while the type argument of
+                // `idty(a)` is an annotation and went through the chokepoint,
+                // so it is the reference. `code_of` of the first is
+                // `TmSum(…)` and the second is `Flat#tycode^δ`, the two
+                // occurrences disagree, and the hole is not placed. The
+                // disagreement is in the **subject**, not in the matcher:
+                // there is no single argument at which the template is this
+                // type syntactically, so step 2 would refuse whichever was
+                // chosen. It is `docs/telescoped-record-projections-design.md`
+                // §3.2's "spell both sides alike" at a site the round did not
+                // reach; the decline listing reports it as
+                // `hole-match-type-hole/two-occurrences-disagree`.
+                let (flat, fl) = e.lowered("Flat");
+                let (closed, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat, fl)], &[], SPAN)
+                    .expect("`ByCode<Flat>` lowers");
+                assert!(
+                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed).is_none(),
+                    "if this now recovers, the two spellings of a closed type argument \
+                     have been reconciled — flip the assertion and re-measure"
+                );
+            }
+
+            #[test]
+            fn the_hidden_parameter_records_check_and_compute() {
+                // Emission on real source, both records, all four axes.
+                let mut e = env_hidden();
+                e.el.enable_emission_walk();
+                e.el.elab_source(
+                    "
+fn mk_app<A>(n: Nat, a: A) -> ByApp<A>(n) { ByApp(a, refl) }
+fn mk_code<A>(a: A) -> ByCode<A> { ByCode(a, refl) }
+fn app_a<A>(n: Nat, r: ByApp<A>(n)) -> A { r.a }
+fn code_a<A>(r: ByCode<A>) -> A { r.a }
+fn code_ok<A>(r: ByCode<A>) -> idty(r.a) = r.a { r.ok }
+theorem app_open<A>(n: Nat, a: A): app_a(n, mk_app(n, a)) = a { refl }
+theorem code_open<A>(a: A): code_a(mk_code(a)) = a { refl }
+theorem code_literal(): code_a(mk_code(FA)) = FA { refl }
+",
+                )
+                .expect("the hidden-parameter records check and compute");
+                assert!(
+                    e.el
+                        .elab_source("theorem code_false(): code_a(mk_code(FA)) = FB(1) { refl }")
+                        .is_err(),
+                    "a false equation must be refused"
+                );
+                let findings = e.el.take_emission_findings();
+                assert!(
+                    findings.is_empty(),
+                    "the emission walker is empty on the hidden-parameter records: {}",
+                    findings.len()
+                );
+            }
         }
 
         #[test]

@@ -145,7 +145,15 @@ theorem law<A: CMon>(x: A): op(x, A.unit) = x {
 }
 theorem nope(x: Bool): or(x, True) = x { law(x) }
 ");
-    assert!(e.contains("nope"), "{e}");
+    // The refusal is unmoved; what it reads like moved on 2026-09-15 with
+    // `docs/telescoped-record-projections-design.md`'s device — `A.unit` is a
+    // named projection, so the mismatch is caught in the checking position and
+    // the message names the two types rather than the declaration. Assert the
+    // substance (see `lib_algebra.rs`'s twin).
+    assert!(
+        e.contains(".unit") && e.contains("or(x, True) = x"),
+        "the wrong unit must be refused, naming both sides: {e}"
+    );
 }
 
 // ---------------------------------------------------------------------------

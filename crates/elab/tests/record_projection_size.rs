@@ -269,9 +269,19 @@ fn an_unknown_field_on_a_big_record_is_rejected() {
 
 // -- 5: the boundary --------------------------------------------------------
 
-// A **parameterized** record has no closed lowering to name, so it keeps the
-// inline walk (`gendefs.rs`'s boundary, shared with `μ` and the type codes).
-// Dependent projections off one still work — that route is not going away.
+// A **parameterized** record used to have no closed lowering to name and kept
+// the inline walk. Since `docs/telescoped-record-projections-design.md` (§3,
+// 2026-09-15) it has one: `Monoid<A>` is telescoped and its spine is dependent
+// (`unit_l` mentions `op` and `unit`), which is the device's fourth cell — the
+// closed `RecFam`/`RecProj`/`RecTail` triple with `Θ` in front — so **this test
+// now exercises the new route and no longer the fallback**. What it asserts is
+// unchanged and is the point: the same three reads still elaborate, check and
+// compute, off a **computed** receiver (`nat_monoid()`, which
+// `receiver_admits_reference` declines and the dependent device is exempt
+// from), off a **bare binder** (`m`, which the gate also declines), and at an
+// **open** element type, with the law used in a **checking** position. The
+// fallback walk itself is covered by the closed non-dependent records above,
+// which are the cell that still declines.
 #[test]
 fn a_parameterized_records_dependent_field_still_projects() {
     ok(r#"

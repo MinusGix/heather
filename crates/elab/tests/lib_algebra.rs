@@ -358,8 +358,21 @@ theorem at_or(x: Bool): or(x, False) = x { op_unit_of_comm(x) }
 ");
     // …and the negative control: the law is about the registered unit, so a
     // wrong one is refused rather than derived.
+    //
+    // **What the refusal reads like moved on 2026-09-15** and the refusal did
+    // not. Since `docs/telescoped-record-projections-design.md`'s device a
+    // dictionary's `A.unit` is `CommMonoid#projⱼ^δ ā v` and not an inline
+    // `fst(sndʲ v)`, so the disagreement is caught in the **checking**
+    // position — where the law's instance meets the stated goal — instead of
+    // further down, and the message names the two types rather than the
+    // declaration. So the control asserts the substance: the instance's own
+    // type mentions the registered unit and the stated one is the wrong
+    // literal.
     let e = bad("theorem nope(x: Bool): or(x, True) = x { op_unit_of_comm(x) }");
-    assert!(e.contains("nope"), "{e}");
+    assert!(
+        e.contains(".unit") && e.contains("or(x, True) = x"),
+        "the wrong unit must be refused, naming both sides: {e}"
+    );
 }
 
 // ---------------------------------------------------------------------------

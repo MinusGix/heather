@@ -3,7 +3,7 @@ title: "Render resolved operations with their operator notation in diagnostics"
 status: open
 labels: [frontend,diagnostics,notation,ergonomics]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-09-15
 ---
 
 Kernel-term diagnostics currently recover a global application as a named call:
@@ -58,3 +58,4 @@ the printer must not invent notation that a user could not write.
   source-like enough that named calls such as `pow(a, n)` became the next
   conspicuous mismatch. Surface-AST rendering already preserves written
   operator nodes; this issue owns the harder kernel-to-surface inverse.
+- 2026-09-15: 2026-09-15: a second customer for the resugaring pass: [[wrong-dictionary-field-refusal-names-projection]] — a named projection reference now appears in a wrong-field refusal where the declaration's name used to.

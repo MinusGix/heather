@@ -31,9 +31,12 @@ fn nat_suite_checks() {
     // suite's `fn add` and 4 theorems all landed as Ψ-globals (a `fn` is a
     // *defined* one since issues/simulate-conversion-cost.md; the code
     // function is docs/per-instantiation-type-codes-design.md §2's, over the
-    // prelude's one parameterized declaration — whose *projections* are not
-    // named, §13.6's boundary).
-    assert_eq!(e.psi().bindings.len(), 10);
+    // prelude's one parameterized declaration). Plus `3·nfields + 1 = 7` for
+    // that declaration's *projections*: `CollectionLiteral<C>(n)` is
+    // telescoped and its spine is dependent (`fromLiteral` mentions
+    // `element`), which since docs/telescoped-record-projections-design.md
+    // §3 is the device's fourth cell rather than §13.6's decline.
+    assert_eq!(e.psi().bindings.len(), 17);
 }
 
 #[test]
@@ -55,10 +58,16 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
         .iter()
         .map(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
         .collect();
-    assert_eq!(
-        bodied,
-        vec![true, false, false, false, false, true, false, false, false, false]
-    );
+    // Eight generated definitions for the prelude's one telescoped dependent
+    // record (`CollectionLiteral#tycode_fn` and its `3·nfields + 1 = 7`
+    // projection definitions, `docs/telescoped-record-projections-design.md`
+    // §3), then the prelude's four theorems, then `fn add`, then the suite's
+    // four theorems.
+    let mut want = vec![true; 8];
+    want.extend([false; 4]);
+    want.push(true);
+    want.extend([false; 4]);
+    assert_eq!(bodied, want);
 }
 
 #[test]

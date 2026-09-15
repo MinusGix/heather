@@ -73,12 +73,13 @@ fn a_body_hole_is_discharged_by_name() {
         "#,
     );
     // 5 prelude (4 theorems and `CollectionLiteral#tycode_fn`,
-    // `docs/per-instantiation-type-codes-design.md` §2 — its *projections*
-    // are not named, §13.6's boundary: the spine is dependent) + 3 preamble
-    // (`add` included: a `fn` is a *defined* Ψ-global since
-    // issues/simulate-conversion-cost.md) + this one; goals never leak into
-    // the real Ψ.
-    assert_eq!(e.psi().bindings.len(), 9);
+    // `docs/per-instantiation-type-codes-design.md` §2) + `3·nfields + 1 = 7`
+    // for its two-field dependent spine's projections
+    // (docs/telescoped-record-projections-design.md §3, which turned §13.6's
+    // decline into the device's fourth cell) + 3 preamble (`add` included: a
+    // `fn` is a *defined* Ψ-global since issues/simulate-conversion-cost.md)
+    // + this one; goals never leak into the real Ψ.
+    assert_eq!(e.psi().bindings.len(), 16);
 }
 
 #[test]
