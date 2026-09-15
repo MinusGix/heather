@@ -74,11 +74,13 @@ impl Obligations {
             Some(h) => format!(". {h}"),
             None => String::new(),
         };
+        let target = hole.strip_prefix("#decreasing:").map(|n| format!("decreasing {n}"))
+            .unwrap_or_else(|| format!("?{hole}"));
         crate::ElabError::Elab {
             msg: format!(
                 "this recursive call must decrease the measure, and `{text}` was not \
                  proved automatically ({msg}). Discharge it by hand: \
-                 `on ?{hole} := …;` at the end of the body{rank}"
+                 `on {target} := …;` at the end of the body{rank}"
             ),
             span: *span,
         }
@@ -103,25 +105,57 @@ pub(crate) struct Family {
     pub(crate) decls: Vec<Lowered>,
 }
 
-/// The one thing the generator cannot read off the surface: what a
-/// constructor pattern's binders are typed at. A lifted obligation quantifies
-/// the arm binders its statement names, and a declaration parameter needs a
-/// written type; the elaborator has the constructor's stored field types and
-/// answers here (`docs/decreases-unfolding-design.md` §4).
+/// Type information supplied by ordinary elaboration: constructor fields and
+/// inferred locals in a reconstructed telescope. Every recovered annotation
+/// is checked again; no query commits a declaration or proof.
 ///
 /// `None` is an honest decline — the site is then not lifted, and `f` falls
 /// back to the obligation spelled at the call as it was before.
 pub(crate) trait BinderTys {
     fn ctor_fields(&self, scrut: &Ty, ctor: &str) -> Option<Vec<Ty>>;
+    fn local_evidence(&self, decl: &Decl, scope: &[Binder], goal: &Ty, arithmetic: bool) -> Option<Expr>;
+    fn infer_local(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[Binder], expr: &Expr) -> Option<Ty>;
 }
 
 /// A binder in scope during the walk, with the surface type a lifted
-/// obligation may quantify it at — `None` where the walk cannot name it (an
-/// unannotated `let`, a pattern [`BinderTys`] declines).
+/// obligation may quantify it at — `None` where [`BinderTys`] declines to
+/// recover a complete annotation.
 #[derive(Clone)]
-struct Binder {
-    name: String,
-    ty: Option<Ty>,
+pub(crate) struct Binder {
+    pub(crate) name: String,
+    pub(crate) ty: Option<Ty>,
+}
+
+/// The smallest spellable dependent telescope for a goal and its evidence.
+/// Unknown unrelated locals are deliberately absent from isolated queries.
+pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<&Expr>) -> Option<Vec<&'a Binder>> {
+    let mut needed: Vec<bool> = scope.iter().enumerate().map(|(i, b)| {
+        !scope[i + 1..].iter().any(|c| c.name == b.name)
+            && (mentions_ty(goal, &b.name)
+                || evidence.is_some_and(|e| mentions_context(e, &b.name)))
+    }).collect();
+    for i in (0..scope.len()).rev() {
+        if !needed[i] { continue; }
+        let ty = scope[i].ty.as_ref()?;
+        for j in (0..i).rev() {
+            if mentions_ty(ty, &scope[j].name) {
+                if scope[j + 1..].iter().any(|b| b.name == scope[j].name) { return None; }
+                needed[j] = true;
+            }
+        }
+    }
+    Some(scope.iter().zip(needed).filter_map(|(b, needed)| needed.then_some(b)).collect())
+}
+
+pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
+    let TyKind::OfExpr(e) = &ty.kind else { return false; };
+    let ExprKind::App { head, .. } = &e.kind else { return false; };
+    let relation = match &head.kind {
+        ExprKind::Var(name) => matches!(name.as_str(), "nat::Lt" | "nat::Le" | "Lt" | "Le"),
+        ExprKind::OpSymbol { symbol, .. } => matches!(symbol.as_str(), "<" | "<="),
+        _ => false,
+    };
+    relation && scope.iter().any(|b| mentions_ty(goal, &b.name) && mentions_ty(ty, &b.name))
 }
 
 /// A stored field type at the scrutinee's type arguments: type parameters are
@@ -166,6 +200,66 @@ pub(crate) fn instantiate_ty(t: &Ty, m: &[(String, Ty)]) -> Ty {
     Ty { kind, span }
 }
 
+/// A local function signature's surface codomain after a saturated call.
+/// Only a candidate: the type query rechecks it against the inferred type.
+pub(crate) fn signature_result(signatures: &[(String, Ty)], e: &Expr) -> Option<Ty> {
+    let ExprKind::App { head, args, named, .. } = &e.kind else { return None; };
+    if !named.is_empty() { return None; }
+    let ExprKind::Var(name) = &head.kind else { return None; };
+    let mut result = signatures.iter().find(|(n, _)| n == name)?.1.clone();
+    for arg in args {
+        let TyKind::Fn { binder, cod, .. } = result.kind else { return None; };
+        result = if let Some(binder) = binder {
+            subst_surface_ty(&cod, &binder, arg)
+        } else { *cod };
+    }
+    Some(result)
+}
+
+pub(crate) fn subst_surface_ty(ty: &Ty, name: &str, value: &Expr) -> Ty {
+    let mut ty = ty.clone();
+    match &mut ty.kind {
+        TyKind::OfExpr(e) | TyKind::Fin(e) => **e = subst_candidate_expr(e, name, value),
+        TyKind::Eq(a,b) => {
+            **a = subst_candidate_expr(a, name, value);
+            **b = subst_candidate_expr(b, name, value);
+        }
+        TyKind::Named { name: n, args } if n == name && args.is_empty() => return of_expr(value.clone()),
+        TyKind::Named { args, .. } => for arg in args { *arg = subst_surface_ty(arg, name, value); },
+        TyKind::Fn { binder, dom, cod, .. } => {
+            **dom = subst_surface_ty(dom, name, value);
+            if binder.as_deref() != Some(name) { **cod = subst_surface_ty(cod, name, value); }
+        }
+        TyKind::Vec { elem, len } => {
+            **elem = subst_surface_ty(elem, name, value);
+            **len = subst_candidate_expr(len, name, value);
+        }
+        TyKind::Squash(t) => **t = subst_surface_ty(t, name, value),
+        _ => {}
+    }
+    ty
+}
+
+// The candidate's explicit type arguments participate in substitution too;
+// the measure-expression substitution below intentionally leaves them alone.
+fn subst_candidate_expr(e: &Expr, name: &str, value: &Expr) -> Expr {
+    let mut out = e.clone();
+    match &mut out.kind {
+        ExprKind::App { head, args, named, .. } => {
+            **head = subst_candidate_expr(head, name, value);
+            for arg in args { *arg = subst_candidate_expr(arg, name, value); }
+            for arg in named { arg.expr = subst_candidate_expr(&arg.expr, name, value); }
+        }
+        ExprKind::TyApp { head, args } => {
+            **head = subst_candidate_expr(head, name, value);
+            for ty in args { *ty = subst_surface_ty(ty, name, value); }
+        }
+        ExprKind::TyLit(ty) => **ty = subst_surface_ty(ty, name, value),
+        _ => return subst(e, &[(name, value)], &mut Vec::new()),
+    }
+    out
+}
+
 /// `f#body` — the rewritten `Succ` arm, lifted out of the eliminator.
 pub(crate) fn body_name(name: &str) -> String {
     format!("{name}#body")
@@ -202,6 +296,7 @@ pub(crate) fn grp_rec_name(name: &str) -> String {
 struct Sibling {
     name: String,
     params: Vec<Param>,
+    result: Ty,
     raw: Expr,
     measure: Expr,
     /// `.snd` repeated `n` times then `.fst`/`.snd` (§3); `None` where the ih
@@ -364,6 +459,7 @@ fn solo(decl: &Decl, name: &str, measure: &Expr) -> [Sibling; 1] {
     [Sibling {
         name: name.to_string(),
         params: decl.params.clone(),
+        result: decl.result.clone(),
         raw: measure.clone(),
         measure: measure.clone(),
         proj: None,
@@ -455,6 +551,7 @@ pub(crate) fn lower(
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
     let result = state.expr(&decl.body.result);
+    state.validate_labels();
     if let Some(error) = state.error.take() {
         return Err(error);
     }
@@ -779,6 +876,7 @@ pub(crate) fn lower_group(
         .map(|(i, m)| Sibling {
             name: m.self_name.clone(),
             params: m.decl.params.clone(),
+            result: m.decl.result.clone(),
             raw: m.measure.clone(),
             measure: scaled(&m.measure, n, n - 1 - i),
             // `.snd` down to this component, then `.fst` — except the last,
@@ -819,6 +917,7 @@ pub(crate) fn lower_group(
         };
         let stmts: Vec<Stmt> = m.decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
         let result = state.expr(&m.decl.body.result);
+        state.validate_labels();
         if let Some(error) = state.error.take() {
             return Err(error);
         }
@@ -1173,6 +1272,22 @@ impl Rewrite<'_> {
         }
     }
 
+    fn validate_labels(&mut self) {
+        let mut seen = Vec::new();
+        for on in self.ons {
+            if let OnTarget::Name(name) = &on.target
+                && let Some(label) = name.strip_prefix("#decreasing:")
+            {
+                if seen.contains(&name) {
+                    self.fail(format!("duplicate discharge for decrease label `{label}`"), on.span);
+                } else if !self.sites.iter().any(|(_, n, ..)| n == name) {
+                    self.fail(format!("unknown decrease label `{label}` in this declaration"), on.span);
+                }
+                seen.push(name);
+            }
+        }
+    }
+
     /// `f(ȳ, spill…)` ↦ `ih(ȳ, proof, spill…)`, and for a group member
     /// `j(ȳ, spill…)` ↦ `ih.<proj_j>(ȳ, proof, spill…)`
     /// (`docs/mutual-recursion-design.md` §3). Arguments were rewritten by
@@ -1243,7 +1358,9 @@ impl Rewrite<'_> {
             }
         });
         let proj = self.members[target].proj;
-        let acc = self.obligation(&at_args, clean, span);
+        let label = call.named_args().iter().find(|a| a.name.starts_with("#decreasing:"))
+            .map(|a| a.name.as_str());
+        let acc = self.obligation(&at_args, clean, span, label);
         let var = |n: &str| Expr {
             kind: ExprKind::Var(n.to_string()),
             span,
@@ -1285,7 +1402,7 @@ impl Rewrite<'_> {
     /// exactly this term — same numbering, same reference — under their own
     /// bound and hypothesis, which is what makes the three spellings of a
     /// self-call identical.
-    fn obligation(&mut self, at_args: &Expr, clean: Option<Clean>, span: Span) -> Expr {
+    fn obligation(&mut self, at_args: &Expr, clean: Option<Clean>, span: Span, label: Option<&str>) -> Expr {
         // The measure as the enclosing arms know it: `e[Succ(k)/n]` inside
         // `match n { Succ(k) => … }`, and so on down.
         let stages = self.stages();
@@ -1299,7 +1416,7 @@ impl Rewrite<'_> {
         let at_stages = self.refine(at_args);
         let at_args = at_stages.last().expect("stage 0 is the argument's measure");
         let site = self.next;
-        let hole = format!("dec{site}");
+        let hole = label.map(str::to_owned).unwrap_or_else(|| format!("dec{site}"));
         self.next += 1;
         // What the writer is told they owe: for a group, the *unscaled*
         // statement of §4 — the one they wrote the measure to make true —
@@ -1335,7 +1452,17 @@ impl Rewrite<'_> {
         // writer's hole where an `on` names it, `omega` where the closer is
         // available, and the bare hole otherwise (reported with its
         // statement, `docs/termination-measures-design.md` §2).
-        let closer = if on.is_some() || !self.omega_available {
+        let goal = match &clean {
+            Some((c, args, raw)) => of_expr(app(var(if c.strict { "nat::Lt" } else { "nat::Le" }, span),
+                vec![args.clone(), raw.clone()], span)),
+            None => lt_ty(at_args.clone(), refined.clone(), span),
+        };
+        let automatic = if on.is_none() {
+            self.tys.local_evidence(self.decl, &self.scope, &goal, self.omega_available)
+        } else { None };
+        let closer = if let Some(proof) = &automatic {
+            proof.clone()
+        } else if on.is_some() || !self.omega_available {
             Expr {
                 kind: ExprKind::Hole(Some(hole.clone())),
                 span,
@@ -1349,7 +1476,7 @@ impl Rewrite<'_> {
         // The lifted declaration's body. Without a clean statement it is the
         // closer alone, as Part A had it; with one it binds the writer's
         // statement to the closer and lets `omega` do §4's arithmetic on top.
-        let on_expr = on.as_ref().map(|o| o.expr.clone());
+        let on_expr = on.as_ref().map(|o| o.expr.clone()).or(automatic);
         let body = match &clean {
             None => Block {
                 stmts: Vec::new(),
@@ -1481,17 +1608,9 @@ impl Rewrite<'_> {
     ) -> Option<Expr> {
         let mut params = Vec::new();
         let mut args = Vec::new();
-        for (i, b) in self.scope.iter().enumerate() {
-            // A name re-bound further in is that name's meaning here.
-            if self.scope[i + 1..].iter().any(|c| c.name == b.name) {
-                continue;
-            }
-            let named = mentions(at_args, &b.name)
-                || mentions(refined, &b.name)
-                || on.as_ref().is_some_and(|o| mentions(o, &b.name));
-            if !named {
-                continue;
-            }
+        let goal = lt_ty(at_args.clone(), refined.clone(), span);
+        let selected = select_scope(&self.scope, &goal, on.as_ref())?;
+        for b in selected {
             params.push(param(&b.name, b.ty.clone()?, span));
             args.push(var(&b.name, span));
         }
@@ -1524,12 +1643,20 @@ impl Rewrite<'_> {
         })
     }
 
-    /// The surface type of a scrutinee, where it is a binder the walk knows.
+    /// Query the ordinary elaborator in an isolated local telescope. Recursive
+    /// signatures are neutral locals used only for recovering types; emitted
+    /// calls still go through the well-founded induction hypothesis.
+    fn infer_local(&self, e: &Expr) -> Option<Ty> {
+        let signatures: Vec<_> = self.members.iter().map(|m|
+            (m.name.clone(), pi_over(&m.params, m.result.clone(), e.span))).collect();
+        self.tys.infer_local(self.decl, &signatures, &self.scope, e)
+    }
+
     fn scrut_ty(&self, e: &Expr) -> Option<Ty> {
-        let ExprKind::Var(v) = &e.kind else {
-            return None;
-        };
-        self.scope.iter().rev().find(|b| &b.name == v)?.ty.clone()
+        if let ExprKind::Var(v) = &e.kind {
+            return self.scope.iter().rev().find(|b| &b.name == v)?.ty.clone();
+        }
+        self.infer_local(e)
     }
 
     /// Bind one arm pattern, typing its binders from the scrutinee's type
@@ -1537,10 +1664,13 @@ impl Rewrite<'_> {
     /// which only costs the sites whose statements name it their lifting.
     fn bind_pat(&mut self, p: &Pat, ty: Option<&Ty>) {
         match p {
-            Pat::Var { name, .. } => self.scope.push(Binder {
-                name: name.clone(),
-                ty: ty.cloned(),
-            }),
+            Pat::Var { name, .. } => {
+                // A bare nullary constructor is a pattern, not a local.
+                if ty.and_then(|t| self.tys.ctor_fields(t, name)).is_some_and(|f| f.is_empty()) {
+                    return;
+                }
+                self.scope.push(Binder { name: name.clone(), ty: ty.cloned() });
+            },
             Pat::Ctor { name, args, .. } => {
                 let fields = ty
                     .and_then(|t| self.tys.ctor_fields(t, name))
@@ -1605,7 +1735,24 @@ impl Rewrite<'_> {
                 explicit,
                 goal_oriented,
             } => {
-                let args: Vec<Expr> = args.iter().map(|a| self.expr(a)).collect();
+                // Postfix `?` introduces a private callback whose domain is
+                // the preceding Result's success payload. Recover it before
+                // walking the callback (and its recursive call sites).
+                let payload = args.first().and_then(|input| {
+                    args.get(1).filter(|a| matches!(&a.kind, ExprKind::Lam { binders, .. }
+                        if binders.len() == 1 && binders[0].name.starts_with("#try")))?;
+                    let input_ty = self.scrut_ty(input)?;
+                    self.tys.ctor_fields(&input_ty, "Ok")?.into_iter().next()
+                });
+                let args: Vec<Expr> = args.iter().enumerate().map(|(i, a)| {
+                    if i == 1 && let Some(ty) = &payload {
+                        let mut a = a.clone();
+                        if let ExprKind::Lam { binders, .. } = &mut a.kind {
+                            binders[0].ty = Some(ty.clone());
+                        }
+                        self.expr(&a)
+                    } else { self.expr(a) }
+                }).collect();
                 let named: Vec<heather_syntax::NamedArg> = named
                     .iter()
                     .map(|n| heather_syntax::NamedArg {
@@ -1630,7 +1777,7 @@ impl Rewrite<'_> {
                     _ => None,
                 };
                 if let Some(target) = target {
-                    if !named.is_empty() {
+                    if named.iter().any(|a| !a.name.starts_with("#decreasing:")) {
                         self.fail(
                             format!(
                                 "a recursive call to `{}` under `decreases` takes positional \
@@ -1641,6 +1788,9 @@ impl Rewrite<'_> {
                         );
                     }
                     return self.self_call(target, e, args, *explicit);
+                }
+                if let Some(label) = named.iter().find(|a| a.name.starts_with("#decreasing:")) {
+                    self.fail("a decrease label must name a call to a member of this recursion".into(), label.name_span);
                 }
                 ExprKind::App {
                     head: Box::new(self.expr(head)),
@@ -1678,6 +1828,25 @@ impl Rewrite<'_> {
                 motive,
                 arms,
             } => {
+                if !matches!(scrut.kind, ExprKind::Var(_))
+                    && let Some(ty) = self.scrut_ty(scrut)
+                {
+                    // Give the dependent match one shared scrutinee in its
+                    // local telescope, just as a written annotated let does.
+                    let mut name = format!("__dec_scrut_{}", scrut.span.start);
+                    while self.scope.iter().any(|b| b.name == name)
+                        || mentions_context(e, &name)
+                        || self.ons.iter().any(|o| mentions_context(&o.expr, &name))
+                    { name.push('_'); }
+                    let mut matched = e.clone();
+                    if let ExprKind::Match { scrut, .. } = &mut matched.kind {
+                        **scrut = var(&name, span);
+                    }
+                    return self.expr(&Expr { kind: ExprKind::Block(Box::new(Block {
+                        stmts: vec![Stmt::Let { name, ty: Some(ty), expr: (**scrut).clone(), span }],
+                        result: Box::new(matched), ons: Vec::new(), span,
+                    })), span });
+                }
                 let refine = if *form == MatchForm::Match {
                     self.refining_match(scrut, eqbind)
                 } else {
@@ -1698,7 +1867,15 @@ impl Rewrite<'_> {
                         if let (Some((eq, p)), ExprKind::Var(v)) = (&pattern, &scrut.kind) {
                             self.refinements.push((v.clone(), p.clone(), eq.clone()));
                         }
-                        let arm = self.arm(a, eqbind.as_deref(), scrut_ty.as_ref());
+                        let n = self.scope.len();
+                        self.bind_arm(a, scrut_ty.as_ref());
+                        if let Some(eq) = &eqbind {
+                            let ty = pattern_expr(a, span).map(|p| eq_ty((**scrut).clone(), p, span));
+                            self.scope.push(Binder { name: eq.clone(), ty });
+                        }
+                        let mut arm = a.clone();
+                        arm.body = self.expr(&a.body);
+                        self.scope.truncate(n);
                         if pattern.is_some() {
                             self.refinements.pop();
                         }
@@ -1856,13 +2033,11 @@ impl Rewrite<'_> {
                 expr,
                 span,
             } => {
+                // Query the source before replacing recursive calls by IH
+                // applications. The result is only a telescope annotation.
+                let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
                 let expr = self.expr(expr);
-                // An annotated `let` types its binder; an inferred one does
-                // not, and a site whose statement names it is not lifted.
-                self.scope.push(Binder {
-                    name: name.clone(),
-                    ty: ty.clone(),
-                });
+                self.scope.push(Binder { name: name.clone(), ty: inferred });
                 Stmt::Let {
                     name: name.clone(),
                     ty: ty.clone(),
@@ -1956,6 +2131,40 @@ fn mentions(e: &Expr, v: &str) -> bool {
         }
     });
     found
+}
+
+// Include annotations and explicit type arguments when collecting a lifted
+// telescope. The ordinary expression walker deliberately skips these.
+fn mentions_context(e: &Expr, name: &str) -> bool {
+    let mut found = false;
+    crate::surface::walk_expr(e, &mut |e| {
+        found |= match &e.kind {
+            ExprKind::Var(n) => n == name,
+            ExprKind::TyLit(t) => mentions_ty(t, name),
+            ExprKind::TyApp { args, .. } => args.iter().any(|t| mentions_ty(t, name)),
+            ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.as_ref().is_some_and(|t| mentions_ty(t, name))),
+            ExprKind::Match { motive, .. } => motive.as_ref().is_some_and(|e| mentions_context(e, name)),
+            ExprKind::MatchCode { motive, .. } => mentions_ty(motive, name),
+            ExprKind::RecordLit { tyargs, .. } => tyargs.iter().any(|t| mentions_ty(t, name)),
+            ExprKind::J { proof, motive, case } => [proof, motive, case].iter().any(|e| mentions_context(e, name)),
+            ExprKind::Block(b) => b.stmts.iter().any(|s| matches!(s, Stmt::Let { ty: Some(t), .. } if mentions_ty(t, name))),
+            _ => false,
+        };
+    });
+    found
+}
+
+fn mentions_ty(t: &Ty, name: &str) -> bool {
+    match &t.kind {
+        TyKind::Named { name: n, args } => n == name || args.iter().any(|t| mentions_ty(t, name)),
+        TyKind::OfExpr(e) | TyKind::Fin(e) => mentions_context(e, name),
+        TyKind::Eq(a, b) => mentions_context(a, name) || mentions_context(b, name),
+        TyKind::Vec { elem, len } => mentions_ty(elem, name) || mentions_context(len, name),
+        TyKind::Fn { binder, dom, cod, .. } => mentions_ty(dom, name)
+            || (binder.as_deref() != Some(name) && mentions_ty(cod, name)),
+        TyKind::Squash(t) | TyKind::Code { ty: t, .. } => mentions_ty(t, name),
+        _ => false,
+    }
 }
 
 fn pat_names(p: &Pat, out: &mut Vec<String>) {
@@ -2650,7 +2859,7 @@ impl Respell<'_> {
         // context and not of the goal alone.
         let mut acc = self
             .rw
-            .obligation(&subst(self.rw.measure, &map, &mut Vec::new()), None, span);
+            .obligation(&subst(self.rw.measure, &map, &mut Vec::new()), None, span, None);
         if !self.rw.obls.last().is_some_and(Option::is_some) {
             return Err(
                 "a recursive call whose obligation cannot be lifted into a declaration \

@@ -27,7 +27,9 @@ guess, revised freely as taste and design rounds move.
 numbers, `+`, `*`, and parentheses. Multiplication binds more tightly than
 addition; both operators associate to the right, as in the idealized parser.
 It imports the existing `Expr`, evaluator, RPN compiler, and compiler proof
-from `calc.hthr`.
+from `calc.hthr`. The grammar uses `lib/std/parser.hthr` for source-indexed
+cursors, consuming composition, commitment and complete-input checking.
+See [the parser library](../parser-library.md) for its contracts.
 
 ```text
 expr   := factor [ '+' expr ]
@@ -48,11 +50,15 @@ left after a complete expression produce explicit `ParseError` values.
 
 `parsed_compile_correct` proves for **every token list** that compiled RPN
 execution agrees with direct evaluation after parsing, preserving errors.
-The parser's `Parsed(limit)` record carries a bound on the remainder length;
-this supplies the termination evidence for recursive calls on returned
-remainders. AST equations check precedence, association, and nesting, including
-an open numeric payload. This is not a general grammar soundness/completeness
-proof. Character lexing, shell IO, and native compilation remain future work.
+`parse_sound` additionally proves that every successful parse has an independent
+well-formed grammar derivation whose spelling is exactly the input and whose
+meaning is the returned AST. Source-indexed cursors and checked consumption
+provide recursive-call evidence. The proof-carrying recursive implementation
+projects ordinary replies for public callers. See
+[calculator grammar soundness](../calculator-grammar-soundness.md).
+AST equations also check precedence, association, and nesting, including an
+open numeric payload. General recognition completeness, character lexing,
+shell IO, and native compilation remain future work.
 
 Both realized files are checked by
 `crates/elab/tests/showcase_calculator.rs`, including controls that require the
@@ -85,7 +91,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 | `Result`, `?`-chaining, `.map` | **landed 2026-09-14** via `import result;`, function/lambda-scoped propagation and explicit `Ok`; runnable parser and recursive collection in `result-parser.hthr` | `issues/result-propagation.md`; remaining Option chaining: `issues/prelude-option-and-friends.md` |
 | `let b :: a :: s2 = s else { … }` | let-else (the one-non-absurd-branch match) | `issues/let-else-sugar.md` |
 | `String`, `.chars()`, `[c, ..rest]`, `if c.is_digit()` guards | strings, slice patterns, match guards | no owner yet |
-| `decreases ts.len()` on mutually recursive parsers | **realized 2026-09-14** in `calc_parser.hthr`: three adjacent parsers, `Result`/`?`, and a length-bounded remainder. The checked spelling uses `list_len(ts)`, explicit local type annotations, and `on ?dec2 := small` for the returned-tail calls. Group unfolding equations and the remaining diagnostic renderer gap retain their own owners. | `issues/showcase-token-parser.md`, `issues/group-unfolding-equations.md`, `issues/omega-renders-member-by-base-name.md` |
+| `decreases ts.len()` on mutually recursive parsers | **realized 2026-09-15** in `calc_parser.hthr`: three adjacent proof-carrying recursive functions use checked consuming recognition for their decrease. Production composition constructs independent source-span derivations; the public parser projects ordinary results. Certificate ergonomics and group unfolding equations retain their own owners. | `issues/showcase-token-parser.md`, `issues/group-unfolding-equations.md`, `issues/omega-renders-member-by-base-name.md` |
 | `"{src} = {eval(e)}"` | string interpolation | no owner yet |
 | `datarepr Nat = repr::BigNat` | runtime representation chosen per type, linked by certified refinement | `issues/datarepr-separation.md` |
 | `derive instance Compile[Cpu] for eval` | **half landed 2026-08-14**: tier-1 source types are in the generator's fragment (`docs/certgen-tier1-source-types-design.md` — an `eval`-shaped recursion over an `Expr`-shaped type generates a kernel-checked `Compile` instance end to end). Still missing here: the `derive` surface and the `Compile` class (their own row), and `run` — blocked by four independent certgen declines even after hand-monomorphization (probed 2026-08-15: tier-1 constructor fields at a *third* inductive — the binding one; recursive tier-1 results; non-`Nat`-field results like `Option<List<Nat>>`; the curried result), not only the parameterized-instantiation name gap | `issues/compile-typeclass-design.md`; `run`: `issues/datarepr-separation.md` |
@@ -128,7 +134,7 @@ Recorded here because "it checks" hides them:
 ## Bookkeeping
 
 The realized calculator and its token parser are checked by the ordinary test
-suite as of 2026-09-14 (`crates/elab/tests/showcase_calculator.rs`). The
+suite as of 2026-09-15 (`crates/elab/tests/showcase_calculator.rs`). The
 idealized file remains a design sketch and is deliberately excluded.
 
 **`mul` moved to `std/nat` on 2026-08-13** (`issues/std-nat-multiplication.md`),

@@ -647,6 +647,8 @@ pub struct RecordLitField {
 /// named argument is that slot filled from the other side.
 #[derive(Debug, Clone)]
 pub struct NamedArg {
+    /// Written parameter name, or private `#decreasing:label` call metadata.
+    /// The latter is consumed by measure lowering, never passed to a callee.
     pub name: String,
     pub name_span: Span,
     pub expr: Expr,

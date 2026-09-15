@@ -6,10 +6,21 @@
 use std::sync::Arc as Rc;
 
 use heather_syntax::{Expr, ExprKind, NamedArg, Span};
+use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 
 use crate::{
     BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, err, skel_of_ty,
+    application, vec,
 };
+
+/// Only disjoint outer carriers are used to discard imported candidates.
+/// Type arguments and callbacks never break a tie; an unknown carrier keeps
+/// the ambiguity, including a generic `self x: A`.
+#[derive(PartialEq, Eq)]
+enum ReceiverCarrier {
+    Named(String),
+    Vector,
+}
 
 impl Elaborator {
     // -- field access (docs/surface-records.md §4) ---------------------------
@@ -105,6 +116,11 @@ impl Elaborator {
         // The `member_bases` test comes first for the same reason the record
         // one does — no receiver is inferred for a name nobody attaches.
         let head = self.member_head(cx, recv, name, span)?;
+        let (head, vector_map) = if head == name && !self.shadowed(cx, name) {
+            self.imported_receiver_head(cx, recv, name, span)?
+        } else {
+            (head, false)
+        };
         // Receiver dispatch through an instance
         // (docs/traits-receiver-dispatch-design.md §3). Last, so nothing that
         // resolved before this round can be reinterpreted by it: a class
@@ -117,7 +133,7 @@ impl Elaborator {
         // `shadowed` cannot see them.
         let other: Option<(String, String)> = if head != name {
             Some((
-                format!("`{head}`, a member of the receiver's own type"),
+                format!("`{head}`, selected using the receiver's type"),
                 format!("`{head}(…)`"),
             ))
         } else if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
@@ -135,6 +151,16 @@ impl Elaborator {
         };
         if let Some(d) = self.class_dispatch(cx, recv, name, other, args, span)? {
             return Ok(d);
+        }
+        if vector_map {
+            application::refuse_named("vector map", "its arguments are positional", named)?;
+            let [f] = args.as_slice() else {
+                let mut supplied = vec![recv.clone()];
+                supplied.extend(args.iter().cloned());
+                return vec::method_arity_error(self, cx, &supplied, name, "`(f)`", span);
+            };
+            let (t, ty, lvl) = vec::elab_map(self, cx, f, recv, span)?;
+            return Ok(DotResolution::Inferred(t, ty, lvl));
         }
         let name = &head;
         let mut args = args.clone();
@@ -225,4 +251,75 @@ impl Elaborator {
         }
         Ok(qualified)
     }
+
+    fn receiver_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> Option<ReceiverCarrier> {
+        // Preserve Vec before normalization expands a concrete length into Σ.
+        if matches!(&*crate::inductive::decoded(ty), Type::Vec { .. }) {
+            return Some(ReceiverCarrier::Vector);
+        }
+        self.carrier_of_ty(cx, ty, span).map(|c| ReceiverCarrier::Named(c.key))
+    }
+
+    /// Read the subject's outer carrier from a committed signature, under
+    /// its own parameter telescope. No callback elaboration, speculative
+    /// application, or scratch metavariable solutions escape this query.
+    fn imported_subject_carrier(&self, name: &str, span: Span) -> Option<ReceiverCarrier> {
+        let info = self.lookup_global(name)?;
+        let GlobalBinding::Tm { ctx, ty, .. } = &self.psi.bindings[info.abs as usize] else {
+            return None;
+        };
+        if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 { return None; }
+        let growth = self.psi.bindings.len() as u32 - info.abs
+            + self.attempt.goal_arena.base() + self.meta_pushed.borrow().len() as u32;
+        let mut ty = ty.shift_global(growth);
+        let mut cx = Cx::empty();
+        let subject = info.params.iter().position(|p| p.is_self)
+            .or_else(|| info.params.iter().position(|p| !p.implicit && !p.is_type))?;
+        for (i, p) in info.params.iter().enumerate() {
+            let Type::Pi { dom, dom_level, cod, .. } = self.whnf(&cx, &ty, span).ok()? else {
+                return None;
+            };
+            if i == subject { return self.receiver_carrier(&cx, &dom, span); }
+            cx.push(p.name.clone(), (*dom).clone(), dom_level);
+            ty = (*cod).clone();
+        }
+        None
+    }
+
+    /// Only an ambiguous unqualified import set enters this route. Local
+    /// bindings, selected imports, unique ambient names, record fields and
+    /// nominal members keep their existing resolution rules.
+    fn imported_receiver_head(&self, cx: &Cx, recv: &Expr, name: &str, span: Span)
+        -> R<(String, bool)>
+    {
+        let NameRes::Ambiguous(origins) = self.resolve_name(name) else {
+            return Ok((name.to_string(), false));
+        };
+        let (_, ty, _) = self.elab_infer(cx, recv)?;
+        let Some(carrier) = self.receiver_carrier(cx, &ty, span) else {
+            return Err(self.name_miss(name, String::new(), span));
+        };
+        let mut compatible = Vec::new();
+        let mut unknown = false;
+        for origin in &origins {
+            let candidate = format!("{origin}::{name}");
+            match self.imported_subject_carrier(&candidate, span) {
+                Some(c) if c == carrier => compatible.push(candidate),
+                Some(_) => {}
+                None => unknown = true,
+            }
+        }
+        if !unknown {
+            if let [candidate] = compatible.as_slice() {
+                return Ok((candidate.clone(), false));
+            }
+            if compatible.is_empty() && name == "map" && carrier == ReceiverCarrier::Vector {
+                return Ok((name.to_string(), true));
+            }
+        }
+        // Never use declaration/import order, callback success, or a failed
+        // carrier query as evidence for selecting a different operation.
+        Err(self.name_miss(name, String::new(), span))
+    }
+
 }

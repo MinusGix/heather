@@ -40,6 +40,10 @@
         "named": true
       },
       {
+        "type": "decreasing_expression",
+        "named": true
+      },
+      {
         "type": "explicit_call_expression",
         "named": true
       },
@@ -2167,6 +2171,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "decreasing_expression",
+    "named": true,
+    "fields": {
+      "call": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -5555,6 +5585,10 @@
   },
   {
     "type": "decreases",
+    "named": false
+  },
+  {
+    "type": "decreasing",
     "named": false
   },
   {

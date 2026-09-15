@@ -16,3 +16,5 @@ mod try_lower;
 
 pub use ast::*;
 pub use parser::{class_ty, parse_file, ParseError};
+
+pub use try_lower::without_decrease_labels;

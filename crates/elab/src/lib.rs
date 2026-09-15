@@ -122,6 +122,7 @@ mod lint;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
+mod measure_context;
 mod metaprograms;
 mod module_delta;
 mod module_image;
@@ -302,9 +303,11 @@ fn snippet(src: &str, span: Span) -> String {
 
 impl GoalReport {
     fn render(&self, at: Option<&str>) -> String {
+        let name = self.name.strip_prefix("#decreasing:")
+            .map(|n| format!("decreasing {n}")).unwrap_or_else(|| format!("?{}", self.name));
         let mut s = match at {
-            Some(at) => format!("  ?{} : {}   ({at})\n", self.name, self.statement),
-            None => format!("  ?{} : {}\n", self.name, self.statement),
+            Some(at) => format!("  {name} : {}   ({at})\n", self.statement),
+            None => format!("  {name} : {}\n", self.statement),
         };
         // The context is not decoration: a goal captured in a `match` arm is
         // discharged with that arm's binders in scope, which is not what is
@@ -314,6 +317,9 @@ impl GoalReport {
         }
         if let Some(origin) = &self.origin {
             s.push_str(&format!("      from {origin}\n"));
+        }
+        if self.name.starts_with("#decreasing:") {
+            s.push_str(&format!("      discharge with `on {name} := proof;`\n"));
         }
         s
     }
@@ -671,6 +677,8 @@ impl DerefMut for Elaborator {
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
 enum DotResolution {
+    /// An already inferred intrinsic selected by its receiver.
+    Inferred(Term, Type, Level),
     /// A record field: the projection, its type and level, plus the field's
     /// implicitness skeleton, derived on demand from the *stored surface*
     /// field type — no new storage, keyed positionally by the same index the
@@ -1112,9 +1120,17 @@ impl application::ImplicitApplicationElab for Elaborator {
         cx: &Cx,
         argument: &Expr,
     ) -> application::ArgumentClass {
+        // An annotated domain does not make a lambda's body inferable:
+        // `λ (a: A) => Some([a])` still needs the expected codomain. Prefer
+        // per-call checking once the parameter type is solved, retaining
+        // inference when the callback itself must teach that type. Keep this
+        // scheduling rule local to applications: standalone annotated
+        // lambdas (including equality endpoints) still infer normally.
+        let annotated_lambda = matches!(&argument.kind, ExprKind::Lam { binders, .. }
+            if binders.iter().all(|b| b.ty.is_some()));
         application::ArgumentClass {
-            checking_only: self.is_checking_only(cx, argument),
-            fallback_infer: self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -1363,8 +1379,14 @@ impl Default for Elaborator {
 /// (`docs/decreases-unfolding-design.md` §4): the constructor's stored field
 /// types, instantiated at the scrutinee's type arguments.
 impl measure::BinderTys for Elaborator {
+    fn local_evidence(&self, decl: &Decl, scope: &[measure::Binder], goal: &Ty, arithmetic: bool) -> Option<Expr> {
+        self.measure_local_evidence(decl, scope, goal, arithmetic)
+    }
     fn ctor_fields(&self, scrut: &Ty, ctor: &str) -> Option<Vec<Ty>> {
         self.ctor_fields_of(scrut, ctor)
+    }
+    fn infer_local(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder], expr: &Expr) -> Option<Ty> {
+        self.infer_measure_local(decl, signatures, scope, expr)
     }
 }
 
@@ -1838,7 +1860,7 @@ impl Elaborator {
                             _ => unreachable!("a group holds declarations"),
                         })
                         .collect();
-                    self.elab_measure_group(&members)
+                    self.session_transaction(|me| me.elab_measure_group(&members))
                 }
                 Some(_) => Ok(()),
                 None => self.elab_decl(d),
@@ -2715,7 +2737,7 @@ impl Elaborator {
         // the declaration itself, and — for a `fn` whose body the walk of §3
         // handles — the unfolding companions.
         if decl.decreases.is_some() {
-            return self.elab_measure_decl(decl);
+            return self.session_transaction(|me| me.elab_measure_decl(decl));
         }
         self.elab_decl_one(decl, None)
     }
@@ -4311,6 +4333,10 @@ impl Elaborator {
                 named,
             } => {
                 match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+                    DotResolution::Inferred(t, got, _) => {
+                        self.note_check_mismatch(cx, &got, expected, lvl, e.span);
+                        Ok(t)
+                    }
                     DotResolution::Project(t, ty, l, fskel) => match args {
                         // A bare skeletal projection in checking position:
                         // the §5.2 route with the field's skeleton, under the
@@ -5002,6 +5028,7 @@ impl Elaborator {
                 args,
                 named,
             } => match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+                DotResolution::Inferred(t, ty, l) => Ok((t, ty, l)),
                 DotResolution::Project(t, ty, l, fskel) => match args {
                     None => Ok((t, ty, l)),
                     Some(args) => self
@@ -5358,6 +5385,12 @@ impl Elaborator {
                 // direct spelling reads best
                 // (issues/method-receiver-position.md).
                 if name == "map" && !self.shadowed(cx, name) {
+                    // Ambiguous declarations are not an absent builtin name.
+                    // Dot calls may select by receiver; a bare call retains
+                    // the ordinary module ambiguity rule.
+                    if matches!(self.resolve_name(name), NameRes::Ambiguous(_)) {
+                        return Err(self.name_miss(name, String::new(), e.span));
+                    }
                     let [xs, f] = args.as_slice() else {
                         return vec::method_arity_error(self, cx, args, name, "`(f)`", e.span);
                     };

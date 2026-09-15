@@ -46,14 +46,12 @@ pub(crate) struct DeferredArg<'a> {
     pub(crate) dom_level: Level,
     /// Parameter index, for the goal-name hint and the §7.2 message.
     pub(crate) param: usize,
-    /// Deferred by the **result-only implicit** rule
-    /// (docs/congruence-in-inference-position-design.md §2), rather than by
-    /// one of the syntactic checking-only forms. Such an argument *can* be
-    /// elaborated in inference mode — it just fails at its own implicit — so
-    /// an obligation that never becomes ready is inferred in place rather
-    /// than reported as blocked. That is what makes the rule strictly
-    /// additive: every program that elaborated before it existed takes the
-    /// old path and gets the old message.
+    /// This argument prefers checking but has a compatibility inference
+    /// route: a result-only implicit call or a fully annotated lambda.
+    /// If its domain never becomes ready, inference may supply the missing
+    /// type information (or the original inference error). An annotated
+    /// lambda's body can still be checking-only, so expected-type solving
+    /// and ready obligations run before this fallback.
     pub(crate) fallback_infer: bool,
 }
 

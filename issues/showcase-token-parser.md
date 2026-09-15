@@ -75,3 +75,11 @@ combined imports also expose other operations named `map`.
   `heather check` with caching disabled also passes for `calc_parser.hthr`
   and its imported calculator. `scripts/issue check` and `git diff --check`
   pass. The scoped acceptance is complete.
+
+- 2026-09-14: [[result-map-receiver-dispatch]] replaces qualified map calls
+  in the pipeline laws with receiver syntax; callback inference remains
+  owned by [[callback-expected-type-propagation]].
+- 2026-09-14: [[typed-termination-obligations]] removes local parse-result
+  annotations and allows direct field matches while preserving acceptance.
+- 2026-09-14: [[termination-local-evidence]] removes both ordinal decrease discharges; existing local progress proofs are selected automatically.
+- 2026-09-14: Migrated the grammar to [[parser-combinator-library]] while preserving all AST/error examples and the open-input compiler agreement theorem. [[parser-grammar-soundness]] owns the independent grammar proof.

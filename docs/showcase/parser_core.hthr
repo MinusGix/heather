@@ -1,0 +1,244 @@
+// First checked parser-library prototype. API remains experimental.
+import logic;
+import nat;
+import list;
+import pair;
+import result;
+import int;
+import omega;
+
+record Cursor<T>(source: List<T>) {
+    // Value parameters alone are not generative nominal indices. This
+    // endpoint-bearing field prevents equal-length sources from collapsing.
+    identity: source = source,
+    offset: Nat,
+    within: nat::Le(offset, list_len(source)),
+}
+fn start<T>(source: List<T>) -> Cursor<T>(source) {
+    Cursor(refl,0, nat::zero_le(list_len(source)))
+}
+fn rest<T>(source: List<T>, c: Cursor<T>(source)) -> List<T> {
+    drop(source, c.offset)
+}
+record Success<T,A>(source: List<T>, begin: Cursor<T>(source)) {
+    value: A,
+    end: Cursor<T>(source),
+    forward: nat::Le(begin.offset, end.offset),
+}
+// Failure semantics are intentionally minimal in this representation probe.
+// Choice, diagnostics and commitment are a subsequent prototype.
+fn Reply<T,A>(source: List<T>, begin: Cursor<T>(source)) -> Type {
+    Result<Success<T,A>(source,begin), Nat>
+}
+record Parser<T,A> {
+    run: (source: List<T>) -> (begin: Cursor<T>(source)) -> Reply<T,A>(source,begin),
+}
+fn pure_at<T,A>(source: List<T>, begin: Cursor<T>(source), value: A) -> Reply<T,A>(source,begin) {
+    Ok(Success(value,begin,nat::le_refl(begin.offset)))
+}
+fn pure<T,A>(value: A) -> Parser<T,A> {
+    Parser(λ source begin => pure_at(source,begin,value))
+}
+fn map_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), f: A -> B) -> Reply<T,B>(source,begin) {
+    match r {
+        Err(e) => Err(e),
+        Ok(s) => Ok(Success(f(s.value),s.end,s.forward)),
+    }
+}
+fn map<T,A,B>(p: Parser<T,A>, f: A -> B) -> Parser<T,B> {
+    Parser(λ source begin => map_at(source,begin,p.run(source,begin),f))
+}
+fn rebase<T,A>(source: List<T>, begin: Cursor<T>(source), middle: Cursor<T>(source),
+    forward: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle)) -> Reply<T,A>(source,begin) {
+    match r {
+        Err(e) => Err(e),
+        Ok(s) => Ok(Success(s.value,s.end,nat::le_trans(begin.offset,middle.offset,s.end.offset,forward,s.forward))),
+    }
+}
+fn bind_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin),
+    next: (value: A) -> (middle: Cursor<T>(source)) -> nat::Le(begin.offset,middle.offset) -> Reply<T,B>(source,middle)) -> Reply<T,B>(source,begin) {
+    match r {
+        Err(e) => Err(e),
+        Ok(s) => rebase(source,begin,s.end,s.forward,next(s.value,s.end,s.forward)),
+    }
+}
+fn bind<T,A,B>(p: Parser<T,A>, next: A -> Parser<T,B>) -> Parser<T,B> {
+    Parser(λ source begin => bind_at(source,begin,p.run(source,begin),
+        λ value middle forward => next(value).run(source,middle)))
+}
+record Dep<A>(B: A -> Type) { first: A, second: B(first) }
+fn bindD<T,A>(B: A -> Type, p: Parser<T,A>, next: (a: A) -> Parser<T,B(a)>) -> Parser<T,Dep<A>(B)> {
+    bind(p, λ (a: A) => map(next(a), λ (b: B(a)) => Dep(a,b)))
+}
+// Equality observes the result and position, not the forward witness.
+fn observe<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Result<Pair<A,Nat>,Nat> {
+    match r { Err(e) => Err(e), Ok(s) => Ok(Pair(s.value,s.end.offset)) }
+}
+theorem map_identity<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
+    observe(source,begin,map_at(source,begin,r,λ (a: A) => a)) = observe(source,begin,r) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+theorem map_composition<T,A,B,C>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), f: A -> B, g: B -> C):
+    observe(source,begin,map_at(source,begin,map_at(source,begin,r,f),g)) =
+    observe(source,begin,map_at(source,begin,r,λ (a: A) => g(f(a)))) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+theorem rebase_observation<T,A>(source: List<T>, begin: Cursor<T>(source), middle: Cursor<T>(source),
+    forward: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle)):
+    observe(source,begin,rebase(source,begin,middle,forward,r)) = observe(source,middle,r) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+theorem bind_right_unit<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
+    observe(source,begin,bind_at<T,A,A>(source,begin,r,λ value middle forward => pure_at(source,middle,value))) = observe(source,begin,r) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+// The initial cursor's remainder is the original source, including open lists.
+theorem initial_rest<T>(source: List<T>): rest(source,start(source)) = source {
+    match source { Nil => refl, Cons(h,t) => refl }
+}
+// A separately checked cache; cached stepping will be compared in the next probe.
+record CachedCursor<T>(source: List<T>) {
+    cursor: Cursor<T>(source),
+    suffix: List<T>,
+    coherent: suffix = rest(source,cursor),
+}
+fn cache<T>(source: List<T>, c: Cursor<T>(source)) -> CachedCursor<T>(source) {
+    CachedCursor(c,rest(source,c),refl)
+}
+theorem cached_rest<T>(source: List<T>, c: CachedCursor<T>(source)):
+    c.suffix = rest(source,c.cursor) { c.coherent }
+
+theorem drop_length_le<T>(source: List<T>): (n: Nat) -> nat::Le(list_len(drop(source,n)),list_len(source)) {
+    match source {
+        Nil => λ n => trivial,
+        Cons(h,t) => λ n => match n {
+            Zero => nat::le_refl(list_len(Cons(h,t))),
+            Succ(k) => nat::le_succ_r(list_len(drop(t,k)),list_len(t),drop_length_le(t,k)),
+        },
+    }
+}
+theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(n,m) -> nat::Le(m,list_len(source)) ->
+    nat::Lt(list_len(drop(source,m)),list_len(drop(source,n))) {
+    match source {
+        Nil => λ n m => match m { Zero => λ smaller within => false_elim(smaller), Succ(k) => λ smaller within => false_elim(within) },
+        Cons(h,t) => λ n m => match m {
+            Zero => λ smaller within => false_elim(smaller),
+            Succ(j) => match n {
+                Zero => λ smaller within => drop_length_le(t,j),
+                Succ(i) => λ smaller within => drop_length_strict(t,i,j,smaller,within),
+            },
+        },
+    }
+}
+// The recursive capability is only callable at a strictly later cursor.
+// Its proof is translated once to the measure used by the well-founded lowering.
+fn guarded<T,A>(source: List<T>,
+    body: (begin: Cursor<T>(source)) ->
+        ((later: Cursor<T>(source)) -> nat::Lt(begin.offset,later.offset) -> Reply<T,A>(source,later)) -> Reply<T,A>(source,begin),
+    begin: Cursor<T>(source)) -> Reply<T,A>(source,begin) decreases list_len(rest(source,begin)) {
+    body(begin, λ (later: Cursor<T>(source)) (advance: nat::Lt(begin.offset,later.offset)) => {
+        let small = drop_length_strict(source,begin.offset,later.offset,advance,later.within);
+        guarded(source,body,later) decreasing recur
+    })
+    on decreasing recur := small;
+}
+
+// Compare observation after a two-step rebase with its composed movement.
+theorem rebase_associativity<T,A>(source: List<T>, a,b,c: Cursor<T>(source),
+    ab: nat::Le(a.offset,b.offset), bc: nat::Le(b.offset,c.offset), r: Reply<T,A>(source,c)):
+    observe(source,a,rebase(source,a,b,ab,rebase(source,b,c,bc,r))) =
+    observe(source,a,rebase(source,a,c,nat::le_trans(a.offset,b.offset,c.offset,ab,bc),r)) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+
+theorem bind_left_unit<T,A,B>(source: List<T>, begin: Cursor<T>(source), value: A, next: A -> Parser<T,B>):
+    observe(source,begin,bind_at<T,A,B>(source,begin,pure_at(source,begin,value),
+        λ a middle forward => next(a).run(source,middle))) = observe(source,begin,next(value).run(source,begin)) {
+    rebase_observation(source,begin,begin,nat::le_refl(begin.offset),next(value).run(source,begin))
+}
+theorem bind_rebase<T,A,B>(source: List<T>, begin,middle: Cursor<T>(source), move: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle), next: A -> Parser<T,B>):
+    observe(source,begin,bind_at<T,A,B>(source,begin,rebase(source,begin,middle,move,r),λ a end forward => next(a).run(source,end))) =
+    observe(source,begin,rebase(source,begin,middle,move,bind_at<T,A,B>(source,middle,r,λ a end forward => next(a).run(source,end)))) {
+    match r {
+        Err(e) => refl,
+        Ok(s) => sym(rebase_associativity(source,begin,middle,s.end,move,s.forward,next(s.value).run(source,s.end))),
+    }
+}
+theorem bind_associativity<T,A,B,C>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), next: A -> Parser<T,B>, last: B -> Parser<T,C>):
+    observe(source,begin,bind_at<T,B,C>(source,begin,
+        bind_at<T,A,B>(source,begin,r,λ a middle forward => next(a).run(source,middle)),
+        λ b middle forward => last(b).run(source,middle))) =
+    observe(source,begin,bind_at<T,A,C>(source,begin,r,λ a middle forward =>
+        bind_at<T,B,C>(source,middle,next(a).run(source,middle),λ b end step => last(b).run(source,end)))) {
+    match r {
+        Err(e) => refl,
+        Ok(a) => bind_rebase(source,begin,a.end,a.forward,next(a.value).run(source,a.end),last),
+    }
+}
+
+fn advance<T>(source: List<T>, c: Cursor<T>(source), room: nat::Lt(c.offset,list_len(source))) -> Cursor<T>(source) {
+    Cursor(refl,Succ(c.offset),room)
+}
+// Reuse the cached suffix rather than rescanning source when advancing.
+fn advance_cached<T>(source: List<T>, c: CachedCursor<T>(source), room: nat::Lt(c.cursor.offset,list_len(source))) -> CachedCursor<T>(source) {
+    let next = advance(source,c.cursor,room);
+    let coherent: (drop(c.suffix,1) = drop(rest(source,c.cursor),1)) =
+        (j(c.coherent, λ ys q => (drop(c.suffix,1) = drop(ys,1)), refl));
+    CachedCursor(next,drop(c.suffix,1),
+        trans(coherent,sym(drop_succ(source,c.cursor.offset))))
+}
+theorem cached_advance_agrees<T>(source: List<T>, c: CachedCursor<T>(source), room: nat::Lt(c.cursor.offset,list_len(source))):
+    advance_cached(source,c,room).suffix = rest(source,advance(source,c.cursor,room)) {
+    advance_cached(source,c,room).coherent
+}
+
+// A real guarded client. The caller only supplies an offset-progress witness;
+// the builder owns the remainder-length proof needed by recursive lowering.
+fn count_body<T>(source: List<T>, begin: Cursor<T>(source),
+    recur: (later: Cursor<T>(source)) -> nat::Lt(begin.offset,later.offset) -> Reply<T,Nat>(source,later)) -> Reply<T,Nat>(source,begin) {
+    match nat::le_dec(Succ(begin.offset),list_len(source)) {
+        Inl(room) => {
+            let next = advance(source,begin,room);
+            let answer = recur(next,nat::lt_succ_self(begin.offset));
+            rebase(source,begin,next,nat::le_succ_r(begin.offset,begin.offset,nat::le_refl(begin.offset)),
+                map_at(source,next,answer,λ (n: Nat) => Succ(n)))
+        },
+        Inr(done) => pure_at(source,begin,0),
+    }
+}
+fn count<T>(source: List<T>) -> Reply<T,Nat>(source,start(source)) {
+    guarded(source,λ begin recur => count_body(source,begin,recur),start(source))
+}
+theorem count_empty<T>(): observe<T,Nat>([],start<T>([]),count<T>([])) = Ok<Pair<Nat,Nat>,Nat>(Pair(0,0)) { refl }
+theorem count_open<T>(x,y: T): observe<T,Nat>([x,y],start<T>([x,y]),count<T>([x,y])) = Ok<Pair<Nat,Nat>,Nat>(Pair(2,2)) { refl }
+
+// A dependent continuation returns a witness indexed by the parsed value.
+fn witness(n: Nat) -> Type { n = n }
+fn dependent_client<T>(n: Nat) -> Parser<T,Dep<Nat>(witness)> {
+    bindD(witness,pure<T,Nat>(n),λ (m: Nat) => pure<T,witness(m)>(refl))
+}
+theorem dependent_open<T>(source: List<T>, n: Nat):
+    observe(source,start(source),dependent_client<T>(n).run(source,start(source))) =
+    Ok<Pair<Dep<Nat>(witness),Nat>,Nat>(Pair(Dep(n,refl),0)) { refl }
+
+fn token_at<T>(source: List<T>, begin: Cursor<T>(source)) -> Reply<T,T>(source,begin) {
+    match nat::le_dec(Succ(begin.offset),list_len(source)) {
+        Inl(room) => match rest(source,begin) {
+            Nil => Err(0),
+            Cons(head,tail) => Ok(Success(head,advance(source,begin,room),
+                nat::le_succ_r(begin.offset,begin.offset,nat::le_refl(begin.offset)))),
+        },
+        Inr(done) => Err(0),
+    }
+}
+fn token<T>() -> Parser<T,T> { Parser(λ source begin => token_at(source,begin)) }
+theorem token_open<T>(x,y: T):
+    observe<T,T>([x,y],start<T>([x,y]),token_at<T>([x,y],start<T>([x,y]))) =
+    Ok<Pair<T,Nat>,Nat>(Pair(x,1)) { refl }
+fn self_equal<A>(value: A) -> Type { value = value }
+fn token_with_proof<T>() -> Parser<T,Dep<T>(self_equal<T>)> {
+    bindD(self_equal<T>,token<T>(),λ (value: T) => pure<T,self_equal<T>(value)>(refl))
+}
+theorem dependent_token_open<T>(x,y: T):
+    observe<T,Dep<T>(self_equal<T>)>([x,y],start<T>([x,y]),token_with_proof<T>().run([x,y],start<T>([x,y]))) =
+    Ok<Pair<Dep<T>(self_equal<T>),Nat>,Nat>(Pair(Dep(x,refl),1)) { refl }

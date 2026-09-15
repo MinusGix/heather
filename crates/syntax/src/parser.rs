@@ -1952,6 +1952,7 @@ impl Parser {
             for p in &params { crate::try_lower::reject_type(&p.ty)?; }
             crate::try_lower::block(body, &mut self.next_hygienic)?
         } else { body };
+        crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, decreases, body, span })
     }
@@ -2236,6 +2237,11 @@ impl Parser {
     fn on_stmt(&mut self) -> R<OnStmt> {
         let start = self.bump().span; // `on`
         let target = match self.peek().clone() {
+            _ if self.at_kw("decreasing") => {
+                self.bump();
+                let (name, _) = self.ident("decrease label")?;
+                OnTarget::Name(format!("#decreasing:{name}"))
+            }
             TokKind::Hole(Some(name)) => {
                 self.bump();
                 // `?bound.1` — the checker's ordinal suffix for a deduplicated
@@ -3353,6 +3359,16 @@ impl Parser {
         }
         loop {
             match self.peek() {
+                _ if self.at_kw("decreasing") => {
+                    let start = self.bump().span;
+                    let (label, end) = self.ident("decrease label")?;
+                    let ExprKind::App { named, .. } = &mut e.kind else {
+                        return self.err("`decreasing` labels a recursive call: write `f(args) decreasing label`");
+                    };
+                    named.push(NamedArg { name: format!("#decreasing:{label}"), name_span: end,
+                        expr: Expr { kind: ExprKind::Num(0), span: end }, span: start.join(end) });
+                    e.span = e.span.join(end);
+                }
                 TokKind::Hole(None) if self.tight(self.pos) => {
                     if self.propagation_depth == 0 {
                         return self.err("postfix `?` needs an enclosing function or lambda body");

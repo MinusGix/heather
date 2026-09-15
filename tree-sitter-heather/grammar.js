@@ -232,7 +232,7 @@ module.exports = grammar({
       'split_all', ';', 'all_goals', field('body', $.block),
     ),
     on_statement: $ => seq(
-      'on', choice($.goal_reference, seq('_', ':', $._expression), $._pattern),
+      'on', choice(seq('decreasing', $.identifier), $.goal_reference, seq('_', ':', $._expression), $._pattern),
       ':=', field('value', $._expression), ';',
     ),
     goal_reference: $ => seq($.hole, optional(seq('.', $.number))),
@@ -356,6 +356,7 @@ module.exports = grammar({
       $.explicit_call_expression,
       $.record_expression,
       $.call_expression,
+      $.decreasing_expression,
       $.member_expression,
       $.index_expression,
       $.propagation_expression,
@@ -445,6 +446,7 @@ module.exports = grammar({
 
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
     propagation_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), token.immediate('?'))),
+    decreasing_expression: $ => prec.left(PREC.POSTFIX, seq(field('call', $._expression), 'decreasing', field('label', $.identifier))),
     call_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._expression), repeat1(field('arguments', $.argument_list)),
     )),

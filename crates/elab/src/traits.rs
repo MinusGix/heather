@@ -526,17 +526,20 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         ExprKind::App {
             head, args, named, ..
         } => format!(
-            "{}({})",
+            "{}({}){}",
             render_expr(head),
             args.iter()
                 .map(render_expr)
                 .chain(
                     named
                         .iter()
+                        .filter(|a| !a.name.starts_with("#decreasing:"))
                         .map(|a| format!("{} := {}", a.name, render_expr(&a.expr)))
                 )
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            named.iter().find_map(|a| a.name.strip_prefix("#decreasing:"))
+                .map(|n| format!(" decreasing {n}")).unwrap_or_default()
         ),
         ExprKind::Dot { recv, name, .. } => format!("{}.{name}", render_expr(recv)),
         _ => "_".into(),

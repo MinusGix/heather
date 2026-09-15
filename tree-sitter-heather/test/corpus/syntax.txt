@@ -372,3 +372,37 @@ theorem t(n: Nat): Even(n) decreases n { trivial }
       (identifier))
     (block
       (identifier))))
+
+==================
+Named decrease proofs
+==================
+
+fn down(n: Nat) -> Nat decreases n {
+  down(n) decreasing tail
+  on decreasing tail := proof;
+}
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (decreases_clause
+      (identifier))
+    (block
+      (decreasing_expression
+        (call_expression
+          (identifier)
+          (argument_list
+            (identifier)))
+        (identifier))
+      (on_statement
+        (identifier)
+        (identifier)))))

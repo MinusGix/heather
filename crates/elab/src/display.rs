@@ -1,4 +1,6 @@
-//! Printing a kernel type back as **surface** syntax, for diagnostics only.
+//! Printing a kernel type back as **surface** syntax. Diagnostics use the
+//! bounded presentation path; generated annotations additionally require
+//! complete source spelling and a caller-owned type comparison.
 //!
 //! `docs/surface-type-display-design.md`. [[goal-display-decodes]] gave the
 //! display sites a *reader* — δ-step an `El` until a non-`El` head appears —
@@ -12,7 +14,7 @@
 //!
 //! Three invariants, each against a way this could go wrong:
 //!
-//! - **It never reduces.** No δ, no β, no whnf, no fuel. The one registry
+//! - **The diagnostic path never reduces.** No δ, no β, no whnf, no fuel. The one registry
 //!   consultation is [`Elaborator::unspell_here`], which is a lookup rather
 //!   than a reduction. So this code cannot affect what is checked — a stronger
 //!   guarantee than the reader's, which at least spends steps.
@@ -85,6 +87,16 @@ impl Elaborator {
         self.spell_within(cx, ty, 0)
     }
 
+    /// Complete source spelling for generated annotations. The caller must
+    /// re-elaborate and compare it before using it as a type.
+    pub(crate) fn spell_type_source(&self, cx: &Cx, ty: &Type) -> Option<String> {
+        let mut sp = self.speller(cx);
+        sp.qualified = true;
+        sp.annotations = true;
+        let out = sp.ty(ty, 0);
+        (sp.fallbacks.get() == 0).then_some(out)
+    }
+
     /// Spell a **term** as surface, or decline — [`Self::spell_type_clean`]'s
     /// counterpart at the other syntactic class, and admitting no raw node for
     /// the same reason.
@@ -137,6 +149,7 @@ impl Elaborator {
             nodes: Cell::new(SPELL_NODES),
             fallbacks: Cell::new(0),
             qualified: false,
+            annotations: false,
         }
     }
 }
@@ -152,6 +165,7 @@ struct Speller<'a> {
     fallbacks: Cell<u32>,
     /// Spell globals so the result can be **re-parsed** rather than only read.
     qualified: bool,
+    annotations: bool,
 }
 
 impl Speller<'_> {
@@ -229,12 +243,35 @@ impl Speller<'_> {
         s
     }
 
+    fn source_instance(&self, ind: &crate::inductive::Inductive, args: &[Rc<Term>], d: u32) -> Option<String> {
+        if args.len() != ind.params.len() + ind.valparams.len() { return None; }
+        let (types, values) = args.split_at(ind.params.len());
+        let types = types.iter().map(|t| {
+            // Decoding a canonical code only reads its own constructors;
+            // the ambient universe is irrelevant to this source spelling.
+            let code = Type::El { level: crate::Level::Zero, tm: Rc::clone(t) };
+            self.ty(&code, d + 1)
+        }).collect::<Vec<_>>();
+        let values = values.iter().map(|t| self.tm(t, d + 1)).collect::<Vec<_>>();
+        let head = if types.is_empty() { ind.name.clone() }
+            else { format!("{}<{}>", ind.name, types.join(", ")) };
+        Some(if values.is_empty() { head } else { format!("{head}({})", values.join(", ")) })
+    }
+
     // -- types --------------------------------------------------------------
 
     fn ty(&self, ty: &Type, d: u32) -> String {
         if !self.charge(d) {
             return self.raw_ty(ty);
         }
+        if self.annotations && let std::borrow::Cow::Owned(decoded) = crate::inductive::decoded(ty) {
+            return self.ty(&decoded, d + 1);
+        }
+        if self.annotations && let Type::El { tm, .. } = ty
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(tm)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && let Some(source) = self.source_instance(&ind, &args, d)
+        { return source; }
         // A reference to a registered lowering is spelled through the
         // registry's inline copy, which is what `tag_of` recognizes.
         if let Some(inline) = self.el.unspell_here(ty) {
@@ -245,6 +282,17 @@ impl Speller<'_> {
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
             && let Some(ind) = self.el.display_tag_of(ty)
         {
+            if self.annotations && !ind.valparams.is_empty() {
+                // Unlike a diagnostic, a generated annotation cannot omit
+                // value arguments. Reuse the checked instance matcher.
+                if self.names.borrow().len() != self.cx.names.len() {
+                    return self.raw_ty(ty);
+                }
+                let Some(args) = self.el.instance_args(self.cx, &ind, ty) else {
+                    return self.raw_ty(ty);
+                };
+                return self.source_instance(&ind, &args, d).unwrap_or_else(|| self.raw_ty(ty));
+            }
             return if ind.params.is_empty() {
                 ind.name.clone()
             } else if let Some(args) = self.el.display_targs(self.cx, ty, &ind) {
@@ -304,6 +352,11 @@ impl Speller<'_> {
         if !self.charge(d) {
             return self.raw_tm(t);
         }
+        if self.annotations
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && let Some(source) = self.source_instance(&ind, &args, d)
+        { return source; }
         // `3`, not `S(S(S(0)))`.
         if let Some(k) = nat_value(t) {
             return k.to_string();

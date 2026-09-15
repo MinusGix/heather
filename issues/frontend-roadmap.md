@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-09-13
+updated: 2026-09-14
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -13,6 +13,29 @@ without re-deriving where it sits.
 
 Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
 (the reasoning); requirements tracker: [[front-end-sugar]].
+
+## Current parser-library sequence (2026-09-14)
+
+User-directed order: improve the language foundations before building
+[[parser-combinator-library]]. Remainder/progress tracking belongs to the
+combinator library; no separate remainder API round is scheduled.
+
+1. [[result-map-receiver-dispatch]] and [[callback-expected-type-propagation]]
+   are implemented and verified; receiver calls and callback container
+   inference now work in the calculator pipeline laws.
+2. [[typed-termination-obligations]] and [[termination-local-evidence]]
+   supply inferred local contexts and automatic use of available decrease
+   proofs; the calculator needs no explicit decrease discharges.
+3. [[stable-termination-obligation-names]] adds call-site labels and named
+   manual discharges for cases automation cannot close.
+4. [[parser-combinator-library]] implements the checked library and migrates
+   the calculator. Follow-ups: [[parser-grammar-soundness]] for the independent
+   grammar theorem, and [[parser-cached-cursor-cost]] for representation costs.
+
+`<`, `<=`, and `.len()` already checked in scratch copies of the calculator;
+use those spellings during the client cleanups rather than inventing a new
+notation feature. These priorities supersede the previous remainder-first
+suggestion for this workstream; unrelated roadmap items keep their own scope.
 
 ## Focus order (edit as reality intervenes)
 
@@ -344,3 +367,15 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 
 - 2026-09-14: [[result-propagation]] implements the Result/`?` showcase slice with explicit Ok, function/lambda boundaries, and a checked token parser plus recursive collection; Option chaining remains with [[prelude-option-and-friends]].
 - 2026-09-14: [[showcase-token-parser]] connects the length-bounded mutual parser to the realized calculator's evaluator and proved RPN compiler, with an open-input pipeline law and automated showcase acceptance.
+- 2026-09-14: [[result-map-receiver-dispatch]] adds conservative selection among ambiguous imports and restores calculator `.map` syntax; next on the parser-library sequence is [[callback-expected-type-propagation]].
+- 2026-09-14: [[callback-expected-type-propagation]] removes the calculator callback container annotation; next on the parser-library sequence is [[typed-termination-obligations]].
+- 2026-09-14: [[typed-termination-obligations]] removes the calculator's lifting-only annotations and field aliases; next is [[termination-local-evidence]].
+- 2026-09-14: [[termination-local-evidence]] removes the calculator's explicit decrease discharges using available local proofs; next is [[stable-termination-obligation-names]].
+- 2026-09-14: [[stable-termination-obligation-names]] adds stable call labels and named manual proofs; all parser-library foundations are complete and [[parser-combinator-library]] is now open.
+- 2026-09-14: [[parser-combinator-library]] now provides checked composition, progress/semantic certificates and committed parsing; the calculator uses it. Independent grammar soundness and cached-cursor optimization have explicit follow-up owners.
+
+- 2026-09-15: Parser follow-ups: [[parser-certificate-ergonomics]], [[parser-dependent-format-client]], [[parser-commitment-interface]], [[parser-source-index-representation]], [[parser-contextual-diagnostics]], and [[parser-canonical-printers]]. Start with [[parser-grammar-soundness]] to inform the proof API; [[parser-cached-cursor-cost]] retains the performance work.
+
+- 2026-09-15: The grammar-proof client exposed [[parser-certified-composition-cost]]; keep evidence-checking cost separate from cursor traversal optimization.
+
+- 2026-09-15: [[parser-grammar-soundness]] establishes the independent consumed-span and whole-input calculator success theorems; full suite 2672 passed. [[parser-certified-composition-cost]] and [[parser-certificate-ergonomics]] own the next improvements.

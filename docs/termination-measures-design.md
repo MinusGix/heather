@@ -158,3 +158,14 @@ it cannot use. The names are unspellable by convention, not by the lexer.
   `crates/elab/tests/decreases_unfolding.rs` for the companions.
 
 No kernel change.
+
+## 6. Stable manual proof handles
+
+A recursive call may now carry a source label: `f(args) decreasing tail`,
+with `on decreasing tail := proof;` at the end of the declaration body.
+Labels are local to a declaration and independent of ordinary goal names.
+They select the call directly across insertions and reorderings; existing
+unlabeled `?decN` discharges remain supported. Automatic local evidence
+still applies when no manual proof is supplied. See
+`docs/stable-termination-labels-design.md` for attachment, scoping and
+validation rules.

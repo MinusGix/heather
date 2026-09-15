@@ -178,6 +178,8 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArgumentClass {
+    /// Reserve a deferred slot when the parameter type is still unsolved.
+    /// Includes arguments that prefer checking but permit inference below.
     pub(crate) checking_only: bool,
     pub(crate) fallback_infer: bool,
 }
@@ -187,8 +189,9 @@ pub(crate) struct ArgumentClass {
 /// Solver obligations run first because dictionaries may unblock argument
 /// domains, while checking an argument cannot instantiate a withheld solver
 /// slot. Each continuing pass fills at least one slot, which bounds the loop
-/// by the number of obligations. Before promotion, result-only calls may use
-/// their compatibility inference fallback; after promotion they may not.
+/// by the number of obligations. Before promotion, result-only calls and
+/// annotated callbacks may use their compatibility inference fallback;
+/// after promotion they may not.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retry_obligations(
     elab: &impl ImplicitApplicationElab,

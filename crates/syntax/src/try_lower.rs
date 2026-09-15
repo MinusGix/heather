@@ -287,3 +287,47 @@ pub(crate) fn reject_type(t: &Ty) -> R<()> {
     if let Some(span) = bad { fail(span,"postfix `?` cannot occur in a type; it returns from a function or lambda") }
     else { Ok(()) }
 }
+
+// Labels use an unspellable named-argument key so all existing surface
+// traversals and Result lowering preserve their attachment to the call.
+// They are consumed by measure lowering before application elaboration.
+pub(crate) fn validate_decrease_labels(body: &Block, measured: bool) -> R<()> {
+    fn walk(e: &Expr, measured: bool, labels: &mut Vec<String>, error: &mut Option<ParseError>) {
+        if let ExprKind::App { named, .. } = &e.kind {
+            let mut count = 0;
+            for arg in named {
+                if let Some(label) = arg.name.strip_prefix("#decreasing:") {
+                    count += 1;
+                    let message = if !measured { Some("a decrease label needs a declaration with `decreases`".into()) }
+                        else if count > 1 { Some("a recursive call takes only one decrease label".into()) }
+                        else if labels.iter().any(|n| n == label) { Some(format!("duplicate decrease label `{label}` in this declaration")) }
+                        else { None };
+                    if error.is_none() { *error = message.map(|msg| ParseError { msg, span: arg.name_span }); }
+                    labels.push(label.into());
+                }
+            }
+        }
+        visit(e, &mut |e| walk(e, measured, labels, error));
+    }
+    if !measured && let Some(on) = body.ons.iter().find(|on|
+        matches!(&on.target, OnTarget::Name(n) if n.starts_with("#decreasing:")))
+    { return fail(on.span, "a named decrease discharge needs a declaration with `decreases`"); }
+    let e = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+    let mut error = None;
+    walk(&e, measured, &mut Vec::new(), &mut error);
+    if let Some(error) = error { Err(error) } else { Ok(()) }
+}
+
+/// Remove call-site annotations for an isolated type query. The executable
+/// source retains them until measure lowering consumes the corresponding call.
+pub fn without_decrease_labels(e: &Expr) -> Expr {
+    let mut e = e.clone();
+    fn strip(e: &mut Expr) {
+        if let ExprKind::App { named, .. } = &mut e.kind {
+            named.retain(|a| !a.name.starts_with("#decreasing:"));
+        }
+        children(e, &mut strip);
+    }
+    strip(&mut e);
+    e
+}
