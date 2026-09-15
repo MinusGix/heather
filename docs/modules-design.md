@@ -109,6 +109,57 @@ heather check lib/std
 Directory checking is deliberately non-recursive because module names are
 file stems rather than hierarchical paths.
 
+### 3.4 Reexports: a facade names the same declaration (2026-09-15)
+
+`export m::{a, b, T::method};` is the one reexport form. It is an import
+item with a public list: it must precede the first declaration, the list is
+mandatory and nonempty (no `export m;`, no glob), and `export` stays a
+contextual keyword, so `fn export()` still parses. A listed name may be
+qualified by its owning type (`Box::get`) exactly as a declaration may.
+
+Semantics are aliasing in the *visibility index only*. The facade gains
+entries for the selected names that point at the declaration's **origin**
+module; global coordinates, nominal tags, instance keys, signatures and
+proof provenance never move, and a facade adds zero Ψ bindings. Resolving
+`facade::x`, a listed `import facade::{x}`, a bare `x` visible through the
+facade, a receiver call, or `T::ctor` all yield the origin, so a client that
+imports both the component and its facade interchanges values and
+certificates with no conversion, and an axiom audit reports the origin path.
+
+Rules that follow from "same declaration, new spelling":
+
+- **Ordinary imports stay private.** A facade's `import m;` or
+  `import m::{h};` publishes nothing; only the `export` list is visible to
+  the facade's clients. Reexports chain: a facade may export a name it only
+  sees through another facade, and the origin is still the declaring module.
+- **Selecting a type selects its constructors.** Methods, instances and
+  other type-owned members remain explicit selections (`Box::get`).
+- **Ambiguity is by origin.** A diamond reaching one declaration through
+  two facades is a single hit; two different declarations sharing a name are
+  ambiguous at use exactly as in §4, with no import-order precedence. A
+  facade exporting the same name from two origins, or exporting a name it
+  also declares with a different origin, is an error at the `export` item;
+  a listed import naming a facade and its component agree and are not a
+  double listing.
+- **Generated names are refused** at the export list by the same access
+  regime that refuses them at use (`docs/repr-access-spellings-design.md`).
+- **The loader treats an export edge as an import edge**: same discovery,
+  ordering, duplicate and cycle diagnostics. A semantic image records each
+  import's exported names; replay re-validates every alias against the
+  already accepted dependency world before the facade is admitted, and a
+  changed origin invalidates the unchanged facade and its clients through
+  the ordinary dependency identity.
+
+Not built, by decision: whole-module reexport, renaming on export, and
+hierarchical module paths. Each would obscure either the identity rule or
+§3.2's flat search, and the parser umbrella needed none of them.
+
+The acceptance client is `lib/std/parser.hthr`, a pure facade over the
+components in `lib/std/parser/` (the former core now lives in
+`parser_core.hthr` so that no component imports the facade that exports
+it); the mechanism is pinned in `crates/elab/tests/modules.rs` and the
+loader/replay path in `crates/cli/tests/semantic.rs`.
+
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 
 The regime, and the one deliberate departure from Rust/ML convention:

@@ -50,6 +50,8 @@ pub(crate) struct ImportSpec {
     pub module: String,
     /// The `::{…}` list, if written. Empty for a plain `import m;`.
     pub listed: Vec<String>,
+    /// Selected public names, including constructors of selected inductives.
+    pub exported: Vec<String>,
 }
 
 /// The visibility of the module currently being elaborated.
@@ -80,6 +82,8 @@ impl Scope {
 #[derive(Clone, Debug)]
 struct NameEntry {
     module: String,
+    /// Canonical declaration module; `module` may be a reexporting facade.
+    origin: String,
     kind: NameKind,
 }
 
@@ -200,6 +204,7 @@ impl NameIndex {
             .or_default()
             .push(NameEntry {
                 module: module.to_string(),
+                origin: module.to_string(),
                 kind,
             });
     }
@@ -252,6 +257,21 @@ impl Names {
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
         }
+        // Publish aliases only in the visibility index: global coordinates,
+        // nominal tags, signatures and proof provenance stay at their origin.
+        for import in &scope.imports {
+            for name in &import.exported {
+                let entries: Vec<_> = self.entries(name)
+                    .filter(|e| e.module == import.module).cloned().collect();
+                for mut entry in entries {
+                    if self.entries(name).any(|e| e.module == scope.module
+                        && e.origin == entry.origin && e.kind == entry.kind) { continue; }
+                    entry.module = scope.module.clone();
+                    Rc::make_mut(&mut self.current).index.by_name
+                        .entry(name.clone()).or_default().push(entry);
+                }
+            }
+        }
         self.scope = scope;
     }
 
@@ -286,6 +306,28 @@ impl Names {
         self.entries(name).any(|e| e.module == module)
     }
 
+    /// Original owner of a public name, including a transitive reexport.
+    pub(crate) fn origin(&self, module: &str, name: &str) -> Option<&str> {
+        self.layers().find_map(|layer| layer.index.entries(name).iter()
+            .find(|e| e.module == module).map(|e| e.origin.as_str()))
+    }
+
+    /// Replay must validate aliases against the already accepted dependency world.
+    pub(crate) fn valid_exports(&self, scope: &Scope) -> bool {
+        let mut exported = HashMap::new();
+        for import in &scope.imports {
+            for name in &import.exported {
+                if import.module == scope.module { return false; }
+                let Some(origin) = self.origin(&import.module, name) else { return false; };
+                if let Some(previous) = exported.insert(name, origin)
+                    && previous != origin { return false; }
+                if let Some(previous) = self.origin(&scope.module, name)
+                    && previous != origin { return false; }
+            }
+        }
+        true
+    }
+
     /// Does *any* module, visible from the current scope or not, declare
     /// `name` with one of `kinds`? The scope-free question a route asks before
     /// paying for evidence it could only use if some such declaration exists.
@@ -296,6 +338,14 @@ impl Names {
     pub(crate) fn declares_as(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
         self.entries(name)
             .any(|e| e.module == module && kinds.contains(&e.kind))
+    }
+
+    /// Declared *by* `module`, not merely visible through it: a reexported
+    /// alias is not the module's own declaration, so a facade that also
+    /// declares the name gets the listed-collision diagnostic, not "duplicate".
+    pub(crate) fn declares_own(&self, module: &str, name: &str, kinds: &[NameKind]) -> bool {
+        self.entries(name)
+            .any(|e| e.module == module && e.origin == module && kinds.contains(&e.kind))
     }
 
     pub(crate) fn visible_entries_are(
@@ -428,7 +478,7 @@ fn resolve_kinds(
     let visible_module =
         qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
     if visible_module && names.declares(qual, base) {
-        return NameRes::Found(qual.to_string());
+        return NameRes::Found(names.origin(qual, base).unwrap().to_string());
     }
     // `Option::None` — a constructor qualified by its *type*. The type name is
     // itself resolved by the same regime, so `Option` may come from an import.
@@ -472,7 +522,7 @@ fn resolve_bare_kinds(names: &Names, scope: &Scope, name: &str, kinds: &[NameKin
     // A listed name is a standing disambiguation and wins outright. Two
     // imports listing the same name is an error at the import (see
     // `Elaborator::set_scope`), so at most one survives here.
-    let listed: Vec<String> = scope
+    let mut listed: Vec<(String, String)> = scope
         .imports
         .iter()
         .filter(|i| {
@@ -481,13 +531,15 @@ fn resolve_bare_kinds(names: &Names, scope: &Scope, name: &str, kinds: &[NameKin
                     .entries(name)
                     .any(|e| e.module == i.module && of_kind(e))
         })
-        .map(|i| i.module.clone())
+        .map(|i| (names.origin(&i.module, name).unwrap().to_string(), i.module.clone()))
         .collect();
-    if let Some(m) = listed.first() {
+    listed.sort_by(|a, b| a.0.cmp(&b.0));
+    listed.dedup_by(|a, b| a.0 == b.0);
+    if let Some((origin, _)) = listed.first() {
         if listed.len() > 1 {
-            return NameRes::Ambiguous(listed);
+            return NameRes::Ambiguous(listed.into_iter().map(|(_, visible)| visible).collect());
         }
-        return NameRes::Found(m.clone());
+        return NameRes::Found(origin.clone());
     }
     // Locals beat unlisted imports: the file you are reading beats the file
     // you are not. This is the one precedence in the system.
@@ -495,19 +547,19 @@ fn resolve_bare_kinds(names: &Names, scope: &Scope, name: &str, kinds: &[NameKin
         .entries(name)
         .any(|e| e.module == scope.module && of_kind(e))
     {
-        return NameRes::Found(scope.module.clone());
+        return NameRes::Found(names.origin(&scope.module, name).unwrap().to_string());
     }
-    let mut hits: Vec<String> = Vec::new();
+    let mut hits: Vec<(String, String)> = Vec::new();
     for e in names.entries(name).filter(|e| of_kind(e)) {
         let visible = scope.imports_module(&e.module) || e.module == PRELUDE_MODULE;
-        if visible && !hits.contains(&e.module) {
-            hits.push(e.module.clone());
+        if visible && !hits.iter().any(|(origin, _)| origin == &e.origin) {
+            hits.push((e.origin.clone(), e.module.clone()));
         }
     }
     match hits.len() {
         0 => NameRes::NotFound,
-        1 => NameRes::Found(hits.remove(0)),
-        _ => NameRes::Ambiguous(hits),
+        1 => NameRes::Found(hits.remove(0).0),
+        _ => NameRes::Ambiguous(hits.into_iter().map(|(_, visible)| visible).collect()),
     }
 }
 

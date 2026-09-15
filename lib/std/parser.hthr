@@ -1,138 +1,45 @@
-// Checked parser library: core representation and cursor laws.
-import logic;
-import nat;
-import list;
-import pair;
-import result;
-import option;
-import int;
-import omega;
-
-// A position bounded by, and indexed by, the particular source being parsed.
-record Cursor<T>(source: List<T>) {
-    // Value parameters alone are not generative nominal indices. This
-    // endpoint-bearing field prevents equal-length sources from collapsing.
-    identity: source = source,
-    offset: Nat,
-    within: nat::Le(offset, list_len(source)),
-}
-
-// Start at offset zero, with the entire source remaining.
-fn start<T>(source: List<T>) -> Cursor<T>(source) {
-    Cursor(refl,0, nat::zero_le(list_len(source)))
-}
-
-// Return the source suffix beginning at this cursor.
-fn rest<T>(source: List<T>, c: Cursor<T>(source)) -> List<T> {
-    drop(source, c.offset)
-}
-
-// A parsed value and ending cursor, with evidence that parsing moved forwards or stayed put.
-record Success<T,A>(source: List<T>, begin: Cursor<T>(source)) {
-    value: A,
-    end: Cursor<T>(source),
-    forward: nat::Le(begin.offset, end.offset),
-}
-
-// Whether an enclosing choice may try its other branch after this failure.
-inductive Retry { Retryable, Committed }
-
-// A diagnostic position and expected-token codes, with a separate retry decision.
-record Failure<T>(source: List<T>) {
-    at: Cursor<T>(source),
-    expected: List<Nat>,
-    retry: Retry,
-}
-
-// A source-independent diagnostic suitable for reporting to a caller.
-record ErrorView { offset: Nat, expected: List<Nat>, retry: Retry }
-
-// Either a success measured from begin, or a failure somewhere in the same source.
-fn Reply<T,A>(source: List<T>, begin: Cursor<T>(source)) -> Type {
-    Result<Success<T,A>(source,begin),Failure<T>(source)>
-}
-
-// Project a failure to its reportable offset, expectations, and retry status.
-fn error_view<T>(source: List<T>, error: Failure<T>(source)) -> ErrorView {
-    ErrorView(error.at.offset,error.expected,error.retry)
-}
-
-// A parser that can start at any valid cursor over any source of tokens T.
-record Parser<T,A> {
-    run: (source: List<T>) -> (begin: Cursor<T>(source)) -> Reply<T,A>(source,begin),
-}
-
-// Equality observes the result and position, not the forward witness.
-fn observe<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Result<Pair<A,Nat>,ErrorView> {
-    match r { Err(e) => Err(error_view(source,e)), Ok(s) => Ok(Pair(s.value,s.end.offset)) }
-}
-
-// The initial cursor's remainder is the original source, including open lists.
-theorem initial_rest<T>(source: List<T>): rest(source,start(source)) = source {
-    match source { Nil => refl, Cons(h,t) => refl }
-}
-
-// A stored remainder with evidence that it agrees with the source and cursor.
-record CachedCursor<T>(source: List<T>) {
-    cursor: Cursor<T>(source),
-    suffix: List<T>,
-    coherent: suffix = rest(source,cursor),
-}
-
-// Store the current suffix together with its equality to rest(source,c).
-fn cache<T>(source: List<T>, c: Cursor<T>(source)) -> CachedCursor<T>(source) {
-    CachedCursor(c,rest(source,c),refl)
-}
-
-// Recover the coherence proof relating a cached suffix to its source cursor.
-theorem cached_rest<T>(source: List<T>, c: CachedCursor<T>(source)):
-    c.suffix = rest(source,c.cursor) { c.coherent }
-
-// Taking a suffix never increases the number of remaining tokens.
-theorem drop_length_le<T>(source: List<T>): (n: Nat) -> nat::Le(list_len(drop(source,n)),list_len(source)) {
-    match source {
-        Nil => λ n => trivial,
-        Cons(h,t) => λ n => match n {
-            Zero => nat::le_refl(list_len(Cons(h,t))),
-            Succ(k) => nat::le_succ_r(list_len(drop(t,k)),list_len(t),drop_length_le(t,k)),
-        },
-    }
-}
-
-// Moving to a strictly later valid offset strictly shortens the remainder.
-// This converts cursor progress into the decreasing measure used by recursion.
-theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(n,m) -> nat::Le(m,list_len(source)) ->
-    nat::Lt(list_len(drop(source,m)),list_len(drop(source,n))) {
-    match source {
-        Nil => λ n m => match m { Zero => λ smaller within => false_elim(smaller), Succ(k) => λ smaller within => false_elim(within) },
-        Cons(h,t) => λ n m => match m {
-            Zero => λ smaller within => false_elim(smaller),
-            Succ(j) => match n {
-                Zero => λ smaller within => drop_length_le(t,j),
-                Succ(i) => λ smaller within => drop_length_strict(t,i,j,smaller,within),
-            },
-        },
-    }
-}
-
-// Step one token forwards using evidence that this cursor is not at the end.
-fn advance<T>(source: List<T>, c: Cursor<T>(source), room: nat::Lt(c.offset,list_len(source))) -> Cursor<T>(source) {
-    Cursor(refl,Succ(c.offset),room)
-}
-
-// Parse from the start and report the value or diagnostic; trailing input is allowed.
-// Use complete(p,expected) before run when the whole input must be consumed.
-fn run<T,A>(p: Parser<T,A>, source: List<T>) -> Result<A,ErrorView> {
-    match p.run(source,start(source)) { Err(e) => Err(error_view(source,e)), Ok(s) => Ok(s.value) }
-}
-
-// Two consecutive suffix operations equal one operation at the summed offset.
-theorem drop_add<T>(source: List<T>): (first: Nat) -> (second: Nat) -> drop(source,first + second) = drop(drop(source,first),second) {
-    match source {
-        Nil => λ first second => refl,
-        Cons(head,tail) => λ first => match first {
-            Zero => λ second => j(sym(nat::add_left_zero(second)),λ n q => drop(Cons(head,tail),n) = drop(Cons(head,tail),second),refl),
-            Succ(n) => λ second => j(sym(nat::add_succ_left(n,second)),λ total q => drop(Cons(head,tail),total) = drop(drop(tail,n),second),drop_add(tail,n,second)),
-        },
-    }
-}
+// Public parser interface. Implementations and proofs live in parser/.
+export parser_core::{
+    Cursor, start, rest, Success, Retry,
+    Failure, ErrorView, Reply, error_view, Parser,
+    observe, initial_rest, CachedCursor, cache, cached_rest,
+    drop_length_le, drop_length_strict, advance, run, drop_add
+};
+export parser_combinators::{
+    pure_at, pure, map_at, map, rebase,
+    bind_at, bind, Dep, bindD, map_identity,
+    map_composition, then, before, choice_at, choice,
+    optional, lookahead_at, lookahead, map_bound, map_consumes,
+    lookahead_zero, map_post, map_sound, or_at, PureSpec,
+    pure_sound, rebase_post, bind_post, bind_sound, add_progress,
+    rebase_bound, bind_bound, bind_consumes, choice_bound, choice_consumes,
+    rebase_same, rebase_associativity, bind_left_unit, bind_right_unit, bind_rebase,
+    bind_associativity, choice_post, choice_sound, certified_map_at, certified_finish_at,
+    certified_finish_forget, certified_map_forget
+};
+export parser_contracts::{
+    Bound, Consumes, bound_on_success, Post, Sound,
+    post_on_success, weaken_bound, weaken_consumes, Certified, certify_at,
+    zero_bound, consumes_zero, forget_at, forget_post, CompleteSpec
+};
+export parser_diagnostics::{
+    committed, commit_offsets, commit_after, attempt_at, attempt,
+    commit_at, commit, insert_expected, merge_expected, merge_error,
+    attempt_bound, attempt_consumes, attempt_idempotent, commit_same, commit_later,
+    commit_not_later, commit_absorbs, no_total_progress, commit_chain, commit_bound,
+    commit_consumes
+};
+export parser_primitives::{
+    fail_at, fail, recognize_at, recognize, token,
+    eof_at, eof, complete, recognize_bound, recognize_consumes,
+    token_consumes, Selects, Recognized, recognize_post, recognize_sound,
+    fail_consumes, SelectedHead, selected_head, RecognizedHead, recognized_head,
+    complete_post, complete_sound, recognize_certified, recognized_progress
+};
+export parser_recursion::{
+    guarded, progress_after, extend_at, after_at
+};
+export parser_repetition::{
+    many_at, many, some, Counted, repeat_at,
+    repeatN, some_consumes
+};

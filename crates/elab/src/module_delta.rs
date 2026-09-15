@@ -460,6 +460,9 @@ impl Elaborator {
         if self.psi.bindings.iter().ne(delta.dependency_psi.bindings.iter()) {
             return Err(ModuleReplayError::DependencyKernelPrefix);
         }
+        if !self.names.valid_exports(&delta.scope) {
+            return Err(ModuleReplayError::MetadataConflict("reexports"));
+        }
         self.recheck_extension(&delta.extension)?;
 
         let mut candidate = self.semantic_image().elaborator();

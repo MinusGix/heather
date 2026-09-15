@@ -41,6 +41,7 @@ module.exports = grammar({
 
     _item: $ => choice(
       $.import_declaration,
+      $.export_declaration,
       $.function_declaration,
       $.theorem_declaration,
       $.axiom_declaration,
@@ -58,6 +59,11 @@ module.exports = grammar({
       'import', field('module', $.identifier),
       optional(seq('::', '{', commaSep1(field('name', $.identifier)), optional(','), '}')),
       ';',
+    ),
+
+    export_declaration: $ => seq(
+      'export', field('module', $.identifier),
+      '::', '{', commaSep1(field('name', $._qualified_name)), optional(','), '}', ';',
     ),
 
     function_declaration: $ => seq(

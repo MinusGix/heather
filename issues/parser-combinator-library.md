@@ -115,3 +115,4 @@ before closing its chosen implementation scope.
 
 - 2026-09-15: [[parser-grammar-soundness]] supplies the independent calculator theorem and extends the certificate bridge; current API details are in `docs/parser-library.md`.
 - 2026-09-15: The component layout needs an umbrella import; explicit declaration-preserving reexports are tracked by [[module-reexports]].
+- 2026-09-15: 2026-09-15: umbrella restored — `import parser;` is the whole library via reexports ([[module-reexports]] closed); components remain importable with the same identities.

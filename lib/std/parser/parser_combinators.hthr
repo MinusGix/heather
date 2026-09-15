@@ -7,7 +7,7 @@ import result;
 import option;
 import int;
 import omega;
-import parser::{Cursor, start, Success, Failure, ErrorView, Reply, Parser, observe, run};
+import parser_core::{Cursor, start, Success, Failure, ErrorView, Reply, Parser, observe, run};
 import parser_contracts::{Bound, Consumes, bound_on_success, Post, Sound, post_on_success, Certified, forget_at};
 import parser_diagnostics::{commit_after, merge_error, commit_same, commit_chain};
 

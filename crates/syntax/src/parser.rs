@@ -166,7 +166,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             match &item {
                 Item::Import(i) if seen_decl => {
                     return Err(ParseError {
-                        msg: "`import` must come before the first declaration".into(),
+                        msg: format!("`{}` must come before the first declaration", if i.reexport { "export" } else { "import" }),
                         span: i.span,
                     })
                 }
@@ -783,7 +783,7 @@ impl Parser {
         // named `import` is impossible anyway (`import` would have to be
         // followed by `fn`/`theorem`), and the `;`/`::` shape below is what a
         // real import always has.
-        if self.at_kw("import") {
+        if self.at_kw("import") || self.at_kw("export") {
             return Ok(Item::Import(self.import()?));
         }
         if self.at_kw("inductive") {
@@ -1407,7 +1407,8 @@ impl Parser {
     /// brings all of `m` into scope unqualified, so a glob would be a second
     /// spelling of it.
     fn import(&mut self) -> R<ImportItem> {
-        let start = self.bump().span; // `import`
+        let reexport = self.at_kw("export");
+        let start = self.bump().span; // `import` or `export`
         let (module, module_span) = self.qual_ident("module name after `import`")?;
         if module.contains("::") {
             return Err(ParseError {
@@ -1431,7 +1432,8 @@ impl Parser {
                          `m` into scope unqualified (docs/modules-design.md §3.1)",
                     );
                 }
-                listed.push(self.ident("a name in the import list")?);
+                listed.push(if reexport { self.qual_ident("a name in the export list")? }
+                    else { self.ident("a name in the import list")? });
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -1439,8 +1441,11 @@ impl Parser {
             }
             self.expect(&TokKind::RBrace, "`}` to close the import list")?;
         }
+        if reexport && listed.is_empty() {
+            return self.err("an export needs an explicit nonempty list: `export m::{Name};`");
+        }
         let end = self.expect(&TokKind::Semi, "`;` to end the import")?;
-        Ok(ImportItem { module, module_span, listed, span: start.join(end) })
+        Ok(ImportItem { reexport, module, module_span, listed, span: start.join(end) })
     }
 
     /// `record D<p, …>(v: T, …) { f: T, … }` — desugared here into the

@@ -7,7 +7,7 @@ import result;
 import option;
 import int;
 import omega;
-import parser::{Cursor, Failure, Reply, Parser, observe, run};
+import parser_core::{Cursor, Failure, Reply, Parser, observe, run};
 import parser_contracts::{Bound, Consumes};
 
 // Mark a diagnostic committed while keeping its position and expectations.

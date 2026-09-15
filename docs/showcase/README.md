@@ -27,9 +27,9 @@ guess, revised freely as taste and design rounds move.
 numbers, `+`, `*`, and parentheses. Multiplication binds more tightly than
 addition; both operators associate to the right, as in the idealized parser.
 It imports the existing `Expr`, evaluator, RPN compiler, and compiler proof
-from `calc.hthr`. The grammar uses `lib/std/parser.hthr` and the components in
-`lib/std/parser/` for source-indexed cursors, consuming composition, commitment
-and complete-input checking.
+from `calc.hthr`. The grammar imports `parser`, the facade over
+`lib/std/parser/`, for source-indexed cursors, consuming composition,
+commitment and complete-input checking.
 See [the parser library](../parser-library.md) for its contracts.
 
 ```text

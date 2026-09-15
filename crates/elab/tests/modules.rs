@@ -675,3 +675,85 @@ fn an_argument_is_checking_position_exactly_when_its_parameter_type_is_concrete(
     ]);
     assert!(e.contains("ambiguous"), "{e}");
 }
+
+// Explicit reexports expose the same declaration, through a new visible path.
+#[test]
+fn selected_reexports_preserve_identity_and_do_not_publish_private_imports() {
+    let origin = "record Box<A> { value: A } inductive Flag { On, Off } fn keep<A>(self b: Box<A>) -> A { b.value } fn hidden() -> Nat { 9 }";
+    let facade = "import origin::{hidden}; export origin::{Box, Flag, keep};";
+    ok(&[("origin", origin), ("facade", facade), ("client", r#"
+        import facade; import origin;
+        fn both<A>(b: origin::Box<A>) -> facade::Box<A> { b }
+        theorem open<A>(x: A): facade::keep(Box(x)) = x { refl }
+        theorem method<A>(x: A): Box(x).keep() = x { refl }
+        fn flag() -> Flag { Flag::On }
+        fn bare_flag() -> Flag { Off }
+    "#)]);
+    ok(&[("origin", origin), ("facade", facade), ("client", "import facade::{Box}; fn id<A>(b: Box<A>) -> A { b.keep() }")]);
+    for body in ["hidden()", "facade::hidden()", "origin::hidden()"] {
+        let client = format!("import facade; fn bad() -> Nat {{ {body} }}");
+        let error = bad(&[("origin", origin), ("facade", facade), ("client", &client)]);
+        assert!(error.contains("hidden") || error.contains("origin"), "{error}");
+    }
+}
+
+#[test]
+fn reexport_diamonds_deduplicate_but_distinct_origins_remain_ambiguous() {
+    let prefix = [("origin", "fn answer() -> Nat { 7 }"),
+        ("left", "export origin::{answer};"), ("right", "export origin::{answer};"),
+        ("facade", "export left::{answer}; export right::{answer};")];
+    let mut mods = prefix.to_vec();
+    mods.push(("client", "import facade::{answer}; import origin::{answer}; theorem same(): answer() = 7 { refl }"));
+    ok(&mods);
+    for imports in ["import facade; import other;", "import other; import facade;"] {
+        let mut mods = prefix.to_vec();
+        mods.push(("other", "fn answer() -> Nat { 8 }"));
+        let client = format!("{imports} fn bad() -> Nat {{ answer() }}");
+        mods.push(("client", &client));
+        assert!(bad(&mods).contains("ambiguous"));
+    }
+    let error = bad(&[("a", A), ("b", B), ("facade", "export a::{f}; export b::{f};")]);
+    assert!(error.contains("listed by two") || error.contains("conflicts"), "{error}");
+    let error = bad(&[("a", A), ("facade", "export a::{f}; fn f() -> Nat { 3 }")]);
+    assert!(error.contains("declared"), "{error}");
+    assert!(bad(&[("a", A), ("facade", "export a::{missing};")]).contains("declares no"));
+}
+
+#[test]
+fn reexports_retain_receiver_disambiguation_and_type_owned_members() {
+    ok(&[("a", "record Box<A> { value: A } fn map<A,B>(self b: Box<A>, f: A -> B) -> Box<B> { Box(f(b.value)) } fn Box::get<A>(self b: Box<A>) -> A { b.value }"),
+        ("b", "record Other<A> { value: A } fn map<A,B>(self b: Other<A>, f: A -> B) -> Other<B> { Other(f(b.value)) }"),
+        ("facade", "export a::{Box, map, Box::get};"),
+        ("client", "import facade; import b; theorem mapped(): Box(2).map(Succ).get() = 3 { refl } theorem qualified(): facade::Box::get(Box(2)) = 2 { refl }")]);
+}
+
+#[test]
+fn export_syntax_requires_a_list_and_the_import_header() {
+    let file = parse_file("export a::{Box, Box::get};").unwrap();
+    let heather_syntax::Item::Import(item) = &file.items[0] else { panic!("export dependency") };
+    assert!(item.reexport);
+    for src in ["export a;", "export a::{};", "export a::{*};", "fn f() -> Nat { 0 } export a::{f};", "assuming n: Nat { export a::{f}; }"] {
+        assert!(parse_file(src).is_err(), "{src}");
+    }
+    // The keyword stays contextual at declaration names.
+    parse_file("fn export() -> Nat { 0 }").unwrap();
+}
+
+#[test]
+fn reexport_images_preserve_aliases_and_proof_provenance_without_new_bindings() {
+    use heather_elab::{ModuleDelta, ModuleDependencyIdentity, ModuleImageLimits};
+    let mut e = ok(&[("origin", "axiom assumed(n: Nat): n = n; theorem proved(n: Nat): n = n { assumed(n) }")]);
+    let prefix = e.semantic_image();
+    let psi = e.psi().clone();
+    let identity = ModuleDependencyIdentity::new(vec![[7;32]]);
+    let delta = e.elab_module_delta("facade", "export origin::{proved};", identity.clone()).unwrap();
+    assert_eq!(delta.binding_count(), 0);
+    let bytes = delta.to_image_bytes();
+    let decoded = ModuleDelta::from_image_bytes(&bytes, psi, ModuleImageLimits::default()).unwrap();
+    let mut replay = prefix.elaborator();
+    replay.replay_module_delta(&decoded, &identity).unwrap();
+    replay.elab_module_source("client", "import facade; theorem use_it(n: Nat): n = n { proved(n) }").unwrap();
+    let audit = replay.axiom_report("client::use_it").unwrap();
+    assert_eq!(audit.axioms[0].path, ["client::use_it", "origin::proved", "origin::assumed"]);
+    assert!(replay.elab_module_source("bad", "import facade; theorem falsehood(): 0 = 1 { proved(0) }").is_err());
+}

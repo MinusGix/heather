@@ -2014,7 +2014,7 @@ impl Elaborator {
             .module_scope(module)
             .cloned()
             .unwrap_or_else(|| Scope::new(module));
-        let mut written: Vec<&str> = Vec::new();
+        let mut written: Vec<(&str, bool)> = Vec::new();
         for item in &file.items {
             let Item::Import(imp) = item else { continue };
             if imp.module == module {
@@ -2034,18 +2034,23 @@ impl Elaborator {
             }
             // Twice *in this file* is the error; an import repeated across
             // two chunks of one module is the same import.
-            if written.contains(&imp.module.as_str()) {
+            if written.contains(&(imp.module.as_str(), imp.reexport)) {
                 return err(format!("`{}` is imported twice", imp.module), imp.span);
             }
-            written.push(&imp.module);
+            written.push((&imp.module, imp.reexport));
+            let mut exported = Vec::new();
             for (n, nspan) in &imp.listed {
+                if imp.reexport && let Some(why) = self.access_refusal(n) {
+                    return err(why, *nspan);
+                }
                 if !self.names.declares(&imp.module, n) {
                     return err(format!("`{}` declares no `{n}`", imp.module), *nspan);
                 }
                 if let Some(other) = scope
                     .imports
                     .iter()
-                    .find(|i| i.module != imp.module && i.listed.iter().any(|l| l == n))
+                    .find(|i| i.module != imp.module && i.listed.iter().any(|l| l == n)
+                        && self.names.origin(&i.module, n) != self.names.origin(&imp.module, n))
                     .map(|i| i.module.clone())
                 {
                     // Both were asked for by name; there is nothing left to
@@ -2060,13 +2065,40 @@ impl Elaborator {
                         *nspan,
                     );
                 }
+                if imp.reexport {
+                    exported.push(n.clone());
+                    // Selecting a type also exposes its constructors. Methods and
+                    // instances remain explicit selections (including qualified names).
+                    if let Some(origin) = self.names.origin(&imp.module, n)
+                        && let Some(ind) = self.types.inductive(&qkey(origin, n))
+                    {
+                        for ctor in &ind.ctors {
+                            if self.names.declares(&imp.module, &ctor.name)
+                                && !exported.contains(&ctor.name) {
+                                exported.push(ctor.name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            for name in &exported {
+                let origin = self.names.origin(&imp.module, name);
+                if self.names.declares(module, name) && self.names.origin(module, name) != origin {
+                    return err(format!("reexport `{name}` conflicts with a declaration in `{module}`"), imp.span);
+                }
+                for previous in &scope.imports {
+                    if previous.exported.contains(name) && self.names.origin(&previous.module, name) != origin {
+                        return err(format!("reexport `{name}` conflicts between `{}` and `{}`", previous.module, imp.module), imp.span);
+                    }
+                }
             }
             let listed: Vec<String> = imp.listed.iter().map(|(n, _)| n.clone()).collect();
             match scope.imports.iter_mut().find(|i| i.module == imp.module) {
-                Some(existing) => existing.listed.extend(listed),
+                Some(existing) => { existing.listed.extend(listed); existing.exported.extend(exported); },
                 None => scope.imports.push(ImportSpec {
                     module: imp.module.clone(),
                     listed,
+                    exported,
                 }),
             }
         }
@@ -2289,7 +2321,7 @@ impl Elaborator {
     /// The duplicate-declaration test: a *module* never declares one name
     /// twice, while two modules may.
     fn own_declares(&self, name: &str, kinds: &[NameKind]) -> bool {
-        self.names.declares_as(self.names.module(), name, kinds)
+        self.names.declares_own(self.names.module(), name, kinds)
     }
 
     /// The one collision the regime turns into an error at the *declaration*:

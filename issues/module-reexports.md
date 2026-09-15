@@ -1,6 +1,6 @@
 ---
 title: Support explicit identity-preserving module reexports
-status: open
+status: closed
 labels: [syntax,elab,cli]
 created: 2026-09-15
 updated: 2026-09-15
@@ -60,3 +60,6 @@ questions; this issue does not require them to ship with reexports.
 - `lib/std/parser/README.md`: current component layout and import instructions.
 - [[axiom-provenance]] owns dependency auditing; reexports must preserve it.
 
+## Log
+
+- 2026-09-15: Landed: `export m::{…};` as a selected, identity-preserving reexport (aliases in the visibility index only; origin resolution, by-origin ambiguity, constructor inclusion, generated-name refusal, loader edge, image field + replay validation). `lib/std/parser.hthr` is now a facade over `parser_core` and the six components. Design in docs/modules-design.md §3.4; tests in crates/elab/tests/modules.rs and crates/cli/tests/semantic.rs. Whole-module reexport, renaming and hierarchical paths stay unbuilt by decision.

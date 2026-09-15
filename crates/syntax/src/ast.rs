@@ -102,6 +102,8 @@ impl OpFixity {
 /// else in scope declares them too (docs/modules-design.md §4).
 #[derive(Debug, Clone)]
 pub struct ImportItem {
+    /// Explicit selected reexport (`export m::{x};`); ordinary imports stay private.
+    pub reexport: bool,
     pub module: String,
     pub module_span: Span,
     pub listed: Vec<(String, Span)>,

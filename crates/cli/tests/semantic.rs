@@ -109,3 +109,41 @@ fn a_stale_image_is_replayed_only_under_the_accepting_policy_and_is_reported() {
 
     let _ = std::fs::remove_dir_all(cache);
 }
+
+#[test]
+fn reexport_dependencies_load_replay_and_invalidate_through_a_facade() {
+    let root = temp("reexports");
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    let origin = root.join("origin.hthr");
+    let facade = root.join("facade.hthr");
+    let client = root.join("client.hthr");
+    std::fs::write(&origin, "fn value() -> Nat { 7 } fn hidden() -> Nat { 9 }").unwrap();
+    std::fs::write(&facade, "export origin::{value};").unwrap();
+    std::fs::write(&client, "import facade; theorem correct(): facade::value() = 7 { refl }").unwrap();
+    for warm in [false, true] {
+        let modules = heather_cli::loader::load(&client, &[]).unwrap_or_else(|e| panic!("{}", e.msg));
+        assert_eq!(modules.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["origin", "facade", "client"]);
+        let mut e = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(cache.clone()));
+        for module in &modules {
+            let out = session.check(&mut e, module, LintProfile::Default);
+            assert!(out.errors.is_empty(), "{}", module.name);
+            assert_eq!(out.replayed, warm, "{}", module.name);
+        }
+    }
+    // A changed origin invalidates the unchanged facade and its client.
+    std::fs::write(&origin, "fn value() -> Nat { 8 } fn hidden() -> Nat { 9 }").unwrap();
+    let modules = heather_cli::loader::load(&client, &[]).unwrap_or_else(|e| panic!("{}", e.msg));
+    let mut e = Elaborator::with_prelude().unwrap();
+    let mut session = SemanticSession::new(Some(cache.clone()));
+    for module in &modules {
+        let out = session.check(&mut e, module, LintProfile::Default);
+        assert!(!out.replayed, "{}", module.name);
+        assert_eq!(out.errors.is_empty(), module.name != "client");
+    }
+    // Export edges participate in the loader's ordinary cycle check.
+    std::fs::write(&origin, "export facade::{value};").unwrap();
+    assert!(heather_cli::loader::load(&client, &[]).is_err());
+    let _ = std::fs::remove_dir_all(root);
+}

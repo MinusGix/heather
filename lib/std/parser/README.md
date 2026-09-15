@@ -1,11 +1,13 @@
 # Parser components
 
-The core representation lives in [`../parser.hthr`](../parser.hthr). The
-remaining components are ordinary Heather modules in this directory:
+[`../parser.hthr`](../parser.hthr) is the public interface: a facade that
+reexports every operation, type, and certificate below. The implementation
+and proofs are ordinary Heather modules in this directory:
 
 | Module | Responsibility |
 |---|---|
-| `parser` | Source-indexed cursors, replies, execution, observations, cursor laws |
+| `parser` (facade) | Reexports the components; declares nothing of its own |
+| `parser_core` | Source-indexed cursors, replies, execution, observations, cursor laws |
 | `parser_contracts` | `Post`, `Sound`, `Bound`, `Consumes`, `Certified`, evidence projection, and `CompleteSpec` |
 | `parser_diagnostics` | Commitment, retry, expected-token merging, and their laws |
 | `parser_combinators` | Pure values, mapping, dependent sequencing, choice, lookahead, and composition laws |
@@ -15,32 +17,31 @@ remaining components are ordinary Heather modules in this directory:
 
 ## Imports
 
-Heather currently uses flat module names and has no reexports. Supply both
-`-L lib/std` and `-L lib/std/parser`; import each component whose declarations
-you use. Importing `parser` alone provides the core, not the full library.
-For example:
+Module names are flat file stems, so supply both `-L lib/std` and
+`-L lib/std/parser`; the facade's export edges then find the components.
+`import parser;` is the whole library. For example:
 
 ```heather
 import parser;
-import parser_combinators;
-import parser_primitives;
 import list;
 import result;
 
 fn next_number() -> Parser<Nat,Nat> {
-    parser_primitives::token<Nat>(1).map(Succ)
+    parser::token<Nat>(1).map(Succ)
 }
 theorem example(): parser::run(next_number(),[2]) = Ok<Nat,ErrorView>(3) {
     refl
 }
 ```
 
-Receiver calls such as `.map` continue to work when their component is
-imported. Qualified names use the component that owns the declaration:
-`parser_primitives::token`, `parser_combinators::bind`, and
-`parser_repetition::many`. No types or proof classes are duplicated for a
-facade. [Module reexports](../../../issues/module-reexports.md) tracks restoring a single
-umbrella import.
+A reexport is the original declaration under a second visible path
+(`docs/modules-design.md` §3.4): `parser::token` and
+`parser_primitives::token` are one function, `parser::Consumes` and
+`parser_contracts::Consumes` one class, and a certificate built through
+either spelling is accepted by the other. A client may import a component
+directly, alone or beside the facade, without ambiguity or conversions;
+qualified use through the component still works. Axiom audits report the
+component that owns a proof, not the facade.
 
 ## Dependency and proof boundaries
 

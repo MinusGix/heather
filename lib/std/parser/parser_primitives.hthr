@@ -7,7 +7,7 @@ import result;
 import option;
 import int;
 import omega;
-import parser::{Cursor, rest, Success, Failure, Reply, Parser, initial_rest, advance, run};
+import parser_core::{Cursor, rest, Success, Failure, Reply, Parser, initial_rest, advance, run};
 import parser_contracts::{Bound, Consumes, Post, Sound, Certified, certify_at, CompleteSpec};
 import parser_combinators::{pure_at, map_at, bind_at, before};
 

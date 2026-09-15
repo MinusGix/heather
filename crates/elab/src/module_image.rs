@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x05";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x05";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x06";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x06";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1172,13 +1172,14 @@ fn put_scope(w: &mut Writer, scope: &Scope) {
     w.vec(&scope.imports, |w, import| {
         w.string(&import.module);
         w.vec(&import.listed, |w, name| w.string(name));
+        w.vec(&import.exported, |w, name| w.string(name));
     });
 }
 
 fn get_scope(r: &mut Reader<'_>) -> Result<Scope, ModuleImageDecodeError> {
     Ok(Scope {
         module: r.string()?,
-        imports: r.vec(|r| Ok(ImportSpec { module: r.string()?, listed: r.vec(Reader::string)? }))?,
+        imports: r.vec(|r| Ok(ImportSpec { module: r.string()?, listed: r.vec(Reader::string)?, exported: r.vec(Reader::string)? }))?,
     })
 }
 
