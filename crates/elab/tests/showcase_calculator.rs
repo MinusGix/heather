@@ -25,8 +25,8 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     // The proof-carrying grammar is a large checked artifact; keep its gate
     // serial within the per-process memory rail.
     e.set_kernel_workers(1);
+    support::parser::load(&mut e);
     for (name, src) in [
-        ("parser", include_str!("../../../lib/std/parser.hthr")),
         ("calc", include_str!("../../../docs/showcase/calc.hthr")),
         ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
     ] {
@@ -43,7 +43,7 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     "#;
     e.elab_module_source("mixed", mixed).unwrap_or_else(|err| panic!("{}", err.render(mixed)));
     let grammar_client = r#"
-        import calc_parser; import calc; import list; import result; import logic; import parser; import nat;
+        import calc_parser; import calc; import list; import result; import logic; import parser; import parser_contracts; import parser_diagnostics; import parser_combinators; import parser_primitives; import parser_recursion; import parser_repetition; import nat;
         // These witnesses use the specification constructors, independently
         // of the parser. The variable numeral exercises an open payload.
         fn literal_witness(n: Nat) -> WholeGrammar([TNum(n)],Lit(n)) {
@@ -66,7 +66,7 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     for name in ["calc_parser::checked_expr", "calc_parser::checked_factor", "calc_parser::checked_atom",
         "calc_parser::parse_sound", "calc_parser::expression_sound", "calc_parser::grammar_sound",
         "calc_parser::factor_sound", "calc_parser::atom_sound", "grammar_client::open_success",
-        "parser::complete_post", "parser::certified_finish_forget", "parser::recognized_head"] {
+        "parser_primitives::complete_post", "parser_combinators::certified_finish_forget", "parser_primitives::recognized_head"] {
         assert!(e.axiom_report(name).unwrap().axioms.is_empty(), "{name} used an axiom");
     }
     // Each control starts from the same checked modules. A failed attempt
@@ -95,7 +95,7 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
         "fn bad() -> WellFormed(Product(Sum(AtomFactor(Number(1)),FactorExpr(AtomFactor(Number(2)))),AtomFactor(Number(3)))) { And(And(refl,And(And(refl,And(refl,trivial)),And(refl,And(refl,And(refl,trivial))))),And(refl,And(refl,trivial))) }",
         "fn bad() -> WholeGrammar([TOpen,TNum(7)],Lit(7)) { WholeGrammar(FactorExpr(AtomFactor(Parenthesized(FactorExpr(AtomFactor(Number(7)))))),And(refl,And(refl,And(refl,And(refl,And(refl,trivial))))),refl,refl,refl) }",
     ] {
-        let src = format!("import calc; import calc_parser; import list; import logic; import parser; import nat; {body}");
+        let src = format!("import calc; import calc_parser; import list; import logic; import parser; import parser_contracts; import parser_diagnostics; import parser_combinators; import parser_primitives; import parser_recursion; import parser_repetition; import nat; {body}");
         let mut control = image.elaborator();
         let err = control.elab_module_source("bad_grammar", &src).expect_err("invalid grammar derivation");
         let message = err.render(&src);
@@ -106,10 +106,10 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
 
 fn check_nested_parser_costs(image: &heather_elab::SemanticImage) {
     for depth in [1,2,4,8] {
-        let mut expression = "parser::token<Nat>(1)".to_string();
-        for _ in 1..depth { expression = format!("parser::then(parser::token<Nat>(1),{expression})"); }
+        let mut expression = "parser_primitives::token<Nat>(1)".to_string();
+        for _ in 1..depth { expression = format!("parser_combinators::then(parser_primitives::token<Nat>(1),{expression})"); }
         let tokens = vec!["7";depth].join(",");
-        let source = format!("import parser; import list; import result; fn p() -> Parser<Nat,Nat> {{ {expression} }} theorem correct(): parser::run<Nat,Nat>(parser::complete(p(),99),[{tokens}]) = Ok<Nat,ErrorView>(7) {{ refl }}");
+        let source = format!("import parser; import parser_contracts; import parser_diagnostics; import parser_combinators; import parser_primitives; import parser_recursion; import parser_repetition; import list; import result; fn p() -> Parser<Nat,Nat> {{ {expression} }} theorem correct(): parser::run<Nat,Nat>(parser_primitives::complete(p(),99),[{tokens}]) = Ok<Nat,ErrorView>(7) {{ refl }}");
         measure(image,"composition",depth,&source);
         let mut tokens = vec!["TOpen";depth]; tokens.push("TNum(7)"); tokens.extend(vec!["TClose";depth]);
         let source = format!("import calc; import calc_parser; import result; import list; theorem correct(): parse([{}]) = Ok<Expr,ParseError>(Lit(7)) {{ refl }}",tokens.join(","));

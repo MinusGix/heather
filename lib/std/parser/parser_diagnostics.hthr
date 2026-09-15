@@ -1,0 +1,123 @@
+// Checked parser library: diagnostics.
+import logic;
+import nat;
+import list;
+import pair;
+import result;
+import option;
+import int;
+import omega;
+import parser::{Cursor, Failure, Reply, Parser, observe, run};
+import parser_contracts::{Bound, Consumes};
+
+fn committed<T>(source: List<T>, error: Failure<T>(source)) -> Failure<T>(source) {
+    Failure(error.at,error.expected,Committed)
+}
+
+fn commit_offsets<T>(source: List<T>, begin,middle: Nat, error: Failure<T>(source)) -> Failure<T>(source) {
+    match nat::le_dec(Succ(begin),middle) {
+        Inl(moved) => committed(source,error),
+        Inr(stayed) => error,
+    }
+}
+
+fn commit_after<T>(source: List<T>, begin,middle: Cursor<T>(source), error: Failure<T>(source)) -> Failure<T>(source) {
+    commit_offsets(source,begin.offset,middle.offset,error)
+}
+
+fn attempt_at<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
+    match r { Err(e) => Err(Failure(e.at,e.expected,Retryable)), Ok(s) => Ok(s) }
+}
+
+fn attempt<T,A>(self p: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => attempt_at(source,begin,p.run(source,begin))) }
+
+fn commit_at<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
+    match r { Err(e) => Err(committed(source,e)), Ok(s) => Ok(s) }
+}
+
+fn commit<T,A>(self p: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => commit_at(source,begin,p.run(source,begin))) }
+
+fn insert_expected(code: Nat, expected: List<Nat>) -> List<Nat> {
+    match expected { Nil => [code], Cons(head,tail) => match nat::eq_dec(code,head) {
+        Inl(same) => expected, Inr(different) => Cons(head,insert_expected(code,tail)),
+    } }
+}
+
+fn merge_expected(left,right: List<Nat>) -> List<Nat> {
+    match right { Nil => left, Cons(code,tail) => merge_expected(insert_expected(code,left),tail) }
+}
+
+// On ties, expected identifiers retain deterministic left-to-right order.
+fn merge_error<T>(source: List<T>, left,right: Failure<T>(source)) -> Failure<T>(source) {
+    match nat::le_dec(Succ(left.at.offset),right.at.offset) {
+        Inl(farther) => right,
+        Inr(no) => match nat::le_dec(Succ(right.at.offset),left.at.offset) {
+            Inl(farther) => Failure(left.at,left.expected,right.retry),
+            Inr(tied) => Failure(right.at,merge_expected(left.expected,right.expected),right.retry),
+        },
+    }
+}
+
+theorem attempt_bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)):
+    Bound(source,begin,amount,r) -> Bound(source,begin,amount,attempt_at(source,begin,r)) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
+}
+
+fn attempt_consumes<T,A>(p: Parser<T,A>, amount: Nat, certificate: Consumes<T,A>(p,amount)) -> Consumes<T,A>(attempt(p),amount) {
+    Consumes(λ source begin => attempt_bound(source,begin,amount,p.run(source,begin),certificate.bound(source,begin)))
+}
+
+// Restore success observations; failures retain the specified commitment.
+theorem attempt_idempotent<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
+    observe(source,begin,attempt_at(source,begin,attempt_at(source,begin,r))) = observe(source,begin,attempt_at(source,begin,r)) {
+    match r { Err(e) => refl, Ok(s) => refl }
+}
+
+theorem commit_same<T>(source: List<T>, offset: Nat, error: Failure<T>(source)):
+    commit_offsets(source,offset,offset,error) = error {
+    match nat::le_dec(Succ(offset),offset) { Inl(impossible) => false_elim(nat::lt_irrefl(offset,impossible)), Inr(no) => refl }
+}
+
+theorem commit_later<T>(source: List<T>, a,b: Nat, error: Failure<T>(source), later: nat::Lt(a,b)):
+    commit_offsets(source,a,b,error) = committed(source,error) {
+    match nat::le_dec(Succ(a),b) { Inl(yes) => refl, Inr(no) => false_elim(no(later)) }
+}
+
+theorem commit_not_later<T>(source: List<T>, a,b: Nat, error: Failure<T>(source), stayed: nat::Lt(a,b) -> False):
+    commit_offsets(source,a,b,error) = error {
+    match nat::le_dec(Succ(a),b) { Inl(yes) => false_elim(stayed(yes)), Inr(no) => refl }
+}
+
+theorem commit_absorbs<T>(source: List<T>, a,b: Nat, error: Failure<T>(source)):
+    committed(source,commit_offsets(source,a,b,error)) = committed(source,error) {
+    match nat::le_dec(Succ(a),b) {
+        Inl(yes) => j(commit_later(source,a,b,error,yes),λ changed q => committed(source,commit_offsets(source,a,b,error)) = committed(source,changed),refl),
+        Inr(no) => j(commit_not_later(source,a,b,error,no),λ changed q => committed(source,commit_offsets(source,a,b,error)) = committed(source,changed),refl),
+    }
+}
+
+theorem no_total_progress(a,b,c: Nat, first: nat::Lt(a,b) -> False, second: nat::Lt(b,c) -> False, total: nat::Lt(a,c)): False {
+    nat::lt_irrefl(a,nat::le_trans(Succ(a),c,a,total,
+        nat::le_trans(c,b,a,nat::lt_of_not_le(c,Succ(b),second),nat::lt_of_not_le(b,Succ(a),first))))
+}
+
+theorem commit_chain<T>(source: List<T>, a,b,c: Nat, ab: nat::Le(a,b), bc: nat::Le(b,c), error: Failure<T>(source)):
+    commit_offsets(source,a,b,commit_offsets(source,b,c,error)) = commit_offsets(source,a,c,error) {
+    or_elim(nat::le_dec(Succ(a),b),
+        λ first => trans(commit_later(source,a,b,commit_offsets(source,b,c,error),first),
+            trans(commit_absorbs(source,b,c,error),sym(commit_later(source,a,c,error,nat::le_trans(Succ(a),b,c,first,bc))))),
+        λ first => or_elim(nat::le_dec(Succ(b),c),
+            λ second => trans(commit_not_later(source,a,b,commit_offsets(source,b,c,error),first),
+                trans(commit_later(source,b,c,error,second),sym(commit_later(source,a,c,error,nat::le_trans(Succ(a),Succ(b),c,ab,second))))),
+            λ second => trans(commit_not_later(source,a,b,commit_offsets(source,b,c,error),first),
+                trans(commit_not_later(source,b,c,error,second),sym(commit_not_later(source,a,c,error,no_total_progress(a,b,c,first,second)))))))
+}
+
+theorem commit_bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)):
+    Bound(source,begin,amount,r) -> Bound(source,begin,amount,commit_at(source,begin,r)) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
+}
+
+fn commit_consumes<T,A>(p: Parser<T,A>, amount: Nat, proof: Consumes<T,A>(p,amount)) -> Consumes<T,A>(commit(p),amount) {
+    Consumes(λ source begin => commit_bound(source,begin,amount,p.run(source,begin),proof.bound(source,begin)))
+}

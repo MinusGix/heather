@@ -20,6 +20,8 @@
 //! - **What a generated-term test must vary**: docs/testing-generated-terms.md.
 #![allow(dead_code)]
 
+pub mod parser;
+
 use std::sync::Arc as Rc;
 
 use heather_kernel::term::GlobalCtx;

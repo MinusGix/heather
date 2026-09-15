@@ -1,0 +1,151 @@
+// Checked parser library: primitives.
+import logic;
+import nat;
+import list;
+import pair;
+import result;
+import option;
+import int;
+import omega;
+import parser::{Cursor, rest, Success, Failure, Reply, Parser, initial_rest, advance, run};
+import parser_contracts::{Bound, Consumes, Post, Sound, Certified, certify_at, CompleteSpec};
+import parser_combinators::{pure_at, map_at, bind_at, before};
+
+fn fail_at<T,A>(source: List<T>, begin: Cursor<T>(source), expected: List<Nat>) -> Reply<T,A>(source,begin) {
+    Err(Failure(begin,expected,Retryable))
+}
+
+fn fail<T,A>(expected: Nat) -> Parser<T,A> {
+    Parser(λ source begin => fail_at(source,begin,[expected]))
+}
+
+fn recognize_at<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,A>(source,begin) {
+    match nat::le_dec(Succ(begin.offset),list_len(source)) {
+        Inl(room) => match rest(source,begin) {
+            Nil => fail_at(source,begin,[expected]),
+            Cons(head,tail) => match pick(head) {
+                None => fail_at(source,begin,[expected]),
+                Some(value) => Ok(Success(value,advance(source,begin,room),
+                    nat::le_succ_r(begin.offset,begin.offset,nat::le_refl(begin.offset)))),
+            },
+        },
+        Inr(done) => fail_at(source,begin,[expected]),
+    }
+}
+
+fn recognize<T,A>(pick: T -> Option<A>, expected: Nat) -> Parser<T,A> {
+    Parser(λ source begin => recognize_at(pick,expected,source,begin))
+}
+
+fn token<T>(expected: Nat) -> Parser<T,T> { recognize(λ (t: T) => Some(t),expected) }
+
+fn eof_at<T>(expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,Nat>(source,begin) {
+    match rest(source,begin) { Nil => pure_at(source,begin,0), Cons(h,t) => fail_at(source,begin,[expected]) }
+}
+
+fn eof<T>(expected: Nat) -> Parser<T,Nat> { Parser(λ source begin => eof_at(expected,source,begin)) }
+
+fn complete<T,A>(self p: Parser<T,A>, expected: Nat) -> Parser<T,A> { before(p,eof<T>(expected)) }
+
+theorem recognize_bound<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
+    Bound(source,begin,1,recognize_at(pick,expected,source,begin)) {
+    match nat::le_dec(Succ(begin.offset),list_len(source)) {
+        Inl(room) => match rest(source,begin) {
+            Nil => trivial,
+            Cons(head,tail) => match pick(head) { None => trivial, Some(value) => nat::le_refl(Succ(begin.offset)) },
+        },
+        Inr(done) => trivial,
+    }
+}
+
+fn recognize_consumes<T,A>(pick: T -> Option<A>, expected: Nat) -> Consumes<T,A>(recognize(pick,expected),1) {
+    Consumes(λ source begin => recognize_bound(pick,expected,source,begin))
+}
+
+fn token_consumes<T>(expected: Nat) -> Consumes<T,T>(token<T>(expected),1) {
+    recognize_consumes(λ (t: T) => Some(t),expected)
+}
+
+fn Selects<T,A>(pick: T -> Option<A>, input: List<T>, value: A) -> Type {
+    match input { Nil => False, Cons(head,tail) => pick(head) = Some(value) }
+}
+
+fn Recognized<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
+    And<end.offset = Succ(begin.offset), Selects(pick,rest(source,begin),value)>
+}
+
+theorem recognize_post<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
+    Post(source,begin,Recognized<T,A>(pick),recognize_at(pick,expected,source,begin)) {
+    match nat::le_dec(Succ(begin.offset),list_len(source)) {
+        Inl(room) => match input_shape : rest(source,begin) {
+            Nil => trivial,
+            Cons(head,tail) => match picked : pick(head) { None => trivial, Some(value) => And(refl,
+                j(sym(input_shape),λ input q => Selects(pick,input,value),picked)) },
+        },
+        Inr(done) => trivial,
+    }
+}
+
+fn recognize_sound<T,A>(pick: T -> Option<A>, expected: Nat) -> Sound<T,A>(recognize(pick,expected),Recognized<T,A>(pick)) {
+    Sound(λ source begin => recognize_post(pick,expected,source,begin))
+}
+
+fn fail_consumes<T,A>(expected,amount: Nat) -> Consumes<T,A>(fail<T,A>(expected),amount) {
+    Consumes(λ source begin => trivial)
+}
+
+// Recognition exposes a head token and an exact suffix boundary, so clients
+// can connect token predicates to independent grammar productions.
+record SelectedHead<T,A>(pick: T -> Option<A>, input: List<T>, value: A) {
+    head: T,
+    selected: pick(head) = Some(value),
+    suffix: input = Cons(head,drop(input,1)),
+}
+
+theorem selected_head<T,A>(pick: T -> Option<A>, input: List<T>, value: A):
+    Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value) {
+    let alg: ListElim<T>(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value)) =
+        ListElim(λ h => false_elim(h),λ head tail ih h => SelectedHead(head,h,list::cong_cons(head,sym(initial_rest(tail)))));
+    list::list_elim(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value),alg,input)
+}
+
+record RecognizedHead<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) {
+    head: T,
+    selected: pick(head) = Some(value),
+    suffix: rest(source,begin) = Cons(head,rest(source,end)),
+}
+
+theorem recognized_head<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
+    proof: Recognized<T,A>(pick,source,begin,end,value)):
+    RecognizedHead<T,A>(pick,source,begin,end,value) {
+    let selected = selected_head(pick,rest(source,begin),value,proof.right);
+    let boundary: (rest(source,end) = drop(rest(source,begin),1)) =
+        trans(j(proof.left,λ offset q => rest(source,end) = drop(source,offset),refl),list::drop_succ(source,begin.offset));
+    RecognizedHead(selected.head,selected.selected,
+        trans(selected.suffix,list::cong_cons(selected.head,sym(boundary))))
+}
+
+theorem complete_post<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,CompleteSpec<T,A>(relation),
+        bind_at<T,A,A>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
+        Nil => And(h,shape), Cons(head,tail) => trivial,
+    } }
+}
+
+fn complete_sound<T,A>(p: Parser<T,A>, expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    proof: Sound<T,A>(p,relation)) -> Sound<T,A>(complete(p,expected),CompleteSpec<T,A>(relation)) {
+    Sound(λ source begin => complete_post(source,begin,p.run(source,begin),expected,relation,proof.law(source,begin)))
+}
+
+fn recognize_certified<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) ->
+    Result<Certified<T,A>(source,begin,Recognized<T,A>(pick)),Failure<T>(source)> {
+    certify_at(recognize(pick,expected),Recognized<T,A>(pick),recognize_sound(pick,expected),source,begin)
+}
+
+theorem recognized_progress<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
+    proof: Recognized<T,A>(pick,source,begin,end,value)): nat::Lt(begin.offset,end.offset) {
+    j(sym(proof.left),λ offset q => nat::Lt(begin.offset,offset),nat::le_refl(Succ(begin.offset)))
+}

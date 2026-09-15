@@ -1,0 +1,53 @@
+// Checked parser library: repetition.
+import logic;
+import nat;
+import list;
+import pair;
+import result;
+import option;
+import int;
+import omega;
+import parser::{Cursor, rest, Reply, Parser, drop_length_strict, advance, run};
+import parser_contracts::{Consumes, bound_on_success, consumes_zero};
+import parser_combinators::{pure_at, map_at, map, rebase, bind_at, bind, bind_consumes};
+
+fn many_at<T,A>(p: Parser<T,A>, progress: Consumes<T,A>(p,1), source: List<T>, begin: Cursor<T>(source)) -> Reply<T,List<A>>(source,begin)
+    decreases list_len(rest(source,begin)) {
+    match shape : p.run(source,begin) {
+        Err(e) => match e.retry { Retryable => pure_at<T,List<A>>(source,begin,[]), Committed => Err(e) },
+        Ok(s) => {
+            let advance = bound_on_success(source,begin,1,p.run(source,begin),progress.bound(source,begin),s,shape);
+            let small = drop_length_strict(source,begin.offset,s.end.offset,advance,s.end.within);
+            let more = many_at(p,progress,source,s.end) decreasing tail;
+            rebase(source,begin,s.end,s.forward,map_at(source,s.end,more,λ (xs: List<A>) => Cons(s.value,xs)))
+        },
+    }
+    on decreasing tail := small;
+}
+
+fn many<T,A>(self p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Parser<T,List<A>> {
+    Parser(λ source begin => many_at(p,progress,source,begin))
+}
+
+fn some<T,A>(self p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Parser<T,List<A>> {
+    bind(p,λ (a: A) => map(many(p,progress),λ (xs: List<A>) => Cons(a,xs)))
+}
+
+// A finite repetition has a checked length, and needs no progress premise.
+record Counted<A>(count: Nat) { values: List<A>, length: list_len(values) = count }
+
+fn repeat_at<T,A>(count: Nat, p: Parser<T,A>, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,Counted<A>(count)>(source,begin) {
+    match count {
+        Zero => pure_at<T,Counted<A>(0)>(source,begin,Counted([],refl)),
+        Succ(n) => bind_at<T,A,Counted<A>(Succ(n))>(source,begin,p.run(source,begin),λ value middle forward =>
+            map_at<T,Counted<A>(n),Counted<A>(Succ(n))>(source,middle,repeat_at(n,p,source,middle),λ (tail: Counted<A>(n)) =>
+                Counted(Cons(value,tail.values),cong_succ(tail.length)))),
+    }
+}
+
+fn repeatN<T,A>(count: Nat, p: Parser<T,A>) -> Parser<T,Counted<A>(count)> { Parser(λ source begin => repeat_at(count,p,source,begin)) }
+
+fn some_consumes<T,A>(p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Consumes<T,List<A>>(some(p,progress),1) {
+    bind_consumes(p,λ (a: A) => map(many(p,progress),λ (xs: List<A>) => Cons(a,xs)),1,0,progress,
+        λ (a: A) => consumes_zero(map(many(p,progress),λ (xs: List<A>) => Cons(a,xs))))
+}

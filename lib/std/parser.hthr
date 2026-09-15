@@ -1,4 +1,4 @@
-// Checked parser combinators with source-indexed cursors and progress evidence.
+// Checked parser library: core representation and cursor laws.
 import logic;
 import nat;
 import list;
@@ -15,108 +15,64 @@ record Cursor<T>(source: List<T>) {
     offset: Nat,
     within: nat::Le(offset, list_len(source)),
 }
+
 fn start<T>(source: List<T>) -> Cursor<T>(source) {
     Cursor(refl,0, nat::zero_le(list_len(source)))
 }
+
 fn rest<T>(source: List<T>, c: Cursor<T>(source)) -> List<T> {
     drop(source, c.offset)
 }
+
 record Success<T,A>(source: List<T>, begin: Cursor<T>(source)) {
     value: A,
     end: Cursor<T>(source),
     forward: nat::Le(begin.offset, end.offset),
 }
+
 inductive Retry { Retryable, Committed }
+
 record Failure<T>(source: List<T>) {
     at: Cursor<T>(source),
     expected: List<Nat>,
     retry: Retry,
 }
+
 record ErrorView { offset: Nat, expected: List<Nat>, retry: Retry }
+
 fn Reply<T,A>(source: List<T>, begin: Cursor<T>(source)) -> Type {
     Result<Success<T,A>(source,begin),Failure<T>(source)>
 }
+
 fn error_view<T>(source: List<T>, error: Failure<T>(source)) -> ErrorView {
     ErrorView(error.at.offset,error.expected,error.retry)
 }
-fn committed<T>(source: List<T>, error: Failure<T>(source)) -> Failure<T>(source) {
-    Failure(error.at,error.expected,Committed)
-}
-fn commit_offsets<T>(source: List<T>, begin,middle: Nat, error: Failure<T>(source)) -> Failure<T>(source) {
-    match nat::le_dec(Succ(begin),middle) {
-        Inl(moved) => committed(source,error),
-        Inr(stayed) => error,
-    }
-}
-fn commit_after<T>(source: List<T>, begin,middle: Cursor<T>(source), error: Failure<T>(source)) -> Failure<T>(source) {
-    commit_offsets(source,begin.offset,middle.offset,error)
-}
+
 record Parser<T,A> {
     run: (source: List<T>) -> (begin: Cursor<T>(source)) -> Reply<T,A>(source,begin),
 }
-fn pure_at<T,A>(source: List<T>, begin: Cursor<T>(source), value: A) -> Reply<T,A>(source,begin) {
-    Ok(Success(value,begin,nat::le_refl(begin.offset)))
-}
-fn pure<T,A>(value: A) -> Parser<T,A> {
-    Parser(λ source begin => pure_at(source,begin,value))
-}
-fn map_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), f: A -> B) -> Reply<T,B>(source,begin) {
-    match r {
-        Err(e) => Err(e),
-        Ok(s) => Ok(Success(f(s.value),s.end,s.forward)),
-    }
-}
-fn map<T,A,B>(self p: Parser<T,A>, f: A -> B) -> Parser<T,B> {
-    Parser(λ source begin => map_at(source,begin,p.run(source,begin),f))
-}
-fn rebase<T,A>(source: List<T>, begin: Cursor<T>(source), middle: Cursor<T>(source),
-    forward: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle)) -> Reply<T,A>(source,begin) {
-    match r {
-        Err(e) => Err(commit_after(source,begin,middle,e)),
-        Ok(s) => Ok(Success(s.value,s.end,nat::le_trans(begin.offset,middle.offset,s.end.offset,forward,s.forward))),
-    }
-}
-fn bind_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin),
-    next: (value: A) -> (middle: Cursor<T>(source)) -> nat::Le(begin.offset,middle.offset) -> Reply<T,B>(source,middle)) -> Reply<T,B>(source,begin) {
-    match r {
-        Err(e) => Err(e),
-        Ok(s) => rebase(source,begin,s.end,s.forward,next(s.value,s.end,s.forward)),
-    }
-}
-fn bind<T,A,B>(self p: Parser<T,A>, next: A -> Parser<T,B>) -> Parser<T,B> {
-    Parser(λ source begin => bind_at(source,begin,p.run(source,begin),
-        λ value middle forward => next(value).run(source,middle)))
-}
-record Dep<A>(B: A -> Type) { first: A, second: B(first) }
-fn bindD<T,A>(B: A -> Type, p: Parser<T,A>, next: (a: A) -> Parser<T,B(a)>) -> Parser<T,Dep<A>(B)> {
-    bind(p, λ (a: A) => map(next(a), λ (b: B(a)) => Dep(a,b)))
-}
+
 // Equality observes the result and position, not the forward witness.
 fn observe<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Result<Pair<A,Nat>,ErrorView> {
     match r { Err(e) => Err(error_view(source,e)), Ok(s) => Ok(Pair(s.value,s.end.offset)) }
 }
-theorem map_identity<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    observe(source,begin,map_at(source,begin,r,λ (a: A) => a)) = observe(source,begin,r) {
-    match r { Err(e) => refl, Ok(s) => refl }
-}
-theorem map_composition<T,A,B,C>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), f: A -> B, g: B -> C):
-    observe(source,begin,map_at(source,begin,map_at(source,begin,r,f),g)) =
-    observe(source,begin,map_at(source,begin,r,λ (a: A) => g(f(a)))) {
-    match r { Err(e) => refl, Ok(s) => refl }
-}
+
 // The initial cursor's remainder is the original source, including open lists.
 theorem initial_rest<T>(source: List<T>): rest(source,start(source)) = source {
     match source { Nil => refl, Cons(h,t) => refl }
 }
+
 // A separately checked cache; cached stepping will be compared in the next probe.
 record CachedCursor<T>(source: List<T>) {
     cursor: Cursor<T>(source),
     suffix: List<T>,
     coherent: suffix = rest(source,cursor),
 }
+
 fn cache<T>(source: List<T>, c: Cursor<T>(source)) -> CachedCursor<T>(source) {
     CachedCursor(c,rest(source,c),refl)
 }
+
 theorem cached_rest<T>(source: List<T>, c: CachedCursor<T>(source)):
     c.suffix = rest(source,c.cursor) { c.coherent }
 
@@ -129,6 +85,7 @@ theorem drop_length_le<T>(source: List<T>): (n: Nat) -> nat::Le(list_len(drop(so
         },
     }
 }
+
 theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(n,m) -> nat::Le(m,list_len(source)) ->
     nat::Lt(list_len(drop(source,m)),list_len(drop(source,n))) {
     match source {
@@ -142,353 +99,15 @@ theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(
         },
     }
 }
-// The recursive capability is only callable at a strictly later cursor.
-// Its proof is translated once to the measure used by the well-founded lowering.
-fn guarded<T,A>(source: List<T>,
-    body: (begin: Cursor<T>(source)) ->
-        ((later: Cursor<T>(source)) -> nat::Lt(begin.offset,later.offset) -> Reply<T,A>(source,later)) -> Reply<T,A>(source,begin),
-    begin: Cursor<T>(source)) -> Reply<T,A>(source,begin) decreases list_len(rest(source,begin)) {
-    body(begin, λ (later: Cursor<T>(source)) (advance: nat::Lt(begin.offset,later.offset)) => {
-        let small = drop_length_strict(source,begin.offset,later.offset,advance,later.within);
-        guarded(source,body,later) decreasing recur
-    })
-    on decreasing recur := small;
-}
-
 
 fn advance<T>(source: List<T>, c: Cursor<T>(source), room: nat::Lt(c.offset,list_len(source))) -> Cursor<T>(source) {
     Cursor(refl,Succ(c.offset),room)
 }
-fn fail_at<T,A>(source: List<T>, begin: Cursor<T>(source), expected: List<Nat>) -> Reply<T,A>(source,begin) {
-    Err(Failure(begin,expected,Retryable))
-}
-fn fail<T,A>(expected: Nat) -> Parser<T,A> {
-    Parser(λ source begin => fail_at(source,begin,[expected]))
-}
-fn recognize_at<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,A>(source,begin) {
-    match nat::le_dec(Succ(begin.offset),list_len(source)) {
-        Inl(room) => match rest(source,begin) {
-            Nil => fail_at(source,begin,[expected]),
-            Cons(head,tail) => match pick(head) {
-                None => fail_at(source,begin,[expected]),
-                Some(value) => Ok(Success(value,advance(source,begin,room),
-                    nat::le_succ_r(begin.offset,begin.offset,nat::le_refl(begin.offset)))),
-            },
-        },
-        Inr(done) => fail_at(source,begin,[expected]),
-    }
-}
-fn recognize<T,A>(pick: T -> Option<A>, expected: Nat) -> Parser<T,A> {
-    Parser(λ source begin => recognize_at(pick,expected,source,begin))
-}
-fn token<T>(expected: Nat) -> Parser<T,T> { recognize(λ (t: T) => Some(t),expected) }
-fn eof_at<T>(expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,Nat>(source,begin) {
-    match rest(source,begin) { Nil => pure_at(source,begin,0), Cons(h,t) => fail_at(source,begin,[expected]) }
-}
-fn eof<T>(expected: Nat) -> Parser<T,Nat> { Parser(λ source begin => eof_at(expected,source,begin)) }
-fn then<T,A,B>(self p: Parser<T,A>, q: Parser<T,B>) -> Parser<T,B> { bind(p,λ (a: A) => q) }
-fn before<T,A,B>(self p: Parser<T,A>, q: Parser<T,B>) -> Parser<T,A> { bind(p,λ (a: A) => map(q,λ (b: B) => a)) }
-fn complete<T,A>(self p: Parser<T,A>, expected: Nat) -> Parser<T,A> { before(p,eof<T>(expected)) }
+
 fn run<T,A>(p: Parser<T,A>, source: List<T>) -> Result<A,ErrorView> {
     match p.run(source,start(source)) { Err(e) => Err(error_view(source,e)), Ok(s) => Ok(s.value) }
 }
-fn attempt_at<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
-    match r { Err(e) => Err(Failure(e.at,e.expected,Retryable)), Ok(s) => Ok(s) }
-}
-fn attempt<T,A>(self p: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => attempt_at(source,begin,p.run(source,begin))) }
-fn commit_at<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
-    match r { Err(e) => Err(committed(source,e)), Ok(s) => Ok(s) }
-}
-fn commit<T,A>(self p: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => commit_at(source,begin,p.run(source,begin))) }
-fn insert_expected(code: Nat, expected: List<Nat>) -> List<Nat> {
-    match expected { Nil => [code], Cons(head,tail) => match nat::eq_dec(code,head) {
-        Inl(same) => expected, Inr(different) => Cons(head,insert_expected(code,tail)),
-    } }
-}
-fn merge_expected(left,right: List<Nat>) -> List<Nat> {
-    match right { Nil => left, Cons(code,tail) => merge_expected(insert_expected(code,left),tail) }
-}
-// On ties, expected identifiers retain deterministic left-to-right order.
-fn merge_error<T>(source: List<T>, left,right: Failure<T>(source)) -> Failure<T>(source) {
-    match nat::le_dec(Succ(left.at.offset),right.at.offset) {
-        Inl(farther) => right,
-        Inr(no) => match nat::le_dec(Succ(right.at.offset),left.at.offset) {
-            Inl(farther) => Failure(left.at,left.expected,right.retry),
-            Inr(tied) => Failure(right.at,merge_expected(left.expected,right.expected),right.retry),
-        },
-    }
-}
-fn choice_at<T,A>(source: List<T>, begin: Cursor<T>(source), left: Reply<T,A>(source,begin), right: Parser<T,A>) -> Reply<T,A>(source,begin) {
-    match left {
-        Ok(s) => Ok(s),
-        Err(e) => match e.retry {
-            Committed => Err(e),
-            Retryable => match right.run(source,begin) { Ok(s) => Ok(s), Err(other) => Err(merge_error(source,e,other)) },
-        },
-    }
-}
-fn choice<T,A>(self left: Parser<T,A>, right: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => choice_at(source,begin,left.run(source,begin),right)) }
-fn optional<T,A>(self p: Parser<T,A>) -> Parser<T,Option<A>> { choice(map(p,λ (a: A) => Some(a)),pure<T,Option<A>>(None)) }
-fn lookahead_at<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
-    match r { Err(e) => Err(e), Ok(s) => pure_at(source,begin,s.value) }
-}
-fn lookahead<T,A>(self p: Parser<T,A>) -> Parser<T,A> { Parser(λ source begin => lookahead_at(source,begin,p.run(source,begin))) }
 
-// Proofs are indexed by the actual parser operation, not unchecked flags.
-fn Bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)) -> Type {
-    match r { Err(e) => True, Ok(s) => nat::Le(begin.offset + amount,s.end.offset) }
-}
-class Consumes<T,A>(p: Parser<T,A>, amount: Nat) {
-    bound: (source: List<T>) -> (begin: Cursor<T>(source)) -> Bound(source,begin,amount,p.run(source,begin)),
-}
-theorem recognize_bound<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
-    Bound(source,begin,1,recognize_at(pick,expected,source,begin)) {
-    match nat::le_dec(Succ(begin.offset),list_len(source)) {
-        Inl(room) => match rest(source,begin) {
-            Nil => trivial,
-            Cons(head,tail) => match pick(head) { None => trivial, Some(value) => nat::le_refl(Succ(begin.offset)) },
-        },
-        Inr(done) => trivial,
-    }
-}
-fn recognize_consumes<T,A>(pick: T -> Option<A>, expected: Nat) -> Consumes<T,A>(recognize(pick,expected),1) {
-    Consumes(λ source begin => recognize_bound(pick,expected,source,begin))
-}
-fn token_consumes<T>(expected: Nat) -> Consumes<T,T>(token<T>(expected),1) {
-    recognize_consumes(λ (t: T) => Some(t),expected)
-}
-theorem bound_on_success<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin),
-    bound: Bound(source,begin,amount,r), s: Success<T,A>(source,begin), shape: r = Ok(s)):
-    nat::Le(begin.offset + amount,s.end.offset) {
-    j(shape,λ answer q => Bound(source,begin,amount,answer),bound)
-}
-theorem map_bound<T,A,B>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin), f: A -> B):
-    Bound(source,begin,amount,r) -> Bound(source,begin,amount,map_at(source,begin,r,f)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
-}
-fn map_consumes<T,A,B>(p: Parser<T,A>, f: A -> B, amount: Nat, certificate: Consumes<T,A>(p,amount)) -> Consumes<T,B>(map(p,f),amount) {
-    Consumes(λ source begin => map_bound(source,begin,amount,p.run(source,begin),f,certificate.bound(source,begin)))
-}
-theorem attempt_bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)):
-    Bound(source,begin,amount,r) -> Bound(source,begin,amount,attempt_at(source,begin,r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
-}
-fn attempt_consumes<T,A>(p: Parser<T,A>, amount: Nat, certificate: Consumes<T,A>(p,amount)) -> Consumes<T,A>(attempt(p),amount) {
-    Consumes(λ source begin => attempt_bound(source,begin,amount,p.run(source,begin),certificate.bound(source,begin)))
-}
-fn many_at<T,A>(p: Parser<T,A>, progress: Consumes<T,A>(p,1), source: List<T>, begin: Cursor<T>(source)) -> Reply<T,List<A>>(source,begin)
-    decreases list_len(rest(source,begin)) {
-    match shape : p.run(source,begin) {
-        Err(e) => match e.retry { Retryable => pure_at<T,List<A>>(source,begin,[]), Committed => Err(e) },
-        Ok(s) => {
-            let advance = bound_on_success(source,begin,1,p.run(source,begin),progress.bound(source,begin),s,shape);
-            let small = drop_length_strict(source,begin.offset,s.end.offset,advance,s.end.within);
-            let more = many_at(p,progress,source,s.end) decreasing tail;
-            rebase(source,begin,s.end,s.forward,map_at(source,s.end,more,λ (xs: List<A>) => Cons(s.value,xs)))
-        },
-    }
-    on decreasing tail := small;
-}
-fn many<T,A>(self p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Parser<T,List<A>> {
-    Parser(λ source begin => many_at(p,progress,source,begin))
-}
-fn some<T,A>(self p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Parser<T,List<A>> {
-    bind(p,λ (a: A) => map(many(p,progress),λ (xs: List<A>) => Cons(a,xs)))
-}
-// A finite repetition has a checked length, and needs no progress premise.
-record Counted<A>(count: Nat) { values: List<A>, length: list_len(values) = count }
-fn repeat_at<T,A>(count: Nat, p: Parser<T,A>, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,Counted<A>(count)>(source,begin) {
-    match count {
-        Zero => pure_at<T,Counted<A>(0)>(source,begin,Counted([],refl)),
-        Succ(n) => bind_at<T,A,Counted<A>(Succ(n))>(source,begin,p.run(source,begin),λ value middle forward =>
-            map_at<T,Counted<A>(n),Counted<A>(Succ(n))>(source,middle,repeat_at(n,p,source,middle),λ (tail: Counted<A>(n)) =>
-                Counted(Cons(value,tail.values),cong_succ(tail.length)))),
-    }
-}
-fn repeatN<T,A>(count: Nat, p: Parser<T,A>) -> Parser<T,Counted<A>(count)> { Parser(λ source begin => repeat_at(count,p,source,begin)) }
-
-// Library-owned composition of prefix movement and a strict next step.
-theorem progress_after<T>(source: List<T>, begin,middle,end: Cursor<T>(source),
-    prefix: nat::Le(begin.offset,middle.offset), step: nat::Lt(middle.offset,end.offset)):
-    nat::Lt(list_len(rest(source,end)),list_len(rest(source,begin))) {
-    let moved: nat::Lt(begin.offset,end.offset) = nat::le_trans(Succ(begin.offset),Succ(middle.offset),end.offset,prefix,step);
-    drop_length_strict(source,begin.offset,end.offset,moved,end.within)
-}
-// Optional right-recursive grammar tail. The continuation gets exactly the
-// decrease proof owed by a recursive call, without exposing rebasing arithmetic.
-fn extend_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), left: Success<T,A>(source,begin),
-    op: Parser<T,B>, progress: Consumes<T,B>(op,1),
-    next: (value: B) -> (end: Cursor<T>(source)) -> nat::Lt(list_len(rest(source,end)),list_len(rest(source,begin))) -> Reply<T,A>(source,end)) -> Reply<T,A>(source,begin) {
-    match shape : op.run(source,left.end) {
-        Err(e) => match e.retry { Retryable => Ok(left), Committed => Err(e) },
-        Ok(s) => {
-            let step = bound_on_success(source,left.end,1,op.run(source,left.end),progress.bound(source,left.end),s,shape);
-            let small = progress_after(source,begin,left.end,s.end,left.forward,step);
-            rebase(source,begin,left.end,left.forward,
-                rebase(source,left.end,s.end,s.forward,next(s.value,s.end,small)))
-        },
-    }
-}
-// A consuming prefix followed by a recursive parser, used for parentheses.
-fn after_at<T,A,B>(source: List<T>, begin: Cursor<T>(source), p: Parser<T,A>, progress: Consumes<T,A>(p,1),
-    next: (value: A) -> (end: Cursor<T>(source)) -> nat::Lt(list_len(rest(source,end)),list_len(rest(source,begin))) -> Reply<T,B>(source,end)) -> Reply<T,B>(source,begin) {
-    match shape : p.run(source,begin) {
-        Err(e) => Err(e),
-        Ok(s) => {
-            let step = bound_on_success(source,begin,1,p.run(source,begin),progress.bound(source,begin),s,shape);
-            let small = drop_length_strict(source,begin.offset,s.end.offset,step,s.end.within);
-            rebase(source,begin,s.end,s.forward,next(s.value,s.end,small))
-        },
-    }
-}
-// Restore success observations; failures retain the specified commitment.
-theorem attempt_idempotent<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    observe(source,begin,attempt_at(source,begin,attempt_at(source,begin,r))) = observe(source,begin,attempt_at(source,begin,r)) {
-    match r { Err(e) => refl, Ok(s) => refl }
-}
-theorem lookahead_zero<T,A>(source: List<T>, begin: Cursor<T>(source), s: Success<T,A>(source,begin)):
-    observe(source,begin,lookahead_at<T,A>(source,begin,Ok(s))) = Ok<Pair<A,Nat>,ErrorView>(Pair(s.value,begin.offset)) { refl }
-// Certificates for arbitrary source-span postconditions. False/unsupported
-// refinements must be proved, not inferred from a parser's name.
-fn Post<T,A>(source: List<T>, begin: Cursor<T>(source),
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Reply<T,A>(source,begin)) -> Type {
-    match r { Err(e) => True, Ok(s) => relation(source,begin,s.end,s.value) }
-}
-class Sound<T,A>(p: Parser<T,A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
-    law: (source: List<T>) -> (begin: Cursor<T>(source)) -> Post(source,begin,relation,p.run(source,begin)),
-}
-theorem map_post<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), f: A -> B,
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    transform: (end: Cursor<T>(source)) -> (a: A) -> before(source,begin,end,a) -> after(source,begin,end,f(a))):
-    Post(source,begin,before,r) -> Post(source,begin,after,map_at(source,begin,r,f)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => transform(s.end,s.value,h) }
-}
-fn map_sound<T,A,B>(p: Parser<T,A>, f: A -> B,
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    proof: Sound<T,A>(p,before),
-    transform: (source: List<T>) -> (begin,end: Cursor<T>(source)) -> (a: A) -> before(source,begin,end,a) -> after(source,begin,end,f(a))) -> Sound<T,B>(map(p,f),after) {
-    Sound(λ source begin => map_post(source,begin,p.run(source,begin),f,before,after,transform(source,begin),proof.law(source,begin)))
-}
-
-fn or_at<T,A>(source: List<T>, begin: Cursor<T>(source), left: Reply<T,A>(source,begin),
-    right: Nat -> Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
-    match left {
-        Ok(s) => Ok(s),
-        Err(e) => match e.retry {
-            Committed => Err(e),
-            Retryable => match right(0) { Ok(s) => Ok(s), Err(other) => Err(merge_error(source,e,other)) },
-        },
-    }
-}
-
-fn PureSpec<T,A>(expected: A, source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
-    And<end.offset = begin.offset, value = expected>
-}
-fn pure_sound<T,A>(value: A) -> Sound<T,A>(pure<T,A>(value),PureSpec<T,A>(value)) {
-    Sound(λ source begin => And(refl,refl))
-}
-fn Selects<T,A>(pick: T -> Option<A>, input: List<T>, value: A) -> Type {
-    match input { Nil => False, Cons(head,tail) => pick(head) = Some(value) }
-}
-fn Recognized<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
-    And<end.offset = Succ(begin.offset), Selects(pick,rest(source,begin),value)>
-}
-theorem recognize_post<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
-    Post(source,begin,Recognized<T,A>(pick),recognize_at(pick,expected,source,begin)) {
-    match nat::le_dec(Succ(begin.offset),list_len(source)) {
-        Inl(room) => match input_shape : rest(source,begin) {
-            Nil => trivial,
-            Cons(head,tail) => match picked : pick(head) { None => trivial, Some(value) => And(refl,
-                j(sym(input_shape),λ input q => Selects(pick,input,value),picked)) },
-        },
-        Inr(done) => trivial,
-    }
-}
-fn recognize_sound<T,A>(pick: T -> Option<A>, expected: Nat) -> Sound<T,A>(recognize(pick,expected),Recognized<T,A>(pick)) {
-    Sound(λ source begin => recognize_post(pick,expected,source,begin))
-}
-theorem post_on_success<T,A>(source: List<T>, begin: Cursor<T>(source),
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Reply<T,A>(source,begin), proof: Post(source,begin,relation,r), s: Success<T,A>(source,begin), shape: r = Ok(s)):
-    relation(source,begin,s.end,s.value) { j(shape,λ answer q => Post(source,begin,relation,answer),proof) }
-theorem rebase_post<T,A>(source: List<T>, begin,middle: Cursor<T>(source), forward: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle),
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    transform: (end: Cursor<T>(source)) -> (a: A) -> before(source,middle,end,a) -> after(source,begin,end,a)):
-    Post(source,middle,before,r) -> Post(source,begin,after,rebase(source,begin,middle,forward,r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => transform(s.end,s.value,h) }
-}
-theorem bind_post<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), next: A -> Parser<T,B>,
-    first: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    second: A -> (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    final: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    next_law: (a: A) -> (middle: Cursor<T>(source)) -> Post(source,middle,second(a),next(a).run(source,middle)),
-    compose: (middle,end: Cursor<T>(source)) -> (a: A) -> (b: B) -> first(source,begin,middle,a) -> second(a,source,middle,end,b) -> final(source,begin,end,b)):
-    Post(source,begin,first,r) -> Post(source,begin,final,bind_at<T,A,B>(source,begin,r,λ a middle forward => next(a).run(source,middle))) {
-    match r {
-        Err(e) => λ h => trivial,
-        Ok(s) => λ h => rebase_post(source,begin,s.end,s.forward,next(s.value).run(source,s.end),second(s.value),final,
-            λ end b law => compose(s.end,end,s.value,b,h,law),next_law(s.value,s.end)),
-    }
-}
-fn bind_sound<T,A,B>(p: Parser<T,A>, next: A -> Parser<T,B>,
-    first: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    second: A -> (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    final: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    first_law: Sound<T,A>(p,first), next_law: (a: A) -> Sound<T,B>(next(a),second(a)),
-    compose: (source: List<T>) -> (begin,middle,end: Cursor<T>(source)) -> (a: A) -> (b: B) -> first(source,begin,middle,a) -> second(a,source,middle,end,b) -> final(source,begin,end,b)) -> Sound<T,B>(bind(p,next),final) {
-    Sound(λ source begin => bind_post(source,begin,p.run(source,begin),next,first,second,final,
-        λ a middle => next_law(a).law(source,middle),compose(source,begin),first_law.law(source,begin)))
-}
-
-// Quantitative progress composes by addition; weakening needs an explicit bound.
-theorem add_progress(start,middle,end,a,b: Nat, first: nat::Le(start + a,middle), second: nat::Le(middle + b,end)):
-    nat::Le(start + (a + b),end) {
-    j(nat::add_assoc(start,a,b),λ n q => nat::Le(n,end),
-        nat::le_trans((start + a) + b,middle + b,end,nat::add_le_mono_r(b,start + a,middle,first),second))
-}
-theorem rebase_bound<T,A>(source: List<T>, begin,middle: Cursor<T>(source), forward: nat::Le(begin.offset,middle.offset), a,b: Nat,
-    first: nat::Le(begin.offset + a,middle.offset), r: Reply<T,A>(source,middle)):
-    Bound(source,middle,b,r) -> Bound(source,begin,a + b,rebase(source,begin,middle,forward,r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => add_progress(begin.offset,middle.offset,s.end.offset,a,b,first,h) }
-}
-theorem bind_bound<T,A,B>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), next: A -> Parser<T,B>, a,b: Nat,
-    later: (value: A) -> (middle: Cursor<T>(source)) -> Bound(source,middle,b,next(value).run(source,middle))):
-    Bound(source,begin,a,r) -> Bound(source,begin,a + b,bind_at<T,A,B>(source,begin,r,λ value middle forward => next(value).run(source,middle))) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => rebase_bound(source,begin,s.end,s.forward,a,b,h,next(s.value).run(source,s.end),later(s.value,s.end)) }
-}
-fn bind_consumes<T,A,B>(p: Parser<T,A>, next: A -> Parser<T,B>, a,b: Nat, first: Consumes<T,A>(p,a), later: (value: A) -> Consumes<T,B>(next(value),b)) -> Consumes<T,B>(bind(p,next),a + b) {
-    Consumes(λ source begin => bind_bound(source,begin,p.run(source,begin),next,a,b,
-        λ value middle => later(value).bound(source,middle),first.bound(source,begin)))
-}
-theorem weaken_bound<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), small,big: Nat, order: nat::Le(small,big)):
-    Bound(source,begin,big,r) -> Bound(source,begin,small,r) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h =>
-        nat::le_trans(begin.offset + small,begin.offset + big,s.end.offset,nat::add_le_mono_l(begin.offset,small,big,order),h) }
-}
-fn weaken_consumes<T,A>(p: Parser<T,A>, small,big: Nat, order: nat::Le(small,big), proof: Consumes<T,A>(p,big)) -> Consumes<T,A>(p,small) {
-    Consumes(λ source begin => weaken_bound(source,begin,p.run(source,begin),small,big,order,proof.bound(source,begin)))
-}
-// Choice preserves any lower bound shared by both alternatives.
-theorem choice_bound<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), right: Parser<T,A>, amount: Nat,
-    right_bound: Bound(source,begin,amount,right.run(source,begin))):
-    Bound(source,begin,amount,r) -> Bound(source,begin,amount,choice_at(source,begin,r,right)) {
-    match r {
-        Ok(s) => λ h => h,
-        Err(e) => λ h => match e.retry { Committed => trivial,
-            Retryable => match shape : right.run(source,begin) {
-                Err(other) => trivial,
-                Ok(s) => bound_on_success(source,begin,amount,right.run(source,begin),right_bound,s,shape),
-            },
-        },
-    }
-}
-fn choice_consumes<T,A>(left,right: Parser<T,A>, amount: Nat, first: Consumes<T,A>(left,amount), second: Consumes<T,A>(right,amount)) -> Consumes<T,A>(choice(left,right),amount) {
-    Consumes(λ source begin => choice_bound(source,begin,left.run(source,begin),right,amount,second.bound(source,begin),first.bound(source,begin)))
-}
 // Two consecutive suffix operations equal one operation at the summed offset.
 theorem drop_add<T>(source: List<T>): (first: Nat) -> (second: Nat) -> drop(source,first + second) = drop(drop(source,first),second) {
     match source {
@@ -498,244 +117,4 @@ theorem drop_add<T>(source: List<T>): (first: Nat) -> (second: Nat) -> drop(sour
             Succ(n) => λ second => j(sym(nat::add_succ_left(n,second)),λ total q => drop(Cons(head,tail),total) = drop(drop(tail,n),second),drop_add(tail,n,second)),
         },
     }
-}
-
-theorem commit_same<T>(source: List<T>, offset: Nat, error: Failure<T>(source)):
-    commit_offsets(source,offset,offset,error) = error {
-    match nat::le_dec(Succ(offset),offset) { Inl(impossible) => false_elim(nat::lt_irrefl(offset,impossible)), Inr(no) => refl }
-}
-theorem commit_later<T>(source: List<T>, a,b: Nat, error: Failure<T>(source), later: nat::Lt(a,b)):
-    commit_offsets(source,a,b,error) = committed(source,error) {
-    match nat::le_dec(Succ(a),b) { Inl(yes) => refl, Inr(no) => false_elim(no(later)) }
-}
-theorem commit_not_later<T>(source: List<T>, a,b: Nat, error: Failure<T>(source), stayed: nat::Lt(a,b) -> False):
-    commit_offsets(source,a,b,error) = error {
-    match nat::le_dec(Succ(a),b) { Inl(yes) => false_elim(stayed(yes)), Inr(no) => refl }
-}
-theorem commit_absorbs<T>(source: List<T>, a,b: Nat, error: Failure<T>(source)):
-    committed(source,commit_offsets(source,a,b,error)) = committed(source,error) {
-    match nat::le_dec(Succ(a),b) {
-        Inl(yes) => j(commit_later(source,a,b,error,yes),λ changed q => committed(source,commit_offsets(source,a,b,error)) = committed(source,changed),refl),
-        Inr(no) => j(commit_not_later(source,a,b,error,no),λ changed q => committed(source,commit_offsets(source,a,b,error)) = committed(source,changed),refl),
-    }
-}
-theorem no_total_progress(a,b,c: Nat, first: nat::Lt(a,b) -> False, second: nat::Lt(b,c) -> False, total: nat::Lt(a,c)): False {
-    nat::lt_irrefl(a,nat::le_trans(Succ(a),c,a,total,
-        nat::le_trans(c,b,a,nat::lt_of_not_le(c,Succ(b),second),nat::lt_of_not_le(b,Succ(a),first))))
-}
-theorem commit_chain<T>(source: List<T>, a,b,c: Nat, ab: nat::Le(a,b), bc: nat::Le(b,c), error: Failure<T>(source)):
-    commit_offsets(source,a,b,commit_offsets(source,b,c,error)) = commit_offsets(source,a,c,error) {
-    or_elim(nat::le_dec(Succ(a),b),
-        λ first => trans(commit_later(source,a,b,commit_offsets(source,b,c,error),first),
-            trans(commit_absorbs(source,b,c,error),sym(commit_later(source,a,c,error,nat::le_trans(Succ(a),b,c,first,bc))))),
-        λ first => or_elim(nat::le_dec(Succ(b),c),
-            λ second => trans(commit_not_later(source,a,b,commit_offsets(source,b,c,error),first),
-                trans(commit_later(source,b,c,error,second),sym(commit_later(source,a,c,error,nat::le_trans(Succ(a),Succ(b),c,ab,second))))),
-            λ second => trans(commit_not_later(source,a,b,commit_offsets(source,b,c,error),first),
-                trans(commit_not_later(source,b,c,error,second),sym(commit_not_later(source,a,c,error,no_total_progress(a,b,c,first,second)))))))
-}
-theorem rebase_same<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    observe<T,A>(source,begin,rebase(source,begin,begin,nat::le_refl(begin.offset),r)) = observe<T,A>(source,begin,r) {
-    match r { Err(e) => j(commit_same(source,begin.offset,e),λ error q =>
-        observe<T,A>(source,begin,Err<Success<T,A>(source,begin),Failure<T>(source)>(commit_after(source,begin,begin,e))) =
-        observe<T,A>(source,begin,Err<Success<T,A>(source,begin),Failure<T>(source)>(error)),refl), Ok(s) => refl }
-}
-theorem rebase_associativity<T,A>(source: List<T>, a,b,c: Cursor<T>(source), ab: nat::Le(a.offset,b.offset), bc: nat::Le(b.offset,c.offset), r: Reply<T,A>(source,c)):
-    observe<T,A>(source,a,rebase(source,a,b,ab,rebase(source,b,c,bc,r))) =
-    observe<T,A>(source,a,rebase(source,a,c,nat::le_trans(a.offset,b.offset,c.offset,ab,bc),r)) {
-    match r {
-        Err(e) => j(commit_chain(source,a.offset,b.offset,c.offset,ab,bc,e),λ error q =>
-            observe<T,A>(source,a,Err<Success<T,A>(source,a),Failure<T>(source)>(commit_after(source,a,b,commit_after(source,b,c,e)))) =
-            observe<T,A>(source,a,Err<Success<T,A>(source,a),Failure<T>(source)>(error)),refl),
-        Ok(s) => refl,
-    }
-}
-theorem bind_left_unit<T,A,B>(source: List<T>, begin: Cursor<T>(source), value: A, next: A -> Parser<T,B>):
-    observe(source,begin,bind_at<T,A,B>(source,begin,pure_at(source,begin,value),λ a middle forward => next(a).run(source,middle))) =
-    observe(source,begin,next(value).run(source,begin)) {
-    rebase_same(source,begin,next(value).run(source,begin))
-}
-theorem bind_right_unit<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    observe(source,begin,bind_at<T,A,A>(source,begin,r,λ value middle forward => pure_at(source,middle,value))) = observe(source,begin,r) {
-    match r { Err(e) => refl, Ok(s) => refl }
-}
-
-theorem bind_rebase<T,A,B>(source: List<T>, begin,middle: Cursor<T>(source), move: nat::Le(begin.offset,middle.offset), r: Reply<T,A>(source,middle), next: A -> Parser<T,B>):
-    observe(source,begin,bind_at<T,A,B>(source,begin,rebase(source,begin,middle,move,r),λ a end forward => next(a).run(source,end))) =
-    observe(source,begin,rebase(source,begin,middle,move,bind_at<T,A,B>(source,middle,r,λ a end forward => next(a).run(source,end)))) {
-    match r {
-        Err(e) => refl,
-        Ok(s) => sym(rebase_associativity(source,begin,middle,s.end,move,s.forward,next(s.value).run(source,s.end))),
-    }
-}
-theorem bind_associativity<T,A,B,C>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), next: A -> Parser<T,B>, last: B -> Parser<T,C>):
-    observe(source,begin,bind_at<T,B,C>(source,begin,
-        bind_at<T,A,B>(source,begin,r,λ a middle forward => next(a).run(source,middle)),
-        λ b middle forward => last(b).run(source,middle))) =
-    observe(source,begin,bind_at<T,A,C>(source,begin,r,λ a middle forward =>
-        bind_at<T,B,C>(source,middle,next(a).run(source,middle),λ b end step => last(b).run(source,end)))) {
-    match r {
-        Err(e) => refl,
-        Ok(a) => bind_rebase(source,begin,a.end,a.forward,next(a.value).run(source,a.end),last),
-    }
-}
-
-record Certified<T,A>(source: List<T>, begin: Cursor<T>(source), relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
-    value: A,
-    end: Cursor<T>(source),
-    forward: nat::Le(begin.offset,end.offset),
-    evidence: relation(source,begin,end,value),
-}
-fn certify_at<T,A>(p: Parser<T,A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    proof: Sound<T,A>(p,relation), source: List<T>, begin: Cursor<T>(source)) -> Result<Certified<T,A>(source,begin,relation),Failure<T>(source)> {
-    match shape : p.run(source,begin) {
-        Err(e) => Err(e),
-        Ok(s) => Ok(Certified(s.value,s.end,s.forward,post_on_success(source,begin,relation,p.run(source,begin),proof.law(source,begin),s,shape))),
-    }
-}
-theorem choice_post<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), right: Parser<T,A>,
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    right_law: Post(source,begin,relation,right.run(source,begin))):
-    Post(source,begin,relation,r) -> Post(source,begin,relation,choice_at(source,begin,r,right)) {
-    match r { Ok(s) => λ h => h, Err(e) => λ h => match e.retry {
-        Committed => trivial,
-        Retryable => match shape : right.run(source,begin) { Err(other) => trivial,
-            Ok(s) => post_on_success(source,begin,relation,right.run(source,begin),right_law,s,shape),
-        },
-    } }
-}
-fn choice_sound<T,A>(left,right: Parser<T,A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    first: Sound<T,A>(left,relation), second: Sound<T,A>(right,relation)) -> Sound<T,A>(choice(left,right),relation) {
-    Sound(λ source begin => choice_post(source,begin,left.run(source,begin),right,relation,second.law(source,begin),first.law(source,begin)))
-}
-
-theorem zero_bound<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    Bound(source,begin,0,r) { match r { Err(e) => trivial, Ok(s) => s.forward } }
-fn consumes_zero<T,A>(p: Parser<T,A>) -> Consumes<T,A>(p,0) {
-    Consumes(λ source begin => zero_bound(source,begin,p.run(source,begin)))
-}
-fn fail_consumes<T,A>(expected,amount: Nat) -> Consumes<T,A>(fail<T,A>(expected),amount) {
-    Consumes(λ source begin => trivial)
-}
-fn some_consumes<T,A>(p: Parser<T,A>, progress: Consumes<T,A>(p,1)) -> Consumes<T,List<A>>(some(p,progress),1) {
-    bind_consumes(p,λ (a: A) => map(many(p,progress),λ (xs: List<A>) => Cons(a,xs)),1,0,progress,
-        λ (a: A) => consumes_zero(map(many(p,progress),λ (xs: List<A>) => Cons(a,xs))))
-}
-theorem commit_bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)):
-    Bound(source,begin,amount,r) -> Bound(source,begin,amount,commit_at(source,begin,r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
-}
-fn commit_consumes<T,A>(p: Parser<T,A>, amount: Nat, proof: Consumes<T,A>(p,amount)) -> Consumes<T,A>(commit(p),amount) {
-    Consumes(λ source begin => commit_bound(source,begin,amount,p.run(source,begin),proof.bound(source,begin)))
-}
-
-// Proof-carrying replies let a recursive implementation establish its
-// postcondition as it parses. Forgetting evidence recovers an ordinary reply.
-fn forget_at<T,A>(source: List<T>, begin: Cursor<T>(source),
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Result<Certified<T,A>(source,begin,relation),Failure<T>(source)>) -> Reply<T,A>(source,begin) {
-    match r { Err(e) => Err(e), Ok(c) => Ok(Success(c.value,c.end,c.forward)) }
-}
-theorem forget_post<T,A>(source: List<T>, begin: Cursor<T>(source),
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Result<Certified<T,A>(source,begin,relation),Failure<T>(source)>):
-    Post(source,begin,relation,forget_at(source,begin,relation,r)) {
-    match r { Err(e) => trivial, Ok(c) => c.evidence }
-}
-fn certified_map_at<T,A,B>(source: List<T>, begin: Cursor<T>(source),
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    f: A -> B,
-    transform: (end: Cursor<T>(source)) -> (value: A) -> before(source,begin,end,value) -> after(source,begin,end,f(value)),
-    r: Result<Certified<T,A>(source,begin,before),Failure<T>(source)>) -> Result<Certified<T,B>(source,begin,after),Failure<T>(source)> {
-    match r { Err(e) => Err(e), Ok(c) => Ok(Certified(f(c.value),c.end,c.forward,
-        transform(c.end,c.value,c.evidence))) }
-}
-// Recognition exposes a head token and an exact suffix boundary, so clients
-// can connect token predicates to independent grammar productions.
-record SelectedHead<T,A>(pick: T -> Option<A>, input: List<T>, value: A) {
-    head: T,
-    selected: pick(head) = Some(value),
-    suffix: input = Cons(head,drop(input,1)),
-}
-theorem selected_head<T,A>(pick: T -> Option<A>, input: List<T>, value: A):
-    Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value) {
-    let alg: ListElim<T>(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value)) =
-        ListElim(λ h => false_elim(h),λ head tail ih h => SelectedHead(head,h,list::cong_cons(head,sym(initial_rest(tail)))));
-    list::list_elim(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value),alg,input)
-}
-record RecognizedHead<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) {
-    head: T,
-    selected: pick(head) = Some(value),
-    suffix: rest(source,begin) = Cons(head,rest(source,end)),
-}
-theorem recognized_head<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
-    proof: Recognized<T,A>(pick,source,begin,end,value)):
-    RecognizedHead<T,A>(pick,source,begin,end,value) {
-    let selected = selected_head(pick,rest(source,begin),value,proof.right);
-    let boundary: (rest(source,end) = drop(rest(source,begin),1)) =
-        trans(j(proof.left,λ offset q => rest(source,end) = drop(source,offset),refl),list::drop_succ(source,begin.offset));
-    RecognizedHead(selected.head,selected.selected,
-        trans(selected.suffix,list::cong_cons(selected.head,sym(boundary))))
-}
-
-fn certified_finish_at<T,A,B>(source: List<T>, begin,middle: Cursor<T>(source), forward: nat::Le(begin.offset,middle.offset),
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    f: A -> B,
-    transform: (end: Cursor<T>(source)) -> (value: A) -> before(source,middle,end,value) -> after(source,begin,end,f(value)),
-    r: Result<Certified<T,A>(source,middle,before),Failure<T>(source)>) -> Result<Certified<T,B>(source,begin,after),Failure<T>(source)> {
-    match r { Err(e) => Err(commit_after(source,begin,middle,e)),
-        Ok(c) => Ok(Certified(f(c.value),c.end,
-            nat::le_trans(begin.offset,middle.offset,c.end.offset,forward,c.forward),
-            transform(c.end,c.value,c.evidence))) }
-}
-
-fn CompleteSpec<T,A>(relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
-    And<relation(source,begin,end,value),rest(source,end) = Nil<T>>
-}
-theorem complete_post<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
-    Post(source,begin,relation,r) -> Post(source,begin,CompleteSpec<T,A>(relation),
-        bind_at<T,A,A>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
-        Nil => And(h,shape), Cons(head,tail) => trivial,
-    } }
-}
-fn complete_sound<T,A>(p: Parser<T,A>, expected: Nat,
-    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    proof: Sound<T,A>(p,relation)) -> Sound<T,A>(complete(p,expected),CompleteSpec<T,A>(relation)) {
-    Sound(λ source begin => complete_post(source,begin,p.run(source,begin),expected,relation,proof.law(source,begin)))
-}
-
-// Evidence construction does not change the underlying combinator result.
-theorem certified_finish_forget<T,A,B>(source: List<T>, begin,middle: Cursor<T>(source), forward: nat::Le(begin.offset,middle.offset),
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    f: A -> B,
-    transform: (end: Cursor<T>(source)) -> (value: A) -> before(source,middle,end,value) -> after(source,begin,end,f(value)),
-    r: Result<Certified<T,A>(source,middle,before),Failure<T>(source)>):
-    forget_at(source,begin,after,certified_finish_at(source,begin,middle,forward,before,after,f,transform,r)) =
-        rebase(source,begin,middle,forward,map_at(source,middle,forget_at(source,middle,before,r),f)) {
-    match r { Err(e) => refl, Ok(c) => refl }
-}
-theorem certified_map_forget<T,A,B>(source: List<T>, begin: Cursor<T>(source),
-    before: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    after: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> B -> Type,
-    f: A -> B,
-    transform: (end: Cursor<T>(source)) -> (value: A) -> before(source,begin,end,value) -> after(source,begin,end,f(value)),
-    r: Result<Certified<T,A>(source,begin,before),Failure<T>(source)>):
-    forget_at(source,begin,after,certified_map_at(source,begin,before,after,f,transform,r)) =
-        map_at(source,begin,forget_at(source,begin,before,r),f) {
-    match r { Err(e) => refl, Ok(c) => refl }
-}
-
-fn recognize_certified<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) ->
-    Result<Certified<T,A>(source,begin,Recognized<T,A>(pick)),Failure<T>(source)> {
-    certify_at(recognize(pick,expected),Recognized<T,A>(pick),recognize_sound(pick,expected),source,begin)
-}
-theorem recognized_progress<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
-    proof: Recognized<T,A>(pick,source,begin,end,value)): nat::Lt(begin.offset,end.offset) {
-    j(sym(proof.left),λ offset q => nat::Lt(begin.offset,offset),nat::le_refl(Succ(begin.offset)))
 }

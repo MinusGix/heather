@@ -1,6 +1,8 @@
 # Checked parser combinators
 
-Implementation: `lib/std/parser.hthr` (`import parser;`).
+Implementation: the core in `lib/std/parser.hthr`, with focused components in
+[`lib/std/parser/`](../lib/std/parser/README.md). Use `-L lib/std -L lib/std/parser`
+and import the components you use; `import parser;` exposes the core.
 Examples and tests: `crates/elab/tests/parser_library.rs` and
 `docs/showcase/calc_parser.hthr`.
 
@@ -53,9 +55,9 @@ list laws rather than introducing a second vector implementation.
 For example, the acceptance suite checks these ordinary compositions:
 
 ```heather
-parser::token<Nat>(1).map(Succ).before(parser::eof<Nat>(99))
-parser::many(parser::token<Nat>(1), parser::token_consumes<Nat>(1))
-parser::repeatN(3, parser::pure<Nat,Nat>(7))
+parser_primitives::token<Nat>(1).map(Succ).before(parser_primitives::eof<Nat>(99))
+parser_repetition::many(parser_primitives::token<Nat>(1), parser_primitives::token_consumes<Nat>(1))
+parser_repetition::repeatN(3, parser_combinators::pure<Nat,Nat>(7))
 ```
 
 ## Progress certificates

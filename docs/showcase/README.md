@@ -27,8 +27,9 @@ guess, revised freely as taste and design rounds move.
 numbers, `+`, `*`, and parentheses. Multiplication binds more tightly than
 addition; both operators associate to the right, as in the idealized parser.
 It imports the existing `Expr`, evaluator, RPN compiler, and compiler proof
-from `calc.hthr`. The grammar uses `lib/std/parser.hthr` for source-indexed
-cursors, consuming composition, commitment and complete-input checking.
+from `calc.hthr`. The grammar uses `lib/std/parser.hthr` and the components in
+`lib/std/parser/` for source-indexed cursors, consuming composition, commitment
+and complete-input checking.
 See [the parser library](../parser-library.md) for its contracts.
 
 ```text
@@ -39,7 +40,7 @@ atom   := number | '(' expr ')'
 
 ```sh
 (ulimit -v 8388608 -t 120; target/release/heather check \
-  -L lib/std -L docs/showcase docs/showcase/calc_parser.hthr)
+  -L lib/std -L lib/std/parser -L docs/showcase docs/showcase/calc_parser.hthr)
 ```
 
 The public entry points are `parse(tokens)`, `calculate(tokens)`, and
