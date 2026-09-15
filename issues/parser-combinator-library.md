@@ -114,3 +114,4 @@ before closing its chosen implementation scope.
   complete; remaining broader grammar/performance work is separately owned.
 
 - 2026-09-15: [[parser-grammar-soundness]] supplies the independent calculator theorem and extends the certificate bridge; current API details are in `docs/parser-library.md`.
+- 2026-09-15: The component layout needs an umbrella import; explicit declaration-preserving reexports are tracked by [[module-reexports]].

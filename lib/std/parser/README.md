@@ -39,7 +39,8 @@ Receiver calls such as `.map` continue to work when their component is
 imported. Qualified names use the component that owns the declaration:
 `parser_primitives::token`, `parser_combinators::bind`, and
 `parser_repetition::many`. No types or proof classes are duplicated for a
-facade. A future module-reexport facility can restore a single umbrella import.
+facade. [Module reexports](../../../issues/module-reexports.md) tracks restoring a single
+umbrella import.
 
 ## Dependency and proof boundaries
 

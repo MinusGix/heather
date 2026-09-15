@@ -11,14 +11,17 @@ import parser::{Cursor, rest, Success, Failure, Reply, Parser, initial_rest, adv
 import parser_contracts::{Bound, Consumes, Post, Sound, Certified, certify_at, CompleteSpec};
 import parser_combinators::{pure_at, map_at, bind_at, before};
 
+// Fail retryably at begin with the supplied expected-token codes.
 fn fail_at<T,A>(source: List<T>, begin: Cursor<T>(source), expected: List<Nat>) -> Reply<T,A>(source,begin) {
     Err(Failure(begin,expected,Retryable))
 }
 
+// Always fail retryably at the current cursor with one expected-token code.
 fn fail<T,A>(expected: Nat) -> Parser<T,A> {
     Parser(λ source begin => fail_at(source,begin,[expected]))
 }
 
+// Try pick on the next token; Some consumes one token and None fails retryably.
 fn recognize_at<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,A>(source,begin) {
     match nat::le_dec(Succ(begin.offset),list_len(source)) {
         Inl(room) => match rest(source,begin) {
@@ -33,20 +36,28 @@ fn recognize_at<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin
     }
 }
 
+// Recognize and transform one token using pick, reporting expected if no token is accepted.
+// For example, a digit picker returns Some(n) for a digit token and None for punctuation.
 fn recognize<T,A>(pick: T -> Option<A>, expected: Nat) -> Parser<T,A> {
     Parser(λ source begin => recognize_at(pick,expected,source,begin))
 }
 
+// Accept any single token; expected is a diagnostic code, not the token to match.
 fn token<T>(expected: Nat) -> Parser<T,T> { recognize(λ (t: T) => Some(t),expected) }
 
+// Succeed with zero exactly when the remainder is empty; otherwise fail retryably.
 fn eof_at<T>(expected: Nat, source: List<T>, begin: Cursor<T>(source)) -> Reply<T,Nat>(source,begin) {
     match rest(source,begin) { Nil => pure_at(source,begin,0), Cons(h,t) => fail_at(source,begin,[expected]) }
 }
 
+// Check end-of-input without consuming, returning zero on success.
 fn eof<T>(expected: Nat) -> Parser<T,Nat> { Parser(λ source begin => eof_at(expected,source,begin)) }
 
+// Require p to consume the whole remainder, retaining its value.
+// For example, complete(number,expected_end) rejects a number followed by extra tokens.
 fn complete<T,A>(self p: Parser<T,A>, expected: Nat) -> Parser<T,A> { before(p,eof<T>(expected)) }
 
+// A successful recognition advances exactly one step, hence at least one token.
 theorem recognize_bound<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Bound(source,begin,1,recognize_at(pick,expected,source,begin)) {
     match nat::le_dec(Succ(begin.offset),list_len(source)) {
@@ -58,22 +69,27 @@ theorem recognize_bound<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T
     }
 }
 
+// Supply the one-token progress certificate for recognition.
 fn recognize_consumes<T,A>(pick: T -> Option<A>, expected: Nat) -> Consumes<T,A>(recognize(pick,expected),1) {
     Consumes(λ source begin => recognize_bound(pick,expected,source,begin))
 }
 
+// Supply the one-token progress certificate for accepting any token.
 fn token_consumes<T>(expected: Nat) -> Consumes<T,T>(token<T>(expected),1) {
     recognize_consumes(λ (t: T) => Some(t),expected)
 }
 
+// The input has a head token which pick maps to Some(value).
 fn Selects<T,A>(pick: T -> Option<A>, input: List<T>, value: A) -> Type {
     match input { Nil => False, Cons(head,tail) => pick(head) = Some(value) }
 }
 
+// Recognition advanced one offset and selected value from the original remainder's head.
 fn Recognized<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
     And<end.offset = Succ(begin.offset), Selects(pick,rest(source,begin),value)>
 }
 
+// Establish the recognition relation for a single recognition reply.
 theorem recognize_post<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Post(source,begin,Recognized<T,A>(pick),recognize_at(pick,expected,source,begin)) {
     match nat::le_dec(Succ(begin.offset),list_len(source)) {
@@ -86,10 +102,12 @@ theorem recognize_post<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>
     }
 }
 
+// Certify the selected value and one-step offset change of recognition.
 fn recognize_sound<T,A>(pick: T -> Option<A>, expected: Nat) -> Sound<T,A>(recognize(pick,expected),Recognized<T,A>(pick)) {
     Sound(λ source begin => recognize_post(pick,expected,source,begin))
 }
 
+// An always-failing parser satisfies every success-only consumption bound vacuously.
 fn fail_consumes<T,A>(expected,amount: Nat) -> Consumes<T,A>(fail<T,A>(expected),amount) {
     Consumes(λ source begin => trivial)
 }
@@ -102,6 +120,7 @@ record SelectedHead<T,A>(pick: T -> Option<A>, input: List<T>, value: A) {
     suffix: input = Cons(head,drop(input,1)),
 }
 
+// Expose the selected head token and exact tail boundary from a selection proof.
 theorem selected_head<T,A>(pick: T -> Option<A>, input: List<T>, value: A):
     Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value) {
     let alg: ListElim<T>(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value)) =
@@ -109,12 +128,15 @@ theorem selected_head<T,A>(pick: T -> Option<A>, input: List<T>, value: A):
     list::list_elim(λ input => Selects(pick,input,value) -> SelectedHead<T,A>(pick,input,value),alg,input)
 }
 
+// An accepted token with a proof that removing it leaves the ending remainder.
 record RecognizedHead<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A) {
     head: T,
     selected: pick(head) = Some(value),
     suffix: rest(source,begin) = Cons(head,rest(source,end)),
 }
 
+// Turn recognition evidence into a head-token witness and exact source-span boundary.
+// Grammar proofs use this to prepend the recognized token to a continuation's spelling.
 theorem recognized_head<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
     proof: Recognized<T,A>(pick,source,begin,end,value)):
     RecognizedHead<T,A>(pick,source,begin,end,value) {
@@ -125,6 +147,7 @@ theorem recognized_head<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: C
         trans(selected.suffix,list::cong_cons(selected.head,sym(boundary))))
 }
 
+// Strengthen a successful reply's relation with end-of-input after the eof check.
 theorem complete_post<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
     Post(source,begin,relation,r) -> Post(source,begin,CompleteSpec<T,A>(relation),
@@ -134,17 +157,20 @@ theorem complete_post<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T
     } }
 }
 
+// Certify that complete establishes both p's relation and an empty remainder.
 fn complete_sound<T,A>(p: Parser<T,A>, expected: Nat,
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
     proof: Sound<T,A>(p,relation)) -> Sound<T,A>(complete(p,expected),CompleteSpec<T,A>(relation)) {
     Sound(λ source begin => complete_post(source,begin,p.run(source,begin),expected,relation,proof.law(source,begin)))
 }
 
+// Recognize one token and return its value with checked recognition evidence.
 fn recognize_certified<T,A>(pick: T -> Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) ->
     Result<Certified<T,A>(source,begin,Recognized<T,A>(pick)),Failure<T>(source)> {
     certify_at(recognize(pick,expected),Recognized<T,A>(pick),recognize_sound(pick,expected),source,begin)
 }
 
+// Extract the strict cursor advance needed for recursion from recognition evidence.
 theorem recognized_progress<T,A>(pick: T -> Option<A>, source: List<T>, begin,end: Cursor<T>(source), value: A,
     proof: Recognized<T,A>(pick,source,begin,end,value)): nat::Lt(begin.offset,end.offset) {
     j(sym(proof.left),λ offset q => nat::Lt(begin.offset,offset),nat::le_refl(Succ(begin.offset)))
