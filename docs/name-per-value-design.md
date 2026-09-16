@@ -323,3 +323,155 @@ a name whose Δ is every binder above it is one name per depth and grows
 value, and the emitted count then follows the value graph's curve. What the
 implementation pass owes is the device, its typing, and §6's audit — not
 another measurement of the unit.
+
+---
+
+## 8. Implementation (2026-09-16): step 0, and the sort of the shared value
+
+The implementation pass of §4. Its step 0 — the instrument's own checks
+re-run on this tree, and the mint priced before any commit-path edit — holds
+the round's STOP conditions, and one fires on a distinction §2's table does
+not draw. **A Ψ binding names a term** (§12.1 item 1), and most of what
+clears the threshold on the value graph is a **type**. §2's `Δ = fv` column
+is therefore the price of §4's mint *and* §5's type-code device **together**,
+and §4's mint on its own has a ceiling 1.16–1.74× above it.
+
+Nothing on the commit path was touched. The only source change is the sort
+of each graph node — its flag, its former — and three threshold columns on
+the instrument (`crates/elab/src/rbcount.rs`), all inert with `HEATHER_RB`
+unset; `probes/np0.sh`, `np0b.sh`, `np0c.sh`, `np0d.sh` and `np0f.sh` are the
+jobs, in that order, and `np0e.sh` is the suite.
+
+### 8.1 §6 items 1–3 and 5, re-confirmed to the unit
+
+Split keying — the emitter's — read **per item**; job 0's aggregate reports
+the largest `naive` of each run, which is `complete_post` in all of them, and
+that is why it is job 0b that answers §6 item 1.
+
+| probe | item | `naive` | §12.3's | graph | shared | ≥T | `bad` | `closed` | **`T64`** | §2's |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `t_qt1` | `qt_pure` | 293 908 | 293 908 | 26 920 | 531 | 35 | 0 | 7 | 34 / 35 651 | 34 / 35 651 |
+| `t_cp9` | `cp_andt` | 1 056 154 | 1 056 154 | 68 974 | 1 065 | 20 | 0 | 7 | 20 / 88 053 | 20 / 88 053 |
+| `t_qt3` | `qt_deep` | 4 006 444 | 4 006 444 | 90 240 | 1 374 | 24 | 0 | 9 | 24 / 115 125 | 24 / 115 125 |
+| library | `complete_post` | 1 584 491 | 1 584 491 | 69 756 | 1 094 | 22 | 0 | 7 | 21 / 89 132 | 21 / 89 132 |
+
+`badc = 0` and `opaque = basevar = decl = 0` on every row; `|fv|` averages
+2.43 / 2.55 / 2.54 / 2.73 and its maximum is **5**; depth keying reads
+§11.1's 4 967 022 / 80 519 to the unit. §6 items 1, 2, 3 and 5 hold exactly
+as the design pass measured them, and the whole showcase reproduces too —
+8 092 reducts, 6 194 shared values, **344** clearing T = 64, `bad = 0`, 302
+closed, **336** mints, 1 053 845 emitted.
+
+### 8.2 The column §2 does not have
+
+Of the values that clear the threshold, how many are of the value language's
+**type** sort — the ones no `GlobalBinding::Tm` can name. `TM` is §4's mint
+restricted to terms (`TM0` waives the threshold, so it is that device's
+*ceiling*); `TC` is both devices, with a type occurrence charged the `El` as
+well (`2 + |fv|`).
+
+| item | ≥T | of them types | `T64` (§2) | **`TM64`** | `TM0` (ceiling) | `TC64` |
+|---|---|---|---|---|---|---|
+| `qt_pure` | 35 | **27** | 34 / 35 651 | 8 / 62 079 | 38 / 62 368 | 33 / 35 948 |
+| `cp_andt` | 20 | **13** | 20 / 88 053 | 7 / 102 015 | 15 / 102 085 | 20 / 88 128 |
+| `qt_deep` | 24 | **15** | 24 / 115 125 | 9 / 133 050 | 17 / 133 124 | 24 / 115 213 |
+| `complete_post` | 22 | **14** | 21 / 89 132 | 8 / 103 197 | 21 / 103 282 | 21 / 89 210 |
+| showcase | 344 | **229** | 336 / 1 053 845 | 115 / 1 084 573 | 577 / 1 084 865 | 143 / 1 066 340 |
+
+Three things to read off it.
+
+- **The gap is not a threshold artefact.** `TM0` — name *every* shared term
+  value, whatever it saves — is within 0.5 % of `TM64` on all four rows. The
+  term-only device's ceiling on `complete_post` is 103 282, not 89 132.
+- **The type half is nearly free once it exists.** `TC64` is §2's column plus
+  0.1 %: the `El` a code occurrence carries costs less than a tenth of a
+  percent, so the 89 132 ↔ 103 197 difference is the *absence* of §5's device
+  and nothing else. §5's "worth about 2 %" was measured on §12.3's graph; on
+  the free-variable graph the same device is worth **1.16× on
+  `complete_post` and 1.74× on `qt_pure`**.
+- **The shape bar is met by the term half alone.** Per combinator layer
+  `qt_pure → cp_andt → qt_deep` the term-only column is ×1.64 / **×1.30**,
+  against the value graph's ×2.35 / ×1.31 and §12.3's ×2.54 / ×2.61;
+  `qt_deep / qt_pure` is ×2.14 against §6's predicted ×3.0 and §12.3's ×6.6.
+  §6 item 3 — the ratios must fall toward 1, and the second is the one that
+  discriminates — passes. §6 item 4's absolute sub-bars do not: 103 k against
+  "≤ ~90 k" and 133 k against "≤ ~115 k".
+
+### 8.3 What that makes of §4 and §5
+
+§2's table is sound and its mechanism is unchanged: `bad = 0`, `|Δ| ≤ 5`, one
+name per value, the value graph's curve. What it is *not* is the price of one
+device. Read as a landing plan:
+
+- **§4's mint is still the mechanism.** Everything that makes the column
+  possible — a Δ that is the value's free variables, a per-occurrence δ, the
+  merge of a 0-binder closure across depths that stage one's `(CloId, d)`
+  memo cannot spend — belongs to it, and the term-only column already leaves
+  §12.3's curve behind.
+- **§5's type-code device is no longer separable.** It was ranked "not what
+  the round was short of" on a graph where it moved 2 %. On this one it is
+  the difference between 103 k and 89 k on `complete_post`, and between
+  62 k and 36 k on `qt_pure`, because the tower's shared mass sits in `El`
+  encodings and an `El` is a type. A round that lands §4 alone banks 25.5×
+  against the rewriter's reduct instead of 29.6× and leaves the larger half
+  of its own names unspendable on the smaller items.
+- **The implementation is one device with two spellings**, not two rounds:
+  the choice, the Δ, the δ and the mint block are shared, and the type half
+  adds only `code.rs`'s `code_of` on the chosen node's syntax and an `El` at
+  the occurrence. The reference cost is already measured (`TC`).
+- **What `code_of` has to cover is four formers** (`np0f.sh`, `tyshapes=`
+  over the threshold-clearing type nodes): `Π` 16 / `El` 7 / `Σ` 4 on
+  `qt_pure`, `Σ` 7 / `Π` 4 / `El` 2–3 on `cp_andt` and `complete_post`,
+  `Σ` 9 / `Π` 4 / `El` 2 on `qt_deep`, and over the whole showcase **`+` 196,
+  `Π` 14, `El` 10, `Σ` 9**. All four are code formers the encoder already has
+  (`TmPi`, `TmSigma`, `TmSum`, and `code_of (El t) = t` reads a named child
+  straight through), so the partiality §12.4 warns about does not fall where
+  the mass is — which is the one thing the next pass should confirm before
+  building anything.
+
+### 8.4 The measure of sharing, re-asked — and why it does not rescue §4
+
+The in-degree every threshold column here measures sharing by is the right
+measure only while each parent is itself written once. Under the term-only
+rule it is not: an `El` written twenty times has **one** edge to the code
+under it, so that code reads as "shared once" and is never named, though its
+expansion is written twenty times. `TE<t>=` prices the same term-only rule
+with the saving taken over a node's multiplicity in the **tree** instead —
+still only Ψ `Tm` bindings, no new device.
+
+| item | `T64` (§2) | `TM64` | **`TE64`** |
+|---|---|---|---|
+| `qt_pure` | 34 / 35 651 | 8 / 62 079 | **740** / 39 799 |
+| `cp_andt` | 20 / 88 053 | 7 / 102 015 | **1 976** / 95 714 |
+| `qt_deep` | 24 / 115 125 | 9 / 133 050 | **5 353** / 131 244 |
+| `complete_post` | 21 / 89 132 | 8 / 103 197 | **4 023** / 100 900 |
+
+It is not a device, and the two halves of the table say why the type half is
+not optional:
+
+- **The cost.** Every mint is a kernel-gated global (`push_gen_def`), and
+  this rule mints 740 to 5 353 of them **per reduct** where §2 names 20–35.
+- **What it buys is uneven and small where it matters.** It recovers most of
+  the distance on `qt_pure` (39 799 against 35 651), 6 % on `cp_andt`, 2.2 %
+  on `complete_post` and **1.4 %** on `qt_deep` — least on the deepest item,
+  which is the one the round exists for. Naming a term two levels under a
+  shared `Π` is not naming the `Π`.
+
+### 8.5 Status
+
+§6 items **1, 2, 3 and 5 pass to the unit**; item **4 fails** for the
+term-only mint (103 k and 133 k against "≤ ~90 k" and "≤ ~115 k") and holds
+for the two devices together; item 6 — the typing refusal rate — is not
+reached, because it is a measurement *of* the device and §4's mint was not
+built. No commit-path edit was made, no fixture moved, no issue edited, and
+no commit. The tree holds the instrument's `tynode`, `TM`, `TC` and `TE`
+columns, the `tyshapes=` tally and the six jobs; `HEATHER_RB=count`'s line is
+unchanged, so §11.1's and §12.3's runs stay reproducible, and the default
+path is
+byte-identical to the parent's. `scripts/test --fast -p heather-elab` is
+`== suite: 1971 passed, 0 failed, 5 ignored ==`, the design pass's own line.
+
+What the next pass takes is §4 **and** §5 as one device, against §2's table
+as their joint bar — the choice, the Δ, the δ and the mint block are shared,
+and the type half is `code.rs`'s `code_of` on the chosen node plus an `El` at
+the occurrence.

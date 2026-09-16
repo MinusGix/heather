@@ -472,6 +472,16 @@ struct Dag {
     /// Whether the node's own mass includes embedded syntax with a free
     /// variable the walk cannot resolve to a level (see [`Walk::syn_ty`]).
     opaque: Vec<bool>,
+    /// Whether the node is a **type** of the value language (`vty`) rather
+    /// than a term (`val`). A Ψ binding names a term, so a type node is
+    /// nameable only through its *code* (§12.1 item 1) — the device
+    /// `docs/name-per-value-design.md` §5 keeps separate. The column exists
+    /// so the term-only ceiling is on the record beside the `Δ = fv` one.
+    is_ty: Vec<bool>,
+    /// For a node of the type sort, which former it is — the tally the
+    /// type-code device of `docs/name-per-value-design.md` §5 has to cover,
+    /// since `code.rs`'s `code_of` is partial on purpose.
+    ty_shape: Vec<&'static str>,
     /// The level the node was opened at on the walk's **first** visit to it —
     /// the only visit, since the memo answers the rest. A 0-binder closure
     /// merged across depths keeps the first one, which is the whole question
@@ -488,6 +498,8 @@ impl Dag {
         self.bound.push((0, 0));
         self.basevar.push(false);
         self.opaque.push(false);
+        self.is_ty.push(false);
+        self.ty_shape.push("-");
         self.open_lvl.push(0);
         (self.kids.len() - 1) as u32
     }
@@ -517,6 +529,9 @@ struct Walk<'a, 'v> {
     cur_vars: Vec<u32>,
     cur_basevar: bool,
     cur_opaque: bool,
+    /// See [`Dag::is_ty`]; saved and restored around a child as `cur` is.
+    cur_is_ty: bool,
+    cur_shape: &'static str,
     /// The highest level any fresh neutral was opened at.
     max_lvl: u32,
     /// `HEATHER_RB=fv`: every opening gets its **own** binder identities from
@@ -603,6 +618,8 @@ impl<'a, 'v> Walk<'a, 'v> {
         let saved_v = std::mem::take(&mut self.cur_vars);
         let saved_b = std::mem::take(&mut self.cur_basevar);
         let saved_o = std::mem::take(&mut self.cur_opaque);
+        let saved_k = std::mem::take(&mut self.cur_is_ty);
+        let saved_s = std::mem::replace(&mut self.cur_shape, "-");
         self.depth += 1;
         let mass = body(self);
         self.depth -= 1;
@@ -610,6 +627,8 @@ impl<'a, 'v> Walk<'a, 'v> {
         self.dag.own_vars[id as usize] = std::mem::replace(&mut self.cur_vars, saved_v);
         self.dag.basevar[id as usize] = std::mem::replace(&mut self.cur_basevar, saved_b);
         self.dag.opaque[id as usize] = std::mem::replace(&mut self.cur_opaque, saved_o);
+        self.dag.is_ty[id as usize] = std::mem::replace(&mut self.cur_is_ty, saved_k);
+        self.dag.ty_shape[id as usize] = std::mem::replace(&mut self.cur_shape, saved_s);
         let (kids, own) = std::mem::replace(&mut self.cur, saved);
         self.dag.kids[id as usize] = kids;
         // `val`/`vty` already count the head node they wrote.
@@ -728,6 +747,7 @@ impl<'a, 'v> Walk<'a, 'v> {
     }
 
     fn val(&mut self, v: &Rc<Val<'v>>, lvl: u32) -> u64 {
+        self.cur_is_ty = false;
         self.cur_typable = matches!(
             &**v,
             Val::TmNat
@@ -868,6 +888,26 @@ impl<'a, 'v> Walk<'a, 'v> {
     }
 
     fn vty(&mut self, v: &Rc<VTy<'v>>, lvl: u32) -> u64 {
+        self.cur_is_ty = true;
+        self.cur_shape = match &**v {
+            VTy::Nat => "Nat",
+            VTy::Ty(_) => "Ty",
+            VTy::Unit { .. } | VTy::Empty { .. } | VTy::SEmpty { .. } => "unit/empty",
+            VTy::Squash { .. } => "Squash",
+            VTy::Pi { .. } => "Pi",
+            VTy::Sigma { .. } => "Sigma",
+            VTy::W { .. } => "W",
+            VTy::Wf { .. } => "Wf",
+            VTy::Sum { .. } => "Sum",
+            VTy::Id { .. } => "Id",
+            VTy::SEq { .. } => "SEq",
+            VTy::Vec { .. } => "Vec",
+            VTy::Fin { .. } => "Fin",
+            VTy::UPi { .. } | VTy::CtxPi { .. } | VTy::TyPi { .. } => "UPi/CtxPi/TyPi",
+            VTy::CodeTy { .. } | VTy::CodeTm { .. } => "Code",
+            VTy::Neutral(VNeTy::Global { .. }) => "GlobalTy",
+            VTy::Neutral(VNeTy::El { .. }) => "El",
+        };
         self.cur_typable = true;
         let kids: u64 = match &**v {
             VTy::Nat
@@ -1073,6 +1113,8 @@ pub(crate) fn at_build_ctor(
         cur_vars: Vec::new(),
         cur_basevar: false,
         cur_opaque: false,
+        cur_is_ty: false,
+        cur_shape: "-",
         max_lvl: lvl,
         uniq: mode() == Mode::Fv && std::env::var("HEATHER_RB_FVDEPTH").is_err(),
         next: lvl,
@@ -1352,11 +1394,40 @@ fn fv_report(
         .filter(|&x| x != root as usize && !smax[x].contains(&fv[x]))
         .count();
 
+    // The same rule restricted to **term** nodes: a Ψ binding names a term,
+    // so a shared node of the value language's *type* sort is nameable only
+    // through its code, which `docs/name-per-value-design.md` §5 keeps as a
+    // separate device. This column is the ceiling the term-only mint can
+    // actually reach, beside the one §2's table quotes.
+    let nameable_tm = |x: usize| -> bool { nameable(x) && !dag.is_ty[x] };
+
+    // How many times each node appears in the tree the graph expands to. The
+    // in-degree is the measure every threshold column here has used, and it
+    // is the right one when each parent is itself written once; it is *not*
+    // when the parent cannot be named — a type node under the term-only rule
+    // — because then the parent's own multiplicity is what the child pays.
+    let mut mult = vec![0u64; n];
+    mult[root as usize] = 1;
+    for &x in dag.finish.iter().rev() {
+        let x = x as usize;
+        for &k in &dag.kids[x] {
+            mult[k as usize] = mult[k as usize].saturating_add(mult[x]);
+        }
+    }
+
     let mut line = String::new();
     for t in [0u64, 16, 64, 1_024] {
-        let (names, emitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, false);
-        let (inames, iemitted) = fv_names(dag, indeg, &sizes, root, t, &|_| true, false);
-        let (_, femitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, true);
+        let (names, emitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, false, false, None);
+        let (tnames, temitted) =
+            fv_names(dag, indeg, &sizes, root, t, &nameable_tm, false, false, None);
+        let (cnames, cemitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, false, true, None);
+        let (enames, eemitted) =
+            fv_names(dag, indeg, &sizes, root, t, &nameable_tm, false, false, Some(&mult));
+        line.push_str(&format!(
+            " TM{t}={tnames}/{temitted} TC{t}={cnames}/{cemitted} TE{t}={enames}/{eemitted}"
+        ));
+        let (inames, iemitted) = fv_names(dag, indeg, &sizes, root, t, &|_| true, false, false, None);
+        let (_, femitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, true, false, None);
         line.push_str(&format!(
             " T{t}={names}/{emitted}|ideal={inames}/{iemitted}|flat3={femitted}"
         ));
@@ -1367,6 +1438,11 @@ fn fv_report(
     // failing), how many are closed, and how wide the Δs are.
     let (mut sh, mut thr, mut bad, mut closed, mut opq, mut basev) = (0, 0, 0, 0, 0, 0);
     let (mut unb, mut badc, mut short) = (0, 0, 0);
+    // Of the threshold-clearing values, how many are of the **type** sort —
+    // the ones only a minted code could name (§5 of the name-per-value doc).
+    let mut tynode = 0;
+    let mut shapes: std::collections::BTreeMap<&'static str, u64> =
+        std::collections::BTreeMap::new();
     let (mut fvsum, mut fvmax) = (0u64, 0u64);
     let mut cost = vec![0u64; n];
     for &x in &dag.finish {
@@ -1385,6 +1461,10 @@ fn fv_report(
             continue;
         }
         thr += 1;
+        if dag.is_ty[x] {
+            tynode += 1;
+            *shapes.entry(dag.ty_shape[x]).or_insert(0u64) += 1;
+        }
         fvsum += sizes[x];
         fvmax = fvmax.max(sizes[x]);
         if sizes[x] == 0 {
@@ -1538,7 +1618,7 @@ fn fv_report(
     }
     eprintln!(
         "rb fv item={m}::{i} naive={naive} graph={n} shared={sh} thr={thr} bad={bad} \
-         closed={closed} opaque={opq} basevar={basev} decl={declines} unb={unb} badc={badc} short={short} solo={solo} fvsum={fvsum} fvmax={fvmax} \
+         tynode={tynode} tyshapes={shapes:?} closed={closed} opaque={opq} basevar={basev} decl={declines} unb={unb} badc={badc} short={short} solo={solo} fvsum={fvsum} fvmax={fvmax} \
          gamma={gamma_len} maxlvl={max_lvl} back={back}{line}"
     );
 }
@@ -1554,9 +1634,27 @@ fn fv_names(
     threshold: u64,
     nameable: &dyn Fn(usize) -> bool,
     flat: bool,
+    code: bool,
+    // `mult`: how many times the node appears in the **tree** the graph
+    // expands to, when the saving is to be measured that way rather than by
+    // the node's in-degree. The two differ exactly where an unnameable parent
+    // is itself written many times: an `El` of the type sort cannot be a Ψ
+    // binding, so its multiplicity has to reach the *term* under it, or the
+    // term-only device loses the sharing for want of a name one node up.
+    mult: Option<&[u64]>,
 ) -> (u64, u64) {
     let n = dag.len();
-    let refc = |x: usize| if flat { REF_COST } else { 1 + sizes[x] };
+    // A **type** node is named through its code — mint `c : Ty l`, spell the
+    // occurrence `El (c^δ)` — so its reference carries the `El` as well
+    // (`docs/name-per-value-design.md` §5, §12.1 item 1). The bare rule
+    // charges every occurrence `1 + |fv|`, which is the term half's price.
+    let refc = |x: usize| {
+        if flat {
+            REF_COST
+        } else {
+            1 + sizes[x] + u64::from(code && dag.is_ty[x])
+        }
+    };
     let mut cost = vec![0u64; n];
     let mut named = vec![false; n];
     let mut mints = 0u64;
@@ -1569,7 +1667,10 @@ fn fv_names(
             c = c.saturating_add(if named[k] { refc(k) } else { cost[k] });
         }
         cost[x] = c;
-        let shares = u64::from(indeg[x]).saturating_sub(1);
+        let shares = match mult {
+            Some(m) => m[x].saturating_sub(1),
+            None => u64::from(indeg[x]).saturating_sub(1),
+        };
         if shares > 0
             && shares.saturating_mul(c.saturating_sub(refc(x))) >= threshold
             && x != root as usize
