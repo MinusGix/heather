@@ -247,3 +247,95 @@ fn a_non_type_expression_at_a_universe_is_rejected() {
     let e = bad("fn id_at(A: Type, x: A) -> A { x }\nfn f() -> Nat { id_at(3, 3) }");
     assert!(!e.is_empty());
 }
+
+// -- the quoted component's spelling --------------------------------------
+//
+// A type written where a term is expected is quoted here (`quote_type_at`),
+// and since `docs/complete-post-attribution-design.md` §5 the quote carries
+// the **emitted** spelling — registered sub-lowerings as `#tycode`
+// references — rather than the raw inline lowering. These four vary the axes
+// `docs/testing-generated-terms.md` asks for on that one call: a neutral and
+// a literal scrutinee, an open element type and its closed control, a
+// checking position, and negative controls.
+
+/// The shape the round was written by, in miniature: a `→ Type` function
+/// whose body is a declared former with a **binder-dependent** component
+/// (`Holds(R, c)`'s `R(c)`), over a declared record that has a code of its
+/// own to be respelled to.
+const SPEC: &str = "inductive Tag { On, Off }
+record Cell<A> { flag: Tag, payload: A }
+inductive Conj<P, Q> { Both(p: P, q: Q) }
+fn Holds<A>(R: (c: Cell<A>) -> Type, c: Cell<A>) -> Type { Conj<R(c), Nat> }
+";
+
+// The open element type (`A` is a parameter, so `Cell<A>` cannot be known),
+// in a **checking** position: the body is checked against `Holds(R, c)`,
+// which the kernel only accepts if the quoted component and the argument's
+// own spelling convert.
+#[test]
+fn a_binder_dependent_component_checks_at_an_open_element_type() {
+    ok(&format!(
+        "{SPEC}fn mk<A>(R: (c: Cell<A>) -> Type, c: Cell<A>, p: R(c)) -> Holds(R, c) {{ Both(p, 0) }}"
+    ));
+}
+
+// The closed control for the axis above: `cp5`'s equality — closing the
+// element type must not change the verdict (design §3.2).
+#[test]
+fn the_same_component_checks_at_a_closed_element_type() {
+    ok(&format!(
+        "{SPEC}fn mk_nat(R: (c: Cell<Nat>) -> Type, c: Cell<Nat>, p: R(c)) -> Holds(R, c) {{ Both(p, 0) }}"
+    ));
+}
+
+// A **neutral** scrutinee (a `match` over a parameter, which is `cp1`'s own
+// shape) and a **literal** one (the reply constructed at the call site), both
+// checked against the same quoted statement.
+#[test]
+fn a_neutral_and_a_literal_scrutinee_agree_on_the_component() {
+    ok(&format!(
+        "{SPEC}fn pick<A>(R: (c: Cell<A>) -> Type, c: Cell<A>, t: Tag, p: R(c)) -> Holds(R, c) {{
+            match t {{ On => Both(p, 0), Off => Both(p, 1) }}
+        }}
+        fn literal<A>(R: (c: Cell<A>) -> Type, c: Cell<A>, p: R(c)) -> Holds(R, c) {{
+            pick(R, c, On, p)
+        }}"
+    ));
+}
+
+// Negative control: the second conjunct is a false equation, so the component
+// is well spelled and the *claim* is still refused — by the kernel, which is
+// the judge of the equation.
+#[test]
+fn a_false_second_conjunct_is_refused() {
+    let e = bad(&format!(
+        "{SPEC}fn HoldsEq<A>(R: (c: Cell<A>) -> Type, c: Cell<A>) -> Type {{ Conj<R(c), 0 = 1> }}
+        fn wrong<A>(R: (c: Cell<A>) -> Type, c: Cell<A>, p: R(c)) -> HoldsEq(R, c) {{ Both(p, refl) }}"
+    ));
+    assert!(!e.is_empty());
+}
+
+// The pin, in the shape `docs/closed-argument-and-parameter-domain-spelling-design.md`
+// §7 item 7 pins its own quote pair: what the quote *carries*. The component
+// here is an equation whose element type is a registered declaration, so the
+// two spellings are visibly different — the reference the emission chokepoint
+// writes everywhere else, against the whole inline lowering the quote layer
+// used to copy in. The day `issues/quote-see-through-bounded-arm` lands, this
+// is the test that has to be re-read.
+#[test]
+fn a_quoted_component_carries_the_reference_and_not_the_inline_lowering() {
+    let src = format!(
+        "{SPEC}fn HoldsEq<A>(R: (c: Cell<A>) -> Type, c: Cell<A>) -> Type {{ Conj<R(c), c = c> }}"
+    );
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&src).unwrap_or_else(|err| panic!("{}", err.render(&src)));
+    let rendered = format!("{:?}", e.psi().bindings.last().expect("a binding"));
+    assert!(
+        rendered.contains("«Id[0](app("),
+        "the quoted equation should spell its element type as `Cell`'s reference: {rendered}"
+    );
+    assert!(
+        !rendered.contains("«Id[0](«Σ"),
+        "the quote carried the inline lowering again: {rendered}"
+    );
+}

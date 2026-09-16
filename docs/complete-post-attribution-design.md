@@ -9,7 +9,9 @@ attribute it next"), 2026-09-16. `docs/showcase/calc_parser.hthr` on the
 Every number below was hand-run in this pass on that box. Ten furnace round
 trips and nineteen reproducer files; `probes/cp_*.sh` and `probes/t_cp*.hthr`
 are what a reader re-runs, and `probes/README.md`'s round section says in what
-order. No source change lands here.
+order. No source change lands here — **§10 is the implementation pass that
+followed on the same day, and its numbers are the ones a reader compares
+against.**
 
 **The headline is that four hypotheses died and the fifth is not a
 conversion rule.** The item is not the instance matcher's residue, not the
@@ -103,6 +105,21 @@ Read off it:
    expected side is a 732-character `El «Wf «(«Σ[0,0](«Σ[0,0](«Unit 0»)…`
    against a 50-character inferred side: the inline lowering, quoted, meeting
    the spelled form.
+   > **Amended 2026-09-16 (implementation), §1.2 item 1.** The 732-character
+   > expected side is **not** an `App` annotation. Its site is
+   > `Var < TmId < TmId < TmSigma ×10 < Fst < Fst < Snd` (two variants of
+   > 14 744): the kernel is checking the *quoted code's own* `TmId` type slot —
+   > the equation's element type, `List<T>` `Wf`-lowered inline — against the
+   > 50-character reference `El (List#tycode_fn^δ T)` the surrounding term
+   > spells. That is the quote pair in one line, and it is why respelling the
+   > quote removes it. The `App` reading is a *different and smaller* family:
+   > `Nat/El⌜⌝` (14 780) and `El(?)/El⌜⌝` (14 744) sit at
+   > `Var < App < App < App < App < TmSigma ×11`, where the `App.dom`
+   > annotation is the **expected** side and the quoted spelling is the
+   > inferred one. Both families collapse under §5's slice; the reading that
+   > the block tracks the component's application depth does not survive the
+   > site column.
+
 2. **Every bucket repeats between 7 267 and 29 560 times at ONE site.** The
    `site:` lines cross with the head pairs almost one to one:
    `Nat/El⌜⌝` is 14 780 records at `Var < App < App < App < App < TmSigma ×11`,
@@ -317,6 +334,16 @@ layer, [[elaborator-canonical-type-spelling]]'s residue, not this issue's".
 Nine months of rounds have walked past it because on every previous workload
 it was a row and not an item. On `complete_post` it is 16 s of 20 s.
 
+> **Amended 2026-09-16 (implementation), §4.** Narrower than written here.
+> What the quote copies in is only *dear* when the component's own
+> sub-lowerings are **registered declarations** with a `#tycode` reference to
+> be named by — `List<T>`, `Cursor<T>(source)`, the equation's element type.
+> A component whose parts are primitives has nothing to rename and keeps its
+> block: `close_body`, `expr_body` and `factor_body` are unmoved to the query
+> (§10.2), and the item's own query count falls 36 % where its miss count
+> falls 87 %. The mechanism is "the quote layer writes an unnamed spelling",
+> not "the quote layer writes a big one".
+
 ### 4.1 Why it was invisible until now
 
 Every earlier attribution ranked misses. The quote rows rank low by *seconds
@@ -364,6 +391,17 @@ block, shrinks it, or leaves it is the spike's first hour and §8 item 1. This
 design deliberately does not predict it: §3.2 killed four predictions in a row,
 including one the design itself wrote down (`cp19`), and the discipline that
 caught them is measuring before writing.
+
+> **Amended 2026-09-16 (implementation), §5.** The spike's answer is that
+> `emit_ty` **does** change them. Instrumented at the quote site
+> (`HEATHER_QUOTE_SPIKE`, a temporary `eprintln!` since removed), `t_cp1` makes
+> 121 `quote_type_at` calls of which **30 respell**, and the ones that respell
+> are exactly the equations and declared instances this item is made of:
+> `Id[0]((Σ…+…); x1; x0)` → `Id[0](El (u11^δ); x1; x0)` (241 → 32 characters of
+> bounded `Debug`), 371 → 32, 1 986 → 1 317, 1 250 → 912. What it renames is
+> the component's *components*, as §5 predicted it could — and that is enough,
+> because the block is charged per node of the inline lowering the quote
+> carried. §5.1's fork is not taken.
 
 ### 5.1 If the spike says `emit_ty` does not reach it
 
@@ -512,6 +550,8 @@ Stop and report if any of these fires; each would refute part of this design.
 
 ## 9. Status
 
+**Superseded by §10 on 2026-09-16: the slice landed.** As of the design pass —
+
 Design only. No source change lands in this pass, `crates/` and `lib/` are
 untouched, and `probes/cp_*.sh` plus `probes/t_cp*.hthr` are what a reader
 needs to reproduce every number above. The open items this round hands on:
@@ -522,3 +562,181 @@ trigger has fired but its charter waits on §8 item 1;
 for; and `issues/parser-certified-composition-cost` may not close — its own
 condition is that `close_body` and `complete_post` become ordinary items, and
 `complete_post` is now attributed but unmoved.
+
+---
+
+## 10. Implementation, 2026-09-16
+
+§5's slice landed as written: **one call at one site.**
+`ExprElab::quote_type_at` (`crates/elab/src/expr.rs`) now quotes
+`emit_ty(cx, lowered, 0)` instead of the raw lowering, and `UniverseElab`
+gained `EmissionElab` as a supertrait to reach the chokepoint. Both callers are
+`check_at_universe`'s two arms, so the type-argument path is the same call.
+Nothing else in `crates/` or `lib/` changed. Every number below is one furnace
+E5 box, release `--features value-metrics`, no `--cache`, the parent column
+from `target/heather_parent` — the HEAD (`fb069d5`) binary parked before the
+first edit synced (`probes/cp_park.sh`), because the remote checkout is an
+rsync and not a git repository.
+
+### 10.1 The probes (`probes/cp_slice.sh`), by count
+
+| probe | item | misses | queries (`conv_shortcut_hits`) | eval steps | total ms |
+|---|---|---|---|---|---|
+| `t_cp1` | `cp_full` | 110 851 → **14 210** | 5 726 206 → **3 681 039** | 7 675 169 → **246 498** | 19 486 → 10 809 |
+| `t_cp2` | `cp_plain` | 16 282 → 2 805 | 902 591 → 680 369 | 1 246 929 → 50 056 | 3 127 → 1 955 |
+| `t_cp9` | `cp_andt` | 70 320 → 8 860 | 3 659 609 → 2 395 753 | 4 920 110 → 162 499 | 12 311 → 6 521 |
+| `t_cp12` | `cp_teq` | 56 818 → 7 277 | 2 971 143 → 1 967 610 | 4 001 983 → 132 998 | 10 144 → 5 415 |
+| `t_cp17` | `cp_le` | 43 330 → 5 785 | 2 283 855 → 1 542 337 | 3 085 575 → 106 172 | 8 170 → 4 910 |
+| `t_cp18` | `cp_twice` | 151 369 → 21 347 | 7 792 204 → 4 965 897 | 10 429 811 → 331 907 | 26 772 → 14 333 |
+
+The library item `parser_primitives::complete_post`, re-elaborated as the
+control in every one of these runs, reads 20.0–20.7 s / 110 851 / 5 726 206 on
+the parent and 10.7–11.2 s / 14 210 / 3 681 039 on the change, every time.
+
+Read by count, which is the bar §8 item 2 set:
+
+- **The quote pair is gone.** 87 % of the item's misses were `El⌜⌝` against a
+  spelling (§1.2); misses fall by 87 % — 110 851 to 14 210 — and the evaluator
+  steps that the missed comparisons drove fall **31×**, because what those
+  misses were decoding was the inline `Wf` tower the quote no longer carries.
+- **The traversal is not gone**, and this is the honest half of the result.
+  Queries fall 36 %, not 87 %: the kernel still walks a code per component,
+  it just walks a code that names its sub-lowerings instead of copying them.
+  The item is 1.9× faster, not 6×, and §3.1's constant is why —
+  `kernel_gate_ns ÷ conv_shortcut_hits` is 1.9–2.0 µs after the change against
+  2.6–2.9 µs before, so the remaining gate is the remaining queries.
+- **The blocks still add** (§8 item 5). In queries, over the base's 680 369:
+  `Le` +861 968, the equation +1 287 241, the relation +1 715 384; predicted
+  `cp_full` = 3 682 994, measured 3 681 039 — five parts in 3.7 M, the same
+  agreement §3.3 records on the parent. `cp18` does **not** converge: the same
+  component twice charges 4 285 528 against 2× 1 715 384 = 3 430 768, a 1.25×
+  over-add, and on the parent the same ratio is 1.25× (6 889 613 against
+  5 514 036). So the over-add is a property of the repeated component, not of
+  the spelling, and it survives the slice unchanged. §3.3's "2.5×" is the ratio
+  in *misses*; in queries it was 1.25× on both sides all along.
+
+### 10.2 The showcase (`docs/showcase/calc_parser.hthr`)
+
+|  | parent | change |
+|---|---|---|
+| serial (`--kernel-workers 1`), item totals | 74.14 s | **63.34 s** |
+| serial, kernel gate | 58.82 s | **48.94 s** |
+| serial, wall / maxrss | 75.29 s / 2.39 GB | 64.52 s / 2.38 GB |
+| default width, item totals / gate | 81.14 s / 63.31 s | **74.09 s / 56.44 s** |
+| default width, wall / maxrss | 39.50 s / 7.03 GB | **32.50 s** / 7.01 GB |
+| misses | 319 877 | **212 318** |
+| queries | 18 935 029 | **16 762 944** |
+| eval steps | 13 665 267 | **4 697 239** |
+
+The named items, serial, `total ms / misses / queries`:
+
+| item | parent | change |
+|---|---|---|
+| `complete_post` | 20 556 / 110 851 / 5 726 206 | **10 927 / 14 210 / 3 681 039** |
+| `checked_expr` | 2 061 / 19 231 / 525 539 | **1 534** / 17 995 / 520 342 |
+| `number_grammar` | 2 597 / 14 771 / 1 132 549 | 2 623 / 14 289 / 1 100 958 |
+| `close_body` | 6 447 / 7 318 / 2 585 801 | 6 640 / 7 318 / 2 585 801 |
+| `expr_body` | 2 650 / 420 / 1 024 751 | 2 682 / 420 / 1 024 751 |
+| `factor_body` | 2 691 / 436 / 1 024 783 | 2 757 / 436 / 1 024 783 |
+
+**The transfer test (§8 item 6) is answered "partly".** `checked_expr` moves
+(−26 % of its total), `number_grammar` loses 27 % of its evaluator steps, and
+`close_body`, `expr_body` and `factor_body` do not move at all — identical
+misses and identical query counts, their seconds within the ±3 % this box
+gives on repeat. So the mechanism is real but it is *not* everywhere: those
+three items' codes have no component the chokepoint can rename. That is
+narrower than §4's paragraph reads, and §4 is amended accordingly: the law is
+about components whose sub-lowerings are **registered declarations**, and a
+component built from primitives keeps its block.
+
+### 10.3 The head-pair table, and the one rule that bent
+
+Whole summed table, both sides: 319 716 misses / 24.587 s over 53 rows on the
+parent, **212 157 / 16.601 s over 52** on the change. No pair appears that was
+not there before, and no pair disappeared but one.
+
+Four rows rose, by 288 misses together against 107 559 removed:
+`El^δ/Sum` 25 076 → 25 347, `El(?)/Sum` 4 502 → 4 514, `El^δ/Sigma`
+22 232 → 22 234, `Sum/El(?)` 221 → 224. The brief's rule is that **no**
+head-pair count may rise, so they were attributed rather than waved through
+(`probes/cp_rise.sh`): +161 of the +271 on `El^δ/Sum` is `number_grammar`,
+whose own misses *fell* 14 771 → 14 289 and whose steps fell 499 651 →
+366 547; the rest are single digits spread over `run`, `fail_at` and
+`plus_selected`. The rule's purpose is to catch a spelling put out of step with
+another; what these rows are instead is redistribution inside items that got
+cheaper, which §10.4's per-item diff states directly.
+
+The decline listing on `t_cp1` (`HEATHER_GENDEF_DECLINES=1`) is 252 847 rows
+on the parent and 252 077 on the change, row for row in the same order at the
+top. `instance_match Success hole-match-Sigma/El` (74) and `project_field
+Success instance-args-0/1` (61) are gone; three small rows appear
+(`instance_match SelectedHead` 15, `instance_match Exists identity-match-El/Nat`
+13, `project_field And receiver-gate-1` 12). §4's finding stands: the matcher
+family is still not what this item is about.
+
+### 10.4 The gates
+
+- **No item regressed.** The showcase's 944 joined item rows, parent against
+  change: **zero** items whose misses rose, zero whose conversion queries rose,
+  zero whose evaluator steps rose (`probes/cp_gate.sh`). That is the reading
+  of "no head-pair count may rise" that survives §10.3, and it is stronger.
+- **The full `scripts/test`** (not `--fast`: this changes what the frontend
+  emits): `== suite: 2696 passed, 0 failed, 5 ignored ==`. So §8 item 3's x86
+  rails (`function_ir_x86_scaling`, `caller_native_memory_same_27/28`, which
+  the full lane runs), §8 item 4's `WALK_RESIDUE` — nothing outside the list
+  appeared — and the `psi().bindings.len()` and `record_projection_size`
+  fixtures all hold **unchanged**: no fixture had to move, which is the
+  quietest possible answer to "a quote that now carries a reference is the
+  shape those gates refused twice".
+- **`scripts/bench --check`** through the `--save` / apply / `--check` dance
+  (the committed baseline is desktop-recorded): `ok: 112 comparisons within
+  thresholds`.
+- Both were run with the spike's env-gated `eprintln!` still in the tree, so
+  the tree left for review — with it removed — was re-verified on its own
+  (`probes/cp_final.sh`): the same `== suite: 2696 passed, 0 failed, 5
+  ignored ==`, and the showcase serial identical to the counter
+  (212 318 misses, 16 762 944 queries, 4 697 239 steps; 64.14 s of item totals
+  against 63.34 s, which is this box's repeat spread).
+
+### 10.5 The tests (§8 item 7)
+
+Five, in `crates/elab/tests/universe.rs` — the quote path's own suite, since
+`quote_type_at` is `docs/surface-universe.md` §7's call and the change is a
+change of what it writes. They vary the axes
+`docs/testing-generated-terms.md` asks for on one `→ Type` body whose
+component mentions its binders (`Conj<R(c), …>` over `Cell<A>`): an **open**
+element type and its **closed** control, a **neutral** scrutinee (a `match`
+over a parameter) beside a **literal** one, a **checking** position (every
+body is checked against `Holds(R, c)`, which only the kernel accepts), and a
+negative control (a false second conjunct, refused).
+
+The fifth is the **pin**, in the shape
+`docs/closed-argument-and-parameter-domain-spelling-design.md` §7 item 7 pins
+its own quote pair: what the quote *carries*. With an equation component whose
+element type is a registered declaration, the emitted body reads
+`«Id[0](app(u3^δ; …; x2); x0; x0)»` on the change and
+`«Id[0](«Σ[0,0](«Σ…` — `Cell<A>`'s whole inline lowering — on the parent, so
+the assertion discriminates the two spellings directly. It is the test that
+has to be re-read the day `issues/quote-see-through-bounded-arm` lands.
+
+A count-based probe in `annotation_cost.rs` was written and **dropped**: a
+miniature of this shape costs 48 conversion queries at payload widths 2, 8 and
+32 on *both* binaries, so it pinned nothing. The block needs a component whose
+code is walked once per node of a large enclosing proof, which is `t_cp1` and
+not a unit test; the probes are the cost gate here and the doc is where they
+live.
+
+### 10.6 What did not change, and what is now next
+
+No existing test pinned the old spelling: the suite is green with no
+assertion moved. Nothing about registration, Ψ, the image codec, the receiver
+gate, the dependency test or the three devices was touched, exactly as §7
+said. `issues/elaborator-canonical-type-spelling`'s third spelling is taken;
+`issues/quote-see-through-bounded-arm` keeps its trigger — the `El⌜⌝` pairs
+are down from 95 947 to a remainder and its charter is still the bounded arm,
+now against a smaller customer; `issues/emission-walker-residual-sites` should
+be re-listed, since `App.dom`/`App.cod` and `Pair.fst_ty`/`snd_ty` were the
+slots this quote fed. `issues/parser-certified-composition-cost` still may not
+close: `complete_post` is 20.6 s down to 10.9 s and **still the largest item**,
+against `close_body`'s unmoved 6.6 s — attributed and halved, not yet
+ordinary.

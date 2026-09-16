@@ -53,7 +53,7 @@ pub(crate) trait StructuralTypeElab {
 /// type-shaped expressions are quoted here.  These queries keep the policies
 /// that identify declared families, rewrite operators, and respell registered
 /// types with their existing owners.
-pub(crate) trait UniverseElab: StructuralTypeElab {
+pub(crate) trait UniverseElab: StructuralTypeElab + EmissionElab {
     /// Rewrite an operator occurring in type position to its named call.
     fn rewrite_type_operator(&self, cx: &Cx, expression: &Expr) -> R<Option<Expr>>;
 
@@ -400,12 +400,12 @@ impl<'a> ExprElab<'a> {
     ) -> R<Term> {
         if let Some(ty) = self.type_former_application(elab, cx, expression)? {
             let (lowered, level) = elab.lower_type(cx, &ty)?;
-            return Self::quote_type_at(&lowered, &level, want, span);
+            return Self::quote_type_at(elab, cx, &lowered, &level, want, span);
         }
         if let Some(ty) = expression_as_type(expression)
             && let Ok((lowered, level)) = elab.lower_type(cx, &ty)
         {
-            return Self::quote_type_at(&lowered, &level, want, span);
+            return Self::quote_type_at(elab, cx, &lowered, &level, want, span);
         }
         let (term, _, _) = elab.infer_type_endpoint(cx, expression)?;
         Ok(term)
@@ -442,7 +442,14 @@ impl<'a> ExprElab<'a> {
         }))
     }
 
-    fn quote_type_at(elaborated: &Type, level: &Level, want: &Level, span: Span) -> R<Term> {
+    fn quote_type_at(
+        elab: &impl UniverseElab,
+        cx: &Cx,
+        elaborated: &Type,
+        level: &Level,
+        want: &Level,
+        span: Span,
+    ) -> R<Term> {
         if !level.equiv(want) {
             return err(
                 format!(
@@ -456,7 +463,14 @@ impl<'a> ExprElab<'a> {
                 span,
             );
         }
-        match code::code_of(elaborated) {
+        // Quote the spelling the emission chokepoint would emit, not the raw
+        // inline lowering (`docs/complete-post-attribution-design.md` §5, and
+        // `docs/record-projection-reference-design.md` §9.8 for the landed
+        // precedent at `register_ty_code_fn`). The type is lowered against
+        // `cx` itself, so the respell sits at depth 0.
+        let emitted = elab.emit_ty(cx, elaborated, 0);
+        let quoted = emitted.as_ref().unwrap_or(elaborated);
+        match code::code_of(quoted) {
             Some(code) => Ok(code),
             None => err(
                 "this type has no code, so it cannot be written where a term is \
