@@ -127,6 +127,12 @@ mod metaprograms;
 mod module_delta;
 mod module_image;
 mod quote;
+// The projected-tuple-tower round's two instruments
+// (`docs/projected-tuple-tower-design.md` §11, `probes/README.md`): the
+// value-graph counter that priced the naming, and the readback itself. Both
+// are inert unless `HEATHER_RB` is set.
+mod rbcount;
+mod rbemit;
 mod recursion;
 mod representations;
 pub mod resolve;

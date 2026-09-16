@@ -1963,7 +1963,41 @@ impl Elaborator {
             }
             return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
+        let pre_whnf = expected;
         let expected = self.whnf(cx, expected, span)?;
+        // The sharing-preserving readback's spike
+        // (`docs/projected-tuple-tower-design.md` §9 items 2–3): what a
+        // readback of the *value* the machine already produced would write
+        // down, counted beside the reduct the rewriter wrote.
+        crate::rbcount::at_build_ctor(
+            self.semantic_oracle().world(),
+            &cx.gamma,
+            pre_whnf,
+            self.fuel,
+            &expected,
+        );
+        // …and, with `HEATHER_RB=fire`, the components below are read out of
+        // the **value** the machine already produced rather than out of the
+        // rewriter's reduct (`docs/projected-tuple-tower-design.md` §6). The
+        // two rules `Elaborator::whnf` applies to its own answer apply here
+        // too: a reference to a registered lowering is the registry's copy
+        // and is not read back at all, and a sum of the whole-type code's
+        // components is respelled inline — which is the spelling the value
+        // machine leaves folded.
+        let expected = if crate::rbemit::firing() && self.unspell_here(pre_whnf).is_none() {
+            let t = crate::rbemit::at_build_ctor(
+                self.semantic_oracle().world(),
+                &cx.gamma,
+                pre_whnf,
+                self.fuel,
+                expected,
+            );
+            self.unspell_here(&t)
+                .or_else(|| self.unspell_sum_components(&t))
+                .unwrap_or(t)
+        } else {
+            expected
+        };
         match self.tag_of(&expected) {
             Some(found) if found.tag == ind.tag => {}
             _ => {

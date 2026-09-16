@@ -525,7 +525,10 @@ Stop and report if any of these fires.
 
 ## 10. Status
 
-Design, with one measured spike that is **not** proposed to land. The reading
+Design, with one measured spike that is **not** proposed to land. §11 is the
+implementation pass that followed it (2026-09-16): the verification items are
+confirmed, the unit of sharing is measured, and the readback's first stage is
+built, flagged and measured end to end. The reading
 the brief handed this pass is refuted by its own instrument (§2), the exponent
 is re-derived (§3), candidate D is measured end to end and declined with its
 table (§4, §5), and the chosen mechanism is the sharing-preserving readback of
@@ -549,3 +552,277 @@ What this hands on:
 - The memory rule "computed-hypothesis shortcuts pay twice" gains its limit
   case: when the elaborator normalizes and writes the result down, every phase
   pays per node of a tree that has a linear graph inside it.
+
+---
+
+## 11. Implementation (2026-09-16): the spike, and stage one of the readback
+
+The implementation pass of §6. It ran §9's items 1–3 first, which **confirm**
+the design, and then built the readback itself in two stages: the value→syntax
+spelling (landed here, behind a flag, measured end to end) and the naming
+(designed here with its Ψ-entry mechanism and its measured target, **not**
+built). Everything below is measured on the same furnace E5 box as §4 unless
+a table says "local", release with `--features value-metrics`,
+`--kernel-workers 1`, no `--cache`, one process per file;
+`probes/rb_slice.sh` and `probes/README.md`'s round section say in what order.
+The tree offered for review carries both instruments and is **inert** with
+`HEATHER_RB` unset; `probes/rb_base/` holds the pristine copies.
+
+### 11.1 The spike: the naive count, the graph count, the curve (§9 items 1–3)
+
+`crates/elab/src/rbcount.rs` (`HEATHER_RB=count`) — which carries §1's
+exhaustive syntax counter, redex columns dropped, for its `reduct` column —
+walks the whnf **value** at
+`build_ctor` the way a readback would — forcing a 0-binder sub-structure,
+applying a `k`-binder one to `k` fresh neutrals, with
+`crates/kernel/src/conv/dom/values.rs`'s binder arities, and reading a glued
+neutral at its **folded** head. Both columns come from one walk: memoizing
+`count = 1 + Σ count(children)` on closure identity computes the size of the
+*tree* a naive readback writes, in the *graph*'s time, and the memo's
+population is the graph.
+
+| probe | item | reduct (§2, pre-firing) | naive readback | graph | shared nodes |
+|---|---|---|---|---|---|
+| `t_qt1` | `qt_pure` | 390 717 | 332 848 | 26 043 | 546 |
+| `t_cp9` | `cp_andt` | 1 756 377 | 1 304 352 | 61 181 | 1 103 |
+| `t_qt3` | `qt_deep` | 7 219 017 | 4 967 022 | 80 519 | 1 430 |
+| `t_qt5` | `qt_deeper` | 29 069 577 | 19 617 702 | 99 857 | 1 757 |
+| library | `complete_post` | 2 634 824 | 1 957 109 | 62 058 | 1 132 |
+
+1. **§2's counts re-confirm to the unit** on this tree — every `reduct` column
+   above is §2's number exactly, and the curve is ×4.50 / ×4.11 / ×4.03.
+2. **The naive readback is the normal form**, as §5 E said: 0.85 / 0.74 / 0.69
+   / 0.67 of the rewriter's own reduct — the annotation constant, *below* it
+   rather than above because the readback fires the redexes §4 measured at
+   25–45 % — and on the same curve, ×3.92 / ×3.81 / ×3.95 per layer. Not
+   smaller in kind; the STOP of item 2 does not fire.
+3. **The graph is linear**: 26 043 → 61 181 → 80 519 → 99 857, i.e. ×2.35,
+   ×1.31, ×1.24 and about +19 000 nodes per combinator layer at the tail
+   against ×4 in the tree. At `qt_deeper` the tree is **196×** its own graph.
+   §3's re-derivation stands and §6 has its basis.
+
+### 11.2 What the unit of sharing has to be — two measurements §6 did not have
+
+The same walk prices §6's open choice ("a sub-value visited twice; or every
+closure of a layer") directly: for a threshold `T`, name every shared node
+whose naming saves at least `T` nodes, bottom-up, and count what is emitted —
+the root's term plus every minted body, a reference costing 3 nodes.
+
+| item | T=0 (every shared node) | T=64 | T=1 024 |
+|---|---|---|---|
+| `qt_pure` | 546 names / 37 630 nodes | **40 / 34 681** | 20 / 41 267 |
+| `cp_andt` | 1 103 / 84 916 | **30 / 79 298** | 14 / 84 622 |
+| `qt_deep` | 1 430 / 111 614 | **36 / 104 309** | 18 / 109 915 |
+| `qt_deeper` | 1 757 / 138 312 | **42 / 129 320** | 22 / 135 208 |
+| `complete_post` | 1 132 / 86 191 | **31 / 80 477** | 14 / 86 207 |
+
+- **The unit is "shared *and* worth at least ~64 nodes", not "shared".**
+  Naming every twice-spelled sub-value is both 30× more declarations *and*
+  slightly worse in nodes than naming the few dozen that pay: a name costs its
+  body plus a reference per use, and most shared nodes are small.
+- **Thirty to forty declarations per reduct** collapse 1.96 M emitted nodes to
+  80 477 — and the emitted curve is the graph's, ×2.29 / ×1.32 / ×1.24. §6's
+  first-hour check, "`qt_deep`'s emitted node count is a small multiple of
+  `qt_pure`'s and not 18× it", comes out at **×3.0** against ×18.5 in the
+  rewriter's reduct.
+- **Ψ growth, per declaration**: over the whole showcase (8 092 `build_ctor`
+  reducts) the T=64 rule names **152** sub-values in total — 31 in
+  `complete_post`, 12 each in `product_grammar` and `sum_grammar` (over 14
+  reducts apiece), 3 in `paren_grammar`, **zero** in the 900-odd other items,
+  including every `omega::cutsat_*` (1 087 reducts, not one shared node worth
+  naming). That is the number
+  `issues/record-projection-defs-declaration-cost` has to cover, and it is two
+  orders below that issue's own customers — but its cost is per *binding
+  gated*, so it is the next round's measurement, not this one's claim.
+- **A naming device restricted to codes does not work.** The obvious
+  conservative rule — mint only what is already a type or a type *encoding*,
+  whose statement is `Ty l` and needs no inference — was measured on the same
+  walk: `complete_post` goes to 14 names / **1 442 433** nodes,
+  `qt_deep` to 15 / 3 571 257. The heavy shared nodes are *terms* that are not
+  encodings. So §6's device must be able to name a **term at an arbitrary
+  type**, and the type must come from the **position** — kernel syntax is
+  fully annotated (ch. 04), so every sub-structure's type is in the former
+  above it — rather than from the value, which does not carry one.
+
+### 11.3 Stage one: the readback, spelled but not named
+
+`crates/elab/src/rbemit.rs` (`HEATHER_RB=fire`) is §5 E's readback with the
+sharing memo on the *elaborator's* copy (one `Rc` per distinct sub-value) and
+**no minting**. It is installed at `build_ctor` only. Two rules, both
+discovered by the library failing to elaborate without them, and both §6's own
+doctrine read at a new place:
+
+- **An `El` at a glued encoding is kept folded.** Forcing it decodes the
+  definition the encoding names, and the registry's whole reason for naming a
+  lowering is that `El (D#tycode^δ)` is the spelling every structural reader
+  anchors on. This is §6's preference (a) at the type level.
+- **`Elaborator::whnf`'s two rules apply to the readback's answer too**: a
+  reference to a registered lowering is the registry's copy and is not read
+  back at all, and a sum of the whole-type code's components is respelled
+  inline (`unspell_sum_components`). Without the second, `tag_of` fails on
+  `Bool`: the value machine leaves `El (D#payload₀^δ) + El (D#suffix₀^δ)`
+  folded where the rewriter had decoded it, and no structural reader sees a
+  tag through that.
+- A **stuck** head is declined outright, which is `oracle.rs`'s own rule, and
+  so is any value with no bounded syntax (a compressed `Nat` run past 4 096
+  over a neutral tail, a bit run, a code recursor's elimination). A decline
+  keeps the rewriter's reduct. Over every probe and the showcase: **zero**
+  declines at `build_ctor`.
+
+`off` is the parent's path to the unit (`t_cp9` off reads 8 860 / 2 395 753 /
+162 499 against the parked HEAD binary's, and §4.1's `off` column).
+
+| probe | item | total ms | gate ms | `elab_whnf` | `decl_emit` | misses | queries | steps | maxrss |
+|---|---|---|---|---|---|---|---|---|---|
+| `t_qt2` | `qt_floor` | 27.6 → 31.9 | 12.2 → 11.4 | 7.1 → 11.1 | 0.9 → 1.1 | 21 → 8 | 6 495 → 6 430 | 738 → 651 | 1.41 → 0.99 GB |
+| `t_qt1` | `qt_pure` | 1 363 → 1 188 | 691 → 558 | 265 → 327 | 65 → 48 | 1 469 → **48** | 390 503 → 289 582 | 27 174 → 6 930 | 1.41 → 0.99 GB |
+| `t_cp9` | `cp_andt` | 6 909 → 5 682 | 4 347 → 3 167 | 704 → 917 | 415 → 298 | 8 860 → 2 414 | 2 395 753 → 1 689 132 | 162 499 → 67 920 | 1.41 → 0.99 GB |
+| `t_qt3` | `qt_deep` | 25 544 → 15 636 | 15 404 → 8 810 | 2 547 → 3 100 | 1 622 → 632 | 33 780 → 3 626 | 7 928 179 → 4 706 040 | 525 244 → 131 810 | 2.78 → 1.73 GB |
+| `t_qt4` | `qt_named` | 25 813 → 16 070 | 15 399 → 8 874 | 2 569 → 3 091 | 1 611 → 650 | 33 771 → 3 617 | 7 917 550 → 4 695 411 | 525 260 → 131 826 | 2.78 → 1.73 GB |
+| `t_cp1` | `cp_full` | 11 007 → 7 812 | 7 318 → 4 681 | 936 → 1 168 | 654 → 383 | 14 210 → 2 532 | 3 681 039 → 2 445 182 | 246 498 → 80 752 | 1.46 → 1.04 GB |
+| `t_cp18` | `cp_twice` | 14 902 → 9 883 | 10 078 → 6 214 | 964 → 1 245 | 1 021 → 543 | 21 347 → 2 637 | 4 965 897 → 3 200 804 | 331 907 → 92 882 | 1.86 → 1.27 GB |
+| `t_qt5` | `qt_deeper` | 101 388 → 53 012 | 62 305 → 29 902 | 11 058 → 11 746 | 5 860 → 1 782 | 128 043 → **6 460** | 29 447 197 → 16 164 444 | 1 917 588 → 331 910 | 9.54 → 5.26 GB |
+
+Read it against §4.1, which is candidate D's column on the same probes:
+
+- **It is not "no change at all".** §5 E predicted an unmemoized readback
+  "will measure no change", and that is the one prediction of the design this
+  pass corrects. On queries it is D's equal (`qt_deep` 4 706 040 against D's
+  4 792 739); on **misses** and **steps** it is not close to D — misses fall
+  9.3× at `qt_pure`, 19.8× at `qt_deeper`, steps 3.9× and 5.8× — because the
+  spelling is a *deep* normal form with the registry's names kept folded, so
+  the kernel hits where it used to miss. Resident memory falls with it
+  (9.54 → 5.26 GB), and `decl_emit_ns` 3.3× (the chokepoint walks a smaller
+  object).
+- **The exponent stays, exactly as §5 E said it would.** `cp_andt` →
+  `qt_deep` → `qt_deeper` is ×3.31 / ×3.71 in queries on the parent and
+  ×2.79 / ×3.43 here; in steps ×3.23 / ×3.65 against ×1.94 / ×2.52; in gate
+  ×3.54 / ×4.04 against ×2.78 / ×3.39. §6's bar — the ratios must fall
+  *toward 1* in queries and steps and gate — is **not met**. One identity
+  `map_at` still costs three times the item. The naming is the whole of the
+  remaining distance, and §11.2 says how far it goes: 104 309 emitted nodes
+  at `qt_deep` against 34 681 at `qt_pure`.
+- `elab_whnf_ns` **rises** by roughly what the readback costs (2 547 → 3 100
+  at `qt_deep`), because the site still runs the rewriter *and* the readback:
+  stage one is installed after `Elaborator::whnf` rather than in place of it,
+  deliberately, so that a decline is the parent's behaviour at the same site.
+  A landed version skips the rewriter there, and that clock is the size of the
+  gain it would take.
+- `t_qt4` stays within **0.23 %** of `t_qt3` on both sides (§9 item 6): naming
+  the reply in the library still does not matter.
+
+The showcase, serial and at the default gate width:
+
+| | off | fire |
+|---|---|---|
+| serial, item totals / kernel gate | 51.10 s / 38.05 s | **50.50 s / 36.92 s** |
+| serial, wall | 52.08 s | 51.52 s |
+| default width, item totals / gate | 58.72 s / 42.75 s | 58.00 s / 41.31 s |
+| default width, wall / maxrss | 28.69 s / 4.95 GB | 27.60 s / 4.59 GB |
+| misses / queries / steps | 207 075 / 14 533 673 / 4 624 434 | 189 401 / 13 215 537 / 4 420 603 |
+
+and the named items, serial, `misses / queries`: `complete_post`
+14 210 / 3 681 039 → **2 532 / 2 445 182**; `close_body` 2 707 / 1 318 201 →
+2 687 / 1 316 861; `expr_body` 365 / 558 836 → 345 / 557 496; `factor_body`
+381 / 558 868 → 361 / 557 528; `checked_expr` 17 995 / 520 342 →
+17 943 / 520 258; `number_grammar`, `Grammar` and `Certified` unchanged to the
+unit. As with D, **one item of the showcase moves and the rest are noise** —
+the whole-run 9.1 % of queries is `complete_post`'s 33.6 %.
+
+**And the per-item gate fails, in D's own shape.** Of the 944 joined rows,
+misses rise on 14 (`list::append_nil_elim` 88 → 96, `list::rev_involutive`
+356 → 357, twelve more of the same family, all +1 except that one), queries
+rise on 1 (`list::append_nil_elim` 1 845 → 1 888) and steps rise on at least
+30 (the listing is capped; `list::append_nil_elim` +568,
+`calc_parser::number_selected` +172, the rest +2 to +5). The summed head-pair
+table moves 206 914 → 189 240 misses over 52 rows, with five pairs rising
+(`El(?)/Wf` 37 563 → 37 597, `Pi/Pi` 3 693 → 3 734, `Wf/El(?)` 790 → 805,
+`Wf/El^δ` 8 → 32, `Wf/Wf` 11 → 17). The mechanism is §6's own audit line: a
+readback changes the spelling of every component it writes, and a `list::*`
+proof whose reduct the rewriter left weak-head now meets a deep normal form.
+So stage one is **kept behind its flag** and is not proposed to land on its
+own.
+
+### 11.4 The naming: how the minted declarations would enter Ψ
+
+What §6 asked to be said, now that §11.2 has priced it and stage one has shown
+what the spelling has to be. Three findings constrain it:
+
+1. A mint must name a **term at an arbitrary type** (§11.2's negative), and
+   the type comes from the position, so the readback that mints is
+   **type-directed**: it carries the type its parent's annotation gives it.
+   The minted binding is then `Δ ⊢ body : T` — for the common case, a code,
+   `Δ ⊢ ⌜T⌝ : Ty l`, which is what every existing device in `gendefs.rs`
+   registers.
+2. `Δ` is §6's "constructor telescope's local substitution" — `cx.gamma` —
+   extended, for a sub-value under `k` of the tower's own binders, by the
+   binder types the readback has just spelled; the use site is `u^δ` with `δ`
+   the identity substitution of that context, which costs one node plus the
+   substitution and carries **no annotations** (unlike an application).
+3. The mint happens **during** expression elaboration, where the elaborator is
+   `&self` and Ψ's indices are relative to its current length — so an eager
+   push would invalidate every global reference the declaration emitted
+   earlier. This is exactly the blocker
+   `issues/record-projection-defs-declaration-cost` records for lazy
+   projection registration, and it names the precedent: `meta_pushed`'s
+   `RefCell`.
+
+The mechanism this design proposes for it is the **goal arena's**
+(`crates/elab/src/goals.rs`), which already solves the same problem for holes
+and is the only device in the elaborator that lets Ψ grow across an item:
+
+- `configure(written, reserved)` reserves a block at the innermost end of Ψ
+  *before* the declaration is elaborated, and every reference emitted during
+  it is already numbered past that block (`gen_ref`, `resolve` and
+  `gen_def_of` all offset by `goal_arena.base()`);
+- entries are allocated through `&self` into a `RefCell`, each with its own
+  local context — a goal's binding is `GlobalBinding::Tm { ctx: goal.cx.gamma,
+  …, body: None }`, and a mint's is the same with a **body**, so that
+  `goal_arena.world()`'s padded Ψ makes the minted definition unfoldable by
+  the elaborator's own whnf and conversion as soon as it is minted;
+- at commit the block is *realized* rather than substituted away: the mints
+  are pushed into Ψ (through the gate, as `push_gen_def` does), and the
+  declaration's term is strengthened with a `GlobalSubst` whose mint entries
+  are references to the bindings just pushed — the same `apply_global` +
+  `strengthen_global` pass that already retires the goal block, with different
+  entries. A mint that overflows the reserved block declines and the component
+  stays inline, which is stage one's behaviour and is always safe.
+
+What that leaves for the round that builds it, in the order the audit wants
+them: the image and `ModuleDelta`'s dependency identity for a binding that is
+not keyed by a declaration's tag (every `GenDef` today is), the cache identity
+(`docs/cache-v1-design.md` §4 gives a generated definition its own), and the
+per-item join — which stage one already fails on 14 small `list::*` rows, so
+the naming round inherits that debt rather than creating it.
+
+### 11.5 Tests, and what was not run
+
+`crates/elab/src/rbemit.rs`'s own four (`docs/testing-generated-terms.md`'s
+axes, scaled to what stage one is): a **literal** scrutinee whose computation
+runs and lands on the rewriter's former; a **neutral** scrutinee, declined at
+the head and spelled **folded** one level down, which pins §6's preference
+(a); an **open** codomain read back under its binder against its closed
+control, which pins the one structural difference from the rewriter — the
+readback's answer is a *deep* normal form, so a `Vec` at a canonical length
+steps under a binder where the weak-head rewriter leaves it; and a negative
+control, a compressed successor program over a neutral tail past the cap,
+which is **declined** rather than guessed at.
+
+The full `scripts/test` is green on the furnace box — `== suite: 2701 passed,
+0 failed, 5 ignored ==`, the four above being the new ones — and no fixture
+moved: `WALK_RESIDUE` and the `psi().bindings.len()` fixtures are untouched,
+because with the flag off the elaborator emits exactly what it emitted. (On
+the desktop the same suite dies `INCOMPLETE` in `crates/cli`'s binary target
+under parallel scheduling; it dies there on the **pristine** tree too, 2 688
+passed against this tree's 2 692, so it is the box and not the change.)
+
+`scripts/bench --check` on the desktop, where the committed baseline was
+recorded, flags one row — `nat/step-once:256` 116 ns → 145 ns — beside
+uniform improvements elsewhere (`wf/check-tree` 0.63–0.66×,
+`check/generated-terms` 0.76×). `crates/kernel` is byte-identical to HEAD in
+this tree, so both columns are the same compiled kernel and the whole table is
+machine drift, not a change (`desktop-bench-gate-for-constants`).
+
+Not run, because stage one is flagged off and is not proposed to land: the x86
+rails at two sizes per item. They are the naming round's gates, and §8's list
+of what a landing owes is unchanged.
