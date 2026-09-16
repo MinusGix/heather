@@ -475,3 +475,290 @@ What the next pass takes is §4 **and** §5 as one device, against §2's table
 as their joint bar — the choice, the Δ, the δ and the mint block are shared,
 and the type half is `code.rs`'s `code_of` on the chosen node plus an `El` at
 the occurrence.
+
+---
+
+## 9. Implementation (2026-09-16): the device, on the default path
+
+§8's landing plan, built and measured; **not landed on the default path**, for
+the two reasons §9.5 and §9.6 give. `crates/elab/src/mint.rs` is the device —
+one mechanism with the two spellings of §8.3 — installed at `build_ctor`
+behind `HEATHER_RB_MINT=1`; it stands down whenever `HEATHER_RB` names one of
+the two design passes' instruments, so every run recorded in §1–§8 and in
+`docs/projected-tuple-tower-design.md` §11–§12 is still reproducible from this
+tree. `probes/nm0.sh` is step 0 and `probes/nm_slice.sh` is the measurement;
+`probes/README.md`'s round section says in what order.
+
+### 9.1 Step 0, to the unit
+
+§8.1/§8.2's columns re-read on this tree, split keying, per item. Every one is
+equal to §8's, so the object the device is built against is the one that was
+priced.
+
+| item | `naive` | `bad` | `closed` | `T64` | `TM64` | `TC64` | types | `code_of` refuses |
+|---|---|---|---|---|---|---|---|---|
+| `qt_pure` | 293 908 | 0 | 7 | 34 / 35 651 | 8 / 62 079 | 33 / 35 948 | 27 | **0** |
+| `cp_andt` | 1 056 154 | 0 | 7 | 20 / 88 053 | 7 / 102 015 | 20 / 88 128 | 13 | **0** |
+| `qt_deep` | 4 006 444 | 0 | 9 | 24 / 115 125 | 9 / 133 050 | 24 / 115 213 | 15 | **0** |
+| `complete_post` | 1 584 491 | 0 | 7 | 21 / 89 132 | 8 / 103 197 | 21 / 89 210 | 14 | **0** |
+| showcase | 8 092 reducts | 0 | 302 | 336 / 1 053 845 | 115 / 1 084 573 | 143 / 1 066 340 | 229 | **0** |
+
+Step 0 item 2 — §8.3's last bullet, which the brief asked to be confirmed
+before anything was built — is answered by the new `tycode_no=` /
+`tycode_lost=` columns on the instrument, and it is answered more strongly
+than §8.3 put it. The test is not the root former but the whole **type**
+subtree, because `code_of` recurses through type children and clones term
+ones: of the 229 threshold-clearing type nodes of the whole showcase, `code_of`
+refuses **none**, and the saving they carry that it cannot reach is
+**0 of 31 745** nodes. The partiality §12.4 warns about does not fall where
+the mass is, on any probe or on the showcase.
+
+### 9.2 What the device is, and the three things §4 did not know
+
+The mechanism is §4's: one mint per value, `Δ` the value's own free variables
+closed up so every entry's type is inside the block, a per-occurrence `δ`, the
+term spelling `u^δ` and the type spelling `El l (u^δ)` over `code_of`'s quote
+of the node. The Ψ entry is §11.4/§12.7's, to the arithmetic: the mint block
+sits **below** the goal block, so `GoalArena::allocate`'s `goal_base − 1 − k`
+and the `strengthen_global(solution, goal_base)` at the `on` sites are
+unchanged and only the *total* padding moves (`Elaborator::global_padding`);
+entries are allocated through `&self`; a body is strengthened by
+`goal_cap + mint_cap − j` at mint time, so it is scoped in `Ψ ++ mints[0..j]`
+and can be typed against the mints before it; realization at commit is a push
+through `push_generated` — the gate `push_gen_def` already faces, so the cache
+identity of `docs/cache-v1-design.md` §4 and the module image's Ψ suffix carry
+a mint with no new machinery — plus one `strengthen_global(term, mint_cap −
+used)`. A mint has **no** `GenDef` key: nothing reads it back by identity, so
+the recognizer registry does not grow and `ModuleDelta`'s event list does not
+either.
+
+Three things the design could not have known, each of which is the difference
+between the measured column and 2.5× it.
+
+1. **The emitter's graph was coarser than the counter's, twice over.**
+   `rbcount.rs` memoizes an out-of-line forced value on `(address, depth)` in
+   *every* keying, and a **0-binder closure on its identity alone** — merged
+   across depths — in every keying too, split included. `rbemit.rs` did
+   neither. §1's description of split keying as "no memo at all on an
+   out-of-line forced value" is therefore too strong, and it matters: every
+   column §2 and §8.2 price is over the graph those two memos make.
+   - The first is a memo the emitter may simply have (one value at one depth
+     is one piece of syntax), and it is now in `rbemit.rs`'s `shared`, keeping
+     the value alive beside its syntax so that no freed address can be reused
+     under the memo.
+   - The second is **not** a memo the emitter may have — the readback of a
+     0-binder closure at two depths really is different syntax — and it is
+     exactly what §8.3 meant by "the merge … that stage one's `(CloId, d)`
+     memo cannot spend". The device carries a *provenance* map from each piece
+     of syntax to the value it came from, merges the copies into one name, and
+     spells each occurrence with its own `δ`. Without the merge,
+     `complete_post` emits **224 653** where §8.2's `TC64` is 89 210; with it,
+     90 844.
+2. **The choice has to be top-down, over multiplicity, not bottom-up over
+   in-degree.** The two agree only while every parent is itself written once,
+   and under a name they do not: a node inside a minted body is written once
+   however many edges reach it. Bottom-up over in-degree names it again for
+   nothing — 196 names on `complete_post` against 80 for the same emitted
+   count — and every mint is a kernel-gated global.
+3. **`delta_psi` cannot be the world while a mint block is live.** A mint is
+   allocated through `&self` and `delta_psi` is rebuilt only where the
+   elaborator has `&mut self`, so the block the elaborator's own whnf and
+   conversion read stays placeholder padding, a reference into it does not
+   unfold, and a component that used to reduce to `True` stops. This is
+   §12.7's last bullet and it is not optional: `semantic_oracle` now builds
+   the padded world from the arena — cached, invalidated on allocation — for
+   exactly the declarations that have a block.
+
+Two further deviations from §4, both measured rather than argued:
+
+- **`Δ`'s binder types still come off `slots_tm`/`slots_ty`'s `Scope` table**,
+  not off the values as §4 asked. §4 attributed §12.6's seven refusals to that
+  table; with `Δ = fv` the question does not arise, because a binder type is
+  read only for a variable the body actually *uses*. §6 item 6 asked for fewer
+  than 7 refusals of 19: the measured refusal rate is **0**, on every probe
+  and on the showcase (`untyped=0`, `dunscoped=0`, `ddisagree=0`). A scope
+  whose binder types the table cannot spell gets **anonymous** binders rather
+  than poisoning its subtree — its *levels* are exact, and only a node whose
+  own `Δ` would need one of those types is refused. Poisoning the subtree
+  instead, which is what `rbname.rs`'s spike did, throws away the tower's
+  largest shared values, since they sit under `ElimWf` steps.
+- **Capacity discovery is a restart, and the discovering attempt must stop at
+  once.** The first attempt at a declaration has no mint block; a name that
+  wants one raises, and `elab_decl_one` elaborates the declaration again with
+  `MINT_CAP` slots — the goal arena's own precedent (§11.4's third finding).
+  Letting that first attempt run to the kernel gate costs the declaration its
+  whole conversion bill twice: `qt_pure` at exactly 2× the parent's misses and
+  no gain anywhere. Aborting at the first naming site is what turns the device
+  from a cost into §9.3's column.
+
+### 9.3 The firing gate, and why it is the declaration
+
+A node count on the rewriter's reduct cannot be the gate, which is worth
+writing down because it was the brief's first suggestion and it is wrong for a
+structural reason: that reduct is a **weak head** normal form and is small at
+every site — under 8 192 nodes at all 4 041 of `t_qt1`'s — while the object
+this round exists to shrink is the deep one under it. So the question is asked
+of the object itself: the readback runs wherever stage one's did, the naming
+walks its graph, and the answer is "does this take a name".
+
+That answer is then applied to the **whole declaration**, through the capacity
+restart: a declaration that names nothing never reaches a second attempt and
+keeps the rewriter's reduct byte for byte — which is what keeps stage one's
+fourteen `list::*` regressions (`docs/projected-tuple-tower-design.md` §11.3)
+from being inherited by the ~900 quiet ones — and a declaration that names
+something is elaborated again with a block and spells every site it can.
+
+Two gates sit behind it, and both are **declines** in §4's sense:
+
+- a mint whose body `typing::infer_term` will not type, whose `Δ` cannot be
+  written, or whose code `code_of` has no arm for;
+- the **whole named answer**, typed with `typing::infer_type` before it is
+  handed to `build_ctor`. A well-typed name is not yet a well-typed spelling —
+  the occurrence carries the statement `infer_term` chose, and the site may
+  want another — and without this gate the device writes a term the kernel
+  rejects at the declaration's own gate with nothing to say which name did it
+  (`lib/std/arch/x86_64`'s `fetched_executes`, `NotConvertible`). With it, the
+  block rolls back and the rewriter's reduct stands.
+
+### 9.4 The threshold is 1 024, and that is a debt
+
+§5 measured T = 64 three times on the *value* graph. The device works on the
+emitter's **syntax** graph, which splits a neutral into its head and spine and
+so has three times the nodes and four times the shared ones; that alone is a
+reason to re-ask the unit. It is not the reason this number is 1 024.
+
+The reason is the readers audit of §4's last paragraph, and it is an honest
+debt rather than a measurement. Naming a value hides its former from every
+reader that reconstitutes one against the spelling — the 2026-09-10 lesson —
+and two readers are tripped by small names:
+
+- at T = 64, a mint hides a record from `dispatch/member.rs`'s `record_of_at`:
+  `lib/std/relation.hthr`'s `compose_assoc` reports "this is not a record, so
+  it has no field `witness`". `record_of_at` now also tries `unspell_here` on
+  its whnf, which is the registry's own exact inverse; that was not enough.
+- at T = 256, the showcase's calculator stops converting `leb(2, 2)` against
+  `leb(2, len_append(…))` at an elaborator check.
+
+At T = 1 024 no reader in the suite trips. The threshold is not the fix for
+either — what a name may hide from a *structural* reader is the round this
+hands on — and the cost of paying the debt this way is in §9.5's table.
+
+### 9.5 What it does, and where it stops
+
+The naming itself reaches the column it was priced at. Local, deterministic,
+`HEATHER_RB_MINTS=1`, threshold 64 — node counts, machine-independent:
+
+| item | rewriter's tree | device | §8.2's `TC64` | mints (term / type) | Δ mean / max | declines |
+|---|---|---|---|---|---|---|
+| `qt_pure` | 293 908 | **36 067** | 35 948 (+0.3 %) | 10 / 45 | 2.4 / 5 | 0 |
+| `complete_post` | 1 584 491 | **90 844** | 89 210 (+1.8 %) | 40 / 40 | 3.1 / 5 | 0 |
+
+`untyped = 0`, `dunscoped = 0`, `ddisagree = 0` on every fired site of the
+library: §6 item 6 asked for fewer than 7 refusals of 19 and the answer is
+**none at all**, which is the one measurement §8.5 said this pass owed. §6
+item 5's `|Δ| ≤ 5` holds. The mechanism of §4 is confirmed end to end: a mint
+over exactly its free variables, one body serving every occurrence, a
+per-occurrence `δ`, and the emitted count on the value graph's curve.
+
+And at that threshold the kernel columns move the way §6 item 3 wants. Same
+tree, same box, `--kernel-workers 1`, `t_qt1` (which checks the whole parser
+library beside the probe), against the parent path (`HEATHER_RB=off`, which
+reproduces `docs/projected-tuple-tower-design.md` §11.3's `off` column to the
+unit) and against stage one (`HEATHER_RB=fire`, which reproduces its `fire`
+column to the unit):
+
+| item | | misses | queries | steps | gate ms | `decl_emit` ms |
+|---|---|---|---|---|---|---|
+| `qt_pure` | parent | 1 469 | 392 324 | 27 174 | 553 | 59 |
+| | stage one | 48 | 289 630 | 6 930 | 470 | 58 |
+| | **device** | 1 473 | **45 790** | 50 545 | **124** | **2.5** |
+| `complete_post` | parent | 14 210 | 3 698 442 | 246 498 | 6 581 | 626 |
+| | stage one | 2 532 | 2 447 732 | 80 752 | 4 213 | 405 |
+| | **device** | **5 417** | **775 451** | **166 158** | **1 646** | **174** |
+
+Queries fall 8.6× and 4.8× against the parent and 6.3× and 3.2× against stage
+one; the kernel gate falls 4.5× and 4.0×; the emission chokepoint falls 24×
+and 3.6×. What rises is `elab_whnf_ns` — 236 ms → 1 011 ms and 1 146 ms →
+4 095 ms — which is the device's own bill: the readback runs at every site as
+stage one's did, the naming walks its graph, every mint is typed, and a
+declaration that names anything is elaborated twice by the capacity restart.
+That clock is the next round's target and it is not the round's bar.
+
+**The round stops here, on two obstacles, and the device ships opt-in at
+`THRESHOLD = 1 024`.**
+
+**The first is cost, and it is the price of the gate.** The readback and its
+plan run at **every** `build_ctor`, as stage one's did — that is how the gate
+learns whether there is anything to name (§9.3) — so the ~900 declarations
+with nothing to name pay a deep readback to find out. On a fired item that
+bill is `elab_whnf_ns`'s 4×, which the kernel columns above pay for several
+times over. Across `scripts/test --fast` it is visible but not alarming:
+187 s of tests at T = 1 024, 206 s at 256, 267 s at 64, against the same
+suite's own variance. It is still the wrong shape — the question "is there
+anything here" is answerable on the *value* graph, which `rbcount.rs` already
+walks in graph time — and a pre-gate there is the first thing the next round
+wants.
+
+**The second is the readers audit, and it is what stops the landing.** Three
+things break, and they are the same thing:
+
+1. at T = 64, a name hides a record from `dispatch/member.rs`'s
+   `record_of_at` (§9.4);
+2. at T = 256, the showcase's calculator stops converting `leb(2, 2)` against
+   `leb(2, len_append(…))`;
+3. a **kernel** `NotConvertible` on `lib/std/arch/x86_64`'s `fetched_executes`
+   — a well-typed name is not a well-typed spelling, because the occurrence
+   carries the statement `infer_term` chose and the site may want another.
+
+§9.3's whole-answer `infer_type` gate turns (3) into a decline and the suite
+goes green. But that gate is the same reader asked once more, and it then
+**declines the items the round exists for**:
+`typing::infer_type` refuses the named root of `complete_post` and of
+`qt_pure` with `NotConvertible` too, so at T = 1 024 the device chooses names
+at three sites of the whole library and mints at none of them. That is why the
+table above is quoted at 64 and the tree ships at 1 024: what the device does
+is measured, and what it may safely *say* is not yet known.
+
+So the landing is not made, and what it waits on is one question, now sharp:
+**what may a name hide from a reader, and from the kernel's own conversion?**
+Not "is the mint well typed" — it is, 100 % of the time, which is the finding
+§8.5 asked for — but "does the occurrence's statement convert against the
+statement the site wants". Every one of the three failures is that question
+asked at a different reader.
+
+`HEATHER_RB_MINT=1 HEATHER_RB_T=64 HEATHER_RB_NOROOTGATE=1` on `t_qt1`
+reproduces both tables above in one run — the mint counts, the emitted counts
+and the kernel columns, to the unit — and `HEATHER_RB=off` and
+`HEATHER_RB=fire` on the same file are the parent and stage-one columns beside
+them.
+
+### 9.6 Status
+
+The device is built, tested and **opt-in**: with `HEATHER_RB_MINT` unset the
+default path is the parent's byte for byte, which is why the fixtures do not
+move and the landing gates are not the ones reported. No commit, no
+`cargo fmt`, no issue edited, no fixture moved: `WALK_RESIDUE`,
+`record_projection_size` and every `psi().bindings.len()` fixture are
+untouched. Source:
+`crates/elab/src/mint.rs` (new), the provenance and out-of-line memo in
+`rbemit.rs`, `code_of_spliced` in `code.rs`, the `tycode_no=`/`tycode_lost=`
+columns in `rbcount.rs`, the mint block's arithmetic across `attempt.rs`,
+`goals.rs`, `gendefs.rs`, `lib.rs` and the five sites that renumber by the
+padding, and `record_of_at`'s `unspell_here` fallback. Tests: eight in
+`mint.rs` on `docs/testing-generated-terms.md`'s axes — a closed shared value,
+an open one against it, one under a binder, one below the threshold, a refused
+mint, a type named through its code, a type `code_of` has no code for, and the
+pairing of `code_of_spliced` with `code_of`. `scripts/test --fast` is
+`== suite: 2574 passed, 0 failed, 5 ignored ==` (186 s), and it is the same
+line and the same 187 s with the device **on** at T = 1 024 — which is the
+measurement behind §9.5's first obstacle being a shape rather than a wall.
+The bench dance, the x86 rails at two sizes and the whole
+parent-against-change slice were **not** run to completion: they are a landing's gates, and with the device off they would
+measure the parent twice.
+
+What the next pass takes, in order: the **pre-gate** on the value graph that
+makes the readback affordable at the ~900 sites that will not name anything;
+then the one question §9.5 ends on — what a name may hide from a reader and
+from conversion — which is the whole of the remaining distance, since the
+naming itself is measured, its typing refusal rate is zero, and its emitted
+count is §8.2's column.

@@ -340,17 +340,26 @@ impl GoalArena {
     }
 
     /// Ψ as goal statements see it, including reserved-but-unused slots.
-    pub(super) fn world(&self, psi: &GlobalCtx, meta_pushed: &[GlobalBinding]) -> GlobalCtx {
+    pub(super) fn world(
+        &self,
+        psi: &GlobalCtx,
+        meta_pushed: &[GlobalBinding],
+        mints: &[GlobalBinding],
+    ) -> GlobalCtx {
         if !meta_pushed.is_empty() {
             let mut bindings = psi.bindings.to_vec();
             bindings.extend(meta_pushed.iter().cloned());
             return GlobalCtx::new(bindings);
         }
-        if self.base == 0 {
+        if self.base == 0 && mints.is_empty() {
             return psi.clone();
         }
         let goals = self.entries.borrow();
         let mut bindings = psi.bindings.to_vec();
+        // The mint block, **below** the goal block: with it there, goal `k` is
+        // still `GlobalVar(goal_base − 1 − k)` and only the padding total
+        // moves (`crate::mint`).
+        bindings.extend(mints.iter().cloned());
         for k in 0..self.base as usize {
             bindings.push(match goals.get(k) {
                 Some(goal) => GlobalBinding::Tm {

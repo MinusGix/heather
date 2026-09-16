@@ -2007,7 +2007,16 @@ impl Elaborator {
                 .or_else(|| self.unspell_sum_components(&t))
                 .unwrap_or(t)
         } else {
-            expected
+            // …and, on the **default** path, the same readback with its
+            // shared sub-values **named**: one mint per value, `Δ` the
+            // value's own free variables, referenced `u^δ` for a term and
+            // `El l (u^δ)` over a code for a type
+            // (`docs/name-per-value-design.md` §4 and §8.3, and the tower
+            // design's §11.4/§12.7 for how the block enters Ψ). Fires only
+            // where the readback buys — a reduct past `mint::FIRE_NODES` —
+            // so a declaration with nothing worth naming keeps the
+            // rewriter's spelling byte for byte.
+            self.mint_ctor_reduct(cx, pre_whnf, expected, span)?
         };
         match self.tag_of(&expected) {
             Some(found) if found.tag == ind.tag => {}
@@ -2799,7 +2808,17 @@ impl Elaborator {
         if let Some(ind) = self.record_of(ty) {
             return Some(ind);
         }
-        self.record_of(&self.whnf(cx, ty, span).ok()?)
+        let head = self.whnf(cx, ty, span).ok()?;
+        // …and through a **name**, which is the one new shape this round adds
+        // at this reader (`docs/name-per-value-design.md` §4's audit). The
+        // readback keeps a glued encoding folded on purpose — that is what
+        // every structural reader anchors on — so a receiver whose type came
+        // out of a named `build_ctor` reduct arrives as `El (D#tycode_fn^δ ā)`
+        // where the rewriter's reduct was the inline lowering, and `tag_of`
+        // reads a *shape*. `unspell_here` is the registry's own exact inverse
+        // and is what restores it.
+        self.record_of(&head)
+            .or_else(|| self.record_of(&self.unspell_here(&head)?))
     }
 }
 

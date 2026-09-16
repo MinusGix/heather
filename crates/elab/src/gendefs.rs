@@ -2349,7 +2349,7 @@ impl Elaborator {
     /// [`Self::gen_ref`]'s own numbering, goal arena and `meta fn` padding
     /// included.
     fn gen_ref_len(&self, g: u32) -> u32 {
-        self.psi.bindings.len() as u32 + self.attempt.goal_arena.base() + self.meta_offset() + g
+        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset() + g
     }
 
     /// [`Self::instance_ref`]'s two steps without the spine: the recovered
@@ -3123,7 +3123,7 @@ impl Elaborator {
             return None;
         }
         let len_at = self.psi.bindings.len() as u32
-            + self.attempt.goal_arena.base()
+            + self.global_padding()
             + self.meta_offset()
             + scratch;
         self.unspell_ty_deep(len_at, ty)
@@ -3365,13 +3365,36 @@ impl Elaborator {
         body: Term,
         span: Span,
     ) -> R<()> {
-        let empty = LocalCtx::nil();
         let name = key.name(owner);
+        self.push_generated(Some(key), name, LocalCtx::nil(), ty, level, body, span)
+    }
+
+    /// The gate-and-push half of [`Self::push_gen_def`], over an arbitrary
+    /// `Δ`. A generated definition is closed and keyed by its declaration's
+    /// tag; a **mint** (`crate::mint`) is neither — its `Δ` is the value's own
+    /// free variables and its identity is its position — so what they share is
+    /// exactly this: an ordinary bodied Ψ binding that faces the same gate and
+    /// takes its own cache identity (`docs/cache-v1-design.md` §4).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_generated(
+        &mut self,
+        key: Option<GenDef>,
+        name: String,
+        empty: LocalCtx,
+        ty: Type,
+        level: Level,
+        body: Term,
+        span: Span,
+    ) -> R<()> {
         // Generated-declaration emission, as its own column: a declaration's
         // row says how much of it was spent minting the definitions it needed
         // (`docs/instrumentation-design.md` §5). The kernel gate below keeps
         // its own bracket, and the exclusive rule keeps the two apart.
-        crate::stats::count(crate::stats::Counter::GendefsPushed);
+        crate::stats::count(if key.is_some() {
+            crate::stats::Counter::GendefsPushed
+        } else {
+            crate::stats::Counter::MintsPushed
+        });
         let _phase = crate::stats::guard(crate::stats::Timer::Gendefs);
         {
             // A generated definition faces the same gate as a `fn` and the same
@@ -3461,7 +3484,13 @@ impl Elaborator {
             level,
             Rc::new(body),
         ));
-        self.semantic_commit_gen_def(key, abs);
+        match key {
+            Some(key) => self.semantic_commit_gen_def(key, abs),
+            // A mint has no recognizer key: nothing reads it back by identity,
+            // and the binding itself travels in the module's Ψ suffix like any
+            // other (`module_delta.rs`'s `extension`).
+            None => {}
+        }
         self.refresh_delta_psi();
         Ok(())
     }
@@ -3490,7 +3519,7 @@ impl Elaborator {
         // symptom was a kernel `WrongGlobalBinding` naming the context binder
         // (`crates/elab/tests/certgen_route1_spike.rs`'s meta walk over `Ir`).
         // The two paddings never combine: goals are refused inside a `meta fn`.
-        let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base() + self.meta_offset());
+        let var = GlobalVar(len - 1 - abs + self.global_padding() + self.meta_offset());
         Some(Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -3524,7 +3553,7 @@ impl Elaborator {
         // Fully checked: a `GlobalVar` reaching here can be anything the term
         // it came out of contains, including one that is out of scope.
         let abs = len
-            .checked_add(self.attempt.goal_arena.base())?
+            .checked_add(self.global_padding())?
             .checked_add(self.meta_offset())?
             .checked_sub(var.0.checked_add(1)?)?;
         self.types.gdefs().key_for_abs(&abs).copied()

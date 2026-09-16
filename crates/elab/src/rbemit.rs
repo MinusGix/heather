@@ -73,6 +73,31 @@ struct Emit<'a, 'v> {
     base: CtxBase,
     tm: HashMap<Key, Rc<Term>>,
     ty: HashMap<Key, Rc<Type>>,
+    /// An **out-of-line** forced value — a neutral's substitution entry, a
+    /// `Vec`'s length — read at the depth it is met at. `rbcount.rs`'s
+    /// counter has always memoized these on `(address, depth)`, and every
+    /// column `docs/name-per-value-design.md` prices is over the graph that
+    /// memo makes; without it here the emitter's own graph is coarser than
+    /// the one the mint was measured on, and the same names buy 2.5× less.
+    /// The keying is `tm_at`'s: one value at one depth is one piece of
+    /// syntax.
+    /// The value is kept beside its syntax so that its address cannot be
+    /// reused by a later allocation while the memo still answers for it —
+    /// these `Rc`s are the elaborator's own and are otherwise dropped as soon
+    /// as the spine entry that held them is.
+    val: HashMap<(usize, u32), (Rc<Val<'v>>, Rc<Term>)>,
+    /// Which **value** each piece of syntax is the readback of, for the
+    /// sub-structures whose sharing crosses depths: a 0-binder closure is one
+    /// value wherever it is met, and its readbacks at two depths differ only
+    /// in the de Bruijn indices of its free variables. The emitter cannot
+    /// merge them — the syntax really is different — but the *mint* can, and
+    /// must: `rbcount.rs` keys such a closure on its identity alone in every
+    /// keying, so that merge is inside every column
+    /// `docs/name-per-value-design.md` prices, and it is what §8.3 means by
+    /// "the merge of a 0-binder closure across depths that stage one's
+    /// `(CloId, d)` memo cannot spend". One name, one body scoped in `Δ`, and
+    /// a per-occurrence `δ` supplying each depth's own indices.
+    prov: HashMap<usize, (bool, CloId)>,
     depth: u32,
     declined: bool,
 }
@@ -123,6 +148,9 @@ impl<'a, 'v> Emit<'a, 'v> {
             Err(_) => Rc::new(self.decline_tm()),
         };
         self.depth -= 1;
+        if pending == 0 {
+            self.prov.insert(Rc::as_ptr(&out) as usize, (true, c.ident()));
+        }
         self.tm.insert(key, Rc::clone(&out));
         out
     }
@@ -171,6 +199,9 @@ impl<'a, 'v> Emit<'a, 'v> {
             && let Some(folded) = self.el_folded(c, pending, d)
         {
             let out = Rc::new(folded);
+            if pending == 0 {
+                self.prov.insert(Rc::as_ptr(&out) as usize, (false, c.ident()));
+            }
             self.ty.insert(key, Rc::clone(&out));
             return out;
         }
@@ -186,12 +217,26 @@ impl<'a, 'v> Emit<'a, 'v> {
             Err(_) => Rc::new(self.decline_ty()),
         };
         self.depth -= 1;
+        if pending == 0 {
+            self.prov.insert(Rc::as_ptr(&out) as usize, (false, c.ident()));
+        }
         self.ty.insert(key, Rc::clone(&out));
         out
     }
 
     fn shared(&mut self, v: &Rc<Val<'v>>, d: u32) -> Rc<Term> {
-        Rc::new(self.val(v, d))
+        let key = (Rc::as_ptr(v) as *const u8 as usize, if merge_depths() { 0 } else { d });
+        if let Some((_, t)) = self.val.get(&key) {
+            return Rc::clone(t);
+        }
+        if self.depth >= DEPTH_CAP || self.declined {
+            return Rc::new(self.decline_tm());
+        }
+        self.depth += 1;
+        let out = Rc::new(self.val(v, d));
+        self.depth -= 1;
+        self.val.insert(key, (Rc::clone(v), Rc::clone(&out)));
+        out
     }
 
     fn subst(&mut self, s: &VSubst<'v>, d: u32) -> LocalSubst {
@@ -660,6 +705,16 @@ pub(crate) fn whnf_type_from_value(
     ty: &Type,
     fuel: u64,
 ) -> Option<Type> {
+    whnf_type_from_value_with_prov(world, gamma, ty, fuel).map(|(t, _)| t)
+}
+
+/// [`whnf_type_from_value`] with the value provenance the mint needs.
+pub(crate) fn whnf_type_from_value_with_prov(
+    world: &GlobalCtx,
+    gamma: &LocalCtx,
+    ty: &Type,
+    fuel: u64,
+) -> Option<(Type, HashMap<usize, (bool, CloId)>)> {
     let arena = ValueArena::new();
     let defs = Defs::transparent(world);
     let root = eval::whnf_value_ty(&arena, &Rc::new(ty.clone()), gamma, defs, fuel).ok()?;
@@ -676,6 +731,8 @@ pub(crate) fn whnf_type_from_value(
         base: gamma.base,
         tm: HashMap::new(),
         ty: HashMap::new(),
+        val: HashMap::new(),
+        prov: HashMap::new(),
         depth: 0,
         declined: false,
     };
@@ -684,7 +741,7 @@ pub(crate) fn whnf_type_from_value(
     if e.declined {
         return None;
     }
-    Some(out)
+    Some((out, std::mem::take(&mut e.prov)))
 }
 
 /// The one call site, beside [`crate::rbcount::at_build_ctor`]: with

@@ -133,6 +133,7 @@ mod quote;
 // are inert unless `HEATHER_RB` is set.
 mod rbcount;
 mod rbemit;
+mod mint;
 mod rbname;
 mod recursion;
 mod representations;
@@ -971,15 +972,20 @@ impl matching::MotiveSynthesisElab for Elaborator {
 }
 
 impl matching::MatchSpeculationState for Elaborator {
-    type Mark = (usize, usize);
+    type Mark = (usize, usize, usize);
 
     fn mark_match_state(&self) -> Self::Mark {
-        (self.warnings.borrow().len(), self.attempt.goal_arena.mark())
+        (
+            self.warnings.borrow().len(),
+            self.attempt.goal_arena.mark(),
+            self.attempt.mint_arena.mark(),
+        )
     }
 
     fn rollback_match_state(&self, mark: Self::Mark) {
         self.warnings.borrow_mut().truncate(mark.0);
         self.attempt.goal_arena.rollback(mark.1);
+        self.attempt.mint_arena.rollback(mark.2);
     }
 
     fn motive_probe_active(&self) -> bool {
@@ -2713,7 +2719,7 @@ impl Elaborator {
     pub(crate) fn global_abs_of(&self, var: GlobalVar) -> Option<usize> {
         let len = self.psi.bindings.len() as u32;
         let abs = len
-            .checked_add(self.attempt.goal_arena.base())?
+            .checked_add(self.global_padding())?
             .checked_add(self.meta_pushed.borrow().len() as u32)?
             .checked_sub(var.0.checked_add(1)?)?;
         Some(abs as usize)
@@ -2787,14 +2793,25 @@ impl Elaborator {
     fn elab_decl_one(&mut self, decl: &Decl, obligations: Option<&measure::Obligations>) -> R<()> {
         let warn_mark = self.warnings.borrow().len();
         let mut reserved = 0;
+        // The readback's mint block is discovered the same way a promoted
+        // implicit parameter's goal slot is: the first attempt has none, a
+        // name that wants one asks, and the declaration is elaborated again
+        // with capacity (`crate::mint`, the tower design's §11.4). The ~900
+        // declarations with nothing worth naming never ask, and so keep the
+        // parent's numbering and the `delta_psi` fast path byte for byte.
+        let mut mints = 0;
         self.attempt.goal_arena.enable_restarts();
         let r = loop {
             self.attempt.prepare();
             self.pending_derived.borrow_mut().clear();
-            let r = self.check_decl(decl, reserved);
+            let r = self.check_decl(decl, reserved, mints);
             let requested = self.attempt.goal_arena.take_requested_base();
-            if requested <= reserved {
+            let wants_mints = self.attempt.mint_arena.take_wanted() && mints == 0;
+            if requested <= reserved && !wants_mints {
                 break r;
+            }
+            if wants_mints {
+                mints = crate::mint::MINT_CAP;
             }
             // Nothing in an ordinary declaration is registered before its
             // kernel gate. Goal-capacity discovery is therefore speculative:
@@ -2802,7 +2819,7 @@ impl Elaborator {
             // prefix, and elaborate the declaration again from its source.
             self.warnings.borrow_mut().truncate(warn_mark);
             self.attempt.clear_goals();
-            reserved = requested;
+            reserved = reserved.max(requested);
         };
         self.attempt.finish();
         self.refresh_delta_psi();
@@ -3161,7 +3178,12 @@ impl Elaborator {
         Ok(cx)
     }
 
-    fn check_decl(&mut self, decl: &Decl, reserved_goals: u32) -> R<PendingDecl> {
+    fn check_decl(
+        &mut self,
+        decl: &Decl,
+        reserved_goals: u32,
+        reserved_mints: u32,
+    ) -> R<PendingDecl> {
         // Keep the writer's declaration, not the constraint-expanded working
         // copy: representation obligations later restate the surface API.
         let surface = decl.clone();
@@ -3222,6 +3244,7 @@ impl Elaborator {
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
+        self.attempt.mint_arena.configure(reserved_mints);
         self.attempt
             .goal_arena
             .configure(count_holes(decl), reserved_goals);
@@ -3459,6 +3482,14 @@ impl Elaborator {
         let term = term.map(|term| term.apply_global(&sigma));
         let stmt = stmt.apply_global(&sigma);
         drop(decl_emit);
+
+        // The readback's mint block is **realized** rather than substituted
+        // away (the tower design's §11.4 and §12.7): the names it took become
+        // ordinary bodied Ψ definitions, pushed through the same gate a
+        // generated definition faces, and the declaration's own pair is
+        // strengthened out of the slots nothing took. With no block reserved —
+        // every declaration that named nothing — this is the identity.
+        let (term, stmt) = self.realize_mints(&decl.name, decl.span, term, stmt)?;
 
         // The emission audit, on exactly the pair the kernel is about to be
         // handed (`emission_walk`; design §2.5). Off unless asked for.
@@ -3733,10 +3764,12 @@ impl Elaborator {
     /// has one, so the term path is served by the cheaper padded
     /// [`Self::delta_psi`] and goals still need no real binding for the rest
     /// of elaboration.
-    fn goal_psi(&self) -> GlobalCtx {
-        self.attempt
-            .goal_arena
-            .world(&self.psi, &self.meta_pushed.borrow())
+    pub(crate) fn goal_psi(&self) -> GlobalCtx {
+        self.attempt.goal_arena.world(
+            &self.psi,
+            &self.meta_pushed.borrow(),
+            &self.attempt.mint_arena.bindings(),
+        )
     }
 
     /// The substitution discharging the whole goal block: `entries[k]` is the
@@ -7127,7 +7160,7 @@ impl Elaborator {
                 // The two paddings never combine: goals are refused inside a
                 // `meta fn`.
                 let meta_off = self.meta_pushed.borrow().len() as u32;
-                let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base() + meta_off);
+                let var = GlobalVar(len - 1 - abs + self.global_padding() + meta_off);
                 let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");
                 };
@@ -7182,6 +7215,21 @@ impl Elaborator {
     /// Semantic operations in the expression world's δ context, including
     /// any dynamic meta binders currently in scope.
     fn semantic_oracle(&self) -> oracle::SemanticOracle {
+        // While a mint block is reserved, the world the elaborator reads is
+        // built here rather than cached in `delta_psi`: a mint is allocated
+        // through `&self` and its **body** has to be visible to whnf and
+        // conversion the moment it exists (`crate::mint`, §12.7).
+        if self.attempt.mint_arena.live() {
+            let world = self
+                .attempt
+                .mint_arena
+                .world(&self.psi, self.attempt.goal_arena.base());
+            return oracle::SemanticOracle::with_dynamic(
+                &world,
+                &self.meta_pushed.borrow(),
+                self.fuel,
+            );
+        }
         oracle::SemanticOracle::with_dynamic(&self.delta_psi, &self.meta_pushed.borrow(), self.fuel)
     }
 
@@ -7248,13 +7296,60 @@ impl Elaborator {
         Ok(self.unspell_sum_components(&head).unwrap_or(head))
     }
 
+    /// Push the mint block into Ψ and strengthen the declaration's own pair
+    /// out of the slots nothing took (`crate::mint`).
+    ///
+    /// A mint's stored body is already scoped in `Ψ ++ mints[0..j]`, so the
+    /// pushes are in order and each one's body is checkable against the ones
+    /// before it; what is left is the block's slack, `mint_cap − used`.
+    fn realize_mints(
+        &mut self,
+        owner: &str,
+        span: Span,
+        term: Option<Term>,
+        stmt: Type,
+    ) -> R<(Option<Term>, Type)> {
+        if self.attempt.mint_arena.cap() == 0 {
+            return Ok((term, stmt));
+        }
+        let (mints, slack) = self.attempt.mint_arena.realize();
+        for m in mints {
+            self.push_generated(
+                None,
+                format!("{owner}::{}", m.name),
+                m.ctx,
+                (*m.ty).clone(),
+                m.level,
+                (*m.body).clone(),
+                span,
+            )?;
+        }
+        let term = term.map(|t| crate::mint::strengthen_tm(&Rc::new(t), slack));
+        let stmt = crate::mint::strengthen_ty(&stmt, slack);
+        Ok((term, stmt))
+    }
+
+    /// How far the committed bindings are pushed out by the declaration-local
+    /// blocks: the goal block, and **below** it the readback's mint block
+    /// (`crate::mint`, the tower design's §12.7). Every site that renumbers a
+    /// `GlobalVar` against the padding takes this total; only
+    /// `GoalArena::allocate`'s own `goal_base − 1 − k` does not, which is why
+    /// the mint block sits below rather than above.
+    pub(crate) fn global_padding(&self) -> u32 {
+        self.attempt.goal_arena.base() + self.attempt.mint_arena.cap()
+    }
+
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
-        if self.attempt.goal_arena.base() == 0 {
+        if self.global_padding() == 0 {
             self.delta_psi = self.psi.clone();
             return;
         }
         let mut bindings = self.psi.bindings.to_vec();
+        // The mint block carries its **bodies**: the term path is what the
+        // elaborator's own whnf and conversion read, and a mint that does not
+        // unfold there is a name no reader can see through (§12.7).
+        bindings.extend(self.attempt.mint_arena.bindings());
         bindings.resize(
             bindings.len() + self.attempt.goal_arena.base() as usize,
             GlobalBinding::Tm {

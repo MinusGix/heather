@@ -568,7 +568,7 @@ impl Elaborator {
                 .insert(key.to_string());
         }
         let len = self.psi.bindings.len() as u32;
-        let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base());
+        let var = GlobalVar(len - 1 - abs + self.global_padding());
         Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -595,7 +595,7 @@ impl Elaborator {
     /// empty context, and the head that ordered the first search is what
     /// keeps the second from building the general candidates first.
     fn record_derived(&self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
-        if self.attempt.goal_arena.base() != 0 || !self.type_is_closed(goal, lvl) {
+        if self.global_padding() != 0 || !self.type_is_closed(goal, lvl) {
             return;
         }
         let mut pending = self.pending_derived.borrow_mut();

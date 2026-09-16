@@ -1315,7 +1315,7 @@ record DepC { m: Nat, eq: m = m }
         ));
         e.el.refresh_delta_psi();
         let dup = Term::GlobalTm {
-            var: GlobalVar(e.el.attempt.goal_arena.base()),
+            var: GlobalVar(e.el.global_padding()),
             subst: LocalSubst {
                 tail: SubstTail::Empty {
                     len: 0,
@@ -1325,7 +1325,7 @@ record DepC { m: Nat, eq: m = m }
             },
         };
         assert!(
-            e.el.gen_def_of(GlobalVar(e.el.attempt.goal_arena.base()))
+            e.el.gen_def_of(GlobalVar(e.el.global_padding()))
                 .is_none()
         );
         let forged = Type::El {

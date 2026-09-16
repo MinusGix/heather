@@ -482,6 +482,14 @@ struct Dag {
     /// type-code device of `docs/name-per-value-design.md` §5 has to cover,
     /// since `code.rs`'s `code_of` is partial on purpose.
     ty_shape: Vec<&'static str>,
+    /// For a node of the type sort, whether its **own former** has a code in
+    /// `code.rs`'s `code_of`. Whether the node as a whole can be quoted is the
+    /// bottom-up closure of this over the node's *type* children, since
+    /// `code_of` recurses into them and clones its term children — that fold
+    /// is the `tycode=` column, which is step 0 item 2 of the implementation
+    /// brief (`docs/name-per-value-design.md` §8.3's last bullet, asked of the
+    /// whole subtree rather than of the root former alone).
+    code_shape: Vec<bool>,
     /// The level the node was opened at on the walk's **first** visit to it —
     /// the only visit, since the memo answers the rest. A 0-binder closure
     /// merged across depths keeps the first one, which is the whole question
@@ -500,6 +508,7 @@ impl Dag {
         self.opaque.push(false);
         self.is_ty.push(false);
         self.ty_shape.push("-");
+        self.code_shape.push(true);
         self.open_lvl.push(0);
         (self.kids.len() - 1) as u32
     }
@@ -532,6 +541,8 @@ struct Walk<'a, 'v> {
     /// See [`Dag::is_ty`]; saved and restored around a child as `cur` is.
     cur_is_ty: bool,
     cur_shape: &'static str,
+    /// See [`Dag::code_shape`]; saved and restored around a child as `cur` is.
+    cur_code_shape: bool,
     /// The highest level any fresh neutral was opened at.
     max_lvl: u32,
     /// `HEATHER_RB=fv`: every opening gets its **own** binder identities from
@@ -620,6 +631,7 @@ impl<'a, 'v> Walk<'a, 'v> {
         let saved_o = std::mem::take(&mut self.cur_opaque);
         let saved_k = std::mem::take(&mut self.cur_is_ty);
         let saved_s = std::mem::replace(&mut self.cur_shape, "-");
+        let saved_c = std::mem::replace(&mut self.cur_code_shape, true);
         self.depth += 1;
         let mass = body(self);
         self.depth -= 1;
@@ -629,6 +641,7 @@ impl<'a, 'v> Walk<'a, 'v> {
         self.dag.opaque[id as usize] = std::mem::replace(&mut self.cur_opaque, saved_o);
         self.dag.is_ty[id as usize] = std::mem::replace(&mut self.cur_is_ty, saved_k);
         self.dag.ty_shape[id as usize] = std::mem::replace(&mut self.cur_shape, saved_s);
+        self.dag.code_shape[id as usize] = std::mem::replace(&mut self.cur_code_shape, saved_c);
         let (kids, own) = std::mem::replace(&mut self.cur, saved);
         self.dag.kids[id as usize] = kids;
         // `val`/`vty` already count the head node they wrote.
@@ -908,6 +921,17 @@ impl<'a, 'v> Walk<'a, 'v> {
             VTy::Neutral(VNeTy::Global { .. }) => "GlobalTy",
             VTy::Neutral(VNeTy::El { .. }) => "El",
         };
+        // Which formers `code.rs`'s `code_of` has a code for, arm for arm.
+        self.cur_code_shape = !matches!(
+            &**v,
+            VTy::SEmpty { .. }
+                | VTy::UPi { .. }
+                | VTy::CtxPi { .. }
+                | VTy::TyPi { .. }
+                | VTy::CodeTy { .. }
+                | VTy::CodeTm { .. }
+                | VTy::Neutral(VNeTy::Global { .. })
+        );
         self.cur_typable = true;
         let kids: u64 = match &**v {
             VTy::Nat
@@ -1114,6 +1138,7 @@ pub(crate) fn at_build_ctor(
         cur_basevar: false,
         cur_opaque: false,
         cur_is_ty: false,
+        cur_code_shape: true,
         cur_shape: "-",
         max_lvl: lvl,
         uniq: mode() == Mode::Fv && std::env::var("HEATHER_RB_FVDEPTH").is_err(),
@@ -1415,6 +1440,26 @@ fn fv_report(
         }
     }
 
+    // Step 0 item 2 of the implementation brief: `code_of` is partial, and
+    // what has to be covered is not a threshold-clearing type node's own
+    // former but its whole **type** subtree, because quoting recurses through
+    // type children (and clones term ones). One bottom-up fold says it.
+    let mut code_ok = vec![true; n];
+    for &x in &dag.finish {
+        let x = x as usize;
+        if !dag.is_ty[x] {
+            continue;
+        }
+        let mut ok = dag.code_shape[x];
+        for &k in &dag.kids[x] {
+            let k = k as usize;
+            if dag.is_ty[k] && !code_ok[k] {
+                ok = false;
+            }
+        }
+        code_ok[x] = ok;
+    }
+
     let mut line = String::new();
     for t in [0u64, 16, 64, 1_024] {
         let (names, emitted) = fv_names(dag, indeg, &sizes, root, t, &nameable, false, false, None);
@@ -1441,6 +1486,9 @@ fn fv_report(
     // Of the threshold-clearing values, how many are of the **type** sort —
     // the ones only a minted code could name (§5 of the name-per-value doc).
     let mut tynode = 0;
+    // Of those, the ones `code_of` cannot quote at all, and the saving they
+    // carry — the mass the type spelling would have to decline.
+    let (mut tyno, mut tyno_saves, mut ty_saves) = (0u64, 0u64, 0u64);
     let mut shapes: std::collections::BTreeMap<&'static str, u64> =
         std::collections::BTreeMap::new();
     let (mut fvsum, mut fvmax) = (0u64, 0u64);
@@ -1463,6 +1511,11 @@ fn fv_report(
         thr += 1;
         if dag.is_ty[x] {
             tynode += 1;
+            ty_saves += saves;
+            if !code_ok[x] {
+                tyno += 1;
+                tyno_saves += saves;
+            }
             *shapes.entry(dag.ty_shape[x]).or_insert(0u64) += 1;
         }
         fvsum += sizes[x];
@@ -1618,7 +1671,7 @@ fn fv_report(
     }
     eprintln!(
         "rb fv item={m}::{i} naive={naive} graph={n} shared={sh} thr={thr} bad={bad} \
-         tynode={tynode} tyshapes={shapes:?} closed={closed} opaque={opq} basevar={basev} decl={declines} unb={unb} badc={badc} short={short} solo={solo} fvsum={fvsum} fvmax={fvmax} \
+         tynode={tynode} tycode_no={tyno} tycode_lost={tyno_saves}/{ty_saves} tyshapes={shapes:?} closed={closed} opaque={opq} basevar={basev} decl={declines} unb={unb} badc={badc} short={short} solo={solo} fvsum={fvsum} fvmax={fvmax} \
          gamma={gamma_len} maxlvl={max_lvl} back={back}{line}"
     );
 }

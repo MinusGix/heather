@@ -131,3 +131,77 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
         _ => return None,
     })
 }
+
+/// [`code_of`] with its **recursion supplied**: `kids` holds one already-built
+/// code per child of `t` in `crate::rbname::slots_ty`'s order, so a type child
+/// contributes `kids[i]` where `code_of` would have written `code_of(child)?`
+/// and a term child contributes itself unchanged.
+///
+/// The arms below pair one for one with [`code_of`]'s and are in the same
+/// order, so the two are checkable by reading them side by side — the same
+/// rule that pairs `code_of` with `reduce.rs`'s `decode`. The caller is
+/// `mint.rs`, which quotes a **graph**: recursing through `code_of` would
+/// expand every shared component into a tree, which is the object this round
+/// exists to stop writing.
+pub(crate) fn code_of_spliced(t: &Type, kids: &[Rc<Term>]) -> Option<Term> {
+    let kid = |i: usize| -> Option<Rc<Term>> { kids.get(i).map(Rc::clone) };
+    Some(match t {
+        Type::Nat => Term::TmNat,
+        Type::Ty(l) => Term::TmTy(l.clone()),
+        Type::El { .. } => (*kid(0)?).clone(),
+        Type::Pi { dom_level, cod_level, .. } => Term::TmPi {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: kid(0)?,
+            cod: kid(1)?,
+        },
+        Type::Id { level, .. } => Term::TmId {
+            level: level.clone(),
+            ty: kid(0)?,
+            lhs: kid(1)?,
+            rhs: kid(2)?,
+        },
+        Type::Sigma { fst_level, snd_level, .. } => Term::TmSigma {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst: kid(0)?,
+            snd: kid(1)?,
+        },
+        Type::Unit { level } => Term::TmUnit { level: level.clone() },
+        Type::Empty { level } => Term::TmEmpty { level: level.clone() },
+        Type::Sum { lhs_level, rhs_level, .. } => Term::TmSum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: kid(0)?,
+            rhs: kid(1)?,
+        },
+        Type::W { shape_level, pos_level, .. } => Term::TmW {
+            shape_level: shape_level.clone(),
+            pos_level: pos_level.clone(),
+            shape: kid(0)?,
+            pos: kid(1)?,
+        },
+        Type::Vec { level, .. } => Term::TmVec {
+            level: level.clone(),
+            elem: kid(0)?,
+            len: kid(1)?,
+        },
+        Type::Fin { .. } => Term::TmFin { len: kid(0)? },
+        Type::Squash { level, .. } => Term::TmSquash {
+            level: level.clone(),
+            ty: kid(0)?,
+        },
+        Type::SEq { level, .. } => Term::TmSEq {
+            level: level.clone(),
+            ty: kid(0)?,
+            lhs: kid(1)?,
+            rhs: kid(2)?,
+        },
+        Type::Wf { level, .. } => Term::TmWf {
+            level: level.clone(),
+            shape: kid(0)?,
+            arity: kid(1)?,
+        },
+        _ => return None,
+    })
+}

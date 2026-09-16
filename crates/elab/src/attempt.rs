@@ -51,6 +51,9 @@ pub(super) struct DeclAttempt {
 
     /// Stable goal identities and their temporary Ψ prefix.
     pub(super) goal_arena: GoalArena,
+    /// The readback's minted names and their temporary Ψ prefix, which sits
+    /// **below** the goal block (`crate::mint`, the tower design's §12.7).
+    pub(super) mint_arena: crate::mint::MintArena,
 
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,
@@ -73,11 +76,13 @@ impl DeclAttempt {
     /// Discard goal state produced by a speculative attempt.
     pub(super) fn clear_goals(&mut self) {
         self.goal_arena.clear();
+        self.mint_arena.clear();
     }
 
     /// Restore the declaration-independent state after success or failure.
     pub(super) fn finish(&mut self) {
         self.goal_arena.finish();
+        self.mint_arena.finish();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.refl_notes.get_mut().clear();
