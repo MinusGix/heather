@@ -526,7 +526,10 @@ Stop and report if any of these fires.
 ## 10. Status
 
 Design, with one measured spike that is **not** proposed to land. §11 is the
-implementation pass that followed it (2026-09-16): the verification items are
+implementation pass that followed it (2026-09-16), and §12 is the naming pass
+that followed *that* and stopped at its own step 0, having measured that the
+emitted spelling cannot reach §11.2's price — read §12.4 and §12.5 before
+picking up §11.4. §11 in its own words: the verification items are
 confirmed, the unit of sharing is measured, and the readback's first stage is
 built, flagged and measured end to end. The reading
 the brief handed this pass is refuted by its own instrument (§2), the exponent
@@ -788,8 +791,11 @@ and is the only device in the elaborator that lets Ψ grow across an item:
   entries. A mint that overflows the reserved block declines and the component
   stays inline, which is stage one's behaviour and is always safe.
 
-What that leaves for the round that builds it, in the order the audit wants
-them: the image and `ModuleDelta`'s dependency identity for a binding that is
+**§12 is that round, and it stopped before building it**: the naming was built
+as an instrument and counted first, and what it counts refuses the mechanism
+below its own bar. What that section leaves for a *later* pass is stated there;
+what §11.4 left for §12, in the order the audit wanted them, was:
+the image and `ModuleDelta`'s dependency identity for a binding that is
 not keyed by a declaration's tag (every `GenDef` today is), the cache identity
 (`docs/cache-v1-design.md` §4 gives a generated definition its own), and the
 per-item join — which stage one already fails on 14 small `list::*` rows, so
@@ -826,3 +832,261 @@ machine drift, not a change (`desktop-bench-gate-for-constants`).
 Not run, because stage one is flagged off and is not proposed to land: the x86
 rails at two sizes per item. They are the naming round's gates, and §8's list
 of what a landing owes is unchanged.
+
+---
+
+## 12. The naming (2026-09-16): step 0, and why the round stops there
+
+The implementation pass of §11.4, which was to mint the readback's shared
+sub-values into Ψ and put the named spelling on the default path. Its step 0 —
+"mint into a scratch world first, without touching Ψ's commit path, and count
+the emitted nodes per reduct" — carries the round's STOP conditions, and **the
+first of them fires**: the emitted count is 7–10× §11.2's prediction and still
+multiplies by ≈2.6 per combinator layer. Nothing on the commit path was
+touched. The device is built, tested and inert, and this section is the
+measurement that says what landing it would take.
+
+Everything below is measured on the same furnace E5 box as §4 and §11, release
+with `--features value-metrics`, `--kernel-workers 1`, `--timings`, no
+`--cache`, one process per file. `probes/rn_spike.sh`, `probes/rn_types.sh`,
+`probes/rn_merge.sh` and `probes/README.md`'s round section say in what order.
+
+### 12.1 What was built
+
+`crates/elab/src/rbname.rs` (`HEATHER_RB=name`), the naming as **pure
+syntax**: it takes the root `Type` `rbemit.rs` hands back — whose interior is
+an `Rc` *graph*, one node per distinct sub-value, but whose meaning is the tree
+that graph expands to — chooses the nodes worth a Ψ definition by §11.2's rule,
+and rebuilds the graph with each chosen node replaced by `u^δ`, handing
+`Δ ⊢ body` to a **minter** that answers with the reference's `GlobalVar` or
+declines. It never touches a value, which is what makes it unit-testable and
+reusable at any emission site with an `Rc`-shared answer. The instrument runs
+it at `build_ctor` and throws the answer away: the item still checks against
+the rewriter's reduct.
+
+Three conditions decide whether a chosen node can be named, and they are this
+section:
+
+1. **It must be a term.** `GlobalBinding::Ty` has no body, so a Ψ binding names
+   a `Tm`. A shared *type* is nameable only through its **code** — mint
+   `c : Ty l`, spell the occurrence `El (c^δ)`, which is what the registry
+   already does for `D#tycode` — and §11.4 does not describe that device.
+2. **Its context must be spellable.** A mint is `Δ ⊢ body : T` with `Δ = Γ`
+   extended by the binders the node sits under, and those binder types are read
+   off the *syntax*: kernel syntax is fully annotated (ch. 04), so `Π`'s
+   codomain sits under `dom`, `case`'s motive under `A + B`, `elim_Nat`'s step
+   under `Nat` and the motive — `slots_tm`/`slots_ty`'s `Scope` table, whose
+   binder counts agree arm for arm with `conv/dom/values.rs`'s views. A scope
+   the table does not spell (a code payload in another Δ, a universe or context
+   binder, `elim_W`'s three-binder step) is `Foreign` and nothing under it is
+   named. **Zero declines on that ground**, on every probe and the whole
+   showcase: the table is complete where the mass is.
+3. **Its context must be the same at every occurrence.** One `Rc` reached by
+   two paths under different binders means different things at the two sites.
+   Frames are interned, so the test is a pointer comparison, with a
+   node-budgeted structural slow path.
+
+Five unit tests, on the axes of `docs/testing-generated-terms.md` as they apply
+to a syntax device: a shared term minted once and referenced twice; the same
+one binder down, where the mint's `Δ` carries the binder and **the kernel
+checks the named answer against a Ψ holding the mint** (the round's obligation
+in one assertion); a shared *type* declined and counted; a node under two
+different binders declined; and the negative control, a mint past the reserved
+block, which declines and leaves the component inline.
+
+### 12.2 §11.1 re-confirmed, to the unit
+
+`HEATHER_RB=count` on this tree reads `qt_deep` 7 219 017 / 4 967 022 / 80 519
+and `complete_post` 2 634 824 / 1 960 091 / 62 146 — §11.1's `reduct`, `naive`
+and `graph` columns, and its T=64 row (31 names / 80 616 for `complete_post`,
+36 / 104 309 for `qt_deep`). Item 1 of the spike passes.
+
+### 12.3 The naming, counted — and the STOP
+
+`naive` is the exact node count of the readback's own syntax (0.72–0.81 of
+§11.1's model of the same object); `emitted` is the root's term plus every
+named body, a reference charged `1 + |Δ|` nodes.
+
+| probe | item | naive | emitted, terms | mints | **+ type codes** | **+ minimal Δ** | §11.2 predicted |
+|---|---|---|---|---|---|---|---|
+| `t_qt1` | `qt_pure` | 293 908 | 95 151 | 7 | 78 901 | 73 236 | 34 681 |
+| `t_cp9` | `cp_andt` | 1 056 154 | 241 892 | 8 | 227 400 | 217 492 | 79 298 |
+| `t_qt3` | `qt_deep` | 4 006 444 | 632 566 | 12 | 609 936 | 574 472 | 104 309 |
+| library | `complete_post` | 1 584 491 | 770 235 | 8 | 755 746 | 708 206 | 80 477 |
+
+The last two columns are counting modes, not spellings this tree emits: §12.5
+says what each would take. The **curve is the same in all three**.
+
+**The bar fails on the shape, not on a constant.** The naming buys 2.1–6.3×
+against the readback's own spelling (2.2–7.0× with both counting modes),
+but per combinator layer the emitted count still multiplies by **×2.54 and
+×2.61** (`qt_pure → cp_andt → qt_deep`; ×2.88 and ×2.68 with type codes,
+×2.97 and ×2.64 with a minimal Δ on top),
+against ×3.59 / ×3.79 in the readback's own naive spelling and ×1.31 / ×1.24
+in the value graph §11.2 priced. §6's bar — the ratios must fall *toward 1* —
+is not met, and §6's first-hour check, "`qt_deep`'s emitted node count is a
+small multiple of `qt_pure`'s", comes out at **×6.6** against the predicted
+×3.0.
+
+**What it is worth as a constant**, for the record, since a constant is what
+it is: against the *rewriter's* reduct — the object the parent path hands the
+kernel — `complete_post` goes 2 634 824 → 1 584 491 (stage one's readback,
+already measured in §11.3) → 708 206, i.e. **3.7×** fewer nodes for the
+chokepoint and the kernel to walk. That is a larger constant than candidate D's
+and it is offered on the same terms §5 refused D on: it banks a constant
+against the exponent, and the next combinator layer costs ×2.6 on its own
+curve.
+
+§11.2's *threshold* survives its own re-asking: on the emitted graph T=16 and
+T=64 are within 0.03 % of each other, T=1 024 is worse, and T=0 — **naming
+every shared node**, with a reserved block big enough not to truncate it
+(`HEATHER_RB_CAP=4096`) and with both counting modes on — names 2 725 of
+`complete_post`'s nodes and emits **709 847**, against 708 206 for naming
+thirty-five. That is the ceiling of the device, and it is the round's decisive
+number: *the emitted graph does not contain more sharing to spend.* Its 62 146
+distinct sub-values (§11.1) are not 62 146 distinct pieces of **syntax**.
+
+Over the whole showcase (8 092 `build_ctor` reducts, exactly §11.2's count):
+**90 names**, in 12 items — `grammar_sound` 12, `atom_body` 10,
+`sum_finish`/`product_finish`/`factor_body`/`expr_body`/`close_body` 9 each,
+`complete_post` 8, `sum_grammar`/`product_grammar` 4,
+`selected_head`/`append_nil_elim` 2 — against §11.2's predicted 152 in four
+items, and 64 further shared nodes that cleared the threshold and were declined
+for being types. 90 + 64 = 154: the prediction was right about *how many*
+sub-values are worth naming and wrong about what a Ψ binding can name, and
+wrong about which items they are in.
+
+### 12.4 Why, in order of size
+
+- **Most of what clears the threshold cannot be named at all, and the reason is
+  the context.** Of `complete_post`'s 51 threshold-clearing shared nodes, **42
+  are reached under two different binder chains** (29 of the 38 type nodes, 13
+  of the 21 term nodes); on `qt_pure` it is 40 of 47, on `qt_deep` 32. Comparing
+  the chains *structurally* rather than by pointer changes none of those counts:
+  these are not one context spelled twice, they are one sub-value genuinely
+  reached under two different binders, and §11.4's Δ ("Γ extended by the binders
+  the node sits under") names none of them. The one relief there is — a
+  **minimal** Δ, §12.5 — rescues eighteen of the forty-two and 6 % of the
+  nodes, because the bodies do reach into the binders they sit under.
+- **A type node cannot be a Ψ definition** (§12.1 item 1), but on its own this
+  is worth little: counting type nodes as nameable moves `complete_post` from
+  770 235 to 755 746 and the showcase from 1 768 398 to 1 749 057 — **2 %** —
+  because the heavy type nodes are mostly the ambiguous ones. The device is
+  cheap and idiomatic when it is wanted (`crates/elab/src/code.rs`'s `code_of`
+  *is* `⌜T⌝`, is already partial-on-purpose, and composes with the naming for
+  free, since `code_of(El t) = t` reads a named child straight through), but it
+  is not what this round is short of.
+- **§11.2's price is not the emitter's, and no rule recovers it.** Even with
+  every relief above, 708 206 against a predicted 80 477 leaves 8.8× — and
+  naming *every* shared node of the emitted graph leaves the same 8.8×. The gap
+  is a modelling difference and it is the round's most important finding:
+  §11.1's counter memoizes a **0-binder closure on its identity alone**,
+  merging its occurrences at *every* depth, and prices the sharing that
+  follows. The emitter cannot: the readback of a closure at depth `d` spells its
+  free variables as indices `d − lvl − 1` and its references' substitution tails
+  as `δ̂ = d`, so the same closure one binder further in is *different syntax*.
+  `rbemit.rs` keys its memo on `(CloId, d)` for exactly that reason, and §12.5
+  measures what happens when it does not.
+
+### 12.5 The two mechanisms that could have closed it, measured
+
+Both standing blockers have the same shape — a name is scoped, and the sharing
+is not — so both have the same candidate answer: let a name be scoped in less.
+Neither closes the gap, and the second one is the round's key negative.
+
+**A minimal Δ.** A mint does not need every binder it sits under: it needs the
+innermost `k` entries its body actually reaches into, closed up so that each
+entry's own type is inside the block. Strengthening the body out of the rest is
+one `apply_local` over the body (which is small by construction — that is what
+the threshold bought), and it rewrites the substitution tails that would
+otherwise pin the body to one ambient length. Two occurrences under different
+chains then only have to agree on those `k` entries, and a reference costs
+`1 + k` rather than `1 + |Γ| + depth`. Measured as a counting mode
+(`min=` in the instrument's threshold sweep): it names **35** of
+`complete_post`'s shared nodes instead of 17 and emits 708 206 instead of
+755 746 — **6 %**; on `qt_pure` 30 names and 73 236 nodes against 21 and
+78 901; on `cp_andt` 29 and 217 492 against 17 and 227 400. A minimal Δ is the
+right rule — it is what makes "the same sub-value under two different outer
+binders" one name — and it is not the missing order of magnitude.
+
+**Merging a 0-binder closure across depths.** The same mechanism, one level up:
+a sub-value whose body reaches into nothing (`k = 0`) is closed, its mint is
+`· ⊢ body`, and every occurrence at every depth is one reference — which is
+exactly `gen_ref`'s shape and exactly the sharing §11.2 priced. What stands in
+the way is not the spelling but `rbemit.rs`'s memo, which has already written
+one copy per depth by the time the naming sees it. `HEATHER_RB_MERGE=1` keys
+the emitter the counter's way (**unsound syntax**, counted and discarded) so
+the gap can be attributed: every number gets **worse**.
+`complete_post` emits its whole naive tree (1 584 491, not one name, against
+755 746 keyed), `cp_andt` 522 338 against 227 400, `qt_pure` 129 572 against
+78 901. The mechanism is the finding: a closure merged across depths is reached
+under binder chains of *different length*, so no Δ serves both occurrences and
+the shared node becomes unnameable — the merged graph has **more** sharing and
+**less** of it is spendable. Only a body that reaches into nothing can be named
+at every depth; `complete_post` has seven such nodes worth naming, together
+worth 70 k of its 1.58 M.
+
+So the heavy shared sub-values of this tower are **not closed** — they mention
+the binders they sit under. One name per depth is all they can have, the
+emitted spelling therefore grows with the depth, and **§11.2's 80 477 was never
+reachable by any emitter**: it is the price of a sharing the term language
+cannot express. That is the sentence this round exists to have written down.
+
+### 12.6 Can a mint be typed?
+
+§11.4's first finding — a mint names a term at an arbitrary type, so the
+readback that mints is type-directed — was implemented the robust way instead:
+kernel syntax is fully annotated, so `typing::infer_term` gives the statement
+and the readback supplies only `Δ`. The statements are **small**: 1 966 nodes
+over 12 mints, about 160 apiece, so a mint's binding is not a second
+exponential object.
+
+It is not total. Of the names chosen on `t_qt1`, **12 of 19
+were minted and 7 refused** — `complete_post` 3 of 8, `qt_pure` 4 of 7 — every
+refusal `NotConvertible`, and every one still `NotConvertible` at **sixteen
+times the fuel**, so these are not the kernel running out of steps on a deep
+normal form. The control says where the fault is:
+`HEATHER_RB_CHECK=1` runs `typing::infer_type` on the readback's **own**
+answer, un-named, in the same padded world, and it passes on **6 627 of
+6 627** roots. So the readback produces well-typed syntax and the refusals are
+this pass's `Δ` — a position whose binder type or level the `Scope` table gets
+wrong for some arm — not a property of the spelling. It is a defect to find,
+not a boundary; §12.3's verdict does not depend on it, since a refused mint
+declines and the emitted counts above are the *planned* ones. Every refusal is a **decline**, not an
+error: the component stays inline, which is stage one's behaviour and always
+safe, and the instrument mints through the same callback the landed device
+would, so a refusal does not cascade into the mints after it (an installed
+placeholder would fail every body that referenced it and count one fault as
+many).
+
+### 12.7 What this hands on
+
+- The device is **built, tested and inert**: `HEATHER_RB` unset is the parent's
+  code path byte for byte, `WALK_RESIDUE` and the `psi().bindings.len()`
+  fixtures are untouched, and no commit was made. The plain full
+  `scripts/test` on the furnace box is `== suite: 2706 passed, 0 failed, 5
+  ignored ==` — §11.5's 2 701 plus this section's five. Not run, because
+  nothing on the default path moved: the x86 rails, the bench dance and the
+  parent-against-change slice, which are a *landing*'s gates and would measure
+  the parent twice here.
+- §11.4's Ψ-entry mechanism (reserve, allocate through `&self`, realize at
+  commit) was **designed down to the arithmetic but not built**, because §12.3
+  says it would land a device that still multiplies by 2.6 per combinator
+  layer. For the record, since the next pass needs it: the mint block sits
+  **below** the goal block in the padded Ψ, which leaves `allocate`'s
+  `goal_base − 1 − k` and the `strengthen_global(solution, goal_base)` at the
+  `on` sites unchanged; a mint's body is strengthened by
+  `goal_cap + mint_cap − j` at mint time, so it is already scoped in
+  `Ψ ++ mints[0..j]` and realization is a push plus one
+  `strengthen_global(term, mint_cap − used)`; every site that renumbers by
+  `goal_arena.base()` (`global_abs_of`, `gen_ref`, `gen_def_of`, `resolve`,
+  `refresh_delta_psi`) takes the *total* padding instead; and `semantic_oracle`
+  has to see the minted **bodies**, which `delta_psi`'s placeholder padding
+  does not carry.
+- `issues/elab-emits-normal-form-of-matched-type-argument` keeps its charter
+  and its mechanism is narrowed once more. The fix is a spelling with names in
+  it; the names are worth 2–6× as measured; and the **exponent** lives in the
+  one place neither §11.2 nor §11.4 looked — what a name may be scoped in. A
+  name whose Δ is "every binder above it" is one name per context and therefore
+  one per depth, which is the growth §12.3 measures; a name scoped in what its
+  body actually reads is one name per *value*, which is what §11.2 priced.

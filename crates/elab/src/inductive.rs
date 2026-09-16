@@ -1976,6 +1976,17 @@ impl Elaborator {
             self.fuel,
             &expected,
         );
+        // …and the *naming*'s spike (§11.4): the same readback with its shared
+        // sub-values minted into a **scratch** Ψ block, counted and thrown
+        // away. Nothing on the commit path moves; what this answers is whether
+        // the emitted node count collapses to the graph's and whether every
+        // mint has a type.
+        crate::rbname::at_build_ctor(
+            self.semantic_oracle().world(),
+            &cx.gamma,
+            pre_whnf,
+            self.fuel,
+        );
         // …and, with `HEATHER_RB=fire`, the components below are read out of
         // the **value** the machine already produced rather than out of the
         // rewriter's reduct (`docs/projected-tuple-tower-design.md` §6). The

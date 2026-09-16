@@ -62,6 +62,14 @@ pub(crate) fn count_ty(ty: &Type) -> Counts {
     c
 }
 
+/// [`count_ty`]'s term half — the same exhaustive count, for a minted body
+/// (`rbname.rs`).
+pub(crate) fn count_tm(t: &Term) -> Counts {
+    let mut c = Counts::default();
+    ctm(t, &mut c);
+    c
+}
+
 fn ctms(ts: &[Rc<Term>], c: &mut Counts) {
     for t in ts {
         ctm(t, c);

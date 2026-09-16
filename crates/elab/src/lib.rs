@@ -133,6 +133,7 @@ mod quote;
 // are inert unless `HEATHER_RB` is set.
 mod rbcount;
 mod rbemit;
+mod rbname;
 mod recursion;
 mod representations;
 pub mod resolve;

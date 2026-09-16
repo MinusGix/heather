@@ -39,6 +39,22 @@ pub(crate) fn firing() -> bool {
     *M.get_or_init(|| std::env::var("HEATHER_RB").ok().as_deref() == Some("fire"))
 }
 
+/// The instrument of §12.4's third finding, and **unsound on purpose**:
+/// `rbcount.rs`'s value-graph counter memoizes a 0-binder closure on its
+/// identity alone, merging its occurrences at every depth, and §11.2 priced
+/// the sharing that follows. The emitter cannot do that — the readback of a
+/// closure at depth `d` spells its free variables as indices `d − lvl − 1`
+/// and its embedded references' tails as `δ̂ = d`, so one more binder is
+/// different syntax — and keys on `(CloId, d)` instead. With
+/// `HEATHER_RB_MERGE=1` it keys the way the *counter* does, so the emitted
+/// node count can be compared against the price §11.2 quoted. The answer is
+/// then not a term anyone may emit; the mode exists only under
+/// `HEATHER_RB=name`, where the answer is counted and discarded.
+fn merge_depths() -> bool {
+    static M: OnceLock<bool> = OnceLock::new();
+    *M.get_or_init(|| std::env::var("HEATHER_RB_MERGE").is_ok())
+}
+
 /// Native recursion depth, as in `rbcount.rs`.
 const DEPTH_CAP: u32 = 1_500;
 /// The tallest `Succ` chain a compressed run is spelled as before the
@@ -88,7 +104,7 @@ impl<'a, 'v> Emit<'a, 'v> {
     }
 
     fn tm_at(&mut self, c: &'v TmClo<'v>, pending: u32, d: u32) -> Rc<Term> {
-        let key = (c.ident(), d);
+        let key = (c.ident(), if pending == 0 && merge_depths() { 0 } else { d });
         if let Some(t) = self.tm.get(&key) {
             return Rc::clone(t);
         }
@@ -144,7 +160,7 @@ impl<'a, 'v> Emit<'a, 'v> {
     }
 
     fn ty_at(&mut self, c: &'v TyClo<'v>, pending: u32, d: u32) -> Rc<Type> {
-        let key = (c.ident(), d);
+        let key = (c.ident(), if pending == 0 && merge_depths() { 0 } else { d });
         if let Some(t) = self.ty.get(&key) {
             return Rc::clone(t);
         }
