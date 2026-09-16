@@ -524,6 +524,42 @@ struct Tc {
     diag_stack: RefCell<Vec<&'static str>>,
     #[cfg(feature = "value-metrics")]
     diag_term: RefCell<Option<Term>>,
+    /// `HEATHER_CONV_QUERY_TRACE`'s sample counter: conversion *queries* of
+    /// the traced item that the reflexivity shortcut answered. Per-gate, like
+    /// the two above (issues/quoted-component-traversal-remainder.md).
+    #[cfg(feature = "value-metrics")]
+    query_trace_seen: Cell<u64>,
+}
+
+/// `HEATHER_CONV_QUERY_TRACE`'s parsed setting: the item to trace and the
+/// sampling stride. Read once — the variable is a diagnosis switch, not a
+/// per-query lookup.
+#[cfg(feature = "value-metrics")]
+struct QueryTraceCfg {
+    item: String,
+    every: u64,
+}
+
+/// `<item>` or `<item>:<N>`. The default stride keeps a multi-million-query
+/// item near the 10–50 k lines a `sort | uniq -c` reads comfortably.
+#[cfg(feature = "value-metrics")]
+fn query_trace_config() -> Option<&'static QueryTraceCfg> {
+    static CFG: std::sync::OnceLock<Option<QueryTraceCfg>> = std::sync::OnceLock::new();
+    CFG.get_or_init(|| {
+        let raw = std::env::var("HEATHER_CONV_QUERY_TRACE").ok()?;
+        // Item names contain `::`, so a trailing `:<digits>` is the stride and
+        // anything else is part of the name.
+        match raw.rsplit_once(':') {
+            Some((item, n)) => match n.parse::<u64>() {
+                Ok(every) if every > 0 && !item.ends_with(':') => {
+                    Some(QueryTraceCfg { item: item.to_string(), every })
+                }
+                _ => Some(QueryTraceCfg { item: raw, every: 128 }),
+            },
+            None => Some(QueryTraceCfg { item: raw, every: 128 }),
+        }
+    })
+    .as_ref()
 }
 
 /// Pops the checker's diagnostic stack when a `tm_check`/`tm_infer` frame
@@ -606,6 +642,8 @@ impl Tc {
             diag_stack: RefCell::new(Vec::new()),
             #[cfg(feature = "value-metrics")]
             diag_term: RefCell::new(None),
+            #[cfg(feature = "value-metrics")]
+            query_trace_seen: Cell::new(0),
         }
     }
 
@@ -618,6 +656,16 @@ impl Tc {
         DiagFrame(self)
     }
 
+    /// The `site:` line alone — the checker's own stack, innermost first.
+    /// The one renderer of the one stack; `diag_site` opens with it and the
+    /// query trace prints nothing else, because a backtrace per *query* is
+    /// three orders of magnitude more output than a backtrace per miss.
+    #[cfg(feature = "value-metrics")]
+    fn diag_site_stack(&self, depth: usize) -> String {
+        let stack = self.diag_stack.borrow();
+        stack.iter().rev().take(depth).copied().collect::<Vec<_>>().join(" < ")
+    }
+
     /// The sampler's site excerpt: the checker's stack innermost first, the
     /// innermost compared term (budget-bounded `Debug`), and the elaborator
     /// frames of a backtrace — which name the emission site that wrote the
@@ -627,12 +675,7 @@ impl Tc {
     fn diag_site(&self) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
-        let stack = self.diag_stack.borrow();
-        let _ = writeln!(
-            out,
-            "site: {}",
-            stack.iter().rev().take(16).copied().collect::<Vec<_>>().join(" < ")
-        );
+        let _ = writeln!(out, "site: {}", self.diag_site_stack(16));
         if let Some(t) = self.diag_term.borrow().as_ref() {
             let mut r = format!("{t:?}");
             if r.len() > 600 {
@@ -658,6 +701,45 @@ impl Tc {
         out
     }
 
+    /// `HEATHER_CONV_QUERY_TRACE=<item>[:N]`: every Nth conversion *query* of
+    /// that item which the reflexivity shortcut answered, with the site stack
+    /// and a bounded size for the type compared. The misses are traced by
+    /// `HEATHER_CONV_MISS_TRACE`; on a workload whose gate is a flat cost per
+    /// query the misses are a remainder and the queries are the datum
+    /// (issues/quoted-component-traversal-remainder.md).
+    ///
+    /// Unset, this is one `Option` test per query and nothing else.
+    #[cfg(feature = "value-metrics")]
+    fn query_trace(&self, env: &Env, expected: &Type) {
+        let Some(cfg) = query_trace_config() else { return };
+        let Some(metrics) = env.value_metrics.as_ref() else { return };
+        if !metrics.current_item().is_some_and(|item| *item == *cfg.item) {
+            return;
+        }
+        let n = self.query_trace_seen.get();
+        self.query_trace_seen.set(n + 1);
+        if n % cfg.every != 0 {
+            return;
+        }
+        // `Debug` is budget-bounded (crates/kernel/src/fmt.rs), so this is a
+        // *saturating* size: 512 nodes' worth of characters and no more.
+        let size = format!("{expected:?}").len();
+        // The address of the compared type. An annotation the elaborator wrote
+        // once and shared into many slots is one address seen many times; a
+        // term the elaborator wrote out per occurrence is many addresses. That
+        // is the round's (a)-against-(d) question, and nothing else in the
+        // process can answer it. (A type built on the stack by the rule itself
+        // — the `Π` of the `App` rule — reuses stack addresses; those cluster
+        // in one high range and the aggregator says so.)
+        eprintln!(
+            "conv query trace {} {}/{} size={size} at={expected:p} site: {}",
+            cfg.item,
+            type_head(expected),
+            type_head(expected),
+            self.diag_site_stack(40),
+        );
+    }
+
     // -- premise helpers ----------------------------------------------------
 
     /// `⊢_L l : Level` (rejects `ω` and out-of-scope variables).
@@ -677,6 +759,8 @@ impl Tc {
         // avoiding an arena for the overwhelmingly common positive case.
         if self.fuel > 0 && expected == inferred {
             crate::stats::conv_shortcut_hits(1);
+            #[cfg(feature = "value-metrics")]
+            self.query_trace(env, expected);
             return Ok(());
         }
         // Cross-head conversions necessarily do semantic work before they can
