@@ -487,7 +487,11 @@ Stop and report if any of these fires; each would refute part of this design.
 
 ## 9. Status
 
-Design only. The instrument is the one source change; `crates/elab`, `lib/`
+Design only, and **§10 is the implementation pass's answer**: the spike of §8
+item 2 stopped the round, so nothing under `crates/` changed here either. Read
+§5 through §10.3.
+
+The instrument is the one source change; `crates/elab`, `lib/`
 and the fixtures are untouched, no commit is made, and `probes/qt_*.sh`,
 `probes/t_qt*.hthr` and `probes/qt_agg.py` are what a reader needs to
 reproduce every number above.
@@ -513,3 +517,172 @@ What this round hands on:
   family after all — `close_body` has no code in its histogram and the same
   `App`/`Pair`/`Fst` shape, so the transfer that §10.2 called "partly" is
   complete here even though the slice did not reach it.
+
+---
+
+## 10. Implementation, 2026-09-16: the spike, and the stop it fired
+
+The implementation pass ran §8 items 1–2 before touching anything, as item 9
+requires. Item 1 passed and item 2 **fired its stop condition**: the
+normalization site is one call, the pre-normalization term is in hand at it,
+and it is not a spelling any of the slots that are emitted there can carry.
+Nothing under `crates/` changed. The instrument the spike needed is kept as
+`probes/nf_spike.patch`; `probes/nf_*.sh` and `probes/nf_agg.py` are what a
+reader re-runs, in the order `probes/README.md`'s round section gives.
+
+### 10.1 The exponent, re-confirmed on the current tree (item 1)
+
+`probes/nf_spike.sh`, `d53ec73`, release with `value-metrics`, one furnace
+box, `--kernel-workers 1`, no `--cache`, one process per file.
+
+| probe | item | queries | misses | steps | total ms | gate ms | `decl_emit` ms | `elab_whnf` ms | maxrss |
+|---|---|---|---|---|---|---|---|---|---|
+| `t_qt2` | `qt_floor` | 6 495 | 21 | 738 | 26.4 | 11.7 | 0.9 | 6.2 | 1.41 GB |
+| `t_cp9` | `cp_andt` | 2 395 753 | 8 860 | 162 499 | 6 995 | 4 379 | 388 | 683 | 1.41 GB |
+| `t_qt3` | `qt_deep` | 7 928 179 | 33 780 | 525 244 | 25 200 | 15 218 | 1 570 | 2 564 | 2.78 GB |
+| `t_qt5` | `qt_deeper` | 29 447 197 | 128 043 | 1 917 588 | 100 997 | 62 251 | 5 850 | 10 915 | 9.54 GB |
+
+Three points, and every count is §3.1's to the unit: ×3.31 and ×3.71 in
+queries, ×3.48 and ×4.09 in gate, ×4.05 and ×3.73 in emission, ×3.75 and ×4.26
+in the elaborator's whnf clock. **The design's premise holds on the tree the
+implementation started from.**
+
+### 10.2 The site, named (item 2)
+
+`HEATHER_NF_SPIKE=<µs>` (`probes/nf_spike.patch`, `value-metrics` only) prints
+every `Elaborator::whnf`, `whnf_tm` and `Elaborator::emit_ty` call that costs
+more than the budget, with the item scope, the input's and output's bounded
+`Debug` lengths and the elaborator frames that asked for it. Both clocks are
+size proxies: `whnf` builds the reduct and `emit_ty` walks every node of what
+it is handed. `--timings` is what opens the declaration scopes the `item=`
+column reads; without it every record is attributed to `-`, which cost this
+pass one round trip.
+
+The exponent is **two calls per item**, and it is the same two in the library's
+`complete_post` as in the probes (`probes/nf_site3.sh`, budget 20 µs,
+milliseconds of self time, one record each):
+
+| site | `qt_floor` | `cp_andt` | `qt_deep` | per layer |
+|---|---|---|---|---|
+| `whnf` at `build_ctor` | 5.4 | 492.6 | 2 213.5 | ×4.5 |
+| `emit_ty` at `respell_spine < build_ctor` | 1.1 | 525.9 | 2 989.1 | ×5.7 |
+| `whnf` at `matching::expose < synthesize_motive` | — | 113.7 | 140.9 | ×1.24 |
+| every other record, summed | 1.5 | 13.3 | 107.3 | |
+
+(the last row is every record the aggregator printed below the first three;
+`qt_deep`'s 107.3 is 92.4 of it in one `ctor_here_expected` probe under the
+same `wf_branch`. `qt_floor` has no combinator and reaches the same
+`build_ctor` call one route over, under `elab_arm < case_tree`; the two rows
+with a `Wf` match in them are the ones that scale.) The frames:
+
+```text
+whnf     < build_ctor < elab_check_skel_slots < check_lambda_at
+         < elab_check_skel_slots < wf_branch < wf_case_tree < build_elim_wf
+         < elab_match_wf < elab_match < elab_convoy
+emit_ty  < respell_spine < build_ctor < …the same…
+```
+
+So, in the code:
+
+- **The normalization site is `Elaborator::build_ctor`'s
+  `let expected = self.whnf(cx, expected, span)?`** (`crates/elab/src/inductive.rs:1966`),
+  reached when an arm body's constructor — `And(h, trivial)` — is checked
+  against the branch type `tel.at(&inj, d)` handed down by `wf_branch`. The
+  input is the match's motive instantiated at this constructor, printed as
+  `El(case(…))`: a redex the reducer must fire, and firing it is where the
+  `3.5ⁿ` object is built.
+- **The emitter is the Σ/Sum spine of that reduct**: `spine(&expected, …)`
+  decomposes it, `respell_spine` sends every component through the emission
+  chokepoint, and `inject` writes them into the constructor value's
+  `Inl`/`Inr` annotations, with `build_fields_skel` writing the rest into the
+  `Pair` slots. That is §2.3's site shape, from the other end: `Pair×12` is
+  this value, `App×22` is one component of it.
+- **The motive is not the carrier.** The coordinator's first hypothesis —
+  that a scrutinee-abstraction motive is abstracted out of a whnf'd expected
+  type, and each branch's expected type is a copy of it — is refused by the
+  clock: `matching::expose`'s whnf is 113.7 → 140.9 ms across a layer that
+  multiplies everything else by 3.5. It is the **second** hypothesis that
+  holds, one step further in than it was stated: the branch bodies are checked
+  against a reduct, and what is written is not the lambda's domain but the
+  *constructor value's* annotations.
+
+### 10.3 Why §5 is not one site — the stop (item 2's second half)
+
+The pre-normalization term **is** in hand at that call: `expected`, one line
+above, un-normalized. It is nevertheless not what §5 needs, and the reason is
+not plumbing:
+
+> What `build_ctor` emits are the **components** of the reduct — the two
+> summands of a `Sum`, the `fst`/`snd` of a `Σ`. The pre-whnf spelling is
+> `El(case(…))`, whose sub-terms are not those components and do not
+> correspond to them. The kernel's `Inl`/`Inr` and `Pair` rules take a
+> former's components, not a term that reduces to the former, so there is no
+> slot at this site into which "the application it started from" could be
+> written.
+
+§5's sentence — "keep the application as the spelling the annotation carries"
+— presumes the annotation holds the type that was normalized. Here it holds a
+piece of it. The mass inside those pieces is not a type either: it is the
+**terms** the reply computed (the cursor and the value the combinator tower
+produces), substituted into a type-code application. Their folded spelling
+exists in principle — projections of the un-reduced reply — but recovering it
+means the reducer telling its caller which sub-term of its output came from
+destructuring which sub-term of its input. That is a provenance in
+`reduce`/`oracle`, i.e. `crates/kernel`, and by the brief's own boundary this
+round stops and reports rather than partially editing `crates/elab`.
+
+Three consequences worth stating with the stop:
+
+1. **The object is exponential, not exponentially repeated.** Resident memory
+   tracks the queries (§6's rejection of hash-consing) and the emission
+   chokepoint's own walk of it tracks them too (10.2's second row): a naming
+   device over the reduct's components, the shape that fixed
+   `issues/theorem-field-projection-oom`, buys the repetition factor and not
+   the exponent. The exponent is in the reducer's output, and only not
+   producing it removes it.
+2. **The reducer's output is the substitution-expanded record tower.** Every
+   layer of the tower rebuilds a record whose field types mention the previous
+   layer's projections *with their annotations* — the same arithmetic as the
+   projection OOM, one layer per combinator, which is what a base of ≈3.5
+   looks like. `close_body`'s `App/Pair/Fst` shape (§2.3) is the same tower.
+3. **The motive question (the coordinator's item 4) is moot for the fix and
+   was not probed.** A motive constant in the scrutinee is refused by the code
+   before any measurement — it is already `synthesize_motive`'s last fallback,
+   reached only when abstraction fails, and the `Nil` branch of
+   `match shape : rest(source,s.end)` type-checks precisely because the motive
+   substitutes `Nil` into the reply and lets the tower compute. Keeping the
+   un-normalized `Post(…, bind_at(…))` in the motive would leave the branch
+   body facing a stuck type with only `shape` to transport along, which is a
+   different proof, not a cheaper spelling of this one.
+
+### 10.4 What this amends
+
+- **§5 is amended, not withdrawn.** Its owner is right — the elaborator, at
+  the boundary between normalizing to decide and emitting to record — and its
+  site is now named to the line. What it cannot be is a substitution at
+  `emit_ty`/`annotation_type`: the chokepoint is *downstream* of the reduct
+  and is handed components, which is why routing this through
+  `respell_ty_deep_in` (its first sentence) does not reach it. Read §5 with
+  10.3's paragraph in place of "the machinery is the one that already exists".
+- **§8 item 2 is answered** in both halves, and its stop is the one that
+  fired. Items 3–8 were not reached: there is no changed binary to measure, so
+  no curve, no per-item join, no rails, no `WALK_RESIDUE`, no bench. The full
+  `scripts/test` was run once on the tree offered for review — which is
+  `d53ec73` under `crates/` and `lib/` — as the check that the instrument left
+  nothing behind: `== suite: 2696 passed, 0 failed, 5 ignored ==`.
+- **§7's "proposed change" cost estimate is superseded**: this is not a slot's
+  spelling and so it is not the shape the x86 gates refused twice. It is a
+  reduction-provenance change in the kernel, and it needs its own design pass.
+
+### 10.5 Two findings the spike produced in passing
+
+- `emit_ty` at `respell_spine` spends 505 ms (`cp_andt`), 1 130 ms
+  (`complete_post`) and 2 989 ms (`qt_deep`) walking one type — more than the
+  `whnf` that built it — and returns a rewrite each time. The chokepoint has
+  no short-circuit for a type whose components cannot respell; on this family
+  that is a second full traversal of the exponential object per constructor
+  value. Constant-factor, and its own issue.
+- The declaration scopes that carry `item=` exist only under `--timings`
+  (`crates/elab/src/stats.rs`'s `ITEMS`). Any future elaborator-side sampler
+  has to be run with it or attribute nothing; worth a line in
+  `docs/instrumentation-design.md`.
