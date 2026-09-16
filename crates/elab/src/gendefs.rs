@@ -265,7 +265,21 @@ pub(crate) struct TyCodeFn {
 /// A type parameter and a value parameter may be spelled with the same index
 /// at their own depths and are never confused, because they are matched by
 /// position in the template and live in different sorts of slot.
-struct Holes {
+struct Holes<'a> {
+    /// The registry, for [`Holes::see_through`], and the scratch anchor the
+    /// references inside the subject are numbered at
+    /// ([`Elaborator::unspell_here_in`]). The anchor is carried rather than
+    /// assumed because a reference read at the wrong one names a *different*
+    /// definition rather than none.
+    el: &'a Elaborator,
+    g: u32,
+    /// Whether a global's substitution tail counts. The **match**'s two sides
+    /// are read in different frames and the tail records a frame's length and
+    /// nothing about the constant (see [`Holes::tm`]'s global arm); step 2's
+    /// two sides are read in *one* frame and catching a wrongly-framed copy is
+    /// that walk's whole job (§3 of
+    /// `docs/closed-argument-and-parameter-domain-spelling-design.md`).
+    strict: bool,
     /// The subject's context base and length, for [`strengthened_ty`]: a hole
     /// hit `md` binders inside the subject is scoped `md` deeper than the
     /// reference that will carry it.
@@ -341,7 +355,50 @@ fn tm_former(t: &Term) -> &'static str {
     }
 }
 
-impl Holes {
+impl Holes<'_> {
+    /// The registry's **inline** copy behind `El (D#tycode^δ)` or
+    /// `El (app(D#tycode_fn^δ; ā))`, and `None` for everything else — the
+    /// recognizer seeing through a *name*
+    /// (`docs/closed-argument-and-parameter-domain-spelling-design.md` §3).
+    ///
+    /// Reached only where the two sides already differ at a node, so the fast
+    /// path never pays for it, and what it materializes is the copy step 2 was
+    /// going to build anyway. Seeing through a **quote** is not the same
+    /// sentence and is not here: §5.2 built it and measured a stack overflow,
+    /// because a quote can be a multi-megabyte literal while a reference
+    /// unspells to the copy the walk was already comparing.
+    fn see_through(&self, ty: &Type) -> Option<Type> {
+        self.el.unspell_here_in(ty, self.g)
+    }
+
+    /// [`Self::see_through`] at a **code**: the inline copy a code reference
+    /// names, quoted again. [`Elaborator::unspell_here_in`] reads the `El`'s
+    /// code and never its level, so the level here is scaffolding for that
+    /// call and not a claim about the code's sort.
+    fn see_through_code(&self, t: &Term) -> Option<Term> {
+        let el = Type::El {
+            level: Level::Zero,
+            tm: Rc::new(t.clone()),
+        };
+        crate::code::code_of(&self.see_through(&el)?)
+    }
+
+    /// Whether two codes recovered for one hole are two spellings of one type,
+    /// and which of them to keep.
+    ///
+    /// The **reference** is kept: that is what the reference carries, what the
+    /// emitted argument becomes anyway (`instance_match` re-derives it as
+    /// `code_of(emit_ty(decode_deep(El l c)))`, which gives the reference from
+    /// either input), and what step 2's copy is then spelled with. When
+    /// neither side is a reference the two codes are equal and the choice does
+    /// not arise.
+    fn agree_as_codes(&self, a: &Rc<Term>, b: &Rc<Term>) -> Option<Rc<Term>> {
+        let ia = self.see_through_code(a);
+        let ib = self.see_through_code(b);
+        (ia.as_ref().unwrap_or(&**a) == ib.as_ref().unwrap_or(&**b))
+            .then(|| if ia.is_some() { Rc::clone(a) } else { Rc::clone(b) })
+    }
+
     /// Which parameter, if any, a template variable at walk depth `md` is.
     fn hole(&self, v: u32, md: u32) -> Option<u32> {
         (v >= md && v - md < self.total).then(|| self.total - 1 - (v - md))
@@ -363,6 +420,16 @@ impl Holes {
         let code = Rc::new(code);
         if let Some(prev) = &self.types[i as usize] {
             if *prev == code {
+                return Some(());
+            }
+            // A **closed** argument is spelled two ways inside one lowering: a
+            // binder's type is a structural read and keeps the inline
+            // lowering, while the same type as an application's type argument
+            // went through the emission chokepoint and is a reference (§2 of
+            // `docs/closed-argument-and-parameter-domain-spelling-design.md`).
+            // Two codes for one hole agree when their inline copies do.
+            if let Some(keep) = self.agree_as_codes(prev, &code) {
+                self.types[i as usize] = Some(keep);
                 return Some(());
             }
             return self.stop("type-hole", "two-occurrences-disagree");
@@ -453,6 +520,17 @@ impl Holes {
                 if a == b {
                     return Some(());
                 }
+                // The former-mismatch arm, and the only place §3's relation is
+                // consulted: the subject first, then the template. Every arm
+                // above is untouched, so nothing that matches today matches
+                // differently. `hole-match-Wf/El`, `Sigma/El` and `Sum/El` are
+                // one relation seen at three formers and leave together (§3.1).
+                if let Some(seen) = self.see_through(b) {
+                    return self.ty(a, &seen, md);
+                }
+                if let Some(seen) = self.see_through(a) {
+                    return self.ty(&seen, b, md);
+                }
                 self.stop(ty_former(a), ty_former(b))
             }
         }
@@ -516,7 +594,9 @@ impl Holes {
                 && matches!(s1.tail, SubstTail::Empty { .. })
                 && matches!(s2.tail, SubstTail::Empty { .. }) =>
             {
-                (v1 == v2).then_some(())
+                // …except in step 2's walk, whose two sides are in one frame
+                // and whose whole job is to catch a wrongly-framed copy (§3).
+                (v1 == v2 && (!self.strict || s1.tail == s2.tail)).then_some(())
             }
             // §2.2: the two formers a parameter hides behind in every
             // declaration of `lib/std` and `lib/std/parser`. `Certified`'s
@@ -591,6 +671,15 @@ impl Holes {
             (a, b) => {
                 if a == b {
                     return Some(());
+                }
+                // §3 at the code layer: the same component, quoted. A type
+                // argument that went through the chokepoint is `D#tycode^δ`
+                // where the binder-type occurrence's code is `TmSum(…)`.
+                if let Some(seen) = self.see_through_code(b) {
+                    return self.tm(a, &seen, md);
+                }
+                if let Some(seen) = self.see_through_code(a) {
+                    return self.tm(&seen, b, md);
                 }
                 self.stop(tm_former(a), tm_former(b))
             }
@@ -2230,11 +2319,14 @@ impl Elaborator {
     /// read, which is what makes the entry and the reference agree whatever
     /// pushed in between.
     pub(crate) fn ty_code_fn_now(&self, tag: u32, g: u32) -> Option<TyCodeFn> {
-        let len = self.psi.bindings.len() as u32
-            + self.attempt.goal_arena.base()
-            + self.meta_offset()
-            + g;
-        self.ty_code_fn_at(tag, len)
+        self.ty_code_fn_at(tag, self.gen_ref_len(g))
+    }
+
+    /// The Ψ length a reference minted `g` scratch globals deep counts from —
+    /// [`Self::gen_ref`]'s own numbering, goal arena and `meta fn` padding
+    /// included.
+    fn gen_ref_len(&self, g: u32) -> u32 {
+        self.psi.bindings.len() as u32 + self.attempt.goal_arena.base() + self.meta_offset() + g
     }
 
     /// [`Self::instance_ref`]'s two steps without the spine: the recovered
@@ -2261,6 +2353,9 @@ impl Elaborator {
             return None;
         }
         let mut holes = Holes {
+            el: self,
+            g,
+            strict: false,
             base: cx.gamma.base,
             outer: cx.gamma.entries.len() as u32 + d,
             total: arity as u32,
@@ -2300,8 +2395,29 @@ impl Elaborator {
         let mut inline: Vec<Rc<Term>> = Vec::with_capacity(codes.len() + values.len());
         inline.extend(codes.iter().map(Rc::clone));
         inline.extend(values.iter().map(Rc::clone));
-        if instance_of_template(&entry, &inline, frame_tail(cx, d)) != *ty {
-            decline!("instance_match", &ind.name, "identity-match");
+        // The comparison is `Holes::ty` again with **no holes** — an empty
+        // telescope, so no hole arm can fire — rather than a syntactic `!=`
+        // or a second congruence kept in step with the first: the see-through
+        // arms the match needed are exactly the ones the proof is allowed, and
+        // one walk cannot drift from the other. `strict` restores the one
+        // reading the match gives up, a global's substitution tail (§3 of
+        // `docs/closed-argument-and-parameter-domain-spelling-design.md`).
+        let copy = instance_of_template(&entry, &inline, frame_tail(cx, d));
+        let mut proof = Holes {
+            el: self,
+            g,
+            strict: true,
+            base: cx.gamma.base,
+            outer: cx.gamma.entries.len() as u32 + d,
+            total: 0,
+            np: 0,
+            types: Vec::new(),
+            values: Vec::new(),
+            why: None,
+        };
+        if proof.ty(&copy, ty, 0).is_none() {
+            let (t, s) = proof.why.unwrap_or(("?", "level-profile"));
+            decline!("instance_match", &ind.name, "identity-match-{t}/{s}");
             return None;
         }
         // The arguments the reference will carry: a type argument goes
@@ -2801,24 +2917,36 @@ impl Elaborator {
     /// use-site guard is written against. Closed by construction, so nothing
     /// is shifted.
     pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
+        self.unspell_here_in(ty, 0)
+    }
+
+    /// [`Self::unspell_here`] for a type living in an application's **scratch
+    /// world** ([`Self::respell_ty_deep_in`]'s `scratch`), where `g`
+    /// metavariables sit below the committed globals. The recognizer runs
+    /// there too ([`Holes::see_through`]), and reading a reference at the
+    /// wrong anchor would name a *different* definition rather than none, so
+    /// the anchor is carried instead of assumed. At `g = 0` this is
+    /// [`Self::gen_def_of`]'s own numbering, unchanged.
+    pub(crate) fn unspell_here_in(&self, ty: &Type, g: u32) -> Option<Type> {
         let gdefs = self.types.gdefs();
         if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
+        let len = self.gen_ref_len(g);
         if let Term::GlobalTm { var, .. } = &**tm {
-            return self.inline_of_code_key(self.gen_def_of(*var)?);
+            return self.inline_of_code_key(self.code_key_at(len, *var)?);
         }
         // `El (app(D#tycode_fn^δ; ā))`, the applied spelling
         // (`docs/per-instantiation-type-codes-design.md` §4.2). Without this
         // arm a structural reader gets the kernel's lazy *decode* of the
         // instantiation instead of the registry's own copy, and every
         // use-site guard declines silently.
-        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of(tm)? else {
+        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of_at(len, tm)? else {
             return None;
         };
-        let entry = self.ty_code_fn_now(tag, 0)?;
-        let args = self.inlined_arguments(&entry, &args, |el| self.unspell_here(el))?;
+        let entry = self.ty_code_fn_now(tag, g)?;
+        let args = self.inlined_arguments(&entry, &args, |el| self.unspell_here_in(el, g))?;
         Some(instance_of_template(&entry, &args, spine_frame(tm)?))
     }
 

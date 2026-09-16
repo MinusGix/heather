@@ -4164,32 +4164,202 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     "this declaration's lowering is not the look-alike's instantiation"
                 );
                 assert!(e.el.instance_args(&acx, &e.ind("ByCode"), &lk).is_none());
-                // **The boundary the code recovery does not reach**, stated as
-                // it stands so the round that closes it has something to flip.
-                // At a *closed* argument the subject spells the same parameter
-                // two ways: a binder's type is a **structural read** and keeps
-                // the inline lowering (`docs/annotation-component-respell-
-                // design.md` §2.5's own rule), while the type argument of
-                // `idty(a)` is an annotation and went through the chokepoint,
-                // so it is the reference. `code_of` of the first is
-                // `TmSum(…)` and the second is `Flat#tycode^δ`, the two
-                // occurrences disagree, and the hole is not placed. The
-                // disagreement is in the **subject**, not in the matcher:
-                // there is no single argument at which the template is this
-                // type syntactically, so step 2 would refuse whichever was
-                // chosen. It is `docs/telescoped-record-projections-design.md`
-                // §3.2's "spell both sides alike" at a site the round did not
-                // reach; the decline listing reports it as
-                // `hole-match-type-hole/two-occurrences-disagree`.
+                // **The boundary the code recovery did not reach**, flipped
+                // 2026-09-15 (`docs/closed-argument-and-parameter-domain-
+                // spelling-design.md` §3). At a *closed* argument the subject
+                // spells the same parameter two ways: a binder's type is a
+                // **structural read** and keeps the inline lowering
+                // (`docs/annotation-component-respell-design.md` §2.5's own
+                // rule), while the type argument of `idty(a)` is an annotation
+                // and went through the chokepoint, so it is the reference.
+                // `code_of` of the first is `TmSum(…)` and the second is
+                // `Flat#tycode^δ`. The recognizer now sees through the name:
+                // the two codes agree because their inline copies do, and the
+                // **reference** is what is kept — which is what the emitted
+                // argument becomes anyway.
                 let (flat, fl) = e.lowered("Flat");
                 let (closed, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat.clone(), fl.clone())], &[], SPAN)
+                    .expect("`ByCode<Flat>` lowers");
+                let cargs =
+                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed)
+                        .expect("the two spellings of a closed type argument are reconciled");
+                assert_eq!(cargs.len(), 1);
+                assert!(
+                    e.el.is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)),
+                    "…and the recovered argument is the **reference** code"
+                );
+                // The look-alike does not start matching, which is the one
+                // failure mode of the new arm that is not a performance
+                // question (§7 item 1): `ByCodeLk<Flat>` is a different
+                // declaration with the same lowering shape, and seeing through
+                // a name relates no two declarations.
+                let (closed_lk, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCodeLk"), &[(flat, fl)], &[], SPAN)
+                    .expect("`ByCodeLk<Flat>` lowers");
+                assert!(
+                    e.el.instance_args(&e.cx, &e.ind("ByCodeLk"), &closed).is_none(),
+                    "the look-alike's template is not this declaration's lowering"
+                );
+                assert!(e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed_lk).is_none());
+                // And a genuinely different argument is a different
+                // instantiation, recovered as its own reference rather than
+                // reconciled with this one.
+                let (flat2, f2l) = e.lowered("Flat2");
+                let (other, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat2, f2l)], &[], SPAN)
+                    .expect("`ByCode<Flat2>` lowers");
+                let oargs2 =
+                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &other)
+                        .expect("`ByCode<Flat2>`'s own argument is recovered");
+                assert!(
+                    e.el.is_gen_ref(&oargs2[0], GenDef::TyCode(e.ind("Flat2").tag)),
+                    "a different closed argument recovers a different reference"
+                );
+                assert_ne!(cargs[0], oargs2[0]);
+            }
+
+            #[test]
+            fn a_type_argument_arriving_as_a_quote_still_declines() {
+                // §5.2, pinned. Seeing through a **name** is not seeing
+                // through a **quote**: the quote arm was built and refused
+                // (`fatal runtime error: stack overflow` on every workload,
+                // because a quote can be a multi-megabyte literal while a
+                // reference unspells to the copy the walk was already
+                // comparing). So a type argument that arrives as a *code
+                // literal* against the same type written out still declines,
+                // and the decline listing reports it as `identity-match` with
+                // the `El`/`Nat` former pair — the group-A row of the design's
+                // trace read, arriving in the elaborator.
+                //
+                // **This is the test the bounded arm of §5.2 changes.** If it
+                // starts recovering, that arm has landed and its own cost
+                // gate is what to read, not this assertion.
+                let e = env_hidden();
+                // The control, so that the declines below are about the
+                // argument's spelling and not about the declaration: a closed
+                // argument that is a **name** is reconciled.
+                let (flat, fl) = e.lowered("Flat");
+                let (named, _) = e
                     .el
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat, fl)], &[], SPAN)
                     .expect("`ByCode<Flat>` lowers");
                 assert!(
-                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed).is_none(),
-                    "if this now recovers, the two spellings of a closed type argument \
-                     have been reconciled — flip the assertion and re-measure"
+                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &named).is_some(),
+                    "a named closed argument is reconciled"
+                );
+                // The quote, two ways. The first is written as a code literal
+                // outright; the second is the **primitive** `Nat`, which has no
+                // name to take and whose type-argument occurrence is the
+                // kernel's own substitution result `El «Nat»` against the `Nat`
+                // the binder spells — the design's group A exactly, arriving
+                // here as `identity-match` on the `El`/`Nat` former pair.
+                let quoted = Type::El {
+                    level: Level::Zero,
+                    tm: Rc::new(Term::TmNat),
+                };
+                for (label, arg) in [("El «Nat»", quoted), ("Nat", Type::Nat)] {
+                    let (closed, _) = e
+                        .el
+                        .lower_instance(&e.cx, &e.ind("ByCode"), &[(arg, Level::Zero)], &[], SPAN)
+                        .expect("the instantiation lowers");
+                    assert!(
+                        e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed).is_none(),
+                        "{label}: a quoted type argument is not a name and is not seen through"
+                    );
+                }
+            }
+
+            #[test]
+            fn a_wrong_instance_closed_projection_is_refused_by_the_kernel() {
+                // The control that says the reconciled reference means what it
+                // claims. `ByCode<Flat>`'s receiver against the projection at
+                // `ByCode<Flat2>`'s recovered arguments: the spine is built —
+                // nothing here guards it — and the kernel refuses it.
+                let e = env_hidden();
+                let (flat, fl) = e.lowered("Flat");
+                let (inline, il) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat, fl)], &[], SPAN)
+                    .expect("`ByCode<Flat>` lowers");
+                let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                let (cx, v) = receiver(&r, &il);
+                let (flat2, f2l) = e.lowered("Flat2");
+                let (other, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat2, f2l)], &[], SPAN)
+                    .expect("`ByCode<Flat2>` lowers");
+                let args =
+                    e.el.instance_args(&cx, &e.ind("ByCode"), &other.shift_local(1))
+                        .expect("`ByCode<Flat2>`'s arguments are recovered");
+                let Some((tm, ty, lvl)) =
+                    e.el.rec_proj_ref_at(&cx, e.ind("ByCode").tag, 0, &args, &v)
+                else {
+                    return;
+                };
+                assert!(
+                    e.el.kernel_check_term(
+                        &e.el.psi,
+                        heather_kernel::layer::Layer::Prog,
+                        &cx.gamma,
+                        &tm,
+                        &ty,
+                        &lvl,
+                    )
+                    .is_err(),
+                    "a receiver from a different instantiation must not typecheck"
+                );
+            }
+
+            #[test]
+            fn the_closed_record_reads_check_and_compute() {
+                // The four axes on a record whose registration reaches its use
+                // sites only now: a **literal** receiver (an assembled record
+                // value), **neutral** ones (a parameter and a bare binder), an
+                // **open** element type as the control that the new arm did
+                // not change it, and a **checking** position — `r.ok` offered
+                // as the proof of a stated equation.
+                let mut e = env_hidden();
+                e.el.enable_emission_walk();
+                e.el.elab_source(
+                    "
+fn mk_c<A>(a: A) -> ByCode<A> { ByCode(a, refl) }
+fn c_a<A>(r: ByCode<A>) -> A { r.a }
+fn c_flat(r: ByCode<Flat>) -> Flat { r.a }
+fn c_flat_ok(r: ByCode<Flat>) -> idty(r.a) = r.a { r.ok }
+fn c_lit() -> ByCode<Flat> { ByCode(FB(1), refl) }
+theorem c_open<A>(a: A): c_a(mk_c(a)) = a { refl }
+theorem c_closed(): c_flat(c_lit()) = FB(1) { refl }
+theorem c_bare_lit(): idty(c_lit().a) = c_lit().a { c_lit().ok }
+theorem c_bare(r: ByCode<Flat>): idty(r.a) = r.a { r.ok }
+theorem c_neutral(r: ByCode<Flat>): c_flat(mk_c(c_flat(r))) = r.a { refl }
+",
+                )
+                .expect("the closed-argument record's reads check and compute");
+                assert!(
+                    e.el
+                        .elab_source("theorem c_false(): c_flat(c_lit()) = FA { refl }")
+                        .is_err(),
+                    "a false equation must be refused"
+                );
+                assert!(
+                    e.el
+                        .elab_source("fn c_wrong_field(r: ByCode<Flat>) -> Flat { r.ok }")
+                        .is_err(),
+                    "the equality field is not the element field"
+                );
+                let findings = e.el.take_emission_findings();
+                let listed: Vec<String> = findings
+                    .iter()
+                    .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                    .collect();
+                assert!(
+                    findings.is_empty(),
+                    "the emission walker is empty on the closed-argument record:\n{}",
+                    listed.join("\n")
                 );
             }
 
