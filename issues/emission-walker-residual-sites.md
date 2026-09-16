@@ -3,7 +3,7 @@ title: The slots the emission walker still lists on the library: route each emit
 status: open
 labels: [elaboration,representation,performance]
 created: 2026-09-06
-updated: 2026-09-13
+updated: 2026-09-16
 ---
 
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
@@ -79,3 +79,4 @@ rows 1–2.
 - 2026-09-10: Item 1 (`project_field`'s fallback walk) landed by [[unnameable-annotation-occurrences]]'s round (2026-09-10), in the fix shape written here: each link's `fst`/`snd` read off `whnf(cur_emit)` now goes through `emit_ty` (depth 0 and 1). Measured on the x86 fetch certificates rather than the library: the chain met the literal at every `FetchedFrom` instance (numbers on that issue). Item 2 (`elab_arm`'s alias projections) is untouched.
 - 2026-09-10: Five-node listing 578 → 260 after [[per-instantiation-type-codes]] (2026-09-10): the Supf shape/arity and the whole Fst/Snd chain are gone; Pair.fst_ty/snd_ty 236 → 120 each, App.cod/dom and ElimNat.motive 20 — all pre-existing slots, the closed boxed literal.
 - 2026-09-13: The quote layer's remaining literal had one more site than the walker lists, because it is a definition body and not a slot: `register_ty_code_fn`'s `code_of(template)`. Quoted respelled since 2026-09-13 (docs/record-projection-reference-design.md §9.8); the walker's own listing is unaffected, its slots were already routed.
+- 2026-09-16: The quote residue this table lists as not its own has been attributed to an item: `complete_post`'s 5.73 M conversion queries are the quote layer's inline component lowerings (docs/complete-post-attribution-design.md §4). Verification item for the slice: this walker's `WALK_RESIDUE` list may only shrink (design §8 item 4).
