@@ -2730,6 +2730,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "contextual_identifier"
+        },
+        {
+          "type": "SYMBOL",
           "name": "qualified_identifier"
         },
         {
@@ -7377,6 +7381,10 @@
     ],
     [
       "quote_expression",
+      "contextual_identifier"
+    ],
+    [
+      "match_code_expression",
       "contextual_identifier"
     ],
     [
