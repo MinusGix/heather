@@ -4223,25 +4223,28 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
             }
 
             #[test]
-            fn a_type_argument_arriving_as_a_quote_still_declines() {
-                // §5.2, pinned. Seeing through a **name** is not seeing
-                // through a **quote**: the quote arm was built and refused
-                // (`fatal runtime error: stack overflow` on every workload,
-                // because a quote can be a multi-megabyte literal while a
-                // reference unspells to the copy the walk was already
-                // comparing). So a type argument that arrives as a *code
-                // literal* against the same type written out still declines,
-                // and the decline listing reports it as `identity-match` with
-                // the `El`/`Nat` former pair — the group-A row of the design's
-                // trace read, arriving in the elaborator.
+            fn a_type_argument_arriving_as_a_quote_is_now_seen_through() {
+                // **Flipped 2026-09-16** by
+                // `docs/instance-match-quote-arm-design.md`. This test was
+                // `a_type_argument_arriving_as_a_quote_still_declines`, and it
+                // pinned the boundary the *name* arm could not reach: a type
+                // argument that arrives as a code literal (`El «Nat»`) against
+                // the type it quotes, and the **primitive** `Nat`, which has
+                // no name to take at all. Both declined, as
+                // `identity-match-El/Nat`.
                 //
-                // **This is the test the bounded arm of §5.2 changes.** If it
-                // starts recovering, that arm has landed and its own cost
-                // gate is what to read, not this assertion.
+                // What changed: the matcher's former-mismatch arm now takes
+                // **one head step** of `decoded` — the kernel's own
+                // `step_type` on an `El` of a canonical code former — where
+                // the 2026-09-15 attempt took `decode_deep` and materialized
+                // the whole literal at every mismatch node (design §2). The
+                // walk that follows is bounded by the **template**, which is a
+                // declaration's own lowering, so a multi-megabyte quote is
+                // walked only as far as the template is.
                 let e = env_hidden();
-                // The control, so that the declines below are about the
-                // argument's spelling and not about the declaration: a closed
-                // argument that is a **name** is reconciled.
+                // The control is unchanged and still a *name*: a closed
+                // argument spelled as a reference is reconciled by the arm
+                // above this one, not by the quote arm.
                 let (flat, fl) = e.lowered("Flat");
                 let (named, _) = e
                     .el
@@ -4251,24 +4254,186 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     e.el.instance_args(&e.cx, &e.ind("ByCode"), &named).is_some(),
                     "a named closed argument is reconciled"
                 );
-                // The quote, two ways. The first is written as a code literal
-                // outright; the second is the **primitive** `Nat`, which has no
-                // name to take and whose type-argument occurrence is the
-                // kernel's own substitution result `El «Nat»` against the `Nat`
-                // the binder spells — the design's group A exactly, arriving
-                // here as `identity-match` on the `El`/`Nat` former pair.
+                // The quote, two ways, and both now recover — to the **same**
+                // argument, because `El «Nat»` and `Nat` are one type and the
+                // recovered hole is a code either way.
                 let quoted = Type::El {
                     level: Level::Zero,
                     tm: Rc::new(Term::TmNat),
                 };
+                let mut recovered = Vec::new();
                 for (label, arg) in [("El «Nat»", quoted), ("Nat", Type::Nat)] {
                     let (closed, _) = e
                         .el
                         .lower_instance(&e.cx, &e.ind("ByCode"), &[(arg, Level::Zero)], &[], SPAN)
                         .expect("the instantiation lowers");
+                    let args =
+                        e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed)
+                            .unwrap_or_else(|| panic!("{label}: the quote is seen through"));
+                    assert_eq!(args.len(), 1);
+                    recovered.push(Rc::clone(&args[0]));
+                }
+                assert_eq!(
+                    recovered[0], recovered[1],
+                    "the two spellings of `Nat` recover one code"
+                );
+                assert_eq!(*recovered[0], Term::TmNat);
+                // The negative the arm must not swallow: a quote whose decode
+                // is a *different* type still declines. `El ⌜Ty 0⌝` decodes to
+                // `Ty 0`, which is not `Nat`, and `ByCodeLk` is still a
+                // different declaration.
+                let wrong = Type::El {
+                    level: Level::succ(Level::Zero),
+                    tm: Rc::new(Term::TmTy(Level::Zero)),
+                };
+                let (wrong_inst, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCode"), &[(wrong, Level::succ(Level::Zero))], &[], SPAN)
+                    .map_or_else(|_| (Type::Nat, Level::Zero), |t| t);
+                if wrong_inst != Type::Nat {
+                    let args = e.el.instance_args(&e.cx, &e.ind("ByCode"), &wrong_inst);
                     assert!(
-                        e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed).is_none(),
-                        "{label}: a quoted type argument is not a name and is not seen through"
+                        args.is_none_or(|a| *a[0] != Term::TmNat),
+                        "a quote of a different type is not `Nat`"
+                    );
+                }
+                let (flat2, f2l) = e.lowered("Flat2");
+                let (lk, _) = e
+                    .el
+                    .lower_instance(&e.cx, &e.ind("ByCodeLk"), &[(flat2, f2l)], &[], SPAN)
+                    .expect("`ByCodeLk<Flat2>` lowers");
+                assert!(
+                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &lk).is_none(),
+                    "the look-alike does not start matching"
+                );
+            }
+
+            #[test]
+            fn the_axes_on_a_record_whose_type_argument_is_a_quote() {
+                // The quote arm on real source
+                // (`docs/instance-match-quote-arm-design.md` §5 item 8).
+                // `ByCode<Nat>`'s `A` argument has no name to take, so before
+                // this arm every one of these reads fell to `project_field`'s
+                // `Fst`/`Snd` walk. The four axes: a **literal** receiver (an
+                // assembled record returned by a `fn` and read through, the
+                // idiom the amendment to §7 item 7 of
+                // `docs/closed-argument-and-parameter-domain-spelling-design.md`
+                // settled on) and a **neutral** one; an **open** element type
+                // beside the closed one; a **checking** position, where a
+                // wrong field type is a rejection and not a different term;
+                // and negative controls below.
+                let mut e = env_hidden();
+                e.el.enable_emission_walk();
+                e.el.elab_source(
+                    "
+fn mkc<A>(a: A) -> ByCode<A> { ByCode(a, refl) }
+fn c_open<A>(c: ByCode<A>) -> A { c.a }
+fn c_quoted(c: ByCode<Nat>) -> Nat { c.a }
+fn c_named(c: ByCode<Flat>) -> Flat { c.a }
+fn c_lit() -> ByCode<Nat> { ByCode(3, refl) }
+theorem c_neutral<A>(a: A): c_open(mkc(a)) = a { refl }
+theorem c_neutral_q(n: Nat): c_quoted(mkc(n)) = n { refl }
+theorem c_literal(): c_quoted(c_lit()) = 3 { refl }
+theorem c_bare_lit(): c_lit().a = 3 { refl }
+theorem c_checking(c: ByCode<Nat>): idty(c.a) = c.a { c.ok }
+theorem c_checking_open<A>(c: ByCode<A>): idty(c.a) = c.a { c.ok }
+",
+                )
+                .expect("a quoted type argument's field reads check and compute");
+                // Axis 4: the negatives.
+                assert!(
+                    e.el
+                        .elab_source("theorem c_false(): c_quoted(c_lit()) = 4 { refl }")
+                        .is_err(),
+                    "a false equation must be refused"
+                );
+                assert!(
+                    e.el
+                        .elab_source(
+                            "theorem c_neighbour(c: ByCode<Nat>): idty(c.a) = c.a { c.a }"
+                        )
+                        .is_err(),
+                    "a neighbouring field must not prove this field's statement"
+                );
+                // The emission walker, and what it is allowed to say here.
+                // It is **not** empty, and asserting that it were would pin
+                // someone else's defect to this test (the 2026-09-15
+                // amendment to §7 item 7 of
+                // `docs/closed-argument-and-parameter-domain-spelling-design.md`,
+                // `issues/emission-walker-residual-sites`): every finding is an
+                // `App`'s `dom`/`cod` carrying the boxed `El ⌜Nat⌝` literal,
+                // which is the quote layer's standing residue and is exactly
+                // the thing `Nat` has no name to replace. So what is asserted
+                // is that **`«Nat»` is the only quote in them** — a finding
+                // carrying any other boxed code would be this arm's, and is
+                // the failure this test exists to catch.
+                let findings = e.el.take_emission_findings();
+                let listed: Vec<String> = findings
+                    .iter()
+                    .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                    .collect();
+                assert!(
+                    findings
+                        .iter()
+                        .all(|f| !f.found.replace("«Nat»", "").contains('«')),
+                    "the only residual quote is the unnameable primitive:\n{}",
+                    listed.join("\n")
+                );
+                // The control, and the reason the assertion above is not
+                // vacuous: the same axes at a **named** closed argument leave
+                // the walker empty, so the residue is the primitive's and not
+                // the device's.
+                e.el.elab_source(
+                    "
+fn n_read(c: ByCode<Flat>) -> Flat { c.a }
+fn n_lit() -> ByCode<Flat> { ByCode(FA, refl) }
+theorem n_literal(): n_read(n_lit()) = FA { refl }
+theorem n_checking(c: ByCode<Flat>): idty(c.a) = c.a { c.ok }
+",
+                )
+                .expect("a named closed argument's field reads check and compute");
+                let named_findings = e.el.take_emission_findings();
+                let named_listed: Vec<String> = named_findings
+                    .iter()
+                    .map(|f| format!("{} {} depth={}: {}", f.decl, f.slot, f.depth, f.found))
+                    .collect();
+                assert!(
+                    named_findings.is_empty(),
+                    "a named closed argument leaves the emission walker empty:\n{}",
+                    named_listed.join("\n")
+                );
+                // And the route actually changed: a bare-binder read off
+                // `ByCode<Nat>` now takes the named projection. `ByCode` is
+                // dependent (its `ok` field mentions `a`), so it is exempt
+                // from the receiver gate and `instance_args` is the only
+                // thing that was declining.
+                let quoted = Type::El {
+                    level: Level::Zero,
+                    tm: Rc::new(Term::TmNat),
+                };
+                for (label, arg) in [("El «Nat»", quoted), ("Nat", Type::Nat)] {
+                    let (inline, il) = e
+                        .el
+                        .lower_instance(&e.cx, &e.ind("ByCode"), &[(arg, Level::Zero)], &[], SPAN)
+                        .expect("the instantiation lowers");
+                    let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                    let mut cx = Cx::empty();
+                    cx.push("#v".into(), r.clone(), il.clone());
+                    let (tm, ..) = e
+                        .el
+                        .project_field(
+                            &cx,
+                            &e.ind("ByCode"),
+                            &r.shift_local(1),
+                            Rc::new(Term::Var(LocalVar(0))),
+                            0,
+                            SPAN,
+                        )
+                        .expect("the read elaborates either way");
+                    assert_eq!(
+                        e.el.gen_app_of(&tm).map(|(k, _)| k),
+                        Some(GenDef::RecProj(e.ind("ByCode").tag, 0)),
+                        "{label}: the read takes the named projection"
                     );
                 }
             }

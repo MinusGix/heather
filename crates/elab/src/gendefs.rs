@@ -31,6 +31,7 @@
 //!   *size* optimization, never a semantic one, so the fallback is the old
 //!   behavior verbatim rather than an error at a span the user never wrote.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc as Rc;
 
@@ -529,6 +530,28 @@ impl Holes<'_> {
                     return self.ty(a, &seen, md);
                 }
                 if let Some(seen) = self.see_through(a) {
+                    return self.ty(&seen, b, md);
+                }
+                // The same component, **quoted** rather than named
+                // (`docs/instance-match-quote-arm-design.md` §1): `El «Nat»`
+                // against the primitive the binder spells, and `El «Σ…»`
+                // against the inline Σ it denotes — one relation at two
+                // depths. `Nat` has no name to take, so the arm above cannot
+                // reach it in principle.
+                //
+                // **One head step, never `decode_deep`** (§2). The refuted
+                // unbounded arm materialized the whole literal at every
+                // mismatch node and overflowed the stack on a
+                // multi-megabyte quote; [`crate::inductive::decoded`] is the
+                // kernel's own `step_type` at the head, O(1) per node, and
+                // the components below stay quoted until the walk reaches
+                // them. What bounds the walk that follows is the
+                // **template** — a declaration's own lowering — because the
+                // two sides descend in lockstep.
+                if let Cow::Owned(seen) = crate::inductive::decoded(b) {
+                    return self.ty(a, &seen, md);
+                }
+                if let Cow::Owned(seen) = crate::inductive::decoded(a) {
                     return self.ty(&seen, b, md);
                 }
                 self.stop(ty_former(a), ty_former(b))

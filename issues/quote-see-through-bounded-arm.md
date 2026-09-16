@@ -1,6 +1,6 @@
 ---
 title: Seeing through a quote in the instance matcher: only with a bounded arm
-status: open
+status: closed
 labels: [elaboration,representation,performance,design]
 created: 2026-09-15
 updated: 2026-09-16
@@ -10,3 +10,4 @@ docs/closed-argument-and-parameter-domain-spelling-design.md §5.2: the name arm
 - 2026-09-16: Trigger fired: on `complete_post` the `El⌜⌝` pairs are 95 947 of 110 851 misses and 5.5 of 7.3 s (docs/complete-post-attribution-design.md §1.2). Not chartered yet: the elaborator-side slice (quote the respelled type, [[elaborator-canonical-type-spelling]]) is tried first, and this arm becomes the owner only if that spike finds `emit_ty` does not reach the open components (design §5.1). Still bounded, never an unbounded decode.
 - 2026-09-16: The elaborator slice took the customer: `El⌜⌝` pairs on `complete_post` 95 947 → a remainder inside 14 210 misses (docs/complete-post-attribution-design.md §10.1). Trigger stays armed against a much smaller row; the `Certified`/`Exists` `identity-match-El/Nat` declines are still the shape (13 rows on `t_cp1` after the slice).
 - 2026-09-16: Priced and chartered: `instance_match Certified identity-match-El/Nat` is 33 of `close_body`'s declines and, with `hole-match-Sigma/El`, gates 78 % of its read nodes (docs/close-body-family-attribution-design.md §7.1); the walk it forces is ×14 per chained receiver. The bounded arm is slice 1 of that family; the reproducers per arm come from the decline listing (`probes/cb_decline.sh`).
+- 2026-09-16: Landed (docs/instance-match-quote-arm-design.md): the bound is **one head step** of `crate::inductive::decoded` on the mismatching side — the kernel's `step_type` at the head, O(1) per node, components left quoted until the lockstep walk reaches them, the template bounding the walk — not a node budget (which would refuse the `Sigma/El` arm and needs its own unbounded count) and not a whitelist. Both `identity-match-El/Nat` and `hole-match-Sigma/El` are one relation at two depths and both go to zero on the family; `Result hole-match-Sum/Sigma` is a correct decline (a one-field record is not a `Result`). The pinned negative in `wf.rs` is flipped (`a_type_argument_arriving_as_a_quote_is_now_seen_through`) with the look-alike and a wrong-decode negative kept. Closing.
