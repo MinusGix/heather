@@ -193,6 +193,19 @@ impl Speller<'_> {
 
     // -- binders ------------------------------------------------------------
 
+    /// Binders the walk has descended under since `cx`.
+    ///
+    /// **Not `d`.** `d` is the *budget* depth ([`Self::charge`]) and counts
+    /// every descent, binder or not — `Squash`'s payload, a `Π`'s domain and a
+    /// spelled type argument all take `d + 1`. `names` is `cx.names` plus one
+    /// entry per binder [`Self::under`] pushed, and `cx.names` is parallel to
+    /// `cx.gamma.entries`, so this difference is what a context *length* has
+    /// to be extended by to scope a type the walk is currently looking at
+    /// (issues/pi-codomain-record-mismatch-panics-kernel.md).
+    fn binders(&self) -> u32 {
+        (self.names.borrow().len() - self.cx.names.len()) as u32
+    }
+
     /// A name for a binder the kernel does not name: the first of a short
     /// preference list not already in scope, else `x{n}`.
     fn fresh(&self) -> String {
@@ -295,7 +308,9 @@ impl Speller<'_> {
             }
             return if ind.params.is_empty() {
                 ind.name.clone()
-            } else if let Some(args) = self.el.display_targs(self.cx, ty, &ind) {
+            } else if let Some(args) =
+                self.el.display_targs(self.cx, ty, &ind, self.binders())
+            {
                 let shown = args
                     .iter()
                     .map(|(arg, _)| self.ty(arg, d + 1))
