@@ -3,7 +3,7 @@ title: One instrumentation layer: scoped counters and timers on every phase, dum
 status: open
 labels: [tooling,performance,measurement,kernel,elaboration,cli]
 created: 2026-09-11
-updated: 2026-09-11
+updated: 2026-09-16
 ---
 
 Every performance issue in the tracker starts its next action with "re-measure first", and the main command has nothing to measure with: `heather check` has no timing flag at all. What exists is real but scattered (survey 2026-09-11):
@@ -89,3 +89,4 @@ Here `omega_check` also sheds half a second, and correctly: that bracket wraps `
 **Verification.** `furnace run -- scripts/test --fast` `== suite: 2435 passed, 0 failed, 5 ignored ==`. `scripts/bench --check` on the desktop that recorded the baseline: 6 regressions and 8 improvements, all of them the pre-existing `nat/step-once` + `nat/mul-normalize` Arc tax and the `check-numeral`/`wf/check-tree` wins already on record — this round's diff touches no file in `crates/kernel`, so the kernel bench binary is the same one, and no family is flagged for slope. `scripts/bench-frontend --check --no-heavy` against a `--save` taken on the same box from the un-instrumented tree (the committed frontend baseline is from 2026-08-17 and would measure a month, not this diff): 9 flags on the first run, 1 on the second — and the **control**, the un-instrumented tree checked against its own baseline, flags 6, including `corpus/parse:ir_v1.hthr` at 1.39x, which is one build of one parser against another build of the same parser. So `--no-heavy` on this box cannot resolve anything under about 1.4x per case, and the only family flagged in all three runs is `indexed/arms slope band` (2.46 in the control, 2.55 and 2.58 instrumented) — flagged against itself, not by this diff. The wall clock on the two real workloads is the better evidence: 120.93 -> 120.19 s and 10.267 -> 10.299 s, both inside noise, for two `Instant::now()` per declaration phase, per whnf probe and per diagnostic note.
 
 **Left out on purpose.** Residue item (3) — the `heather-cli` bin unit tests and `lib_setoid_mergeable` do not opt into `stats::with_env_dump`, so `HEATHER_TIMINGS` on them still writes nothing. Residue item's derived `eval steps per kernel second` rate is not a column; the two counters it divides are both in the TSV already. `scripts/perf` and the frame-pointer profile stay [[perf-profile-build-target]]'s (a frame-pointer build plus `perf record` is how the bucket was located, but nothing about it landed in the tree).
+- 2026-09-16: The consumer side has no reader: --timings TSV columns are positional and "queries" has no single definition — two design docs quote one and a hand-summed shortcut+memo+miss disagrees with both. [[timings-tsv-has-no-reader]] owns that.
