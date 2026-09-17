@@ -105,7 +105,19 @@ structural siblings for scale:
 | `parser_contracts::certify_at` | 84 | 48 | 210 | 34 196 | 4 137 |
 
 The brief's table is reproduced to the unit, so the family is what it said it
-was. Two rows of it are the round's first surprise and are worth reading
+was.
+
+> **Reading this table later** (added 2026-09-17, `issues/timings-tsv-has-no-reader.md`).
+> Its `queries` column is `conv_shortcut_hits` alone, not the sum of the three
+> `Tc::conv_ty` outcomes that `scripts/timings` now calls `queries`; re-read it
+> with `--columns shortcut`. Re-measured on that day's tree, the rows that do
+> **not** go through the receiver chain reproduce to the unit —
+> `complete_post` 3 681 039, `Grammar` 457 050, `Certified` 357 891,
+> `symbol_span` 71 609, `certify_at` 34 196 — and the family's own rows have
+> since halved, because `0245b31` taught the instance matcher to see through a
+> quote: `close_body` 2 585 801 → 1 316 602 and 6 773 ms → 2 904 ms, `expr_body`
+> and `factor_body` 1 024 7xx → 554 5xx. So this table is a record of its tree,
+> not of the mechanism, and §3 onward is what carries over. Two rows of it are the round's first surprise and are worth reading
 before §3:
 
 - **`open_body` is `close_body`'s caller and costs 2.3 % of it.** It runs the

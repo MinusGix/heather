@@ -60,6 +60,14 @@
   exponent, not the time. `docs/benchmarking.md` explains what "regressed"
   means and why the harness is first-party (the kernel stays at zero
   dependencies, dev-dependencies included — so no Criterion).
+- **Read a `--timings` TSV with `scripts/timings`**, never by counting
+  indices into an `awk -F'\t'` line — that mislabelled three columns in one
+  session. It looks columns up by name and prints the five the design docs
+  quote (`--diff a.tsv b.tsv` for per-item deltas). `queries` means every
+  `Tc::conv_ty` query — shortcut + memo + miss; the attribution docs written
+  before it quote `conv_shortcut_hits` alone, so reproduce one of their numbers
+  with `--columns shortcut`. Counts are exact and worker-count-invariant;
+  seconds are not, and at width > 1 item times sum past the run row.
 - **Testing generated terms** (elaborator schemas, lowerings):
   `docs/testing-generated-terms.md` — the four axes a test has to vary
   (literal *and* neutral scrutinee, an **open** element type, a *checking*

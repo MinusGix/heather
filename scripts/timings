@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Read a `heather check --timings` TSV.
+
+The file has 50-plus positional columns, and reading it by hand — counting
+indices off the header into an `awk -F'\t'` line — mislabelled three of them in
+one session (`issues/timings-tsv-has-no-reader.md`). Everything here looks
+columns up **by name**, which is the property that makes a column inserted in
+the middle a non-event.
+
+Stdlib only, like `scripts/issue`. Writer: `crates/elab/src/stats.rs::header`.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+# The five columns every attribution doc quotes, defined once.
+#
+# `queries` is the one that needed a definition: a `Tc::conv_ty` query has
+# exactly three outcomes (the syntactic shortcut, the gate's cross-head memo,
+# or a paid value-domain comparison), so their sum is every query the kernel
+# was asked. Docs that quote a "queries" column against one of the three
+# alone are quoting a *part*, and `--columns` is how to reproduce that.
+COLUMNS = {
+    "total ms":  (["total_ns"], 1e6),
+    "gate ms":   (["kernel_gate_ns"], 1e6),
+    "misses":    (["conv_misses"], 1),
+    "queries":   (["conv_shortcut_hits", "conv_memo_hits", "conv_misses"], 1),
+    "steps":     (["eval_steps"], 1),
+    # Not in the default five, and here because the attribution docs' own
+    # "queries" column is `shortcut` alone (measured 2026-09-17: five of their
+    # rows reproduce to the unit against it and none against the sum). Ask for
+    # it by name to reproduce one of their numbers.
+    "shortcut":  (["conv_shortcut_hits"], 1),
+    "memo":      (["conv_memo_hits"], 1),
+    "gated":     (["check_terms"], 1),
+    "delta":     (["eval_delta_steps"], 1),
+}
+DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
+
+# Which columns are counts and which are seconds. A count is reproducible to
+# the unit on the same tree; a time is not, and on the recording box repeats
+# spread a few percent — so a delta in one is a result and in the other is
+# noise until it is large.
+def is_time(col: str) -> bool:
+    return col.endswith(" ms")
+
+
+class Table:
+    def __init__(self, path: Path):
+        text = path.read_text()
+        lines = text.splitlines()
+        if not lines:
+            sys.exit(f"error: {path} is empty")
+        self.path = path
+        self.columns = lines[0].split("\t")
+        self.rows = []
+        for n, line in enumerate(lines[1:], start=2):
+            cells = line.split("\t")
+            if len(cells) != len(self.columns):
+                sys.exit(f"error: {path}:{n} has {len(cells)} cells, header has {len(self.columns)}")
+            self.rows.append(cells)
+        for needed in ("scope", "module", "item"):
+            if needed not in self.columns:
+                sys.exit(f"error: {path} has no `{needed}` column — is it a --timings dump?")
+
+    def index(self, name: str) -> int:
+        try:
+            return self.columns.index(name)
+        except ValueError:
+            sys.exit(
+                f"error: {self.path} has no column `{name}`.\n"
+                f"       Columns present: {', '.join(self.columns)}"
+            )
+
+    def cell(self, row, name: str) -> int:
+        raw = row[self.index(name)].strip()
+        return int(raw) if raw else 0
+
+    def value(self, row, col: str) -> float:
+        parts, scale = COLUMNS[col]
+        return sum(self.cell(row, p) for p in parts) / scale
+
+    def name(self, row) -> str:
+        module, item = row[self.index("module")], row[self.index("item")]
+        return f"{module}::{item}" if module and item else (item or module or "(run)")
+
+    def scoped(self, kind: str):
+        i = self.index("scope")
+        return [r for r in self.rows if r[i] == kind]
+
+    def items(self, wanted):
+        """Item rows, in file order, filtered by substring if any were named."""
+        rows = self.scoped("item")
+        if wanted:
+            rows = [r for r in rows if any(w in self.name(r) for w in wanted)]
+            if not rows:
+                sys.exit(f"error: no item row matches {', '.join(wanted)}")
+        return rows
+
+
+def fmt(col: str, v: float) -> str:
+    return f"{v:,.1f}" if is_time(col) else f"{v:,.0f}"
+
+
+def render(headings, rows):
+    """`rows` is a list of (name, [cell strings])."""
+    widths = [max(len(headings[0]), *(len(n) for n, _ in rows))] if rows else [len(headings[0])]
+    for i, h in enumerate(headings[1:]):
+        widths.append(max(len(h), *(len(c[i]) for _, c in rows)) if rows else len(h))
+    line = headings[0].ljust(widths[0]) + "".join(
+        "  " + h.rjust(w) for h, w in zip(headings[1:], widths[1:])
+    )
+    print(line)
+    print("-" * len(line))
+    for name, cells in rows:
+        print(name.ljust(widths[0]) + "".join(
+            "  " + c.rjust(w) for c, w in zip(cells, widths[1:])
+        ))
+
+
+def cmd_read(args, cols):
+    t = Table(Path(args.file))
+    rows = t.items(args.item)
+    rows.sort(key=lambda r: -t.value(r, cols[0]))
+    if args.top and not args.item:
+        rows = rows[: args.top]
+    render(["item"] + cols, [(t.name(r), [fmt(c, t.value(r, c)) for c in cols]) for r in rows])
+
+    if not args.item:
+        totals = t.scoped("run")
+        over = t.scoped("item")
+        print()
+        print("sum over item rows:  " + "  ".join(
+            f"{c} {fmt(c, sum(t.value(r, c) for r in over))}" for c in cols))
+        for r in totals:
+            print("run row:             " + "  ".join(f"{c} {fmt(c, t.value(r, c))}" for c in cols))
+        print(f"({len(over)} item rows in {t.path})")
+        # At width > 1 the item rows sum past the run row in *time* — each
+        # item is charged the wall its own gate spent, and several were spent
+        # at once — while the counts still add up exactly. Saying so here is
+        # cheaper than re-deriving it from a table that looks wrong.
+        for r in totals:
+            times = [c for c in cols if is_time(c)]
+            if any(abs(sum(t.value(x, c) for x in over) - t.value(r, c)) > 0.05 * max(t.value(r, c), 1)
+                   for c in times):
+                print("note: item times sum past the run row — kernel workers overlap; "
+                      "counts still add exactly.")
+                break
+
+
+def cmd_diff(args, cols):
+    a, b = Table(Path(args.diff[0])), Table(Path(args.diff[1]))
+    left = {a.name(r): r for r in a.items(args.item)}
+    right = {b.name(r): r for r in b.items(args.item)}
+    names = sorted(set(left) | set(right), key=lambda n: -abs(
+        (b.value(right[n], cols[0]) if n in right else 0)
+        - (a.value(left[n], cols[0]) if n in left else 0)))
+    if args.top and not args.item:
+        names = names[: args.top]
+
+    rows = []
+    for n in names:
+        cells = []
+        for c in cols:
+            if n not in left:
+                cells += ["—", fmt(c, b.value(right[n], c)), "new"]
+                continue
+            if n not in right:
+                cells += [fmt(c, a.value(left[n], c)), "—", "gone"]
+                continue
+            x, y = a.value(left[n], c), b.value(right[n], c)
+            d = y - x
+            pct = f"{d / x * 100:+.1f}%" if x else ("—" if d == 0 else "new")
+            cells += [fmt(c, x), fmt(c, y), pct]
+        rows.append((n, cells))
+
+    headings = ["item"] + [h for c in cols for h in (f"{c} a", f"{c} b", "Δ")]
+    render(headings, rows)
+    print()
+    print(f"a = {a.path}")
+    print(f"b = {b.path}")
+    print("counts (misses, queries, steps) are exact on one tree and comparable;")
+    print("times (total ms, gate ms) repeat to a few percent — a small Δ there is noise.")
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="timings",
+        description="read a `heather check --timings` TSV by column name",
+        epilog="`queries` = conv_shortcut_hits + conv_memo_hits + conv_misses — every "
+               "Tc::conv_ty query, by its three outcomes. The attribution docs' column of "
+               "that name is `shortcut` alone; ask for `--columns shortcut` to reproduce one.",
+    )
+    p.add_argument("file", nargs="?", help="a --timings TSV")
+    p.add_argument("item", nargs="*", help="substrings; only matching item rows are shown")
+    p.add_argument("--diff", nargs=2, metavar=("A.tsv", "B.tsv"), help="per-item deltas, a → b")
+    p.add_argument("--top", type=int, default=20, metavar="N", help="rows to show (default 20)")
+    p.add_argument("--all", action="store_true", help="every item row")
+    p.add_argument("--columns", help="comma-separated subset of: " + ", ".join(COLUMNS))
+    p.add_argument("--list-columns", action="store_true", help="print the file's raw column names")
+    args = p.parse_args()
+
+    if args.all:
+        args.top = 0
+    cols = DEFAULT
+    if args.columns:
+        cols = [c.strip() for c in args.columns.split(",") if c.strip()]
+        for c in cols:
+            if c not in COLUMNS:
+                sys.exit(f"error: unknown column `{c}`; known: {', '.join(COLUMNS)}")
+
+    if args.list_columns:
+        if not args.file:
+            sys.exit("error: --list-columns needs a file")
+        for n, c in enumerate(Table(Path(args.file)).columns, start=1):
+            print(f"{n:>3}  {c}")
+        return
+    if args.diff:
+        if args.file:
+            args.item = [args.file] + list(args.item)
+        cmd_diff(args, cols)
+        return
+    if not args.file:
+        sys.exit("error: give a --timings TSV, or --diff a.tsv b.tsv")
+    cmd_read(args, cols)
+
+
+if __name__ == "__main__":
+    main()
