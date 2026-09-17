@@ -37,9 +37,21 @@ use heather_kernel::term::GlobalCtx;
 /// they carry no proof). The returned elaborator has `NoGate`, so fixture
 /// theorems, mutations and controls always reach the real kernel.
 pub fn semantic_test_base(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
+    semantic_test_base_with(modules, |_| {})
+}
+
+/// [`semantic_test_base`] with the elaborator configured *before* the prefix
+/// is checked or replayed — for a target whose prefix carries a large checked
+/// artifact and pins the gate serial to stay inside the per-process memory
+/// rail on a cold run (the showcase calculator's grammar). Setting the width
+/// on the returned elaborator would be too late for the cold path.
+pub fn semantic_test_base_with(
+    modules: &[(&str, &str)],
+    configure: impl FnOnce(&mut heather_elab::Elaborator),
+) -> heather_elab::Elaborator {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/semantic-test-images");
-    semantic_test_base_at(modules, dir)
+    semantic_test_base_in(modules, dir, configure)
 }
 
 /// The isolated-directory form used by the support boundary's own corruption
@@ -48,6 +60,14 @@ pub fn semantic_test_base(modules: &[(&str, &str)]) -> heather_elab::Elaborator 
 pub fn semantic_test_base_at(
     modules: &[(&str, &str)],
     dir: std::path::PathBuf,
+) -> heather_elab::Elaborator {
+    semantic_test_base_in(modules, dir, |_| {})
+}
+
+fn semantic_test_base_in(
+    modules: &[(&str, &str)],
+    dir: std::path::PathBuf,
+    configure: impl FnOnce(&mut heather_elab::Elaborator),
 ) -> heather_elab::Elaborator {
     // `HEATHER_SEMANTIC_IMAGES=accept-stale` (the fast lane, set by
     // scripts/test) replays images an earlier build of the compiler wrote
@@ -61,6 +81,7 @@ pub fn semantic_test_base_at(
     };
     let mut session = heather_cli::semantic::SemanticSession::new(Some(dir)).with_freshness(freshness);
     let mut elab = heather_elab::Elaborator::with_prelude().expect("prelude");
+    configure(&mut elab);
     // The checked-in prefix goes through the declaration-verdict store as
     // well (`with_decl_cache`'s trust argument, below): a replayed image's
     // stored definitions ask the store the question the cold gate answered

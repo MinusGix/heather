@@ -193,10 +193,12 @@ fn a_corrupt_semantic_module_is_reported_and_rebuilt() {
     let modules = dir.join("modules-v1");
     let artifact = std::fs::read_dir(&modules)
         .unwrap()
-        .next()
-        .expect("one cached module")
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        // The store also holds a `.latest` pointer per module (the
+        // slice-replay commit); corrupting *that* leaves the image
+        // valid and proves nothing. Take the image itself.
+        .find(|path| path.extension().is_some_and(|ext| ext == "hmi"))
+        .expect("one cached module");
     std::fs::write(artifact, b"not an image").unwrap();
 
     let warm = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
@@ -419,10 +421,12 @@ fn axioms_loads_and_rebuilds_semantic_module_images() {
     let modules = dir.join("modules-v1");
     let artifact = std::fs::read_dir(&modules)
         .unwrap()
-        .next()
-        .expect("one cached module")
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        // The store also holds a `.latest` pointer per module (the
+        // slice-replay commit); corrupting *that* leaves the image
+        // valid and proves nothing. Take the image itself.
+        .find(|path| path.extension().is_some_and(|ext| ext == "hmi"))
+        .expect("one cached module");
     std::fs::write(artifact, b"not an image").unwrap();
     let rebuilt = heather(&args);
     assert_eq!(rebuilt.status.code(), Some(0));

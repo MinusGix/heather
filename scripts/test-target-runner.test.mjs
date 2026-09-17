@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { jobBounds, parseArtifacts, parseResults, targetIncomplete } from "./run-test-targets.mjs";
+import { CPU_MARKER, collect, jobBounds, limitedCommand, parseArtifacts, parseCpu, parseResults, targetIncomplete } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -37,4 +37,28 @@ test("ordinary failures are red but only missing summaries are incomplete", () =
   assert.equal(targetIncomplete({ code: 101, signal: null, result: { resultLines: 1 } }), false);
   assert.equal(targetIncomplete({ code: null, signal: "SIGKILL", result: { resultLines: 0 } }), true);
   assert.equal(targetIncomplete({ code: 1, signal: null, result: { resultLines: 0 } }), true);
+});
+
+test("the wrapper's CPU line is summed and removed from the child's output", () => {
+  const libtest = "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s\n";
+  const parsed = parseCpu(`${libtest}${CPU_MARKER} user=43.250 sys=1.500\n`);
+  assert.equal(parsed.cpu, 44.75);
+  assert.equal(parsed.output, libtest);
+  assert.deepEqual(parseCpu(libtest), { cpu: null, output: libtest });
+});
+
+test("the limited wrapper reports CPU, keeps the exit code, and re-raises a signal", async () => {
+  const plain = await collect(limitedCommand("bash", ["-c", "echo out; exit 3"]));
+  assert.equal(plain.code, 3);
+  assert.equal(plain.signal, null);
+  const parsed = parseCpu(plain.output);
+  assert.equal(typeof parsed.cpu, "number");
+  assert.equal(parsed.output, "out\n");
+  // A rail kill reaches the child as SIGKILL; the wrapper dies of the same
+  // signal so the runner's `signal=SIGKILL` diagnosis is unchanged — and the
+  // CPU the child burnt before the kill is still reported, which is the
+  // number a rail kill wants on record.
+  const killed = await collect(limitedCommand("bash", ["-c", "kill -9 $$"]));
+  assert.equal(killed.signal, "SIGKILL");
+  assert.equal(typeof parseCpu(killed.output).cpu, "number");
 });

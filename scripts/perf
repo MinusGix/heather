@@ -165,8 +165,9 @@ def suite_history_dirs():
 
 def suite_timings():
     """Latest run per lane of the runner's append-only history. Rows are
-    `run\\tseconds\\tlabel`; rows from before the run column (`seconds\\tlabel`)
-    count as one undated run."""
+    `run\\tseconds\\tlabel\\tcpu` (cpu = user+sys seconds, empty when the
+    wrapper could not report it; absent before 2026-09-17); rows from before
+    the run column (`seconds\\tlabel`) count as one undated run."""
     out = {}
     for lane in ("full", "fast"):
         path = next((d / f"test-target-timings-{lane}.tsv" for d in suite_history_dirs()
@@ -176,14 +177,17 @@ def suite_timings():
         runs = {}
         for line in path.read_text().splitlines():
             cells = line.split("\t")
-            if len(cells) == 3:
+            cpu = None
+            if len(cells) == 4:
+                run, secs, label, cpu = cells
+            elif len(cells) == 3:
                 run, secs, label = cells
             elif len(cells) == 2:
                 run, (secs, label) = "undated", cells
             else:
                 continue
             try:
-                runs.setdefault(run, []).append([label, float(secs)])
+                runs.setdefault(run, []).append([label, float(secs), float(cpu) if cpu else None])
             except ValueError:
                 continue
         if not runs:
@@ -192,15 +196,18 @@ def suite_timings():
         latest = max(dated) if dated else "undated"
         # Undated rows are several runs on top of each other: the last row
         # per target is the latest run's.
-        by_label = {label: secs for label, secs in runs[latest]}
-        targets = sorted(([l, s] for l, s in by_label.items()), key=lambda r: -r[1])
+        by_label = {label: (secs, cpu) for label, secs, cpu in runs[latest]}
+        targets = sorted(([l, s, c] for l, (s, c) in by_label.items()), key=lambda r: -r[1])
+        cpus = [c for _, _, c in targets if c is not None]
         out[lane] = {
             "run": latest,
             "runs_on_file": len(runs),
             "targets": targets,
-            "sum_s": round(sum(s for _, s in targets), 2),
+            "sum_s": round(sum(s for _, s, _ in targets), 2),
+            "cpu_sum_s": round(sum(cpus), 2) if cpus else None,
             "source": str(path),
-            "note": "seconds per test binary at kernel width one under the suite's parallel scheduler",
+            "note": "seconds per test binary at kernel width one under the suite's parallel scheduler; "
+                    "the third cell is the binary's CPU seconds (user+sys) against the runner's 300 s rail",
         }
     return out
 
@@ -480,16 +487,22 @@ def cmd_report(args):
 
     # --- suite
     for lane, t in snap.get("tests", {}).items():
+        cpu_sum = t.get("cpu_sum_s")
+        cpu_note = f", {cpu_sum:.0f} CPU-s" if cpu_sum is not None else ""
         print(f"\n-- suite ({lane} lane, run {t['run']}): {len(t['targets'])} targets, "
-              f"{t['sum_s']:.0f}s summed at width one")
+              f"{t['sum_s']:.0f}s summed at width one{cpu_note}")
         prev = {}
         if against and lane in against.get("tests", {}):
-            prev = dict(against["tests"][lane]["targets"])
-        for label, s in t["targets"][:top]:
-            print(f"   {fmt_s(s)} {delta(prev.get(label), s, True):>6}  {label}")
+            prev = {row[0]: row[1] for row in against["tests"][lane]["targets"]}
+        # Rows are [label, seconds] before 2026-09-17 and [label, seconds, cpu] after.
+        for row in t["targets"][:top]:
+            label, s = row[0], row[1]
+            cpu = row[2] if len(row) > 2 else None
+            cpu_cell = f"{cpu:7.1f} CPU-s" if cpu is not None else " " * 13
+            print(f"   {fmt_s(s)} {delta(prev.get(label), s, True):>6} {cpu_cell}  {label}")
         rest = t["targets"][top:]
         if rest:
-            print(f"   {fmt_s(sum(s for _, s in rest))}         … {len(rest)} more")
+            print(f"   {fmt_s(sum(row[1] for row in rest))}                       … {len(rest)} more")
 
     # --- files
     if snap["files"]:

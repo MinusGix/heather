@@ -1,6 +1,6 @@
 ---
 title: The test runner records wall time, so a target drifting toward the CPU rail is invisible until it SIGKILLs
-status: open
+status: closed
 labels: [testing,tooling,robustness]
 created: 2026-09-17
 updated: 2026-09-17
@@ -58,3 +58,4 @@ summary can say which targets are within some fraction of the rail, the way
   ([[native-summary-test-cpu-margin]]). The fix there removed the contention
   that was consuming the rail; this is the instrument that would have shown it
   without a hand measurement, and that would show the next one.
+- 2026-09-17: Done. scripts/run-test-targets.mjs no longer exec's the child from its ulimit wrapper: bash stays the parent, `time "$@"` with a TIMEFORMAT marker prints user+sys (every thread — the quantity `ulimit -t` kills on) and the wrapper re-raises the child's signal so a rail kill still reads `signal=SIGKILL`. parseCpu strips the marker from the output, the `[done]` line and the slowest-targets table print CPU-s and the percentage of the 300 s rail, any target past 50% of the rail is listed under its own heading every run, and the timings TSV gains a fourth column (older rows still read; scripts/perf's suite reader and the dashboard carry it). Covered by scripts/test-target-runner.test.mjs, including an end-to-end wrapper case for exit code, CPU line and signal re-raise.
