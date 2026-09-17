@@ -336,6 +336,65 @@ theorem u(P: Type, Q: Type, h: Iff<Or<P, Q>, And<P, Q>>): Or<P, Q> ↔ And<P, Q>
 ");
 }
 
+/// A **parenthesised** connective inside a function type's codomain. `↔` is
+/// suppressed while a codomain is read (that is what makes it looser than
+/// `->`), and until `issues/iff-in-type-valued-body.md` that suppression
+/// reached all the way down: `(a: A) -> (P(a) ↔ Q(a))` was
+/// "expected `)`, found Iff". The restriction is a rule about the codomain's
+/// own spine, so every bracket lifts it, exactly as `no_eq`'s does.
+///
+/// Two negative controls below. Both operands mention the binder, so the
+/// grouping is load-bearing rather than cosmetic: without the parentheses the
+/// `↔` is the looser rung, the binder's scope ends at the arrow's codomain,
+/// and the right-hand `a` is unbound — which the issue asked be left exactly
+/// as it is. And parenthesising must not have turned the group into that
+/// looser reading either.
+#[test]
+fn a_parenthesised_connective_is_readable_inside_a_codomain() {
+    // Type-valued body and type annotation, against the named-constructor
+    // spelling in each direction: conversion has to see one type.
+    ok("
+fn SameOn<A>(P, Q: A -> Type) -> Type { (a: A) -> (P(a) ↔ Q(a)) }
+fn SameOnNamed<A>(P, Q: A -> Type) -> Type { (a: A) -> Iff<P(a), Q(a)> }
+theorem body_to_named<A>(P, Q: A -> Type, h: SameOn(P, Q)): SameOnNamed(P, Q) { h }
+theorem named_to_body<A>(P, Q: A -> Type, h: SameOnNamed(P, Q)): SameOn(P, Q) { h }
+theorem in_an_annotation<A>(P, Q: A -> Type, h: (a: A) -> (P(a) ↔ Q(a))):
+    (a: A) -> Iff<P(a), Q(a)> { h }
+");
+    // One hypothesis, both readings, and the parentheses are what choose:
+    // bracketed, the `↔` is the codomain and the type is a `Pi`, so the
+    // `Iff`-at-the-root hypothesis is refused; bare, it is the loose rung and
+    // the same hypothesis is exactly right. The second half is the precedence
+    // this fix had to leave alone.
+    let err = bad("theorem t(P: Type, Q: Type, R: Type, h: Iff<P -> Q, R>): P -> (Q ↔ R) { h }");
+    assert!(err.contains("Iff"), "got: {err}");
+    ok("theorem t(P: Type, Q: Type, R: Type, h: Iff<P -> Q, R>): P -> Q ↔ R { h }");
+    // The spelling the parentheses exist to distinguish, unmoved: dropping
+    // them puts the right-hand operand outside the binder.
+    let err = bad("fn SameOn<A>(P, Q: A -> Type) -> Type { (a: A) -> P(a) ↔ Q(a) }");
+    assert!(err.contains("unbound name `a`"), "got: {err}");
+}
+
+/// The grammar boundary, not `SameMembers`: `∧` and `∨` were never suppressed
+/// in a codomain and still are not, and the brackets the `↔` fix had to reach
+/// are all of them — a parenthesised group whose own top level is an arrow, a
+/// type-argument list, and a call's arguments.
+#[test]
+fn every_bracket_inside_a_codomain_admits_a_connective() {
+    ok("
+theorem conj<A>(P, Q: A -> Type, h: (a: A) -> And<P(a), Q(a)>):
+    (a: A) -> (P(a) ∧ Q(a)) { h }
+theorem disj<A>(P, Q: A -> Type, h: (a: A) -> Or<P(a), Q(a)>):
+    (a: A) -> (P(a) ∨ Q(a)) { h }
+theorem arrow_inside(P: Type, Q: Type, R: Type, S: Type, h: P -> Iff<Q -> R, S>):
+    P -> (Q -> R ↔ S) { h }
+theorem tyargs(P: Type, Q: Type, R: Type, h: P -> Or<Iff<Q, R>, P>):
+    P -> Or<Q ↔ R, P> { h }
+theorem call_args(P: Type, Q: Type, R: Type, h: P -> ¬(Iff<Q, R>)):
+    P -> ¬(Q ↔ R) { h }
+");
+}
+
 // ---------------------------------------------------------------------------
 // 4b. Expected-type-directed connective introductions and patterns.
 

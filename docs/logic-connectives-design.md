@@ -128,6 +128,18 @@ Three of these are worth their reasons:
   `Parser::cod` at the three codomain sites, mirroring `no_eq` — is what makes
   the loosest rung actually loosest.
 
+  It mirrors `no_eq` in the *other* half too, and until 2026-09-17 it did not:
+  **a bracket lifts the restriction**, so a parenthesis is the escape hatch —
+  `(a: A) -> (P(a) ↔ Q(a))` is the dependent function returning an `Iff`, and
+  `P -> Or<Q ↔ R, S>` reads its type arguments. It has to work that way,
+  because the restriction exists only to stop the codomain's *own spine* from
+  eating the outer `↔`, and a `↔` inside a delimiter is never that one.
+  `Parser::expr` lifts it for every expression-side bracket (each one parses
+  its contents through `expr`) and `Parser::ty_atom` for the type-side ones,
+  restoring it around the two fallthroughs that *are* the spine
+  (`issues/iff-in-type-valued-body.md`). The `↔` that is *not* bracketed is
+  unaffected: `P -> Q ↔ R` is still `(P -> Q) ↔ R`.
+
 `∧` and `∨` are **right-associative** (the fixity `++` chose, and for the same
 proof-relevant reason: `And(p, And(q, r))` is the nesting the record builds
 and projects). `↔` is **non-associative**, like the comparison rung, with its

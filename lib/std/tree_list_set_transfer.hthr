@@ -15,7 +15,9 @@ fn enumerate_tree<A>(xs: SetTree<A>) → List<A> {
         Join(left, right) => enumerate_tree(left) ++ enumerate_tree(right),
     }
 }
-theorem enumerate_members<A>(xs: SetTree<A>, a: A): Iff<tree_member(a, xs), Mem(a, enumerate_tree(xs))> {
+theorem enumerate_members<A>(xs: SetTree<A>, a: A):
+    tree_member(a, xs) ↔ Mem(a, enumerate_tree(xs))
+{
     match xs {
         Vacant => iff_refl(),
         Item(b) => Iff(mp := λ h => Inl(h),
@@ -43,7 +45,9 @@ theorem enumerate_reflects<A>(xs, ys: SetTree<A>, h: SameMembers(enumerate_tree(
 fn tree_of_list<A>(xs: List<A>) → SetTree<A> {
     match xs { Nil => Vacant, Cons(a, rest) => Join(Item(a), tree_of_list(rest)) }
 }
-theorem tree_of_list_members<A>(xs: List<A>, a: A): Iff<Mem(a, xs), tree_member(a, tree_of_list(xs))> {
+theorem tree_of_list_members<A>(xs: List<A>, a: A):
+    Mem(a, xs) ↔ tree_member(a, tree_of_list(xs))
+{
     match xs {
         Nil => iff_refl(),
         Cons(b, rest) => Iff(

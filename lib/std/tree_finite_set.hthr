@@ -15,7 +15,7 @@ fn tree_member<A>(a: A, xs: SetTree<A>) → Type {
     }
 }
 fn TreeSame<A>(xs, ys: SetTree<A>) → Type {
-    (a: A) → Iff<tree_member(a, xs), tree_member(a, ys)>
+    (a: A) → (tree_member(a, xs) ↔ tree_member(a, ys))
 }
 fn tree_image<A, B>(f: A → B, xs: SetTree<A>) → SetTree<B> {
     match xs {

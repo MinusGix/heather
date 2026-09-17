@@ -527,10 +527,10 @@ theorem carry_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
 
 theorem carry_bits_true_iff_arithmetic(n: Nat):
     (a, b: BitVec(n)) → (carry: Bool) →
-    Iff<CarryBitTrue(n, a, b, carry), CarryArithmetic(n, a, b, carry)>
+    (CarryBitTrue(n, a, b, carry) ↔ CarryArithmetic(n, a, b, carry))
 {
     match n as λ k => (a, b: BitVec(k)) → (carry: Bool) →
-        Iff<CarryBitTrue(k, a, b, carry), CarryArithmetic(k, a, b, carry)> {
+        (CarryBitTrue(k, a, b, carry) ↔ CarryArithmetic(k, a, b, carry)) {
         Zero => λ a b carry => match carry {
             False => Iff(
                 mp := λ bad => absurd(bad),
@@ -710,10 +710,10 @@ theorem borrow_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
 
 theorem borrow_bits_true_iff_arithmetic(n: Nat):
     (a, b: BitVec(n)) → (borrow: Bool) →
-    Iff<BorrowBitTrue(n, a, b, borrow), BorrowArithmetic(n, a, b, borrow)>
+    (BorrowBitTrue(n, a, b, borrow) ↔ BorrowArithmetic(n, a, b, borrow))
 {
     match n as λ k => (a, b: BitVec(k)) → (borrow: Bool) →
-        Iff<BorrowBitTrue(k, a, b, borrow), BorrowArithmetic(k, a, b, borrow)> {
+        (BorrowBitTrue(k, a, b, borrow) ↔ BorrowArithmetic(k, a, b, borrow)) {
         Zero => λ a b borrow => match borrow {
             False => Iff(
                 mp := λ bad => absurd(bad),

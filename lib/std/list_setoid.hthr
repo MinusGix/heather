@@ -8,7 +8,7 @@ import relation_props;
 import algebra_rel;
 
 fn SameMembers<A>(xs, ys: List<A>) → Type {
-    (a: A) → Iff<Mem(a, xs), Mem(a, ys)>
+    (a: A) → (Mem(a, xs) ↔ Mem(a, ys))
 }
 
 theorem same_members_refl<A>(xs: List<A>): SameMembers(xs, xs) {
