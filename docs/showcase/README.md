@@ -39,9 +39,15 @@ atom   := number | '(' expr ')'
 ```
 
 ```sh
-(ulimit -v 8388608 -t 120; target/release/heather check \
-  -L lib/std -L lib/std/parser -L docs/showcase docs/showcase/calc_parser.hthr)
+mkdir -p /tmp/calc && cp docs/showcase/calc{,_parser}.hthr /tmp/calc/
+(ulimit -v 8388608 -t 300; target/release/heather check \
+  -L lib/std -L lib/std/parser -L /tmp/calc /tmp/calc/calc_parser.hthr)
 ```
+
+The copy is not ceremony: `-L docs/showcase` also offers this directory's
+`parser_core.hthr`, the pre-library prototype, and a module in two search
+directories is refused rather than resolved by precedence. Only `calc.hthr`
+and `calc_parser.hthr` are needed, so they move and the rest stays put.
 
 The public entry points are `parse(tokens)`, `calculate(tokens)`, and
 `execute(tokens)`. For the tokens of `2 + 3 * 4`, they produce
