@@ -605,6 +605,11 @@ pub struct Elaborator {
     /// Project-local style policy for written-source lints. General lints run
     /// under every profile; the CLI selects `Stdlib` only for `lib/std`.
     lint_profile: LintProfile,
+    /// Review-mode lints run only when a driver asks (`heather check
+    /// --review`): the ones whose recognizer is a second elaboration of the
+    /// item, which is a cost no ordinary check should pay to say nothing
+    /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
+    review_lints: bool,
     /// Backchaining depth, for the recursion cap. A `Cell` because resolution
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
@@ -1442,6 +1447,7 @@ impl Elaborator {
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
+            review_lints: false,
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
@@ -1669,6 +1675,13 @@ impl Elaborator {
     /// the language accepts. Intended for drivers before they check a module.
     pub fn set_lint_profile(&mut self, profile: LintProfile) {
         self.lint_profile = profile;
+    }
+
+    /// Turn on the review-mode lints — today `redundant-match-motive`, whose
+    /// recognizer re-elaborates and kernel-checks every written motive. Off
+    /// by default; `heather check --review` sets it.
+    pub fn set_review_lints(&mut self, on: bool) {
+        self.review_lints = on;
     }
 
     /// Begin aggregating value-machine allocation and cache activity across
@@ -3912,8 +3925,13 @@ impl Elaborator {
         // and ask the ordinary goal-derived route to check the same match
         // against the same expected type. The clone makes goals, warnings,
         // fallback provenance, derived instances, and fuel bookkeeping
-        // transactional; no declaration or kernel gate is duplicated.
-        if let ExprKind::Match {
+        // transactional; no declaration is duplicated — but the match is
+        // elaborated twice and kernel-checked once more, paid in full when
+        // the motive turns out to be required, which is every motive left
+        // in a library that adopted the lint's findings. So it is a
+        // review-mode lint (`set_review_lints`), not part of a check.
+        if self.review_lints
+            && let ExprKind::Match {
             generated: false,
             scrut,
             motive: Some(motive),

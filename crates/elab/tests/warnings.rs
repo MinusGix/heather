@@ -395,6 +395,7 @@ fn compatibility_fallback_without_any_designation_remains_silent() {
 #[test]
 fn a_match_motive_verified_redundant_in_checking_position_has_an_exact_fix() {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.set_review_lints(true);
     let src = "fn choose(n: Nat) → Nat {
         match n as λ z => Nat { Zero => 0, Succ(k) => k }
     }";
@@ -421,6 +422,7 @@ fn a_match_motive_verified_redundant_in_checking_position_has_an_exact_fix() {
 #[test]
 fn nested_redundant_motives_are_each_reported_once() {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.set_review_lints(true);
     let src = "fn choose(n: Nat, m: Nat) → Nat {
         match n as λ z => Nat {
             Zero => 0,
@@ -440,9 +442,22 @@ fn nested_redundant_motives_are_each_reported_once() {
     assert!(src[spans[1].start..spans[1].end].contains("as λ w => Nat"));
 }
 
+/// Without `set_review_lints(true)` — every ordinary check — the motive is
+/// not probed at all and nothing is reported, redundant or not.
+#[test]
+fn the_redundant_motive_lint_is_silent_outside_review_mode() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn choose(n: Nat) → Nat {
+        match n as λ z => Nat { Zero => 0, Succ(k) => k }
+    }";
+    assert!(e.check_source(src).is_empty());
+    assert!(e.take_warnings().iter().all(|w| w.lint != Lint::RedundantMatchMotive));
+}
+
 #[test]
 fn a_motive_required_for_inference_is_not_called_redundant() {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.set_review_lints(true);
     let src = "fn choose(n: Nat) → Nat {
         let answer = match n as λ z => Nat { Zero => 0, Succ(k) => k };
         answer

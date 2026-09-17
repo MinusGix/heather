@@ -96,7 +96,7 @@ fn main() -> ExitCode {
 
 const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
                      usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
-                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...";
@@ -119,6 +119,9 @@ struct Opts {
     /// axiom. The axiom declaration itself is an explicit policy input, not a
     /// violation until something depends on it.
     deny_axioms: bool,
+    /// `--review`: the review-mode lints too (a second elaboration per
+    /// written match motive), off for an ordinary check.
+    review: bool,
     /// `--timings <path.tsv>` (`-` for stderr), or `HEATHER_TIMINGS` in the
     /// environment: write the attribution table — one row per declaration, per
     /// module and for the run (`docs/instrumentation-design.md` §4).
@@ -145,6 +148,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
         json: false,
         deny_axioms: false,
+        review: false,
         timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
         kernel_workers: None,
@@ -193,6 +197,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--deny-axioms" {
             opts.deny_axioms = true;
+            continue;
+        }
+        if a == "--review" {
+            opts.review = true;
             continue;
         }
         // `--item-timings` is the spelling `build-x86`/`compile-x86` grew
@@ -267,6 +275,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         let lint_profile = lint_profile_for_path(Path::new(path));
         elab.set_lint_profile(lint_profile);
+        elab.set_review_lints(opts.review);
         elab.set_kernel_workers(
             opts.kernel_workers
                 .or_else(heather_elab::kernel_workers_from_env)

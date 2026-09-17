@@ -33,6 +33,9 @@ const INT: &str = include_str!("../../../lib/std/int.hthr");
 
 fn elaborated(cached: bool) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    // The retained-motive control in `the_int_module_checks` reads the
+    // review-mode lint.
+    e.set_review_lints(true);
     let load = |e: &mut Elaborator| {
         for (name, src) in [
             ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
