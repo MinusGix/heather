@@ -25,13 +25,22 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     // The proof-carrying grammar is a large checked artifact; keep its gate
     // serial within the per-process memory rail.
     e.set_kernel_workers(1);
-    support::parser::load(&mut e);
-    for (name, src) in [
-        ("calc", include_str!("../../../docs/showcase/calc.hthr")),
-        ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
-    ] {
-        e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{}", err.render(src)));
-    }
+    // The parser library and the two showcase modules are checked-in prefix:
+    // they go through the declaration-verdict store (`with_decl_cache`'s
+    // trust argument), and the gate is sealed before the probe modules and
+    // controls below, which face the kernel on every run. This binary was
+    // the fast lane's wall — one test elaborating the showcase from source
+    // at width one, ~90 s against the next-longest target's ~60 s
+    // (2026-09-17).
+    support::with_decl_cache(&mut e, |e| {
+        support::parser::load(e);
+        for (name, src) in [
+            ("calc", include_str!("../../../docs/showcase/calc.hthr")),
+            ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
+        ] {
+            e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        }
+    });
     let mixed = r#"
         import calc_parser; import list; import result; import option;
         fn list_map<A,B>(xs: List<A>, f: A → B) -> List<B> { xs.map(f) }
