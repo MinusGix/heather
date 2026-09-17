@@ -80,6 +80,46 @@ def today():
     return datetime.date.today().isoformat()
 
 
+def read_prose(text, body_file, what: str, default_stdin: bool):
+    """Prose for a log entry or a new issue's body.
+
+    Prose here is markdown with `code spans`, so it must not travel through
+    argv — a shell expands backticks inside a double-quoted argument and one
+    entry was silently mangled that way ([[issue-log-text-through-stdin]]).
+    A file or stdin is the safe path; the positional/--body form stays for
+    short entries that are genuinely free of shell metacharacters.
+    """
+    if body_file is not None:
+        if text is not None:
+            sys.exit(f"error: give the {what} either inline or with --body-file, not both")
+        return (sys.stdin.read() if body_file == "-" else Path(body_file).read_text())
+    if text is not None:
+        return text
+    if not default_stdin:
+        return None
+    if sys.stdin.isatty():
+        sys.exit(
+            f"error: no {what} given. Write it on stdin (heredoc or `< entry.md`),\n"
+            "       or pass --body-file <path>. Inline text is only safe without "
+            "backticks."
+        )
+    return sys.stdin.read()
+
+
+def as_log_entry(text: str) -> str:
+    """`- <date>: <first line>` with continuation lines indented into the item.
+
+    Everything after the first line is indented two spaces so that a multi-line
+    entry — the normal shape once prose arrives on stdin — stays inside the list
+    item, fenced blocks included.
+    """
+    if not text.strip():
+        sys.exit("error: empty log entry")
+    lines = text.strip("\n").rstrip().split("\n")
+    head, rest = lines[0].strip(), lines[1:]
+    return "\n".join([f"- {today()}: {head}"] + [("  " + l if l.strip() else "") for l in rest])
+
+
 def render_index(issues):
     order = {s: i for i, s in enumerate(STATUSES)}
     issues = sorted(issues, key=lambda m: (order.get(m["status"], 99), m["slug"]))
@@ -181,7 +221,8 @@ def cmd_new(args):
     if args.labels:
         front.append(f"labels: [{args.labels}]")
     front += [f"created: {date}", f"updated: {date}"]
-    body = args.body + "\n" if args.body else "\n"
+    text = read_prose(args.body, args.body_file, "body", default_stdin=False)
+    body = text.strip("\n") + "\n" if text and text.strip() else "\n"
     path.write_text("---\n" + "\n".join(front) + "\n---\n\n" + body)
     write_index(load_all())
     print(f"created issues/{path.name}")
@@ -210,12 +251,13 @@ def cmd_index(_args):
 
 
 def cmd_log(args):
+    entry = as_log_entry(read_prose(args.text, args.body_file, "entry", default_stdin=True))
     path = find(args.slug)
     text = path.read_text().rstrip("\n")
     if "\n## Log" not in text:
         text += "\n\n## Log"
     sep = "\n\n" if text.endswith("## Log") else "\n"
-    text += f"{sep}- {today()}: {args.text}"
+    text += sep + entry
     path.write_text(text + "\n")
     set_field(path, "updated", today())
     write_index(load_all())
@@ -373,7 +415,8 @@ def main():
     sp.add_argument("--title", required=True)
     sp.add_argument("--thread")
     sp.add_argument("--labels", help="comma-separated")
-    sp.add_argument("--body")
+    sp.add_argument("--body", help="short body; unsafe for prose with `code spans`")
+    sp.add_argument("--body-file", metavar="PATH", help="read the body from a file, or `-` for stdin")
     sp.set_defaults(fn=cmd_new)
 
     sp = sub.add_parser("close", help="mark closed")
@@ -387,9 +430,10 @@ def main():
     sp = sub.add_parser("index", help="regenerate INDEX.md")
     sp.set_defaults(fn=cmd_index)
 
-    sp = sub.add_parser("log", help="append a dated entry to an issue's ## Log")
+    sp = sub.add_parser("log", help="append a dated entry to an issue's ## Log (text on stdin)")
     sp.add_argument("slug")
-    sp.add_argument("text")
+    sp.add_argument("text", nargs="?", help="short entry; omit to read the entry from stdin")
+    sp.add_argument("--body-file", metavar="PATH", help="read the entry from a file, or `-` for stdin")
     sp.set_defaults(fn=cmd_log)
 
     sp = sub.add_parser("threads", help="per-thread status counts")

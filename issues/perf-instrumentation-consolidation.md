@@ -3,7 +3,7 @@ title: One instrumentation layer: scoped counters and timers on every phase, dum
 status: open
 labels: [tooling,performance,measurement,kernel,elaboration,cli]
 created: 2026-09-11
-updated: 2026-09-16
+updated: 2026-09-17
 ---
 
 Every performance issue in the tracker starts its next action with "re-measure first", and the main command has nothing to measure with: `heather check` has no timing flag at all. What exists is real but scattered (survey 2026-09-11):
@@ -90,3 +90,8 @@ Here `omega_check` also sheds half a second, and correctly: that bracket wraps `
 
 **Left out on purpose.** Residue item (3) — the `heather-cli` bin unit tests and `lib_setoid_mergeable` do not opt into `stats::with_env_dump`, so `HEATHER_TIMINGS` on them still writes nothing. Residue item's derived `eval steps per kernel second` rate is not a column; the two counters it divides are both in the TSV already. `scripts/perf` and the frame-pointer profile stay [[perf-profile-build-target]]'s (a frame-pointer build plus `perf record` is how the bucket was located, but nothing about it landed in the tree).
 - 2026-09-16: The consumer side has no reader: --timings TSV columns are positional and "queries" has no single definition — two design docs quote one and a hand-summed shortcut+memo+miss disagrees with both. [[timings-tsv-has-no-reader]] owns that.
+- 2026-09-17: The columns now have a reader and `queries` has one definition
+  (`scripts/timings`, `docs/instrumentation-design.md` §4); the assumption
+  [[timings-tsv-has-no-reader]] made on this issue held — the meanings were
+  stable enough to write down, and what was moving was the tree under two
+  recorded tables, not a column.

@@ -170,6 +170,32 @@ columns carry the kernel's names plus the elaborator's own
 Rows are written in completion order, so a module's declarations precede its
 module row and the run row is last.
 
+**Reading it: `scripts/timings <file.tsv> [item…]`,** which looks every column
+up *by name* and prints the five that the attribution docs quote — total ms,
+gate ms, misses, queries, evaluator steps — plus `--diff a.tsv b.tsv` for
+per-item deltas. It exists because the alternative is counting indices off the
+header into an `awk -F'\t'` line, which mislabelled three columns in one
+session (`issues/timings-tsv-has-no-reader.md`); by-name lookup is also why a
+column inserted in the middle is a non-event and the header carries no version.
+
+**`queries` is defined there and nowhere else:** a `Tc::conv_ty` query has
+exactly three outcomes — the syntactic shortcut, the gate's cross-head memo, a
+paid comparison — so `conv_shortcut_hits + conv_memo_hits + conv_misses` is
+every query the kernel was asked, and that is what the column means. The
+attribution docs written before this reader quote a "queries" column that is
+`conv_shortcut_hits` **alone**; the two are within 1.5 % over a whole run
+(memo hits are a ten-thousandth of it) and up to 3.7 % on a single item, so a
+number copied from one of those tables reproduces under `--columns shortcut`
+and not under `queries`.
+
+Two properties worth knowing before comparing tables. Counts are exact and
+**invariant in the worker count** — a run at `--kernel-workers 1` and one at 8
+report identical run-row misses, queries and steps, though a handful of
+instance declarations shuffle counts between items. Times are not: at width 8
+the item rows sum *past* the run row, because each item is charged the wall its
+own gate spent and several were spent at once. The reader says so when it sees
+it.
+
 ## 5. What is instrumented
 
 Elaborator, per declaration (both `elab_module_source` and

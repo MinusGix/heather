@@ -797,6 +797,13 @@ two reps a side:
 | conversion queries | 5 734 779 | 5 738 612 (+0.07 %) |
 | wall | 51.4 s / 50.7 s | 51.2 s / 51.4 s |
 
+> **Reading these two tables later** (added 2026-09-17,
+> `issues/timings-tsv-has-no-reader.md`). Both are summed *over the file's own
+> items*, not over the 960-item import closure a whole run reports — which is
+> the second axis, beside the definition, on which a "queries" number stops
+> reconciling. `scripts/timings <run.tsv> calc_parser::` is that restriction,
+> and `--columns shortcut` is §10.1's narrower column.
+
 Counts move, seconds do not: each spelling's two reps differ by about as much
 as the two spellings differ from each other, so this is **not** a speedup and
 must not be quoted as one. The interesting part is the shape of the movement —

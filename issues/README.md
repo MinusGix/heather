@@ -67,9 +67,11 @@ open issues whose last log says LANDED/DONE, and open issues nothing links to.
 ```
 scripts/issue list [--status S] [--thread T] [--label L]   # table of issues
 scripts/issue show <slug>                                  # print one issue
-scripts/issue new <slug> --title "..." [--thread T] [--labels a,b]
+scripts/issue new <slug> --title "..." [--thread T] [--labels a,b] [--body-file F]
 scripts/issue close <slug> / reopen <slug>
-scripts/issue log <slug> "note"                            # dated entry under ## Log
+scripts/issue log <slug> < entry.md                        # dated entry under ## Log
+scripts/issue log <slug> --body-file entry.md              # same, named file
+scripts/issue log <slug> "note"                            # short entries only
 scripts/issue threads                                      # per-thread status counts
 scripts/issue check                                        # lint links/blocked-by/index
 scripts/issue index                                        # regenerate INDEX.md
@@ -86,3 +88,20 @@ and selection state lives in the URL hash, so a view can be bookmarked.
 
 Mutating commands (`new`, `close`, `reopen`) update `updated:` and regenerate
 `INDEX.md` automatically.
+
+**Prose goes in on stdin, not in argv.** A log entry is markdown with `code
+spans`, and a shell expands backticks inside a double-quoted argument: on
+2026-09-16 an entry lost three spans that way and was committed before anyone
+noticed ([[issue-log-text-through-stdin]]). So `log` reads the entry from stdin
+when no positional text is given, `--body-file <path>` (or `-`) is available on
+both `log` and `new`, and the inline forms remain only for short entries with no
+metacharacters in them. A multi-line entry is indented into its list item,
+fenced blocks included, so heredocs are the normal way to write one:
+
+```
+scripts/issue log <slug> <<'EOF'
+First line becomes `- <date>: …`.
+
+Continuations are indented two spaces.
+EOF
+```
