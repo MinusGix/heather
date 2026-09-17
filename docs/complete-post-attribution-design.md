@@ -740,3 +740,70 @@ slots this quote fed. `issues/parser-certified-composition-cost` still may not
 close: `complete_post` is 20.6 s down to 10.9 s and **still the largest item**,
 against `close_body`'s unmoved 6.6 s — attributed and halved, not yet
 ordinary.
+
+### 10.7 The showcase's own spelling changed after §10.2 (2026-09-16)
+
+§10.2's table was taken against a `calc_parser.hthr` that wrote
+`Result<Certified<PTok,Expr>(source,begin,GrammarSpec(n)),Failure<PTok>(source)>`
+in full, twenty-five times. The file now names that type once —
+`fn Checked(level, source, begin) -> Type` — and applies it. **Anyone
+re-measuring the showcase must take their own parent number from the current
+tree**: §10.2's columns are still the right parent for the mechanism this
+chapter is about, but they are no longer the right parent for a whole-file
+comparison.
+
+The abbreviation was measured on the same box at the same width before it
+landed, and it is a small *win*, not a cost:
+
+| serial (`--kernel-workers 1`) | spelled out | `Checked` |
+|---|---|---|
+| item totals / gate | 22.6 s / 19.0 s | **21.9 s / 18.5 s** |
+| conversion queries over the file's items (shortcut + memo + miss) | 5 796 292 | **5 734 779** |
+| eval steps over the file's items | 1 384 180 | **1 142 770** |
+| wall / maxrss | 51.2 s / 1.65 GB | 51.7 s / 1.63 GB |
+
+Per item, the movement is where the named type is *compared*, not where it is
+written: `checked_expr` drops 35 150 conversion queries (538 337 → 503 187; the
+sum of shortcut hits, memo hits and misses — read it against the other column
+of this section, not against §10.2's, which was summed on a different tree),
+`expr_body` and `factor_body` about 6 400 each, and `close_body` 1 816, while
+`complete_post` and `number_grammar` have **identical** counts on both
+spellings — their ±5 % in seconds is this box's repeat noise, and the counts
+are what to read. Evaluator steps fall 17 % file-wide: an applied one-argument
+constant is cheaper to drive than the spelled-out `Result`/`Certified`
+application it abbreviates, and the extra δ-step it costs does not pay that
+back.
+
+The general note for a later perf round: **a shared type written out at every
+use is not free**, and naming it is not the tradeoff it looks like. The
+elaborator's canonical-spelling work (`issues/elaborator-canonical-type-spelling`)
+is about the *compiler* choosing a smaller spelling; this is the same effect
+reached from the source side, and the two should be compared before either is
+assumed to subsume the other.
+
+The same file changed spelling again the same day, and the same warning
+applies. `result::fold`/`and_then`/`map_err` were being called with all three
+type arguments written out, their continuations' parameter types written out,
+and `recognize_certified` given its `<PTok,…>` — **none of it required**
+(`issues/result-eliminator-explicit-type-arguments`, closed). The file now
+calls them as the `self` methods they are, annotating nothing. Measured serial,
+two reps a side:
+
+| | annotated | inferred |
+|---|---|---|
+| conversion misses | 46 497 | **45 920** |
+| evaluator steps | 1 142 770 | **1 129 562** |
+| unify calls | 1 522 | **1 463** |
+| conversion queries | 5 734 779 | 5 738 612 (+0.07 %) |
+| wall | 51.4 s / 50.7 s | 51.2 s / 51.4 s |
+
+Counts move, seconds do not: each spelling's two reps differ by about as much
+as the two spellings differ from each other, so this is **not** a speedup and
+must not be quoted as one. The interesting part is the shape of the movement —
+the misses halve exactly where the annotations were densest (`expr_body`
+383 → 186, `factor_body` 399 → 202, `parentheses_body` 27 → 9) and are
+untouched elsewhere. A written-out type argument is a term the elaborator must
+convert against the one it would have inferred, and that conversion is the
+whole cost; it is the same observation as §10.7's, from the other direction —
+there a shared type got *shorter* by being named, here a redundant one stopped
+being written at all.

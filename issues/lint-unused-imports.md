@@ -3,7 +3,7 @@ title: "Lint imports that contribute nothing to a module"
 status: open
 labels: [tooling,lint,frontend,modules,ergonomics]
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-09-16
 ---
 
 Report an import only when removing it would leave the module's elaboration
@@ -45,3 +45,5 @@ service from `m` is used; removing the whole import is not.
 
 - 2026-08-22: Filed as the preferred next infrastructure customer: it pays for
   a module-finalization lint phase while providing a high-confidence cleanup.
+- 2026-09-16: The `pair`/`int`/`omega` imports of `docs/showcase/calc_parser.hthr` are the sharp case for this lint's semantic definition: nothing in the file names them, but each is required by the mutual `decreases` machinery, so a textual scan would wrongly flag all three. [[feature-implicit-module-dependencies]] proposes to remove the requirement; if it lands, the same three lines become genuinely unused and this lint should start flagging them.
+- 2026-09-16: The inverse reading of the same module-finalization table — "what did this import contribute" rather than "did anything" — is [[explain-why-an-import-is-needed]]; if this issue lands, that one should be a presentation layer over it and not separate machinery.

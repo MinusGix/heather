@@ -3,7 +3,7 @@ title: "Grow lints as conservative checks with explicit style profiles"
 status: open
 labels: [tooling,lint,diagnostics,design,ergonomics]
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-09-16
 ---
 
 Heather now has stable lint identities, a registered source-AST lint pass, and
@@ -79,3 +79,4 @@ and the distinction between activation level and style profile belong to
   bindings, vacuous matches, proof-lambda `⊢` spelling, and a future
   proof-`apply` readability lint. It also split optional review advice from
   always-on warnings rather than treating removable annotations as defects.
+- 2026-09-16: Some lints determine their own fix ("write `_` instead", "write `[…]` instead"); [[lint-mechanical-fix-mode]] owns applying those, and assumes only that fixability is a property of the individual lint rather than of a profile.
