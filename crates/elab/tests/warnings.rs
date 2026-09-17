@@ -263,26 +263,6 @@ fn a_match_used_as_a_function_value_is_not_reported() {
 }
 
 #[test]
-fn spaced_prefix_negation_is_reported_but_comments_are_preserved() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    let src = "
-        inductive Empty {}
-        fn Not(P: Type) → Type { P → Empty }
-        fn spaced(P: Type, h: ¬ P) → ¬P { h }
-        fn documented(P: Type, h: ¬ // why this hypothesis is negative
-            P) → ¬P { h }
-    ";
-    assert!(e.check_source(src).is_empty());
-    let ws = e.take_warnings();
-    assert_eq!(ws.len(), 1, "{ws:?}");
-    assert_eq!(ws[0].lint, Lint::TightNegationSpacing);
-    assert_eq!(ws[0].lint.name(), "tight-negation-spacing");
-    let fix = ws[0].fix.as_ref().expect("spacing has a mechanical fix");
-    assert_eq!(&src[fix.span.start..fix.span.end], " ");
-    assert_eq!(fix.replacement, "");
-}
-
-#[test]
 fn unicode_spelling_is_a_stdlib_profile_not_a_language_rule() {
     let src = "// ASCII examples remain useful: fun x -> x\nfn id(n: Nat) -> Nat { (fun (x: Nat) => x)(n) }";
     let mut ordinary = Elaborator::with_prelude().expect("prelude");

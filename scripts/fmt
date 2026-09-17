@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Normalize the whitespace of Heather source.
+#
+# Usage: scripts/fmt [--check] [paths...]   (default: lib examples)
+#
+# `--check` writes nothing and exits 1 listing the files that would change;
+# that is the form `scripts/test` gates on. The formatter itself never moves a
+# line break and changes nothing but whitespace, so a reformat is reviewable in
+# bulk (issues/heather-formatter.md).
+#
+# Unlike the Rust side (issues/fmt-not-enforced-decision.md), Heather source
+# *is* formatted: there is no large pre-existing tree to churn, because this
+# script's first run is what made lib/ uniform.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CHECK=()
+if [[ "${1:-}" == --check ]]; then
+  CHECK=(--check)
+  shift
+fi
+PATHS=("$@")
+if [[ ${#PATHS[@]} -eq 0 ]]; then
+  PATHS=(lib examples)
+fi
+
+# Build outside any `ulimit -v` cap: mold reserves ~8 GiB of address space per
+# link and fails under one (see CLAUDE.md).
+cargo build --quiet --release -p heather-cli
+(ulimit -v 8388608 -t 300; exec target/release/heather fmt "${CHECK[@]}" "${PATHS[@]}")

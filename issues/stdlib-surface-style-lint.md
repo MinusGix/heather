@@ -3,7 +3,7 @@ title: "Standard-library surface style: n-ary calls, designated operators, and a
 status: open
 labels: [stdlib,ergonomics,tooling,lint]
 created: 2026-08-19
-updated: 2026-08-22
+updated: 2026-09-16
 ---
 
 Heather's surface now accepts substantially better spellings than parts of the
@@ -142,3 +142,4 @@ rewrite that would change which later argument participates in inference.
   ignores computed and deliberately stored function values, and found three
   remaining executable chains in Nat/Int; all three now use one argument list.
   This issue remains open for provenance-aware designated-operator spelling.
+- 2026-09-16: [[heather-formatter]] takes the whitespace half (the tight-comma spelling in lib/std/parser, 1,741 of the library's 1,790 occurrences). It decides nothing about which spelling is idiomatic, which stays here.

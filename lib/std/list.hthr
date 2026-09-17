@@ -513,7 +513,7 @@ theorem filter_filter<A>(xs: List<A>, p: A → Bool):
 {
     match xs {
         Nil => {},
-        Cons(h, t) => match e : p(h) {
+        Cons(h, t) => match e: p(h) {
             True =>
                 j(sym(e),
                   λ y q =>

@@ -656,10 +656,6 @@ fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) -> TA {
 // a bare parameter occurrence, and nothing else.
 inductive LOut { LNo, LYes(lvl: Nat) }
 
-
-
-
-
 fn scrut_lvl_len(l: Nat, len: Nat) -> LOut {
     match len { Zero => LYes(l), _ => LNo }
 }

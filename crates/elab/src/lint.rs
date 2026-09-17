@@ -31,8 +31,6 @@ pub enum Lint {
     /// `λ x h => (match x as … { … })(h)` can usually put the match in
     /// checking position by moving `h` into its result.
     MatchFunctionApplication,
-    /// Whitespace after prefix negation makes it read unlike an operator.
-    TightNegationSpacing,
     /// Heather's own library uses the canonical mathematical spellings.
     StdlibUnicodeSpelling,
     /// Consecutive calls of a directly named function can use one argument list.
@@ -54,7 +52,6 @@ impl Lint {
         match self {
             Self::UnreachableMatchArm => "unreachable-match-arm",
             Self::MatchFunctionApplication => "match-function-application",
-            Self::TightNegationSpacing => "tight-negation-spacing",
             Self::StdlibUnicodeSpelling => "stdlib-unicode-spelling",
             Self::NestedCall => "nested-call",
             Self::UnusedPatternBinder => "unused-pattern-binder",
@@ -137,7 +134,7 @@ const EXPR_LINTS: &[ExprLint] = &[
     nested_call,
     unused_pattern_binders,
 ];
-const SOURCE_LINTS: &[SourceLint] = &[tight_negation_spacing, stdlib_unicode_spelling];
+const SOURCE_LINTS: &[SourceLint] = &[stdlib_unicode_spelling];
 
 pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
     let mut out = Vec::new();
@@ -752,36 +749,6 @@ fn pattern_names(pat: &heather_syntax::Pat) -> Vec<&str> {
         heather_syntax::Pat::Var { name, .. } => vec![name],
         heather_syntax::Pat::Ctor { args, .. } => args.iter().flat_map(pattern_names).collect(),
         heather_syntax::Pat::Named { pat, .. } => pattern_names(pat),
-    }
-}
-
-fn tight_negation_spacing(item: &Item, source: &Source<'_>, out: &mut Vec<Finding>) {
-    let toks = source.item_tokens(item).collect::<Vec<_>>();
-    for pair in toks.windows(2) {
-        let [neg, next] = pair else { unreachable!() };
-        if !matches!(neg.kind, TokKind::Neg) || next.span.start == neg.span.end {
-            continue;
-        }
-        let gap = &source.text[neg.span.end..next.span.start];
-        // Comments are lexically skipped too, but deleting one is never a
-        // spacing fix. Only diagnose a gap made entirely of whitespace.
-        if gap.chars().all(char::is_whitespace) {
-            out.push(Finding {
-                lint: Lint::TightNegationSpacing,
-                msg: "prefix negation is written tightly; remove the space after `¬`".into(),
-                span: Span {
-                    start: neg.span.start,
-                    end: next.span.start,
-                },
-                fix: Some(crate::LintFix {
-                    span: Span {
-                        start: neg.span.end,
-                        end: next.span.start,
-                    },
-                    replacement: String::new(),
-                }),
-            });
-        }
     }
 }
 

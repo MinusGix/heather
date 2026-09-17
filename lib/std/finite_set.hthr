@@ -28,7 +28,6 @@ class FiniteSets<S, A>(same: S → S → Type, union: S → S → S, ops: SetOpe
     image_composition: (f, g: A → A) → (x: S) → same(ops.image(g, ops.image(f, x)), ops.image(λ a => g(f(a)), x)),
 }
 
-
 // Dependent clients carry membership in the abstract interface, not in a list.
 record SetElement<S, A>(member: A → S → Type, collection: S) {
     value: A,

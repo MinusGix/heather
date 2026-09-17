@@ -432,14 +432,12 @@ fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
     }
 }
 
-
 // The order on Nat — `Bool`, `leb`, `Le`, `sub` — is `nat`'s
 // (docs/modules-design.md §7). `<=` is surface notation for a call to `Le`
 // (issues/comparison-operators.md), so the spellings below are unchanged by
 // the move: `<=` where the order is being *stated*, and the explicit `Le`
 // inside explicit motives, where an infix operator would read as one more
 // thing to disentangle rather than one fewer.
-
 
 // ---------------------------------------------------------------------------
 // The refinement chain (doc §6 stress test): the same add function reached
@@ -455,7 +453,6 @@ fn ir_call1() -> Ir { LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) 
 fn ir_call2() -> Ir { LetCall(1, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
 
 fn plus2() -> Nat -> Nat { λ (n: Nat) => Succ(Succ(n)) }
-
 
 // ---------------------------------------------------------------------------
 // The first end-to-end certificate (doc §11 item 4): an `equiv`-shaped
@@ -474,7 +471,6 @@ fn bumps(k: Nat) -> Val -> Val {
         Succ(k2) => λ (a: Val) => bumps(k2)(VCon(1, VCons(a, VNil))),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Acceptance (doc §11 items 2 and 6): simulate discharges by conversion at
@@ -765,7 +761,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         // the loop's own re-entry: a sub-region, then the protocol, then a
         // tail call at the continue flag
         LoopIter(lbody) =>
-            match h : ev1(env, lbody) as λ r =>
+            match h: ev1(env, lbody) as λ r =>
                 k_iter(ev1, lbody, r) = Out(vs)
                 -> k_iter(ev2, lbody, ev2(env, lbody)) = Out(vs) {
                 Stuck => λ q => absurd(q),
