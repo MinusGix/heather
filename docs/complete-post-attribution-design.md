@@ -780,3 +780,30 @@ elaborator's canonical-spelling work (`issues/elaborator-canonical-type-spelling
 is about the *compiler* choosing a smaller spelling; this is the same effect
 reached from the source side, and the two should be compared before either is
 assumed to subsume the other.
+
+The same file changed spelling again the same day, and the same warning
+applies. `result::fold`/`and_then`/`map_err` were being called with all three
+type arguments written out, their continuations' parameter types written out,
+and `recognize_certified` given its `<PTok,…>` — **none of it required**
+(`issues/result-eliminator-explicit-type-arguments`, closed). The file now
+calls them as the `self` methods they are, annotating nothing. Measured serial,
+two reps a side:
+
+| | annotated | inferred |
+|---|---|---|
+| conversion misses | 46 497 | **45 920** |
+| evaluator steps | 1 142 770 | **1 129 562** |
+| unify calls | 1 522 | **1 463** |
+| conversion queries | 5 734 779 | 5 738 612 (+0.07 %) |
+| wall | 51.4 s / 50.7 s | 51.2 s / 51.4 s |
+
+Counts move, seconds do not: each spelling's two reps differ by about as much
+as the two spellings differ from each other, so this is **not** a speedup and
+must not be quoted as one. The interesting part is the shape of the movement —
+the misses halve exactly where the annotations were densest (`expr_body`
+383 → 186, `factor_body` 399 → 202, `parentheses_body` 27 → 9) and are
+untouched elsewhere. A written-out type argument is a term the elaborator must
+convert against the one it would have inferred, and that conversion is the
+whole cost; it is the same observation as §10.7's, from the other direction —
+there a shared type got *shorter* by being named, here a redundant one stopped
+being written at all.

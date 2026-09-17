@@ -1,6 +1,6 @@
 ---
 title: Result eliminators are called with all three type arguments spelled out; find out whether they have to be
-status: open
+status: closed
 labels: [frontend,elaboration,inference,stdlib,ergonomics]
 created: 2026-09-16
 updated: 2026-09-16
@@ -56,3 +56,26 @@ is worth knowing why before adding another special case.
   probed — the file was left with the annotations it had, since removing them
   changes elaborated terms and that file is a quoted perf fixture
   (`docs/complete-post-attribution-design.md` §10.7).
+- 2026-09-16: Answered: **(2), they were not required.** The showcase now calls the
+eliminators as the `self` methods they are declared as, with nothing annotated:
+`first.and_then(λ left => recognize_certified(plus,0,source,left.end).fold(λ op => …, λ ignored => …))`.
+Three things came off, each probed separately and each checking clean: the
+eliminators' type arguments (8 calls), their continuations' parameter types
+(16 lambdas), and `recognize_certified`'s `<PTok,Nat>`/`<PTok,Expr>` (5 calls).
+The dependent positions — types indexed by `begin`, a variable of the enclosing
+telescope — were never the obstacle they looked like, and the capability was
+already pinned by `crates/elab/tests/callback_expected_types.rs`; the showcase
+simply was not using it.
+
+Cost, serial, two reps on the furnace: **counts improve, seconds do not move.**
+Conversion misses 46 497 -> 45 920, evaluator steps 1 142 770 -> 1 129 562,
+unify calls 1 522 -> 1 463, queries +3 833 (+0.07 %); wall 51.4/50.7 s against
+51.2/51.4 s and item totals within each spelling's own repeat spread. Per item
+the misses halve where the annotations were densest (`expr_body` 383 -> 186,
+`factor_body` 399 -> 202, `parentheses_body` 27 -> 9). So the annotations were
+costing a little conversion and buying nothing — but this is a readability
+result, not a performance one, and should not be quoted as a speedup.
+
+No residue: no other file in `lib/` or `docs/showcase/` writes the pattern. The
+two occurrences in `crates/elab/tests` are deliberate tests of the qualified
+spelling and stay. Closing.

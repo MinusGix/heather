@@ -168,26 +168,26 @@ fn product_finish(source: List<PTok>, begin,middle,next: Cursor<PTok>(source), f
             nat::le_trans(begin.offset,next.offset,right.end.offset,forward,right.forward),
             product_grammar(source,begin,middle,next,right.end,left,right.value,proof,token,right.evidence))) }
 }
-// Generic Result eliminators keep the production proof types shared.
+// The productions compose through the generic `Result` eliminators rather than
+// through `match`, which keeps one proof type per tier. Their type arguments and
+// their continuations' parameter types are all inferred: writing them out, as
+// this file used to, cost 577 conversion misses and bought nothing.
 fn expr_body(source: List<PTok>, begin: Cursor<PTok>(source),
     first: Checked(1,source,begin),
     recur: (next: Cursor<PTok>(source))
         -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
         -> Checked(0,source,next))
     -> Checked(0,source,begin) {
-    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),
-            Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>(first,
-        λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(1))) =>
-            result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(plus)),Failure<PTok>(source),
-                Checked(0,source,begin)>(recognize_certified<PTok,Nat>(plus,0,source,left.end),
-            λ (op: Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(plus))) => {
+    first.and_then(λ left =>
+        recognize_certified(plus,0,source,left.end).fold(
+            λ op => {
                 let token = symbol_span(plus,TPlusSym,plus_selected,source,left.end,op.end,op.value,op.evidence);
                 let step = recognized_progress(plus,source,left.end,op.end,op.value,op.evidence);
                 let small = progress_after(source,begin,left.end,op.end,left.forward,step);
                 sum_finish(source,begin,left.end,op.end,nat::le_trans(begin.offset,left.end.offset,op.end.offset,left.forward,op.forward),
                     left.value,left.evidence,token,recur(op.end,small))
             },
-            λ (ignored: Failure<PTok>(source)) => Ok(Certified(left.value,left.end,left.forward,
+            λ ignored => Ok(Certified(left.value,left.end,left.forward,
                 expression_grammar(source,begin,left.end,left.value,left.evidence)))))
 }
 fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source),
@@ -196,35 +196,29 @@ fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source),
         -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
         -> Checked(1,source,next))
     -> Checked(1,source,begin) {
-    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),
-            Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>(first,
-        λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(2))) =>
-            result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(times)),Failure<PTok>(source),
-                Checked(1,source,begin)>(recognize_certified<PTok,Nat>(times,0,source,left.end),
-            λ (op: Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(times))) => {
+    first.and_then(λ left =>
+        recognize_certified(times,0,source,left.end).fold(
+            λ op => {
                 let token = symbol_span(times,TStarSym,times_selected,source,left.end,op.end,op.value,op.evidence);
                 let step = recognized_progress(times,source,left.end,op.end,op.value,op.evidence);
                 let small = progress_after(source,begin,left.end,op.end,left.forward,step);
                 product_finish(source,begin,left.end,op.end,nat::le_trans(begin.offset,left.end.offset,op.end.offset,left.forward,op.forward),
                     left.value,left.evidence,token,recur(op.end,small))
             },
-            λ (ignored: Failure<PTok>(source)) => Ok(Certified(left.value,left.end,left.forward,
+            λ ignored => Ok(Certified(left.value,left.end,left.forward,
                 factor_grammar(source,begin,left.end,left.value,left.evidence)))))
 }
 fn close_body(source: List<PTok>, begin: Cursor<PTok>(source),
     op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
     inner: Certified<PTok,Expr>(source,op.end,GrammarSpec(0))) -> Checked(2,source,begin) {
-    result::fold<Certified<PTok,Nat>(source,inner.end,Recognized<PTok,Nat>(closing)),Failure<PTok>(source),
-            Checked(2,source,begin)>(
-        recognize_certified<PTok,Nat>(closing,2,source,inner.end),
-        λ (close: Certified<PTok,Nat>(source,inner.end,Recognized<PTok,Nat>(closing))) =>
-            Ok(Certified(inner.value,close.end,
+    recognize_certified(closing,2,source,inner.end).fold(
+        λ close => Ok(Certified(inner.value,close.end,
                 nat::le_trans(begin.offset,op.end.offset,close.end.offset,op.forward,
                     nat::le_trans(op.end.offset,inner.end.offset,close.end.offset,inner.forward,close.forward)),
                 paren_grammar(source,begin,op.end,inner.end,close.end,inner.value,
                     symbol_span(opening,TOpen,opening_selected,source,begin,op.end,op.value,op.evidence),inner.evidence,
                     symbol_span(closing,TClose,closing_selected,source,inner.end,close.end,close.value,close.evidence)))),
-        λ (e: Failure<PTok>(source)) => Err(commit_after(source,begin,op.end,commit_after(source,op.end,inner.end,e))))
+        λ e => Err(commit_after(source,begin,op.end,commit_after(source,op.end,inner.end,e))))
 }
 fn open_body(source: List<PTok>, begin: Cursor<PTok>(source),
     op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
@@ -234,34 +228,26 @@ fn open_body(source: List<PTok>, begin: Cursor<PTok>(source),
     -> Checked(2,source,begin) {
     let step = recognized_progress(opening,source,begin,op.end,op.value,op.evidence);
     let small = drop_length_strict(source,begin.offset,op.end.offset,step,op.end.within);
-    result::fold<Certified<PTok,Expr>(source,op.end,GrammarSpec(0)),Failure<PTok>(source),
-                Checked(2,source,begin)>(recur(op.end,small),
-        λ (inner: Certified<PTok,Expr>(source,op.end,GrammarSpec(0))) => close_body(source,begin,op,inner),
-        λ (e: Failure<PTok>(source)) => Err(commit_after(source,begin,op.end,e)))
+    recur(op.end,small).fold(λ inner => close_body(source,begin,op,inner),
+        λ e => Err(commit_after(source,begin,op.end,e)))
 }
 fn parentheses_body(source: List<PTok>, begin: Cursor<PTok>(source),
     recur: (next: Cursor<PTok>(source))
         -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
         -> Checked(0,source,next))
     -> Checked(2,source,begin) {
-    result::and_then<Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
-            Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>(
-        recognize_certified<PTok,Nat>(opening,0,source,begin),
-        λ (op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening))) => open_body(source,begin,op,recur))
+    recognize_certified(opening,0,source,begin).and_then(λ op => open_body(source,begin,op,recur))
 }
 fn atom_body(source: List<PTok>, begin: Cursor<PTok>(source),
     recur: (next: Cursor<PTok>(source))
         -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
         -> Checked(0,source,next))
     -> Checked(2,source,begin) {
-    result::fold<Certified<PTok,Expr>(source,begin,Recognized<PTok,Expr>(number)),Failure<PTok>(source),
-            Checked(2,source,begin)>(
-        recognize_certified<PTok,Expr>(number,0,source,begin),
-        λ (n: Certified<PTok,Expr>(source,begin,Recognized<PTok,Expr>(number))) =>
+    recognize_certified(number,0,source,begin).fold(
+        λ n =>
             Ok(Certified(n.value,n.end,n.forward,number_grammar(source,begin,n.end,n.value,n.evidence))),
-        λ (number_error: Failure<PTok>(source)) =>
-            result::map_err<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source),Failure<PTok>(source)>(
-            parentheses_body(source,begin,recur),λ (e: Failure<PTok>(source)) => merge_error(source,number_error,e)))
+        λ number_error =>
+            parentheses_body(source,begin,recur).map_err(λ e => merge_error(source,number_error,e)))
 }
 fn checked_expr(source: List<PTok>, begin: Cursor<PTok>(source)) -> Checked(0,source,begin)
     decreases list_len(rest(source,begin)) {
@@ -363,7 +349,7 @@ fn execute(ts: List<PTok>) -> Result<Option<List<Nat>>, ParseError> { execute_pa
 // Prove agreement at an open parse result, then specialize to any token
 // stream. This only assumes the compiler theorem, not parser unfolding laws.
 theorem compile_result_correct(parsed: Result<Expr, ParseError>):
-    execute_parsed(parsed) = evaluate_parsed(parsed).map(λ (n: Nat) => Some([n])) {
+    execute_parsed(parsed) = evaluate_parsed(parsed).map(λ n => Some([n])) {
     match parsed {
         Err(_) => refl,
         Ok(e) => j(compile_correct(e),
@@ -372,7 +358,7 @@ theorem compile_result_correct(parsed: Result<Expr, ParseError>):
 }
 
 theorem parsed_compile_correct(ts: List<PTok>):
-    execute(ts) = calculate(ts).map(λ (n: Nat) => Some([n])) {
+    execute(ts) = calculate(ts).map(λ n => Some([n])) {
     compile_result_correct(parse(ts))
 }
 
