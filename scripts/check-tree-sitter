@@ -36,3 +36,14 @@ done
 )
 
 cargo test -p heather-syntax --test editor_corpus --quiet
+
+# A developer who has installed the Zed dev extension has a *snapshot* of the
+# grammar under editors/zed/.dev, while its queries are symlinked live. A
+# grammar node added here and referenced from a query therefore breaks
+# highlighting silently until the snapshot is refreshed by hand — which is how
+# `decreases` dark-loaded the extension for two weeks. Refresh it here, so the
+# check the README already tells you to run keeps the snapshot honest. Zed
+# still needs a **Rebuild** on the extension to recompile the new revision.
+if [[ -d editors/zed/.dev ]]; then
+  scripts/zed-dev-extension
+fi

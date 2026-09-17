@@ -19,6 +19,14 @@ objects.
    on the extension after grammar changes. Use `zed: open log` if compilation
    fails.
 
+Only the grammar is snapshotted; the queries are symlinked live. So a grammar
+node added in `tree-sitter-heather` and referenced from a query loads against a
+snapshot that predates it, and Zed drops the whole language with `Error loading
+highlights query … Invalid node type <name>` in the log — with no other symptom
+than highlighting that stops. `scripts/check-tree-sitter` therefore refreshes an
+existing `.dev` on every run; a **Rebuild** in Zed is still what recompiles the
+new revision.
+
 The published `extension.toml` stays untouched and release-ready throughout;
 there is no tracked local URL to remember to restore and no Git
 `skip-worktree` state hiding future manifest updates.

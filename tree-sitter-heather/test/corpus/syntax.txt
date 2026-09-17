@@ -406,3 +406,69 @@ fn down(n: Nat) -> Nat decreases n {
       (on_statement
         (identifier)
         (identifier)))))
+
+==================
+Contextual names in head position
+==================
+
+fn run(code: List<Tok>) -> Nat {
+  match code { Nil => 0, Cons(t, rest) => run(rest) }
+}
+fn intensional(e: Code(g)) -> Nat {
+  match code e as Nat { lit(n) => n }
+}
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (identifier))))))
+    (identifier)
+    (block
+      (match_expression
+        (contextual_identifier
+          (identifier))
+        (match_body
+          (match_arm
+            (identifier)
+            (number))
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (identifier)
+              (identifier))
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier))))))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (call_expression
+            (builtin_type)
+            (argument_list
+              (identifier))))))
+    (identifier)
+    (block
+      (match_code_expression
+        (identifier)
+        (identifier)
+        (match_body
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (identifier))
+            (identifier)))))))

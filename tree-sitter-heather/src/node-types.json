@@ -2608,6 +2608,10 @@
             "named": true
           },
           {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -2760,6 +2764,10 @@
             "named": true
           },
           {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -2837,6 +2845,10 @@
         },
         {
           "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "contextual_identifier",
           "named": true
         },
         {
@@ -2933,6 +2945,10 @@
             "named": true
           },
           {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -3013,6 +3029,10 @@
           "named": true
         },
         {
+          "type": "contextual_identifier",
+          "named": true
+        },
+        {
           "type": "head_binary_expression",
           "named": true
         },
@@ -3088,6 +3108,10 @@
           "named": true
         },
         {
+          "type": "contextual_identifier",
+          "named": true
+        },
+        {
           "type": "head_binary_expression",
           "named": true
         },
@@ -3160,6 +3184,10 @@
         },
         {
           "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "contextual_identifier",
           "named": true
         },
         {
@@ -3276,6 +3304,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
             "named": true
           },
           {
@@ -3420,6 +3452,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
             "named": true
           },
           {
@@ -3980,6 +4016,10 @@
             "named": true
           },
           {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -4084,6 +4124,10 @@
             "named": true
           },
           {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -4163,6 +4207,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
             "named": true
           },
           {

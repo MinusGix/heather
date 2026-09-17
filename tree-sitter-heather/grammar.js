@@ -29,6 +29,13 @@ module.exports = grammar({
     [$._expression, $.lambda_binder],
     [$.parameter_name, $.lambda_binder],
     [$.quote_expression, $.contextual_identifier],
+    // `match code { … }` and `match code as M { … }` are ordinary matches on a
+    // variable named `code`: `{` and `as` cannot begin the analysis form's
+    // scrutinee, so there was never one there. The compiler's parser decides
+    // this by that exact follow-token rule (parser.rs `match_expr`,
+    // issues/match-scrutinee-named-code.md); here the two readings fork and the
+    // one that consumes the arm block wins.
+    [$.match_code_expression, $.contextual_identifier],
     [$.calc_expression, $.contextual_identifier],
     [$.apply_expression, $.contextual_identifier],
     [$.j_expression, $.contextual_identifier],
@@ -244,7 +251,10 @@ module.exports = grammar({
     goal_reference: $ => seq($.hole, optional(seq('.', $.number))),
 
     _head_expression: $ => choice(
-      $.identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
+      // A head position is where a match scrutinee lives, so the contextual
+      // words have to be ordinary names here too — `match code { … }` is an
+      // ordinary match on a variable named `code`.
+      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
