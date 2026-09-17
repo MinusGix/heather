@@ -375,6 +375,49 @@ theorem in_an_annotation<A>(P, Q: A -> Type, h: (a: A) -> (P(a) ↔ Q(a))):
     assert!(err.contains("unbound name `a`"), "got: {err}");
 }
 
+/// A **binder-headed** function type as the `↔`'s left operand. `↔` is looser
+/// than `->`, so `(a: A) -> P(a) ↔ R` is `((a: A) -> P(a)) ↔ R` — the reading
+/// `P -> Q ↔ R` already got. `Parser::ty`'s binder-group path builds its Π and
+/// returns it, so until `issues/binder-headed-arrow-as-connective-operand.md`
+/// it sat below the loosest rung and the spelling was
+/// ``expected `{`, found Iff``.
+///
+/// Checked against the named-constructor hypothesis, not against itself, so
+/// the test says which grouping it got.
+#[test]
+fn a_binder_headed_function_type_can_be_the_iff_operand() {
+    ok("
+theorem bare<A>(P: A -> Type, R: Type, h: Iff<(a: A) -> P(a), R>):
+    (a: A) -> P(a) ↔ R { h }
+theorem bracketed<A>(P: A -> Type, R: Type, h: Iff<(a: A) -> P(a), R>):
+    ((a: A) -> P(a)) ↔ R { h }
+");
+    // …and in a Type-valued *body*, which is expression position and reaches
+    // the rung by a different route (the Π arrives as a `TyLit`, the plain
+    // arrow's as a `TyApp`). All three spellings have to be one type.
+    ok("
+fn Bare<A>(P: A -> Type, R: Type) -> Type { (a: A) -> P(a) ↔ R }
+fn Bracketed<A>(P: A -> Type, R: Type) -> Type { ((a: A) -> P(a)) ↔ R }
+theorem to<A>(P: A -> Type, R: Type, h: Bare(P, R)): Bracketed(P, R) { h }
+theorem back<A>(P: A -> Type, R: Type, h: Bracketed(P, R)): Bare(P, R) { h }
+theorem named<A>(P: A -> Type, R: Type, h: Iff<(a: A) -> P(a), R>): Bare(P, R) { h }
+");
+    // The binder's scope does not move: the Π is complete before the `↔`
+    // applies, so the right operand is still outside the binder. This is the
+    // reading [[iff-in-type-valued-body]] asked be left alone — what changed
+    // is that it is a reading rather than a parse error.
+    let err = bad("fn SameOn<A>(P, Q: A -> Type) -> Type { (a: A) -> P(a) ↔ Q(a) }");
+    assert!(err.contains("unbound name `a`"), "got: {err}");
+    // Still one non-associative rung.
+    let err = bad("theorem t<A>(P: A -> Type, R: Type, S: Type, h: R):
+                       (a: A) -> P(a) ↔ R ↔ S { h }");
+    assert!(err.contains("does not chain"), "got: {err}");
+    // A codomain still declines, so a binder-headed *codomain* leaves the `↔`
+    // to the outer arrow: this is `(P -> (a: A) -> Q(a)) ↔ R`.
+    ok("theorem t<A>(P: Type, Q: A -> Type, R: Type, h: Iff<P -> (a: A) -> Q(a), R>):
+            P -> (a: A) -> Q(a) ↔ R { h }");
+}
+
 /// The grammar boundary, not `SameMembers`: `∧` and `∨` were never suppressed
 /// in a codomain and still are not, and the brackets the `↔` fix had to reach
 /// are all of them — a parenthesised group whose own top level is an arrow, a

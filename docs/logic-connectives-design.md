@@ -140,6 +140,20 @@ Three of these are worth their reasons:
   (`issues/iff-in-type-valued-body.md`). The `↔` that is *not* bracketed is
   unaffected: `P -> Q ↔ R` is still `(P -> Q) ↔ R`.
 
+  The other half of being the loosest rung is being *reachable* from every
+  type, and one spelling was not: `Parser::ty`'s **binder-headed** paths —
+  `(x: A) -> B` and `{x: A} -> B` — build their Π and `return` it, while every
+  other route into a type passes through `Parser::expr`, where the rung lives.
+  So `(a: A) -> P(a) ↔ R` was a parse error rather than
+  `((a: A) -> P(a)) ↔ R`. Those two paths now offer their Π to the rung
+  (`Parser::iff_after_fn_type`, declining while a codomain is read)
+  (`issues/binder-headed-arrow-as-connective-operand.md`). `∧`/`∨` never
+  showed this, because they bind *tighter* than `->` and are consumed inside
+  the codomain; only a rung looser than the arrow can be affected, and `↔` is
+  the only one. The Π is complete — binders *and* codomain — before the `↔`
+  applies, so the binder's scope does not move: the unparenthesised
+  `(a: A) -> P(a) ↔ Q(a)` still leaves the right-hand `a` unbound.
+
 `∧` and `∨` are **right-associative** (the fixity `++` chose, and for the same
 proof-relevant reason: `And(p, And(q, r))` is the nesting the record builds
 and projects). `↔` is **non-associative**, like the comparison rung, with its

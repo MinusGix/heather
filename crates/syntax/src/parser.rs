@@ -2336,7 +2336,7 @@ impl Parser {
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
-            return Ok(curry(binders, cod, false, span));
+            return self.iff_after_fn_type(curry(binders, cod, false, span));
         }
         // `{x: A} -> B` — an *implicit* binder
         // (docs/implicit-binders-design.md §8). The same three-token
@@ -2354,7 +2354,7 @@ impl Parser {
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
-            return Ok(curry(binders, cod, true, span));
+            return self.iff_after_fn_type(curry(binders, cod, true, span));
         }
         let lhs = self.ty_atom()?;
         if matches!(self.peek(), TokKind::Arrow) {
@@ -2681,11 +2681,24 @@ impl Parser {
         if restricted {
             return Ok(lhs);
         }
-        // `↔` is the loosest rung of all — looser than `->`, so `P -> Q ↔ R`
-        // is `(P -> Q) ↔ R` — and **non-associative**, for the reason the
-        // comparison rung is: `P ↔ Q ↔ R` has two readings and no reason to
-        // prefer either, and a bi-implication between bi-implications is not
-        // what anyone writing it meant.
+        self.iff_rung(lhs)
+    }
+
+    /// The `↔` rung, given its left operand.
+    ///
+    /// `↔` is the loosest rung of all — looser than `->`, so `P -> Q ↔ R` is
+    /// `(P -> Q) ↔ R` — and **non-associative**, for the reason the comparison
+    /// rung is: `P ↔ Q ↔ R` has two readings and no reason to prefer either,
+    /// and a bi-implication between bi-implications is not what anyone writing
+    /// it meant.
+    ///
+    /// Split out of [`Self::expr_rung`] because it has a second caller:
+    /// [`Self::ty`]'s binder-headed paths build their Π and return it, so
+    /// without this they sit *below* the loosest rung and
+    /// `(a: A) -> P(a) ↔ R` is a parse error rather than the reading
+    /// `P -> Q ↔ R` already gets
+    /// (issues/binder-headed-arrow-as-connective-operand.md).
+    fn iff_rung(&mut self, lhs: Expr) -> R<Expr> {
         if !matches!(self.peek(), TokKind::Iff) {
             return Ok(lhs);
         }
@@ -2699,6 +2712,28 @@ impl Parser {
             );
         }
         Ok(connective("Iff", lhs, rhs, span))
+    }
+
+    /// Offer a binder-headed function type to the `↔` rung, which is looser
+    /// than the arrow it was just built from.
+    ///
+    /// The Π is complete — binders *and* codomain — before the `↔` is applied,
+    /// so the binder's scope is unchanged and the unparenthesised
+    /// `(a: A) -> P(a) ↔ Q(a)` still leaves the right-hand `a` unbound. That
+    /// is the reading [`issues/iff-in-type-valued-body.md`] asked be left
+    /// alone; what changes here is only that it is a *reading* rather than a
+    /// parse error.
+    ///
+    /// Declines while a codomain is being read, exactly as [`Self::expr_rung`]
+    /// does: there the outer arrow's own `↔` is still to come.
+    fn iff_after_fn_type(&mut self, pi: Ty) -> R<Ty> {
+        if self.no_iff || !matches!(self.peek(), TokKind::Iff) {
+            return Ok(pi);
+        }
+        let span = pi.span;
+        let lhs = Expr { kind: ExprKind::TyLit(Box::new(pi)), span };
+        let out = self.iff_rung(lhs)?;
+        Ok(expr_as_ty(&out))
     }
 
     /// Does the cursor begin the contextual `apply <callee>;` form?
@@ -5227,6 +5262,30 @@ mod tests {
             let ExprKind::TyLit(ty) = body(src) else { panic!("{src}: expected a type") };
             assert!(matches!(&ty.kind, TyKind::Fn { .. }), "{src}: {ty:?}");
         }
+    }
+
+    /// A binder-headed function type is offered to the `↔` rung too, which
+    /// `Parser::ty`'s early `return` used to skip
+    /// (issues/binder-headed-arrow-as-connective-operand.md). The Π is
+    /// complete before the `↔` applies, so it is the *whole* arrow that
+    /// becomes the left operand — the binder does not reach the right one.
+    #[test]
+    fn a_binder_headed_function_type_reaches_the_iff_rung() {
+        let ExprKind::TyLit(ty) = body("(a: A) -> P(a) ↔ R") else {
+            panic!("expected a type")
+        };
+        let TyKind::Named { name, args } = &ty.kind else {
+            panic!("expected the `↔` at the root, got {ty:?}")
+        };
+        assert_eq!(name, "Iff");
+        assert!(matches!(&args[0].kind, TyKind::Fn { binder, .. } if binder.as_deref() == Some("a")));
+        // A codomain still declines, so the `↔` after a binder-headed
+        // codomain belongs to the outer arrow: `(P -> (a: A) -> Q(a)) ↔ R`.
+        let ExprKind::TyApp { head, args } = body("P -> (a: A) -> Q(a) ↔ R") else {
+            panic!("expected the `↔` at the root")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Iff"));
+        assert!(matches!(&args[0].kind, TyKind::Fn { binder, .. } if binder.is_none()));
     }
 
     #[test]
