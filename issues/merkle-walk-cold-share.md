@@ -1,6 +1,6 @@
 ---
 title: The merkle walk is a sixth of the showcase's wait and all of some cheap declarations: attribute and memoize
-status: open
+status: closed
 labels: [tooling,caching,performance,measurement]
 created: 2026-09-17
 updated: 2026-09-17
@@ -161,3 +161,37 @@ Two shapes in that table:
   real but not large; the walk's remaining half is the encode over 25 M
   distinct nodes visited 1.7–2.1× over, whose 2× ceiling is the per-`Rc` memo
   [[warm-path-rewalks-unchanged-declarations]] names.
+- 2026-09-17: 2026-09-17: The hash lever taken after all, on the user's call: the forbid is
+  a strong guideline, and SHA is hard to get badly wrong. Measured first as
+  asked — `sha2`'s hardware path against ours on the flat 512 MB buffer:
+
+  | | MB/s |
+  | - | - |
+  | ours, portable rounds | 301–318 |
+  | ours, SHA extensions (`compress_blocks_sha`) | 2239–2261 |
+  | `sha2` 0.10.9 | 2248 |
+
+  Identical, as they should be (the same instructions), so ours stays and the
+  cache crate keeps zero shipped dependencies; the crate carries
+  `unsafe_code = "deny"` where the workspace says `forbid`, with one `allow` on
+  the intrinsic function and one on its dispatch, and the oracle test now
+  checks the two paths against each other and against `sha2` on every length
+  through the padding boundaries plus ragged feeding (`Sha256::scalar()`
+  forces the portable path). [[dependency-policy]] has the line.
+
+  Walk column, run rows, same tree otherwise (the box was under a load of
+  30+ from something else during the last snapshot, so read the column and
+  not the wall):
+
+  | | merkle_walk, before this round | after open questions | after SHA ext. |
+  | - | - | - | - |
+  | showcase wait, width 8 | 5.86 s (16.8%) | 2.36 s (6.9%) | **1.52 s (4.2%)** |
+  | showcase cold, width 1 | 3.02 s (5.8%) | 2.18 s | **1.35 s (2.4%)** |
+  | omega cold, width 1 | 0.39 s | 0.42 s | **0.21 s** |
+
+  So the walk is a quarter of what it was on the wait and under 3% of a cold
+  check. What is left is the encode itself over ~25 M distinct nodes visited
+  ~1.7–2.1× over; the per-`Rc` memo that would halve it is
+  [[warm-path-rewalks-unchanged-declarations]]'s first candidate and stays
+  there. Closing: attributed, the double walk fixed, the hash at hardware
+  rate, the residue owned.

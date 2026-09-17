@@ -561,12 +561,16 @@ with the Ψ snapshot its item was queued under. The cache now keeps an exact
 map of *open questions* keyed by Ψ position (opened by `admits`, closed by
 the answer, killed by `KernelGate::abandon` when a declaration fails — the
 elaborator keeps going after a refusal and the next declaration lands at the
-same position). What remains of the walk is its content and the hash's
-scalar rate: the walker visits shared structure about twice over on a large
-module, so a per-`Rc` memo is a 2× ceiling, not the lever it was once
-assumed to be; and the textbook rounds are the larger half of what is left,
-which the issue records with the two ways to change that and why neither
-has been taken.
+same position), and the hasher compresses with the CPU's SHA extensions
+where it has them (`src/sha256.rs`, `compress_blocks_sha`: Intel's reference
+schedule over `std::arch`, selected per hasher, the portable rounds kept as
+the same function for every other target and checked against it by the
+oracle tests). That is the one `unsafe` in the workspace; the cache crate
+carries `deny` where the workspace says `forbid`, for exactly those two
+functions. `sha2`'s hardware path measured the same rate, so the crate stays
+at zero shipped dependencies. What remains of the walk is its content: the
+walker visits shared structure about twice over on a large module, so a
+per-`Rc` memo is a 2× ceiling, not the lever it was once assumed to be.
 
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session

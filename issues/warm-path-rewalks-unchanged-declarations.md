@@ -3,7 +3,7 @@ title: "The warm cache path re-walks and re-hashes every unchanged declaration"
 status: open
 labels: [tooling, performance, cli]
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-09-17
 code: crates/cache/src/merkle.rs @ 33c65ef
 ---
 
@@ -39,3 +39,7 @@ Triggered: when warm-run latency matters to an inner loop — e.g. an agent
 session re-checking a large file after each small edit, or the daemon
 round making warm checks the common case. One deliberate round, per the
 accumulator discipline.
+
+## Log
+
+- 2026-09-17: 2026-09-17: a datum for the memo candidate from [[merkle-walk-cold-share]] (closed): on the showcase the walker visits 51.8 M nodes against 24.7 M distinct addresses, ratio 2.1 (at most 3.8 on one walk), so the per-Rc memo is a 2x ceiling on what is now ~1.3 s of a 57 s cold check; the walk's other two costs (a double render per declaration, the scalar hash rate) are gone.
