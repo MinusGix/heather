@@ -88,3 +88,4 @@ rules: seconds within one environment, counts across; a diary, not a gate.
     5.8 vs 9.7 s) at 2.8× the memory (4.9 GB vs 1.7 GB).
 - 2026-09-17: 2026-09-17: the merkle-walk surprise from the first snapshot has an owner: [[merkle-walk-cold-share]].
 - 2026-09-17: 2026-09-17: first use as a before/after instrument: the over-budget fix ([[semantic-image-over-budget-republished-every-run]], closed) was remeasured with `snapshot --only calc_parser --only omega` and read with `report`; the delta column showed warm unchanged in seconds and the phase table showed why (re-elaboration became replay). The second snapshot is on record.
+- 2026-09-17: 2026-09-17: second use as a before/after instrument, [[merkle-walk-cold-share]]: the cache_hashes counter and merkle_walk column of the raw run rows showed the deferred gate's double hashing (2122 -> 1061 renders on the showcase's wait run) where the wall column, taken on a loaded box, showed nothing. Read the counts first.

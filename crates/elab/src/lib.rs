@@ -1981,6 +1981,9 @@ impl Elaborator {
             }
             if r.is_err() {
                 self.container_decls.borrow_mut().clear();
+                if let Some(g) = self.gate.as_ref() {
+                    g.abandon(&self.psi);
+                }
                 // Nothing may outlive the module with proofs in flight, the
                 // failure path included (`docs/parallel-kernel-gate-design.md`
                 // §5). The item's own error is the one reported — unless a
@@ -2558,6 +2561,11 @@ impl Elaborator {
             }
             if let Err(e) = r {
                 errs.push(e);
+                // The refused declaration's gate question is dead, and the
+                // next declaration lands at the same Ψ length.
+                if let Some(g) = self.gate.as_ref() {
+                    g.abandon(&self.psi);
+                }
             }
             // The early abort (§5.1): this pass is already doomed to be
             // replayed serially, so stop elaborating declarations for it.

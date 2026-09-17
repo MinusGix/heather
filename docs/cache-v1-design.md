@@ -552,6 +552,22 @@ next lever is not a faster encoder but *not walking unchanged declarations*:
 memoizing per-`Rc` subtree hashes, or a cache that skips elaboration too,
 which §1 already notes is a larger design.
 
+**Hash once per declaration (2026-09-17).** The `admits`/`accepted` pair asks
+one question, and answering it twice doubles the hashing: the first
+instrumented reading of a cold check (`issues/merkle-walk-cold-share.md`)
+found the interface walked twice per declaration at the inline gate and the
+whole identity computed twice at the deferred join, where `accepted` arrives
+with the Ψ snapshot its item was queued under. The cache now keeps an exact
+map of *open questions* keyed by Ψ position (opened by `admits`, closed by
+the answer, killed by `KernelGate::abandon` when a declaration fails — the
+elaborator keeps going after a refusal and the next declaration lands at the
+same position). What remains of the walk is its content and the hash's
+scalar rate: the walker visits shared structure about twice over on a large
+module, so a per-`Rc` memo is a 2× ceiling, not the lever it was once
+assumed to be; and the textbook rounds are the larger half of what is left,
+which the issue records with the two ways to change that and why neither
+has been taken.
+
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session
 (v2 only, `plain`/`cold` alternating, five iterations, load falling) gave
