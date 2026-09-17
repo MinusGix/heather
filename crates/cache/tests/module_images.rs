@@ -225,3 +225,43 @@ fn warnings_round_trip_with_lint_fixes_and_source_bounded_spans() {
     ));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// An image the reader would refuse is not written. Storing it anyway is what
+/// made an unchanged showcase module cost a full re-elaboration on every warm
+/// run: decoded up to the budget, rejected, rebuilt, re-published
+/// (`issues/semantic-image-over-budget-republished-every-run.md`).
+#[test]
+fn an_image_past_the_node_budget_is_refused_at_publication_not_at_every_load() {
+    let dir = temp("over-budget");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dependencies = ModuleDependencyIdentity::default();
+    let src = "fn value() -> Nat { 0 }";
+    let key = ModuleCacheKey::for_source("sample", src, &dependencies, LintProfile::Default);
+    let mut source = Elaborator::with_prelude().unwrap();
+    let prefix = source.psi().clone();
+    let delta = source
+        .elab_module_delta("sample", src, dependencies.clone())
+        .unwrap();
+
+    let tight = heather_elab::ModuleImageLimits { max_nodes: 1, ..Default::default() };
+    let cache = ModuleImageCache::with_limits(dir.clone(), tight);
+    match cache.publish(key, &delta, &[]) {
+        Err(ModuleCacheError::OverBudget { nodes, limit: 1 }) => assert!(nodes > 1, "{nodes}"),
+        Err(other) => panic!("expected an over-budget refusal, got: {other}"),
+        Ok(_) => panic!("an over-budget image was published"),
+    }
+    // Nothing was stored: the next run misses cleanly instead of decoding
+    // and rejecting.
+    assert!(
+        cache
+            .load(key, prefix.clone(), src.len(), ImageFreshness::Exact)
+            .unwrap()
+            .is_none(),
+        "a refused image must leave no artifact"
+    );
+    // The same delta under the default budget publishes and loads.
+    let cache = ModuleImageCache::new(dir.clone());
+    cache.publish(key, &delta, &[]).unwrap();
+    assert!(cache.load(key, prefix, src.len(), ImageFreshness::Exact).unwrap().is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}

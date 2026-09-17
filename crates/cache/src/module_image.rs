@@ -142,6 +142,11 @@ pub enum ModuleCacheError {
     Io(std::io::Error),
     Corrupt(&'static str),
     Decode(ModuleImageDecodeError),
+    /// The image would be refused by its own reader, so it was not written:
+    /// a stored over-budget image is decoded up to the budget, rejected and
+    /// re-published on every warm run
+    /// (`issues/semantic-image-over-budget-republished-every-run.md`).
+    OverBudget { nodes: u64, limit: u64 },
 }
 
 impl fmt::Display for ModuleCacheError {
@@ -150,6 +155,10 @@ impl fmt::Display for ModuleCacheError {
             Self::Io(e) => write!(f, "{e}"),
             Self::Corrupt(why) => write!(f, "{why}"),
             Self::Decode(e) => write!(f, "semantic image was rejected: {e}"),
+            Self::OverBudget { nodes, limit } => write!(
+                f,
+                "semantic image has {nodes} syntax nodes, past the decode budget of {limit}; not stored, so a warm run re-elaborates this module"
+            ),
         }
     }
 }
@@ -314,7 +323,10 @@ impl ModuleImageCache {
         warnings: &[Warning],
         semantics: SemanticsIdentity,
     ) -> Result<[u8; 32], ModuleCacheError> {
-        let semantic = delta.to_image_bytes();
+        let (semantic, nodes) = delta.to_image();
+        if nodes > self.limits.max_nodes {
+            return Err(ModuleCacheError::OverBudget { nodes, limit: self.limits.max_nodes });
+        }
         if semantic.len() > self.limits.max_bytes {
             return Err(ModuleCacheError::Corrupt(
                 "semantic image exceeds the byte limit",

@@ -1,6 +1,6 @@
 ---
 title: An over-budget semantic image is rejected, rebuilt and re-published on every warm run of the showcase
-status: open
+status: closed
 labels: [tooling,caching,performance,elaboration]
 created: 2026-09-17
 updated: 2026-09-17
@@ -47,3 +47,32 @@ Two halves, in the order they should land:
 - **[[elab-emits-normal-form-of-matched-type-argument]]** owns the emitted
   size. Assumed here: only that the showcase's items are on its curve.
 - **[[perf-dashboard]]** is where the warm column that found this lives.
+
+## Log
+
+- 2026-09-17: 2026-09-17: Both halves of the small fix landed, and the budget is raised as
+  the user asked (it bounds decoding work, not allocation, and was not
+  principled at 16 M): the writer counts syntax nodes at exactly the sites the
+  reader charges (`Writer::nodes`, `ModuleDelta::to_image`), `publish` refuses
+  an image past `max_nodes` with `ModuleCacheError::OverBudget { nodes, limit }`
+  and writes nothing, and `max_nodes` is 256 M. The showcase's image is
+  **29.4 M nodes**. Measured on the desktop at width one
+  (`perf/snapshots/2026-09-17T184149Z-local.json` against `…T182332Z`):
+
+  | showcase, unchanged | before | refusal alone (16 M) | refusal + 256 M |
+  | - | - | - | - |
+  | warm wall | 12.5–13.7 s, re-elaborated | 9.5 s, re-elaborated, no decode/publish | 12.9 s, **replayed** |
+  | of which | decode 1.1 + elaborate 2.5 + publish 1.5 + merkle 1.1 | — | decode 2.1 + kernel recheck 7.2 |
+  | edit wall | 12.6 s | — | 10.8 s |
+
+  So the warm run is now what it claims to be — 20 modules replayed, 0
+  declarations elaborated — and it costs what a replay of this module costs:
+  a 2.1 s decode of 29 M nodes and a 7.2 s kernel recheck, against the cold
+  gate's 15.8 s (5.1 M conversion queries against 5.7 M). That the honest
+  replay is *slower* than the refused-image path is not a regression of this
+  fix; it is the replay's own price, which [[semantic-replay-phase-attribution]]
+  owns (its parallel recheck applies at width > 1; the wait number was 35.2 s
+  against 36.7 s). Edit is 10.8 s and is now cheaper than warm, because the
+  declaration cache skips the gate where the replay re-runs it. Closing: the
+  scope here was the rejected-and-republished loop, and it is gone. The image's
+  size is [[elab-emits-normal-form-of-matched-type-argument]]'s.

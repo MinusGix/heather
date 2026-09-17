@@ -40,6 +40,13 @@ const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x06";
 /// The loader may choose a smaller policy; these defaults are deliberately
 /// generous enough for Heather's present standard library without making a
 /// corrupt count an allocation request.
+///
+/// `max_nodes` bounds decoding *work*, not allocation (the sequence and
+/// string limits do that), so it is sized loosely: the showcase's parser
+/// module was 29 M nodes on 2026-09-17 against the earlier 16 M, and an image
+/// past the budget is the worst of both worlds — decoded up to the budget,
+/// refused, and rebuilt on every warm run. The writer now refuses to publish
+/// past it (`heather_cache::module_image::ModuleCacheError::OverBudget`).
 #[derive(Clone, Copy, Debug)]
 pub struct ModuleImageLimits {
     pub max_bytes: usize,
@@ -53,7 +60,7 @@ impl Default for ModuleImageLimits {
     fn default() -> Self {
         Self {
             max_bytes: 512 * 1024 * 1024,
-            max_nodes: 16_000_000,
+            max_nodes: 256_000_000,
             max_sequence: 2_000_000,
             max_string_bytes: 16 * 1024 * 1024,
             max_depth: 2_048,
@@ -105,11 +112,15 @@ impl std::error::Error for ModuleImageDecodeError {}
 struct Writer {
     bytes: Vec<u8>,
     interface: bool,
+    /// Syntax nodes written, counted at exactly the sites the reader charges
+    /// its node budget, so a writer knows before publication whether the
+    /// reader would refuse the image (`ModuleImageLimits::max_nodes`).
+    nodes: u64,
 }
 
 impl Default for Writer {
     fn default() -> Self {
-        Self { bytes: Vec::new(), interface: false }
+        Self { bytes: Vec::new(), interface: false, nodes: 0 }
     }
 }
 
@@ -309,6 +320,7 @@ mod tag {
 }
 
 fn put_level(w: &mut Writer, level: &Level) {
+    w.nodes += 1;
     match level {
         Level::Var(var) => {
             w.byte(tag::LEVEL_VAR);
@@ -433,6 +445,7 @@ fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
 // every exhaustive match remains a compile-time schema tripwire.
 
 fn put_type(w: &mut Writer, ty: &Type) {
+    w.nodes += 1;
     match ty {
         Type::Nat => w.byte(0),
         Type::Pi { dom_level, cod_level, dom, cod } => {
@@ -510,6 +523,7 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
 }
 
 fn put_term(w: &mut Writer, term: &Term) {
+    w.nodes += 1;
     match term {
         Term::Var(var) => { w.byte(0); w.u32(var.0); }
         Term::TmNat => w.byte(1),
@@ -765,6 +779,7 @@ fn get_branches(r: &mut Reader<'_>) -> Result<Branches, ModuleImageDecodeError> 
 }
 
 fn put_binding(w: &mut Writer, binding: &GlobalBinding) {
+    w.nodes += 1;
     match binding {
         GlobalBinding::Ctx => w.byte(tag::BINDING_CTX),
         GlobalBinding::Ty { ctx, layer, level } => {
@@ -826,6 +841,7 @@ fn get_fixity(r: &mut Reader<'_>) -> Result<OpFixity, ModuleImageDecodeError> {
 }
 
 fn put_ty(w: &mut Writer, ty: &Ty) {
+    w.nodes += 1;
     put_span(w, ty.span);
     match &ty.kind {
         TyKind::Nat => w.byte(0),
@@ -874,6 +890,7 @@ fn get_ty(r: &mut Reader<'_>) -> Result<Ty, ModuleImageDecodeError> {
 }
 
 fn put_pat(w: &mut Writer, pat: &Pat) {
+    w.nodes += 1;
     match pat {
         Pat::Var { name, span } => { w.byte(0); w.string(name); put_span(w, *span); }
         Pat::Ctor { name, args, span } => {
@@ -942,6 +959,7 @@ fn get_match_form(r: &mut Reader<'_>) -> Result<MatchForm, ModuleImageDecodeErro
 }
 
 fn put_expr(w: &mut Writer, expr: &Expr) {
+    w.nodes += 1;
     put_span(w, expr.span);
     match &expr.kind {
         ExprKind::Var(name) => { w.byte(0); w.string(name); }
@@ -1196,6 +1214,7 @@ fn get_name_kind(r: &mut Reader<'_>) -> Result<NameKind, ModuleImageDecodeError>
 }
 
 fn put_skel(w: &mut Writer, skel: &Skel) {
+    w.nodes += 1;
     w.vec(&skel.params, |w, binder| {
         w.option(binder.name.as_ref(), |w, name| w.string(name));
         w.bool(binder.implicit); w.bool(binder.is_type);
@@ -1316,6 +1335,7 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
 }
 
 fn put_inductive(w: &mut Writer, info: &Inductive) {
+    w.nodes += 1;
     w.string(&info.name); put_scope(w, &info.scope); w.u32(info.tag);
     w.vec(&info.params, |w, name| w.string(name));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
@@ -1757,13 +1777,20 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
 }
 
 pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {
+    encode_delta_counted(delta).0
+}
+
+/// The image bytes and the syntax-node count the reader will charge for
+/// them — the number a publisher compares against `max_nodes` before writing
+/// an image the reader would only decode up to the budget and refuse.
+pub(crate) fn encode_delta_counted(delta: &ModuleDelta) -> (Vec<u8>, u64) {
     let mut w = Writer::default();
     encode_delta_into(&mut w, delta, MAGIC);
-    w.bytes
+    (w.bytes, w.nodes)
 }
 
 pub(crate) fn encode_delta_interface(delta: &ModuleDelta) -> Vec<u8> {
-    let mut w = Writer { bytes: Vec::new(), interface: true };
+    let mut w = Writer { bytes: Vec::new(), interface: true, nodes: 0 };
     encode_delta_into(&mut w, delta, INTERFACE_MAGIC);
     w.bytes
 }

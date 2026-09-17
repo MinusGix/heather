@@ -68,6 +68,14 @@ impl ModuleDelta {
         crate::module_image::encode_delta(self)
     }
 
+    /// [`Self::to_image_bytes`] together with the syntax-node count the
+    /// reader charges against [`crate::ModuleImageLimits::max_nodes`] when
+    /// decoding it. A publisher checks the count first: an image past the
+    /// budget is decoded up to the budget and refused on every later run.
+    pub fn to_image(&self) -> (Vec<u8>, u64) {
+        crate::module_image::encode_delta_counted(self)
+    }
+
     /// Deterministic downstream-observable projection used for module
     /// interface identity. Unlike the replay image, this canonicalizes source
     /// spans and opaque proof bodies while retaining transparent definitions

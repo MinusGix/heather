@@ -86,3 +86,5 @@ rules: seconds within one environment, counts across; a diary, not a gate.
     the elaborator.
   - **Width 8 buys 1.5× on the showcase and 1.7× on omega** (36.7 vs 53.8 s;
     5.8 vs 9.7 s) at 2.8× the memory (4.9 GB vs 1.7 GB).
+- 2026-09-17: 2026-09-17: the merkle-walk surprise from the first snapshot has an owner: [[merkle-walk-cold-share]].
+- 2026-09-17: 2026-09-17: first use as a before/after instrument: the over-budget fix ([[semantic-image-over-budget-republished-every-run]], closed) was remeasured with `snapshot --only calc_parser --only omega` and read with `report`; the delta column showed warm unchanged in seconds and the phase table showed why (re-elaboration became replay). The second snapshot is on record.
