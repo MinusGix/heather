@@ -3,7 +3,7 @@ title: Check the manual Mergeable foundation and showcase
 status: closed
 labels: [stdlib,relations,algebra,setoids,testing]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-17
 ---
 
 Implement the bounded first round agreed after the client-first design:
@@ -60,3 +60,4 @@ this bounded round. Their existing owners retain those deliverables.
   document links, tracker lint, and `git diff --check` pass. This bounded scope
   is complete; the broader owners listed above retain their remaining work.
 - 2026-09-04: **[[iff-in-type-valued-body]]** now owns the parenthesized connective parsing gap; the completed round retains its checked Iff workaround.
+- 2026-09-17: [[iff-in-type-valued-body]] closed the parenthesized-connective row: `std/list_setoid` now writes `(a: A) → (Mem(a, xs) ↔ Mem(a, ys))` and the round doc's gap table records it. The round's own Iff workaround is gone; nothing else in the round moved.

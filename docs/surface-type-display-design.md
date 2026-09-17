@@ -148,6 +148,24 @@ and parameters with no exact field witness retain the honest `<…>` fallback.
 Thus ordinary context entries now say `List<A>`, while `Phantom<A>` still says
 `Phantom<…>` ([[display-inductive-type-arguments]]).
 
+**That strengthening has to count the walk's own binders**, and for a year it
+counted none: the recovery was handed the `Cx` the walk started from, so a
+declaration printed *under* a `Π` was strengthened against a context short by
+the binder, the binder's variable addressed nothing, and the kernel aborted the
+process on the very invariant the paragraph above calls out — the display path
+panicking, which this design says is worse than any message
+([[pi-codomain-record-mismatch-panics-kernel]]). The count is **not** the
+walk's `d`: `d` is the node/depth *budget* and is incremented on every descent,
+binder or not. It is `names.len() − cx.names.len()`, since `names` gains one
+entry per binder the walk descends under and `cx.names` is parallel to
+`cx.gamma.entries`. The recovered arguments are strengthened past those binders
+as well as the Σ spine's, which puts them back in `cx` — where the re-lowering
+check already scopes them — and are shifted forward again before they are
+handed to a walk that is still standing under them. An argument that genuinely
+mentions one of those binders does not strengthen and keeps the honest `<…>`;
+one that does not is now recovered where before it could only crash or fall
+back.
+
 ## 5. Recovering a global's name
 
 `GlobalBinding` carries no name (`crates/kernel/src/term.rs`); the elaborator's

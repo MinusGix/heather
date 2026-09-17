@@ -272,7 +272,7 @@ fn TwiceLeTwice(n, m: Nat) → Type { twice(n) <= twice(m) }
 fn TwiceLeOdd(n, m: Nat) → Type { twice(n) <= Succ(twice(m)) }
 
 theorem twice_le_twice_iff_curried(n: Nat): (m: Nat) →
-    Iff<TwiceLeTwice(n, m), Le(n, m)>
+    (TwiceLeTwice(n, m) ↔ Le(n, m))
 {
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m),
@@ -291,7 +291,7 @@ theorem twice_le_twice_iff(n, m: Nat):
 }
 
 theorem twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
-    Iff<TwiceLeOdd(n, m), Le(n, m)>
+    (TwiceLeOdd(n, m) ↔ Le(n, m))
 {
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m),
@@ -313,7 +313,7 @@ fn TwiceLtTwice(n, m: Nat) → Type { twice(n) < twice(m) }
 fn TwiceLtOdd(n, m: Nat) → Type { twice(n) < Succ(twice(m)) }
 
 theorem twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
-    Iff<TwiceLtTwice(n, m), Lt(n, m)>
+    (TwiceLtTwice(n, m) ↔ Lt(n, m))
 {
     match n {
         Zero => λ m => match m {
@@ -334,7 +334,7 @@ theorem twice_lt_twice_iff(n, m: Nat):
 }
 
 theorem twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
-    Iff<TwiceLtOdd(n, m), Le(n, m)>
+    (TwiceLtOdd(n, m) ↔ Le(n, m))
 {
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m), mpr := λ h => trivial),

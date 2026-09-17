@@ -213,6 +213,15 @@ struct Parser {
     /// `expr()` and takes the `↔` for itself, so `P -> Q ↔ Q -> P` parses as
     /// `P -> (Q ↔ (Q -> P))` — right-associativity of the arrow beating a
     /// rung that is supposed to be looser than it.
+    ///
+    /// Same shape as `no_eq` in the other half too, and that half was missing:
+    /// the restriction is **lifted inside any bracket**, so a parenthesis is
+    /// the escape hatch — `(a: A) -> (P(a) ↔ Q(a))`, `P -> Or<Q ↔ R, S>`. It
+    /// has to be, because the restriction exists only to stop the *codomain's
+    /// own spine* from eating the outer `↔`, and a `↔` inside a delimiter is
+    /// never that one. Lifted in exactly two places — [`Parser::expr`], for
+    /// every expression-side bracket, and [`Parser::ty_atom`], for the
+    /// type-side ones (issues/iff-in-type-valued-body.md).
     no_iff: bool,
     /// The next lambda body parsed is a **motive** body, so it is a type and
     /// is parsed with [`Parser::ty`] rather than [`Parser::expr`].
@@ -2327,7 +2336,7 @@ impl Parser {
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
-            return Ok(curry(binders, cod, false, span));
+            return self.iff_after_fn_type(curry(binders, cod, false, span));
         }
         // `{x: A} -> B` — an *implicit* binder
         // (docs/implicit-binders-design.md §8). The same three-token
@@ -2345,7 +2354,7 @@ impl Parser {
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
-            return Ok(curry(binders, cod, true, span));
+            return self.iff_after_fn_type(curry(binders, cod, true, span));
         }
         let lhs = self.ty_atom()?;
         if matches!(self.peek(), TokKind::Arrow) {
@@ -2441,6 +2450,23 @@ impl Parser {
     }
 
     fn ty_atom(&mut self) -> R<Ty> {
+        // Every rule below but the two expression fallthroughs opens a
+        // bracket, and a bracket lifts the codomain's `↔` restriction
+        // ([`Self::expr`]). Lifting it once here covers the type-side
+        // brackets — the parenthesised group, the type arguments of `D<A, B>`,
+        // `[T; n]`, `Squash`, `Code` — and the fallthroughs put it back, since
+        // those *are* the codomain's spine (issues/iff-in-type-valued-body.md).
+        let restricted = std::mem::replace(&mut self.no_iff, false);
+        let out = self.ty_atom_rules(restricted);
+        self.no_iff = restricted;
+        out
+    }
+
+    /// [`Self::ty_atom`]'s rules, with the codomain restriction lifted for the
+    /// bracketed ones. `restricted` is restored around the two fallthroughs to
+    /// [`Self::expr`], which continue the codomain rather than descending into
+    /// a bracket.
+    fn ty_atom_rules(&mut self, restricted: bool) -> R<Ty> {
         if matches!(self.peek(), TokKind::NormBar) {
             let start = self.bump().span;
             let inner = self.ty()?;
@@ -2568,7 +2594,7 @@ impl Parser {
             // pretending to know which reading was intended.
             if !ok || !matches!(self.peek(), TokKind::Gt) {
                 self.spec_note_failure(save, SITE_TY_NAMED);
-                let lhs = self.expr()?;
+                let lhs = self.with_iff(restricted, |p| p.expr())?;
                 return Ok(expr_as_ty(&lhs));
             }
             let end = self.expect(&TokKind::Gt, "`>` to close the type arguments")?;
@@ -2590,7 +2616,7 @@ impl Parser {
                 return Ok(Ty { kind: TyKind::Named { name, args }, span: start.join(end) });
             }
         }
-        let lhs = self.expr()?;
+        let lhs = self.with_iff(restricted, |p| p.expr())?;
         Ok(expr_as_ty(&lhs))
     }
 
@@ -2618,6 +2644,23 @@ impl Parser {
     /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
     /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
+        // The codomain restriction is a rule about **this rung**, not about
+        // everything below it: once the parse descends into a bracket, a `↔`
+        // there cannot be the enclosing arrow's, so the restriction has
+        // nothing left to protect. Lift it for the operands and put it back
+        // before the `↔` decision — the same bracket escape hatch
+        // [`Parser::no_eq`] documents, which `no_iff` claimed to mirror and
+        // did not (issues/iff-in-type-valued-body.md).
+        let restricted = std::mem::replace(&mut self.no_iff, false);
+        let out = self.expr_rung(restricted);
+        self.no_iff = restricted;
+        out
+    }
+
+    /// [`Self::expr`]'s rung, with the codomain restriction already lifted for
+    /// the operands. `restricted` is the value it was lifted from — the one
+    /// bit the `↔` decision itself still needs.
+    fn expr_rung(&mut self, restricted: bool) -> R<Expr> {
         // The turnstile is the loosest expression form and extends rightward
         // exactly like a lambda body. It is recognized before parsing its
         // identifier-headed left side; without the complete binder-prefix
@@ -2635,14 +2678,27 @@ impl Parser {
             return self.apply_expr();
         }
         let lhs = self.expr_no_iff()?;
-        if self.no_iff {
+        if restricted {
             return Ok(lhs);
         }
-        // `↔` is the loosest rung of all — looser than `->`, so `P -> Q ↔ R`
-        // is `(P -> Q) ↔ R` — and **non-associative**, for the reason the
-        // comparison rung is: `P ↔ Q ↔ R` has two readings and no reason to
-        // prefer either, and a bi-implication between bi-implications is not
-        // what anyone writing it meant.
+        self.iff_rung(lhs)
+    }
+
+    /// The `↔` rung, given its left operand.
+    ///
+    /// `↔` is the loosest rung of all — looser than `->`, so `P -> Q ↔ R` is
+    /// `(P -> Q) ↔ R` — and **non-associative**, for the reason the comparison
+    /// rung is: `P ↔ Q ↔ R` has two readings and no reason to prefer either,
+    /// and a bi-implication between bi-implications is not what anyone writing
+    /// it meant.
+    ///
+    /// Split out of [`Self::expr_rung`] because it has a second caller:
+    /// [`Self::ty`]'s binder-headed paths build their Π and return it, so
+    /// without this they sit *below* the loosest rung and
+    /// `(a: A) -> P(a) ↔ R` is a parse error rather than the reading
+    /// `P -> Q ↔ R` already gets
+    /// (issues/binder-headed-arrow-as-connective-operand.md).
+    fn iff_rung(&mut self, lhs: Expr) -> R<Expr> {
         if !matches!(self.peek(), TokKind::Iff) {
             return Ok(lhs);
         }
@@ -2656,6 +2712,28 @@ impl Parser {
             );
         }
         Ok(connective("Iff", lhs, rhs, span))
+    }
+
+    /// Offer a binder-headed function type to the `↔` rung, which is looser
+    /// than the arrow it was just built from.
+    ///
+    /// The Π is complete — binders *and* codomain — before the `↔` is applied,
+    /// so the binder's scope is unchanged and the unparenthesised
+    /// `(a: A) -> P(a) ↔ Q(a)` still leaves the right-hand `a` unbound. That
+    /// is the reading [`issues/iff-in-type-valued-body.md`] asked be left
+    /// alone; what changes here is only that it is a *reading* rather than a
+    /// parse error.
+    ///
+    /// Declines while a codomain is being read, exactly as [`Self::expr_rung`]
+    /// does: there the outer arrow's own `↔` is still to come.
+    fn iff_after_fn_type(&mut self, pi: Ty) -> R<Ty> {
+        if self.no_iff || !matches!(self.peek(), TokKind::Iff) {
+            return Ok(pi);
+        }
+        let span = pi.span;
+        let lhs = Expr { kind: ExprKind::TyLit(Box::new(pi)), span };
+        let out = self.iff_rung(lhs)?;
+        Ok(expr_as_ty(&out))
     }
 
     /// Does the cursor begin the contextual `apply <callee>;` form?
@@ -3206,7 +3284,14 @@ impl Parser {
     /// Run `f` with `P ↔ Q` suppressed. The codomain rule; see
     /// [`Parser::no_iff`].
     fn cod<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
-        let saved = std::mem::replace(&mut self.no_iff, true);
+        self.with_iff(true, f)
+    }
+
+    /// Run `f` with the `↔` restriction set to `no` (or restored). Mirrors
+    /// [`Parser::with_eq`]; [`Self::cod`] is the setter and
+    /// [`Self::expr`]/[`Self::ty_atom`] are the bracket lifts.
+    fn with_iff<T>(&mut self, no: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.no_iff, no);
         let r = f(self);
         self.no_iff = saved;
         r
@@ -5149,6 +5234,58 @@ mod tests {
         // `¬` is an ordinary call: `Not` takes a `Type` and has no type
         // parameters to fill.
         assert_eq!(as_call(&body("¬p")).0, "Not");
+    }
+
+    /// A bracket lifts the codomain's `↔` restriction, so the parentheses that
+    /// group a connective inside a codomain are readable rather than a parse
+    /// error (issues/iff-in-type-valued-body.md). The spelling assertion is
+    /// here; that the two spellings mean one type is
+    /// `crates/elab/tests/logic.rs`.
+    #[test]
+    fn a_bracket_lifts_the_codomain_iff_restriction() {
+        // Bracketed: the `↔` is the codomain, so the type is a `Fn` whose
+        // codomain is the `Iff`.
+        let ExprKind::TyLit(ty) = body("P -> (Q ↔ R)") else { panic!("expected a type") };
+        let TyKind::Fn { cod, .. } = &ty.kind else { panic!("expected a Pi, got {ty:?}") };
+        assert!(matches!(&cod.kind, TyKind::Named { name, args } if name == "Iff" && args.len() == 2));
+        // Bare: the `↔` is the loosest rung, so it is the root and the arrow
+        // is its left operand. The restriction still does its job.
+        let ExprKind::TyApp { head, args } = body("P -> Q ↔ R") else {
+            panic!("expected the `↔` at the root")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Iff"));
+        assert!(matches!(&args[0].kind, TyKind::Fn { .. }));
+        // Every other bracket, same rule: a type-argument list, a call's
+        // arguments, and a group whose own top level is an arrow (which is
+        // read by `ty_atom`'s parenthesis rule rather than `atom`'s).
+        for src in ["P -> Or<Q ↔ R, P>", "P -> ¬(Q ↔ R)", "P -> (Q -> R ↔ P)"] {
+            let ExprKind::TyLit(ty) = body(src) else { panic!("{src}: expected a type") };
+            assert!(matches!(&ty.kind, TyKind::Fn { .. }), "{src}: {ty:?}");
+        }
+    }
+
+    /// A binder-headed function type is offered to the `↔` rung too, which
+    /// `Parser::ty`'s early `return` used to skip
+    /// (issues/binder-headed-arrow-as-connective-operand.md). The Π is
+    /// complete before the `↔` applies, so it is the *whole* arrow that
+    /// becomes the left operand — the binder does not reach the right one.
+    #[test]
+    fn a_binder_headed_function_type_reaches_the_iff_rung() {
+        let ExprKind::TyLit(ty) = body("(a: A) -> P(a) ↔ R") else {
+            panic!("expected a type")
+        };
+        let TyKind::Named { name, args } = &ty.kind else {
+            panic!("expected the `↔` at the root, got {ty:?}")
+        };
+        assert_eq!(name, "Iff");
+        assert!(matches!(&args[0].kind, TyKind::Fn { binder, .. } if binder.as_deref() == Some("a")));
+        // A codomain still declines, so the `↔` after a binder-headed
+        // codomain belongs to the outer arrow: `(P -> (a: A) -> Q(a)) ↔ R`.
+        let ExprKind::TyApp { head, args } = body("P -> (a: A) -> Q(a) ↔ R") else {
+            panic!("expected the `↔` at the root")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Iff"));
+        assert!(matches!(&args[0].kind, TyKind::Fn { binder, .. } if binder.is_none()));
     }
 
     #[test]

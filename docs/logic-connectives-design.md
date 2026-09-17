@@ -128,6 +128,32 @@ Three of these are worth their reasons:
   `Parser::cod` at the three codomain sites, mirroring `no_eq` — is what makes
   the loosest rung actually loosest.
 
+  It mirrors `no_eq` in the *other* half too, and until 2026-09-17 it did not:
+  **a bracket lifts the restriction**, so a parenthesis is the escape hatch —
+  `(a: A) -> (P(a) ↔ Q(a))` is the dependent function returning an `Iff`, and
+  `P -> Or<Q ↔ R, S>` reads its type arguments. It has to work that way,
+  because the restriction exists only to stop the codomain's *own spine* from
+  eating the outer `↔`, and a `↔` inside a delimiter is never that one.
+  `Parser::expr` lifts it for every expression-side bracket (each one parses
+  its contents through `expr`) and `Parser::ty_atom` for the type-side ones,
+  restoring it around the two fallthroughs that *are* the spine
+  (`issues/iff-in-type-valued-body.md`). The `↔` that is *not* bracketed is
+  unaffected: `P -> Q ↔ R` is still `(P -> Q) ↔ R`.
+
+  The other half of being the loosest rung is being *reachable* from every
+  type, and one spelling was not: `Parser::ty`'s **binder-headed** paths —
+  `(x: A) -> B` and `{x: A} -> B` — build their Π and `return` it, while every
+  other route into a type passes through `Parser::expr`, where the rung lives.
+  So `(a: A) -> P(a) ↔ R` was a parse error rather than
+  `((a: A) -> P(a)) ↔ R`. Those two paths now offer their Π to the rung
+  (`Parser::iff_after_fn_type`, declining while a codomain is read)
+  (`issues/binder-headed-arrow-as-connective-operand.md`). `∧`/`∨` never
+  showed this, because they bind *tighter* than `->` and are consumed inside
+  the codomain; only a rung looser than the arrow can be affected, and `↔` is
+  the only one. The Π is complete — binders *and* codomain — before the `↔`
+  applies, so the binder's scope does not move: the unparenthesised
+  `(a: A) -> P(a) ↔ Q(a)` still leaves the right-hand `a` unbound.
+
 `∧` and `∨` are **right-associative** (the fixity `++` chose, and for the same
 proof-relevant reason: `And(p, And(q, r))` is the nesting the record builds
 and projects). `↔` is **non-associative**, like the comparison rung, with its

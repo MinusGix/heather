@@ -102,12 +102,50 @@ export function targetIncomplete(run) {
   return Boolean(run.signal) || run.code === null || run.result.resultLines !== 1;
 }
 
+// Kernel-gate width for a suite child. The default is eight
+// (`HEATHER_KERNEL_WORKERS`, crates/elab/src/pool.rs), which is right for one
+// interactive `heather check` on an idle box and wrong underneath a scheduler
+// that is already running children in parallel: the job bound below budgets
+// TWO CPUs per child ("libtest gets two threads"), and that arithmetic is only
+// true if each test thread is itself serial. At the default width a child is
+// 2 x 8 = 16 runnable threads, so a 7-way bound oversubscribes a 16-core box
+// about 7x — and the CPU rail counts every one of those threads.
+//
+// Measured on `heather-cli (crates/cli/src/main.rs)`, the target this was
+// found on (2026-09-17, 16 cores, idle box, the runner's own invocation):
+//
+//     test threads x workers     wall      CPU (user+sys)
+//     2 x 8 (the default)        43.7 s    274.5 s
+//     1 x 8                      54.5 s    191.5 s
+//     2 x 1                      65.4 s    123.0 s
+//     1 x 1                     110.0 s    109.4 s
+//
+// The work is ~109 CPU-s; the other 165 s at the default width is contention.
+// That inflation, not the tests, is what took the target past `ulimit -t 300`
+// and made a full run unable to go green at all
+// (issues/native-summary-test-cpu-margin.md).
+//
+// Width one puts the parallelism where it is bounded — at the runner, which
+// counts it — instead of multiplying it underneath. No coverage moves: every
+// pool test names its own width (`with_workers`, crates/elab/tests/kernel_pool.rs)
+// and the CLI's width tests spawn subprocesses with the variable removed or
+// set, deliberately (crates/cli/tests/kernel_workers.rs). An explicitly set
+// `HEATHER_KERNEL_WORKERS` still wins, so isolating one item at a chosen width
+// works as documented.
+const KERNEL_WORKERS = process.env.HEATHER_KERNEL_WORKERS ?? "1";
+
 function limitedCommand(command, args, env = {}) {
   return spawn("bash", ["--noprofile", "--norc", "-c",
     `ulimit -v ${LIMIT_KIB}; ulimit -t 300; exec \"$@\"`,
     "heather-test-target", command, ...args], {
     cwd: process.cwd(),
-    env: { ...process.env, RUST_MIN_STACK: "8388608", RUST_TEST_THREADS: "2", ...env },
+    env: {
+      ...process.env,
+      RUST_MIN_STACK: "8388608",
+      RUST_TEST_THREADS: "2",
+      HEATHER_KERNEL_WORKERS: KERNEL_WORKERS,
+      ...env,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 }

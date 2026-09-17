@@ -194,3 +194,50 @@ theorem compare(x: Entry): (y: Entry) → x.second = y.first { ?comparison }
     );
     assert!(statement.contains(".first"), "{statement}");
 }
+
+/// A parameterized inductive **under a binder**. The walk recovers a
+/// declaration's type arguments by strengthening the field types out of its
+/// lowering back to the context it holds; a binder the walk has descended
+/// under is not in that context, so the variable addressed nothing and the
+/// kernel aborted the process — `local variable N escapes the substitution's
+/// target entries` — instead of the diagnostic being printed
+/// (issues/pi-codomain-record-mismatch-panics-kernel.md).
+///
+/// The axes are forced, and each one alone hides it
+/// (`docs/testing-generated-terms.md`): the carrier must be **open**, or there
+/// is no `Π` whose codomain mentions its binder; and the mismatch must be a
+/// **refusal**, because the crash was in rendering the refusal and a body that
+/// checks never renders one.
+#[test]
+fn a_parameterized_inductive_under_a_binder_renders_instead_of_aborting() {
+    const BOTH: &str = "record Both<P, Q> { left: P, right: Q }\n";
+    // The argument genuinely mentions the binder, so it does not strengthen
+    // back to the context and the honest ellipsis is the answer. What matters
+    // is that there *is* an answer.
+    let msg = rendered(&format!(
+        "{BOTH}theorem dep<A>(P: A -> Type, R: Type, h: R): (a: A) -> Both<P(a), R> {{ h }}"
+    ));
+    assert!(
+        msg.contains("this has type `R`, but `(x: A) -> Both<…>` is expected here"),
+        "{msg}"
+    );
+    // …and where the arguments do *not* mention the binder they are recovered
+    // and spelled, which the old code could not do either: it strengthened
+    // against a context short by the binder, so an argument mentioning any
+    // outer variable fell off the end of the substitution too.
+    let msg = rendered(&format!(
+        "{BOTH}theorem indep<A>(P: Type, R: Type, h: Nat): (a: A) -> Both<P, R> {{ h }}"
+    ));
+    assert!(
+        msg.contains("this has type `Nat`, but `A -> Both<P, R>` is expected here"),
+        "{msg}"
+    );
+    // The control at zero binders, which always worked and must not move.
+    let msg = rendered(&format!(
+        "{BOTH}theorem flat(P: Type, R: Type, h: Nat): Both<P, R> {{ h }}"
+    ));
+    assert!(
+        msg.contains("this has type `Nat`, but `Both<P, R>` is expected here"),
+        "{msg}"
+    );
+}

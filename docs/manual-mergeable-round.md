@@ -69,12 +69,15 @@ implementing a maximum library was not needed to test relation specialization.
 | `A.respects2` like every other law | `Respects2` has three type parameters; carrier-directed projection only supports a one-parameter owner. Project `A::Mergeable(same,merge).respects2` instead. | Keep explicit dictionary access; broader projection ergonomics can be considered with relation-indexed algebra. |
 | `≈` calculation with contextual rewriting | Explicit `same(...)`, `A.rel_trans`, and `laws.respects2` | [Auto-lifting](../issues/setoid-auto-lifting.md) |
 | Introduce indices inside the constraint | Explicit same/merge parameters still work | [Compact binder introduction](../issues/constraint-index-binder-introduction.md) |
-| `(a:A) → Mem(a,xs) ↔ Mem(a,ys)` in a Type-valued body | Use `(a:A) → Iff<Mem(a,xs), Mem(a,ys)>`; the unparenthesized spelling leaves the right occurrence outside the binder, and parenthesized infix Iff is refused in that expression position | [Parser follow-up](../issues/iff-in-type-valued-body.md); explicit Iff is sufficient for this round. |
+| `(a:A) → Mem(a,xs) ↔ Mem(a,ys)` in a Type-valued body | **Closed 2026-09-17.** `(a:A) → (Mem(a,xs) ↔ Mem(a,ys))` now parses and is what `std/list_setoid` writes; the *unparenthesized* spelling still leaves the right occurrence outside the binder, which is the `↔`-is-looser-than-`→` precedence and is not a gap. | [The parser fix](../issues/iff-in-type-valued-body.md): a bracket lifts the codomain's `↔` restriction, so the parentheses group as written. |
 | Partially apply a helper's explicit argument list to fill an Iff direction | Use `λ h => helper(..., h)`; partial application of those declared parameters is refused | Existing returned-function style is another possible library spelling. |
 | Infer the carrier of numeral-only list arguments | Supply `<Nat>` on both the relation and the theorem used on `[0]` where inference is deferred | Explicit specialization is the current fallback. |
 
-No kernel, parser, elaborator, or solver change was needed. These are findings
-about the source-level gap, not claims that the idealized syntax now checks.
+No kernel, parser, elaborator, or solver change was needed *by this round*.
+These are findings about the source-level gap, not claims that the idealized
+syntax now checks — except where a row says so: the parenthesized `↔` row was
+closed by a later parser fix and `std/list_setoid` now writes the idealized
+spelling.
 
 ## Evidence and boundaries
 
