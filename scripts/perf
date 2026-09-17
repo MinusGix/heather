@@ -76,7 +76,11 @@ CORPUS = {
         ("lib/ir_v1.hthr", ["lib/std"]),
         ("lib/function_ir.hthr", ["lib/std"]),
         ("lib/std/arch/x86_64/model.hthr", ["lib/std"]),
-        ("lib/certgen_code.hthr", ["lib/std"]),
+        # lib/certgen_code.hthr is not in the corpus: it has no imports and
+        # elaborates only after a test-only support prelude and ir_v1 in
+        # process (crates/elab/tests/certgen_cert.rs), so the CLI refuses it
+        # with 83 errors on any machine (2026-09-17). Its cost is the
+        # certgen_* rows of the suite section.
     ],
 }
 
