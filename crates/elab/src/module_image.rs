@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x06";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x07";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x06";
 
 /// Hard limits applied before any decoded collection or string allocation.
@@ -1847,6 +1847,37 @@ fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
     for hash in delta.dependencies.ordered_interface_hashes() { w.bytes.extend_from_slice(hash); }
     w.len(delta.dependency_psi.bindings.len());
     w.vec(&delta.extension, put_binding); put_scope(w, &delta.scope); w.vec(&delta.events, put_event);
+    // The declaration slices (`docs/declaration-slice-replay-design.md` §3):
+    // the semantic image only, never the interface projection, since a
+    // slice's text is not something a dependent observes.
+    if !w.interface {
+        w.vec(&delta.items, put_slice);
+        w.option(delta.scope_at_entry.as_ref(), put_scope);
+    }
+}
+
+fn put_slice(w: &mut Writer, slice: &crate::module_delta::ItemSlice) {
+    w.string(&slice.source);
+    w.usize(slice.start);
+    for range in [&slice.psi, &slice.events, &slice.warnings] {
+        w.usize(range.start);
+        w.usize(range.end);
+    }
+}
+
+fn get_slice(r: &mut Reader<'_>) -> Result<crate::module_delta::ItemSlice, ModuleImageDecodeError> {
+    let source = r.string()?;
+    let start = r.usize()?;
+    let mut ranges = [0..0, 0..0, 0..0];
+    for range in &mut ranges {
+        let (a, b) = (r.usize()?, r.usize()?);
+        if a > b {
+            return Err(ModuleImageDecodeError::InvalidStructure("a slice range is reversed"));
+        }
+        *range = a..b;
+    }
+    let [psi, events, warnings] = ranges;
+    Ok(crate::module_delta::ItemSlice { source, start, psi, events, warnings })
 }
 
 pub(crate) fn decode_delta(
@@ -1871,16 +1902,31 @@ pub(crate) fn decode_delta(
     let extension = r.vec(get_binding)?;
     let scope = get_scope(&mut r)?;
     let events = r.vec(get_event)?;
+    let items = r.vec(get_slice)?;
+    let scope_at_entry = r.option(get_scope)?;
     r.finish()?;
     if scope.module != module {
         return Err(ModuleImageDecodeError::InvalidStructure("module and scope names disagree"));
     }
+    // Slices partition the extension and the events in order; the warning
+    // ranges are checked by whoever decodes the warnings beside this image.
+    let (mut psi_at, mut events_at) = (0, 0);
+    for slice in &items {
+        if slice.psi.start != psi_at || slice.events.start != events_at {
+            return Err(ModuleImageDecodeError::InvalidStructure("slices do not partition the delta"));
+        }
+        psi_at = slice.psi.end;
+        events_at = slice.events.end;
+    }
+    if !items.is_empty() && (psi_at != extension.len() || events_at != events.len()) {
+        return Err(ModuleImageDecodeError::InvalidStructure("slices do not cover the delta"));
+    }
     let delta = ModuleDelta {
         module, dependencies: ModuleDependencyIdentity::new(hashes), dependency_psi,
         extension, scope, events,
-        items: Vec::new(),
+        items,
         warnings: Vec::new(),
-        scope_at_entry: None,
+        scope_at_entry,
     };
     validate_delta(&delta)?;
     Ok(delta)

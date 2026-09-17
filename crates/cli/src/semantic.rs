@@ -23,6 +23,9 @@ pub enum CacheNoticeKind {
     /// [`ImageFreshness::AcceptStale`]. Kernel-rechecked like any replay; the
     /// notice exists because the current frontend was not exercised on it.
     StaleReplayed,
+    /// The module's previous image (for slice replay after an edit) could
+    /// not be loaded; the module is elaborated in full.
+    PreviousUnusable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +51,11 @@ impl fmt::Display for CacheNotice {
             CacheNoticeKind::PublishFailed => {
                 write!(f, "cache: could not store module `{}` ({})", self.module, self.error)
             }
+            CacheNoticeKind::PreviousUnusable => write!(
+                f,
+                "cache: the previous image of module `{}` is unusable ({}) — elaborating every declaration",
+                self.module, self.error
+            ),
             CacheNoticeKind::StaleReplayed => write!(
                 f,
                 "cache: module `{}` replayed from an image of another build ({}), kernel-rechecked or vouched for by the verdict store; a run without stale images re-elaborates it",
@@ -61,6 +69,10 @@ pub struct ModuleOutcome {
     pub errors: Vec<ElabError>,
     pub warnings: Vec<Warning>,
     pub replayed: bool,
+    /// Declarations reproduced from the module's previous image after an
+    /// edit (`docs/declaration-slice-replay-design.md`); zero when the
+    /// module replayed whole or was elaborated from scratch.
+    pub replayed_items: usize,
     pub notices: Vec<CacheNotice>,
 }
 
@@ -72,6 +84,7 @@ pub struct SemanticSession {
     freshness: ImageFreshness,
     hits: usize,
     stale_hits: usize,
+    replayed_items: usize,
 }
 
 impl SemanticSession {
@@ -84,6 +97,7 @@ impl SemanticSession {
             freshness: ImageFreshness::Exact,
             hits: 0,
             stale_hits: 0,
+            replayed_items: 0,
         }
     }
 
@@ -108,6 +122,12 @@ impl SemanticSession {
         self.stale_hits
     }
 
+    /// Declarations reproduced from previous images after edits, summed
+    /// over the session's modules.
+    pub fn replayed_items(&self) -> usize {
+        self.replayed_items
+    }
+
     /// Check or replay the next module. After a source error, later modules
     /// remain checkable for diagnostic recovery, but no longer read or write
     /// images because the accepted prefix has been broken.
@@ -127,6 +147,7 @@ impl SemanticSession {
                 errors: elab.check_module_source(&module.name, &module.src),
                 warnings: elab.take_warnings(),
                 replayed: false,
+                replayed_items: 0,
                 notices: Vec::new(),
             };
         }
@@ -170,6 +191,7 @@ impl SemanticSession {
                         errors: Vec::new(),
                         warnings: loaded.warnings,
                         replayed: true,
+                        replayed_items: 0,
                         notices,
                     };
                 }
@@ -187,15 +209,44 @@ impl SemanticSession {
             }),
         }
 
-        let delta = match elab.check_module_delta(&module.name, &module.src, dependencies) {
-            Ok(delta) => {
+        // A source miss with a previous image of this module over the same
+        // dependencies: the unchanged declarations are reproduced from its
+        // slices and the rest elaborated
+        // (`docs/declaration-slice-replay-design.md` §4). An unusable
+        // previous image is reported and the module elaborated as usual.
+        // Its decode is a decode: the previous image is the module's own,
+        // often the largest in the closure, and the dashboard reads the
+        // column (`issues/semantic-replay-phase-attribution.md`).
+        let previous = match stats::timed(stats::Timer::ImageDecode, || {
+            images.load_previous(&module.name, &dependencies, elab.psi().clone(), self.freshness)
+        }) {
+            Ok(previous) => previous,
+            Err(error) => {
+                notices.push(CacheNotice {
+                    module: module.name.clone(),
+                    kind: CacheNoticeKind::PreviousUnusable,
+                    error: error.to_string(),
+                });
+                None
+            }
+        };
+        let checked = match &previous {
+            Some(previous) => elab
+                .check_module_delta_from(&module.name, &module.src, dependencies, &previous.delta)
+                .map(|(delta, report)| (delta, report.replayed)),
+            None => elab
+                .check_module_delta(&module.name, &module.src, dependencies)
+                .map(|delta| (delta, 0)),
+        };
+        let (delta, replayed_items) = match checked {
+            Ok(checked) => {
                 // Drained, not printed: where an `omega` invocation's time went
                 // is the dump's `omega_*` columns now, attributed by
                 // declaration rather than by invocation
                 // (`docs/instrumentation-design.md` §4). The per-invocation
                 // reports stay available through `take_omega_reports`.
                 elab.take_omega_reports();
-                delta
+                checked
             }
             Err(errors) => {
                 self.images_usable = false;
@@ -203,10 +254,12 @@ impl SemanticSession {
                     errors,
                     warnings: elab.take_warnings(),
                     replayed: false,
+                    replayed_items: 0,
                     notices,
                 };
             }
         };
+        self.replayed_items += replayed_items;
         self.interfaces.push(ModuleImageCache::interface_hash(&delta));
         let warnings = elab.take_warnings();
         if let Err(error) =
@@ -218,6 +271,6 @@ impl SemanticSession {
                 error: error.to_string(),
             });
         }
-        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, notices }
+        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, notices }
     }
 }

@@ -423,13 +423,16 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     let n = c.counts().since(&before);
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
-                         from cache, {} semantic module{} replayed",
+                         from cache, {} semantic module{} replayed, {} declaration{} replayed \
+                         after an edit",
                         color::success("ok", stdout_color),
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },
                         n.hits,
                         semantic.hits(),
                         if semantic.hits() == 1 { "" } else { "s" },
+                        semantic.replayed_items(),
+                        if semantic.replayed_items() == 1 { "" } else { "s" },
                     );
                 }
                 _ => println!("{path}: {}", color::success("ok", stdout_color)),

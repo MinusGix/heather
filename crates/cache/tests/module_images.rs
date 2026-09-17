@@ -265,3 +265,71 @@ fn an_image_past_the_node_budget_is_refused_at_publication_not_at_every_load() {
     assert!(cache.load(key, prefix, src.len(), ImageFreshness::Exact).unwrap().is_some());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The declaration slices ride in the image, the newest image of a module
+/// over a dependency world is found again whatever its source, and its
+/// warnings are attached so the slices can replay
+/// (`docs/declaration-slice-replay-design.md` §7).
+#[test]
+fn the_previous_image_of_a_module_replays_its_unchanged_declarations() {
+    let dir = temp("previous");
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = ModuleImageCache::new(dir.clone());
+    let dependencies = ModuleDependencyIdentity::default();
+    let src = "fn value() -> Nat { 0 }\nfn twice(n: Nat) -> Nat { n }\ntheorem t(): value() = 0 { refl }";
+    let mut source = Elaborator::with_prelude().unwrap();
+    let prefix = source.psi().clone();
+    let delta = source
+        .check_module_delta("sample", src, dependencies.clone())
+        .unwrap_or_else(|errs| panic!("{}", errs[0].render(src)));
+    assert_eq!(delta.items().len(), 3);
+    let key = ModuleCacheKey::for_source("sample", src, &dependencies, LintProfile::Default);
+    cache.publish(key, &delta, delta.warnings()).unwrap();
+
+    // Nothing was published for another module or another world.
+    assert!(cache.load_previous("other", &dependencies, prefix.clone(), ImageFreshness::Exact).unwrap().is_none());
+
+    // The image carries the slices, and the pointer finds it from the
+    // module name alone: an edited source has a different key.
+    let previous = cache
+        .load_previous("sample", &dependencies, prefix.clone(), ImageFreshness::Exact)
+        .unwrap()
+        .expect("the newest image of `sample`");
+    assert_eq!(previous.delta.items(), delta.items());
+    assert_eq!(previous.delta.warnings().len(), delta.warnings().len());
+
+    // An edit replays through it: only the appended declaration elaborates.
+    let edited = format!("{src}\nfn more() -> Nat {{ 1 }}");
+    let mut target = Elaborator::with_prelude().unwrap();
+    let (replayed, report) = target
+        .check_module_delta_from("sample", &edited, dependencies.clone(), &previous.delta)
+        .unwrap_or_else(|errs| panic!("{}", errs[0].render(&edited)));
+    assert_eq!((report.replayed, report.elaborated), (3, 1));
+    let mut fresh = Elaborator::with_prelude().unwrap();
+    let fresh_delta = fresh.check_module_delta("sample", &edited, dependencies.clone()).unwrap();
+    assert_eq!(replayed.to_image_bytes(), fresh_delta.to_image_bytes());
+
+    // Publishing the edited module moves the pointer to it.
+    let key2 = ModuleCacheKey::for_source("sample", &edited, &dependencies, LintProfile::Default);
+    cache.publish(key2, &replayed, replayed.warnings()).unwrap();
+    let newest = cache
+        .load_previous("sample", &dependencies, prefix.clone(), ImageFreshness::Exact)
+        .unwrap()
+        .expect("the newest image");
+    assert_eq!(newest.delta.items().len(), 4);
+
+    // A previous image another build wrote is not consulted under `Exact`
+    // and is under `AcceptStale`, like any image.
+    let stale = SemanticsIdentity::of("an earlier elaborator", "and its kernel");
+    let key3 = ModuleCacheKey::for_source("stale", src, &dependencies, LintProfile::Default);
+    let mut other = Elaborator::with_prelude().unwrap();
+    let stale_delta = other.check_module_delta("stale", src, dependencies.clone()).unwrap();
+    cache.publish_as(key3, &stale_delta, &[], stale).unwrap();
+    assert!(cache.load_previous("stale", &dependencies, prefix.clone(), ImageFreshness::Exact).unwrap().is_none());
+    let accepted = cache
+        .load_previous("stale", &dependencies, prefix, ImageFreshness::AcceptStale)
+        .unwrap()
+        .expect("accepted as stale");
+    assert_eq!(accepted.stale, Some(stale));
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -121,6 +121,29 @@ impl ModuleDelta {
         &self.items
     }
 
+    /// The ordered dependency identity this delta was elaborated over.
+    pub fn dependencies(&self) -> &ModuleDependencyIdentity {
+        &self.dependencies
+    }
+
+    /// Attach the warnings an image stored beside this delta, so its slices
+    /// can re-raise them (`docs/declaration-slice-replay-design.md` §4).
+    /// Rejected when a slice's warning range does not fit.
+    pub fn with_warnings(mut self, warnings: Vec<crate::diagnostics::Warning>) -> Result<Self, &'static str> {
+        let mut at = 0;
+        for slice in &self.items {
+            if slice.warnings.start != at || slice.warnings.end > warnings.len() {
+                return Err("slices do not partition the warnings");
+            }
+            at = slice.warnings.end;
+        }
+        if !self.items.is_empty() && at != warnings.len() {
+            return Err("slices do not cover the warnings");
+        }
+        self.warnings = warnings;
+        Ok(self)
+    }
+
     /// The module's warnings, in order.
     pub fn warnings(&self) -> &[crate::diagnostics::Warning] {
         &self.warnings

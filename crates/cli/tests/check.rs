@@ -444,3 +444,35 @@ fn deny_axioms_is_a_check_policy() {
     assert!(err.contains("axioms::indirect"), "{err}");
     assert!(!err.contains("axioms::clean"), "{err}");
 }
+
+/// After an edit, the module's unchanged declarations are reproduced from
+/// its previous image and the `(cache)` line says how many
+/// (`docs/declaration-slice-replay-design.md`).
+#[test]
+fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image() {
+    let dir = cache_dir("slice-replay");
+    let arg = dir.display().to_string();
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let edited = std::path::Path::new(fixtures).join("slice_edit.hthr");
+    let original = std::fs::read_to_string(std::path::Path::new(fixtures).join("good.hthr")).unwrap();
+    std::fs::write(&edited, &original).unwrap();
+
+    let cold = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
+    let cold_out = String::from_utf8_lossy(&cold.stdout).to_string();
+    assert!(cold_out.contains("0 declarations replayed after an edit"), "{cold_out}");
+
+    std::fs::write(&edited, format!("{original}\nfn one_more() -> Nat {{ double(1) }}\n")).unwrap();
+    let edit = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    assert_eq!(edit.status.code(), Some(0), "{}", String::from_utf8_lossy(&edit.stderr));
+    let edit_out = String::from_utf8_lossy(&edit.stdout).to_string();
+    let items = original.matches("\nfn ").count() + original.matches("\ntheorem ").count();
+    assert!(
+        edit_out.contains(&format!("{items} declarations replayed after an edit")),
+        "{items} unchanged declarations replay: {edit_out}"
+    );
+    assert!(edit_out.contains("1 declaration kernel-checked"), "the appended one faces the kernel: {edit_out}");
+
+    let _ = std::fs::remove_file(&edited);
+    let _ = std::fs::remove_dir_all(dir);
+}

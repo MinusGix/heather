@@ -1,9 +1,11 @@
 # Declaration-slice replay: the edit path skips unchanged declarations
 
-Status: the in-process half (§7's first round) landed 2026-09-17 —
-`ModuleDelta` slices, `Elaborator::check_module_delta_from`, the
-differential suite `crates/elab/tests/slice_replay.rs`; the persistent half
-(format, previous-image index, CLI) is open. Owner:
+Status: both rounds landed 2026-09-17 — `ModuleDelta` slices and
+`Elaborator::check_module_delta_from` with the differential suite
+`crates/elab/tests/slice_replay.rs`; the slice table in the image format
+(`HTHMOD` 7), the store's newest-image pointer and `load_previous`, and the
+session's source-miss path with the `(cache)` line's "declarations replayed
+after an edit" count. Owner:
 `issues/declaration-slice-replay.md` (split from
 `issues/warm-path-rewalks-unchanged-declarations.md`'s second candidate).
 
@@ -178,9 +180,18 @@ image from another build is not consulted.
 Measured in process on 2026-09-17 (release, width one, the desktop, the
 verdict store installed as the CLI installs it): re-checking the showcase's
 own module with one declaration appended went from 4.7 s fresh to 0.72 s
-sliced, all 96 items replayed and one elaborated. The CLI number waits on
-the persistent half; the rest of this section is the projection made before
-that datum.
+sliced, all 96 items replayed and one elaborated. Through the CLI the same
+edit went from 8.3 s to 5.5 s, and the profile of what remains corrected
+the projection below: the module's *previous* image has to be decoded (and
+dropped) to replay from, which for the showcase's 29 M-node image is about
+2 s of allocation and freeing — the imports' decode of 0.5 s was the only
+decode the projection counted — then publish 1.0 s, the verdict walk
+0.5 s, the encode-and-decode relocation of the replayed events. The
+replayed declarations themselves are nearly free. So the next levers on
+this path are the ones the design already named plus one: publish
+incrementally, walk incrementally, and decode the previous image lazily or
+drop it off the critical path. The rest of this section is the projection
+made before the datum.
 
 Showcase edit, from the table in §1: the 4 s of re-elaboration goes to the
 edited declaration's own cost; decode (0.5 s), the verdict walk (0.6 s) and
