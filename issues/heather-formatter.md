@@ -44,8 +44,9 @@ moves a line break. Three properties decide this over a printer:
    never moves relative to its neighbours. No attachment policy, no lexer
    change. A printer has to solve comment attachment properly, and that is
    most of its cost.
-3. **The cleanup commit is reviewable.** No rule changes a line break, so the
-   one-time reformat is empty under `git diff -w` by construction.
+3. **The cleanup commit is reviewable.** No rule changes a line break, and
+   nothing but whitespace changes, so the one-time reformat shows up under
+   `git diff -w` as nothing but the blank lines it collapsed.
 
 It does **not** reflow: the 76 over-100-column lines in
 `parser_combinators.hthr` stay as written until phase 3.
@@ -87,13 +88,22 @@ beside the lexer.
 - `,` `;` — one space after when the next token is on the same line, never
   before;
 - no padding inside `( ) [ ] ⟨ ⟩` and inside a generic `< >`;
-- one space around infix `+ - * ++ = ≠ ∧ ∨ ↔ ≈ ⊔ ∙ && || -> => ⊢ :=` and
-  around `<` in its comparison role only;
+- one space around infix `+ * ++ = ≠ ∧ ∨ ↔ ≈ ⊔ ∙ && || -> => ⊢ :=` and around
+  `<` in its comparison role only;
 - `:` — space after, none before;
-- tight prefixes `¬ - $ ? · λ`, where the lexer's adjacency rules *are* the
-  specification — but only when the trivia is **pure whitespace**. `¬ // why\n P`
-  must keep its gap, because closing it would swallow the comment;
+- tight prefixes `¬ - $`, where the lexer's adjacency rules *are* the
+  specification — but only when the trivia is **pure whitespace** (`¬ // why\n P`
+  keeps its gap, or the comment is swallowed) and only where the token really
+  is a prefix operator (see the role table);
+- **not** `λ`, which the design first listed here in error: the library writes
+  `λ source begin =>` in every occurrence;
 - strip trailing whitespace, collapse runs of blank lines, one final newline.
+
+The formatter decides **whether** there is a space, never **how many**. A run
+of spaces is the author aligning a column — `tm_lam(dom, b)            =>` and
+27 others across four library files — and re-deciding that is not formatting.
+This replaces the design's original "collapse runs of spaces to one", which
+would have destroyed every aligned block in the library.
 
 Adopt `heather_emit.rs`'s `LINE_WIDTH = 96` rather than inventing a second
 width, so generated and hand-written source do not disagree forever.
@@ -195,6 +205,47 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
   here.
 
 ## Log
+
+- 2026-09-16: **Phase 1 landed.** `crates/syntax/src/fmt.rs` (the normalizer)
+  and `src/roles.rs` (the role table), `heather fmt [--check]`, `scripts/fmt`,
+  a `repository_sources_are_formatted` gate in the ordinary suite, and the
+  library reformat: 17 of 63 files, 431 insertions and 446 deletions, every
+  deleted line under `git diff -w` a blank one. `TightNegationSpacing` is gone,
+  its rule and both its controls now living in the formatter.
+
+  Four things the design got wrong, each found by running it rather than by
+  reasoning about it:
+
+  - **`λ` is not a tight prefix.** The library writes `λ source begin =>` in
+    every occurrence. Listed in the rule set from the start; nothing but the
+    corpus said otherwise.
+  - **"Collapse runs of spaces to one" would have destroyed deliberate column
+    alignment** — 27 sites across four files. Replaced by the sharper rule that
+    the formatter decides presence, never width.
+  - **A declared operator symbol is not a prefix operator.** `designation
+    prefix - at Int := neg` became `-at`. Both spellings lex identically, so no
+    invariant catches it; it needed `TokenRole::OperatorName`, which is the
+    second customer of the general role table and vindicates building one.
+  - **The generated certificate module had to be formatted at its source.**
+    `lib/function_ir_certificates.hthr` is written by a test that also asserts
+    it is current, so formatting it in place would have failed on the next
+    regeneration. The generator now emits through `format_source`, which is the
+    same "generated and hand-written source must not disagree" point the
+    original design made about `LINE_WIDTH`.
+
+  Two further findings belong to the derivation rather than the rules. The
+  census was passing against a **copy** of the walker left in its own test
+  while `roles.rs` shipped a different one; the test now calls the library, as
+  it should have from the start. And it was passing over a real bug —
+  `instance<…> Decide<¬P>` derived the *instance's* `<` against the class
+  reference's `>` — because the check required no `>` to be claimed twice but
+  never the mirror. Both directions are checked now, and the opener is the
+  nearest `<` to the left of the first argument rather than the first one
+  inside the node's span.
+
+  Not done, by design: no reflow. The over-100-column lines in
+  `parser_combinators.hthr` are untouched, and the user has confirmed that is
+  acceptable. Phase 2 (indentation only) remains unscheduled.
 
 - 2026-09-16: [[lint-tight-negation-spacing]] is subsumed rather than kept
   alongside (user decision). Recorded as an acceptance item: phase 1 removes

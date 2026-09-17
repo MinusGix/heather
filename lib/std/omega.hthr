@@ -857,7 +857,6 @@ theorem upper_neg_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
         λ q p => q <= (-a) * l + (-b) * r, summed)
 }
 
-
 // Fourier--Motzkin combines a lower row with an upper row using positive
 // magnitudes `a` and `b`; the upper row is multiplied by `-b`, reversing it.
 theorem lower_upper_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,

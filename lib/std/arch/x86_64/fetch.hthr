@@ -114,7 +114,6 @@ theorem execute_fetched_from_execute_at<M>(access: FetchAccess<M>,
     ExecuteFetched(access, span, decoded, before, outcome)
 { ⟨fetched, execution⟩ }
 
-
 theorem fetch_one_byte<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
     byte: BitVec(8), permission: access.executable(memory, start) = True,
     present: access.read_byte(memory, start) = Some(byte)):
@@ -173,7 +172,6 @@ theorem fetch_span_one<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
 {
     FetchedFrom(⟨permission, ⟨present, trivial⟩⟩)
 }
-
 
 theorem readable_cons_fetch<M>(access: FetchAccess<M>, memory: M,
     byte: BitVec(8), rest: List<BitVec(8)>):

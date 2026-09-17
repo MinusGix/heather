@@ -10,100 +10,100 @@ import omega;
 import parser_core::{Cursor, rest, Success, Failure, Reply, Parser, run};
 
 // A lower bound on tokens consumed by this reply; any failure satisfies it vacuously.
-fn Bound<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin)) -> Type {
-    match r { Err(e) => True, Ok(s) => nat::Le(begin.offset + amount,s.end.offset) }
+fn Bound<T, A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T, A>(source, begin)) -> Type {
+    match r { Err(e) => True, Ok(s) => nat::Le(begin.offset + amount, s.end.offset) }
 }
 
 // Every success of p consumes at least amount tokens; failures impose no bound.
 // Consumes(p,1) permits unbounded repetition, while Consumes(p,0) permits empty success.
-class Consumes<T,A>(p: Parser<T,A>, amount: Nat) {
-    bound: (source: List<T>) -> (begin: Cursor<T>(source)) -> Bound(source,begin,amount,p.run(source,begin)),
+class Consumes<T, A>(p: Parser<T, A>, amount: Nat) {
+    bound: (source: List<T>) -> (begin: Cursor<T>(source)) -> Bound(source, begin, amount, p.run(source, begin)),
 }
 
 // Extract a concrete consumption bound once a reply is known to be Ok(s).
-theorem bound_on_success<T,A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T,A>(source,begin),
-    bound: Bound(source,begin,amount,r), s: Success<T,A>(source,begin), shape: r = Ok(s)):
-    nat::Le(begin.offset + amount,s.end.offset) {
-    j(shape,λ answer q => Bound(source,begin,amount,answer),bound)
+theorem bound_on_success<T, A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T, A>(source, begin),
+    bound: Bound(source, begin, amount, r), s: Success<T, A>(source, begin), shape: r = Ok(s)):
+    nat::Le(begin.offset + amount, s.end.offset) {
+    j(shape, λ answer q => Bound(source, begin, amount, answer), bound)
 }
 
 // A relation required of successful replies, with no condition on failures.
-fn Post<T,A>(source: List<T>, begin: Cursor<T>(source),
+fn Post<T, A>(source: List<T>, begin: Cursor<T>(source),
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Reply<T,A>(source,begin)) -> Type {
-    match r { Err(e) => True, Ok(s) => relation(source,begin,s.end,s.value) }
+    r: Reply<T, A>(source, begin)) -> Type {
+    match r { Err(e) => True, Ok(s) => relation(source, begin, s.end, s.value) }
 }
 
 // Every success of p satisfies a relation on its source, span, and value.
 // For a format parser, the relation can say its length field matches its payload.
 // This says nothing about whether every valid encoding is accepted.
-class Sound<T,A>(p: Parser<T,A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
-    law: (source: List<T>) -> (begin: Cursor<T>(source)) -> Post(source,begin,relation,p.run(source,begin)),
+class Sound<T, A>(p: Parser<T, A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
+    law: (source: List<T>) -> (begin: Cursor<T>(source)) -> Post(source, begin, relation, p.run(source, begin)),
 }
 
 // Extract the source-span relation from a sound reply known to be Ok(s).
-theorem post_on_success<T,A>(source: List<T>, begin: Cursor<T>(source),
+theorem post_on_success<T, A>(source: List<T>, begin: Cursor<T>(source),
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Reply<T,A>(source,begin), proof: Post(source,begin,relation,r), s: Success<T,A>(source,begin), shape: r = Ok(s)):
-    relation(source,begin,s.end,s.value) { j(shape,λ answer q => Post(source,begin,relation,answer),proof) }
+    r: Reply<T, A>(source, begin), proof: Post(source, begin, relation, r), s: Success<T, A>(source, begin), shape: r = Ok(s)):
+    relation(source, begin, s.end, s.value) { j(shape, λ answer q => Post(source, begin, relation, answer), proof) }
 
 // Relax a reply's minimum consumption using an explicit small <= big proof.
-theorem weaken_bound<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), small,big: Nat, order: nat::Le(small,big)):
-    Bound(source,begin,big,r) -> Bound(source,begin,small,r) {
+theorem weaken_bound<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin), small, big: Nat, order: nat::Le(small, big)):
+    Bound(source, begin, big, r) -> Bound(source, begin, small, r) {
     match r { Err(e) => λ h => trivial, Ok(s) => λ h =>
-        nat::le_trans(begin.offset + small,begin.offset + big,s.end.offset,nat::add_le_mono_l(begin.offset,small,big,order),h) }
+        nat::le_trans(begin.offset + small, begin.offset + big, s.end.offset, nat::add_le_mono_l(begin.offset, small, big, order), h) }
 }
 
 // Relax a parser's minimum consumption; e.g. a two-token bound implies a one-token bound.
-fn weaken_consumes<T,A>(p: Parser<T,A>, small,big: Nat, order: nat::Le(small,big), proof: Consumes<T,A>(p,big)) -> Consumes<T,A>(p,small) {
-    Consumes(λ source begin => weaken_bound(source,begin,p.run(source,begin),small,big,order,proof.bound(source,begin)))
+fn weaken_consumes<T, A>(p: Parser<T, A>, small, big: Nat, order: nat::Le(small, big), proof: Consumes<T, A>(p, big)) -> Consumes<T, A>(p, small) {
+    Consumes(λ source begin => weaken_bound(source, begin, p.run(source, begin), small, big, order, proof.bound(source, begin)))
 }
 
 // A successful value and cursor packaged with evidence of their source-span relation.
-record Certified<T,A>(source: List<T>, begin: Cursor<T>(source), relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
+record Certified<T, A>(source: List<T>, begin: Cursor<T>(source), relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type) {
     value: A,
     end: Cursor<T>(source),
-    forward: nat::Le(begin.offset,end.offset),
-    evidence: relation(source,begin,end,value),
+    forward: nat::Le(begin.offset, end.offset),
+    evidence: relation(source, begin, end, value),
 }
 
 // Run a parser and attach the evidence supplied by its Sound certificate.
-fn certify_at<T,A>(p: Parser<T,A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    proof: Sound<T,A>(p,relation), source: List<T>, begin: Cursor<T>(source)) -> Result<Certified<T,A>(source,begin,relation),Failure<T>(source)> {
-    match shape : p.run(source,begin) {
+fn certify_at<T, A>(p: Parser<T, A>, relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    proof: Sound<T, A>(p, relation), source: List<T>, begin: Cursor<T>(source)) -> Result<Certified<T, A>(source, begin, relation), Failure<T>(source)> {
+    match shape: p.run(source, begin) {
         Err(e) => Err(e),
-        Ok(s) => Ok(Certified(s.value,s.end,s.forward,post_on_success(source,begin,relation,p.run(source,begin),proof.law(source,begin),s,shape))),
+        Ok(s) => Ok(Certified(s.value, s.end, s.forward, post_on_success(source, begin, relation, p.run(source, begin), proof.law(source, begin), s, shape))),
     }
 }
 
 // Every successful reply already carries the proof of zero minimum consumption.
-theorem zero_bound<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin)):
-    Bound(source,begin,0,r) { match r { Err(e) => trivial, Ok(s) => s.forward } }
+theorem zero_bound<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)):
+    Bound(source, begin, 0, r) { match r { Err(e) => trivial, Ok(s) => s.forward } }
 
 // Give any parser its always-available zero-consumption certificate.
-fn consumes_zero<T,A>(p: Parser<T,A>) -> Consumes<T,A>(p,0) {
-    Consumes(λ source begin => zero_bound(source,begin,p.run(source,begin)))
+fn consumes_zero<T, A>(p: Parser<T, A>) -> Consumes<T, A>(p, 0) {
+    Consumes(λ source begin => zero_bound(source, begin, p.run(source, begin)))
 }
 
 // Proof-carrying replies let a recursive implementation establish its
 // postcondition as it parses. Forgetting evidence recovers an ordinary reply.
-fn forget_at<T,A>(source: List<T>, begin: Cursor<T>(source),
+fn forget_at<T, A>(source: List<T>, begin: Cursor<T>(source),
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Result<Certified<T,A>(source,begin,relation),Failure<T>(source)>) -> Reply<T,A>(source,begin) {
-    match r { Err(e) => Err(e), Ok(c) => Ok(Success(c.value,c.end,c.forward)) }
+    r: Result<Certified<T, A>(source, begin, relation), Failure<T>(source)>) -> Reply<T, A>(source, begin) {
+    match r { Err(e) => Err(e), Ok(c) => Ok(Success(c.value, c.end, c.forward)) }
 }
 
 // Projecting an ordinary reply still leaves its postcondition provable from the certificate.
-theorem forget_post<T,A>(source: List<T>, begin: Cursor<T>(source),
+theorem forget_post<T, A>(source: List<T>, begin: Cursor<T>(source),
     relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    r: Result<Certified<T,A>(source,begin,relation),Failure<T>(source)>):
-    Post(source,begin,relation,forget_at(source,begin,relation,r)) {
+    r: Result<Certified<T, A>(source, begin, relation), Failure<T>(source)>):
+    Post(source, begin, relation, forget_at(source, begin, relation, r)) {
     match r { Err(e) => trivial, Ok(c) => c.evidence }
 }
 
 // Require both the supplied relation and an empty remainder at the ending cursor.
 // This describes whole-input success; it is not a completeness claim about accepted inputs.
-fn CompleteSpec<T,A>(relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
-    source: List<T>, begin,end: Cursor<T>(source), value: A) -> Type {
-    And<relation(source,begin,end,value),rest(source,end) = Nil<T>>
+fn CompleteSpec<T, A>(relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    source: List<T>, begin, end: Cursor<T>(source), value: A) -> Type {
+    And<relation(source, begin, end, value), rest(source, end) = Nil<T>>
 }

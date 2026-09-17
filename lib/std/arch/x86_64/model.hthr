@@ -505,7 +505,6 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
         valid_length := squash(And(trivial, trivial)))
 }
 
-
 fn canonical_length(instruction: Instruction) → Nat {
     match instruction { MovRI(_, _) => 10, _ => 3 }
 }
@@ -1216,7 +1215,7 @@ fn decode_opcode_from_operands(rex, opcode, modrm: BitVec(8),
 {
     match operands {
         None => None,
-        Some(found) => match success : classify_rr_opcode(opcode) {
+        Some(found) => match success: classify_rr_opcode(opcode) {
             Some(form) => Some(interpret_rr_opcode(rex, opcode,
                 modrm, found, form,
                 classify_rr_opcode_sound(opcode, form, success))),
