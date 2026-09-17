@@ -178,6 +178,10 @@ struct Reader<'a> {
     limits: ModuleImageLimits,
     nodes_left: u64,
     depth: u32,
+    /// Added to every span read: a replayed declaration slice is decoded
+    /// at the position its text now has in the edited source
+    /// (`docs/declaration-slice-replay-design.md` §4). Zero for an image.
+    span_offset: i64,
 }
 
 impl<'a> Reader<'a> {
@@ -191,6 +195,7 @@ impl<'a> Reader<'a> {
             limits,
             nodes_left: limits.max_nodes,
             depth: 0,
+            span_offset: 0,
         })
     }
 
@@ -825,7 +830,17 @@ fn put_span(w: &mut Writer, span: Span) {
 }
 
 fn get_span(r: &mut Reader<'_>) -> Result<Span, ModuleImageDecodeError> {
-    Ok(Span { start: r.usize()?, end: r.usize()? })
+    let (start, end) = (r.usize()?, r.usize()?);
+    if r.span_offset == 0 {
+        return Ok(Span { start, end });
+    }
+    let shift = |at: usize| {
+        usize::try_from(i64::try_from(at).ok()? + r.span_offset).ok()
+    };
+    match (shift(start), shift(end)) {
+        (Some(start), Some(end)) => Ok(Span { start, end }),
+        _ => Err(ModuleImageDecodeError::InvalidStructure("a relocated span leaves the source")),
+    }
 }
 
 fn put_fixity(w: &mut Writer, fixity: OpFixity) {
@@ -1507,6 +1522,36 @@ fn get_meta(r: &mut Reader<'_>) -> Result<MetaDef, ModuleImageDecodeError> {
     })
 }
 
+/// The deterministic encoding of a run of events, for comparing two runs
+/// structurally (`ModuleDelta` slices: `docs/declaration-slice-replay-design.md`
+/// §4). With `interface`, the projection a dependent observes — spans
+/// zeroed, theorem proofs and proof dependency edges dropped — which is what
+/// "the same contribution" means for the declarations after it.
+pub(crate) fn encode_events(events: &[DeltaEvent], interface: bool) -> Vec<u8> {
+    let mut w = Writer { bytes: Vec::new(), interface, nodes: 0 };
+    w.vec(events, put_event);
+    w.bytes
+}
+
+/// The same events with every span moved by `offset`: a replayed slice's
+/// events, at the position its unchanged text now has. Through the image
+/// encoding, because `put_span`/`get_span` are the one place every span in
+/// every event payload passes.
+pub(crate) fn relocate_events(
+    events: &[DeltaEvent],
+    offset: i64,
+) -> Result<Vec<DeltaEvent>, ModuleImageDecodeError> {
+    if offset == 0 {
+        return Ok(events.to_vec());
+    }
+    let bytes = encode_events(events, false);
+    let mut r = Reader::new(&bytes, ModuleImageLimits::default())?;
+    r.span_offset = offset;
+    let events = r.vec(get_event)?;
+    r.finish()?;
+    Ok(events)
+}
+
 fn put_event(w: &mut Writer, event: &DeltaEvent) {
     match event {
         DeltaEvent::Name { name, kind } => { w.byte(0); w.string(name); put_name_kind(w, *kind); }
@@ -1833,6 +1878,9 @@ pub(crate) fn decode_delta(
     let delta = ModuleDelta {
         module, dependencies: ModuleDependencyIdentity::new(hashes), dependency_psi,
         extension, scope, events,
+        items: Vec::new(),
+        warnings: Vec::new(),
+        scope_at_entry: None,
     };
     validate_delta(&delta)?;
     Ok(delta)
@@ -1975,6 +2023,9 @@ mod tests {
             extension: vec![GlobalBinding::Ctx],
             scope: Scope::new("bad"),
             events: vec![DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 99 }],
+            items: Vec::new(),
+            warnings: Vec::new(),
+            scope_at_entry: None,
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(
@@ -2001,6 +2052,9 @@ mod tests {
                 DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 0 },
                 DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 1 },
             ],
+            items: Vec::new(),
+            warnings: Vec::new(),
+            scope_at_entry: None,
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(

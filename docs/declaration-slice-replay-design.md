@@ -1,8 +1,24 @@
 # Declaration-slice replay: the edit path skips unchanged declarations
 
-Status: design pass, 2026-09-17. Owner: `issues/declaration-slice-replay.md`
-(split from `issues/warm-path-rewalks-unchanged-declarations.md`'s second
-candidate). Nothing here is implemented.
+Status: the in-process half (§7's first round) landed 2026-09-17 —
+`ModuleDelta` slices, `Elaborator::check_module_delta_from`, the
+differential suite `crates/elab/tests/slice_replay.rs`; the persistent half
+(format, previous-image index, CLI) is open. Owner:
+`issues/declaration-slice-replay.md` (split from
+`issues/warm-path-rewalks-unchanged-declarations.md`'s second candidate).
+
+Two things the implementation settled that §3–4 below did not say:
+
+- **Spans.** A registration event carries the declaration's surface syntax
+  with byte spans, and a slice's text may sit elsewhere after an edit
+  above it. A replayed slice's events are *relocated*: encoded and decoded
+  through the image codec with an offset added at `get_span`, the one place
+  every span in every payload passes; its warnings shift the same way.
+- **"The same contribution"** is the interface projection of the slice's
+  events (spans zeroed, theorem proofs and proof dependency edges dropped),
+  compared as encoded bytes, plus the Ψ bindings compared structurally. That
+  is what a dependent observes, so it is what decides whether the prefix
+  after a re-elaborated item is still exact.
 
 ## 1. The number this is about
 
@@ -62,7 +78,9 @@ data the delta already has:
 
 ```
 ItemSlice {
-    source: Hash,          // SHA-256 of the item's exact source span
+    source: String,        // the item's exact source span (in process; the
+                           // persistent half stores its SHA-256 instead)
+    start: usize,          // its byte offset, the base its spans are relative to
     psi:      a..b,        // bindings this item pushed (extension indices)
     events:   e..f,        // journal events it recorded
     warnings: w..x,        // warnings it raised (re-raised on replay)
@@ -96,8 +114,9 @@ for each new item (or group) in order:
     if the next unconsumed old slice has the same source digest
        and the prefix is still exact:
         replay the slice          (extend Ψ through recheck_extension;
-                                   preflight + apply its events; re-raise
-                                   its warnings; run its source lints)
+                                   preflight + apply its events, spans
+                                   relocated; re-raise its warnings, which
+                                   already hold its source lints' findings)
     else:
         elaborate the item from source, journaling as today
         if the slice it produced is structurally equal to the old slice
@@ -133,8 +152,8 @@ What a replayed slice must reproduce, and where it comes from:
 | Ψ bindings | slice's extension range, through `recheck_extension` (gate or kernel) |
 | names, registries, gendefs, instances, designations, reprs, meta | slice's events, through `preflight_module_event` + `apply_module_event` |
 | derived instances minted after it | `Derived` events in the same slice |
-| warnings | stored per slice, re-raised |
-| source lints | re-run over the item's text (cheap; they read the source and the warnings) |
+| warnings | stored per slice, re-raised at the relocated spans |
+| source lints | their findings are among the stored warnings; not re-run |
 | omega reports, timing rows | not reproduced; the CLI drains reports and the row for a replayed item is a replay row |
 | `container_decls`, goal/mint arenas, `pending_derived` | transient per item; empty at every boundary today |
 
@@ -155,6 +174,13 @@ applies to the previous image as to any other; under `Exact` a previous
 image from another build is not consulted.
 
 ## 6. What it should buy, and what it does not
+
+Measured in process on 2026-09-17 (release, width one, the desktop, the
+verdict store installed as the CLI installs it): re-checking the showcase's
+own module with one declaration appended went from 4.7 s fresh to 0.72 s
+sliced, all 96 items replayed and one elaborated. The CLI number waits on
+the persistent half; the rest of this section is the projection made before
+that datum.
 
 Showcase edit, from the table in §1: the 4 s of re-elaboration goes to the
 edited declaration's own cost; decode (0.5 s), the verdict walk (0.6 s) and

@@ -784,7 +784,7 @@ fn stdlib_unicode_spelling(item: &Item, source: &Source<'_>, out: &mut Vec<Findi
     }
 }
 
-fn item_span(item: &Item) -> Span {
+pub(crate) fn item_span(item: &Item) -> Span {
     match item {
         Item::Decl(x) => x.span,
         Item::Inductive(x) => x.span,

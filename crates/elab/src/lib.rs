@@ -139,7 +139,7 @@ mod recursion;
 mod representations;
 pub mod resolve;
 mod session;
-pub use module_delta::{ModuleDelta, ModuleDependencyIdentity, ModuleReplayError};
+pub use module_delta::{ItemSlice, ModuleDelta, ModuleDependencyIdentity, ModuleReplayError, SliceReport};
 pub use module_image::{ModuleImageDecodeError, ModuleImageLimits};
 pub use session::SemanticImage;
 mod slots;
@@ -564,6 +564,9 @@ pub struct Elaborator {
     /// Logical semantic additions made while one module delta is extracted.
     /// Failed transactions truncate this alongside committed state.
     module_journal: RefCell<Option<module_delta::ModuleJournal>>,
+    /// The previous delta a module pass may replay slices from
+    /// (`check_module_delta_from`); `None` on every other pass.
+    slice_plan: Option<module_delta::SlicePlan>,
     /// Dynamically installed scope while stored surface syntax is re-lowered.
     /// This is execution state, not a committed name-registry fact, so it must
     /// remain private to one elaborator when semantic state is shared.
@@ -1372,6 +1375,28 @@ impl application::ImplicitApplicationElab for Elaborator {
     }
 }
 
+/// The text a slice is keyed by: the item's exact source span, or, at the
+/// first member of a mutual measure group, every member's span joined —
+/// the group is elaborated as one there, so its slice answers for all of
+/// them and must be keyed by all of them.
+fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemPlan) -> String {
+    let span_of = |i: usize| lint::item_span(&file.items[i]);
+    match plan.in_group.get(&idx) {
+        Some(&g) if plan.groups[g][0] == idx => plan.groups[g]
+            .iter()
+            .map(|&i| {
+                let sp = span_of(i);
+                &src[sp.start..sp.end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => {
+            let sp = span_of(idx);
+            src[sp.start..sp.end].to_string()
+        }
+    }
+}
+
 fn item_timing_name(item: &Item) -> String {
     match item {
         Item::Decl(decl) => decl.name.clone(),
@@ -1439,6 +1464,7 @@ impl Elaborator {
         Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
             module_journal: RefCell::new(None),
+            slice_plan: None,
             resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: Cell::new(0),
             impl_provenance: None,
@@ -1961,6 +1987,7 @@ impl Elaborator {
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
+        self.slice_enter(module);
         let plan = self.begin_container(&file);
         for (idx, item) in file.items.iter().enumerate() {
             let name = item_timing_name(item);
@@ -1972,6 +1999,17 @@ impl Elaborator {
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
+            }
+            let slice_source = slice_source(&file, src, idx, &plan);
+            let slice_start = lint::item_span(item).start;
+            let slice_mark = self.slice_begin();
+            // A replayed slice carries the item's warnings, source lints
+            // included: nothing is re-run over it.
+            if self.try_replay_slice(idx, &slice_source, slice_start) {
+                if let Some(mark) = slice_mark {
+                    self.slice_end(mark, slice_source, slice_start, true);
+                }
+                continue;
             }
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
@@ -1987,6 +2025,10 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
+                if let Some(mark) = slice_mark {
+                    self.slice_elaborated();
+                    self.slice_end(mark, slice_source, slice_start, false);
+                }
             }
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -2541,6 +2583,7 @@ impl Elaborator {
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
+        self.slice_enter(module);
         let plan = self.begin_container(&file);
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
@@ -2557,6 +2600,24 @@ impl Elaborator {
             if let Some(metrics) = &self.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
+            // A slice of the previous delta stands in for the item when its
+            // text and the prefix so far match
+            // (`docs/declaration-slice-replay-design.md` §4).
+            let slice_source = slice_source(&file, src, idx, &plan);
+            let slice_start = lint::item_span(item).start;
+            let slice_mark = self.slice_begin();
+            // A replayed slice carries the item's warnings, source lints
+            // included: nothing is re-run over it.
+            if self.try_replay_slice(idx, &slice_source, slice_start) {
+                if let Some(mark) = slice_mark {
+                    self.slice_end(mark, slice_source, slice_start, true);
+                }
+                #[cfg(feature = "value-metrics")]
+                if let Some(metrics) = &self.value_metrics {
+                    metrics.set_current_item(None);
+                }
+                continue;
+            }
             let r = self.elab_item_at(&file, idx, item, &plan);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -2571,6 +2632,10 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
+                if let Some(mark) = slice_mark {
+                    self.slice_elaborated();
+                    self.slice_end(mark, slice_source, slice_start, false);
+                }
             }
             if let Err(e) = r {
                 errs.push(e);
