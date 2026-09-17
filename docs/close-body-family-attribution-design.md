@@ -672,3 +672,15 @@ What is now attributed, and what is not:
 - **Not attempted.** Any slice. §7.3's two are in the order their evidence
   supports, and the first of them is a continuation of a device that has
   already landed twice this month.
+
+## Note, 2026-09-16: the showcase's type spelling changed under this table
+
+`docs/showcase/calc_parser.hthr` now names the tier's reply type once
+(`fn Checked(level, source, begin) -> Type`) instead of writing
+`Result<Certified<…>,Failure<…>>` at each of twenty-five uses. The family's
+per-item counts above were taken before that. Measured either side of the
+change, `close_body` loses 1 816 conversion queries and `expr_body` and
+`factor_body` about 6 400 each, while `number_grammar`'s counts are identical
+— so the table's *ranking* and its argument are untouched, but a fresh
+parent is needed before any new number is compared against these.
+`docs/complete-post-attribution-design.md` §10.7 has the measurement.
