@@ -1,6 +1,6 @@
 ---
 title: A formatter for Heather source
-status: open
+status: closed
 labels: [tooling,syntax,ergonomics]
 created: 2026-09-16
 updated: 2026-09-16
@@ -254,3 +254,4 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
 - 2026-09-16: Filed with the design and the census. The `<`-role spike ran
   first, because it was the one result that could have changed the shape:
   it succeeded, and produced the three findings recorded above.
+- 2026-09-16: Closing. Phase 1 is the formatter, and it is in: normalizer, role table, `heather fmt`, `scripts/fmt`, the suite gate, and the library through it. The two deferred halves are disposed of rather than left to hold this issue open. Indentation has an owner, [[formatter-indentation]]. Reflow does **not**, by decision and not by oversight: the user's verdict on the long lines in `parser_combinators.hthr` was "somewhat troublesome but not that major — I'm fine with unwrapped files for the most part", so there is no demand to build a total printer and comment attachment against, and filing an issue nobody intends to do would be the same permanence in a different file. If reflow is ever wanted, it starts from that decision, not from a stale ticket. The `match e: p(h)` restyle the reformat introduced was reviewed and kept.
