@@ -60,6 +60,20 @@ impl ModuleDelta {
         self.extension.len()
     }
 
+    /// The stored Ψ suffix, outermost first: what a replay rechecks or has
+    /// the declaration gate vouch for.
+    pub fn extension(&self) -> &[GlobalBinding] {
+        &self.extension
+    }
+
+    /// The suffix, mutable — for a negative control that forges a stored
+    /// binding and expects the replay to refuse it. Nothing else edits a
+    /// delta after elaboration.
+    #[doc(hidden)]
+    pub fn extension_mut(&mut self) -> &mut Vec<GlobalBinding> {
+        &mut self.extension
+    }
+
     /// Encode this checked, process-local delta as a deterministic semantic
     /// module image. The dependency kernel prefix itself is deliberately not
     /// serialized; only its length and the loader-supplied interface
@@ -471,7 +485,7 @@ impl Elaborator {
         if !self.names.valid_exports(&delta.scope) {
             return Err(ModuleReplayError::MetadataConflict("reexports"));
         }
-        self.recheck_extension(&delta.extension)?;
+        self.recheck_extension(&delta.module, &delta.extension)?;
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
@@ -493,7 +507,8 @@ impl Elaborator {
     }
 
     /// `⊢_L Ψ, Ψ'` for the stored suffix — the kernel recheck of a replayed
-    /// module, on the kernel worker pool when the elaborator has one.
+    /// module, on the kernel worker pool when the elaborator has one, and
+    /// through the installed gate oracle when there is one.
     ///
     /// The serial form is one `typing::check_global_ctx_extension` call. The
     /// wide form is the same judgement split the way the deferred gate splits
@@ -508,34 +523,90 @@ impl Elaborator {
     /// quiescent for whatever the caller does next. Nothing is committed
     /// from a rejected replay at either width; the caller rebuilds the
     /// module from source instead.
-    fn recheck_extension(&mut self, extension: &[GlobalBinding]) -> Result<(), ModuleReplayError> {
-        if self.kernel_pool.is_inline() {
+    ///
+    /// **The gate vouches here exactly as it does at the source gate.** A
+    /// stored definition is the binding the cold run's `GateItem::binding`
+    /// produced, over the same Ψ prefix, so it asks the oracle the same
+    /// question (`docs/cache-v1-design.md` §3: the name is metadata, not
+    /// identity) and an `admits` hit skips its statement and body the way it
+    /// does for a fresh declaration; a miss is checked and `accepted` at the
+    /// same points the source path uses. A theorem is stored without its
+    /// proof and has nothing to ask: its statement is checked. Before
+    /// 2026-09-17 a replay rechecked every stored body regardless, so a warm
+    /// run of an unchanged file cost more than an edited one
+    /// (`issues/semantic-replay-phase-attribution.md`).
+    fn recheck_extension(
+        &mut self,
+        module: &str,
+        extension: &[GlobalBinding],
+    ) -> Result<(), ModuleReplayError> {
+        let gate = self.gate.clone();
+        let inline = self.kernel_pool.is_inline();
+        if gate.is_none() && inline {
             return typing::check_global_ctx_extension(&self.psi, extension, 0, self.fuel)
                 .map_err(ModuleReplayError::Kernel);
         }
         let mut prefix = Rc::clone(&self.psi.0);
         let mut statement = Ok(());
         for (index, binding) in extension.iter().enumerate() {
-            if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
-                statement = Err(ModuleReplayError::Kernel(e));
-                break;
+            // The oracle's human-readable column only; identity is the
+            // content hash, and a stored binding has no source name here.
+            let name = format!("{module}#{index}");
+            let body = match binding {
+                GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) } => {
+                    Some(crate::gate::GateItem {
+                        name: &name,
+                        ctx,
+                        ty,
+                        level,
+                        body,
+                        opaque: false,
+                        layer: *layer,
+                        lands_in_psi: true,
+                    })
+                }
+                _ => None,
+            };
+            let admitted = match (&gate, &body) {
+                (Some(g), Some(item)) => g.admits(&prefix, item),
+                _ => false,
+            };
+            if !admitted {
+                if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
+                    statement = Err(ModuleReplayError::Kernel(e));
+                    break;
+                }
+                if let Some(item) = &body {
+                    if inline {
+                        let verdict = typing::check_term(
+                            &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.fuel,
+                        );
+                        if let Err(e) = verdict {
+                            statement = Err(ModuleReplayError::Kernel(e));
+                            break;
+                        }
+                        if let Some(g) = &gate {
+                            g.accepted(&prefix, item);
+                        }
+                    } else {
+                        self.kernel_pool.submit(pool::Deferred {
+                            name: name.clone(),
+                            span: heather_syntax::Span { start: 0, end: 0 },
+                            psi: Rc::clone(&prefix),
+                            ctx: item.ctx.clone(),
+                            ty: item.ty.clone(),
+                            level: item.level.clone(),
+                            body: item.body.clone(),
+                            opaque: false,
+                            layer: item.layer,
+                            lands_in_psi: true,
+                            fuel: self.fuel,
+                            row: None,
+                        });
+                    }
+                }
             }
-            if let GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) } = binding {
-                self.kernel_pool.submit(pool::Deferred {
-                    name: format!("stored binding {index}"),
-                    span: heather_syntax::Span { start: 0, end: 0 },
-                    psi: Rc::clone(&prefix),
-                    ctx: ctx.clone(),
-                    ty: (**ty).clone(),
-                    level: level.clone(),
-                    body: (**body).clone(),
-                    opaque: false,
-                    layer: *layer,
-                    lands_in_psi: true,
-                    fuel: self.fuel,
-                    row: None,
-                });
-            }
+            drop(body);
             Rc::make_mut(&mut prefix).push(binding.clone());
         }
         // Join even after a statement failure: the pool must be drained before
@@ -560,7 +631,35 @@ impl Elaborator {
         // in the serial order, and every body before i passed the statement
         // check; the first failure by binding order is what the serial form
         // reports, and it is the statement's when both exist.
-        statement.and(body)
+        let verdict = statement.and(body);
+        if let Some(g) = &gate {
+            match &verdict {
+                Ok(()) => {
+                    // Every queued body passed: record each at the Ψ it was
+                    // queued against, as the source join does.
+                    for outcome in &outcomes {
+                        let item = outcome.item.as_ref();
+                        g.accepted(
+                            &item.psi,
+                            &crate::gate::GateItem {
+                                name: &item.name,
+                                ctx: &item.ctx,
+                                ty: &item.ty,
+                                level: &item.level,
+                                body: &item.body,
+                                opaque: item.opaque,
+                                layer: item.layer,
+                                lands_in_psi: item.lands_in_psi,
+                            },
+                        );
+                    }
+                }
+                // Nothing lands from a rejected replay, so every question this
+                // replay opened is dead; the rebuild from source asks its own.
+                Err(_) => g.abandon(&self.psi),
+            }
+        }
+        verdict
     }
 
     fn apply_module_event(&mut self, event: DeltaEvent) {

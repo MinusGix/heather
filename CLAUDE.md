@@ -10,8 +10,9 @@
   (~4.7 CPU-min), and the native x86 certificate gates
   (`crates/cli/tests/native*.rs` plus their warmup, ~20 CPU-min;
   `issues/native-summary-test-cpu-margin.md`) for the inner loop, and replays semantic test images that
-  an earlier build of the compiler wrote (kernel-rechecked, but the current
-  frontend is not re-run on unchanged library modules); a round's **final**
+  an earlier build of the compiler wrote (vouched for by the verdict store
+  at `target/decl-cache` or kernel-rechecked, but the current frontend is
+  not re-run on unchanged library modules); a round's **final**
   verification, and any change touching `lib/`, the kit, or the generators,
   must run the plain full `scripts/test`, which rebuilds such images.
   `scripts/test --long` (own target dir) additionally runs every slow kernel

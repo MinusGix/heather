@@ -572,6 +572,19 @@ at zero shipped dependencies. What remains of the walk is its content: the
 walker visits shared structure about twice over on a large module, so a
 per-`Rc` memo is a 2× ceiling, not the lever it was once assumed to be.
 
+**The replay asks the same question (2026-09-17).** A module replayed from
+its semantic image used to be kernel-rechecked in full — every stored
+definition's body — while the same store vouched for those declarations on
+the source path, so a warm check of an unchanged file cost more than a check
+after an edit. A stored definition is the binding `GateItem::binding`
+produced at the cold gate, over the same Ψ prefix, and the key is content
+with the name as metadata (§3); so `Elaborator::recheck_extension` now asks
+`admits` over each stored definition, checks only the misses and records
+them with `accepted`, and abandons its questions if the replay is rejected.
+A stored theorem has no proof to ask about and keeps its statement check.
+The trust is unchanged: rung 1 either way, and a body the store never saw
+still faces the kernel.
+
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session
 (v2 only, `plain`/`cold` alternating, five iterations, load falling) gave

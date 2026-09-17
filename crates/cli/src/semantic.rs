@@ -50,7 +50,7 @@ impl fmt::Display for CacheNotice {
             }
             CacheNoticeKind::StaleReplayed => write!(
                 f,
-                "cache: module `{}` replayed from an image of another build ({}), kernel-rechecked; a run without stale images re-elaborates it",
+                "cache: module `{}` replayed from an image of another build ({}), kernel-rechecked or vouched for by the verdict store; a run without stale images re-elaborates it",
                 self.module, self.error
             ),
         }

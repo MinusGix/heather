@@ -414,7 +414,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     let n = c.counts().since(&before);
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
-                         from cache, {} semantic module{} replayed and kernel-checked",
+                         from cache, {} semantic module{} replayed",
                         color::success("ok", stdout_color),
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },

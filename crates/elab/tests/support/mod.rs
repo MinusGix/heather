@@ -31,9 +31,11 @@ use heather_kernel::term::GlobalCtx;
 /// The ordered input is the same dependency-first closure an ordinary test
 /// used to elaborate by hand. A cold run checks every source module and
 /// publishes beneath `target/semantic-test-images`; a warm run bounded-decodes
-/// and kernel-checks every stored suffix before metadata becomes visible.
-/// The returned elaborator has `NoGate`, so fixture theorems, mutations and
-/// controls always reach the real kernel.
+/// every stored suffix and, before metadata becomes visible, either has the
+/// declaration-verdict store at `target/decl-cache` vouch for each stored
+/// definition or kernel-checks it (stored theorems are statement-checked;
+/// they carry no proof). The returned elaborator has `NoGate`, so fixture
+/// theorems, mutations and controls always reach the real kernel.
 pub fn semantic_test_base(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/semantic-test-images");
@@ -49,16 +51,29 @@ pub fn semantic_test_base_at(
 ) -> heather_elab::Elaborator {
     // `HEATHER_SEMANTIC_IMAGES=accept-stale` (the fast lane, set by
     // scripts/test) replays images an earlier build of the compiler wrote
-    // instead of rebuilding every prefix after each Rust edit. Replay still
-    // kernel-checks every binding; what the fast lane gives up is exercising
-    // the *current* frontend on unchanged library modules, which the full
-    // lane's exact policy restores.
+    // instead of rebuilding every prefix after each Rust edit. A replayed
+    // binding is vouched for by the verdict store or kernel-checked; what
+    // the fast lane gives up is exercising the *current* frontend on
+    // unchanged library modules, which the full lane's exact policy restores.
     let freshness = match std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() {
         Ok("accept-stale") => heather_cache::module_image::ImageFreshness::AcceptStale,
         _ => heather_cache::module_image::ImageFreshness::Exact,
     };
     let mut session = heather_cli::semantic::SemanticSession::new(Some(dir)).with_freshness(freshness);
     let mut elab = heather_elab::Elaborator::with_prelude().expect("prelude");
+    // The checked-in prefix goes through the declaration-verdict store as
+    // well (`with_decl_cache`'s trust argument, below): a replayed image's
+    // stored definitions ask the store the question the cold gate answered
+    // (`docs/parallel-kernel-gate-design.md` §5.3), so a binary that replays
+    // an unchanged prefix no longer rechecks every body per process. The
+    // gate is sealed to `NoGate` before the caller's own content, as ever.
+    let decl_cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/decl-cache");
+    let (cache, rejected) = heather_cache::Cache::open(decl_cache.clone());
+    if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
+        eprintln!("decl-cache: {msg}");
+    }
+    let cache = Rc::new(cache);
+    elab.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
     for &(name, src) in modules {
         let module = heather_cli::loader::Module {
             name: name.into(),
@@ -84,12 +99,20 @@ pub fn semantic_test_base_at(
         }
     }
     elab.set_gate(Rc::new(heather_elab::gate::NoGate));
+    if let Err(err) = cache.save() {
+        eprintln!("decl-cache: could not write {}: {err}", decl_cache.display());
+    }
     if std::env::var_os("HEATHER_SEMANTIC_FIXTURE_STATS").is_some() {
+        let n = cache.counts();
         eprintln!(
-            "semantic-test-images: {} module{} safely replayed ({} from another build)",
+            "semantic-test-images: {} module{} safely replayed ({} from another build); \
+             {} declaration{} kernel-checked, {} accepted from cache",
             session.hits(),
             if session.hits() == 1 { "" } else { "s" },
             session.stale_hits(),
+            n.checked,
+            if n.checked == 1 { "" } else { "s" },
+            n.hits,
         );
     }
     elab

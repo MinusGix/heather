@@ -180,7 +180,7 @@ fn a_cached_run_says_so_and_counts_what_it_trusted() {
     assert_eq!(warm.status.code(), Some(0));
     let warm_out = String::from_utf8_lossy(&warm.stdout).to_string();
     assert!(warm_out.contains("0 declarations kernel-checked"), "{warm_out}");
-    assert!(warm_out.contains("1 semantic module replayed and kernel-checked"), "{warm_out}");
+    assert!(warm_out.contains("1 semantic module replayed"), "{warm_out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -223,7 +223,7 @@ fn warning_producing_modules_replay_the_same_diagnostics() {
         }
         let expected = if run == 0 { 0 } else { 1 };
         assert!(String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "{expected} semantic module{} replayed and kernel-checked",
+            "{expected} semantic module{} replayed",
             if expected == 1 { "" } else { "s" }
         )));
     }
@@ -267,7 +267,7 @@ fn opaque_proof_edits_do_not_invalidate_dependent_module_images() {
     assert_eq!(proof_edit.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&proof_edit.stdout)
-            .contains("1 semantic module replayed and kernel-checked"),
+            .contains("1 semantic module replayed"),
         "the changed dependency rebuilds, but its unchanged consumer should replay: {}",
         String::from_utf8_lossy(&proof_edit.stdout)
     );
@@ -281,7 +281,7 @@ fn opaque_proof_edits_do_not_invalidate_dependent_module_images() {
     assert_eq!(definition_edit.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&definition_edit.stdout)
-            .contains("0 semantic modules replayed and kernel-checked"),
+            .contains("0 semantic modules replayed"),
         "a transparent dependency edit invalidates its exact-prefix consumer: {}",
         String::from_utf8_lossy(&definition_edit.stdout)
     );
