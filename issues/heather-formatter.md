@@ -69,6 +69,19 @@ Resolved by the spike below: derive the openers from the AST and treat the
 remaining `Lt` as operators. When the file does not parse, leave `<`/`>`
 spacing alone and normalize everything else — degrade, never refuse.
 
+**Build this as a general token-role table, not a `<` special case.** `<` is
+the only ambiguous token *today* — `-` is prefix-only, the infix table carries
+`Star` but no `Minus` — but [[infix-subtraction-notation]] is open and would
+make `a - b` vs `-b` the second instance of exactly this shape. A span-keyed
+`TokenRole` side-table derived from the AST absorbs that at no extra cost; a
+`<`-shaped hack would have to be rewritten to.
+
+The spacing table itself is **not** a fourth copy of the operator inventory
+(cf. [[machine-readable-syntax-manifest]]): the formatter reads a token stream,
+so it needs a classification of `TokKind` into prefix/infix/delimiter, not a
+table of spellings. That is one match over the lexer's own vocabulary, living
+beside the lexer.
+
 ## Rule set (phase 1)
 
 - `,` `;` — one space after when the next token is on the same line, never
@@ -165,6 +178,9 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
   authority, so the formatter's infix table is not a fourth copy. The
   Tree-sitter `indents.scm` is a separate, unchecked indentation authority and
   becomes that issue's problem at phase 2, not this one's.
+- **[[infix-subtraction-notation]]** would add the second token whose role its
+  kind does not determine. Assumed here: only that the role table is built
+  general enough to take it, which costs nothing now and a rewrite later.
 - **[[stdlib-surface-style-lint]]** owns *which spelling* is idiomatic
   (`f(a, b)` over `f(a)(b)`, operator over named call). This issue owns
   whitespace only and decides nothing about spelling.
