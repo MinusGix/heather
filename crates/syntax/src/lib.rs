@@ -10,11 +10,15 @@
 //! contract; the grammar is swappable (docs/sketches/surface-v0..3.md).
 
 pub mod ast;
+pub mod fmt;
 pub mod lexer;
 pub mod parser;
+pub mod roles;
 mod try_lower;
 
 pub use ast::*;
 pub use parser::{class_ty, parse_file, ParseError};
+pub use fmt::format_source;
+pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 
 pub use try_lower::without_decrease_labels;

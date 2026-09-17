@@ -1251,11 +1251,11 @@ theorem le_max_r(a, b: Int): b <= max(a, b) {
 }
 
 theorem min_le_l(a, b: Int): min(a, b) <= a {
-    if h : a <= b { le_refl(a) } else { le_of_not_le(a, b, h) }
+    if h: a <= b { le_refl(a) } else { le_of_not_le(a, b, h) }
 }
 
 theorem min_le_r(a, b: Int): min(a, b) <= b {
-    if h : a <= b { h } else { le_refl(b) }
+    if h: a <= b { h } else { le_refl(b) }
 }
 
 theorem max_le(a, b, c: Int, h1: a <= c, h2: b <= c): max(a, b) <= c {

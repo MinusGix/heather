@@ -361,7 +361,6 @@ fn encode_warnings(
         out.push(match warning.lint {
             Lint::UnreachableMatchArm => 0,
             Lint::MatchFunctionApplication => 1,
-            Lint::TightNegationSpacing => 2,
             Lint::StdlibUnicodeSpelling => 3,
             Lint::NestedCall => 4,
             Lint::UnusedPatternBinder => 5,
@@ -413,7 +412,6 @@ fn decode_warnings(
         let lint = match reader.byte()? {
             0 => Lint::UnreachableMatchArm,
             1 => Lint::MatchFunctionApplication,
-            2 => Lint::TightNegationSpacing,
             3 => Lint::StdlibUnicodeSpelling,
             4 => Lint::NestedCall,
             5 => Lint::UnusedPatternBinder,

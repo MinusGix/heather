@@ -171,7 +171,6 @@ theorem ordinary_call_step<M>(access: StackAccess<M>, instruction: Instruction,
         canonical_execute_normal_is_allowed(instruction, before))
 }
 
-
 theorem stack_reads_cons<M>(access: StackAccess<M>, count: Nat, address, next: BitVec(64),
     permission: access.readable(address) = True, canonical: LowCanonical(address),
     nowrap: bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 1)) = False,
@@ -193,7 +192,6 @@ theorem machine_readdress<M>(state: MachineState<M>, address: BitVec(64), same: 
 {
     j(sym(same), λ actual _ => MachineState(state.gprs, state.flags, actual, state.memory) = state, refl)
 }
-
 
 theorem call_after_target<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>):
     call_after(access, displacement, before).rip = call_target(before.rip, displacement)

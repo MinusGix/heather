@@ -3,7 +3,7 @@ title: "Carrier-directed infix subtraction notation"
 status: open
 labels: [frontend,syntax,notation,stdlib,ergonomics]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-09-16
 ---
 
 `Nat` and `Int` both expose `sub`, but their laws still read
@@ -28,3 +28,4 @@ continuing to recognize prefix `-` and `->` unambiguously.
 
 - 2026-08-20: Filed from the standard-library surface review. Prefix
   negation deliberately reserved this separate fixity slot but did not add it.
+- 2026-09-16: Landing this makes `-` the second token whose role its kind does not determine (`a - b` vs prefix `-b`), which [[heather-formatter]] must disambiguate from the AST exactly as it does `<`. No constraint on this issue; its role table is being built general so this costs nothing when it lands.
