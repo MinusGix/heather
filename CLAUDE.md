@@ -68,6 +68,15 @@
   exponent, not the time. `docs/benchmarking.md` explains what "regressed"
   means and why the harness is first-party (the kernel stays at zero
   dependencies, dev-dependencies included — so no Criterion).
+- **What is slow right now, and where it comes from: `scripts/perf report`**
+  (`perf/README.md`). `scripts/perf snapshot` measures the suite history and
+  a corpus of files cold/warm/edited through the release CLI with `--timings`
+  and writes a dated, environment-keyed record to `perf/snapshots/`;
+  `report` prints the phase split, the concentration per file and the
+  heaviest declarations with deltas against the previous same-environment
+  snapshot, and `serve` is the dashboard. Read the latest report before
+  choosing a perf target, so a round attacks what the corpus says dominates
+  and not the item it happened to be looking at. It is a diary, not a gate.
 - **Read a `--timings` TSV with `scripts/timings`**, never by counting
   indices into an `awk -F'\t'` line — that mislabelled three columns in one
   session. It looks columns up by name and prints the five the design docs
