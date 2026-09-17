@@ -3920,6 +3920,7 @@ impl Elaborator {
             eqbind: None,
             ..
         } = &e.kind
+            && !self.attempt.motive_redundancy_probe.get()
         {
             let mut omitted = e.clone();
             let ExprKind::Match {
@@ -3931,6 +3932,11 @@ impl Elaborator {
             };
             *omitted_motive = None;
             let probe = self.clone();
+            // One probe per written motive: the matches nested under this
+            // one are elaborated here with their motives kept and are probed
+            // by the real pass below, once each, not once per enclosing
+            // probe (`attempt.rs`).
+            probe.attempt.motive_redundancy_probe.set(true);
             if let Ok(term) =
                 probe.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
                 && probe

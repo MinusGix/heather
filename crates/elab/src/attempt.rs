@@ -59,6 +59,12 @@ pub(super) struct DeclAttempt {
     pub(super) slot_probe_target: Cell<Option<Span>>,
     /// Prevents nested motive-less match speculation.
     pub(super) motive_speculation: Cell<bool>,
+    /// Inside the redundant-motive probe (`elab_check_skel_slots`): a written
+    /// motive nested under a probed one is not probed again there. Each
+    /// probe re-elaborates and kernel-checks its whole match, so probing at
+    /// every level doubled the work per level of nesting — `step_mono`'s
+    /// three levels cost 8.5x its elaboration (2026-09-17).
+    pub(super) motive_redundancy_probe: Cell<bool>,
 }
 
 impl DeclAttempt {
