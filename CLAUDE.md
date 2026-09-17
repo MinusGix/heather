@@ -10,8 +10,9 @@
   (~4.7 CPU-min), and the native x86 certificate gates
   (`crates/cli/tests/native*.rs` plus their warmup, ~20 CPU-min;
   `issues/native-summary-test-cpu-margin.md`) for the inner loop, and replays semantic test images that
-  an earlier build of the compiler wrote (kernel-rechecked, but the current
-  frontend is not re-run on unchanged library modules); a round's **final**
+  an earlier build of the compiler wrote (vouched for by the verdict store
+  at `target/decl-cache` or kernel-rechecked, but the current frontend is
+  not re-run on unchanged library modules); a round's **final**
   verification, and any change touching `lib/`, the kit, or the generators,
   must run the plain full `scripts/test`, which rebuilds such images.
   `scripts/test --long` (own target dir) additionally runs every slow kernel
@@ -68,6 +69,15 @@
   exponent, not the time. `docs/benchmarking.md` explains what "regressed"
   means and why the harness is first-party (the kernel stays at zero
   dependencies, dev-dependencies included — so no Criterion).
+- **What is slow right now, and where it comes from: `scripts/perf report`**
+  (`perf/README.md`). `scripts/perf snapshot` measures the suite history and
+  a corpus of files cold/warm/edited through the release CLI with `--timings`
+  and writes a dated, environment-keyed record to `perf/snapshots/`;
+  `report` prints the phase split, the concentration per file and the
+  heaviest declarations with deltas against the previous same-environment
+  snapshot, and `serve` is the dashboard. Read the latest report before
+  choosing a perf target, so a round attacks what the corpus says dominates
+  and not the item it happened to be looking at. It is a diary, not a gate.
 - **Read a `--timings` TSV with `scripts/timings`**, never by counting
   indices into an `awk -F'\t'` line — that mislabelled three columns in one
   session. It looks columns up by name and prints the five the design docs

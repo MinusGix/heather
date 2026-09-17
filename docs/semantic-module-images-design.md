@@ -162,7 +162,12 @@ data.
 1. Decode with bounds and reject malformed or unsupported images.
 2. Match all header identities before using the payload.
 3. Starting from the already-accepted dependency world, recheck every stored
-   kernel binding in order at its declared layer.
+   kernel binding in order at its declared layer — or, for a stored
+   definition, let the installed declaration gate vouch for it: the binding
+   is the one the source gate asked about over the same Ψ, so a
+   content-addressed verdict store answers the replay's question as it
+   answers the source path's (`docs/parallel-kernel-gate-design.md` §5.3,
+   2026-09-17). Without a gate, or on a miss, the kernel runs.
 4. Keep frontend metadata quarantined until every binding succeeds.
 5. Atomically commit the validated delta.
 
@@ -177,7 +182,8 @@ become expensive again. The existing trust ladder remains available:
 
 - recheck from the stored term;
 - replay recorded kernel search decisions;
-- trust a content-addressed local verdict for an inner-loop quick mode; and
+- trust a content-addressed local verdict (`heather check --cache` does,
+  for stored definitions as for source declarations); and
 - run a fresh or replay-verified final build.
 
 The safe recheck rung lands first. Omega's equal cold/warm measurements say it

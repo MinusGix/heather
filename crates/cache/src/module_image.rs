@@ -142,6 +142,11 @@ pub enum ModuleCacheError {
     Io(std::io::Error),
     Corrupt(&'static str),
     Decode(ModuleImageDecodeError),
+    /// The image would be refused by its own reader, so it was not written:
+    /// a stored over-budget image is decoded up to the budget, rejected and
+    /// re-published on every warm run
+    /// (`issues/semantic-image-over-budget-republished-every-run.md`).
+    OverBudget { nodes: u64, limit: u64 },
 }
 
 impl fmt::Display for ModuleCacheError {
@@ -150,6 +155,10 @@ impl fmt::Display for ModuleCacheError {
             Self::Io(e) => write!(f, "{e}"),
             Self::Corrupt(why) => write!(f, "{why}"),
             Self::Decode(e) => write!(f, "semantic image was rejected: {e}"),
+            Self::OverBudget { nodes, limit } => write!(
+                f,
+                "semantic image has {nodes} syntax nodes, past the decode budget of {limit}; not stored, so a warm run re-elaborates this module"
+            ),
         }
     }
 }
@@ -184,6 +193,56 @@ impl ModuleImageCache {
 
     pub fn path(&self, key: ModuleCacheKey) -> PathBuf {
         self.dir.join(format!("{}.hmi", hex(&key.0)))
+    }
+
+    /// The pointer to the newest image published for `module` over
+    /// `dependencies`, whatever its source: what an edited module replays
+    /// its unchanged declarations from
+    /// (`docs/declaration-slice-replay-design.md` §4). One small file per
+    /// (module, dependency world), holding the image's cache key.
+    fn latest_path(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> PathBuf {
+        let mut h = Sha256::new();
+        h.update(b"heather-module-latest-v1\0");
+        put_bytes(&mut h, module.as_bytes());
+        h.update(&(dependencies.ordered_interface_hashes().len() as u64).to_le_bytes());
+        for dependency in dependencies.ordered_interface_hashes() {
+            h.update(dependency);
+        }
+        self.dir.join(format!("{}.latest", hex(&h.finish())))
+    }
+
+    /// The newest image of `module` over `dependencies`, under the same
+    /// freshness policy as [`Self::load`]; `None` when no image was ever
+    /// published for that world or the pointer's target is gone. Its
+    /// warnings are attached to the delta so its slices can replay. The
+    /// warning spans are not bounded by any source length here: they refer
+    /// to the source that image was built from and are relocated before use.
+    pub fn load_previous(
+        &self,
+        module: &str,
+        dependencies: &ModuleDependencyIdentity,
+        dependency_psi: GlobalCtx,
+        freshness: ImageFreshness,
+    ) -> Result<Option<LoadedModule>, ModuleCacheError> {
+        let pointer = match std::fs::read(self.latest_path(module, dependencies)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(key) = <[u8; 32]>::try_from(pointer.as_slice()) else {
+            return Err(ModuleCacheError::Corrupt("module latest-image pointer has the wrong length"));
+        };
+        let Some(mut loaded) = self.load(ModuleCacheKey(key), dependency_psi, usize::MAX, freshness)? else {
+            return Ok(None);
+        };
+        if loaded.delta.module() != module {
+            return Err(ModuleCacheError::Corrupt("module latest-image pointer names another module"));
+        }
+        loaded.delta = loaded
+            .delta
+            .with_warnings(loaded.warnings.clone())
+            .map_err(ModuleCacheError::Corrupt)?;
+        Ok(Some(loaded))
     }
 
     pub fn interface_hash(delta: &ModuleDelta) -> [u8; 32] {
@@ -314,7 +373,10 @@ impl ModuleImageCache {
         warnings: &[Warning],
         semantics: SemanticsIdentity,
     ) -> Result<[u8; 32], ModuleCacheError> {
-        let semantic = delta.to_image_bytes();
+        let (semantic, nodes) = delta.to_image();
+        if nodes > self.limits.max_nodes {
+            return Err(ModuleCacheError::OverBudget { nodes, limit: self.limits.max_nodes });
+        }
         if semantic.len() > self.limits.max_bytes {
             return Err(ModuleCacheError::Corrupt(
                 "semantic image exceeds the byte limit",
@@ -346,6 +408,17 @@ impl ModuleImageCache {
             .and_then(|()| std::fs::rename(&temp_path, &final_path))
         {
             let _ = std::fs::remove_file(&temp_path);
+            return Err(error.into());
+        }
+        // The newest-image pointer, last: a reader that finds it finds the
+        // image. Losing the pointer costs one un-sliced edit check, never a
+        // wrong answer.
+        let latest = self.latest_path(delta.module(), delta.dependencies());
+        let temp_latest = temporary_sibling(&latest);
+        if let Err(error) = std::fs::write(&temp_latest, key.0)
+            .and_then(|()| std::fs::rename(&temp_latest, &latest))
+        {
+            let _ = std::fs::remove_file(&temp_latest);
             return Err(error.into());
         }
         Ok(interface_hash)

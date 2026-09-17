@@ -476,3 +476,209 @@ fn an_entry_for_nothing_is_never_consulted() {
     assert_eq!(cache.counts().hits, 0, "a key nothing computes cannot be hit");
     assert!(cache.counts().checked > 0);
 }
+
+// -- 5. one render per declaration ------------------------------------------
+
+/// `admits` and `accepted` ask about the same declaration, and hashing it is
+/// a full render: the run must render each gated declaration once, with the
+/// inline gate and at a deferred join alike. Until 2026-09-17 the deferred
+/// join re-rendered every declaration and the inline path re-walked every
+/// interface (`issues/merkle-walk-cold-share.md`).
+#[test]
+fn each_gated_declaration_is_rendered_once_at_either_gate_width() {
+    let src = source(PROOF_A, "add(n, 0) = n");
+    let mut per_width = Vec::new();
+    for workers in [1usize, 4] {
+        let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        cache.begin_run();
+        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let errs = e.check_source(&src);
+        assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(&src));
+        let c = cache.counts();
+        assert_eq!(
+            c.hashed, c.checked,
+            "width {workers}: {} declarations went to the kernel but {} were rendered",
+            c.checked, c.hashed
+        );
+        per_width.push((c.checked, cache.keys()));
+    }
+    assert_eq!(per_width[0], per_width[1], "the gate width must not change what is cached");
+}
+
+/// The open question a refused declaration leaves behind must not answer for
+/// the next declaration at the same Ψ position: the elaborator keeps going
+/// after a failure, and a same-named declaration with different content is
+/// exactly what a second module, or an edit, puts there. Driven at the gate
+/// interface directly, since a kernel refusal is hard to arrange from source.
+#[test]
+fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
+    use heather_elab::gate::{GateItem, KernelGate};
+    use heather_kernel::layer::Layer;
+    use heather_kernel::level::Level;
+    use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
+
+    let cache = Cache::over(Store::empty("unused".into()));
+    cache.begin_run();
+    let psi = GlobalCtx::new(Vec::new());
+    let empty = LocalCtx::nil();
+    let level = Level::constant(0);
+    let body_a = Term::TmNat;
+    let body_b = Term::TmUnit { level: Level::constant(0) };
+    let item = |body: &'static Term| GateItem {
+        name: "helper",
+        ctx: &empty,
+        ty: &Type::Nat,
+        level: &level,
+        body,
+        opaque: true,
+        layer: Layer::Code,
+        lands_in_psi: true,
+    };
+    // The bodies outlive the items; leak them so the closure can hand out
+    // `'static` borrows without a lifetime dance.
+    let body_a: &'static Term = Box::leak(Box::new(body_a));
+    let body_b: &'static Term = Box::leak(Box::new(body_b));
+
+    assert!(!cache.admits(&psi, &item(body_a)), "an empty store admits nothing");
+    assert_eq!(cache.counts().hashed, 1);
+    // The same declaration, accepted: answered from the open question.
+    cache.accepted(&psi, &item(body_a));
+    assert_eq!(cache.counts().hashed, 1, "accepted must not render again");
+    let key_a = cache.keys();
+    assert_eq!(key_a.len(), 1);
+
+    // A second declaration with the same name at the same position — refused
+    // before it could land, then a different one asks.
+    let cache = Cache::over(Store::empty("unused".into()));
+    cache.begin_run();
+    assert!(!cache.admits(&psi, &item(body_a)));
+    cache.abandon(&psi);
+    assert!(!cache.admits(&psi, &item(body_b)));
+    assert_eq!(cache.counts().hashed, 2, "after abandon the new declaration is rendered afresh");
+    cache.accepted(&psi, &item(body_b));
+    let key_b = cache.keys();
+    assert_eq!(key_b.len(), 1);
+    assert_ne!(key_a, key_b, "the two bodies must not share a check key");
+
+    // Without abandon, the belt: a second Ψ-landing question at one length
+    // kills the first, since only one declaration can be waiting to land at
+    // a position. (A same-named one is indistinguishable by position and is
+    // exactly what `abandon` exists for.)
+    let other = |body: &'static Term| GateItem { name: "other", ..item(body) };
+    let cache = Cache::over(Store::empty("unused".into()));
+    cache.begin_run();
+    assert!(!cache.admits(&psi, &item(body_a)));
+    assert!(!cache.admits(&psi, &other(body_b)));
+    assert_eq!(cache.counts().hashed, 2);
+    cache.accepted(&psi, &other(body_b));
+    assert_eq!(cache.keys(), key_b, "the check key is content-addressed; the name is metadata");
+    // `helper`'s question is dead: asking again renders again.
+    assert!(!cache.admits(&psi, &item(body_a)));
+    assert_eq!(cache.counts().hashed, 3);
+}
+
+// -- 5. replay ---------------------------------------------------------------
+
+/// A module replayed from its semantic image asks the gate the same questions
+/// its source elaboration asked: a stored definition is the binding the cold
+/// gate's `GateItem::binding` produced, over the same Ψ, so the warm store
+/// vouches for it and the kernel runs on nothing (the statement of a stored
+/// theorem, which carries no proof, is checked and has nothing to ask). An
+/// empty store rechecks every body and records it, so the *second* replay is
+/// the warm one; and a body the store never saw is not vouched for, at either
+/// gate width.
+#[test]
+fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
+    use heather_elab::{ModuleDependencyIdentity, ModuleReplayError};
+    use heather_kernel::term::{GlobalBinding, Term};
+
+    let src = source(PROOF_A, "add(n, 0) = n");
+    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let mut cold = Elaborator::with_prelude().expect("prelude");
+    cache.begin_run();
+    cold.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    let delta = cold
+        .elab_module_delta("m", &src, ModuleDependencyIdentity::default())
+        .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(&src)));
+    let bodies = delta
+        .extension()
+        .iter()
+        .filter(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+        .count();
+    assert_eq!(bodies, 1, "`add` is the one transparent definition; the theorems are opaque");
+    let c = cache.counts();
+    assert_eq!((c.checked, c.hits), (4, 0), "cold: every declaration faced the kernel");
+
+    for workers in [1usize, 4] {
+        // Warm: the store holds every verdict the cold run earned.
+        let mut warm = Elaborator::with_prelude().expect("prelude");
+        warm.set_kernel_workers(workers);
+        cache.begin_run();
+        warm.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let before = cache.counts();
+        warm.replay_module_delta(&delta, &ModuleDependencyIdentity::default())
+            .expect("the stored suffix replays");
+        let c = cache.counts().since(&before);
+        assert_eq!(
+            (c.checked, c.hits, c.hashed),
+            (0, bodies, bodies),
+            "width {workers}: a warm replay is vouched for, one render per body"
+        );
+        assert_eq!(warm.psi(), cold.psi(), "the replay lands the cold run's Ψ");
+
+        // An empty store: every body is checked and recorded, and the next
+        // replay against that store is warm.
+        let fresh = Rc::new(Cache::over(Store::empty("unused".into())));
+        for (round, expected) in [(1, (bodies, 0)), (2, (0, bodies))] {
+            let mut e = Elaborator::with_prelude().expect("prelude");
+            e.set_kernel_workers(workers);
+            fresh.begin_run();
+            e.set_gate(Rc::clone(&fresh) as Rc<dyn heather_elab::gate::KernelGate>);
+            let before = fresh.counts();
+            e.replay_module_delta(&delta, &ModuleDependencyIdentity::default())
+                .expect("the stored suffix replays");
+            let c = fresh.counts().since(&before);
+            assert_eq!((c.checked, c.hits), expected, "width {workers}, round {round}");
+        }
+
+        // A body the store never saw: the kernel judges it, and refuses.
+        let mut forged = delta.clone();
+        let at = forged
+            .extension()
+            .iter()
+            .position(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+            .unwrap();
+        let GlobalBinding::Tm { body, .. } = &mut forged.extension_mut()[at] else {
+            unreachable!()
+        };
+        *body = Some(Rc::new(Term::TmNat));
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        cache.begin_run();
+        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let before = e.psi().clone();
+        let counts = cache.counts();
+        let verdict = e.replay_module_delta(&forged, &ModuleDependencyIdentity::default());
+        assert!(
+            matches!(verdict, Err(ModuleReplayError::Kernel(_))),
+            "width {workers}: the forged body is refused through the kernel"
+        );
+        assert_eq!(e.psi(), &before, "nothing lands from a rejected replay");
+        let c = cache.counts().since(&counts);
+        assert_eq!((c.checked, c.hits), (1, 0), "width {workers}: the forged body was a miss");
+        // The refused question is dead: the same store still vouches for the
+        // genuine delta at the same Ψ position afterwards.
+        cache.begin_run();
+        let mut again = Elaborator::with_prelude().expect("prelude");
+        again.set_kernel_workers(workers);
+        again.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let before = cache.counts();
+        again
+            .replay_module_delta(&delta, &ModuleDependencyIdentity::default())
+            .expect("the genuine suffix replays after a refused one");
+        let c = cache.counts().since(&before);
+        assert_eq!((c.checked, c.hits), (0, bodies), "width {workers}: still warm after a refusal");
+    }
+}

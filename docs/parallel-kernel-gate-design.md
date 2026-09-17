@@ -386,11 +386,23 @@ exactly as the certificate's theorems are. The kernel exposes the statement
 half as `typing::check_global_binding_statement`, and `recheck_extension`
 runs it in order on the elaborator's thread, queues each body as a
 [`Deferred`](#3-the-queued-item) with an O(1) snapshot of its prefix, and
-joins before it returns. Nothing about the queued item is special: no gate
-row, no `accepted` (the replay never consulted the declaration gate), a
-placeholder name and span, because a replay failure is not reported to a
-user — it is the `ReplayRejected` notice that sends the module back to
-source elaboration.
+joins before it returns. The queued item has no gate row and a placeholder
+name and span, because a replay failure is not reported to a user — it is
+the `ReplayRejected` notice that sends the module back to source
+elaboration.
+
+Since 2026-09-17 the replay also consults the installed declaration gate
+(`gate.rs`), exactly as the source path does. A stored definition *is* the
+binding the cold run's `GateItem::binding` produced, over the same Ψ prefix,
+and the cache keys on content, never on the name (`docs/cache-v1-design.md`
+§3), so `admits` over the stored binding asks the question the cold gate
+answered: a hit skips the statement and the body, a miss checks both and
+`accepted` records the verdict at the join (inline: at the site), and a
+rejected replay abandons every question it opened. A stored theorem carries
+no proof and has nothing to ask; its statement is checked. Before that a warm
+run of an unchanged file rechecked every stored body and cost more than an
+edited one, whose declarations the same store vouched for
+(`issues/semantic-replay-phase-attribution.md`, 2026-09-17).
 
 The contract of §5.1 holds trivially here, because a replay commits nothing
 until the whole recheck has passed: a rejected replay at either width leaves
@@ -402,7 +414,8 @@ and their verdicts still read, and the statement's error is the one
 reported, which is what the serial loop would have reported first. A worker
 panic is `ModuleReplayError::KernelWorkerPanicked`, a rejection like any
 other from the session's point of view. An inline pool (`workers == 1`, a
-clone) runs the original serial call unchanged.
+clone) with no gate installed runs the original serial call unchanged; with
+a gate it runs the same loop with each body checked in place of queued.
 
 **Attribution.** The join's wall is already inside the session's
 `image_recheck` bracket, so the workers' clocks are charged nowhere and only

@@ -1,0 +1,5372 @@
+{
+ "schema": 1,
+ "stamp": "2026-09-17T18:41:49Z",
+ "label": "after: over-budget images refused at publish, node budget 16M -> 256M",
+ "commit": "2da2dbc",
+ "commit_full": "2da2dbc788c2cfff5bb62d22f4b7709f8e271d20",
+ "dirty": true,
+ "env": {
+  "source": "local",
+  "host": "minus-desktop",
+  "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+  "nproc": 16,
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "profile": "release",
+  "kernel_workers": 1,
+  "wait_workers": 8,
+  "loadavg": [
+   4.43,
+   6.6,
+   4.86
+  ]
+ },
+ "tests": {
+  "full": {
+   "run": "2026-09-16T17:44:45.606Z",
+   "runs_on_file": 21,
+   "targets": [
+    [
+     "crates/elab/tests/showcase_calculator.rs",
+     179.11
+    ],
+    [
+     "crates/elab/tests/certgen_emissions.rs",
+     68.83
+    ],
+    [
+     "crates/elab/tests/parser_library.rs",
+     68.27
+    ],
+    [
+     "heather-cli (crates/cli/src/main.rs)",
+     61.88
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_conditionals.rs",
+     58.09
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_control_flow.rs",
+     52.7
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_dataflow.rs",
+     52.06
+    ],
+    [
+     "crates/elab/tests/lib_setoid_mergeable.rs",
+     50.11
+    ],
+    [
+     "crates/cli/tests/native_stack_local.rs",
+     45.28
+    ],
+    [
+     "crates/elab/tests/certgen_nonnat.rs",
+     43.26
+    ],
+    [
+     "crates/elab/tests/certgen_t0param.rs",
+     39.82
+    ],
+    [
+     "crates/elab/tests/certgen_controls.rs",
+     36.94
+    ],
+    [
+     "crates/cli/tests/native.rs",
+     36.3
+    ],
+    [
+     "crates/elab/tests/certgen_tier1.rs",
+     35.21
+    ],
+    [
+     "crates/cli/tests/native_calls.rs",
+     34.82
+    ],
+    [
+     "crates/elab/tests/ir_pass_fuel.rs",
+     32.75
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_scaling.rs",
+     29.53
+    ],
+    [
+     "crates/elab/tests/x86_64.rs",
+     28.68
+    ],
+    [
+     "crates/elab/tests/reprgen.rs",
+     27.93
+    ],
+    [
+     "crates/elab/tests/function_ir_cert.rs",
+     25.6
+    ],
+    [
+     "crates/elab/tests/operators_onto_classes.rs",
+     23.87
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_model.rs",
+     23.48
+    ],
+    [
+     "crates/elab/tests/obligation_records.rs",
+     23.29
+    ],
+    [
+     "crates/cli/tests/native_summary.rs",
+     19.86
+    ],
+    [
+     "crates/elab/tests/lib_algebra.rs",
+     17.22
+    ],
+    [
+     "crates/elab/tests/omega_div_mod.rs",
+     14.54
+    ],
+    [
+     "crates/elab/tests/operation_indexed_classes.rs",
+     14.48
+    ],
+    [
+     "crates/elab/tests/function_ir.rs",
+     14.09
+    ],
+    [
+     "crates/elab/tests/lib_std_bitvec.rs",
+     11.75
+    ],
+    [
+     "crates/elab/tests/certgen_cert.rs",
+     11.13
+    ],
+    [
+     "crates/elab/tests/record_projection_size.rs",
+     11.06
+    ],
+    [
+     "crates/elab/tests/datarepr.rs",
+     10.73
+    ],
+    [
+     "crates/elab/tests/radix_numerals.rs",
+     10.37
+    ],
+    [
+     "crates/elab/tests/nat_order.rs",
+     9.63
+    ],
+    [
+     "crates/elab/tests/lib_std_int.rs",
+     9.47
+    ],
+    [
+     "crates/elab/tests/ir_v1.rs",
+     8.31
+    ],
+    [
+     "crates/elab/tests/repr_access.rs",
+     8.15
+    ],
+    [
+     "crates/elab/tests/omega.rs",
+     7.67
+    ],
+    [
+     "crates/elab/tests/lib_std_list.rs",
+     7.3
+    ],
+    [
+     "crates/elab/tests/binder_symbol_notation.rs",
+     7.06
+    ],
+    [
+     "crates/elab/tests/lib_std_tree.rs",
+     6.87
+    ],
+    [
+     "crates/cli/tests/check.rs",
+     6.76
+    ],
+    [
+     "crates/elab/tests/lib_std_relation.rs",
+     6.76
+    ],
+    [
+     "crates/elab/tests/lib_std_order.rs",
+     6.72
+    ],
+    [
+     "crates/elab/tests/mutual_recursion.rs",
+     6.61
+    ],
+    [
+     "crates/elab/tests/lib_std_bounded_list.rs",
+     5.61
+    ],
+    [
+     "crates/elab/tests/logic.rs",
+     5.25
+    ],
+    [
+     "crates/elab/tests/nat_arith.rs",
+     4.85
+    ],
+    [
+     "crates/elab/tests/omega_logic.rs",
+     4.49
+    ],
+    [
+     "crates/elab/tests/termination_measures.rs",
+     3.98
+    ],
+    [
+     "crates/elab/tests/parser_core.rs",
+     3.93
+    ],
+    [
+     "crates/elab/tests/omega_reconstruction.rs",
+     3.83
+    ],
+    [
+     "crates/elab/tests/omega_measure_reduction.rs",
+     3.82
+    ],
+    [
+     "crates/elab/tests/lib_list_algos.rs",
+     3.42
+    ],
+    [
+     "crates/elab/tests/semantic_x86_warmup.rs",
+     3.29
+    ],
+    [
+     "crates/elab/tests/stable_termination_labels.rs",
+     3.04
+    ],
+    [
+     "crates/elab/tests/decreases_unfolding.rs",
+     2.65
+    ],
+    [
+     "crates/kernel/tests/conv_pair_properties.rs",
+     2.53
+    ],
+    [
+     "crates/elab/tests/typed_termination_contexts.rs",
+     2.41
+    ],
+    [
+     "crates/elab/tests/termination_local_evidence.rs",
+     2.25
+    ],
+    [
+     "crates/kernel/tests/acc.rs",
+     2.2
+    ],
+    [
+     "crates/elab/tests/certgen.rs",
+     2.0
+    ],
+    [
+     "crates/elab/tests/nat_parity.rs",
+     2.0
+    ],
+    [
+     "heather-elab (crates/elab/src/lib.rs)",
+     1.79
+    ],
+    [
+     "crates/elab/tests/annotation_cost.rs",
+     1.66
+    ],
+    [
+     "crates/elab/tests/nat_run_primitives.rs",
+     1.63
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_declared.rs",
+     1.59
+    ],
+    [
+     "crates/kernel/tests/subst_laws.rs",
+     1.56
+    ],
+    [
+     "crates/elab/tests/omega_div_mod_scaling.rs",
+     1.51
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_wf.rs",
+     1.44
+    ],
+    [
+     "crates/elab/tests/result_propagation.rs",
+     1.37
+    ],
+    [
+     "crates/elab/tests/lib_std_certified_lookup.rs",
+     1.33
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_gen.rs",
+     1.22
+    ],
+    [
+     "crates/elab/tests/semantic_image.rs",
+     1.11
+    ],
+    [
+     "crates/elab/tests/frontend_bench_smoke.rs",
+     1.08
+    ],
+    [
+     "crates/elab/tests/callback_expected_types.rs",
+     1.07
+    ],
+    [
+     "crates/elab/tests/decide_combinator.rs",
+     0.99
+    ],
+    [
+     "crates/elab/tests/modules.rs",
+     0.99
+    ],
+    [
+     "crates/elab/tests/indexed_declared_families.rs",
+     0.83
+    ],
+    [
+     "crates/elab/tests/decidable_if.rs",
+     0.78
+    ],
+    [
+     "crates/elab/tests/function_types.rs",
+     0.78
+    ],
+    [
+     "crates/elab/tests/inductive_tier0.rs",
+     0.77
+    ],
+    [
+     "crates/elab/tests/goal_holes.rs",
+     0.74
+    ],
+    [
+     "crates/kernel/tests/ch05_06_lemmas.rs",
+     0.71
+    ],
+    [
+     "crates/kernel/tests/conv_properties.rs",
+     0.71
+    ],
+    [
+     "crates/elab/tests/traits_type_projection.rs",
+     0.7
+    ],
+    [
+     "crates/elab/tests/traits.rs",
+     0.69
+    ],
+    [
+     "crates/cache/tests/end_to_end.rs",
+     0.67
+    ],
+    [
+     "crates/elab/tests/surface_fin.rs",
+     0.67
+    ],
+    [
+     "crates/elab/tests/decidable_equation_carrier.rs",
+     0.64
+    ],
+    [
+     "crates/elab/tests/nested_match_patterns.rs",
+     0.63
+    ],
+    [
+     "crates/elab/tests/inductive_tier1.rs",
+     0.61
+    ],
+    [
+     "crates/elab/tests/polymorphism.rs",
+     0.61
+    ],
+    [
+     "crates/elab/tests/warnings.rs",
+     0.61
+    ],
+    [
+     "crates/elab/tests/semantic_omega_warmup.rs",
+     0.59
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b.rs",
+     0.57
+    ],
+    [
+     "crates/elab/tests/telescope_roles_compile.rs",
+     0.57
+    ],
+    [
+     "crates/elab/tests/match_equation_split.rs",
+     0.56
+    ],
+    [
+     "crates/elab/tests/let_and_blocks.rs",
+     0.54
+    ],
+    [
+     "crates/elab/tests/records.rs",
+     0.54
+    ],
+    [
+     "crates/elab/tests/indexed_families.rs",
+     0.53
+    ],
+    [
+     "crates/kernel/tests/conv_differential.rs",
+     0.5
+    ],
+    [
+     "crates/elab/tests/el_reader_audit.rs",
+     0.47
+    ],
+    [
+     "crates/elab/tests/congruence_lgg.rs",
+     0.46
+    ],
+    [
+     "crates/elab/tests/motive_synth.rs",
+     0.46
+    ],
+    [
+     "crates/elab/tests/types_as_expressions.rs",
+     0.46
+    ],
+    [
+     "crates/elab/tests/traits_inline_constraints.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/traits_resolution.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/universe.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/match_recursion.rs",
+     0.44
+    ],
+    [
+     "crates/elab/tests/quotation.rs",
+     0.42
+    ],
+    [
+     "crates/elab/tests/named_arguments.rs",
+     0.41
+    ],
+    [
+     "crates/elab/tests/traits_receiver.rs",
+     0.41
+    ],
+    [
+     "crates/elab/tests/value_generic_instances.rs",
+     0.41
+    ],
+    [
+     "crates/elab/tests/value_parameters.rs",
+     0.41
+    ],
+    [
+     "crates/elab/tests/algebraic_theory_composition.rs",
+     0.4
+    ],
+    [
+     "crates/elab/tests/ih_generalization.rs",
+     0.4
+    ],
+    [
+     "crates/elab/tests/branching_route_c_nary.rs",
+     0.39
+    ],
+    [
+     "crates/elab/tests/certgen_route1_spike.rs",
+     0.39
+    ],
+    [
+     "crates/elab/tests/implicit_fn_binders.rs",
+     0.39
+    ],
+    [
+     "crates/elab/tests/template_registration.rs",
+     0.39
+    ],
+    [
+     "crates/elab/tests/argument_type_reduction.rs",
+     0.37
+    ],
+    [
+     "crates/elab/tests/imported_receiver_dispatch.rs",
+     0.36
+    ],
+    [
+     "crates/elab/tests/kernel_pool.rs",
+     0.36
+    ],
+    [
+     "crates/elab/tests/tier1_list_proofs.rs",
+     0.36
+    ],
+    [
+     "heather-kernel (crates/kernel/src/lib.rs)",
+     0.35
+    ],
+    [
+     "crates/elab/tests/operators.rs",
+     0.34
+    ],
+    [
+     "crates/elab/tests/in_language_nth.rs",
+     0.33
+    ],
+    [
+     "crates/elab/tests/check_reports_mismatch.rs",
+     0.32
+    ],
+    [
+     "crates/elab/tests/in_language_fold.rs",
+     0.32
+    ],
+    [
+     "crates/elab/tests/determinism.rs",
+     0.31
+    ],
+    [
+     "crates/elab/tests/type_members.rs",
+     0.31
+    ],
+    [
+     "crates/kernel/tests/eval_differential.rs",
+     0.3
+    ],
+    [
+     "crates/elab/tests/motives.rs",
+     0.29
+    ],
+    [
+     "crates/elab/tests/overapplication.rs",
+     0.29
+    ],
+    [
+     "crates/elab/tests/container_proofs.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/in_language_tabulate.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/apply.rs",
+     0.27
+    ],
+    [
+     "crates/elab/tests/method_receiver.rs",
+     0.27
+    ],
+    [
+     "crates/elab/tests/list_literals.rs",
+     0.26
+    ],
+    [
+     "crates/elab/tests/container_fields.rs",
+     0.25
+    ],
+    [
+     "crates/elab/tests/traits_type_former_carrier.rs",
+     0.25
+    ],
+    [
+     "crates/elab/tests/goal_combinators.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/carrier_numerals.rs",
+     0.22
+    ],
+    [
+     "crates/elab/tests/constructor_values.rs",
+     0.22
+    ],
+    [
+     "crates/elab/tests/implicit_args.rs",
+     0.22
+    ],
+    [
+     "crates/cli/tests/semantic.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/lib_std_location.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/named_patterns.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/record_type_values.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/true_prop.rs",
+     0.19
+    ],
+    [
+     "crates/cache/tests/module_images.rs",
+     0.18
+    ],
+    [
+     "crates/elab/tests/auto_refl.rs",
+     0.18
+    ],
+    [
+     "crates/elab/tests/display_surface.rs",
+     0.18
+    ],
+    [
+     "crates/elab/tests/positional_if_let.rs",
+     0.18
+    ],
+    [
+     "crates/cli/tests/kernel_workers.rs",
+     0.17
+    ],
+    [
+     "crates/elab/tests/in_language_map.rs",
+     0.17
+    ],
+    [
+     "crates/elab/tests/container_recursion.rs",
+     0.16
+    ],
+    [
+     "crates/cache/tests/sha256.rs",
+     0.15
+    ],
+    [
+     "crates/elab/tests/argument_slots.rs",
+     0.15
+    ],
+    [
+     "crates/elab/tests/check_diagnostics.rs",
+     0.15
+    ],
+    [
+     "crates/elab/tests/nat_suite.rs",
+     0.15
+    ],
+    [
+     "crates/elab/tests/instance_resolved_key.rs",
+     0.13
+    ],
+    [
+     "crates/kernel/tests/wf.rs",
+     0.13
+    ],
+    [
+     "crates/elab/tests/squash.rs",
+     0.12
+    ],
+    [
+     "crates/cli/tests/timings.rs",
+     0.11
+    ],
+    [
+     "crates/elab/tests/sequent_binders.rs",
+     0.11
+    ],
+    [
+     "crates/elab/tests/vector_types.rs",
+     0.11
+    ],
+    [
+     "crates/elab/tests/assuming_groups.rs",
+     0.1
+    ],
+    [
+     "crates/elab/tests/instrumentation.rs",
+     0.1
+    ],
+    [
+     "crates/elab/tests/tier1_fording.rs",
+     0.1
+    ],
+    [
+     "crates/elab/tests/designation_resolved_key.rs",
+     0.09
+    ],
+    [
+     "crates/elab/tests/branching_route_c.rs",
+     0.08
+    ],
+    [
+     "crates/elab/tests/branching_route_a.rs",
+     0.05
+    ],
+    [
+     "crates/kernel/tests/seq_transp.rs",
+     0.05
+    ],
+    [
+     "crates/elab/tests/semantic_test_support.rs",
+     0.04
+    ],
+    [
+     "crates/kernel/tests/reduce.rs",
+     0.04
+    ],
+    [
+     "crates/elab/tests/axiom_provenance.rs",
+     0.03
+    ],
+    [
+     "crates/kernel/tests/typing.rs",
+     0.03
+    ],
+    [
+     "crates/elab/tests/indexed_declared_index.rs",
+     0.02
+    ],
+    [
+     "crates/elab/tests/indexed_route1.rs",
+     0.02
+    ],
+    [
+     "crates/elab/tests/large_nat_literals.rs",
+     0.02
+    ],
+    [
+     "crates/elab/tests/session_transaction.rs",
+     0.02
+    ],
+    [
+     "crates/kernel/tests/bitvec_values.rs",
+     0.02
+    ],
+    [
+     "crates/kernel/tests/squash.rs",
+     0.013
+    ],
+    [
+     "crates/syntax/tests/editor_corpus.rs",
+     0.011
+    ],
+    [
+     "crates/elab/tests/surface_existential_probe.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/conv.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/decode_laws.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/definitions.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/seq_codes.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/vec_fin.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/wf_codes.rs",
+     0.01
+    ],
+    [
+     "heather-syntax (crates/syntax/src/lib.rs)",
+     0.01
+    ],
+    [
+     "crates/cache/tests/merkle.rs",
+     0.008
+    ],
+    [
+     "crates/elab/tests/module_delta_omega_bench.rs",
+     0.008
+    ],
+    [
+     "crates/syntax/tests/decrease_labels.rs",
+     0.008
+    ],
+    [
+     "crates/syntax/tests/result_propagation.rs",
+     0.008
+    ],
+    [
+     "crates/elab/tests/function_ir_x86.rs",
+     0.006
+    ],
+    [
+     "heather-cache (crates/cache/src/lib.rs)",
+     0.005
+    ],
+    [
+     "heather-cli (crates/cli/src/lib.rs)",
+     0.005
+    ]
+   ],
+   "sum_s": 1421.74,
+   "source": "/home/minus/Kairos/Code/heather/target/test-target-timings-full.tsv",
+   "note": "seconds per test binary at kernel width one under the suite's parallel scheduler"
+  },
+  "fast": {
+   "run": "2026-09-16T22:50:54.627Z",
+   "runs_on_file": 6,
+   "targets": [
+    [
+     "crates/elab/tests/showcase_calculator.rs",
+     132.94
+    ],
+    [
+     "crates/elab/tests/parser_library.rs",
+     68.64
+    ],
+    [
+     "crates/elab/tests/lib_setoid_mergeable.rs",
+     54.47
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_conditionals.rs",
+     41.02
+    ],
+    [
+     "crates/elab/tests/ir_pass_fuel.rs",
+     38.9
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_control_flow.rs",
+     38.58
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_dataflow.rs",
+     37.31
+    ],
+    [
+     "crates/elab/tests/x86_64.rs",
+     23.7
+    ],
+    [
+     "crates/elab/tests/function_ir_cert.rs",
+     19.5
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_model.rs",
+     17.92
+    ],
+    [
+     "crates/elab/tests/obligation_records.rs",
+     17.3
+    ],
+    [
+     "crates/elab/tests/function_ir.rs",
+     13.49
+    ],
+    [
+     "crates/elab/tests/omega_div_mod.rs",
+     13.46
+    ],
+    [
+     "crates/elab/tests/datarepr.rs",
+     10.07
+    ],
+    [
+     "crates/elab/tests/record_projection_size.rs",
+     10.03
+    ],
+    [
+     "crates/elab/tests/radix_numerals.rs",
+     9.85
+    ],
+    [
+     "crates/elab/tests/lib_std_bitvec.rs",
+     9.73
+    ],
+    [
+     "crates/elab/tests/repr_access.rs",
+     9.43
+    ],
+    [
+     "crates/elab/tests/nat_order.rs",
+     9.03
+    ],
+    [
+     "crates/elab/tests/lib_std_int.rs",
+     8.06
+    ],
+    [
+     "crates/elab/tests/omega.rs",
+     7.68
+    ],
+    [
+     "crates/elab/tests/lib_std_list.rs",
+     7.6
+    ],
+    [
+     "crates/elab/tests/lib_std_order.rs",
+     7.33
+    ],
+    [
+     "crates/elab/tests/mutual_recursion.rs",
+     6.66
+    ],
+    [
+     "crates/cli/tests/check.rs",
+     6.46
+    ],
+    [
+     "crates/elab/tests/lib_std_bounded_list.rs",
+     6.07
+    ],
+    [
+     "crates/elab/tests/reprgen.rs",
+     5.97
+    ],
+    [
+     "crates/elab/tests/lib_std_relation.rs",
+     5.64
+    ],
+    [
+     "crates/elab/tests/nat_arith.rs",
+     5.34
+    ],
+    [
+     "crates/elab/tests/termination_measures.rs",
+     5.28
+    ],
+    [
+     "crates/elab/tests/lib_std_tree.rs",
+     5.21
+    ],
+    [
+     "crates/elab/tests/logic.rs",
+     4.76
+    ],
+    [
+     "crates/elab/tests/omega_logic.rs",
+     4.18
+    ],
+    [
+     "crates/elab/tests/parser_core.rs",
+     3.61
+    ],
+    [
+     "crates/elab/tests/omega_measure_reduction.rs",
+     3.5
+    ],
+    [
+     "crates/elab/tests/omega_reconstruction.rs",
+     3.5
+    ],
+    [
+     "crates/elab/tests/lib_list_algos.rs",
+     3.31
+    ],
+    [
+     "crates/elab/tests/stable_termination_labels.rs",
+     3.23
+    ],
+    [
+     "crates/elab/tests/decreases_unfolding.rs",
+     3.06
+    ],
+    [
+     "crates/kernel/tests/conv_pair_properties.rs",
+     3.04
+    ],
+    [
+     "crates/elab/tests/typed_termination_contexts.rs",
+     3.02
+    ],
+    [
+     "crates/elab/tests/termination_local_evidence.rs",
+     2.99
+    ],
+    [
+     "crates/elab/tests/binder_symbol_notation.rs",
+     2.96
+    ],
+    [
+     "crates/elab/tests/operators_onto_classes.rs",
+     2.94
+    ],
+    [
+     "crates/elab/tests/semantic_x86_warmup.rs",
+     2.8
+    ],
+    [
+     "crates/elab/tests/certgen.rs",
+     2.76
+    ],
+    [
+     "crates/elab/tests/nat_parity.rs",
+     2.64
+    ],
+    [
+     "crates/elab/tests/lib_algebra.rs",
+     2.57
+    ],
+    [
+     "crates/kernel/tests/acc.rs",
+     2.53
+    ],
+    [
+     "crates/elab/tests/operation_indexed_classes.rs",
+     2.46
+    ],
+    [
+     "heather-elab (crates/elab/src/lib.rs)",
+     2.14
+    ],
+    [
+     "crates/elab/tests/certgen_nonnat.rs",
+     1.97
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_gen.rs",
+     1.62
+    ],
+    [
+     "crates/elab/tests/annotation_cost.rs",
+     1.49
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_declared.rs",
+     1.46
+    ],
+    [
+     "crates/elab/tests/nat_run_primitives.rs",
+     1.46
+    ],
+    [
+     "crates/kernel/tests/subst_laws.rs",
+     1.4
+    ],
+    [
+     "crates/elab/tests/lib_std_certified_lookup.rs",
+     1.35
+    ],
+    [
+     "crates/elab/tests/omega_div_mod_scaling.rs",
+     1.35
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b_wf.rs",
+     1.32
+    ],
+    [
+     "crates/elab/tests/ir_v1.rs",
+     1.27
+    ],
+    [
+     "crates/elab/tests/frontend_bench_smoke.rs",
+     1.25
+    ],
+    [
+     "crates/elab/tests/result_propagation.rs",
+     1.23
+    ],
+    [
+     "crates/elab/tests/semantic_image.rs",
+     1.19
+    ],
+    [
+     "crates/elab/tests/decide_combinator.rs",
+     1.15
+    ],
+    [
+     "crates/elab/tests/callback_expected_types.rs",
+     1.0
+    ],
+    [
+     "crates/elab/tests/indexed_declared_families.rs",
+     0.92
+    ],
+    [
+     "crates/elab/tests/surface_fin.rs",
+     0.86
+    ],
+    [
+     "crates/elab/tests/decidable_if.rs",
+     0.85
+    ],
+    [
+     "crates/elab/tests/polymorphism.rs",
+     0.83
+    ],
+    [
+     "crates/kernel/tests/ch05_06_lemmas.rs",
+     0.76
+    ],
+    [
+     "crates/elab/tests/let_and_blocks.rs",
+     0.75
+    ],
+    [
+     "crates/elab/tests/match_equation_split.rs",
+     0.73
+    ],
+    [
+     "crates/elab/tests/modules.rs",
+     0.69
+    ],
+    [
+     "crates/cache/tests/end_to_end.rs",
+     0.64
+    ],
+    [
+     "crates/elab/tests/goal_holes.rs",
+     0.63
+    ],
+    [
+     "crates/elab/tests/records.rs",
+     0.63
+    ],
+    [
+     "crates/elab/tests/semantic_omega_warmup.rs",
+     0.63
+    ],
+    [
+     "crates/elab/tests/traits.rs",
+     0.62
+    ],
+    [
+     "crates/elab/tests/function_types.rs",
+     0.61
+    ],
+    [
+     "crates/elab/tests/indexed_families.rs",
+     0.61
+    ],
+    [
+     "crates/elab/tests/el_reader_audit.rs",
+     0.58
+    ],
+    [
+     "crates/elab/tests/inductive_tier0.rs",
+     0.58
+    ],
+    [
+     "crates/elab/tests/inductive_tier1.rs",
+     0.57
+    ],
+    [
+     "crates/elab/tests/universe.rs",
+     0.57
+    ],
+    [
+     "crates/elab/tests/warnings.rs",
+     0.56
+    ],
+    [
+     "crates/elab/tests/decidable_equation_carrier.rs",
+     0.54
+    ],
+    [
+     "crates/kernel/tests/conv_properties.rs",
+     0.54
+    ],
+    [
+     "crates/elab/tests/quotation.rs",
+     0.53
+    ],
+    [
+     "crates/elab/tests/traits_inline_constraints.rs",
+     0.52
+    ],
+    [
+     "crates/elab/tests/operators.rs",
+     0.51
+    ],
+    [
+     "crates/elab/tests/motive_synth.rs",
+     0.5
+    ],
+    [
+     "crates/elab/tests/traits_receiver.rs",
+     0.49
+    ],
+    [
+     "crates/elab/tests/indexed_route_2b.rs",
+     0.48
+    ],
+    [
+     "crates/elab/tests/telescope_roles_compile.rs",
+     0.48
+    ],
+    [
+     "crates/elab/tests/traits_resolution.rs",
+     0.48
+    ],
+    [
+     "crates/elab/tests/value_generic_instances.rs",
+     0.47
+    ],
+    [
+     "crates/elab/tests/named_arguments.rs",
+     0.46
+    ],
+    [
+     "crates/elab/tests/algebraic_theory_composition.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/implicit_fn_binders.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/nested_match_patterns.rs",
+     0.45
+    ],
+    [
+     "crates/elab/tests/congruence_lgg.rs",
+     0.44
+    ],
+    [
+     "crates/elab/tests/match_recursion.rs",
+     0.44
+    ],
+    [
+     "crates/kernel/tests/conv_differential.rs",
+     0.44
+    ],
+    [
+     "crates/elab/tests/certgen_route1_spike.rs",
+     0.43
+    ],
+    [
+     "crates/elab/tests/kernel_pool.rs",
+     0.42
+    ],
+    [
+     "crates/elab/tests/traits_type_projection.rs",
+     0.42
+    ],
+    [
+     "heather-kernel (crates/kernel/src/lib.rs)",
+     0.42
+    ],
+    [
+     "crates/elab/tests/tier1_list_proofs.rs",
+     0.41
+    ],
+    [
+     "crates/elab/tests/types_as_expressions.rs",
+     0.4
+    ],
+    [
+     "crates/elab/tests/value_parameters.rs",
+     0.4
+    ],
+    [
+     "crates/elab/tests/branching_route_c_nary.rs",
+     0.35
+    ],
+    [
+     "crates/elab/tests/in_language_tabulate.rs",
+     0.34
+    ],
+    [
+     "crates/elab/tests/apply.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/determinism.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/ih_generalization.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/motives.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/overapplication.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/template_registration.rs",
+     0.28
+    ],
+    [
+     "crates/elab/tests/argument_type_reduction.rs",
+     0.26
+    ],
+    [
+     "crates/elab/tests/traits_type_former_carrier.rs",
+     0.26
+    ],
+    [
+     "crates/elab/tests/check_reports_mismatch.rs",
+     0.25
+    ],
+    [
+     "crates/elab/tests/imported_receiver_dispatch.rs",
+     0.25
+    ],
+    [
+     "crates/elab/tests/true_prop.rs",
+     0.25
+    ],
+    [
+     "crates/elab/tests/container_fields.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/container_proofs.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/in_language_fold.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/in_language_nth.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/list_literals.rs",
+     0.24
+    ],
+    [
+     "crates/kernel/tests/eval_differential.rs",
+     0.24
+    ],
+    [
+     "crates/elab/tests/carrier_numerals.rs",
+     0.23
+    ],
+    [
+     "crates/elab/tests/lib_std_location.rs",
+     0.23
+    ],
+    [
+     "crates/elab/tests/record_type_values.rs",
+     0.23
+    ],
+    [
+     "crates/elab/tests/goal_combinators.rs",
+     0.22
+    ],
+    [
+     "crates/elab/tests/named_patterns.rs",
+     0.22
+    ],
+    [
+     "crates/elab/tests/argument_slots.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/auto_refl.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/constructor_values.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/implicit_args.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/in_language_map.rs",
+     0.21
+    ],
+    [
+     "crates/elab/tests/type_members.rs",
+     0.21
+    ],
+    [
+     "crates/cache/tests/module_images.rs",
+     0.2
+    ],
+    [
+     "crates/cli/tests/semantic.rs",
+     0.2
+    ],
+    [
+     "crates/elab/tests/method_receiver.rs",
+     0.2
+    ],
+    [
+     "crates/elab/tests/check_diagnostics.rs",
+     0.18
+    ],
+    [
+     "crates/elab/tests/container_recursion.rs",
+     0.18
+    ],
+    [
+     "crates/cache/tests/sha256.rs",
+     0.16
+    ],
+    [
+     "crates/cli/tests/kernel_workers.rs",
+     0.16
+    ],
+    [
+     "crates/elab/tests/display_surface.rs",
+     0.16
+    ],
+    [
+     "crates/elab/tests/positional_if_let.rs",
+     0.15
+    ],
+    [
+     "crates/elab/tests/designation_resolved_key.rs",
+     0.14
+    ],
+    [
+     "crates/elab/tests/sequent_binders.rs",
+     0.14
+    ],
+    [
+     "crates/elab/tests/instance_resolved_key.rs",
+     0.13
+    ],
+    [
+     "crates/elab/tests/squash.rs",
+     0.13
+    ],
+    [
+     "crates/kernel/tests/wf.rs",
+     0.13
+    ],
+    [
+     "crates/elab/tests/assuming_groups.rs",
+     0.12
+    ],
+    [
+     "crates/elab/tests/nat_suite.rs",
+     0.12
+    ],
+    [
+     "crates/cli/tests/timings.rs",
+     0.11
+    ],
+    [
+     "crates/elab/tests/vector_types.rs",
+     0.11
+    ],
+    [
+     "crates/elab/tests/branching_route_c.rs",
+     0.08
+    ],
+    [
+     "crates/elab/tests/tier1_fording.rs",
+     0.08
+    ],
+    [
+     "crates/elab/tests/branching_route_a.rs",
+     0.06
+    ],
+    [
+     "crates/kernel/tests/seq_transp.rs",
+     0.06
+    ],
+    [
+     "crates/elab/tests/instrumentation.rs",
+     0.05
+    ],
+    [
+     "crates/elab/tests/semantic_test_support.rs",
+     0.04
+    ],
+    [
+     "crates/kernel/tests/reduce.rs",
+     0.04
+    ],
+    [
+     "crates/elab/tests/axiom_provenance.rs",
+     0.03
+    ],
+    [
+     "crates/elab/tests/indexed_route1.rs",
+     0.03
+    ],
+    [
+     "crates/elab/tests/indexed_declared_index.rs",
+     0.02
+    ],
+    [
+     "crates/elab/tests/large_nat_literals.rs",
+     0.02
+    ],
+    [
+     "crates/elab/tests/session_transaction.rs",
+     0.02
+    ],
+    [
+     "crates/kernel/tests/bitvec_values.rs",
+     0.02
+    ],
+    [
+     "crates/kernel/tests/typing.rs",
+     0.02
+    ],
+    [
+     "crates/kernel/tests/wf_codes.rs",
+     0.02
+    ],
+    [
+     "crates/syntax/tests/editor_corpus.rs",
+     0.018
+    ],
+    [
+     "crates/kernel/tests/squash.rs",
+     0.017
+    ],
+    [
+     "crates/syntax/tests/result_propagation.rs",
+     0.014
+    ],
+    [
+     "crates/cli/tests/native_calls.rs",
+     0.013
+    ],
+    [
+     "crates/elab/tests/certgen_tier1.rs",
+     0.01
+    ],
+    [
+     "crates/elab/tests/surface_existential_probe.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/conv.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/decode_laws.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/definitions.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/seq_codes.rs",
+     0.01
+    ],
+    [
+     "crates/kernel/tests/vec_fin.rs",
+     0.01
+    ],
+    [
+     "heather-syntax (crates/syntax/src/lib.rs)",
+     0.01
+    ],
+    [
+     "crates/cli/tests/native.rs",
+     0.009
+    ],
+    [
+     "crates/elab/tests/certgen_cert.rs",
+     0.009
+    ],
+    [
+     "crates/syntax/tests/decrease_labels.rs",
+     0.009
+    ],
+    [
+     "heather-cli (crates/cli/src/lib.rs)",
+     0.008
+    ],
+    [
+     "crates/elab/tests/certgen_emissions.rs",
+     0.007
+    ],
+    [
+     "crates/elab/tests/certgen_t0param.rs",
+     0.007
+    ],
+    [
+     "crates/elab/tests/function_ir_x86_scaling.rs",
+     0.007
+    ],
+    [
+     "heather-cli (crates/cli/src/main.rs)",
+     0.007
+    ],
+    [
+     "crates/cache/tests/merkle.rs",
+     0.006
+    ],
+    [
+     "crates/cli/tests/native_summary.rs",
+     0.006
+    ],
+    [
+     "crates/elab/tests/certgen_controls.rs",
+     0.006
+    ],
+    [
+     "crates/elab/tests/module_delta_omega_bench.rs",
+     0.006
+    ],
+    [
+     "crates/cli/tests/native_stack_local.rs",
+     0.005
+    ],
+    [
+     "crates/elab/tests/function_ir_x86.rs",
+     0.004
+    ],
+    [
+     "heather-cache (crates/cache/src/lib.rs)",
+     0.004
+    ]
+   ],
+   "sum_s": 771.39,
+   "source": "/home/minus/Kairos/Code/heather/target/test-target-timings-fast.tsv",
+   "note": "seconds per test binary at kernel width one under the suite's parallel scheduler"
+  }
+ },
+ "files": [
+  {
+   "path": "lib/std/omega.hthr",
+   "search": [],
+   "wait": {
+    "wall_s": 5.52,
+    "cpu_s": 10.819,
+    "max_rss_mb": 667.7,
+    "exit": 0,
+    "summary": "lib/std/omega.hthr: ok (cache) \u2014 683 declarations kernel-checked, 0 accepted from cache, 0 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 5402727425,
+     "other_ns": 477667529,
+     "parse_ns": 9708499,
+     "prelude_ns": 163397,
+     "kernel_gate_ns": 399830733,
+     "decl_type_ns": 853675511,
+     "decl_body_ns": 1485560571,
+     "decl_emit_ns": 452388922,
+     "decl_commit_ns": 56412544,
+     "lower_ns": 31758731,
+     "elab_whnf_ns": 52795196,
+     "diag_note_ns": 0,
+     "lint_ns": 2082407,
+     "unify_ns": 2265512,
+     "resolve_ns": 6159491,
+     "matching_ns": 24552783,
+     "gendefs_ns": 1020723,
+     "omega_reflect_ns": 2252609,
+     "omega_search_ns": 43001,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 13502161,
+     "omega_reconstruct_ns": 1534929,
+     "omega_check_ns": 690404712,
+     "image_decode_ns": 73390,
+     "image_recheck_ns": 0,
+     "image_publish_ns": 33795093,
+     "cache_hash_ns": 656290,
+     "merkle_walk_ns": 804422691,
+     "decls_gated": 1678,
+     "gendefs_pushed": 115,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 61,
+     "unify_calls": 1291,
+     "cache_hashes": 1366,
+     "diag_notes": 0,
+     "diag_candidates": 11665,
+     "check_terms": 737,
+     "conv_shortcut_hits": 2455757,
+     "conv_memo_hits": 1091,
+     "conv_misses": 133329,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 16,
+     "eval_steps": 2661187,
+     "eval_delta_steps": 111680,
+     "eval_drives": 4207255,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 11558127,
+      "kernel_gate_ns": 1027111,
+      "image_decode_ns": 10640,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 968546,
+      "items": 45
+     },
+     {
+      "name": "bool",
+      "total_ns": 6876494,
+      "kernel_gate_ns": 515888,
+      "image_decode_ns": 6853,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 439433,
+      "items": 24
+     },
+     {
+      "name": "nat",
+      "total_ns": 123707615,
+      "kernel_gate_ns": 662301,
+      "image_decode_ns": 6813,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1708929,
+      "items": 136
+     },
+     {
+      "name": "option",
+      "total_ns": 1785475,
+      "kernel_gate_ns": 67738,
+      "image_decode_ns": 8356,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 127832,
+      "items": 4
+     },
+     {
+      "name": "pair",
+      "total_ns": 2722310,
+      "kernel_gate_ns": 620535,
+      "image_decode_ns": 6262,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 154743,
+      "items": 3
+     },
+     {
+      "name": "list",
+      "total_ns": 291496852,
+      "kernel_gate_ns": 9580408,
+      "image_decode_ns": 7344,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 3722235,
+      "items": 79
+     },
+     {
+      "name": "algebra",
+      "total_ns": 113488576,
+      "kernel_gate_ns": 20855248,
+      "image_decode_ns": 9128,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7377844,
+      "items": 46
+     },
+     {
+      "name": "int",
+      "total_ns": 548862497,
+      "kernel_gate_ns": 5246734,
+      "image_decode_ns": 8546,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 4319277,
+      "items": 158
+     },
+     {
+      "name": "omega",
+      "total_ns": 4091141227,
+      "kernel_gate_ns": 358564257,
+      "image_decode_ns": 9448,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 14976254,
+      "items": 123
+     }
+    ],
+    "items": {
+     "count": 623,
+     "sum_total_ns": 9394013483,
+     "p50_total_ns": 1198471,
+     "p90_total_ns": 19514848,
+     "max_total_ns": 1600919006,
+     "top": [
+      {
+       "name": "omega::cutsat_left_cut",
+       "total_ns": 1600919006,
+       "kernel_gate_ns": 1170003893,
+       "decl_type_ns": 37296783,
+       "decl_body_ns": 27443,
+       "decl_emit_ns": 103572506,
+       "elab_whnf_ns": 1263512,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 26241,
+       "eval_steps": 610883
+      },
+      {
+       "name": "omega::cutsat_right_cut",
+       "total_ns": 1416056793,
+       "kernel_gate_ns": 978923563,
+       "decl_type_ns": 65228269,
+       "decl_body_ns": 35427,
+       "decl_emit_ns": 89720810,
+       "elab_whnf_ns": 1206333,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 22347,
+       "eval_steps": 523563
+      },
+      {
+       "name": "omega::cutsat_cancel_middle",
+       "total_ns": 474746709,
+       "kernel_gate_ns": 333660541,
+       "decl_type_ns": 11600439,
+       "decl_body_ns": 122803,
+       "decl_emit_ns": 31472912,
+       "elab_whnf_ns": 664320,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8104,
+       "eval_steps": 177829
+      },
+      {
+       "name": "omega::cutsat_left_remainder_bound",
+       "total_ns": 468727525,
+       "kernel_gate_ns": 317262002,
+       "decl_type_ns": 15133612,
+       "decl_body_ns": 19227,
+       "decl_emit_ns": 29437054,
+       "elab_whnf_ns": 361603,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 9241,
+       "eval_steps": 192035
+      },
+      {
+       "name": "omega::cutsat_right_remainder_bound",
+       "total_ns": 413668297,
+       "kernel_gate_ns": 286637051,
+       "decl_type_ns": 16857890,
+       "decl_body_ns": 20268,
+       "decl_emit_ns": 25867467,
+       "elab_whnf_ns": 451451,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8263,
+       "eval_steps": 172936
+      },
+      {
+       "name": "omega::cutsat_left_gap_nonnegative",
+       "total_ns": 308489281,
+       "kernel_gate_ns": 225601528,
+       "decl_type_ns": 8057553,
+       "decl_body_ns": 22233,
+       "decl_emit_ns": 17418634,
+       "elab_whnf_ns": 442124,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 6924,
+       "eval_steps": 131854
+      },
+      {
+       "name": "omega::cutsat_lower_bound",
+       "total_ns": 296612266,
+       "kernel_gate_ns": 214034324,
+       "decl_type_ns": 13431872,
+       "decl_body_ns": 14237,
+       "decl_emit_ns": 15082165,
+       "elab_whnf_ns": 181373,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 5917,
+       "eval_steps": 113082
+      },
+      {
+       "name": "omega::cutsat_remainder_le_gap",
+       "total_ns": 275463946,
+       "kernel_gate_ns": 193528778,
+       "decl_type_ns": 7244277,
+       "decl_body_ns": 11040,
+       "decl_emit_ns": 18525954,
+       "elab_whnf_ns": 176183,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 4849,
+       "eval_steps": 107515
+      },
+      {
+       "name": "omega::cutsat_right_dvd",
+       "total_ns": 176003935,
+       "kernel_gate_ns": 10504178,
+       "decl_type_ns": 37689707,
+       "decl_body_ns": 118652996,
+       "decl_emit_ns": 1536051,
+       "elab_whnf_ns": 124606,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 310,
+       "eval_steps": 3710
+      },
+      {
+       "name": "omega::cutsat_right_gap_nonnegative",
+       "total_ns": 162643681,
+       "kernel_gate_ns": 114411062,
+       "decl_type_ns": 10644291,
+       "decl_body_ns": 19036,
+       "decl_emit_ns": 7294576,
+       "elab_whnf_ns": 676400,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 3134,
+       "eval_steps": 58716
+      },
+      {
+       "name": "omega::cutsat_left_dvd",
+       "total_ns": 137171688,
+       "kernel_gate_ns": 8740717,
+       "decl_type_ns": 28838250,
+       "decl_body_ns": 95860234,
+       "decl_emit_ns": 1387510,
+       "elab_whnf_ns": 109943,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 310,
+       "eval_steps": 3710
+      },
+      {
+       "name": "omega::cutsat_upper_bound",
+       "total_ns": 126841549,
+       "kernel_gate_ns": 84670200,
+       "decl_type_ns": 8263260,
+       "decl_body_ns": 15580,
+       "decl_emit_ns": 7115977,
+       "elab_whnf_ns": 261599,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2310,
+       "eval_steps": 43863
+      },
+      {
+       "name": "omega::cutsat_rotate_cancel",
+       "total_ns": 124530478,
+       "kernel_gate_ns": 4773466,
+       "decl_type_ns": 9270860,
+       "decl_body_ns": 106625832,
+       "decl_emit_ns": 1100907,
+       "elab_whnf_ns": 13618,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 4,
+       "eval_steps": 176
+      },
+      {
+       "name": "omega::cutsat_cooper_right_cut",
+       "total_ns": 114546189,
+       "kernel_gate_ns": 24024574,
+       "decl_type_ns": 29342937,
+       "decl_body_ns": 54089779,
+       "decl_emit_ns": 4303817,
+       "elab_whnf_ns": 30601,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 991,
+       "eval_steps": 10964
+      },
+      {
+       "name": "omega::cutsat_right_witness_product",
+       "total_ns": 109284378,
+       "kernel_gate_ns": 5747725,
+       "decl_type_ns": 16115384,
+       "decl_body_ns": 85538475,
+       "decl_emit_ns": 687543,
+       "elab_whnf_ns": 31816,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 249,
+       "eval_steps": 2746
+      },
+      {
+       "name": "omega::cutsat_cooper_right_remainder_le_gap",
+       "total_ns": 86483243,
+       "kernel_gate_ns": 6540056,
+       "decl_type_ns": 34208772,
+       "decl_body_ns": 43675537,
+       "decl_emit_ns": 1049389,
+       "elab_whnf_ns": 21168,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 218,
+       "eval_steps": 2398
+      },
+      {
+       "name": "omega::dot_add",
+       "total_ns": 81318588,
+       "kernel_gate_ns": 58959940,
+       "decl_type_ns": 204596,
+       "decl_body_ns": 13046685,
+       "decl_emit_ns": 4291734,
+       "elab_whnf_ns": 6245,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1642,
+       "eval_steps": 12665
+      },
+      {
+       "name": "omega::cutsat_cooper_left_dvd",
+       "total_ns": 77118286,
+       "kernel_gate_ns": 18339420,
+       "decl_type_ns": 10804375,
+       "decl_body_ns": 42977547,
+       "decl_emit_ns": 2058621,
+       "elab_whnf_ns": 12585,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 886,
+       "eval_steps": 10410
+      },
+      {
+       "name": "omega::cutsat_cooper_left_cut",
+       "total_ns": 74898909,
+       "kernel_gate_ns": 16183974,
+       "decl_type_ns": 35807239,
+       "decl_body_ns": 18611349,
+       "decl_emit_ns": 2186615,
+       "elab_whnf_ns": 18399,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 716,
+       "eval_steps": 7880
+      },
+      {
+       "name": "omega::cutsat_cooper_right_dvd",
+       "total_ns": 66491210,
+       "kernel_gate_ns": 9084758,
+       "decl_type_ns": 10767575,
+       "decl_body_ns": 44233840,
+       "decl_emit_ns": 1347995,
+       "elab_whnf_ns": 14907,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 352,
+       "eval_steps": 3872
+      },
+      {
+       "name": "int::mul_assoc",
+       "total_ns": 65991811,
+       "kernel_gate_ns": 35063320,
+       "decl_type_ns": 1203209,
+       "decl_body_ns": 24416754,
+       "decl_emit_ns": 2638581,
+       "elab_whnf_ns": 45549,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2369,
+       "eval_steps": 37310
+      },
+      {
+       "name": "int::divmod_negative_reconstruct",
+       "total_ns": 58688157,
+       "kernel_gate_ns": 20620835,
+       "decl_type_ns": 38452,
+       "decl_body_ns": 33365738,
+       "decl_emit_ns": 1539558,
+       "elab_whnf_ns": 848279,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1477,
+       "eval_steps": 20455
+      },
+      {
+       "name": "omega::cutsat_cooper_left_remainder_le_gap",
+       "total_ns": 58235565,
+       "kernel_gate_ns": 5891316,
+       "decl_type_ns": 19706452,
+       "decl_body_ns": 30738621,
+       "decl_emit_ns": 1035633,
+       "elab_whnf_ns": 18663,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 249,
+       "eval_steps": 2798
+      },
+      {
+       "name": "omega::cutsat_cooper_right",
+       "total_ns": 57317794,
+       "kernel_gate_ns": 7737324,
+       "decl_type_ns": 29247172,
+       "decl_body_ns": 18458954,
+       "decl_emit_ns": 943529,
+       "elab_whnf_ns": 15101,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 340,
+       "eval_steps": 3740
+      },
+      {
+       "name": "omega::cutsat_cooper_left",
+       "total_ns": 47973725,
+       "kernel_gate_ns": 9845380,
+       "decl_type_ns": 22218374,
+       "decl_body_ns": 13930306,
+       "decl_emit_ns": 954188,
+       "elab_whnf_ns": 15744,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 422,
+       "eval_steps": 4642
+      }
+     ]
+    },
+    "kernel_workers": 8,
+    "raw": "target/perf/2026-09-17T184149Z/omega-wait.tsv"
+   },
+   "cold": {
+    "wall_s": 9.506,
+    "cpu_s": 9.476,
+    "max_rss_mb": 243.7,
+    "exit": 0,
+    "summary": "lib/std/omega.hthr: ok (cache) \u2014 678 declarations kernel-checked, 5 accepted from cache, 0 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 9427400429,
+     "other_ns": 305695255,
+     "parse_ns": 9828949,
+     "prelude_ns": 141850,
+     "kernel_gate_ns": 5161116054,
+     "decl_type_ns": 809995129,
+     "decl_body_ns": 1441898185,
+     "decl_emit_ns": 436334353,
+     "decl_commit_ns": 55581252,
+     "lower_ns": 26788715,
+     "elab_whnf_ns": 50201949,
+     "diag_note_ns": 0,
+     "lint_ns": 1997538,
+     "unify_ns": 2570977,
+     "resolve_ns": 5586113,
+     "matching_ns": 22525353,
+     "gendefs_ns": 961731,
+     "omega_reflect_ns": 2274210,
+     "omega_search_ns": 40228,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 12695600,
+     "omega_reconstruct_ns": 1373633,
+     "omega_check_ns": 658223492,
+     "image_decode_ns": 69102,
+     "image_recheck_ns": 0,
+     "image_publish_ns": 28258684,
+     "cache_hash_ns": 383327,
+     "merkle_walk_ns": 392858750,
+     "decls_gated": 1668,
+     "gendefs_pushed": 115,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 61,
+     "unify_calls": 1291,
+     "cache_hashes": 683,
+     "diag_notes": 0,
+     "diag_candidates": 11665,
+     "check_terms": 732,
+     "conv_shortcut_hits": 2453630,
+     "conv_memo_hits": 1091,
+     "conv_misses": 133300,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 16,
+     "eval_steps": 2660873,
+     "eval_delta_steps": 111651,
+     "eval_drives": 4206825,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 12880171,
+      "kernel_gate_ns": 4170350,
+      "image_decode_ns": 11863,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 915645,
+      "items": 45
+     },
+     {
+      "name": "bool",
+      "total_ns": 7816845,
+      "kernel_gate_ns": 2571532,
+      "image_decode_ns": 6222,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 390881,
+      "items": 24
+     },
+     {
+      "name": "nat",
+      "total_ns": 138915254,
+      "kernel_gate_ns": 26357753,
+      "image_decode_ns": 6443,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1726753,
+      "items": 136
+     },
+     {
+      "name": "option",
+      "total_ns": 868225,
+      "kernel_gate_ns": 196743,
+      "image_decode_ns": 7084,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 124736,
+      "items": 4
+     },
+     {
+      "name": "pair",
+      "total_ns": 1305114,
+      "kernel_gate_ns": 587545,
+      "image_decode_ns": 5901,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 118574,
+      "items": 3
+     },
+     {
+      "name": "list",
+      "total_ns": 596769690,
+      "kernel_gate_ns": 392852430,
+      "image_decode_ns": 6131,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 3882949,
+      "items": 79
+     },
+     {
+      "name": "algebra",
+      "total_ns": 142234471,
+      "kernel_gate_ns": 65971921,
+      "image_decode_ns": 8256,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 8467418,
+      "items": 46
+     },
+     {
+      "name": "int",
+      "total_ns": 792672355,
+      "kernel_gate_ns": 224153053,
+      "image_decode_ns": 8326,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 4012795,
+      "items": 158
+     },
+     {
+      "name": "omega",
+      "total_ns": 7693435294,
+      "kernel_gate_ns": 4441558458,
+      "image_decode_ns": 8876,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 8618933,
+      "items": 123
+     }
+    ],
+    "items": {
+     "count": 623,
+     "sum_total_ns": 9339073272,
+     "p50_total_ns": 1031425,
+     "p90_total_ns": 20407699,
+     "max_total_ns": 1718252515,
+     "top": [
+      {
+       "name": "omega::cutsat_left_cut",
+       "total_ns": 1718252515,
+       "kernel_gate_ns": 1243763129,
+       "decl_type_ns": 35453088,
+       "decl_body_ns": 27041,
+       "decl_emit_ns": 110794166,
+       "elab_whnf_ns": 1218182,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 26241,
+       "eval_steps": 610883
+      },
+      {
+       "name": "omega::cutsat_right_cut",
+       "total_ns": 1405322619,
+       "kernel_gate_ns": 994995587,
+       "decl_type_ns": 51463752,
+       "decl_body_ns": 29936,
+       "decl_emit_ns": 69517673,
+       "elab_whnf_ns": 1519399,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 22347,
+       "eval_steps": 523563
+      },
+      {
+       "name": "omega::cutsat_cancel_middle",
+       "total_ns": 511066778,
+       "kernel_gate_ns": 342582936,
+       "decl_type_ns": 11065962,
+       "decl_body_ns": 54752,
+       "decl_emit_ns": 40217398,
+       "elab_whnf_ns": 648708,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8104,
+       "eval_steps": 177829
+      },
+      {
+       "name": "omega::cutsat_left_remainder_bound",
+       "total_ns": 475419787,
+       "kernel_gate_ns": 325580119,
+       "decl_type_ns": 16044881,
+       "decl_body_ns": 19858,
+       "decl_emit_ns": 22038698,
+       "elab_whnf_ns": 432312,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 9241,
+       "eval_steps": 192035
+      },
+      {
+       "name": "omega::cutsat_right_remainder_bound",
+       "total_ns": 453094132,
+       "kernel_gate_ns": 318936345,
+       "decl_type_ns": 15903138,
+       "decl_body_ns": 20398,
+       "decl_emit_ns": 24592536,
+       "elab_whnf_ns": 381152,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8263,
+       "eval_steps": 172936
+      },
+      {
+       "name": "omega::cutsat_left_gap_nonnegative",
+       "total_ns": 324537789,
+       "kernel_gate_ns": 234590670,
+       "decl_type_ns": 9084062,
+       "decl_body_ns": 24276,
+       "decl_emit_ns": 20149708,
+       "elab_whnf_ns": 479499,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 6924,
+       "eval_steps": 131854
+      },
+      {
+       "name": "omega::cutsat_lower_bound",
+       "total_ns": 292689715,
+       "kernel_gate_ns": 202142587,
+       "decl_type_ns": 12217080,
+       "decl_body_ns": 13767,
+       "decl_emit_ns": 16417904,
+       "elab_whnf_ns": 173356,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 5917,
+       "eval_steps": 113082
+      },
+      {
+       "name": "omega::cutsat_remainder_le_gap",
+       "total_ns": 275743745,
+       "kernel_gate_ns": 200689901,
+       "decl_type_ns": 7176592,
+       "decl_body_ns": 11453,
+       "decl_emit_ns": 12768790,
+       "elab_whnf_ns": 184254,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 4849,
+       "eval_steps": 107515
+      },
+      {
+       "name": "omega::cutsat_right_gap_nonnegative",
+       "total_ns": 164535711,
+       "kernel_gate_ns": 105873072,
+       "decl_type_ns": 9684731,
+       "decl_body_ns": 19988,
+       "decl_emit_ns": 11249771,
+       "elab_whnf_ns": 698404,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 3134,
+       "eval_steps": 58716
+      },
+      {
+       "name": "omega::cutsat_right_dvd",
+       "total_ns": 155222900,
+       "kernel_gate_ns": 9074607,
+       "decl_type_ns": 36049284,
+       "decl_body_ns": 100593585,
+       "decl_emit_ns": 1055160,
+       "elab_whnf_ns": 118886,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 310,
+       "eval_steps": 3710
+      },
+      {
+       "name": "omega::cutsat_rotate_cancel",
+       "total_ns": 131835559,
+       "kernel_gate_ns": 8197897,
+       "decl_type_ns": 9339831,
+       "decl_body_ns": 109363830,
+       "decl_emit_ns": 1476398,
+       "elab_whnf_ns": 14688,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 4,
+       "eval_steps": 176
+      },
+      {
+       "name": "omega::cutsat_upper_bound",
+       "total_ns": 128449918,
+       "kernel_gate_ns": 83058812,
+       "decl_type_ns": 8194531,
+       "decl_body_ns": 13846,
+       "decl_emit_ns": 7091520,
+       "elab_whnf_ns": 348902,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2310,
+       "eval_steps": 43863
+      },
+      {
+       "name": "omega::cutsat_left_dvd",
+       "total_ns": 122359098,
+       "kernel_gate_ns": 9529730,
+       "decl_type_ns": 27075207,
+       "decl_body_ns": 77792123,
+       "decl_emit_ns": 1000777,
+       "elab_whnf_ns": 113253,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 310,
+       "eval_steps": 3710
+      },
+      {
+       "name": "omega::cutsat_cooper_right_cut",
+       "total_ns": 99293389,
+       "kernel_gate_ns": 21440432,
+       "decl_type_ns": 24561910,
+       "decl_body_ns": 45568557,
+       "decl_emit_ns": 3375768,
+       "elab_whnf_ns": 30042,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 991,
+       "eval_steps": 10964
+      },
+      {
+       "name": "omega::cutsat_right_witness_product",
+       "total_ns": 94391740,
+       "kernel_gate_ns": 5600554,
+       "decl_type_ns": 13341454,
+       "decl_body_ns": 72958446,
+       "decl_emit_ns": 658328,
+       "elab_whnf_ns": 31206,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 249,
+       "eval_steps": 2746
+      },
+      {
+       "name": "omega::dot_add",
+       "total_ns": 88034005,
+       "kernel_gate_ns": 61834531,
+       "decl_type_ns": 289419,
+       "decl_body_ns": 13806268,
+       "decl_emit_ns": 5441804,
+       "elab_whnf_ns": 6774,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1642,
+       "eval_steps": 12665
+      },
+      {
+       "name": "omega::cutsat_cooper_left_dvd",
+       "total_ns": 69827883,
+       "kernel_gate_ns": 17032359,
+       "decl_type_ns": 5913986,
+       "decl_body_ns": 41158073,
+       "decl_emit_ns": 1851298,
+       "elab_whnf_ns": 11352,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 886,
+       "eval_steps": 10410
+      },
+      {
+       "name": "omega::cutsat_cooper_right_remainder_le_gap",
+       "total_ns": 68669905,
+       "kernel_gate_ns": 4812149,
+       "decl_type_ns": 24003941,
+       "decl_body_ns": 37766774,
+       "decl_emit_ns": 665691,
+       "elab_whnf_ns": 18269,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 218,
+       "eval_steps": 2398
+      },
+      {
+       "name": "int::mul_assoc",
+       "total_ns": 64065922,
+       "kernel_gate_ns": 33683869,
+       "decl_type_ns": 1386625,
+       "decl_body_ns": 22730179,
+       "decl_emit_ns": 2754621,
+       "elab_whnf_ns": 45589,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2369,
+       "eval_steps": 37310
+      },
+      {
+       "name": "int::divmod_negative_reconstruct",
+       "total_ns": 63650753,
+       "kernel_gate_ns": 21573426,
+       "decl_type_ns": 41921,
+       "decl_body_ns": 36732349,
+       "decl_emit_ns": 1608819,
+       "elab_whnf_ns": 918286,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1477,
+       "eval_steps": 20455
+      },
+      {
+       "name": "omega::cutsat_cooper_right_dvd",
+       "total_ns": 63083057,
+       "kernel_gate_ns": 8091594,
+       "decl_type_ns": 8690254,
+       "decl_body_ns": 42977247,
+       "decl_emit_ns": 1503108,
+       "elab_whnf_ns": 15832,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 352,
+       "eval_steps": 3872
+      },
+      {
+       "name": "omega::cutsat_cooper_left_cut",
+       "total_ns": 55819696,
+       "kernel_gate_ns": 15076483,
+       "decl_type_ns": 18940970,
+       "decl_body_ns": 17465243,
+       "decl_emit_ns": 1980333,
+       "elab_whnf_ns": 14699,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 716,
+       "eval_steps": 7880
+      },
+      {
+       "name": "omega::cutsat_cooper_right",
+       "total_ns": 52669794,
+       "kernel_gate_ns": 7331113,
+       "decl_type_ns": 27504064,
+       "decl_body_ns": 15346452,
+       "decl_emit_ns": 872003,
+       "elab_whnf_ns": 15759,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 340,
+       "eval_steps": 3740
+      },
+      {
+       "name": "int::complement_reconstruct",
+       "total_ns": 51218822,
+       "kernel_gate_ns": 1516825,
+       "decl_type_ns": 6518205,
+       "decl_body_ns": 42484755,
+       "decl_emit_ns": 230166,
+       "elab_whnf_ns": 24517,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 106,
+       "eval_steps": 112
+      },
+      {
+       "name": "omega::cutsat_cooper_left_remainder_le_gap",
+       "total_ns": 50808909,
+       "kernel_gate_ns": 5147004,
+       "decl_type_ns": 18808689,
+       "decl_body_ns": 24925333,
+       "decl_emit_ns": 631436,
+       "elab_whnf_ns": 16671,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 249,
+       "eval_steps": 2798
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/omega-cold.tsv"
+   },
+   "warm": {
+    "wall_s": 0.194,
+    "cpu_s": 0.212,
+    "max_rss_mb": 75.6,
+    "exit": 0,
+    "summary": "lib/std/omega.hthr: ok (cache) \u2014 0 declarations kernel-checked, 0 accepted from cache, 9 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 174195992,
+     "other_ns": 26948810,
+     "parse_ns": 107303,
+     "prelude_ns": 137974,
+     "kernel_gate_ns": 2934029,
+     "decl_type_ns": 38803,
+     "decl_body_ns": 43622,
+     "decl_emit_ns": 18805,
+     "decl_commit_ns": 15660,
+     "lower_ns": 2531105,
+     "elab_whnf_ns": 7084,
+     "diag_note_ns": 0,
+     "lint_ns": 2745,
+     "unify_ns": 0,
+     "resolve_ns": 0,
+     "matching_ns": 0,
+     "gendefs_ns": 291093,
+     "omega_reflect_ns": 0,
+     "omega_search_ns": 0,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 0,
+     "omega_reconstruct_ns": 0,
+     "omega_check_ns": 0,
+     "image_decode_ns": 49507229,
+     "image_recheck_ns": 91611730,
+     "image_publish_ns": 0,
+     "cache_hash_ns": 0,
+     "merkle_walk_ns": 0,
+     "decls_gated": 24,
+     "gendefs_pushed": 8,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 0,
+     "unify_calls": 0,
+     "cache_hashes": 0,
+     "diag_notes": 0,
+     "diag_candidates": 0,
+     "check_terms": 12,
+     "conv_shortcut_hits": 103890,
+     "conv_memo_hits": 44,
+     "conv_misses": 2174,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 0,
+     "eval_steps": 39974,
+     "eval_delta_steps": 2972,
+     "eval_drives": 68707,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 4057279,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1175568,
+      "image_recheck_ns": 2818090,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "bool",
+      "total_ns": 1882638,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 447948,
+      "image_recheck_ns": 1410413,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "nat",
+      "total_ns": 5614420,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 2911107,
+      "image_recheck_ns": 2374430,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "option",
+      "total_ns": 308715,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 100360,
+      "image_recheck_ns": 202714,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "pair",
+      "total_ns": 296763,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 92826,
+      "image_recheck_ns": 197514,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "list",
+      "total_ns": 27539689,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 7883229,
+      "image_recheck_ns": 19506907,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "algebra",
+      "total_ns": 62669372,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 20909665,
+      "image_recheck_ns": 41658225,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "int",
+      "total_ns": 17501927,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 6341488,
+      "image_recheck_ns": 10701270,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "omega",
+      "total_ns": 22740425,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 9645038,
+      "image_recheck_ns": 12742167,
+      "image_publish_ns": 0,
+      "items": 0
+     }
+    ],
+    "items": {
+     "count": 5,
+     "sum_total_ns": 22830026,
+     "p50_total_ns": 2050426,
+     "p90_total_ns": 18508826,
+     "max_total_ns": 18508826,
+     "top": [
+      {
+       "name": "prelude::class CollectionLiteral",
+       "total_ns": 18508826,
+       "kernel_gate_ns": 15678772,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 4970,
+       "diag_note_ns": 0,
+       "lower_ns": 2531105,
+       "conv_misses": 20,
+       "eval_steps": 540
+      },
+      {
+       "name": "prelude::sym",
+       "total_ns": 2094539,
+       "kernel_gate_ns": 2024667,
+       "decl_type_ns": 12794,
+       "decl_body_ns": 17311,
+       "decl_emit_ns": 7294,
+       "elab_whnf_ns": 432,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::trans",
+       "total_ns": 2050426,
+       "kernel_gate_ns": 2022293,
+       "decl_type_ns": 4608,
+       "decl_body_ns": 7655,
+       "decl_emit_ns": 2945,
+       "elab_whnf_ns": 100,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::cong",
+       "total_ns": 133524,
+       "kernel_gate_ns": 93507,
+       "decl_type_ns": 13836,
+       "decl_body_ns": 11491,
+       "decl_emit_ns": 5791,
+       "elab_whnf_ns": 1142,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::cong_succ",
+       "total_ns": 42711,
+       "kernel_gate_ns": 16140,
+       "decl_type_ns": 7565,
+       "decl_body_ns": 7165,
+       "decl_emit_ns": 2775,
+       "elab_whnf_ns": 440,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/omega-warm.tsv"
+   },
+   "edit": {
+    "wall_s": 2.946,
+    "cpu_s": 2.948,
+    "max_rss_mb": 241.8,
+    "exit": 0,
+    "summary": "lib/std/omega.hthr: ok (cache) \u2014 1 declaration kernel-checked, 119 accepted from cache, 8 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 2869554814,
+     "other_ns": 191631975,
+     "parse_ns": 2925514,
+     "prelude_ns": 124305,
+     "kernel_gate_ns": 2647978,
+     "decl_type_ns": 497014132,
+     "decl_body_ns": 810475759,
+     "decl_emit_ns": 335262559,
+     "decl_commit_ns": 11437816,
+     "lower_ns": 2300339,
+     "elab_whnf_ns": 7614486,
+     "diag_note_ns": 0,
+     "lint_ns": 528002,
+     "unify_ns": 598578,
+     "resolve_ns": 0,
+     "matching_ns": 1632741,
+     "gendefs_ns": 266185,
+     "omega_reflect_ns": 1821322,
+     "omega_search_ns": 38161,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 10551044,
+     "omega_reconstruct_ns": 1616596,
+     "omega_check_ns": 553889719,
+     "image_decode_ns": 40317745,
+     "image_recheck_ns": 82145250,
+     "image_publish_ns": 7100906,
+     "cache_hash_ns": 102048,
+     "merkle_walk_ns": 307511654,
+     "decls_gated": 26,
+     "gendefs_pushed": 8,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 0,
+     "unify_calls": 291,
+     "cache_hashes": 120,
+     "diag_notes": 0,
+     "diag_candidates": 9561,
+     "check_terms": 13,
+     "conv_shortcut_hits": 89345,
+     "conv_memo_hits": 43,
+     "conv_misses": 1630,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 0,
+     "eval_steps": 37450,
+     "eval_delta_steps": 2943,
+     "eval_drives": 66577,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 4085362,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1252804,
+      "image_recheck_ns": 2768746,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "bool",
+      "total_ns": 1890072,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 446747,
+      "image_recheck_ns": 1418929,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "nat",
+      "total_ns": 5499161,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 2818210,
+      "image_recheck_ns": 2358009,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "option",
+      "total_ns": 344473,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 108055,
+      "image_recheck_ns": 230697,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "pair",
+      "total_ns": 318233,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 100962,
+      "image_recheck_ns": 209427,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "list",
+      "total_ns": 27938375,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 7960686,
+      "image_recheck_ns": 19799251,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "algebra",
+      "total_ns": 65672073,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 21235012,
+      "image_recheck_ns": 44332443,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "int",
+      "total_ns": 17859404,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 6367106,
+      "image_recheck_ns": 11027748,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "omega",
+      "total_ns": 2707928263,
+      "kernel_gate_ns": 6433,
+      "image_decode_ns": 28163,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7100906,
+      "items": 124
+     }
+    ],
+    "items": {
+     "count": 129,
+     "sum_total_ns": 2712136743,
+     "p50_total_ns": 2387395,
+     "p90_total_ns": 60906040,
+     "max_total_ns": 394002170,
+     "top": [
+      {
+       "name": "omega::cutsat_left_cut",
+       "total_ns": 394002170,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 28865160,
+       "decl_body_ns": 23503,
+       "decl_emit_ns": 93066876,
+       "elab_whnf_ns": 1041314,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 130
+      },
+      {
+       "name": "omega::cutsat_right_cut",
+       "total_ns": 372013573,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 45707556,
+       "decl_body_ns": 25950,
+       "decl_emit_ns": 84529686,
+       "elab_whnf_ns": 1262908,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 130
+      },
+      {
+       "name": "omega::cutsat_right_dvd",
+       "total_ns": 127021859,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 29610992,
+       "decl_body_ns": 93474665,
+       "decl_emit_ns": 931345,
+       "elab_whnf_ns": 112106,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 7
+      },
+      {
+       "name": "omega::cutsat_left_remainder_bound",
+       "total_ns": 125932889,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 11407909,
+       "decl_body_ns": 16721,
+       "decl_emit_ns": 23296198,
+       "elab_whnf_ns": 348317,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 322
+      },
+      {
+       "name": "omega::cutsat_cancel_middle",
+       "total_ns": 118224721,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 8000191,
+       "decl_body_ns": 39916,
+       "decl_emit_ns": 22693926,
+       "elab_whnf_ns": 509951,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 814
+      },
+      {
+       "name": "omega::cutsat_right_remainder_bound",
+       "total_ns": 104147913,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 12803523,
+       "decl_body_ns": 18705,
+       "decl_emit_ns": 18582494,
+       "elab_whnf_ns": 330171,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 264
+      },
+      {
+       "name": "omega::cutsat_left_dvd",
+       "total_ns": 101743699,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 20884461,
+       "decl_body_ns": 76623980,
+       "decl_emit_ns": 1290836,
+       "elab_whnf_ns": 116191,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 7
+      },
+      {
+       "name": "omega::cutsat_rotate_cancel",
+       "total_ns": 97354240,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 7456439,
+       "decl_body_ns": 87325091,
+       "decl_emit_ns": 774939,
+       "elab_whnf_ns": 11957,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_right_witness_product",
+       "total_ns": 88891140,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 13636792,
+       "decl_body_ns": 72897507,
+       "decl_emit_ns": 612140,
+       "elab_whnf_ns": 35672,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_lower_bound",
+       "total_ns": 83662853,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 19184137,
+       "decl_body_ns": 14147,
+       "decl_emit_ns": 11972337,
+       "elab_whnf_ns": 192488,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 317
+      },
+      {
+       "name": "omega::cutsat_left_gap_nonnegative",
+       "total_ns": 81265794,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 6207977,
+       "decl_body_ns": 19117,
+       "decl_emit_ns": 17845408,
+       "elab_whnf_ns": 346116,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 501
+      },
+      {
+       "name": "omega::cutsat_cooper_right_cut",
+       "total_ns": 78689178,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 23431625,
+       "decl_body_ns": 48051652,
+       "decl_emit_ns": 3328006,
+       "elab_whnf_ns": 32126,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_remainder_le_gap",
+       "total_ns": 60906040,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 5011265,
+       "decl_body_ns": 9969,
+       "decl_emit_ns": 12915335,
+       "elab_whnf_ns": 149970,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 257
+      },
+      {
+       "name": "omega::cutsat_cooper_right_remainder_le_gap",
+       "total_ns": 59139030,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 22281426,
+       "decl_body_ns": 34902203,
+       "decl_emit_ns": 645784,
+       "elab_whnf_ns": 19352,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_left_dvd",
+       "total_ns": 53146064,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 4482886,
+       "decl_body_ns": 41431651,
+       "decl_emit_ns": 2651495,
+       "elab_whnf_ns": 11283,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_right_dvd",
+       "total_ns": 48774588,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 7470998,
+       "decl_body_ns": 38351904,
+       "decl_emit_ns": 1139799,
+       "elab_whnf_ns": 16494,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_left_remainder_le_gap",
+       "total_ns": 40979047,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 16759308,
+       "decl_body_ns": 22874612,
+       "decl_emit_ns": 523973,
+       "elab_whnf_ns": 18423,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_right",
+       "total_ns": 39774472,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 23101343,
+       "decl_body_ns": 14583856,
+       "decl_emit_ns": 952395,
+       "elab_whnf_ns": 15925,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_right_gap_nonnegative",
+       "total_ns": 37371471,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 6760303,
+       "decl_body_ns": 12933,
+       "decl_emit_ns": 5630701,
+       "elab_whnf_ns": 476484,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 441
+      },
+      {
+       "name": "omega::cutsat_cooper_left_cut",
+       "total_ns": 37153958,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 17614612,
+       "decl_body_ns": 15456749,
+       "decl_emit_ns": 1526293,
+       "elab_whnf_ns": 13266,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_left",
+       "total_ns": 35113511,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 17735701,
+       "decl_body_ns": 14349717,
+       "decl_emit_ns": 1463583,
+       "elab_whnf_ns": 15844,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_right_bound",
+       "total_ns": 33716924,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 13166853,
+       "decl_body_ns": 19745687,
+       "decl_emit_ns": 81805,
+       "elab_whnf_ns": 10048,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_upper_bound",
+       "total_ns": 31214463,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 6110100,
+       "decl_body_ns": 20148,
+       "decl_emit_ns": 3913326,
+       "elab_whnf_ns": 242443,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 265
+      },
+      {
+       "name": "omega::cutsat_solve_add_left",
+       "total_ns": 30538853,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 5648265,
+       "decl_body_ns": 23746806,
+       "decl_emit_ns": 314316,
+       "elab_whnf_ns": 7059,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "omega::cutsat_cooper_left_remainder_bound",
+       "total_ns": 20008576,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 10398136,
+       "decl_body_ns": 8515429,
+       "decl_emit_ns": 426729,
+       "elab_whnf_ns": 8423,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/omega-edit.tsv"
+   }
+  },
+  {
+   "path": "docs/showcase/calc_parser.hthr",
+   "search": [
+    "lib/std",
+    "lib/std/parser"
+   ],
+   "wait": {
+    "wall_s": 35.236,
+    "cpu_s": 69.149,
+    "max_rss_mb": 4708.4,
+    "exit": 0,
+    "summary": "docs/showcase/calc_parser.hthr: ok (cache) \u2014 1061 declarations kernel-checked, 0 accepted from cache, 0 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 34903311322,
+     "other_ns": 3152253734,
+     "parse_ns": 19022836,
+     "prelude_ns": 135830,
+     "kernel_gate_ns": 8690268185,
+     "decl_type_ns": 1232536110,
+     "decl_body_ns": 7825734443,
+     "decl_emit_ns": 2694949926,
+     "decl_commit_ns": 162109165,
+     "lower_ns": 600852236,
+     "elab_whnf_ns": 1647611334,
+     "diag_note_ns": 0,
+     "lint_ns": 2519241,
+     "unify_ns": 55142262,
+     "resolve_ns": 12459294,
+     "matching_ns": 176405044,
+     "gendefs_ns": 3973371,
+     "omega_reflect_ns": 17588272,
+     "omega_search_ns": 48974,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 16571158,
+     "omega_reconstruct_ns": 2301841,
+     "omega_check_ns": 936932762,
+     "image_decode_ns": 165635,
+     "image_recheck_ns": 0,
+     "image_publish_ns": 1793070039,
+     "cache_hash_ns": 1400911,
+     "merkle_walk_ns": 5859258719,
+     "decls_gated": 2683,
+     "gendefs_pushed": 256,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 100,
+     "unify_calls": 4108,
+     "cache_hashes": 2122,
+     "diag_notes": 0,
+     "diag_candidates": 14590,
+     "check_terms": 1156,
+     "conv_shortcut_hits": 14477071,
+     "conv_memo_hits": 5197,
+     "conv_misses": 205997,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 16,
+     "eval_steps": 4369816,
+     "eval_delta_steps": 231458,
+     "eval_drives": 7092190,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 11350108,
+      "kernel_gate_ns": 888922,
+      "image_decode_ns": 10970,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 894996,
+      "items": 45
+     },
+     {
+      "name": "bool",
+      "total_ns": 6428001,
+      "kernel_gate_ns": 570580,
+      "image_decode_ns": 6592,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 394507,
+      "items": 24
+     },
+     {
+      "name": "nat",
+      "total_ns": 123704640,
+      "kernel_gate_ns": 667857,
+      "image_decode_ns": 6613,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1692938,
+      "items": 136
+     },
+     {
+      "name": "option",
+      "total_ns": 1902746,
+      "kernel_gate_ns": 91614,
+      "image_decode_ns": 9528,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 130598,
+      "items": 4
+     },
+     {
+      "name": "pair",
+      "total_ns": 2367366,
+      "kernel_gate_ns": 650182,
+      "image_decode_ns": 6002,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 124115,
+      "items": 3
+     },
+     {
+      "name": "list",
+      "total_ns": 264179490,
+      "kernel_gate_ns": 9838580,
+      "image_decode_ns": 7134,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 3674303,
+      "items": 79
+     },
+     {
+      "name": "result",
+      "total_ns": 5448004,
+      "kernel_gate_ns": 431317,
+      "image_decode_ns": 9107,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 248391,
+      "items": 8
+     },
+     {
+      "name": "algebra",
+      "total_ns": 105117988,
+      "kernel_gate_ns": 19007667,
+      "image_decode_ns": 9217,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7408219,
+      "items": 46
+     },
+     {
+      "name": "int",
+      "total_ns": 543169860,
+      "kernel_gate_ns": 5185234,
+      "image_decode_ns": 8557,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 4312723,
+      "items": 158
+     },
+     {
+      "name": "omega",
+      "total_ns": 4147076055,
+      "kernel_gate_ns": 326532591,
+      "image_decode_ns": 8827,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 14568586,
+      "items": 123
+     },
+     {
+      "name": "parser_core",
+      "total_ns": 138435690,
+      "kernel_gate_ns": 17750218,
+      "image_decode_ns": 9628,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 8254612,
+      "items": 28
+     },
+     {
+      "name": "parser_contracts",
+      "total_ns": 929794748,
+      "kernel_gate_ns": 142922723,
+      "image_decode_ns": 8476,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 135210105,
+      "items": 24
+     },
+     {
+      "name": "parser_diagnostics",
+      "total_ns": 298720907,
+      "kernel_gate_ns": 28963018,
+      "image_decode_ns": 9127,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7896593,
+      "items": 31
+     },
+     {
+      "name": "parser_combinators",
+      "total_ns": 2545488912,
+      "kernel_gate_ns": 228586321,
+      "image_decode_ns": 8486,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 165900448,
+      "items": 58
+     },
+     {
+      "name": "parser_primitives",
+      "total_ns": 10667950928,
+      "kernel_gate_ns": 5013640711,
+      "image_decode_ns": 8847,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 22194660,
+      "items": 35
+     },
+     {
+      "name": "parser_recursion",
+      "total_ns": 796700869,
+      "kernel_gate_ns": 48940731,
+      "image_decode_ns": 7815,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 44034477,
+      "items": 15
+     },
+     {
+      "name": "parser_repetition",
+      "total_ns": 538277169,
+      "kernel_gate_ns": 46934814,
+      "image_decode_ns": 8306,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 14607134,
+      "items": 18
+     },
+     {
+      "name": "parser",
+      "total_ns": 1026946,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 8055,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 106812,
+      "items": 7
+     },
+     {
+      "name": "calc",
+      "total_ns": 479545344,
+      "kernel_gate_ns": 97214025,
+      "image_decode_ns": 6262,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1237515,
+      "items": 17
+     },
+     {
+      "name": "calc_parser",
+      "total_ns": 11997608884,
+      "kernel_gate_ns": 2698821506,
+      "image_decode_ns": 8086,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1360178307,
+      "items": 96
+     }
+    ],
+    "items": {
+     "count": 960,
+     "sum_total_ns": 59624765938,
+     "p50_total_ns": 1570455,
+     "p90_total_ns": 67703047,
+     "max_total_ns": 9445634968,
+     "top": [
+      {
+       "name": "parser_primitives::complete_post",
+       "total_ns": 9445634968,
+       "kernel_gate_ns": 5282425616,
+       "decl_type_ns": 4320956,
+       "decl_body_ns": 1743042159,
+       "decl_emit_ns": 580335531,
+       "elab_whnf_ns": 1131962640,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 14210,
+       "eval_steps": 246498
+      },
+      {
+       "name": "calc_parser::close_body",
+       "total_ns": 4000979091,
+       "kernel_gate_ns": 2800582723,
+       "decl_type_ns": 5330883,
+       "decl_body_ns": 737367654,
+       "decl_emit_ns": 220631396,
+       "elab_whnf_ns": 1563866,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2572,
+       "eval_steps": 32579
+      },
+      {
+       "name": "calc_parser::number_grammar",
+       "total_ns": 2695197036,
+       "kernel_gate_ns": 1916707575,
+       "decl_type_ns": 2705284,
+       "decl_body_ns": 256836713,
+       "decl_emit_ns": 221014655,
+       "elab_whnf_ns": 113144285,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 13768,
+       "eval_steps": 350076
+      },
+      {
+       "name": "calc_parser::expr_body",
+       "total_ns": 1686186012,
+       "kernel_gate_ns": 839014252,
+       "decl_type_ns": 1661819,
+       "decl_body_ns": 583191738,
+       "decl_emit_ns": 122799313,
+       "elab_whnf_ns": 2897293,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 186,
+       "eval_steps": 4579
+      },
+      {
+       "name": "omega::cutsat_left_cut",
+       "total_ns": 1634020287,
+       "kernel_gate_ns": 1196034173,
+       "decl_type_ns": 38241926,
+       "decl_body_ns": 24047,
+       "decl_emit_ns": 103447147,
+       "elab_whnf_ns": 1221809,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 26241,
+       "eval_steps": 613305
+      },
+      {
+       "name": "calc_parser::factor_body",
+       "total_ns": 1616960591,
+       "kernel_gate_ns": 753087434,
+       "decl_type_ns": 1624799,
+       "decl_body_ns": 585021250,
+       "decl_emit_ns": 140902736,
+       "elab_whnf_ns": 2469106,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 202,
+       "eval_steps": 4611
+      },
+      {
+       "name": "calc_parser::parentheses",
+       "total_ns": 1471715362,
+       "kernel_gate_ns": 1469014726,
+       "decl_type_ns": 416488,
+       "decl_body_ns": 3717,
+       "decl_emit_ns": 164622,
+       "elab_whnf_ns": 1650577,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 166,
+       "eval_steps": 8869
+      },
+      {
+       "name": "omega::cutsat_right_cut",
+       "total_ns": 1413969758,
+       "kernel_gate_ns": 970608078,
+       "decl_type_ns": 67522000,
+       "decl_body_ns": 28615,
+       "decl_emit_ns": 88467850,
+       "elab_whnf_ns": 1153349,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 22347,
+       "eval_steps": 525639
+      },
+      {
+       "name": "calc_parser::Grammar",
+       "total_ns": 1397823433,
+       "kernel_gate_ns": 1025426983,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 8414,
+       "diag_note_ns": 0,
+       "lower_ns": 285991771,
+       "conv_misses": 36,
+       "eval_steps": 9045
+      },
+      {
+       "name": "calc_parser::nested_parentheses",
+       "total_ns": 1365546527,
+       "kernel_gate_ns": 1362752062,
+       "decl_type_ns": 382320,
+       "decl_body_ns": 4247,
+       "decl_emit_ns": 131459,
+       "elab_whnf_ns": 1847995,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 138,
+       "eval_steps": 7110
+      },
+      {
+       "name": "calc_parser::checked_expr",
+       "total_ns": 1364984949,
+       "kernel_gate_ns": 834629811,
+       "decl_type_ns": 9751865,
+       "decl_body_ns": 27313166,
+       "decl_emit_ns": 98392530,
+       "elab_whnf_ns": 18428335,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 17995,
+       "eval_steps": 325367
+      },
+      {
+       "name": "calc_parser::executed_parentheses",
+       "total_ns": 1290432788,
+       "kernel_gate_ns": 1286187295,
+       "decl_type_ns": 576533,
+       "decl_body_ns": 5781,
+       "decl_emit_ns": 192545,
+       "elab_whnf_ns": 2916536,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 161,
+       "eval_steps": 9040
+      },
+      {
+       "name": "parser_contracts::Certified",
+       "total_ns": 929121130,
+       "kernel_gate_ns": 646728579,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 7390,
+       "diag_note_ns": 0,
+       "lower_ns": 228683595,
+       "conv_misses": 36,
+       "eval_steps": 5320
+      },
+      {
+       "name": "calc_parser::missing_close",
+       "total_ns": 846935470,
+       "kernel_gate_ns": 844537648,
+       "decl_type_ns": 262871,
+       "decl_body_ns": 2595,
+       "decl_emit_ns": 94900,
+       "elab_whnf_ns": 1680230,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 67,
+       "eval_steps": 2856
+      },
+      {
+       "name": "calc_parser::evaluated",
+       "total_ns": 813070332,
+       "kernel_gate_ns": 810743746,
+       "decl_type_ns": 227261,
+       "decl_body_ns": 3257,
+       "decl_emit_ns": 118975,
+       "elab_whnf_ns": 1615349,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 99,
+       "eval_steps": 5137
+      },
+      {
+       "name": "calc_parser::wrong_close",
+       "total_ns": 806576244,
+       "kernel_gate_ns": 804253825,
+       "decl_type_ns": 253332,
+       "decl_body_ns": 2734,
+       "decl_emit_ns": 97675,
+       "elab_whnf_ns": 1634575,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 79,
+       "eval_steps": 3532
+      },
+      {
+       "name": "calc_parser::execution_error",
+       "total_ns": 795316547,
+       "kernel_gate_ns": 792963920,
+       "decl_type_ns": 311911,
+       "decl_body_ns": 2816,
+       "decl_emit_ns": 88357,
+       "elab_whnf_ns": 1641058,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 67,
+       "eval_steps": 2869
+      },
+      {
+       "name": "calc_parser::product_association",
+       "total_ns": 750583883,
+       "kernel_gate_ns": 747911112,
+       "decl_type_ns": 393813,
+       "decl_body_ns": 3968,
+       "decl_emit_ns": 141428,
+       "elab_whnf_ns": 1712366,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 122,
+       "eval_steps": 5487
+      },
+      {
+       "name": "calc_parser::product_before_sum",
+       "total_ns": 741036666,
+       "kernel_gate_ns": 738592548,
+       "decl_type_ns": 390677,
+       "decl_body_ns": 2525,
+       "decl_emit_ns": 143602,
+       "elab_whnf_ns": 1515894,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 118,
+       "eval_steps": 5942
+      },
+      {
+       "name": "calc_parser::precedence",
+       "total_ns": 733791140,
+       "kernel_gate_ns": 731179622,
+       "decl_type_ns": 365533,
+       "decl_body_ns": 3196,
+       "decl_emit_ns": 170403,
+       "elab_whnf_ns": 1669603,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 118,
+       "eval_steps": 5810
+      },
+      {
+       "name": "calc_parser::sum_association",
+       "total_ns": 701664320,
+       "kernel_gate_ns": 699079562,
+       "decl_type_ns": 352355,
+       "decl_body_ns": 2685,
+       "decl_emit_ns": 155575,
+       "elab_whnf_ns": 1668805,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 114,
+       "eval_steps": 6257
+      },
+      {
+       "name": "calc_parser::executed",
+       "total_ns": 672079516,
+       "kernel_gate_ns": 668137539,
+       "decl_type_ns": 537752,
+       "decl_body_ns": 5710,
+       "decl_emit_ns": 167357,
+       "elab_whnf_ns": 2756980,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 113,
+       "eval_steps": 5981
+      },
+      {
+       "name": "calc_parser::extra_close",
+       "total_ns": 595218490,
+       "kernel_gate_ns": 592828523,
+       "decl_type_ns": 287657,
+       "decl_body_ns": 3186,
+       "decl_emit_ns": 88678,
+       "elab_whnf_ns": 1689889,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 67,
+       "eval_steps": 2390
+      },
+      {
+       "name": "calc_parser::missing_rhs",
+       "total_ns": 573504296,
+       "kernel_gate_ns": 571149223,
+       "decl_type_ns": 290634,
+       "decl_body_ns": 2836,
+       "decl_emit_ns": 98897,
+       "elab_whnf_ns": 1658268,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 58,
+       "eval_steps": 2795
+      },
+      {
+       "name": "calc_parser::missing_product_rhs",
+       "total_ns": 565855191,
+       "kernel_gate_ns": 563545114,
+       "decl_type_ns": 308516,
+       "decl_body_ns": 3907,
+       "decl_emit_ns": 108245,
+       "elab_whnf_ns": 1561377,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 62,
+       "eval_steps": 2504
+      }
+     ]
+    },
+    "kernel_workers": 8,
+    "raw": "target/perf/2026-09-17T184149Z/calc_parser-wait.tsv"
+   },
+   "cold": {
+    "wall_s": 52.09,
+    "cpu_s": 51.851,
+    "max_rss_mb": 1733.6,
+    "exit": 0,
+    "summary": "docs/showcase/calc_parser.hthr: ok (cache) \u2014 1048 declarations kernel-checked, 13 accepted from cache, 0 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 51862938863,
+     "other_ns": 2441746925,
+     "parse_ns": 19580295,
+     "prelude_ns": 188014,
+     "kernel_gate_ns": 31176726581,
+     "decl_type_ns": 1107489518,
+     "decl_body_ns": 6597572526,
+     "decl_emit_ns": 2397719779,
+     "decl_commit_ns": 283360091,
+     "lower_ns": 361435413,
+     "elab_whnf_ns": 1528340294,
+     "diag_note_ns": 0,
+     "lint_ns": 2549533,
+     "unify_ns": 39775573,
+     "resolve_ns": 12921094,
+     "matching_ns": 152770324,
+     "gendefs_ns": 17378549,
+     "omega_reflect_ns": 12864932,
+     "omega_search_ns": 48352,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 16859333,
+     "omega_reconstruct_ns": 2072734,
+     "omega_check_ns": 878107429,
+     "image_decode_ns": 176840,
+     "image_recheck_ns": 0,
+     "image_publish_ns": 1791867104,
+     "cache_hash_ns": 831271,
+     "merkle_walk_ns": 3020556359,
+     "decls_gated": 2657,
+     "gendefs_pushed": 256,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 100,
+     "unify_calls": 4108,
+     "cache_hashes": 1061,
+     "diag_notes": 0,
+     "diag_candidates": 14590,
+     "check_terms": 1143,
+     "conv_shortcut_hits": 14474748,
+     "conv_memo_hits": 5197,
+     "conv_misses": 205968,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 16,
+     "eval_steps": 4369474,
+     "eval_delta_steps": 231429,
+     "eval_drives": 7091732,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 12532651,
+      "kernel_gate_ns": 4016243,
+      "image_decode_ns": 15900,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 915765,
+      "items": 45
+     },
+     {
+      "name": "bool",
+      "total_ns": 7801568,
+      "kernel_gate_ns": 2560332,
+      "image_decode_ns": 7103,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 394567,
+      "items": 24
+     },
+     {
+      "name": "nat",
+      "total_ns": 138351435,
+      "kernel_gate_ns": 25994769,
+      "image_decode_ns": 6683,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1709097,
+      "items": 136
+     },
+     {
+      "name": "option",
+      "total_ns": 854228,
+      "kernel_gate_ns": 194910,
+      "image_decode_ns": 7435,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 124576,
+      "items": 4
+     },
+     {
+      "name": "pair",
+      "total_ns": 1304221,
+      "kernel_gate_ns": 585258,
+      "image_decode_ns": 6162,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 118685,
+      "items": 3
+     },
+     {
+      "name": "list",
+      "total_ns": 586388232,
+      "kernel_gate_ns": 384302431,
+      "image_decode_ns": 5912,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 4483052,
+      "items": 79
+     },
+     {
+      "name": "result",
+      "total_ns": 2418591,
+      "kernel_gate_ns": 776161,
+      "image_decode_ns": 10089,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 249673,
+      "items": 8
+     },
+     {
+      "name": "algebra",
+      "total_ns": 151209178,
+      "kernel_gate_ns": 68081772,
+      "image_decode_ns": 6954,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 9752323,
+      "items": 46
+     },
+     {
+      "name": "int",
+      "total_ns": 808004828,
+      "kernel_gate_ns": 231435414,
+      "image_decode_ns": 8466,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 4768041,
+      "items": 158
+     },
+     {
+      "name": "omega",
+      "total_ns": 7727686096,
+      "kernel_gate_ns": 4435716211,
+      "image_decode_ns": 10340,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7599865,
+      "items": 123
+     },
+     {
+      "name": "parser_core",
+      "total_ns": 176766920,
+      "kernel_gate_ns": 99588470,
+      "image_decode_ns": 14808,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 12440964,
+      "items": 28
+     },
+     {
+      "name": "parser_contracts",
+      "total_ns": 1253240486,
+      "kernel_gate_ns": 697095280,
+      "image_decode_ns": 7725,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 119378669,
+      "items": 24
+     },
+     {
+      "name": "parser_diagnostics",
+      "total_ns": 226932701,
+      "kernel_gate_ns": 105476166,
+      "image_decode_ns": 13726,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 7135194,
+      "items": 31
+     },
+     {
+      "name": "parser_combinators",
+      "total_ns": 4159221620,
+      "kernel_gate_ns": 2317691894,
+      "image_decode_ns": 7485,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 168022729,
+      "items": 58
+     },
+     {
+      "name": "parser_primitives",
+      "total_ns": 11560161272,
+      "kernel_gate_ns": 6492129034,
+      "image_decode_ns": 9458,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 18745359,
+      "items": 35
+     },
+     {
+      "name": "parser_recursion",
+      "total_ns": 635461237,
+      "kernel_gate_ns": 246722406,
+      "image_decode_ns": 8125,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 37499194,
+      "items": 15
+     },
+     {
+      "name": "parser_repetition",
+      "total_ns": 303164760,
+      "kernel_gate_ns": 124260593,
+      "image_decode_ns": 7715,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 14515058,
+      "items": 18
+     },
+     {
+      "name": "parser",
+      "total_ns": 960689,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 9298,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 106081,
+      "items": 7
+     },
+     {
+      "name": "calc",
+      "total_ns": 225935799,
+      "kernel_gate_ns": 125731370,
+      "image_decode_ns": 5891,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1218467,
+      "items": 17
+     },
+     {
+      "name": "calc_parser",
+      "total_ns": 23204800078,
+      "kernel_gate_ns": 15811497929,
+      "image_decode_ns": 7565,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1382689745,
+      "items": 96
+     }
+    ],
+    "items": {
+     "count": 960,
+     "sum_total_ns": 48506504139,
+     "p50_total_ns": 1436211,
+     "p90_total_ns": 60404555,
+     "max_total_ns": 10509481632,
+     "top": [
+      {
+       "name": "parser_primitives::complete_post",
+       "total_ns": 10509481632,
+       "kernel_gate_ns": 5911644245,
+       "decl_type_ns": 4439500,
+       "decl_body_ns": 1796831831,
+       "decl_emit_ns": 719094914,
+       "elab_whnf_ns": 1135103708,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 14210,
+       "eval_steps": 246498
+      },
+      {
+       "name": "calc_parser::close_body",
+       "total_ns": 2853292727,
+       "kernel_gate_ns": 1881575501,
+       "decl_type_ns": 4713017,
+       "decl_body_ns": 508961757,
+       "decl_emit_ns": 165647224,
+       "elab_whnf_ns": 1016892,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 2572,
+       "eval_steps": 32579
+      },
+      {
+       "name": "calc_parser::number_grammar",
+       "total_ns": 2192320302,
+       "kernel_gate_ns": 1555352806,
+       "decl_type_ns": 1846377,
+       "decl_body_ns": 179799423,
+       "decl_emit_ns": 203914046,
+       "elab_whnf_ns": 66031512,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 13768,
+       "eval_steps": 350076
+      },
+      {
+       "name": "omega::cutsat_left_cut",
+       "total_ns": 1654430830,
+       "kernel_gate_ns": 1184450231,
+       "decl_type_ns": 35375937,
+       "decl_body_ns": 28404,
+       "decl_emit_ns": 107714381,
+       "elab_whnf_ns": 1324012,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 26241,
+       "eval_steps": 613305
+      },
+      {
+       "name": "omega::cutsat_right_cut",
+       "total_ns": 1436725970,
+       "kernel_gate_ns": 1019698805,
+       "decl_type_ns": 51036056,
+       "decl_body_ns": 30147,
+       "decl_emit_ns": 70665568,
+       "elab_whnf_ns": 1319142,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 22347,
+       "eval_steps": 525639
+      },
+      {
+       "name": "calc_parser::factor_body",
+       "total_ns": 1327467079,
+       "kernel_gate_ns": 639063588,
+       "decl_type_ns": 1118006,
+       "decl_body_ns": 379870728,
+       "decl_emit_ns": 87329857,
+       "elab_whnf_ns": 1991703,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 202,
+       "eval_steps": 4611
+      },
+      {
+       "name": "calc_parser::expr_body",
+       "total_ns": 1265372951,
+       "kernel_gate_ns": 636930524,
+       "decl_type_ns": 855794,
+       "decl_body_ns": 401034067,
+       "decl_emit_ns": 88499924,
+       "elab_whnf_ns": 1447979,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 186,
+       "eval_steps": 4579
+      },
+      {
+       "name": "calc_parser::checked_expr",
+       "total_ns": 1234042206,
+       "kernel_gate_ns": 744632052,
+       "decl_type_ns": 6892392,
+       "decl_body_ns": 20948064,
+       "decl_emit_ns": 83442978,
+       "elab_whnf_ns": 14032454,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 17995,
+       "eval_steps": 325367
+      },
+      {
+       "name": "calc_parser::Grammar",
+       "total_ns": 1062193595,
+       "kernel_gate_ns": 780074010,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 7784,
+       "diag_note_ns": 0,
+       "lower_ns": 151132642,
+       "conv_misses": 36,
+       "eval_steps": 9045
+      },
+      {
+       "name": "parser_contracts::Certified",
+       "total_ns": 748931337,
+       "kernel_gate_ns": 529437737,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 6883,
+       "diag_note_ns": 0,
+       "lower_ns": 145923270,
+       "conv_misses": 36,
+       "eval_steps": 5320
+      },
+      {
+       "name": "calc_parser::parentheses",
+       "total_ns": 662863484,
+       "kernel_gate_ns": 656111900,
+       "decl_type_ns": 571182,
+       "decl_body_ns": 3757,
+       "decl_emit_ns": 260894,
+       "elab_whnf_ns": 2090899,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 166,
+       "eval_steps": 8869
+      },
+      {
+       "name": "parser_combinators::bind_rebase",
+       "total_ns": 642130851,
+       "kernel_gate_ns": 416757442,
+       "decl_type_ns": 6234123,
+       "decl_body_ns": 130329693,
+       "decl_emit_ns": 43286926,
+       "elab_whnf_ns": 622828,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 248,
+       "eval_steps": 5701
+      },
+      {
+       "name": "calc_parser::executed_parentheses",
+       "total_ns": 570885396,
+       "kernel_gate_ns": 562363188,
+       "decl_type_ns": 822549,
+       "decl_body_ns": 4909,
+       "decl_emit_ns": 297242,
+       "elab_whnf_ns": 3654777,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 161,
+       "eval_steps": 9040
+      },
+      {
+       "name": "calc_parser::nested_parentheses",
+       "total_ns": 521059153,
+       "kernel_gate_ns": 514208180,
+       "decl_type_ns": 457732,
+       "decl_body_ns": 4308,
+       "decl_emit_ns": 217622,
+       "elab_whnf_ns": 2483397,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 138,
+       "eval_steps": 7110
+      },
+      {
+       "name": "calc_parser::execution_error",
+       "total_ns": 512531729,
+       "kernel_gate_ns": 502612890,
+       "decl_type_ns": 482393,
+       "decl_body_ns": 3917,
+       "decl_emit_ns": 136048,
+       "elab_whnf_ns": 1975131,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 67,
+       "eval_steps": 2869
+      },
+      {
+       "name": "calc_parser::wrong_close",
+       "total_ns": 509272473,
+       "kernel_gate_ns": 503032758,
+       "decl_type_ns": 392873,
+       "decl_body_ns": 3827,
+       "decl_emit_ns": 148601,
+       "elab_whnf_ns": 1988224,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 79,
+       "eval_steps": 3532
+      },
+      {
+       "name": "calc_parser::missing_close",
+       "total_ns": 507824757,
+       "kernel_gate_ns": 502589314,
+       "decl_type_ns": 387451,
+       "decl_body_ns": 3998,
+       "decl_emit_ns": 134074,
+       "elab_whnf_ns": 1997483,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 67,
+       "eval_steps": 2856
+      },
+      {
+       "name": "parser_combinators::bind_associativity",
+       "total_ns": 507492335,
+       "kernel_gate_ns": 280625152,
+       "decl_type_ns": 11815466,
+       "decl_body_ns": 131169962,
+       "decl_emit_ns": 38739642,
+       "elab_whnf_ns": 916129,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 126,
+       "eval_steps": 2929
+      },
+      {
+       "name": "omega::cutsat_left_remainder_bound",
+       "total_ns": 490890624,
+       "kernel_gate_ns": 336004869,
+       "decl_type_ns": 15057886,
+       "decl_body_ns": 18596,
+       "decl_emit_ns": 23494774,
+       "elab_whnf_ns": 361867,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 9241,
+       "eval_steps": 194729
+      },
+      {
+       "name": "omega::cutsat_cancel_middle",
+       "total_ns": 485072970,
+       "kernel_gate_ns": 330903190,
+       "decl_type_ns": 9012211,
+       "decl_body_ns": 44695,
+       "decl_emit_ns": 36734811,
+       "elab_whnf_ns": 569361,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8104,
+       "eval_steps": 179495
+      },
+      {
+       "name": "omega::cutsat_right_remainder_bound",
+       "total_ns": 446186785,
+       "kernel_gate_ns": 306970983,
+       "decl_type_ns": 19109528,
+       "decl_body_ns": 30907,
+       "decl_emit_ns": 24124044,
+       "elab_whnf_ns": 483981,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 8263,
+       "eval_steps": 175256
+      },
+      {
+       "name": "parser_recursion::extend_at",
+       "total_ns": 391947706,
+       "kernel_gate_ns": 167136062,
+       "decl_type_ns": 2237041,
+       "decl_body_ns": 163582553,
+       "decl_emit_ns": 23054580,
+       "elab_whnf_ns": 3298078,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 238,
+       "eval_steps": 3517
+      },
+      {
+       "name": "calc_parser::open_body",
+       "total_ns": 364871999,
+       "kernel_gate_ns": 84376938,
+       "decl_type_ns": 2507557,
+       "decl_body_ns": 56084058,
+       "decl_emit_ns": 17754408,
+       "elab_whnf_ns": 1676169,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 167,
+       "eval_steps": 1976
+      },
+      {
+       "name": "calc_parser::product_grammar",
+       "total_ns": 354978686,
+       "kernel_gate_ns": 234686772,
+       "decl_type_ns": 4424994,
+       "decl_body_ns": 36510624,
+       "decl_emit_ns": 28265826,
+       "elab_whnf_ns": 5970894,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1590,
+       "eval_steps": 59231
+      },
+      {
+       "name": "calc_parser::executed",
+       "total_ns": 336816684,
+       "kernel_gate_ns": 325678796,
+       "decl_type_ns": 2164169,
+       "decl_body_ns": 4338,
+       "decl_emit_ns": 231749,
+       "elab_whnf_ns": 3287352,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 113,
+       "eval_steps": 5981
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/calc_parser-cold.tsv"
+   },
+   "warm": {
+    "wall_s": 12.924,
+    "cpu_s": 12.861,
+    "max_rss_mb": 2325.2,
+    "exit": 0,
+    "summary": "docs/showcase/calc_parser.hthr: ok (cache) \u2014 0 declarations kernel-checked, 0 accepted from cache, 20 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 12683937704,
+     "other_ns": 1135089265,
+     "parse_ns": 110179,
+     "prelude_ns": 149512,
+     "kernel_gate_ns": 2526592,
+     "decl_type_ns": 34925,
+     "decl_body_ns": 57439,
+     "decl_emit_ns": 14908,
+     "decl_commit_ns": 16572,
+     "lower_ns": 2411706,
+     "elab_whnf_ns": 7314,
+     "diag_note_ns": 0,
+     "lint_ns": 3839,
+     "unify_ns": 0,
+     "resolve_ns": 0,
+     "matching_ns": 0,
+     "gendefs_ns": 319827,
+     "omega_reflect_ns": 0,
+     "omega_search_ns": 0,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 0,
+     "omega_reconstruct_ns": 0,
+     "omega_check_ns": 0,
+     "image_decode_ns": 2659341170,
+     "image_recheck_ns": 8883854456,
+     "image_publish_ns": 0,
+     "cache_hash_ns": 0,
+     "merkle_walk_ns": 0,
+     "decls_gated": 24,
+     "gendefs_pushed": 8,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 0,
+     "unify_calls": 0,
+     "cache_hashes": 0,
+     "diag_notes": 0,
+     "diag_candidates": 0,
+     "check_terms": 12,
+     "conv_shortcut_hits": 6581502,
+     "conv_memo_hits": 292,
+     "conv_misses": 31391,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 0,
+     "eval_steps": 843456,
+     "eval_delta_steps": 56404,
+     "eval_drives": 1464091,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 4037073,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1201284,
+      "image_recheck_ns": 2758272,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "bool",
+      "total_ns": 1894757,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 438090,
+      "image_recheck_ns": 1432221,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "nat",
+      "total_ns": 5537414,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 2710943,
+      "image_recheck_ns": 2485345,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "option",
+      "total_ns": 304346,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 98958,
+      "image_recheck_ns": 199788,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "pair",
+      "total_ns": 301581,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 89400,
+      "image_recheck_ns": 205529,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "list",
+      "total_ns": 29798857,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 8399292,
+      "image_recheck_ns": 21247047,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "result",
+      "total_ns": 940361,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 352528,
+      "image_recheck_ns": 576992,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "algebra",
+      "total_ns": 65067931,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 22149525,
+      "image_recheck_ns": 42814750,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "int",
+      "total_ns": 18270291,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 6550593,
+      "image_recheck_ns": 11255680,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "omega",
+      "total_ns": 23267201,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 9460231,
+      "image_recheck_ns": 13466886,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_core",
+      "total_ns": 61871750,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 16433373,
+      "image_recheck_ns": 45396969,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_contracts",
+      "total_ns": 704320320,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 173986132,
+      "image_recheck_ns": 530283020,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_diagnostics",
+      "total_ns": 58788091,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 11964352,
+      "image_recheck_ns": 46755791,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_combinators",
+      "total_ns": 819413399,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 219446388,
+      "image_recheck_ns": 599755903,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_primitives",
+      "total_ns": 132846219,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 32504588,
+      "image_recheck_ns": 100263242,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_recursion",
+      "total_ns": 212749214,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 55493171,
+      "image_recheck_ns": 157209014,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_repetition",
+      "total_ns": 129502869,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 24941440,
+      "image_recheck_ns": 104515111,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser",
+      "total_ns": 540413,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 136388,
+      "image_recheck_ns": 386011,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "calc",
+      "total_ns": 8587518,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1608886,
+      "image_recheck_ns": 6924910,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "calc_parser",
+      "total_ns": 9267632005,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 2071375608,
+      "image_recheck_ns": 7195921975,
+      "image_publish_ns": 0,
+      "items": 0
+     }
+    ],
+    "items": {
+     "count": 5,
+     "sum_total_ns": 20756736,
+     "p50_total_ns": 1576775,
+     "p90_total_ns": 17131444,
+     "max_total_ns": 17131444,
+     "top": [
+      {
+       "name": "prelude::class CollectionLiteral",
+       "total_ns": 17131444,
+       "kernel_gate_ns": 14390213,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 5921,
+       "diag_note_ns": 0,
+       "lower_ns": 2411706,
+       "conv_misses": 20,
+       "eval_steps": 540
+      },
+      {
+       "name": "prelude::sym",
+       "total_ns": 1881462,
+       "kernel_gate_ns": 1812331,
+       "decl_type_ns": 11572,
+       "decl_body_ns": 16251,
+       "decl_emit_ns": 4759,
+       "elab_whnf_ns": 400,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::trans",
+       "total_ns": 1576775,
+       "kernel_gate_ns": 1545256,
+       "decl_type_ns": 4308,
+       "decl_body_ns": 8025,
+       "decl_emit_ns": 3677,
+       "elab_whnf_ns": 231,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::cong",
+       "total_ns": 121900,
+       "kernel_gate_ns": 77746,
+       "decl_type_ns": 12583,
+       "decl_body_ns": 17754,
+       "decl_emit_ns": 4649,
+       "elab_whnf_ns": 321,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::cong_succ",
+       "total_ns": 45155,
+       "kernel_gate_ns": 13495,
+       "decl_type_ns": 6462,
+       "decl_body_ns": 15409,
+       "decl_emit_ns": 1823,
+       "elab_whnf_ns": 441,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/calc_parser-warm.tsv"
+   },
+   "edit": {
+    "wall_s": 10.843,
+    "cpu_s": 10.8,
+    "max_rss_mb": 1615.5,
+    "exit": 0,
+    "summary": "docs/showcase/calc_parser.hthr: ok (cache) \u2014 1 declaration kernel-checked, 144 accepted from cache, 19 semantic modules replayed and kernel-checked",
+    "run": {
+     "total_ns": 10603564203,
+     "other_ns": 1468916667,
+     "parse_ns": 1164314,
+     "prelude_ns": 176623,
+     "kernel_gate_ns": 9348507,
+     "decl_type_ns": 70682900,
+     "decl_body_ns": 2396205754,
+     "decl_emit_ns": 1117326415,
+     "decl_commit_ns": 36418102,
+     "lower_ns": 133072540,
+     "elab_whnf_ns": 249251050,
+     "diag_note_ns": 0,
+     "lint_ns": 214310,
+     "unify_ns": 37767002,
+     "resolve_ns": 3612065,
+     "matching_ns": 1535925,
+     "gendefs_ns": 549228,
+     "omega_reflect_ns": 16074466,
+     "omega_search_ns": 6731,
+     "omega_cutsat_ns": 0,
+     "omega_render_ns": 0,
+     "omega_parse_ns": 4144575,
+     "omega_reconstruct_ns": 757869,
+     "omega_check_ns": 272120557,
+     "image_decode_ns": 599120834,
+     "image_recheck_ns": 1793551418,
+     "image_publish_ns": 1321352303,
+     "cache_hash_ns": 194166,
+     "merkle_walk_ns": 1069999882,
+     "decls_gated": 166,
+     "gendefs_pushed": 61,
+     "mints_pushed": 0,
+     "mints_declined": 0,
+     "resolve_goals": 31,
+     "unify_calls": 1463,
+     "cache_hashes": 145,
+     "diag_notes": 0,
+     "diag_candidates": 1327,
+     "check_terms": 44,
+     "conv_shortcut_hits": 1532604,
+     "conv_memo_hits": 54,
+     "conv_misses": 5453,
+     "conv_out_of_fuel": 0,
+     "conv_not_convertible": 0,
+     "eval_steps": 158951,
+     "eval_delta_steps": 14696,
+     "eval_drives": 269040,
+     "term_cache_lookups": 0,
+     "term_cache_hits": 0,
+     "type_cache_lookups": 0,
+     "type_cache_hits": 0
+    },
+    "modules": [
+     {
+      "name": "logic",
+      "total_ns": 4409277,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1217455,
+      "image_recheck_ns": 3127640,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "bool",
+      "total_ns": 1882995,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 444572,
+      "image_recheck_ns": 1414127,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "nat",
+      "total_ns": 5882807,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 2821131,
+      "image_recheck_ns": 2720730,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "option",
+      "total_ns": 340906,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 105951,
+      "image_recheck_ns": 228793,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "pair",
+      "total_ns": 308554,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 93968,
+      "image_recheck_ns": 206211,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "list",
+      "total_ns": 36505026,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 9655829,
+      "image_recheck_ns": 26689625,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "result",
+      "total_ns": 940070,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 347969,
+      "image_recheck_ns": 579758,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "algebra",
+      "total_ns": 74501714,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 24444234,
+      "image_recheck_ns": 49954396,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "int",
+      "total_ns": 18726671,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 6707418,
+      "image_recheck_ns": 11555725,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "omega",
+      "total_ns": 24392726,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 10035147,
+      "image_recheck_ns": 14009901,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_core",
+      "total_ns": 69442387,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 18093983,
+      "image_recheck_ns": 51282039,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_contracts",
+      "total_ns": 740211920,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 182382517,
+      "image_recheck_ns": 557774098,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_diagnostics",
+      "total_ns": 60434884,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 12109163,
+      "image_recheck_ns": 48254246,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_combinators",
+      "total_ns": 839944575,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 214635399,
+      "image_recheck_ns": 625082827,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_primitives",
+      "total_ns": 138916910,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 33106891,
+      "image_recheck_ns": 105730638,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_recursion",
+      "total_ns": 238954842,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 54917399,
+      "image_recheck_ns": 183979153,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser_repetition",
+      "total_ns": 130385199,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 26226107,
+      "image_recheck_ns": 104110562,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "parser",
+      "total_ns": 533890,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 131028,
+      "image_recheck_ns": 384548,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "calc",
+      "total_ns": 8134399,
+      "kernel_gate_ns": 0,
+      "image_decode_ns": 1614836,
+      "image_recheck_ns": 6466401,
+      "image_publish_ns": 0,
+      "items": 0
+     },
+     {
+      "name": "calc_parser",
+      "total_ns": 7490687515,
+      "kernel_gate_ns": 6336124,
+      "image_decode_ns": 29837,
+      "image_recheck_ns": 0,
+      "image_publish_ns": 1321352303,
+      "items": 97
+     }
+    ],
+    "items": {
+     "count": 102,
+     "sum_total_ns": 5551942204,
+     "p50_total_ns": 2266390,
+     "p90_total_ns": 100020659,
+     "max_total_ns": 1104010020,
+     "top": [
+      {
+       "name": "calc_parser::close_body",
+       "total_ns": 1104010020,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 5064228,
+       "decl_body_ns": 641652457,
+       "decl_emit_ns": 256530312,
+       "elab_whnf_ns": 2735103,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 24
+      },
+      {
+       "name": "calc_parser::number_grammar",
+       "total_ns": 834293365,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2525809,
+       "decl_body_ns": 271680163,
+       "decl_emit_ns": 273805244,
+       "elab_whnf_ns": 114986529,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 34
+      },
+      {
+       "name": "calc_parser::factor_body",
+       "total_ns": 764264570,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 1136761,
+       "decl_body_ns": 520334919,
+       "decl_emit_ns": 128239619,
+       "elab_whnf_ns": 1878095,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 24
+      },
+      {
+       "name": "calc_parser::expr_body",
+       "total_ns": 726021738,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 1020184,
+       "decl_body_ns": 475940577,
+       "decl_emit_ns": 123956904,
+       "elab_whnf_ns": 1619602,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 24
+      },
+      {
+       "name": "calc_parser::checked_expr",
+       "total_ns": 639283376,
+       "kernel_gate_ns": 564799,
+       "decl_type_ns": 8115815,
+       "decl_body_ns": 22053536,
+       "decl_emit_ns": 109185508,
+       "elab_whnf_ns": 37077116,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 1670
+      },
+      {
+       "name": "calc_parser::PTok",
+       "total_ns": 196028501,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 0,
+       "diag_note_ns": 0,
+       "lower_ns": 84079,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::Grammar",
+       "total_ns": 185398817,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 6588,
+       "diag_note_ns": 0,
+       "lower_ns": 125325522,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::product_grammar",
+       "total_ns": 118533272,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 4858138,
+       "decl_body_ns": 45957396,
+       "decl_emit_ns": 34287165,
+       "elab_whnf_ns": 6670456,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 21
+      },
+      {
+       "name": "calc_parser::sum_grammar",
+       "total_ns": 113731031,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 3774442,
+       "decl_body_ns": 46259420,
+       "decl_emit_ns": 32006938,
+       "elab_whnf_ns": 5657110,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 20
+      },
+      {
+       "name": "calc_parser::atom_body",
+       "total_ns": 110967031,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 586231,
+       "decl_body_ns": 58545099,
+       "decl_emit_ns": 14113005,
+       "elab_whnf_ns": 924992,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 32
+      },
+      {
+       "name": "calc_parser::whole_grammar",
+       "total_ns": 100020659,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 675975,
+       "decl_body_ns": 53336362,
+       "decl_emit_ns": 15682215,
+       "elab_whnf_ns": 15062996,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 334
+      },
+      {
+       "name": "calc_parser::symbol_span",
+       "total_ns": 75254173,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 738410,
+       "decl_body_ns": 39700321,
+       "decl_emit_ns": 19282521,
+       "elab_whnf_ns": 5528,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::product_finish",
+       "total_ns": 71018085,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2605030,
+       "decl_body_ns": 27554830,
+       "decl_emit_ns": 19705582,
+       "elab_whnf_ns": 3404557,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 64
+      },
+      {
+       "name": "calc_parser::sum_finish",
+       "total_ns": 70647824,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2423467,
+       "decl_body_ns": 22951396,
+       "decl_emit_ns": 21573468,
+       "elab_whnf_ns": 3224735,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 64
+      },
+      {
+       "name": "calc_parser::paren_grammar",
+       "total_ns": 64516810,
+       "kernel_gate_ns": 248843,
+       "decl_type_ns": 3690510,
+       "decl_body_ns": 28006463,
+       "decl_emit_ns": 14351286,
+       "elab_whnf_ns": 4928629,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 1,
+       "eval_steps": 169
+      },
+      {
+       "name": "calc_parser::open_body",
+       "total_ns": 62260594,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2247916,
+       "decl_body_ns": 31469901,
+       "decl_emit_ns": 12027847,
+       "elab_whnf_ns": 1120189,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 24
+      },
+      {
+       "name": "calc_parser::expression_sound",
+       "total_ns": 30647623,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 3793261,
+       "decl_body_ns": 16038969,
+       "decl_emit_ns": 5263012,
+       "elab_whnf_ns": 233091,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 9
+      },
+      {
+       "name": "calc_parser::expression_grammar",
+       "total_ns": 25843551,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2222959,
+       "decl_body_ns": 7833168,
+       "decl_emit_ns": 7089811,
+       "elab_whnf_ns": 2275425,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 12
+      },
+      {
+       "name": "calc_parser::factor_grammar",
+       "total_ns": 21658970,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2067726,
+       "decl_body_ns": 8008548,
+       "decl_emit_ns": 4050227,
+       "elab_whnf_ns": 2000836,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 11
+      },
+      {
+       "name": "calc_parser::atom_sound",
+       "total_ns": 21024517,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2594152,
+       "decl_body_ns": 11069055,
+       "decl_emit_ns": 4235708,
+       "elab_whnf_ns": 4756,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::factor_sound",
+       "total_ns": 20872429,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 2598279,
+       "decl_body_ns": 11369710,
+       "decl_emit_ns": 3938235,
+       "elab_whnf_ns": 4981,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::grammar_sound",
+       "total_ns": 19622252,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 1810777,
+       "decl_body_ns": 11437400,
+       "decl_emit_ns": 3561502,
+       "elab_whnf_ns": 4237,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "calc_parser::parse_post",
+       "total_ns": 17109526,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 72919,
+       "decl_body_ns": 10192953,
+       "decl_emit_ns": 3194918,
+       "elab_whnf_ns": 2606,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 0
+      },
+      {
+       "name": "prelude::class CollectionLiteral",
+       "total_ns": 16552686,
+       "kernel_gate_ns": 13718361,
+       "decl_type_ns": 0,
+       "decl_body_ns": 0,
+       "decl_emit_ns": 0,
+       "elab_whnf_ns": 6191,
+       "diag_note_ns": 0,
+       "lower_ns": 2502999,
+       "conv_misses": 20,
+       "eval_steps": 540
+      },
+      {
+       "name": "calc_parser::public_reply_sound",
+       "total_ns": 9974961,
+       "kernel_gate_ns": 0,
+       "decl_type_ns": 1300832,
+       "decl_body_ns": 4254445,
+       "decl_emit_ns": 1148895,
+       "elab_whnf_ns": 1123796,
+       "diag_note_ns": 0,
+       "lower_ns": 0,
+       "conv_misses": 0,
+       "eval_steps": 63
+      }
+     ]
+    },
+    "kernel_workers": 1,
+    "raw": "target/perf/2026-09-17T184149Z/calc_parser-edit.tsv"
+   }
+  }
+ ]
+}

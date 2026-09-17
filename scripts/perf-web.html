@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heather perf</title>
+<!-- Served by `scripts/perf serve`; reads /api/snapshots (perf/snapshots/*.json). Self-contained: no external requests. -->
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #ffffff; --sunk: #efefea; --fg: #1c1c1e; --muted: #6a6a70; --faint: #a3a3a8;
+  --line: #e2e2dc; --accent: #3462d4; --code-bg: #f0f0eb;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+  --other: #b8b8b0; --good: #0ca30c; --bad: #d03b3b;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131417; --panel: #1a1b1f; --sunk: #202126; --fg: #e6e6e9; --muted: #9a9aa3; --faint: #5f6068;
+    --line: #2b2c32; --accent: #7ea2ff; --code-bg: #23242a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --other: #55555c;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13.5px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+code, .mono { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 0.92em; }
+header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 18px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0 8px 0 0; }
+select, button { font: inherit; color: inherit; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+main { padding: 12px 18px 60px; max-width: 1400px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 14px 0; overflow-x: auto; }
+h2 { font-size: 14px; margin: 0 0 4px; }
+h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
+p.note { color: var(--muted); margin: 0 0 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 3px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+th:first-child, td:first-child { text-align: left; }
+td.bar { min-width: 140px; }
+.bar > div { display: inline-block; height: 12px; border-radius: 0 3px 3px 0; vertical-align: middle; margin-right: 6px; }
+.stack { display: flex; height: 14px; gap: 2px; border-radius: 3px; overflow: hidden; }
+.stack > div { height: 100%; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12px; margin: 6px 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.legend i.line { height: 2px; width: 18px; border-radius: 1px; vertical-align: 3px; }
+.legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.card h4 { margin: 0 0 2px; font-size: 12.5px; font-weight: 600; }
+svg text { fill: var(--muted); font-size: 10.5px; }
+svg .axis { stroke: var(--line); }
+svg .grid { stroke: var(--line); stroke-dasharray: 2 3; }
+.delta-up { color: var(--bad); } .delta-down { color: var(--good); } .delta-flat { color: var(--faint); }
+#tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; z-index: 5; max-width: 420px; white-space: pre; font-family: ui-monospace, Menlo, monospace; }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+.kv { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Heather perf</h1>
+  <label>snapshot <select id="pick"></select></label>
+  <label>compare to <select id="against"></select></label>
+  <span id="envinfo" class="kv"></span>
+</header>
+<main id="main"><div class="empty">loading…</div></main>
+<div id="tip"></div>
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S = n => `var(--s${n})`;
+const ENV_COLOR = {};          // environment -> categorical slot, assigned in fixed first-seen order
+const PHASES = [               // fixed order, fixed colors: the phase keeps its color across every chart
+  ['kernel_gate_ns', 'kernel gate', S(1)], ['decl_body_ns', 'decl body', S(2)], ['decl_emit_ns', 'decl emit', S(3)],
+  ['decl_type_ns', 'decl type', S(4)], ['lower_ns', 'lower', S(5)], ['elab_whnf_ns', 'elab whnf', S(6)],
+  ['image_recheck_ns', 'image recheck', S(7)], ['image_decode_ns', 'image decode', S(8)],
+];
+let SNAPS = [];
+const fmtS = v => v == null ? '—' : v >= 100 ? v.toFixed(0) + 's' : v >= 10 ? v.toFixed(1) + 's' : v.toFixed(2) + 's';
+const fmtN = v => v == null ? '—' : v.toLocaleString();
+const fmtMs = ns => (ns / 1e6).toFixed(1) + 'ms';
+const stem = p => p.split('/').pop().replace('.hthr', '');
+const queries = run => run ? (run.conv_shortcut_hits || 0) + (run.conv_memo_hits || 0) + (run.conv_misses || 0) : null;
+
+function delta(a, b, isTime) {
+  if (a == null || b == null || !a) return '';
+  const d = (b - a) / a * 100;
+  if (isTime && Math.abs(d) < 10) return '<span class="delta-flat">≈</span>';
+  const cls = d > 0 ? 'delta-up' : 'delta-down';
+  return `<span class="${cls}">${d > 0 ? '+' : ''}${d.toFixed(0)}%</span>`;
+}
+function envColor(env) {
+  if (!(env in ENV_COLOR)) ENV_COLOR[env] = Object.keys(ENV_COLOR).length + 1;
+  return S(Math.min(ENV_COLOR[env], 8));
+}
+function tip(ev, text) {
+  const t = $('#tip');
+  if (!text) { t.style.display = 'none'; return; }
+  t.textContent = text; t.style.display = 'block';
+  const x = Math.min(ev.clientX + 14, window.innerWidth - t.offsetWidth - 8);
+  t.style.left = x + 'px'; t.style.top = (ev.clientY + 14) + 'px';
+}
+document.addEventListener('mousemove', ev => {
+  const el = ev.target.closest('[data-tip]');
+  tip(ev, el ? el.dataset.tip : null);
+});
+
+// ---------------------------------------------------------------- now
+function barCell(v, max, color, label) {
+  const w = max ? Math.max(2, v / max * 130) : 0;
+  return `<td class="bar" data-tip="${esc(label)}"><div style="width:${w}px;background:${color}"></div>${fmtS(v)}</td>`;
+}
+function corpusTable(snap, against) {
+  const prev = Object.fromEntries((against?.files || []).map(f => [f.path, f]));
+  const max = Math.max(...snap.files.flatMap(f => ['wait', 'cold', 'warm', 'edit'].map(m => f[m]?.wall_s || 0)), 0.001);
+  const rows = snap.files.map(f => {
+    const c = f.cold || {}, w = f.warm || {}, e = f.edit || {}, p = prev[f.path] || {};
+    const run = c.run || {}, prun = p.cold?.run || {};
+    const gate = run.total_ns ? run.kernel_gate_ns / run.total_ns * 100 : null;
+    const bad = ['wait', 'cold', 'warm', 'edit'].filter(m => f[m] && f[m].exit !== 0);
+    const t = m => `${f.path} ${m}\nwall ${fmtS(f[m]?.wall_s)}  cpu ${fmtS(f[m]?.cpu_s)}  rss ${f[m]?.max_rss_mb} MB\n${f[m]?.summary || ''}`;
+    return `<tr><td class="mono">${esc(f.path)}${bad.length ? ` <span class="delta-up">✗ ${bad.join(',')}</span>` : ''}</td>
+      ${f.wait ? barCell(f.wait.wall_s, max, S(7), t('wait')) : '<td>—</td>'}<td>${delta(p.wait?.wall_s, f.wait?.wall_s, true)}</td>
+      ${barCell(c.wall_s, max, S(1), t('cold'))}<td>${delta(p.cold?.wall_s, c.wall_s, true)}</td>
+      ${barCell(w.wall_s, max, S(3), t('warm'))}
+      ${barCell(e.wall_s, max, S(2), t('edit'))}<td>${delta(p.edit?.wall_s, e.wall_s, true)}</td>
+      <td>${gate == null ? '—' : gate.toFixed(0) + '%'}</td><td>${fmtN(c.items?.count)}</td>
+      <td>${fmtN(run.conv_misses)}</td><td>${delta(prun.conv_misses, run.conv_misses, false)}</td>
+      <td>${fmtN(queries(run))}</td><td>${delta(queries(prun), queries(run), false)}</td>
+      <td>${fmtN(run.eval_steps)}</td><td>${c.max_rss_mb ? c.max_rss_mb.toFixed(0) : '—'}</td></tr>`;
+  }).join('');
+  return `<table><thead><tr><th>file</th><th>wait</th><th>Δ</th><th>cold</th><th>Δ</th><th>warm</th><th>edit</th><th>Δ</th><th>gate</th><th>decls</th>
+    <th>misses</th><th>Δ</th><th>queries</th><th>Δ</th><th>eval steps</th><th>RSS MB</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function phaseStack(run) {
+  const total = run.total_ns || 1;
+  let acc = 0;
+  const segs = PHASES.map(([k, label, color]) => {
+    const v = run[k] || 0; acc += v;
+    return v / total < 0.004 ? '' : `<div style="flex:${v};background:${color}" data-tip="${label}: ${(v / total * 100).toFixed(1)}% (${fmtMs(v)})"></div>`;
+  }).join('');
+  const rest = Math.max(total - acc, 0);
+  const named = Object.entries(run).filter(([k, v]) => k.endsWith('_ns') && k !== 'total_ns' && !PHASES.some(p => p[0] === k) && v / total >= 0.01)
+    .map(([k, v]) => `${k.slice(0, -3)} ${(v / total * 100).toFixed(1)}%`).join(', ');
+  return `<div class="stack">${segs}<div style="flex:${rest};background:var(--other)" data-tip="everything else: ${(rest / total * 100).toFixed(1)}%${named ? '\n' + named : ''}"></div></div>`;
+}
+function phaseTable(snap, mode) {
+  const rows = snap.files.filter(f => f[mode]?.run?.total_ns).map(f =>
+    `<tr><td class="mono">${esc(stem(f.path))}</td><td style="width:60%">${phaseStack(f[mode].run)}</td><td>${fmtS(f[mode].run.total_ns / 1e9)}</td></tr>`).join('');
+  const legend = PHASES.map(([, l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('') + `<span><i style="background:var(--other)"></i>everything else (hover)</span>`;
+  return `<div class="legend">${legend}</div><table><tbody>${rows}</tbody></table>`;
+}
+function corpusPhaseTotals(snap, mode) {
+  const tot = {};
+  for (const f of snap.files) for (const [k, v] of Object.entries(f[mode]?.run || {})) if (k.endsWith('_ns') && k !== 'total_ns') tot[k] = (tot[k] || 0) + v;
+  const sum = Object.values(tot).reduce((a, b) => a + b, 0) || 1;
+  return Object.entries(tot).sort((a, b) => b[1] - a[1]).filter(([, v]) => v / sum >= 0.005).map(([k, v]) => `${k.slice(0, -3)} ${(v / sum * 100).toFixed(0)}%`).join(', ');
+}
+function heavyItems(snap) {
+  // A module in two closures has its items twice; the largest reading stands for each.
+  const seen = new Set();
+  const all = snap.files.flatMap(f => (f.cold?.items?.top || []).map(i => ({ file: stem(f.path), ...i }))).sort((a, b) => b.total_ns - a.total_ns)
+    .filter(i => !seen.has(i.name) && seen.add(i.name)).slice(0, 20);
+  const max = all[0]?.total_ns || 1;
+  const rows = all.map(i => {
+    const elab = ['decl_body_ns', 'decl_type_ns', 'decl_emit_ns', 'elab_whnf_ns', 'lower_ns'].map(k => [k, i[k] || 0]).sort((a, b) => b[1] - a[1])[0];
+    return `<tr><td class="mono">${esc(i.file)}: ${esc(i.name)}</td>${barCell(i.total_ns / 1e9, max / 1e9, S(1), `${i.name}: ${fmtMs(i.total_ns)}`)}
+      <td>${(i.kernel_gate_ns / i.total_ns * 100).toFixed(0)}%</td><td>${elab[0].slice(0, -3)} ${(elab[1] / i.total_ns * 100).toFixed(0)}%</td>
+      <td>${fmtN(i.conv_misses)}</td><td>${fmtN(i.eval_steps)}</td></tr>`;
+  }).join('');
+  return `<table><thead><tr><th>declaration</th><th>total (cold)</th><th>gate</th><th>largest elab phase</th><th>misses</th><th>eval steps</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function concentration(snap) {
+  const rows = snap.files.filter(f => f.cold?.items?.count).map(f => {
+    const it = f.cold.items, top5 = it.top.slice(0, 5).reduce((a, i) => a + i.total_ns, 0);
+    return `<tr><td class="mono">${esc(stem(f.path))}</td><td>${it.count}</td><td>${(it.max_total_ns / it.sum_total_ns * 100).toFixed(0)}%</td>
+      <td>${(top5 / it.sum_total_ns * 100).toFixed(0)}%</td><td>${fmtMs(it.p50_total_ns)}</td><td>${fmtMs(it.p90_total_ns)}</td><td>${fmtMs(it.max_total_ns)}</td></tr>`;
+  }).join('');
+  return `<table><thead><tr><th>file</th><th>decls</th><th>top 1 share</th><th>top 5 share</th><th>p50</th><th>p90</th><th>max</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function suiteTable(snap, against) {
+  return Object.entries(snap.tests || {}).map(([lane, t]) => {
+    const prev = Object.fromEntries(against?.tests?.[lane]?.targets || []);
+    const top = t.targets.slice(0, 25), max = top[0]?.[1] || 1;
+    const rest = t.targets.slice(25).reduce((a, [, s]) => a + s, 0);
+    const rows = top.map(([label, s]) => `<tr><td class="mono">${esc(label)}</td>${barCell(s, max, S(1), label)}<td>${delta(prev[label], s, true)}</td></tr>`).join('');
+    return `<h3>${lane} lane · run ${esc(t.run)} · ${t.targets.length} targets · ${fmtS(t.sum_s)} summed at kernel width one</h3>
+      <table><thead><tr><th>test binary</th><th>seconds</th><th>Δ</th></tr></thead><tbody>${rows}
+      <tr><td class="kv">${t.targets.length - top.length} more</td><td>${fmtS(rest)}</td><td></td></tr></tbody></table>`;
+  }).join('') || '<p class="note">no suite history in this snapshot</p>';
+}
+
+// ---------------------------------------------------------------- history
+// Small multiples: one card per file (or test), x = snapshot order, y = the measure,
+// one line per environment (fixed color), solid = first measure, dashed = second.
+function lineChart(series, opts) {
+  const W = 300, H = 120, L = 42, R = 8, T = 8, B = 20;
+  const pts = series.flatMap(s => s.points);
+  if (!pts.length) return '<div class="kv">no data</div>';
+  const xs = [...new Set(pts.map(p => p.x))].sort();
+  const ymax = Math.max(...pts.map(p => p.y)) || 1;
+  const X = x => L + (xs.length === 1 ? (W - L - R) / 2 : xs.indexOf(x) / (xs.length - 1) * (W - L - R));
+  const Y = y => T + (1 - y / ymax) * (H - T - B);
+  const fmt = opts.fmt;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">`;
+  for (const g of [0, 0.5, 1]) svg += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(ymax * g)}" y2="${Y(ymax * g)}"/><text x="${L - 4}" y="${Y(ymax * g) + 3.5}" text-anchor="end">${fmt(ymax * g)}</text>`;
+  svg += `<line class="axis" x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}"/>`;
+  svg += `<text x="${L}" y="${H - 6}">${xs[0].slice(0, 10)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">${xs[xs.length - 1].slice(0, 10)}</text>`;
+  for (const s of series) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" ${s.dashed ? 'stroke-dasharray="4 3"' : ''}/>`;
+    for (const p of s.points) svg += `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="${s.points.length > 30 ? 2 : 3.5}" fill="${s.color}" stroke="var(--panel)" stroke-width="1.5" data-tip="${esc(s.name)}\n${esc(p.x)} ${esc(p.label || '')}\n${fmt(p.y)}"/>`;
+  }
+  return svg + '</svg>';
+}
+function historyCards(snaps, measures, keyOf, valueOf, fmt, title) {
+  // measures: [[name, dashed]]; keyOf(snap) -> {key: obj}; valueOf(obj, name) -> number|null
+  const keys = new Map();
+  for (const s of snaps) for (const [k, o] of Object.entries(keyOf(s))) keys.set(k, (keys.get(k) || 0) + (valueOf(o, measures[0][0]) || 0));
+  const ordered = [...keys.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const envs = [...new Set(snaps.map(s => s.env.source))];
+  const cards = ordered.map(k => {
+    const series = [];
+    for (const env of envs) for (const [m, dashed] of measures) {
+      const points = snaps.filter(s => s.env.source === env).map(s => {
+        const v = keyOf(s)[k] ? valueOf(keyOf(s)[k], m) : null;
+        return v == null ? null : { x: s.stamp, y: v, label: `${s.commit}${s.dirty ? ' dirty' : ''} ${s.label || ''}` };
+      }).filter(Boolean);
+      series.push({ name: `${k} · ${env} · ${m}`, color: envColor(env), dashed, points });
+    }
+    return `<div class="card"><h4 class="mono">${esc(k)}</h4>${lineChart(series, { fmt })}</div>`;
+  }).join('');
+  const legend = envs.map(e => `<span><i class="line" style="background:${envColor(e)}"></i>${esc(e)}</span>`).join('')
+    + measures.map(([m, dashed]) => `<span><i class="line ${dashed ? 'dash' : ''}" style="${dashed ? 'color:var(--muted)' : 'background:var(--muted)'}"></i>${m}</span>`).join('');
+  return `<h3>${title}</h3><div class="legend">${legend}</div><div class="grid">${cards}</div>`;
+}
+
+// ---------------------------------------------------------------- page
+function render() {
+  const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
+  const againstName = $('#against').value;
+  const against = againstName === 'prev'
+    ? [...SNAPS].reverse().find(s => s.stamp < snap.stamp && s.env.source === snap.env.source)
+    : SNAPS.find(s => s._path === againstName);
+  const e = snap.env;
+  $('#envinfo').textContent = `${e.source} · ${e.host} · ${e.cpu} · ${e.nproc} cpus · gate width ${e.kernel_workers} · ${snap.commit}${snap.dirty ? ' (dirty)' : ''}${snap.label ? ' · ' + snap.label : ''}`
+    + (against ? ` · Δ vs ${against.stamp} ${against.commit}` : ' · no earlier same-environment snapshot to compare');
+  const main = $('#main');
+  const byFile = s => Object.fromEntries(s.files.map(f => [f.path, f]));
+  const byTest = s => Object.fromEntries(Object.values(s.tests || {}).flatMap(t => t.targets).map(([l, sec]) => [l, sec]));
+  main.innerHTML = `
+    <section><h2>What is slow now — the corpus</h2>
+      <p class="note">Each file through the release CLI. <b>wait</b> is a cold check at kernel width ${e.wait_workers ?? '?'} — what a person sits through. The attributed runs are at width ${e.kernel_workers}, where the phase columns are honest and comparable with the suite's timings: <b>cold</b> is an empty cache (every module elaborated and gated), <b>warm</b> is nothing changed (every module replayed from its image), <b>edit</b> is one trivial declaration appended (imports replayed, the root re-elaborated with the declaration cache). Seconds compare within one environment only; misses, queries and steps are exact and compare across machines.</p>
+      ${snap.files.length ? corpusTable(snap, against) : '<p class="note">no corpus in this snapshot</p>'}
+      ${snap.files.length ? `<h3>Where cold time goes, per file (self time per phase, the run row)</h3>${phaseTable(snap, 'cold')}
+      <p class="note">Corpus total: ${corpusPhaseTotals(snap, 'cold')}</p>
+      <h3>Where edit time goes</h3>${phaseTable(snap, 'edit')}<p class="note">Corpus total: ${corpusPhaseTotals(snap, 'edit')}</p>` : ''}
+    </section>
+    ${snap.files.length ? `<section><h2>Which declarations</h2>
+      <p class="note">Concentration first: a file whose top declaration is most of its time has one problem; a flat file has a constant-factor problem.</p>
+      ${concentration(snap)}<h3>Heaviest declarations across the corpus (cold)</h3>${heavyItems(snap)}</section>` : ''}
+    <section><h2>The test suite</h2><p class="note">Latest run per lane of the suite runner's history (scripts/test); seconds per test binary, scheduled in parallel, each at kernel width one.</p>${suiteTable(snap, against)}</section>
+    <section><h2>History</h2>
+      <p class="note">One line per environment (fixed color). Points are snapshots; hover for the commit. Counts are the honest cross-machine line; seconds within one environment.</p>
+      ${historyCards(SNAPS, [['cold', false], ['edit', true]], byFile, (f, m) => f[m]?.wall_s ?? null, v => fmtS(v), 'Wall seconds per file at width ' + e.kernel_workers + ', cold (solid) and edit (dashed)')}
+      ${historyCards(SNAPS, [['wait', false], ['warm', true]], byFile, (f, m) => f[m]?.wall_s ?? null, v => fmtS(v), 'Wall seconds per file: the wait (cold at the default width, solid) and warm replay (dashed)')}
+      ${historyCards(SNAPS, [['queries', false], ['misses', true]], byFile, (f, m) => f.cold?.run ? (m === 'queries' ? queries(f.cold.run) : f.cold.run.conv_misses) : null, v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v.toFixed(0), 'Conversion queries (solid) and misses (dashed) per file, cold — machine-independent')}
+      ${historyCards(SNAPS, [['eval steps', false]], byFile, f => f.cold?.run?.eval_steps ?? null, v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v.toFixed(0), 'Evaluator steps per file, cold')}
+      ${historyCards(SNAPS, [['seconds', false]], s => { const t = byTest(s); return Object.fromEntries(Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 12)); }, (v) => v, v => fmtS(v), 'Slowest test binaries over snapshots (top 12 by the latest run)')}
+    </section>`;
+}
+async function load() {
+  SNAPS = await (await fetch('/api/snapshots')).json();
+  if (!SNAPS.length) { $('#main').innerHTML = '<div class="empty">no snapshots yet — run <code>scripts/perf snapshot</code></div>'; return; }
+  const opt = s => `<option value="${esc(s._path)}">${esc(s.stamp)} ${esc(s.env.source)} ${esc(s.commit)}${s.dirty ? '*' : ''}${s.label ? ' — ' + esc(s.label) : ''}</option>`;
+  $('#pick').innerHTML = [...SNAPS].reverse().map(opt).join('');
+  $('#against').innerHTML = '<option value="prev">previous in the same environment</option>' + [...SNAPS].reverse().map(opt).join('');
+  $('#pick').onchange = $('#against').onchange = render;
+  render();
+}
+load().catch(e => { $('#main').innerHTML = `<div class="empty">${esc(e)}</div>`; });
+</script>
+</body>
+</html>

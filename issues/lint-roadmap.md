@@ -80,3 +80,4 @@ and the distinction between activation level and style profile belong to
   proof-`apply` readability lint. It also split optional review advice from
   always-on warnings rather than treating removable annotations as defects.
 - 2026-09-16: Some lints determine their own fix ("write `_` instead", "write `[…]` instead"); [[lint-mechanical-fix-mode]] owns applying those, and assumes only that fixability is a property of the individual lint rather than of a profile.
+- 2026-09-17: The first review-mode lint: [[lint-redundant-match-motive]] runs only under `heather check --review` (`Elaborator::set_review_lints`), because its recognizer re-elaborates and kernel-checks every written motive and was 45% of `lib/ir_v1.hthr`'s check and 20% of the x86 model's while finding nothing on a library that had already adopted its findings. The rule that falls out: a lint whose recognizer is a second elaboration of the item is review advice, never an always-on warning.

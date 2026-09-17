@@ -184,3 +184,37 @@ fn the_hasher_is_a_format_sink() {
     write!(h, "ab{}", 'c').expect("infallible");
     assert_eq!(hex(&h.finish()), hex(&sha256(b"abc")));
 }
+
+/// The SHA-extensions path and the portable rounds are one function: on a
+/// machine that has the extensions, both are checked against the oracle
+/// and against each other across every length and chunking that matters;
+/// on one that does not, `Sha256::new()` *is* the scalar path and this
+/// test degenerates to the differential tests above.
+#[test]
+fn the_sha_extensions_path_agrees_with_the_portable_rounds() {
+    let has = Sha256::new().uses_sha_extensions();
+    assert!(!Sha256::scalar().uses_sha_extensions());
+    eprintln!("sha extensions: {has}");
+    for len in (0..300).chain([511, 512, 513, 4095, 4096, 4097, 65_536 + 7]) {
+        let bytes = lcg_bytes(len as u64 * 7919 + 1, len);
+        let expected = oracle(&bytes);
+        let mut fast = Sha256::new();
+        fast.update(&bytes);
+        let mut slow = Sha256::scalar();
+        slow.update(&bytes);
+        assert_eq!(fast.finish(), expected, "default path, length {len}");
+        assert_eq!(slow.finish(), expected, "scalar path, length {len}");
+        // Fed in ragged pieces, so the partial-buffer block goes through the
+        // same compressor as the whole ones.
+        let mut ragged = Sha256::new();
+        let mut at = 0;
+        let mut step = 1;
+        while at < bytes.len() {
+            let end = (at + step).min(bytes.len());
+            ragged.update(&bytes[at..end]);
+            at = end;
+            step = step % 97 + 13;
+        }
+        assert_eq!(ragged.finish(), expected, "ragged feeding, length {len}");
+    }
+}

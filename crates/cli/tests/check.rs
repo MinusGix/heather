@@ -180,7 +180,7 @@ fn a_cached_run_says_so_and_counts_what_it_trusted() {
     assert_eq!(warm.status.code(), Some(0));
     let warm_out = String::from_utf8_lossy(&warm.stdout).to_string();
     assert!(warm_out.contains("0 declarations kernel-checked"), "{warm_out}");
-    assert!(warm_out.contains("1 semantic module replayed and kernel-checked"), "{warm_out}");
+    assert!(warm_out.contains("1 semantic module replayed"), "{warm_out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -223,7 +223,7 @@ fn warning_producing_modules_replay_the_same_diagnostics() {
         }
         let expected = if run == 0 { 0 } else { 1 };
         assert!(String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "{expected} semantic module{} replayed and kernel-checked",
+            "{expected} semantic module{} replayed",
             if expected == 1 { "" } else { "s" }
         )));
     }
@@ -267,7 +267,7 @@ fn opaque_proof_edits_do_not_invalidate_dependent_module_images() {
     assert_eq!(proof_edit.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&proof_edit.stdout)
-            .contains("1 semantic module replayed and kernel-checked"),
+            .contains("1 semantic module replayed"),
         "the changed dependency rebuilds, but its unchanged consumer should replay: {}",
         String::from_utf8_lossy(&proof_edit.stdout)
     );
@@ -281,7 +281,7 @@ fn opaque_proof_edits_do_not_invalidate_dependent_module_images() {
     assert_eq!(definition_edit.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&definition_edit.stdout)
-            .contains("0 semantic modules replayed and kernel-checked"),
+            .contains("0 semantic modules replayed"),
         "a transparent dependency edit invalidates its exact-prefix consumer: {}",
         String::from_utf8_lossy(&definition_edit.stdout)
     );
@@ -443,4 +443,36 @@ fn deny_axioms_is_a_check_policy() {
     assert!(err.contains("axioms::direct"), "{err}");
     assert!(err.contains("axioms::indirect"), "{err}");
     assert!(!err.contains("axioms::clean"), "{err}");
+}
+
+/// After an edit, the module's unchanged declarations are reproduced from
+/// its previous image and the `(cache)` line says how many
+/// (`docs/declaration-slice-replay-design.md`).
+#[test]
+fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image() {
+    let dir = cache_dir("slice-replay");
+    let arg = dir.display().to_string();
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let edited = std::path::Path::new(fixtures).join("slice_edit.hthr");
+    let original = std::fs::read_to_string(std::path::Path::new(fixtures).join("good.hthr")).unwrap();
+    std::fs::write(&edited, &original).unwrap();
+
+    let cold = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
+    let cold_out = String::from_utf8_lossy(&cold.stdout).to_string();
+    assert!(cold_out.contains("0 declarations replayed after an edit"), "{cold_out}");
+
+    std::fs::write(&edited, format!("{original}\nfn one_more() -> Nat {{ double(1) }}\n")).unwrap();
+    let edit = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    assert_eq!(edit.status.code(), Some(0), "{}", String::from_utf8_lossy(&edit.stderr));
+    let edit_out = String::from_utf8_lossy(&edit.stdout).to_string();
+    let items = original.matches("\nfn ").count() + original.matches("\ntheorem ").count();
+    assert!(
+        edit_out.contains(&format!("{items} declarations replayed after an edit")),
+        "{items} unchanged declarations replay: {edit_out}"
+    );
+    assert!(edit_out.contains("1 declaration kernel-checked"), "the appended one faces the kernel: {edit_out}");
+
+    let _ = std::fs::remove_file(&edited);
+    let _ = std::fs::remove_dir_all(dir);
 }

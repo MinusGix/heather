@@ -40,6 +40,9 @@ pub enum Lint {
     /// Written notation selected a compatibility basename after missing a designation.
     OperatorFallback,
     /// An explicit match motive can be omitted in its checking position.
+    /// Review-mode only (`Elaborator::set_review_lints`, `heather check
+    /// --review`): its recognizer is a second elaboration plus a kernel check
+    /// of every written motive.
     RedundantMatchMotive,
     /// A finite `Cons`/`Nil` construction can use `[…]`.
     ManualListConstruction,
@@ -781,7 +784,7 @@ fn stdlib_unicode_spelling(item: &Item, source: &Source<'_>, out: &mut Vec<Findi
     }
 }
 
-fn item_span(item: &Item) -> Span {
+pub(crate) fn item_span(item: &Item) -> Span {
     match item {
         Item::Decl(x) => x.span,
         Item::Inductive(x) => x.span,

@@ -49,6 +49,62 @@ pub struct ModuleDelta {
     pub(crate) extension: Vec<GlobalBinding>,
     pub(crate) scope: Scope,
     pub(crate) events: Vec<DeltaEvent>,
+    /// One slice per item of the source file, in order: the ranges of
+    /// `extension`, `events` and `warnings` that item contributed
+    /// (`docs/declaration-slice-replay-design.md` §3). Empty for a delta
+    /// decoded from an image until the persistent half of that design lands.
+    pub(crate) items: Vec<ItemSlice>,
+    /// The warnings the module raised, in order, so a replayed slice can
+    /// re-raise its own. Process-local for now (not encoded).
+    pub(crate) warnings: Vec<crate::diagnostics::Warning>,
+    /// The module's scope right after `enter_module`, before any item: the
+    /// imports the items were resolved against. A later elaboration of the
+    /// same module may replay slices only from an identical entry scope.
+    pub(crate) scope_at_entry: Option<Scope>,
+}
+
+/// One item's contribution to a [`ModuleDelta`], as ranges into its flat
+/// vectors, keyed by the item's exact source text
+/// (`docs/declaration-slice-replay-design.md` §3). A mutual measure group is
+/// one slice at its first member, keyed by every member's text; the other
+/// members' slices are empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemSlice {
+    pub source: String,
+    /// Byte offset of the item in its source: every span inside the slice
+    /// is relative to it when the slice is replayed at another position.
+    pub start: usize,
+    pub psi: std::ops::Range<usize>,
+    pub events: std::ops::Range<usize>,
+    pub warnings: std::ops::Range<usize>,
+}
+
+/// What a sliced pass did with the previous delta's items.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SliceReport {
+    /// Items reproduced from the previous delta without elaboration.
+    pub replayed: usize,
+    /// Items elaborated from source.
+    pub elaborated: usize,
+}
+
+/// The previous delta a module pass may replay slices from, and whether the
+/// semantic prefix built so far is still exactly the one those slices were
+/// elaborated over (`docs/declaration-slice-replay-design.md` §4).
+#[derive(Clone)]
+pub(crate) struct SlicePlan {
+    pub(crate) previous: Rc<ModuleDelta>,
+    pub(crate) exact: bool,
+    pub(crate) report: SliceReport,
+}
+
+/// The journal's marks at an item's start, taken relative to the module's
+/// base so the slice's ranges index the delta's vectors.
+#[derive(Clone, Copy)]
+pub(crate) struct SliceMark {
+    psi: usize,
+    events: usize,
+    warnings: usize,
 }
 
 impl ModuleDelta {
@@ -60,12 +116,67 @@ impl ModuleDelta {
         self.extension.len()
     }
 
+    /// The per-item slices, in source order.
+    pub fn items(&self) -> &[ItemSlice] {
+        &self.items
+    }
+
+    /// The ordered dependency identity this delta was elaborated over.
+    pub fn dependencies(&self) -> &ModuleDependencyIdentity {
+        &self.dependencies
+    }
+
+    /// Attach the warnings an image stored beside this delta, so its slices
+    /// can re-raise them (`docs/declaration-slice-replay-design.md` §4).
+    /// Rejected when a slice's warning range does not fit.
+    pub fn with_warnings(mut self, warnings: Vec<crate::diagnostics::Warning>) -> Result<Self, &'static str> {
+        let mut at = 0;
+        for slice in &self.items {
+            if slice.warnings.start != at || slice.warnings.end > warnings.len() {
+                return Err("slices do not partition the warnings");
+            }
+            at = slice.warnings.end;
+        }
+        if !self.items.is_empty() && at != warnings.len() {
+            return Err("slices do not cover the warnings");
+        }
+        self.warnings = warnings;
+        Ok(self)
+    }
+
+    /// The module's warnings, in order.
+    pub fn warnings(&self) -> &[crate::diagnostics::Warning] {
+        &self.warnings
+    }
+
+    /// The stored Ψ suffix, outermost first: what a replay rechecks or has
+    /// the declaration gate vouch for.
+    pub fn extension(&self) -> &[GlobalBinding] {
+        &self.extension
+    }
+
+    /// The suffix, mutable — for a negative control that forges a stored
+    /// binding and expects the replay to refuse it. Nothing else edits a
+    /// delta after elaboration.
+    #[doc(hidden)]
+    pub fn extension_mut(&mut self) -> &mut Vec<GlobalBinding> {
+        &mut self.extension
+    }
+
     /// Encode this checked, process-local delta as a deterministic semantic
     /// module image. The dependency kernel prefix itself is deliberately not
     /// serialized; only its length and the loader-supplied interface
     /// identities enter the image.
     pub fn to_image_bytes(&self) -> Vec<u8> {
         crate::module_image::encode_delta(self)
+    }
+
+    /// [`Self::to_image_bytes`] together with the syntax-node count the
+    /// reader charges against [`crate::ModuleImageLimits::max_nodes`] when
+    /// decoding it. A publisher checks the count first: an image past the
+    /// budget is decoded up to the budget and refused on every later run.
+    pub fn to_image(&self) -> (Vec<u8>, u64) {
+        crate::module_image::encode_delta_counted(self)
     }
 
     /// Deterministic downstream-observable projection used for module
@@ -184,6 +295,18 @@ pub(crate) enum DeltaEvent {
 #[derive(Clone)]
 pub(crate) struct ModuleJournal {
     pub(crate) events: Vec<DeltaEvent>,
+    /// Ψ length and warning count when the journal was installed: the
+    /// delta's vectors start here.
+    pub(crate) base_psi: usize,
+    pub(crate) base_warnings: usize,
+    pub(crate) items: Vec<ItemSlice>,
+    pub(crate) scope_at_entry: Option<Scope>,
+}
+
+impl ModuleJournal {
+    fn new(base_psi: usize, base_warnings: usize) -> Self {
+        Self { events: Vec::new(), base_psi, base_warnings, items: Vec::new(), scope_at_entry: None }
+    }
 }
 
 impl Elaborator {
@@ -387,7 +510,8 @@ impl Elaborator {
         );
         let dependency_psi = (*self.psi).clone();
         let base_len = dependency_psi.bindings.len();
-        *self.module_journal.borrow_mut() = Some(ModuleJournal { events: Vec::new() });
+        *self.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.warnings.borrow().len()));
         let result = self.session_transaction(|me| me.elab_module_source(module, src));
         let journal = self
             .module_journal
@@ -395,15 +519,213 @@ impl Elaborator {
             .take()
             .expect("module journal was installed");
         result?;
-        let extension = self.psi.bindings.iter().skip(base_len).cloned().collect();
-        Ok(ModuleDelta {
+        Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
+    }
+
+    /// The delta the journal describes, once the module has checked.
+    fn delta_from_journal(
+        &self,
+        module: &str,
+        dependencies: ModuleDependencyIdentity,
+        dependency_psi: GlobalCtx,
+        journal: ModuleJournal,
+    ) -> ModuleDelta {
+        let extension = self.psi.bindings.iter().skip(journal.base_psi).cloned().collect();
+        let warnings = self.warnings.borrow()[journal.base_warnings..].to_vec();
+        ModuleDelta {
             module: module.to_string(),
             dependencies,
             dependency_psi,
             extension,
             scope: self.names.scope().clone(),
             events: journal.events,
+            items: journal.items,
+            warnings,
+            scope_at_entry: journal.scope_at_entry,
+        }
+    }
+
+    /// [`Self::check_module_delta`] with the module's *previous* delta to
+    /// replay unchanged items from (`docs/declaration-slice-replay-design.md`
+    /// §4): an item whose source text matches the previous slice at its
+    /// position, while every earlier item reproduced the previous prefix
+    /// exactly, is reproduced from the slice — its bindings through the gate,
+    /// its events through the preflight checks — instead of elaborated. The
+    /// delta returned is what fresh elaboration would have produced.
+    pub fn check_module_delta_from(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+        previous: &ModuleDelta,
+    ) -> Result<(ModuleDelta, SliceReport), Vec<ElabError>> {
+        assert!(self.slice_plan.is_none(), "sliced module checks are not nested");
+        self.slice_plan = Some(SlicePlan {
+            previous: Rc::new(previous.clone()),
+            exact: false,
+            report: SliceReport::default(),
+        });
+        let result = self.check_module_delta(module, src, dependencies);
+        let plan = self.slice_plan.take().expect("the slice plan was installed");
+        result.map(|delta| (delta, plan.report))
+    }
+
+    /// The pass just entered `module`: decide whether the previous delta's
+    /// slices apply at all. They do only over the same dependency identity,
+    /// the same dependency Ψ and the same entry scope — the three inputs an
+    /// item's elaboration reads besides the earlier items of its module.
+    pub(crate) fn slice_enter(&mut self, module: &str) {
+        let scope = self.names.scope().clone();
+        if let Some(journal) = self.module_journal.borrow_mut().as_mut() {
+            journal.scope_at_entry = Some(scope.clone());
+        }
+        let Some(plan) = self.slice_plan.as_ref() else { return };
+        let previous = &plan.previous;
+        let exact = previous.module == module
+            && previous.scope_at_entry.as_ref() == Some(&scope)
+            && previous.dependency_psi.bindings.len() == self.psi.bindings.len()
+            && previous.dependency_psi.bindings.iter().eq(self.psi.bindings.iter());
+        let plan = self.slice_plan.as_mut().expect("checked above");
+        plan.exact = exact;
+        plan.report = SliceReport::default();
+    }
+
+    pub(crate) fn slice_begin(&self) -> Option<SliceMark> {
+        let journal = self.module_journal.borrow();
+        let journal = journal.as_ref()?;
+        Some(SliceMark {
+            psi: self.psi.bindings.len() - journal.base_psi,
+            events: journal.events.len(),
+            warnings: self.warnings.borrow().len() - journal.base_warnings,
         })
+    }
+
+    /// Close the slice an item opened with [`Self::slice_begin`], after
+    /// everything the item contributes (its derived instances included) has
+    /// landed, and keep the plan's `exact` flag honest: it means the prefix
+    /// through the items completed so far equals the previous delta's, so
+    /// the next item may replay its slice (§4).
+    pub(crate) fn slice_end(&mut self, mark: SliceMark, source: String, start: usize, replayed: bool) {
+        let Some(begun) = self.slice_begin() else { return };
+        let slice = ItemSlice {
+            source,
+            start,
+            psi: mark.psi..begun.psi,
+            events: mark.events..begun.events,
+            warnings: mark.warnings..begun.warnings,
+        };
+        let index = {
+            let mut journal = self.module_journal.borrow_mut();
+            let journal = journal.as_mut().expect("slice_begin found a journal");
+            journal.items.push(slice.clone());
+            journal.items.len() - 1
+        };
+        let Some(plan) = self.slice_plan.as_ref() else { return };
+        if !plan.exact || replayed {
+            // A broken prefix stays broken: everything after the first item
+            // whose contribution differed sits over a different world. A
+            // replayed slice reproduced the previous one by construction.
+            return;
+        }
+        // The item was elaborated from source over an exact prefix. The
+        // prefix stays exact only if its contribution equals the previous
+        // slice's at this position — which is what a proof-body edit, a
+        // comment, or reformatting leaves behind, and what a changed `fn`
+        // body does not.
+        let previous = Rc::clone(&plan.previous);
+        let same = previous.items.get(index).is_some_and(|old| {
+            let journal = self.module_journal.borrow();
+            let journal = journal.as_ref().expect("slice_begin found a journal");
+            old.psi == slice.psi
+                && old.events == slice.events
+                && previous.extension[old.psi.clone()].iter().eq(
+                    self.psi.bindings.iter().skip(journal.base_psi + slice.psi.start).take(slice.psi.len()),
+                )
+                && crate::module_image::encode_events(&previous.events[old.events.clone()], true)
+                    == crate::module_image::encode_events(&journal.events[slice.events.clone()], true)
+        });
+        if !same {
+            self.slice_plan.as_mut().expect("checked above").exact = false;
+        }
+    }
+
+    /// Try to reproduce item `index` from the previous delta's slice. `true`
+    /// means the slice landed (Ψ, events, warnings) and the item is done;
+    /// `false` means elaborate it. A slice the gate or the preflight checks
+    /// refuse is rolled back and the item is elaborated instead.
+    pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize) -> bool {
+        let Some(plan) = self.slice_plan.as_ref() else { return false };
+        if !plan.exact {
+            return false;
+        }
+        let previous = Rc::clone(&plan.previous);
+        // A text mismatch is not a broken prefix: the item is elaborated,
+        // and `slice_end` decides from what it contributed.
+        let Some(old) = previous.items.get(index).filter(|old| old.source == source) else {
+            return false;
+        };
+        let replayed = self.session_transaction(|me| {
+            me.replay_slice(&previous, old, start).map_err(|e| ElabError::Elab {
+                msg: format!("stored slice for item {index} does not replay: {e}"),
+                span: heather_syntax::Span { start: 0, end: 0 },
+            })
+        });
+        let plan = self.slice_plan.as_mut().expect("checked above");
+        match replayed {
+            Ok(()) => {
+                plan.report.replayed += 1;
+                true
+            }
+            Err(_) => {
+                plan.exact = false;
+                false
+            }
+        }
+    }
+
+    /// An item was elaborated from source under a slice plan.
+    pub(crate) fn slice_elaborated(&mut self) {
+        if let Some(plan) = self.slice_plan.as_mut() {
+            plan.report.elaborated += 1;
+        }
+    }
+
+    fn replay_slice(
+        &mut self,
+        previous: &ModuleDelta,
+        slice: &ItemSlice,
+        start: usize,
+    ) -> Result<(), ModuleReplayError> {
+        let bindings = &previous.extension[slice.psi.clone()];
+        // Inline, whatever the pool's width: the pool holds the bodies of the
+        // items elaborated around this one, and their join is the module's.
+        self.recheck_extension(&previous.module, bindings, false)?;
+        // The item's text is unchanged but may sit elsewhere in the file:
+        // every span the slice carries moves with it.
+        let offset = start as i64 - slice.start as i64;
+        let events = crate::module_image::relocate_events(&previous.events[slice.events.clone()], offset)
+            .map_err(|_| ModuleReplayError::MetadataConflict("relocated slice"))?;
+        for event in &events {
+            self.preflight_module_event(event)?;
+        }
+        self.psi.extend(bindings.iter().cloned());
+        for event in events {
+            // Applying an event records it again, so the new delta's journal
+            // carries this slice as it would a fresh elaboration's.
+            self.apply_module_event(event);
+        }
+        self.refresh_delta_psi();
+        self.result_only_memo.borrow_mut().clear();
+        let shift = |at: usize| (at as i64 + offset) as usize;
+        self.warnings.borrow_mut().extend(previous.warnings[slice.warnings.clone()].iter().map(|w| {
+            let mut w = w.clone();
+            w.span = heather_syntax::Span { start: shift(w.span.start), end: shift(w.span.end) };
+            if let Some(fix) = w.fix.as_mut() {
+                fix.span = heather_syntax::Span { start: shift(fix.span.start), end: shift(fix.span.end) };
+            }
+            w
+        }));
+        Ok(())
     }
 
     /// Check a whole module with the ordinary diagnostic-recovery policy and,
@@ -426,7 +748,8 @@ impl Elaborator {
         );
         let dependency_psi = (*self.psi).clone();
         let base_len = dependency_psi.bindings.len();
-        *self.module_journal.borrow_mut() = Some(ModuleJournal { events: Vec::new() });
+        *self.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.warnings.borrow().len()));
         let errs = self.check_module_source_inner(module, src);
         let journal = self
             .module_journal
@@ -436,15 +759,7 @@ impl Elaborator {
         if !errs.is_empty() {
             return Err(errs);
         }
-        let extension = self.psi.bindings.iter().skip(base_len).cloned().collect();
-        Ok(ModuleDelta {
-            module: module.to_string(),
-            dependencies,
-            dependency_psi,
-            extension,
-            scope: self.names.scope().clone(),
-            events: journal.events,
-        })
+        Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
     }
 
     /// Recheck the stored suffix, install metadata into a private candidate,
@@ -463,7 +778,7 @@ impl Elaborator {
         if !self.names.valid_exports(&delta.scope) {
             return Err(ModuleReplayError::MetadataConflict("reexports"));
         }
-        self.recheck_extension(&delta.extension)?;
+        self.recheck_extension(&delta.module, &delta.extension, true)?;
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
@@ -485,7 +800,8 @@ impl Elaborator {
     }
 
     /// `⊢_L Ψ, Ψ'` for the stored suffix — the kernel recheck of a replayed
-    /// module, on the kernel worker pool when the elaborator has one.
+    /// module, on the kernel worker pool when the elaborator has one, and
+    /// through the installed gate oracle when there is one.
     ///
     /// The serial form is one `typing::check_global_ctx_extension` call. The
     /// wide form is the same judgement split the way the deferred gate splits
@@ -500,34 +816,94 @@ impl Elaborator {
     /// quiescent for whatever the caller does next. Nothing is committed
     /// from a rejected replay at either width; the caller rebuilds the
     /// module from source instead.
-    fn recheck_extension(&mut self, extension: &[GlobalBinding]) -> Result<(), ModuleReplayError> {
-        if self.kernel_pool.is_inline() {
+    ///
+    /// **The gate vouches here exactly as it does at the source gate.** A
+    /// stored definition is the binding the cold run's `GateItem::binding`
+    /// produced, over the same Ψ prefix, so it asks the oracle the same
+    /// question (`docs/cache-v1-design.md` §3: the name is metadata, not
+    /// identity) and an `admits` hit skips its statement and body the way it
+    /// does for a fresh declaration; a miss is checked and `accepted` at the
+    /// same points the source path uses. A theorem is stored without its
+    /// proof and has nothing to ask: its statement is checked. Before
+    /// 2026-09-17 a replay rechecked every stored body regardless, so a warm
+    /// run of an unchanged file cost more than an edited one
+    /// (`issues/semantic-replay-phase-attribution.md`).
+    fn recheck_extension(
+        &mut self,
+        module: &str,
+        extension: &[GlobalBinding],
+        on_pool: bool,
+    ) -> Result<(), ModuleReplayError> {
+        let gate = self.gate.clone();
+        // `on_pool == false` keeps every body on this thread even at width:
+        // a slice replay runs inside a module pass whose own deferred bodies
+        // are on the pool, and a join here would consume their outcomes.
+        let inline = self.kernel_pool.is_inline() || !on_pool;
+        if gate.is_none() && inline {
             return typing::check_global_ctx_extension(&self.psi, extension, 0, self.fuel)
                 .map_err(ModuleReplayError::Kernel);
         }
         let mut prefix = Rc::clone(&self.psi.0);
         let mut statement = Ok(());
         for (index, binding) in extension.iter().enumerate() {
-            if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
-                statement = Err(ModuleReplayError::Kernel(e));
-                break;
+            // The oracle's human-readable column only; identity is the
+            // content hash, and a stored binding has no source name here.
+            let name = format!("{module}#{index}");
+            let body = match binding {
+                GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) } => {
+                    Some(crate::gate::GateItem {
+                        name: &name,
+                        ctx,
+                        ty,
+                        level,
+                        body,
+                        opaque: false,
+                        layer: *layer,
+                        lands_in_psi: true,
+                    })
+                }
+                _ => None,
+            };
+            let admitted = match (&gate, &body) {
+                (Some(g), Some(item)) => g.admits(&prefix, item),
+                _ => false,
+            };
+            if !admitted {
+                if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
+                    statement = Err(ModuleReplayError::Kernel(e));
+                    break;
+                }
+                if let Some(item) = &body {
+                    if inline {
+                        let verdict = typing::check_term(
+                            &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.fuel,
+                        );
+                        if let Err(e) = verdict {
+                            statement = Err(ModuleReplayError::Kernel(e));
+                            break;
+                        }
+                        if let Some(g) = &gate {
+                            g.accepted(&prefix, item);
+                        }
+                    } else {
+                        self.kernel_pool.submit(pool::Deferred {
+                            name: name.clone(),
+                            span: heather_syntax::Span { start: 0, end: 0 },
+                            psi: Rc::clone(&prefix),
+                            ctx: item.ctx.clone(),
+                            ty: item.ty.clone(),
+                            level: item.level.clone(),
+                            body: item.body.clone(),
+                            opaque: false,
+                            layer: item.layer,
+                            lands_in_psi: true,
+                            fuel: self.fuel,
+                            row: None,
+                        });
+                    }
+                }
             }
-            if let GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) } = binding {
-                self.kernel_pool.submit(pool::Deferred {
-                    name: format!("stored binding {index}"),
-                    span: heather_syntax::Span { start: 0, end: 0 },
-                    psi: Rc::clone(&prefix),
-                    ctx: ctx.clone(),
-                    ty: (**ty).clone(),
-                    level: level.clone(),
-                    body: (**body).clone(),
-                    opaque: false,
-                    layer: *layer,
-                    lands_in_psi: true,
-                    fuel: self.fuel,
-                    row: None,
-                });
-            }
+            drop(body);
             Rc::make_mut(&mut prefix).push(binding.clone());
         }
         // Join even after a statement failure: the pool must be drained before
@@ -552,7 +928,35 @@ impl Elaborator {
         // in the serial order, and every body before i passed the statement
         // check; the first failure by binding order is what the serial form
         // reports, and it is the statement's when both exist.
-        statement.and(body)
+        let verdict = statement.and(body);
+        if let Some(g) = &gate {
+            match &verdict {
+                Ok(()) => {
+                    // Every queued body passed: record each at the Ψ it was
+                    // queued against, as the source join does.
+                    for outcome in &outcomes {
+                        let item = outcome.item.as_ref();
+                        g.accepted(
+                            &item.psi,
+                            &crate::gate::GateItem {
+                                name: &item.name,
+                                ctx: &item.ctx,
+                                ty: &item.ty,
+                                level: &item.level,
+                                body: &item.body,
+                                opaque: item.opaque,
+                                layer: item.layer,
+                                lands_in_psi: item.lands_in_psi,
+                            },
+                        );
+                    }
+                }
+                // Nothing lands from a rejected replay, so every question this
+                // replay opened is dead; the rebuild from source asks its own.
+                Err(_) => g.abandon(&self.psi),
+            }
+        }
+        verdict
     }
 
     fn apply_module_event(&mut self, event: DeltaEvent) {

@@ -95,3 +95,4 @@ Here `omega_check` also sheds half a second, and correctly: that bracket wraps `
   [[timings-tsv-has-no-reader]] made on this issue held — the meanings were
   stable enough to write down, and what was moving was the tree under two
   recorded tables, not a column.
+- 2026-09-17: 2026-09-17: a standing consumer of the --timings tables: [[perf-dashboard]] summarizes the run, module and heaviest item rows of a corpus of files into perf/snapshots/ and reads them back with deltas. Residue it exposed on first use: at width > 1 the run row's kernel_gate_ns is the main thread's share only, so the snapshot attributes at width one and records the default-width wall separately.

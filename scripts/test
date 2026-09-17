@@ -61,7 +61,7 @@ if [[ "${1:-}" == --fast ]]; then
   # the full lane's exact policy does, which is one more reason a round's
   # final verification is a plain `scripts/test`.
   export HEATHER_SEMANTIC_IMAGES=accept-stale
-  echo "fast lane: semantic test images from other builds are replayed (kernel-rechecked); the full lane rebuilds them"
+  echo "fast lane: semantic test images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the full lane rebuilds them"
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.

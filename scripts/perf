@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+"""Perf snapshots and the dashboard that reads them.
+
+Where the numbers in a round come from is one question (`scripts/bench --check`,
+`issues/perf-tracking-consistent-environment.md`); *what is slow right now, and
+where it comes from* is another, and it had no answer that did not start with
+"re-measure first". This script owns the second question.
+
+    scripts/perf snapshot [--corpus quick|full] [--env NAME] ...   # measure, write perf/snapshots/<stamp>-<env>.json
+    scripts/perf report [SNAPSHOT] [--against prev|SNAPSHOT]       # what is slow, where it comes from, what moved
+    scripts/perf list                                              # snapshots on record
+    scripts/perf serve [--port N] [--open]                         # the dashboard (scripts/perf-web.html)
+
+A snapshot records three things, each keyed by the environment that produced
+it (`local` is the desktop, `furnace` the cloud box; they differ by a roughly
+uniform constant, so a family that departs from that constant is the signal):
+
+  1. the suite: the latest run per lane of `target/test-target-timings-<lane>.tsv`
+     (written by scripts/test), so the slow test binaries are on record;
+  2. the corpus: each file checked three ways through the release CLI —
+     **cold** (an empty cache: every module elaborated and gated), **warm**
+     (nothing changed: every module replayed from its image), and **edit**
+     (one trivial declaration appended: imports replayed, the root
+     re-elaborated with the declaration cache) — each with `--timings`, so a
+     wall number always has its phase split beside it;
+  3. the attribution: from those `--timings` tables, the run row's every
+     phase and counter, the module rows, and the heaviest declarations.
+
+The numbers are a dated diary (docs carry shape claims, not numbers —
+`issues/perf-tracking-consistent-environment.md` 2026-08-12). Counts (queries,
+misses, steps) are exact on one tree and comparable across machines; seconds
+are not, and are read against the same environment only.
+
+Stdlib only, like `scripts/issue` and `scripts/timings`.
+"""
+
+import argparse
+import json
+import os
+import platform
+import resource
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SNAPSHOTS = ROOT / "perf" / "snapshots"
+WEB = ROOT / "scripts" / "perf-web.html"
+SCHEMA = 1
+
+# The corpus: (path, search dirs). A file resolves imports beside itself first,
+# then the `-L` dirs; a module found in two `-L` dirs is an error, which is why
+# the showcase never gets `docs/showcase` on its path (its own `parser_core`
+# would clash with the library's). `quick` is the inner-loop set; `full` is
+# everything the CLI can check by path. The x86 arch modules are named by
+# the tests, not by their stems, so they are checked here under their stems.
+CORPUS = {
+    "quick": [
+        ("lib/std/omega.hthr", []),
+        ("lib/std/nat.hthr", []),
+        ("docs/showcase/calc_parser.hthr", ["lib/std", "lib/std/parser"]),
+    ],
+    "full": [
+        ("lib/std/omega.hthr", []),
+        ("lib/std/nat.hthr", []),
+        ("lib/std/int.hthr", []),
+        ("lib/std/list.hthr", []),
+        ("lib/std/bitvec.hthr", []),
+        ("lib/std/algebra.hthr", []),
+        ("docs/showcase/calc_parser.hthr", ["lib/std", "lib/std/parser"]),
+        ("lib/ir_v1.hthr", ["lib/std"]),
+        ("lib/function_ir.hthr", ["lib/std"]),
+        ("lib/std/arch/x86_64/model.hthr", ["lib/std"]),
+        # lib/certgen_code.hthr is not in the corpus: it has no imports and
+        # elaborates only after a test-only support prelude and ir_v1 in
+        # process (crates/elab/tests/certgen_cert.rs), so the CLI refuses it
+        # with 83 errors on any machine (2026-09-17). Its cost is the
+        # certgen_* rows of the suite section.
+    ],
+}
+
+# What the edit mode appends: a declaration that needs no import and costs
+# nothing to check, so the run measures the module's re-elaboration and not
+# the probe.
+EDIT_PROBE = "\n\nfn perf_probe_edit<A>(a: A) → A { a }\n"
+
+# The item columns a snapshot keeps per heavy declaration. Everything else on
+# an item row is in the raw TSV the snapshot points at.
+ITEM_KEEP = ["total_ns", "kernel_gate_ns", "decl_type_ns", "decl_body_ns", "decl_emit_ns",
+             "elab_whnf_ns", "diag_note_ns", "lower_ns", "conv_misses", "eval_steps"]
+TOP_ITEMS = 25
+
+
+def now_stamp():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sh(*cmd, default=""):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, check=False).stdout.strip() or default
+    except OSError:
+        return default
+
+
+def guess_source():
+    if str(ROOT).startswith("/work"):
+        return "furnace"
+    if socket.gethostname() == "minus-desktop":
+        return "local"
+    return socket.gethostname()
+
+
+def cpu_model():
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
+
+
+def environment(args):
+    workers = args.kernel_workers or 1
+    try:
+        load = [float(x) for x in Path("/proc/loadavg").read_text().split()[:3]]
+    except (OSError, ValueError):
+        load = []
+    return {
+        "source": args.env or guess_source(),
+        "host": socket.gethostname(),
+        "cpu": cpu_model(),
+        "nproc": os.cpu_count(),
+        "rustc": sh("rustc", "--version"),
+        "profile": "release",
+        "kernel_workers": workers,
+        "wait_workers": args.wait_workers,
+        "loadavg": load,
+    }
+
+
+# ---------------------------------------------------------------- suite
+
+def target_dir():
+    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+
+
+def suite_history_dirs():
+    """Where scripts/test's history may be: this checkout's target dir, and —
+    from a worktree — the main checkout's, which is where the suite usually
+    ran. A worktree's own `target/` is normally a fresh build with no history."""
+    dirs = [target_dir()]
+    common = sh("git", "rev-parse", "--git-common-dir")
+    if common:
+        main = (ROOT / common).resolve().parent / "target"
+        if main not in dirs:
+            dirs.append(main)
+    return dirs
+
+
+def suite_timings():
+    """Latest run per lane of the runner's append-only history. Rows are
+    `run\\tseconds\\tlabel`; rows from before the run column (`seconds\\tlabel`)
+    count as one undated run."""
+    out = {}
+    for lane in ("full", "fast"):
+        path = next((d / f"test-target-timings-{lane}.tsv" for d in suite_history_dirs()
+                     if (d / f"test-target-timings-{lane}.tsv").is_file()), None)
+        if path is None:
+            continue
+        runs = {}
+        for line in path.read_text().splitlines():
+            cells = line.split("\t")
+            if len(cells) == 3:
+                run, secs, label = cells
+            elif len(cells) == 2:
+                run, (secs, label) = "undated", cells
+            else:
+                continue
+            try:
+                runs.setdefault(run, []).append([label, float(secs)])
+            except ValueError:
+                continue
+        if not runs:
+            continue
+        dated = [k for k in runs if k != "undated"]
+        latest = max(dated) if dated else "undated"
+        # Undated rows are several runs on top of each other: the last row
+        # per target is the latest run's.
+        by_label = {label: secs for label, secs in runs[latest]}
+        targets = sorted(([l, s] for l, s in by_label.items()), key=lambda r: -r[1])
+        out[lane] = {
+            "run": latest,
+            "runs_on_file": len(runs),
+            "targets": targets,
+            "sum_s": round(sum(s for _, s in targets), 2),
+            "source": str(path),
+            "note": "seconds per test binary at kernel width one under the suite's parallel scheduler",
+        }
+    return out
+
+
+# ---------------------------------------------------------------- corpus
+
+class Timings:
+    """A `--timings` TSV by column name (the reader discipline of scripts/timings)."""
+
+    def __init__(self, path: Path):
+        lines = path.read_text().splitlines()
+        self.columns = lines[0].split("\t")
+        self.rows = [l.split("\t") for l in lines[1:]]
+        self.rows = [r for r in self.rows if len(r) == len(self.columns)]
+        self.ix = {c: i for i, c in enumerate(self.columns)}
+
+    def cell(self, row, col):
+        raw = row[self.ix[col]].strip() if col in self.ix else ""
+        return int(raw) if raw.lstrip("-").isdigit() else 0
+
+    def scoped(self, kind):
+        i = self.ix["scope"]
+        return [r for r in self.rows if r[i] == kind]
+
+    def numeric_columns(self):
+        return [c for c in self.columns if c not in ("scope", "module", "item")]
+
+    def name(self, row):
+        m, i = row[self.ix["module"]], row[self.ix["item"]]
+        return f"{m}::{i}" if m and i else (i or m)
+
+
+def summarize(tsv: Path):
+    t = Timings(tsv)
+    runs = t.scoped("run")
+    run = {c: t.cell(runs[0], c) for c in t.numeric_columns()} if runs else {}
+    modules = []
+    items = t.scoped("item")
+    per_module = {}
+    for r in items:
+        per_module[r[t.ix["module"]]] = per_module.get(r[t.ix["module"]], 0) + 1
+    for r in t.scoped("module"):
+        name = r[t.ix["module"]]
+        modules.append({
+            "name": name,
+            "total_ns": t.cell(r, "total_ns"),
+            "kernel_gate_ns": t.cell(r, "kernel_gate_ns"),
+            "image_decode_ns": t.cell(r, "image_decode_ns"),
+            "image_recheck_ns": t.cell(r, "image_recheck_ns"),
+            "image_publish_ns": t.cell(r, "image_publish_ns"),
+            "items": per_module.get(name, 0),
+        })
+    totals = sorted(t.cell(r, "total_ns") for r in items)
+    top = sorted(items, key=lambda r: -t.cell(r, "total_ns"))[:TOP_ITEMS]
+
+    def pct(p):
+        return totals[min(len(totals) - 1, int(len(totals) * p))] if totals else 0
+
+    return {
+        "run": run,
+        "modules": modules,
+        "items": {
+            "count": len(totals),
+            "sum_total_ns": sum(totals),
+            "p50_total_ns": pct(0.5),
+            "p90_total_ns": pct(0.9),
+            "max_total_ns": totals[-1] if totals else 0,
+            "top": [dict(name=t.name(r), **{c: t.cell(r, c) for c in ITEM_KEEP}) for r in top],
+        },
+    }
+
+
+def run_check(args, heather: Path, file: str, search, cache: Path, tsv: Path, workers: int):
+    """One capped release `heather check`; wall, CPU and peak RSS from wait4."""
+    cmd = [str(heather), "check"]
+    for d in search:
+        cmd += ["-L", d]
+    cmd += ["--cache-dir", str(cache), "--kernel-workers", str(workers), "--timings", str(tsv), file]
+
+    def limits():
+        resource.setrlimit(resource.RLIMIT_AS, (args.mem_gib << 30, args.mem_gib << 30))
+        resource.setrlimit(resource.RLIMIT_CPU, (args.cpu_secs, args.cpu_secs))
+
+    env = dict(os.environ)
+    env.pop("HEATHER_TIMINGS", None)
+    t0 = time.perf_counter()
+    p = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, preexec_fn=limits, env=env)
+    output = p.stdout.read()
+    _, status, ru = os.wait4(p.pid, 0)
+    p.returncode = os.waitstatus_to_exitcode(status)
+    wall = time.perf_counter() - t0
+    lines = [l for l in output.splitlines() if l.strip()]
+    summary = next((l for l in reversed(lines) if ": ok" in l or "error" in l.lower()), lines[-1] if lines else "")
+    mode = {
+        "wall_s": round(wall, 3),
+        "cpu_s": round(ru.ru_utime + ru.ru_stime, 3),
+        "max_rss_mb": round(ru.ru_maxrss / 1024, 1),
+        "exit": p.returncode,
+        "summary": summary[:300],
+    }
+    if p.returncode == 0 and tsv.is_file():
+        mode.update(summarize(tsv))
+    else:
+        mode["output_tail"] = lines[-8:]
+    return mode
+
+
+def measure_file(args, heather, file, search, raw_dir: Path):
+    path = ROOT / file
+    stem = path.stem
+    cache = Path(tempfile.mkdtemp(prefix=f"heather-perf-{stem}-"))
+    entry = {"path": file, "search": search}
+    original = path.read_bytes()
+    try:
+        # `wait` is the cold check at the CLI's default gate width — the
+        # number a person sits through. The three attributed modes run at
+        # width one, where the run row's phases are honest (a worker's gate
+        # time is not on the main thread's clock) and comparable with the
+        # suite's width-one timings. `wait` goes first so that the cold
+        # run publishes into an empty cache too.
+        modes = [("wait", args.wait_workers), ("cold", args.kernel_workers_effective),
+                 ("warm", args.kernel_workers_effective), ("edit", args.kernel_workers_effective)]
+        if args.wait_workers == args.kernel_workers_effective:
+            modes = modes[1:]
+        for mode, workers in modes:
+            if mode == "edit":
+                path.write_bytes(original + EDIT_PROBE.encode())
+            if mode == "cold":
+                shutil.rmtree(cache, ignore_errors=True)
+                cache.mkdir()
+            tsv = raw_dir / f"{stem}-{mode}.tsv"
+            print(f"  {file} {mode} (width {workers}) …", end="", flush=True)
+            entry[mode] = run_check(args, heather, file, search, cache, tsv, workers)
+            entry[mode]["kernel_workers"] = workers
+            entry[mode]["raw"] = str(tsv.relative_to(ROOT)) if tsv.is_relative_to(ROOT) else str(tsv)
+            m = entry[mode]
+            print(f" {m['wall_s']:.2f}s wall, {m['cpu_s']:.1f}s cpu, {m['max_rss_mb']:.0f} MB"
+                  + ("" if m["exit"] == 0 else f"  EXIT {m['exit']}: {m['summary']}"), flush=True)
+            if mode == "edit":
+                path.write_bytes(original)
+    finally:
+        path.write_bytes(original)
+        shutil.rmtree(cache, ignore_errors=True)
+    return entry
+
+
+def find_heather(args):
+    if args.heather:
+        return Path(args.heather)
+    p = target_dir() / "release" / "heather"
+    if not p.is_file():
+        sys.exit(f"error: no release binary at {p}; build with `cargo build --release -p heather-cli` "
+                 f"(outside any ulimit — mold needs the address space) or pass --heather")
+    return p
+
+
+def cmd_snapshot(args):
+    heather = find_heather(args)
+    env = environment(args)
+    args.kernel_workers_effective = env["kernel_workers"]
+    if args.no_wait:
+        args.wait_workers = env["kernel_workers"]
+    stamp = now_stamp()
+    snap = {
+        "schema": SCHEMA,
+        "stamp": stamp,
+        "label": args.label or "",
+        "commit": sh("git", "rev-parse", "--short", "HEAD"),
+        "commit_full": sh("git", "rev-parse", "HEAD"),
+        "dirty": bool(sh("git", "status", "--porcelain", "--untracked-files=no")),
+        "env": env,
+        "tests": {} if args.no_tests else suite_timings(),
+        "files": [],
+    }
+    print(f"snapshot {stamp} env={env['source']} host={env['host']} commit={snap['commit']}"
+          f"{' (dirty)' if snap['dirty'] else ''} workers={env['kernel_workers']} load={env['loadavg']}")
+    for lane, t in snap["tests"].items():
+        print(f"  suite {lane}: run {t['run']}, {len(t['targets'])} targets, {t['sum_s']:.0f}s summed")
+    if not args.no_files:
+        corpus = list(CORPUS[args.corpus])
+        for spec in args.file or []:
+            path, _, dirs = spec.partition(":")
+            corpus.append((path, [d for d in dirs.split(",") if d]))
+        if args.only:
+            corpus = [c for c in corpus if any(o in c[0] for o in args.only)]
+        raw_dir = target_dir() / "perf" / stamp.replace(":", "")
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        for file, search in corpus:
+            snap["files"].append(measure_file(args, heather, file, search, raw_dir))
+    SNAPSHOTS.mkdir(parents=True, exist_ok=True)
+    out = SNAPSHOTS / f"{stamp.replace(':', '')}-{env['source']}.json"
+    out.write_text(json.dumps(snap, indent=1) + "\n")
+    print(f"wrote {out.relative_to(ROOT)}")
+    args.snapshot = out.name
+    args.against = "prev"
+    args.top = 10
+    cmd_report(args)
+
+
+# ---------------------------------------------------------------- report
+
+def load_all():
+    snaps = []
+    for p in sorted(SNAPSHOTS.glob("*.json")):
+        try:
+            s = json.loads(p.read_text())
+        except json.JSONDecodeError as e:
+            print(f"warning: {p}: {e}", file=sys.stderr)
+            continue
+        s["_path"] = p
+        snaps.append(s)
+    return snaps
+
+
+def pick(snaps, spec):
+    if not snaps:
+        sys.exit("error: no snapshots in perf/snapshots; run `scripts/perf snapshot`")
+    if not spec or spec == "latest":
+        return snaps[-1]
+    for s in reversed(snaps):
+        if spec in s["_path"].name or spec == s["stamp"] or spec == s.get("commit"):
+            return s
+    sys.exit(f"error: no snapshot matches {spec}")
+
+
+def previous(snaps, snap):
+    """The snapshot before `snap` from the same environment: seconds compare
+    only within one environment."""
+    before = [s for s in snaps if s["stamp"] < snap["stamp"] and s["env"]["source"] == snap["env"]["source"]]
+    return before[-1] if before else None
+
+
+def secs(ns):
+    return ns / 1e9
+
+
+def fmt_s(v):
+    return f"{v:7.2f}s"
+
+
+def delta(a, b, is_time):
+    if a is None or b is None or a == 0:
+        return ""
+    d = (b - a) / a * 100
+    # Seconds repeat to a few percent on one box; counts are exact.
+    if is_time and abs(d) < 10:
+        return "   ≈"
+    return f"{d:+5.0f}%"
+
+
+def phase_totals(snap, mode="cold"):
+    """Self-time per phase summed over the corpus' run rows. `other_ns` is
+    the run row's own unattributed remainder."""
+    tot = {}
+    for f in snap["files"]:
+        run = f.get(mode, {}).get("run") or {}
+        for c, v in run.items():
+            if c.endswith("_ns") and c != "total_ns":
+                tot[c] = tot.get(c, 0) + v
+    return dict(sorted(tot.items(), key=lambda kv: -kv[1]))
+
+
+def cmd_report(args):
+    snaps = load_all()
+    snap = pick(snaps, getattr(args, "snapshot", None))
+    against = None
+    if getattr(args, "against", None):
+        against = previous(snaps, snap) if args.against == "prev" else pick(snaps, args.against)
+    e = snap["env"]
+    print(f"== {snap['stamp']}  {e['source']}  {e['host']}  {e['cpu']}  {e['nproc']} cpus  "
+          f"workers {e['kernel_workers']}  commit {snap['commit']}{' (dirty)' if snap['dirty'] else ''}"
+          f"{'  ' + snap['label'] if snap.get('label') else ''}")
+    if against:
+        print(f"   against {against['stamp']}  {against['env']['source']}  commit {against['commit']}")
+    top = args.top
+
+    # --- suite
+    for lane, t in snap.get("tests", {}).items():
+        print(f"\n-- suite ({lane} lane, run {t['run']}): {len(t['targets'])} targets, "
+              f"{t['sum_s']:.0f}s summed at width one")
+        prev = {}
+        if against and lane in against.get("tests", {}):
+            prev = dict(against["tests"][lane]["targets"])
+        for label, s in t["targets"][:top]:
+            print(f"   {fmt_s(s)} {delta(prev.get(label), s, True):>6}  {label}")
+        rest = t["targets"][top:]
+        if rest:
+            print(f"   {fmt_s(sum(s for _, s in rest))}         … {len(rest)} more")
+
+    # --- files
+    if snap["files"]:
+        print(f"\n-- corpus: wall seconds through the release CLI (wait = cold at width {e.get('wait_workers', '?')}; "
+              f"at width {e['kernel_workers']}: cold = empty cache, warm = images replayed, edit = one declaration appended)")
+        print(f"   {'file':34} {'wait':>7} {'cold':>8} {'':>6} {'warm':>8} {'edit':>8} {'':>6} | {'gate%':>5} {'decls':>5} "
+              f"{'misses':>8} {'':>6} {'queries':>10} {'steps':>10} {'rss MB':>7}")
+        prev_files = {f["path"]: f for f in (against or {}).get("files", [])}
+        for f in snap["files"]:
+            c, w, ed = f.get("cold", {}), f.get("warm", {}), f.get("edit", {})
+            pf = prev_files.get(f["path"], {})
+            run = c.get("run", {})
+            q = run.get("conv_shortcut_hits", 0) + run.get("conv_memo_hits", 0) + run.get("conv_misses", 0)
+            prun = pf.get("cold", {}).get("run", {})
+            pq = prun.get("conv_shortcut_hits", 0) + prun.get("conv_memo_hits", 0) + prun.get("conv_misses", 0)
+            gate = run.get("kernel_gate_ns", 0) / max(run.get("total_ns", 1), 1) * 100
+            bad = "".join(f"  {m} EXIT {f[m]['exit']}" for m in ("cold", "warm", "edit") if f.get(m, {}).get("exit", 0) != 0)
+            wait = f.get("wait", {}).get("wall_s")
+            print(f"   {f['path']:34} {wait if wait is not None else float('nan'):7.2f} {c.get('wall_s', 0):8.2f} {delta(pf.get('cold', {}).get('wall_s'), c.get('wall_s'), True):>6} "
+                  f"{w.get('wall_s', 0):8.2f} {ed.get('wall_s', 0):8.2f} {delta(pf.get('edit', {}).get('wall_s'), ed.get('wall_s'), True):>6} | "
+                  f"{gate:5.0f} {c.get('items', {}).get('count', 0):5d} {run.get('conv_misses', 0):8,d} "
+                  f"{delta(prun.get('conv_misses'), run.get('conv_misses'), False):>6} {q:10,d} {run.get('eval_steps', 0):10,d} "
+                  f"{c.get('max_rss_mb', 0):7.0f}{bad}")
+
+        # --- phases
+        tot = phase_totals(snap)
+        total = sum(tot.values()) or 1
+        print("\n-- where cold time goes (self time per phase, summed over the corpus' run rows)")
+        line = []
+        for c, v in tot.items():
+            if v / total < 0.005:
+                break
+            line.append(f"{c[:-3]} {v / total * 100:.0f}%")
+        print("   " + ", ".join(line))
+        # Per file, the phases that do not fit the gate story.
+        print("   per file, the largest non-gate phase:")
+        for f in snap["files"]:
+            run = f.get("cold", {}).get("run") or {}
+            phases = sorted(((c, v) for c, v in run.items() if c.endswith("_ns") and c not in ("total_ns", "kernel_gate_ns")),
+                            key=lambda kv: -kv[1])
+            if phases and run.get("total_ns"):
+                c, v = phases[0]
+                print(f"   {f['path']:34} {c[:-3]:14} {v / run['total_ns'] * 100:4.0f}% of {secs(run['total_ns']):.1f}s")
+
+        # --- concentration and heaviest declarations
+        print("\n-- concentration: how much of a file is its heaviest declaration (cold, item total)")
+        for f in snap["files"]:
+            it = f.get("cold", {}).get("items")
+            if not it or not it["count"]:
+                continue
+            top5 = sum(i["total_ns"] for i in it["top"][:5])
+            print(f"   {f['path']:34} top1 {it['max_total_ns'] / max(it['sum_total_ns'], 1) * 100:3.0f}%  "
+                  f"top5 {top5 / max(it['sum_total_ns'], 1) * 100:3.0f}%  p50 {it['p50_total_ns'] / 1e6:7.1f}ms  "
+                  f"p90 {it['p90_total_ns'] / 1e6:7.1f}ms  max {it['max_total_ns'] / 1e6:8.1f}ms  ({it['count']} items)")
+        # A module in two closures (omega under omega and under calc_parser)
+        # has its items twice; the first, largest reading stands for it.
+        allitems, seen = [], set()
+        for f in snap["files"]:
+            for i in f.get("cold", {}).get("items", {}).get("top", []):
+                allitems.append((f["path"], i))
+        allitems.sort(key=lambda fi: -fi[1]["total_ns"])
+        allitems = [fi for fi in allitems if not (fi[1]["name"] in seen or seen.add(fi[1]["name"]))]
+        print(f"\n-- heaviest declarations across the corpus (cold; ms, gate share, misses, steps; one reading per declaration)")
+        for path, i in allitems[:top]:
+            gate = i["kernel_gate_ns"] / max(i["total_ns"], 1) * 100
+            elab = max(i[k] for k in ("decl_body_ns", "decl_type_ns", "decl_emit_ns", "elab_whnf_ns", "lower_ns"))
+            elab_name = max(("decl_body_ns", "decl_type_ns", "decl_emit_ns", "elab_whnf_ns", "lower_ns"), key=lambda k: i[k])[:-3]
+            print(f"   {i['total_ns'] / 1e6:9.1f}ms  gate {gate:3.0f}%  {elab_name} {elab / max(i['total_ns'], 1) * 100:3.0f}%  "
+                  f"misses {i['conv_misses']:7,d}  steps {i['eval_steps']:10,d}  {Path(path).stem}: {i['name']}")
+    print()
+
+
+def cmd_list(args):
+    for s in load_all():
+        e = s["env"]
+        files = ", ".join(Path(f["path"]).stem for f in s["files"])
+        lanes = "/".join(s.get("tests", {}).keys()) or "-"
+        print(f"{s['stamp']}  {e['source']:8} {s['commit']:8} {'dirty' if s['dirty'] else '     '}  "
+              f"suite {lanes:9} files {len(s['files']):2d}  {files[:60]}{'  ' + s['label'] if s.get('label') else ''}")
+
+
+def cmd_serve(args):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    def payload():
+        snaps = load_all()
+        for s in snaps:
+            s["_path"] = s["_path"].name
+        return json.dumps(snaps).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def send(self, body, ctype):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path in ("/", "/index.html"):
+                self.send(WEB.read_bytes(), "text/html; charset=utf-8")
+            elif path == "/api/snapshots":
+                self.send(payload(), "application/json")
+            else:
+                self.send_error(404)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    url = f"http://{args.host}:{server.server_address[1]}/"
+    print(f"serving the perf dashboard at {url} (read-only; Ctrl-C to stop)", flush=True)
+    if args.open:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def main():
+    p = argparse.ArgumentParser(prog="perf", description="perf snapshots and the dashboard that reads them")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("snapshot", help="measure the suite history and the corpus; write one JSON")
+    sp.add_argument("--corpus", choices=CORPUS, default="quick")
+    sp.add_argument("--file", action="append", metavar="PATH[:DIR,DIR]", help="extra corpus file with its -L dirs")
+    sp.add_argument("--only", action="append", metavar="SUBSTR", help="restrict the corpus to matching paths")
+    sp.add_argument("--no-tests", action="store_true", help="skip the suite history")
+    sp.add_argument("--no-files", action="store_true", help="skip the corpus")
+    sp.add_argument("--env", help="environment name (default: local on the desktop, furnace under /work)")
+    sp.add_argument("--label", help="a few words about why this snapshot was taken")
+    sp.add_argument("--kernel-workers", type=int, help="gate width for the attributed runs (default 1: honest phases, comparable to the suite)")
+    sp.add_argument("--wait-workers", type=int, default=int(os.environ.get("HEATHER_KERNEL_WORKERS", "8")),
+                    help="gate width for the `wait` cold run — what a person sits through (default: HEATHER_KERNEL_WORKERS or the CLI's 8)")
+    sp.add_argument("--no-wait", action="store_true", help="skip the `wait` run")
+    sp.add_argument("--heather", help="release binary (default: $CARGO_TARGET_DIR/release/heather)")
+    sp.add_argument("--mem-gib", type=int, default=8, help="address-space cap per check (default 8)")
+    sp.add_argument("--cpu-secs", type=int, default=600, help="CPU cap per check (default 600)")
+    sp.set_defaults(fn=cmd_snapshot)
+
+    sp = sub.add_parser("report", help="what is slow and where it comes from; deltas against the previous snapshot")
+    sp.add_argument("snapshot", nargs="?", help="stamp, file name fragment or commit (default: latest)")
+    sp.add_argument("--against", metavar="prev|SNAPSHOT", default="prev",
+                    help="compare against the previous same-environment snapshot (default) or a named one; `none` for no deltas")
+    sp.add_argument("--top", type=int, default=12)
+    sp.set_defaults(fn=lambda a: (setattr(a, "against", None if a.against == "none" else a.against), cmd_report(a)))
+
+    sp = sub.add_parser("list", help="snapshots on record")
+    sp.set_defaults(fn=cmd_list)
+
+    sp = sub.add_parser("serve", help="the dashboard")
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=8766)
+    sp.add_argument("--open", action="store_true")
+    sp.set_defaults(fn=cmd_serve)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

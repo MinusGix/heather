@@ -26,5 +26,11 @@ heather-elab = { path = "../elab" }
 [dev-dependencies]
 sha2 = "0.10"
 
-[lints]
-workspace = true
+# `deny` where the workspace says `forbid`, for one reason: the SHA-256
+# compression function has a hardware path (`src/sha256.rs`,
+# `compress_blocks_sha`) whose intrinsic call needs an `unsafe` block, and
+# `forbid` admits no `allow` beneath it. The two functions that carry it are
+# the only `#[allow(unsafe_code)]` in the workspace; everything else in this
+# crate is still refused (2026-09-17, issues/merkle-walk-cold-share.md).
+[lints.rust]
+unsafe_code = "deny"

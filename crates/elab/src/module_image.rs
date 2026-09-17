@@ -33,13 +33,20 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x06";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x07";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x06";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
 /// generous enough for Heather's present standard library without making a
 /// corrupt count an allocation request.
+///
+/// `max_nodes` bounds decoding *work*, not allocation (the sequence and
+/// string limits do that), so it is sized loosely: the showcase's parser
+/// module was 29 M nodes on 2026-09-17 against the earlier 16 M, and an image
+/// past the budget is the worst of both worlds — decoded up to the budget,
+/// refused, and rebuilt on every warm run. The writer now refuses to publish
+/// past it (`heather_cache::module_image::ModuleCacheError::OverBudget`).
 #[derive(Clone, Copy, Debug)]
 pub struct ModuleImageLimits {
     pub max_bytes: usize,
@@ -53,7 +60,7 @@ impl Default for ModuleImageLimits {
     fn default() -> Self {
         Self {
             max_bytes: 512 * 1024 * 1024,
-            max_nodes: 16_000_000,
+            max_nodes: 256_000_000,
             max_sequence: 2_000_000,
             max_string_bytes: 16 * 1024 * 1024,
             max_depth: 2_048,
@@ -105,11 +112,15 @@ impl std::error::Error for ModuleImageDecodeError {}
 struct Writer {
     bytes: Vec<u8>,
     interface: bool,
+    /// Syntax nodes written, counted at exactly the sites the reader charges
+    /// its node budget, so a writer knows before publication whether the
+    /// reader would refuse the image (`ModuleImageLimits::max_nodes`).
+    nodes: u64,
 }
 
 impl Default for Writer {
     fn default() -> Self {
-        Self { bytes: Vec::new(), interface: false }
+        Self { bytes: Vec::new(), interface: false, nodes: 0 }
     }
 }
 
@@ -167,6 +178,10 @@ struct Reader<'a> {
     limits: ModuleImageLimits,
     nodes_left: u64,
     depth: u32,
+    /// Added to every span read: a replayed declaration slice is decoded
+    /// at the position its text now has in the edited source
+    /// (`docs/declaration-slice-replay-design.md` §4). Zero for an image.
+    span_offset: i64,
 }
 
 impl<'a> Reader<'a> {
@@ -180,6 +195,7 @@ impl<'a> Reader<'a> {
             limits,
             nodes_left: limits.max_nodes,
             depth: 0,
+            span_offset: 0,
         })
     }
 
@@ -309,6 +325,7 @@ mod tag {
 }
 
 fn put_level(w: &mut Writer, level: &Level) {
+    w.nodes += 1;
     match level {
         Level::Var(var) => {
             w.byte(tag::LEVEL_VAR);
@@ -433,6 +450,7 @@ fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
 // every exhaustive match remains a compile-time schema tripwire.
 
 fn put_type(w: &mut Writer, ty: &Type) {
+    w.nodes += 1;
     match ty {
         Type::Nat => w.byte(0),
         Type::Pi { dom_level, cod_level, dom, cod } => {
@@ -510,6 +528,7 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
 }
 
 fn put_term(w: &mut Writer, term: &Term) {
+    w.nodes += 1;
     match term {
         Term::Var(var) => { w.byte(0); w.u32(var.0); }
         Term::TmNat => w.byte(1),
@@ -765,6 +784,7 @@ fn get_branches(r: &mut Reader<'_>) -> Result<Branches, ModuleImageDecodeError> 
 }
 
 fn put_binding(w: &mut Writer, binding: &GlobalBinding) {
+    w.nodes += 1;
     match binding {
         GlobalBinding::Ctx => w.byte(tag::BINDING_CTX),
         GlobalBinding::Ty { ctx, layer, level } => {
@@ -810,7 +830,17 @@ fn put_span(w: &mut Writer, span: Span) {
 }
 
 fn get_span(r: &mut Reader<'_>) -> Result<Span, ModuleImageDecodeError> {
-    Ok(Span { start: r.usize()?, end: r.usize()? })
+    let (start, end) = (r.usize()?, r.usize()?);
+    if r.span_offset == 0 {
+        return Ok(Span { start, end });
+    }
+    let shift = |at: usize| {
+        usize::try_from(i64::try_from(at).ok()? + r.span_offset).ok()
+    };
+    match (shift(start), shift(end)) {
+        (Some(start), Some(end)) => Ok(Span { start, end }),
+        _ => Err(ModuleImageDecodeError::InvalidStructure("a relocated span leaves the source")),
+    }
 }
 
 fn put_fixity(w: &mut Writer, fixity: OpFixity) {
@@ -826,6 +856,7 @@ fn get_fixity(r: &mut Reader<'_>) -> Result<OpFixity, ModuleImageDecodeError> {
 }
 
 fn put_ty(w: &mut Writer, ty: &Ty) {
+    w.nodes += 1;
     put_span(w, ty.span);
     match &ty.kind {
         TyKind::Nat => w.byte(0),
@@ -874,6 +905,7 @@ fn get_ty(r: &mut Reader<'_>) -> Result<Ty, ModuleImageDecodeError> {
 }
 
 fn put_pat(w: &mut Writer, pat: &Pat) {
+    w.nodes += 1;
     match pat {
         Pat::Var { name, span } => { w.byte(0); w.string(name); put_span(w, *span); }
         Pat::Ctor { name, args, span } => {
@@ -942,6 +974,7 @@ fn get_match_form(r: &mut Reader<'_>) -> Result<MatchForm, ModuleImageDecodeErro
 }
 
 fn put_expr(w: &mut Writer, expr: &Expr) {
+    w.nodes += 1;
     put_span(w, expr.span);
     match &expr.kind {
         ExprKind::Var(name) => { w.byte(0); w.string(name); }
@@ -1196,6 +1229,7 @@ fn get_name_kind(r: &mut Reader<'_>) -> Result<NameKind, ModuleImageDecodeError>
 }
 
 fn put_skel(w: &mut Writer, skel: &Skel) {
+    w.nodes += 1;
     w.vec(&skel.params, |w, binder| {
         w.option(binder.name.as_ref(), |w, name| w.string(name));
         w.bool(binder.implicit); w.bool(binder.is_type);
@@ -1316,6 +1350,7 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
 }
 
 fn put_inductive(w: &mut Writer, info: &Inductive) {
+    w.nodes += 1;
     w.string(&info.name); put_scope(w, &info.scope); w.u32(info.tag);
     w.vec(&info.params, |w, name| w.string(name));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
@@ -1485,6 +1520,36 @@ fn get_meta(r: &mut Reader<'_>) -> Result<MetaDef, ModuleImageDecodeError> {
         term: Rc::new(get_term(r)?), stmt: Rc::new(get_type(r)?), psi_len: r.u32()?,
         order: r.vec(Reader::usize)?,
     })
+}
+
+/// The deterministic encoding of a run of events, for comparing two runs
+/// structurally (`ModuleDelta` slices: `docs/declaration-slice-replay-design.md`
+/// §4). With `interface`, the projection a dependent observes — spans
+/// zeroed, theorem proofs and proof dependency edges dropped — which is what
+/// "the same contribution" means for the declarations after it.
+pub(crate) fn encode_events(events: &[DeltaEvent], interface: bool) -> Vec<u8> {
+    let mut w = Writer { bytes: Vec::new(), interface, nodes: 0 };
+    w.vec(events, put_event);
+    w.bytes
+}
+
+/// The same events with every span moved by `offset`: a replayed slice's
+/// events, at the position its unchanged text now has. Through the image
+/// encoding, because `put_span`/`get_span` are the one place every span in
+/// every event payload passes.
+pub(crate) fn relocate_events(
+    events: &[DeltaEvent],
+    offset: i64,
+) -> Result<Vec<DeltaEvent>, ModuleImageDecodeError> {
+    if offset == 0 {
+        return Ok(events.to_vec());
+    }
+    let bytes = encode_events(events, false);
+    let mut r = Reader::new(&bytes, ModuleImageLimits::default())?;
+    r.span_offset = offset;
+    let events = r.vec(get_event)?;
+    r.finish()?;
+    Ok(events)
 }
 
 fn put_event(w: &mut Writer, event: &DeltaEvent) {
@@ -1757,13 +1822,20 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
 }
 
 pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {
+    encode_delta_counted(delta).0
+}
+
+/// The image bytes and the syntax-node count the reader will charge for
+/// them — the number a publisher compares against `max_nodes` before writing
+/// an image the reader would only decode up to the budget and refuse.
+pub(crate) fn encode_delta_counted(delta: &ModuleDelta) -> (Vec<u8>, u64) {
     let mut w = Writer::default();
     encode_delta_into(&mut w, delta, MAGIC);
-    w.bytes
+    (w.bytes, w.nodes)
 }
 
 pub(crate) fn encode_delta_interface(delta: &ModuleDelta) -> Vec<u8> {
-    let mut w = Writer { bytes: Vec::new(), interface: true };
+    let mut w = Writer { bytes: Vec::new(), interface: true, nodes: 0 };
     encode_delta_into(&mut w, delta, INTERFACE_MAGIC);
     w.bytes
 }
@@ -1775,6 +1847,37 @@ fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
     for hash in delta.dependencies.ordered_interface_hashes() { w.bytes.extend_from_slice(hash); }
     w.len(delta.dependency_psi.bindings.len());
     w.vec(&delta.extension, put_binding); put_scope(w, &delta.scope); w.vec(&delta.events, put_event);
+    // The declaration slices (`docs/declaration-slice-replay-design.md` §3):
+    // the semantic image only, never the interface projection, since a
+    // slice's text is not something a dependent observes.
+    if !w.interface {
+        w.vec(&delta.items, put_slice);
+        w.option(delta.scope_at_entry.as_ref(), put_scope);
+    }
+}
+
+fn put_slice(w: &mut Writer, slice: &crate::module_delta::ItemSlice) {
+    w.string(&slice.source);
+    w.usize(slice.start);
+    for range in [&slice.psi, &slice.events, &slice.warnings] {
+        w.usize(range.start);
+        w.usize(range.end);
+    }
+}
+
+fn get_slice(r: &mut Reader<'_>) -> Result<crate::module_delta::ItemSlice, ModuleImageDecodeError> {
+    let source = r.string()?;
+    let start = r.usize()?;
+    let mut ranges = [0..0, 0..0, 0..0];
+    for range in &mut ranges {
+        let (a, b) = (r.usize()?, r.usize()?);
+        if a > b {
+            return Err(ModuleImageDecodeError::InvalidStructure("a slice range is reversed"));
+        }
+        *range = a..b;
+    }
+    let [psi, events, warnings] = ranges;
+    Ok(crate::module_delta::ItemSlice { source, start, psi, events, warnings })
 }
 
 pub(crate) fn decode_delta(
@@ -1799,13 +1902,31 @@ pub(crate) fn decode_delta(
     let extension = r.vec(get_binding)?;
     let scope = get_scope(&mut r)?;
     let events = r.vec(get_event)?;
+    let items = r.vec(get_slice)?;
+    let scope_at_entry = r.option(get_scope)?;
     r.finish()?;
     if scope.module != module {
         return Err(ModuleImageDecodeError::InvalidStructure("module and scope names disagree"));
     }
+    // Slices partition the extension and the events in order; the warning
+    // ranges are checked by whoever decodes the warnings beside this image.
+    let (mut psi_at, mut events_at) = (0, 0);
+    for slice in &items {
+        if slice.psi.start != psi_at || slice.events.start != events_at {
+            return Err(ModuleImageDecodeError::InvalidStructure("slices do not partition the delta"));
+        }
+        psi_at = slice.psi.end;
+        events_at = slice.events.end;
+    }
+    if !items.is_empty() && (psi_at != extension.len() || events_at != events.len()) {
+        return Err(ModuleImageDecodeError::InvalidStructure("slices do not cover the delta"));
+    }
     let delta = ModuleDelta {
         module, dependencies: ModuleDependencyIdentity::new(hashes), dependency_psi,
         extension, scope, events,
+        items,
+        warnings: Vec::new(),
+        scope_at_entry,
     };
     validate_delta(&delta)?;
     Ok(delta)
@@ -1948,6 +2069,9 @@ mod tests {
             extension: vec![GlobalBinding::Ctx],
             scope: Scope::new("bad"),
             events: vec![DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 99 }],
+            items: Vec::new(),
+            warnings: Vec::new(),
+            scope_at_entry: None,
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(
@@ -1974,6 +2098,9 @@ mod tests {
                 DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 0 },
                 DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 1 },
             ],
+            items: Vec::new(),
+            warnings: Vec::new(),
+            scope_at_entry: None,
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(

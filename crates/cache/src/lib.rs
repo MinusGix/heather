@@ -15,6 +15,7 @@
 //! nothing about any of this.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use heather_elab::gate::{GateItem, KernelGate};
@@ -59,11 +60,20 @@ pub struct Counts {
     pub checked: usize,
     /// Declarations admitted on the cache's word alone.
     pub hits: usize,
+    /// Full identity computations — the interface walk plus the check-key
+    /// walk of one declaration. `admits` and `accepted` ask about the same
+    /// declaration, so on a run that gates N declarations this is N, not 2N;
+    /// it was 2N until 2026-09-17 (`issues/merkle-walk-cold-share.md`).
+    pub hashed: usize,
 }
 
 impl Counts {
     pub fn since(&self, earlier: &Counts) -> Counts {
-        Counts { checked: self.checked - earlier.checked, hits: self.hits - earlier.hits }
+        Counts {
+            checked: self.checked - earlier.checked,
+            hits: self.hits - earlier.hits,
+            hashed: self.hashed - earlier.hashed,
+        }
     }
 }
 
@@ -76,12 +86,35 @@ struct Inner {
     /// index it will land at. Lets `sync` reuse it instead of re-rendering the
     /// binding a third time.
     pending: Option<(usize, Option<Hash>)>,
-    /// The identity computed by the most recent [`Inner::identify`], with the
-    /// Ψ length it was computed at. `accepted` follows `admits` immediately
-    /// and asks the same question, and hashing a declaration is a full render
-    /// of it — the one thing on this path that costs real time.
-    last: Option<(usize, Hash, Hash)>,
+    /// The open questions: identities computed by [`Inner::identify`] for
+    /// declarations `admits` has been asked about and `accepted` has not yet
+    /// answered, keyed by the Ψ length they were asked at, then by name and
+    /// opacity. Hashing a declaration is a full render of it — the one thing
+    /// on this path that costs real time — and `accepted` asks the same
+    /// question `admits` asked: immediately after, with the inline gate, or
+    /// at the join of a deferred pass, when many other declarations have
+    /// been asked about since and each is answered against the Ψ snapshot it
+    /// was queued with. A single "last question" memo keyed on Ψ length
+    /// served the first shape and missed the second on every item, so the
+    /// deferred gate hashed everything twice and rebuilt the prefix once per
+    /// module (`issues/merkle-walk-cold-share.md`).
+    ///
+    /// Exactness is what makes this safe to consult before hashing anything:
+    /// an entry is opened by `admits`, closed by the `admits` hit or the
+    /// `accepted` that answers it, and killed by [`KernelGate::abandon`] when
+    /// its declaration fails — the elaborator keeps going after a refused
+    /// declaration, and the next one lands at the same Ψ length. As a belt,
+    /// a second Ψ-landing question at one length kills the first: only one
+    /// declaration can be waiting to land at a position.
+    open: BTreeMap<usize, Vec<OpenQuestion>>,
     counts: Counts,
+}
+
+struct OpenQuestion {
+    name: String,
+    opaque: bool,
+    lands_in_psi: bool,
+    answer: Option<(Hash, Hash)>,
 }
 
 /// The gate oracle. Install with `Elaborator::set_gate`; share one across
@@ -111,7 +144,7 @@ impl Cache {
                 store,
                 prefix: Vec::new(),
                 pending: None,
-                last: None,
+                open: BTreeMap::new(),
                 counts: Counts::default(),
             }),
         }
@@ -173,7 +206,7 @@ impl Cache {
         let mut inner = self.inner.borrow_mut();
         inner.prefix.clear();
         inner.pending = None;
-        inner.last = None;
+        inner.open.clear();
     }
 }
 
@@ -193,7 +226,7 @@ impl Inner {
         if self.prefix.len() > psi.bindings.len() {
             self.prefix.clear();
             self.pending = None;
-            self.last = None;
+            self.open.clear();
         }
         while self.prefix.len() < psi.bindings.len() {
             let i = self.prefix.len();
@@ -209,24 +242,38 @@ impl Inner {
     /// Interface hash and check key for the item at the gate, or `None` if
     /// either is unhashable (§3.1: fail closed, never cache).
     fn identify(&mut self, psi: &GlobalCtx, item: &GateItem<'_>) -> Option<(Hash, Hash)> {
-        self.sync(psi);
+        let at = psi.bindings.len();
         // The `admits`/`accepted` pair asks about one declaration in one Ψ;
         // answering twice would double the run's hashing, which is the whole
-        // of its overhead. Keyed on the Ψ length so a mismatched pair
-        // recomputes rather than answers about the wrong thing. (Sound for a
-        // non-Ψ item too — two of those could share a Ψ length, so `admits`/
-        // `accepted` clear this memo the moment such an item is answered.)
-        if let Some((at, iface, key)) = self.last
-            && at == psi.bindings.len()
-        {
-            return Some((iface, key));
+        // of its overhead. An open question is answered without touching the
+        // prefix: at a deferred join, `psi` is the snapshot the declaration
+        // was queued with and the prefix has long since grown past it.
+        if let Some(q) = self.open.get(&at).and_then(|qs| {
+            qs.iter().find(|q| q.opaque == item.opaque && q.name == item.name)
+        }) {
+            return q.answer;
         }
+        // A miss. Questions open at a greater length were asked by a pass
+        // that is not coming back (the join answers in order, and answers
+        // never miss); a Ψ-landing question open at *this* length is a
+        // declaration that never landed.
+        self.open.split_off(&(at + 1));
+        if let Some(qs) = self.open.get_mut(&at) {
+            if item.lands_in_psi {
+                qs.retain(|q| !q.lands_in_psi);
+            }
+        }
+        self.sync(psi);
+        self.counts.hashed += 1;
         // Hashing a declaration is a full render of it — the one thing on this
         // path that costs real time, and until now the only thing about it the
         // cache reported was a count (`docs/instrumentation-design.md` §5).
         heather_elab::stats::count(heather_elab::stats::Counter::CacheHashes);
         let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::CacheHash);
         let binding = item.binding();
+        if std::env::var_os("HEATHER_MERKLE_SHARE").is_some() {
+            eprintln!("merkle-item\t{}\t{}\t{}", item.name, self.prefix.len(), item.opaque);
+        }
         let iface = merkle::interface_hash(&self.prefix, &binding);
         // Recorded for `sync` whether or not it succeeded: the binding lands
         // at this index either way, and a poisoned entry must be *stored* as
@@ -237,17 +284,30 @@ impl Inner {
         if item.lands_in_psi {
             self.pending = Some((self.prefix.len(), iface));
         }
-        let iface = iface?;
-        let key = merkle::check_key(&self.prefix, item.body, item.opaque, &iface)?;
-        self.last = Some((psi.bindings.len(), iface, key));
-        Some((iface, key))
+        let answer = (|| {
+            let iface = iface?;
+            let key = merkle::check_key(&self.prefix, item.body, item.opaque, &iface)?;
+            Some((iface, key))
+        })();
+        self.open.entry(at).or_default().push(OpenQuestion {
+            name: item.name.to_string(),
+            opaque: item.opaque,
+            lands_in_psi: item.lands_in_psi,
+            answer,
+        });
+        answer
     }
 
-    /// Forget the `admits`/`accepted` memo. Called once a non-Ψ item's
-    /// question is fully answered: its Ψ length is not unique to it, so a
-    /// later item at the same length must never inherit its hashes.
-    fn forget(&mut self) {
-        self.last = None;
+    /// Close a question: it has been answered (an `admits` hit, or the
+    /// `accepted` that follows a miss), so nothing will ask it again.
+    fn close(&mut self, psi: &GlobalCtx, item: &GateItem<'_>) {
+        let at = psi.bindings.len();
+        if let Some(qs) = self.open.get_mut(&at) {
+            qs.retain(|q| !(q.opaque == item.opaque && q.name == item.name));
+            if qs.is_empty() {
+                self.open.remove(&at);
+            }
+        }
     }
 }
 
@@ -260,12 +320,8 @@ impl KernelGate for Cache {
         };
         if inner.store.contains(&key) {
             inner.counts.hits += 1;
-            // A hit ends the question: no `accepted` follows, so a non-Ψ
-            // item's memo must die here rather than answer for the next item
-            // at this Ψ length.
-            if !item.lands_in_psi {
-                inner.forget();
-            }
+            // A hit ends the question: no `accepted` follows.
+            inner.close(psi, item);
             true
         } else {
             inner.counts.checked += 1;
@@ -278,10 +334,11 @@ impl KernelGate for Cache {
         if let Some((iface, key)) = inner.identify(psi, item) {
             inner.store.insert(key, iface, item.name);
         }
-        // Same reason as the hit path in `admits`: the pair is answered.
-        if !item.lands_in_psi {
-            inner.forget();
-        }
+        inner.close(psi, item);
+    }
+
+    fn abandon(&self, psi: &GlobalCtx) {
+        self.inner.borrow_mut().open.split_off(&psi.bindings.len());
     }
 
     fn assumption(
@@ -296,6 +353,5 @@ impl KernelGate for Cache {
         let hash = merkle::assumption_interface_hash(&inner.prefix, binding);
         inner.pending = Some((at, hash));
         inner.counts.checked += 1;
-        inner.last = None;
     }
 }

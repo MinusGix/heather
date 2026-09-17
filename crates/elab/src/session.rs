@@ -90,7 +90,7 @@ impl SessionCheckpoint {
 /// wider boundary, and it exists for exactly one caller.
 pub(crate) struct ModulePassCheckpoint {
     committed: SessionCheckpoint,
-    journal: Option<usize>,
+    journal: Option<(usize, usize)>,
     warnings: usize,
     omega_reports: usize,
     omega_failure_reports: usize,
@@ -107,7 +107,7 @@ impl Elaborator {
                 .module_journal
                 .borrow()
                 .as_ref()
-                .map(|journal| journal.events.len()),
+                .map(|journal| (journal.events.len(), journal.items.len())),
             warnings: self.warnings.borrow().len(),
             omega_reports: self.omega_reports.borrow().len(),
             omega_failure_reports: self.omega_failure_reports.borrow().len(),
@@ -120,10 +120,11 @@ impl Elaborator {
     /// module, re-registers its names and re-raises its diagnostics itself.
     pub(crate) fn restore_module_pass(&mut self, mark: ModulePassCheckpoint) {
         mark.committed.restore(self);
-        if let Some(at) = mark.journal
+        if let Some((events, items)) = mark.journal
             && let Some(journal) = self.module_journal.borrow_mut().as_mut()
         {
-            journal.events.truncate(at);
+            journal.events.truncate(events);
+            journal.items.truncate(items);
         }
         self.warnings.borrow_mut().truncate(mark.warnings);
         self.omega_reports.borrow_mut().truncate(mark.omega_reports);
@@ -159,14 +160,15 @@ impl Elaborator {
             .module_journal
             .borrow()
             .as_ref()
-            .map(|journal| journal.events.len());
+            .map(|journal| (journal.events.len(), journal.items.len()));
         let result = operation(self);
         if result.is_err() {
             checkpoint.restore(self);
-            if let Some(mark) = journal_mark
+            if let Some((events, items)) = journal_mark
                 && let Some(journal) = self.module_journal.borrow_mut().as_mut()
             {
-                journal.events.truncate(mark);
+                journal.events.truncate(events);
+                journal.items.truncate(items);
             }
         }
         result

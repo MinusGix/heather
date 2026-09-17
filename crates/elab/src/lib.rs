@@ -139,7 +139,7 @@ mod recursion;
 mod representations;
 pub mod resolve;
 mod session;
-pub use module_delta::{ModuleDelta, ModuleDependencyIdentity, ModuleReplayError};
+pub use module_delta::{ItemSlice, ModuleDelta, ModuleDependencyIdentity, ModuleReplayError, SliceReport};
 pub use module_image::{ModuleImageDecodeError, ModuleImageLimits};
 pub use session::SemanticImage;
 mod slots;
@@ -564,6 +564,9 @@ pub struct Elaborator {
     /// Logical semantic additions made while one module delta is extracted.
     /// Failed transactions truncate this alongside committed state.
     module_journal: RefCell<Option<module_delta::ModuleJournal>>,
+    /// The previous delta a module pass may replay slices from
+    /// (`check_module_delta_from`); `None` on every other pass.
+    slice_plan: Option<module_delta::SlicePlan>,
     /// Dynamically installed scope while stored surface syntax is re-lowered.
     /// This is execution state, not a committed name-registry fact, so it must
     /// remain private to one elaborator when semantic state is shared.
@@ -605,6 +608,11 @@ pub struct Elaborator {
     /// Project-local style policy for written-source lints. General lints run
     /// under every profile; the CLI selects `Stdlib` only for `lib/std`.
     lint_profile: LintProfile,
+    /// Review-mode lints run only when a driver asks (`heather check
+    /// --review`): the ones whose recognizer is a second elaboration of the
+    /// item, which is a cost no ordinary check should pay to say nothing
+    /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
+    review_lints: bool,
     /// Backchaining depth, for the recursion cap. A `Cell` because resolution
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
@@ -1367,6 +1375,28 @@ impl application::ImplicitApplicationElab for Elaborator {
     }
 }
 
+/// The text a slice is keyed by: the item's exact source span, or, at the
+/// first member of a mutual measure group, every member's span joined —
+/// the group is elaborated as one there, so its slice answers for all of
+/// them and must be keyed by all of them.
+fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemPlan) -> String {
+    let span_of = |i: usize| lint::item_span(&file.items[i]);
+    match plan.in_group.get(&idx) {
+        Some(&g) if plan.groups[g][0] == idx => plan.groups[g]
+            .iter()
+            .map(|&i| {
+                let sp = span_of(i);
+                &src[sp.start..sp.end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => {
+            let sp = span_of(idx);
+            src[sp.start..sp.end].to_string()
+        }
+    }
+}
+
 fn item_timing_name(item: &Item) -> String {
     match item {
         Item::Decl(decl) => decl.name.clone(),
@@ -1434,6 +1464,7 @@ impl Elaborator {
         Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
             module_journal: RefCell::new(None),
+            slice_plan: None,
             resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: Cell::new(0),
             impl_provenance: None,
@@ -1442,6 +1473,7 @@ impl Elaborator {
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
+            review_lints: false,
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
@@ -1669,6 +1701,13 @@ impl Elaborator {
     /// the language accepts. Intended for drivers before they check a module.
     pub fn set_lint_profile(&mut self, profile: LintProfile) {
         self.lint_profile = profile;
+    }
+
+    /// Turn on the review-mode lints — today `redundant-match-motive`, whose
+    /// recognizer re-elaborates and kernel-checks every written motive. Off
+    /// by default; `heather check --review` sets it.
+    pub fn set_review_lints(&mut self, on: bool) {
+        self.review_lints = on;
     }
 
     /// Begin aggregating value-machine allocation and cache activity across
@@ -1948,6 +1987,7 @@ impl Elaborator {
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
+        self.slice_enter(module);
         let plan = self.begin_container(&file);
         for (idx, item) in file.items.iter().enumerate() {
             let name = item_timing_name(item);
@@ -1959,6 +1999,17 @@ impl Elaborator {
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
+            }
+            let slice_source = slice_source(&file, src, idx, &plan);
+            let slice_start = lint::item_span(item).start;
+            let slice_mark = self.slice_begin();
+            // A replayed slice carries the item's warnings, source lints
+            // included: nothing is re-run over it.
+            if self.try_replay_slice(idx, &slice_source, slice_start) {
+                if let Some(mark) = slice_mark {
+                    self.slice_end(mark, slice_source, slice_start, true);
+                }
+                continue;
             }
             let warn_mark = self.warnings.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
@@ -1974,6 +2025,10 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
+                if let Some(mark) = slice_mark {
+                    self.slice_elaborated();
+                    self.slice_end(mark, slice_source, slice_start, false);
+                }
             }
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -1981,6 +2036,9 @@ impl Elaborator {
             }
             if r.is_err() {
                 self.container_decls.borrow_mut().clear();
+                if let Some(g) = self.gate.as_ref() {
+                    g.abandon(&self.psi);
+                }
                 // Nothing may outlive the module with proofs in flight, the
                 // failure path included (`docs/parallel-kernel-gate-design.md`
                 // §5). The item's own error is the one reported — unless a
@@ -2525,6 +2583,7 @@ impl Elaborator {
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
+        self.slice_enter(module);
         let plan = self.begin_container(&file);
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
@@ -2541,6 +2600,24 @@ impl Elaborator {
             if let Some(metrics) = &self.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
+            // A slice of the previous delta stands in for the item when its
+            // text and the prefix so far match
+            // (`docs/declaration-slice-replay-design.md` §4).
+            let slice_source = slice_source(&file, src, idx, &plan);
+            let slice_start = lint::item_span(item).start;
+            let slice_mark = self.slice_begin();
+            // A replayed slice carries the item's warnings, source lints
+            // included: nothing is re-run over it.
+            if self.try_replay_slice(idx, &slice_source, slice_start) {
+                if let Some(mark) = slice_mark {
+                    self.slice_end(mark, slice_source, slice_start, true);
+                }
+                #[cfg(feature = "value-metrics")]
+                if let Some(metrics) = &self.value_metrics {
+                    metrics.set_current_item(None);
+                }
+                continue;
+            }
             let r = self.elab_item_at(&file, idx, item, &plan);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.value_metrics {
@@ -2555,9 +2632,18 @@ impl Elaborator {
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
+                if let Some(mark) = slice_mark {
+                    self.slice_elaborated();
+                    self.slice_end(mark, slice_source, slice_start, false);
+                }
             }
             if let Err(e) = r {
                 errs.push(e);
+                // The refused declaration's gate question is dead, and the
+                // next declaration lands at the same Ψ length.
+                if let Some(g) = self.gate.as_ref() {
+                    g.abandon(&self.psi);
+                }
             }
             // The early abort (§5.1): this pass is already doomed to be
             // replayed serially, so stop elaborating declarations for it.
@@ -3904,14 +3990,20 @@ impl Elaborator {
         // and ask the ordinary goal-derived route to check the same match
         // against the same expected type. The clone makes goals, warnings,
         // fallback provenance, derived instances, and fuel bookkeeping
-        // transactional; no declaration or kernel gate is duplicated.
-        if let ExprKind::Match {
+        // transactional; no declaration is duplicated — but the match is
+        // elaborated twice and kernel-checked once more, paid in full when
+        // the motive turns out to be required, which is every motive left
+        // in a library that adopted the lint's findings. So it is a
+        // review-mode lint (`set_review_lints`), not part of a check.
+        if self.review_lints
+            && let ExprKind::Match {
             generated: false,
             scrut,
             motive: Some(motive),
             eqbind: None,
             ..
         } = &e.kind
+            && !self.attempt.motive_redundancy_probe.get()
         {
             let mut omitted = e.clone();
             let ExprKind::Match {
@@ -3923,6 +4015,11 @@ impl Elaborator {
             };
             *omitted_motive = None;
             let probe = self.clone();
+            // One probe per written motive: the matches nested under this
+            // one are elaborated here with their motives kept and are probed
+            // by the real pass below, once each, not once per enclosing
+            // probe (`attempt.rs`).
+            probe.attempt.motive_redundancy_probe.set(true);
             if let Ok(term) =
                 probe.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
                 && probe

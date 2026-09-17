@@ -102,6 +102,15 @@ pub trait KernelGate {
         _binding: &heather_kernel::term::GlobalBinding,
     ) {
     }
+
+    /// Every question `admits` opened at a Ψ length ≥ `psi.bindings.len()`
+    /// is dead: the declaration it was asked about was refused (or the pass
+    /// carrying it discarded), so nothing will land there and no `accepted`
+    /// will follow. Called on every declaration failure. A gate that
+    /// remembers an open question by its Ψ position — the cache does, so
+    /// that `accepted` never re-hashes what `admits` hashed — must forget
+    /// it here, or the next declaration at that position could inherit it.
+    fn abandon(&self, _psi: &GlobalCtx) {}
 }
 
 /// A gate that never admits anything: the identity, useful as a control.

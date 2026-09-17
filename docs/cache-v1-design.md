@@ -552,6 +552,39 @@ next lever is not a faster encoder but *not walking unchanged declarations*:
 memoizing per-`Rc` subtree hashes, or a cache that skips elaboration too,
 which §1 already notes is a larger design.
 
+**Hash once per declaration (2026-09-17).** The `admits`/`accepted` pair asks
+one question, and answering it twice doubles the hashing: the first
+instrumented reading of a cold check (`issues/merkle-walk-cold-share.md`)
+found the interface walked twice per declaration at the inline gate and the
+whole identity computed twice at the deferred join, where `accepted` arrives
+with the Ψ snapshot its item was queued under. The cache now keeps an exact
+map of *open questions* keyed by Ψ position (opened by `admits`, closed by
+the answer, killed by `KernelGate::abandon` when a declaration fails — the
+elaborator keeps going after a refusal and the next declaration lands at the
+same position), and the hasher compresses with the CPU's SHA extensions
+where it has them (`src/sha256.rs`, `compress_blocks_sha`: Intel's reference
+schedule over `std::arch`, selected per hasher, the portable rounds kept as
+the same function for every other target and checked against it by the
+oracle tests). That is the one `unsafe` in the workspace; the cache crate
+carries `deny` where the workspace says `forbid`, for exactly those two
+functions. `sha2`'s hardware path measured the same rate, so the crate stays
+at zero shipped dependencies. What remains of the walk is its content: the
+walker visits shared structure about twice over on a large module, so a
+per-`Rc` memo is a 2× ceiling, not the lever it was once assumed to be.
+
+**The replay asks the same question (2026-09-17).** A module replayed from
+its semantic image used to be kernel-rechecked in full — every stored
+definition's body — while the same store vouched for those declarations on
+the source path, so a warm check of an unchanged file cost more than a check
+after an edit. A stored definition is the binding `GateItem::binding`
+produced at the cold gate, over the same Ψ prefix, and the key is content
+with the name as metadata (§3); so `Elaborator::recheck_extension` now asks
+`admits` over each stored definition, checks only the misses and records
+them with `accepted`, and abandons its questions if the replay is rejected.
+A stored theorem has no proof to ask about and keeps its statement check.
+The trust is unchanged: rung 1 either way, and a body the store never saw
+still faces the kernel.
+
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session
 (v2 only, `plain`/`cold` alternating, five iterations, load falling) gave
