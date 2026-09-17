@@ -78,7 +78,8 @@ spacing alone and normalize everything else — degrade, never refuse.
   around `<` in its comparison role only;
 - `:` — space after, none before;
 - tight prefixes `¬ - $ ? · λ`, where the lexer's adjacency rules *are* the
-  specification;
+  specification — but only when the trivia is **pure whitespace**. `¬ // why\n P`
+  must keep its gap, because closing it would swallow the comment;
 - strip trailing whitespace, collapse runs of blank lines, one final newline.
 
 Adopt `heather_emit.rs`'s `LINE_WIDTH = 96` rather than inventing a second
@@ -108,7 +109,10 @@ baseline, gating in `scripts/test` once `lib/` is clean.
   under `git diff -w`;
 - adversarial fixtures for the adjacency forms (`? p` vs `?p`, `·₂`, `$x`,
   `¬P`, `⟨a |⟩`, three-segment qualified names), each with a negative control;
-- a file that fails to parse is still formatted, minus `<`/`>` spacing.
+- a file that fails to parse is still formatted, minus `<`/`>` spacing;
+- phase 1 retires the `TightNegationSpacing` lint and adopts its two controls
+  as formatter fixtures — the exact empty replacement, and the comment between
+  operator and operand that must survive.
 
 ## Spike: recovering the role of `<` from the AST — done, succeeded
 
@@ -164,10 +168,11 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
 - **[[stdlib-surface-style-lint]]** owns *which spelling* is idiomatic
   (`f(a, b)` over `f(a)(b)`, operator over named call). This issue owns
   whitespace only and decides nothing about spelling.
-- **[[lint-tight-negation-spacing]]** owns the same whitespace rule as a lint.
-  Once the formatter is the authority for whitespace, that lint is either
-  subsumed or is the story for people who do not run `fmt`. Decide it there
-  before phase 1 ships; do not let both drift.
+- **[[lint-tight-negation-spacing]]** landed the same whitespace rule as a
+  lint, and is **subsumed** by this issue (user decision, 2026-09-16). The
+  formatter is the single authority for whitespace; phase 1 removes the lint
+  rather than leaving two owners to drift. Its value does not vanish — the two
+  cases it got right become fixtures here, above.
 - **[[fmt-not-enforced-decision]]** is about *Rust* and rustfmt, and does not
   transfer: it turned on a formatter that reformats aggressively against a
   large existing tree, which is exactly what the no-line-breaks rule avoids
@@ -175,6 +180,10 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
 
 ## Log
 
+- 2026-09-16: [[lint-tight-negation-spacing]] is subsumed rather than kept
+  alongside (user decision). Recorded as an acceptance item: phase 1 removes
+  the lint and inherits its controls, so the rule survives as a mechanical
+  guarantee instead of a warning.
 - 2026-09-16: Filed with the design and the census. The `<`-role spike ran
   first, because it was the one result that could have changed the shape:
   it succeeded, and produced the three findings recorded above.

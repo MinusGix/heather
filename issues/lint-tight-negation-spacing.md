@@ -39,3 +39,4 @@ that removes only the trivia between `¬` and its operand.
   were normalized and the focused warning tests cover both the fix and comment
   control.
 - 2026-09-16: Whitespace may acquire a different owner: [[heather-formatter]] proposes a token-stream formatter that would make this rule mechanical rather than advisory. Decide there whether this lint is subsumed or is the story for people who do not run it.
+- 2026-09-16: Decision: subsumed by [[heather-formatter]] (user, 2026-09-16). The formatter becomes the single authority for whitespace and its phase 1 removes this lint; the two cases this rule got right — the exact empty replacement, and leaving a comment between operator and operand alone — are carried over as formatter fixtures.
