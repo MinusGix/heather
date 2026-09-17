@@ -1,14 +1,24 @@
 // Calculator grammar built from the checked parser library.
+//
+// `import parser;` is the whole library. The facade reexports the cursor
+// model, the contracts, the diagnostics, the combinators, the primitives and
+// the recursion guard under one module name (docs/modules-design.md §3.4), so
+// the operations below are spelled unqualified and still resolve to the
+// component that declares each one — `rest` is `parser_core::rest`, and an
+// axiom audit reports that component, not the facade.
 import nat;
 import list;
 import result;
 import logic;
-import pair;
-import int;
-import omega;
 import option;
 import parser;
 import calc;
+// The mutual `decreases` group below states its obligations at the flattened
+// measure and closes the arithmetic over these three
+// (docs/mutual-recursion-design.md §3–§4); nothing here names them directly.
+import pair;
+import int;
+import omega;
 
 inductive PTok { TNum(n: Nat), TPlusSym, TStarSym, TOpen, TClose }
 inductive ParseError { ExpectedAtom, UnexpectedEnd, BadParen, Trailing }
@@ -29,8 +39,8 @@ inductive Derivation {
     Parenthesized(inner: Derivation),
 }
 fn tier(d: Derivation) -> Nat {
-    match d { Number(n) => 2, AtomFactor(a) => 1, FactorExpr(f) => 0,
-        Sum(l,r) => 0, Product(l,r) => 1, Parenthesized(e) => 2 }
+    match d { Number(_) => 2, AtomFactor(_) => 1, FactorExpr(_) => 0,
+        Sum(_,_) => 0, Product(_,_) => 1, Parenthesized(_) => 2 }
 }
 fn meaning(d: Derivation) -> Expr {
     match d { Number(n) => Lit(n), AtomFactor(a) => meaning(a), FactorExpr(f) => meaning(f),
@@ -44,7 +54,7 @@ fn spelling(d: Derivation) -> List<PTok> {
         Parenthesized(e) => Cons(TOpen,spelling(e) ++ [TClose]) }
 }
 fn WellFormed(d: Derivation) -> Type {
-    match d { Number(n) => True,
+    match d { Number(_) => True,
         AtomFactor(a) => And<tier(a) = 2, WellFormed(a)>,
         FactorExpr(f) => And<tier(f) = 1, WellFormed(f)>,
         Sum(l,r) => And<And<tier(l) = 1, WellFormed(l)>, And<tier(r) = 0, WellFormed(r)>>,
@@ -56,7 +66,7 @@ record Grammar(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), 
     valid: WellFormed(derivation),
     at_level: tier(derivation) = level,
     yields: meaning(derivation) = value,
-    span: parser::rest(source,begin) = spelling(derivation) ++ parser::rest(source,end),
+    span: rest(source,begin) = spelling(derivation) ++ rest(source,end),
 }
 fn GrammarSpec(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr) -> Type {
     Grammar(level,source,begin,end,value)
@@ -71,7 +81,7 @@ fn expression_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value
 }
 // A token step specifies the actual remainder, including its next boundary.
 fn TokenSpan(token: PTok, source: List<PTok>, begin,end: Cursor<PTok>(source), ignored: Nat) -> Type {
-    parser::rest(source,begin) = Cons(token,parser::rest(source,end))
+    rest(source,begin) = Cons(token,rest(source,end))
 }
 theorem span_join(xs,ys,first,middle,last: List<PTok>, a: first = xs ++ middle, b: middle = ys ++ last):
     first = (xs ++ ys) ++ last {
@@ -83,7 +93,7 @@ fn sum_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), 
     Grammar(Sum(l.derivation,r.derivation),And(And(l.at_level,l.valid),And(r.at_level,r.valid)),refl,
         j(l.yields,λ value q => Plus(meaning(l.derivation),meaning(r.derivation)) = Plus(value,right),
             j(r.yields,λ value q => Plus(meaning(l.derivation),meaning(r.derivation)) = Plus(meaning(l.derivation),value),refl)),
-        span_join(spelling(l.derivation),Cons(TPlusSym,spelling(r.derivation)),parser::rest(source,begin),parser::rest(source,middle),parser::rest(source,end),
+        span_join(spelling(l.derivation),Cons(TPlusSym,spelling(r.derivation)),rest(source,begin),rest(source,middle),rest(source,end),
             l.span,trans(op,list::cong_cons(TPlusSym,r.span))))
 }
 fn product_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), left,right: Expr,
@@ -92,7 +102,7 @@ fn product_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(sourc
     Grammar(Product(l.derivation,r.derivation),And(And(l.at_level,l.valid),And(r.at_level,r.valid)),refl,
         j(l.yields,λ value q => Times(meaning(l.derivation),meaning(r.derivation)) = Times(value,right),
             j(r.yields,λ value q => Times(meaning(l.derivation),meaning(r.derivation)) = Times(meaning(l.derivation),value),refl)),
-        span_join(spelling(l.derivation),Cons(TStarSym,spelling(r.derivation)),parser::rest(source,begin),parser::rest(source,middle),parser::rest(source,end),
+        span_join(spelling(l.derivation),Cons(TStarSym,spelling(r.derivation)),rest(source,begin),rest(source,middle),rest(source,end),
             l.span,trans(op,list::cong_cons(TStarSym,r.span))))
 }
 fn paren_grammar(source: List<PTok>, begin,next,middle,end: Cursor<PTok>(source), value: Expr,
@@ -100,7 +110,7 @@ fn paren_grammar(source: List<PTok>, begin,next,middle,end: Cursor<PTok>(source)
     close: TokenSpan(TClose,source,middle,end,0)) -> Grammar(2,source,begin,end,value) {
     Grammar(Parenthesized(inner.derivation),And(inner.at_level,inner.valid),refl,inner.yields,
         trans(op,list::cong_cons(TOpen,
-            span_join(spelling(inner.derivation),[TClose],parser::rest(source,next),parser::rest(source,middle),parser::rest(source,end),inner.span,close))))
+            span_join(spelling(inner.derivation),[TClose],rest(source,next),rest(source,middle),rest(source,end),inner.span,close))))
 }
 
 theorem number_selected(token: PTok, value: Expr):
@@ -111,70 +121,86 @@ theorem number_selected(token: PTok, value: Expr):
 }
 fn number_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr,
     proof: Recognized<PTok,Expr>(number,source,begin,end,value)) -> Grammar(2,source,begin,end,value) {
-    let head = parser::recognized_head(number,source,begin,end,value,proof);
+    let head = recognized_head(number,source,begin,end,value,proof);
     let selected = number_selected(head.head,value,head.selected);
     Grammar(Number(selected.witness),trivial,refl,selected.proof.right,
-        trans(head.suffix,j(selected.proof.left,λ token q => Cons(head.head,parser::rest(source,end)) = Cons(token,parser::rest(source,end)),refl)))
+        trans(head.suffix,j(selected.proof.left,λ token q => Cons(head.head,rest(source,end)) = Cons(token,rest(source,end)),refl)))
 }
 theorem plus_selected(token: PTok, value: Nat): plus(token) = Some(value) -> token = TPlusSym {
-    match token { TPlusSym => λ h => refl, TNum(n) => λ h => absurd(h), TStarSym => λ h => absurd(h), TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
+    match token { TPlusSym => λ h => refl, TNum(_) => λ h => absurd(h), TStarSym => λ h => absurd(h), TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
 }
 theorem times_selected(token: PTok, value: Nat): times(token) = Some(value) -> token = TStarSym {
-    match token { TStarSym => λ h => refl, TNum(n) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
+    match token { TStarSym => λ h => refl, TNum(_) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
 }
 theorem opening_selected(token: PTok, value: Nat): opening(token) = Some(value) -> token = TOpen {
-    match token { TOpen => λ h => refl, TNum(n) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TStarSym => λ h => absurd(h), TClose => λ h => absurd(h) }
+    match token { TOpen => λ h => refl, TNum(_) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TStarSym => λ h => absurd(h), TClose => λ h => absurd(h) }
 }
 theorem closing_selected(token: PTok, value: Nat): closing(token) = Some(value) -> token = TClose {
-    match token { TClose => λ h => refl, TNum(n) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TStarSym => λ h => absurd(h), TOpen => λ h => absurd(h) }
+    match token { TClose => λ h => refl, TNum(_) => λ h => absurd(h), TPlusSym => λ h => absurd(h), TStarSym => λ h => absurd(h), TOpen => λ h => absurd(h) }
 }
 fn symbol_span(pick: PTok -> Option<Nat>, token: PTok,
     selects: (t: PTok) -> (value: Nat) -> pick(t) = Some(value) -> t = token,
     source: List<PTok>, begin,end: Cursor<PTok>(source), value: Nat,
     proof: Recognized<PTok,Nat>(pick,source,begin,end,value)) -> TokenSpan(token,source,begin,end,value) {
-    let head = parser::recognized_head(pick,source,begin,end,value,proof);
-    trans(head.suffix,j(selects(head.head,value,head.selected),λ t q => Cons(head.head,parser::rest(source,end)) = Cons(t,parser::rest(source,end)),refl))
+    let head = recognized_head(pick,source,begin,end,value,proof);
+    trans(head.suffix,j(selects(head.head,value,head.selected),λ t q => Cons(head.head,rest(source,end)) = Cons(t,rest(source,end)),refl))
 }
 
 fn sum_finish(source: List<PTok>, begin,middle,next: Cursor<PTok>(source), forward: nat::Le(begin.offset,next.offset),
     left: Expr, proof: Grammar(1,source,begin,middle,left), token: TokenSpan(TPlusSym,source,middle,next,0),
-    r: Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)> {
-    match r { Err(e) => Err(parser::commit_after(source,begin,next,e)),
+    r: Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)> {
+    match r { Err(e) => Err(commit_after(source,begin,next,e)),
         Ok(right) => Ok(Certified(Plus(left,right.value),right.end,
             nat::le_trans(begin.offset,next.offset,right.end.offset,forward,right.forward),
             sum_grammar(source,begin,middle,next,right.end,left,right.value,proof,token,right.evidence))) }
 }
 fn product_finish(source: List<PTok>, begin,middle,next: Cursor<PTok>(source), forward: nat::Le(begin.offset,next.offset),
     left: Expr, proof: Grammar(2,source,begin,middle,left), token: TokenSpan(TStarSym,source,middle,next,0),
-    r: Result<Certified<PTok,Expr>(source,next,GrammarSpec(1)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)> {
-    match r { Err(e) => Err(parser::commit_after(source,begin,next,e)),
+    r: Result<Certified<PTok,Expr>(source,next,GrammarSpec(1)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)> {
+    match r { Err(e) => Err(commit_after(source,begin,next,e)),
         Ok(right) => Ok(Certified(Times(left,right.value),right.end,
             nat::le_trans(begin.offset,next.offset,right.end.offset,forward,right.forward),
             product_grammar(source,begin,middle,next,right.end,left,right.value,proof,token,right.evidence))) }
 }
 // Generic Result eliminators keep the production proof types shared.
-fn expr_body(source: List<PTok>, begin: Cursor<PTok>(source), first: Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>,
-    recur: (next: Cursor<PTok>(source)) -> nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin))) -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)> {
-    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>(first,λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(1))) =>
-        result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(plus)),Failure<PTok>(source),Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>>(parser::recognize_certified<PTok,Nat>(plus,0,source,left.end),
+fn expr_body(source: List<PTok>, begin: Cursor<PTok>(source),
+    first: Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>,
+    recur: (next: Cursor<PTok>(source))
+        -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
+        -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)> {
+    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),
+            Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>(first,
+        λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(1))) =>
+            result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(plus)),Failure<PTok>(source),
+                    Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>>(recognize_certified<PTok,Nat>(plus,0,source,left.end),
             λ (op: Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(plus))) => {
                 let token = symbol_span(plus,TPlusSym,plus_selected,source,left.end,op.end,op.value,op.evidence);
-                let step = parser::recognized_progress(plus,source,left.end,op.end,op.value,op.evidence);
-                let small = parser::progress_after(source,begin,left.end,op.end,left.forward,step);
+                let step = recognized_progress(plus,source,left.end,op.end,op.value,op.evidence);
+                let small = progress_after(source,begin,left.end,op.end,left.forward,step);
                 sum_finish(source,begin,left.end,op.end,nat::le_trans(begin.offset,left.end.offset,op.end.offset,left.forward,op.forward),
                     left.value,left.evidence,token,recur(op.end,small))
             },
             λ (ignored: Failure<PTok>(source)) => Ok(Certified(left.value,left.end,left.forward,
                 expression_grammar(source,begin,left.end,left.value,left.evidence)))))
 }
-fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source), first: Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>,
-    recur: (next: Cursor<PTok>(source)) -> nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin))) -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(1)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)> {
-    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>(first,λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(2))) =>
-        result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(times)),Failure<PTok>(source),Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>>(parser::recognize_certified<PTok,Nat>(times,0,source,left.end),
+fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source),
+    first: Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>,
+    recur: (next: Cursor<PTok>(source))
+        -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
+        -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(1)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)> {
+    result::and_then<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),
+            Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>(first,
+        λ (left: Certified<PTok,Expr>(source,begin,GrammarSpec(2))) =>
+            result::fold<Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(times)),Failure<PTok>(source),
+                    Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>>(recognize_certified<PTok,Nat>(times,0,source,left.end),
             λ (op: Certified<PTok,Nat>(source,left.end,Recognized<PTok,Nat>(times))) => {
                 let token = symbol_span(times,TStarSym,times_selected,source,left.end,op.end,op.value,op.evidence);
-                let step = parser::recognized_progress(times,source,left.end,op.end,op.value,op.evidence);
-                let small = parser::progress_after(source,begin,left.end,op.end,left.forward,step);
+                let step = recognized_progress(times,source,left.end,op.end,op.value,op.evidence);
+                let small = progress_after(source,begin,left.end,op.end,left.forward,step);
                 product_finish(source,begin,left.end,op.end,nat::le_trans(begin.offset,left.end.offset,op.end.offset,left.forward,op.forward),
                     left.value,left.evidence,token,recur(op.end,small))
             },
@@ -184,8 +210,9 @@ fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source), first: Result<Ce
 fn close_body(source: List<PTok>, begin: Cursor<PTok>(source),
     op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
     inner: Certified<PTok,Expr>(source,op.end,GrammarSpec(0))) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
-    result::fold<Certified<PTok,Nat>(source,inner.end,Recognized<PTok,Nat>(closing)),Failure<PTok>(source),Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(
-        parser::recognize_certified<PTok,Nat>(closing,2,source,inner.end),
+    result::fold<Certified<PTok,Nat>(source,inner.end,Recognized<PTok,Nat>(closing)),Failure<PTok>(source),
+                Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(
+        recognize_certified<PTok,Nat>(closing,2,source,inner.end),
         λ (close: Certified<PTok,Nat>(source,inner.end,Recognized<PTok,Nat>(closing))) =>
             Ok(Certified(inner.value,close.end,
                 nat::le_trans(begin.offset,op.end.offset,close.end.offset,op.forward,
@@ -193,74 +220,90 @@ fn close_body(source: List<PTok>, begin: Cursor<PTok>(source),
                 paren_grammar(source,begin,op.end,inner.end,close.end,inner.value,
                     symbol_span(opening,TOpen,opening_selected,source,begin,op.end,op.value,op.evidence),inner.evidence,
                     symbol_span(closing,TClose,closing_selected,source,inner.end,close.end,close.value,close.evidence)))),
-        λ (e: Failure<PTok>(source)) => Err(parser::commit_after(source,begin,op.end,parser::commit_after(source,op.end,inner.end,e))))
+        λ (e: Failure<PTok>(source)) => Err(commit_after(source,begin,op.end,commit_after(source,op.end,inner.end,e))))
 }
 fn open_body(source: List<PTok>, begin: Cursor<PTok>(source),
-    op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)), recur: (next: Cursor<PTok>(source)) -> nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin))) -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
-    let step = parser::recognized_progress(opening,source,begin,op.end,op.value,op.evidence);
-    let small = parser::drop_length_strict(source,begin.offset,op.end.offset,step,op.end.within);
-    result::fold<Certified<PTok,Expr>(source,op.end,GrammarSpec(0)),Failure<PTok>(source),Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(recur(op.end,small),
+    op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
+    recur: (next: Cursor<PTok>(source))
+        -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
+        -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
+    let step = recognized_progress(opening,source,begin,op.end,op.value,op.evidence);
+    let small = drop_length_strict(source,begin.offset,op.end.offset,step,op.end.within);
+    result::fold<Certified<PTok,Expr>(source,op.end,GrammarSpec(0)),Failure<PTok>(source),
+                Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(recur(op.end,small),
         λ (inner: Certified<PTok,Expr>(source,op.end,GrammarSpec(0))) => close_body(source,begin,op,inner),
-        λ (e: Failure<PTok>(source)) => Err(parser::commit_after(source,begin,op.end,e)))
+        λ (e: Failure<PTok>(source)) => Err(commit_after(source,begin,op.end,e)))
 }
-fn parentheses_body(source: List<PTok>, begin: Cursor<PTok>(source), recur: (next: Cursor<PTok>(source)) -> nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin))) -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
-    result::and_then<Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>(
-        parser::recognize_certified<PTok,Nat>(opening,0,source,begin),
+fn parentheses_body(source: List<PTok>, begin: Cursor<PTok>(source),
+    recur: (next: Cursor<PTok>(source))
+        -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
+        -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
+    result::and_then<Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
+            Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>(
+        recognize_certified<PTok,Nat>(opening,0,source,begin),
         λ (op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening))) => open_body(source,begin,op,recur))
 }
-fn atom_body(source: List<PTok>, begin: Cursor<PTok>(source), recur: (next: Cursor<PTok>(source)) -> nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin))) -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
-    result::fold<Certified<PTok,Expr>(source,begin,Recognized<PTok,Expr>(number)),Failure<PTok>(source),Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(
-        parser::recognize_certified<PTok,Expr>(number,0,source,begin),
+fn atom_body(source: List<PTok>, begin: Cursor<PTok>(source),
+    recur: (next: Cursor<PTok>(source))
+        -> nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))
+        -> Result<Certified<PTok,Expr>(source,next,GrammarSpec(0)),Failure<PTok>(source)>)
+    -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)> {
+    result::fold<Certified<PTok,Expr>(source,begin,Recognized<PTok,Expr>(number)),Failure<PTok>(source),
+                Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>>(
+        recognize_certified<PTok,Expr>(number,0,source,begin),
         λ (n: Certified<PTok,Expr>(source,begin,Recognized<PTok,Expr>(number))) =>
             Ok(Certified(n.value,n.end,n.forward,number_grammar(source,begin,n.end,n.value,n.evidence))),
-        λ (number_error: Failure<PTok>(source)) => result::map_err<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source),Failure<PTok>(source)>(
-            parentheses_body(source,begin,recur),λ (e: Failure<PTok>(source)) => parser::merge_error(source,number_error,e)))
+        λ (number_error: Failure<PTok>(source)) =>
+            result::map_err<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source),Failure<PTok>(source)>(
+            parentheses_body(source,begin,recur),λ (e: Failure<PTok>(source)) => merge_error(source,number_error,e)))
 }
 fn checked_expr(source: List<PTok>, begin: Cursor<PTok>(source)) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(0)),Failure<PTok>(source)>
-    decreases list_len(parser::rest(source,begin)) {
+    decreases list_len(rest(source,begin)) {
     expr_body(source,begin,checked_factor(source,begin),
-        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin)))) => checked_expr(source,next) decreasing tail)
+        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))) => checked_expr(source,next) decreasing tail)
     on decreasing tail := smaller;
 }
 fn checked_factor(source: List<PTok>, begin: Cursor<PTok>(source)) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(1)),Failure<PTok>(source)>
-    decreases list_len(parser::rest(source,begin)) {
+    decreases list_len(rest(source,begin)) {
     factor_body(source,begin,checked_atom(source,begin),
-        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin)))) => checked_factor(source,next) decreasing tail)
+        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))) => checked_factor(source,next) decreasing tail)
     on decreasing tail := smaller;
 }
 fn checked_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Result<Certified<PTok,Expr>(source,begin,GrammarSpec(2)),Failure<PTok>(source)>
-    decreases list_len(parser::rest(source,begin)) {
+    decreases list_len(rest(source,begin)) {
     atom_body(source,begin,
-        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(parser::rest(source,next)),list_len(parser::rest(source,begin)))) => checked_expr(source,next) decreasing inner)
+        λ (next: Cursor<PTok>(source)) (smaller: nat::Lt(list_len(rest(source,next)),list_len(rest(source,begin)))) => checked_expr(source,next) decreasing inner)
     on decreasing inner := smaller;
 }
 fn parse_expr(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    parser::forget_at(source,begin,GrammarSpec(0),checked_expr(source,begin))
+    forget_at(source,begin,GrammarSpec(0),checked_expr(source,begin))
 }
 fn parse_factor(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    parser::forget_at(source,begin,GrammarSpec(1),checked_factor(source,begin))
+    forget_at(source,begin,GrammarSpec(1),checked_factor(source,begin))
 }
 fn parse_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    parser::forget_at(source,begin,GrammarSpec(2),checked_atom(source,begin))
+    forget_at(source,begin,GrammarSpec(2),checked_atom(source,begin))
 }
 fn grammar() -> Parser<PTok,Expr> { Parser(λ source begin => parse_expr(source,begin)) }
 fn grammar_sound() -> Sound<PTok,Expr>(grammar(),GrammarSpec(0)) {
-    Sound(λ source begin => parser::forget_post(source,begin,GrammarSpec(0),checked_expr(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,GrammarSpec(0),checked_expr(source,begin)))
 }
 fn factor_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_factor(source,begin)),GrammarSpec(1)) {
-    Sound(λ source begin => parser::forget_post(source,begin,GrammarSpec(1),checked_factor(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,GrammarSpec(1),checked_factor(source,begin)))
 }
 fn atom_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_atom(source,begin)),GrammarSpec(2)) {
-    Sound(λ source begin => parser::forget_post(source,begin,GrammarSpec(2),checked_atom(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,GrammarSpec(2),checked_atom(source,begin)))
 }
 theorem expression_sound(source: List<PTok>, begin: Cursor<PTok>(source), s: Success<PTok,Expr>(source,begin), shape: parse_expr(source,begin) = Ok(s)):
     Grammar(0,source,begin,s.end,s.value) {
-    parser::post_on_success(source,begin,GrammarSpec(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
+    post_on_success(source,begin,GrammarSpec(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
 }
-fn error_code(expected: List<Nat>) -> Nat { match expected { Nil => 0, Cons(code,tail) => code } }
+fn error_code(expected: List<Nat>) -> Nat { match expected { Nil => 0, Cons(code,_) => code } }
 fn public_error(source: List<PTok>, error: ErrorView) -> ParseError {
     match error_code(error.expected) {
-        Zero => match nat::le_dec(list_len(source),error.offset) { Inl(at_end) => UnexpectedEnd, Inr(before_end) => ExpectedAtom },
+        Zero => match nat::le_dec(list_len(source),error.offset) { Inl(_) => UnexpectedEnd, Inr(_) => ExpectedAtom },
         Succ(k) => match k { Zero => UnexpectedEnd, Succ(j) => match j { Zero => BadParen, _ => Trailing } },
     }
 }
@@ -272,28 +315,28 @@ record WholeGrammar(source: List<PTok>, value: Expr) {
     tokens: spelling(derivation) = source,
 }
 fn whole_grammar(source: List<PTok>, end: Cursor<PTok>(source), value: Expr,
-    proof: CompleteSpec<PTok,Expr>(GrammarSpec(0),source,parser::start(source),end,value)) -> WholeGrammar(source,value) {
+    proof: CompleteSpec<PTok,Expr>(GrammarSpec(0),source,start(source),end,value)) -> WholeGrammar(source,value) {
     let g = proof.left;
     WholeGrammar(g.derivation,g.valid,g.at_level,g.yields,
-        sym(trans(sym(parser::initial_rest(source)),trans(g.span,
-            trans(j(proof.right,λ suffix q => spelling(g.derivation) ++ parser::rest(source,end) = spelling(g.derivation) ++ suffix,refl),list::append_nil(spelling(g.derivation)))))))
+        sym(trans(sym(initial_rest(source)),trans(g.span,
+            trans(j(proof.right,λ suffix q => spelling(g.derivation) ++ rest(source,end) = spelling(g.derivation) ++ suffix,refl),list::append_nil(spelling(g.derivation)))))))
 }
-fn public_reply(source: List<PTok>, r: Reply<PTok,Expr>(source,parser::start(source))) -> Result<Expr,ParseError> {
-    match r { Err(e) => Err(public_error(source,parser::error_view(source,e))), Ok(s) => Ok(s.value) }
+fn public_reply(source: List<PTok>, r: Reply<PTok,Expr>(source,start(source))) -> Result<Expr,ParseError> {
+    match r { Err(e) => Err(public_error(source,error_view(source,e))), Ok(s) => Ok(s.value) }
 }
 fn ParsedGrammar(source: List<PTok>, r: Result<Expr,ParseError>) -> Type {
-    match r { Err(e) => True, Ok(value) => WholeGrammar(source,value) }
+    match r { Err(_) => True, Ok(value) => WholeGrammar(source,value) }
 }
-theorem public_reply_sound(source: List<PTok>, r: Reply<PTok,Expr>(source,parser::start(source))):
-    Post(source,parser::start(source),CompleteSpec<PTok,Expr>(GrammarSpec(0)),r) -> ParsedGrammar(source,public_reply(source,r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => whole_grammar(source,s.end,s.value,h) }
+theorem public_reply_sound(source: List<PTok>, r: Reply<PTok,Expr>(source,start(source))):
+    Post(source,start(source),CompleteSpec<PTok,Expr>(GrammarSpec(0)),r) -> ParsedGrammar(source,public_reply(source,r)) {
+    match r { Err(_) => λ h => trivial, Ok(s) => λ h => whole_grammar(source,s.end,s.value,h) }
 }
 fn parse(ts: List<PTok>) -> Result<Expr,ParseError> {
-    public_reply(ts,parser::complete(grammar(),3).run(ts,parser::start(ts)))
+    public_reply(ts,complete(grammar(),3).run(ts,start(ts)))
 }
 theorem parse_post(source: List<PTok>): ParsedGrammar(source,parse(source)) {
-    public_reply_sound(source,parser::complete(grammar(),3).run(source,parser::start(source)),
-        parser::complete_sound(grammar(),3,GrammarSpec(0),grammar_sound()).law(source,parser::start(source)))
+    public_reply_sound(source,complete(grammar(),3).run(source,start(source)),
+        complete_sound(grammar(),3,GrammarSpec(0),grammar_sound()).law(source,start(source)))
 }
 theorem parse_sound(source: List<PTok>, value: Expr, success: parse(source) = Ok(value)):
     WholeGrammar(source,value) {

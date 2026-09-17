@@ -3,7 +3,7 @@ title: Structural mutual recursion: synthesize the measure when none is written
 status: open
 labels: [frontend,elaboration,design]
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-16
 ---
 
 
@@ -21,3 +21,7 @@ exactly one candidate.
 ## What it assumes from elsewhere
 - **[[mutual-recursion-declarations]]** owns the group lowering. Assumed
   here: only that a written measure on every member is what it consumes.
+
+## Log
+
+- 2026-09-16: The flattened-measure route also costs the *client* three imports it never names (`pair`, `int`, `omega`); [[feature-implicit-module-dependencies]] owns removing that requirement.
