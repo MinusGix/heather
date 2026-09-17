@@ -214,7 +214,12 @@ if (( $# == 0 )); then
 fi
 rm -f "$manifest"
 
-# ...then run under them: 6 GiB address space, 5 CPU minutes, two threads.
+# ...then run under them: 6 GiB address space, 5 CPU minutes, two threads, and
+# a SERIAL kernel gate. The gate's default width is eight, and the CPU rail
+# counts every worker thread, so two test threads at the default width spend
+# their five minutes about 2.5x faster than the work costs — see
+# `KERNEL_WORKERS` in scripts/run-test-targets.mjs for the measurement. An
+# explicitly set `HEATHER_KERNEL_WORKERS` still wins here too.
 #
 # The awk pass-through counts per-binary `test result:` lines — cargo
 # scatters them across ~60 targets and prints no total, so callers (humans
@@ -237,7 +242,9 @@ counts=$(mktemp)
 timings=$(mktemp)
 test_started=$SECONDS
 set +e
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test "${CARGO_FLAGS[@]}" "${TEST_ARGS[@]}" "$@" "${LIBTEST_ARGS[@]}" 2>&1 |
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 \
+HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" \
+cargo test "${CARGO_FLAGS[@]}" "${TEST_ARGS[@]}" "$@" "${LIBTEST_ARGS[@]}" 2>&1 |
   awk -v out="$counts" -v timing_out="$timings" '
        { print }
        /^     Running / {

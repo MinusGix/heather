@@ -39,6 +39,14 @@
   `--kernel-workers`); a proof's item timing is only comparable across runs
   at the same width, and `HEATHER_KERNEL_WORKERS=1` is the serial build for
   isolating one item. The suite's per-process address-space rail is 6 GiB.
+  **`scripts/test` runs its children at width one** since 2026-09-17: the
+  runner already schedules targets in parallel and budgets two CPUs each, so
+  eight workers underneath that multiplied the box's load ~8x and the CPU rail
+  (`ulimit -t 300`, which counts every worker thread) was measuring contention
+  rather than test cost — one target reached 274 CPU-s against 300 for 109 CPU-s
+  of work, and no full run could go green. Width one made the suite green *and*
+  faster. So timings read out of a suite run are width-one timings; set
+  `HEATHER_KERNEL_WORKERS` explicitly to override, which still wins.
 - **Builds link with mold** (`.cargo/config.toml`), which reserves ~8 GiB of
   address space per link, so build (`cargo … --no-run`) *before* entering a
   `ulimit -v` cap; the scripts already do. A cap on a command that still has
