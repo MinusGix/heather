@@ -3,7 +3,7 @@ title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
 created: 2026-09-06
-updated: 2026-09-16
+updated: 2026-09-18
 ---
 
 Filed from the 2026-09-06 x86 kernel round. Exact first-difference excerpts
@@ -66,3 +66,17 @@ where the fallbacks are paid for.
 - 2026-09-16: Third spelling taken: `quote_type_at` quotes `code_of(emit_ty(·))` (docs/complete-post-attribution-design.md §10). Reach is exactly components whose sub-lowerings are registered declarations; a primitive-built component keeps its block, [[quoted-component-traversal-remainder]]. Suite 2696 passed, bench 112 within thresholds, no fixture moved.
 - 2026-09-16: The function-typed value-parameter domain (the 2026-09-15 naming slice rejected for `Pi/Pi`) is re-priced by docs/close-body-family-attribution-design.md §5.2 at **44×** per identical three-receiver chain (`Certified` vs `Success`), because the unnameable 776–911-character `Π` is written into every `dom`/`cod` of every read's spine. Slice 2 of the close_body family, after the matcher slice.
 - 2026-09-16: The quote pair on the matcher's side is closed by [[quote-see-through-bounded-arm]] (one head step of `decoded`). What remains on the family is slice 2 — the unnameable function-typed value-parameter domain filling ~45 k-node `ref` spines per read — and `open_body`'s one-receiver regression, boundary 2's floor.
+- 2026-09-18: A **record token type costs 27× the conversion misses of an inductive one**, in a controlled pair. `probes/str/p10.hthr` declares the same certified character-class run twice over the parser library — once at `T = Char` (a record over `Nat` plus an `IsTrue` witness) and once at `T = Nat` — with every other line identical, down to the lemma names:
+
+  | token type | conv misses | queries | steps |
+  |---|---|---|---|
+  | `Char` (record) | 1,527,745 | 42,887,503 | 6,177,673 |
+  | `Nat` (inductive) | 56,662 | 10,380,405 | 2,745,504 |
+
+  Release binary at 3d10b94 plus the `char`/`list` additions of this date, `--cache`, default kernel width; counts are exact and width-invariant, so only they are quoted.
+
+  This is this issue's own group-B shape — a record component spelled `Σ[0,0](…)` on one side and `El(app(…#tycode_fn^δ; ā))` on the other (docs/closed-argument-and-parameter-domain-spelling-design.md §1) — reached from the *type argument* end rather than from a parameter domain: `Cursor<Char>(source)`, `List<Char>` and `Certified<Char, List<Char>>(…)` each instantiate the library at a record, and every conversion along the parser's spine re-derives the disagreement.
+
+  Found while building the scannerless character calculator ([[sequence-parser-source]]). Its consequence there: the four tier bodies cost ~35 s of gate and ~290–450 k misses each where `calc_parser`'s structurally identical bodies cost 188–204, and the file needs **more than 8 GiB** cold — it passes at 20 GiB and dies at the suite's 6 GiB per-process rail, so it cannot be wired into `crates/elab/tests/showcase_calculator.rs` until this is fixed. Two spellings were tried against it and neither is the lever: moving the tier bodies from nested `match` onto the `Result` eliminators cut misses 2.9× (854 k → 291 k, and it is the better style regardless), and returning the library's `Certified` instead of a purpose-built indexed record left them flat. Threading the character *value* through `Recognized`/`Certified` rather than a placeholder `Nat` is worth 21% on the one item that does it.
+
+  The character calculator is therefore the first consumer whose cost is dominated by this defect rather than annoyed by it, and `probes/str/p10.hthr` is a 25-line reproduction that needs no showcase.

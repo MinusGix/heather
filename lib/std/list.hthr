@@ -80,6 +80,14 @@ fn append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
     }
 }
 
+// The other side of `cong_append_l`: rewriting the tail of an append. A
+// client threading a span through a fixed prefix needs this direction, and
+// wrote the `j` by hand before it was here.
+theorem cong_append_r<A>(xs: List<A>, {a: List<A>}, {b: List<A>}, p: a = b):
+        xs ++ a = xs ++ b {
+    j(p, λ y q => xs ++ a = xs ++ y, refl)
+}
+
 theorem append_nil<A>(xs: List<A>): xs ++ Nil = xs {
     list_elim(λ (ys: List<A>) => ys ++ Nil = ys, append_nil_elim(), xs)
 }

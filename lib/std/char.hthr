@@ -13,6 +13,7 @@
 import logic;
 import bool;
 import nat;
+import option;
 
 // ---------------------------------------------------------------------------
 // The predicate, and its decision.
@@ -112,3 +113,85 @@ instance DecEq<Char> { eq_dec := char_eq_dec }
 // `Char`, and `algebra` sits *below* this module in the library's import
 // order.
 class CharLiteral<A> { ofChar: Char → A }
+
+// ---------------------------------------------------------------------------
+// Character classes. Each is a `Bool` program over the code, spelled the way
+// `is_scalar` is: a `leb` range test, so a closed character decides by
+// descending both literals together and a class fact is `IsTrue` of the
+// program rather than a separate inductive predicate. The digit reading is
+// the one class a client consumes as data rather than as a test, so it also
+// gets an `Option` form — the shape `parser::recognize` takes.
+
+fn is_digit(c: Char) → Bool {
+    nat::leb(0x30, c.code) && nat::leb(Succ(c.code), 0x3A)
+}
+
+// A code equality built from the order, `leb` in both directions. `nat` has
+// no `eqb`, and the two comparisons here are at closed codes.
+fn code_is(c: Char, code: Nat) → Bool {
+    nat::leb(c.code, code) && nat::leb(code, c.code)
+}
+
+// Rust's `char::is_ascii_whitespace`: space, tab, line feed, form feed and
+// carriage return. Vertical tab (`0x0B`) is *not* one, which is why this is
+// five code tests and not a range.
+fn is_space(c: Char) → Bool {
+    code_is(c, 0x20) || code_is(c, 0x09) || code_is(c, 0x0A)
+        || code_is(c, 0x0C) || code_is(c, 0x0D)
+}
+
+// The value a digit character denotes. Total on every character, and only
+// meaningful under `is_digit` — `digit_val_lt` is the fact that says so.
+fn digit_val(c: Char) → Nat { nat::sub(c.code, 0x30) }
+
+// The digit reading as data: `Some` of the value at a digit, `None`
+// otherwise. `digit_selected` inverts it, which is what a parser's
+// `Recognized` obligation needs.
+fn digit_of(c: Char) → Option<Nat> {
+    match is_digit(c) { False => None, True => Some(digit_val(c)) }
+}
+
+// The inversion, stated at an abstract `Bool` and applied at `is_digit(c)`.
+// A `match` on the computed class alone would not refine `digit_of(c)`, so
+// the generalization is the written motive below and the use site is one
+// application (docs/testing-generated-terms.md: an open scrutinee is the
+// axis that catches this).
+theorem selected_of_match<A>(b: Bool, v: A, w: A,
+        h: (match b { False => None<A>, True => Some(v) }) = Some(w)):
+        IsTrue(b) ∧ v = w {
+    match b as λ x => ((match x { False => None<A>, True => Some(v) }) = Some(w))
+            → IsTrue(x) ∧ v = w {
+        False => λ (absent: (None<A> = Some(w))) => absurd(absent),
+        True => λ (present: (Some(v) = Some(w))) => And(trivial, some_inj(v, w, present)),
+    }(h)
+}
+
+theorem digit_selected(c: Char, n: Nat, h: digit_of(c) = Some(n)):
+        IsTrue(is_digit(c)) ∧ digit_val(c) = n {
+    selected_of_match(is_digit(c), digit_val(c), n, h)
+}
+
+// A digit's value is a decimal digit. The two `leb` halves of `is_digit`
+// become order facts, the lower bound cancels against the subtraction, and
+// the upper bound is `0x3A` read as `10 + 0x30`.
+theorem digit_val_lt(c: Char, p: IsTrue(is_digit(c))): digit_val(c) < 10 {
+    let parts = is_true_and(nat::leb(0x30, c.code), nat::leb(Succ(c.code), 0x3A), p);
+    let lower = leb_sound(0x30, c.code, parts.left);
+    let upper = leb_sound(Succ(c.code), 0x3A, parts.right);
+    nat::le_of_add_le_add_r(0x30, Succ(digit_val(c)), 10,
+        j(sym(nat::sub_add_cancel(0x30, c.code, lower)),
+            λ y q => nat::Le(Succ(y), 10 + 0x30), upper))
+}
+
+// A passed code test is an equality of codes, and so an equality of
+// characters. This is what a parser recognizing one particular character
+// needs out of `code_is`: the two `leb` halves are antisymmetry's premises.
+theorem code_is_sound(c: Char, code: Nat, p: IsTrue(code_is(c, code))): c.code = code {
+    let parts = is_true_and(nat::leb(c.code, code), nat::leb(code, c.code), p);
+    nat::le_antisym(c.code, code, leb_sound(c.code, code, parts.left),
+        leb_sound(code, c.code, parts.right))
+}
+
+theorem code_is_char(c, target: Char, p: IsTrue(code_is(c, target.code))): c = target {
+    code_injective(c, target, code_is_sound(c, target.code, p))
+}

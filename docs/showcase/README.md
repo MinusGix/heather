@@ -64,14 +64,58 @@ provide recursive-call evidence. The proof-carrying recursive implementation
 projects ordinary replies for public callers. See
 [calculator grammar soundness](../calculator-grammar-soundness.md).
 AST equations also check precedence, association, and nesting, including an
-open numeric payload. General recognition completeness, character lexing,
-shell IO, and native compilation remain future work.
+open numeric payload. Characters are no longer future work — `calc_text.hthr`
+below is the same grammar over text, scannerless. General recognition
+completeness, shell IO, and native compilation remain future work.
 
 Both realized files are checked by
 `crates/elab/tests/showcase_calculator.rs`, including controls that require the
 kernel to reject wrong precedence, association, arithmetic, leftover-input
 handling, and error priority. The smaller `result-parser.hthr` remains a
 standalone introduction to `?`.
+
+## Scannerless text calculator
+
+[`calc_text.hthr`](calc_text.hthr) is the same grammar over **characters**, so
+`calculate("2 + 3 * 4")` runs the whole pipeline from a `String` to a checked
+answer — the consumer `String` and `Char` were built for
+(`../string-char-design.md`). Two things change when the source is text.
+
+A numeral is a *run*, not a token: `Number` carries its digits, so `spelling`
+is those characters and `meaning` is the decimal fold, and no `Nat`-to-decimal
+rendering function or round-trip theorem appears anywhere. And whitespace is
+carried *in the derivation* — each lexeme owns its trailing spaces, the whole
+parse owns its leading ones, and `WellFormed` obliges every one of those
+characters to be a space — so the span theorem still says the derivation spells
+the input character for character. Nothing is skipped behind the proof's back.
+
+```text
+expr   := factor [ '+' spaces expr ]
+factor := atom [ '*' spaces factor ]
+atom   := digit+ spaces | '(' spaces expr ')' spaces
+```
+
+```sh
+mkdir -p /tmp/calc && cp docs/showcase/calc{,_text}.hthr /tmp/calc/
+(ulimit -v 20971520 -t 900; target/release/heather check \
+  -L lib/std -L lib/std/parser -L /tmp/calc /tmp/calc/calc_text.hthr)
+```
+
+The entry points take a `String`: `parse`, `calculate`, `execute`.
+`parse_sound` gives every accepted text a well-formed derivation that spells it
+and means the returned AST, and `parsed_compile_correct` carries the compiler
+agreement across. Fifteen `refl` equations run the pipeline on text, including
+multi-digit numerals, spacing, and five error cases.
+
+The cap above is deliberate and the reason this file is **not yet** in
+`crates/elab/tests/showcase_calculator.rs`: it needs more than 8 GiB cold,
+which the suite's 6 GiB per-process rail refuses. The cost is not the grammar's
+shape — a record token type costs 27× the conversion misses of an inductive one
+in a controlled pair (`probes/str/p10.hthr`), which is
+`issues/elaborator-canonical-type-spelling.md` reached from the type-argument
+end, since `Cursor<Char>` and `List<Char>` instantiate the library at a record.
+`issues/sequence-parser-source.md` owns the file and
+`../sequence-parser-source-design.md` records the design.
 
 ## What already matches
 

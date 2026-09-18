@@ -1,0 +1,561 @@
+// The calculator over *text*: a scannerless grammar whose tokens are
+// characters, so `calculate("2 + 3 * 4")` is the whole pipeline from a
+// `String` to a machine-checked answer.
+//
+// `calc_parser.hthr` is the same grammar over a `List<PTok>` that someone
+// else produced. Two things change when the source is characters:
+//
+//  - **A numeral is a run, not a token.** `Number` carries its *digits*, so
+//    `spelling` is those characters and `meaning` is the decimal fold. No
+//    `Nat`-to-decimal rendering function appears anywhere, and there is no
+//    render/parse round-trip theorem to prove: the derivation holds the text
+//    it came from.
+//  - **Whitespace is part of the derivation.** Each lexeme carries its
+//    trailing spaces and the whole parse carries its leading ones, with
+//    `WellFormed` obliging every one of those characters to be a space. The
+//    span theorem therefore still says the derivation spells the source
+//    character for character — nothing is skipped behind the proof's back.
+//
+// The spelling is written as a *difference list* — `spell(d, tail)` rather
+// than `spelling(d) ++ tail` — which is why no `append_assoc` appears below.
+// Every production's span proof is a congruence under `spell(d, ·)` applied
+// to the next cursor's equation (`cong_spell`), where the token version
+// needed a three-way `span_join` at each step.
+import nat;
+import list;
+import bool;
+import option;
+import result;
+import logic;
+import char;
+import string;
+import parser;
+import calc;
+// The mutual `decreases` group states its obligations at the flattened
+// measure over these three, as in `calc_parser`.
+import pair;
+import int;
+import omega;
+
+inductive ParseError { ExpectedAtom, UnexpectedEnd, BadParen, Trailing }
+
+// ---------------------------------------------------------------------------
+// Character runs. A class recognizer selects the character itself exactly
+// when it is in the class, which is the shape `char::selected_of_match`
+// inverts.
+
+fn class_pick(cls: Char -> Bool) -> Char -> Option<Char> {
+    λ (c: Char) => match cls(c) { False => None, True => Some(c) }
+}
+
+fn all_of(cls: Char -> Bool, cs: List<Char>) -> Type {
+    match cs { Nil => True, Cons(c, r) => And<IsTrue(cls(c)), all_of(cls, r)> }
+}
+
+fn nonempty(cs: List<Char>) -> Type { match cs { Nil => False, Cons(_, _) => True } }
+
+// What a run certifies: its characters are in the class, and they are exactly
+// the span between the two cursors.
+fn RunSpec(cls: Char -> Bool, source: List<Char>, begin, end: Cursor<Char>(source), cs: List<Char>) -> Type {
+    And<all_of(cls, cs), rest(source, begin) = cs ++ rest(source, end)>
+}
+
+// A run cannot fail — an empty run is a run — so this returns a certificate
+// rather than a `Reply`. The library's `many` supplies the parser but no span
+// contract (issues/parser-certified-repetition.md), so the recursion is
+// written out here; it is the same `recognized_progress` /
+// `drop_length_strict` measure every other tier uses.
+fn checked_run(cls: Char -> Bool, source: List<Char>, begin: Cursor<Char>(source))
+    -> Certified<Char, List<Char>>(source, begin, RunSpec(cls))
+    decreases list_len(rest(source, begin)) {
+    match recognize_certified(class_pick(cls), 0, source, begin) {
+        Err(_) => Certified([], begin, nat::le_refl(begin.offset), And(trivial, refl)),
+        Ok(one) => {
+            let head = recognized_head(class_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let inside = selected_of_match(cls(head.head), head.head, one.value, head.selected);
+            let step = recognized_progress(class_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let small = drop_length_strict(source, begin.offset, one.end.offset, step, one.end.within);
+            let more = checked_run(cls, source, one.end) decreasing tail;
+            Certified(Cons(one.value, more.value), more.end,
+                nat::le_trans(begin.offset, one.end.offset, more.end.offset, one.forward, more.forward),
+                And(And(j(inside.right, λ y q => IsTrue(cls(y)), inside.left), more.evidence.left),
+                    trans(head.suffix,
+                        trans(j(inside.right, λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
+                            list::cong_cons(one.value, more.evidence.right)))))
+        },
+    }
+    on decreasing tail := small;
+}
+
+// The decimal value of a digit run, most significant first.
+fn digits_from(acc: Nat, cs: List<Char>) -> Nat {
+    match cs { Nil => acc, Cons(c, r) => digits_from(acc * 10 + digit_val(c), r) }
+}
+fn digits_value(cs: List<Char>) -> Nat { digits_from(0, cs) }
+
+// ---------------------------------------------------------------------------
+// The independent grammar. Constructors describe productions and carry the
+// characters they stand for; nothing here runs a parser.
+// Tiers are expression = 0, factor = 1, atom = 2.
+
+inductive Derivation {
+    Number(digits: List<Char>, trail: List<Char>),
+    AtomFactor(atom: Derivation),
+    FactorExpr(factor: Derivation),
+    Sum(left: Derivation, trail: List<Char>, right: Derivation),
+    Product(left: Derivation, trail: List<Char>, right: Derivation),
+    Parenthesized(open_trail: List<Char>, inner: Derivation, close_trail: List<Char>),
+}
+
+fn tier(d: Derivation) -> Nat {
+    match d { Number(_, _) => 2, AtomFactor(_) => 1, FactorExpr(_) => 0,
+        Sum(_, _, _) => 0, Product(_, _, _) => 1, Parenthesized(_, _, _) => 2 }
+}
+
+fn meaning(d: Derivation) -> Expr {
+    match d { Number(ds, _) => Lit(digits_value(ds)),
+        AtomFactor(a) => meaning(a), FactorExpr(f) => meaning(f),
+        Sum(l, _, r) => Plus(meaning(l), meaning(r)),
+        Product(l, _, r) => Times(meaning(l), meaning(r)),
+        Parenthesized(_, e, _) => meaning(e) }
+}
+
+// The spelling, in difference-list form: `spell(d, tail)` is what `d` spells
+// followed by `tail`. Concrete character lists still use `++`; what is never
+// appended is one derivation's spelling to another's.
+fn spell(d: Derivation, tail: List<Char>) -> List<Char> {
+    match d {
+        Number(ds, tr) => ds ++ (tr ++ tail),
+        AtomFactor(a) => spell(a, tail),
+        FactorExpr(f) => spell(f, tail),
+        Sum(l, tr, r) => spell(l, Cons('+', tr ++ spell(r, tail))),
+        Product(l, tr, r) => spell(l, Cons('*', tr ++ spell(r, tail))),
+        Parenthesized(otr, e, ctr) => Cons('(', otr ++ spell(e, Cons(')', ctr ++ tail))),
+    }
+}
+
+fn spelling(d: Derivation) -> List<Char> { spell(d, Nil<Char>) }
+
+theorem cong_spell(d: Derivation, x, y: List<Char>, p: x = y): spell(d, x) = spell(d, y) {
+    j(p, λ z q => spell(d, x) = spell(d, z), refl)
+}
+
+fn WellFormed(d: Derivation) -> Type {
+    match d {
+        Number(ds, tr) => And<And<nonempty(ds), all_of(is_digit, ds)>, all_of(is_space, tr)>,
+        AtomFactor(a) => And<tier(a) = 2, WellFormed(a)>,
+        FactorExpr(f) => And<tier(f) = 1, WellFormed(f)>,
+        Sum(l, tr, r) => And<And<And<tier(l) = 1, WellFormed(l)>, all_of(is_space, tr)>,
+            And<tier(r) = 0, WellFormed(r)>>,
+        Product(l, tr, r) => And<And<And<tier(l) = 2, WellFormed(l)>, all_of(is_space, tr)>,
+            And<tier(r) = 1, WellFormed(r)>>,
+        Parenthesized(otr, e, ctr) => And<And<all_of(is_space, otr), And<tier(e) = 0, WellFormed(e)>>,
+            all_of(is_space, ctr)>,
+    }
+}
+
+record Grammar(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source), value: Expr) {
+    derivation: Derivation,
+    valid: WellFormed(derivation),
+    at_level: tier(derivation) = level,
+    yields: meaning(derivation) = value,
+    span: rest(source, begin) = spell(derivation, rest(source, end)),
+}
+
+fn GrammarSpec(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source), value: Expr) -> Type {
+    Grammar(level, source, begin, end, value)
+}
+
+// What a tier's parser returns: a certified `Expr` whose evidence is the
+// grammar at that tier, or a failure over the same source.
+fn Checked(level: Nat, source: List<Char>, begin: Cursor<Char>(source)) -> Type {
+    Result<Certified<Char, Expr>(source, begin, GrammarSpec(level)), Failure<Char>(source)>
+}
+
+// ---------------------------------------------------------------------------
+// Tier coercions and the productions, as proofs over the grammar alone.
+
+fn factor_grammar(source: List<Char>, begin, end: Cursor<Char>(source), value: Expr,
+    atom: Grammar(2, source, begin, end, value)) -> Grammar(1, source, begin, end, value) {
+    Grammar(AtomFactor(atom.derivation), And(atom.at_level, atom.valid), refl, atom.yields, atom.span)
+}
+
+fn expression_grammar(source: List<Char>, begin, end: Cursor<Char>(source), value: Expr,
+    factor: Grammar(1, source, begin, end, value)) -> Grammar(0, source, begin, end, value) {
+    Grammar(FactorExpr(factor.derivation), And(factor.at_level, factor.valid), refl, factor.yields, factor.span)
+}
+
+// One operator character and the run of spaces after it: the remainder at
+// `begin` is that character, then those spaces, then the remainder at `end`.
+fn OpSpan(token: Char, trail: List<Char>, source: List<Char>, begin, end: Cursor<Char>(source)) -> Type {
+    rest(source, begin) = Cons(token, trail ++ rest(source, end))
+}
+
+fn number_grammar(source: List<Char>, begin, middle, end: Cursor<Char>(source),
+    digits: List<Char>, trail: List<Char>, more: nonempty(digits),
+    run: RunSpec(is_digit, source, begin, middle, digits),
+    spaces: RunSpec(is_space, source, middle, end, trail))
+    -> Grammar(2, source, begin, end, Lit(digits_value(digits))) {
+    Grammar(Number(digits, trail), And(And(more, run.left), spaces.left), refl, refl,
+        trans(run.right, list::cong_append_r(digits, spaces.right)))
+}
+
+fn sum_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(source),
+    left, right: Expr, trail: List<Char>, trail_spaces: all_of(is_space, trail),
+    l: Grammar(1, source, begin, middle, left), op: OpSpan('+', trail, source, middle, next),
+    r: Grammar(0, source, next, end, right)) -> Grammar(0, source, begin, end, Plus(left, right)) {
+    Grammar(Sum(l.derivation, trail, r.derivation),
+        And(And(And(l.at_level, l.valid), trail_spaces), And(r.at_level, r.valid)),
+        refl,
+        j(l.yields, λ value q => Plus(meaning(l.derivation), meaning(r.derivation)) = Plus(value, right),
+            j(r.yields, λ value q => Plus(meaning(l.derivation), meaning(r.derivation)) = Plus(meaning(l.derivation), value), refl)),
+        trans(l.span, cong_spell(l.derivation, rest(source, middle),
+            Cons('+', trail ++ spell(r.derivation, rest(source, end))),
+            trans(op, list::cong_cons('+', list::cong_append_r(trail, r.span))))))
+}
+
+fn product_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(source),
+    left, right: Expr, trail: List<Char>, trail_spaces: all_of(is_space, trail),
+    l: Grammar(2, source, begin, middle, left), op: OpSpan('*', trail, source, middle, next),
+    r: Grammar(1, source, next, end, right)) -> Grammar(1, source, begin, end, Times(left, right)) {
+    Grammar(Product(l.derivation, trail, r.derivation),
+        And(And(And(l.at_level, l.valid), trail_spaces), And(r.at_level, r.valid)),
+        refl,
+        j(l.yields, λ value q => Times(meaning(l.derivation), meaning(r.derivation)) = Times(value, right),
+            j(r.yields, λ value q => Times(meaning(l.derivation), meaning(r.derivation)) = Times(meaning(l.derivation), value), refl)),
+        trans(l.span, cong_spell(l.derivation, rest(source, middle),
+            Cons('*', trail ++ spell(r.derivation, rest(source, end))),
+            trans(op, list::cong_cons('*', list::cong_append_r(trail, r.span))))))
+}
+
+fn paren_grammar(source: List<Char>, begin, next, middle, last, end: Cursor<Char>(source), value: Expr,
+    open_trail, close_trail: List<Char>,
+    op: OpSpan('(', open_trail, source, begin, next),
+    inner: Grammar(0, source, next, middle, value),
+    close: OpSpan(')', close_trail, source, middle, last),
+    open_spaces: all_of(is_space, open_trail), close_spaces: all_of(is_space, close_trail),
+    tail: rest(source, last) = rest(source, end))
+    -> Grammar(2, source, begin, end, value) {
+    Grammar(Parenthesized(open_trail, inner.derivation, close_trail),
+        And(And(open_spaces, And(inner.at_level, inner.valid)), close_spaces), refl, inner.yields,
+        trans(op, list::cong_cons('(',
+            list::cong_append_r(open_trail,
+                trans(inner.span, cong_spell(inner.derivation, rest(source, middle),
+                    Cons(')', close_trail ++ rest(source, end)),
+                    trans(close, list::cong_cons(')', list::cong_append_r(close_trail, tail)))))))))
+}
+
+// ---------------------------------------------------------------------------
+// The parser. One tier per level, each returning the grammar at that tier as
+// its certificate. The shape is `calc_parser`'s: a `_body` per production, the
+// recursion closed by the flattened `decreases` measure below.
+
+// Recognize one particular character. `char::code_is_char` turns the class
+// fact back into an equality of characters.
+// The recognized *value* is a placeholder `Nat`, not the character: a `Char`
+// carries its scalar-value witness, and threading one through `Recognized`
+// and `Certified` makes every conversion along the way compare those
+// witnesses. `calc_parser`'s symbol pickers return `Some(0)` for the same
+// reason, and the character itself comes back out of `recognized_head`.
+fn exact_pick(target: Char) -> Char -> Option<Nat> {
+    λ (c: Char) => match code_is(c, target.code) { False => None, True => Some(0) }
+}
+
+// One operator character followed by its run of spaces: what a production
+// consumes between its operands. This is a *spec relation* over the library's
+// own `Certified`, not a new record of its own — the value is the run of
+// spaces, and the evidence is that they are spaces, that the two together are
+// exactly the span, and that the span is non-empty.
+fn OpRun(target: Char, source: List<Char>, begin, end: Cursor<Char>(source), trail: List<Char>) -> Type {
+    And<And<all_of(is_space, trail), OpSpan(target, trail, source, begin, end)>,
+        nat::Lt(begin.offset, end.offset)>
+}
+
+fn operator(target: Char, expected: Nat, source: List<Char>, begin: Cursor<Char>(source))
+    -> Result<Certified<Char, List<Char>>(source, begin, OpRun(target)), Failure<Char>(source)> {
+    recognize_certified(exact_pick(target), expected, source, begin).and_then(λ one => {
+            let head = recognized_head(exact_pick(target), source, begin, one.end, one.value, one.evidence);
+            let matched = selected_of_match(code_is(head.head, target.code), 0, one.value, head.selected);
+            let spaces = checked_run(is_space, source, one.end);
+            let step = nat::le_trans(Succ(begin.offset), one.end.offset, spaces.end.offset,
+                recognized_progress(exact_pick(target), source, begin, one.end, one.value, one.evidence),
+                spaces.forward);
+            let span = trans(head.suffix,
+                trans(j(code_is_char(head.head, target, matched.left),
+                        λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
+                    list::cong_cons(target, spaces.evidence.right)));
+            Ok(Certified(spaces.value, spaces.end,
+                nat::le_of_lt(begin.offset, spaces.end.offset, step),
+                And(And(spaces.evidence.left, span), step)))
+    })
+}
+
+// A numeral: a nonempty digit run and its trailing spaces.
+fn number_body(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(2, source, begin) {
+    let run = checked_run(is_digit, source, begin);
+    match shape: run.value {
+        Nil => Err(Failure(begin, [0], Retryable)),
+        Cons(_, _) => {
+            let spaces = checked_run(is_space, source, run.end);
+            Ok(Certified(Lit(digits_value(run.value)), spaces.end,
+                nat::le_trans(begin.offset, run.end.offset, spaces.end.offset, run.forward, spaces.forward),
+                number_grammar(source, begin, run.end, spaces.end, run.value, spaces.value,
+                    j(sym(shape), λ y q => nonempty(y), trivial), run.evidence, spaces.evidence)))
+        },
+    }
+}
+
+fn close_body(source: List<Char>, begin: Cursor<Char>(source),
+    op: Certified<Char, List<Char>>(source, begin, OpRun('(')),
+    inner: Certified<Char, Expr>(source, op.end, GrammarSpec(0))) -> Checked(2, source, begin) {
+    operator(')', 2, source, inner.end).fold(
+        λ close => Ok(Certified(inner.value, close.end,
+            nat::le_trans(begin.offset, op.end.offset, close.end.offset,
+                nat::le_of_lt(begin.offset, op.end.offset, op.evidence.right),
+                nat::le_trans(op.end.offset, inner.end.offset, close.end.offset, inner.forward,
+                    nat::le_of_lt(inner.end.offset, close.end.offset, close.evidence.right))),
+            paren_grammar(source, begin, op.end, inner.end, close.end, close.end, inner.value,
+                op.value, close.value, op.evidence.left.right, inner.evidence, close.evidence.left.right,
+                op.evidence.left.left, close.evidence.left.left, refl))),
+        λ e => Err(commit_after(source, begin, inner.end, e)))
+}
+
+fn parentheses_body(source: List<Char>, begin: Cursor<Char>(source),
+    recur: (next: Cursor<Char>(source))
+        -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+        -> Checked(0, source, next))
+    -> Checked(2, source, begin) {
+    operator('(', 0, source, begin).and_then(λ op => {
+        let small = drop_length_strict(source, begin.offset, op.end.offset, op.evidence.right, op.end.within);
+        recur(op.end, small).fold(λ inner => close_body(source, begin, op, inner),
+            λ e => Err(commit_after(source, begin, op.end, e)))
+    })
+}
+
+fn atom_body(source: List<Char>, begin: Cursor<Char>(source),
+    recur: (next: Cursor<Char>(source))
+        -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+        -> Checked(0, source, next))
+    -> Checked(2, source, begin) {
+    number_body(source, begin).fold(λ n => Ok(n),
+        λ number_error =>
+            parentheses_body(source, begin, recur).map_err(λ e => merge_error(source, number_error, e)))
+}
+
+fn factor_body(source: List<Char>, begin: Cursor<Char>(source),
+    first: Checked(2, source, begin),
+    recur: (next: Cursor<Char>(source))
+        -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+        -> Checked(1, source, next))
+    -> Checked(1, source, begin) {
+    first.and_then(λ left =>
+        operator('*', 1, source, left.end).fold(
+            λ op => {
+                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.right);
+                recur(op.end, small).fold(
+                    λ right => Ok(Certified(Times(left.value, right.value), right.end,
+                        nat::le_trans(begin.offset, op.end.offset, right.end.offset,
+                            nat::le_trans(begin.offset, left.end.offset, op.end.offset, left.forward,
+                                nat::le_of_lt(left.end.offset, op.end.offset, op.evidence.right)),
+                            right.forward),
+                        product_grammar(source, begin, left.end, op.end, right.end,
+                            left.value, right.value, op.value, op.evidence.left.left,
+                            left.evidence, op.evidence.left.right, right.evidence))),
+                    λ e => Err(commit_after(source, begin, op.end, e)))
+            },
+            λ ignored => Ok(Certified(left.value, left.end, left.forward,
+                factor_grammar(source, begin, left.end, left.value, left.evidence)))))
+}
+
+fn expr_body(source: List<Char>, begin: Cursor<Char>(source),
+    first: Checked(1, source, begin),
+    recur: (next: Cursor<Char>(source))
+        -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+        -> Checked(0, source, next))
+    -> Checked(0, source, begin) {
+    first.and_then(λ left =>
+        operator('+', 1, source, left.end).fold(
+            λ op => {
+                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.right);
+                recur(op.end, small).fold(
+                    λ right => Ok(Certified(Plus(left.value, right.value), right.end,
+                        nat::le_trans(begin.offset, op.end.offset, right.end.offset,
+                            nat::le_trans(begin.offset, left.end.offset, op.end.offset, left.forward,
+                                nat::le_of_lt(left.end.offset, op.end.offset, op.evidence.right)),
+                            right.forward),
+                        sum_grammar(source, begin, left.end, op.end, right.end,
+                            left.value, right.value, op.value, op.evidence.left.left,
+                            left.evidence, op.evidence.left.right, right.evidence))),
+                    λ e => Err(commit_after(source, begin, op.end, e)))
+            },
+            λ ignored => Ok(Certified(left.value, left.end, left.forward,
+                expression_grammar(source, begin, left.end, left.value, left.evidence)))))
+}
+
+fn checked_expr(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(0, source, begin)
+    decreases list_len(rest(source, begin)) {
+    expr_body(source, begin, checked_factor(source, begin),
+        λ (next: Cursor<Char>(source)) (smaller: nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))) =>
+            checked_expr(source, next) decreasing tail)
+    on decreasing tail := smaller;
+}
+fn checked_factor(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(1, source, begin)
+    decreases list_len(rest(source, begin)) {
+    factor_body(source, begin, checked_atom(source, begin),
+        λ (next: Cursor<Char>(source)) (smaller: nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))) =>
+            checked_factor(source, next) decreasing tail)
+    on decreasing tail := smaller;
+}
+fn checked_atom(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(2, source, begin)
+    decreases list_len(rest(source, begin)) {
+    atom_body(source, begin,
+        λ (next: Cursor<Char>(source)) (smaller: nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))) =>
+            checked_expr(source, next) decreasing inner)
+    on decreasing inner := smaller;
+}
+
+// ---------------------------------------------------------------------------
+// The whole input: leading spaces, an expression, and nothing left over.
+
+record WholeGrammar(source: List<Char>, value: Expr) {
+    lead: List<Char>,
+    lead_spaces: all_of(is_space, lead),
+    derivation: Derivation,
+    valid: WellFormed(derivation),
+    at_level: tier(derivation) = 0,
+    yields: meaning(derivation) = value,
+    // The derivation, after the leading spaces, spells the source exactly.
+    text: lead ++ spelling(derivation) = source,
+}
+
+// A parse together with its whole-input evidence. Packaging the two here is
+// what lets the public theorems below be one `match` rather than a second
+// derivation of everything (`calc_parser` threads a `Post` through instead).
+record Parsed(source: List<Char>) {
+    value: Expr,
+    whole: WholeGrammar(source, value),
+}
+
+fn error_code(expected: List<Nat>) -> Nat { match expected { Nil => 0, Cons(code, _) => code } }
+
+fn public_error(source: List<Char>, error: ErrorView) -> ParseError {
+    match error_code(error.expected) {
+        Zero => match nat::le_dec(list_len(source), error.offset) { Inl(_) => UnexpectedEnd, Inr(_) => ExpectedAtom },
+        Succ(k) => match k { Zero => UnexpectedEnd, Succ(j) => match j { Zero => BadParen, _ => Trailing } },
+    }
+}
+
+// The end of the input, with the whole-input evidence assembled: the source
+// is the leading spaces followed by what the derivation spells, because the
+// remainder at the final cursor is empty.
+fn finish_text(source: List<Char>,
+    lead: Certified<Char, List<Char>>(source, start(source), RunSpec(is_space)),
+    got: Certified<Char, Expr>(source, lead.end, GrammarSpec(0)))
+    -> Result<Parsed(source), ParseError> {
+    match shape: rest(source, got.end) {
+        Cons(_, _) => Err(Trailing),
+        Nil => Ok(Parsed(got.value,
+            WholeGrammar(lead.value, lead.evidence.left,
+                got.evidence.derivation, got.evidence.valid, got.evidence.at_level, got.evidence.yields,
+                sym(trans(sym(initial_rest(source)),
+                    trans(lead.evidence.right,
+                        list::cong_append_r(lead.value,
+                            trans(got.evidence.span,
+                                cong_spell(got.evidence.derivation, rest(source, got.end), Nil<Char>, shape))))))))),
+    }
+}
+
+fn checked_text(source: List<Char>) -> Result<Parsed(source), ParseError> {
+    let lead = checked_run(is_space, source, start(source));
+    checked_expr(source, lead.end).fold(
+        λ got => finish_text(source, lead, got),
+        λ e => Err(public_error(source, error_view(source, e))))
+}
+
+// ---------------------------------------------------------------------------
+// The public entry points. `parse` takes a `String`; the `List<Char>` forms
+// are underneath it, because that is what a cursor is indexed by.
+
+fn parse_chars(source: List<Char>) -> Result<Expr, ParseError> {
+    checked_text(source).fold(λ p => Ok(p.value), λ e => Err(e))
+}
+
+fn parse(s: String) -> Result<Expr, ParseError> { parse_chars(s.chars) }
+
+fn ParsedText(source: List<Char>, r: Result<Expr, ParseError>) -> Type {
+    match r { Err(_) => True, Ok(value) => WholeGrammar(source, value) }
+}
+
+// Every accepted text has a well-formed derivation that spells it and means
+// the answer. This is the char-level counterpart of `calc_parser::parse_sound`.
+// Stated at an abstract certified result, so the `match` refines the goal;
+// applied at `checked_text(source)`, which is what `parse_chars` forgets.
+theorem post_of_parsed(source: List<Char>, r: Result<Parsed(source), ParseError>):
+        ParsedText(source, r.fold(λ (p: Parsed(source)) => Ok(p.value), λ (e: ParseError) => Err(e))) {
+    match r { Err(_) => trivial, Ok(p) => p.whole }
+}
+
+theorem parse_chars_post(source: List<Char>): ParsedText(source, parse_chars(source)) {
+    post_of_parsed(source, checked_text(source))
+}
+
+theorem parse_sound(s: String, value: Expr, success: parse(s) = Ok(value)):
+    WholeGrammar(s.chars, value) {
+    j(success, λ result q => ParsedText(s.chars, result), parse_chars_post(s.chars))
+}
+
+fn evaluate_parsed(parsed: Result<Expr, ParseError>) -> Result<Nat, ParseError> {
+    let e = parsed?;
+    Ok(e.eval())
+}
+
+fn execute_parsed(parsed: Result<Expr, ParseError>) -> Result<Option<List<Nat>>, ParseError> {
+    let e = parsed?;
+    Ok(calc::run(compile(e), []))
+}
+
+fn calculate(s: String) -> Result<Nat, ParseError> { evaluate_parsed(parse(s)) }
+
+fn execute(s: String) -> Result<Option<List<Nat>>, ParseError> { execute_parsed(parse(s)) }
+
+// The compiler agreement, proved at an open parse result and then specialized,
+// so it assumes the compiler theorem and no parser unfolding law.
+theorem compile_result_correct(parsed: Result<Expr, ParseError>):
+    execute_parsed(parsed) = evaluate_parsed(parsed).map(λ n => Some([n])) {
+    match parsed {
+        Err(_) => refl,
+        Ok(e) => j(compile_correct(e),
+            λ answer q => Ok<Option<List<Nat>>, ParseError>(calc::run(compile(e), [])) = Ok(answer), refl),
+    }
+}
+
+theorem parsed_compile_correct(s: String):
+    execute(s) = calculate(s).map(λ n => Some([n])) {
+    compile_result_correct(parse(s))
+}
+
+// ---------------------------------------------------------------------------
+// The pipeline, run on text.
+
+theorem single_digit(): calculate("7") = Ok(7) { refl }
+theorem multi_digit(): calculate("407") = Ok(407) { refl }
+theorem precedence(): parse("2+3*4") = Ok(Plus(Lit(2), Times(Lit(3), Lit(4)))) { refl }
+theorem product_before_sum(): parse("2*3+4") = Ok(Plus(Times(Lit(2), Lit(3)), Lit(4))) { refl }
+theorem sum_association(): parse("1+2+3") = Ok(Plus(Lit(1), Plus(Lit(2), Lit(3)))) { refl }
+theorem parentheses(): calculate("(2+3)*4") = Ok(20) { refl }
+theorem evaluated(): calculate("2+3*4") = Ok(14) { refl }
+
+// Whitespace is consumed by the derivation, not skipped behind the proof's
+// back: the same text spaced out has the same meaning and the same theorem.
+theorem spaced(): calculate(" 2 + 3 * 4 ") = Ok(14) { refl }
+theorem spaced_parentheses(): calculate(" ( 2 + 3 ) * 4 ") = Ok(20) { refl }
+
+// The compiled path agrees, on text.
+theorem executed(): execute("2+3*4") = Ok(Some([14])) { refl }
+
+// Malformed text is an error, including trailing input after a valid prefix.
+theorem empty_input(): parse("") = Err(UnexpectedEnd) { refl }
+theorem missing_rhs(): parse("2+") = Err(UnexpectedEnd) { refl }
+theorem missing_close(): parse("(2") = Err(BadParen) { refl }
+theorem trailing_number(): parse("2 3") = Err(Trailing) { refl }
+theorem leading_operator(): parse("+2") = Err(ExpectedAtom) { refl }
