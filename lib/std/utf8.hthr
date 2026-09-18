@@ -417,27 +417,20 @@ theorem decode_char_encode_char(c: Char, rest: List<BitVec(8)>):
             char::code_injective(char::ofNat(c.code, c.valid), c, refl)))
 }
 
-// One step of the list recursion, stated at the `emit` the class's arm of
-// `decode` reduces to rather than at `decode_char`. That spelling is
-// load-bearing: converting `decode` at a three- or four-byte sequence
-// against a term that ALSO says `decode_char`/`decode_seq` exhausts the
-// kernel's conversion fuel, while converting it against the reduced `emit`
-// form is cheap (`issues/utf8-decode-conversion-blowup.md`).
-theorem push_step(c: Char, cs: List<Char>, min, n, code: Nat, p: char::scalar(code),
-        low: IsTrue(nat::leb(min, code)), bound: code < nat::pow(2, n),
-        pc: char::ofNat(code, p) = c,
-        ih: decode(encode_chars(cs)) = Some(String(chars := cs))):
-        push_char(emit(min, toNat(n, bitvec::ofNat(n, code)), encode_chars(cs)),
-            decode(encode_chars(cs)))
-                = Some(String(chars := Cons(c, cs))) {
-    j(sym(trans(decode_emit(min, n, code, p, low, bound, encode_chars(cs)),
-            cong_fn(λ (x: Char) => Some(Pair(x, encode_chars(cs))), pc))),
-        λ y _ => push_char(y, decode(encode_chars(cs)))
-                = Some(String(chars := Cons(c, cs))),
-        j(sym(ih),
-            λ z _ => push_char(Some(Pair(c, encode_chars(cs))), z)
-                = Some(String(chars := Cons(c, cs))),
-            refl))
+// One step of the list recursion: decoding a list is decoding its head and
+// then its tail, by computation at every width and at an open code. The
+// `match` on the width is what lets each arm compute: the class of a lead
+// byte is decided by its literal header bits, whatever the payload.
+theorem decode_step(w: Width, code: Nat, rest: List<BitVec(8)>):
+        decode(encode_width(w, code) ++ rest)
+            = push_char(decode_char(encode_width(w, code) ++ rest), decode(rest)) {
+    match w as λ x => decode(encode_width(x, code) ++ rest)
+            = push_char(decode_char(encode_width(x, code) ++ rest), decode(rest)) {
+        W1 => refl,
+        W2 => refl,
+        W3 => refl,
+        W4 => refl,
+    }
 }
 
 // Theorem 3, on the character list: each class decodes exactly the bytes it
@@ -449,23 +442,14 @@ theorem decode_encode_chars(cs: List<Char>):
         Nil => refl,
         Cons(c, more) => {
             let ih = decode_encode_chars(more);
-            match width_of(c.code) as λ x => WidthBounds(x, c.code) →
-                    decode(encode_width(x, c.code) ++ encode_chars(more))
-                        = Some(String(chars := Cons(c, more))) {
-                W1 => λ h => push_step(c, more, 0, 7, c.code, c.valid, trivial,
-                    bound_pow(c.code, 0x80, 7, h, trivial),
-                    char::code_injective(char::ofNat(c.code, c.valid), c, refl), ih),
-                W2 => λ h => push_step(c, more, 0x80, 11, c.code, c.valid, h.left,
-                    bound_pow(c.code, 0x800, 11, h.right, trivial),
-                    char::code_injective(char::ofNat(c.code, c.valid), c, refl), ih),
-                W3 => λ h => push_step(c, more, 0x800, 16, c.code, c.valid, h.left,
-                    bound_pow(c.code, 0x10000, 16, h.right, trivial),
-                    char::code_injective(char::ofNat(c.code, c.valid), c, refl), ih),
-                W4 => λ h => push_step(c, more, 0x10000, 21, c.code, c.valid, h,
-                    bound_pow(c.code, 0x110000, 21, char::scalar_bound(c.code, c.valid),
-                        trivial),
-                    char::code_injective(char::ofNat(c.code, c.valid), c, refl), ih),
-            }(width_bounds(c.code))
+            trans(decode_step(width_of(c.code), c.code, encode_chars(more)),
+                j(sym(decode_char_encode_char(c, encode_chars(more))),
+                    λ y _ => push_char(y, decode(encode_chars(more)))
+                        = Some(String(chars := Cons(c, more))),
+                    j(sym(ih),
+                        λ z _ => push_char(Some(Pair(c, encode_chars(more))), z)
+                            = Some(String(chars := Cons(c, more))),
+                        refl)))
         },
     }
 }

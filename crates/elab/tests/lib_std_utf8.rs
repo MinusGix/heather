@@ -258,3 +258,60 @@ theorem bytes_of_ofString(s: String): utf8::ofString(s).bytes = utf8::encode(s) 
     );
     assert!(!msg.is_empty(), "an invalid byte list must have no witness");
 }
+
+/// The whole-list decoder is the per-sequence decoder pushed onto the tail,
+/// by computation, at every width and at an open payload — the statement
+/// `utf8::decode_step` makes per width. The three- and four-byte rows once
+/// died in the kernel: the two sides' first shared δ-head is `bit7`, under
+/// *different* matches (`class_of`'s against `cont_of`'s), and a failed meet
+/// there used to normalize both sides through `nat::leb(0x800, code)` at a
+/// stuck `code` — a 2048-deep closure chain no comparison can descend
+/// (`issues/utf8-decode-conversion-blowup.md`). The two-byte row is the
+/// control that was always green. The negative control is a wrong tail; a
+/// wrong *class* is refused too, but by exhaustion rather than mismatch,
+/// which is `issues/run-elimination-meet.md`.
+#[test]
+fn decoding_a_list_is_decoding_its_head_then_its_tail_by_computation() {
+    check(
+        r#"
+theorem uf1(b: BitVec(7), t: List<BitVec(8)>):
+        decode(Cons(ascii_byte(b), t)) = push_char(decode_seq(C1, ascii_byte(b), t), decode(t))
+{ refl }
+theorem uf2(q: BitVec(5), r: BitVec(6), t: List<BitVec(8)>):
+        decode(Cons(lead2_byte(q), Cons(cont_byte(r), t)))
+        = push_char(decode_seq(C2, lead2_byte(q), Cons(cont_byte(r), t)), decode(t))
+{ refl }
+theorem uf3(q: BitVec(4), r, s: BitVec(6), t: List<BitVec(8)>):
+        decode(Cons(lead3_byte(q), Cons(cont_byte(r), Cons(cont_byte(s), t))))
+        = push_char(decode_seq(C3, lead3_byte(q),
+              Cons(cont_byte(r), Cons(cont_byte(s), t))), decode(t))
+{ refl }
+theorem uf4(q: BitVec(3), r, s, u: BitVec(6), t: List<BitVec(8)>):
+        decode(Cons(lead4_byte(q), Cons(cont_byte(r), Cons(cont_byte(s), Cons(cont_byte(u), t)))))
+        = push_char(decode_seq(C4, lead4_byte(q),
+              Cons(cont_byte(r), Cons(cont_byte(s), Cons(cont_byte(u), t)))), decode(t))
+{ refl }
+// The one-character decoder is the same call.
+theorem uf3c(q: BitVec(4), r, s: BitVec(6), t: List<BitVec(8)>):
+        decode(Cons(lead3_byte(q), Cons(cont_byte(r), Cons(cont_byte(s), t))))
+        = push_char(decode_char(Cons(lead3_byte(q), Cons(cont_byte(r), Cons(cont_byte(s), t)))),
+              decode(t))
+{ refl }
+// The library's statement, at an open width and code.
+theorem step(w: Width, code: Nat, rest: List<BitVec(8)>):
+        decode(encode_width(w, code) ++ rest)
+            = push_char(decode_char(encode_width(w, code) ++ rest), decode(rest))
+{ utf8::decode_step(w, code, rest) }
+"#,
+    );
+    let msg = refused(
+        r#"
+theorem bad(q: BitVec(4), r, s, u: BitVec(6), t: List<BitVec(8)>):
+        decode(Cons(lead3_byte(q), Cons(cont_byte(r), Cons(cont_byte(s), t))))
+        = push_char(decode_seq(C3, lead3_byte(q),
+              Cons(cont_byte(r), Cons(cont_byte(s), t))), decode(Cons(cont_byte(u), t)))
+{ refl }
+"#,
+    );
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}

@@ -394,6 +394,15 @@ pub(super) trait Dom<'v>: Sized {
     /// path — the strip loop must not cost a view construction.
     fn is_transp(w: &Self::Tm) -> bool;
 
+    /// Is this δ-stuck term a **bare application** of its defined head —
+    /// `f a⃗`, with nothing but applications between the head and the root?
+    /// The alternative is an elimination stuck on a glued scrutinee,
+    /// `E[f a⃗]`, whose δ-head is only what its scrutinee happens to
+    /// compute with. [`Conv::tm_w`]'s same-head arm keys its reaction to a
+    /// failed meet on the distinction; asked only there, after
+    /// [`Dom::delta_head`] has answered `Some`.
+    fn is_application_spine(w: &Self::Tm) -> bool;
+
     // -- views --------------------------------------------------------------
 
     /// The two views. Unlike every other accessor these are **total**: they
@@ -935,6 +944,20 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn is_transp(w: &Rc<Term>) -> bool {
         matches!(**w, Term::Transp { .. })
+    }
+
+    fn is_application_spine(w: &Rc<Term>) -> bool {
+        let mut t: &Term = w;
+        loop {
+            match t {
+                Term::GlobalTm { .. } => return true,
+                Term::App { fun, .. }
+                | Term::UApp { fun, .. }
+                | Term::CtxApp { fun, .. }
+                | Term::TyApp { fun, .. } => t = fun,
+                _ => return false,
+            }
+        }
     }
 
     // -- views --------------------------------------------------------------

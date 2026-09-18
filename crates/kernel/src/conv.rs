@@ -1285,20 +1285,46 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     (Some(u1), Some(u2)) if u1.0 < u2.0 => {
                         wa = D::delta_tm(self, env, &wa)?;
                     }
-                    // The same head on both sides, and its spines just
-                    // failed to convert. Advancing one side a single step
-                    // and re-comparing would re-evaluate the body it
-                    // exposes on every round — with every closure beneath
-                    // it fresh each time, so nothing below is ever shared
-                    // or memoized — and two `ofNat(8, k)` at different `k`
-                    // exhausted 2^20 units that way. Nothing is lost by
-                    // unfolding both sides to their δ-heads instead: the
-                    // meet at *this* head has already failed, and a meet
-                    // at a sub-term is still found by the ordinary lazy
-                    // comparison of the canonical forms' components.
+                    // The same head on both sides, and the meet there just
+                    // failed. Two reactions, keyed on what the head *is* to
+                    // each side.
+                    //
+                    // Bare applications `f a⃗` and `f b⃗`: the failure says
+                    // `a⃗ ≉ b⃗`, so this head is spent. Advancing one side a
+                    // single step and re-comparing would re-evaluate the
+                    // body it exposes on every round — with every closure
+                    // beneath it fresh each time, so nothing below is ever
+                    // shared or memoized — and two `ofNat(8, k)` at
+                    // different `k` exhausted 2^20 units that way. Nothing
+                    // is lost by unfolding both sides to their δ-heads
+                    // instead: a meet at a sub-term is still found by the
+                    // ordinary lazy comparison of the canonical forms'
+                    // components.
+                    //
+                    // Eliminations stuck on glued scrutinees, `E₁[f a⃗]` and
+                    // `E₂[f b⃗]`: the shared head is only what the two
+                    // scrutinees happen to compute with, and the failure
+                    // may be `E₁`'s against `E₂`'s — `match class_of(x)`
+                    // against `match cont_of(y)` share `bit7` — which says
+                    // nothing about where the *terms* would meet. Normalizing
+                    // both here throws that meet away and unrolls whatever
+                    // the bodies hide: `utf8::decode` at a three-byte
+                    // sequence against its own `decode_seq` went through
+                    // `nat::leb(0x800, code)` at a stuck `code`, a 2048-deep
+                    // closure chain on each side that no comparison can
+                    // descend (`issues/utf8-decode-conversion-blowup.md`).
+                    // So each side takes one δ-step and the loop looks for
+                    // the next meet — the same lockstep the different-head
+                    // arms take, with both sides moving because neither is
+                    // the newer.
                     (Some(u1), Some(u2)) if u1 == u2 => {
-                        wa = self.delta_to_head_tm(env, wa)?;
-                        wb = self.delta_to_head_tm(env, wb)?;
+                        if D::is_application_spine(&wa) && D::is_application_spine(&wb) {
+                            wa = self.delta_to_head_tm(env, wa)?;
+                            wb = self.delta_to_head_tm(env, wb)?;
+                        } else {
+                            wa = D::delta_tm(self, env, &wa)?;
+                            wb = D::delta_tm(self, env, &wb)?;
+                        }
                     }
                     (Some(_), Some(_)) => {
                         wb = D::delta_tm(self, env, &wb)?;

@@ -120,7 +120,8 @@ the value at `chain[i]`.
    `push_step`/`decode_at_encode_chars`), tests in
    `crates/elab/tests/lib_std_utf8.rs` unchanged in meaning. Keep
    `push_step` stated at `emit` (`issues/utf8-decode-conversion-blowup.md`
-   is not this round's).
+   is not this round's; it closed the same day, and the step is now
+   `decode_step`, the natural statement).
 5. Update `docs/course-of-values-recursion-design.md` §8 to point here, and
    `issues/utf8-encode-decode-strictness.md`'s route if the fuel-free
    decoder changes it.

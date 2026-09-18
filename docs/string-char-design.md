@@ -335,13 +335,17 @@ implementation had to settle, and what a later round should read first:
   at an open tail. `Nat` admits course-of-values recursion, so a fuel spent
   exactly as many steps as bytes consumed does not, and the recursive call
   in the proof is the induction hypothesis with no fuel arithmetic between.
-- **A conversion pathology shapes one statement.** Converting `decode_at` at
-  a three- or four-byte sequence against a term that also names
-  `decode_char`/`decode_seq` exhausts the kernel's fuel, while converting it
-  against the same term one delta-step further reduced is cheap. `push_step`
-  is therefore stated at `emit`. Filed as
-  `issues/utf8-decode-conversion-blowup.md`; the workaround is local and the
-  natural statement is the refused one.
+- **A conversion pathology shaped one statement, until it was fixed.**
+  Converting `decode` at a three- or four-byte sequence against a term that
+  also names `decode_char`/`decode_seq` died in the kernel, while converting
+  it against the same term one delta-step further reduced (`emit`) was
+  cheap, so the list step was first stated at `emit`. The cause was the
+  kernel's reaction to a failed same-head meet — the two sides share `bit7`
+  as the δ-head of *different* matches, and normalizing both from there
+  unrolled `nat::leb(0x800, code)` at a stuck `code` past the depth budget
+  (`issues/utf8-decode-conversion-blowup.md`, closed 2026-09-18). The step
+  is now `decode_step`, the natural statement: decoding a list is decoding
+  its head and then its tail, by computation at every width.
 - **Theorem 7 stalls on inversion, not on arithmetic.** Its hypothesis is
   `decode(bytes) = Some(s)` at an *abstract* byte list, so the proof has to
   case on `class_of(b)` — and the class is not an argument of `decode_at`,

@@ -1,6 +1,6 @@
 ---
 title: Converting a whole-list decoder against a term naming its own per-character decoder exhausts the kernel's fuel
-status: open
+status: closed
 labels: [kernel, conversion, stdlib]
 created: 2026-09-18
 updated: 2026-09-18
@@ -58,3 +58,4 @@ decoding its head and then its tail" — is the one that is refused.
 ## Log
 
 - 2026-09-18: Re-reproduced 2026-09-18 on the fuel-free `decode` (after [[list-course-of-values-recursion]] landed): the 2-byte control checks, the 3-byte case overflows the kernel stack. The repro above is updated to the current spelling; the fuel was not a factor.
+- 2026-09-18: Root-caused and fixed. The fuel counts for `uf3` were small (1.2k queries, 44k steps); the death was the native depth budget: a depth trace showed `Conv::tm` comparing `elim_Nat` on the local it had just pushed, two locals and ~90 fuel per level, to depth 1024 — two copies of `nat::leb(0x800, code)` at a stuck `code`, each a 2048-deep lazily unrolled closure chain, compared level by level. They were materialized because the two sides' first shared δ-head is `bit7` under *different* matches (`class_of`'s against `cont_of`'s); the failed meet there took the same-head rule's "unfold both sides to their δ-heads", which normalized both through `emit`, `emit_min` and `leb`. The emit form was cheap only because it met at the glued `leb` spine before that rule fired. Fix in `Conv::tm_w`: the eager both-sides unfolding stays for bare applications `f a⃗`/`f b⃗` (the `ofNat(n, k)` shape it was written for), while eliminations stuck on a glued scrutinee take one δ-step each and look for the next meet. `uf3` now checks in 26 ms with counts on par with the emit form; the two-byte control, the emit form, the bitvec `ofNat` controls, the radix hex-digit-off control and the kernel suite are unchanged. `push_step` is replaced by `decode_step`, the natural statement, at every width by `refl`. Wrong-class and wrong-lead controls at this shape are refused by exhaustion before and after — a distinct, pre-existing cost in comparing the unrolled chains once a bare meet has honestly failed, filed as [[run-elimination-meet]].
