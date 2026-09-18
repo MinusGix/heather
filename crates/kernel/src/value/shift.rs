@@ -97,11 +97,16 @@ fn tables<'v>(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer<'v>) -> (Rc<Motives>, 
 // The value graph
 // ---------------------------------------------------------------------------
 
+/// Every entry weakened; the handle's own **global offset is preserved**.
+/// Body syntax here is shifted eagerly by the callers below, and a pending
+/// offset composes with that shift in either order (both are uniform at
+/// cutoff 0) — so a closure that still owes `k` still owes exactly `k`
+/// (`docs/lazy-global-offset-design.md` §5).
 pub fn env<'v>(e: &Env<'v>, o: Outer<'v>) -> Env<'v> {
     if o.is_none() {
         return *e;
     }
-    let mut out = Env::empty();
+    let mut out = Env::at(e.gshift());
     for c in e.to_vec() {
         out = out.push(o.arena, tm_clo(c, o));
     }
@@ -146,6 +151,10 @@ pub fn reenv_ty<'v>(c: &'v TyClo<'v>, o: Outer<'v>) -> &'v TyClo<'v> {
     }
     match c {
         TyClo::Syn { env: e, body, .. } => {
+            debug_assert!(
+                o.globals == 0 || e.gshift() == 0,
+                "a body under a global binder is materialized (design §4)"
+            );
             o.arena.ty(TyClo::new(env(e, o), Rc::clone(body)))
         }
         _ => ty_clo(c, o),
@@ -158,6 +167,10 @@ pub fn reenv_tm<'v>(c: &'v TmClo<'v>, o: Outer<'v>) -> &'v TmClo<'v> {
     }
     match c {
         TmClo::Syn { env: e, body, .. } => {
+            debug_assert!(
+                o.globals == 0 || e.gshift() == 0,
+                "a body under a global binder is materialized (design §4)"
+            );
             o.arena.tm(TmClo::syn(env(e, o), Rc::clone(body)))
         }
         _ => tm_clo(c, o),
@@ -664,7 +677,13 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
 fn shift_under<'v>(c: &'v TmClo<'v>, o: Outer<'v>, cu: u32, cg: u32) -> &'v TmClo<'v> {
     match c {
         TmClo::Syn { env: e, body, .. } => o.arena.tm(TmClo::syn(
-            env(e, o),
+            {
+                debug_assert!(
+                    cg == 0 || o.globals == 0 || e.gshift() == 0,
+                    "a body under a global binder is materialized (design §4)"
+                );
+                env(e, o)
+            },
             Rc::new(
                 body.shift_univ_above(o.univs, cu)
                     .shift_global_above(o.globals, cg),

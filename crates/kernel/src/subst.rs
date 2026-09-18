@@ -1043,6 +1043,23 @@ impl Mapper for ShiftGlobal {
     }
 }
 
+/// The recursor's motive and branch telescopes, weakened by `by` global
+/// bindings. The value machine's one materialization site that is a
+/// telescope table rather than a term (`docs/lazy-global-offset-design.md`
+/// §5); routed through the generic traversal so the 56 telescopes are not
+/// written down again.
+pub(crate) fn shift_global_tables(
+    motives: &Motives,
+    branches: &Branches,
+    by: u32,
+) -> (Motives, Branches) {
+    let at = Depths::default();
+    let mut m = ShiftGlobal { by, changes: 0 };
+    let mo = map_motives(motives, &mut m, at);
+    let br = map_branches(branches, &mut m, at);
+    (mo, br)
+}
+
 /// Weaken the universe context by `by` variables.
 struct ShiftUniv {
     by: u32,

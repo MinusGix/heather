@@ -485,7 +485,17 @@ paper too).
   free. The `has_defs` gate survives. The rescoping `shift_global(v + 1)`
   that every unfold used to recompute is memoized per `GlobalVar` in a
   `reduce::BodyCache` owned beside the Ψ it belongs to (7.8% of a routine
-  `heather check lib/ir_v1.hthr`).
+  `heather check lib/ir_v1.hthr`) — and on the **value** path is not
+  performed at all: the machine evaluates the body *as stored*, under a
+  global-index offset carried by the closure's environment, so a definition
+  is read rather than copied however many gate calls unfold it
+  (`docs/lazy-global-offset-design.md`, `issues/refl-theorem-step-cost.md`).
+  The offset is always at cutoff 0 because a closure body under a global
+  binder is built with its offset already spent, which is also what keeps
+  the eager things — a `box`'s payload, a `ctx`, a recursor table, the
+  rewriter's own δ — on one side of every β. The closure's identity includes
+  the offset, so two readings of one body at two Ψ depths are two objects to
+  every memo.
 - **Fuel is unchanged in meaning and shared.** One budget pays for both
   reduction steps and comparison nodes, so the checker stays total on
   ill-typed input; the evaluator spends from the checker's account and hands

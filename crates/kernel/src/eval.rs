@@ -55,7 +55,8 @@ use crate::reduce::{
 };
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    nth, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
+    nth, Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
+    Motives, Term, Type,
 };
 use crate::value::{
     Elim, ElimSpine, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail,
@@ -81,6 +82,83 @@ fn neutral<'v>(
     unfold: Option<&'v TmClo<'v>>,
 ) -> Rc<Val<'v>> {
     Rc::new(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
+}
+
+// -- materializing a closure's pending global offset -------------------------
+//
+// A syntactic closure evaluates an **unshifted** body under the global offset
+// its environment carries (`docs/lazy-global-offset-design.md`). The offset
+// stays pending on the value path; these four helpers spend it where syntax
+// *leaves* that path — into a box, a `ctx`, an annotation, a recursor table —
+// and where a closure body sits under a global binder, which is the one place
+// a pending (cutoff-free) offset could not be applied later.
+
+fn amb_tm(env: &Env<'_>, t: &Rc<Term>) -> Rc<Term> {
+    match env.gshift() {
+        0 => Rc::clone(t),
+        k => Rc::new(t.shift_global(k)),
+    }
+}
+
+fn amb_ty(env: &Env<'_>, t: &Rc<Type>) -> Rc<Type> {
+    match env.gshift() {
+        0 => Rc::clone(t),
+        k => Rc::new(t.shift_global(k)),
+    }
+}
+
+fn amb_ctx(env: &Env<'_>, c: &LocalCtx) -> LocalCtx {
+    match env.gshift() {
+        0 => c.clone(),
+        k => c.shift_global(k),
+    }
+}
+
+/// A term closure whose body sits **under a global binder** (design §4): the
+/// offset is spent now, above that binder, and the closure is ambient.
+fn under_binder_tm<'v>(
+    arena: &'v ValueArena<'v>,
+    env: &Env<'v>,
+    body: &Rc<Term>,
+) -> &'v TmClo<'v> {
+    match env.gshift() {
+        0 => arena.tm(TmClo::syn(*env, Rc::clone(body))),
+        k => arena.tm(TmClo::syn(
+            env.with_gshift(0),
+            Rc::new(body.shift_global_above(k, 1)),
+        )),
+    }
+}
+
+/// The recursor's motive and branch telescopes, materialized: they are read
+/// as syntax by `reduce.rs`'s β, which knows nothing of offsets.
+fn amb_tables(
+    env: &Env<'_>,
+    motives: &Rc<Motives>,
+    branches: &Rc<Branches>,
+) -> (Rc<Motives>, Rc<Branches>) {
+    match env.gshift() {
+        0 => (Rc::clone(motives), Rc::clone(branches)),
+        k => {
+            let (m, b) = crate::subst::shift_global_tables(motives, branches, k);
+            (Rc::new(m), Rc::new(b))
+        }
+    }
+}
+
+/// [`under_binder_tm`] at the type level.
+fn under_binder_ty<'v>(
+    arena: &'v ValueArena<'v>,
+    env: &Env<'v>,
+    body: &Rc<Type>,
+) -> &'v TyClo<'v> {
+    match env.gshift() {
+        0 => arena.ty(TyClo::new(*env, Rc::clone(body))),
+        k => arena.ty(TyClo::new(
+            env.with_gshift(0),
+            Rc::new(body.shift_global_above(k, 1)),
+        )),
+    }
 }
 
 /// An eliminator applied to something it cannot eliminate. Unreachable on
@@ -661,26 +739,28 @@ impl<'a, 'v> Eval<'a, 'v> {
                 level: level.clone(),
                 body: yclo(env, body),
             },
-            Type::CtxPi { level, body } => {
-                VTy::CtxPi { level: level.clone(), body: yclo(env, body) }
-            }
+            Type::CtxPi { level, body } => VTy::CtxPi {
+                level: level.clone(),
+                body: under_binder_ty(self.arena, env, body),
+            },
             Type::TyPi { ctx, arg_level, body_level, body } => VTy::TyPi {
-                ctx: ctx.clone(),
+                ctx: amb_ctx(env, ctx),
                 arg_level: arg_level.clone(),
                 body_level: body_level.clone(),
-                body: yclo(env, body),
+                body: under_binder_ty(self.arena, env, body),
             },
             Type::CodeTy { ctx, level } => {
-                VTy::CodeTy { ctx: ctx.clone(), level: level.clone() }
+                VTy::CodeTy { ctx: amb_ctx(env, ctx), level: level.clone() }
             }
             Type::CodeTm { ctx, ty, level } => VTy::CodeTm {
-                ctx: ctx.clone(),
-                ty: Rc::clone(ty),
+                ctx: amb_ctx(env, ctx),
+                ty: amb_ty(env, ty),
                 level: level.clone(),
             },
             Type::GlobalTy { var, subst } => {
+                let var = GlobalVar(var.0 + env.gshift());
                 let subst = self.eval_subst(subst, env)?;
-                VTy::Neutral(VNeTy::Global { var: *var, subst })
+                VTy::Neutral(VNeTy::Global { var, subst })
             }
             // `El` is a redex-or-neutral and has no canonical value.
             Type::El { level, tm } => {
@@ -925,7 +1005,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         for t in &d.terms {
             terms.push(self.eval_tm(t, env)?);
         }
-        Ok(VSubst { tail: VTail::of(d.tail, self.base), terms })
+        Ok(VSubst { tail: VTail::of(d.tail, self.base, env.gshift()), terms })
     }
 
     // -- terms --------------------------------------------------------------
@@ -1096,24 +1176,32 @@ impl<'a, 'v> Eval<'a, 'v> {
                 level: level.clone(),
                 body: tclo(env, body),
             },
-            Term::CtxLam { level, body } => {
-                Val::CtxLam { level: level.clone(), body: tclo(env, body) }
-            }
+            Term::CtxLam { level, body } => Val::CtxLam {
+                level: level.clone(),
+                body: under_binder_tm(self.arena, env, body),
+            },
             Term::TyLam { ctx, arg_level, body_level, body } => Val::TyLam {
-                ctx: ctx.clone(),
+                ctx: amb_ctx(env, ctx),
                 arg_level: arg_level.clone(),
                 body_level: body_level.clone(),
-                body: tclo(env, body),
+                body: under_binder_tm(self.arena, env, body),
             },
 
             // -- code: inert, and carrying no environment --
-            Term::BoxTy(c) => Val::BoxTy(Rc::clone(c)),
-            Term::BoxTm(c) => Val::BoxTm(Rc::clone(c)),
+            //
+            // A box holds raw syntax with no environment and compares
+            // syntactically (ch. 06), so it is the sharpest of the sites
+            // where a pending offset must be spent: an ambient box is what
+            // keeps `letbox`'s β substituting ambient code into the ambient
+            // body of design §4.
+            Term::BoxTy(c) => Val::BoxTy(amb_ty(env, c)),
+            Term::BoxTm(c) => Val::BoxTm(amb_tm(env, c)),
 
             // -- globals: glued neutrals --
             Term::GlobalTm { var, subst } => {
+                let var = GlobalVar(var.0 + env.gshift());
                 let subst = self.eval_subst(subst, env)?;
-                return Ok(Work::Val(self.global_tm(*var, subst)));
+                return Ok(Work::Val(self.global_tm(var, subst)));
             }
 
             // -- eliminations --
@@ -1134,11 +1222,11 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Term::CtxApp { fun, ctx } => {
                 let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::CtxApp { ctx: ctx.clone() }));
+                return Ok(Work::Elim(f, Elim::CtxApp { ctx: amb_ctx(env, ctx) }));
             }
             Term::TyApp { fun, arg } => {
                 let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::TyApp { arg: Rc::clone(arg) }));
+                return Ok(Work::Elim(f, Elim::TyApp { arg: amb_ty(env, arg) }));
             }
             Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
                 let p = self.eval_tm(pair, env)?;
@@ -1290,9 +1378,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let e = Elim::LetBoxTy {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
-                    ctx: ctx.clone(),
+                    ctx: amb_ctx(env, ctx),
                     motive: yclo(env, motive),
-                    body: tclo(env, body),
+                    body: under_binder_tm(self.arena, env, body),
                 };
                 return Ok(Work::Elim(s, e));
             }
@@ -1301,10 +1389,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let e = Elim::LetBoxTm {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
-                    ctx: ctx.clone(),
-                    ty: Rc::clone(ty),
+                    ctx: amb_ctx(env, ctx),
+                    ty: amb_ty(env, ty),
                     motive: yclo(env, motive),
-                    body: tclo(env, body),
+                    body: under_binder_tm(self.arena, env, body),
                 };
                 return Ok(Work::Elim(s, e));
             }
@@ -1318,14 +1406,17 @@ impl<'a, 'v> Eval<'a, 'v> {
                 scrut,
             } => {
                 let s = self.eval_tm(scrut, env)?;
+                let (motives, branches) = amb_tables(env, motives, branches);
                 let e = Elim::ElimCodeTy {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
-                    motives: Rc::clone(motives),
-                    branches: Rc::clone(branches),
+                    motives,
+                    branches,
                     code_level: code_level.clone(),
-                    ctx: ctx.clone(),
-                    env: env.clone(),
+                    ctx: amb_ctx(env, ctx),
+                    // Tables, `ctx` and the box the β meets are all ambient,
+                    // so the fired branch is too.
+                    env: env.with_gshift(0),
                 };
                 return Ok(Work::Elim(s, e));
             }
@@ -1342,17 +1433,20 @@ impl<'a, 'v> Eval<'a, 'v> {
                 // Fixed order (ch. 06): the type annotation — scoped in Δ,
                 // not Γ — reaches WHNF before the scrutinee is touched. It
                 // stays syntax, so it is the rewriter that reduces it.
-                let wty = self.whnf_ty_syntax(ty, ctx)?;
+                let ctx = amb_ctx(env, ctx);
+                let wty = self.whnf_ty_syntax(&amb_ty(env, ty), &ctx)?;
                 let s = self.eval_tm(scrut, env)?;
+                let (motives, branches) = amb_tables(env, motives, branches);
                 let e = Elim::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
-                    motives: Rc::clone(motives),
-                    branches: Rc::clone(branches),
+                    motives,
+                    branches,
                     code_level: code_level.clone(),
-                    ctx: ctx.clone(),
+                    ctx,
                     ty: wty,
-                    env: env.clone(),
+                    // See `elim^Typ` above.
+                    env: env.with_gshift(0),
                 };
                 return Ok(Work::Elim(s, e));
             }
@@ -1369,8 +1463,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `·^k_{g?}` targets an empty Δ, so past the payloads the lookup falls
     /// through to the same [`Head::BaseVar`] numbering either way.
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
-        let unfold = self.defs.body(var).map(|body| {
-            let mut denv = Env::empty();
+        let body = self.defs.body_unshifted(var).map(Rc::clone);
+        let unfold = body.map(|body| {
+            let mut denv = Env::at(var.0 + 1);
             for v in &subst.terms {
                 denv = denv.push(self.arena, self.vclo(Rc::clone(v)));
             }

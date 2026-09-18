@@ -86,7 +86,11 @@ machine there, and with it **"conversion is ch. 06 verbatim" became
 statement: `eval(t, ρ)` is related to the ch. 06 whnf of `t`
 (completeness), and every value `eval` returns is (soundness — the half that
 forbids the machine from inventing reductions). The design doc §11.2 states
-the relation.
+the relation. Since 2026-09-18 the obligation has one more equation inside
+it, because a definition's body is now read as stored rather than rescoped
+into the ambient Ψ: `eval(shift_global(k, t), ρ) = eval(t, ρ @ k)`, the body
+of `docs/lazy-global-offset-design.md` — a refinement of this row's
+obligation, tested where the rest of it is, against the rewriter.
 
 The verdict is **◐, not ✅**, and the distinction is the point. What exists
 is *mechanical evidence*, at two levels and deliberately not one: the

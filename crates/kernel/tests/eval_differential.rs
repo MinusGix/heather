@@ -379,7 +379,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         // The value's tail drops δ̂ and normalizes `·`'s base, because a
         // machine that substitutes nothing cannot renormalize them; see
         // [`VTail`]. Everything the tail still distinguishes is compared.
-        if a.tail != VTail::of(b.tail, gamma.base) || a.terms.len() != b.terms.len() {
+        if a.tail != VTail::of(b.tail, gamma.base, 0) || a.terms.len() != b.terms.len() {
             return bad("δ tail/arity");
         }
         if depth == 0 {
@@ -1547,4 +1547,126 @@ fn zero_fuel_reduces_nothing() {
         whnf_term_delta(&t, &gamma, Defs::opaque(), 0).is_err(),
         "the rewriter agrees"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Seed stream 6: definitions at several Ψ depths — the lazy global offset
+// ---------------------------------------------------------------------------
+
+/// `δ = (x)`: the identity substitution of `Δ = (·, x : Nat)`, the one every
+/// body below names its predecessor under.
+fn chain_delta_subst(arg: Rc<Term>) -> LocalSubst {
+    LocalSubst {
+        tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+        terms: vec![arg],
+    }
+}
+
+fn chain_ref(var: u32, arg: Rc<Term>) -> Rc<Term> {
+    Rc::new(Term::GlobalTm { var: GlobalVar(var), subst: chain_delta_subst(arg) })
+}
+
+/// `Ψ = (u₀ := su x, u₁ := su² (u₀^δ), u₂ := box …, u₃ := letbox …, …)`:
+/// **each body names the one before it**, so a body evaluated at the wrong
+/// global offset resolves to a *different binding* — a different numeral,
+/// which the rewriter catches — rather than to nothing.
+///
+/// That is the failure mode a lazy offset has and an eager copy cannot
+/// (`docs/lazy-global-offset-design.md` §8): the three shapes whose treatment
+/// differs from the ordinary one are all here, at a depth where getting them
+/// wrong changes the answer — a `box` (whose payload is materialized at
+/// formation), a `letbox` (whose body sits under a global binder, so the
+/// materialization is above that binder and the bound `g` must *not* move),
+/// and a context abstraction applied to a context (the same, through `CtxApp`'s
+/// β).
+fn chain_psi(n: u32) -> (GlobalCtx, LocalCtx) {
+    let delta = LocalCtx {
+        base: CtxBase::Nil,
+        entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
+    };
+    let x = || Rc::new(Term::Var(LocalVar(0)));
+    let mut bindings = Vec::new();
+    for i in 0..n {
+        let body = match i % 4 {
+            // `su x` — the base of the chain.
+            _ if i == 0 => Rc::new(Term::Succ(x())),
+            // `su^{i+1} (u_{i-1}^δ)`: a plain δ reference one binding out.
+            1 => {
+                let mut t = chain_ref(0, x());
+                for _ in 0..=i {
+                    t = Rc::new(Term::Succ(t));
+                }
+                t
+            }
+            // `letbox (g <- box (u_{i-1}^δ)); su (g^{δ = (u_{i-1}^{δ=(x)})})`
+            // — `g` is global index 0 *inside* the body and must stay there,
+            // while `u_{i-1}` is index 1 there and index 0 in the scrutinee.
+            2 => Rc::new(Term::LetBoxTm {
+                motive_level: Level::Zero,
+                code_level: Level::Zero,
+                ctx: delta.clone(),
+                ty: Rc::new(Type::Nat),
+                motive: Rc::new(Type::Nat),
+                body: Rc::new(Term::Succ(chain_ref(0, chain_ref(1, x())))),
+                scrut: Rc::new(Term::BoxTm(chain_ref(0, x()))),
+            }),
+            // `(Λ g. u_{i-1}^δ) Δ` — a context abstraction, fired.
+            3 => Rc::new(Term::CtxApp {
+                fun: Rc::new(Term::CtxLam {
+                    level: Level::Zero,
+                    body: Rc::new(Term::Succ(chain_ref(1, x()))),
+                }),
+                ctx: delta.clone(),
+            }),
+            // `su (box (u_{i-1}^δ) …)` is not a term; the box goes where it
+            // can be looked at: as the scrutinee of a `letbox` one binding
+            // later. Here, another δ reference, at a different depth.
+            _ => Rc::new(Term::Succ(Rc::new(Term::Succ(chain_ref(0, x()))))),
+        };
+        bindings.push(GlobalBinding::defined_tm(
+            delta.clone(),
+            Layer::Code,
+            Rc::new(Type::Nat),
+            Level::Zero,
+            body,
+        ));
+    }
+    (GlobalCtx::new(bindings), delta)
+}
+
+/// Every binding of [`chain_psi`], unfolded from every Ψ depth, against the
+/// rewriter — which still copies the body eagerly, so it is the oracle for
+/// the machine's offset.
+#[test]
+fn stream6_definitions_at_several_psi_depths() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    let gamma = LocalCtx {
+        base: CtxBase::Nil,
+        entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
+    };
+    for n in 1..=9u32 {
+        let (psi, _) = chain_psi(n);
+        for v in 0..n {
+            for (i, payload) in [
+                numeral(0),
+                numeral(2),
+                nat_rec(numeral(2)),
+                nat_rec(Rc::new(Term::Var(LocalVar(0)))),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let u = chain_ref(v, Rc::clone(payload));
+                let what = format!("Ψ of {n}, u{v}, payload {i}");
+                check(u64::from(n * 16 + v), &psi, &gamma, &u, &what);
+                check(
+                    u64::from(n * 16 + v),
+                    &psi,
+                    &gamma,
+                    &nat_rec(Rc::clone(&u)),
+                    &format!("elim {what}"),
+                );
+            }
+        }
+    }
 }
