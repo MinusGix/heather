@@ -86,6 +86,9 @@ pub struct SliceReport {
     pub replayed: usize,
     /// Items elaborated from source.
     pub elaborated: usize,
+    /// Items elaborated because `--only` named them
+    /// (`docs/check-only-design.md`); counted in `elaborated` too.
+    pub forced: usize,
 }
 
 /// The previous delta a module pass may replay slices from, and whether the
@@ -96,6 +99,11 @@ pub(crate) struct SlicePlan {
     pub(crate) previous: Rc<ModuleDelta>,
     pub(crate) exact: bool,
     pub(crate) report: SliceReport,
+    /// Item names that must be elaborated from source however exact the
+    /// prefix is (`docs/check-only-design.md` §2); `met` collects the ones
+    /// the pass actually saw, so the caller can name the ones it did not.
+    pub(crate) force: std::collections::BTreeSet<String>,
+    pub(crate) met: std::collections::BTreeSet<String>,
 }
 
 /// The journal's marks at an item's start, taken relative to the module's
@@ -559,15 +567,54 @@ impl Elaborator {
         dependencies: ModuleDependencyIdentity,
         previous: &ModuleDelta,
     ) -> Result<(ModuleDelta, SliceReport), Vec<ElabError>> {
+        self.check_module_delta_only(module, src, dependencies, previous, Default::default())
+            .map(|(delta, report, _)| (delta, report))
+    }
+
+    /// [`Self::check_module_delta_from`] with `force`: the named items are
+    /// elaborated from source whether or not their slice would replay, so a
+    /// probe can time one declaration over a replayed prefix
+    /// (`docs/check-only-design.md`). A name matches an item's declared name
+    /// (`item_timing_name`), and naming any member of a mutual measure
+    /// group elaborates the group. The third result is the set of forced
+    /// names the pass met; a caller that named something not in this module
+    /// reads the difference.
+    pub fn check_module_delta_only(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+        previous: &ModuleDelta,
+        force: std::collections::BTreeSet<String>,
+    ) -> Result<(ModuleDelta, SliceReport, std::collections::BTreeSet<String>), Vec<ElabError>> {
         assert!(self.slice_plan.is_none(), "sliced module checks are not nested");
         self.slice_plan = Some(SlicePlan {
             previous: Rc::new(previous.clone()),
             exact: false,
             report: SliceReport::default(),
+            force,
+            met: Default::default(),
         });
         let result = self.check_module_delta(module, src, dependencies);
         let plan = self.slice_plan.take().expect("the slice plan was installed");
-        result.map(|delta| (delta, plan.report))
+        result.map(|delta| (delta, plan.report, plan.met))
+    }
+
+    /// Is any of `names` (an item's name, or a group's members' names) one
+    /// the plan forces from source? Records the ones it met.
+    pub(crate) fn slice_forced(&mut self, names: &[String]) -> bool {
+        let Some(plan) = self.slice_plan.as_mut() else { return false };
+        let mut forced = false;
+        for name in names {
+            if plan.force.contains(name) {
+                plan.met.insert(name.clone());
+                forced = true;
+            }
+        }
+        if forced {
+            plan.report.forced += 1;
+        }
+        forced
     }
 
     /// The pass just entered `module`: decide whether the previous delta's

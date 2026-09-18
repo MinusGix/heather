@@ -32,7 +32,11 @@
   memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:
   `(ulimit -v 8388608 -t 120; target/release/heather check <file>)`,
-  loosening deliberately per run if needed — never uncapped. After editing
+  loosening deliberately per run if needed — never uncapped. **To probe one
+  declaration**, `--cache --only <item> --timings f.tsv` elaborates and gates
+  just it over a replayed prefix (13 s instead of 48 s on the showcase's
+  heaviest item; `docs/check-only-design.md` — the run is labelled and
+  `scripts/timings` refuses to diff it against a whole run). After editing
   the compiler's Rust, `--cache --accept-stale-images` replays the library's
   module images instead of re-elaborating them (same trade as the fast
   lane; drop the flag for a final check).

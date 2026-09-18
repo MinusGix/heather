@@ -122,6 +122,11 @@ struct Opts {
     /// `--review`: the review-mode lints too (a second elaboration per
     /// written match motive), off for an ordinary check.
     review: bool,
+    /// `--only a,b,mod::c`: elaborate and kernel-check exactly these
+    /// declarations over a replayed prefix, publish nothing, and label the
+    /// run so its numbers cannot pass for a whole-run's
+    /// (`docs/check-only-design.md`). Needs `--cache`.
+    only: Option<Vec<String>>,
     /// `--timings <path.tsv>` (`-` for stderr), or `HEATHER_TIMINGS` in the
     /// environment: write the attribution table — one row per declaration, per
     /// module and for the run (`docs/instrumentation-design.md` §4).
@@ -149,6 +154,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         json: false,
         deny_axioms: false,
         review: false,
+        only: None,
         timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
         kernel_workers: None,
@@ -203,6 +209,19 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.review = true;
             continue;
         }
+        if let Some(rest) = a.strip_prefix("--only") {
+            let spec = match rest.strip_prefix('=') {
+                Some(d) if !d.is_empty() => d.to_string(),
+                _ if rest.is_empty() => it.next().ok_or("`--only` needs a declaration name")?.clone(),
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            let names: Vec<String> = spec.split(',').map(str::trim).filter(|n| !n.is_empty()).map(String::from).collect();
+            if names.is_empty() {
+                return Err("`--only` needs a declaration name".into());
+            }
+            opts.only.get_or_insert_with(Vec::new).extend(names);
+            continue;
+        }
         // `--item-timings` is the spelling `build-x86`/`compile-x86` grew
         // first; it is the same flag and writes the same table.
         if let Some(rest) = a.strip_prefix("--timings").or_else(|| a.strip_prefix("--item-timings"))
@@ -237,6 +256,9 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
     if opts.search.is_empty() && Path::new(DEFAULT_LIB).is_dir() {
         opts.search.push(PathBuf::from(DEFAULT_LIB));
     }
+    if opts.only.is_some() && !opts.cache {
+        return Err("`--only` replays the rest of the module from the cache: pass `--cache` (or `--cache-dir`)".into());
+    }
     Ok((opts, files))
 }
 
@@ -246,7 +268,10 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     if opts.timings.is_some() {
         stats::enable();
     }
-    let run_scope = opts.timings.as_ref().map(|_| stats::scope(stats::ScopeKind::Run, "", ""));
+    // A `--only` run's row is labelled, so `scripts/timings` can refuse to
+    // read its numbers as a whole run's (`docs/check-only-design.md` §3).
+    let run_label = opts.only.as_ref().map(|names| format!("only={}", names.join(","))).unwrap_or_default();
+    let run_scope = opts.timings.as_ref().map(|_| stats::scope(stats::ScopeKind::Run, "", &run_label));
     // One cache for the whole run, shared across roots: a declaration two
     // roots have in common is checked once. Loading says out loud when it
     // threw an existing file away (a stale kernel, a corrupted file) — the
@@ -288,7 +313,17 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             // Each root is a fresh Ψ, so the cache's view of it restarts too;
             // the recorded entries, being content-addressed, do not.
             c.begin_run();
-            elab.set_gate(Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>);
+            let store = Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>;
+            // `--only`: the named declarations face the kernel every time
+            // and the store never learns that they passed.
+            let gate: Rc<dyn heather_elab::gate::KernelGate> = match &opts.only {
+                Some(names) => Rc::new(heather_elab::gate::Except::new(
+                    store,
+                    names.iter().map(|n| n.rsplit("::").next().unwrap_or(n).to_string()).collect(),
+                )),
+                None => store,
+            };
+            elab.set_gate(gate);
             c.counts()
         });
         let roots = match roots_for_path(Path::new(path)) {
@@ -307,8 +342,24 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let mut root_ok = true;
+        // `--only`'s names, per module: `mod::name` names a module of the
+        // closure, a bare name the root module.
+        let only: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = opts
+            .only
+            .iter()
+            .flatten()
+            .map(|spec| match spec.rsplit_once("::") {
+                Some((module, name)) => (module.to_string(), name.to_string()),
+                None => (modules.last().map(|m| m.name.clone()).unwrap_or_default(), spec.clone()),
+            })
+            .fold(Default::default(), |mut map, (module, name)| {
+                map.entry(module).or_default().insert(name);
+                map
+            });
         let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
-            .with_freshness(opts.images);
+            .with_freshness(opts.images)
+            .with_only(only);
+        let mut forced_items = 0;
         // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
         // per module (meaningful with the `value-metrics` feature; zeros
         // otherwise). Observational only — it cannot change a verdict.
@@ -344,6 +395,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             for notice in &outcome.notices {
                 eprintln!("{notice}");
             }
+            forced_items += outcome.forced_items;
             let errs = outcome.errors;
             // Warnings are drained per module, before the next one is checked:
             // a span indexes into the source it came from
@@ -393,6 +445,18 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
             eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
         }
+        if root_ok && opts.only.is_some() {
+            let unmet = semantic.only_unmet();
+            if !unmet.is_empty() {
+                root_ok = false;
+                failed = true;
+                eprintln!(
+                    "{}: --only named {} that no module of the closure declares",
+                    color::error_label(stderr_color),
+                    unmet.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "),
+                );
+            }
+        }
         if root_ok && opts.deny_axioms {
             let violations = elab.axiom_violations();
             if !violations.is_empty() {
@@ -414,7 +478,17 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 }
             }
         }
-        if root_ok {
+        if root_ok && opts.only.is_some() {
+            // Reserved wording, like `(cache)`: a `--only` run never reads
+            // as a check of the module (`docs/check-only-design.md` §3).
+            println!(
+                "{path}: {} (only) — {} declaration{} elaborated for --only, {} replayed",
+                color::success("ok", stdout_color),
+                forced_items,
+                if forced_items == 1 { "" } else { "s" },
+                semantic.replayed_items(),
+            );
+        } else if root_ok {
             match (&cache, before) {
                 // The bare `ok` is reserved for a full check, so a green line
                 // from a cached run can never be mistaken for one — and a gate

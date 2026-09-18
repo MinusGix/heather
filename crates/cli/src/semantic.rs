@@ -6,6 +6,7 @@
 //! are always bounded, kernel-checked semantic replay; this component never
 //! installs the separate trusted declaration cache gate.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -73,6 +74,9 @@ pub struct ModuleOutcome {
     /// edit (`docs/declaration-slice-replay-design.md`); zero when the
     /// module replayed whole or was elaborated from scratch.
     pub replayed_items: usize,
+    /// Declarations elaborated because `--only` named them
+    /// (`docs/check-only-design.md`); such a module is not published.
+    pub forced_items: usize,
     pub notices: Vec<CacheNotice>,
 }
 
@@ -85,6 +89,30 @@ pub struct SemanticSession {
     hits: usize,
     stale_hits: usize,
     replayed_items: usize,
+    /// `--only`: per module, the declarations to elaborate from source over
+    /// a replayed prefix. A module named here is loaded from its previous
+    /// image and never published.
+    only: BTreeMap<String, BTreeSet<String>>,
+    /// The `--only` names the passes met, `module::name`.
+    only_met: BTreeSet<String>,
+}
+
+/// `--only` asked for a module's previous image and there was none: the
+/// prefix a probe replays has to have been checked and published once.
+#[derive(Debug)]
+pub struct NoPreviousImage {
+    pub module: String,
+}
+
+impl fmt::Display for NoPreviousImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "--only: no stored image of module `{}` over these dependencies to replay the \
+             prefix from; run `heather check --cache` on the file once first",
+            self.module
+        )
+    }
 }
 
 impl SemanticSession {
@@ -98,7 +126,26 @@ impl SemanticSession {
             hits: 0,
             stale_hits: 0,
             replayed_items: 0,
+            only: BTreeMap::new(),
+            only_met: BTreeSet::new(),
         }
+    }
+
+    /// `--only`: per module, the declarations to elaborate from source
+    /// while the rest of the module replays (`docs/check-only-design.md`).
+    pub fn with_only(mut self, only: BTreeMap<String, BTreeSet<String>>) -> Self {
+        self.only = only;
+        self
+    }
+
+    /// The `--only` names (`module::name`) no pass met — the ones to report
+    /// as unknown once every module has been checked.
+    pub fn only_unmet(&self) -> Vec<String> {
+        self.only
+            .iter()
+            .flat_map(|(module, names)| names.iter().map(move |n| format!("{module}::{n}")))
+            .filter(|full| !self.only_met.contains(full))
+            .collect()
     }
 
     /// Choose how images written by other builds are treated. The default
@@ -148,6 +195,7 @@ impl SemanticSession {
                 warnings: elab.take_warnings(),
                 replayed: false,
                 replayed_items: 0,
+                forced_items: 0,
                 notices: Vec::new(),
             };
         }
@@ -161,6 +209,9 @@ impl SemanticSession {
         );
         let images = self.images.as_ref().expect("usable images have a cache");
         let mut notices = Vec::new();
+        if let Some(force) = self.only.get(&module.name).cloned() {
+            return self.check_only(elab, module, dependencies, force, notices);
+        }
         // The three phases warm replay is made of — read/checksum/decode, the
         // kernel recheck of the decoded delta, and publication (render plus
         // hash). The fast lane's premise rests on these
@@ -192,6 +243,7 @@ impl SemanticSession {
                         warnings: loaded.warnings,
                         replayed: true,
                         replayed_items: 0,
+                        forced_items: 0,
                         notices,
                     };
                 }
@@ -255,6 +307,7 @@ impl SemanticSession {
                     warnings: elab.take_warnings(),
                     replayed: false,
                     replayed_items: 0,
+                    forced_items: 0,
                     notices,
                 };
             }
@@ -271,6 +324,91 @@ impl SemanticSession {
                 error: error.to_string(),
             });
         }
-        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, notices }
+        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, notices }
+    }
+
+    /// The `--only` path for a module with named declarations: the module's
+    /// previous image over the current dependency world is the prefix, the
+    /// named items elaborate from source, and nothing is published
+    /// (`docs/check-only-design.md` §2). The source-keyed image is not
+    /// consulted — a hit would replay the whole module and elaborate nothing.
+    fn check_only(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        dependencies: ModuleDependencyIdentity,
+        force: BTreeSet<String>,
+        mut notices: Vec<CacheNotice>,
+    ) -> ModuleOutcome {
+        let images = self.images.as_ref().expect("usable images have a cache");
+        let previous = stats::timed(stats::Timer::ImageDecode, || {
+            images.load_previous(&module.name, &dependencies, elab.psi().clone(), self.freshness)
+        });
+        let previous = match previous {
+            Ok(Some(previous)) => previous,
+            Ok(None) => {
+                self.images_usable = false;
+                return ModuleOutcome {
+                    errors: vec![ElabError::Elab {
+                        msg: NoPreviousImage { module: module.name.clone() }.to_string(),
+                        span: heather_syntax::Span { start: 0, end: 0 },
+                    }],
+                    warnings: Vec::new(),
+                    replayed: false,
+                    replayed_items: 0,
+                    forced_items: 0,
+                    notices,
+                };
+            }
+            Err(error) => {
+                notices.push(CacheNotice {
+                    module: module.name.clone(),
+                    kind: CacheNoticeKind::PreviousUnusable,
+                    error: error.to_string(),
+                });
+                self.images_usable = false;
+                return ModuleOutcome {
+                    errors: vec![ElabError::Elab {
+                        msg: NoPreviousImage { module: module.name.clone() }.to_string(),
+                        span: heather_syntax::Span { start: 0, end: 0 },
+                    }],
+                    warnings: Vec::new(),
+                    replayed: false,
+                    replayed_items: 0,
+                    forced_items: 0,
+                    notices,
+                };
+            }
+        };
+        match elab.check_module_delta_only(&module.name, &module.src, dependencies, &previous.delta, force) {
+            Ok((delta, report, met)) => {
+                elab.take_omega_reports();
+                self.replayed_items += report.replayed;
+                self.only_met.extend(met.into_iter().map(|n| format!("{}::{n}", module.name)));
+                // The interface a full check would have published, so later
+                // modules replay over the same world; the image itself is
+                // not written.
+                self.interfaces.push(ModuleImageCache::interface_hash(&delta));
+                ModuleOutcome {
+                    errors: Vec::new(),
+                    warnings: elab.take_warnings(),
+                    replayed: false,
+                    replayed_items: report.replayed,
+                    forced_items: report.forced,
+                    notices,
+                }
+            }
+            Err(errors) => {
+                self.images_usable = false;
+                ModuleOutcome {
+                    errors,
+                    warnings: elab.take_warnings(),
+                    replayed: false,
+                    replayed_items: 0,
+                    forced_items: 0,
+                    notices,
+                }
+            }
+        }
     }
 }

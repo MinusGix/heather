@@ -480,3 +480,46 @@ fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image()
     let _ = std::fs::remove_file(&edited);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// `heather check --only` (`docs/check-only-design.md`): needs `--cache` and a
+/// previous image; elaborates the named declarations over a replayed
+/// prefix, prints the reserved `(only)` line, labels the timings run row,
+/// leaves the verdict store's counts alone, and names an unknown item.
+#[test]
+fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
+    let out = heather(&["check", "--only", "double", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`--only` replays the rest"), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let dir = cache_dir("only");
+    let arg = dir.display().to_string();
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no stored image of module `good`"), "{err}");
+
+    // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
+    let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    let baseline = String::from_utf8_lossy(&cold.stdout).to_string();
+    let tsv = dir.join("only.tsv");
+    let tsv_arg = tsv.display().to_string();
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double", "--timings", &tsv_arg, "good.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let line = String::from_utf8_lossy(&out.stdout);
+    assert!(line.contains("good.hthr: ok (only) — 1 declaration elaborated for --only, "), "{line}");
+    assert!(!line.contains("(cache)"), "{line}");
+    let table = std::fs::read_to_string(&tsv).unwrap();
+    let run_row = table.lines().find(|l| l.starts_with("run\t")).expect("a run row");
+    assert!(run_row.split('\t').nth(2) == Some("only=double"), "{run_row}");
+    // The store is as it was: a `--only` run vouches for nothing, and the
+    // next cached run reports exactly what it reported before.
+    let again = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    assert_eq!(String::from_utf8_lossy(&again.stdout), baseline);
+
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double,nope", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--only named `good::nope` that no module of the closure declares"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
