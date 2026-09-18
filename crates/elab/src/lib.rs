@@ -119,6 +119,7 @@ mod indexed;
 mod inductive;
 mod lgg;
 mod lint;
+mod literals;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
@@ -4431,6 +4432,12 @@ impl Elaborator {
                 Some(result) => result,
                 None => self.elab_overloaded_num_check(cx, e, expected, lvl, e.span),
             },
+            // The two literals of docs/string-char-design.md §3, on the
+            // numeral's ladder: the spec type's introduction form at `Char` /
+            // `String`, and `CharLiteral` / `StringLiteral` at every other
+            // carrier.
+            ExprKind::Char(c) => self.elab_char_check(cx, *c, e, expected, lvl),
+            ExprKind::Str(text) => self.elab_string_check(cx, text, e, expected, lvl),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -5077,6 +5084,8 @@ impl Elaborator {
             // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
             // the block contributes no term of its own, because a `let` is an
             // alias.
+            ExprKind::Char(c) => self.elab_char_infer(cx, *c, e),
+            ExprKind::Str(text) => self.elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self, cx, block),
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*

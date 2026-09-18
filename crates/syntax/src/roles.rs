@@ -225,6 +225,8 @@ impl<'a> Walk<'a> {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::Char(_)
+            | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl

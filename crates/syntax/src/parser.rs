@@ -3904,6 +3904,18 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })
             }
+            // One atom each, exactly as a numeral is one: the lexer has
+            // already decided the payload, so there is no grammar here beyond
+            // "a literal is an expression" (docs/string-char-design.md §3).
+            TokKind::Char(c) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::Char(c), span: sp })
+            }
+            TokKind::Str(s) => {
+                let s = s.clone();
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::Str(s), span: sp })
+            }
             TokKind::LParen => {
                 self.bump();
                 // Parenthesising is the escape hatch for a record literal in

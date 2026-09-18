@@ -7,6 +7,15 @@ use crate::ast::Span;
 pub enum TokKind {
     Ident(String),
     Num(u64),
+    /// `'x'` — one Unicode scalar value (docs/string-char-design.md §3). The
+    /// payload is Rust's `char`, which *is* the scalar-value type: the lexer
+    /// refuses a surrogate escape, so nothing downstream has to re-check that
+    /// a lexed character is a `Char`.
+    Char(char),
+    /// `"…"` — a sequence of scalar values, held decoded (escapes already
+    /// resolved) for the same reason a numeral holds its value rather than
+    /// its spelling: the radix, and here the escape, is a spelling.
+    Str(String),
     /// `·` followed immediately by zero or more Unicode subscript digits.
     /// No subscript is the left-to-right anonymous mode; a subscript is an
     /// explicit zero-based argument position (issues/argument-slot-sections.md).
@@ -224,6 +233,124 @@ fn lex_numeral(src: &str, start: usize) -> Result<(u64, usize), LexError> {
     Ok((value, i))
 }
 
+/// One escape body, `i` pointing just past the `\`. Returns the scalar value
+/// and the offset past the escape.
+///
+/// The set is `\n \t \r \\ \' \" \0` and `\u{hex}`
+/// (docs/string-char-design.md §3) — deliberately small, and closed: a
+/// spelling that is not in it is an error rather than a literal backslash, so
+/// widening the set later cannot change what an existing file means.
+fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexError> {
+    let bytes = src.as_bytes();
+    let Some(&b) = bytes.get(i) else {
+        return Err(LexError {
+            msg: "a literal ends inside an escape".into(),
+            span: Span { start: open, end: i },
+        });
+    };
+    let simple = match b {
+        b'n' => Some('\n'),
+        b't' => Some('\t'),
+        b'r' => Some('\r'),
+        b'\\' => Some('\\'),
+        b'\'' => Some('\''),
+        b'"' => Some('"'),
+        b'0' => Some('\0'),
+        _ => None,
+    };
+    if let Some(c) = simple {
+        return Ok((c, i + 1));
+    }
+    if b != b'u' {
+        let bad = src[i..].chars().next().unwrap_or('\\');
+        return Err(LexError {
+            msg: format!(
+                "unknown escape `\\{bad}`: the escapes are \\n \\t \\r \\\\ \\' \\\" \\0 and \\u{{hex}}"
+            ),
+            span: Span { start: i - 1, end: i + bad.len_utf8() },
+        });
+    }
+    if bytes.get(i + 1) != Some(&b'{') {
+        return Err(LexError {
+            msg: "`\\u` needs a braced hexadecimal scalar value, as in `\\u{1F600}`".into(),
+            span: Span { start: i - 1, end: i + 1 },
+        });
+    }
+    let digits_start = i + 2;
+    let mut end = digits_start;
+    let mut value: u32 = 0;
+    while let Some(&b) = bytes.get(end) {
+        let Some(d) = (b as char).to_digit(16) else { break };
+        value = value.checked_mul(16).and_then(|v| v.checked_add(d)).unwrap_or(u32::MAX);
+        end += 1;
+    }
+    if end == digits_start || bytes.get(end) != Some(&b'}') {
+        let stop = (end + 1).min(bytes.len());
+        return Err(LexError {
+            msg: format!("`{}` is not a `\\u{{hex}}` escape", &src[i - 1..stop]),
+            span: Span { start: i - 1, end: stop },
+        });
+    }
+    let span = Span { start: i - 1, end: end + 1 };
+    let text = &src[i - 1..end + 1];
+    // `char::from_u32` is exactly the scalar-value predicate `std/char`
+    // spells: below `0x110000` and not a surrogate. Refusing here is what
+    // makes every lexed payload a `Char` by construction, so the literal's
+    // elaboration never has a proof step that can fail.
+    match char::from_u32(value) {
+        Some(c) => Ok((c, end + 1)),
+        None if (0xD800..0xE000).contains(&value) => Err(LexError {
+            msg: format!(
+                "`{text}` is a surrogate, not a Unicode scalar value: `Char` excludes \
+                 `0xD800`–`0xDFFF` so that encoding stays injective"
+            ),
+            span,
+        }),
+        None => Err(LexError {
+            msg: format!("`{text}` is above the last Unicode scalar value, `0x10FFFF`"),
+            span,
+        }),
+    }
+}
+
+/// The body of a `'…'` or `"…"` literal. `open` points at the opening
+/// delimiter; the returned offset is just past the closing one.
+fn lex_quoted(src: &str, open: usize, delim: u8) -> Result<(String, usize), LexError> {
+    let bytes = src.as_bytes();
+    let what = if delim == b'\'' { "character" } else { "string" };
+    let mut out = String::new();
+    let mut i = open + 1;
+    loop {
+        let Some(&b) = bytes.get(i) else {
+            return Err(LexError {
+                msg: format!("unterminated {what} literal: no closing `{}`", delim as char),
+                span: Span { start: open, end: open + 1 },
+            });
+        };
+        if b == delim {
+            return Ok((out, i + 1));
+        }
+        // A literal does not span lines. Reporting at the opening quote is
+        // what makes a missing delimiter legible: without this the scan runs
+        // to the end of the file and blames whatever it happens to stop at.
+        if b == b'\n' {
+            return Err(LexError {
+                msg: format!("unterminated {what} literal: no closing `{}`", delim as char),
+                span: Span { start: open, end: open + 1 },
+            });
+        }
+        if b == b'\\' {
+            let (c, next) = lex_escape(src, open, i + 1)?;
+            out.push(c);
+            i = next;
+            continue;
+        }
+        let c = src[i..].chars().next().expect("a byte at `i` starts a character");
+        out.push(c);
+        i += c.len_utf8();
+    }
+}
+
 pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
     let bytes = src.as_bytes();
     let mut toks = Vec::new();
@@ -296,6 +423,34 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             let (n, end) = lex_numeral(src, start)?;
             i = end;
             toks.push(Tok { kind: TokKind::Num(n), span: Span { start, end: i } });
+            continue;
+        }
+        // character and string literals (docs/string-char-design.md §3). One
+        // syntax form each: `'x'` is a scalar value and `"…"` a sequence of
+        // them, and neither delimiter had any other reading before this —
+        // `'` and `"` were both "unexpected character".
+        if c == b'\'' {
+            let (text, end) = lex_quoted(src, start, b'\'')?;
+            let mut chars = text.chars();
+            let (Some(ch), None) = (chars.next(), chars.next()) else {
+                return Err(LexError {
+                    msg: format!(
+                        "a character literal holds exactly one scalar value, and `{}` holds {}: \
+                         write a string literal `\"…\"` for a sequence",
+                        &src[start..end],
+                        text.chars().count()
+                    ),
+                    span: Span { start, end },
+                });
+            };
+            toks.push(Tok { kind: TokKind::Char(ch), span: Span { start, end } });
+            i = end;
+            continue;
+        }
+        if c == b'"' {
+            let (text, end) = lex_quoted(src, start, b'"')?;
+            toks.push(Tok { kind: TokKind::Str(text), span: Span { start, end } });
+            i = end;
             continue;
         }
         // goal holes: `?name` if an identifier follows immediately, else `?`
@@ -535,6 +690,91 @@ mod tests {
             let msg = refused(src);
             assert_eq!(msg, format!("numeral out of range: {src}"), "{src}");
         }
+    }
+
+    fn chr(src: &str) -> char {
+        let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert_eq!(toks.len(), 2, "{src}: one literal then Eof, got {toks:?}");
+        let TokKind::Char(c) = toks[0].kind else {
+            panic!("{src}: not a character literal: {:?}", toks[0])
+        };
+        assert_eq!(toks[0].span, Span { start: 0, end: src.len() });
+        c
+    }
+
+    fn text(src: &str) -> String {
+        let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert_eq!(toks.len(), 2, "{src}: one literal then Eof, got {toks:?}");
+        let TokKind::Str(s) = &toks[0].kind else {
+            panic!("{src}: not a string literal: {:?}", toks[0])
+        };
+        assert_eq!(toks[0].span, Span { start: 0, end: src.len() });
+        s.clone()
+    }
+
+    #[test]
+    fn literals_hold_scalar_values_and_not_their_spelling() {
+        assert_eq!(chr("'x'"), 'x');
+        assert_eq!(chr("'é'"), 'é');
+        assert_eq!(chr("'\u{1F600}'"), '\u{1F600}');
+        assert_eq!(chr(r"'\u{1F600}'"), '\u{1F600}');
+        assert_eq!(chr(r"'\u{41}'"), 'A');
+        assert_eq!(text(r#""hi""#), "hi");
+        assert_eq!(text(r#""""#), "");
+        assert_eq!(text(r#""λx. x""#), "λx. x");
+    }
+
+    #[test]
+    fn the_escape_set_is_the_documented_one() {
+        assert_eq!(chr(r"'\n'"), '\n');
+        assert_eq!(chr(r"'\t'"), '\t');
+        assert_eq!(chr(r"'\r'"), '\r');
+        assert_eq!(chr(r"'\\'"), '\\');
+        assert_eq!(chr(r"'\''"), '\'');
+        assert_eq!(chr(r#"'\"'"#), '"');
+        assert_eq!(chr(r"'\0'"), '\0');
+        assert_eq!(text(r#""a\nb\\c\"d""#), "a\nb\\c\"d");
+        assert!(refused(r"'\q'").starts_with("unknown escape `\\q`"));
+        assert!(refused(r"'\u41'").contains("braced hexadecimal"));
+        assert!(refused(r"'\u{}'").contains("is not a `\\u{hex}` escape"));
+        assert!(refused(r"'\u{41'").contains("is not a `\\u{hex}` escape"));
+    }
+
+    #[test]
+    fn a_surrogate_escape_is_refused_at_the_lexer() {
+        for src in [r"'\u{D800}'", r"'\u{dfff}'", r#""a\u{D9AB}b""#] {
+            let msg = refused(src);
+            assert!(msg.contains("is a surrogate"), "{src}: {msg}");
+        }
+        // The two neighbours of the excluded block still lex.
+        assert_eq!(chr(r"'\u{D7FF}'"), '\u{D7FF}');
+        assert_eq!(chr(r"'\u{E000}'"), '\u{E000}');
+        assert!(refused(r"'\u{110000}'").contains("above the last Unicode scalar value"));
+        assert_eq!(chr(r"'\u{10FFFF}'"), '\u{10FFFF}');
+    }
+
+    #[test]
+    fn an_unterminated_literal_names_its_opening_quote() {
+        for (src, what) in [("'x", "character"), ("\"hi", "string"), ("'x\ny'", "character")] {
+            let msg = refused(src);
+            assert!(msg.contains(&format!("unterminated {what} literal")), "{src}: {msg}");
+        }
+        assert_eq!(
+            lex("\"hi").unwrap_err().span,
+            Span { start: 0, end: 1 },
+            "the span is the opening quote"
+        );
+        assert!(refused("''").contains("exactly one scalar value"));
+        assert!(refused("'ab'").contains("exactly one scalar value"));
+    }
+
+    #[test]
+    fn a_literal_ends_at_punctuation() {
+        let toks = lex("f('a', \"bc\", 1)").unwrap();
+        let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[2], TokKind::Char('a')), "{kinds:?}");
+        assert!(matches!(kinds[4], TokKind::Str(s) if s == "bc"), "{kinds:?}");
+        assert!(matches!(kinds[6], TokKind::Num(1)), "{kinds:?}");
     }
 
     #[test]

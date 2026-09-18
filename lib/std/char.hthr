@@ -1,0 +1,96 @@
+// Unicode scalar values. A `Char` is a code point below `0x110000` that is
+// not a surrogate, sealed the way `bounded_list` seals its fit witness: the
+// record carries the code and a *truncated* scalar proof, so equality of
+// characters is equality of codes and rebuilding the witness cannot disturb
+// a value (docs/string-char-design.md §2).
+//
+// Surrogates are excluded because UTF-8 encoding is the first repr of a
+// string and has to be injective on the spec type; that repr, and the `Utf8`
+// spec type beside it, are a later round's work and nothing here anticipates
+// them.
+
+import logic;
+import nat;
+
+// ---------------------------------------------------------------------------
+// The predicate, and its decision.
+
+fn scalar(code: Nat) → Type { code < 1114112 ∧ ¬(55296 <= code ∧ code < 57344) }
+
+// The decision, as three `le_dec` calls with the refutations wired through
+// the conjunction. `le_dec(n, m)` descends both arguments together, so each
+// test costs the smaller of the code and its bound — a literal in the ASCII
+// range pays its own size and nothing like the size of `0x110000`.
+//
+// A `fn` and not a `theorem` for `le_dec`'s reason: a literal's proof is
+// `decide`, which the kernel judges by *running* this.
+fn scalar_dec(code: Nat) → scalar(code) ∨ ¬scalar(code) {
+    match le_dec(Succ(code), 1114112) {
+        Inr(over) => Inr(λ (h: scalar(code)) => over(h.left)),
+        Inl(under) =>
+            match le_dec(55296, code) {
+                Inr(below) => Inl(And(under,
+                    λ (h: 55296 <= code ∧ code < 57344) => below(h.left))),
+                Inl(at_least) =>
+                    match le_dec(Succ(code), 57344) {
+                        Inl(surrogate) =>
+                            Inr(λ (h: scalar(code)) => h.right(And(at_least, surrogate))),
+                        Inr(above) => Inl(And(under,
+                            λ (h: 55296 <= code ∧ code < 57344) => above(h.right))),
+                    },
+            },
+    }
+}
+
+instance(code: Nat) Decide<scalar(code)> { dec := scalar_dec(code) }
+
+// ---------------------------------------------------------------------------
+// The type.
+
+record Char {
+    code: Nat,
+    valid: ∥scalar(code)∥,
+}
+
+// The introduction form a `'x'` literal elaborates to: the code, and a proof
+// that it is a scalar value. The elaborator supplies the latter with `decide`,
+// so a literal never states it.
+fn ofNat(code: Nat, p: scalar(code)) → Char {
+    Char(code := code, valid := squash(p))
+}
+
+fn Char::toNat(self c: Char) → Nat { c.code }
+
+// The lemma everything else rests on, and the only place the truncation is
+// unpacked — which it is not: the witness is a `Prop`-level value, so two
+// records with equal codes are equal by squash irrelevance alone. The `j`
+// generalizes the second record's witness so the base case is `refl` under
+// record η.
+theorem code_injective(a, b: Char, p: a.code = b.code): a = b {
+    j(p, λ y q => (w: ∥scalar(y)∥) → a = Char(code := y, valid := w),
+        λ (w: ∥scalar(a.code)∥) => refl)(b.valid)
+}
+
+theorem cong_code(a, b: Char, p: a = b): a.code = b.code {
+    j(p, λ y q => a.code = y.code, refl)
+}
+
+// Equality decides through the code, which is the whole content of a `Char`.
+// A `fn` for the same reason `nat::eq_dec` is one.
+fn char_eq_dec(a, b: Char) → a = b ∨ ¬(a = b) {
+    match eq_dec(a.code, b.code) {
+        Inl(p) => Inl(code_injective(a, b, p)),
+        Inr(np) => Inr(λ (h: a = b) => np(cong_code(a, b, h))),
+    }
+}
+
+instance(a, b: Char) Decide<a = b> { dec := char_eq_dec(a, b) }
+
+// ---------------------------------------------------------------------------
+// The literal class. `Numeral`'s counterpart for `'x'`
+// (docs/string-char-design.md §3): at any carrier that is not `Char` itself a
+// character literal resolves this and applies `ofChar`. It is declared here
+// rather than beside `Numeral` in `algebra` because its field mentions
+// `Char`, and `algebra` sits *below* this module in the library's import
+// order.
+class CharLiteral<A> { ofChar: Char → A }
