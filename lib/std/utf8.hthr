@@ -302,78 +302,47 @@ fn push_char(step: Option<Pair<Char, List<BitVec(8)>>>, tail: Option<String>) �
     }
 }
 
-// The whole list. The recursion is on a FUEL, which `decode` supplies as the
-// byte count: a class that consumes `k` bytes spends exactly `k` of it, so
-// the fuel and the list stay in step and the recursive call in the proof is
-// the induction hypothesis with nothing to reconcile. A `decreases` on the
-// list was tried and rejected: only an immediate tail may carry a structural
-// self-call, and a `decreases` body written with the equation bindings the
-// measure proofs need gets no unfolding equation
-// (docs/decreases-unfolding-design.md §3), so nothing about it is provable at
-// an open tail. `Nat` admits course-of-values recursion, so a fuel does not
-// meet either obstacle.
+// The whole list. The recursion is on the byte list itself: a class that
+// consumes `k` bytes recurses on the tail `k` constructors down, which the
+// course-of-values window admits on any chain-shaped inductive
+// ([[list-course-of-values-recursion]],
+// `docs/list-course-of-values-design.md`). The decoder therefore has no fuel
+// parameter and no `decode_at`: the API is the one the specification wants,
+// and the proofs below get the bare recursive call as their induction
+// hypothesis with no arithmetic in between.
 //
 // `decode_seq` still supplies the character and every rejection — it is the
 // same call `decode_char` makes — and the arms here only say how far to step.
-fn decode_at(fuel: Nat, bytes: List<BitVec(8)>) → Option<String> {
-    match fuel {
-        Zero => match bytes {
-            Nil => Some(String(chars := Nil<Char>)),
-            Cons(_, _) => None,
-        },
-        Succ(f1) => match bytes {
-            Nil => Some(String(chars := Nil<Char>)),
-            Cons(b, rest) => match class_of(b) {
-                CBad => None,
-                C1 => push_char(decode_seq(C1, b, rest), decode_at(f1, rest)),
-                C2 => match rest {
+fn decode(bytes: List<BitVec(8)>) → Option<String> {
+    match bytes {
+        Nil => Some(String(chars := Nil<Char>)),
+        Cons(b, rest) => match class_of(b) {
+            CBad => None,
+            C1 => push_char(decode_seq(C1, b, rest), decode(rest)),
+            C2 => match rest {
+                Nil => None,
+                Cons(_, rest2) => push_char(decode_seq(C2, b, rest), decode(rest2)),
+            },
+            C3 => match rest {
+                Nil => None,
+                Cons(_, rest2) => match rest2 {
                     Nil => None,
-                    Cons(_, rest2) => match f1 {
-                        Zero => None,
-                        Succ(f2) =>
-                            push_char(decode_seq(C2, b, rest), decode_at(f2, rest2)),
-                    },
+                    Cons(_, rest3) => push_char(decode_seq(C3, b, rest), decode(rest3)),
                 },
-                C3 => match rest {
+            },
+            C4 => match rest {
+                Nil => None,
+                Cons(_, rest2) => match rest2 {
                     Nil => None,
-                    Cons(_, rest2) => match rest2 {
+                    Cons(_, rest3) => match rest3 {
                         Nil => None,
-                        Cons(_, rest3) => match f1 {
-                            Zero => None,
-                            Succ(f2) => match f2 {
-                                Zero => None,
-                                Succ(f3) =>
-                                    push_char(decode_seq(C3, b, rest), decode_at(f3, rest3)),
-                            },
-                        },
-                    },
-                },
-                C4 => match rest {
-                    Nil => None,
-                    Cons(_, rest2) => match rest2 {
-                        Nil => None,
-                        Cons(_, rest3) => match rest3 {
-                            Nil => None,
-                            Cons(_, rest4) => match f1 {
-                                Zero => None,
-                                Succ(f2) => match f2 {
-                                    Zero => None,
-                                    Succ(f3) => match f3 {
-                                        Zero => None,
-                                        Succ(f4) => push_char(decode_seq(C4, b, rest),
-                                            decode_at(f4, rest4)),
-                                    },
-                                },
-                            },
-                        },
+                        Cons(_, rest4) => push_char(decode_seq(C4, b, rest), decode(rest4)),
                     },
                 },
             },
         },
     }
 }
-
-fn decode(bytes: List<BitVec(8)>) → Option<String> { decode_at(list_len(bytes), bytes) }
 
 // ---------------------------------------------------------------------------
 // The round trip. `decode ∘ encode` is the identity on `String`, proved one
@@ -449,22 +418,21 @@ theorem decode_char_encode_char(c: Char, rest: List<BitVec(8)>):
 }
 
 // One step of the list recursion, stated at the `emit` the class's arm of
-// `decode_at` reduces to rather than at `decode_char`. That spelling is
-// load-bearing: converting `decode_at` at a three- or four-byte sequence
+// `decode` reduces to rather than at `decode_char`. That spelling is
+// load-bearing: converting `decode` at a three- or four-byte sequence
 // against a term that ALSO says `decode_char`/`decode_seq` exhausts the
 // kernel's conversion fuel, while converting it against the reduced `emit`
 // form is cheap (`issues/utf8-decode-conversion-blowup.md`).
 theorem push_step(c: Char, cs: List<Char>, min, n, code: Nat, p: char::scalar(code),
         low: IsTrue(nat::leb(min, code)), bound: code < nat::pow(2, n),
         pc: char::ofNat(code, p) = c,
-        ih: decode_at(list_len(encode_chars(cs)), encode_chars(cs))
-                = Some(String(chars := cs))):
+        ih: decode(encode_chars(cs)) = Some(String(chars := cs))):
         push_char(emit(min, toNat(n, bitvec::ofNat(n, code)), encode_chars(cs)),
-            decode_at(list_len(encode_chars(cs)), encode_chars(cs)))
+            decode(encode_chars(cs)))
                 = Some(String(chars := Cons(c, cs))) {
     j(sym(trans(decode_emit(min, n, code, p, low, bound, encode_chars(cs)),
             cong_fn(λ (x: Char) => Some(Pair(x, encode_chars(cs))), pc))),
-        λ y _ => push_char(y, decode_at(list_len(encode_chars(cs)), encode_chars(cs)))
+        λ y _ => push_char(y, decode(encode_chars(cs)))
                 = Some(String(chars := Cons(c, cs))),
         j(sym(ih),
             λ z _ => push_char(Some(Pair(c, encode_chars(cs))), z)
@@ -472,19 +440,17 @@ theorem push_step(c: Char, cs: List<Char>, min, n, code: Nat, p: char::scalar(co
             refl))
 }
 
-// Theorem 3, on the character list: the fuel `decode` supplies is the byte
-// count, each class spends exactly what it wrote, so the recursive call is
-// the induction hypothesis with no fuel arithmetic in between.
-theorem decode_at_encode_chars(cs: List<Char>):
-        decode_at(list_len(encode_chars(cs)), encode_chars(cs))
-            = Some(String(chars := cs)) {
+// Theorem 3, on the character list: each class decodes exactly the bytes it
+// wrote and steps over exactly those, so the recursive call is the induction
+// hypothesis with nothing to reconcile.
+theorem decode_encode_chars(cs: List<Char>):
+        decode(encode_chars(cs)) = Some(String(chars := cs)) {
     match cs {
         Nil => refl,
         Cons(c, more) => {
-            let ih = decode_at_encode_chars(more);
+            let ih = decode_encode_chars(more);
             match width_of(c.code) as λ x => WidthBounds(x, c.code) →
-                    decode_at(list_len(encode_width(x, c.code) ++ encode_chars(more)),
-                        encode_width(x, c.code) ++ encode_chars(more))
+                    decode(encode_width(x, c.code) ++ encode_chars(more))
                         = Some(String(chars := Cons(c, more))) {
                 W1 => λ h => push_step(c, more, 0, 7, c.code, c.valid, trivial,
                     bound_pow(c.code, 0x80, 7, h, trivial),
@@ -505,7 +471,7 @@ theorem decode_at_encode_chars(cs: List<Char>):
 }
 
 theorem decode_encode(s: String): decode(encode(s)) = Some(s) {
-    decode_at_encode_chars(s.chars)
+    decode_encode_chars(s.chars)
 }
 
 // Theorem 4. Encoding is injective, because decoding inverts it.

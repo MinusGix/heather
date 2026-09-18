@@ -29,7 +29,8 @@ use heather_kernel::term::{LocalCtx, LocalVar, Term, Type, nth, wf_step_telescop
 use heather_syntax::{Arm, Expr, Span};
 
 use crate::inductive::{ConstBody, FieldKind, Inductive, Spine, inject};
-use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind};
+use crate::matching::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
+use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind, WfCov};
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 
 /// The pieces every part of the lowering needs, gathered once so that the
@@ -90,9 +91,184 @@ pub(crate) struct Tel<'a> {
     /// `⟦T⟧`, and most of a lowered body's node mass, measured
     /// (`docs/wf-shape-code-design.md` §3.4).
     pub spine_emit: Spine,
+    /// The `Wf` slot pair as it is written into emitted terms, kept because
+    /// the course-of-values lowering has to rebuild the `sup_f` the telescope
+    /// states its step at ([`Tel::value_at`]) with those very slots.
+    slots: (Rc<Type>, Rc<Term>),
+    /// What this `match` carries beyond the ordinary lowering
+    /// (`docs/list-course-of-values-design.md`). [`TelRec::None`] for every
+    /// `match` written before the window existed.
+    rec: TelRec<'a>,
+}
+
+/// [`WfRec`] once `build_elim_wf` has respelled the motive: the window's
+/// components are built from the *respelled* motive, or the types the arms
+/// annotate with would not be the ones the eliminator's own type states.
+enum TelRec<'a> {
+    None,
+    Cov {
+        d: usize,
+        step: &'a ChainStep,
+        /// `M` as the source wrote it, over `(gamma0, z)`, respelled.
+        /// [`Tel::motive`] is the Σ-tower built from it.
+        plain: Rc<Type>,
+    },
+    Convoy {
+        convoy: &'a WfConvoy,
+        /// The level the *arm bodies* live at. [`Tel::mlvl`] is the motive's,
+        /// which for a convoyed `match` is the max of this and the window's.
+        body_lvl: Level,
+    },
+}
+
+/// What a `match` on a tier-1 inductive carries beyond the ordinary lowering.
+/// The two are exclusive: a `match` that descends on a parameter sets a window
+/// up, a nested `match` on the chain's end passes one down.
+pub(crate) enum WfRec<'a> {
+    /// The ordinary lowering, byte for byte.
+    None,
+    /// A course-of-values recursion carrying `d` values
+    /// (`docs/list-course-of-values-design.md` §3).
+    Cov { d: usize, step: ChainStep },
+    /// A nested `match` on the chain's end, convoying the enclosing
+    /// recursion's window in as an argument (§4).
+    Convoy(&'a WfConvoy),
+}
+
+/// The enclosing recursion's window of past values, as a nested `match` on the
+/// chain's end needs it (`docs/list-course-of-values-design.md` §4). The `Nat`
+/// twin is `matching::routes`'s `Convoy`, and every field here means what its
+/// field there means.
+pub(crate) struct WfConvoy {
+    dec: usize,
+    /// The chain so far, as terms, scoped in this `match`'s own context.
+    chain: Vec<Rc<Term>>,
+    /// How many values are carried.
+    d: usize,
+    lvl: Level,
+    /// The recursion's motive reindexed into the context this `match` sits in,
+    /// scoped in (that context, z)…
+    motive: Rc<Type>,
+    /// …and as it was written, for the guards this `match` hands to its arms:
+    /// they must be able to reindex it again, deeper in.
+    outer_motive: Rc<Type>,
+    gamma: LocalCtx,
+    /// `tail_D` reindexed here, and as it was written, for the same reason.
+    step: ChainStep,
+    outer_tail: Rc<Term>,
+    /// The window itself, at this `match`'s context.
+    tuple: Term,
+    /// `λ y. …` — where the window's anchor and the goal's sit, seen from a
+    /// term at this `match`'s scrutinee. Copies of [`WfCov::window`] and
+    /// [`WfCov::goal`], shifted.
+    window: Rc<Term>,
+    goal: Rc<Term>,
+    generalized: Option<Rc<Vec<usize>>>,
+}
+
+impl WfConvoy {
+    /// An anchor applied by substitution: `t` is scoped `extra` binders past
+    /// `gamma`, which is this `match`'s own ambient context. No β-redex is
+    /// emitted — the anchors are λs only so that they shift like closed
+    /// terms.
+    fn at(anchor: &Rc<Term>, gamma: &LocalCtx, extra: u32, t: Term) -> Term {
+        let Term::Lam { body, .. } = &**anchor else {
+            unreachable!("an anchor is built as a λ and only ever shifted")
+        };
+        body.apply_local(&embed(gamma, extra).extended(Rc::new(t)))
+    }
+
+    fn window(&self, gamma: &LocalCtx, extra: u32, t: Term) -> Term {
+        Self::at(&self.window, gamma, extra, t)
+    }
+
+    fn goal(&self, gamma: &LocalCtx, extra: u32, t: Term) -> Term {
+        Self::at(&self.goal, gamma, extra, t)
+    }
 }
 
 impl Tel<'_> {
+    /// The scrutinee this branch stands for: `sup_f(ℓᵢ; cs')`, spelled exactly
+    /// as `wf_step_telescope_at` states `step_ty` at it — the same slots
+    /// through the same shift — so that the window's components built here and
+    /// the obligation the telescope hands down agree *syntactically* rather
+    /// than only by conversion.
+    fn value_at(&self, inj: &Rc<Term>, d_body: u32) -> Term {
+        let whole = Type::Wf {
+            level: self.level.clone(),
+            shape: Rc::clone(&self.slots.0),
+            arity: Rc::clone(&self.slots.1),
+        };
+        // Through the `Wf`, so that the arity — scoped under the shape's
+        // binder — crosses the right number of them.
+        let Type::Wf { shape, arity, .. } = whole.shift_local(d_body) else {
+            unreachable!("shifting a Wf yields a Wf")
+        };
+        Term::Supf {
+            level: self.level.clone(),
+            shape,
+            arity,
+            label: Rc::new(inj.shift_local(2)),
+            children: Rc::new(Term::Var(LocalVar(1))),
+        }
+    }
+
+    /// This arm's own constructor with its own child back in the recursive
+    /// field: `sup_f(ℓᵢ; (nth cs' ι₀, ⟨⟩))`, scoped in the branch itself.
+    fn rebuilt_here(&self, inj: &Rc<Term>, d_body: u32, child: &Rc<Term>) -> Term {
+        self.supf_over(inj, d_body, d_body, Rc::clone(child))
+    }
+
+    /// This arm's own constructor with `y` in its recursive field:
+    /// `sup_f(ℓᵢ; (y, ⟨⟩))`. The `Wf` counterpart of `Nat`'s `Succ(y)`, and
+    /// what §4's re-anchoring rebuilds — the payload travels as the label it
+    /// already is, so nothing is re-elaborated and only the children tuple is
+    /// new. Scoped in the branch plus the convoy binder plus `y`.
+    fn rebuilt_at(&self, inj: &Rc<Term>, d_body: u32) -> Term {
+        self.supf_over(inj, d_body, d_body + 2, Rc::new(Term::Var(LocalVar(0))))
+    }
+
+    /// `sup_f(ℓᵢ; (child, ⟨⟩))` at depth `up`, for a constructor with exactly
+    /// one recursive field — every constructor a [`chain_shaped`] declaration
+    /// has one of. Only the children tuple is new: the payload travels as the
+    /// label `inj` it already is, so nothing is re-elaborated.
+    fn supf_over(&self, inj: &Rc<Term>, d_body: u32, up: u32, child: Rc<Term>) -> Term {
+        let whole = Type::Wf {
+            level: self.level.clone(),
+            shape: Rc::clone(&self.slots.0),
+            arity: Rc::clone(&self.slots.1),
+        };
+        let Type::Wf { shape, arity, .. } = whole.shift_local(up) else {
+            unreachable!("shifting a Wf yields a Wf")
+        };
+        let elem = self.emitted.shift_local(up).into_type();
+        // `Vec(T; S 0) ⇝ Σ(_ : T). Vec(T; 0)`, and a Σ's second component
+        // binds, so the tail sits one level deeper (§5).
+        let children = Term::Pair {
+            fst_level: self.level.clone(),
+            snd_level: self.level.clone(),
+            fst_ty: Rc::new(elem.clone()),
+            snd_ty: Rc::new(Type::Vec {
+                level: self.level.clone(),
+                elem: Rc::new(elem.shift_local(1)),
+                len: Rc::new(Term::Zero),
+            }),
+            fst: child,
+            snd: Rc::new(Term::Triv {
+                level: self.level.clone(),
+            }),
+        };
+        Term::Supf {
+            level: self.level.clone(),
+            shape,
+            arity,
+            // `inj` is scoped where the branch's own binders start, which is
+            // `d_body - 2`; `up` is here.
+            label: Rc::new(inj.shift_local(up - (d_body - 2))),
+            children: Rc::new(children),
+        }
+    }
+
     /// The Π-type of a branch body before its two λs: `P(v)` of §6.2, for a
     /// *fully injected* `v : S` scoped `d` binders past `gamma0`.
     ///
@@ -152,6 +328,30 @@ pub(crate) enum Branches<'a> {
         t: usize,
         default: Rc<Term>,
     },
+    /// `tail_D` (`docs/list-course-of-values-design.md` §2): the one child at
+    /// *every* recursive constructor, and `default` — the scrutinee itself —
+    /// at every base one, so that `tail_D(Nil) ⇝ Nil` the way `pred 0 ⇝ 0`.
+    ///
+    /// [`Branches::Child`] cannot stand in: it names one constructor, and a
+    /// chain-shaped declaration may have several recursive ones
+    /// (`Run { Stop, Step(p, next), Skip(next) }`). Only reached for a
+    /// declaration [`chain_shaped`] accepted, so every arity here is 0 or 1.
+    Tail { default: Rc<Term> },
+}
+
+/// Is `ind` **chain-shaped** — does every constructor carry at most one
+/// recursive field and no container (`docs/list-course-of-values-design.md`
+/// §1)?
+///
+/// Only such a declaration has a *chain* for the course-of-values window to
+/// walk. A branching constructor's window would be a tree of values, which is
+/// a different tupling and has no customer; a container field is a group of
+/// children rather than one, and a self-call over it maps rather than
+/// descends (`docs/container-fields.md` §4.2).
+pub(crate) fn chain_shaped(ind: &Inductive) -> bool {
+    ind.ctors
+        .iter()
+        .all(|c| c.arity() <= 1 && c.container().is_none())
 }
 
 impl Elaborator {
@@ -257,17 +457,169 @@ impl Elaborator {
         // Does this `match` descend on one of the enclosing declaration's own
         // parameters? If so, a self-call in an arm is the ih (§6.4).
         let dec = crate::recursion::descends_on_param(cx, &scrut);
-        self.build_elim_wf(
+        let Type::Wf { level, .. } = scrut_ty else {
+            return err(
+                "internal: a recursive declaration did not lower to a `Wf`",
+                span,
+            );
+        };
+        let level = level.clone();
+        // The motive, respelled once here rather than twice: `build_elim_wf`
+        // respells again and `annotation_type` is idempotent, but the window's
+        // components have to be built from the *respelled* spelling, and this
+        // is where both halves can see it.
+        let plain = Rc::new(self.annotation_type(cx, &motive, 1));
+        // How many past values the arms read (`docs/list-course-of-values-design.md`
+        // §3). `1` is the ordinary recursion and emits exactly the term it
+        // always did; more makes the recursor carry a tuple.
+        let d = match dec {
+            Some(dec) if chain_shaped(ind) => self.cov_depth_wf(cx, ind, arms, dec),
+            _ => 1,
+        };
+        // A nested `match` on the chain's end, with values below it still
+        // uncollected: it must **convoy** them, or its arms cannot see that the
+        // value one below the arm's child is the value at the child's own
+        // child (§4).
+        let convoy = if dec.is_none() {
+            self.wf_chain_convoy(cx, &scrut)
+        } else {
+            None
+        };
+        let rec = match (&convoy, d) {
+            (Some(convoy), _) => WfRec::Convoy(convoy),
+            (None, 1) => WfRec::None,
+            (None, d) => WfRec::Cov {
+                d,
+                step: ChainStep::Tail(Rc::new(
+                    self.tail_term(cx, ind, scrut_ty, &level, span)?,
+                )),
+            },
+        };
+        let elim = self.build_elim_wf(
             cx,
             ind,
             scrut_ty,
-            motive,
-            mlvl,
-            scrut,
+            (*plain).clone(),
+            mlvl.clone(),
+            scrut.clone(),
             &Branches::Arms(arms),
             dec,
+            &rec,
             span,
-        )
+        )?;
+        match &rec {
+            WfRec::None => Ok(elim),
+            // The source's `match` is the *first* component of what the
+            // recursor now computes, so the transformation stays local to this
+            // expression: its type is still `M[scrut/z]`.
+            WfRec::Cov { d, step } => {
+                let comps = cov_comps(&cx.gamma, step, &plain, *d, 0, &scrut);
+                Ok(cov_proj(&comps, &mlvl, elim, 0))
+            }
+            // …and the window goes in, which is what refines it.
+            WfRec::Convoy(convoy) => {
+                let at = convoy.window(&cx.gamma, 0, scrut.clone());
+                let comps = cov_comps(&cx.gamma, &convoy.step, &convoy.motive, convoy.d, 0, &at);
+                Ok(Term::App {
+                    fun: Rc::new(elim),
+                    dom_level: convoy.lvl.clone(),
+                    cod_level: mlvl.clone(),
+                    dom: Rc::new(cov_ty(&comps, &convoy.lvl)),
+                    // The whole `match` computes the enclosing recursion's
+                    // motive at the anchor, which is `chain[0]` — the very
+                    // obligation the enclosing arm is being checked against.
+                    cod: Rc::new(convoy.motive.apply_local(
+                        &embed(&cx.gamma, 1).extended(Rc::new(convoy.goal(
+                            &cx.gamma,
+                            1,
+                            scrut.shift_local(1),
+                        ))),
+                    )),
+                    arg: Rc::new(convoy.tuple.clone()),
+                })
+            }
+        }
+    }
+
+    /// A nested `match` on the enclosing arm's recursive child continues the
+    /// chain — but only if the values the enclosing recursion carries are
+    /// *passed through* this `match`, since only then does the component one
+    /// below the child reduce, at the arm that knows the child is
+    /// `Cons(h, t)`, to the value at `t` (§4).
+    ///
+    /// `None` when the enclosing recursion has nothing left to hand down,
+    /// which is every ordinary one-step recursion.
+    fn wf_chain_convoy(&self, cx: &Cx, scrut: &Term) -> Option<WfConvoy> {
+        let g = cx.guard.clone()?;
+        let GuardKind::Wf {
+            depth,
+            cov: Some(window),
+            ..
+        } = &g.kind
+        else {
+            return None;
+        };
+        // Nothing below the chain's end is carried: the ordinary recursion,
+        // which a nested `match` changes nothing about.
+        if window.comps.len() <= window.chain.len() {
+            return None;
+        }
+        let by = (cx.names.len() - depth) as u32;
+        // By *term*, never by name: an inner binder that shadows the arm's own
+        // is a different alias and does not continue the chain.
+        if window.chain.last()?.shift_local(by) != *scrut {
+            return None;
+        }
+        let reindex = |t: &Rc<Term>| {
+            t.apply_local(
+                &embed(&window.gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+            )
+        };
+        Some(WfConvoy {
+            dec: g.dec,
+            chain: window
+                .chain
+                .iter()
+                .map(|t| Rc::new(t.shift_local(by)))
+                .collect(),
+            d: window.comps.len(),
+            lvl: window.mlvl.clone(),
+            motive: Rc::new(window.motive.apply_local(
+                &embed(&window.gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+            )),
+            outer_motive: Rc::clone(&window.motive),
+            gamma: window.gamma.clone(),
+            step: ChainStep::Tail(Rc::new(reindex(&window.tail))),
+            outer_tail: Rc::clone(&window.tail),
+            tuple: window.tuple.shift_local(by),
+            window: Rc::new(window.window.shift_local(by)),
+            goal: Rc::new(window.goal.shift_local(by)),
+            generalized: g.generalized.clone(),
+        })
+    }
+
+    /// How deep into the chain this `match`'s self-calls reach, over all its
+    /// arms: the `Wf` case of `cov_depth` (`Nat` design §6, list design §5).
+    ///
+    /// Each recursive arm contributes the depth its own body reaches from its
+    /// own child binder, and the window is sized for the deepest — one motive
+    /// serves every arm, so one depth does. Syntactic and a sizing decision
+    /// only, for exactly the reasons the `Nat` scan states: wrong in either
+    /// direction is safe, because what a call *lowers to* is decided by
+    /// `elab_self_call` comparing terms.
+    fn cov_depth_wf(&self, cx: &Cx, ind: &Inductive, arms: &[&Arm], dec: usize) -> usize {
+        let mut d = 1usize;
+        for (i, arm) in arms.iter().enumerate() {
+            let ctor = &ind.ctors[i];
+            let Some(field) = ctor.kind.iter().position(|k| *k == FieldKind::Plain) else {
+                continue;
+            };
+            let Some(binder) = arm.binders.get(field) else {
+                continue;
+            };
+            d = d.max(self.cov_depth(cx, &arm.body, binder.name(), dec, Some(ind)));
+        }
+        d
     }
 
     /// The `t`-th child of constructor `i` as a *total* function of `⟦D⟧`
@@ -301,6 +653,58 @@ impl Elaborator {
             scrut,
             &Branches::Child { i, t, default },
             None,
+            &WfRec::None,
+            span,
+        )
+    }
+
+    /// `tail_D`, the projection that plays `pred` for a chain-shaped `Wf`
+    /// (`docs/list-course-of-values-design.md` §2), as a term over
+    /// `(cx.gamma, z : ⟦D⟧)`:
+    ///
+    /// ```text
+    /// tail_D(z) = elim_Wf(λ _. ⟦D⟧; case tag of
+    ///                 recursive ctor ⇒ the one child | base ctor ⇒ z; z)
+    /// ```
+    ///
+    /// Two computation facts come out of it, and they are the ones the window
+    /// needs: `tail_D(Cons(h, t)) ⇝ t` is `elim_Wf` β on a `sup`, and at a
+    /// base constructor `tail_D` is the scrutinee itself — the `z` the outer
+    /// binder supplies, which is what makes every component of a base arm's
+    /// tuple sit at one and the same type.
+    ///
+    /// It goes through [`Self::build_elim_wf`] and not `const_elim_wf`, per
+    /// §7's correction: a *constant motive* frees the step from `ih` but not
+    /// from `cs`, and reading a child out of `cs` needs the literal arity that
+    /// only a tag branch has.
+    pub(crate) fn tail_term(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        d_ty: &Type,
+        level: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let mut zcx = cx.clone();
+        zcx.push("#z".into(), d_ty.clone(), level.clone());
+        let under_z = d_ty.shift_local(1);
+        let z = Rc::new(Term::Var(LocalVar(0)));
+        // The motive is `⟦D⟧` itself, constant in the eliminator's own binder
+        // — an emitted annotation, so it takes the reference where there is
+        // one, exactly as `child_projection`'s does.
+        let motive = self.annotation_type(&zcx, &under_z, 0).shift_local(1);
+        self.build_elim_wf(
+            &zcx,
+            ind,
+            &under_z,
+            motive,
+            level.clone(),
+            (*z).clone(),
+            &Branches::Tail {
+                default: Rc::clone(&z),
+            },
+            None,
+            &WfRec::None,
             span,
         )
     }
@@ -353,6 +757,7 @@ impl Elaborator {
         scrut: Term,
         branches: &Branches,
         dec: Option<usize>,
+        rec: &WfRec,
         span: Span,
     ) -> R<Term> {
         let Type::Wf {
@@ -388,7 +793,69 @@ impl Elaborator {
         // motive's own `z` binder: `respell_ty_deep` shifts the *references* by
         // it rather than the result, which is why this is not the
         // `shift_local(1)` the whole-type version needed.
-        let motive = Rc::new(self.annotation_type(cx, &motive, 1));
+        let plain = Rc::new(self.annotation_type(cx, &motive, 1));
+        // The motive of the recursor actually emitted. Three shapes, and the
+        // first is what every `match` on a tier-1 inductive has always
+        // emitted (`docs/list-course-of-values-design.md` §3–§4):
+        //   ordinary : M
+        //   window   : Σ(M[z], M[tail z], …)   — the carried values
+        //   convoy   : T_outer(anchor z) -> M[z]  — the window passed in
+        let (motive, mlvl, rec) = match rec {
+            WfRec::None => (Rc::clone(&plain), mlvl, TelRec::None),
+            WfRec::Cov { d, step } => {
+                let comps = cov_comps(
+                    &cx.gamma,
+                    step,
+                    &plain,
+                    *d,
+                    1,
+                    &Term::Var(LocalVar(0)),
+                );
+                (
+                    Rc::new(cov_ty(&comps, &mlvl)),
+                    mlvl,
+                    TelRec::Cov {
+                        d: *d,
+                        step,
+                        plain: Rc::clone(&plain),
+                    },
+                )
+            }
+            WfRec::Convoy(convoy) => {
+                let at = convoy.window(&cx.gamma, 1, Term::Var(LocalVar(0)));
+                let carried = cov_ty(
+                    &cov_comps(&cx.gamma, &convoy.step, &convoy.motive, convoy.d, 1, &at),
+                    &convoy.lvl,
+                );
+                // The codomain is the **enclosing recursion's** motive at this
+                // `match`'s anchor, not the motive synthesized from the goal.
+                // Those are convertible — the goal was `M[chain[0]]` and
+                // `anchor(chain-end)` is `chain[0]` — and the anchored
+                // spelling is the one that *refines*: a `Wf` arm's goal sits
+                // at `sup_f(ℓ; cs')`, where the child is `nth(cs'; ι₀)` and
+                // not a subterm, so synthesis has to recover the scrutinee
+                // out of a reduced goal and at depth it does not. Rebuilding
+                // it here is the §4 anchoring again, one level up.
+                let anchored = convoy
+                    .motive
+                    .apply_local(&embed(&cx.gamma, 2).extended(Rc::new(convoy.goal(
+                        &cx.gamma,
+                        2,
+                        Term::Var(LocalVar(1)),
+                    ))));
+                let pi = Type::Pi {
+                    dom_level: convoy.lvl.clone(),
+                    cod_level: convoy.lvl.clone(),
+                    dom: Rc::new(carried),
+                    cod: Rc::new(anchored),
+                };
+                let rec = TelRec::Convoy {
+                    convoy,
+                    body_lvl: convoy.lvl.clone(),
+                };
+                (Rc::new(pi), convoy.lvl.clone(), rec)
+            }
+        };
         // Name both closed and parameterized recursive types in the children
         // telescope. An inline List<CallInstruction> here repeats the entire
         // instruction payload in Vec/nth annotations (call_run_checked).
@@ -434,6 +901,8 @@ impl Elaborator {
             cs_ty,
             ih_ty,
             step_ty,
+            slots: (Rc::clone(&shape_e), Rc::clone(&arity_e)),
+            rec,
         };
         // Γ₃ = (Γ, a : S, cs : cs_ty, ih : ih_ty) — the step's context, and
         // the kernel's, verbatim (typing.rs's `elim_Wf` rule).
@@ -760,6 +1229,16 @@ impl Elaborator {
                     default.shift_local(d_body)
                 }
             }
+            // §2 of the list design: the child at a recursive constructor, the
+            // outer scrutinee at a base one. `m` is 0 or 1 here — the caller
+            // checked [`chain_shaped`] — so "the child" is unambiguous.
+            Branches::Tail { default } => {
+                if m == 1 {
+                    nth_child(&tel.level, &d_ty_here, m, 0, cs_var, &base)
+                } else {
+                    default.shift_local(d_body)
+                }
+            }
             Branches::Arms(arms) => {
                 let arm = arms[i];
                 let mut acx = bcx.clone();
@@ -935,21 +1414,215 @@ impl Elaborator {
                 // `match` descends on one of the declaration's own
                 // parameters. If it does not, an enclosing arm's guard, if
                 // any, still stands.
-                acx.guard = dec
-                    .map(|dec| {
+                let plain_guard = |acx: &Cx, cov: Option<Rc<WfCov>>, children| {
+                    dec.map(|dec| {
                         Rc::new(Guard {
                             dec,
                             kind: GuardKind::Wf {
                                 depth: acx.names.len(),
                                 children,
                                 container: container_ih.clone(),
+                                cov,
                             },
                             rebind: None,
                             generalized: crate::generalize::guard_gen(cx, dec, Some(span)),
                         })
                     })
-                    .or_else(|| cx.guard.clone());
-                self.elab_check(&acx, &arm.body, &body_ty, &tel.mlvl)?
+                    .or_else(|| cx.guard.clone())
+                };
+                match &tel.rec {
+                    TelRec::None => {
+                        acx.guard = plain_guard(&acx, None, children);
+                        self.elab_check(&acx, &arm.body, &body_ty, &tel.mlvl)?
+                    }
+                    // The window (§3): the arm the writer wrote, tupled with
+                    // the window slid by one.
+                    TelRec::Cov { d, step, plain } => {
+                        let ChainStep::Tail(tail) = step else {
+                            return err("internal: a `Wf` window without `tail_D`", span);
+                        };
+                        // The arm's own value, spelled as the constructor
+                        // *rebuilt around its child* rather than as the
+                        // `sup_f(ℓ; cs')` the telescope states its step at.
+                        // The two are convertible — `cs'` is a one-element
+                        // `Vec`, and η gives `(nth cs' ι₀, ⟨⟩) ≡ cs'` — and
+                        // the rebuilt spelling is the one with the child as a
+                        // *subterm*, which is what lets a nested `match` on it
+                        // refine this goal the way `Succ k` does for `Nat`
+                        // (`docs/list-course-of-values-design.md` §7.4).
+                        //
+                        // The components are annotated at it, where the kernel
+                        // checks them; a shifted component differs from its
+                        // annotation only by `tail_D(Cᵢ(p, t)) ⇝ t`, which
+                        // conversion does.
+                        let here = children.first().cloned();
+                        let value = match &here {
+                            Some((child, ..)) => tel.rebuilt_here(&inj, d_body, child),
+                            None => tel.value_at(&inj, d_body),
+                        };
+                        let comps = cov_comps(tel.gamma0, step, plain, *d, d_body, &value);
+                        match here {
+                            Some((child, ih, ..)) => {
+                                // An anchor is a λ so that it shifts like a
+                                // closed term; its body mentions this arm's
+                                // payload binders, which are not ambient.
+                                let lam = |body: Term| Term::Lam {
+                                    dom_level: tel.level.clone(),
+                                    cod_level: tel.level.clone(),
+                                    dom: Rc::new(
+                                        tel.emitted.shift_local(d_body).into_type(),
+                                    ),
+                                    body: Rc::new(body),
+                                };
+                                let at_child =
+                                    cov_comps(tel.gamma0, step, plain, *d, d_body, &child);
+                                let window = Rc::new(WfCov {
+                                    chain: vec![Rc::clone(&child)],
+                                    tuple: (*ih).clone(),
+                                    comps: at_child.clone(),
+                                    mlvl: tel.mlvl.clone(),
+                                    motive: Rc::clone(plain),
+                                    gamma: tel.gamma0.clone(),
+                                    tail: Rc::clone(tail),
+                                    // The recursion's own `match`: the window
+                                    // is anchored at this arm's child, which
+                                    // is the chain's end, so the window anchor
+                                    // is the identity — while the *goal* is
+                                    // this arm's own constructor, since a
+                                    // nested `match` on the child refines the
+                                    // arm's obligation to `M[Cᵢ(p, y)]`.
+                                    window: Rc::new(lam(Term::Var(LocalVar(0)))),
+                                    // One binder past the branch — the
+                                    // anchor's own `y` — and no convoy binder
+                                    // here, which is where `rebuilt_at` sits.
+                                    goal: Rc::new(lam(tel.supf_over(
+                                        &inj,
+                                        d_body,
+                                        d_body + 1,
+                                        Rc::new(Term::Var(LocalVar(0))),
+                                    ))),
+                                });
+                                acx.guard = plain_guard(&acx, Some(window), children);
+                                let body =
+                                    self.elab_check(&acx, &arm.body, &comps[0], &tel.mlvl)?;
+                                let mut vals = vec![body];
+                                vals.extend((0..*d - 1).map(|i| {
+                                    cov_proj(&at_child, &tel.mlvl, (*ih).clone(), i)
+                                }));
+                                cov_tuple(&comps, &tel.mlvl, vals)
+                            }
+                            // A base constructor emits its own value `d`
+                            // times (§3): `tail_D` there is the scrutinee, so
+                            // all `d` components sit at the same type, and
+                            // nothing can read the copies — a call at depth
+                            // `i` is only in scope inside `i` nested
+                            // recursive arms.
+                            None => {
+                                acx.guard = plain_guard(&acx, None, children);
+                                let body =
+                                    self.elab_check(&acx, &arm.body, &comps[0], &tel.mlvl)?;
+                                cov_tuple(&comps, &tel.mlvl, vec![body; *d])
+                            }
+                        }
+                    }
+                    // The convoy (§4): the window arrives as an argument, and
+                    // its type at the *rebuilt* constructor is what makes the
+                    // component one below this arm's scrutinee reduce to the
+                    // motive at the child the arm binds.
+                    TelRec::Convoy { convoy, body_lvl } => {
+                        let value = tel.value_at(&inj, d_body);
+                        let at = convoy.window(tel.gamma0, d_body, value);
+                        let comps = cov_comps(
+                            tel.gamma0,
+                            &convoy.step,
+                            &convoy.motive,
+                            convoy.d,
+                            d_body,
+                            &at,
+                        );
+                        let dom = cov_ty(&comps, &convoy.lvl);
+                        let Type::Pi { cod, .. } = &body_ty else {
+                            return err("internal: a convoyed arm is not a Π", span);
+                        };
+                        let mut ccx = acx.clone();
+                        ccx.push("#cov".into(), dom.clone(), convoy.lvl.clone());
+                        // Past the convoy binder itself.
+                        let up = d_body + 1;
+                        let mut chain: Vec<Rc<Term>> = convoy
+                            .chain
+                            .iter()
+                            .map(|t| Rc::new(t.shift_local(up)))
+                            .collect();
+                        let elem = Rc::new(tel.emitted.shift_local(up).into_type());
+                        // Both anchors grow by *this* arm's constructor: a
+                        // nesting one deeper scrutinizes the child, and what
+                        // stood at its scrutinee now stands at
+                        // `Cᵢ(payload, y)`. A base arm extends the chain by
+                        // nothing and so composes with nothing — it is
+                        // convoyed all the same, since its own components sit
+                        // at `tail_D^i` of its own value and a call at the
+                        // chain's head belongs there too.
+                        let (window_anchor, goal_anchor) = match children.first() {
+                            Some((child, ..)) => {
+                                chain.push(Rc::new(child.shift_local(1)));
+                                let rebuilt = tel.rebuilt_at(&inj, d_body);
+                                (
+                                    convoy.window(tel.gamma0, d_body + 2, rebuilt.clone()),
+                                    convoy.goal(tel.gamma0, d_body + 2, rebuilt),
+                                )
+                            }
+                            None => {
+                                let y = Term::Var(LocalVar(0));
+                                (
+                                    convoy.window(tel.gamma0, d_body + 2, y.clone()),
+                                    convoy.goal(tel.gamma0, d_body + 2, y),
+                                )
+                            }
+                        };
+                        let window = Rc::new(WfCov {
+                            chain,
+                            tuple: Term::Var(LocalVar(0)),
+                            comps: comps.iter().map(|c| c.shift_local(1)).collect(),
+                            mlvl: convoy.lvl.clone(),
+                            motive: Rc::clone(&convoy.outer_motive),
+                            gamma: convoy.gamma.clone(),
+                            tail: Rc::clone(&convoy.outer_tail),
+                            window: Rc::new(Term::Lam {
+                                dom_level: tel.level.clone(),
+                                cod_level: tel.level.clone(),
+                                dom: Rc::clone(&elem),
+                                body: Rc::new(window_anchor),
+                            }),
+                            goal: Rc::new(Term::Lam {
+                                dom_level: tel.level.clone(),
+                                cod_level: tel.level.clone(),
+                                dom: Rc::clone(&elem),
+                                body: Rc::new(goal_anchor),
+                            }),
+                        });
+                        ccx.guard = Some(Rc::new(Guard {
+                            dec: convoy.dec,
+                            kind: GuardKind::Wf {
+                                depth: ccx.names.len(),
+                                // A convoyed `match` descends on nothing of
+                                // its own: the ih a self-call takes is the
+                                // window's, not this eliminator's.
+                                children: Vec::new(),
+                                container: None,
+                                cov: Some(window),
+                            },
+                            rebind: None,
+                            generalized: convoy.generalized.clone(),
+                        }));
+                        let body = self.elab_check(&ccx, &arm.body, cod, body_lvl)?;
+                        Term::Lam {
+                            dom_level: convoy.lvl.clone(),
+                            cod_level: body_lvl.clone(),
+                            dom: Rc::new(dom),
+                            body: Rc::new(body),
+                        }
+                    }
+                }
             }
         };
         Ok(Term::Lam {

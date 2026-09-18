@@ -3,7 +3,7 @@ title: A course-of-values window costs O(d²) nodes in its annotations; recorded
 status: open
 labels: [elaboration,performance,kernel]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-09-18
 ---
 
 An accumulator issue in the sense
@@ -22,11 +22,22 @@ and every `fst`/`snd` in the body repeats the tail annotation it projects
 through. The convoy multiplies this by the nesting: each nested `match` on the
 chain carries a Π whose domain is the whole window type again.
 
+**2026-09-18, the same shape on chain-shaped `Wf` declarations**
+([[list-course-of-values-recursion]]): `pred` becomes `tail_D`, which is a
+whole `elim_Wf` with a case tree on the tag rather than five nodes. So the
+`O(d²)` *count* is unchanged and its **constant is larger** — by roughly the
+size of one no-confusion-style projection per link. The customer's `d` is 4
+(`utf8::decode`), the largest in the tree; the convoy multiplier is the same,
+and the levers below all apply verbatim with `tail_D` in `pred`'s place. Lever
+1 has no `Wf` counterpart — there is no one-node "child of" former to add — so
+lever 2, sharing the tail types, is the one that would carry both cases. Not
+measured, per the accumulator discipline.
+
 ## Why it is not a problem now
 
-`d = 2` for every customer that exists (`half`, `Even`, `Odd`, `fib`), `d = 3`
-for `trib` in the tests. At those sizes the tuple is smaller than the arm it
-sits in. The full suite showed no wall-clock change worth naming.
+`d = 2` for every `Nat` customer that exists (`half`, `Even`, `Odd`, `fib`),
+`d = 3` for `trib` in the tests, `d = 4` for `utf8::decode`. At those sizes
+the tuple is smaller than the arm it sits in. The full suite showed no wall-clock change worth naming.
 
 ## What would make it one
 

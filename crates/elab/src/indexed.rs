@@ -700,6 +700,7 @@ impl Elaborator {
                     idx,
                     &Branches::Custom(&body),
                     None,
+                    &crate::wf::WfRec::None,
                     span,
                 )?
             }
@@ -1402,6 +1403,7 @@ impl Elaborator {
                     (*fam.idx).clone(),
                     &Branches::Custom(&body),
                     None,
+                    &crate::wf::WfRec::None,
                     span,
                 )?
             }
@@ -1830,6 +1832,9 @@ impl Elaborator {
                             depth: acx.names.len(),
                             children,
                             container: None,
+                            // An indexed family fords by `Id` and is not
+                            // chain-shaped for the window's purposes.
+                            cov: None,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                         generalized: crate::generalize::guard_gen(&acx, dec, None),
