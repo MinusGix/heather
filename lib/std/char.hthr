@@ -15,7 +15,7 @@ import nat;
 // ---------------------------------------------------------------------------
 // The predicate, and its decision.
 
-fn scalar(code: Nat) → Type { code < 1114112 ∧ ¬(55296 <= code ∧ code < 57344) }
+fn scalar(code: Nat) → Type { code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) }
 
 // The decision, as three `le_dec` calls with the refutations wired through
 // the conjunction. `le_dec(n, m)` descends both arguments together, so each
@@ -25,18 +25,18 @@ fn scalar(code: Nat) → Type { code < 1114112 ∧ ¬(55296 <= code ∧ code < 5
 // A `fn` and not a `theorem` for `le_dec`'s reason: a literal's proof is
 // `decide`, which the kernel judges by *running* this.
 fn scalar_dec(code: Nat) → scalar(code) ∨ ¬scalar(code) {
-    match le_dec(Succ(code), 1114112) {
+    match le_dec(Succ(code), 0x110000) {
         Inr(over) => Inr(λ (h: scalar(code)) => over(h.left)),
         Inl(under) =>
-            match le_dec(55296, code) {
+            match le_dec(0xD800, code) {
                 Inr(below) => Inl(And(under,
-                    λ (h: 55296 <= code ∧ code < 57344) => below(h.left))),
+                    λ (h: 0xD800 <= code ∧ code < 0xE000) => below(h.left))),
                 Inl(at_least) =>
-                    match le_dec(Succ(code), 57344) {
+                    match le_dec(Succ(code), 0xE000) {
                         Inl(surrogate) =>
                             Inr(λ (h: scalar(code)) => h.right(And(at_least, surrogate))),
                         Inr(above) => Inl(And(under,
-                            λ (h: 55296 <= code ∧ code < 57344) => above(h.right))),
+                            λ (h: 0xD800 <= code ∧ code < 0xE000) => above(h.right))),
                     },
             },
     }
@@ -85,6 +85,10 @@ fn char_eq_dec(a, b: Char) → a = b ∨ ¬(a = b) {
 }
 
 instance(a, b: Char) Decide<a = b> { dec := char_eq_dec(a, b) }
+
+// The carrier-level form, which is what a container generic in its element
+// type requires (`logic::DecEq`): `List<Char>` decides because `Char` does.
+instance DecEq<Char> { eq_dec := char_eq_dec }
 
 // ---------------------------------------------------------------------------
 // The literal class. `Numeral`'s counterpart for `'x'`

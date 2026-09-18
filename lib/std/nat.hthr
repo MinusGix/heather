@@ -821,6 +821,10 @@ fn eq_dec(n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
 
 instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n, m) }
 
+// The same decision as a property of the carrier, which is what a polymorphic
+// container's decider requires of its element type (`logic::DecEq`).
+instance DecEq<Nat> { eq_dec := eq_dec }
+
 // ---------------------------------------------------------------------------
 // The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
 // rather than chosen. `le_add` is the forward half and was already here.

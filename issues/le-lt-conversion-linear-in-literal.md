@@ -17,7 +17,7 @@ Minimal repro (`import logic; import nat;`):
 
 ```heather
 theorem conv_small(n: Nat, h: 16 < Succ(n)): 16 <= n { h }      // checks
-theorem conv_only(n: Nat, h: 55296 < Succ(n)): 55296 <= n { h } // OutOfFuel
+theorem conv_only(n: Nat, h: 0xD800 < Succ(n)): 0xD800 <= n { h } // OutOfFuel
 theorem mid(n: Nat, h: ¬(Succ(n) <= 1024)): 1024 <= n {         // OutOfFuel
     lt_of_not_le(1024, Succ(n), h)
 }
@@ -30,11 +30,11 @@ between the two forms at a Unicode-sized constant is unwritable.
 
 Found while writing `lib/std/char.hthr` ([[string-char-spec-types]]): the
 first spelling of `scalar_dec` refuted the surrogate range by `le_trans`
-against `¬(Succ(code) <= 55296)` and hit this. The landed spelling avoids it
-by deciding `55296 <= code` with `le_dec` directly — cheap at a closed code,
+against `¬(Succ(code) <= 0xD800)` and hit this. The landed spelling avoids it
+by deciding `0xD800 <= code` with `le_dec` directly — cheap at a closed code,
 since `le_dec` descends both arguments together — so nothing is blocked; the
 pathology is filed rather than worked around further.
 
 ## Log
 
-- 2026-09-18: Coordinator repro 2026-09-18 on the release binary at the default kernel width: the `55296` case aborts the checker with a kernel-worker stack overflow rather than `OutOfFuel`, so the cost is a deep recursion, not only a long one.
+- 2026-09-18: Coordinator repro 2026-09-18 on the release binary at the default kernel width: the `0xD800` case aborts the checker with a kernel-worker stack overflow rather than `OutOfFuel`, so the cost is a deep recursion, not only a long one.

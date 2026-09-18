@@ -220,6 +220,25 @@ instance<P: Decide> Decide<¬P> {
 }
 
 // ---------------------------------------------------------------------------
+// Decidable equality at a CARRIER, which `Decide` cannot express. A `Decide`
+// instance is keyed by the endpoints' resolved type
+// (docs/decidable-equation-carrier-design.md), so it says "equality at *this*
+// type decides" and a generic consumer — a decider for `List<A>`, a count of
+// occurrences in a list — has no goal to backchain on at an abstract `A`. That
+// is what this class is: equality decided as a property of the carrier, which
+// a container's instance can require of its element type.
+//
+// The two are not parallel notions and neither subsumes the other. `DecEq<A>`
+// is the premise a polymorphic decider takes; `Decide<a = b>` is the goal
+// `decide` answers at fixed endpoints. Each carrier with decidable equality
+// registers both, and the `Decide` side is one line over this one.
+//
+// The field is a `fn`-shaped decision and not a `theorem` for the reason
+// `Decide`'s own `dec` carries: nothing downstream of a decision is `refl`
+// any more once it stops reducing.
+class DecEq<A> { eq_dec: (a, b: A) → a = b ∨ ¬(a = b) }
+
+// ---------------------------------------------------------------------------
 // Propositional truncation. The primitive eliminator is deliberately
 // dependent and exposes its squash-headed result restriction. These are the
 // ordinary constant-motive views clients should use when dependency is not

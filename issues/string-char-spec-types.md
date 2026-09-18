@@ -36,3 +36,15 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   would have had to import them). Filed on the way:
   [[le-lt-conversion-linear-in-literal]], which refused the first spelling of
   `scalar_dec`.
+- 2026-09-18: Follow-ups filed from review 2026-09-18: [[derive-decide-instances]] (no hand-written `scalar_dec`), [[member-shadows-receiver-member]] (the `string_len` delegation), [[derive-record-injectivity-congruence]] (`code_injective`, `chars_injective`). Library rework in flight: `chars_nth` and the `List<Char>` helpers go; list equality becomes generic in `list`.
+- 2026-09-18: Rework landed. `logic::DecEq<A>` is the carrier-level equality
+  class (instances at `Nat`, `Char`, and `List<A>` given `DecEq<A>`);
+  `list::list_eq_dec` is the generic decider and `list` now owns
+  `is_nil`/`head_or`/`nil_ne_cons`/`cons_ne_nil`/`cong_head`/`cong_tail`/`cons_eq`
+  at an open element type. `string.hthr` keeps no `List<Char>` helper at all:
+  `String::nth` recurses on the `String` under a `decreases` measure and
+  `string_eq_dec` calls the generic decider. Filed on the way:
+  [[instance-binder-occurrence-through-binder-types]], which refused the
+  value-generic `Decide<xs = ys>` bridge, and
+  [[generic-congruence-inferred-type-arg-level-mismatch]], which forced
+  `cong_tail<A>(p)` at one use site.

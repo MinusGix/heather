@@ -28,20 +28,9 @@ fn String::len(self s: String) → Nat { string_len(s) }
 // ---------------------------------------------------------------------------
 // Indexing. `nth` takes a `Fin(s.len())`, so no partial index appears in the
 // specification at all: out of range is unwritable rather than an `Option`.
-//
-// The index is eliminated by recursing on the *list* and letting the motive
-// instantiate the length — `Fin` has no eliminator of its own, and at a
-// neutral length there is no canonical index to match on
-// (docs/surface-fin-indexing-design.md §1.2).
-fn chars_nth(xs: List<Char>) → (i: Fin(xs.len())) → Char {
-    match xs {
-        Nil => λ (i: Fin(0)) => match i {},
-        Cons(head, tail) => λ (i: Fin(Succ(tail.len()))) =>
-            match i { FZ => head, FS(j) => chars_nth(tail, j) },
-    }
-}
-
-fn String::nth(self s: String, i: Fin(s.len())) → Char { chars_nth(s.chars, i) }
+// The lookup itself is `List::at`, the total `Fin`-indexed read every list
+// has; `s.len()` is `s.chars.len()` by definition, so the index carries over.
+fn String::nth(self s: String, i: Fin(s.len())) → Char { s.chars.at(i) }
 
 fn take(s: String, n: Nat) → String { String(list::take(s.chars, n)) }
 
@@ -70,77 +59,13 @@ theorem len_append(s, t: String): (s ++ t).len() = s.len() + t.len() {
 theorem len_nil(): String(chars := Nil<Char>).len() = 0 {}
 
 // ---------------------------------------------------------------------------
-// Decidable equality. The character list is compared structurally, so this
-// section first needs what `list` does not yet export: a `Nil`/`Cons`
-// discriminator and the two projections congruence goes through. They are
-// stated over `Char` rather than at an open element type because that is all
-// this module needs; if a second client wants them they move to `list`.
-
-fn is_nil(xs: List<Char>) → Type { match xs { Nil => True, Cons(_, _) => False } }
-
-fn head_or(fallback: Char, xs: List<Char>) → Char {
-    match xs { Nil => fallback, Cons(head, _) => head }
-}
-
-fn tail_or(xs: List<Char>) → List<Char> {
-    match xs { Nil => Nil, Cons(_, tail) => tail }
-}
-
-theorem nil_ne_cons(head: Char, tail: List<Char>): ¬(Nil<Char> = Cons(head, tail)) {
-    λ (p: (Nil<Char> = Cons(head, tail))) => j(p, λ y q => is_nil(y), trivial)
-}
-
-theorem cons_ne_nil(head: Char, tail: List<Char>): ¬(Cons(head, tail) = Nil<Char>) {
-    λ (p: (Cons(head, tail) = Nil<Char>)) => nil_ne_cons(head, tail, sym(p))
-}
-
-theorem cong_head(fallback: Char, {xs, ys: List<Char>}, p: xs = ys):
-    head_or(fallback, xs) = head_or(fallback, ys)
-{
-    j(p, λ y q => head_or(fallback, xs) = head_or(fallback, y), refl)
-}
-
-theorem cong_tail({xs, ys: List<Char>}, p: xs = ys): tail_or(xs) = tail_or(ys) {
-    j(p, λ y q => tail_or(xs) = tail_or(y), refl)
-}
-
-theorem cons_eq(head1, head2: Char, tail1, tail2: List<Char>,
-    ph: head1 = head2, pt: tail1 = tail2): Cons(head1, tail1) = Cons(head2, tail2)
-{
-    j(ph, λ y q => Cons(head1, tail1) = Cons(y, tail2), cong_cons(head1, pt))
-}
-
-// A `fn` and not a `theorem`: a decision has to reduce, or nothing downstream
-// of `Decide<s = t>` is `refl` any more (`nat::eq_dec` carries the same note).
-fn chars_eq_dec(xs: List<Char>) → (ys: List<Char>) → xs = ys ∨ ¬(xs = ys) {
-    match xs {
-        Nil => λ ys =>
-            match ys {
-                Nil => Inl(refl),
-                Cons(head2, tail2) => Inr(nil_ne_cons(head2, tail2)),
-            },
-        Cons(head1, tail1) => λ ys =>
-            match ys {
-                Nil => Inr(cons_ne_nil(head1, tail1)),
-                Cons(head2, tail2) =>
-                    match char_eq_dec(head1, head2) {
-                        Inr(head_ne) => Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                            head_ne(cong_head(head1, p))),
-                        Inl(head_eq) =>
-                            match chars_eq_dec(tail1, tail2) {
-                                Inl(tail_eq) => Inl(cons_eq(head1, head2, tail1, tail2,
-                                    head_eq, tail_eq)),
-                                Inr(tail_ne) =>
-                                    Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                                        tail_ne(cong_tail(p))),
-                            },
-                    },
-            },
-    }
-}
+// Decidable equality. The character lists are compared by `list`'s generic
+// decider, which `Char`'s `DecEq` instance supplies the element decision to,
+// and the answer is lifted through the one projection. Nothing about lists is
+// restated here.
 
 fn string_eq_dec(s, t: String) → s = t ∨ ¬(s = t) {
-    match chars_eq_dec(s.chars, t.chars) {
+    match list_eq_dec(s.chars, t.chars) {
         Inl(p) => Inl(chars_injective(s, t, p)),
         Inr(np) => Inr(λ (h: s = t) => np(cong_chars(s, t, h))),
     }

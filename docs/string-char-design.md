@@ -40,7 +40,7 @@ disturb it.
 
 ```heather
 // lib/std/char.hthr
-fn scalar(code: Nat) → Type { code < 1114112 ∧ ¬(55296 <= code ∧ code < 57344) }
+fn scalar(code: Nat) → Type { code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) }
 fn scalar_dec(code: Nat) → scalar(code) ∨ ¬scalar(code)     // from the Nat deciders
 instance(code: Nat) Decide<scalar(code)> { dec := scalar_dec(code) }
 
@@ -75,6 +75,27 @@ instance(s, t: String) Decide<s = t>
 Everything is stated over `String` and proved by unfolding to the list
 lemma once; do not re-prove list theorems. `nth` at `Fin(len)` is the
 "better-typed" indexing: no partial index anywhere in the spec.
+
+A `String` has exactly **one** presentation of its characters, and it is
+`String` itself: no `List<Char>`-typed helper lives in `string.hthr`, and a
+fact about lists is `list`'s (2026-09-18 review). Two consequences the
+implementation had to find a spelling for:
+
+- Equality decides through `list::list_eq_dec`, the generic decider whose
+  premise is the carrier-level class `logic::DecEq<A>`. That class is the
+  "future carrier-level equality class" `docs/decidable-equation-carrier-design.md`
+  names: a `Decide<a = b>` instance is keyed by the endpoints' *resolved* type,
+  so it says nothing at an abstract element type, which is exactly what a
+  container's decider needs to require. `Nat`, `Char` and `List<A>` given
+  `DecEq<A>` register it; `Decide<xs = ys>` at `List<A>` does not, for
+  `issues/instance-binder-occurrence-through-binder-types.md`.
+- `String::nth` is `s.chars.at(i)`: the total `Fin`-indexed read is a fact
+  about every list, so it lives in `list.hthr` as `List::at`, and the string
+  projects into it. A version recursing on the `String` itself was tried and
+  rejected: the scrutinee is a projection, so it needs a `decreases` measure,
+  which may not carry a `self` and leaves the recursion stuck at a neutral
+  tail (`String(chars := Cons(c, rest)).nth(FS(k))` did not reduce to
+  `String(chars := rest).nth(k)`). Through `List::at` every step reduces.
 
 ## 3. Literals
 
@@ -133,10 +154,7 @@ Two spellings the implementation settled (2026-09-18):
   Unicode-sized constants. Filed, not worked around further.
 - `take`, `drop`, `append` and `len_append` exist in both `list` and
   `string`; a file importing both qualifies (`string::take`). The receiver
-  forms and `take_drop` are unambiguous. The `Nil`/`Cons` discriminators
-  `chars_eq_dec` needs are declared in `string.hthr` at `Char` rather than
-  added to `list.hthr`, whose tail is conversion-sensitive for its clients;
-  they move to `list` when a second client wants them.
+  forms and `take_drop` are unambiguous.
 
 ## 4. Round 1 scope (this round)
 

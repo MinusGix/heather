@@ -92,13 +92,16 @@ fn nth_reads_at_a_literal_and_at_an_open_string() {
 theorem literal_first(): "abc".nth(FZ) = 'a' { refl }
 theorem literal_second(): "abc".nth(FS(FZ)) = 'b' { refl }
 theorem literal_third(): "abc".nth(FS(FS(FZ))) = 'c' { refl }
-// Neutral receiver, neutral index: `nth` is the list reader through the one
-// projection, and says so without computing.
-theorem neutral(s: String, i: Fin(s.len())): s.nth(i) = chars_nth(s.chars, i) { refl }
-// An open tail with a literal head still reduces, which is what makes the
-// `Fin` motive usable at all.
+// A read into an open tail reduces step by step: the length is a `Succ`
+// at every `Cons`, so the `Fin` motive instantiates without the tail.
 theorem open_tail(c: Char, rest: List<Char>):
     String(chars := Cons(c, rest)).nth(FZ) = c
+{}
+theorem open_tail_second(c, d: Char, rest: List<Char>):
+    String(chars := Cons(c, Cons(d, rest))).nth(FS(FZ)) = d
+{}
+theorem open_tail_step(c: Char, rest: List<Char>, i: Fin(rest.len())):
+    String(chars := Cons(c, rest)).nth(FS(i)) = String(chars := rest).nth(i)
 {}
 "#,
     );
