@@ -354,16 +354,7 @@ mod tests {
     use super::*;
     #[test]
     fn elf_header_mutations_are_rejected_by_heather() {
-        use heather_elab::Elaborator;
-        use heather_cli::{loader, semantic::SemanticSession};
-        use std::path::PathBuf;
-        let mut elab = Elaborator::with_prelude().unwrap();
-        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
-        for &(name, src) in super::super::SUPPORT {
-            super::super::check_module(&mut elab, &mut session, &loader::Module {
-                name: name.into(), path: PathBuf::from(name), src: src.into(),
-            }).unwrap();
-        }
+        let elab = super::super::native_test_base();
         let good = image(&[0x0f, 0x05]).unwrap();
         // Identity/class/endian/type/machine/entry/table offsets and sizes,
         // segment permissions/mapping/file bounds/alignment, and stack policy.
@@ -389,16 +380,7 @@ mod tests {
 
     #[test]
     fn loaded_mapping_and_fetch_refusals() {
-        use heather_elab::Elaborator;
-        use heather_cli::{loader, semantic::SemanticSession};
-        use std::path::PathBuf;
-        let mut elab = Elaborator::with_prelude().unwrap();
-        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
-        for &(name, src) in super::super::SUPPORT {
-            super::super::check_module(&mut elab, &mut session, &loader::Module {
-                name: name.into(), path: PathBuf::from(name), src: src.into(),
-            }).unwrap();
-        }
+        let mut elab = super::super::native_test_base();
         let source = r#"
 import elf64;
 import elf64_load;

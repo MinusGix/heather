@@ -379,11 +379,44 @@ fn assembly(symbol: &str, bytes: &[u8]) -> String {
     out
 }
 
-// Each certificate test loads the complete proof library (~1 GB resident)
-// and checks its probe modules on forks of that elaborator, at the default
-// worker width. libtest runs two of them at once under the suite's 6 GiB
-// address-space rail; the lock that once serialized them dates from the
-// 4 GiB rail and the serial gate.
+// Each certificate test checks its probe modules on a fresh elaborator over
+// the complete proof library (~1 GB resident), at the default worker width.
+// libtest runs two of them at once under the suite's 6 GiB address-space
+// rail; the lock that once serialized them dates from the 4 GiB rail and the
+// serial gate.
+//
+// The library is replayed ONCE per process, and through the declaration-
+// verdict store at `target/decl-cache` — the same trust argument as
+// `crates/elab/tests/support`'s `semantic_test_base`: a replayed image's
+// stored definitions ask the store the question the cold gate answered, and
+// a changed kernel discards the store loudly on open. Without it every test
+// re-kernel-checked all 28 modules' bindings in the debug profile: 25 s of
+// replay per test against ~1 s of the test's own content, 100 of this
+// binary's 105 CPU-s (2026-09-17, alone, width one). The gate is sealed to
+// `NoGate` before the image is taken, so every certificate, mutation and
+// refusal below faces the real kernel on every run.
+#[cfg(test)]
+pub(crate) fn native_test_base() -> Elaborator {
+    use std::sync::{Arc, OnceLock};
+    static IMAGE: OnceLock<heather_elab::SemanticImage> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+        let mut elab = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
+        let decl_cache = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/decl-cache"));
+        let (cache, rejected) = heather_cache::Cache::open(decl_cache.clone());
+        if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) { eprintln!("decl-cache: {msg}"); }
+        let cache = Arc::new(cache);
+        elab.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
+        for &(name, src) in SUPPORT {
+            check_module(&mut elab, &mut session, &loader::Module {
+                name: name.into(), path: PathBuf::from(name), src: src.into(),
+            }).unwrap();
+        }
+        elab.set_gate(Arc::new(heather_elab::gate::NoGate));
+        if let Err(err) = cache.save() { eprintln!("decl-cache: could not write {}: {err}", decl_cache.display()); }
+        elab.semantic_image()
+    }).elaborator()
+}
 
 #[cfg(test)]
 mod tests {
@@ -391,13 +424,7 @@ mod tests {
 
     #[test]
     fn native_encoder_is_checked_and_corruption_is_rejected() {
-        let mut elab = Elaborator::with_prelude().unwrap();
-        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
-        for &(name, src) in SUPPORT {
-            check_module(&mut elab, &mut session, &loader::Module {
-                name: name.into(), path: PathBuf::from(name), src: src.into(),
-            }).unwrap();
-        }
+        let elab = native_test_base();
         let instructions = [
             Instruction::MovRR { destination: Gpr::R15, source: Gpr::R8 },
             Instruction::MovRI { destination: Gpr::R9, immediate: 257 },
