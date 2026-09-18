@@ -178,52 +178,47 @@ fn encode(s: String) → List<BitVec(8)> { encode_chars(s.chars) }
 // ---------------------------------------------------------------------------
 // Decoding. `decode_char` reads one scalar value off the front of a byte list
 // and returns the rest; it is where every rejection lives.
+//
+// Every test the decoder makes is a `match` on a Boolean or on an `Option`,
+// and each one is its own declaration — the ladder-as-declarations spelling
+// of `width_of`, for the same reason. The strictness proof (theorem 7 below)
+// starts from a hypothesis at an ABSTRACT byte list, so it cannot compute
+// through the decoder; it has to case on each computed value and learn what
+// the taken branch promises, and a `match` that is a declaration is one a
+// proof can rewrite along a rung at a time and state a promise about
+// (`Header`, `ContSpec`, `EmitSpec`) without respelling the body in a motive.
 
 inductive Class { C1, C2, C3, C4, CBad }
 
-// A lead byte's class, read off the top bits. `CBad` covers both a stray
-// continuation byte (`10……`) and a lead byte of `0xF8` or above, neither of
-// which starts a sequence.
-fn class_of(b: BitVec(8)) → Class {
-    match bit7(b) {
-        False => C1,
-        True => match bit6(b) {
-            False => CBad,
-            True => match bit5(b) {
-                False => C2,
-                True => match bit4(b) {
-                    False => C3,
-                    True => match bit3(b) { False => C4, True => CBad },
-                },
-            },
-        },
-    }
-}
+// A lead byte's class, read off the top bits one rung at a time. `CBad`
+// covers both a stray continuation byte (`10……`) and a lead byte of `0xF8` or
+// above, neither of which starts a sequence.
+fn class_lead4(b: BitVec(8)) → Class { match bit3(b) { False => C4, True => CBad } }
+fn class_lead3(b: BitVec(8)) → Class { match bit4(b) { False => C3, True => class_lead4(b) } }
+fn class_lead2(b: BitVec(8)) → Class { match bit5(b) { False => C2, True => class_lead3(b) } }
+fn class_lead(b: BitVec(8)) → Class { match bit6(b) { False => CBad, True => class_lead2(b) } }
+fn class_of(b: BitVec(8)) → Class { match bit7(b) { False => C1, True => class_lead(b) } }
 
 // One continuation byte, checked. `None` is both truncation and a byte that
 // is not `10……`.
+fn cont_marked(b: BitVec(8), rest: List<BitVec(8)>) → Option<Pair<BitVec(6), List<BitVec(8)>>> {
+    match bit6(b) { True => None, False => Some(Pair(cont_payload(b), rest)) }
+}
+
+fn cont_lead(b: BitVec(8), rest: List<BitVec(8)>) → Option<Pair<BitVec(6), List<BitVec(8)>>> {
+    match bit7(b) { False => None, True => cont_marked(b, rest) }
+}
+
 fn cont_of(bytes: List<BitVec(8)>) → Option<Pair<BitVec(6), List<BitVec(8)>>> {
-    match bytes {
-        Nil => None,
-        Cons(b, rest) => match bit7(b) {
-            False => None,
-            True => match bit6(b) {
-                True => None,
-                False => Some(Pair(cont_payload(b), rest)),
-            },
-        },
-    }
+    match bytes { Nil => None, Cons(b, rest) => cont_lead(b, rest) }
 }
 
 // The two checks every decoded value passes: it is not an overlong form of a
 // shorter class (`min` is the class's least legal value), and it is a scalar
 // value. Both rejections are `None`; the second is also where the resulting
 // `Char`'s witness comes from, so the character is built from the decision
-// rather than from a separate proof.
-//
-// Each guard gets its own declaration so that a proof can rewrite the guard
-// and leave the rest of the term alone; a single nested `match` would have to
-// be re-spelled inside every motive.
+// rather than from a separate proof. Each guard is its own declaration so
+// that a proof can rewrite the guard and leave the rest of the term alone.
 fn emit_dec(code: Nat, d: char::scalar(code) ∨ ¬char::scalar(code),
         rest: List<BitVec(8)>) → Option<Pair<Char, List<BitVec(8)>>> {
     match d {
@@ -244,6 +239,63 @@ fn emit(min: Nat, code: Nat, rest: List<BitVec(8)>) → Option<Pair<Char, List<B
     emit_min(nat::leb(min, code), code, rest)
 }
 
+// The multi-byte classes, one taken continuation at a time: each step takes
+// the `cont_of` result it cases on as a parameter and the payloads already
+// read as the others, so that a proof can split on one continuation while the
+// earlier ones stay named. The payload is assembled LOW piece first, which is
+// the last byte: UTF-8 is big-endian across bytes and a `BitVec` is
+// little-endian within one.
+fn seq2(b: BitVec(8),
+        k1: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k1 {
+        None => None,
+        Some(k) => emit(0x80, toNat(11, concat(6, 5, k.fst, lead2_payload(b))), k.snd),
+    }
+}
+
+fn seq3_last(b: BitVec(8), p1: BitVec(6),
+        k2: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k2 {
+        None => None,
+        Some(k) => emit(0x800,
+            toNat(16, concat(6, 10, k.fst, concat(6, 4, p1, lead3_payload(b)))), k.snd),
+    }
+}
+
+fn seq3(b: BitVec(8),
+        k1: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k1 {
+        None => None,
+        Some(k) => seq3_last(b, k.fst, cont_of(k.snd)),
+    }
+}
+
+fn seq4_last(b: BitVec(8), p1, p2: BitVec(6),
+        k3: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k3 {
+        None => None,
+        Some(k) => emit(0x10000,
+            toNat(21, concat(6, 15, k.fst,
+                concat(6, 9, p2, concat(6, 3, p1, lead4_payload(b))))), k.snd),
+    }
+}
+
+fn seq4_mid(b: BitVec(8), p1: BitVec(6),
+        k2: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k2 {
+        None => None,
+        Some(k) => seq4_last(b, p1, k.fst, cont_of(k.snd)),
+    }
+}
+
+fn seq4(b: BitVec(8),
+        k1: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Option<Pair<Char, List<BitVec(8)>>> {
+    match k1 {
+        None => None,
+        Some(k) => seq4_mid(b, k.fst, cont_of(k.snd)),
+    }
+}
+
 // The per-class body, shared by the one-character decoder and the whole-list
 // one so that the two agree by computation at every class. The class is a
 // parameter and not a `match` on the lead byte, which is what lets a proof
@@ -253,33 +305,9 @@ fn decode_seq(cl: Class, b: BitVec(8),
     match cl {
         CBad => None,
         C1 => emit(0, toNat(7, ascii_payload(b)), rest),
-        C2 => match cont_of(rest) {
-            None => None,
-            Some(k1) => emit(0x80,
-                toNat(11, concat(6, 5, k1.fst, lead2_payload(b))), k1.snd),
-        },
-        C3 => match cont_of(rest) {
-            None => None,
-            Some(k1) => match cont_of(k1.snd) {
-                None => None,
-                Some(k2) => emit(0x800,
-                    toNat(16, concat(6, 10, k2.fst,
-                        concat(6, 4, k1.fst, lead3_payload(b)))), k2.snd),
-            },
-        },
-        C4 => match cont_of(rest) {
-            None => None,
-            Some(k1) => match cont_of(k1.snd) {
-                None => None,
-                Some(k2) => match cont_of(k2.snd) {
-                    None => None,
-                    Some(k3) => emit(0x10000,
-                        toNat(21, concat(6, 15, k3.fst,
-                            concat(6, 9, k2.fst,
-                                concat(6, 3, k1.fst, lead4_payload(b))))), k3.snd),
-                },
-            },
-        },
+        C2 => seq2(b, cont_of(rest)),
+        C3 => seq3(b, cont_of(rest)),
+        C4 => seq4(b, cont_of(rest)),
     }
 }
 
@@ -292,13 +320,17 @@ fn decode_char(bytes: List<BitVec(8)>) → Option<Pair<Char, List<BitVec(8)>>> {
 
 // Pushing a decoded character onto a decoded tail; `None` on either side is
 // `None`, so a rejection anywhere rejects the whole list.
+fn push_tail(c: Char, tail: Option<String>) → Option<String> {
+    match tail {
+        None => None,
+        Some(s) => Some(String(chars := Cons(c, s.chars))),
+    }
+}
+
 fn push_char(step: Option<Pair<Char, List<BitVec(8)>>>, tail: Option<String>) → Option<String> {
     match step {
         None => None,
-        Some(st) => match tail {
-            None => None,
-            Some(s) => Some(String(chars := Cons(st.fst, s.chars))),
-        },
+        Some(st) => push_tail(st.fst, tail),
     }
 }
 
@@ -338,6 +370,49 @@ fn decode(bytes: List<BitVec(8)>) → Option<String> {
                         Nil => None,
                         Cons(_, rest4) => push_char(decode_seq(C4, b, rest), decode(rest4)),
                     },
+                },
+            },
+        },
+    }
+}
+
+// The loop's `Cons` arm at a NAMED class: `decode`'s dispatch spelled again
+// as a declaration that takes the class as a parameter. `decode` cannot call
+// it — the arms recurse, and a pair of declarations would be mutually
+// recursive with all that `docs/mutual-recursion-design.md` asks of one — so
+// it is stated after `decode` and calls the finished `decode` where the loop
+// called itself. What it is for is a motive: a proof with `decode(Cons(b, rest))`
+// in its hypothesis cases on `class_of(b)` through it.
+//
+// The two are one term by computation once `rest` is a constructor as deep
+// as the widest class steps, and not before: the window `decode` recurses
+// through is convoyed as an ARGUMENT to each nested `match` on `rest`, and an
+// applied `match` stuck on an open tail is not the plain `match` written
+// here. The strictness proof therefore cases on `rest` three constructors
+// deep before it cases on the class, and never states this equation at an
+// open tail.
+fn decode_class(cl: Class, b: BitVec(8), rest: List<BitVec(8)>) → Option<String> {
+    match cl {
+        CBad => None,
+        C1 => push_char(decode_seq(C1, b, rest), decode(rest)),
+        C2 => match rest {
+            Nil => None,
+            Cons(_, rest2) => push_char(decode_seq(C2, b, rest), decode(rest2)),
+        },
+        C3 => match rest {
+            Nil => None,
+            Cons(_, rest2) => match rest2 {
+                Nil => None,
+                Cons(_, rest3) => push_char(decode_seq(C3, b, rest), decode(rest3)),
+            },
+        },
+        C4 => match rest {
+            Nil => None,
+            Cons(_, rest2) => match rest2 {
+                Nil => None,
+                Cons(_, rest3) => match rest3 {
+                    Nil => None,
+                    Cons(_, rest4) => push_char(decode_seq(C4, b, rest), decode(rest4)),
                 },
             },
         },
@@ -484,6 +559,606 @@ theorem encode_append(s, t: String): encode(s ++ t) = encode(s) ++ encode(t) {
 }
 
 // ---------------------------------------------------------------------------
+// Theorem 7, strictness: a byte list that decodes is the encoding of what it
+// decodes to. The round trip above is the direction computation gives; this
+// is the converse, and it is what makes `Utf8` and `String` two presentations
+// of one type (theorem 8 at the end of the file). It holds because the
+// decoder is strict: an overlong form or a non-scalar decodes to nothing, so
+// nothing that decodes has a second spelling.
+//
+// The hypothesis is at an ABSTRACT byte list, so where the round trip
+// computed, this proof inverts. Each `match` the decoder made on a computed
+// value is replayed as a case split whose motive carries what that value
+// promises — `Header` for the lead byte's class, `ContSpec` for a taken
+// continuation, `EmitSpec` for the emitted character — and each promise is
+// proved once, by `width_bounds`'s `inspect` idiom, rung by rung. A decoded
+// code then re-encodes to the bytes it was read from because (i) its class's
+// range tests pin `width_of` (`width_of_bounds`, the converse of
+// `width_bounds`), (ii) `bitvec::ofNat_toNat` turns the value back into the
+// payload it was read from, and (iii) a byte is its payload under its header
+// (`rebuild`). The induction is on the byte COUNT, structurally on a `Nat`
+// bound: the leaf lemmas below case on the tail three constructors deep, and
+// a nested `match` on the chain inside a theorem's `λ` is a shape the
+// course-of-values window does not carry yet
+// (`issues/cov-window-in-theorem-arms.md`).
+
+// A rejection branch against a hypothesis that the decoder succeeded. The
+// discriminator is a recursion into `Type` like `list::is_nil`: it reduces at
+// a constructor, so the refutation is transporting `trivial`. (`option` does
+// not import `logic`, so the two live here rather than there.)
+fn IsSome<A>(o: Option<A>) → Type { match o { None => False, Some(_) => True } }
+
+theorem none_ne_some<A>(a: A): ¬((None<A>) = Some(a)) {
+    λ (p: ((None<A>) = Some(a))) => j(sym(p), λ y q => IsSome(y), trivial)
+}
+
+// (iii) A vector is its low bits under its high bits: `concat_split` with
+// the high bits rewritten to what a class says they are.
+theorem rebuild(n, m: Nat, x: BitVec(m + n), hi: BitVec(m), h: drop_low(n, m, x) = hi):
+        concat(n, m, take_low(n, m, x), hi) = x {
+    j(h, λ y _ => concat(n, m, take_low(n, m, x), y) = x, bitvec::concat_split(n, m, x))
+}
+
+// What a class says about the lead byte it was read from, as the equation
+// `rebuild` consumes. `CBad` promises nothing. At these literal widths
+// `drop_low(5, 3, b)` IS `from_bits(3, [bit5(b), bit6(b), bit7(b)])` by
+// vector η, which is what lets one rung's Boolean outcome rewrite one bit.
+fn Header(cl: Class, b: BitVec(8)) → Type {
+    match cl {
+        CBad => True,
+        C1 => drop_low(7, 1, b) = from_bits(1, [False]),
+        C2 => drop_low(5, 3, b) = from_bits(3, [False, True, True]),
+        C3 => drop_low(4, 4, b) = from_bits(4, [False, True, True, True]),
+        C4 => drop_low(3, 5, b) = from_bits(5, [False, True, True, True, True]),
+    }
+}
+
+theorem header_1(b: BitVec(8), e7: bit7(b) = False): drop_low(7, 1, b) = from_bits(1, [False]) {
+    j(sym(e7), λ y _ => from_bits(1, [y]) = from_bits(1, [False]), refl)
+}
+
+theorem header_2(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = False):
+        drop_low(5, 3, b) = from_bits(3, [False, True, True]) {
+    j(sym(e5), λ y _ => from_bits(3, [y, bit6(b), bit7(b)]) = from_bits(3, [False, True, True]),
+        j(sym(e6), λ y _ => from_bits(3, [False, y, bit7(b)]) = from_bits(3, [False, True, True]),
+            j(sym(e7), λ y _ => from_bits(3, [False, True, y]) = from_bits(3, [False, True, True]),
+                refl)))
+}
+
+theorem header_3(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
+        e4: bit4(b) = False): drop_low(4, 4, b) = from_bits(4, [False, True, True, True]) {
+    j(sym(e4), λ y _ => from_bits(4, [y, bit5(b), bit6(b), bit7(b)])
+            = from_bits(4, [False, True, True, True]),
+        j(sym(e5), λ y _ => from_bits(4, [False, y, bit6(b), bit7(b)])
+                = from_bits(4, [False, True, True, True]),
+            j(sym(e6), λ y _ => from_bits(4, [False, True, y, bit7(b)])
+                    = from_bits(4, [False, True, True, True]),
+                j(sym(e7), λ y _ => from_bits(4, [False, True, True, y])
+                        = from_bits(4, [False, True, True, True]),
+                    refl))))
+}
+
+theorem header_4(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
+        e4: bit4(b) = True, e3: bit3(b) = False):
+        drop_low(3, 5, b) = from_bits(5, [False, True, True, True, True]) {
+    j(sym(e3), λ y _ => from_bits(5, [y, bit4(b), bit5(b), bit6(b), bit7(b)])
+            = from_bits(5, [False, True, True, True, True]),
+        j(sym(e4), λ y _ => from_bits(5, [False, y, bit5(b), bit6(b), bit7(b)])
+                = from_bits(5, [False, True, True, True, True]),
+            j(sym(e5), λ y _ => from_bits(5, [False, True, y, bit6(b), bit7(b)])
+                    = from_bits(5, [False, True, True, True, True]),
+                j(sym(e6), λ y _ => from_bits(5, [False, True, True, y, bit7(b)])
+                        = from_bits(5, [False, True, True, True, True]),
+                    j(sym(e7), λ y _ => from_bits(5, [False, True, True, True, y])
+                            = from_bits(5, [False, True, True, True, True]),
+                        refl)))))
+}
+
+// The class ladder read forwards, one rung per declaration: each rung
+// inspects its bit and hands the outcome down, exactly as `bounds_ge_*`
+// hand a range test down.
+theorem class_header_lead4(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True,
+        e5: bit5(b) = True, e4: bit4(b) = True): Header(class_lead4(b), b) {
+    match bit3(b) as λ x => (bit3(b) = x) → Header(match x { False => C4, True => CBad }, b) {
+        False => λ e3 => header_4(b, e7, e6, e5, e4, e3),
+        True => λ _ => trivial,
+    }(refl)
+}
+
+theorem class_header_lead3(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True,
+        e5: bit5(b) = True): Header(class_lead3(b), b) {
+    match bit4(b) as λ x => (bit4(b) = x) → Header(match x { False => C3, True => class_lead4(b) }, b) {
+        False => λ e4 => header_3(b, e7, e6, e5, e4),
+        True => λ e4 => class_header_lead4(b, e7, e6, e5, e4),
+    }(refl)
+}
+
+theorem class_header_lead2(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True):
+        Header(class_lead2(b), b) {
+    match bit5(b) as λ x => (bit5(b) = x) → Header(match x { False => C2, True => class_lead3(b) }, b) {
+        False => λ e5 => header_2(b, e7, e6, e5),
+        True => λ e5 => class_header_lead3(b, e7, e6, e5),
+    }(refl)
+}
+
+theorem class_header_lead(b: BitVec(8), e7: bit7(b) = True): Header(class_lead(b), b) {
+    match bit6(b) as λ x => (bit6(b) = x) → Header(match x { False => CBad, True => class_lead2(b) }, b) {
+        False => λ _ => trivial,
+        True => λ e6 => class_header_lead2(b, e7, e6),
+    }(refl)
+}
+
+theorem class_header(b: BitVec(8)): Header(class_of(b), b) {
+    match bit7(b) as λ x => (bit7(b) = x) → Header(match x { False => C1, True => class_lead(b) }, b) {
+        False => λ e7 => header_1(b, e7),
+        True => λ e7 => class_header_lead(b, e7),
+    }(refl)
+}
+
+// What a taken continuation says: the payload and the tail are the byte's
+// own, and its header is the marker.
+fn ContSpec(b: BitVec(8), rest: List<BitVec(8)>,
+        k: Option<Pair<BitVec(6), List<BitVec(8)>>>) → Type {
+    match k {
+        None => True,
+        Some(p) => (p = Pair(cont_payload(b), rest)) ∧ (drop_low(6, 2, b) = from_bits(2, [False, True])),
+    }
+}
+
+theorem cont_marked_spec(b: BitVec(8), rest: List<BitVec(8)>, e7: bit7(b) = True):
+        ContSpec(b, rest, cont_marked(b, rest)) {
+    match bit6(b) as λ x => (bit6(b) = x) →
+            ContSpec(b, rest, match x { True => None, False => Some(Pair(cont_payload(b), rest)) }) {
+        True => λ _ => trivial,
+        False => λ e6 => And(refl,
+            j(sym(e6), λ y _ => from_bits(2, [y, bit7(b)]) = from_bits(2, [False, True]),
+                j(sym(e7), λ y _ => from_bits(2, [False, y]) = from_bits(2, [False, True]), refl))),
+    }(refl)
+}
+
+theorem cont_spec(b: BitVec(8), rest: List<BitVec(8)>): ContSpec(b, rest, cont_lead(b, rest)) {
+    match bit7(b) as λ x => (bit7(b) = x) →
+            ContSpec(b, rest, match x { False => None, True => cont_marked(b, rest) }) {
+        False => λ _ => trivial,
+        True => λ e7 => cont_marked_spec(b, rest, e7),
+    }(refl)
+}
+
+// What an emitted character says: the overlong test passed, and its code is
+// the one `emit` was given. Its scalar witness is its own; nothing here needs
+// it, because the re-encoding of a code has no upper range test to meet.
+fn EmitSpec(min, code: Nat, rest: List<BitVec(8)>,
+        o: Option<Pair<Char, List<BitVec(8)>>>) → Type {
+    match o {
+        None => True,
+        Some(st) => IsTrue(nat::leb(min, code)) ∧ (st.fst.code = code),
+    }
+}
+
+theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, rest, emit(min, code, rest)) {
+    match nat::leb(min, code) as λ x => (nat::leb(min, code) = x) →
+            EmitSpec(min, code, rest, emit_min(x, code, rest)) {
+        False => λ _ => trivial,
+        True => λ e => match is_true_dec(char::is_scalar(code)) as λ d =>
+                EmitSpec(min, code, rest, emit_dec(code, d, rest)) {
+            Inr(_) => trivial,
+            Inl(q) => And(j(sym(e), λ y _ => IsTrue(y), trivial), refl),
+        },
+    }(refl)
+}
+
+// (i) The width ladder read backwards: a class's range tests decide
+// `width_of`. A rung the class did not take is refuted two ways — its test
+// came out `True` against the class's lower bound (`rung_absurd`), or `False`
+// against the class's upper bound (`rung_refuted`).
+theorem rung_absurd(code, bnd: Nat, e: nat::leb(Succ(code), bnd) = True,
+        low: IsTrue(nat::leb(bnd, code))): False {
+    nat::leb_lt_le_absurd(code, bnd, j(sym(e), λ y _ => IsTrue(y), trivial), low)
+}
+
+theorem rung_refuted(code, bnd: Nat, e: nat::leb(Succ(code), bnd) = False,
+        hi: IsTrue(nat::leb(Succ(code), bnd))): False {
+    j(e, λ y _ => IsTrue(y), hi)
+}
+
+theorem low_trans(a, b, code: Nat, ab: IsTrue(nat::leb(a, b)), h: IsTrue(nat::leb(b, code))):
+        IsTrue(nat::leb(a, code)) {
+    nat::leb_complete(a, code,
+        nat::le_trans(a, b, code, nat::leb_sound(a, b, ab), nat::leb_sound(b, code, h)))
+}
+
+theorem width_of_bounds(w: Width, code: Nat, hb: WidthBounds(w, code)): width_of(code) = w {
+    match w as λ v => WidthBounds(v, code) → width_of(code) = v {
+        W1 => λ h => match nat::leb(Succ(code), 0x80) as λ x => (nat::leb(Succ(code), 0x80) = x) →
+                (match x { True => W1, False => width_ge_80(code) }) = W1 {
+            True => λ _ => refl,
+            False => λ e => false_elim(rung_refuted(code, 0x80, e, h)),
+        }(refl),
+        W2 => λ h => match nat::leb(Succ(code), 0x80) as λ x => (nat::leb(Succ(code), 0x80) = x) →
+                (match x { True => W1, False => width_ge_80(code) }) = W2 {
+            True => λ e => false_elim(rung_absurd(code, 0x80, e, h.left)),
+            False => λ _ => match nat::leb(Succ(code), 0x800) as λ x =>
+                    (nat::leb(Succ(code), 0x800) = x) →
+                    (match x { True => W2, False => width_ge_800(code) }) = W2 {
+                True => λ _ => refl,
+                False => λ e => false_elim(rung_refuted(code, 0x800, e, h.right)),
+            }(refl),
+        }(refl),
+        W3 => λ h => match nat::leb(Succ(code), 0x80) as λ x => (nat::leb(Succ(code), 0x80) = x) →
+                (match x { True => W1, False => width_ge_80(code) }) = W3 {
+            True => λ e => false_elim(rung_absurd(code, 0x80, e,
+                low_trans(0x80, 0x800, code, trivial, h.left))),
+            False => λ _ => match nat::leb(Succ(code), 0x800) as λ x =>
+                    (nat::leb(Succ(code), 0x800) = x) →
+                    (match x { True => W2, False => width_ge_800(code) }) = W3 {
+                True => λ e => false_elim(rung_absurd(code, 0x800, e, h.left)),
+                False => λ _ => match nat::leb(Succ(code), 0x10000) as λ x =>
+                        (nat::leb(Succ(code), 0x10000) = x) →
+                        (match x { True => W3, False => W4 }) = W3 {
+                    True => λ _ => refl,
+                    False => λ e => false_elim(rung_refuted(code, 0x10000, e, h.right)),
+                }(refl),
+            }(refl),
+        }(refl),
+        W4 => λ h => match nat::leb(Succ(code), 0x80) as λ x => (nat::leb(Succ(code), 0x80) = x) →
+                (match x { True => W1, False => width_ge_80(code) }) = W4 {
+            True => λ e => false_elim(rung_absurd(code, 0x80, e,
+                low_trans(0x80, 0x10000, code, trivial, h))),
+            False => λ _ => match nat::leb(Succ(code), 0x800) as λ x =>
+                    (nat::leb(Succ(code), 0x800) = x) →
+                    (match x { True => W2, False => width_ge_800(code) }) = W4 {
+                True => λ e => false_elim(rung_absurd(code, 0x800, e,
+                    low_trans(0x800, 0x10000, code, trivial, h))),
+                False => λ _ => match nat::leb(Succ(code), 0x10000) as λ x =>
+                        (nat::leb(Succ(code), 0x10000) = x) →
+                        (match x { True => W3, False => W4 }) = W4 {
+                    True => λ e => false_elim(rung_absurd(code, 0x10000, e, h)),
+                    False => λ _ => refl,
+                }(refl),
+            }(refl),
+        }(refl),
+    }(hb)
+}
+
+// (ii) Each class's code re-encodes to the bytes it was read from. The code
+// is named per class so that the statements read; each is the `toNat` of the
+// payload `decode_seq` assembles, and the decoder's own `emit` call is at
+// that `toNat` by δ.
+fn code_1(b: BitVec(8)) → Nat { toNat(7, ascii_payload(b)) }
+
+fn code_2(b, c1: BitVec(8)) → Nat { toNat(11, concat(6, 5, cont_payload(c1), lead2_payload(b))) }
+
+fn code_3(b, c1, c2: BitVec(8)) → Nat {
+    toNat(16, concat(6, 10, cont_payload(c2), concat(6, 4, cont_payload(c1), lead3_payload(b))))
+}
+
+fn code_4(b, c1, c2, c3: BitVec(8)) → Nat {
+    toNat(21, concat(6, 15, cont_payload(c3),
+        concat(6, 9, cont_payload(c2), concat(6, 3, cont_payload(c1), lead4_payload(b)))))
+}
+
+// The encoder's splits undo the decoder's `concat`s by computation (vector η
+// at the literal widths), so once `ofNat_toNat` has put the payload back,
+// each byte is a `rebuild` and the list is a `cons_eq` per byte.
+theorem encode_1_of(b: BitVec(8), h: Header(C1, b)):
+        encode_width(width_of(code_1(b)), code_1(b)) = [b] {
+    j(sym(width_of_bounds(W1, code_1(b),
+            nat::leb_complete(Succ(code_1(b)), 0x80, bitvec::toNat_lt_pow(7, ascii_payload(b))))),
+        λ w _ => encode_width(w, code_1(b)) = [b],
+        cong_fn(λ (z: BitVec(8)) => [z],
+            j(sym(bitvec::ofNat_toNat(7, ascii_payload(b))), λ p _ => ascii_byte(p) = b,
+                rebuild(7, 1, b, from_bits(1, [False]), h))))
+}
+
+theorem encode_2_of(b, c1: BitVec(8), hb: Header(C2, b),
+        hc: drop_low(6, 2, c1) = from_bits(2, [False, True]),
+        low: IsTrue(nat::leb(0x80, code_2(b, c1)))):
+        encode_width(width_of(code_2(b, c1)), code_2(b, c1)) = [b, c1] {
+    let v = concat(6, 5, cont_payload(c1), lead2_payload(b));
+    j(sym(width_of_bounds(W2, code_2(b, c1),
+            And(low, nat::leb_complete(Succ(code_2(b, c1)), 0x800, bitvec::toNat_lt_pow(11, v))))),
+        λ w _ => encode_width(w, code_2(b, c1)) = [b, c1],
+        j(sym(bitvec::ofNat_toNat(11, v)),
+            λ p _ => Cons(lead2_byte(drop_low(6, 5, p)), Cons(cont_byte(take_low(6, 5, p)), Nil<BitVec(8)>))
+                = [b, c1],
+            cons_eq(lead2_byte(lead2_payload(b)), b, [cont_byte(cont_payload(c1))], [c1],
+                rebuild(5, 3, b, from_bits(3, [False, True, True]), hb),
+                cong_fn(λ (z: BitVec(8)) => [z],
+                    rebuild(6, 2, c1, from_bits(2, [False, True]), hc)))))
+}
+
+theorem encode_3_of(b, c1, c2: BitVec(8), hb: Header(C3, b),
+        hc1: drop_low(6, 2, c1) = from_bits(2, [False, True]),
+        hc2: drop_low(6, 2, c2) = from_bits(2, [False, True]),
+        low: IsTrue(nat::leb(0x800, code_3(b, c1, c2)))):
+        encode_width(width_of(code_3(b, c1, c2)), code_3(b, c1, c2)) = [b, c1, c2] {
+    let v = concat(6, 10, cont_payload(c2), concat(6, 4, cont_payload(c1), lead3_payload(b)));
+    j(sym(width_of_bounds(W3, code_3(b, c1, c2),
+            And(low, nat::leb_complete(Succ(code_3(b, c1, c2)), 0x10000,
+                bitvec::toNat_lt_pow(16, v))))),
+        λ w _ => encode_width(w, code_3(b, c1, c2)) = [b, c1, c2],
+        j(sym(bitvec::ofNat_toNat(16, v)),
+            λ p _ => Cons(lead3_byte(drop_low(6, 4, drop_low(6, 10, p))),
+                Cons(cont_byte(take_low(6, 4, drop_low(6, 10, p))),
+                    Cons(cont_byte(take_low(6, 10, p)), Nil<BitVec(8)>)))
+                = [b, c1, c2],
+            cons_eq(lead3_byte(lead3_payload(b)), b,
+                [cont_byte(cont_payload(c1)), cont_byte(cont_payload(c2))], [c1, c2],
+                rebuild(4, 4, b, from_bits(4, [False, True, True, True]), hb),
+                cons_eq(cont_byte(cont_payload(c1)), c1, [cont_byte(cont_payload(c2))], [c2],
+                    rebuild(6, 2, c1, from_bits(2, [False, True]), hc1),
+                    cong_fn(λ (z: BitVec(8)) => [z],
+                        rebuild(6, 2, c2, from_bits(2, [False, True]), hc2))))))
+}
+
+theorem encode_4_of(b, c1, c2, c3: BitVec(8), hb: Header(C4, b),
+        hc1: drop_low(6, 2, c1) = from_bits(2, [False, True]),
+        hc2: drop_low(6, 2, c2) = from_bits(2, [False, True]),
+        hc3: drop_low(6, 2, c3) = from_bits(2, [False, True]),
+        low: IsTrue(nat::leb(0x10000, code_4(b, c1, c2, c3)))):
+        encode_width(width_of(code_4(b, c1, c2, c3)), code_4(b, c1, c2, c3)) = [b, c1, c2, c3] {
+    let v = concat(6, 15, cont_payload(c3),
+        concat(6, 9, cont_payload(c2), concat(6, 3, cont_payload(c1), lead4_payload(b))));
+    j(sym(width_of_bounds(W4, code_4(b, c1, c2, c3), low)),
+        λ w _ => encode_width(w, code_4(b, c1, c2, c3)) = [b, c1, c2, c3],
+        j(sym(bitvec::ofNat_toNat(21, v)),
+            λ p _ => Cons(lead4_byte(drop_low(6, 3, drop_low(6, 9, drop_low(6, 15, p)))),
+                Cons(cont_byte(take_low(6, 3, drop_low(6, 9, drop_low(6, 15, p)))),
+                    Cons(cont_byte(take_low(6, 9, drop_low(6, 15, p))),
+                        Cons(cont_byte(take_low(6, 15, p)), Nil<BitVec(8)>))))
+                = [b, c1, c2, c3],
+            cons_eq(lead4_byte(lead4_payload(b)), b,
+                [cont_byte(cont_payload(c1)), cont_byte(cont_payload(c2)),
+                    cont_byte(cont_payload(c3))], [c1, c2, c3],
+                rebuild(3, 5, b, from_bits(5, [False, True, True, True, True]), hb),
+                cons_eq(cont_byte(cont_payload(c1)), c1,
+                    [cont_byte(cont_payload(c2)), cont_byte(cont_payload(c3))], [c2, c3],
+                    rebuild(6, 2, c1, from_bits(2, [False, True]), hc1),
+                    cons_eq(cont_byte(cont_payload(c2)), c2, [cont_byte(cont_payload(c3))], [c3],
+                        rebuild(6, 2, c2, from_bits(2, [False, True]), hc2),
+                        cong_fn(λ (z: BitVec(8)) => [z],
+                            rebuild(6, 2, c3, from_bits(2, [False, True]), hc3)))))))
+}
+
+// The statement, as a type: what the induction carries for a byte list.
+fn Strict(bytes: List<BitVec(8)>) → Type {
+    (s: String) → decode(bytes) = Some(s) → encode(s) = bytes
+}
+
+theorem strict_nil(s: String, p: decode(Nil<BitVec(8)>) = Some(s)): encode(s) = Nil<BitVec(8)> {
+    j(option::some_inj(String(chars := Nil<Char>), s, p), λ y _ => encode(y) = Nil<BitVec(8)>, refl)
+}
+
+// One taken step. `push_char` at a taken `emit` and a decoded tail says the
+// string is the character before the tail's string; the tail re-encodes by
+// the induction hypothesis and the character by its class, which is what
+// `enc` takes — given the overlong test the emission passed.
+theorem strict_step(min, code: Nat, r, tail, bs: List<BitVec(8)>, s: String,
+        q: push_char(emit(min, code, r), decode(tail)) = Some(s),
+        ih: Strict(tail),
+        enc: IsTrue(nat::leb(min, code)) → encode_width(width_of(code), code) = bs):
+        encode(s) = bs ++ tail {
+    match emit(min, code, r) as λ x => EmitSpec(min, code, r, x) →
+            push_char(x, decode(tail)) = Some(s) → encode(s) = bs ++ tail {
+        None => λ _ q1 => false_elim(none_ne_some(s, q1)),
+        Some(st) => λ es q1 => match decode(tail) as λ y => (decode(tail) = y) →
+                push_tail(st.fst, y) = Some(s) → encode(s) = bs ++ tail {
+            None => λ _ q2 => false_elim(none_ne_some(s, q2)),
+            Some(t) => λ e q2 =>
+                j(option::some_inj(String(chars := Cons(st.fst, t.chars)), s, q2),
+                    λ y _ => encode(y) = bs ++ tail,
+                    j(sym(ih(t, e)), λ z _ => encode_char(st.fst) ++ z = bs ++ tail,
+                        cong_fn(λ (z: List<BitVec(8)>) => z ++ tail,
+                            j(sym(es.right), λ c _ => encode_width(width_of(c), c) = bs,
+                                enc(es.left))))),
+        }(refl, q1),
+    }(emit_spec(min, code, r), q)
+}
+
+// One class each, at a tail with as many constructors as the class steps
+// over. Each continuation is split on with `cont_spec` as the promise, and
+// the split's `Some` arm rewrites the taken pair into the next step.
+theorem strict_1(b: BitVec(8), rest: List<BitVec(8)>, s: String, h: Header(C1, b),
+        q: decode_class(C1, b, rest) = Some(s), ih: Strict(rest)): encode(s) = Cons(b, rest) {
+    strict_step(0, code_1(b), rest, rest, [b], s, q, ih, λ _ => encode_1_of(b, h))
+}
+
+theorem strict_2(b, c1: BitVec(8), rest2: List<BitVec(8)>, s: String, h: Header(C2, b),
+        q: decode_class(C2, b, Cons(c1, rest2)) = Some(s), ih: Strict(rest2)):
+        encode(s) = Cons(b, Cons(c1, rest2)) {
+    match cont_of(Cons(c1, rest2)) as λ k => ContSpec(c1, rest2, k) →
+            push_char(seq2(b, k), decode(rest2)) = Some(s) → encode(s) = Cons(b, Cons(c1, rest2)) {
+        None => λ _ q1 => false_elim(none_ne_some(s, q1)),
+        Some(k1) => λ cs q1 => strict_step(0x80, code_2(b, c1), rest2, rest2, [b, c1], s,
+            j(cs.left, λ p _ => push_char(seq2(b, Some(p)), decode(rest2)) = Some(s), q1),
+            ih, λ low => encode_2_of(b, c1, h, cs.right, low)),
+    }(cont_spec(c1, rest2), q)
+}
+
+theorem strict_3(b, c1, c2: BitVec(8), rest3: List<BitVec(8)>, s: String, h: Header(C3, b),
+        q: decode_class(C3, b, Cons(c1, Cons(c2, rest3))) = Some(s), ih: Strict(rest3)):
+        encode(s) = Cons(b, Cons(c1, Cons(c2, rest3))) {
+    match cont_of(Cons(c1, Cons(c2, rest3))) as λ k => ContSpec(c1, Cons(c2, rest3), k) →
+            push_char(seq3(b, k), decode(rest3)) = Some(s)
+            → encode(s) = Cons(b, Cons(c1, Cons(c2, rest3))) {
+        None => λ _ q1 => false_elim(none_ne_some(s, q1)),
+        Some(k1) => λ cs1 q1 => match cont_of(Cons(c2, rest3)) as λ k => ContSpec(c2, rest3, k) →
+                push_char(seq3_last(b, cont_payload(c1), k), decode(rest3)) = Some(s)
+                → encode(s) = Cons(b, Cons(c1, Cons(c2, rest3))) {
+            None => λ _ q2 => false_elim(none_ne_some(s, q2)),
+            Some(k2) => λ cs2 q2 => strict_step(0x800, code_3(b, c1, c2), rest3, rest3,
+                [b, c1, c2], s,
+                j(cs2.left, λ p _ => push_char(seq3_last(b, cont_payload(c1), Some(p)),
+                    decode(rest3)) = Some(s), q2),
+                ih, λ low => encode_3_of(b, c1, c2, h, cs1.right, cs2.right, low)),
+        }(cont_spec(c2, rest3),
+            j(cs1.left, λ p _ => push_char(seq3(b, Some(p)), decode(rest3)) = Some(s), q1)),
+    }(cont_spec(c1, Cons(c2, rest3)), q)
+}
+
+theorem strict_4(b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>, s: String, h: Header(C4, b),
+        q: decode_class(C4, b, Cons(c1, Cons(c2, Cons(c3, rest4)))) = Some(s), ih: Strict(rest4)):
+        encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
+    match cont_of(Cons(c1, Cons(c2, Cons(c3, rest4)))) as λ k =>
+            ContSpec(c1, Cons(c2, Cons(c3, rest4)), k) →
+            push_char(seq4(b, k), decode(rest4)) = Some(s)
+            → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
+        None => λ _ q1 => false_elim(none_ne_some(s, q1)),
+        Some(k1) => λ cs1 q1 => match cont_of(Cons(c2, Cons(c3, rest4))) as λ k =>
+                ContSpec(c2, Cons(c3, rest4), k) →
+                push_char(seq4_mid(b, cont_payload(c1), k), decode(rest4)) = Some(s)
+                → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
+            None => λ _ q2 => false_elim(none_ne_some(s, q2)),
+            Some(k2) => λ cs2 q2 => match cont_of(Cons(c3, rest4)) as λ k => ContSpec(c3, rest4, k) →
+                    push_char(seq4_last(b, cont_payload(c1), cont_payload(c2), k), decode(rest4))
+                        = Some(s)
+                    → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
+                None => λ _ q3 => false_elim(none_ne_some(s, q3)),
+                Some(k3) => λ cs3 q3 => strict_step(0x10000, code_4(b, c1, c2, c3), rest4, rest4,
+                    [b, c1, c2, c3], s,
+                    j(cs3.left, λ p _ =>
+                        push_char(seq4_last(b, cont_payload(c1), cont_payload(c2), Some(p)),
+                            decode(rest4)) = Some(s), q3),
+                    ih, λ low => encode_4_of(b, c1, c2, c3, h, cs1.right, cs2.right, cs3.right, low)),
+            }(cont_spec(c3, rest4),
+                j(cs2.left, λ p _ => push_char(seq4_mid(b, cont_payload(c1), Some(p)),
+                    decode(rest4)) = Some(s), q2)),
+        }(cont_spec(c2, Cons(c3, rest4)),
+            j(cs1.left, λ p _ => push_char(seq4(b, Some(p)), decode(rest4)) = Some(s), q1)),
+    }(cont_spec(c1, Cons(c2, Cons(c3, rest4))), q)
+}
+
+// The class dispatch at each shape of tail: `decode(Cons(b, rest))` is
+// `decode_class(class_of(b), b, rest)` by computation at each of these, and
+// a class that steps past the end of the tail is `None`. The induction
+// hypotheses arrive one per depth the shape has.
+theorem strict_leaf0(b: BitVec(8), ih1: Strict(Nil<BitVec(8)>)): Strict(Cons(b, Nil<BitVec(8)>)) {
+    λ s p => match class_of(b) as λ c => Header(c, b) →
+            decode_class(c, b, Nil<BitVec(8)>) = Some(s) → encode(s) = Cons(b, Nil<BitVec(8)>) {
+        CBad => λ _ q => false_elim(none_ne_some(s, q)),
+        C1 => λ h q => strict_1(b, Nil<BitVec(8)>, s, h, q, ih1),
+        C2 => λ _ q => false_elim(none_ne_some(s, q)),
+        C3 => λ _ q => false_elim(none_ne_some(s, q)),
+        C4 => λ _ q => false_elim(none_ne_some(s, q)),
+    }(class_header(b), p)
+}
+
+theorem strict_leaf1(b, c1: BitVec(8), ih1: Strict(Cons(c1, Nil<BitVec(8)>)), ih2: Strict(Nil<BitVec(8)>)):
+        Strict(Cons(b, Cons(c1, Nil<BitVec(8)>))) {
+    λ s p => match class_of(b) as λ c => Header(c, b) →
+            decode_class(c, b, Cons(c1, Nil<BitVec(8)>)) = Some(s)
+            → encode(s) = Cons(b, Cons(c1, Nil<BitVec(8)>)) {
+        CBad => λ _ q => false_elim(none_ne_some(s, q)),
+        C1 => λ h q => strict_1(b, [c1], s, h, q, ih1),
+        C2 => λ h q => strict_2(b, c1, Nil<BitVec(8)>, s, h, q, ih2),
+        C3 => λ _ q => false_elim(none_ne_some(s, q)),
+        C4 => λ _ q => false_elim(none_ne_some(s, q)),
+    }(class_header(b), p)
+}
+
+theorem strict_leaf2(b, c1, c2: BitVec(8), ih1: Strict(Cons(c1, Cons(c2, Nil<BitVec(8)>))), ih2: Strict(Cons(c2, Nil<BitVec(8)>)),
+        ih3: Strict(Nil<BitVec(8)>)): Strict(Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>)))) {
+    λ s p => match class_of(b) as λ c => Header(c, b) →
+            decode_class(c, b, Cons(c1, Cons(c2, Nil<BitVec(8)>))) = Some(s)
+            → encode(s) = Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>))) {
+        CBad => λ _ q => false_elim(none_ne_some(s, q)),
+        C1 => λ h q => strict_1(b, [c1, c2], s, h, q, ih1),
+        C2 => λ h q => strict_2(b, c1, [c2], s, h, q, ih2),
+        C3 => λ h q => strict_3(b, c1, c2, Nil<BitVec(8)>, s, h, q, ih3),
+        C4 => λ _ q => false_elim(none_ne_some(s, q)),
+    }(class_header(b), p)
+}
+
+theorem strict_leaf3(b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>,
+        ih1: Strict(Cons(c1, Cons(c2, Cons(c3, rest4)))), ih2: Strict(Cons(c2, Cons(c3, rest4))),
+        ih3: Strict(Cons(c3, rest4)), ih4: Strict(rest4)):
+        Strict(Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4))))) {
+    λ s p => match class_of(b) as λ c => Header(c, b) →
+            decode_class(c, b, Cons(c1, Cons(c2, Cons(c3, rest4)))) = Some(s)
+            → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
+        CBad => λ _ q => false_elim(none_ne_some(s, q)),
+        C1 => λ h q => strict_1(b, Cons(c1, Cons(c2, Cons(c3, rest4))), s, h, q, ih1),
+        C2 => λ h q => strict_2(b, c1, Cons(c2, Cons(c3, rest4)), s, h, q, ih2),
+        C3 => λ h q => strict_3(b, c1, c2, Cons(c3, rest4), s, h, q, ih3),
+        C4 => λ h q => strict_4(b, c1, c2, c3, rest4, s, h, q, ih4),
+    }(class_header(b), p)
+}
+
+// The induction, on a bound for the byte count: every list below the bound
+// is strict, and the tails a class steps to are shorter by as much as it
+// steps. `Le` moves a `Succ` across both sides by computation, so the bound
+// at each tail is the arm's own hypothesis with `le_of_lt` applied once per
+// byte stepped over. One step per shape of tail, then the induction.
+fn Bounded(k: Nat) → Type { (bytes: List<BitVec(8)>) → list_len(bytes) <= k → Strict(bytes) }
+
+theorem bounded_leaf0(k: Nat, ih: Bounded(k), b: BitVec(8),
+        hl: list_len(Cons(b, Nil<BitVec(8)>)) <= Succ(k)): Strict(Cons(b, Nil<BitVec(8)>)) {
+    strict_leaf0(b, ih(Nil<BitVec(8)>, hl))
+}
+
+theorem bounded_leaf1(k: Nat, ih: Bounded(k), b, c1: BitVec(8),
+        hl: list_len(Cons(b, Cons(c1, Nil<BitVec(8)>))) <= Succ(k)):
+        Strict(Cons(b, Cons(c1, Nil<BitVec(8)>))) {
+    strict_leaf1(b, c1, ih(Cons(c1, Nil<BitVec(8)>), hl), ih(Nil<BitVec(8)>, nat::zero_le(k)))
+}
+
+theorem bounded_leaf2(k: Nat, ih: Bounded(k), b, c1, c2: BitVec(8),
+        hl: list_len(Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>)))) <= Succ(k)):
+        Strict(Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>)))) {
+    strict_leaf2(b, c1, c2, ih(Cons(c1, Cons(c2, Nil<BitVec(8)>)), hl),
+        ih(Cons(c2, Nil<BitVec(8)>), nat::le_of_lt(Succ(0), k, hl)),
+        ih(Nil<BitVec(8)>, nat::zero_le(k)))
+}
+
+theorem bounded_leaf3(k: Nat, ih: Bounded(k), b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>,
+        hl: list_len(Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4))))) <= Succ(k)):
+        Strict(Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4))))) {
+    let l = list_len(rest4);
+    let h3 = nat::le_of_lt(Succ(Succ(l)), k, hl);
+    let h2 = nat::le_of_lt(Succ(l), k, h3);
+    strict_leaf3(b, c1, c2, c3, rest4,
+        ih(Cons(c1, Cons(c2, Cons(c3, rest4))), hl),
+        ih(Cons(c2, Cons(c3, rest4)), h3),
+        ih(Cons(c3, rest4), h2),
+        ih(rest4, nat::le_of_lt(l, k, h2)))
+}
+
+// The motives are written out: each nested `match` is on a tier-1 arm's
+// alias, and an arm's obligation has to be stated at the constructor rebuilt
+// around the next alias for the leaf's type to be that obligation verbatim.
+theorem strict_below(n: Nat): Bounded(n) {
+    match n {
+        Zero => λ bytes => match bytes as λ l => list_len(l) <= 0 → Strict(l) {
+            Nil => λ _ s p => strict_nil(s, p),
+            Cons(b, rest) => λ hl => false_elim(hl),
+        },
+        Succ(k, ih) => λ bytes => match bytes as λ l => list_len(l) <= Succ(k) → Strict(l) {
+            Nil => λ _ s p => strict_nil(s, p),
+            Cons(b, rest) => match rest as λ r =>
+                    list_len(Cons(b, r)) <= Succ(k) → Strict(Cons(b, r)) {
+                Nil => λ hl => bounded_leaf0(k, ih, b, hl),
+                Cons(c1, rest2) => match rest2 as λ r2 =>
+                        list_len(Cons(b, Cons(c1, r2))) <= Succ(k) → Strict(Cons(b, Cons(c1, r2))) {
+                    Nil => λ hl => bounded_leaf1(k, ih, b, c1, hl),
+                    Cons(c2, rest3) => match rest3 as λ r3 =>
+                            list_len(Cons(b, Cons(c1, Cons(c2, r3)))) <= Succ(k)
+                            → Strict(Cons(b, Cons(c1, Cons(c2, r3)))) {
+                        Nil => λ hl => bounded_leaf2(k, ih, b, c1, c2, hl),
+                        Cons(c3, rest4) => λ hl => bounded_leaf3(k, ih, b, c1, c2, c3, rest4, hl),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// Theorem 7.
+theorem encode_decode(bytes: List<BitVec(8)>, s: String, p: decode(bytes) = Some(s)):
+        encode(s) = bytes {
+    strict_below(list_len(bytes), bytes, nat::le_refl(list_len(bytes)), s, p)
+}
+
+// ---------------------------------------------------------------------------
 // The `Utf8` spec type: a byte list that decodes, with the decision as its
 // witness. The seal is `bool::IsTrue` for `Char`'s reason — a consumer has to
 // USE the witness, and `toString` below is exactly that use.
@@ -530,4 +1205,28 @@ theorem toString_of_decode(u: Utf8, s: String, p: decode(u.bytes) = Some(s)):
 // Theorem 6.
 theorem toString_ofString(s: String): ofString(s).toString() = s {
     toString_of_decode(ofString(s), s, decode_encode(s))
+}
+
+// ---------------------------------------------------------------------------
+// Theorem 8. With strictness, `ofString` is a section of `toString` as well
+// as a retraction: the two types are two presentations of one thing, and a
+// `Utf8` is determined by its bytes exactly as a `Char` is by its code.
+
+theorem decode_toString(u: Utf8): decode(u.bytes) = Some(u.toString()) {
+    match decode(u.bytes) as λ y => (w: IsTrue(is_some_string(y))) → y = Some(force_string(y, w)) {
+        None => λ w => false_elim(w),
+        Some(z) => λ _ => refl,
+    }(u.valid)
+}
+
+theorem bytes_injective(u, v: Utf8, p: u.bytes = v.bytes): u = v {
+    j(p, λ y _ => (w: utf8_valid(y)) → u = Utf8(bytes := y, valid := w),
+        λ (w: utf8_valid(u.bytes)) =>
+            j(is_true_unique(is_utf8(u.bytes), u.valid, w),
+                λ z _ => u = Utf8(bytes := u.bytes, valid := z), refl))(v.valid)
+}
+
+theorem ofString_toString(u: Utf8): ofString(u.toString()) = u {
+    bytes_injective(ofString(u.toString()), u,
+        encode_decode(u.bytes, u.toString(), decode_toString(u)))
 }

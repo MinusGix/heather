@@ -1467,3 +1467,11 @@ theorem leb_not_lt(n, m: Nat, h: IsTrue(not(leb(Succ(n), m)))): IsTrue(leb(m, n)
     leb_complete(m, n, le_of_not_lt(n, m,
         λ (k: n < m) => is_true_not(leb(Succ(n), m), h, leb_complete(Succ(n), m, k))))
 }
+
+// A rung's own test and the previous rung's lower bound cannot both come out
+// `True`: `n < m` and `m <= n` together put `n` below itself. This is what
+// refutes the rungs a known class did NOT take, when a ladder is read
+// backwards (`utf8::width_of_bounds`).
+theorem leb_lt_le_absurd(n, m: Nat, lt: IsTrue(leb(Succ(n), m)), le: IsTrue(leb(m, n))): False {
+    lt_irrefl(n, le_trans(Succ(n), m, n, leb_sound(Succ(n), m, lt), leb_sound(m, n, le)))
+}

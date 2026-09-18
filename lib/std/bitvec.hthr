@@ -1664,3 +1664,92 @@ theorem toNat_ofNat(n: Nat): (x: Nat) → x < nat::pow(2, n) → toNat(n, ofNat(
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// `toNat` is a section of `ofNat` on every vector, and bounded by the width.
+// The two together are what lets a decoder that read a payload's VALUE be
+// undone: the value re-enters the payload (`ofNat_toNat`), and its range test
+// is the payload's width (`toNat_lt_pow`).
+
+// The digit equation read backwards, one half at a time: a bit under twice a
+// number is that bit, and that number. Two-successor inductions, as
+// `odd_bit_add_twice_half` is.
+theorem odd_bit_twice(m: Nat): odd_bit(twice(m)) = False {
+    match m { Zero => refl, Succ(k) => odd_bit_twice(k) }
+}
+
+theorem odd_bit_succ_twice(m: Nat): odd_bit(Succ(twice(m))) = True {
+    match m { Zero => refl, Succ(k) => odd_bit_succ_twice(k) }
+}
+
+theorem half_twice(m: Nat): nat::half(twice(m)) = m {
+    match m { Zero => refl, Succ(k) => cong_succ(half_twice(k)) }
+}
+
+theorem half_succ_twice(m: Nat): nat::half(Succ(twice(m))) = m {
+    match m { Zero => refl, Succ(k) => cong_succ(half_succ_twice(k)) }
+}
+
+// `nat::add` recurses on its second argument, so a bit on the left of a stuck
+// `twice` needs the two left-unit laws to step.
+theorem one_add(x: Nat): 1 + x = Succ(x) {
+    trans(nat::add_succ_left(0, x), cong_succ(nat::add_left_zero(x)))
+}
+
+theorem odd_bit_digit(b: Bool, m: Nat): odd_bit(bit_value(b) + twice(m)) = b {
+    match b as λ x => odd_bit(bit_value(x) + twice(m)) = x {
+        False => j(sym(nat::add_left_zero(twice(m))), λ y _ => odd_bit(y) = False, odd_bit_twice(m)),
+        True => j(sym(one_add(twice(m))), λ y _ => odd_bit(y) = True, odd_bit_succ_twice(m)),
+    }
+}
+
+theorem half_digit(b: Bool, m: Nat): nat::half(bit_value(b) + twice(m)) = m {
+    match b as λ x => nat::half(bit_value(x) + twice(m)) = m {
+        False => j(sym(nat::add_left_zero(twice(m))), λ y _ => nat::half(y) = m, half_twice(m)),
+        True => j(sym(one_add(twice(m))), λ y _ => nat::half(y) = m, half_succ_twice(m)),
+    }
+}
+
+// Reading a vector's value and writing it back at the same width is the
+// identity — no bound this way, since a vector never exceeds its width. The
+// recursion is on the width like `ofNat`'s: the head is the digit's low bit
+// and the tail is the induction hypothesis at the digit's half.
+theorem ofNat_toNat(n: Nat): (x: BitVec(n)) → ofNat(n, toNat(n, x)) = x {
+    match n as λ k => (x: BitVec(k)) → ofNat(k, toNat(k, x)) = x {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => {
+            let h = head_bit(k, x);
+            let m = toNat(k, tail_bits(k, x));
+            trans(
+                @cons_bit_cong(k, odd_bit(bit_value(h) + twice(m)), h,
+                    ofNat(k, nat::half(bit_value(h) + twice(m))), tail_bits(k, x),
+                    odd_bit_digit(h, m),
+                    trans(j(half_digit(h, m),
+                            λ y _ => ofNat(k, nat::half(bit_value(h) + twice(m))) = ofNat(k, y), refl),
+                        ih(tail_bits(k, x)))),
+                cons_head_tail(k, x))
+        },
+    }
+}
+
+// A bit under twice a bounded number stays under twice the bound: the
+// successor the bit may add is absorbed by doubling the strict inequality.
+theorem bit_twice_lt(b: Bool, m, p: Nat, h: m < p): bit_value(b) + twice(m) < twice(p) {
+    match b as λ x => bit_value(x) + twice(m) < twice(p) {
+        False => j(sym(nat::add_left_zero(twice(m))), λ y _ => y < twice(p),
+            nat::twice_lt_twice_iff(m, p).mpr(h)),
+        True => j(sym(one_add(twice(m))), λ y _ => y < twice(p),
+            nat::twice_le_twice_iff(Succ(m), p).mpr(h)),
+    }
+}
+
+// A vector's value is below `2^n` at width `n`: the range test a decoder
+// makes on a reassembled payload is the width bound, for free.
+theorem toNat_lt_pow(n: Nat): (x: BitVec(n)) → toNat(n, x) < nat::pow(2, n) {
+    match n as λ k => (x: BitVec(k)) → toNat(k, x) < nat::pow(2, k) {
+        Zero => λ x => trivial,
+        Succ(k, ih) => λ x => j(sym(pow_two_succ_twice(k)), λ y _ => toNat(Succ(k), x) < y,
+            bit_twice_lt(head_bit(k, x), toNat(k, tail_bits(k, x)), nat::pow(2, k),
+                ih(tail_bits(k, x)))),
+    }
+}

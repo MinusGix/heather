@@ -315,3 +315,55 @@ theorem bad(q: BitVec(4), r, s, u: BitVec(6), t: List<BitVec(8)>):
     );
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
+
+#[test]
+fn a_decoded_value_re_encodes_to_its_bytes() {
+    check(
+        r#"
+// Theorem 7 at a literal of each width. The decoding hypothesis computes;
+// the conclusion is the theorem's, not `refl`'s.
+theorem one_byte(): utf8::encode("a") = [bitvec::ofNat(8, 0x61)] {
+    utf8::encode_decode([bitvec::ofNat(8, 0x61)], "a", refl)
+}
+theorem two_bytes(): utf8::encode("\u{E9}") = [bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)] {
+    utf8::encode_decode([bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)], "\u{E9}", refl)
+}
+theorem four_bytes(): utf8::encode("\u{1F600}")
+    = [bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F), bitvec::ofNat(8, 0x98), bitvec::ofNat(8, 0x80)] {
+    utf8::encode_decode([bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F), bitvec::ofNat(8, 0x98),
+        bitvec::ofNat(8, 0x80)], "\u{1F600}", refl)
+}
+// At a neutral byte list and string, which is the statement: nothing here
+// computes, every rejection of the decoder is inverted.
+theorem neutral(bs: List<BitVec(8)>, s: String, p: utf8::decode(bs) = Some(s)):
+    utf8::encode(s) = bs { utf8::encode_decode(bs, s, p) }
+// One OPEN byte: the class is read off its header bits, not off a literal.
+theorem one_open(b: BitVec(8), s: String, p: utf8::decode([b]) = Some(s)):
+    utf8::encode(s) = [b] { utf8::encode_decode([b], s, p) }
+// A two-byte sequence with an open tail: the tail is the induction
+// hypothesis and the lead pair is rebuilt from their payloads.
+theorem two_open(b, c: BitVec(8), rest: List<BitVec(8)>, s: String,
+    p: utf8::decode(Cons(b, Cons(c, rest))) = Some(s)):
+    utf8::encode(s) = Cons(b, Cons(c, rest)) { utf8::encode_decode(Cons(b, Cons(c, rest)), s, p) }
+// Theorem 8: the two conversions are mutually inverse, so a `Utf8` is
+// determined by its bytes exactly as a `Char` is by its code.
+theorem section(u: utf8::Utf8): utf8::ofString(u.toString()) = u { utf8::ofString_toString(u) }
+theorem retraction(s: String): utf8::ofString(s).toString() = s { utf8::toString_ofString(s) }
+theorem determined(u, v: utf8::Utf8, p: u.bytes = v.bytes): u = v { utf8::bytes_injective(u, v, p) }
+"#,
+    );
+    // The negative controls: the hypothesis is real — bytes that decode to
+    // something else are not the string's encoding — and the section needs
+    // the value it is stated about.
+    let msg = refused(
+        "theorem bad(): utf8::encode(\"a\") = [bitvec::ofNat(8, 0x62)] {\n    utf8::encode_decode([bitvec::ofNat(8, 0x62)], \"a\", refl)\n}\n",
+    );
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let msg = refused("theorem bad(u: utf8::Utf8, s: String): utf8::ofString(s) = u { utf8::ofString_toString(u) }\n");
+    assert!(msg.contains("expected here"), "{msg}");
+    // And strictness is not vacuous: the neutral statement is not `refl`.
+    let msg = refused(
+        "theorem bad(bs: List<BitVec(8)>, s: String, p: utf8::decode(bs) = Some(s)): utf8::encode(s) = bs { refl }\n",
+    );
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}

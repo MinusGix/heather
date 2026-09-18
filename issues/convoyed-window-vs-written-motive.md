@@ -3,7 +3,7 @@ title: A written motive that names the scrutinee meets the convoyed window as a 
 status: open
 labels: [frontend,elaboration,diagnostics,design]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-09-18
 ---
 
 Filed off [[recursion-at-deeper-subterms]] (closed 2026-08-17,
@@ -58,3 +58,17 @@ decide between a diagnostic, a refusal at the motive, and doing nothing.
 - **[[recursion-at-deeper-subterms]]** (closed) owns the convoy. Assumed here:
   only that the window's head is anchored at the chain's head, which is §5.1 of
   its design doc.
+
+## Log
+
+- 2026-09-18: Probed while closing [[utf8-encode-decode-strictness]]. The shape is
+  reachable and refuses cleanly, with the wrong message. A `fn` with a written
+  CONSTANT motive on the chain `match` (`match r as λ rr => Nat { … skip2a(r2) … }`)
+  checks, so a written motive as such does not drop the window. A theorem with a
+  written dependent motive that names the scrutinee
+  (`match r as λ rr => skip2(Cons(a, rr)) = n → n <= list_len(Cons(a, rr)) { … skip2_le(r2, …) … }`)
+  is refused as "must descend … this one is not [chain-shaped]" — the `cov: None`
+  text — and so is the SAME goal with the motive synthesized, so the case is
+  owned by [[cov-window-in-theorem-arms]] (a hypothesis mentioning the
+  scrutinee), not by the written motive. What this issue owns is the message:
+  "not chain-shaped" about a `List` is option 1's diagnostic gap made concrete.

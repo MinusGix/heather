@@ -346,7 +346,8 @@ implementation had to settle, and what a later round should read first:
   (`issues/utf8-decode-conversion-blowup.md`, closed 2026-09-18). The step
   is now `decode_step`, the natural statement: decoding a list is decoding
   its head and then its tail, by computation at every width.
-- **Theorem 7 stalls on inversion, not on arithmetic.** Its hypothesis is
+- **Theorem 7 stalled on inversion, not on arithmetic** (closed later the
+  same day: §5.6). Its hypothesis is
   `decode(bytes) = Some(s)` at an *abstract* byte list, so the proof has to
   case on `class_of(b)` — and the class is not an argument of `decode_at`,
   it is computed inside its body, so there is no motive to abstract it with.
@@ -362,3 +363,65 @@ implementation had to settle, and what a later round should read first:
   converse of `width_bounds` (a class's range tests determine `width_of`),
   and inversion lemmas for `push_char` and `emit`.
 
+### 5.6 As landed, theorems 7–8 (2026-09-18)
+
+Theorem 7 (`encode_decode`) and theorem 8 (`ofString_toString`, through
+`bytes_injective` and `decode_toString`) closed in `lib/std/utf8.hthr`; the
+decoder was not weakened. Against §5.5's route:
+
+- **The hoist was not taken; a named dispatch after the fact was.** Hoisting
+  all four tail results out of the class dispatch computes `decode` at every
+  tail for every byte — exponential in the byte count unless the evaluator
+  is lazy about unused arguments, which nothing should lean on. Instead
+  `decode_class(cl, b, rest)` is `decode`'s `Cons` arm spelled again with the
+  class as a parameter, declared *after* `decode` and calling it: not
+  mutually recursive, and not what `decode` runs. It is a motive, for
+  `match class_of(b) as λ c => Header(c, b) → decode_class(c, b, rest) = Some(s) → …`.
+  `decode(Cons(b, rest))` converts to `decode_class(class_of(b), b, rest)`
+  only once `rest` is a constructor as deep as the widest class steps: the
+  course-of-values window is convoyed as an *argument* to each nested `match`
+  on the tail, and an applied `match` stuck on an open tail is not the plain
+  one (probed: every closed tail and the depth-3 tail with an open remainder
+  convert; depth 0–2 with an open remainder do not). So the proof cases on
+  the tail three constructors deep first (`strict_leaf0..3`), then on the
+  class.
+- **Every decoder test is a declaration, and every case split carries a
+  promise.** `class_of` is a five-rung ladder and `cont_of` a two-rung one;
+  `decode_seq`'s multi-byte classes are one declaration per continuation
+  (`seq2`, `seq3`/`seq3_last`, `seq4`/`seq4_mid`/`seq4_last`). The proof
+  replays each `match` the decoder made on a computed value as
+  `match v as λ x => Spec(v's inputs, x) → … {…}(spec_lemma, hypothesis)`,
+  with `Header` (what a class says about its lead byte's header bits),
+  `ContSpec` (a taken continuation is the byte's payload and the tail, under
+  the marker) and `EmitSpec` (the emitted character's code is the one given,
+  and the overlong test passed) each proved once by `width_bounds`'s
+  `inspect` idiom, a rung per declaration. The `Some` arm of a split then
+  rewrites the taken pair into the next step and hands the rest to
+  `strict_step`, which is the one place `push_char` is inverted.
+- **Vector η carried the header.** `drop_low(5, 3, b)` is
+  `from_bits(3, [bit5(b), bit6(b), bit7(b)])` by conversion at the literal
+  widths, so a rung's Boolean outcome rewrites one bit of a header
+  (`header_1..4`), and `rebuild` — `concat_split` with the high bits
+  rewritten to the header — is the whole of "a byte is its payload under its
+  header": one lemma, not the five the route counted.
+- **Kit built where it belongs.** `bitvec::ofNat_toNat` (a section on every
+  vector, no bound) and `bitvec::toNat_lt_pow`, both on the width from the
+  digit equation read backwards (`odd_bit_digit`, `half_digit`);
+  `nat::leb_lt_le_absurd`, which refutes a rung the class did not take, and
+  `utf8::width_of_bounds`, the converse of `width_bounds` read the same
+  ladder backwards; `utf8::none_ne_some` and `IsSome` (kept in `utf8`: `option` does not import `logic`) close rejection
+  branches against a `Some` hypothesis.
+- **The induction is on a byte-count bound, not on the byte list.** The
+  window refused the theorem-shaped recursion — a goal whose hypothesis
+  mentions the scrutinee, and a chain `match` under a `λ` — filed as
+  [[cov-window-in-theorem-arms]]. `strict_below(n): Bounded(n)` is structural
+  on `n`; each leaf's hypotheses are `ih` at the tail with `nat::le_of_lt`
+  once per byte stepped over, and `encode_decode` is it at the list's own
+  length. Its nested motive-less `match`es were accepted by the elaborator
+  and refused by the kernel ([[wf-nested-match-motive-synthesis-kernel-refusal]]);
+  the motives are written out at the rebuilt constructor.
+- **Tests.** `crates/elab/tests/lib_std_utf8.rs`: the strictness theorem at
+  a literal of each width, at a neutral list, at one open byte and at a
+  two-byte sequence with an open tail, theorem 8 both ways, and the three
+  negative controls; `lib_std_bitvec.rs`: the section and the bound at an
+  open width, with `refl`/`trivial` refused.

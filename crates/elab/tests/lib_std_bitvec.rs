@@ -287,6 +287,7 @@ theorem ext(n: Nat, x, y: BitVec(n), at: (i: Fin(n)) -> get(n, x, i) = get(n, y,
 theorem equality_is_decidable(n: Nat, x, y: BitVec(n)): x = y ∨ x ≠ y {
     bitvec::eq_dec(n, x, y)
 }
+theorem value_round_trip(n: Nat, x: BitVec(n)): ofNat(n, toNat(n, x)) = x { ofNat_toNat(n, x) }
 
 theorem carry_equiv(n: Nat, x, y: BitVec(n)):
     (carry_add_bit(n, x, y) = True) ↔ carry_add(n, x, y)
@@ -313,6 +314,18 @@ theorem borrow_backward64(x, y: BitVec(64), h: borrow_sub(64, x, y)):
 { borrow_sub_bit_of_borrow(64, x, y, h) }
 "#);
     bad("theorem fake(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { refl }");
+    // The section is not `refl` at an open vector.
+    bad("theorem fake(n: Nat, x: BitVec(n)): ofNat(n, toNat(n, x)) = x { refl }");
+    // The value's bound and the number's round trip below it; `<` is `nat`'s,
+    // so these import it (nothing here says `add`).
+    ok(r#"
+import nat;
+theorem value_bounded(n: Nat, x: BitVec(n)): toNat(n, x) < nat::pow(2, n) { toNat_lt_pow(n, x) }
+theorem number_round_trip(n, k: Nat, h: k < nat::pow(2, n)): toNat(n, ofNat(n, k)) = k {
+    toNat_ofNat(n, k, h)
+}
+"#);
+    bad("import nat;\ntheorem fake(n: Nat, x: BitVec(n)): toNat(n, x) < nat::pow(2, n) { trivial }");
 }
 
 #[test]
