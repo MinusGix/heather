@@ -193,10 +193,12 @@ fn a_corrupt_semantic_module_is_reported_and_rebuilt() {
     let modules = dir.join("modules-v1");
     let artifact = std::fs::read_dir(&modules)
         .unwrap()
-        .next()
-        .expect("one cached module")
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        // The store also holds a `.latest` pointer per module (the
+        // slice-replay commit); corrupting *that* leaves the image
+        // valid and proves nothing. Take the image itself.
+        .find(|path| path.extension().is_some_and(|ext| ext == "hmi"))
+        .expect("one cached module");
     std::fs::write(artifact, b"not an image").unwrap();
 
     let warm = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
@@ -419,10 +421,12 @@ fn axioms_loads_and_rebuilds_semantic_module_images() {
     let modules = dir.join("modules-v1");
     let artifact = std::fs::read_dir(&modules)
         .unwrap()
-        .next()
-        .expect("one cached module")
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        // The store also holds a `.latest` pointer per module (the
+        // slice-replay commit); corrupting *that* leaves the image
+        // valid and proves nothing. Take the image itself.
+        .find(|path| path.extension().is_some_and(|ext| ext == "hmi"))
+        .expect("one cached module");
     std::fs::write(artifact, b"not an image").unwrap();
     let rebuilt = heather(&args);
     assert_eq!(rebuilt.status.code(), Some(0));
@@ -474,5 +478,48 @@ fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image()
     assert!(edit_out.contains("1 declaration kernel-checked"), "the appended one faces the kernel: {edit_out}");
 
     let _ = std::fs::remove_file(&edited);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// `heather check --only` (`docs/check-only-design.md`): needs `--cache` and a
+/// previous image; elaborates the named declarations over a replayed
+/// prefix, prints the reserved `(only)` line, labels the timings run row,
+/// leaves the verdict store's counts alone, and names an unknown item.
+#[test]
+fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
+    let out = heather(&["check", "--only", "double", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`--only` replays the rest"), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let dir = cache_dir("only");
+    let arg = dir.display().to_string();
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no stored image of module `good`"), "{err}");
+
+    // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
+    let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    let baseline = String::from_utf8_lossy(&cold.stdout).to_string();
+    let tsv = dir.join("only.tsv");
+    let tsv_arg = tsv.display().to_string();
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double", "--timings", &tsv_arg, "good.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let line = String::from_utf8_lossy(&out.stdout);
+    assert!(line.contains("good.hthr: ok (only) — 1 declaration elaborated for --only, "), "{line}");
+    assert!(!line.contains("(cache)"), "{line}");
+    let table = std::fs::read_to_string(&tsv).unwrap();
+    let run_row = table.lines().find(|l| l.starts_with("run\t")).expect("a run row");
+    assert!(run_row.split('\t').nth(2) == Some("only=double"), "{run_row}");
+    // The store is as it was: a `--only` run vouches for nothing, and the
+    // next cached run reports exactly what it reported before.
+    let again = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    assert_eq!(String::from_utf8_lossy(&again.stdout), baseline);
+
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "double,nope", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--only named `good::nope` that no module of the closure declares"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

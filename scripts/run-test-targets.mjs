@@ -21,6 +21,12 @@ const LIMIT_KIB = 6 * 1024 * 1024;
 const BUDGET_KIB = 3 * 1024 * 1024;
 const RESERVE_KIB = 2 * 1024 * 1024;
 const OUTPUT_LIMIT = 1024 * 1024;
+// The child's CPU rail, in seconds (`ulimit -t` in limitedCommand). Recorded
+// next to every target's CPU time so a target drifting toward it is visible
+// in the history before the day it crosses and SIGKILLs
+// (issues/test-runner-records-no-per-target-cpu.md).
+const CPU_RAIL_SECONDS = 300;
+const CPU_WARN_FRACTION = 0.5;
 
 export function parseArtifacts(text, root = process.cwd()) {
   const seen = new Set();
@@ -64,6 +70,16 @@ export function parseResults(text) {
     total.resultLines++;
   }
   return total;
+}
+
+// The wrapper's CPU line: seconds of user+sys the child and its threads
+// spent, or null when the wrapper never got to print it. The line is removed
+// from the returned output so libtest's own text stays as it was.
+export function parseCpu(text) {
+  const re = new RegExp(`^${CPU_MARKER} user=([0-9.]+) sys=([0-9.]+)\\n?`, "m");
+  const match = re.exec(text);
+  if (!match) return { cpu: null, output: text };
+  return { cpu: Number(match[1]) + Number(match[2]), output: text.replace(re, "") };
 }
 
 export function jobBounds(requested, meminfo, cores, cgroupMax = "", cgroupCurrent = "") {
@@ -134,9 +150,18 @@ export function targetIncomplete(run) {
 // works as documented.
 const KERNEL_WORKERS = process.env.HEATHER_KERNEL_WORKERS ?? "1";
 
-function limitedCommand(command, args, env = {}) {
+// The wrapper stays the child's parent instead of exec'ing it so that bash's
+// `time` can report the child's CPU (user+sys, every thread — the quantity
+// `ulimit -t` kills on; wall is not proportional to it for a multi-threaded
+// child). The line is parsed out of the output by `parseCpu`. A child that
+// died of a signal is re-raised on the wrapper, so the runner still sees
+// `signal=SIGKILL` for a rail kill exactly as it did with `exec`.
+export const CPU_MARKER = "heather-test-target-cpu";
+export function limitedCommand(command, args, env = {}) {
   return spawn("bash", ["--noprofile", "--norc", "-c",
-    `ulimit -v ${LIMIT_KIB}; ulimit -t 300; exec \"$@\"`,
+    `ulimit -v ${LIMIT_KIB}; ulimit -t ${CPU_RAIL_SECONDS}; ` +
+    `TIMEFORMAT='${CPU_MARKER} user=%U sys=%S'; time \"$@\"; s=$?; ` +
+    `if (( s > 128 )); then kill -$((s - 128)) $$; fi; exit $s`,
     "heather-test-target", command, ...args], {
     cwd: process.cwd(),
     env: {
@@ -150,7 +175,7 @@ function limitedCommand(command, args, env = {}) {
   });
 }
 
-function collect(child) {
+export function collect(child) {
   return new Promise((resolve) => {
     let output = "";
     let truncated = false;
@@ -227,11 +252,13 @@ async function runTargets(targets, jobs, libtestArgs, keepGoing) {
         collect(limitedCommand(target.executable, libtestArgs)).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
+          ({ cpu: run.cpu, output: run.output } = parseCpu(run.output));
           run.result = parseResults(run.output);
           if (run.code !== 0 || run.signal || run.result.resultLines !== 1) failed = true;
           completed.push(run);
           active--;
-          process.stdout.write(`[done  ${completed.length}/${targets.length}] ${target.label} (${run.wall.toFixed(2)}s)\n`);
+          const cpu = run.cpu === null ? "" : `, ${run.cpu.toFixed(1)} CPU-s`;
+          process.stdout.write(`[done  ${completed.length}/${targets.length}] ${target.label} (${run.wall.toFixed(2)}s${cpu})\n`);
           pump();
         });
         if (target.exclusive) break;
@@ -310,16 +337,31 @@ async function main() {
   merge(total, docResult);
   if (doc.signal || docResult.resultLines === 0 || (doc.code !== 0 && docResult.failed === 0)) incomplete = true;
 
-  const timingRows = runs.map((run) => [run.result.duration || run.wall, run.target.label]);
-  timingRows.push([docResult.duration, "doc-tests"]);
+  const docCpu = parseCpu(doc.output).cpu;
+  const timingRows = runs.map((run) => [run.result.duration || run.wall, run.target.label, run.cpu]);
+  timingRows.push([docResult.duration, "doc-tests", docCpu]);
   timingRows.sort((a, b) => b[0] - a[0]);
-  console.log("\n== slowest test targets (reported test time) ==");
+  console.log(`\n== slowest test targets (reported test time; CPU = user+sys against the ${CPU_RAIL_SECONDS} s rail) ==`);
   const visible = timingRows.filter(([seconds]) => seconds >= 1).slice(0, 20);
   if (!visible.length) console.log("  (no target took at least 1 second)");
-  for (const [seconds, label] of visible) console.log(`${seconds.toFixed(2).padStart(8)}s  ${label}`);
-  console.log(`reported target time: ${timingRows.reduce((sum, row) => sum + row[0], 0).toFixed(2)}s across ${total.resultLines} targets`);
+  const cpuCell = (cpu) => cpu === null || cpu === undefined
+    ? "".padStart(16)
+    : `${cpu.toFixed(1).padStart(7)} CPU-s ${Math.round(100 * cpu / CPU_RAIL_SECONDS).toString().padStart(3)}%`;
+  for (const [seconds, label, cpu] of visible) console.log(`${seconds.toFixed(2).padStart(8)}s ${cpuCell(cpu)}  ${label}`);
+  console.log(`reported target time: ${timingRows.reduce((sum, row) => sum + row[0], 0).toFixed(2)}s across ${total.resultLines} targets; ` +
+    `CPU ${timingRows.reduce((sum, row) => sum + (row[2] ?? 0), 0).toFixed(1)}s`);
+  // The margin nobody could see before: a target past half the rail is
+  // named, every run, so its drift has a history before it becomes a kill.
+  const nearRail = timingRows.filter(([, , cpu]) => cpu !== null && cpu !== undefined && cpu >= CPU_WARN_FRACTION * CPU_RAIL_SECONDS);
+  if (nearRail.length) {
+    console.log(`== targets past ${Math.round(100 * CPU_WARN_FRACTION)}% of the CPU rail ==`);
+    for (const [, label, cpu] of nearRail) console.log(`${cpu.toFixed(1).padStart(8)} CPU-s ${Math.round(100 * cpu / CPU_RAIL_SECONDS).toString().padStart(3)}%  ${label}`);
+  }
   const runId = new Date().toISOString();
-  appendFileSync(timingsPath, runs.map((run) => `${runId}\t${(run.result.duration || run.wall).toFixed(3)}\t${run.target.label}`).join("\n") + "\n");
+  // Row: run, reported seconds, label, CPU seconds (empty when unknown).
+  // Older rows have two or three fields and still read (`loadHistory`).
+  appendFileSync(timingsPath, runs.map((run) =>
+    `${runId}\t${(run.result.duration || run.wall).toFixed(3)}\t${run.target.label}\t${run.cpu === null ? "" : run.cpu.toFixed(3)}`).join("\n") + "\n");
   trimHistory(timingsPath, 4000);
 
   if (incomplete) {

@@ -122,3 +122,40 @@ impl KernelGate for NoGate {
     }
     fn accepted(&self, _psi: &GlobalCtx, _item: &GateItem<'_>) {}
 }
+
+/// A gate that never admits the named declarations and never learns that
+/// they passed: `heather check --only` wraps the verdict store in one so the
+/// probed items face the kernel on every run and the store is left exactly
+/// as it was found (`docs/check-only-design.md` §2). Names are matched
+/// bare — the gate sees `GateItem::name`, not the module — which is the
+/// probe's own granularity.
+pub struct Except {
+    inner: Rc<dyn KernelGate>,
+    names: std::collections::BTreeSet<String>,
+}
+
+impl Except {
+    pub fn new(inner: Rc<dyn KernelGate>, names: std::collections::BTreeSet<String>) -> Except {
+        Except { inner, names }
+    }
+}
+
+impl KernelGate for Except {
+    fn admits(&self, psi: &GlobalCtx, item: &GateItem<'_>) -> bool {
+        !self.names.contains(item.name) && self.inner.admits(psi, item)
+    }
+
+    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>) {
+        if !self.names.contains(item.name) {
+            self.inner.accepted(psi, item);
+        }
+    }
+
+    fn assumption(&self, psi: &GlobalCtx, name: &str, binding: &heather_kernel::term::GlobalBinding) {
+        self.inner.assumption(psi, name, binding);
+    }
+
+    fn abandon(&self, psi: &GlobalCtx) {
+        self.inner.abandon(psi);
+    }
+}

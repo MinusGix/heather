@@ -110,14 +110,14 @@ fn slices_partition_the_delta() {
 #[test]
 fn the_same_source_replays_every_item() {
     let (_, previous) = fresh(1, &base());
-    same_as_fresh(&previous, &base(), SliceReport { replayed: 5, elaborated: 0 }, "unchanged");
+    same_as_fresh(&previous, &base(), SliceReport { replayed: 5, elaborated: 0, forced: 0 }, "unchanged");
 }
 
 #[test]
 fn an_appended_declaration_replays_everything_before_it() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, DOUBLE, ADD_ZERO_A, DOUBLE_ZERO, TRIPLE, "fn quad(n: Nat) -> Nat { double(double(n)) }"]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 5, elaborated: 1 }, "append");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 5, elaborated: 1, forced: 0 }, "append");
 }
 
 /// The edit the design is for: a proof edit re-elaborates the theorem, its
@@ -132,7 +132,7 @@ fn a_proof_body_edit_replays_the_declarations_after_it() {
     }))
 }";
     let edited = module(&[ADD, DOUBLE, proof_b, DOUBLE_ZERO, TRIPLE]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1 }, "proof edit");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1, forced: 0 }, "proof edit");
 }
 
 /// Two proof edits: the prefix is restored after each, so only the two
@@ -154,7 +154,7 @@ fn two_proof_edits_each_restore_the_prefix() {
         TRIPLE,
         "theorem triple_zero(): triple(0) = 0 {\n    refl\n}",
     ]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 2 }, "two proof edits");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 2, forced: 0 }, "two proof edits");
 }
 
 /// A comment or reformatting inside a definition: the text differs, the
@@ -163,7 +163,7 @@ fn two_proof_edits_each_restore_the_prefix() {
 fn a_formatting_edit_replays_the_declarations_after_it() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, "fn double(n: Nat) -> Nat {\n    // twice\n    add(n, n)\n}", ADD_ZERO_A, DOUBLE_ZERO, TRIPLE]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1 }, "formatting");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1, forced: 0 }, "formatting");
 }
 
 /// A changed `fn` body changes its binding, and every later declaration may
@@ -172,28 +172,28 @@ fn a_formatting_edit_replays_the_declarations_after_it() {
 fn a_definition_body_edit_re_elaborates_everything_after_it() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, "fn double(n: Nat) -> Nat { add(n, add(n, 0)) }", ADD_ZERO_A, DOUBLE_ZERO, TRIPLE]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 4 }, "fn body edit");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 4, forced: 0 }, "fn body edit");
 }
 
 #[test]
 fn an_inserted_declaration_re_elaborates_everything_after_it() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, "fn one() -> Nat { 1 }", DOUBLE, ADD_ZERO_A, DOUBLE_ZERO, TRIPLE]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 5 }, "insert");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 5, forced: 0 }, "insert");
 }
 
 #[test]
 fn a_deleted_declaration_re_elaborates_everything_after_it() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, DOUBLE, ADD_ZERO_A, TRIPLE]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 3, elaborated: 1 }, "delete");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 3, elaborated: 1, forced: 0 }, "delete");
 }
 
 #[test]
 fn reordered_declarations_re_elaborate_from_the_first_moved_one() {
     let (_, previous) = fresh(1, &base());
     let edited = module(&[ADD, DOUBLE, ADD_ZERO_A, TRIPLE, DOUBLE_ZERO]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 3, elaborated: 2 }, "reorder");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 3, elaborated: 2, forced: 0 }, "reorder");
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn a_rename_re_elaborates_everything_after_it() {
         "theorem double_zero(): dbl(0) = 0 { refl }",
         "fn triple(n: Nat) -> Nat { add(n, dbl(n)) }",
     ]);
-    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 4 }, "rename");
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 1, elaborated: 4, forced: 0 }, "rename");
 }
 
 /// A mutual measure group is one slice at its first member, keyed by every
@@ -248,21 +248,21 @@ fn a_mutual_group_is_one_slice_keyed_by_every_member() {
     assert!(previous.items()[ev_at + 1].psi.is_empty(), "the second member's own slice is empty");
     for (edited, expect, shape) in [
         // Unchanged: the group replays as one, its second member as an empty slice.
-        (src.clone(), SliceReport { replayed: 10, elaborated: 0 }, "group unchanged"),
+        (src.clone(), SliceReport { replayed: 10, elaborated: 0, forced: 0 }, "group unchanged"),
         // The second member's text changes without changing what it means:
         // the group's first member sees the new text and the group is
         // elaborated (the second member's own empty slice too), comes out
         // equal, and the theorem after it replays.
         (
             module(&[IMPORTS, ADD, EV, "fn od(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => ev(k) }  }", EV4]),
-            SliceReport { replayed: 8, elaborated: 2 },
+            SliceReport { replayed: 8, elaborated: 2, forced: 0 },
             "group member reformatted",
         ),
         // The second member's body changes: the group is elaborated and so
         // is everything after it.
         (
             module(&[IMPORTS, ADD, EV, "fn od(n: Nat) -> Nat decreases n { match n { Zero => 2, Succ(k) => ev(k) } }", "theorem ev5(): ev(5) = 2 { refl }"]),
-            SliceReport { replayed: 7, elaborated: 3 },
+            SliceReport { replayed: 7, elaborated: 3, forced: 0 },
             "group member edited",
         ),
     ] {
@@ -290,7 +290,7 @@ fn a_different_dependency_world_replays_nothing() {
     let (delta, report) = e
         .check_module_delta_from("m", &base(), ModuleDependencyIdentity::default(), &previous)
         .expect("checks");
-    assert_eq!(report, SliceReport { replayed: 0, elaborated: 5 });
+    assert_eq!(report, SliceReport { replayed: 0, elaborated: 5, forced: 0 });
     let mut plain = elaborator(1);
     plain.check_module_delta("extra", "fn extra() -> Nat { 0 }\n", ModuleDependencyIdentity::default()).unwrap();
     let fresh_delta = plain.check_module_delta("m", &base(), ModuleDependencyIdentity::default()).unwrap();
@@ -314,7 +314,7 @@ fn a_forged_slice_is_refused_and_the_item_elaborated() {
         // `add` is elaborated (its forged slice was refused) and comes out
         // different from the forged binding, so the prefix is broken and
         // nothing after it replays either.
-        assert_eq!(report, SliceReport { replayed: 0, elaborated: 5 }, "width {workers}");
+        assert_eq!(report, SliceReport { replayed: 0, elaborated: 5, forced: 0 }, "width {workers}");
     }
 }
 
@@ -338,4 +338,35 @@ fn a_broken_edit_reports_the_fresh_errors() {
     assert_eq!(render(&sliced_errs), render(&fresh_errs));
     // Usable afterwards, with no plan left behind.
     e.check_module_delta("again", "fn z() -> Nat { 0 }\n", ModuleDependencyIdentity::default()).expect("checks");
+}
+
+/// `--only` (`docs/check-only-design.md`): a forced item is elaborated from
+/// source over an exact prefix, every other item replays, and the result is
+/// the fresh elaboration's — for an unchanged source, where nothing would
+/// have been elaborated otherwise, and for a name in a mutual group.
+#[test]
+fn a_forced_item_is_elaborated_and_the_rest_replays() {
+    let src = base();
+    let (_, previous) = fresh(1, &src);
+    for workers in [1usize, 4] {
+        let (fresh_elab, fresh_delta) = fresh(workers, &src);
+        let mut e = elaborator(workers);
+        let force = ["double_zero".to_string()].into_iter().collect();
+        let (delta, report, met) = e
+            .check_module_delta_only("m", &src, ModuleDependencyIdentity::default(), &previous, force)
+            .unwrap_or_else(|errs| panic!("{}", errs[0].render(&src)));
+        assert_eq!(report, SliceReport { replayed: 4, elaborated: 1, forced: 1 }, "width {workers}");
+        assert_eq!(met, ["double_zero".to_string()].into_iter().collect(), "width {workers}");
+        assert_eq!(delta.to_image_bytes(), fresh_delta.to_image_bytes(), "width {workers}: the delta");
+        assert_eq!(delta.items(), fresh_delta.items(), "width {workers}: the slices");
+        assert_eq!(e.psi(), fresh_elab.psi(), "width {workers}: Ψ");
+    }
+    // A name nothing declares is reported as unmet, and forces nothing.
+    let mut e = elaborator(1);
+    let force = ["nope".to_string()].into_iter().collect();
+    let (_, report, met) = e
+        .check_module_delta_only("m", &src, ModuleDependencyIdentity::default(), &previous, force)
+        .unwrap_or_else(|errs| panic!("{}", errs[0].render(&src)));
+    assert_eq!(report, SliceReport { replayed: 5, elaborated: 0, forced: 0 });
+    assert!(met.is_empty());
 }

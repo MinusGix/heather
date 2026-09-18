@@ -1379,6 +1379,17 @@ impl application::ImplicitApplicationElab for Elaborator {
 /// first member of a mutual measure group, every member's span joined —
 /// the group is elaborated as one there, so its slice answers for all of
 /// them and must be keyed by all of them.
+/// The names an item answers to for `--only`: its own, or every member's
+/// for the head of a mutual measure group (the group is one slice).
+fn slice_names(file: &heather_syntax::File, idx: usize, plan: &ItemPlan) -> Vec<String> {
+    match plan.in_group.get(&idx) {
+        Some(&g) if plan.groups[g][0] == idx => {
+            plan.groups[g].iter().map(|&i| item_timing_name(&file.items[i])).collect()
+        }
+        _ => vec![item_timing_name(&file.items[idx])],
+    }
+}
+
 fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemPlan) -> String {
     let span_of = |i: usize| lint::item_span(&file.items[i]);
     match plan.in_group.get(&idx) {
@@ -2003,9 +2014,13 @@ impl Elaborator {
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
             let slice_mark = self.slice_begin();
+            // `--only` names items that elaborate from source however exact
+            // the prefix is (`docs/check-only-design.md`); a group is named
+            // through any member.
+            let forced = self.slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if self.try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
                     self.slice_end(mark, slice_source, slice_start, true);
                 }
@@ -2606,9 +2621,13 @@ impl Elaborator {
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
             let slice_mark = self.slice_begin();
+            // `--only` names items that elaborate from source however exact
+            // the prefix is (`docs/check-only-design.md`); a group is named
+            // through any member.
+            let forced = self.slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if self.try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
                     self.slice_end(mark, slice_source, slice_start, true);
                 }

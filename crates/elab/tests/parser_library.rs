@@ -2,21 +2,27 @@
 use heather_elab::{Elaborator, SemanticImage};
 use std::sync::OnceLock;
 mod support;
+const MODULES: &[(&str, &str)] = &[
+    ("logic", include_str!("../../../lib/std/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/nat.hthr")),
+    ("option", include_str!("../../../lib/std/option.hthr")),
+    ("pair", include_str!("../../../lib/std/pair.hthr")),
+    ("list", include_str!("../../../lib/std/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/int.hthr")),
+    ("omega", include_str!("../../../lib/std/omega.hthr")),
+    ("result", include_str!("../../../lib/std/result.hthr")),
+];
+
+/// Standard library and parser library alike come back as replayed semantic
+/// images (`support::parser::MODULES` is the same list the calculator
+/// showcase replays, so the two binaries share one store). Before 2026-09-17
+/// the parser modules were re-elaborated from source here on every run: the
+/// binary took 19.3 s alone at width one, and 1.35 s warm after.
 fn base() -> Elaborator {
-    let mut e = support::semantic_test_base(&[
-        ("logic", include_str!("../../../lib/std/logic.hthr")),
-        ("bool", include_str!("../../../lib/std/bool.hthr")),
-        ("nat", include_str!("../../../lib/std/nat.hthr")),
-        ("option", include_str!("../../../lib/std/option.hthr")),
-        ("pair", include_str!("../../../lib/std/pair.hthr")),
-        ("list", include_str!("../../../lib/std/list.hthr")),
-        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-        ("int", include_str!("../../../lib/std/int.hthr")),
-        ("omega", include_str!("../../../lib/std/omega.hthr")),
-        ("result", include_str!("../../../lib/std/result.hthr")),
-    ]);
-    e.set_kernel_workers(1);
-    e
+    let modules: Vec<(&str, &str)> = MODULES.iter().chain(support::parser::MODULES).copied().collect();
+    support::semantic_test_base_with(&modules, |e| e.set_kernel_workers(1))
 }
 
 #[test]
@@ -29,11 +35,7 @@ fn library() -> Elaborator {
     // attempt and diagnostic state over the same kernel-checked declarations.
     // Rebuilding it for all four tests exceeds the full lane's process budget.
     static IMAGE: OnceLock<SemanticImage> = OnceLock::new();
-    let image = IMAGE.get_or_init(|| {
-        let mut e = base();
-        support::parser::load(&mut e);
-        e.semantic_image()
-    });
+    let image = IMAGE.get_or_init(|| base().semantic_image());
     let mut e = image.elaborator();
     e.set_kernel_workers(1);
     e

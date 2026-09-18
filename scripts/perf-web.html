@@ -185,10 +185,13 @@ function suiteTable(snap, against) {
     const prev = Object.fromEntries(against?.tests?.[lane]?.targets || []);
     const top = t.targets.slice(0, 25), max = top[0]?.[1] || 1;
     const rest = t.targets.slice(25).reduce((a, [, s]) => a + s, 0);
-    const rows = top.map(([label, s]) => `<tr><td class="mono">${esc(label)}</td>${barCell(s, max, S(1), label)}<td>${delta(prev[label], s, true)}</td></tr>`).join('');
-    return `<h3>${lane} lane · run ${esc(t.run)} · ${t.targets.length} targets · ${fmtS(t.sum_s)} summed at kernel width one</h3>
-      <table><thead><tr><th>test binary</th><th>seconds</th><th>Δ</th></tr></thead><tbody>${rows}
-      <tr><td class="kv">${t.targets.length - top.length} more</td><td>${fmtS(rest)}</td><td></td></tr></tbody></table>`;
+    // Rows are [label, seconds] before 2026-09-17 and [label, seconds, cpu] after.
+    const cpuCell = (cpu) => cpu == null ? '' : `${fmtS(cpu)} (${Math.round(100 * cpu / 300)}%)`;
+    const rows = top.map(([label, s, cpu]) => `<tr><td class="mono">${esc(label)}</td>${barCell(s, max, S(1), label)}<td>${cpuCell(cpu)}</td><td>${delta(prev[label], s, true)}</td></tr>`).join('');
+    const cpuSum = t.cpu_sum_s == null ? '' : ` · ${fmtS(t.cpu_sum_s)} CPU`;
+    return `<h3>${lane} lane · run ${esc(t.run)} · ${t.targets.length} targets · ${fmtS(t.sum_s)} summed at kernel width one${cpuSum}</h3>
+      <table><thead><tr><th>test binary</th><th>seconds</th><th>CPU-s (of the 300 s rail)</th><th>Δ</th></tr></thead><tbody>${rows}
+      <tr><td class="kv">${t.targets.length - top.length} more</td><td>${fmtS(rest)}</td><td></td><td></td></tr></tbody></table>`;
   }).join('') || '<p class="note">no suite history in this snapshot</p>';
 }
 

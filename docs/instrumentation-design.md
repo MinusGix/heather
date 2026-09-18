@@ -270,7 +270,12 @@ Suite:
 - `scripts/run-test-targets.mjs` **appends** to
   `target/test-target-timings-<lane>.tsv` with a `run` (ISO timestamp)
   column. Scheduling reads the latest run per target, so the history is
-  additive and costs the scheduler nothing.
+  additive and costs the scheduler nothing. Since 2026-09-17 each row also
+  carries the target's **CPU seconds** (user+sys over every thread, from the
+  wrapper's bash `time`): that is the quantity the child's `ulimit -t` rail
+  kills on, and wall is not proportional to it for a multi-threaded child, so
+  the `slowest test targets` table prints both and names any target past
+  half the rail.
 
 ## 6. Cost when nobody is measuring
 

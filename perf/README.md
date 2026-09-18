@@ -25,3 +25,15 @@ Rules, so the diary keeps meaning something:
   landing something that should have moved a column; not every round.
 - The raw `--timings` tables a snapshot summarized are left under
   `target/perf/<stamp>/` (not committed); `scripts/timings` reads them.
+
+## Probing one declaration
+
+`heather check --cache --only <item>[,<item>…] --timings f.tsv <file>`
+elaborates and kernel-checks exactly the named declarations (`name` in the
+root module, `module::name` anywhere in the closure) over a prefix replayed
+from the store, publishes nothing, and labels the run row `only=…` so that
+`scripts/timings` says so and refuses to diff it against a whole run. Counts
+reproduce a whole run's to the unit or nearly (see
+`docs/check-only-design.md` §4 for the one measured exception); times are a
+series of their own. The store must hold an image of the module first:
+`heather check --cache <file>` once.

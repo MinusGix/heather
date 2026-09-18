@@ -23,10 +23,12 @@ fn a_corrupt_fixture_image_rebuilds_before_fresh_suffixes_run() {
 
     let artifact = std::fs::read_dir(dir.join("modules-v1"))
         .unwrap()
-        .next()
-        .expect("one semantic test image")
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        // The store also holds a `.latest` pointer per module (the
+        // slice-replay commit); corrupting *that* leaves the image valid
+        // and proves nothing. Take the image itself.
+        .find(|path| path.extension().is_some_and(|ext| ext == "hmi"))
+        .expect("one semantic test image");
     std::fs::write(artifact, b"not an image").unwrap();
     let mut rebuilt = support::semantic_test_base_at(modules, dir.clone());
     assert_eq!(rebuilt.psi(), &expected);

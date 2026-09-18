@@ -4,43 +4,50 @@ use heather_elab::Elaborator;
 
 mod support;
 
+const STD: &[(&str, &str)] = &[
+    ("logic", include_str!("../../../lib/std/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/nat.hthr")),
+    ("option", include_str!("../../../lib/std/option.hthr")),
+    ("pair", include_str!("../../../lib/std/pair.hthr")),
+    ("list", include_str!("../../../lib/std/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/int.hthr")),
+    ("omega", include_str!("../../../lib/std/omega.hthr")),
+    ("result", include_str!("../../../lib/std/result.hthr")),
+];
+
+const SHOWCASE: &[(&str, &str)] = &[
+    ("calc", include_str!("../../../docs/showcase/calc.hthr")),
+    ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
+];
+
+/// The whole checked-in prefix — standard library, parser library, the two
+/// showcase modules — as replayed semantic images. Until 2026-09-17 only the
+/// standard library was an image; the parser library and the showcase went
+/// through the declaration-verdict store, which skips the kernel gate but
+/// re-runs the whole frontend from source under the debug profile: 22 s alone
+/// at width one, of which the prefix was 10 s (12 s warm after; the rest is
+/// the probes and controls below). A replayed image is bounded-decoded and
+/// vouched for by the verdict store (or kernel-checked), and the full lane's
+/// exact freshness policy rebuilds it whenever the compiler changed. The gate
+/// is `NoGate` on return, so the probe modules and controls below face the
+/// kernel on every run.
 fn base() -> Elaborator {
-    support::semantic_test_base(&[
-        ("logic", include_str!("../../../lib/std/logic.hthr")),
-        ("bool", include_str!("../../../lib/std/bool.hthr")),
-        ("nat", include_str!("../../../lib/std/nat.hthr")),
-        ("option", include_str!("../../../lib/std/option.hthr")),
-        ("pair", include_str!("../../../lib/std/pair.hthr")),
-        ("list", include_str!("../../../lib/std/list.hthr")),
-        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-        ("int", include_str!("../../../lib/std/int.hthr")),
-        ("omega", include_str!("../../../lib/std/omega.hthr")),
-        ("result", include_str!("../../../lib/std/result.hthr")),
-    ])
+    let modules: Vec<(&str, &str)> = STD
+        .iter()
+        .chain(support::parser::MODULES)
+        .chain(SHOWCASE)
+        .copied()
+        .collect();
+    // The proof-carrying grammar is a large checked artifact; keep its gate
+    // serial within the per-process memory rail, on the cold run too.
+    support::semantic_test_base_with(&modules, |e| e.set_kernel_workers(1))
 }
 
 #[test]
 fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     let mut e = base();
-    // The proof-carrying grammar is a large checked artifact; keep its gate
-    // serial within the per-process memory rail.
-    e.set_kernel_workers(1);
-    // The parser library and the two showcase modules are checked-in prefix:
-    // they go through the declaration-verdict store (`with_decl_cache`'s
-    // trust argument), and the gate is sealed before the probe modules and
-    // controls below, which face the kernel on every run. This binary was
-    // the fast lane's wall — one test elaborating the showcase from source
-    // at width one, ~90 s against the next-longest target's ~60 s
-    // (2026-09-17).
-    support::with_decl_cache(&mut e, |e| {
-        support::parser::load(e);
-        for (name, src) in [
-            ("calc", include_str!("../../../docs/showcase/calc.hthr")),
-            ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
-        ] {
-            e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{}", err.render(src)));
-        }
-    });
     let mixed = r#"
         import calc_parser; import list; import result; import option;
         fn list_map<A,B>(xs: List<A>, f: A → B) -> List<B> { xs.map(f) }

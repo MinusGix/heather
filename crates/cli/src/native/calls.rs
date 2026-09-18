@@ -892,15 +892,7 @@ mod tests {
     }
     #[test]
     fn call_stack_semantics_and_refusals() {
-        use heather_cli::{loader, semantic::SemanticSession};
-        use std::path::PathBuf;
-        let mut elab = Elaborator::with_prelude().unwrap();
-        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
-        for &(name, src) in super::super::SUPPORT {
-            super::super::check_module(&mut elab, &mut session, &loader::Module {
-                name: name.into(), path: PathBuf::from(name), src: src.into(),
-            }).unwrap();
-        }
+        let mut elab = super::super::native_test_base();
         let normal_forms = [
             Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi },
             Instruction::MovRI { destination: Gpr::Rax, immediate: 17 },
