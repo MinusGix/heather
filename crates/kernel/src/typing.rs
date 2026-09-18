@@ -1118,6 +1118,7 @@ impl Tc {
                     return Err(TypeError::LayerMismatch);
                 }
                 let level = level.clone();
+                crate::stats::global_ref_rescopes(1);
                 let ctx = ctx.shift_global(var.0 + 1);
                 self.subst_ck(env, subst, &ctx)?;
                 Ok(level)
@@ -1309,6 +1310,7 @@ impl Tc {
                     return Err(TypeError::LayerMismatch);
                 }
                 let level = level.clone();
+                crate::stats::global_ref_rescopes(1);
                 let ctx = ctx.shift_global(var.0 + 1);
                 let ty = ty.shift_global(var.0 + 1);
                 self.subst_ck(env, subst, &ctx)?;

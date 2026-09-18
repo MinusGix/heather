@@ -118,4 +118,15 @@ counters! {
     eval_delta_steps,
     /// Re-entries of the evaluator's trampoline.
     eval_drives,
+    /// Nodes the `shift_global` traversal visited — every rescoping of a
+    /// global's body, type or context into the ambient Ψ pays one per node
+    /// (`issues/refl-theorem-step-cost.md`: the copying a fuel pin cannot
+    /// see).
+    shift_global_nodes,
+    /// Definition bodies rescoped by `Defs::body` — one per `BodyCache`
+    /// fill, i.e. per (definition, gate call) pair that unfolded it.
+    delta_body_rescopes,
+    /// Occurrences of `u^δ` / `U^δ` whose typing or conversion rule rescoped
+    /// the binding's declared context and type into the ambient Ψ.
+    global_ref_rescopes,
 }

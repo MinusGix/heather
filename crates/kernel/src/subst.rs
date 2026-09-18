@@ -182,6 +182,11 @@ trait Mapper {
     /// Name of the operation, for the change-reporting assertion only.
     const NAME: &'static str;
 
+    /// Bump `stats::shift_global_nodes` per node visited. Only the global
+    /// rescoping sets it: its cost is what the refl-theorem family pays and
+    /// no fuel counter sees (`issues/refl-theorem-step-cost.md`).
+    const COUNT_NODES: bool = false;
+
     /// Count of *effective* changes this mapper has made — see
     /// §Sharing unchanged subtrees. Every hook below that returns something
     /// other than what it was given must [`Self::note`] it.
@@ -291,6 +296,9 @@ fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
 }
 
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
+    if M::COUNT_NODES {
+        crate::stats::shift_global_nodes(1);
+    }
     if m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
         // claim in debug builds, exactly as shared_ty verifies the change
@@ -319,6 +327,9 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
 }
 
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    if M::COUNT_NODES {
+        crate::stats::shift_global_nodes(1);
+    }
     // Whole-node replacement, before anything else: a mapper that matches
     // *terms* has to see a node before its children are rebuilt, and its
     // answer is by construction a change (rule 1's "over-reporting is safe"
@@ -996,6 +1007,7 @@ impl ShiftGlobal {
 impl Mapper for ShiftGlobal {
     const LOCAL_OP: bool = false;
     const NAME: &'static str = "shift_global";
+    const COUNT_NODES: bool = true;
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes

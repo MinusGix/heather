@@ -35,6 +35,13 @@ COLUMNS = {
     "memo":      (["conv_memo_hits"], 1),
     "gated":     (["check_terms"], 1),
     "delta":     (["eval_delta_steps"], 1),
+    # Global rescoping (issues/refl-theorem-step-cost.md): nodes the
+    # `shift_global` traversal copied, definition bodies rescoped per gate
+    # call, and `u^δ`/`U^δ` occurrences whose rules rescoped the binding's
+    # context and type. Work no fuel counter sees.
+    "rescope":   (["shift_global_nodes"], 1),
+    "unfolds":   (["delta_body_rescopes"], 1),
+    "refs":      (["global_ref_rescopes"], 1),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 

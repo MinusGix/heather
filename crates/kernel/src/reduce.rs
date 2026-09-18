@@ -154,9 +154,13 @@ impl<'a> Defs<'a> {
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
             return None;
         };
+        let rescope = || {
+            crate::stats::delta_body_rescopes(1);
+            t.shift_global(v.0 + 1)
+        };
         Some(match self.bodies {
-            Some(c) => c.get_or_insert(v, || t.shift_global(v.0 + 1)),
-            None => Rc::new(t.shift_global(v.0 + 1)),
+            Some(c) => c.get_or_insert(v, rescope),
+            None => Rc::new(rescope()),
         })
     }
 

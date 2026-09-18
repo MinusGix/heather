@@ -92,7 +92,16 @@ EDIT_PROBE = "\n\nfn perf_probe_edit<A>(a: A) → A { a }\n"
 # The item columns a snapshot keeps per heavy declaration. Everything else on
 # an item row is in the raw TSV the snapshot points at.
 ITEM_KEEP = ["total_ns", "kernel_gate_ns", "decl_type_ns", "decl_body_ns", "decl_emit_ns",
-             "elab_whnf_ns", "diag_note_ns", "lower_ns", "conv_misses", "eval_steps"]
+             "elab_whnf_ns", "diag_note_ns", "lower_ns", "conv_misses", "eval_steps",
+             "conv_shortcut_hits", "conv_memo_hits", "shift_global_nodes", "delta_body_rescopes",
+             "global_ref_rescopes"]
+# Items whose kernel gate costs this many times the file's median per
+# evaluator step are listed on their own: their seconds are in what a step
+# touches, not in how many there are (issues/refl-theorem-step-cost.md —
+# fourteen refl theorems at a hundred times the ordinary step, invisible in
+# a table sorted by total).
+OUTLIER_FACTOR = 10
+OUTLIER_MIN_STEPS = 100
 TOP_ITEMS = 25
 
 
@@ -262,6 +271,14 @@ def summarize(tsv: Path):
         })
     totals = sorted(t.cell(r, "total_ns") for r in items)
     top = sorted(items, key=lambda r: -t.cell(r, "total_ns"))[:TOP_ITEMS]
+    # Gate nanoseconds per evaluator step, over every item that stepped at
+    # least OUTLIER_MIN_STEPS times (a three-step item's ratio is noise): the
+    # median is the file's ordinary step, and `outliers` keeps the items
+    # farthest above it whether or not their totals reach `top`.
+    stepped = [r for r in items if t.cell(r, "eval_steps") >= OUTLIER_MIN_STEPS]
+    per_step = sorted(t.cell(r, "kernel_gate_ns") / t.cell(r, "eval_steps") for r in stepped)
+    median = per_step[len(per_step) // 2] if per_step else 0
+    outliers = sorted(stepped, key=lambda r: -t.cell(r, "kernel_gate_ns") / t.cell(r, "eval_steps"))[:TOP_ITEMS]
 
     def pct(p):
         return totals[min(len(totals) - 1, int(len(totals) * p))] if totals else 0
@@ -276,6 +293,8 @@ def summarize(tsv: Path):
             "p90_total_ns": pct(0.9),
             "max_total_ns": totals[-1] if totals else 0,
             "top": [dict(name=t.name(r), **{c: t.cell(r, c) for c in ITEM_KEEP}) for r in top],
+            "per_step_median_ns": median,
+            "outliers": [dict(name=t.name(r), **{c: t.cell(r, c) for c in ITEM_KEEP}) for r in outliers],
         },
     }
 
@@ -509,7 +528,7 @@ def cmd_report(args):
         print(f"\n-- corpus: wall seconds through the release CLI (wait = cold at width {e.get('wait_workers', '?')}; "
               f"at width {e['kernel_workers']}: cold = empty cache, warm = images replayed, edit = one declaration appended)")
         print(f"   {'file':34} {'wait':>7} {'cold':>8} {'':>6} {'warm':>8} {'edit':>8} {'':>6} | {'gate%':>5} {'decls':>5} "
-              f"{'misses':>8} {'':>6} {'queries':>10} {'steps':>10} {'rss MB':>7}")
+              f"{'misses':>8} {'':>6} {'queries':>10} {'steps':>10} {'rescope':>11} {'rss MB':>7}")
         prev_files = {f["path"]: f for f in (against or {}).get("files", [])}
         for f in snap["files"]:
             c, w, ed = f.get("cold", {}), f.get("warm", {}), f.get("edit", {})
@@ -525,7 +544,7 @@ def cmd_report(args):
                   f"{w.get('wall_s', 0):8.2f} {ed.get('wall_s', 0):8.2f} {delta(pf.get('edit', {}).get('wall_s'), ed.get('wall_s'), True):>6} | "
                   f"{gate:5.0f} {c.get('items', {}).get('count', 0):5d} {run.get('conv_misses', 0):8,d} "
                   f"{delta(prun.get('conv_misses'), run.get('conv_misses'), False):>6} {q:10,d} {run.get('eval_steps', 0):10,d} "
-                  f"{c.get('max_rss_mb', 0):7.0f}{bad}")
+                  f"{run.get('shift_global_nodes', 0):11,d} {c.get('max_rss_mb', 0):7.0f}{bad}")
 
         # --- phases
         tot = phase_totals(snap)
@@ -565,14 +584,46 @@ def cmd_report(args):
                 allitems.append((f["path"], i))
         allitems.sort(key=lambda fi: -fi[1]["total_ns"])
         allitems = [fi for fi in allitems if not (fi[1]["name"] in seen or seen.add(fi[1]["name"]))]
-        print(f"\n-- heaviest declarations across the corpus (cold; ms, gate share, misses, steps; one reading per declaration)")
+        print(f"\n-- heaviest declarations across the corpus (cold; ms, gate share, misses, steps, gate µs per step, "
+              f"nodes rescoped by shift_global; one reading per declaration)")
         for path, i in allitems[:top]:
-            gate = i["kernel_gate_ns"] / max(i["total_ns"], 1) * 100
-            elab = max(i[k] for k in ("decl_body_ns", "decl_type_ns", "decl_emit_ns", "elab_whnf_ns", "lower_ns"))
-            elab_name = max(("decl_body_ns", "decl_type_ns", "decl_emit_ns", "elab_whnf_ns", "lower_ns"), key=lambda k: i[k])[:-3]
-            print(f"   {i['total_ns'] / 1e6:9.1f}ms  gate {gate:3.0f}%  {elab_name} {elab / max(i['total_ns'], 1) * 100:3.0f}%  "
-                  f"misses {i['conv_misses']:7,d}  steps {i['eval_steps']:10,d}  {Path(path).stem}: {i['name']}")
+            print(f"   {item_line(i)}  {Path(path).stem}: {i['name']}")
+
+        # --- per-step outliers: the family a total-sorted table hides
+        print(f"\n-- per-step outliers: gate µs per evaluator step at least {OUTLIER_FACTOR}× the file's median "
+              f"(what each step touches, not how many; rescope = nodes copied rescoping globals)")
+        found = False
+        for f in snap["files"]:
+            it = f.get("cold", {}).get("items", {})
+            # Snapshots before 2026-09-18 kept no outlier list; fall back to
+            # the top-by-total items, whose median is then a heavy one.
+            rows = [i for i in it.get("outliers", it.get("top", [])) if i.get("eval_steps", 0) >= OUTLIER_MIN_STEPS]
+            if not rows:
+                continue
+            median = it.get("per_step_median_ns") or sorted(i["kernel_gate_ns"] / i["eval_steps"] for i in rows)[len(rows) // 2]
+            for i in sorted(rows, key=lambda i: -i["kernel_gate_ns"] / i["eval_steps"]):
+                if i["kernel_gate_ns"] / i["eval_steps"] < OUTLIER_FACTOR * median:
+                    break
+                found = True
+                print(f"   {item_line(i)}  {Path(f['path']).stem}: {i['name']}   (file median {median / 1e3:.1f} µs/step)")
+        if not found:
+            print("   none among the kept items")
     print()
+
+
+def item_line(i):
+    """One heaviest-declaration row: total, gate share, the largest
+    elaborator phase, misses, steps, gate µs per step, rescoped nodes. Keys a
+    snapshot predates read as zero."""
+    gate = i["kernel_gate_ns"] / max(i["total_ns"], 1) * 100
+    phases = ("decl_body_ns", "decl_type_ns", "decl_emit_ns", "elab_whnf_ns", "lower_ns")
+    elab_name = max(phases, key=lambda k: i.get(k, 0))
+    elab = i.get(elab_name, 0)
+    steps = i.get("eval_steps", 0)
+    per_step = i["kernel_gate_ns"] / steps / 1e3 if steps else float("nan")
+    return (f"{i['total_ns'] / 1e6:9.1f}ms  gate {gate:3.0f}%  {elab_name[:-3]:9} {elab / max(i['total_ns'], 1) * 100:3.0f}%  "
+            f"misses {i.get('conv_misses', 0):7,d}  steps {steps:10,d}  {per_step:7.1f} µs/step  "
+            f"rescope {i.get('shift_global_nodes', 0):11,d}")
 
 
 def cmd_list(args):

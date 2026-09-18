@@ -1130,6 +1130,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     return Err(NC);
                 }
                 let level = level.clone();
+                crate::stats::global_ref_rescopes(1);
                 let ctx = ctx.shift_global(u1.0 + 1);
                 self.subst(env, d1, d2, &ctx)?;
                 Ok(level)
@@ -1744,6 +1745,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     return Err(NC);
                 }
                 let level = level.clone();
+                crate::stats::global_ref_rescopes(1);
                 let ctx = ctx.shift_global(u1.0 + 1);
                 let ty = Rc::new(ty.shift_global(u1.0 + 1));
                 self.subst(env, d1, d2, &ctx)?;

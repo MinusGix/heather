@@ -26,6 +26,19 @@ Rules, so the diary keeps meaning something:
 - The raw `--timings` tables a snapshot summarized are left under
   `target/perf/<stamp>/` (not committed); `scripts/timings` reads them.
 
+## What the report shows besides totals
+
+Every heaviest-declaration row carries the gate's **µs per evaluator step**
+and the **rescope** count (`shift_global_nodes`: nodes the kernel walked
+rescoping definition bodies and global references into the ambient Ψ), and
+a **per-step outliers** section lists the items whose gate costs at least
+ten times the file's median per step. A table sorted by total hides that
+family: few steps, few queries, and seconds in what each step touches
+(`issues/refl-theorem-step-cost.md`, where fourteen refl theorems were
+invisible at 0.5–1 s each). The snapshot keeps the file's per-step median and
+its own outlier list (`items.outliers`), so the section does not depend on an
+item also being among the heaviest by total.
+
 ## Probing one declaration
 
 `heather check --cache --only <item>[,<item>…] --timings f.tsv <file>`

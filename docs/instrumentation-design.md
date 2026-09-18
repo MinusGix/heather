@@ -61,6 +61,9 @@ Counters, and where each is bumped:
 | `eval_steps` | `Eval::spend` |
 | `eval_delta_steps` | `Eval::delta_step`, the unfolding branch |
 | `eval_drives` | `Eval::drive` re-entry |
+| `shift_global_nodes` | `subst::sub_tm`/`sub_ty` under the `ShiftGlobal` mapper, one per node visited — the copying a global rescoping costs, which no fuel counter sees |
+| `delta_body_rescopes` | `Defs::body`, one per `BodyCache` fill (a definition rescoped into the ambient Ψ for one gate call) |
+| `global_ref_rescopes` | the `u^δ`/`U^δ` rules in `typing.rs` and `conv.rs`, one per occurrence whose binding context and type were rescoped |
 
 The last two rows of the conversion group are the residue
 `generated-proof-cost-diagnostics` left behind: a fuel exhaustion and a
