@@ -1019,6 +1019,8 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::J { proof, motive, case } => {
             w.byte(22); put_expr(w, proof); put_expr(w, motive); put_expr(w, case);
         }
+        ExprKind::Char(c) => { w.byte(23); w.u64(u64::from(u32::from(*c))); }
+        ExprKind::Str(text) => { w.byte(24); w.string(text); }
     }
 }
 
@@ -1067,6 +1069,16 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             22 => ExprKind::J {
                 proof: Box::new(get_expr(r)?), motive: Box::new(get_expr(r)?), case: Box::new(get_expr(r)?),
             },
+            // A character payload is a scalar value by construction: the
+            // lexer refuses anything else, so a code that is not one means a
+            // corrupt image rather than a widened surface.
+            23 => ExprKind::Char(
+                u32::try_from(r.u64()?)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or(ModuleImageDecodeError::InvalidTag { sort: "character literal", tag: 23 })?,
+            ),
+            24 => ExprKind::Str(r.string()?),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
         Ok(Expr { kind, span })

@@ -597,6 +597,15 @@ impl<'v> Dom<'v> for Values {
         }
     }
 
+    fn is_application_spine(w: &Rc<Val<'v>>) -> bool {
+        match &**w {
+            Val::Neutral(n) => n.spine.iter_rev().all(|e| {
+                matches!(e, Elim::App { .. } | Elim::UApp { .. } | Elim::CtxApp { .. } | Elim::TyApp { .. })
+            }),
+            _ => false,
+        }
+    }
+
     /// The outermost elimination of the spine — a value's head is its *last*
     /// pushed elimination, where the syntax's is its outermost node.
     fn is_transp(w: &Rc<Val<'v>>) -> bool {

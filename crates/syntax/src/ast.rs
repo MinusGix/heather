@@ -856,6 +856,16 @@ pub enum ExprKind {
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(u64),
+    /// `'x'` — a character literal, carrying the scalar value the lexer read
+    /// (docs/string-char-design.md §3). At `Char` it elaborates to
+    /// `char::ofNat(code, decide)`; at another carrier it resolves
+    /// `CharLiteral` the way a numeral resolves `Numeral`.
+    Char(char),
+    /// `"…"` — a string literal, carrying the decoded scalar values. At
+    /// `String` it is the record over the list literal of its characters,
+    /// reusing the collection-literal lowering; at another carrier it
+    /// resolves `StringLiteral`.
+    Str(String),
     /// `·` / `·₀` / `·₁₂` — an anonymous argument slot
     /// (issues/argument-slot-sections.md). `None` is an unindexed slot;
     /// `Some(n)` is the explicitly zero-based slot `n`. Checking-position

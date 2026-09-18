@@ -402,3 +402,67 @@ theorem c_not_mem(): ¬ Mem(7, Cons(1, Cons(2, Nil))) {
         panic!("the law kit did not apply: {msg}");
     }
 }
+
+/// Decidable equality, the generic one: `logic::DecEq<A>` is the premise and
+/// `list_eq_dec` the decision, so a list decides exactly when its element type
+/// does. Shaped by `docs/testing-generated-terms.md` — a literal *and* a
+/// neutral list, a checking position, and a negative control — because a
+/// closed scrutinee alone would not see whether the decider is stuck at open
+/// endpoints or merely wrong there.
+///
+/// The `Decide<xs = ys>` bridge is at `List<Nat>` and not at an open element
+/// type: see the note in `lib/std/list.hthr` and
+/// `issues/instance-binder-occurrence-through-binder-types.md`.
+#[test]
+fn list_equality_decides_at_a_literal_and_resolves_at_open_endpoints() {
+    let mut e = elaborated();
+    let probe = r#"
+import list;
+import nat;
+import logic;
+
+fn three() -> List<Nat> { Cons(1, Cons(2, Cons(3, Nil))) }
+fn other() -> List<Nat> { Cons(1, Cons(2, Cons(4, Nil))) }
+
+// Closed: the decision runs, both ways round, in a checking position.
+theorem agree(): three() = three() { decide }
+theorem differ(): ¬(three() = other()) { decide }
+theorem shorter(): ¬(three() = Cons(1, Nil)) { decide }
+theorem empty_differs(): ¬(Nil<Nat> = Cons(1, Nil)) { decide }
+
+// Neutral: the instance is the declared decider at open endpoints, which is
+// what a literal-only test cannot see.
+theorem neutral_instance(xs, ys: List<Nat>, a, b: Nat):
+    decide_pick<xs = ys, Nat>(a, b) = or_pick(list_eq_dec(xs, ys), a, b) { refl }
+
+// The element decision is the class's, at an OPEN element type: this is the
+// half that makes the decider generic rather than a second `Nat` program.
+// A `Cons` is never `Nil`, at an open element type and by computation: the
+// decider reduces past the element decision it never has to make.
+theorem open_element<A: DecEq>(x: A, xs: List<A>, a, b: A):
+    or_pick(list_eq_dec(Cons(x, xs), Nil<A>), a, b) = a { refl }
+theorem open_cons_head<A: DecEq>(x: A, xs: List<A>): ¬(Nil<A> = Cons(x, xs)) {
+    nil_ne_cons(x, xs)
+}
+"#;
+    if let Err(err) = e.elab_module_source("probe", probe) {
+        let msg = match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        };
+        panic!("list equality did not decide: {msg}");
+    }
+    // The negative control: `decide` cannot prove a false equation, and cannot
+    // prove one whose endpoints it has no closed decision for.
+    for bad in [
+        "theorem bad(): Cons(1, Nil) = Cons(2, Nil) { decide }\n",
+        "theorem bad(xs: List<Nat>): xs = Cons(1, Nil) { decide }\n",
+    ] {
+        let src = format!("import list;\nimport nat;\nimport logic;\n{bad}");
+        let mut e = elaborated();
+        assert!(
+            e.elab_module_source("bad_probe", &src).is_err(),
+            "accepted: {bad}"
+        );
+    }
+}

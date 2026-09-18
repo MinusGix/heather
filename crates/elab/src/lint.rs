@@ -276,6 +276,8 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Char(_)
+        | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
@@ -654,6 +656,8 @@ impl BinderUses {
             ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::Char(_)
+            | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl

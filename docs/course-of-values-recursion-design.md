@@ -197,9 +197,16 @@ rule reads as strictness and sends a reader to the wrong file.
 - **Not well-founded recursion.** `div`/`mod`/`gcd` descend by a *measure*,
   not by a fixed number of constructors, and are `issues/termination-measures.md`.
 - **Not mutual recursion**, same issue.
-- **Not `Wf` inductives.** A branching arm's ih is already one per recursive
-  field; extending the window to a grandchild there is a different tupling and
-  has no customer yet. The refusal message says so in its own words.
+- **Not `Wf` inductives** — *was*, until 2026-09-18.
+  `docs/list-course-of-values-design.md` carries the window to any
+  **chain-shaped** declaration (every constructor with at most one recursive
+  field and no container): the same transformation with `pred` replaced by the
+  recursive-field projection `tail_D`, the chain followed by term rather than
+  by binder, and the convoy re-anchored by rebuilding the arm's constructor.
+  `lib/std/utf8.hthr`'s fuel-free `decode` is the customer. A **branching**
+  arm's ih is still one per recursive field; extending the window to a
+  grandchild there is a different tupling and has no customer, so a tree keeps
+  the refusal — with the message extended to say what chain-shaped means.
 - **Not a kernel change.** No new former: Σ, `pair`, `fst`/`snd` were already
   there from the branching-inductives round
   (`docs/branching-inductives-choice.md`).

@@ -734,6 +734,8 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(*n),
+        Char(c) => Char(*c),
+        Str(text) => Str(text.clone()),
         ArgSlot(index) => ArgSlot(*index),
         Refl => Refl,
         AutoRefl => AutoRefl,

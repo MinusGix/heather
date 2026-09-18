@@ -3,7 +3,7 @@ title: Inline enum types in signatures: Result<T, enum EOF|Unexpected(Char)>
 status: open
 labels: [frontend,syntax,design]
 created: 2026-08-13
-updated: 2026-08-13
+updated: 2026-09-18
 ---
 
 Sketch from the showcase critique (2026-08-13). Rust makes declaring a
@@ -29,3 +29,7 @@ type's tags is the row version's payoff and waits for it.
 Open: naming/printing of the fresh type in diagnostics; whether two
 syntactically identical inline enums in one file are one type or two
 (leaning two — nominal means nominal).
+
+## Log
+
+- 2026-09-18: The `String` and `Char` in the sketch signature now have a home: [[string-char-spec-types]] (design: docs/string-char-design.md).

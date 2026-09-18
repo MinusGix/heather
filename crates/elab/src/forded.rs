@@ -535,6 +535,7 @@ impl Elaborator {
                 Term::Zero,
                 &Branches::Custom(&body),
                 None,
+                &crate::wf::WfRec::None,
                 span,
             )
         } else {
@@ -1219,6 +1220,7 @@ impl Elaborator {
                 s_val.clone(),
                 &Branches::Custom(&body),
                 None,
+                &crate::wf::WfRec::None,
                 span,
             )?
         } else {
@@ -1900,6 +1902,7 @@ impl Elaborator {
                 Term::Var(LocalVar(0)),
                 &Branches::Custom(&body),
                 None,
+                &crate::wf::WfRec::None,
                 span,
             )
             .map(|elim| self.idx_lam(env, fam, d, elim))
@@ -2275,6 +2278,9 @@ impl Elaborator {
                             depth: acx.names.len(),
                             children,
                             container: None,
+                            // An indexed family fords by `Id` and is not
+                            // chain-shaped for the window's purposes.
+                            cov: None,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                         generalized: crate::generalize::guard_gen(&acx, dec, None),

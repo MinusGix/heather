@@ -1,0 +1,81 @@
+// Strings as sequences of Unicode scalar values. A `String` is a one-field
+// record over `List<Char>` and not an alias, so it owns its own instance keys
+// — the literal class, decidable equality, a designated `++` — while every
+// law about it is the corresponding list law lifted through one projection
+// (docs/string-char-design.md §2).
+//
+// UTF-8 is a *representation* of this type and not its definition; encoding,
+// decoding and the byte-level `Utf8` spec type are a later round's work.
+
+import logic;
+import nat;
+import list;
+import char;
+
+record String { chars: List<Char> }
+
+fn append(s, t: String) → String { String(s.chars ++ t.chars) }
+
+designation ++ at String := append
+
+// The receiver form delegates, `bounded_list`'s dodge: a `String::len` whose
+// body reached `List::len` through a receiver would make the bare name `len`
+// ambiguous with the member being declared.
+fn string_len(s: String) → Nat { s.chars.len() }
+
+fn String::len(self s: String) → Nat { string_len(s) }
+
+// ---------------------------------------------------------------------------
+// Indexing. `nth` takes a `Fin(s.len())`, so no partial index appears in the
+// specification at all: out of range is unwritable rather than an `Option`.
+// The lookup itself is `List::at`, the total `Fin`-indexed read every list
+// has; `s.len()` is `s.chars.len()` by definition, so the index carries over.
+fn String::nth(self s: String, i: Fin(s.len())) → Char { s.chars.at(i) }
+
+fn take(s: String, n: Nat) → String { String(list::take(s.chars, n)) }
+
+fn drop(s: String, n: Nat) → String { String(list::drop(s.chars, n)) }
+
+// ---------------------------------------------------------------------------
+// The laws. Each is its list counterpart through `chars_injective` or through
+// the projection alone; nothing here re-proves a list theorem.
+
+theorem chars_injective(s, t: String, p: s.chars = t.chars): s = t {
+    j(p, λ y q => s = String(chars := y), refl)
+}
+
+theorem cong_chars(s, t: String, p: s = t): s.chars = t.chars {
+    j(p, λ y q => s.chars = y.chars, refl)
+}
+
+theorem take_drop(s: String, n: Nat): take(s, n) ++ drop(s, n) = s {
+    chars_injective(take(s, n) ++ drop(s, n), s, take_append_drop(s.chars, n))
+}
+
+theorem len_append(s, t: String): (s ++ t).len() = s.len() + t.len() {
+    list::len_append(s.chars, t.chars)
+}
+
+theorem len_nil(): String(chars := Nil<Char>).len() = 0 {}
+
+// ---------------------------------------------------------------------------
+// Decidable equality. The character lists are compared by `list`'s generic
+// decider, which `Char`'s `DecEq` instance supplies the element decision to,
+// and the answer is lifted through the one projection. Nothing about lists is
+// restated here.
+
+fn string_eq_dec(s, t: String) → s = t ∨ ¬(s = t) {
+    match list_eq_dec(s.chars, t.chars) {
+        Inl(p) => Inl(chars_injective(s, t, p)),
+        Inr(np) => Inr(λ (h: s = t) => np(cong_chars(s, t, h))),
+    }
+}
+
+instance(s, t: String) Decide<s = t> { dec := string_eq_dec(s, t) }
+
+// ---------------------------------------------------------------------------
+// The literal class, `char`'s `CharLiteral` at the sequence level: at any
+// carrier that is not `String` itself a `"…"` literal resolves this and
+// applies `ofString`. Declared here for the reason `CharLiteral` is declared
+// in `char` — its field mentions `String`.
+class StringLiteral<A> { ofString: String → A }

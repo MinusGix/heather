@@ -246,13 +246,21 @@ value domain implements this order with glued neutrals rather than by
 walking syntax for the head — see the conversion bullets under *Algorithms*.
 
 Three refinements (2026-09-07, `issues/bitvec-ofnat-large-literals.md`).
-When both sides stop at the *same* defined head and the spine comparison
-fails, both are unfolded to their δ-heads before comparing again: the meet
-at this head has already failed, and single-stepping one side re-evaluates
-the exposed body on every round with every closure beneath it fresh, so
-nothing below is ever shared — two `ofNat(8, k)` at different `k` exhausted
-the budget that way. A meet at a sub-term is still found by the lazy
-comparison of the canonical forms' components. `Conv::tm` memoizes its
+When both sides stop at the *same* defined head as **bare applications**
+`f a⃗`, `f b⃗` and the spine comparison fails, both are unfolded to their
+δ-heads before comparing again: the meet at this head has already failed,
+and single-stepping one side re-evaluates the exposed body on every round
+with every closure beneath it fresh, so nothing below is ever shared — two
+`ofNat(8, k)` at different `k` exhausted the budget that way. A meet at a
+sub-term is still found by the lazy comparison of the canonical forms'
+components. When either side is instead an *elimination* stuck on a glued
+scrutinee, `E[f a⃗]`, the shared head is only what that scrutinee computes
+with and the failed meet may be `E`'s against the other side's, which says
+nothing about where the terms meet; both sides then take one δ-step and the
+loop looks again (2026-09-18, `issues/utf8-decode-conversion-blowup.md`:
+normalizing both there unrolled `nat::leb(0x800, code)` at a stuck `code`
+into a 2048-deep closure chain on each side, past the native depth budget,
+where the lockstep meets at the glued `leb` spine). `Conv::tm` memoizes its
 verdicts per closure pair (address, scope, Ψ length, layer): convertible or
 definitely not, never exhaustion; it carries the repeated sub-comparisons
 of the same closures (~30% of the x86 model's load). And the evaluator's

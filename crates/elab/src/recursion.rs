@@ -198,20 +198,39 @@ pub(crate) fn elab_self_call(
             },
             (
                 GuardKind::Wf {
-                    depth, children, ..
+                    depth,
+                    children,
+                    cov,
+                    ..
                 },
                 true,
             ) => {
                 let shift = (cx.names.len() - depth) as u32;
-                match children
-                    .iter()
-                    .position(|(child, ..)| child.shift_local(shift) == argument_term)
-                {
-                    Some(index) => {
-                        descendant = index;
-                        true
-                    }
-                    None => false,
+                // With a window, the chain is what a call may descend to —
+                // `chain[0]` is the arm's own child, so the ordinary one-step
+                // call is the `i = 0` case of the same lookup.
+                match cov {
+                    Some(window) => match window
+                        .chain
+                        .iter()
+                        .position(|subterm| subterm.shift_local(shift) == argument_term)
+                    {
+                        Some(at) if at < window.comps.len() => {
+                            cov_at = at;
+                            true
+                        }
+                        _ => false,
+                    },
+                    None => match children
+                        .iter()
+                        .position(|(child, ..)| child.shift_local(shift) == argument_term)
+                    {
+                        Some(index) => {
+                            descendant = index;
+                            true
+                        }
+                        None => false,
+                    },
                 }
             }
             (_, false) => {
@@ -271,14 +290,44 @@ pub(crate) fn elab_self_call(
                         )
                     }
                 }
-                GuardKind::Wf { .. } => (
-                    "one of the recursive fields bound by".to_string(),
-                    ". A deeper subterm is refused too, even though it is genuinely \
-                     smaller: the induction hypothesis this `match` binds is the value \
-                     at each recursive field and at nothing else, so a call anywhere \
-                     else has no term to elaborate to"
-                        .to_string(),
-                ),
+                GuardKind::Wf { cov, .. } => match cov {
+                    // The window exists, so the rule is not "the immediate
+                    // field": it is "within the chain the recursion carries".
+                    Some(window) => {
+                        let usable = window.chain.len().min(window.comps.len());
+                        (
+                            format!(
+                                "the recursive field bound by, or one of the {} \
+                                 subterm(s) below it reached by",
+                                usable.saturating_sub(1)
+                            ),
+                            format!(
+                                ". The recursion carries its last {} value(s) down the \
+                                 recursive field, so those are the subterms it can \
+                                 descend to; anything else has no term to elaborate to, \
+                                 even when it is genuinely smaller. The chain reaches \
+                                 one further at each arm that scrutinizes its own \
+                                 recursive field again, and no further than that \
+                                 (docs/list-course-of-values-design.md §4)",
+                                window.comps.len()
+                            ),
+                        )
+                    }
+                    None => (
+                        "one of the recursive fields bound by".to_string(),
+                        ". A deeper subterm is refused too, even though it is genuinely \
+                         smaller: the induction hypothesis this `match` binds is the \
+                         value at each recursive field and at nothing else, so a call \
+                         anywhere else has no term to elaborate to. A window of earlier \
+                         values exists for **chain-shaped** declarations — every \
+                         constructor with at most one recursive field and no container \
+                         (docs/list-course-of-values-design.md §1) — and this one is \
+                         not: a branching constructor has no chain to walk, only a tree \
+                         of children, and a container field is a group of children that \
+                         a self-call maps over rather than descends into"
+                            .to_string(),
+                    ),
+                },
             };
             err(
                 format!(
@@ -321,15 +370,35 @@ pub(crate) fn elab_self_call(
             )
         }
         GuardKind::Wf {
-            depth, children, ..
+            depth,
+            children,
+            cov,
+            ..
         } => {
             let shift = (cx.names.len() - depth) as u32;
-            let (_, ih, ty, level) = &children[descendant];
-            (
-                (**ih).shift_local(shift),
-                ty.shift_local(shift),
-                level.clone(),
-            )
+            match cov {
+                Some(window) => {
+                    let term = matching::cov_proj(
+                        &window.comps,
+                        &window.mlvl,
+                        window.tuple.clone(),
+                        cov_at,
+                    );
+                    (
+                        term.shift_local(shift),
+                        window.comps[cov_at].shift_local(shift),
+                        window.mlvl.clone(),
+                    )
+                }
+                None => {
+                    let (_, ih, ty, level) = &children[descendant];
+                    (
+                        (**ih).shift_local(shift),
+                        ty.shift_local(shift),
+                        level.clone(),
+                    )
+                }
+            }
         }
     };
     // The ih is a Π over the generalized parameters (in position order, which
@@ -464,6 +533,16 @@ pub(crate) enum GuardKind {
     Wf {
         depth: usize,
         children: Vec<(Rc<Term>, Rc<Term>, Type, Level)>,
+        /// The course-of-values window, where the recursion carries one
+        /// (`docs/list-course-of-values-design.md` §3). `None` for every
+        /// ordinary one-step recursion — which is every `Wf` recursion
+        /// written before this existed, and which therefore still emits the
+        /// term it always did.
+        ///
+        /// An *extension* rather than a third kind: a `Wf` arm's ih and its
+        /// aliases are unchanged by the window, and only what a self-call at
+        /// a **deeper** subterm lowers to is new.
+        cov: Option<Rc<WfCov>>,
         /// The arm's *container* field, if it has one
         /// (`docs/container-fields.md` §4.2). A container is a group of
         /// children rather than one, so a self-call over it maps rather than
@@ -471,6 +550,69 @@ pub(crate) enum GuardKind {
         /// container's index range.
         container: Option<ContainerIh>,
     },
+}
+
+/// The window of past values a course-of-values `Wf` arm carries
+/// (`docs/list-course-of-values-design.md` §3), field for field the twin of
+/// [`GuardKind::Nat`]'s — with `pred` replaced by the recursive-field
+/// projection, and the chain followed by **term** rather than by binder
+/// position, because a `Wf` arm binder is an alias and has no position.
+///
+/// Everything here is scoped at [`GuardKind::Wf`]'s `depth`, so a call from
+/// deeper inside the arm shifts it by the difference — except `motive`,
+/// `gamma` and `tail`, which travel as they were written so that a nested
+/// `match` can reindex them at *its* scrutinee.
+pub(crate) struct WfCov {
+    /// The chain this arm makes available, outermost first: `chain[0]` is the
+    /// arm's own child, `chain[1]` the child a nested `match chain[0]` binds,
+    /// and so on. A self-call descending to `chain[i]` lowers to the `i`-th
+    /// component of [`Self::tuple`].
+    ///
+    /// One entry for the arm itself; the chain grows only where the arm's own
+    /// body scrutinizes the child again, and only by being convoyed through
+    /// that `match` (§4).
+    pub(crate) chain: Vec<Rc<Term>>,
+    /// The window: the ih tuple at `chain[0]` in the arm itself, the convoy
+    /// binder inside a nested `match`.
+    pub(crate) tuple: Term,
+    /// Its component types. `comps.len()` is the depth the recursion was
+    /// *elaborated* for: a call below `chain`'s end but within `comps` is what
+    /// a nested `match` unlocks, and a call below `comps.len()` has no
+    /// component to become.
+    pub(crate) comps: Vec<Type>,
+    pub(crate) mlvl: Level,
+    /// The recursion's motive as written, over `(gamma, z : ⟦D⟧)`, with the
+    /// context it was written in: reindexing a family needs that context, and
+    /// a shift cannot recover it.
+    pub(crate) motive: Rc<Type>,
+    pub(crate) gamma: LocalCtx,
+    /// `tail_D`, over `(gamma, z : ⟦D⟧)` — carried rather than rebuilt,
+    /// because building one runs the whole `elim_Wf` lowering.
+    pub(crate) tail: Rc<Term>,
+    /// Where the window's **anchor** sits, as a function of this arm's chain
+    /// end: `λ y. Cⱼ(payload, … C(…, y))`, the constructors of the arms
+    /// *below* the recursion's own rebuilt around `y`, so that
+    /// `window(chain-end)` is `chain[0]`. `λ y. y` in the arm the recursion's
+    /// own `match` binds, which is the `Nat` design's "the first nesting
+    /// lifts by nothing".
+    ///
+    /// A *function* and not an open term because its body mentions the
+    /// enclosing arms' payload binders, which are not ambient: as a λ it
+    /// shifts like any other term in the arm. It is applied by substitution,
+    /// so no β-redex reaches an annotation.
+    pub(crate) window: Rc<Term>,
+    /// Where the **goal** sits, the same way: `λ y. C₀(payload, … C(…, y))`,
+    /// now including the recursion's own arm, so that `goal(chain-end)` is
+    /// the value that arm stands for and `M[goal(y)]` is the arm's obligation
+    /// refined at `y`.
+    ///
+    /// Two anchors and not one because they differ by exactly that outermost
+    /// constructor: the window is anchored at `chain[0]`, the goal one
+    /// constructor above it. `Nat`'s convoy needs only the first, and gets
+    /// the second from motive synthesis (`Succ k` has `k` as a subterm); a
+    /// `Wf` arm's value has its child under a `nth`, not as a subterm, so
+    /// synthesis cannot recover it and the goal is rebuilt here instead.
+    pub(crate) goal: Rc<Term>,
 }
 
 /// What a self-call over a container binder needs, gathered at the arm and

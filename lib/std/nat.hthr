@@ -821,6 +821,10 @@ fn eq_dec(n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
 
 instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n, m) }
 
+// The same decision as a property of the carrier, which is what a polymorphic
+// container's decider requires of its element type (`logic::DecEq`).
+instance DecEq<Nat> { eq_dec := eq_dec }
+
 // ---------------------------------------------------------------------------
 // The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
 // rather than chosen. `le_add` is the forward half and was already here.
@@ -1373,6 +1377,33 @@ theorem half_add_half(n: Nat): Even(n) → half(n) + half(n) = n {
     }
 }
 
+// Halving reflects a doubled bound, which is the step of every recursion that
+// consumes one binary digit per level (`bitvec::toNat_ofNat`): the argument
+// loses a bit and the bound loses a factor of two. Stated at `p + p` rather
+// than at `2 * p` because `add` is what `Le` cancels against structurally.
+//
+// Two steps on `x` and one on `p`; the only rewrite is `add_succ_left`, which
+// turns the doubled successor bound into a visible one for `Le` to strip.
+theorem half_lt_of_lt_double(x: Nat): (p: Nat) → x < p + p → half(x) < p {
+    match x {
+        Zero => λ p => match p {
+            Zero => λ bad => false_elim(bad),
+            Succ(_) => λ _ => trivial,
+        },
+        Succ(k) => match k {
+            Zero => λ p => match p {
+                Zero => λ bad => false_elim(bad),
+                Succ(_) => λ _ => trivial,
+            },
+            Succ(l) => λ p => match p {
+                Zero => λ bad => false_elim(bad),
+                Succ(r) => λ h => half_lt_of_lt_double(l, r,
+                    j(add_succ_left(r, r), λ y _ => Succ(l) < y, h)),
+            },
+        },
+    }
+}
+
 // The decider, and a `fn` rather than a `theorem` for the reason `le_dec`
 // carries: a `theorem` is opaque, so a decision spelled as one never unfolds
 // in conversion and nothing built on it computes. `Even(1)` is `False`, so the
@@ -1391,3 +1422,56 @@ fn even_dec(n: Nat) → Even(n) ∨ ¬Even(n) {
 // (docs/value-generic-instances-design.md): `n` is recovered by unifying
 // `Even(n)` against the goal, so a use site writes nothing.
 instance(n: Nat) Decide<Even(n)> { dec := even_dec(n) }
+
+// ---------------------------------------------------------------------------
+// The bridge between the Boolean decision and the propositional order. `leb`
+// and `Le` are the same two-argument recursion written into `Bool` and into
+// `Type`, so each direction is that recursion read twice; there is no
+// arithmetic in either proof.
+//
+// A client that seals a validity witness as `IsTrue(leb(…))` — `char::scalar`
+// is the first — states its bounds this way rather than with `Le` directly,
+// and reads them back through these.
+
+theorem leb_sound(n: Nat): (m: Nat) → IsTrue(leb(n, m)) → n <= m {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+theorem leb_complete(n: Nat): (m: Nat) → n <= m → IsTrue(leb(n, m)) {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+// The order is total, so refuting `n < m` gives `m <= n`. Stated separately
+// from `le_of_not_le` because a Boolean guard refutes the STRICT comparison:
+// the failing branch of a `leb(Succ(n), m)` test is exactly this hypothesis.
+theorem le_of_not_lt(n, m: Nat, h: ¬(n < m)): m <= n {
+    or_resolve(le_dec(m, n), λ (k: ¬(m <= n)) => h(lt_of_not_le(n, m, k)))
+}
+
+// The same flip with both sides Boolean, which is the shape an encoder's
+// range ladder hands its next rung: `n < m` came out `False`, so `m <= n`
+// comes out `True`.
+theorem leb_not_lt(n, m: Nat, h: IsTrue(not(leb(Succ(n), m)))): IsTrue(leb(m, n)) {
+    leb_complete(m, n, le_of_not_lt(n, m,
+        λ (k: n < m) => is_true_not(leb(Succ(n), m), h, leb_complete(Succ(n), m, k))))
+}
+
+// A rung's own test and the previous rung's lower bound cannot both come out
+// `True`: `n < m` and `m <= n` together put `n` below itself. This is what
+// refutes the rungs a known class did NOT take, when a ladder is read
+// backwards (`utf8::width_of_bounds`).
+theorem leb_lt_le_absurd(n, m: Nat, lt: IsTrue(leb(Succ(n), m)), le: IsTrue(leb(m, n))): False {
+    lt_irrefl(n, le_trans(Succ(n), m, n, leb_sound(Succ(n), m, lt), leb_sound(m, n, le)))
+}

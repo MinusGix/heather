@@ -1996,6 +1996,8 @@ impl Rewrite<'_> {
             | ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::Char(_)
+            | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::TyLit(_)
             | ExprKind::Refl

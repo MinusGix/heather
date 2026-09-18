@@ -279,7 +279,7 @@ impl Elaborator {
         // emits exactly the term it always did; more makes the recursor carry a
         // tuple (`cov_*` below, issues/recursion-at-deeper-subterms.md).
         let d = match dec {
-            Some(dec) => self.cov_depth(cx, succ_body, &k, dec),
+            Some(dec) => self.cov_depth(cx, succ_body, &k, dec, None),
             None => 1,
         };
         // A nested `match` on the chain's end, with values below it still
@@ -296,13 +296,21 @@ impl Elaborator {
         //   d = 1, no convoy : M
         //   d > 1            : Σ(M[z], M[pred z], …)   — the carried window
         //   convoy           : T_outer(z) -> M[z]      — the window passed in
-        let comps_z = cov_comps(&cx.gamma, &motive, d, 1, &Term::Var(LocalVar(0)));
+        let comps_z = cov_comps(
+            &cx.gamma,
+            &ChainStep::Pred,
+            &motive,
+            d,
+            1,
+            &Term::Var(LocalVar(0)),
+        );
         let (rec_motive, rec_lvl) = match &convoy {
             None => (cov_ty(&comps_z, &mlvl), mlvl.clone()),
             Some(c) => {
                 let carried = cov_ty(
                     &cov_comps(
                         &cx.gamma,
+                        &ChainStep::Pred,
                         &c.motive,
                         c.d,
                         1,
@@ -328,7 +336,7 @@ impl Elaborator {
         let base = match &convoy {
             None => self.elab_check(cx, zero, &base_ty, &mlvl)?,
             Some(c) => {
-                let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &c.anchor(Term::Zero));
+                let comps = cov_comps(&cx.gamma, &ChainStep::Pred, &c.motive, c.d, 0, &c.anchor(Term::Zero));
                 let dom = cov_ty(&comps, &c.lvl);
                 let mut bcx = cx.clone();
                 bcx.push("#cov".into(), dom.clone(), c.lvl.clone());
@@ -381,6 +389,7 @@ impl Elaborator {
                 // is the whole point of passing it in.
                 let comps = cov_comps(
                     &cx.gamma,
+                    &ChainStep::Pred,
                     &c.motive,
                     c.d,
                     2,
@@ -430,6 +439,7 @@ impl Elaborator {
                     // `pred (Succ k) ⇝ k`, which conversion does.
                     let comps_succ = cov_comps(
                         &cx.gamma,
+                        &ChainStep::Pred,
                         &motive,
                         d,
                         2,
@@ -449,7 +459,7 @@ impl Elaborator {
         let base = if d == 1 {
             base
         } else {
-            let comps_0 = cov_comps(&cx.gamma, &motive, d, 0, &Term::Zero);
+            let comps_0 = cov_comps(&cx.gamma, &ChainStep::Pred, &motive, d, 0, &Term::Zero);
             cov_tuple(&comps_0, &mlvl, vec![base; d])
         };
         let elim = Term::ElimNat {
@@ -461,7 +471,7 @@ impl Elaborator {
         };
         if let Some(c) = &convoy {
             // …and the window goes in, which is what refines it.
-            let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &c.anchor(scrut_t.clone()));
+            let comps = cov_comps(&cx.gamma, &ChainStep::Pred, &c.motive, c.d, 0, &c.anchor(scrut_t.clone()));
             return Ok(Term::App {
                 fun: Rc::new(elim),
                 dom_level: c.lvl.clone(),
@@ -481,7 +491,7 @@ impl Elaborator {
         // The source's `match` is the *first* component of what the recursor
         // now computes, so the transformation stays local to this expression:
         // its type is still `M[scrut/z]`.
-        let comps_at = cov_comps(&cx.gamma, &motive, d, 0, &scrut_t);
+        let comps_at = cov_comps(&cx.gamma, &ChainStep::Pred, &motive, d, 0, &scrut_t);
         Ok(cov_proj(&comps_at, &mlvl, elim, 0))
     }
 
@@ -549,9 +559,42 @@ impl Elaborator {
     /// this existed); too large, and the recursor carries a component nothing
     /// reads. What a call *lowers to* is decided by [`Self::elab_self_call`]
     /// comparing binder positions, which no spelling can fool.
-    pub(crate) fn cov_depth(&self, cx: &Cx, body: &Expr, k: &str, dec: usize) -> usize {
+    ///
+    /// `link` selects how the scan walks one step down: `None` is `Nat`'s
+    /// `Succ(k)` arm, `Some(ind)` a chain-shaped declaration's recursive
+    /// constructor and the binder at its recursive field
+    /// (`docs/list-course-of-values-design.md` §5).
+    pub(crate) fn cov_depth(
+        &self,
+        cx: &Cx,
+        body: &Expr,
+        k: &str,
+        dec: usize,
+        link: Option<&crate::inductive::Inductive>,
+    ) -> usize {
         let Some(s) = cx.selfref.as_ref() else {
             return 1;
+        };
+        // The binder a `match` arm on `cur` gives to the next link, if it has
+        // one: `Succ`'s predecessor, or the recursive field's binder.
+        let next_link = |arms: &[Arm]| -> Option<String> {
+            match link {
+                None => arms
+                    .iter()
+                    .find(|a| a.ctor == "Succ")
+                    .and_then(|a| match a.binders.as_slice() {
+                        [p] => Some(p.name().to_string()),
+                        _ => None,
+                    }),
+                Some(ind) => arms.iter().find_map(|a| {
+                    let i = ind.ctors.iter().position(|c| c.name == a.ctor)?;
+                    let field = ind.ctors[i]
+                        .kind
+                        .iter()
+                        .position(|k| *k == crate::inductive::FieldKind::Plain)?;
+                    Some(a.binders.get(field)?.name().to_string())
+                }),
+            }
         };
         // name of a chain predecessor -> its depth, `k` being depth 1.
         let mut chain: Vec<(String, usize)> = vec![(k.to_string(), 1)];
@@ -564,10 +607,9 @@ impl Elaborator {
             walk_expr(body, &mut |e| {
                 if let ExprKind::Match { scrut, arms, .. } = &e.kind
                     && matches!(&scrut.kind, ExprKind::Var(n) if *n == cur)
-                    && let Some(a) = arms.iter().find(|a| a.ctor == "Succ")
-                    && let [p] = a.binders.as_slice()
+                    && let Some(p) = next_link(arms)
                 {
-                    next.get_or_insert_with(|| p.name().to_string());
+                    next.get_or_insert(p);
                 }
             });
             match next {
@@ -719,6 +761,36 @@ impl Elaborator {
     }
 }
 
+/// One step down the recursion's chain, which is what the window's components
+/// are indexed by: component `i` at `z` is the motive at `step^i z`.
+///
+/// The two spellings share the two computation facts the whole scheme rests on
+/// (`docs/course-of-values-recursion-design.md` §3,
+/// `docs/list-course-of-values-design.md` §2): at a *recursive* constructor
+/// the step is that constructor's own child, so the step's annotation reduces
+/// to the arm's binder; at a *base* constructor it is the scrutinee itself, so
+/// every component of the base tuple sits at one and the same type.
+pub(crate) enum ChainStep {
+    /// `Nat`: `pred`.
+    Pred,
+    /// A chain-shaped `Wf`: `tail_D`, as a term over `(gamma, z : ⟦D⟧)` —
+    /// `wf::tail_term` builds it, and it is carried rather than rebuilt
+    /// because building one runs the whole `elim_Wf` lowering.
+    Tail(Rc<Term>),
+}
+
+impl ChainStep {
+    /// One step down from `t`, which is scoped `extra` binders past `gamma`.
+    pub(crate) fn at(&self, gamma: &LocalCtx, extra: u32, t: Term) -> Term {
+        match self {
+            ChainStep::Pred => pred_tm(t),
+            ChainStep::Tail(body) => {
+                body.apply_local(&embed(gamma, extra).extended(Rc::new(t)))
+            }
+        }
+    }
+}
+
 /// `pred(t)`, as the kernel spells it: `elim_Nat(λ _. Nat; 0; λ k ih. k; t)`.
 /// Needed because a course-of-values tuple's `i`-th component is the motive at
 /// `pred^i z` — and `pred (Succ k) ⇝ k` and `pred 0 ⇝ 0` by computation, which
@@ -735,16 +807,23 @@ fn pred_tm(t: Term) -> Term {
     }
 }
 
-/// The component types of the course-of-values tuple at `at`: `M[pred^i at/z]`
+/// The component types of the course-of-values tuple at `at`: `M[step^i at/z]`
 /// for `i < d`, scoped in `gamma` extended by `extra` binders (where `at`
 /// lives). `d = 1` gives back the plain motive, which is why every caller can
 /// use these unconditionally.
-fn cov_comps(gamma: &LocalCtx, motive: &Type, d: usize, extra: u32, at: &Term) -> Vec<Type> {
+pub(crate) fn cov_comps(
+    gamma: &LocalCtx,
+    step: &ChainStep,
+    motive: &Type,
+    d: usize,
+    extra: u32,
+    at: &Term,
+) -> Vec<Type> {
     (0..d)
         .map(|i| {
             let mut t = at.clone();
             for _ in 0..i {
-                t = pred_tm(t);
+                t = step.at(gamma, extra, t);
             }
             motive.apply_local(&embed(gamma, extra).extended(Rc::new(t)))
         })
@@ -754,7 +833,7 @@ fn cov_comps(gamma: &LocalCtx, motive: &Type, d: usize, extra: u32, at: &Term) -
 /// `Σ(comps[0], Σ(comps[1], …))`, right-nested and non-dependent — the tuple
 /// the recursor carries. One component is the motive itself, so the ordinary
 /// recursion emits no `Σ` at all.
-fn cov_ty(comps: &[Type], lvl: &Level) -> Type {
+pub(crate) fn cov_ty(comps: &[Type], lvl: &Level) -> Type {
     let (last, rest) = comps
         .split_last()
         .expect("a tuple has at least one component");
@@ -769,7 +848,7 @@ fn cov_ty(comps: &[Type], lvl: &Level) -> Type {
 }
 
 /// The tuple of `vals` at [`cov_ty`]'s type.
-fn cov_tuple(comps: &[Type], lvl: &Level, vals: Vec<Term>) -> Term {
+pub(crate) fn cov_tuple(comps: &[Type], lvl: &Level, vals: Vec<Term>) -> Term {
     debug_assert_eq!(comps.len(), vals.len());
     let mut vals = vals;
     let mut acc = vals.pop().expect("a tuple has at least one component");

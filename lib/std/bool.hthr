@@ -56,6 +56,88 @@ theorem or_comm(a, b: Bool): a || b = b || a {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reflection into `Type`. `IsTrue(b)` is the proposition "`b` is `True`",
+// spelled as a recursion into the two constants rather than as `b = True`:
+// `IsTrue(True)` is `logic::True`, the kernel's `Unit`, so all its proofs are
+// convertible by η and a witness of it carries no information, while
+// `IsTrue(False)` is `logic::False`, so a witness of it closes its branch.
+//
+// That is what makes the reflection usable as a record's *relevant* validity
+// witness (`char::scalar`, `utf8::utf8_valid`): the decision is a `Bool` the
+// caller can compute with, the witness is unique so it cannot disturb the
+// value it seals, and a decoder's rejection branch can still refute it —
+// which a truncated witness cannot, since `squash` eliminates only into
+// squash-headed types (docs/string-char-design.md §5.1).
+
+fn IsTrue(b: Bool) → Type { match b { False => False, True => True } }
+
+// Uniqueness, which is why a record sealed by an `IsTrue` still has equality
+// of its data as equality of its values: the `True` arm is `refl` under
+// `Unit`'s η and the `False` arm is absurd.
+theorem is_true_unique(b: Bool, p, q: IsTrue(b)): p = q {
+    match b as λ x => (u, v: IsTrue(x)) → u = v {
+        False => λ u v => false_elim(u),
+        True => λ u v => refl,
+    }(p, q)
+}
+
+// A `fn` and not a `theorem` for `le_dec`'s reason: a decision has to unfold
+// in conversion, since `decide` is judged by running it.
+fn is_true_dec(b: Bool) → IsTrue(b) ∨ ¬IsTrue(b) {
+    match b { False => Inr(·), True => Inl(trivial) }
+}
+
+instance(b: Bool) Decide<IsTrue(b)> { dec := is_true_dec(b) }
+
+// The two rewrites a consumer of a reflected guard needs: a proved guard IS
+// `True`, and its decision DID go the `Inl` way. Both are what turns a stuck
+// `match` on a guard at an open argument into its taken branch.
+theorem eq_true_of_is_true(b: Bool, p: IsTrue(b)): b = True {
+    match b as λ x => IsTrue(x) → x = True {
+        False => λ u => false_elim(u),
+        True => λ u => refl,
+    }(p)
+}
+
+theorem is_true_dec_yes(b: Bool, p: IsTrue(b)): is_true_dec(b) = Inl(p) {
+    match b as λ x => (u: IsTrue(x)) → is_true_dec(x) = Inl(u) {
+        False => λ u => false_elim(u),
+        True => λ u => refl,
+    }(p)
+}
+
+// The connectives commute with the reflection. Each is the case split on the
+// argument `and`/`not` recurses on; nothing here is stated as an `Iff` because
+// the two directions are used in different places.
+theorem is_true_and(a: Bool): (b: Bool) → IsTrue(a && b) → IsTrue(a) ∧ IsTrue(b) {
+    match a {
+        False => λ b h => false_elim(h),
+        True => λ b h => And(trivial, h),
+    }
+}
+
+theorem is_true_and_intro(a: Bool): (b: Bool) → IsTrue(a) → IsTrue(b) → IsTrue(a && b) {
+    match a {
+        False => λ b p q => false_elim(p),
+        True => λ b p q => q,
+    }
+}
+
+theorem is_true_not(b: Bool): IsTrue(not(b)) → ¬IsTrue(b) {
+    match b {
+        False => λ h p => p,
+        True => λ h p => h,
+    }
+}
+
+theorem is_true_not_intro(b: Bool): ¬IsTrue(b) → IsTrue(not(b)) {
+    match b {
+        False => λ h => trivial,
+        True => λ h => h(trivial),
+    }
+}
+
 // Equality is a separate decision from the propositional order below. It is
 // stated directly over constructor identity, and registers at Bool's equality
 // carrier without colliding with Nat's corresponding instance.

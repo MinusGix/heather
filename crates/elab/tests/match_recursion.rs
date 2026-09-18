@@ -422,3 +422,319 @@ fn self_name_is_not_a_value() {
     assert!(msg.contains("saturated recursive call"), "{msg}");
 }
 
+
+// -- the window on chain-shaped `Wf` inductives ------------------------------
+//
+// `docs/list-course-of-values-design.md`: the same transformation with `pred`
+// replaced by the recursive-field projection. Every test below mirrors one of
+// the `Nat` tests above, and the dependent ones are dependent for the reason
+// §5 of the `Nat` design gives — a non-dependent motive makes every anchoring
+// agree, so it hides the bug it is there to catch.
+
+/// `List` and the arithmetic these tests need, declared here rather than
+/// imported: an elaborator test builds its own world.
+const LIST: &str = "
+inductive List { Nil, Cons(head: Nat, tail: List) }
+fn plus(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(plus(a, k)) } }
+";
+
+fn list_ok(src: &str) {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!("{LIST}\n{src}"))
+        .unwrap_or_else(|err| panic!("expected this to check, got: {err:?}"));
+}
+
+fn list_err(src: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    match e.elab_source(&format!("{LIST}\n{src}")) {
+        Err(ElabError::Elab { msg, .. }) => msg,
+        other => panic!("expected a surface elaboration error, got {other:?}"),
+    }
+}
+
+const ALTERNATE: &str = "
+fn alternate(xs: List) -> Nat {
+    match xs {
+        Nil => 0,
+        Cons(h, t) => match t { Nil => h, Cons(h2, t2) => plus(h, alternate(t2)) },
+    }
+}";
+
+/// The customer's shape at depth two: a self-call on the *grandchild*, which
+/// the one-step guard refuses and the window admits.
+#[test]
+fn a_deeper_list_subterm_descends() {
+    list_ok(ALTERNATE);
+}
+
+/// Still ONE `elim_Wf`, so a closed list computes — the property the whole
+/// transformation exists to keep. With the wrong-value control beside it, so
+/// that "it computes" means "it computes the right thing".
+#[test]
+fn a_list_course_of_values_recursion_still_reduces() {
+    list_ok(&format!(
+        "{ALTERNATE}
+        theorem a0(): alternate(Nil) = 0 {{ refl }}
+        theorem a1(): alternate(Cons(5, Nil)) = 5 {{ refl }}
+        theorem a2(): alternate(Cons(5, Cons(9, Nil))) = 5 {{ refl }}
+        theorem a3(): alternate(Cons(5, Cons(9, Cons(7, Nil)))) = 12 {{ refl }}"
+    ));
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let msg = match e.elab_source(&format!(
+        "{LIST}\n{ALTERNATE}\ntheorem bad(): alternate(Cons(5, Cons(9, Cons(7, Nil)))) = 13 {{ refl }}"
+    )) {
+        Err(other) => format!("{other:?}"),
+        Ok(()) => panic!("expected the wrong value to be refused"),
+    };
+    assert!(!msg.contains("must descend"), "should be a conversion failure, got: {msg}");
+}
+
+/// …and it unfolds at an **open** tail, which is what a proof about the
+/// recursion needs and what a closed-argument test cannot see.
+#[test]
+fn the_list_window_unfolds_at_an_open_tail() {
+    list_ok(&format!(
+        "{ALTERNATE}
+        theorem step(h: Nat, h2: Nat, r: List):
+            alternate(Cons(h, Cons(h2, r))) = plus(h, alternate(r)) {{ refl }}"
+    ));
+}
+
+/// Two calls at two different depths in one arm: the window slides rather
+/// than the deepest call alone being served.
+#[test]
+fn two_list_depths_in_one_arm() {
+    list_ok(
+        "
+        fn fibl(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t { Nil => 1, Cons(h2, t2) => plus(fibl(t), fibl(t2)) },
+            }
+        }
+        theorem f7(): fibl(Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Nil)))))))) = 13 { refl }",
+    );
+}
+
+/// A **dependent** motive at depth two. The carried value one below the arm's
+/// child has type `M[tail_D t]`, and `tail_D t` is stuck at an alias; it
+/// becomes usable only because the window is convoyed through the nested
+/// `match`, where the arm knows its scrutinee is `Cons(h2, t2)`.
+#[test]
+fn a_deeper_list_recursion_at_a_dependent_motive() {
+    list_ok(&format!(
+        "theorem plus_zero(a: Nat): plus(0, a) = a {{
+            match a {{ Zero => refl, Succ(k) => cong_succ(plus_zero(k)) }}
+        }}
+        theorem plus_succ(a: Nat, b: Nat): plus(Succ(a), b) = Succ(plus(a, b)) {{
+            match b {{ Zero => refl, Succ(k) => cong_succ(plus_succ(a, k)) }}
+        }}
+        theorem plus_comm(a: Nat, b: Nat): plus(a, b) = plus(b, a) {{
+            match b {{
+                Zero => sym(plus_zero(a)),
+                Succ(k) => trans(cong_succ(plus_comm(a, k)), sym(plus_succ(k, a))),
+            }}
+        }}
+        theorem cong_plus(h: Nat, a: Nat, b: Nat, p: a = b): plus(h, a) = plus(h, b) {{
+            j(p, \u{3bb} y _ => plus(h, a) = plus(h, y), refl)
+        }}
+        {ALTERNATE}
+        fn altB(xs: List) -> Nat {{
+            match xs {{
+                Nil => 0,
+                Cons(h, t) => match t {{ Nil => plus(h, 0), Cons(h2, t2) => plus(altB(t2), h) }},
+            }}
+        }}
+        theorem agree(xs: List): alternate(xs) = altB(xs) {{
+            match xs {{
+                Nil => refl,
+                Cons(h, t) => match t {{
+                    Nil => refl,
+                    Cons(h2, t2) => trans(cong_plus(h, alternate(t2), altB(t2), agree(t2)),
+                        plus_comm(h, altB(t2))),
+                }},
+            }}
+        }}"
+    ));
+}
+
+/// Depth **three**, dependent: a second nesting, so both anchors compose once
+/// — the window's, which stays at the chain's head, and the goal's, which sits
+/// one constructor above it.
+#[test]
+fn three_deep_on_a_list_at_a_dependent_motive() {
+    list_ok(
+        "
+        fn A(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t {
+                    Nil => 0,
+                    Cons(h2, t2) => match t2 { Nil => 0, Cons(h3, t3) => Succ(A(t3)) },
+                },
+            }
+        }
+        fn B(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t {
+                    Nil => 0,
+                    Cons(h2, t2) => match t2 { Nil => 0, Cons(h3, t3) => plus(B(t3), 1) },
+                },
+            }
+        }
+        theorem agree3(xs: List): A(xs) = B(xs) {
+            match xs {
+                Nil => refl,
+                Cons(h, t) => match t {
+                    Nil => refl,
+                    Cons(h2, t2) => match t2 {
+                        Nil => refl,
+                        Cons(h3, t3) => cong_succ(agree3(t3)),
+                    },
+                },
+            }
+        }
+        theorem a7(): A(Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Cons(1, Nil)))))))) = 2 { refl }",
+    );
+}
+
+/// Depth **four**, dependent — a third nesting, so the anchors compose twice.
+/// Depth three is where a window re-indexed at the scrutinee instead of at the
+/// chain's head would first slide; this says the fix generalized over the
+/// nesting count rather than special-casing one level.
+#[test]
+fn four_deep_on_a_list_at_a_dependent_motive() {
+    list_ok(
+        "
+        fn A4(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t {
+                    Nil => 0,
+                    Cons(h2, t2) => match t2 {
+                        Nil => 0,
+                        Cons(h3, t3) => match t3 { Nil => 0, Cons(h4, t4) => Succ(A4(t4)) },
+                    },
+                },
+            }
+        }
+        fn B4(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t {
+                    Nil => 0,
+                    Cons(h2, t2) => match t2 {
+                        Nil => 0,
+                        Cons(h3, t3) => match t3 { Nil => 0, Cons(h4, t4) => plus(B4(t4), 1) },
+                    },
+                },
+            }
+        }
+        theorem agree4(xs: List): A4(xs) = B4(xs) {
+            match xs {
+                Nil => refl,
+                Cons(h, t) => match t {
+                    Nil => refl,
+                    Cons(h2, t2) => match t2 {
+                        Nil => refl,
+                        Cons(h3, t3) => match t3 {
+                            Nil => refl,
+                            Cons(h4, t4) => cong_succ(agree4(t4)),
+                        },
+                    },
+                },
+            }
+        }",
+    );
+}
+
+/// A user chain-shaped declaration with **two** base constructors and two
+/// recursive ones: `tail_D` branches on the tag, the base arms each emit their
+/// own value `d` times, and the window still computes.
+#[test]
+fn a_user_chain_shaped_declaration_with_two_base_constructors() {
+    list_ok(
+        "
+        inductive Run { Stop, Halt, Step(p: Nat, next: Run), Skip(next: Run) }
+        fn sum2(r: Run) -> Nat {
+            match r {
+                Stop => 0,
+                Halt => 1,
+                Step(p, n) => match n {
+                    Stop => p,
+                    Halt => p,
+                    Step(q, m) => plus(p, sum2(m)),
+                    Skip(m) => sum2(m),
+                },
+                Skip(n) => match n {
+                    Stop => 0,
+                    Halt => 0,
+                    Step(q, m) => sum2(m),
+                    Skip(m) => sum2(m),
+                },
+            }
+        }
+        theorem s0(): sum2(Stop) = 0 { refl }
+        theorem s1(): sum2(Step(3, Step(4, Step(5, Stop)))) = 8 { refl }
+        theorem s2(): sum2(Skip(Step(4, Halt))) = 1 { refl }",
+    );
+}
+
+/// A nested `match` on **another variable** does not extend the chain, and a
+/// call at its pattern variable is refused. The chain is followed by *term*
+/// here rather than by binder position — a `Wf` arm binder is an alias — which
+/// is the same property the positional comparison gives for `Nat`.
+#[test]
+fn a_nested_list_match_on_another_variable_does_not_extend_the_chain() {
+    let msg = list_err(
+        "
+        fn f(xs: List, ys: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match ys { Nil => 0, Cons(a, b) => f(b, ys) },
+            }
+        }",
+    );
+    assert!(msg.contains("must descend"), "{msg}");
+}
+
+/// A **tree** keeps today's refusal, with the message extended to say that the
+/// window exists for chain-shaped declarations and why a branching constructor
+/// is not one (§1).
+#[test]
+fn a_tree_is_not_chain_shaped_and_says_so() {
+    let msg = list_err(
+        "
+        inductive Tree { Leaf, Node(l: Tree, r: Tree) }
+        fn deep(t: Tree) -> Nat {
+            match t {
+                Leaf => 0,
+                Node(l, r) => match l { Leaf => 0, Node(a, b) => Succ(deep(a)) },
+            }
+        }",
+    );
+    assert!(msg.contains("must descend"), "{msg}");
+    assert!(msg.contains("chain-shaped"), "the rule without the mechanism: {msg}");
+    assert!(msg.contains("list-course-of-values-design"), "{msg}");
+}
+
+/// The depth scan reads **names**, so a shadowed binder can under-size the
+/// window — and under-sizing is a refusal, never a wrong term (§5). This is
+/// the `Wf` twin of `shadowing_cannot_fake_a_guard`.
+#[test]
+fn a_shadowed_chain_binder_under_sizes_and_is_refused() {
+    let msg = list_err(
+        "
+        fn g(xs: List) -> Nat {
+            match xs {
+                Nil => 0,
+                Cons(h, t) => match t {
+                    Nil => 0,
+                    Cons(h2, t) => match t { Nil => 0, Cons(h3, t3) => g(t3) },
+                },
+            }
+        }",
+    );
+    assert!(msg.contains("must descend"), "{msg}");
+}

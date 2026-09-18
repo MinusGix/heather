@@ -15,7 +15,7 @@ use crate::diagnostics::STUCK_CANDIDATES;
 use crate::{Cx, ElabError, R, err};
 
 mod routes;
-pub(crate) use routes::cov_proj;
+pub(crate) use routes::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
 
 /// Semantic reads required by the motive-synthesis ladder.
 pub(crate) trait MotiveSynthesisElab {

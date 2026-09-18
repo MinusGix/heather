@@ -890,3 +890,116 @@ instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
     element := A,
     fromLiteral := λ (xs: [A; n]) => xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),
 }
+
+// ---------------------------------------------------------------------------
+// Decidable equality, given it at the element type. Declared last for the
+// reason the literal instance is: everything below the core API is new
+// vocabulary, and putting it here leaves the de Bruijn shape of the
+// established definitions alone.
+//
+// The premise is `logic::DecEq<A>` and not a `Decide<a = b>` goal: at an
+// abstract element type there is no resolved endpoint carrier for such a goal
+// to key on (docs/decidable-equation-carrier-design.md), which is exactly the
+// hole the carrier-level class fills.
+
+// The `Nil`/`Cons` discriminator, as a recursion into `Type` like `Mem`: it
+// REDUCES at a constructor, so refuting `Nil = Cons(…)` is transporting
+// `trivial` and needs no inversion machinery.
+fn is_nil<A>(xs: List<A>) → Type { match xs { Nil => True, Cons(_, _) => False } }
+
+// A total head. `List::head` is the `Option` face and is the right one for a
+// caller; a congruence wants a function into `A` itself, so this one takes
+// what to say about the empty list. `List::tail` is already total, so there
+// is no `tail_or` beside it.
+fn head_or<A>(fallback: A, xs: List<A>) → A {
+    match xs {
+        Nil => fallback,
+        Cons(h, _) => h,
+    }
+}
+
+theorem nil_ne_cons<A>(head: A, tail: List<A>): ¬(Nil<A> = Cons(head, tail)) {
+    λ (p: (Nil<A> = Cons(head, tail))) => j(p, λ y q => is_nil(y), trivial)
+}
+
+theorem cons_ne_nil<A>(head: A, tail: List<A>): ¬(Cons(head, tail) = Nil<A>) {
+    λ (p: (Cons(head, tail) = Nil<A>)) => nil_ne_cons(head, tail, sym(p))
+}
+
+theorem cong_head<A>(fallback: A, {xs, ys: List<A>}, p: xs = ys):
+    head_or(fallback, xs) = head_or(fallback, ys)
+{
+    j(p, λ y q => head_or(fallback, xs) = head_or(fallback, y), refl)
+}
+
+theorem cong_tail<A>({xs, ys: List<A>}, p: xs = ys): xs.tail() = ys.tail() {
+    j(p, λ y q => xs.tail() = y.tail(), refl)
+}
+
+// `cong_cons` moves an equal tail under a fixed head; this moves both at once,
+// which is the shape a decision on a pair of `Cons` cells needs.
+theorem cons_eq<A>(head1, head2: A, tail1, tail2: List<A>,
+    ph: head1 = head2, pt: tail1 = tail2): Cons(head1, tail1) = Cons(head2, tail2)
+{
+    j(ph, λ y q => Cons(head1, tail1) = Cons(y, tail2), cong_cons(head1, pt))
+}
+
+// A `fn` and not a `theorem`: a decision has to reduce, or nothing downstream
+// of `Decide<xs = ys>` is `refl` any more (`nat::eq_dec` carries the same
+// note). Both arguments descend together, so the second is bound behind the
+// arrow exactly as `nat::eq_dec` binds its own.
+//
+// `cong_tail<A>(p)` spells a type argument the site would otherwise infer;
+// inferring it is refused (issues/generic-congruence-inferred-type-arg-level-mismatch.md).
+fn list_eq_dec<A: DecEq>(xs: List<A>) → (ys: List<A>) → xs = ys ∨ ¬(xs = ys) {
+    match xs {
+        Nil => λ ys =>
+            match ys {
+                Nil => Inl(refl),
+                Cons(head2, tail2) => Inr(nil_ne_cons(head2, tail2)),
+            },
+        Cons(head1, tail1) => λ ys =>
+            match ys {
+                Nil => Inr(cons_ne_nil(head1, tail1)),
+                Cons(head2, tail2) =>
+                    match A.eq_dec(head1, head2) {
+                        Inr(head_ne) => Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
+                            head_ne(cong_head(head1, p))),
+                        Inl(head_eq) =>
+                            match list_eq_dec(tail1, tail2) {
+                                Inl(tail_eq) => Inl(cons_eq(head1, head2, tail1, tail2,
+                                    head_eq, tail_eq)),
+                                Inr(tail_ne) =>
+                                    Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
+                                        tail_ne(cong_tail<A>(p))),
+                            },
+                    },
+            },
+    }
+}
+
+// The carrier-level instance, so that lists of lists decide too.
+instance<A: DecEq> DecEq<List<A>> { eq_dec := list_eq_dec }
+
+// The bridge to `Decide`, so that `decide` and proposition-directed `if`
+// answer a goal at two lists without anyone naming the decider. It is at `Nat`
+// and not at an open element type: an instance generic in `A` here is refused
+// today (issues/instance-binder-occurrence-through-binder-types.md), so every
+// other element type calls `list_eq_dec` by name.
+instance(xs, ys: List<Nat>) Decide<xs = ys> { dec := list_eq_dec(xs, ys) }
+
+// ---------------------------------------------------------------------------
+// The total read: an index below the length, so out of range is unwritable
+// rather than `None`. The index is generalized behind the arrow because `Fin`
+// has no eliminator of its own — at a neutral length there is no canonical
+// index to match on (docs/surface-fin-indexing-design.md §1.2) — and the
+// motive instantiates the length from the list the match already refined.
+fn list_at<A>(xs: List<A>) → (i: Fin(xs.len())) → A {
+    match xs {
+        Nil => λ (i: Fin(0)) => match i {},
+        Cons(head, tail) => λ (i: Fin(Succ(tail.len()))) =>
+            match i { FZ => head, FS(k) => list_at(tail, k) },
+    }
+}
+
+fn List::at<A>(self xs: List<A>, i: Fin(xs.len())) → A { list_at(xs, i) }
