@@ -68,8 +68,9 @@ impl Elaborator {
 
     /// `char::ofNat(code, logic::decide_yes(refl))`. The proof is exactly the
     /// term the `decide` goal combinator writes; the kernel judges the `refl`
-    /// by running `char::scalar_dec` at the code, and it can only go the `Inl`
-    /// way because the lexer already refused every non-scalar payload.
+    /// by running the `Decide<char::scalar(n)>` instance at the code, and it
+    /// can only go the `Inl` way because the lexer already refused every
+    /// non-scalar payload.
     fn char_intro(&self, c: char, span: Span) -> Option<Expr> {
         let intro = self.key_of(CHAR_INTRO)?;
         let yes = self.key_of(DECIDE_YES)?;

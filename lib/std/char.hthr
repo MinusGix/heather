@@ -1,84 +1,98 @@
 // Unicode scalar values. A `Char` is a code point below `0x110000` that is
-// not a surrogate, sealed the way `bounded_list` seals its fit witness: the
-// record carries the code and a *truncated* scalar proof, so equality of
-// characters is equality of codes and rebuilding the witness cannot disturb
-// a value (docs/string-char-design.md §2).
+// not a surrogate. The record carries the code and a *relevant* proof that it
+// is a scalar value, reflected out of a `Bool` decision: `IsTrue` has a unique
+// inhabitant at `True` and none at `False` (`bool`), so equality of characters
+// is equality of codes and rebuilding the witness cannot disturb a value —
+// and, unlike a truncated witness, a consumer may refute it
+// (docs/string-char-design.md §5.1).
 //
-// Surrogates are excluded because UTF-8 encoding is the first repr of a
-// string and has to be injective on the spec type; that repr, and the `Utf8`
-// spec type beside it, are a later round's work and nothing here anticipates
-// them.
+// Surrogates are excluded because UTF-8 encoding is the first repr of a string
+// and has to be injective on the spec type; that repr and the `Utf8` spec type
+// beside it are `std/utf8`.
 
 import logic;
+import bool;
 import nat;
 
 // ---------------------------------------------------------------------------
 // The predicate, and its decision.
 
-fn scalar(code: Nat) → Type { code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) }
-
-// The decision, as three `le_dec` calls with the refutations wired through
-// the conjunction. `le_dec(n, m)` descends both arguments together, so each
-// test costs the smaller of the code and its bound — a literal in the ASCII
-// range pays its own size and nothing like the size of `0x110000`.
-//
-// A `fn` and not a `theorem` for `le_dec`'s reason: a literal's proof is
-// `decide`, which the kernel judges by *running* this.
-fn scalar_dec(code: Nat) → scalar(code) ∨ ¬scalar(code) {
-    match le_dec(Succ(code), 0x110000) {
-        Inr(over) => Inr(λ (h: scalar(code)) => over(h.left)),
-        Inl(under) =>
-            match le_dec(0xD800, code) {
-                Inr(below) => Inl(And(under,
-                    λ (h: 0xD800 <= code ∧ code < 0xE000) => below(h.left))),
-                Inl(at_least) =>
-                    match le_dec(Succ(code), 0xE000) {
-                        Inl(surrogate) =>
-                            Inr(λ (h: scalar(code)) => h.right(And(at_least, surrogate))),
-                        Inr(above) => Inl(And(under,
-                            λ (h: 0xD800 <= code ∧ code < 0xE000) => above(h.right))),
-                    },
-            },
-    }
+// The bound and the surrogate hole, as one Boolean. `nat::leb` is qualified
+// because `bool::leb` is the nearer reading of the bare name here, and its
+// operands are not `Bool`.
+fn is_scalar(code: Nat) → Bool {
+    nat::leb(Succ(code), 0x110000)
+        && not(nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000))
 }
 
-instance(code: Nat) Decide<scalar(code)> { dec := scalar_dec(code) }
+fn scalar(code: Nat) → Type { IsTrue(is_scalar(code)) }
+
+// Witnesses are unique, which is what `code_injective` runs on.
+theorem scalar_unique(code: Nat, p, q: scalar(code)): p = q {
+    is_true_unique(is_scalar(code), p, q)
+}
+
+// The decision is the reflection's own, at this code: no bound is compared
+// twice and no refutation is wired by hand. A `fn` route, not a `theorem`,
+// because a literal's proof is `decide`, which the kernel judges by *running*
+// the instance.
+instance(code: Nat) Decide<scalar(code)> { dec := is_true_dec(is_scalar(code)) }
 
 // ---------------------------------------------------------------------------
 // The type.
 
 record Char {
     code: Nat,
-    valid: ∥scalar(code)∥,
+    valid: scalar(code),
 }
 
 // The introduction form a `'x'` literal elaborates to: the code, and a proof
 // that it is a scalar value. The elaborator supplies the latter with `decide`,
 // so a literal never states it.
 fn ofNat(code: Nat, p: scalar(code)) → Char {
-    Char(code := code, valid := squash(p))
+    Char(code := code, valid := p)
 }
 
 fn Char::toNat(self c: Char) → Nat { c.code }
 
-// The lemma everything else rests on, and the only place the truncation is
-// unpacked — which it is not: the witness is a `Prop`-level value, so two
-// records with equal codes are equal by squash irrelevance alone. The `j`
-// generalizes the second record's witness so the base case is `refl` under
+// The lemma everything else rests on. The `j` generalizes the second record's
+// witness so that the base case is a rewrite along `scalar_unique` under
 // record η.
 theorem code_injective(a, b: Char, p: a.code = b.code): a = b {
-    j(p, λ y q => (w: ∥scalar(y)∥) → a = Char(code := y, valid := w),
-        λ (w: ∥scalar(a.code)∥) => refl)(b.valid)
+    j(p, λ y q => (w: scalar(y)) → a = Char(code := y, valid := w),
+        λ (w: scalar(a.code)) =>
+            j(scalar_unique(a.code, a.valid, w),
+                λ z r => a = Char(code := a.code, valid := z), refl))(b.valid)
 }
 
 theorem cong_code(a, b: Char, p: a = b): a.code = b.code {
     j(p, λ y q => a.code = y.code, refl)
 }
 
+// The arithmetic reading of the witness, for a client that wants the bounds
+// as an order fact rather than as a decided Boolean. Stated once here; the
+// two directions of the `leb`/`Le` bridge are `nat`'s.
+theorem scalar_bound(code: Nat, p: scalar(code)): IsTrue(nat::leb(Succ(code), 0x110000)) {
+    is_true_and(nat::leb(Succ(code), 0x110000),
+        not(nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000)), p).left
+}
+
+theorem scalar_sound(code: Nat, p: scalar(code)):
+        code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) {
+    let surrogate = nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000);
+    let parts = is_true_and(nat::leb(Succ(code), 0x110000), not(surrogate), p);
+    And(leb_sound(Succ(code), 0x110000, scalar_bound(code, p)),
+        λ (h: 0xD800 <= code ∧ code < 0xE000) =>
+            is_true_not(surrogate, parts.right,
+                is_true_and_intro(nat::leb(0xD800, code), nat::leb(Succ(code), 0xE000),
+                    leb_complete(0xD800, code, h.left),
+                    leb_complete(Succ(code), 0xE000, h.right))))
+}
+
 // Equality decides through the code, which is the whole content of a `Char`.
 // A `fn` for the same reason `nat::eq_dec` is one.
 fn char_eq_dec(a, b: Char) → a = b ∨ ¬(a = b) {
-    match eq_dec(a.code, b.code) {
+    match nat::eq_dec(a.code, b.code) {
         Inl(p) => Inl(code_injective(a, b, p)),
         Inr(np) => Inr(λ (h: a = b) => np(cong_code(a, b, h))),
     }

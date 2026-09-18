@@ -71,9 +71,21 @@ fn a_char_is_its_code_and_nothing_else() {
 theorem code_decides(a, b: Char, p: a.code = b.code): a = b { code_injective(a, b, p) }
 theorem round_trip(code: Nat, p: scalar(code)): ofNat(code, p).toNat() = code { refl }
 // The witness is not part of the value: two proofs of the same code build
-// the same character.
-theorem witness_irrelevant(code: Nat, p, q: scalar(code)): ofNat(code, p) = ofNat(code, q) {}
-theorem surrogates_excluded(p: scalar(55296)): False { p.right(And(le_refl(55296), lt_succ_self(55296))) }
+// the same character. At an OPEN code that is `scalar_unique` through
+// `code_injective` rather than a conversion — the witness is relevant now
+// (docs/string-char-design.md §5.1) — while at a closed one the two proofs
+// inhabit `Unit` and are definitionally equal.
+theorem witness_irrelevant(code: Nat, p, q: scalar(code)): ofNat(code, p) = ofNat(code, q) {
+    code_injective(ofNat(code, p), ofNat(code, q), refl)
+}
+theorem witness_irrelevant_closed(p, q: scalar(97)): ofNat(97, p) = ofNat(97, q) {}
+theorem surrogates_excluded(p: scalar(55296)): False { p }
+// The witness is relevant and Bool-reflected, so its arithmetic reading is a
+// lemma rather than a projection (docs/string-char-design.md §5.1).
+theorem sound(code: Nat, p: scalar(code)): code < 0x110000 { scalar_sound(code, p).left }
+theorem sound_surrogate(p: scalar(0xD800)): False {
+    scalar_sound(0xD800, p).right(And(le_refl(0xD800), lt_succ_self(0xD800)))
+}
 "#,
     );
     // The negative control: the surrogate block really is outside `scalar`,

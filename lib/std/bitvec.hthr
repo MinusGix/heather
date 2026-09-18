@@ -1626,3 +1626,41 @@ theorem ripple_add_sub_cancel(n: Nat, a, b: BitVec(n)):
 {
     add_sub_cancel(n, a, b)
 }
+
+// ---------------------------------------------------------------------------
+// `ofNat` is a section of `toNat` below the width's bound.
+
+// The digit equation `ofNat` and `toNat` are two halves of: the low bit plus
+// twice the rest is the number. Two steps on `x`, so that `odd_bit` and
+// `nat::half` take one step each per level.
+theorem odd_bit_add_twice_half(x: Nat): bit_value(odd_bit(x)) + twice(nat::half(x)) = x {
+    match x {
+        Zero => refl,
+        Succ(k) => match k {
+            Zero => refl,
+            Succ(l) => cong_succ(cong_succ(odd_bit_add_twice_half(l))),
+        },
+    }
+}
+
+// Round-tripping a natural below `2^n` through the width-`n` vector. The
+// bound is necessary and not bookkeeping: `ofNat` truncates, so above it the
+// result is the argument's low `n` bits and nothing more.
+//
+// The recursion is on the WIDTH, matching `ofNat`'s own; the induction
+// hypothesis applies at `nat::half(x)`, whose bound is the argument's halved
+// by `nat::half_lt_of_lt_double`, and the step is then the digit equation
+// above.
+theorem toNat_ofNat(n: Nat): (x: Nat) → x < nat::pow(2, n) → toNat(n, ofNat(n, x)) = x {
+    match n as λ k => (x: Nat) → x < nat::pow(2, k) → toNat(k, ofNat(k, x)) = x {
+        Zero => λ x h => sym(nat::le_antisym(x, 0, h, nat::zero_le(x))),
+        Succ(k, ih) => λ x h => {
+            let p = nat::pow(2, k);
+            let bound = nat::half_lt_of_lt_double(x, p,
+                j(trans(pow_two_succ_twice(k), twice_add_self(p)), λ y _ => x < y, h));
+            trans(cong_nat(λ (w: Nat) => bit_value(odd_bit(x)) + twice(w),
+                    ih(nat::half(x), bound)),
+                odd_bit_add_twice_half(x))
+        },
+    }
+}

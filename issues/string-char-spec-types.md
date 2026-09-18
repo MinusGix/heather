@@ -48,3 +48,17 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   value-generic `Decide<xs = ys>` bridge, and
   [[generic-congruence-inferred-type-arg-level-mismatch]], which forced
   `cong_tail<A>(p)` at one use site.
+- 2026-09-18: Round 2 chartered 2026-09-18: docs/string-char-design.md §5. Finding on the way: a truncated `Char.valid` cannot refute a decoder (squash eliminates only into squash), so the witness becomes Bool-reflected (`IsTrue(is_scalar(code))`), which also makes `Decide<scalar(code)>` a one-line match.
+- 2026-09-18: Round 2 landed, theorems 1–6. `lib/std/utf8.hthr` — `encode`/`decode`
+  with Rust's strict `from_utf8` rejections, the `Utf8` record, `ofString` and
+  `Utf8::toString`; `lib/std/char.hthr`'s witness is now `IsTrue(is_scalar(code))`
+  and `scalar_dec` is gone. Kit that had to be built on the way, each where the
+  fact belongs: `bool`'s `IsTrue` section, `nat`'s `leb`/`Le` bridge and
+  `half_lt_of_lt_double`, `bitvec`'s `toNat_ofNat` (theorem 1, which `bitvec`
+  did not have), `option::some_inj`. Theorem 7 (`encode_decode`) did **not**
+  close: it needs to invert `decode_at` at an abstract lead byte, and the byte's
+  class is computed inside the decoder's body rather than passed to it, so there
+  is no motive to case on — `docs/string-char-design.md` §5.5 records the way
+  through. Filed on the way: [[utf8-decode-conversion-blowup]], which forced
+  `push_step` to be stated at `emit` rather than at `decode_char`.
+- 2026-09-18: Round 2 landed 2026-09-18: `lib/std/utf8.hthr` with theorems 1–6; the strictness theorem is [[utf8-encode-decode-strictness]]; the fuel-shaped decoder is [[list-course-of-values-recursion]]; conversion finding [[utf8-decode-conversion-blowup]].
