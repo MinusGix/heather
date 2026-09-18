@@ -1607,9 +1607,16 @@ impl<'v> Dom<'v> for Values {
                 senv.len() as usize,
             ),
         };
+        // The three bodies are mixed into one telescope, so they must be
+        // read in one scope: each spends its closure's pending global offset
+        // here (`docs/lazy-global-offset-design.md` §5), and the telescope is
+        // ambient.
+        let (sbody, abody, mbody) =
+            (amb_ty(senv, sbody), amb_tm(aenv, abody), amb_ty(menv, mbody));
         let (cs, ih, step) =
-            wf_step_telescope(&gamma, level, motive_level, sbody, abody, mbody);
+            wf_step_telescope(&gamma, level, motive_level, &sbody, &abody, &mbody);
         let l = glen(env);
+        let senv = &senv.with_gshift(0);
         let e1 = senv.push(env.arena, fresh(env.arena, l));
         let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
         let e3 = e2.push(env.arena, fresh(env.arena, l + 2));
@@ -1664,10 +1671,30 @@ impl<'v> Dom<'v> for Values {
 // Helpers the impl shares
 // ---------------------------------------------------------------------------
 
+/// Spend a closure's pending global offset on syntax read out of it
+/// (`docs/lazy-global-offset-design.md` §5).
+fn amb_ty<'v>(env: &value::Env<'v>, t: &Rc<Type>) -> Rc<Type> {
+    match env.gshift() {
+        0 => Rc::clone(t),
+        k => Rc::new(t.shift_global(k)),
+    }
+}
+
+fn amb_tm<'v>(env: &value::Env<'v>, t: &Rc<Term>) -> Rc<Term> {
+    match env.gshift() {
+        0 => Rc::clone(t),
+        k => Rc::new(t.shift_global(k)),
+    }
+}
+
+/// The payload of `sigma` is ambient, and so is the body: a closure under a
+/// global binder — which is what every caller of this passes — is built with
+/// its offset already spent (`docs/lazy-global-offset-design.md` §4).
 fn inst_global_ty<'v>(env: &Env<'v>, body: &TyC<'v>, sigma: GlobalSubst) -> R<TyC<'v>> {
     let Some((benv, bbody)) = body.clo.as_syn() else {
         return Err(NC);
     };
+    debug_assert_eq!(benv.gshift(), 0, "a binder body is materialized (design §4)");
     Ok(TyC::here(
         env,
         env.arena.ty(TyClo::new(*benv, Rc::new(bbody.apply_global(&sigma)))),

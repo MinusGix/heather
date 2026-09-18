@@ -75,10 +75,24 @@ use program::ContextProgram;
 /// to an entry never changes — which is exactly why closures need no
 /// shifting. The query arena is deliberately not repeated in this handle;
 /// operations that allocate a new persistent cell receive it explicitly.
+/// The handle also carries the **global-index offset** `gshift` of the syntax
+/// read under it: the amount to add to a free global index of a body paired
+/// with this environment to name the same Ψ binding ambiently
+/// (`docs/lazy-global-offset-design.md`). It rides here rather than on the
+/// closure because every site in the kernel that pairs syntax with an
+/// environment does so through this handle, because it fits in the padding
+/// (closures stay four words), and because [`Env::ident`]/[`Env::ptr_eq`] are
+/// the identity of a syntactic closure — so two closures over the same body
+/// at different offsets are already different objects to every memo.
+///
+/// The offset is always at **cutoff 0**: a closure whose body sits under a
+/// global binder is built with its offset materialized (design §4), so a
+/// global index read by the machine is always free in the body.
 #[derive(Clone, Copy)]
 pub struct Env<'v> {
     node: Option<&'v EnvNode<'v>>,
     len: u32,
+    gshift: u32,
 }
 
 struct EnvNode<'v> {
@@ -97,7 +111,24 @@ pub enum Lookup<'v> {
 
 impl<'v> Env<'v> {
     pub fn empty() -> Env<'v> {
-        Env { node: None, len: 0 }
+        Env { node: None, len: 0, gshift: 0 }
+    }
+
+    /// The empty environment at global offset `gshift` — the scope a
+    /// definition's **unshifted** body is read in (design §5).
+    pub fn at(gshift: u32) -> Env<'v> {
+        Env { node: None, len: 0, gshift }
+    }
+
+    /// The global-index offset of syntax read under this environment.
+    pub fn gshift(&self) -> u32 {
+        self.gshift
+    }
+
+    /// The same entries, for syntax that is **already** ambient — what the
+    /// materializing sites of design §5 pair their shifted syntax with.
+    pub fn with_gshift(&self, gshift: u32) -> Env<'v> {
+        Env { gshift, ..*self }
     }
 
     /// The number of concrete entries.
@@ -113,8 +144,8 @@ impl<'v> Env<'v> {
     /// length, which is exactly what [`Env::ptr_eq`] compares. Two closures
     /// with the same body and the same key denote the same value, so a
     /// verdict about one is a verdict about the other.
-    pub fn ident(&self) -> (usize, u32) {
-        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len)
+    pub fn ident(&self) -> (usize, u32, u32) {
+        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len, self.gshift)
     }
 
     /// Object identity: the same spine (both empty, or one shared head
@@ -122,6 +153,7 @@ impl<'v> Env<'v> {
     /// so a closure body evaluated under either denotes the same value.
     pub fn ptr_eq(a: &Env<'v>, b: &Env<'v>) -> bool {
         a.len == b.len
+            && a.gshift == b.gshift
             && match (&a.node, &b.node) {
                 (None, None) => true,
                 (Some(x), Some(y)) => std::ptr::eq(*x, *y),
@@ -175,6 +207,7 @@ impl<'v> Env<'v> {
         Env {
             node: Some(arena.envs.alloc(node)),
             len: self.len + 1,
+            gshift: self.gshift,
         }
     }
 
@@ -935,16 +968,16 @@ impl<'v> TmClo<'v> {
     pub fn ident(&self) -> CloId {
         match self {
             TmClo::Syn { env, body } => {
-                let (node, len) = env.ident();
-                (Rc::as_ptr(body) as usize, node, len)
+                let (node, len, gshift) = env.ident();
+                (Rc::as_ptr(body) as usize, node, len, gshift)
             }
-            _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX),
+            _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
     }
 }
 
 /// See [`TmClo::ident`].
-pub type CloId = (usize, usize, u32);
+pub type CloId = (usize, usize, u32, u32);
 
 /// A type sub-structure of a value: the type mirror of [`TmClo`].
 ///
@@ -1011,10 +1044,10 @@ impl<'v> TyClo<'v> {
     pub fn ident(&self) -> CloId {
         match self {
             TyClo::Syn { env, body } => {
-                let (node, len) = env.ident();
-                (Rc::as_ptr(body) as usize, node, len)
+                let (node, len, gshift) = env.ident();
+                (Rc::as_ptr(body) as usize, node, len, gshift)
             }
-            _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX),
+            _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
     }
 
@@ -1061,10 +1094,13 @@ pub struct VSubst<'v> {
 
 impl VTail {
     /// The tail of a syntactic substitution, read in a scope whose base is
-    /// `base`. See [`VTail`] for why `len` and `·`'s base are not carried.
-    pub fn of(tail: SubstTail, base: CtxBase) -> VTail {
+    /// `base` and whose pending global offset is `gshift`. See [`VTail`] for
+    /// why `len` and `·`'s base are not carried — `·`'s base is the
+    /// **ambient** one and so needs no offset, while `wk_g`'s context
+    /// variable is read off the syntax and does.
+    pub fn of(tail: SubstTail, base: CtxBase, gshift: u32) -> VTail {
         match tail {
-            SubstTail::Wk { ctx_var, .. } => VTail::Wk(ctx_var),
+            SubstTail::Wk { ctx_var, .. } => VTail::Wk(GlobalVar(ctx_var.0 + gshift)),
             SubstTail::Empty { .. } => VTail::Empty(base),
         }
     }

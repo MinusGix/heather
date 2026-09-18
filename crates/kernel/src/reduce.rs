@@ -164,6 +164,20 @@ impl<'a> Defs<'a> {
         })
     }
 
+    /// The body of `v` **as it is stored**, in its own Ψ-prefix rather than
+    /// in the ambient Ψ: the value machine reads it under the global offset
+    /// `v + 1` instead of paying for a copy per gate call
+    /// (`docs/lazy-global-offset-design.md`). `None` on the same three
+    /// conditions as [`Defs::body`].
+    pub(crate) fn body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
+        let psi = self.psi?;
+        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
+            return None;
+        };
+        Some(t)
+    }
+
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
