@@ -915,6 +915,18 @@ instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
 // `trivial` and needs no inversion machinery.
 fn is_nil<A>(xs: List<A>) → Type { match xs { Nil => True, Cons(_, _) => False } }
 
+// `is_nil`'s dual as a receiver, and the elementwise class test beside it.
+// `all` takes a `Bool` program because that is what a decidable class is
+// (`char::is_digit`), and reflects it with `IsTrue` one element at a time, so
+// a witness is a nested pair a caller can build and take apart positionally.
+fn List::nonempty<A>(self xs: List<A>) → Type {
+    match xs { Nil => False, Cons(_, _) => True }
+}
+
+fn List::all<A>(self xs: List<A>, p: A → Bool) → Type {
+    match xs { Nil => True, Cons(c, r) => IsTrue(p(c)) ∧ r.all(p) }
+}
+
 // A total head. `List::head` is the `Option` face and is the right one for a
 // caller; a congruence wants a function into `A` itself, so this one takes
 // what to say about the empty list. `List::tail` is already total, so there

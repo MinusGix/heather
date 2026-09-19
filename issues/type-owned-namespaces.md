@@ -3,7 +3,7 @@ title: "Type-owned namespaces: names attach to subjects, reachability through ev
 status: open
 labels: [frontend, syntax, elaboration, design, modules]
 created: 2026-08-05
-updated: 2026-08-20
+updated: 2026-09-18
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 namespace
@@ -136,3 +136,48 @@ the prelude layer-2 round or the first file that wants two order kits.
 - 2026-08-05: Receiver half scheduled as [[type-owned-members-receiver-slice]] (2026-08-05 ergonomics round); expected-type resolution and head-symbol picking stay here.
 - 2026-08-05: Receiver slice landed ([[type-owned-members-receiver-slice]], 2026-08-05). Three findings for this issue's next slice: (1) Le::refl is not spellable — a fn … -> Type predicate owns no namespace, so every decided predicate is outside the design as landed; (2) the member-ambiguity diagnostic suggests import a::{List::nth}; which does not parse — what a member's standing disambiguation looks like is this issue's call; (3) the exercise file's still-hurts list ranks expected-type (introduction-shaped) resolution as its #4 tax: four lemmas with no ambient home.
 - 2026-08-17: First real customer of the prediction [[list-algorithms-exercise]] made on 2026-08-05 ("map is declared bare in both list and option, so it is already ambiguous at use for any file importing both"). Wave L2' hit it (2026-08-17, [[std-list-l2-prime-laws]]): in a module importing list AND option, map(zip(xs, ys), λ q => swap(q)) resolves to NEITHER declaration — it reaches the prelude's vector map and reports `map's receiver has to be a vector`, which names a third thing the author never mentioned. list::map is the workaround now in crates/elab/tests/lib_std_list.rs. Two facts for the fix's design: the failure is silent-then-confusing rather than an ambiguity error, and it happened in a TEST probe rather than in lib/, because lib/std/list.hthr does not import option.
+- 2026-09-18: A second concrete readability test, beside the `Tree` probe this issue already
+  cites: `docs/showcase/calc_text.hthr` ([[sequence-parser-source]]) was read as a
+  language-quality target on 2026-09-18 and the first complaint was freestanding
+  `tier(d)`, `meaning(d)`, `spell(d, tail)`, `WellFormed(d)` — a derivation's
+  whole theory spelled as ambient functions. Nobody calls `tier` by itself; the
+  intended surface is `Derivation::tier`, `Derivation::meaning`,
+  `Derivation::spell`, `Derivation::WellFormed`.
+
+  What the probe settled (`probes/str/p11.hthr`): the **receiver half of this
+  issue already works** for a user-declared inductive. `fn Derivation::tier(self
+  d: Derivation) → Nat` declares, and `Sum(…).tier() = 0` holds by `refl`. So the
+  gap the showcase actually hit is not the mechanism but the habit — the standard
+  library and the showcases keep writing ambient names because that is what the
+  pre-`modules` code did, and new code copies it.
+
+  Two consequences worth recording:
+
+  - Elimination-shaped members are available *today*, so the readability half of
+    this issue can be paid down incrementally in existing files rather than
+    waiting on the introduction-shaped half (bare `refl` at goal `Le(n, n)`).
+    Non-receiver members of a type's namespace — `Derivation::WellFormed(d)`,
+    where `d` is an argument and not a subject — are the part still missing.
+  - The pattern that forces ambient names is sometimes not habit but
+    [[member-shadows-receiver-member]]: `string.hthr` writes `string_len` beside
+    `String::len` precisely because the member being declared would make the bare
+    name ambiguous. Any cleanup pass over the library will meet that first.
+- 2026-09-18: The missing non-receiver reach now has a diagnostic and a cost. A type-owned
+  member cannot be named at all except through a receiver: inside
+  `fn Tree::flat_d(self t: Tree, …)`, the qualified self-call `Tree::flat_d(l, …)`
+  is refused with "`Tree::flat_d` is qualified by `Tree`, which is neither an
+  imported module nor a type in scope here" (`probes/str/p13.hthr`).
+
+  So the two halves of this issue are not independent after all. Because there is
+  no qualified spelling, every use of a member goes through the receiver path, and
+  any analysis that does not understand receivers becomes a hard block rather than
+  a style tax — which is exactly what [[receiver-member-ih-generalization]] is: a
+  structurally recursive member that varies a non-decreasing parameter has no
+  spelling that checks.
+
+  Concretely, in `docs/showcase/calc_text.hthr` the derivation's theory converts
+  to members except `spell`, the difference-list spelling, which must stay
+  freestanding among members that are not. Worth weighing when this issue is
+  scheduled: a qualified form (`Type::member(args)`) may be the cheaper half to
+  land first, since it gives every existing analysis a spelling it already
+  understands.

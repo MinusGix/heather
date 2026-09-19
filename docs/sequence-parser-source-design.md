@@ -2,7 +2,7 @@
 
 Status: **design, 2026-09-18**; owner `issues/sequence-parser-source.md`. Every
 shape below was hand-run on the tree at 3d10b94 with a freshly built release
-binary before it was written; the probes are `probes/str/p3`–`p10`.
+binary before it was written; the probes are `probes/str/p3`–`p13`.
 
 ## 1. Position
 
@@ -76,8 +76,37 @@ and applied at the computed class, because a `match` on the class alone does
 not refine `digit_of(c)`.
 
 `lib/std/list.hthr` gains `cong_append_r`, the missing counterpart of
-`cong_append_l`: clients threading a span through a fixed prefix wrote that
-`j` by hand.
+`cong_append_l` (clients threading a span through a fixed prefix wrote that `j`
+by hand), and `List::nonempty` / `List::all` beside its existing `is_nil` — the
+elementwise class test takes a `Bool` program because that is what a decidable
+class is, and reflects it with `IsTrue` one element at a time, so a witness is a
+nested pair a caller builds positionally.
+
+## 3.1 What a readability pass found in the language
+
+The showcase was then read as a language-quality target, and four of the five
+complaints were answered by features that already work; the fifth and two
+further findings are filed.
+
+- `A ∧ B` works wherever the showcase wrote `And<A, B>`, and receiver members
+  work on a user-declared inductive: `Derivation::tier` called as `d.tier()`,
+  including **inside a record field's type** (`valid: derivation.WellFormed()`).
+  So the derivation's whole theory is namespaced, and `all_of`/`nonempty` are
+  `list`'s generics reached as `ds.all(is_digit)` and `ds.nonempty()`.
+- A record type **cannot be partially applied**, which is the only reason
+  `GrammarSpec` exists beside `Grammar` — `issues/record-type-partial-application.md`.
+- A type-owned member is reachable *only* through a receiver; the qualified form
+  `Type::member(args)` is refused. Logged on `issues/type-owned-namespaces.md`, whose
+  non-receiver half this is.
+- Because of that, an analysis that does not understand receivers is a hard
+  block rather than a style tax: IH generalization does not see a self-call
+  spelled as a receiver, so a structurally recursive member that varies a
+  non-decreasing parameter has **no spelling that checks**
+  (`issues/receiver-member-ih-generalization.md`). `spell` is therefore the one
+  declaration in the file that stays freestanding, and it is exactly the
+  difference-list idiom §5 credits with removing every `append_assoc`.
+- Seven declarations are `fn … → Type` and read like programs that happen to
+  return types; a `type` declaration form is `issues/type-declaration-form.md`.
 
 ## 4. The certified run, and the library gap it names
 
@@ -89,7 +118,7 @@ in a class:
 
 ```heather
 fn RunSpec(cls, source, begin, end, cs) → Type {
-    And<all_of(cls, cs), rest(source, begin) = cs ++ rest(source, end)>
+    cs.all(cls) ∧ (rest(source, begin) = cs ++ rest(source, end))
 }
 ```
 
@@ -103,7 +132,7 @@ lines. Digits and spaces are both instances of it. This is the datum for what
 `spell(d, tail)` rather than `spelling(d) ++ tail`. Consequence: **no
 `append_assoc` appears in the showcase at all**, where the token version needs
 a three-way `span_join` at every production. Each production's span proof is
-`trans(l.span, cong_spell(l.derivation, …))` — a congruence under
+`trans(l.span, l.derivation.cong_spell(…))` — a congruence under
 `spell(d, ·)` applied to the next cursor's equation. `spelling(d)` is
 `spell(d, Nil)`, so the whole-input theorem also drops `append_nil`.
 

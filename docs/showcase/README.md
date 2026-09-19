@@ -107,6 +107,16 @@ and means the returned AST, and `parsed_compile_correct` carries the compiler
 agreement across. Fifteen `refl` equations run the pipeline on text, including
 multi-digit numerals, spacing, and five error cases.
 
+The derivation's theory is namespaced — `d.tier()`, `d.meaning()`,
+`d.WellFormed()`, `d.spelling()` — and the elementwise class tests are `list`'s
+own `ds.all(is_digit)` and `ds.nonempty()`. Two spellings in the file are not
+what a reader would write, and both are filed rather than excused: `GrammarSpec`
+exists only because a record type cannot be partially applied
+(`../../issues/record-type-partial-application.md`), and `spell` is the one
+declaration that is not a member because IH generalization does not see a
+self-call spelled as a receiver
+(`../../issues/receiver-member-ih-generalization.md`).
+
 The cap above is deliberate and the reason this file is **not yet** in
 `crates/elab/tests/showcase_calculator.rs`: it needs more than 8 GiB cold,
 which the suite's 6 GiB per-process rail refuses. The cost is not the grammar's

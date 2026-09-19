@@ -17,7 +17,7 @@
 //    character for character — nothing is skipped behind the proof's back.
 //
 // The spelling is written as a *difference list* — `spell(d, tail)` rather
-// than `spelling(d) ++ tail` — which is why no `append_assoc` appears below.
+// than `d.spelling() ++ tail` — which is why no `append_assoc` appears below.
 // Every production's span proof is a congruence under `spell(d, ·)` applied
 // to the next cursor's equation (`cong_spell`), where the token version
 // needed a three-way `span_join` at each step.
@@ -48,16 +48,10 @@ fn class_pick(cls: Char -> Bool) -> Char -> Option<Char> {
     λ (c: Char) => match cls(c) { False => None, True => Some(c) }
 }
 
-fn all_of(cls: Char -> Bool, cs: List<Char>) -> Type {
-    match cs { Nil => True, Cons(c, r) => And<IsTrue(cls(c)), all_of(cls, r)> }
-}
-
-fn nonempty(cs: List<Char>) -> Type { match cs { Nil => False, Cons(_, _) => True } }
-
 // What a run certifies: its characters are in the class, and they are exactly
 // the span between the two cursors.
 fn RunSpec(cls: Char -> Bool, source: List<Char>, begin, end: Cursor<Char>(source), cs: List<Char>) -> Type {
-    And<all_of(cls, cs), rest(source, begin) = cs ++ rest(source, end)>
+    cs.all(cls) ∧ (rest(source, begin) = cs ++ rest(source, end))
 }
 
 // A run cannot fail — an empty run is a run — so this returns a certificate
@@ -107,22 +101,28 @@ inductive Derivation {
     Parenthesized(open_trail: List<Char>, inner: Derivation, close_trail: List<Char>),
 }
 
-fn tier(d: Derivation) -> Nat {
+fn Derivation::tier(self d: Derivation) -> Nat {
     match d { Number(_, _) => 2, AtomFactor(_) => 1, FactorExpr(_) => 0,
         Sum(_, _, _) => 0, Product(_, _, _) => 1, Parenthesized(_, _, _) => 2 }
 }
 
-fn meaning(d: Derivation) -> Expr {
+fn Derivation::meaning(self d: Derivation) -> Expr {
     match d { Number(ds, _) => Lit(digits_value(ds)),
-        AtomFactor(a) => meaning(a), FactorExpr(f) => meaning(f),
-        Sum(l, _, r) => Plus(meaning(l), meaning(r)),
-        Product(l, _, r) => Times(meaning(l), meaning(r)),
-        Parenthesized(_, e, _) => meaning(e) }
+        AtomFactor(a) => a.meaning(), FactorExpr(f) => f.meaning(),
+        Sum(l, _, r) => Plus(l.meaning(), r.meaning()),
+        Product(l, _, r) => Times(l.meaning(), r.meaning()),
+        Parenthesized(_, e, _) => e.meaning() }
 }
 
 // The spelling, in difference-list form: `spell(d, tail)` is what `d` spells
 // followed by `tail`. Concrete character lists still use `++`; what is never
 // appended is one derivation's spelling to another's.
+// The one declaration here that is *not* a `Derivation::` member, and not by
+// choice: a difference list varies its `tail` on the recursive call, and the
+// IH-generalization analysis does not recognize a self-call spelled as a
+// receiver, so `spell(d, …)` inside the body is refused where `spell(d, …)`
+// checks (issues/receiver-member-ih-generalization.md). Its callers below
+// therefore read `spell(d, tail)` among neighbours that read `d.tier()`.
 fn spell(d: Derivation, tail: List<Char>) -> List<Char> {
     match d {
         Number(ds, tr) => ds ++ (tr ++ tail),
@@ -134,31 +134,31 @@ fn spell(d: Derivation, tail: List<Char>) -> List<Char> {
     }
 }
 
-fn spelling(d: Derivation) -> List<Char> { spell(d, Nil<Char>) }
+fn Derivation::spelling(self d: Derivation) -> List<Char> { spell(d, Nil<Char>) }
 
-theorem cong_spell(d: Derivation, x, y: List<Char>, p: x = y): spell(d, x) = spell(d, y) {
+theorem Derivation::cong_spell(self d: Derivation, x, y: List<Char>, p: x = y): spell(d, x) = spell(d, y) {
     j(p, λ z q => spell(d, x) = spell(d, z), refl)
 }
 
-fn WellFormed(d: Derivation) -> Type {
+fn Derivation::WellFormed(self d: Derivation) -> Type {
     match d {
-        Number(ds, tr) => And<And<nonempty(ds), all_of(is_digit, ds)>, all_of(is_space, tr)>,
-        AtomFactor(a) => And<tier(a) = 2, WellFormed(a)>,
-        FactorExpr(f) => And<tier(f) = 1, WellFormed(f)>,
-        Sum(l, tr, r) => And<And<And<tier(l) = 1, WellFormed(l)>, all_of(is_space, tr)>,
-            And<tier(r) = 0, WellFormed(r)>>,
-        Product(l, tr, r) => And<And<And<tier(l) = 2, WellFormed(l)>, all_of(is_space, tr)>,
-            And<tier(r) = 1, WellFormed(r)>>,
-        Parenthesized(otr, e, ctr) => And<And<all_of(is_space, otr), And<tier(e) = 0, WellFormed(e)>>,
-            all_of(is_space, ctr)>,
+        Number(ds, tr) => (ds.nonempty() ∧ ds.all(is_digit)) ∧ tr.all(is_space),
+        AtomFactor(a) => (a.tier() = 2) ∧ a.WellFormed(),
+        FactorExpr(f) => (f.tier() = 1) ∧ f.WellFormed(),
+        Sum(l, tr, r) => (((l.tier() = 1) ∧ l.WellFormed()) ∧ tr.all(is_space))
+            ∧ ((r.tier() = 0) ∧ r.WellFormed()),
+        Product(l, tr, r) => (((l.tier() = 2) ∧ l.WellFormed()) ∧ tr.all(is_space))
+            ∧ ((r.tier() = 1) ∧ r.WellFormed()),
+        Parenthesized(otr, e, ctr) => (otr.all(is_space) ∧ ((e.tier() = 0) ∧ e.WellFormed()))
+            ∧ ctr.all(is_space),
     }
 }
 
 record Grammar(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source), value: Expr) {
     derivation: Derivation,
-    valid: WellFormed(derivation),
-    at_level: tier(derivation) = level,
-    yields: meaning(derivation) = value,
+    valid: derivation.WellFormed(),
+    at_level: derivation.tier() = level,
+    yields: derivation.meaning() = value,
     span: rest(source, begin) = spell(derivation, rest(source, end)),
 }
 
@@ -192,7 +192,7 @@ fn OpSpan(token: Char, trail: List<Char>, source: List<Char>, begin, end: Cursor
 }
 
 fn number_grammar(source: List<Char>, begin, middle, end: Cursor<Char>(source),
-    digits: List<Char>, trail: List<Char>, more: nonempty(digits),
+    digits: List<Char>, trail: List<Char>, more: digits.nonempty(),
     run: RunSpec(is_digit, source, begin, middle, digits),
     spaces: RunSpec(is_space, source, middle, end, trail))
     -> Grammar(2, source, begin, end, Lit(digits_value(digits))) {
@@ -201,29 +201,29 @@ fn number_grammar(source: List<Char>, begin, middle, end: Cursor<Char>(source),
 }
 
 fn sum_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(source),
-    left, right: Expr, trail: List<Char>, trail_spaces: all_of(is_space, trail),
+    left, right: Expr, trail: List<Char>, trail_spaces: trail.all(is_space),
     l: Grammar(1, source, begin, middle, left), op: OpSpan('+', trail, source, middle, next),
     r: Grammar(0, source, next, end, right)) -> Grammar(0, source, begin, end, Plus(left, right)) {
     Grammar(Sum(l.derivation, trail, r.derivation),
         And(And(And(l.at_level, l.valid), trail_spaces), And(r.at_level, r.valid)),
         refl,
-        j(l.yields, λ value q => Plus(meaning(l.derivation), meaning(r.derivation)) = Plus(value, right),
-            j(r.yields, λ value q => Plus(meaning(l.derivation), meaning(r.derivation)) = Plus(meaning(l.derivation), value), refl)),
-        trans(l.span, cong_spell(l.derivation, rest(source, middle),
+        j(l.yields, λ value q => Plus(l.derivation.meaning(), r.derivation.meaning()) = Plus(value, right),
+            j(r.yields, λ value q => Plus(l.derivation.meaning(), r.derivation.meaning()) = Plus(l.derivation.meaning(), value), refl)),
+        trans(l.span, l.derivation.cong_spell(rest(source, middle),
             Cons('+', trail ++ spell(r.derivation, rest(source, end))),
             trans(op, list::cong_cons('+', list::cong_append_r(trail, r.span))))))
 }
 
 fn product_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(source),
-    left, right: Expr, trail: List<Char>, trail_spaces: all_of(is_space, trail),
+    left, right: Expr, trail: List<Char>, trail_spaces: trail.all(is_space),
     l: Grammar(2, source, begin, middle, left), op: OpSpan('*', trail, source, middle, next),
     r: Grammar(1, source, next, end, right)) -> Grammar(1, source, begin, end, Times(left, right)) {
     Grammar(Product(l.derivation, trail, r.derivation),
         And(And(And(l.at_level, l.valid), trail_spaces), And(r.at_level, r.valid)),
         refl,
-        j(l.yields, λ value q => Times(meaning(l.derivation), meaning(r.derivation)) = Times(value, right),
-            j(r.yields, λ value q => Times(meaning(l.derivation), meaning(r.derivation)) = Times(meaning(l.derivation), value), refl)),
-        trans(l.span, cong_spell(l.derivation, rest(source, middle),
+        j(l.yields, λ value q => Times(l.derivation.meaning(), r.derivation.meaning()) = Times(value, right),
+            j(r.yields, λ value q => Times(l.derivation.meaning(), r.derivation.meaning()) = Times(l.derivation.meaning(), value), refl)),
+        trans(l.span, l.derivation.cong_spell(rest(source, middle),
             Cons('*', trail ++ spell(r.derivation, rest(source, end))),
             trans(op, list::cong_cons('*', list::cong_append_r(trail, r.span))))))
 }
@@ -233,14 +233,14 @@ fn paren_grammar(source: List<Char>, begin, next, middle, last, end: Cursor<Char
     op: OpSpan('(', open_trail, source, begin, next),
     inner: Grammar(0, source, next, middle, value),
     close: OpSpan(')', close_trail, source, middle, last),
-    open_spaces: all_of(is_space, open_trail), close_spaces: all_of(is_space, close_trail),
+    open_spaces: open_trail.all(is_space), close_spaces: close_trail.all(is_space),
     tail: rest(source, last) = rest(source, end))
     -> Grammar(2, source, begin, end, value) {
     Grammar(Parenthesized(open_trail, inner.derivation, close_trail),
         And(And(open_spaces, And(inner.at_level, inner.valid)), close_spaces), refl, inner.yields,
         trans(op, list::cong_cons('(',
             list::cong_append_r(open_trail,
-                trans(inner.span, cong_spell(inner.derivation, rest(source, middle),
+                trans(inner.span, inner.derivation.cong_spell(rest(source, middle),
                     Cons(')', close_trail ++ rest(source, end)),
                     trans(close, list::cong_cons(')', list::cong_append_r(close_trail, tail)))))))))
 }
@@ -267,8 +267,8 @@ fn exact_pick(target: Char) -> Char -> Option<Nat> {
 // spaces, and the evidence is that they are spaces, that the two together are
 // exactly the span, and that the span is non-empty.
 fn OpRun(target: Char, source: List<Char>, begin, end: Cursor<Char>(source), trail: List<Char>) -> Type {
-    And<And<all_of(is_space, trail), OpSpan(target, trail, source, begin, end)>,
-        nat::Lt(begin.offset, end.offset)>
+    (trail.all(is_space) ∧ OpSpan(target, trail, source, begin, end))
+        ∧ nat::Lt(begin.offset, end.offset)
 }
 
 fn operator(target: Char, expected: Nat, source: List<Char>, begin: Cursor<Char>(source))
@@ -300,7 +300,7 @@ fn number_body(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(2, so
             Ok(Certified(Lit(digits_value(run.value)), spaces.end,
                 nat::le_trans(begin.offset, run.end.offset, spaces.end.offset, run.forward, spaces.forward),
                 number_grammar(source, begin, run.end, spaces.end, run.value, spaces.value,
-                    j(sym(shape), λ y q => nonempty(y), trivial), run.evidence, spaces.evidence)))
+                    j(sym(shape), λ y q => y.nonempty(), trivial), run.evidence, spaces.evidence)))
         },
     }
 }
@@ -419,13 +419,13 @@ fn checked_atom(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(2, s
 
 record WholeGrammar(source: List<Char>, value: Expr) {
     lead: List<Char>,
-    lead_spaces: all_of(is_space, lead),
+    lead_spaces: lead.all(is_space),
     derivation: Derivation,
-    valid: WellFormed(derivation),
-    at_level: tier(derivation) = 0,
-    yields: meaning(derivation) = value,
+    valid: derivation.WellFormed(),
+    at_level: derivation.tier() = 0,
+    yields: derivation.meaning() = value,
     // The derivation, after the leading spaces, spells the source exactly.
-    text: lead ++ spelling(derivation) = source,
+    text: lead ++ derivation.spelling() = source,
 }
 
 // A parse together with its whole-input evidence. Packaging the two here is
@@ -461,7 +461,7 @@ fn finish_text(source: List<Char>,
                     trans(lead.evidence.right,
                         list::cong_append_r(lead.value,
                             trans(got.evidence.span,
-                                cong_spell(got.evidence.derivation, rest(source, got.end), Nil<Char>, shape))))))))),
+                                got.evidence.derivation.cong_spell(rest(source, got.end), Nil<Char>, shape))))))))),
     }
 }
 

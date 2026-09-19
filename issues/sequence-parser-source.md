@@ -125,3 +125,39 @@ scannerless calculator demonstrates.
   takes two parameters and the operations travel as an index, `finite_set`'s
   pattern).
 - 2026-09-18: Full `scripts/test` after rounds 1–3: **2802 passed, 0 failed, 5 ignored**. Tracker check clean. `docs/showcase/calc_text.hthr` is checked through the CLI, not by the suite, for the rail reason above.
+- 2026-09-18: Readability pass over `docs/showcase/calc_text.hthr`, reading it as a
+  language-quality target rather than as a proof artifact. Four complaints were
+  answered by features that already work, and the file now uses them: `∧` in place
+  of `And<A, B>`; `list`'s new `List::all` / `List::nonempty` reached as
+  `ds.all(is_digit)` and `ds.nonempty()`; and the derivation's whole theory
+  namespaced as `Derivation::tier`, `::meaning`, `::spelling`, `::WellFormed`,
+  `::cong_spell`, called as receivers — including inside a record field's type
+  (`valid: derivation.WellFormed()`), which works. Suite 2802 passed, 0 failed.
+
+  Four language findings came out of the pass, each with a repro:
+
+  - [[record-type-partial-application]] — an indexed record's type cannot be
+    partially applied, which is the *entire* reason `GrammarSpec` exists beside
+    `Grammar` in both calculators. The diagnostic names the constructor, not the
+    type.
+  - [[receiver-member-ih-generalization]] — IH generalization does not see a
+    self-call spelled as a receiver, so a structurally recursive member that
+    varies a non-decreasing parameter has **no spelling that checks** (a qualified
+    self-call is refused too). `spell` is therefore the one declaration in the
+    file that stays freestanding, and it is the difference-list idiom that removed
+    every `append_assoc` from the showcase. 12-line repro, `probes/str/p13.hthr`.
+  - [[type-declaration-form]] — nine declarations in the file are `fn … → Type`
+    and read like programs that happen to return types.
+  - [[type-owned-namespaces]] gets the datum that a type-owned member is reachable
+    *only* through a receiver, so any analysis that does not understand receivers
+    is a hard block rather than a style tax.
+
+  And one tooling finding that bears on iterating here at all:
+  [[check-only-no-stored-image]] — `check --cache --only <item>` refuses on every
+  module tried, immediately after the `--cache` run its own message asks for,
+  against a feature `docs/check-only-design.md` records working on these exact
+  targets. Measured consequence: a **theorem-only** edit to this showcase costs
+  95 s to recheck unloaded, and a grammar-level edit costs 96 s — the edit's size
+  does not matter because the floor is re-elaborating the module. Restoring
+  `--only` is the difference between a ~13 s and a ~95 s inner loop, so it comes
+  before the record-token work if this file is to be iterated on.
