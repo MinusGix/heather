@@ -3,7 +3,7 @@ title: A  declaration form for the fn … → Type families that specifications 
 status: open
 labels: [frontend,syntax,ergonomics,design,tooling]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 A specification written in Heather is mostly `fn … → Type`, and nothing in the
@@ -39,3 +39,21 @@ two land together.
 
 Raised while reading `docs/showcase/calc_text.hthr` as a language-quality
 target (2026-09-18, [[sequence-parser-source]]).
+
+## Log
+
+- 2026-09-19: 2026-09-19: The load-bearing use is not the one this issue leads with. A
+  highlighting and reading cue is worth having, but what `docs/showcase/calc_text.hthr`
+  actually needs is a **name for a type that repeats**: the `recur` parameter's type
+
+      (next: Cursor<Char>(source))
+          -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+          -> Checked(0, source, next)
+
+  is spelled out in full **seven times** across `parentheses_body`, `atom_body`,
+  `factor_body`, `expr_body` and the three `checked_*` fixpoints, differing only in
+  the tier. The six `fn … -> Type` declarations the issue counts are a smaller
+  matter than that one repetition, and it is the case where `type` has to accept
+  partial application to help at all — which ties it to
+  [[record-type-partial-application]]'s open question rather than leaving it
+  optional.
