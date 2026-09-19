@@ -147,3 +147,6 @@ itself ([[perf-ab-source-patch]]).
   is 4:24 cold rather than the ~95 s quoted in the body above. And nothing in
   `calc_text` now wants `⟨⟩` or `calc` and does not have it; what the file still
   wants is [[showcase-spec-relations-as-records]], in its own round.
+- 2026-09-19: The "in **no test**" note above, plus the ~95 s/4:24 recheck tax, are now
+  [[showcase-harness]]'s to fix — a manifest, a release-CLI gate for `calc_text` in the
+  `--fast`-skipped tier, and the cacheability question measured rather than chased.

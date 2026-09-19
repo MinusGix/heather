@@ -60,3 +60,8 @@ Do **not** bundle this with the `⟨⟩`/`calc` conversions
 ([[showcases-predate-their-ergonomics]] says so from its side): those carry no
 term growth, and keeping them separate means a recorded cold-check change has
 one candidate cause.
+
+## Log
+- 2026-09-19: The "in **no test**" note above, plus the ~95 s/4:24 recheck tax, are now
+  [[showcase-harness]]'s to fix — a manifest, a release-CLI gate for `calc_text` in the
+  `--fast`-skipped tier, and the cacheability question measured rather than chased.
