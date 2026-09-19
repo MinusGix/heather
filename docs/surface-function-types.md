@@ -299,6 +299,19 @@ annotation aligned with the type it is checked against; the written
 annotation is a readability aid and a wrong one is a diagnostic, not a
 silently different term.
 
+**One consumer reads the annotation anyway, so "readability aid" is not
+unconditional.** The `decreases` obligation generator states a recursive
+call's obligation at the binder's *written* type, and inside a mutual group it
+has no second chance to state it at the call
+(`docs/mutual-recursion-design.md` §4). So a λ whose body makes a mutual
+recursive call must annotate its binders even though this rule would otherwise
+supply them: `λ next smaller => checked_expr(source, next) decreasing tail` in
+`docs/showcase/calc_text.hthr` is refused where the same λ with both binders
+annotated checks (measured 2026-09-19,
+`issues/showcases-predate-their-ergonomics.md` finding 3). The elaboration
+above is unchanged; what the annotation is load-bearing for is downstream of
+it.
+
 Multi-binder lambdas peel one Π per binder.
 
 **Inference** (`elab_infer`, `lib.rs:789`) gains a `Lam` arm requiring **every

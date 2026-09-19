@@ -69,3 +69,75 @@ itself ([[perf-ab-source-patch]]).
   a `fn … -> Type` alias already collapses it then `type` is left with the
   justification the issue ranks lowest — a highlighting and reading cue. Both
   bullets are predictions from reading, not findings; one recheck settles them.
+- 2026-09-19: **`⟨⟩` landed everywhere, `calc` landed in three of six places, and both of the
+  predictions in the entry above are settled — one true, one false.** Two clean
+  rechecks of the file, and `calc_parser`'s six `And(` towers went on the same
+  pass. The converted image is 483,281,749 nodes against 483,322,044 before, so
+  the conversion is term-neutral as the scope note assumed.
+
+  What landed: all 9 `And(` towers in `calc_text` and all 6 in `calc_parser` as
+  `⟨⟩`, including `⟨⟨⟨l.at_level, l.valid⟩, trail_spaces⟩, ⟨r.at_level, r.valid⟩⟩`
+  — the shape the table counted. A `fn Recur(level, source, begin) -> Type`
+  collapsing the four spelled-out `recur:` parameter types. `calc` chains in
+  `checked_run`, `operator` and `finish_text`.
+
+  **Finding 1 — the table's "worst of it" is wrong, and finding that out is what
+  the conversion was for.** `sum_grammar`, `product_grammar` and `paren_grammar`
+  are the three places a `calc` chain does *not* pay, and their span towers are
+  unchanged. The reason is `Derivation::cong_spell(x, y, p)`, which takes both
+  endpoints **explicitly** — the tower already writes every intermediate a chain
+  would write, and the chain spelling restates each one a second time as the
+  step's endpoint. Converted, `sum_grammar`'s span grows from 3 lines to 11 and
+  says nothing new. `calc` pays against a tower whose intermediates are
+  *implicit*, which is what `checked_run`, `operator` and `finish_text` have (3-
+  and 4-leaf `trans` spines through `head.suffix` / `initial_rest`). Leaf count
+  was the wrong proxy; whether the tower's lemmas already name their endpoints is
+  the right one, and that is how the next file should be ranked.
+
+  **Finding 2 — terse `cong` in a calc step is refused at 4 of the 15 sites this
+  file offers it, and the boundary is wider than
+  `docs/calc-equational-chains-design.md` §3 records.** §3 has it as one
+  cross-type constructor case. Measured:
+
+  | site | context | what it said |
+  |---|---|---|
+  | `checked_run` | `Cons(·, rest(…))` at `Char` | `sum type` against `El` |
+  | `sum_grammar`, `product_grammar` | `Plus(·, …)` / `Times(·, …)` at `Expr` | `True` against `El`, under `constructor value ▸ inr ▸ inl ▸ pair ▸ pair` |
+  | `paren_grammar`, `finish_text` | `spell(d, ·)` | the endpoints print *identically* to the differing position and it still declines |
+
+  The last row is the one worth acting on and is filed as
+  [[lgg-error-hides-the-implicit]]: `lgg.rs` matches the witness pair by
+  structural `==` with no conversion (deliberate —
+  [[congruence-by-anti-unification]] §3 decision 2), but the error renders only
+  the surface, so it reads as a contradiction. The difference is in an implicit
+  type argument the renderer drops, and a reader cannot act on the message.
+
+  Consequence for the `yields` fields: they keep their nested `j` with
+  hand-written motives. A chain there was the most attractive conversion in the
+  file — two `cong(l.yields)` / `cong(r.yields)` steps against two motives that
+  each restate `Plus(l.derivation.meaning(), r.derivation.meaning())` — and it is
+  exactly what the elaborator refuses.
+
+  **Finding 3 — the second prediction above is false, with a reason.**
+  `λ next smaller => checked_expr(source, next) decreasing tail` does **not**
+  check: *"this recursive call's obligation names a binder the generator cannot
+  type, and a mutual group cannot fall back to stating it at the call
+  (`docs/mutual-recursion-design.md` §4): annotate the binder, or lift the call
+  out of the pattern that introduces it."* `docs/surface-function-types.md` §5.2
+  is right about the *elaborator* — the expected Π does push the domain — but the
+  `decreases` obligation generator reads the binder's *written* type, and a
+  mutual group has no second chance to state it. The three long lines stay, and
+  the annotation is load-bearing rather than decorative. §5.2 currently reads as
+  unconditional and has been given the caveat.
+
+  **Finding 4 — the first prediction holds, so [[type-declaration-form]] is
+  repriced** (logged there). A `fn … -> Type` alias already collapses the
+  repetition that issue calls its load-bearing use, so `type` is left with the
+  justification it ranks lowest.
+
+  Two notes for whoever takes round 2. `docs/showcase/calc_text.hthr` is in **no
+  test** — `crates/elab/tests/showcase_calculator.rs` includes `calc_parser` and
+  not it — so it is verified only by a hand `heather check`, which on this desktop
+  is 4:24 cold rather than the ~95 s quoted in the body above. And nothing in
+  `calc_text` now wants `⟨⟩` or `calc` and does not have it; what the file still
+  wants is [[showcase-spec-relations-as-records]], in its own round.

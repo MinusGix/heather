@@ -79,11 +79,11 @@ fn Checked(level: Nat, source: List<PTok>, begin: Cursor<PTok>(source)) -> Type 
 }
 fn factor_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr,
     atom: Grammar(2,source,begin,end,value)) -> Grammar(1,source,begin,end,value) {
-    Grammar(AtomFactor(atom.derivation),And(atom.at_level,atom.valid),refl,atom.yields,atom.span)
+    Grammar(AtomFactor(atom.derivation),⟨atom.at_level,atom.valid⟩,refl,atom.yields,atom.span)
 }
 fn expression_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr,
     factor: Grammar(1,source,begin,end,value)) -> Grammar(0,source,begin,end,value) {
-    Grammar(FactorExpr(factor.derivation),And(factor.at_level,factor.valid),refl,factor.yields,factor.span)
+    Grammar(FactorExpr(factor.derivation),⟨factor.at_level,factor.valid⟩,refl,factor.yields,factor.span)
 }
 // A token step specifies the actual remainder, including its next boundary.
 fn TokenSpan(token: PTok, source: List<PTok>, begin,end: Cursor<PTok>(source), ignored: Nat) -> Type {
@@ -96,7 +96,7 @@ theorem span_join(xs,ys,first,middle,last: List<PTok>, a: first = xs ++ middle, 
 fn sum_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), left,right: Expr,
     l: Grammar(1,source,begin,middle,left), op: TokenSpan(TPlusSym,source,middle,next,0),
     r: Grammar(0,source,next,end,right)) -> Grammar(0,source,begin,end,Plus(left,right)) {
-    Grammar(Sum(l.derivation,r.derivation),And(And(l.at_level,l.valid),And(r.at_level,r.valid)),refl,
+    Grammar(Sum(l.derivation,r.derivation),⟨⟨l.at_level,l.valid⟩,⟨r.at_level,r.valid⟩⟩,refl,
         j(l.yields,λ value q => Plus(meaning(l.derivation),meaning(r.derivation)) = Plus(value,right),
             j(r.yields,λ value q => Plus(meaning(l.derivation),meaning(r.derivation)) = Plus(meaning(l.derivation),value),refl)),
         span_join(spelling(l.derivation),Cons(TPlusSym,spelling(r.derivation)),rest(source,begin),rest(source,middle),rest(source,end),
@@ -105,7 +105,7 @@ fn sum_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), 
 fn product_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), left,right: Expr,
     l: Grammar(2,source,begin,middle,left), op: TokenSpan(TStarSym,source,middle,next,0),
     r: Grammar(1,source,next,end,right)) -> Grammar(1,source,begin,end,Times(left,right)) {
-    Grammar(Product(l.derivation,r.derivation),And(And(l.at_level,l.valid),And(r.at_level,r.valid)),refl,
+    Grammar(Product(l.derivation,r.derivation),⟨⟨l.at_level,l.valid⟩,⟨r.at_level,r.valid⟩⟩,refl,
         j(l.yields,λ value q => Times(meaning(l.derivation),meaning(r.derivation)) = Times(value,right),
             j(r.yields,λ value q => Times(meaning(l.derivation),meaning(r.derivation)) = Times(meaning(l.derivation),value),refl)),
         span_join(spelling(l.derivation),Cons(TStarSym,spelling(r.derivation)),rest(source,begin),rest(source,middle),rest(source,end),
@@ -114,14 +114,14 @@ fn product_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(sourc
 fn paren_grammar(source: List<PTok>, begin,next,middle,end: Cursor<PTok>(source), value: Expr,
     op: TokenSpan(TOpen,source,begin,next,0), inner: Grammar(0,source,next,middle,value),
     close: TokenSpan(TClose,source,middle,end,0)) -> Grammar(2,source,begin,end,value) {
-    Grammar(Parenthesized(inner.derivation),And(inner.at_level,inner.valid),refl,inner.yields,
+    Grammar(Parenthesized(inner.derivation),⟨inner.at_level,inner.valid⟩,refl,inner.yields,
         trans(op,list::cong_cons(TOpen,
             span_join(spelling(inner.derivation),[TClose],rest(source,next),rest(source,middle),rest(source,end),inner.span,close))))
 }
 
 theorem number_selected(token: PTok, value: Expr):
     number(token) = Some(value) -> Exists<Nat>(λ n => And<token = TNum(n), Lit(n) = value>) {
-    match token { TNum(n) => λ h => Exists(n,And(refl,inj(h))),
+    match token { TNum(n) => λ h => Exists(n,⟨refl,inj(h)⟩),
         TPlusSym => λ h => absurd(h), TStarSym => λ h => absurd(h),
         TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
 }

@@ -57,3 +57,27 @@ target (2026-09-18, [[sequence-parser-source]]).
   partial application to help at all — which ties it to
   [[record-type-partial-application]]'s open question rather than leaving it
   optional.
+- 2026-09-19: **Repriced, and the repricing is a downgrade.** The seven-fold repetition the
+  2026-09-19 entry above calls this issue's load-bearing use is now gone from
+  `docs/showcase/calc_text.hthr`, and a `type` form had nothing to do with it
+  ([[showcases-predate-their-ergonomics]], round 1). A plain
+
+      fn Recur(level: Nat, source: List<Char>, begin: Cursor<Char>(source)) -> Type {
+          (next: Cursor<Char>(source))
+              -> nat::Lt(list_len(rest(source, next)), list_len(rest(source, begin)))
+              -> Checked(level, source, next)
+      }
+
+  checks, and `recur: Recur(0, source, begin)` replaces all four parameter
+  spellings. `docs/types-as-expressions.md` already makes the body legal — it is
+  the shape `RefinesOn` uses in `lib/ir_v1.hthr` — so no feature was missing.
+  (The count drops from seven to four, not zero: the three `checked_*` fixpoints'
+  λ binders keep their annotations for an unrelated reason, the `decreases`
+  obligation generator, recorded as finding 3 on that issue.)
+
+  So the partial-application tie to [[record-type-partial-application]] is no
+  longer what makes this issue matter, and what is left is the justification this
+  issue itself ranks lowest: a highlighting and reading cue that says "type
+  family" rather than "program" at the declaration. That is a real but small
+  thing, and it should be ranked as one until a repetition shows up that a
+  `fn … -> Type` alias genuinely cannot name.
