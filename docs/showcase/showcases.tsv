@@ -1,0 +1,60 @@
+# The showcase manifest: what each file under docs/showcase/ is, how it is
+# checked, and what it is checked against. One source of truth for four
+# consumers that each used to carry their own copy of this list —
+# crates/elab/tests/showcase_calculator.rs, crates/cli/tests/showcase.rs,
+# scripts/perf's CORPUS and scripts/check-tree-sitter — plus `scripts/showcase`,
+# which is how a human checks one by hand.
+#
+# Columns are tab-separated: name, search, tier, note.
+#
+#   name    the module name, which is the file stem: <name>.hthr in this dir.
+#   search  `-L` dirs, comma-separated, or `-` for none. The importing file's
+#           own directory is searched *first* and is never listed (see
+#           `resolve` in crates/cli/src/loader.rs), so a showcase importing a
+#           sibling showcase needs no entry for this directory — and must not
+#           have one: `-L docs/showcase` puts this directory's `parser_core`
+#           (the pre-library prototype) against `lib/std/parser`'s, and a
+#           module in two search directories is an error rather than a
+#           precedence.
+#   tier    how it is gated:
+#             suite      the in-process prefix of crates/elab/tests/showcase_calculator.rs
+#             test       included by some other in-process test target
+#             test-only  in-process only: the CLI *cannot* check this file, and
+#                        the note says which of the two reasons applies — a
+#                        stem that is not an identifier (a hyphen), so it can
+#                        never be a module, or a deliberate hole that only the
+#                        generator driving it fills
+#             cli        the release-CLI gate, crates/cli/tests/showcase.rs
+#             cli-slow   the same gate, skipped by `scripts/test --fast`
+#             unchecked  nothing checks it, by design — the note says why
+#   note    one line, for a reader deciding whether this file is evidence.
+#
+# A file under docs/showcase/ with no row here fails
+# `crates/cli/tests/showcase.rs::every_showcase_file_has_a_manifest_row`, so a
+# new showcase declares its tier once, here, instead of being findable only by
+# grep.
+calc	lib/std	suite	The realized calculator: the same program as idealized.hthr, at the limit of what checks.
+calc_parser	lib/std,lib/std/parser	suite	Checked token parser over the calculator; the parser library's most complete client.
+calc_text	lib/std,lib/std/parser	cli-slow	Scannerless character grammar. 343 s wall / 334 CPU-s / 9.8 GiB at width one (2026-09-19), image over budget so never cached: issues/showcase-harness.md.
+idealized	-	unchecked	The language we want; does not check, and its job is to be argued with. A snippet is quoted in crates/elab/tests/mutual_recursion.rs.
+finite-sets-idealized	-	unchecked	The finite-set half of the same argument; does not check.
+parser_core	lib/std	test	The pre-library parser prototype: crates/elab/tests/parser_core.rs. Name clashes with lib/std/parser/parser_core.hthr on purpose — see `search` above.
+result-parser	lib/std	test-only	`?` propagation over a small parser: crates/elab/tests/result_propagation.rs. The hyphen means `heather check` refuses it as a module: issues/showcase-hyphen-stems.md.
+contextual_rewrite_input	lib/std	test-only	Generator input: crates/cli/examples/relational_context.rs, driven by scripts/relational-context-demo. Its `rewrite_receive` is `{ ?rewrite }`, a hole the generator fills, so it does not check standalone.
+contextual_rewrite_generated	lib/std	cli	Generator output, checked in. Nothing regenerates it, so the gate is that it still checks.
+relational_generator_input	lib/std	test	Generator input, as above.
+relational_generator_generated	lib/std	cli	Generator output, checked in, as above.
+relational-contexts	lib/std	test-only	crates/elab/tests/lib_setoid_mergeable.rs. The hyphen means `heather check` refuses it as a module: issues/showcase-hyphen-stems.md.
+relational_proof	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+mergeable	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+element_transport	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+lift_positive	lib/std,lib	test	crates/elab/tests/lib_setoid_mergeable.rs; `subtype` is lib/, not lib/std.
+positive_subtype	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+positive_omega	lib/std,lib	test	crates/elab/tests/lib_setoid_mergeable.rs; `subtype` is lib/, not lib/std.
+witness_subtype	lib/std,lib	test	crates/elab/tests/lib_setoid_mergeable.rs; `subtype` is lib/, not lib/std.
+finite_set_client	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+finite_set_list_client	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+finite_set_tree_client	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+finite_set_backend_transfer	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+derive_set_functions	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
+derive_set_function_clients	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.

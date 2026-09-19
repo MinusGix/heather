@@ -10,9 +10,13 @@ RPN stack machine is *proved correct*, the project's thesis in miniature:
   (2026-08-13). Verify with:
 
   ```
-  (ulimit -v 8388608 -t 120; \
-   target/release/heather check -L lib/std docs/showcase/calc.hthr)
+  scripts/showcase check calc
   ```
+
+Every file in this directory has a row in [`showcases.tsv`](showcases.tsv) —
+its `-L` set, how it is gated, and what it is for — and `scripts/showcase`
+reads it, so a check by hand is the name alone, with the `-L` set and the
+`ulimit` discipline already right. `scripts/showcase list` prints the table.
 
 The method: every diff between the two files is either a **gap** (a feature
 that doesn't exist, mapped below to its owner) or a **friction** (it exists
@@ -39,15 +43,17 @@ atom   := number | '(' expr ')'
 ```
 
 ```sh
-mkdir -p /tmp/calc && cp docs/showcase/calc{,_parser}.hthr /tmp/calc/
-(ulimit -v 8388608 -t 300; target/release/heather check \
-  -L lib/std -L lib/std/parser -L /tmp/calc /tmp/calc/calc_parser.hthr)
+scripts/showcase check calc_parser
 ```
 
-The copy is not ceremony: `-L docs/showcase` also offers this directory's
-`parser_core.hthr`, the pre-library prototype, and a module in two search
-directories is refused rather than resolved by precedence. Only `calc.hthr`
-and `calc_parser.hthr` are needed, so they move and the rest stays put.
+There is no copy step, and there used to be one here: this file imports `calc`,
+which sits beside it, and the loader searches the importing file's **own
+directory first** (`resolve` in `crates/cli/src/loader.rs`). What the old
+recipe was working around is `-L docs/showcase`, which puts this directory's
+`parser_core.hthr` — the pre-library prototype — against `lib/std/parser`'s,
+and a module in two search directories is refused rather than resolved by
+precedence. The answer is to not pass that `-L`, which is what the manifest
+records, rather than to move the files.
 
 The public entry points are `parse(tokens)`, `calculate(tokens)`, and
 `execute(tokens)`. For the tokens of `2 + 3 * 4`, they produce
@@ -96,10 +102,15 @@ atom   := digit+ spaces | '(' spaces expr ')' spaces
 ```
 
 ```sh
-mkdir -p /tmp/calc && cp docs/showcase/calc{,_text}.hthr /tmp/calc/
-(ulimit -v 20971520 -t 900; target/release/heather check \
-  -L lib/std -L lib/std/parser -L /tmp/calc /tmp/calc/calc_text.hthr)
+scripts/showcase check calc_text
 ```
+
+This one is expensive — 343 s wall, 334 CPU-s and 9.8 GiB peak at width one
+(2026-09-19) — and its semantic image is refused as over budget, so nothing
+about it is ever cached and a recheck costs that however small the edit
+(`issues/check-only-no-stored-image.md`). It is gated on the full
+`scripts/test` lane by `showcase_gate`, not as a test target: the runner's
+per-child rails are 300 CPU-s and 6 GiB, which this would exceed on both.
 
 The entry points take a `String`: `parse`, `calculate`, `execute`.
 `parse_sound` gives every accepted text a well-formed derivation that spells it

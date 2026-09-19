@@ -24,8 +24,22 @@ done
     "$OLDPWD/$cli" test
   XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
     "$OLDPWD/$cli" parse test/fixtures/positive/*.hthr --quiet
+  # The showcase, from the manifest rather than one hand-picked file: every
+  # row the CLI can check is a file the compiler accepts, so it is a file the
+  # editor grammar has to parse. Two of them do not today
+  # (issues/tree-sitter-showcase-parse-gaps.md); they are named here rather
+  # than dropped, so fixing the grammar is what shortens this list.
+  known_unparseable="calc_text finite_set_client"
+  showcase_files=$(
+    awk -F'\t' '!/^#/ && NF == 4 && $3 != "unchecked" { print $1 }' ../docs/showcase/showcases.tsv |
+      while read -r name; do
+        case " $known_unparseable " in *" $name "*) continue ;; esac
+        echo "../docs/showcase/$name.hthr"
+      done
+  )
+  # shellcheck disable=SC2086 # one path per word, all repo-relative
   XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
-    "$OLDPWD/$cli" parse ../docs/showcase/calc.hthr --quiet
+    "$OLDPWD/$cli" parse $showcase_files --quiet
   rg --files ../lib ../crates -g '*.hthr' |
     XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
       "$OLDPWD/$cli" parse --paths /dev/stdin --quiet

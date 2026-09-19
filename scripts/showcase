@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Check a showcase the way the manifest says it is checked.
+
+Stdlib only. The manifest is docs/showcase/showcases.tsv; its header explains
+the columns and the tiers. This script exists so that checking a showcase by
+hand is one command with the `-L` set and the `ulimit` discipline already
+right — CLAUDE.md requires the cap on every direct `heather` run, and the
+showcase is the one corpus where forgetting it has actually cost a machine.
+
+    scripts/showcase list                     # the manifest, as a table
+    scripts/showcase check calc_parser        # one, by name
+    scripts/showcase check --tier cli         # every file the CLI gate runs
+    scripts/showcase check calc_text -- --cache --timings /tmp/t.tsv
+
+Everything after `--` is passed to `heather check` unchanged.
+"""
+
+import argparse
+import os
+import resource
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SHOWCASE = ROOT / "docs" / "showcase"
+MANIFEST = SHOWCASE / "showcases.tsv"
+TIERS = ["suite", "test", "test-only", "cli", "cli-slow", "unchecked"]
+
+# The per-run rails. `calc_text` is the reason they are not smaller: 9.8 GiB
+# peak RSS and 334 CPU-s at width one (2026-09-19, issues/showcase-harness.md).
+# The memory rail is RLIMIT_AS — *address space*, which is not the same number
+# as peak RSS and is always the larger one — so it is set from a value this
+# file has actually been checked under (14 GiB) with headroom, not from the
+# RSS figure. Both are overridable per run.
+DEFAULT_MEM_GIB = 16
+DEFAULT_CPU_SECS = 600
+
+
+def manifest():
+    """The rows of docs/showcase/showcases.tsv, in file order."""
+    rows = []
+    for n, line in enumerate(MANIFEST.read_text().splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 4:
+            sys.exit(f"error: {MANIFEST}:{n}: expected 4 tab-separated columns, got {len(parts)}")
+        name, search, tier, note = (p.strip() for p in parts)
+        if tier not in TIERS:
+            sys.exit(f"error: {MANIFEST}:{n}: unknown tier `{tier}` (one of {', '.join(TIERS)})")
+        rows.append({
+            "name": name,
+            "path": f"docs/showcase/{name}.hthr",
+            "search": [] if search == "-" else search.split(","),
+            "tier": tier,
+            "note": note,
+        })
+    return rows
+
+
+def select(rows, names, tier):
+    if names:
+        by_name = {r["name"]: r for r in rows}
+        missing = [n for n in names if n not in by_name]
+        if missing:
+            sys.exit(f"error: not in the manifest: {', '.join(missing)}")
+        return [by_name[n] for n in names]
+    if tier:
+        return [r for r in rows if r["tier"] == tier]
+    # No selection: everything the CLI can actually be run on. `unchecked`
+    # and `test-only` cannot be, for the reasons their notes give.
+    return [r for r in rows if r["tier"] not in ("unchecked", "test-only")]
+
+
+def find_heather(explicit):
+    if explicit:
+        return Path(explicit)
+    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+    p = target / "release" / "heather"
+    if not p.is_file():
+        sys.exit(f"error: no release binary at {p}; build with "
+                 f"`cargo build --release -p heather-cli` (outside any ulimit — mold needs "
+                 f"the address space), or pass --heather")
+    return p
+
+
+def run_one(heather, row, extra, mem_gib, cpu_secs, quiet):
+    cmd = [str(heather), "check"]
+    for d in row["search"]:
+        cmd += ["-L", d]
+    cmd += extra + [row["path"]]
+
+    def limits():
+        resource.setrlimit(resource.RLIMIT_AS, (mem_gib << 30, mem_gib << 30))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_secs, cpu_secs))
+        # No core dump. A run that dies on the address-space rail dies *large*,
+        # and the dump is written at that size: measuring the image experiment
+        # on 2026-09-19 left a 24 GiB process core-dumping to a disk this
+        # project has already filled once, and took the box's swap with it.
+        # The rail exists to contain a runaway; a core of the runaway is the
+        # same hazard wearing a different hat.
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+    t0 = time.perf_counter()
+    p = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, preexec_fn=limits)
+    output = p.stdout.read()
+    _, status, ru = os.wait4(p.pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    wall = time.perf_counter() - t0
+    if code != 0 or not quiet:
+        # Warnings are the bulk of a clean run's output and are not this
+        # script's business; errors and cache notices are.
+        for line in output.splitlines():
+            if line.startswith("error") or line.startswith("cache:") or ": ok" in line:
+                print(f"  {line}")
+    print(f"{row['name']:<32} {'ok' if code == 0 else f'FAILED (exit {code})':<22} "
+          f"{wall:7.1f} s wall  {ru.ru_utime + ru.ru_stime:7.1f} s cpu  "
+          f"{ru.ru_maxrss / 1024 / 1024:5.1f} GiB peak")
+    return code
+
+
+def cmd_list(args):
+    rows = select(manifest(), args.name, args.tier)
+    width = max(len(r["name"]) for r in rows)
+    for r in rows:
+        search = " ".join(f"-L {d}" for d in r["search"]) or "—"
+        print(f"{r['name']:<{width}}  {r['tier']:<9}  {search:<28}  {r['note']}")
+
+
+def cmd_check(args):
+    rows = select(manifest(), args.name, args.tier)
+    # Named explicitly, an un-checkable file gets its reason rather than the
+    # loader's error, which for a hyphenated stem names neither the file's
+    # role nor the fact that no flag can fix it.
+    skipped = [r for r in rows if r["tier"] in ("unchecked", "test-only")]
+    for r in skipped:
+        print(f"{r['name']:<32} skipped ({r['tier']}): {r['note']}")
+    rows = [r for r in rows if r not in skipped]
+    if not rows:
+        sys.exit("error: nothing checkable in that selection")
+    heather = find_heather(args.heather)
+    failures = 0
+    for row in rows:
+        failures += 1 if run_one(heather, row, args.extra, args.mem_gib,
+                                 args.cpu_secs, args.quiet) != 0 else 0
+    if failures:
+        sys.exit(f"\n{failures} of {len(rows)} failed")
+    print(f"\n== showcase: {len(rows)} checked, all ok ==")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    for name, fn, help_ in [("list", cmd_list, "print the manifest"),
+                            ("check", cmd_check, "check the selected showcases")]:
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("name", nargs="*", help="showcase names (default: everything checkable)")
+        p.add_argument("--tier", choices=TIERS, help="restrict to one tier")
+        p.set_defaults(fn=fn)
+        if name == "check":
+            p.add_argument("--heather", help="release binary to use (default: target/release/heather)")
+            p.add_argument("--mem-gib", type=int, default=DEFAULT_MEM_GIB,
+                           help=f"address-space cap per run (default: {DEFAULT_MEM_GIB})")
+            p.add_argument("--cpu-secs", type=int, default=DEFAULT_CPU_SECS,
+                           help=f"CPU-second cap per run (default: {DEFAULT_CPU_SECS})")
+            p.add_argument("--quiet", action="store_true",
+                           help="only print the per-file result line unless something fails")
+
+    argv = sys.argv[1:]
+    extra = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1:]
+    args = ap.parse_args(argv)
+    args.extra = extra
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

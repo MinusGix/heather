@@ -45,6 +45,26 @@ fn base() -> Elaborator {
     support::semantic_test_base_with(&modules, |e| e.set_kernel_workers(1))
 }
 
+/// The `SHOWCASE` array above and the manifest's `suite` tier are the same
+/// list written twice — this is the assertion that keeps them so. A showcase
+/// added here without a manifest row, or promoted to `suite` in the manifest
+/// without being added here, is the drift `issues/showcase-harness.md` was
+/// filed about: four consumers, four private copies of one list.
+#[test]
+fn the_suite_tier_of_the_manifest_is_exactly_this_prefix() {
+    let mut declared: Vec<String> = heather_cli::showcase::at_tier(heather_cli::showcase::Tier::Suite)
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    declared.sort();
+    let mut here: Vec<String> = SHOWCASE.iter().map(|(name, _)| (*name).to_string()).collect();
+    here.sort();
+    assert_eq!(
+        declared, here,
+        "docs/showcase/showcases.tsv's `suite` tier and this file's SHOWCASE array disagree"
+    );
+}
+
 #[test]
 fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     let mut e = base();

@@ -3,7 +3,7 @@ title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
 created: 2026-09-06
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 Filed from the 2026-09-06 x86 kernel round. Exact first-difference excerpts
@@ -100,3 +100,12 @@ where the fallbacks are paid for.
   whether `calc_text`'s image falls under 256 M nodes is a single-bit answer from
   one run, no `value-metrics` build required.
 - 2026-09-18: Traced 2026-09-18: the 27× record axis is [[elab-emits-normal-form-of-matched-type-argument]]'s family, not a separate defect — 96.3% of the control pair's misses are `Nat/El⌜⌝` at a uniform six-deep Σ tower, the `Ty/Ty` type-argument check of docs/conversion-query-traversal-design.md §2. A record token type multiplies that family's base rather than introducing a disagreement of its own. Full table and the scheduling consequence are on that issue; the surviving small candidate is the bounded quote arm on the conversion side.
+- 2026-09-19: - 2026-09-19: A datum from [[showcase-harness]], which owns the round: measured what this
+    defect costs at `docs/showcase/calc_text.hthr`'s size. Its semantic image is
+    **762,000,130 bytes for 483 M syntax nodes** — over both stock limits (256 M
+    nodes, 512 MiB). With both raised for the experiment it publishes in 14.5 s,
+    and the warm run that would replay it needed **more than 24 GiB and was killed
+    before replaying one declaration**, against 9.8 GiB and 343 s for checking the
+    same module from source. So this issue's defect is not only paying ×27 in
+    conversion: at this size it has taken caching away from the module entirely,
+    and no budget raise gets it back.

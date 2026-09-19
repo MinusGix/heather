@@ -333,3 +333,92 @@ fn the_previous_image_of_a_module_replays_its_unchanged_declarations() {
     assert_eq!(accepted.stale, Some(stale));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The store keeps its replay set and evicts old history once it is over
+/// budget.
+///
+/// Before there was any retention, this repo's own image store held 3,625
+/// images over 9.2 GiB, of which 116 (0.33 GiB) were named by a `.latest`
+/// pointer and 3,509 (8.85 GiB) by nothing at all — every dependency world
+/// any tree had ever had, kept for ever, on a filesystem that has filled
+/// before (`issues/showcase-harness.md`). What must survive a sweep is the
+/// pointer set: an unreferenced image is a content-addressed hit for some
+/// older tree, but a pointer's target is what an edited module replays its
+/// unchanged declarations from, and losing one costs a full re-elaboration.
+#[test]
+fn the_sweep_evicts_old_images_and_never_the_ones_a_pointer_names() {
+    let dir = temp("retention");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dependencies = ModuleDependencyIdentity::default();
+    // A fresh elaborator per module: they all declare the same name, which is
+    // the point — the images differ, the sources differ, the world does not.
+    let elab = |module: &str, src: &str, deps: ModuleDependencyIdentity| {
+        Elaborator::with_prelude().unwrap().elab_module_delta(module, src, deps).unwrap()
+    };
+
+    // Ten modules, each published over the same (empty) dependency world, so
+    // each leaves one image and one pointer of its own.
+    let published: Vec<(String, ModuleCacheKey)> = (0..10)
+        .map(|n| {
+            let module = format!("m{n}");
+            let src = format!("fn value() -> Nat {{ {n} }}");
+            let key = ModuleCacheKey::for_source(&module, &src, &dependencies, LintProfile::Default);
+            let delta = elab(&module, &src, dependencies.clone());
+            // A generous budget first: nothing is evicted while we set up.
+            ModuleImageCache::new(dir.clone()).publish(key, &delta, &[]).unwrap();
+            (module, key)
+        })
+        .collect();
+
+    let images = dir.join("modules-v1");
+    let count = |ext: &str| {
+        std::fs::read_dir(&images)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some(ext))
+            .count()
+    };
+    assert_eq!(count("hmi"), 10, "ten modules, ten images");
+    assert_eq!(count("latest"), 10, "ten modules, ten pointers");
+
+    // Re-publish one module from *different* sources, which leaves its old
+    // images behind unreferenced: its pointer moves to the newest each time.
+    let (module, _) = &published[0];
+    let mut newest = None;
+    for n in 100..106 {
+        let src = format!("fn value() -> Nat {{ {n} }}");
+        let key = ModuleCacheKey::for_source(module, &src, &dependencies, LintProfile::Default);
+        let delta = elab(module, &src, dependencies.clone());
+        ModuleImageCache::new(dir.clone()).publish(key, &delta, &[]).unwrap();
+        newest = Some(key);
+    }
+    assert_eq!(count("hmi"), 16, "six more images, all but one unreferenced");
+
+    // Now publish under a budget that only a few images fit. The sweep runs
+    // at publication.
+    let src = "fn value() -> Nat { 7 }";
+    let key = ModuleCacheKey::for_source("last", src, &dependencies, LintProfile::Default);
+    let delta = elab("last", src, dependencies.clone());
+    let one_image = std::fs::metadata(ModuleImageCache::new(dir.clone()).path(published[1].1))
+        .unwrap()
+        .len();
+    ModuleImageCache::new(dir.clone())
+        .with_retention(one_image * 12)
+        .publish(key, &delta, &[])
+        .unwrap();
+
+    let after = count("hmi");
+    assert!(after < 17, "the sweep evicted nothing: {after} images");
+    assert_eq!(count("latest"), 11, "a sweep must not touch pointers");
+
+    // Every pointer's target still loads: the replay set is intact.
+    let prefix = Elaborator::with_prelude().unwrap().psi().clone();
+    let cache = ModuleImageCache::new(dir.clone());
+    for key in published.iter().skip(1).map(|(_, k)| *k).chain(newest).chain([key]) {
+        assert!(
+            cache.load(key, prefix.clone(), usize::MAX, ImageFreshness::Exact).unwrap().is_some(),
+            "the sweep evicted an image a pointer names"
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

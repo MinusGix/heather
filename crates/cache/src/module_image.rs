@@ -171,9 +171,23 @@ impl From<std::io::Error> for ModuleCacheError {
     }
 }
 
+/// How many bytes of published images the store keeps, beyond the ones a
+/// `.latest` pointer names — which are never evicted, since they are what an
+/// edited module replays its unchanged declarations from.
+///
+/// Measured on this repo's own store on 2026-09-19, before there was any
+/// retention at all: 3,625 images, 9.2 GiB, of which **116 (0.33 GiB) were
+/// named by a pointer and 3,509 (8.85 GiB) were named by nothing**. The
+/// unreferenced ones are not garbage — an image is addressed by a content key,
+/// so checking out an older tree finds its image again — but the store was
+/// growing without bound on a filesystem that has filled before
+/// (issues/showcase-harness.md). The budget is what that history costs.
+pub const DEFAULT_RETAIN_BYTES: u64 = 4 << 30;
+
 pub struct ModuleImageCache {
     dir: PathBuf,
     limits: ModuleImageLimits,
+    retain_bytes: u64,
 }
 
 impl ModuleImageCache {
@@ -181,6 +195,7 @@ impl ModuleImageCache {
         Self {
             dir: cache_dir.join("modules-v1"),
             limits: ModuleImageLimits::default(),
+            retain_bytes: DEFAULT_RETAIN_BYTES,
         }
     }
 
@@ -188,6 +203,73 @@ impl ModuleImageCache {
         Self {
             dir: cache_dir.join("modules-v1"),
             limits,
+            retain_bytes: DEFAULT_RETAIN_BYTES,
+        }
+    }
+
+    /// The retention budget, for a caller that wants a smaller store (or a
+    /// test that wants to see eviction happen without writing 4 GiB).
+    pub fn with_retention(mut self, retain_bytes: u64) -> Self {
+        self.retain_bytes = retain_bytes;
+        self
+    }
+
+    /// Evict published images, oldest first, until the store fits its budget.
+    ///
+    /// Never evicts an image a `.latest` pointer names: those are the replay
+    /// set, and losing one costs a full re-elaboration rather than a slice.
+    /// Everything else is a content-addressed hit for some older tree, which
+    /// is worth keeping until it is worth more than the disk.
+    ///
+    /// Best-effort by construction. A concurrent run may publish between the
+    /// listing and the unlink, and an image this sweep removes may be one
+    /// another process was about to load: both outcomes are an ordinary cache
+    /// miss, which the reader already handles by rebuilding. Nothing here can
+    /// produce a wrong answer, only a slower run.
+    fn sweep(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
+        let mut pinned: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut images: Vec<(std::time::SystemTime, u64, PathBuf, String)> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else {
+                continue;
+            };
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("latest") => {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                            pinned.insert(hex(&key));
+                        }
+                    }
+                }
+                Some("hmi") => {
+                    if let Ok(meta) = entry.metadata() {
+                        let when = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        images.push((when, meta.len(), path, stem));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut total: u64 = images.iter().map(|(_, len, _, _)| *len).sum();
+        if total <= self.retain_bytes {
+            return;
+        }
+        // Oldest first; a pinned image is skipped rather than counted out, so
+        // a store whose pointers alone exceed the budget shrinks to them and
+        // stops, instead of evicting the replay set it exists to serve.
+        images.sort_by_key(|(when, _, _, _)| *when);
+        for (_, len, path, stem) in images {
+            if total <= self.retain_bytes {
+                break;
+            }
+            if pinned.contains(&stem) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(len);
+            }
         }
     }
 
@@ -421,6 +503,7 @@ impl ModuleImageCache {
             let _ = std::fs::remove_file(&temp_latest);
             return Err(error.into());
         }
+        self.sweep();
         Ok(interface_hash)
     }
 }

@@ -18,3 +18,8 @@
 
 pub mod loader;
 pub mod semantic;
+// The showcase manifest is here for the same reason the loader is: four
+// consumers each carried their own copy of "which showcase, over which `-L`
+// dirs", and a second implementation is what drifts
+// (issues/showcase-harness.md).
+pub mod showcase;

@@ -56,17 +56,34 @@ SNAPSHOTS = ROOT / "perf" / "snapshots"
 WEB = ROOT / "scripts" / "perf-web.html"
 SCHEMA = 1
 
-# The corpus: (path, search dirs). A file resolves imports beside itself first,
-# then the `-L` dirs; a module found in two `-L` dirs is an error, which is why
-# the showcase never gets `docs/showcase` on its path (its own `parser_core`
-# would clash with the library's). `quick` is the inner-loop set; `full` is
+def showcase(name):
+    """One corpus entry for a showcase, with its `-L` dirs from the manifest.
+
+    `docs/showcase/showcases.tsv` is the single source of truth for which
+    showcase is checked against what; this corpus used to carry its own copy,
+    which is three copies of one list counting the two test harnesses
+    (issues/showcase-harness.md). A file resolves imports beside itself first,
+    then the `-L` dirs — which is why no showcase gets `docs/showcase` on its
+    path (its own `parser_core` would clash with the library's).
+    """
+    manifest = ROOT / "docs" / "showcase" / "showcases.tsv"
+    for line in manifest.read_text().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        row, search, _tier, _note = (c.strip() for c in line.split("\t"))
+        if row == name:
+            return (f"docs/showcase/{name}.hthr", [] if search == "-" else search.split(","))
+    sys.exit(f"error: no `{name}` row in {manifest}")
+
+
+# The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is
 # everything the CLI can check by path. The x86 arch modules are named by
 # the tests, not by their stems, so they are checked here under their stems.
 CORPUS = {
     "quick": [
         ("lib/std/omega.hthr", []),
         ("lib/std/nat.hthr", []),
-        ("docs/showcase/calc_parser.hthr", ["lib/std", "lib/std/parser"]),
+        showcase("calc_parser"),
     ],
     "full": [
         ("lib/std/omega.hthr", []),
@@ -75,7 +92,7 @@ CORPUS = {
         ("lib/std/list.hthr", []),
         ("lib/std/bitvec.hthr", []),
         ("lib/std/algebra.hthr", []),
-        ("docs/showcase/calc_parser.hthr", ["lib/std", "lib/std/parser"]),
+        showcase("calc_parser"),
         ("lib/ir_v1.hthr", ["lib/std"]),
         ("lib/function_ir.hthr", ["lib/std"]),
         ("lib/std/arch/x86_64/model.hthr", ["lib/std"]),
@@ -1077,7 +1094,9 @@ def cmd_ab(args):
         else:
             say(f"   NOTE: no file this patch touches is in the `{args.corpus}` corpus, so it is "
                 f"measured only through whatever imports it. Name the consumer with "
-                f"`--file PATH[:DIR,DIR]` — `docs/showcase/calc_text.hthr` is not in the corpus.")
+                f"`--file PATH[:DIR,DIR]` — `docs/showcase/calc_text.hthr` is not in the corpus "
+                f"— it is 4:24 a check; `scripts/showcase check calc_text -- --timings F.tsv` "
+                f"is how it is measured by hand.")
     corpus = [c for c in CORPUS[args.corpus] if any(o in c[0] for o in only)]
     for spec in args.file or []:
         path, _, dirs = spec.partition(":")

@@ -116,6 +116,17 @@
   position and not only computation, and a negative control). Five live
   defects here were invisible to tests that varied none of them; three of the
   five were hidden by a closed type alone.
+- **Showcases: `scripts/showcase`** over `docs/showcase/showcases.tsv`, the
+  manifest that says which showcase is checked how, and against which `-L`
+  dirs. `scripts/showcase check <name>` is the hand check with the `-L` set and
+  the `ulimit` discipline already right (no `/tmp` copy: the loader searches the
+  importing file's own directory first, so a sibling import needs no `-L`, and
+  `-L docs/showcase` is the thing that breaks — it puts that directory's
+  `parser_core` against the library's). A new file under `docs/showcase/` fails
+  `crates/cli/tests/showcase.rs` until it declares a tier. `docs/showcase/calc_text.hthr`
+  is gated by `showcase_gate` in `scripts/test` (full lane only, ~6 min): it
+  cannot be a test target, at 334 CPU-s and 9.8 GiB against the runner's 300 s
+  and 6 GiB rails.
 - Issue tracker: `scripts/issue` over `issues/*.md` (see `issues/README.md`).
 - Type-theory source of truth: `docs/delam/04–06`; `docs/delam/README.md`
   explains which chapters are implementation-relevant (01–03 are a
