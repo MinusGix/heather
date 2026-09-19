@@ -64,3 +64,26 @@ persisted on the `/work` volume makes cargo judge a reverted tree fresh, which
 silently produces two byte-identical binaries. A desktop measurement under load
 read this round's win as −2.9 % instead of −8.9 % and invented a +35 % regression
 that does not exist.
+
+## Log
+
+- 2026-09-19: The measurement protocol this issue's last paragraph describes in
+  prose is now a tool: `scripts/perf ab` (`perf/README.md`). It builds both
+  binaries, parks a copy of each, interleaves the samples, asserts provenance
+  (hashes must differ; `--marker COLUMN` requires the after binary to emit a
+  `--timings` column the before one does not), warns on load average, and reports
+  counters apart from seconds — with `separate` as a verdict only when the two
+  sample sets are disjoint, and a delta inside the spread printed as not a result.
+  `--base REV` uses a reused git worktree, `--patch FILE` reverses a diff in place
+  for a box without `.git`, `--touch` defeats the stale-artifact trap, `--replay`
+  re-renders for free.
+
+  Validated against the round that closed [[global-ref-rescope-per-occurrence]] by
+  re-running it through the harness: the counters reproduce the by-hand furnace
+  numbers exactly (`global_sig_rescopes` 12,263, `shift_global_nodes` 38,815,029 →
+  17,551,478, 24 columns unmoved), which is the cross-machine invariant, while the
+  seconds differ by environment as they should — on a quiet desktop the gate reads
+  −11.7 % against furnace's −8.9 %, and `parser_contracts::Certified`, the one item
+  that regressed +2.8 % on furnace, is −8.0 % here. So that regression is
+  environment-local and not a property of the change; the fills-per-occurrence
+  reasoning above stands, but the +2.8 % should not be quoted as its evidence.

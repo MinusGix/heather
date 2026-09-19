@@ -39,6 +39,60 @@ invisible at 0.5–1 s each). The snapshot keeps the file's per-step median and
 its own outlier list (`items.outliers`), so the section does not depend on an
 item also being among the heaviest by total.
 
+## Is this change faster? `scripts/perf ab`
+
+A snapshot answers *what is slow*. Whether one change made it faster is a
+different measurement, and it is the one that keeps going wrong by hand:
+
+    scripts/perf ab --marker global_sig_rescopes            # HEAD vs this working tree
+    scripts/perf ab --base HEAD~1 --samples 5               # the last commit against its parent
+    scripts/perf ab --patch round.patch --touch             # on a box without git (furnace)
+    scripts/perf ab --replay                                # re-render the last report, measuring nothing
+
+It builds both binaries, parks a copy of each (a `cargo build` writes one
+path, and an A/B builds twice), interleaves `--samples` cold checks of each,
+and reports counters and seconds **separately**. The `before` tree is a reused
+git worktree at `--base`, keyed by commit so its cold build is paid once — or,
+with `--patch`, this tree with a diff reversed and restored afterwards, which
+is what a furnace checkout needs because it has no `.git`
+(a furnace checkout is a plain copy of the working tree).
+
+What it refuses to let you get wrong, each because it happened:
+
+- **Which binary is which.** The two are hashed and an identical pair is a
+  hard error: `cargo build` will hand back the artifact it already has when it
+  judges a tree fresh, which on furnace it does routinely — the checkout is an
+  rsync of the working tree, so source mtimes are the *local* ones while
+  `target/` lives on a volume that outlives instances. `--touch` defeats that;
+  pass it there always. `--marker COLUMN` is the strongest check available when
+  a round adds a counter: the after binary must emit that `--timings` column
+  and the before binary must not.
+- **Counters and seconds are different claims.** Counters are exact on one
+  tree and equal across machines; the report lists every column that moved and
+  says how many did not. A round whose verdicts should not change reads that
+  list, not the clock. Seconds are environment-local and get the per-sample
+  spread printed beside the median, with the verdict `separate` only when the
+  two sample sets are disjoint — otherwise `SPREAD EXCEEDS THE DELTA — not a
+  result`.
+- **A loaded box.** Load average is printed and warned about above a quarter of
+  the CPU count. A desktop under a game once read a −8.9 % gate win as −2.9 %
+  and invented a +35 % per-item regression that a quiet box puts at −1.3 %
+  (`issues/signature-rescope-multiplicity.md`).
+- **Items that are not really there.** The per-item table ranks only items every
+  sample on both sides reported, and only above a 5 ms floor: a snapshot keeps
+  the heaviest N items plus the per-step outliers, so an item near that cut
+  drifts in and out between samples and its "delta" is the cut moving. What was
+  dropped, and why, is printed.
+
+The raw tables are left under `target/perf-ab/raw/` and the whole report is
+replayable from `target/perf-ab/last.json`, so re-reading an A/B costs nothing.
+
+`scripts/perf ab-selftest` asserts the report's pure logic — the spread verdicts,
+and the two filters above, each of which this report shipped without for an
+afternoon. It is not in `scripts/test`: there is no python test lane here (the one
+tested script is the node runner, `scripts/test-target-runner.test.mjs`). Run it
+by hand after touching `report_ab`.
+
 ## Probing one declaration
 
 `heather check --cache --only <item>[,<item>…] --timings f.tsv <file>`

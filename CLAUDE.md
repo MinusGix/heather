@@ -27,7 +27,7 @@
   even complex ones, as long as they add no inference route on a hot path —
   land without timing anything; `scripts/bench --check` against the baseline
   is what catches regressions. Only a round whose issue names performance as
-  the point measures, and then via the recorded protocol.
+  the point measures, and then through `scripts/perf ab`, never by hand.
 - **The same goes for direct `heather` runs**: deep conversion workloads are
   memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:
@@ -82,6 +82,21 @@
   snapshot, and `serve` is the dashboard. Read the latest report before
   choosing a perf target, so a round attacks what the corpus says dominates
   and not the item it happened to be looking at. It is a diary, not a gate.
+- **Did a change make it faster: `scripts/perf ab`** (`perf/README.md`). Never
+  hand-roll a before/after pair: three attempts at one in a single session
+  produced two wrong answers, each confidently. It builds both binaries,
+  interleaves `--samples` cold checks, and reports **counters and seconds
+  apart** — counters are exact on one tree and any column that moved is a
+  behaviour change, while seconds get the per-sample spread beside the median
+  and a delta inside that spread is reported as no result. `--base REV` builds
+  the before side in a reused git worktree; `--patch FILE` reverses a diff in
+  this tree instead, which is what a furnace box needs (no `.git`), and there
+  `--touch` is mandatory — cargo will otherwise hand back the binary it already
+  built, since a checkout's mtimes are the local ones against a `target/` that
+  outlives instances, and the harness then refuses the run as comparing one
+  binary with itself. `--marker COLUMN` asserts the after binary emits a new
+  counter column and the before one does not. `--replay` re-renders the last
+  report for free.
 - **Read a `--timings` TSV with `scripts/timings`**, never by counting
   indices into an `awk -F'\t'` line — that mislabelled three columns in one
   session. It looks columns up by name and prints the five the design docs

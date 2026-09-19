@@ -10,6 +10,7 @@ where it comes from* is another, and it had no answer that did not start with
     scripts/perf report [SNAPSHOT] [--against prev|SNAPSHOT]       # what is slow, where it comes from, what moved
     scripts/perf list                                              # snapshots on record
     scripts/perf serve [--port N] [--open]                         # the dashboard (scripts/perf-web.html)
+    scripts/perf ab [--base REV | --patch FILE] [--marker COL] [--samples N]  # is this change faster? did anything else move?
 
 A snapshot records three things, each keyed by the environment that produced
 it (`local` is the desktop, `furnace` the cloud box; they differ by a roughly
@@ -677,6 +678,486 @@ def cmd_serve(args):
         pass
 
 
+# ---------------------------------------------------------------- A/B
+
+# Where built binaries and their before-trees are parked. A binary is *copied*
+# here the moment it is built: `cargo build` writes one path, and an A/B run
+# builds twice, so measuring `target/release/heather` directly would measure
+# the second build twice over.
+AB_DIR = "perf-ab"
+# The file an A/B run probes to read a binary's `--timings` header. Small
+# enough that two runs of it cost nothing, real enough to produce every
+# column.
+AB_PROBE_FILE = "lib/std/nat.hthr"
+
+
+def sha256_file(path: Path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def run_or_die(cmd, cwd, what, env=None):
+    p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True,
+                       env={**os.environ, **(env or {})})
+    if p.returncode != 0:
+        tail = "\n".join((p.stdout + p.stderr).splitlines()[-15:])
+        sys.exit(f"error: {what} failed ({' '.join(map(str, cmd))}):\n{tail}")
+    return p.stdout
+
+
+def build_binary(tree: Path, target: Path, label: str, touch: bool):
+    """One release build of `tree` into `target`, parked under AB_DIR as
+    `heather-<label>`.
+
+    `touch` exists for the furnace: a checkout there is an rsync of the
+    working tree, so source mtimes are the *local* ones, and `target/` lives
+    on a volume that survives instances. Against a newer target dir cargo
+    judges a reverted tree fresh and hands back the binary it already had —
+    two builds across a revert then produce byte-identical binaries and an
+    A/B that compares one binary with itself. The caller does not get to
+    forget this: `cmd_ab` compares the two hashes and refuses if they match.
+    """
+    if touch:
+        for p in (tree / "crates").rglob("*.rs"):
+            p.touch()
+    print(f"  building {label} in {tree} (target {target}) …", end="", flush=True)
+    t0 = time.perf_counter()
+    run_or_die(["cargo", "build", "--release", "-p", "heather-cli", "--bin", "heather"],
+               cwd=tree, what=f"the {label} build", env={"CARGO_TARGET_DIR": str(target)})
+    built = target / "release" / "heather"
+    if not built.is_file():
+        sys.exit(f"error: the {label} build left no binary at {built}")
+    parked = target_dir() / AB_DIR / f"heather-{label}"
+    parked.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, parked)
+    print(f" {time.perf_counter() - t0:.0f}s", flush=True)
+    return parked
+
+
+def before_tree_from_base(base: str):
+    """A git worktree at `base`, reused across runs and keyed by its commit so
+    the expensive cold build is paid once. Needs `.git`, which a furnace
+    checkout does not have — use `--patch` there."""
+    if not sh("git", "rev-parse", "--git-dir"):
+        sys.exit("error: --base needs a git checkout; on a furnace box (a plain copy, no .git) "
+                 "use --patch with a diff of the change instead")
+    sha = sh("git", "rev-parse", base)
+    if not sha:
+        sys.exit(f"error: --base {base} does not resolve to a commit")
+    root = target_dir() / AB_DIR / sha[:12]
+    tree = root / "tree"
+    if not (tree / "Cargo.toml").is_file():
+        shutil.rmtree(tree, ignore_errors=True)
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  checking out {base} ({sha[:12]}) at {tree}")
+        run_or_die(["git", "worktree", "add", "--detach", str(tree), sha], cwd=ROOT,
+                   what="git worktree add")
+    return tree, root / "target", sha[:12]
+
+
+class ReversePatch:
+    """The before tree as *this* tree with the change taken out, for boxes
+    without git. Restores on the way out and verifies it did: every file the
+    patch touches is hashed before and re-hashed after, because a half-applied
+    restore leaves the working tree silently wrong and nothing else here would
+    notice."""
+
+    def __init__(self, patch: Path):
+        self.patch = patch
+        self.files = []
+        for line in patch.read_text(errors="replace").splitlines():
+            if line.startswith("+++ b/"):
+                self.files.append(line[6:].split("\t")[0])
+        self.before = {f: self._hash(f) for f in self.files}
+
+    def _hash(self, rel):
+        p = ROOT / rel
+        return sha256_file(p) if p.is_file() else None
+
+    def _patch(self, reverse):
+        cmd = ["patch", "-p1", "--batch", "--forward"] + (["-R"] if reverse else [])
+        p = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True,
+                           input=self.patch.read_text(errors="replace"))
+        if p.returncode != 0:
+            sys.exit(f"error: `{' '.join(cmd)}` failed; the working tree may be half-patched — "
+                     f"check `git status` before doing anything else:\n{p.stdout}{p.stderr}")
+
+    def __enter__(self):
+        print(f"  reverting {len(self.files)} file(s) with {self.patch.name}")
+        self._patch(reverse=True)
+        return ROOT
+
+    def __exit__(self, *_):
+        self._patch(reverse=False)
+        bad = [f for f in self.files if self._hash(f) != self.before[f]]
+        if bad:
+            sys.exit("error: restoring the working tree did not reproduce it; these files differ "
+                     "from how this run found them: " + ", ".join(bad))
+        print(f"  working tree restored and verified ({len(self.files)} file(s))")
+        return False
+
+
+def timing_columns(args, heather: Path, raw_dir: Path, label: str):
+    """A binary's `--timings` header, as a behavioural fingerprint.
+
+    Hashes say two binaries differ; they do not say *which* is which. A round
+    that adds a counter can be identified by the column it emits, and that
+    check costs one run of the smallest corpus file.
+    """
+    tsv = raw_dir / f"probe-{label}.tsv"
+    cache = Path(tempfile.mkdtemp(prefix=f"heather-ab-probe-{label}-"))
+    try:
+        run_check(args, heather, AB_PROBE_FILE, [], cache, tsv, 1)
+    finally:
+        shutil.rmtree(cache, ignore_errors=True)
+    if not tsv.is_file():
+        return []
+    return tsv.read_text().splitlines()[0].split("\t")
+
+
+def ab_sample(args, heather, file, search, raw_dir, label, i):
+    """One cold check: a fresh cache dir, so the run elaborates and gates
+    everything rather than replaying somebody's images."""
+    cache = Path(tempfile.mkdtemp(prefix=f"heather-ab-{label}-"))
+    tsv = raw_dir / f"{Path(file).stem}-{label}-{i}.tsv"
+    try:
+        if args.mode != "cold":
+            # warm/edit need a seeded cache: one throwaway run first.
+            run_check(args, heather, file, search, cache, raw_dir / f"seed-{label}-{i}.tsv", args.workers)
+        path = ROOT / file
+        original = path.read_bytes()
+        try:
+            if args.mode == "edit":
+                path.write_bytes(original + EDIT_PROBE.encode())
+            out = run_check(args, heather, file, search, cache, tsv, args.workers)
+        finally:
+            path.write_bytes(original)
+    finally:
+        shutil.rmtree(cache, ignore_errors=True)
+    if out["exit"] != 0:
+        sys.exit(f"error: the {label} binary failed on {file}: {out['summary']}\n"
+                 + "\n".join(out.get("output_tail", [])))
+    out["columns"] = Timings(tsv).columns if tsv.is_file() else []
+    return out
+
+
+def med(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else 0
+
+
+# An item has to be worth this much before an A/B ranks it: a 0.4 ms
+# declaration separates cleanly on two samples through scheduling alone, and a
+# table of ±30 % on sub-millisecond items buries the one row that matters.
+AB_ITEM_FLOOR_NS = 5_000_000
+# A delta below this is reported as no change however cleanly the samples
+# separate — disjointness answers "did it move", not "does it matter".
+AB_EPSILON_PCT = 1.0
+
+
+def spread_verdict(a, b):
+    """Whether the samples actually separate. A median delta smaller than the
+    per-sample spread is not a result, and saying so is the whole point of
+    running more than one sample: a desktop under load once read a −8.9 %
+    kernel-gate win as −2.9 % and invented a +35 % per-item regression that a
+    quiet box puts at −1.3 % (issues/signature-rescope-multiplicity.md)."""
+    if len(a) < 2 or len(b) < 2:
+        return "one sample"
+    ma, mb = med(a), med(b)
+    if ma and abs((mb - ma) / ma * 100) < AB_EPSILON_PCT:
+        return "no change"
+    if max(b) < min(a) or max(a) < min(b):
+        return "disjoint"
+    return "OVERLAPPING"
+
+
+def fmt_count(v):
+    return f"{v:,}" if isinstance(v, int) else str(v)
+
+
+def pct(a, b):
+    return f"{(b - a) / a * 100:+.1f}%" if a else ("new" if b else "—")
+
+
+def cmd_ab(args):
+    args.workers = args.kernel_workers
+    if args.replay:
+        path = Path(args.replay) if args.replay != "last" else target_dir() / AB_DIR / "last.json"
+        if not path.is_file():
+            sys.exit(f"error: no A/B record at {path}; run `scripts/perf ab` first")
+        rec = json.loads(path.read_text())
+        print(f"\n== A/B (replayed from {path}): {rec['label']} ==")
+        for line in rec["header"]:
+            print(line)
+        for file, runs in rec["files"]:
+            print(f"\n-- {file} (replayed; no re-measurement) --")
+            args.samples = len(runs["before"])
+            report_ab(args, runs)
+        return
+    raw_dir = target_dir() / AB_DIR / "raw"
+    shutil.rmtree(raw_dir, ignore_errors=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- the two binaries, and where each came from
+    provenance = {}
+    if args.before and args.after:
+        before_bin, after_bin = Path(args.before), Path(args.after)
+        provenance["before"] = f"given: {before_bin}"
+        provenance["after"] = f"given: {after_bin}"
+    else:
+        after_bin = build_binary(ROOT, target_dir(), "after", args.touch)
+        provenance["after"] = f"this working tree ({sh('git', 'rev-parse', '--short', 'HEAD') or '?'}"\
+                              f"{'+dirty' if sh('git', 'status', '--porcelain', '--untracked-files=no') else ''})"
+        if args.patch:
+            with ReversePatch(Path(args.patch)):
+                before_bin = build_binary(ROOT, target_dir(), "before", True)
+            provenance["before"] = f"this tree with {Path(args.patch).name} reversed"
+        else:
+            tree, target, sha = before_tree_from_base(args.base)
+            before_bin = build_binary(tree, target, "before", args.touch)
+            provenance["before"] = f"worktree at {args.base} ({sha})"
+
+    hb, ha = sha256_file(before_bin), sha256_file(after_bin)
+    e = environment(args)
+    label = args.label or f"{Path(args.patch).name if args.patch else args.base} → working tree"
+    header = []
+
+    def say(line):
+        header.append(line)
+        print(line, flush=True)
+
+    print(f"\n== A/B: {label} ==")
+    say(f"   before  {hb[:12]}  {provenance['before']}")
+    say(f"   after   {ha[:12]}  {provenance['after']}")
+    if hb == ha:
+        sys.exit("error: the two binaries are byte-identical, so this would compare one binary with "
+                 "itself. Either the change does not affect the built code, or a build was skipped as "
+                 "fresh — pass --touch (and see `build_binary` on why a furnace checkout needs it).")
+
+    cols_b = timing_columns(args, before_bin, raw_dir, "before")
+    cols_a = timing_columns(args, after_bin, raw_dir, "after")
+    gained, lost = [c for c in cols_a if c not in cols_b], [c for c in cols_b if c not in cols_a]
+    fingerprint = "identical `--timings` columns"
+    if gained or lost:
+        fingerprint = ("after adds " + ", ".join(gained) if gained else "") + \
+                      ("; " if gained and lost else "") + \
+                      ("after drops " + ", ".join(lost) if lost else "")
+    say(f"   provenance: binaries differ, {fingerprint}")
+    if args.marker:
+        if args.marker not in cols_a or args.marker in cols_b:
+            sys.exit(f"error: --marker {args.marker} should appear in the after binary's --timings "
+                     f"header and not the before one; got after={args.marker in cols_a} "
+                     f"before={args.marker in cols_b}. The binaries are not the trees you think.")
+        say(f"   marker {args.marker}: in after only, as asserted")
+
+    load = e["loadavg"][0] if e["loadavg"] else 0.0
+    say(f"   {e['source']} {e['host']} {e['cpu']} {e['nproc']} cpus, width {args.workers}, "
+        f"mode {args.mode}, {args.samples} interleaved samples, loadavg {e['loadavg']}")
+    if load > max(1.0, e["nproc"] * 0.25):
+        say(f"   WARNING: 1-minute load average {load:.1f} on {e['nproc']} cpus. Seconds from this "
+            f"run are not trustworthy; counters still are. Re-run on a quiet box before quoting a "
+            f"time delta or believing a per-item regression.")
+
+    # --- the corpus
+    only = args.only if args.only is not None else ["calc_parser"]
+    corpus = [c for c in CORPUS[args.corpus] if any(o in c[0] for o in only)]
+    for spec in args.file or []:
+        path, _, dirs = spec.partition(":")
+        corpus.append((path, [d for d in dirs.split(",") if d]))
+    if not corpus and not args.file:
+        sys.exit(f"error: no corpus file matches {only}")
+
+    record = {"label": label, "header": header, "stamp": now_stamp(), "env": e,
+              "before": {"sha256": hb, "from": provenance["before"]},
+              "after": {"sha256": ha, "from": provenance["after"]}, "files": []}
+    for file, search in corpus:
+        runs = {"before": [], "after": []}
+        print(f"\n-- {file} --")
+        for i in range(1, args.samples + 1):
+            for which, binary in (("before", before_bin), ("after", after_bin)):
+                out = ab_sample(args, binary, file, search, raw_dir, which, i)
+                runs[which].append(out)
+                print(f"   sample {i} {which:6} {out['wall_s']:7.2f}s wall  "
+                      f"{secs(out['run'].get('kernel_gate_ns', 0)):6.2f}s gate  "
+                      f"{out['max_rss_mb']:.0f} MB", flush=True)
+        report_ab(args, runs)
+        record["files"].append([file, runs])
+
+    out = target_dir() / AB_DIR / "last.json"
+    out.write_text(json.dumps(record, indent=1) + "\n")
+    print(f"\n   raw `--timings` tables in {raw_dir}; this report is replayable with "
+          f"`scripts/perf ab --replay` ({out})")
+
+
+def report_ab(args, runs):
+    """Counters first and seconds second, because they answer different
+    questions. A counter that moved is a *behaviour* change and is exact on
+    one tree; seconds are the claim that needs the spread beside it."""
+    rb = [r["run"] for r in runs["before"]]
+    ra = [r["run"] for r in runs["after"]]
+    counters = [c for c in rb[0] if not c.endswith("_ns")]
+
+    same, moved = [], []
+    for c in sorted(set(counters) | {c for c in ra[0] if not c.endswith("_ns")}):
+        vb = {r.get(c, 0) for r in rb}
+        va = {r.get(c, 0) for r in ra}
+        if len(vb) > 1 or len(va) > 1:
+            moved.append((c, f"unstable within one binary: before {sorted(vb)} after {sorted(va)}"))
+            continue
+        b, a = vb.pop(), va.pop()
+        (same if b == a else moved).append((c, (b, a)))
+
+    print("\n   counters (exact on one tree; a move here is a behaviour change, not a speed one)")
+    if moved:
+        for c, v in moved:
+            if isinstance(v, str):
+                print(f"     {c:24} {v}")
+            else:
+                print(f"     {c:24} {fmt_count(v[0]):>15} → {fmt_count(v[1]):>15}  {pct(*v)}")
+    else:
+        print("     nothing moved")
+    print(f"     identical across both binaries and every sample: {len(same)} columns "
+          f"({', '.join(c for c, _ in same[:6])}{', …' if len(same) > 6 else ''})")
+
+    print("\n   seconds (noisy; the verdict is whether the samples separate at all)")
+    print(f"     {'metric':14}{'before samples':>26}{'after samples':>26}{'median':>9}  verdict")
+    rows = [("wall", [r["wall_s"] for r in runs["before"]], [r["wall_s"] for r in runs["after"]])]
+    for phase in ("kernel_gate_ns", "total_ns"):
+        rows.append((phase[:-3],
+                     [secs(r["run"].get(phase, 0)) for r in runs["before"]],
+                     [secs(r["run"].get(phase, 0)) for r in runs["after"]]))
+    rows.append(("max_rss_mb", [r["max_rss_mb"] for r in runs["before"]],
+                 [r["max_rss_mb"] for r in runs["after"]]))
+    for name, b, a in rows:
+        v = spread_verdict(b, a)
+        note = {"disjoint": "separate", "OVERLAPPING": "SPREAD EXCEEDS THE DELTA — not a result",
+                "one sample": "one sample — no verdict", "no change": "no change"}[v]
+        print(f"     {name:14}{' '.join(f'{x:7.2f}' for x in b):>26}"
+              f"{' '.join(f'{x:7.2f}' for x in a):>26}{pct(med(b), med(a)):>9}  {note}")
+
+    # --- per item, by the metric the round is about
+    def items(rs, key):
+        """One value per item per sample. A snapshot keeps the heaviest items
+        *and* the per-step outliers, and a heavy item with an expensive step is
+        in both lists — counted twice it would look like a sample reported it
+        twice and be dropped as incomplete below."""
+        out = {}
+        for r in rs:
+            for name, v in {it["name"]: it.get(key, 0)
+                            for it in r["items"]["top"] + r["items"]["outliers"]}.items():
+                out.setdefault(name, []).append(v)
+        return out
+
+    ib, ia = items(runs["before"], args.item_metric), items(runs["after"], args.item_metric)
+    # Only items every sample on both sides reported: a snapshot keeps the
+    # heaviest N items and the per-step outliers, so an item near that cut
+    # enters and leaves the list between samples and its "delta" is really
+    # the cut moving.
+    n_each = len(runs["before"])
+    shared = [n for n in ib if n in ia and len(ib[n]) == n_each and len(ia[n]) == n_each]
+    partial = len([n for n in ib if n in ia]) - len(shared)
+    floor = AB_ITEM_FLOOR_NS if args.item_metric.endswith("_ns") else 0
+    ranked = [n for n in shared if max(med(ib[n]), med(ia[n])) >= floor]
+    small = len(shared) - len(ranked)
+    ranked = sorted(ranked, key=lambda n: -abs(med(ia[n]) - med(ib[n])))[:args.top]
+    unit = "s" if args.item_metric.endswith("_ns") else ""
+    print(f"\n   per item, by |Δ {args.item_metric}| (median of {n_each}; of the heaviest items a "
+          f"snapshot keeps)")
+    if not ranked:
+        print(f"     nothing above the floor of {floor / 1e6:.0f} ms" if floor else "     nothing to rank")
+        return
+    for n in ranked:
+        b, a = med(ib[n]), med(ia[n])
+        cell = (f"{secs(b):8.3f}{unit} → {secs(a):8.3f}{unit}" if unit
+                else f"{fmt_count(int(b)):>13} → {fmt_count(int(a)):>13}")
+        print(f"     {n[-52:]:53}{cell}  {pct(b, a):>8}  "
+              f"{spread_verdict(ib[n], ia[n]).replace('disjoint', 'separate')}")
+    skipped = []
+    if small:
+        skipped.append(f"{small} under the {floor / 1e6:.0f} ms floor")
+    if partial:
+        skipped.append(f"{partial} reported by only some samples (the kept-items cut moved)")
+    if skipped:
+        print("     not ranked: " + ", ".join(skipped))
+
+
+
+# ---------------------------------------------------------------- selftest
+
+def cmd_ab_selftest(_args):
+    """Assertions over the A/B report's pure logic.
+
+    Not in `scripts/test`: there is no python test lane in this repo (the only
+    tested script is the node runner, `scripts/test-target-runner.test.mjs`).
+    Run it by hand after touching `report_ab`. Both cases below are bugs this
+    report actually shipped with for an afternoon.
+    """
+    import io
+    import contextlib
+
+    fails = []
+
+    def check(name, cond, detail=""):
+        print(f"  {'ok  ' if cond else 'FAIL'} {name}{'' if cond else ': ' + detail}")
+        if not cond:
+            fails.append(name)
+
+    check("a delta inside the spread is not a result",
+          spread_verdict([10.0, 12.0], [11.0, 13.0]) == "OVERLAPPING")
+    check("disjoint sample sets separate",
+          spread_verdict([10.0, 10.2], [9.0, 9.1]) == "disjoint")
+    check("a disjoint but tiny delta is no change",
+          spread_verdict([100.0, 100.1], [100.4, 100.5]) == "no change")
+    check("one sample yields no verdict", spread_verdict([1.0], [2.0]) == "one sample")
+    check("pct names a new counter", pct(0, 7) == "new")
+    check("pct on zero-to-zero is neither", pct(0, 0) == "—")
+
+    # A synthetic pair of runs: one heavy item that improved, one heavy item in
+    # *both* the top and the outlier list (the dedupe bug: counted twice, it
+    # looked like a sample had reported it twice and was dropped as
+    # incomplete), and one sub-millisecond item that separates on noise (the
+    # floor bug: ranked at ±30 % above the item that mattered).
+    def run(gate_heavy, gate_both, gate_tiny, counters):
+        heavy = {"name": "m::heavy", "kernel_gate_ns": gate_heavy}
+        both = {"name": "m::both", "kernel_gate_ns": gate_both}
+        tiny = {"name": "m::tiny", "kernel_gate_ns": gate_tiny}
+        return {"wall_s": 1.0, "max_rss_mb": 1.0,
+                "run": dict(kernel_gate_ns=gate_heavy + gate_both, total_ns=0, **counters),
+                "items": {"top": [heavy, both, tiny], "outliers": [both]}}
+
+    runs = {
+        "before": [run(900_000_000, 500_000_000, 400_000, dict(conv_misses=7, moved_counter=10)),
+                   run(910_000_000, 505_000_000, 300_000, dict(conv_misses=7, moved_counter=10))],
+        "after": [run(700_000_000, 400_000_000, 500_000, dict(conv_misses=7, moved_counter=4)),
+                  run(710_000_000, 405_000_000, 600_000, dict(conv_misses=7, moved_counter=4))],
+    }
+
+    class A:
+        item_metric, top, samples = "kernel_gate_ns", 10, 2
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        report_ab(A(), runs)
+    out = buf.getvalue()
+
+    check("an item in both the top and outlier lists is still ranked", "m::both" in out,
+          "the dedupe in `items()` regressed")
+    check("a sub-millisecond item is below the floor", "m::tiny" not in out,
+          "AB_ITEM_FLOOR_NS is not being applied")
+    check("the heavy item is ranked", "m::heavy" in out)
+    check("a moved counter is reported", "moved_counter" in out)
+    check("an unmoved counter is not listed as moved",
+          "conv_misses" not in out.split("seconds (noisy")[0].split("identical across")[0])
+    check("the unmoved count is reported", "identical across both binaries" in out)
+
+    print(f"\n{len(fails)} failed" if fails else "\nall ok")
+    sys.exit(1 if fails else 0)
+
+
 def main():
     p = argparse.ArgumentParser(prog="perf", description="perf snapshots and the dashboard that reads them")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -705,6 +1186,9 @@ def main():
     sp.add_argument("--top", type=int, default=12)
     sp.set_defaults(fn=lambda a: (setattr(a, "against", None if a.against == "none" else a.against), cmd_report(a)))
 
+    sp = sub.add_parser("ab-selftest", help="assertions over the A/B report's pure logic (run by hand)")
+    sp.set_defaults(fn=cmd_ab_selftest)
+
     sp = sub.add_parser("list", help="snapshots on record")
     sp.set_defaults(fn=cmd_list)
 
@@ -713,6 +1197,41 @@ def main():
     sp.add_argument("--port", type=int, default=8766)
     sp.add_argument("--open", action="store_true")
     sp.set_defaults(fn=cmd_serve)
+
+    sp = sub.add_parser("ab", help="two binaries, interleaved, with their provenance asserted")
+    sp.add_argument("--base", default="HEAD",
+                    help="commit the `before` binary is built from, in a reused git worktree (default HEAD, "
+                         "i.e. this tree's uncommitted change is the `after`)")
+    sp.add_argument("--patch", metavar="FILE",
+                    help="instead of a worktree, build `before` by reversing this diff in place and "
+                         "restoring it afterwards — for a checkout without git, which is what a furnace box is")
+    sp.add_argument("--before", metavar="BIN", help="skip building: measure this binary as `before`")
+    sp.add_argument("--after", metavar="BIN", help="skip building: measure this binary as `after`")
+    sp.add_argument("--marker", metavar="COLUMN",
+                    help="assert this `--timings` column is emitted by the after binary and not the before one; "
+                         "the strongest provenance check there is, when the round adds a counter")
+    sp.add_argument("--touch", action="store_true",
+                    help="touch every crate source before each build, so cargo cannot judge a tree fresh that "
+                         "it has already built newer artifacts for (always do this on furnace)")
+    sp.add_argument("--samples", type=int, default=3, help="interleaved before/after pairs (default 3)")
+    sp.add_argument("--mode", choices=("cold", "warm", "edit"), default="cold")
+    sp.add_argument("--corpus", choices=CORPUS, default="quick")
+    sp.add_argument("--only", action="append", metavar="SUBSTR",
+                    help="restrict the corpus to matching paths (default: the showcase alone — an A/B "
+                         "is usually about one workload, and every file costs two binaries times --samples)")
+    sp.add_argument("--file", action="append", metavar="PATH[:DIR,DIR]", help="extra file with its -L dirs")
+    sp.add_argument("--item-metric", default="kernel_gate_ns", help="what the per-item table ranks by")
+    sp.add_argument("--top", type=int, default=12)
+    sp.add_argument("--label", help="a few words about what this A/B is testing")
+    sp.add_argument("--env", help="environment name (default: local on the desktop, furnace under /work)")
+    sp.add_argument("--kernel-workers", type=int, default=1,
+                    help="gate width (default 1: item timings are only comparable at one width)")
+    sp.add_argument("--wait-workers", type=int, default=1, help=argparse.SUPPRESS)
+    sp.add_argument("--mem-gib", type=int, default=12, help="address-space cap per check (default 12)")
+    sp.add_argument("--cpu-secs", type=int, default=900, help="CPU cap per check (default 900)")
+    sp.add_argument("--replay", nargs="?", const="last", metavar="PATH",
+                    help="re-render the last A/B's report (or a saved one) without measuring anything")
+    sp.set_defaults(fn=cmd_ab)
 
     args = p.parse_args()
     args.fn(args)
