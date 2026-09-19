@@ -99,6 +99,12 @@ pub struct SemanticSession {
 
 /// `--only` asked for a module's previous image and there was none: the
 /// prefix a probe replays has to have been checked and published once.
+///
+/// There are two ways to get here and the message says both, because one of
+/// them makes the obvious advice unfollowable: a module whose image the store
+/// refused — over the decode budget — is checked and re-elaborated on every
+/// warm run, so `heather check --cache` succeeds and still leaves nothing to
+/// replay (`issues/check-only-no-stored-image.md`).
 #[derive(Debug)]
 pub struct NoPreviousImage {
     pub module: String,
@@ -109,8 +115,12 @@ impl fmt::Display for NoPreviousImage {
         write!(
             f,
             "--only: no stored image of module `{}` over these dependencies to replay the \
-             prefix from; run `heather check --cache` on the file once first",
-            self.module
+             prefix from. Either it has not been checked with `--cache` over these \
+             dependencies yet — run `heather check --cache` on the file once first — or its \
+             image was refused as too large to store, which that run reports as `cache: could \
+             not store module `{}``; a module whose image does not fit cannot be probed with \
+             --only at all",
+            self.module, self.module
         )
     }
 }

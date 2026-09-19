@@ -53,3 +53,21 @@ should fall under the budget on its own; then this issue is only the diagnostic.
   dependency world right after `lib/std/list.hthr` changed, and this permanent
   one, which is over-budget publication. The transient case repairs itself on
   the next full check; only the over-budget case is a standing defect.
+- 2026-09-18: The diagnostic half landed: `NoPreviousImage` now names both ways to reach it —
+  "not checked with `--cache` over these dependencies yet" *and* "its image was
+  refused as too large to store, which that run reports as `cache: could not store
+  module …`; a module whose image does not fit cannot be probed with --only at
+  all". Pinned by two assertions in
+  `crates/cli/tests/check.rs::only_elaborates_the_named_declarations_over_a_replayed_prefix`,
+  so it cannot regress to the advice alone.
+
+  Deliberately *not* done: a refusal marker beside the `.latest` pointer, which
+  would let the message quote the node count at the `--only` run instead of asking
+  the reader to remember an earlier run's notice. That adds a file kind to the
+  cache's on-disk contract, which is load-bearing for image and verdict identity,
+  and it deserves its own decision rather than riding along with a message fix.
+  Worth doing if anyone loops on this again.
+
+  The cost half stays open and is not this issue's: it is the record axis on
+  [[elab-emits-normal-form-of-matched-type-argument]], whose family the user
+  paused on 2026-09-16.

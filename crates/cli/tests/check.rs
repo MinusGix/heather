@@ -497,6 +497,12 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("no stored image of module `good`"), "{err}");
+    // Both ways to get here are named. A module whose image the store refused
+    // as over budget is re-elaborated on every warm run, so the `--cache`
+    // advice alone is unfollowable for it and a reader loops
+    // (`issues/check-only-no-stored-image.md`).
+    assert!(err.contains("run `heather check --cache` on the file once first"), "{err}");
+    assert!(err.contains("refused as too large to store"), "{err}");
 
     // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
     assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));

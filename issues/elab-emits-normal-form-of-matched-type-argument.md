@@ -23,3 +23,54 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 - 2026-09-16: Coordinator: the readers-audit pass was **stopped mid-way** at the user's request (time versus gain; the device line has become intricate). Its partial, untested edits are parked on branch `wip/mint-readers-audit` (commit 10aee3b: mint.rs/lib.rs/gendefs.rs edits toward attributing the `fetched_executes` kernel rejection, plus the reproducer `probes/fe1.hthr`; the brief is in `probes/brief-mint-readers-audit.md` on the untracked scratch dir). Master stays at 4359f2e with the mint opt-in. Decision: no further slices on this line; the next step is a **structural design pass in a fresh session** — why sharing does not survive in the kernel term language (no let; Rc-sharing dies under de Bruijn shifting) and whether one kernel-side change (a sharing-preserving representation with typing memoized on node identity per context, or a let form costed against the Coq formalization) dissolves the mint, the see-through arms and the quote slices together. The refl-theorem evaluator cost ([[refl-theorem-step-cost]]) belongs in the same pass.
 - 2026-09-17: Re-measured on the current tree through `heather check --only parser_primitives::complete_post` (release, width one, desktop; 13.5 s per probe against 48 s for the whole file): the item is 9.6–9.8 s, 3,681,039 conversion queries, 14,346 misses (0.45 s summed — a remainder), 246,634 steps. The query trace (every 64th, 57,517 samples) reproduces docs/conversion-query-traversal-design.md §2 on this tree: heads Ty 54 %, Pi 36 %, El(?) 9 %; 92 % of compared types under 100 characters; 98 % of site stacks at the 40-frame cap, `Pair×12 < Snd < Snd < Fst < Fst < App×20` — the record tower's constructor annotations. The opt-in mint (`HEATHER_RB_MINT=1`) does not move the kernel's count here: 3,723,257 queries, 298,380 steps, 12.8 s — so the naming device is not a lever on this item, consistent with §10.3's "exponential, not exponentially repeated". Nothing landed: what is left is the structural pass (a sharing-preserving kernel representation with typing memoized on node identity, or a let form) or the reducer-provenance change §10.3 names, and the constant-factor typed-App rule on [[conversion-typed-eliminator-congruence]] (the Pi/Pi 36 % plus both ty_checks per App node) — a kernel typing-rule change, since the stored annotations are load-bearing for typed conversion, and not a slice.
 - 2026-09-18: The 09-16 entry's "the refl-theorem evaluator cost belongs in the same pass" is withdrawn: [[refl-theorem-step-cost]] is attributed (2026-09-18) to per-gate-call global rescoping in `Defs::body`, a value-machine constant with no relation to term sharing or a `let`; it has its own fix candidate there.
+- 2026-09-18: Traced, and the 27× record axis is **this family**, not a new defect — which
+  means the round it implies is the one the user paused on 2026-09-16, and it is
+  not chartered here.
+
+  `HEATHER_VALUE_METRICS=1 HEATHER_CONV_MISS_TRACE=char_run` on the controlled pair
+  (`probes/str/p10.hthr`, width one, release + value-metrics, 1,527,742 records =
+  the whole miss count):
+
+  | head pair | misses | share | summed ms |
+  |---|---:|---:|---:|
+  | `Nat/El⌜⌝` | 1,470,824 | **96.3 %** | 2,089 |
+  | `El(?)/Sigma` | 15,757 | 1.0 % | 3,001 |
+  | `Pi/Pi` | 14,820 | 1.0 % | 438 |
+  | `Wf/El(?)` | 12,600 | 0.8 % | 1,101 |
+  | `El⌜⌝/Sigma` | 6,655 | 0.4 % | 131 |
+  | `Sigma/Sigma` | 3,233 | 0.2 % | 1,274 |
+
+  The dominant row is one structural shape repeated: **1,470,784 of its 1,470,824
+  records have exactly six `TmSigma` on the site stack**, at
+  `Var < App < App < TmSigma×6 < App…`, comparing the primitive `Nat` against the
+  quote `El⌜Nat⌝` at ~1.4 µs each. Six is the Σ tower a
+  `Certified<Char, List<Char>>` over a `Cursor<Char>(source)` builds. So a record
+  token type does not introduce a new disagreement; it adds Σ layers to the tower
+  whose every type-argument slot already pays the `Ty/Ty` check that
+  docs/conversion-query-traversal-design.md §2 measured at 54 % of
+  `complete_post`'s queries. `Char` multiplies an already-exponential term — the
+  27× is a **multiplier on this family's base**, with combinator nesting held
+  identical between the two sides of the control pair.
+
+  Consequences for scheduling, which the coordinator should decide and this entry
+  does not:
+
+  - The standing decision on this family (2026-09-16, user) is *no further
+    slices*; the next step is a structural kernel-side design pass in a fresh
+    session — whether one change (a sharing-preserving representation with typing
+    memoized on node identity, or a `let` costed against the Coq formalization)
+    dissolves the mint, the see-through arms and the quote slices together. That
+    decision covers this axis too, now that the axis is this family.
+  - One candidate *is* newly attractive on this datum and is small: the
+    `Nat/El⌜⌝` pair is the **bounded** quote arm
+    ([[quote-see-through-bounded-arm]], closed) applied on the *conversion*
+    side rather than the matcher's. 96 % of the misses are a primitive against
+    its own quote at a type-argument slot, uniform in shape; one bounded head
+    step of `decoded` in `Tc::conv_ty` turns them into hits. It is a kernel
+    conversion rule, so it needs this area's protocol (design pass, fresh before
+    table, bench gate) and it is exactly the kind of cleverness
+    [[verified-fancy-kernel-later]] says to weigh — not something to slip in.
+  - `probes/str/p10.hthr` is the cheapest reproduction this family has: 90 lines,
+    both sides in one process, no showcase. Where the prior rounds needed
+    `complete_post` inside a 500-line file, the axis is now one declaration
+    duplicated at two token types.

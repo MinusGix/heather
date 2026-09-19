@@ -99,3 +99,4 @@ where the fallbacks are paid for.
   written into every annotation, counted. It is also a cheap regression gate —
   whether `calc_text`'s image falls under 256 M nodes is a single-bit answer from
   one run, no `value-metrics` build required.
+- 2026-09-18: Traced 2026-09-18: the 27× record axis is [[elab-emits-normal-form-of-matched-type-argument]]'s family, not a separate defect — 96.3% of the control pair's misses are `Nat/El⌜⌝` at a uniform six-deep Σ tower, the `Ty/Ty` type-argument check of docs/conversion-query-traversal-design.md §2. A record token type multiplies that family's base rather than introducing a disagreement of its own. Full table and the scheduling consequence are on that issue; the surviving small candidate is the bounded quote arm on the conversion side.
