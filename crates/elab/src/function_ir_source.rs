@@ -400,6 +400,64 @@ fn application_spine(term: &Term) -> (&Term, Vec<&Term>) {
     (head, arguments)
 }
 
+/// A bounded, pure caller expression. Calls retain resolved source identities;
+/// the native producer must still prove its translation against the source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallExpr {
+    Input(usize),
+    Constant(u64),
+    Binary(SourceBinaryOperation, Box<CallExpr>, Box<CallExpr>),
+    Call(Box<CallExpr>, Box<CallExpr>),
+}
+
+impl CallExpr {
+    pub fn expression(&self, callee: &str, inputs: &[HeatherExpr; 2]) -> HeatherExpr {
+        match self {
+            Self::Input(i) => inputs[*i].clone(),
+            Self::Constant(n) => HeatherExpr::call("bitvec::ofNat", [HeatherExpr::nat(64), HeatherExpr::nat(*n)]),
+            Self::Binary(op, left, right) => HeatherExpr::call(op.semantic_name(), [HeatherExpr::nat(64), left.expression(callee, inputs), right.expression(callee, inputs)]),
+            Self::Call(left, right) => HeatherExpr::call(callee, [left.expression(callee, inputs), right.expression(callee, inputs)]),
+        }
+    }
+}
+
+pub fn reflect_call_expression(elaborator: &Elaborator, source: &str, callee: &str) -> Result<CallExpr, SourceError> {
+    let caller = elaborator.global_abs(source).ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source}`")))?;
+    let selected = elaborator.global_abs(callee).ok_or_else(|| SourceError::Unsupported(format!("unknown opted-in callee `{callee}`")))?;
+    let (ty, body) = elaborator.global_body(source).ok_or_else(|| SourceError::Unsupported("caller must be a transparent function".into()))?;
+    if pi_arity(&ty) != 2 { return unsupported("caller requires two BitVec(64) parameters"); }
+    let Term::Lam { body, .. } = &*body else { return unsupported("expected first caller parameter"); };
+    let Term::Lam { body, .. } = &**body else { return unsupported("expected second caller parameter"); };
+    let globals = OperationGlobals::resolve(elaborator)?;
+    fn walk(term: &Term, caller: usize, selected: usize, globals: &OperationGlobals, budget: &mut usize, calls: &mut usize) -> Result<CallExpr, SourceError> {
+        if *budget == 0 { return unsupported("caller expression exceeds the 64-node composition limit"); }
+        *budget -= 1;
+        if let Term::Var(LocalVar(index)) = term {
+            return match index { 1 => Ok(CallExpr::Input(0)), 0 => Ok(CallExpr::Input(1)), _ => unsupported("unsupported caller capture") };
+        }
+        let (head, args) = application_spine(term);
+        let Term::GlobalTm { var, .. } = head else { return unsupported("caller supports straight-line arithmetic and direct calls only"); };
+        let abs = caller.checked_sub(1 + var.0 as usize).ok_or_else(|| SourceError::Unsupported("caller reference escapes source scope".into()))?;
+        if abs == selected && args.len() == 2 {
+            *calls += 1;
+            if *calls > 4 { return unsupported("caller exceeds the four-call composition limit"); }
+            return Ok(CallExpr::Call(Box::new(walk(args[0], caller, selected, globals, budget, calls)?), Box::new(walk(args[1], caller, selected, globals, budget, calls)?)));
+        }
+        if let Some(op) = globals.operations.get(&abs) {
+            if args.len() != 3 || nat_literal(args[0]) != Some(64) { return unsupported("caller arithmetic requires width 64"); }
+            return Ok(CallExpr::Binary(*op, Box::new(walk(args[1], caller, selected, globals, budget, calls)?), Box::new(walk(args[2], caller, selected, globals, budget, calls)?)));
+        }
+        if abs == globals.of_nat && args.len() == 2 && nat_literal(args[0]) == Some(64) {
+            if let Some(n) = nat_literal(args[1]) { return Ok(CallExpr::Constant(n)); }
+        }
+        unsupported("caller contains an unsupported operation or a call to a function not selected by --callee")
+    }
+    let mut calls = 0;
+    let result = walk(body, caller, selected, &globals, &mut 64, &mut calls)?;
+    if calls == 0 { return unsupported("caller must call the opted-in callee"); }
+    Ok(result)
+}
+
 fn nat_literal(term: &Term) -> Option<u64> {
     match term {
         Term::Zero => Some(0),

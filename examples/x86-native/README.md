@@ -124,3 +124,20 @@ Expected status: 3. Both calls use one generic callee summary, with the first
 result feeding the second call. The caller retains its XOR local across both
 calls. Each leaf writes its own private stack slot and restores RSP, leaving
 the dead bytes changed. See [reusable callee summaries](../../docs/x86-64-call-summaries.md).
+
+## Arithmetic and computed arguments around calls
+
+```sh
+(ulimit -v 6291456 -t 300; target/debug/heather build-x86 \
+  examples/x86-native/composition.hthr caller --callee leaf --arg 20 --arg 22 \
+  -o target/x86-native/composition --cache-dir target/native-images)
+./target/x86-native/composition
+printf 'exit status: %s\n' "$?"
+```
+
+Expected status: 3. This caller retains an OR result across two calls, swaps
+the first call's arguments, and computes the second call's arguments. `let`
+bindings and Add/Sub/AND/OR/XOR expressions are supported around calls to one
+selected leaf, within explicit expression, call-count, and register limits.
+See [source-call composition](../../docs/x86-64-call-composition.md) for the
+checked boundary and current limits.

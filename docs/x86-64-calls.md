@@ -6,7 +6,9 @@ The forwarding source caller has two parameters and returns `leaf(left, right)`
 with its original arguments in order. The [live-local extension](x86-64-call-frames.md)
 also supports `leaf(left, right) XOR (left XOR right)`. The
 [reusable-summary extension](x86-64-call-summaries.md) supports two calls with
-a live caller local and a callee-owned frame. The leaf supports the existing straight-line
+a live caller local and a callee-owned frame. The
+[straight-line composition extension](x86-64-call-composition.md) accepts
+arithmetic and computed/reordered arguments around repeated calls. The leaf supports the existing straight-line
 BitVec(64) arithmetic fragment. Both source identities come from elaborated
 terms; the certificate checks the caller/callee equation against the source.
 `--callee` explicitly opts that additional function into this initial driver.

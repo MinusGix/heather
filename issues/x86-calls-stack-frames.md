@@ -3,7 +3,7 @@ title: Certify x86 calls and concrete stack frames
 status: open
 labels: [compiler,x86,proofs]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-19
 ---
 
 ## Scope
@@ -38,3 +38,4 @@ return addresses; do not introduce an unrelated magical stack state.
 - 2026-09-07: First executable milestone works: a checked 334-byte ELF runs entry -> forwarding caller -> arithmetic leaf -> caller -> entry and exits with the source-result byte 197. Near CALL/RET use byte-memory return slots, two aligned calls, an owned RW/NX page, and a restored final RSP. The leaf contract certifies result, return target, memory preservation, and RBX/RBP/R12-R15 preservation. Focused kernel controls reject invalid stack premises, mutated CALL/return bytes, and executable-stack flags; broader call graphs and locals/spills remain open.
 - 2026-09-07: Final validation: full HEATHER_TEST_JOBS=3 scripts/test completed with 2489 passed, 0 failed, 5 ignored. The nested-call integration test built without a linker, checked the ELF/contract claims, and executed the result in 229.42 seconds under the ordinary 300-second CPU and 4 GiB limits. Direct execution and readelf/objdump inspection also confirmed the 334-byte image, backward CALL, two RETs, separate RX/RW mappings, and exit status 197.
 - 2026-09-07: Follow-up ownership: x86-call-memory-footprints owns callee write permissions and caller protection; x86-caller-stack-locals owns the next executable customer; named-abi-contracts owns named convention policies; x86-reusable-callee-certificates owns compositional function summaries. See [[x86-call-memory-footprints]], [[x86-caller-stack-locals]], [[named-abi-contracts]], and [[x86-reusable-callee-certificates]]. The validated baseline implementation is still pending its implementation commit; review closure when it lands.
+- 2026-09-19: Broader bounded source-call composition is owned by [[x86-source-call-composition]]; general call graphs, spills, and callable caller contracts remain here.

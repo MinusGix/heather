@@ -5,6 +5,8 @@ use heather_elab::function_ir_x86_lower::{Gpr, Instruction};
 use heather_elab::heather_emit::{Block, Declaration, Expr, Module, Parameter};
 use heather_elab::Elaborator;
 
+mod composition;
+
 const ENTRY: u64 = 0x4000e8;
 const HEADER: usize = 232;
 const STACK_TOP: u64 = 0x402000;
@@ -346,7 +348,9 @@ fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: us
 pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, caller: &str,
     requested_callee: &str, inputs: [u64; 2]) -> Result<Vec<u8>, String>
 {
-    let (callee, local, twice) = function_ir_source::reflect_call_plan(elab, caller).map_err(|e| e.to_string())?;
+    let legacy = function_ir_source::reflect_call_plan(elab, caller);
+    let composition = if legacy.is_err() { Some(function_ir_source::reflect_call_expression(elab, caller, requested_callee).map_err(|e| e.to_string())?) } else { None };
+    let (callee, local, twice) = legacy.unwrap_or_else(|_| (requested_callee.into(), false, false));
     if callee != requested_callee { return Err(format!("caller resolves to `{callee}`, not opted-in callee `{requested_callee}`")); }
     let leaf_prefix = format!("{prefix}_leaf");
     let mut registers = vec![Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11];
@@ -364,6 +368,7 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     if twice { caller_ops.extend([normal(Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax }), Op::Call("leaf_again".into())]); }
     if local { caller_ops.extend([Op::Load, normal(Instruction::XorRR { destination: Gpr::Rax, source: Gpr::R11 })]); }
     caller_ops.extend([mov(Gpr::R11, 8), normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::R11 }), Op::Ret]);
+    if let Some(expr) = &composition { caller_ops = composition::lower(expr)?; }
     // Place the leaf before the wrapper: its call deliberately exercises a negative rel32.
     let mut fragments = vec![
         Fragment { name: "entry".into(), ops: vec![mov(Gpr::Rsp, STACK_TOP), mov(Gpr::Rdi, inputs[0]), mov(Gpr::Rsi, inputs[1]),
@@ -393,11 +398,19 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
             [Expr::call(format!("{leaf_prefix}_value_{}", leaf.reflected.region.outputs[0].id), [Expr::name("width")]),
              Expr::call(format!("{leaf_prefix}_value_1"), [Expr::name("width")])])?;
     }
-    let left = if twice { format!("{callee}(left, right)") } else { "left".into() };
-    module.declaration(Declaration::theorem(format!("{prefix}_source_call"),
-        Expr::raw(format!("{caller}(left, right) = {}", if local { format!("bitvec::bxor(64, {callee}({left}, right), bitvec::bxor(64, left, right))") } else { format!("{callee}(left, right)") })), Block::expression(Expr::name("refl")))
-        .parameter(Parameter::explicit("left", Expr::raw("BitVec(64)")))
-        .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
+    if let Some(expr) = &composition {
+        module.declaration(Declaration::theorem(format!("{prefix}_source_call"),
+            Expr::equal(Expr::call(caller, [Expr::name("left"), Expr::name("right")]),
+                expr.expression(&callee, &[Expr::name("left"), Expr::name("right")])), Block::expression(Expr::name("refl")))
+            .parameter(Parameter::explicit("left", Expr::raw("BitVec(64)")))
+            .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
+    } else {
+        let left = if twice { format!("{callee}(left, right)") } else { "left".into() };
+        module.declaration(Declaration::theorem(format!("{prefix}_source_call"),
+            Expr::raw(format!("{caller}(left, right) = {}", if local { format!("bitvec::bxor(64, {callee}({left}, right), bitvec::bxor(64, left, right))") } else { format!("{callee}(left, right)") })), Block::expression(Expr::name("refl")))
+            .parameter(Parameter::explicit("left", Expr::raw("BitVec(64)")))
+            .parameter(Parameter::explicit("right", Expr::raw("BitVec(64)"))));
+    }
     byte_chain(module, &format!("{prefix}_code"), &layout.bytes);
     drop_chain(module, &format!("{prefix}_code"), layout.bytes.len());
     byte_chain(module, &format!("{prefix}_header"), &file[..HEADER]);
@@ -408,7 +421,7 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     thm(module, &format!("{prefix}_file_correct"), format!("{prefix}_file() = call_elf_bytes({prefix}_code(), {prefix}_image())"), "refl".into());
     let words = Words { prefix: prefix.into(), values: Default::default() };
     let mut trace = Module::default();
-    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local, twice)?;
+    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local, twice, composition.is_some())?;
     for value in words.values.into_inner() {
         fun(module, &format!("{prefix}_word_{value:x}"), "BitVec(64)", word(value));
     }
@@ -457,7 +470,7 @@ fn emit_leaf_summary(module: &mut Module, prefix: &str, leaf: &SourceX86Emission
 }
 
 fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str, inputs: [u64;2], leaf: &SourceX86Emission,
-    leaf_prefix: &str, layout: &Layout, local: bool, twice: bool) -> Result<(), String>
+    leaf_prefix: &str, layout: &Layout, local: bool, twice: bool, composed: bool) -> Result<(), String>
 {
     let word = |n| words.get(n);
     let state = |i| format!("{prefix}_state_{i}(gprs, flags, stack)");
@@ -478,12 +491,19 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
     let mut leaf_end = 0;
     let mut instances = Vec::new();
     let mut current_instance = prefix.to_string();
+    let mut ledger = composition::Ledger::default();
+    let mut call_inputs = [0; 2];
+    let mut call_entry = None;
     loop {
         let (op, encoding, instruction) = layout.placed.get(&pc).ok_or("execution escaped laid-out fragments")?;
         let i = trace.len();
         if matches!(op, Op::Syscall) { break; }
         if pc == layout.symbols["leaf"] || layout.symbols.get("leaf_again") == Some(&pc) { leaf_start = i; }
         let in_leaf = leaf_start != 0 && i < leaf_start + leaf_count;
+        if composed && in_leaf && i == leaf_start {
+            call_inputs = [ledger.value(Gpr::Rdi)?, ledger.value(Gpr::Rsi)?];
+            call_entry = Some([format!("sym({})", ledger.fact(Gpr::Rdi)?), format!("sym({})", ledger.fact(Gpr::Rsi)?)]);
+        }
         let before = state(i);
         let (after_expr, next) = match op {
             Op::Normal(instruction) => (format!("execute_normal(decoded_canonical({}), {before})", instruction.heather_expr().render()), pc + encoding.len() as u64),
@@ -714,11 +734,18 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             _ => {},
         }
         if matches!(op, Op::Ret) && i == leaf_end {
-            current_instance = if twice { format!("{prefix}_call_{leaf_start}") } else { prefix.into() };
-            let values = if instances.is_empty() { leaf_prefix.to_string() } else { format!("{leaf_prefix}_second") };
-            certify_callee_contract(module, words, prefix, &current_instance, &values, leaf, leaf_prefix, leaf_start, leaf_end, local, twice, instances.last().map(|(_, _, name): &(usize, usize, String)| name.as_str()));
+            current_instance = if twice || composed { format!("{prefix}_call_{leaf_start}") } else { prefix.into() };
+            let values = if composed {
+                let values = format!("{current_instance}_arguments");
+                super::elf::valuation_expressions(module, &values, leaf_prefix, &leaf.reflected.region,
+                    call_inputs.map(|n| Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(n)])))?;
+                values
+            } else if instances.is_empty() { leaf_prefix.to_string() } else { format!("{leaf_prefix}_second") };
+            certify_callee_contract(module, words, prefix, &current_instance, &values, leaf, leaf_prefix, leaf_start, leaf_end, local, twice, instances.last().map(|(_, _, name): &(usize, usize, String)| name.as_str()), call_entry.clone());
+            if composed { ledger.returned(module, words, prefix, i+1, &current_instance, &values, leaf, call_inputs)?; }
             instances.push((leaf_start, leaf_end, current_instance.clone()));
         }
+        if composed && !in_leaf { ledger.step(module, words, prefix, i, op)?; }
         trace.push(instruction.clone()); operations.push(op.clone()); pc = next;
         if trace.len() > 128 { return Err("call trace exceeds the initial bounded profile".into()); }
     }
@@ -743,6 +770,10 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
     state_decl(module, &format!("{prefix}_loaded_execution"),
         format!("CallImageExecution({prefix}_file(), {prefix}_code(), {prefix}_trace_0(), {}, {end})", state(0)),
         format!("CallImageExecution(image := {prefix}_image(), file_correct := {prefix}_file_correct(), initial_memory := refl, execution := {prefix}_execution_0(gprs, flags, stack))"), true);
+    if composed {
+        composition::finish(module, words, prefix, caller, inputs, n, pc, &ledger)?;
+        return Ok(());
+    }
     let caller_result = format!("{caller}({}, {})", word(inputs[0]), word(inputs[1]));
     let source_left = if twice { format!("{}({}, {})", leaf.reflected.source_name, word(inputs[0]), word(inputs[1])) } else { word(inputs[0]) };
     let result_start = instances.last().expect("callee instance").1 + 1;
@@ -813,7 +844,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
 }
 
 fn certify_callee_contract(module: &mut Module, words: &Words, prefix: &str, instance: &str, values: &str, leaf: &SourceX86Emission,
-    leaf_prefix: &str, leaf_start: usize, leaf_end: usize, local: bool, frame: bool, previous: Option<&str>) {
+    leaf_prefix: &str, leaf_start: usize, leaf_end: usize, local: bool, frame: bool, previous: Option<&str>, arguments: Option<[String; 2]>) {
     let state = |i| format!("{prefix}_state_{i}(gprs, flags, stack)");
     let begin = state(leaf_start); let returned = state(leaf_end+1);
     let count = leaf_end + 1 - leaf_start;
@@ -831,6 +862,7 @@ fn certify_callee_contract(module: &mut Module, words: &Words, prefix: &str, ins
     let left = previous.map_or_else(|| "refl".into(), |name|
         format!("trans({leaf_prefix}_denotes_source({leaf_prefix}_values(), {leaf_prefix}_entry_graph()), sym({name}_callee_result(gprs, flags, stack)))"));
     let right = previous.map_or_else(|| "refl".into(), |name| format!("sym({name}_callee_preserved_rsi(gprs, flags, stack))"));
+    let [left, right] = arguments.unwrap_or([left, right]);
     let entry = if frame {
         state_decl(module, &format!("{instance}_callee_return_outside"),
             format!("WordOutside(bitvec::sub(64, read_gpr(Rsp, {begin}.gprs), bitvec::ofNat(64, 8)), read_gpr(Rsp, {begin}.gprs))"),
