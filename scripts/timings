@@ -37,11 +37,16 @@ COLUMNS = {
     "delta":     (["eval_delta_steps"], 1),
     # Global rescoping (issues/refl-theorem-step-cost.md): nodes the
     # `shift_global` traversal copied, definition bodies rescoped per gate
-    # call, and `u^δ`/`U^δ` occurrences whose rules rescoped the binding's
-    # context and type. Work no fuel counter sees.
+    # call, and `u^δ`/`U^δ` occurrences whose rules read the binding's
+    # rescoped context and type. Work no fuel counter sees.
     "rescope":   (["shift_global_nodes"], 1),
     "unfolds":   (["delta_body_rescopes"], 1),
     "refs":      (["global_ref_rescopes"], 1),
+    # Signature *fills* against the `refs` that demanded them: the memo's hit
+    # rate, and — since only a telescope push makes one binding fill twice —
+    # how much Ψ-multiplicity is left to attack
+    # (issues/global-ref-rescope-per-occurrence.md).
+    "sigs":      (["global_sig_rescopes"], 1),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 

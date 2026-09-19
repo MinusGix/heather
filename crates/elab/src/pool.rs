@@ -9,7 +9,7 @@
 //!
 //! Nothing is shared with a worker but the frozen prefix and the item, both
 //! immutable and both behind `Arc`. Every piece of checker state — `Tc`, its
-//! conversion memo, the value arena, `BodyCache`, the bounds memo, the budget
+//! conversion memo, the value arena, `GlobalCache`, the bounds memo, the budget
 //! cells, both stats registries — is per-thread by construction, because it is
 //! either created inside `check_term` or declared `thread_local!`.
 //!

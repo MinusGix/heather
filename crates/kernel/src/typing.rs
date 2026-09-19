@@ -75,7 +75,7 @@ use crate::conv::{conv_local_ctx_cached_with_metrics, conv_type_cached_with_metr
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
-use crate::reduce::{whnf_type_delta, BodyCache, Defs};
+use crate::reduce::{whnf_type_delta, Defs, GlobalCache, Sig};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, CtxBase, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
@@ -195,7 +195,7 @@ fn check_global_bindings<'a>(
 fn binding_env(prefix: &GlobalCtx, univs: u32) -> Env {
     Env {
         psi: prefix.clone(),
-        bodies: Rc::new(BodyCache::new()),
+        cache: Rc::new(GlobalCache::new()),
         gamma: LocalCtx::nil(),
         layer: Layer::Prog,
         univs,
@@ -268,7 +268,7 @@ pub fn check_local_ctx(
 ) -> R {
     let env = Env {
         psi: psi.clone(),
-        bodies: Rc::new(BodyCache::new()),
+        cache: Rc::new(GlobalCache::new()),
         gamma: LocalCtx::nil(),
         layer,
         univs,
@@ -290,7 +290,7 @@ pub fn check_type(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -311,7 +311,7 @@ pub fn check_type_profiled(
     _metrics: &ValueMetrics,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -329,7 +329,7 @@ pub fn infer_type(
     fuel: u64,
 ) -> R<Level> {
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -351,7 +351,7 @@ pub fn check_term(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -374,7 +374,7 @@ pub fn check_term_profiled(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -393,7 +393,7 @@ pub fn infer_term(
     fuel: u64,
 ) -> R<(Type, Level)> {
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -415,7 +415,7 @@ pub fn check_local_subst(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), bodies: Rc::new(BodyCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -432,12 +432,13 @@ pub fn check_local_subst(
 #[derive(Clone)]
 struct Env {
     psi: GlobalCtx,
-    /// Rescoped definition bodies for **this** Ψ (`reduce::BodyCache`), shared
-    /// by every conversion and whnf query of one gate rather than rebuilt per
-    /// query (`docs/conversion-query-arena-pooling-design.md` §3). Inherited by
+    /// Rescoped definition bodies and binding signatures for **this** Ψ
+    /// (`reduce::GlobalCache`), shared by every conversion and whnf query of
+    /// one gate rather than rebuilt per query
+    /// (`docs/conversion-query-arena-pooling-design.md` §3). Inherited by
     /// every scope that keeps Ψ and rebuilt by the one that does not,
     /// `push_tele`.
-    bodies: Rc<BodyCache>,
+    cache: Rc<GlobalCache>,
     gamma: LocalCtx,
     layer: Layer,
     univs: u32,
@@ -467,10 +468,11 @@ impl Env {
         psi.extend(globals);
         Env {
             psi,
-            // Ψ changed, so a cached body's index denotes a different binding:
-            // keeping the old cache here would be a soundness bug, not a
-            // slowdown. Conversion's `push_tele` rebuilds for the same reason.
-            bodies: Rc::new(BodyCache::new()),
+            // Ψ changed, so a cached entry's index denotes a different
+            // binding: keeping the old cache here — body or signature alike —
+            // would be a soundness bug, not a slowdown. Conversion's
+            // `push_tele` rebuilds for the same reason.
+            cache: Rc::new(GlobalCache::new()),
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             univs: self.univs + tu,
@@ -823,7 +825,7 @@ impl Tc {
                 l,
                 self.fuel,
                 env.value_metrics.as_ref(),
-                Rc::clone(&env.bodies),
+                Rc::clone(&env.cache),
             );
             if let Some(metrics) = env.value_metrics.as_ref() {
                 let ns = started.elapsed().as_nanos() as u64;
@@ -848,7 +850,7 @@ impl Tc {
         #[cfg(not(feature = "value-metrics"))]
         {
             let result = conv_type_cached(
-                &env.psi, &env.gamma, at, expected, inferred, l, self.fuel, Rc::clone(&env.bodies),
+                &env.psi, &env.gamma, at, expected, inferred, l, self.fuel, Rc::clone(&env.cache),
             );
             note_conv_outcome(&result);
             result?;
@@ -883,7 +885,7 @@ impl Tc {
     /// exposing a former from behind a definition is p's business even
     /// while the term being checked is at c.
     fn whnf(&self, env: &Env, t: &Type) -> R<Type> {
-        whnf_type_delta(t, &env.gamma, Defs::transparent_cached(&env.psi, &env.bodies), self.fuel)
+        whnf_type_delta(t, &env.gamma, Defs::transparent_cached(&env.psi, &env.cache), self.fuel)
             .map_err(|_| TypeError::OutOfFuel)
     }
 
@@ -1119,8 +1121,11 @@ impl Tc {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let ctx = ctx.shift_global(var.0 + 1);
-                self.subst_ck(env, subst, &ctx)?;
+                let sig = env.cache.sig_or_insert(*var, || Sig {
+                    ctx: ctx.shift_global(var.0 + 1),
+                    ty: None,
+                });
+                self.subst_ck(env, subst, &sig.ctx)?;
                 Ok(level)
             }
             Type::CtxPi { level, body } => {
@@ -1255,11 +1260,11 @@ impl Tc {
                     ctx,
                     self.fuel,
                     env.value_metrics.as_ref(),
-                    Rc::clone(&env.bodies),
+                    Rc::clone(&env.cache),
                 )?;
                 #[cfg(not(feature = "value-metrics"))]
                 conv_local_ctx_cached(
-                    &env.psi, Layer::Prog, &pctx, ctx, self.fuel, Rc::clone(&env.bodies),
+                    &env.psi, Layer::Prog, &pctx, ctx, self.fuel, Rc::clone(&env.cache),
                 )?;
                 let e = env.push_global(GlobalBinding::Ty {
                     ctx: ctx.clone(),
@@ -1311,9 +1316,16 @@ impl Tc {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let ctx = ctx.shift_global(var.0 + 1);
-                let ty = ty.shift_global(var.0 + 1);
-                self.subst_ck(env, subst, &ctx)?;
+                let sig = env.cache.sig_or_insert(*var, || Sig {
+                    ctx: ctx.shift_global(var.0 + 1),
+                    ty: Some(Rc::new(ty.shift_global(var.0 + 1))),
+                });
+                // The binding form fixes the kind at this index, so a `Tm`
+                // lookup always finds the `Tm` signature.
+                let Some(ty) = sig.ty.as_ref() else {
+                    return Err(TypeError::WrongGlobalBinding(var.0));
+                };
+                self.subst_ck(env, subst, &sig.ctx)?;
                 Ok((ty.apply_local(subst), level))
             }
 
@@ -2575,7 +2587,7 @@ mod memo_tests {
     fn env(psi: GlobalCtx) -> Env {
         Env {
             psi,
-            bodies: Rc::new(BodyCache::new()),
+            cache: Rc::new(GlobalCache::new()),
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs: 0,
@@ -2654,9 +2666,77 @@ mod memo_tests {
         }
     }
 
+    /// A term *declaration* — no body, so nothing here is about δ — with the
+    /// given declared context and type.
+    fn decl(ctx: LocalCtx, ty: Type) -> GlobalBinding {
+        GlobalBinding::Tm {
+            ctx,
+            layer: Layer::Var,
+            ty: Rc::new(ty),
+            level: Level::Zero,
+            body: None,
+        }
+    }
+
+    fn global_tm(v: u32) -> Term {
+        Term::GlobalTm {
+            var: GlobalVar(v),
+            subst: LocalSubst {
+                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                terms: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn a_telescope_push_rebuilds_the_signature_cache() {
+        // The body cache's invariant, for the other half of `Env::cache`: the
+        // binding **signature** — its declared Δ and type, rescoped into the
+        // ambient Ψ — that the `u^δ` rules read off every occurrence. After a
+        // push, index 1 denotes a different binding with a different
+        // signature, so an entry surviving the push is a wrong-type (and
+        // wrong-Δ) soundness bug, not a slowdown. Conversion's half of the
+        // invariant is the body test below: the two facts share one cache and
+        // one rebuild, by construction.
+        let tc = Tc::new(DEFAULT_FUEL);
+
+        // The declared *type*: `Nat` at index 1 before the push, `Unit⁰` after.
+        let outer = env(GlobalCtx::new(vec![
+            decl(LocalCtx::nil(), Type::Nat),
+            decl(LocalCtx::nil(), Type::Unit { level: Level::Zero }),
+        ]));
+        let u1 = global_tm(1);
+        assert_eq!(tc.tm_infer(&outer, &u1).map(|(t, _)| t), Ok(Type::Nat));
+        let pushed = outer.push_global(GlobalBinding::Ctx);
+        assert_eq!(
+            tc.tm_infer(&pushed, &u1).map(|(t, _)| t),
+            Ok(Type::Unit { level: Level::Zero }),
+            "the signature cache survived a telescope push",
+        );
+        // And index 2 is the outer binding again, now needing `shift_global(3)`.
+        assert_eq!(tc.tm_infer(&pushed, &global_tm(2)).map(|(t, _)| t), Ok(Type::Nat));
+
+        // The declared *context*, the other field of the signature: `·` at
+        // index 1 before the push and `(·, x : Nat)` after, so the length-zero
+        // substitution above must stop being accepted.
+        let mut one = LocalCtx::nil();
+        one.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
+        let outer = env(GlobalCtx::new(vec![
+            decl(LocalCtx::nil(), Type::Nat),
+            decl(one, Type::Nat),
+        ]));
+        assert_eq!(tc.tm_infer(&outer, &u1).map(|(t, _)| t), Ok(Type::Nat));
+        let pushed = outer.push_global(GlobalBinding::Ctx);
+        assert_eq!(
+            tc.tm_infer(&pushed, &u1).map(|(t, _)| t),
+            Err(TypeError::SubstMismatch),
+            "the signature cache's declared context survived a telescope push",
+        );
+    }
+
     #[test]
     fn a_telescope_push_rebuilds_the_body_cache() {
-        // `Env::bodies` is keyed by a Ψ-index, and `push_tele` is the one
+        // `Env::cache` is keyed by a Ψ-index, and `push_tele` is the one
         // operation that makes those keys mean something else: after a push,
         // index 1 below denotes the *inner* definition, not the outer one. A
         // cache shared across the push would answer with the body it cached

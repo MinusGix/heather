@@ -74,7 +74,7 @@ use std::sync::Arc as Rc;
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
-use crate::reduce::{BodyCache, Defs, NATIVE_DEPTH_LIMIT};
+use crate::reduce::{Defs, GlobalCache, Sig, NATIVE_DEPTH_LIMIT};
 use crate::term::{
     Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
@@ -197,10 +197,10 @@ pub fn conv_local_ctx(
 // -- entry points that borrow the caller's body cache ------------------------
 //
 // The four below are the entries `typing.rs` uses. They differ from the public
-// ones above in one argument: a [`BodyCache`] the *checker* owns, so the
+// ones above in one argument: a [`GlobalCache`] the *checker* owns, so the
 // rescoped bodies a gate's definitions unfold to survive from one conversion
 // query to the next instead of being rebuilt per query. The cache belongs to
-// one Ψ (see [`BodyCache`]), and the caller is the one that knows its Ψ is the
+// one Ψ (see [`GlobalCache`]), and the caller is the one that knows its Ψ is the
 // same — `typing::Env` rebuilds it exactly where conversion's own `push_tele`
 // does. `docs/conversion-query-arena-pooling-design.md` §3.
 
@@ -214,11 +214,11 @@ pub(crate) fn conv_type_cached(
     b: &Type,
     level: &Level,
     fuel: u64,
-    bodies: Rc<BodyCache>,
+    cache: Rc<GlobalCache>,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let arena = ValueArena::new();
-    let env = Env::new_with(&arena, psi, gamma, layer, bodies);
+    let env = Env::new_with(&arena, psi, gamma, layer, cache);
     Conv::<Values>::new(fuel, psi).ty_root(&env, a, b, level)
 }
 
@@ -233,11 +233,11 @@ pub(crate) fn conv_type_cached_with_metrics(
     level: &Level,
     fuel: u64,
     metrics: Option<&ValueMetrics>,
-    bodies: Rc<BodyCache>,
+    cache: Rc<GlobalCache>,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
-    let env = Env::new_with(&arena, psi, gamma, layer, bodies);
+    let env = Env::new_with(&arena, psi, gamma, layer, cache);
     Conv::<Values>::new(fuel, psi).ty_root(&env, a, b, level)
 }
 
@@ -248,11 +248,11 @@ pub(crate) fn conv_local_ctx_cached(
     a: &LocalCtx,
     b: &LocalCtx,
     fuel: u64,
-    bodies: Rc<BodyCache>,
+    cache: Rc<GlobalCache>,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let arena = ValueArena::new();
-    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, bodies);
+    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, cache);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -264,11 +264,11 @@ pub(crate) fn conv_local_ctx_cached_with_metrics(
     b: &LocalCtx,
     fuel: u64,
     metrics: Option<&ValueMetrics>,
-    bodies: Rc<BodyCache>,
+    cache: Rc<GlobalCache>,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
-    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, bodies);
+    let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, cache);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -365,10 +365,10 @@ struct Env<'v> {
     /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
     /// changes Ψ, and it is a layer-m path.
     psi: Rc<GlobalCtx>,
-    /// Rescoped definition bodies for **this** Ψ (`reduce::BodyCache`).
-    /// Shared with every scope that shares the Ψ and rebuilt by the one
-    /// operation that does not — `push_tele`.
-    bodies: Rc<BodyCache>,
+    /// Rescoped definition bodies and binding signatures for **this** Ψ
+    /// (`reduce::GlobalCache`). Shared with every scope that shares the Ψ and
+    /// rebuilt by the one operation that does not — `push_tele`.
+    cache: Rc<GlobalCache>,
     /// Shared, not copied: a binder push clones the whole scope, and
     /// [`crate::term::CtxEntries`] is a spine, so extending Γ costs one cell
     /// and cloning this field costs a refcount bump. It was a `Vec`, and
@@ -459,23 +459,23 @@ impl<'v> Env<'v> {
         gamma: &LocalCtx,
         layer: Layer,
     ) -> Env<'v> {
-        Env::new_with(arena, psi, gamma, layer, Rc::new(BodyCache::new()))
+        Env::new_with(arena, psi, gamma, layer, Rc::new(GlobalCache::new()))
     }
 
-    /// As [`Env::new`], but over a [`BodyCache`] the caller keeps: the checker
+    /// As [`Env::new`], but over a [`GlobalCache`] the caller keeps: the checker
     /// owns one per gate, so the rescoping survives the query that paid for it.
     fn new_with(
         arena: &'v ValueArena<'v>,
         psi: &GlobalCtx,
         gamma: &LocalCtx,
         layer: Layer,
-        bodies: Rc<BodyCache>,
+        cache: Rc<GlobalCache>,
     ) -> Env<'v> {
         let (rho, vtys) = value_scope(arena, gamma);
         Env {
             arena,
             psi: Rc::new(psi.clone()),
-            bodies,
+            cache,
             gamma: gamma.clone(),
             layer,
             rho,
@@ -539,7 +539,7 @@ impl<'v> Env<'v> {
         Env {
             arena: self.arena,
             psi,
-            bodies: Rc::new(BodyCache::new()),
+            cache: Rc::new(GlobalCache::new()),
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             rho: value::shift::env(&self.rho, o),
@@ -685,7 +685,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// not assumed from the call sites.
     fn defs<'a>(&self, env: &'a Env<'v>) -> Defs<'a> {
         if self.has_defs && env.layer.computes() {
-            Defs::transparent_cached(&env.psi, &env.bodies)
+            Defs::transparent_cached(&env.psi, &env.cache)
         } else {
             Defs::opaque()
         }
@@ -1131,8 +1131,11 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let ctx = ctx.shift_global(u1.0 + 1);
-                self.subst(env, d1, d2, &ctx)?;
+                let sig = env.cache.sig_or_insert(*u1, || Sig {
+                    ctx: ctx.shift_global(u1.0 + 1),
+                    ty: None,
+                });
+                self.subst(env, d1, d2, &sig.ctx)?;
                 Ok(level)
             }
             (
@@ -1772,11 +1775,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let ctx = ctx.shift_global(u1.0 + 1);
-                let ty = Rc::new(ty.shift_global(u1.0 + 1));
-                self.subst(env, d1, d2, &ctx)?;
+                let sig = env.cache.sig_or_insert(*u1, || Sig {
+                    ctx: ctx.shift_global(u1.0 + 1),
+                    ty: Some(Rc::new(ty.shift_global(u1.0 + 1))),
+                });
+                // The binding form fixes the kind at this index, so a `Tm`
+                // lookup always finds the `Tm` signature; the guard is a
+                // kernel that reports rather than panics on a broken Ψ.
+                let Some(ty) = sig.ty.as_ref() else { return Err(NC) };
+                self.subst(env, d1, d2, &sig.ctx)?;
                 let n = D::subst_len(d1);
-                Ok((D::apply_subst_ty(self, env, d1, n, &ty)?, level))
+                Ok((D::apply_subst_ty(self, env, d1, n, ty)?, level))
             }
             (
                 TmView::ElimNat { level: v1, motive: m1, base: z1, step: s1, scrut: n1 },

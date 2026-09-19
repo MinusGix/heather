@@ -492,7 +492,7 @@ paper too).
   O(1) instead of a spine walk, and a second visit to the same unfolding is
   free. The `has_defs` gate survives. The rescoping `shift_global(v + 1)`
   that every unfold used to recompute is memoized per `GlobalVar` in a
-  `reduce::BodyCache` owned beside the Ψ it belongs to (7.8% of a routine
+  `reduce::GlobalCache` owned beside the Ψ it belongs to (7.8% of a routine
   `heather check lib/ir_v1.hthr`) — and on the **value** path is not
   performed at all: the machine evaluates the body *as stored*, under a
   global-index offset carried by the closure's environment, so a definition
@@ -503,7 +503,15 @@ paper too).
   the eager things — a `box`'s payload, a `ctx`, a recursor table, the
   rewriter's own δ — on one side of every β. The closure's identity includes
   the offset, so two readings of one body at two Ψ depths are two objects to
-  every memo.
+  every memo. The **signature** side of `u^δ` shares that cache: the
+  `u^δ`/`U^δ` rules of conversion and of the syntactic checker read the
+  binding's declared Δ, and at a term binding its declared type, rescoped into
+  the ambient Ψ — the same `shift_global(v + 1)`, and likewise a function of
+  the index alone — so `GlobalCache` memoizes it per `GlobalVar` beside the
+  body. Both halves are rebuilt by `push_tele`, the one operation that makes
+  an index denote a different binding; an entry that survived it would answer
+  about the wrong binding, which is why the rebuild is a soundness condition
+  and not a cache policy.
 - **Fuel is unchanged in meaning and shared.** One budget pays for both
   reduction steps and comparison nodes, so the checker stays total on
   ill-typed input; the evaluator spends from the checker's account and hands
@@ -703,7 +711,7 @@ same tree; Ψ is persistent (sealed chunks plus a bounded tail), so a worker's
 snapshot is an `Arc` clone that the elaborator's next append copies away from
 rather than mutates under it. Every piece of checker state is per-call or
 per-thread by construction — `Tc`, its conversion memo, the `ValueArena`,
-`BodyCache` and the diagnostic stacks are created inside `check_term`; the
+`GlobalCache` and the diagnostic stacks are created inside `check_term`; the
 bounds memo, the `fmt.rs` budget cells, the `checks.rs` sampling counter and
 `stats.rs` are `thread_local!`. Nothing is shared across workers but
 immutable terms behind atomic refcounts.

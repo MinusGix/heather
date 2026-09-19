@@ -89,40 +89,71 @@ pub const NATIVE_DEPTH_LIMIT: u32 = 1024;
 #[derive(Clone, Copy)]
 pub struct Defs<'a> {
     psi: Option<&'a GlobalCtx>,
-    bodies: Option<&'a BodyCache>,
+    cache: Option<&'a GlobalCache>,
 }
 
-/// Rescoped definition bodies, memoized by [`GlobalVar`].
+/// A binding's **signature**, rescoped from its own Ψ-prefix into the ambient
+/// Ψ: the declared local context, and — for a term binding — its declared
+/// type. What the `u^δ` / `U^δ` rules of [`crate::conv`] and [`crate::typing`]
+/// read off a global occurrence, and all they read.
+pub(crate) struct Sig {
+    pub(crate) ctx: LocalCtx,
+    pub(crate) ty: Option<Rc<Type>>,
+}
+
+/// Rescoped per-Ψ facts about a global binding, memoized by [`GlobalVar`]:
+/// its definition body, and its signature.
 ///
-/// [`Defs::body`] rescopes a body with `shift_global(v + 1)`, and that
-/// rescoping is a function of the index alone — not of the occurrence, not
-/// of the δ that occurrence carries. A cache is therefore sound *for one
-/// Ψ*, which is why it is owned beside the Ψ it belongs to (`conv::Env`)
-/// and rebuilt whenever a telescope push changes Ψ, rather than being a
-/// global table keyed by an index that means different things in different
-/// scopes.
+/// Both are `shift_global(v + 1)` of something stored in Ψ, and both are a
+/// function of the index alone — not of the occurrence, not of the δ that
+/// occurrence carries. A cache is therefore sound *for one Ψ*, which is why
+/// it is owned beside the Ψ it belongs to (`conv::Env`, `typing::Env`) and
+/// rebuilt whenever a telescope push changes Ψ, rather than being a global
+/// table keyed by an index that means different things in different scopes.
+/// An entry surviving a push would answer about the wrong binding: a
+/// soundness bug, not a slowdown.
 #[derive(Default)]
-pub struct BodyCache(std::cell::RefCell<Vec<Option<Rc<Term>>>>);
+pub struct GlobalCache {
+    bodies: std::cell::RefCell<Vec<Option<Rc<Term>>>>,
+    sigs: std::cell::RefCell<Vec<Option<Rc<Sig>>>>,
+}
 
-impl BodyCache {
-    pub fn new() -> BodyCache {
-        BodyCache::default()
+impl GlobalCache {
+    pub fn new() -> GlobalCache {
+        GlobalCache::default()
     }
 
-    fn get_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Term) -> Rc<Term> {
-        let i = v.0 as usize;
-        let mut slots = self.0.borrow_mut();
-        if slots.len() <= i {
-            slots.resize(i + 1, None);
-        }
-        if let Some(t) = &slots[i] {
-            return Rc::clone(t);
-        }
-        // `build` reads only Ψ, never the cache, so no re-entrant borrow.
-        let t = Rc::new(build());
-        slots[i] = Some(Rc::clone(&t));
-        t
+    fn body_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Term) -> Rc<Term> {
+        let mut slots = self.bodies.borrow_mut();
+        slot_or_insert(&mut slots, v, || Rc::new(build()))
     }
+
+    /// The rescoped signature of `v`, built on the first occurrence in this Ψ.
+    /// `build` reads only Ψ, never the cache, so there is no re-entrant borrow.
+    pub(crate) fn sig_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Sig) -> Rc<Sig> {
+        let mut slots = self.sigs.borrow_mut();
+        slot_or_insert(&mut slots, v, || {
+            crate::stats::global_sig_rescopes(1);
+            Rc::new(build())
+        })
+    }
+}
+
+fn slot_or_insert<T>(
+    slots: &mut Vec<Option<Rc<T>>>,
+    v: GlobalVar,
+    build: impl FnOnce() -> Rc<T>,
+) -> Rc<T> {
+    let i = v.0 as usize;
+    if slots.len() <= i {
+        slots.resize_with(i + 1, || None);
+    }
+    if let Some(t) = &slots[i] {
+        return Rc::clone(t);
+    }
+    let t = build();
+    slots[i] = Some(Rc::clone(&t));
+    t
 }
 
 impl<'a> Defs<'a> {
@@ -130,18 +161,18 @@ impl<'a> Defs<'a> {
     /// ch. 06's reduction relation. The right choice at layer c, and the
     /// meaning of the Ψ-free [`step_term`]/[`whnf_term`] entry points.
     pub fn opaque() -> Defs<'a> {
-        Defs { psi: None, bodies: None }
+        Defs { psi: None, cache: None }
     }
 
     /// Definitions of `psi` unfold. Only sound at a computing layer.
     pub fn transparent(psi: &'a GlobalCtx) -> Defs<'a> {
-        Defs { psi: Some(psi), bodies: None }
+        Defs { psi: Some(psi), cache: None }
     }
 
-    /// [`Defs::transparent`] with a [`BodyCache`] to memoize the rescoping
+    /// [`Defs::transparent`] with a [`GlobalCache`] to memoize the rescoping
     /// in. The cache must belong to this exact `psi`.
-    pub fn transparent_cached(psi: &'a GlobalCtx, bodies: &'a BodyCache) -> Defs<'a> {
-        Defs { psi: Some(psi), bodies: Some(bodies) }
+    pub fn transparent_cached(psi: &'a GlobalCtx, cache: &'a GlobalCache) -> Defs<'a> {
+        Defs { psi: Some(psi), cache: Some(cache) }
     }
 
     /// The body of `v`, rescoped from its Ψ-prefix into the ambient Ψ (the
@@ -158,8 +189,8 @@ impl<'a> Defs<'a> {
             crate::stats::delta_body_rescopes(1);
             t.shift_global(v.0 + 1)
         };
-        Some(match self.bodies {
-            Some(c) => c.get_or_insert(v, rescope),
+        Some(match self.cache {
+            Some(c) => c.body_or_insert(v, rescope),
             None => Rc::new(rescope()),
         })
     }

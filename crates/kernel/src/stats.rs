@@ -123,10 +123,17 @@ counters! {
     /// (`issues/refl-theorem-step-cost.md`: the copying a fuel pin cannot
     /// see).
     shift_global_nodes,
-    /// Definition bodies rescoped by `Defs::body` — one per `BodyCache`
-    /// fill, i.e. per (definition, gate call) pair that unfolded it.
+    /// Definition bodies rescoped by `Defs::body` — one per `GlobalCache`
+    /// body fill, i.e. per (definition, gate call) pair that unfolded it.
     delta_body_rescopes,
-    /// Occurrences of `u^δ` / `U^δ` whose typing or conversion rule rescoped
-    /// the binding's declared context and type into the ambient Ψ.
+    /// Occurrences of `u^δ` / `U^δ` whose typing or conversion rule read the
+    /// binding's declared context and type rescoped into the ambient Ψ. One
+    /// per **occurrence**: the rescoping itself is memoized per (Ψ,
+    /// `GlobalVar`) in `reduce::GlobalCache`, so this is demand and
+    /// `shift_global_nodes` is the work it caused.
     global_ref_rescopes,
+    /// Binding signatures actually rescoped — one per `GlobalCache` signature
+    /// fill, i.e. per (binding, Ψ) pair some occurrence demanded. The work
+    /// behind `global_ref_rescopes`, which is the demand.
+    global_sig_rescopes,
 }

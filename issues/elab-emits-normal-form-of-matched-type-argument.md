@@ -69,7 +69,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
     step of `decoded` in `Tc::conv_ty` turns them into hits. It is a kernel
     conversion rule, so it needs this area's protocol (design pass, fresh before
     table, bench gate) and it is exactly the kind of cleverness
-    [[verified-fancy-kernel-later]] says to weigh — not something to slip in.
+    [[kernel-acceleration-policy]] says to weigh — not something to slip in.
   - `probes/str/p10.hthr` is the cheapest reproduction this family has: 90 lines,
     both sides in one process, no showcase. Where the prior rounds needed
     `complete_post` inside a 500-line file, the axis is now one declaration

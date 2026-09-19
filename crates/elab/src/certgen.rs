@@ -2995,9 +2995,9 @@ struct Reader<'a, 'v> {
     /// Every δ-unfold rescopes the callee's whole body with `shift_global`,
     /// and one transcription unfolds the same handful of library globals
     /// thousands of times; the cache is owned beside the Ψ it belongs to and
-    /// dies with the read, which is the soundness condition `BodyCache`
+    /// dies with the read, which is the soundness condition `GlobalCache`
     /// states for itself.
-    bodies: reduce::BodyCache,
+    cache: reduce::GlobalCache,
     /// Instructions read so far. The reader walks a value produced by a
     /// *library file*, which may be wrong in any way at all, so its own
     /// traversal is budgeted like everything else here: past the budget it
@@ -3016,7 +3016,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         Reader {
             psi,
             arena,
-            bodies: reduce::BodyCache::new(),
+            cache: reduce::GlobalCache::new(),
             budget: std::cell::Cell::new(READ_BUDGET),
         }
     }
@@ -3039,7 +3039,7 @@ impl<'v> Reader<'_, 'v> {
     fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
         let mut ev = Eval::new(
             READ_FUEL,
-            Defs::transparent_cached(self.psi, &self.bodies),
+            Defs::transparent_cached(self.psi, &self.cache),
             CtxBase::Nil,
             self.arena,
         );
