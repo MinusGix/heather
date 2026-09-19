@@ -109,6 +109,15 @@ is what makes a value-parameterized record a first-class `Val -> Type` value
 (`docs/record-type-values.md`). Everything in this section is what runs there,
 including the arity message — it is the same `valparam_args`.
 
+Since 2026-09-19 a **prefix** of the telescope is enough, whenever the expected
+type is a function type whose ultimate codomain is a universe: `Grammar(level)`
+against `(source) -> Cursor<T>(source) -> … -> Type` η-expands over the value
+parameters left over and lowers the saturated spelling through this same
+handler (`docs/record-type-partial-application.md`). So a record used "as a
+relation" needs no wrapper `fn`, and the arity message there is the one that does
+**not** come from `valparam_args`: it counts the telescope against the arrows
+the expected type supplies.
+
 ---
 
 ## 4. Construction: checking position supplies the parameters

@@ -72,3 +72,36 @@ has to step over.
   than 8 GiB cold and its semantic image is 483 M nodes, so it is not in the suite
   ([[elaborator-canonical-type-spelling]]). Records add Σ layers to exactly the
   term family measured at 27× there. Measure the cold check before and after.
+- 2026-09-19: Landed the language half: a declared type former, partially applied, checks
+  against an expected function type whose ultimate codomain is a universe
+  (`docs/record-type-partial-application.md`, `check_type_former_value` in
+  `crates/elab/src/inductive.rs`, eight tests in
+  `crates/elab/tests/record_type_partial_application.rs`). `takes_relation(Grammar)`
+  and `Certified(Grammar(level))` both check, so a named-field spec relation no
+  longer costs a wrapper.
+
+  Small round, as the two siblings predicted: the disambiguator is
+  [[record-types-as-type-valued-functions]]'s "no constructor inhabits a
+  universe", one arrow further in — no record type is a `Π` either, so an
+  expected Π-spine ending in `Ty l` can only want the type former. The arm walks
+  to the end of the spine before committing, and commits only there, which is
+  what lets the arity mismatch be measured against the value-parameter telescope
+  instead of surfacing as the constructor's field count. Everywhere else it
+  declines and the constructor arms keep every reading they had — the control is
+  `Two(1)` at `Nat -> Two(n, m)`, which is still field `a` written and field `b`
+  η-expanded, in the same file as the type-former reading of the same record.
+
+  **The showcase wrappers are still there, on purpose, and this round found a
+  specific reason they should be removed under measurement rather than as an
+  edit.** `GrammarSpec(level)` needs no η-expansion at all: a global's term is a
+  reference, so passing it partially applied is a δ-stuck *neutral spine* whose
+  head conversion compares before it unfolds. What the new arm produces is a λ
+  over the *inlined* record lowering, and two of those compare structurally, Σ
+  tower and all — the same trade [[record-types-as-type-valued-functions]] noted
+  from the other side. On `docs/showcase/calc_text.hthr`, whose image is 483 M
+  nodes and whose cold check needs more than 8 GiB
+  ([[elaborator-canonical-type-spelling]]), that is a measurement. It belongs
+  with the showcase half the 09-19 entry above already argued should land first:
+  make `RunSpec` and `OpRun` records, then remove all five wrappers at once and
+  measure the cold check before and after. Filed as
+  [[showcase-spec-relations-as-records]].

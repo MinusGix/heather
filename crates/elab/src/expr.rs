@@ -442,7 +442,7 @@ impl<'a> ExprElab<'a> {
         }))
     }
 
-    fn quote_type_at(
+    pub(crate) fn quote_type_at(
         elab: &impl UniverseElab,
         cx: &Cx,
         elaborated: &Type,

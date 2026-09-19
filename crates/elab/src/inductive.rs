@@ -1237,6 +1237,136 @@ impl Elaborator {
             .map(Some)
     }
 
+    /// A declared type former **partially applied**, checked against an
+    /// expected function type whose ultimate codomain is a universe
+    /// (`docs/record-type-partial-application.md` §2). This is
+    /// [`Self::build_ctor_value`]'s η-expansion pointed at the *type* reading:
+    ///
+    /// ```text
+    /// D<ā>(v₁ … v_j)  ⇐  Π(x_{j+1} : A_{j+1}). … Π(x_m : A_m). Ty l
+    ///     ⇝  λ x_{j+1} … λ x_m. ⌜D<ā>(v₁ … v_j, x_{j+1} … x_m)⌝
+    /// ```
+    ///
+    /// `None` — not an error — for every shape that is not this one, so every
+    /// reading the constructor arms have today is untouched. The disambiguator
+    /// is `docs/record-type-values.md` §2.1's, one arrow further in: no
+    /// constructor inhabits a universe, and no record type is a `Π`, so an
+    /// expected Π-spine that ends in `Ty l` can only want the type former.
+    /// Committing on exactly that shape is what lets an arity mismatch be
+    /// diagnosed against the **value-parameter** telescope here rather than
+    /// reported as the constructor's field count.
+    pub(crate) fn check_type_former_value(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        span: Span,
+    ) -> R<Option<Term>> {
+        let (head, args) = match &e.kind {
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if named.is_empty() => (&**head, args.as_slice()),
+            _ => (e, &[][..]),
+        };
+        let Some((name, _)) = named_head(head) else {
+            return Ok(None);
+        };
+        // Registry first, `shadowed` second: this guard sits on the checking
+        // path of every application that reached the constructor arms, and a
+        // miss in the name table is a hash lookup where the shadowing test is
+        // a walk of the context.
+        let Some(ind) = self.lookup_inductive(name).cloned() else {
+            return Ok(None);
+        };
+        // Saturated (or over-applied) is somebody else's case: the type
+        // position already handles it, and there is nothing to abstract.
+        let Some(missing) = ind
+            .valparams
+            .len()
+            .checked_sub(args.len())
+            .filter(|&m| m > 0)
+        else {
+            return Ok(None);
+        };
+        if self.shadowed(cx, name) {
+            return Ok(None);
+        }
+        // Walk the expected Π-spine to its ultimate codomain, binder by
+        // binder — a *dependent* domain (`Cursor<T>(source)`, which is the
+        // shape the showcase's relation slots have) is only readable under
+        // the ones before it. Nothing is committed during the walk: a spine
+        // that does not end in a universe belongs to another reading.
+        let mut pcx = cx.clone();
+        let mut ty = expected.clone();
+        let mut peeled: Vec<(String, Level, Level, Rc<Type>)> = Vec::new();
+        let want = loop {
+            match self.whnf(&pcx, &ty, span)? {
+                Type::Pi {
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                } => {
+                    // `#` marks an elaborator-introduced binder: unspellable,
+                    // so it captures nothing the user wrote.
+                    let binder = format!("#ta{}", peeled.len());
+                    pcx.push(binder.clone(), (*dom).clone(), dom_level.clone());
+                    ty = (*cod).clone();
+                    peeled.push((binder, dom_level, cod_level, dom));
+                }
+                Type::Ty(want) => break want,
+                _ => return Ok(None),
+            }
+        };
+        if peeled.len() != missing {
+            return err(
+                format!(
+                    "`{name}` needs {missing} more value argument(s) to be a type, but \
+                     the expected function type provides {} before its `Type`",
+                    peeled.len()
+                ),
+                span,
+            );
+        }
+        // The extra arguments are *surface* variables, so the saturated
+        // spelling is lowered by `try_valparam_ty` exactly as a written
+        // `D(v̄, x̄)` in type position is — no second copy of the instance
+        // lowering (`docs/record-type-values.md` §2).
+        let mut vargs = args.to_vec();
+        vargs.extend(peeled.iter().map(|(binder, ..)| Expr {
+            kind: ExprKind::Var(binder.clone()),
+            span,
+        }));
+        let sat = Expr {
+            kind: ExprKind::App {
+                head: Box::new(head.clone()),
+                args: vargs,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let (lowered, level) = self
+            .try_valparam_ty(&pcx, &sat, span)?
+            .expect("a declared type former with value parameters lowers here");
+        let mut t =
+            crate::expr::ExprElab::quote_type_at(self, &pcx, &lowered, &level, &want, span)?;
+        for (_, dom_level, cod_level, dom) in peeled.into_iter().rev() {
+            t = Term::Lam {
+                dom_level,
+                cod_level,
+                dom,
+                body: Rc::new(t),
+            };
+        }
+        Ok(Some(t))
+    }
+
     /// The type arguments of `D(v̄)`, recovered from the value arguments'
     /// own types (issues/exists-type-arg-not-inferred.md).
     ///

@@ -160,6 +160,15 @@ callee that has implicit parameters, which `apply_implicit` *infers*. That gap
 is real and stays open; it is a symptom of `apply_implicit` inferring where it
 could check, which belongs to `issues/elab-unifier-completeness.md`.
 
+One last boundary, drawn after this round: the universe row above extends
+**one arrow further in** as of 2026-09-19. A record type partially applied
+against an expected `Π` whose *ultimate* codomain is a universe η-expands over
+its remaining **value parameters** rather than over the constructor's fields
+(`docs/record-type-partial-application.md`). That arm, like the universe arm,
+runs before the constructor arms, and it declines wherever the spine ends at
+the record itself — which is every case §2 owns, the partial application of
+§5.2 included.
+
 ---
 
 ## 4. Acceptance checklist

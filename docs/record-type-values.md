@@ -3,7 +3,10 @@
 Status: **landed**, 2026-08-01. Tracking issue:
 `issues/record-types-as-type-valued-functions.md`. Sibling round:
 `docs/constructor-function-values.md` — same disambiguator, pointed the other
-way. Prerequisites: `docs/types-as-expressions.md` (a `fn` returning `Type` is
+way. Follow-on: `docs/record-type-partial-application.md` (2026-09-19) takes
+§2's routing one arrow further, so a *prefix* of the value-parameter telescope
+is enough and the wrapper `fn` this document's §1 writes by hand is no longer
+needed. Prerequisites: `docs/types-as-expressions.md` (a `fn` returning `Type` is
 an ordinary `fn`) and `docs/surface-value-parameters.md` §3 (`D(v̄)` in type
 position).
 

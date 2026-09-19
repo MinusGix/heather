@@ -4456,6 +4456,20 @@ impl Elaborator {
                 self.expr_elab()
                     .check_at_universe(self, cx, e, want, e.span)
             }
+            // A declared type former, partially applied, against an expected
+            // function type that ends in a universe: η-expand into the
+            // type-valued function the remaining value parameters describe
+            // (docs/record-type-partial-application.md §2). Sits here for the
+            // same reason the universe arm above does — the reading has to be
+            // chosen before the constructor arms see the same name — and
+            // declines quietly for every other shape.
+            _ if matches!(
+                &e.kind,
+                ExprKind::Var(_) | ExprKind::TyApp { .. } | ExprKind::App { .. }
+            ) && let Some(term) = self.check_type_former_value(cx, e, expected, e.span)? =>
+            {
+                Ok(term)
+            }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).

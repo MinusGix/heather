@@ -31,7 +31,7 @@ tracker got its ranking.
 Scope note. The `⟨⟩` and `calc` conversions are pure surface and carry no term
 growth. Do **not** bundle them with the other readability change these files want
 — turning the `RunSpec`/`OpRun` ∧ towers into named records
-([[record-type-partial-application]], 2026-09-19) — because that one adds Σ layers
+([[showcase-spec-relations-as-records]]) — because that one adds Σ layers
 to a file that already needs more than 8 GiB cold and cannot be cached
 ([[elaborator-canonical-type-spelling]]). Separate rounds, so a cold-check
 regression has one candidate cause.
