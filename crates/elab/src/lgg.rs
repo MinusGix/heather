@@ -108,6 +108,20 @@ impl fmt::Display for Mismatch {
                 self.sides.0, self.sides.1
             );
         }
+        // `{:#}` is the *phrase* — just the position, for a caller that is
+        // already mid-sentence (`crate::Elaborator::cong_invisible_difference`).
+        if f.alternate() {
+            if self.path.is_empty() {
+                return write!(f, "at the root, `{}` against `{}`", self.sides.0, self.sides.1);
+            }
+            return write!(
+                f,
+                "under `{}` at `{}` against `{}`",
+                self.path.join(" ▸ "),
+                self.sides.0,
+                self.sides.1
+            );
+        }
         write!(f, "cannot generalize: the goal's two sides agree ")?;
         if self.path.is_empty() {
             write!(f, "nowhere — they differ at the root, ")?;
@@ -146,6 +160,7 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
     let mut lgg = Lgg {
         s: s.clone(),
         t: t.clone(),
+        match_witness: true,
         witness: Vec::new(),
         path: Vec::new(),
     };
@@ -156,9 +171,43 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
     lgg.tm(&x.shift_local(1), &y.shift_local(1), 0)
 }
 
+/// The first position at which two terms differ **structurally** — implicit
+/// arguments and type annotations included, which is the whole point of it.
+///
+/// This is [`lgg_body`]'s own walk with the witness test switched off, so
+/// every difference is a stop: what comes back is the path to the first one
+/// and the two formers there. `None` means the terms are `==`.
+///
+/// It exists for the diagnostic in [`crate::Elaborator::cong_mismatch`]. When
+/// the position the LGG stopped at *spells* like the proof's endpoint and is
+/// not it, the reason is invisible in surface syntax — a type spelled as a raw
+/// code on one side and `El` of that code on the other, say — and the message
+/// is a contradiction on its face without this
+/// (issues/lgg-error-hides-the-implicit.md).
+///
+/// Only [`Mismatch::path`] and [`Mismatch::sides`] mean anything here — the
+/// `{:#}` rendering is exactly those two. [`Mismatch::depth`] and
+/// [`Mismatch::at`] are scoped for [`lgg_body`]'s `Γ, z`, which this walk does
+/// not build (there is no abstraction and so no weakening), so a caller that
+/// reads them gets a term scoped for a context that does not exist.
+pub(crate) fn first_difference(x: &Term, y: &Term) -> Option<Mismatch> {
+    let mut lgg = Lgg {
+        s: Term::Zero,
+        t: Term::Zero,
+        match_witness: false,
+        witness: Vec::new(),
+        path: Vec::new(),
+    };
+    lgg.tm(x, y, 0).err()
+}
+
 struct Lgg {
     s: Term,
     t: Term,
+    /// Whether [`Self::is_hole`] may answer `true`. Off in
+    /// [`first_difference`], where there is no witness pair and every
+    /// difference is meant to stop the walk.
+    match_witness: bool,
     /// `witness[k]` is `(s, t)` weakened into `Γ, z` plus `k` further
     /// binders. Memoized because the walk asks for it at every node.
     witness: Vec<(Term, Term)>,
@@ -236,6 +285,9 @@ fn former_ty(t: &Type) -> &'static str {
 
 impl Lgg {
     fn is_hole(&mut self, x: &Term, y: &Term, k: u32) -> bool {
+        if !self.match_witness {
+            return false;
+        }
         while self.witness.len() as u32 <= k {
             let i = self.witness.len() as u32;
             self.witness
@@ -1275,5 +1327,89 @@ mod tests {
                 tm: Rc::new(Term::Triv { level: Level::Zero }),
             }
         );
+    }
+
+    // -- first_difference ---------------------------------------------------
+    //
+    // The diagnostic half (issues/lgg-error-hides-the-implicit.md). What it
+    // has to get right is the case the surface speller cannot show: two terms
+    // that print the same and are not the same term.
+
+    #[test]
+    fn identical_terms_have_no_difference() {
+        assert!(first_difference(&nat(3), &nat(3)).is_none());
+        assert!(first_difference(&app(var(0), nat(1)), &app(var(0), nat(1))).is_none());
+    }
+
+    #[test]
+    fn difference_at_the_root_has_an_empty_path() {
+        let d = first_difference(&nat(1), &var(0)).expect("differs");
+        assert!(d.path.is_empty());
+        assert_eq!(d.sides, ("numeral", "variable"));
+        assert_eq!(format!("{d:#}"), "at the root, `numeral` against `variable`");
+    }
+
+    #[test]
+    fn difference_under_a_spine_names_the_path() {
+        let d = first_difference(&app(var(0), nat(1)), &app(var(0), var(2))).expect("differs");
+        assert_eq!(d.path, vec!["application"]);
+        assert_eq!(d.sides, ("numeral", "variable"));
+        assert_eq!(
+            format!("{d:#}"),
+            "under `application` at `numeral` against `variable`"
+        );
+    }
+
+    /// **The case this exists for.** Two terms whose *surface* is identical —
+    /// same head, same arguments — differing only in a type annotation the
+    /// speller does not print. Anti-unification declines on it (the witness
+    /// test is `==`, decision 2) and the message is a contradiction without
+    /// this walk to name where they part.
+    #[test]
+    fn difference_inside_an_annotation_the_surface_drops() {
+        // `refl` at `El(code)` against `refl` at the raw code's type: the two
+        // print the same and are not `==`.
+        let refl_at = |ty: Type| Term::Refl {
+            level: Level::Zero,
+            ty: Rc::new(ty),
+            tm: Rc::new(Term::Triv { level: Level::Zero }),
+        };
+        let raw = Type::Unit { level: Level::Zero };
+        let wrapped = Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::TmUnit { level: Level::Zero }),
+        };
+        let d = first_difference(&refl_at(raw), &refl_at(wrapped)).expect("differs");
+        assert_eq!(d.path, vec!["refl"]);
+        assert_eq!(d.sides, ("True", "El"));
+        // `at` is `None` at a type position — the formers are the whole of
+        // what can be said, which is exactly why they are one word each.
+        assert!(d.at.is_none());
+    }
+
+    #[test]
+    fn the_path_accumulates_down_to_the_difference() {
+        // Two levels of agreeing spine above the node that differs. The path
+        // is what the reader navigates by, so it has to name every step.
+        let d = first_difference(
+            &app(app(var(0), nat(1)), nat(2)),
+            &app(app(var(0), var(5)), nat(2)),
+        )
+        .expect("differs");
+        assert_eq!(d.path, vec!["application", "application"]);
+        assert_eq!(d.sides, ("numeral", "variable"));
+        assert_eq!(
+            format!("{d:#}"),
+            "under `application ▸ application` at `numeral` against `variable`"
+        );
+    }
+
+    #[test]
+    fn a_difference_at_the_root_stops_there() {
+        // The whole node differs, so nothing below it is reported: the path
+        // never points past the first thing to fix.
+        let d = first_difference(&app(nat(0), nat(1)), &var(3)).expect("differs");
+        assert!(d.path.is_empty());
+        assert_eq!(d.sides, ("application", "variable"));
     }
 }

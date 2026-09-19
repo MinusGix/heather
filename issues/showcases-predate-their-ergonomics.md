@@ -105,6 +105,12 @@ itself ([[perf-ab-source-patch]]).
   | `sum_grammar`, `product_grammar` | `Plus(·, …)` / `Times(·, …)` at `Expr` | `True` against `El`, under `constructor value ▸ inr ▸ inl ▸ pair ▸ pair` |
   | `paren_grammar`, `finish_text` | `spell(d, ·)` | the endpoints print *identically* to the differing position and it still declines |
 
+  Correction to the row above, from the round that fixed the message: only the
+  first two are the `El`-against-code shape. In the last row the two terms part
+  at a *constructor payload* — a pattern-derived constructor against a written
+  one — so the family is "an elaboration detail the spelling drops", not the
+  `El` wrapper specifically.
+
   The last row is the one worth acting on and is filed as
   [[lgg-error-hides-the-implicit]]: `lgg.rs` matches the witness pair by
   structural `==` with no conversion (deliberate —

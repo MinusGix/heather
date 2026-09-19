@@ -1470,6 +1470,19 @@ pub fn kernel_workers_from_spec(spec: &str) -> Option<usize> {
     spec.trim().parse::<usize>().ok().filter(|n| *n > 0)
 }
 
+/// The one shape an invisible difference almost always has, named so the
+/// reader does not have to know how a type is represented to act on it
+/// (issues/lgg-error-hides-the-implicit.md).
+///
+/// `El(c)` and the raw code `c` are the same type spelled two ways. They are
+/// convertible and they are not equal as terms, and which one an elaboration
+/// produces depends on where the type came from — a written annotation, an
+/// inductive's lowering, a pattern's scrutinee — so two spellings of the same
+/// goal routinely disagree here while printing identically.
+const EL_AGAINST_CODE: &str = ". `El` against a type code is one type spelled \
+     two ways — a raw code, and the `El` of that code — convertible but not equal \
+     as terms, which is the usual source of a difference the spelling does not show";
+
 impl Elaborator {
     /// An empty elaborator (no prelude).
     pub fn new() -> Self {
@@ -7193,6 +7206,13 @@ impl Elaborator {
             )
             && let (Some(a), Some(b)) =
                 (self.spell_term_clean(cx, &a), self.spell_term_clean(cx, &b))
+            // `#scrut` and its kin are elaborator-internal binder names. A
+            // reader cannot look one up, and a clause built on one reads as
+            // the kernel wall wearing surface syntax — which is what the
+            // *clean* spellings below are there to refuse. The formers in
+            // `m`'s own sentence still say what the node is.
+            && !a.contains('#')
+            && !b.contains('#')
         {
             msg.push_str(&format!(" (`{a}` against `{b}`)"));
         }
@@ -7200,10 +7220,12 @@ impl Elaborator {
         // a term, and a half-spelled one is the kernel wall wearing surface
         // syntax (`issues/check-fallback-discards-expected-type.md`). A clause
         // that cannot be said cleanly is not said.
+        // No bare `.` in the `else`: the next clause opens with `, and the
+        // proof's endpoints`, so a period here punctuates the sentence into
+        // `against \`Nil\`., and the proof's …`. A clause that cannot be said
+        // is not said, and it leaves no mark either.
         if let Some(goal) = self.spell_type_clean(cx, expected) {
             msg.push_str(&format!(". The goal is `{goal}`"));
-        } else {
-            msg.push('.');
         }
         match (self.spell_term_clean(cx, s), self.spell_term_clean(cx, t)) {
             (Some(s), Some(t)) => {
@@ -7215,7 +7237,112 @@ impl Elaborator {
             " — every differing position has to be exactly the proof's endpoints \
              (issues/congruence-by-anti-unification.md §3)",
         );
+        if let Some(why) = self.cong_invisible_difference(cx, m, s, t) {
+            msg.push_str(&why);
+        } else if let Some(why) = self.cong_goal_sides_look_equal(cx, expected) {
+            msg.push_str(&why);
+        } else if m.sides.0 == "El" || m.sides.1 == "El" {
+            msg.push_str(EL_AGAINST_CODE);
+        }
         msg
+    }
+
+    /// The other half of the same complaint: the *goal* prints as `X = X`.
+    ///
+    /// `. The goal is \`wrap(c, Red) = wrap(c, Red)\`` above a sentence that
+    /// says those two sides differ reads as a lie, and the reader has no way
+    /// to see what parts them — for the same reason as in
+    /// [`Self::cong_invisible_difference`]: the walk compares terms and the
+    /// message renders surface (issues/lgg-error-hides-the-implicit.md).
+    fn cong_goal_sides_look_equal(&self, cx: &Cx, expected: &Type) -> Option<String> {
+        let Type::Id { lhs, rhs, .. } = expected else {
+            return None;
+        };
+        if lhs == rhs {
+            return None;
+        }
+        let (l, r) = (
+            self.spell_term_clean(cx, lhs)?,
+            self.spell_term_clean(cx, rhs)?,
+        );
+        if l != r {
+            return None;
+        }
+        let d = lgg::first_difference(lhs, rhs);
+        let mut why =
+            format!(". The goal's own two sides both spell `{l}` and are not the same term");
+        if let Some(d) = &d {
+            why.push_str(&format!(" — they part {d:#}"));
+        }
+        why.push_str(", so the difference the walk stopped at is one the spelling does not show");
+        if matches!(&d, Some(d) if d.sides.0 == "El" || d.sides.1 == "El") {
+            why.push_str(EL_AGAINST_CODE);
+        }
+        Some(why)
+    }
+
+    /// The clause that keeps the message above from contradicting itself.
+    ///
+    /// When the walk stops at the very position the proof witnesses — the two
+    /// sides there *spell* exactly like the two endpoints — the sentence names
+    /// the same two strings as both the difference and the match, and a reader
+    /// following it concludes the condition is already met
+    /// (issues/lgg-error-hides-the-implicit.md). The difference is real and
+    /// invisible: the witness test is structural `==` with no conversion
+    /// (decision 2), so a type argument spelled two convertible ways is a
+    /// difference the surface speller drops.
+    ///
+    /// So: find the side whose spelling matches its endpoint but whose term
+    /// does not, and say where the two actually part. [`lgg::first_difference`]
+    /// answers that in the same vocabulary the rest of the message uses, which
+    /// is why this stays a *position* and never prints a kernel term — the
+    /// wall `issues/lgg-diagnostic-dumps-kernel-terms.md` exists to stop.
+    fn cong_invisible_difference(
+        &self,
+        cx: &Cx,
+        m: &lgg::Mismatch,
+        s: &Term,
+        t: &Term,
+    ) -> Option<String> {
+        let (a, b) = m.at.as_ref()?;
+        // Read both sides in `cx` — the same strengthening the `(a against b)`
+        // clause above uses, and for the same reason: a subterm that mentions
+        // a binder the walk descended under has no reading here at all.
+        let a = strengthen_tm(&cx.gamma, a, m.depth)?;
+        let b = strengthen_tm(&cx.gamma, b, m.depth)?;
+        for (side, goal, endpoint) in [("left", &a, s), ("right", &b, t)] {
+            if goal == endpoint {
+                continue;
+            }
+            let (Some(g), Some(e)) = (
+                self.spell_term_clean(cx, goal),
+                self.spell_term_clean(cx, endpoint),
+            ) else {
+                continue;
+            };
+            if g != e {
+                continue;
+            }
+            let mut why = format!(
+                ". That position is the one the proof witnesses, and it looks like it: \
+                 the {side} side there and the proof's {side} endpoint both spell `{g}`, \
+                 but they are not the same term"
+            );
+            if let Some(d) = lgg::first_difference(goal, endpoint) {
+                why.push_str(&format!(" — they part {d:#}"));
+            }
+            why.push_str(
+                ". The witness test is structural, never up to conversion \
+                 (issues/congruence-by-anti-unification.md §3 decision 2), so a difference \
+                 the surface spelling drops still declines. Spell the endpoint the way the \
+                 goal does, or use an explicit congruence lemma",
+            );
+            if m.sides.0 == "El" || m.sides.1 == "El" {
+                why.push_str(EL_AGAINST_CODE);
+            }
+            return Some(why);
+        }
+        None
     }
 
     // -- names --------------------------------------------------------------

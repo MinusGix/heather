@@ -392,6 +392,97 @@ fn the_diagnostic_states_the_goal_where_it_spells() {
     assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
 }
 
+// -- the invisible difference (issues/lgg-error-hides-the-implicit.md) -----
+//
+// The walk compares *terms* and the message renders *surface*, so a
+// difference that lives in something the speller drops — an implicit type
+// argument, `El(c)` against the raw code `c` — makes the message contradict
+// itself: it names two things that print the same and says they differ. These
+// pin the clauses that name the difference instead of leaving it a mystery.
+
+/// The goal's own two sides printing identically. Without the clause the
+/// reader gets ``The goal is `wrap(Red) = wrap(Red)` `` above a sentence
+/// claiming those two sides differ, which reads as a lie.
+///
+/// A *computed* scrutinee is what sets it up: the match refines the goal to
+/// the scrutinee's own variable on one side while the other keeps the written
+/// constructor, and the two spell alike.
+#[test]
+fn goal_sides_that_spell_alike_are_named_as_such() {
+    let msg = fails(
+        r#"
+    inductive Col { Red, Green }
+    fn wrap(d: Col) -> Col { d }
+    fn pick(c: Col) -> Col { match c { Red => Green, Green => Red } }
+    theorem t(c: Col): wrap(pick(c)) = wrap(Red) {
+        match shape: pick(c) { Red => cong(shape), Green => cong(shape) }
+    }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "{msg}");
+    // The claim, and the fact that makes it not a contradiction.
+    assert!(
+        msg.contains("The goal's own two sides both spell `wrap(Red)` and are not the same term"),
+        "{msg}"
+    );
+    // And *where* they part, in the same vocabulary as the rest of the
+    // message — a position, never a kernel term.
+    assert!(msg.contains("they part under"), "{msg}");
+    assert!(
+        msg.contains("the difference the walk stopped at is one the spelling does not show"),
+        "{msg}"
+    );
+    for wall in ["inl[", "inr[", "Σ[", "«", "El["] {
+        assert!(!msg.contains(wall), "kernel syntax ({wall}) leaked: {msg}");
+    }
+    // Still a sentence, not a dump — the bound the other diagnostic tests
+    // hold, loosened by the one clause this case adds.
+    assert!(msg.len() < 900, "the message is {} chars: {msg}", msg.len());
+}
+
+/// An elaborator-internal binder name must never reach the reader. The same
+/// source used to render `` (`#scrut` against `(trivial, trivial)`) `` — a
+/// name that cannot be looked up beside a raw Σ payload, which is the wall
+/// `issues/lgg-diagnostic-dumps-kernel-terms.md` exists to stop, merely small
+/// enough to print.
+#[test]
+fn internal_binder_names_are_never_spelled() {
+    let msg = fails(
+        r#"
+    inductive Col { Red, Green }
+    fn wrap(d: Col) -> Col { d }
+    fn pick(c: Col) -> Col { match c { Red => Green, Green => Red } }
+    theorem t(c: Col): wrap(pick(c)) = wrap(Red) {
+        match shape: pick(c) { Red => cong(shape), Green => cong(shape) }
+    }
+    "#,
+    );
+    assert!(!msg.contains('#'), "an internal name reached the reader: {msg}");
+    // The clause is dropped, not half-said: the formers still locate the node.
+    assert!(msg.contains("at `variable` against `pair`"), "{msg}");
+}
+
+/// The negative control for both clauses above: an *ordinary* mismatch, whose
+/// two sides genuinely differ in their spelling, must be explained exactly as
+/// it was before. A clause that fires here would be noise on every refusal.
+#[test]
+fn an_ordinary_mismatch_gains_no_extra_clause() {
+    let msg = fails(
+        r#"
+    inductive Tree { Leaf, Node(l: Tree, r: Tree) }
+    theorem t(a: Tree, b: Tree, p: a = b):
+        Node(a, Leaf) = Node(b, Node(Leaf, Leaf))
+    {
+        cong(p)
+    }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "{msg}");
+    assert!(!msg.contains("spell"), "the invisible-difference clause fired wrongly: {msg}");
+    assert!(!msg.contains("they part under"), "{msg}");
+    assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
+}
+
 /// The same claim where the walk stops **under a binder** — the case whose two
 /// sides cannot be spelled at all: a subterm mentioning the λ's own variable
 /// has no reading in the reader's context, and inventing one would name their

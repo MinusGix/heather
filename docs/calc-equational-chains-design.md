@@ -114,6 +114,30 @@ spurious differing position at the annotation. Those steps keep
 `cong_ofnat`/`cong_int`, which is no loss inside a chain: the step still
 states its endpoints.
 
+**That boundary is wider than this paragraph reads, measured 2026-09-19.**
+Converting `docs/showcase/calc_text.hthr` — the first client outside the file
+the rule was born in — offered terse `cong` 15 sites and it was refused at
+four, in three different shapes: under `Cons(·, …)` at `Char`, under a lowered
+inductive's constructor (`Plus(·, …)` at `Expr`), and under a defined function
+(`spell(d, ·)`). Two of the four are the cause above — a type spelled as a raw
+code on one side and `El` of that code on the other. The other two are *not*:
+the terms at the differing position part at a constructor payload (`pair`
+against `variable`), which is a pattern-derived constructor against a written
+one, so the family is "an elaboration detail the surface spelling drops" rather
+than the `El` wrapper specifically. Either way it is not confined to cross-type
+constructor contexts, and a chain author should expect the explicit lemma to be
+needed wherever the context's arguments carry structure the author did not
+write. The refusals are now self-explaining
+(`issues/lgg-error-hides-the-implicit.md`); before that round two of the four
+produced a message that named the same two terms as both the difference and the
+match.
+
+The consequence for §3's decision is none — `cong(p)` remains the calc-native
+spelling where it fires, and the explicit lemma remains the fallback the
+decision already names. What changes is the *expectation*: a chain over a
+library's own inductives will use the explicit lemma more often than "one
+recorded cross-type case" suggests.
+
 Rejected alternatives, with reasons:
 
 - **Hole-in-term contexts** (`= Succ(_) := p`, Isabelle-style): decides by
