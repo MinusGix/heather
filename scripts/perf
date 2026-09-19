@@ -11,6 +11,7 @@ where it comes from* is another, and it had no answer that did not start with
     scripts/perf list                                              # snapshots on record
     scripts/perf serve [--port N] [--open]                         # the dashboard (scripts/perf-web.html)
     scripts/perf ab [--base REV | --patch FILE] [--marker COL] [--samples N]  # is this change faster? did anything else move?
+    scripts/perf ab --source-patch FILE [--samples N]              # the same question for a change to lib/ or a showcase: one binary, two source trees
 
 A snapshot records three things, each keyed by the environment that produced
 it (`local` is the desktop, `furnace` the cloud box; they differ by a roughly
@@ -46,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -783,13 +785,33 @@ class ReversePatch:
         p = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True,
                            input=self.patch.read_text(errors="replace"))
         if p.returncode != 0:
+            # `--forward` *skips* a hunk that looks already-applied (or, under
+            # `-R`, already-reversed) and still exits nonzero, so a patch whose
+            # change is simply not in this tree fails exactly like a conflict
+            # does. Worth naming: it is the likeliest cause on the reverse pass,
+            # and it means nothing was touched rather than half of it.
+            hint = ("\n  on the reverse pass this is most often a change that is not in this tree "
+                    "at all — `patch` skips a hunk it reads as already-reversed and exits nonzero "
+                    "just as it does for a conflict, so check whether the diff is against the tree "
+                    "you think" if reverse else "")
             sys.exit(f"error: `{' '.join(cmd)}` failed; the working tree may be half-patched — "
-                     f"check `git status` before doing anything else:\n{p.stdout}{p.stderr}")
+                     f"check `git status` before doing anything else:{hint}\n{p.stdout}{p.stderr}")
 
     def __enter__(self):
         print(f"  reverting {len(self.files)} file(s) with {self.patch.name}")
         self._patch(reverse=True)
         return ROOT
+
+    def reverted_hashes(self):
+        """The patch-touched files as they are with the change taken *out*.
+
+        The source-patch mode's provenance check needs these: its assertion is
+        "the two source trees differ", the mirror of the binary mode's "the two
+        binaries differ", and there is no hash of the reverted tree until the
+        tree has been reverted once.
+        """
+        with self:
+            return {f: self._hash(f) for f in self.files}
 
     def __exit__(self, *_):
         self._patch(reverse=False)
@@ -799,6 +821,61 @@ class ReversePatch:
                      "from how this run found them: " + ", ".join(bad))
         print(f"  working tree restored and verified ({len(self.files)} file(s))")
         return False
+
+
+def source_patch_setup(args):
+    """The provenance check, inverted, for a change to `lib/` or a showcase.
+
+    A binary A/B asserts that the two binaries differ over one source tree.
+    A *source* round is the other way round — one binary over two source trees
+    — and the assertion has to be inverted with it, or the mode silently
+    measures one tree against itself, which is the exact failure the binary
+    mode's hash check exists to catch.
+
+    Two refusals, both mirrors of that check:
+
+    - a patch that names no files, or whose reversal leaves every file it names
+      byte-identical: the two source trees are the same one;
+    - a patch that touches code the **binary** is built from, which breaks the
+      mode's premise that the binary is fixed. That case is what `--patch` is
+      for, and it rebuilds the before side.
+    """
+    if args.marker:
+        sys.exit("error: --marker asserts a `--timings` column the *after binary* adds, and "
+                 "--source-patch measures one binary on both sides; drop it")
+    picked = [f for f, v in (("--patch", args.patch), ("--before", args.before),
+                             ("--after", args.after)) if v]
+    if picked or args.base != "HEAD":
+        sys.exit("error: --source-patch is the one-binary mode; "
+                 + ", ".join(picked + (["--base"] if args.base != "HEAD" else []))
+                 + " selects binaries and cannot be combined with it. Use --heather to skip the build.")
+    patch = Path(args.source_patch)
+    if not patch.is_file():
+        sys.exit(f"error: no patch at {patch}")
+    rp = ReversePatch(patch)
+    if not rp.files:
+        sys.exit(f"error: {patch.name} names no files (no `+++ b/` lines), so there is nothing to "
+                 f"reverse. A `git diff` of the change is what this wants.")
+    built = [f for f in rp.files if f.startswith("crates/") or f.startswith("Cargo.")]
+    if built:
+        sys.exit("error: --source-patch holds the binary fixed, but this patch changes code the binary "
+                 "is built from: " + ", ".join(built[:5]) +
+                 ". Use --patch (or --base), which rebuilds the before side, for a compiler change.")
+    reverted = rp.reverted_hashes()
+    moved = [f for f in rp.files if reverted[f] != rp.before[f]]
+    if not moved:
+        sys.exit(f"error: reversing {patch.name} leaves every file it names byte-identical, so this "
+                 f"would compare one source tree with itself. The patch is probably already reversed "
+                 f"in this tree, or is a diff against something else.")
+    return rp, moved
+
+
+def side(source, which):
+    """The context a sample runs in: for `--source-patch`, the `before` side is
+    measured with the change reversed and the `after` side as the tree stands.
+    Re-entered per sample so the two sides stay *interleaved* — the property
+    the whole harness is built around — rather than measured in two blocks."""
+    return source if (source is not None and which == "before") else nullcontext()
 
 
 def timing_columns(args, heather: Path, raw_dir: Path, label: str):
@@ -885,11 +962,13 @@ def pct(a, b):
 
 def cmd_ab(args):
     args.workers = args.kernel_workers
+    args.source_mode = False
     if args.replay:
         path = Path(args.replay) if args.replay != "last" else target_dir() / AB_DIR / "last.json"
         if not path.is_file():
             sys.exit(f"error: no A/B record at {path}; run `scripts/perf ab` first")
         rec = json.loads(path.read_text())
+        args.source_mode = rec.get("source", False)
         print(f"\n== A/B (replayed from {path}): {rec['label']} ==")
         for line in rec["header"]:
             print(line)
@@ -902,9 +981,18 @@ def cmd_ab(args):
     shutil.rmtree(raw_dir, ignore_errors=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- the two binaries, and where each came from
+    # --- what is held fixed and what varies: two binaries over one source
+    # tree, or (--source-patch) one binary over two source trees
     provenance = {}
-    if args.before and args.after:
+    source = None
+    if args.source_patch:
+        source, moved_files = source_patch_setup(args)
+        args.source_mode = True
+        before_bin = after_bin = (Path(args.heather) if args.heather
+                                  else build_binary(ROOT, target_dir(), "fixed", args.touch))
+        provenance["before"] = f"this tree with {source.patch.name} reversed"
+        provenance["after"] = "this working tree"
+    elif args.before and args.after:
         before_bin, after_bin = Path(args.before), Path(args.after)
         provenance["before"] = f"given: {before_bin}"
         provenance["after"] = f"given: {after_bin}"
@@ -923,7 +1011,8 @@ def cmd_ab(args):
 
     hb, ha = sha256_file(before_bin), sha256_file(after_bin)
     e = environment(args)
-    label = args.label or f"{Path(args.patch).name if args.patch else args.base} → working tree"
+    label = args.label or (f"{source.patch.name} (source) → working tree" if source else
+                           f"{Path(args.patch).name if args.patch else args.base} → working tree")
     header = []
 
     def say(line):
@@ -933,27 +1022,38 @@ def cmd_ab(args):
     print(f"\n== A/B: {label} ==")
     say(f"   before  {hb[:12]}  {provenance['before']}")
     say(f"   after   {ha[:12]}  {provenance['after']}")
-    if hb == ha:
-        sys.exit("error: the two binaries are byte-identical, so this would compare one binary with "
-                 "itself. Either the change does not affect the built code, or a build was skipped as "
-                 "fresh — pass --touch (and see `build_binary` on why a furnace checkout needs it).")
+    if source:
+        # The provenance assertion, mirrored: here the binary is *supposed* to
+        # be the same on both sides, and it is the two source trees that have
+        # to differ. `source_patch_setup` has already refused a patch that
+        # leaves every file it names byte-identical, and one that touches code
+        # the binary is built from.
+        say(f"   provenance: one binary ({'given: ' + args.heather if args.heather else 'built from '
+            'this working tree'}), {len(moved_files)} source file(s) differ between the sides "
+            f"({', '.join(moved_files[:4])}{', …' if len(moved_files) > 4 else ''})")
+    else:
+        if hb == ha:
+            sys.exit("error: the two binaries are byte-identical, so this would compare one binary with "
+                     "itself. Either the change does not affect the built code, or a build was skipped as "
+                     "fresh — pass --touch (and see `build_binary` on why a furnace checkout needs it). "
+                     "For a change to `lib/` or a showcase, which is one binary over two source trees, "
+                     "use --source-patch.")
 
-    cols_b = timing_columns(args, before_bin, raw_dir, "before")
-    cols_a = timing_columns(args, after_bin, raw_dir, "after")
-    gained, lost = [c for c in cols_a if c not in cols_b], [c for c in cols_b if c not in cols_a]
-    fingerprint = "identical `--timings` columns"
-    if gained or lost:
-        fingerprint = ("after adds " + ", ".join(gained) if gained else "") + \
-                      ("; " if gained and lost else "") + \
-                      ("after drops " + ", ".join(lost) if lost else "")
-    say(f"   provenance: binaries differ, {fingerprint}")
-    if args.marker:
-        if args.marker not in cols_a or args.marker in cols_b:
-            sys.exit(f"error: --marker {args.marker} should appear in the after binary's --timings "
-                     f"header and not the before one; got after={args.marker in cols_a} "
-                     f"before={args.marker in cols_b}. The binaries are not the trees you think.")
-        say(f"   marker {args.marker}: in after only, as asserted")
-
+        cols_b = timing_columns(args, before_bin, raw_dir, "before")
+        cols_a = timing_columns(args, after_bin, raw_dir, "after")
+        gained, lost = [c for c in cols_a if c not in cols_b], [c for c in cols_b if c not in cols_a]
+        fingerprint = "identical `--timings` columns"
+        if gained or lost:
+            fingerprint = ("after adds " + ", ".join(gained) if gained else "") + \
+                          ("; " if gained and lost else "") + \
+                          ("after drops " + ", ".join(lost) if lost else "")
+        say(f"   provenance: binaries differ, {fingerprint}")
+        if args.marker:
+            if args.marker not in cols_a or args.marker in cols_b:
+                sys.exit(f"error: --marker {args.marker} should appear in the after binary's --timings "
+                         f"header and not the before one; got after={args.marker in cols_a} "
+                         f"before={args.marker in cols_b}. The binaries are not the trees you think.")
+            say(f"   marker {args.marker}: in after only, as asserted")
     load = e["loadavg"][0] if e["loadavg"] else 0.0
     say(f"   {e['source']} {e['host']} {e['cpu']} {e['nproc']} cpus, width {args.workers}, "
         f"mode {args.mode}, {args.samples} interleaved samples, loadavg {e['loadavg']}")
@@ -964,6 +1064,20 @@ def cmd_ab(args):
 
     # --- the corpus
     only = args.only if args.only is not None else ["calc_parser"]
+    if source and args.only is None and not args.file:
+        # A source round is about the files the patch touched, so measuring the
+        # default showcase would be measuring something else. Where a patched
+        # file is in the corpus, that is the corpus; where none is, the change
+        # reaches the corpus only through an import and the report says so,
+        # because "no change" would otherwise read as a finding.
+        hit = [c for c in CORPUS[args.corpus] if c[0] in moved_files]
+        if hit:
+            only = [c[0] for c in hit]
+            say(f"   corpus: the patched file(s) in it — {', '.join(only)}")
+        else:
+            say(f"   NOTE: no file this patch touches is in the `{args.corpus}` corpus, so it is "
+                f"measured only through whatever imports it. Name the consumer with "
+                f"`--file PATH[:DIR,DIR]` — `docs/showcase/calc_text.hthr` is not in the corpus.")
     corpus = [c for c in CORPUS[args.corpus] if any(o in c[0] for o in only)]
     for spec in args.file or []:
         path, _, dirs = spec.partition(":")
@@ -972,6 +1086,7 @@ def cmd_ab(args):
         sys.exit(f"error: no corpus file matches {only}")
 
     record = {"label": label, "header": header, "stamp": now_stamp(), "env": e,
+              "source": bool(source),
               "before": {"sha256": hb, "from": provenance["before"]},
               "after": {"sha256": ha, "from": provenance["after"]}, "files": []}
     for file, search in corpus:
@@ -979,7 +1094,8 @@ def cmd_ab(args):
         print(f"\n-- {file} --")
         for i in range(1, args.samples + 1):
             for which, binary in (("before", before_bin), ("after", after_bin)):
-                out = ab_sample(args, binary, file, search, raw_dir, which, i)
+                with side(source, which):
+                    out = ab_sample(args, binary, file, search, raw_dir, which, i)
                 runs[which].append(out)
                 print(f"   sample {i} {which:6} {out['wall_s']:7.2f}s wall  "
                       f"{secs(out['run'].get('kernel_gate_ns', 0)):6.2f}s gate  "
@@ -995,8 +1111,17 @@ def cmd_ab(args):
 
 def report_ab(args, runs):
     """Counters first and seconds second, because they answer different
-    questions. A counter that moved is a *behaviour* change and is exact on
-    one tree; seconds are the claim that needs the spread beside it."""
+    questions. A counter that moved is exact on one tree; seconds are the claim
+    that needs the spread beside it.
+
+    What a moved counter *means* depends on which mode this is, and that is the
+    one thing source mode changes here. For two binaries over one source tree a
+    move is a **behaviour** change — the round was about speed and something
+    else shifted. For one binary over two source trees the move is the
+    **result**: term growth is what a source round trades for readability, so
+    the moved columns are ranked by how far they moved instead of listed
+    alphabetically as an anomaly."""
+    source = getattr(args, "source_mode", False)
     rb = [r["run"] for r in runs["before"]]
     ra = [r["run"] for r in runs["after"]]
     counters = [c for c in rb[0] if not c.endswith("_ns")]
@@ -1011,7 +1136,13 @@ def report_ab(args, runs):
         b, a = vb.pop(), va.pop()
         (same if b == a else moved).append((c, (b, a)))
 
-    print("\n   counters (exact on one tree; a move here is a behaviour change, not a speed one)")
+    if source:
+        print("\n   counters (exact on one tree; for a source change a move here is the RESULT — "
+              "term growth is what the round traded, ranked by how far it moved)")
+        moved.sort(key=lambda m: (0, 0.0) if isinstance(m[1], str) else
+                   (1, -(abs(m[1][1] - m[1][0]) / m[1][0] if m[1][0] else float("inf"))))
+    else:
+        print("\n   counters (exact on one tree; a move here is a behaviour change, not a speed one)")
     if moved:
         for c, v in moved:
             if isinstance(v, str):
@@ -1154,6 +1285,36 @@ def cmd_ab_selftest(_args):
           "conv_misses" not in out.split("seconds (noisy")[0].split("identical across")[0])
     check("the unmoved count is reported", "identical across both binaries" in out)
 
+    # Source mode reads the same table the other way up: the binary is fixed,
+    # the sources differ, and a moved counter is the round's result rather than
+    # an alarm — so the heading says so and the moved columns are ranked by how
+    # far they moved (the readability-for-term-growth trade a showcase round
+    # makes: issues/perf-ab-source-patch.md).
+    def src_run(small_move, big_move):
+        r = run(900_000_000, 500_000_000, 400_000,
+                dict(small_counter=small_move, big_counter=big_move))
+        return r
+
+    src = {"before": [src_run(100, 10), src_run(100, 10)],
+           "after": [src_run(110, 40), src_run(110, 40)]}
+
+    class S:
+        item_metric, top, samples, source_mode = "kernel_gate_ns", 10, 2, True
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        report_ab(S(), src)
+    sout = buf.getvalue()
+    counters_block = sout.split("seconds (noisy")[0]
+
+    check("source mode says a moved counter is the result", "is the RESULT" in counters_block,
+          "the source-mode counter heading regressed")
+    check("binary mode still says a moved counter is a behaviour change",
+          "behaviour change" in out.split("seconds (noisy")[0])
+    check("source mode ranks the furthest-moved counter first",
+          counters_block.index("big_counter") < counters_block.index("small_counter"),
+          "moved counters are not sorted by relative move in source mode")
+
     print(f"\n{len(fails)} failed" if fails else "\nall ok")
     sys.exit(1 if fails else 0)
 
@@ -1205,6 +1366,14 @@ def main():
     sp.add_argument("--patch", metavar="FILE",
                     help="instead of a worktree, build `before` by reversing this diff in place and "
                          "restoring it afterwards — for a checkout without git, which is what a furnace box is")
+    sp.add_argument("--source-patch", metavar="FILE",
+                    help="the other A/B: hold the BINARY fixed and reverse this diff over the *sources* "
+                         "between samples — for a change to `lib/` or a showcase, where the two trees "
+                         "differ and the binary does not. Refuses a patch that touches `crates/` (that "
+                         "is --patch) or one whose reversal changes nothing. A moved counter is then the "
+                         "result, not an alarm")
+    sp.add_argument("--heather", metavar="BIN",
+                    help="with --source-patch: the fixed binary to measure, instead of building one")
     sp.add_argument("--before", metavar="BIN", help="skip building: measure this binary as `before`")
     sp.add_argument("--after", metavar="BIN", help="skip building: measure this binary as `after`")
     sp.add_argument("--marker", metavar="COLUMN",

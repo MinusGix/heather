@@ -1,5 +1,5 @@
 ---
-title: The showcases' five spec-relation wrappers can go, but only under a measured cold check
+title: The showcases' five spec-relation wrappers can go, and RunSpec/OpRun become records
 status: open
 labels: [showcase,ergonomics,perf,stdlib]
 created: 2026-09-19
@@ -22,8 +22,8 @@ into anonymous conjunctions — 4 `op.evidence.left.left`, 4
 projections, the way `Grammar`'s consumers already read `l.span`,
 `inner.yields`, `atom.at_level`.
 
-**Why it is a measurement and not an edit.** Two costs pull the same way and
-neither is visible from the diff:
+**What it may cost, and why that does not gate it.** Two costs pull the same
+way and neither is visible from the diff:
 
 - A record adds Σ layers to exactly the term family measured at 27× in
   [[elaborator-canonical-type-spelling]], on the file whose semantic image is
@@ -39,15 +39,24 @@ neither is visible from the diff:
   and all. So the ergonomic win trades a cheap head comparison for a
   structural one, at every relation slot in the file.
 
-So: batch every edit into one round, measure the cold check before and after,
-and if the wrapper-free spelling costs, say so — the honest outcome may be
-"named records yes, wrapper deletion no", or a kernel-side round on the
-comparison itself, and either is a better finding than the edit.
+**This is a readability round, not a perf round** (user verdict, 2026-09-19).
+The nicer spelling is the deliverable and it lands on its own merits; if the
+resulting form is worse, that is a **sign the language needs another round**,
+filed as its own issue, and not a reason to keep the ∧ towers. Same doctrine as
+"never distort the design for perf — a surprise is a pathology to file", and the
+same call this tracker already makes for `lib/`: a row stalls on the missing
+language feature rather than being written the ugly way that happens to be
+cheap.
+
+So the cold check before and after is worth *recording* — a diary entry, and a
+good candidate for the first consumer of [[perf-ab-source-patch]] once that
+exists — but it is not a gate, and this round does not wait on it. Concretely:
+if the wrapper-free spelling costs, the finding is a kernel-side one about
+comparing a λ over an inlined Σ tower where a δ-stuck spine used to stand, and
+it belongs in the kernel-side structural pass that is the next perf move, not
+in this round.
 
 Do **not** bundle this with the `⟨⟩`/`calc` conversions
-([[showcases-predate-their-ergonomics]] says so from its side): those are pure
-surface with no term growth, and a cold-check regression should have one
-candidate cause. `scripts/perf ab` cannot measure a `.hthr` change today —
-it compares two binaries and would refuse this as one binary against itself
-([[perf-ab-source-patch]]) — so the before/after here is two cold
-`heather check` runs, wrapped per CLAUDE.md.
+([[showcases-predate-their-ergonomics]] says so from its side): those carry no
+term growth, and keeping them separate means a recorded cold-check change has
+one candidate cause.

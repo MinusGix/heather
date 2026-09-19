@@ -96,7 +96,12 @@
   outlives instances, and the harness then refuses the run as comparing one
   binary with itself. `--marker COLUMN` asserts the after binary emits a new
   counter column and the before one does not. `--replay` re-renders the last
-  report for free.
+  report for free. **A change to `lib/` or a showcase is the other A/B**:
+  `--source-patch FILE` holds the binary fixed and reverses the diff over the
+  *sources* between samples (`--heather BIN` skips the build), defaults the
+  corpus to the files the patch touched, and reports a moved counter as the
+  round's result rather than as an alarm — term growth is what a readability
+  round trades. It refuses a patch that touches `crates/`; that is `--patch`.
 - **Read a `--timings` TSV with `scripts/timings`**, never by counting
   indices into an `awk -F'\t'` line — that mislabelled three columns in one
   session. It looks columns up by name and prints the five the design docs

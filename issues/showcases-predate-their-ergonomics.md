@@ -42,3 +42,30 @@ against a 256 M budget, so it is never stored and `--only` has nothing to replay
 batch the edits. And `scripts/perf ab` cannot measure a `.hthr` change at all
 today: it compares two *binaries* and would refuse this as one binary against
 itself ([[perf-ab-source-patch]]).
+
+## Log
+
+- 2026-09-19: Two more repetitions in `docs/showcase/calc_text.hthr`, noticed while reading it
+  for [[record-type-partial-application]]. Both are pure surface, both belong in
+  this issue's batch (the ~95 s tax is per recheck, not per edit), and **neither
+  needs a language feature that does not exist**:
+
+  - The `recur:` parameter type is spelled out in full four times — lines 324,
+    336, 347 and 372 — as `(next: Cursor<Char>(source)) -> nat::Lt(list_len(rest(
+    source, next)), list_len(rest(source, begin))) -> Checked(k, source, next)`,
+    differing only in the tier `k`. A plain `fn Recur(level: Nat, source, begin)
+    -> Type { … }` should collapse all four: `docs/types-as-expressions.md`
+    already makes a `fn` returning `Type` first class, and a parameter whose type
+    is a call to one is the shape `RefinesOn` uses in `lib/ir_v1.hthr`.
+  - The three `checked_*` fixpoints annotate their λ binders — `λ (next:
+    Cursor<Char>(source)) (smaller: nat::Lt(…)) => …` — against an expected Π,
+    where `docs/surface-function-types.md` §5.2 says the annotation is a
+    readability aid and the expected domain is what the binder is pushed with. So
+    `λ next smaller => …` should check, and three of the file's longest lines go.
+
+  If the first one holds it **reprices [[type-declaration-form]]**, which is why
+  it is worth doing here rather than there: that issue's own log says the
+  load-bearing use of a `type` form is exactly this seven-fold repetition, and if
+  a `fn … -> Type` alias already collapses it then `type` is left with the
+  justification the issue ranks lowest — a highlighting and reading cue. Both
+  bullets are predictions from reading, not findings; one recheck settles them.

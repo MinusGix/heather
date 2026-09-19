@@ -48,6 +48,7 @@ different measurement, and it is the one that keeps going wrong by hand:
     scripts/perf ab --base HEAD~1 --samples 5               # the last commit against its parent
     scripts/perf ab --patch round.patch --touch             # on a box without git (furnace)
     scripts/perf ab --replay                                # re-render the last report, measuring nothing
+    scripts/perf ab --source-patch showcase.patch           # a change to lib/ or a showcase: one binary, two source trees
 
 It builds both binaries, parks a copy of each (a `cargo build` writes one
 path, and an A/B builds twice), interleaves `--samples` cold checks of each,
@@ -84,12 +85,53 @@ What it refuses to let you get wrong, each because it happened:
   drifts in and out between samples and its "delta" is the cut moving. What was
   dropped, and why, is printed.
 
+### A source change: `--source-patch`
+
+A change to `lib/` or to a showcase is the same measurement pointed the other
+way — **one binary over two source trees**, where the binary A/B is two
+binaries over one. Without this, `ab` builds the same binary twice, finds the
+hashes equal and refuses the run, correctly by its own rules
+(`issues/perf-ab-source-patch.md`).
+
+    scripts/perf ab --source-patch round.patch --samples 3
+    scripts/perf ab --source-patch round.patch --heather target/release/heather   # skip the build
+    scripts/perf ab --source-patch round.patch --file docs/showcase/calc_text.hthr:lib/std,lib/std/parser
+
+Everything above still holds — the interleaving, the spread verdict, the
+loadavg warning, the item filters, the replay. Four things differ:
+
+- **The provenance assertion is inverted.** The binary is *supposed* to be
+  identical on both sides; it is the two source trees that must differ. So the
+  refusals are the mirror image: a patch that names no files, a patch whose
+  reversal leaves every file byte-identical, and — the one worth knowing — a
+  patch that touches `crates/` or `Cargo.*`, which breaks the premise that the
+  binary is fixed. That last case is what plain `--patch` is for.
+- **A moved counter is the result, not an alarm.** In binary mode a counter
+  that moved means the round changed behaviour it did not mean to. For a source
+  change, term growth is exactly what is being traded for readability, so the
+  moved columns are the finding and are ranked by how far they moved.
+- **The corpus defaults to the files the patch touched**, where any of them is
+  in the corpus, because measuring the default showcase would be measuring
+  something else. Where none is — the change reaches the corpus only through an
+  import — the report says so, so that "no change" is not read as a finding.
+  `docs/showcase/calc_text.hthr` is **not** in the corpus (its own
+  `parser_core` clashes with the library's on a shared `-L` path), so name it
+  with `--file`.
+- **`--marker` is refused**: it asserts a column the *after binary* adds, and
+  there is only one binary here.
+
+A last thing this mode does not decide: whether the change is worth making. A
+readability round is not a perf round — if the nicer spelling costs, that is a
+finding about the language or the kernel to file, not a veto on the edit
+(`issues/showcase-spec-relations-as-records.md`). This measures; it does not
+gate.
+
 The raw tables are left under `target/perf-ab/raw/` and the whole report is
 replayable from `target/perf-ab/last.json`, so re-reading an A/B costs nothing.
 
 `scripts/perf ab-selftest` asserts the report's pure logic — the spread verdicts,
-and the two filters above, each of which this report shipped without for an
-afternoon. It is not in `scripts/test`: there is no python test lane here (the one
+the two filters above (each of which this report shipped without for an
+afternoon), and that the two modes read a moved counter differently. It is not in `scripts/test`: there is no python test lane here (the one
 tested script is the node runner, `scripts/test-target-runner.test.mjs`). Run it
 by hand after touching `report_ab`.
 
