@@ -161,3 +161,13 @@ scannerless calculator demonstrates.
   does not matter because the floor is re-elaborating the module. Restoring
   `--only` is the difference between a ~13 s and a ~95 s inner loop, so it comes
   before the record-token work if this file is to be iterated on.
+- 2026-09-18: Correction to this issue's 2026-09-18 tooling entry: `--only` is **not**
+  regressed. It works — 5 s on `calc_parser`, 1 s on `lib/std/string.hthr`. The
+  reason it refuses on `calc_text` is that the module's semantic image is 483 M
+  syntax nodes against a 256 M budget and is therefore never stored, so there is
+  no previous image to replay; the 95 s warm floor has the same cause.
+  [[check-only-no-stored-image]] is rewritten around that, and the ordering it
+  implies is the opposite of what was recorded: nothing needs fixing in the cache
+  or the CLI first, beyond the misleading message. The record axis of
+  [[elaborator-canonical-type-spelling]] is the single root cause of all four
+  symptoms and is the next round.

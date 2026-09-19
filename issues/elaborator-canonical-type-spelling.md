@@ -80,3 +80,22 @@ where the fallbacks are paid for.
   Found while building the scannerless character calculator ([[sequence-parser-source]]). Its consequence there: the four tier bodies cost ~35 s of gate and ~290–450 k misses each where `calc_parser`'s structurally identical bodies cost 188–204, and the file needs **more than 8 GiB** cold — it passes at 20 GiB and dies at the suite's 6 GiB per-process rail, so it cannot be wired into `crates/elab/tests/showcase_calculator.rs` until this is fixed. Two spellings were tried against it and neither is the lever: moving the tier bodies from nested `match` onto the `Result` eliminators cut misses 2.9× (854 k → 291 k, and it is the better style regardless), and returning the library's `Certified` instead of a purpose-built indexed record left them flat. Threading the character *value* through `Recognized`/`Certified` rather than a placeholder `Nat` is worth 21% on the one item that does it.
 
   The character calculator is therefore the first consumer whose cost is dominated by this defect rather than annoyed by it, and `probes/str/p10.hthr` is a 25-line reproduction that needs no showcase.
+- 2026-09-18: A fourth symptom of the record axis, and the one that decides scheduling: the
+  module's **semantic image is 483,322,044 syntax nodes**, 1.9× the store's
+  256,000,000-node decode budget, so it is never stored
+  ([[check-only-no-stored-image]]). `docs/showcase/calc_parser.hthr` — the same
+  grammar over an inductive token type — stores with no notice.
+
+  So the record-spelling defect is not only a gate cost. In one file it produces,
+  from one cause:
+
+  - 27× the conversion misses of the inductive-token control (`probes/str/p10.hthr`);
+  - a peak over 8 GiB, against the suite's 6 GiB per-process rail;
+  - an image 1.9× over the decode budget, hence no caching at all;
+  - and therefore a 95 s warm recheck for a one-line edit, and no `--only` probe.
+
+  The node count is the most direct measurement of the defect anyone has: it is
+  the `El(app(…#tycode_fn^δ; ā))` spelling of `Char`-instantiated components
+  written into every annotation, counted. It is also a cheap regression gate —
+  whether `calc_text`'s image falls under 256 M nodes is a single-bit answer from
+  one run, no `value-metrics` build required.
