@@ -96,31 +96,44 @@ spelling, and only lacks a syntax into which "the type I had" can be written.
 
 ## 2. The forms
 
-### 2.1 Syntax
+### 2.1 Syntax — revised 2026-09-20 after stage 2's stop
 
-Five term formers, valid at layers p and m only (§2.3):
+Five term formers. The annotation on the three intros is **optional**, and
+the two projections carry none:
 
 ```
-pair@^{l}(T; a; b)        infer: T,    where  T ⇝* Σ^{l₁,l₂}(x:S). U,  a : S,  b : U[a/x]
-inl@^{l}(T; a)            infer: T,    where  T ⇝* A +^{l₁,l₂} B,        a : A
-inr@^{l}(T; b)            infer: T,    where  T ⇝* A +^{l₁,l₂} B,        b : B
-fst@^{l}(T; p)            infer: S,    where  T ⇝* Σ^{l₁,l₂}(x:S). U,  p : T
-snd@^{l}(T; p)            infer: U[fst@(T;p)/x],  same premises
+pair@(a; b)               checked:  against T with T ⇝* Σ^{l₁,l₂}(x:S). U:  a : S,  b : U[a/x]
+pair@^{T}(a; b)           infers T, same premises (the annotated form; inference position only)
+inl@(a) / inl@^{T}(a)     checked against / infers T,  T ⇝* A +^{l₁,l₂} B,  a : A
+inr@(b) / inr@^{T}(b)     symmetric
+fst@(p)                   infers S,          where p infers T and T ⇝* Σ(x:S). U
+snd@(p)                   infers U[fst@(p)/x], same
 ```
 
-`T : Ty l` is the one annotation; `l` is `T`'s level and is what `ty_infer`
-returns for it, so the form carries no level field of its own. The premise
-`T ⇝* former` is the checker's whnf (δ-transparent for types at every layer,
-as `Tc::whnf` already is — "a type lives at `typeof(i)`, which is always a
-computing layer"). The inferred type of `pair@`/`inl@`/`inr@` is **`T`
-itself, un-reduced**, not the former: that is what keeps every consumer of
-the inferred type lazy in δ, which the kernel's conversion already is.
-`fst@`'s inferred type is the component `S` and `snd@`'s is `U` at
-`fst@(T;p)` — these have **no syntax spelling**, and §3 follows from that.
+An unannotated intro is **not inferable** (`NotInferable`, the verdict the
+kernel already gives `box` forms in inference position, typing.rs ~2233);
+it is checked against the expected type, which the checker holds as an
+`ITy` (§3) and views in the value domain. That is what lets a constructor
+value nested inside a constructor value be written with **no type at
+all**: the expected type of a field is `Sel{expected, Fst}`, a description,
+never a spelling. The annotated form exists for the one position the
+elaborator cannot make a checking position — a constructor value at the
+head of a projection or as a scrutinee — and it carries the un-reduced
+type the elaborator had, as the first draft said.
 
-Rust: `Term::PairAt { ty: Rc<Type>, fst, snd }`, `InlAt`, `InrAt`,
-`FstAt { ty, pair }`, `SndAt { ty, pair }`. Names are the implementer's;
-the doc comments should say "checked spelling of `Pair`" and point here.
+**Why the first draft's annotation-everywhere failed** (stage 2, issue log
+2026-09-20): `build_ctor` computes `spine(&whnf(expected))` and hands each
+Σ layer of the tuple a *summand of the reduct* as its "type"; only the
+outermost injection has the un-reduced `pre_whnf`. An annotated inner pair
+therefore wrote a reduct component — two components of a whnf for one
+parent, a factor ~2 on a 3.5ⁿ object — and the curve did not move
+(×3.31 / ×3.71 on both sides). The inner layers have **no** un-reduced
+spelling, and the fix is to write none.
+
+Rust: `Term::PairAt { ty: Option<Rc<Type>>, fst, snd }`, `InlAt`/`InrAt`
+likewise, `FstAt { pair }`, `SndAt { pair }` (stage 1a's `ty` on the
+projections is dropped). Doc comments say "checked spelling of `Pair`" and
+point here.
 
 ### 2.2 Why new forms and not a change to the existing five
 
@@ -149,31 +162,45 @@ pair/injection/projection spellings inside a `box`, and keep their recursor
 branches unchanged. The new forms are what the elaborator writes for
 programs and proofs.
 
-### 2.3 Layer restriction, and why it costs nothing
+### 2.3 The restriction is "not under a quotation", not a layer
 
-`pair@` and its siblings are refused at layer c and v (a `computing_layer`
-guard beside `not_var_layer`). Consequences:
+The first draft said "layers p and m only". That does not transcribe: Heather
+checks **every declaration body at `Layer::Code`** (`crates/elab/src/lib.rs`
+~3637, `gendefs.rs` ~3473; `DESIGN.md`'s "the body is checked at the
+binding's own layer, which is what makes δ layer-preserving"), and only the
+statement at `Prog`. A layer predicate is constantly false at every emitter
+(stage 2 measured it: `LayerMismatch` on a two-field record).
 
-- The code grammar — what a `box` may contain and what the 56 recursor
-  branches range over — is unchanged. No branch is added, no telescope
-  changes, `BRANCH_NAMES` is untouched, the surface `match code` language
-  (`crates/elab/src/quote.rs`, `crates/syntax/src/ast.rs`) is untouched.
-- `code_eq` never meets the new forms. Preservation for the code recursors'
-  β (`reduce.rs` ~1571) is untouched, which is what refuses the alternative
-  in §6 item 5.
-- The elaborator already knows the layer at every emission site (`cx.layer`);
-  the switch is one predicate at each of the ~4 emitters in §4.1. Inside a
-  quotation the component forms continue to be written, with whatever
-  reduct that costs — quoted code is the x86 line's IR terms, not the
-  parser tower, and if a tower ever appears under a `box` it is a separate
-  finding.
+What §2.2 actually needs is that the code recursors never meet a checked
+spelling, and the recursors range over exactly one thing: the payload of a
+`box`. So the rule is a **side condition on the two `box` rules**: the
+payload of `box` (`BoxTy`, `BoxTm`, typing.rs ~1187/1196) contains no
+checked spelling. Implemented as one bit on the checker's `Env`, set when
+those two rules enter their payload and read by the five rules
+(`Tc::not_under_box`, replacing stage 1a's `computing_layer`); the
+elaborator's twin is `Cx::quoted`, set while a quotation payload elaborates
+(`quote.rs`). Consequences:
+
+- The code grammar — what a `box` may contain, what `code_eq` compares, what
+  the 56 recursor branches range over — is unchanged: no branch is added, no
+  telescope changes, the surface `match code` language is untouched.
+- A definition body at layer c may contain checked spellings. δ at a
+  computing layer unfolds it into a term that is legal there; δ inside a box
+  is opaque (`definitions.rs`, both directions), so no checked spelling ever
+  appears inside code by unfolding either.
+- Formally it is a decidable syntactic predicate on the payload, like
+  "closed", not a new judgment index. Ch. 06 is untouched: the recursor β
+  rules fire on box payloads, which the side condition keeps free of the
+  forms.
 
 ### 2.4 Conservativity
 
-Define the translation `⌊·⌋` on well-typed computing-layer terms:
-`⌊pair@(T; a; b)⌋ = pair(x:S. U; ⌊a⌋; ⌊b⌋)` where `T ⇝* Σ(x:S).U` is the
-whnf the typing derivation contains (Determinacy makes it unique up to the
-budget), and likewise for the other four; identity elsewhere. Then:
+Define the translation `⌊·⌋` on typing **derivations** (it is
+type-directed, as a bidirectional elaboration into a fully annotated syntax
+always is): `⌊pair@(a; b) ⇐ T⌋ = pair(x:S. U; ⌊a⌋; ⌊b⌋)` where `T ⇝* Σ(x:S).U`
+is the whnf the derivation contains (Determinacy makes it unique up to the
+budget); the annotated form and the projections likewise, reading `T` from
+the annotation or from `p`'s inferred type; identity elsewhere. Then:
 
 - **Typing.** `Γ ⊢ t : A` implies `Γ ⊢ ⌊t⌋ : ⌊A⌋`, by induction on the
   derivation; the `pair@` case is the existing `pair` rule plus one
@@ -192,7 +219,8 @@ budget), and likewise for the other four; identity elsewhere. Then:
   compare heads and read the Σ the head *infers* (DESIGN.md, "application and
   projection are typed"). None of these reads an annotation, so the new
   forms need new head views and no new decisions.
-- **Layer c.** Nothing. The formers do not exist there.
+- **Under a box.** Nothing. The side condition keeps the forms out of every
+  payload, so the code grammar and its metatheory are the current ones.
 
 The extension is conservative in the only sense that matters for the trusted
 base: every derivation in the extended system translates to one in the
@@ -309,21 +337,22 @@ cheap (§3.6).
 ### 3.4 The five rules
 
 ```
-pair@(T; a; b):  l = ty_infer(T);  view_v(T) = Sigma{l₁,l₂}  else HeadMismatch;
-                 tm_check(a, Sel{T,Fst});  tm_check(b, Sel{T,Snd(a)});  ⇒ (Syn(T), l)
-inl@(T; a):      view_v(T) = Sum;  tm_check(a, Sel{T,Lhs});                ⇒ (Syn(T), l)
-inr@(T; b):      symmetric with Rhs
-fst@(T; p):      view_v(T) = Sigma;  tm_check(p, Syn(T));                  ⇒ (Sel{T,Fst}, l₁)
-snd@(T; p):      view_v(T) = Sigma;  tm_check(p, Syn(T));                  ⇒ (Sel{T,Snd(fst@(T;p))}, l₂)
+pair@(a; b) ⇐ E:     view_v(E) = Sigma  else HeadMismatch;
+                     tm_check(a, Sel{E,Fst});  tm_check(b, Sel{E,Snd(a)})
+pair@^{T}(a; b) ⇒:   l = ty_infer(T);  view_v(Syn T) = Sigma;  fields as above with E := Syn T;  ⇒ (Syn T, l)
+inl@(a) ⇐ E:         view_v(E) = Sum;  tm_check(a, Sel{E,Lhs});     inr@ symmetric;  annotated forms as pair@^{T}
+fst@(p) ⇒:           (E, l) = tm_infer(p);  view_v(E) = Sigma{l₁,l₂};  ⇒ (Sel{E,Fst}, l₁)
+snd@(p) ⇒:           same;  ⇒ (Sel{E,Snd(fst@(p))}, l₂)
+unannotated intro ⇒: NotInferable
 ```
 
 `view_v` is the value-domain view of §3.3 (never the rewriter, even for a
-`Syn` `T`). `tm_check(p, Syn(T))` infers `p` — for a `pair@` that is its
-own `T'` — and converts `T'` against `T` in the value domain, δ-lazy: one
-head step if they differ, a `==` hit if the elaborator wrote the same
-spelling twice. The `Snd(a)` argument is the *term* `a` (or `fst@(T;p)`),
-not its value: evaluated per query in the identity environment, so the
-description stays arena-free.
+`Syn` `E`). `E` is whatever the checking position holds: for a field of an
+outer `pair@` a `Sel`, for a branch body the motive instance, for an
+argument the `app`'s domain annotation — in every case a description or a
+linear spelling, never a reduct. The `Snd(a)` argument is the *term* `a`,
+evaluated per query in the identity environment, so the description stays
+arena-free.
 
 ### 3.5 The three Λ inference arms, and completeness
 
@@ -369,6 +398,17 @@ separate design, priced against this section's number, not a thing to
 slip into stage 2. The per-query arena is kept because stage 1b measured
 what abandoning it costs.
 
+### 3.8 The value forms for the unannotated spellings
+
+Stage 1a mapped `pair@^{T}` onto the existing `Val::Pair` by viewing `T`.
+An unannotated `pair@(a;b)` has no `T` for the evaluator to view, so
+`Val::Pair`/`Inl`/`Inr`'s annotation closures and `Elim::Fst`/`Snd`'s
+become `Option<&TyClo>`, `None` for the unannotated forms. Stage 1a's grep
+(issue log, §9.0 item 3) established that no reader of a pair or injection
+value reads them, and that every reader of the projection annotations reads
+them off a `VTy::Sigma` to *construct* an elimination; those constructors
+wrap in `Some`. The levels on the projections' views are already `Option`.
+
 **Withdrawn from the first draft:** `Tc<D: Dom>`, the `Env` merge, the
 `Dom` widening and the six constructors (step 0 is reverted; its log entry
 is the record of what it cost), one arena per gate (§3.7's sentence "the
@@ -383,28 +423,29 @@ distinction is the arena.
 
 ### 4.1 The emitters that change
 
-All in `crates/elab/src`, all with the un-reduced type in hand (the
-2026-09-20 survey, on the issue):
+All in `crates/elab/src`, all behind `!cx.quoted` (inside a quotation
+payload today's component forms continue to be written):
 
-| site | writes | un-reduced type available as |
+| site | writes | annotation |
 |---|---|---|
-| `inductive.rs` `inject` (~606), via `build_ctor` | `Inl`/`Inr` chain | `pre_whnf` (~2116), live through the function |
-| `inductive.rs` `build_fields_skel` (~2382) | the Σ tuple | `ctor_ty`, the argument, whnf'd at ~2310 |
-| `forded.rs` `build_fields_collect` (~1050) | the forded tuple | `ctor_ty`, same shape |
-| `inductive.rs` `projection` (~2860–2935) | `Fst`/`Snd` with `cur_emit` | the receiver's inferred type, which the `behind_a_name` branch already threads |
+| `inductive.rs` `inject` (~606), via `build_ctor` | `inl@`/`inr@` chain | outermost injection: `Some(emit_ty(pre_whnf))`, the un-reduced type in hand at ~2116; inner injections of the chain: `None` |
+| `inductive.rs` `build_fields_skel` (~2382) | the Σ tuple | `None` at every layer — the field is in checking position by the outer rule |
+| `forded.rs` `build_fields_collect` (~1050) | the forded tuple | `None` |
+| `inductive.rs` `projection` (~2860–2935) | `fst@`/`snd@` with `cur_emit` | none; the receiver infers |
 
-Each gains `if cx.layer.computes() { …At { ty: emit_ty(pre_whnf) … } } else
-{ today's form }`. `emit_ty` still runs on `T` — it is the chokepoint that
-respells a registered lowering as its reference, and `T` is small — but it
-no longer walks a reduct (`emit-ty-rewalks-normalized-type` closes into
-this as a consequence, not a fix). `spine` and the whnf that feed field
-*checking* stay exactly as they are in this stage: the elaborator still
-computes the reduct to decide the constructor and to check the fields
-against inline components. That is stage 3's subject (§5).
+The emitter reads **nothing** out of the reduct for an annotation any more.
+`spine` and the whnf that feed field *checking* stay exactly as they are:
+the elaborator still computes the reduct to decide the constructor and to
+check the fields against inline components. That transient is stage 3 (§5),
+and it is now genuinely independent — stage 2 alone makes the emitted term,
+the image and the kernel's work linear.
+
+The outermost `Some` is there for the one kernel position that infers a
+constructor value (a projection head, a scrutinee); if `NotInferable` shows
+up on the corpus the answer is `Some` at that emitter, never a component.
 
 `wf.rs` `fin_index` (~1762) already annotates a tail "with `Fin` itself
-rather than its unfolded sum"; it is the closest existing precedent and its
-comment is the rationale to reuse.
+rather than its unfolded sum"; the same rationale.
 
 ### 4.2 The readers, and the principle that makes them safe
 
@@ -455,7 +496,9 @@ environment, the `mint_ctor_reduct` call on the default path, the five
 `wip/mint-readers-audit` branch. Not in stage 1 — in stage 2, after the
 emitters switch, so the deletion is measured (the readback ran at every
 `build_ctor` to learn there was nothing to name: `elab_whnf_ns` ×3.5–4 on
-fired items). `emission_walk.rs` stays: it is the auditor.
+fired items). Stage 2 measured the deletion at **zero on the default
+path** — the devices all return on a false `HEATHER_RB*` guard — so it is a
+dead-code commit of ~6 400 lines, separate, with that number in its message. `emission_walk.rs` stays: it is the auditor.
 
 ---
 
@@ -660,10 +703,18 @@ RSS (§3.6); the x86 certificate gates green under their existing fuel.
 inert without an emitter and the syntax checker accepts them), re-scope.
 This is `nbe-conversion-design.md` stage 2b's criterion, verbatim.
 
-### Stage 2 — the emitters (0.5)
+### Stage 2 — the emitters (0.5), resumed after the 2026-09-20 stop
 
-§4.1's four sites behind the layer predicate; §4.2's readers walked, each
-answered in the log; §4.4's deletions; `emission_walk.rs` arms.
+Step 0: replace stage 1a's `computing_layer` and the `HEATHER_AT_SPIKE`
+instrument (committed with the readers audit) by the box side condition of
+§2.3 — one `Env` bit set by the two `box` rules, the five rules refuse
+under it, a golden test that `box(pair@(…))` is rejected and a body at
+layer c with a `pair@` is accepted; make the intro annotation `Option`, drop
+the projections' annotation, and `Option` the value closures (§3.8) — the
+transcription of stage 1a, revisited at the same sites; `typing_differential`
+extended with unannotated forms in checking position and `wt.rs` generating
+them. Then §4.1's four sites behind `!cx.quoted`; §4.2's readers re-walked
+for `ty: None` (the `spelling.rs` views); `emission_walk.rs` arms.
 
 *Gate:* full `scripts/test`; `showcase_gate` (`calc_text`) green; the
 curve re-measured through `scripts/perf ab --marker intro_at_nodes` — the
