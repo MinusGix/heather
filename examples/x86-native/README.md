@@ -35,8 +35,8 @@ below `2^64` check in work bounded by the width (`bitvec::ofNat` reads bits
 from the top against run-compressed powers of two; see
 [the closed issue](../../issues/bitvec-ofnat-large-literals.md)), and the
 example's own constant is a full-width asymmetric one so that every immediate
-byte is distinct. Source branches, loops, calls, memory, other signatures, and
-spilling are not part of this command.
+byte is distinct. Loops, calls, memory, other signatures, and spilling are
+not part of this command.
 
 Arguments arrive in RDI/RSI and the result leaves in RAX. Temporaries use only
 SysV caller-saved registers. The assembly consists of literal `.byte`
@@ -51,7 +51,7 @@ wrong Rust encoding therefore fails certificate checking. The companion
 it independently requires the same source and proof modules under the names
 used by the native driver (including the x86 module aliases).
 
-The proof covers the straight-line body under the existing machine model.
+The proof covers the selected body under the existing machine model.
 The `ret`, calling convention, C wrapper, loader, executable-memory setup,
 and external assembler/linker remain outside the formal claim. Native tests
 exercise that platform boundary; they are not proofs of it.
@@ -61,6 +61,35 @@ normal loader with `lib/std`, `lib`, and additional `-L` directories. A source
 module with a bundled library name must have identical contents. Optional
 `--cache-dir` uses kernel-rechecked semantic images with exact build identity;
 it does not enable the trusted declaration cache or stale-image replay.
+
+## Nested source conditionals
+
+Ordinary `compile-x86` also accepts tail-position matches on
+`bitvec::unsigned_lt_bit(64, ...)`, including nested matches in either arm.
+`branches.hthr` supplies both shapes, retaining the original inputs in the
+selected arithmetic leaf:
+
+```sh
+(ulimit -v 6291456 -t 120; target/debug/heather compile-x86 \
+  examples/x86-native/branches.hthr nested_true \
+  -o target/x86-native/nested_true.s --cache-dir target/native-images \
+  --kernel-workers 1)
+```
+
+The shared recursive selector carries values by port ID and uses the existing
+DAG lowering for comparisons and arithmetic. The generated `StructuredArtifact`
+checks complete selected execution, branch targets, decoding, result agreement
+with the actual source, preserved memory/registers, and the common exit address.
+The public source artifact has no unresolved graph assumptions. A separate
+checked equality ties the published literal bytes to this same code tree.
+The `ret`, ABI, instruction fetch/loading, and host integration remain external.
+
+This first slice has one common word result, one result per prefix, unsigned
+comparison guards, and arithmetic or constant leaves. Register pressure and
+branches outside the forward rel8 range are refused. Structured bodies are
+currently assembly exports; `build-x86` retains its existing arithmetic/call
+fragment. `crates/cli/tests/native_branches.rs` assembles both functions and
+checks each on 10,036 input pairs.
 
 ## Direct executable, with no assembler or linker
 

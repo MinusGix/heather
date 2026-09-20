@@ -38,7 +38,7 @@ const FUNCTION_IR: &str = include_str!("../../../lib/function_ir.hthr");
 const FUNCTION_IR_X86_SUPPORT: &str = include_str!("../../../lib/function_ir_x86_support.hthr");
 const FUNCTION_IR_X86: &str = include_str!("../../../lib/function_ir_x86.hthr");
 
-const MODULES: &[(&str, &str)] = &[
+pub(crate) const MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC),
     ("bool", BOOL),
     ("nat", NAT),
@@ -75,7 +75,7 @@ thread_local! {
 /// gate state around the shared committed prefix, so a caller may mutate the
 /// result (the stale-source control does) without touching the memo. The fill
 /// is serialized so two libtest workers do not both replay a cold prefix.
-fn base_image(n: usize) -> Elaborator {
+pub(crate) fn base_image(n: usize) -> Elaborator {
     let ready = BASES.with(|bases| bases.borrow().get(&n).map(SemanticImage::elaborator));
     if let Some(elab) = ready {
         return elab;

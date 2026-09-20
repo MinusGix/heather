@@ -207,13 +207,25 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let prefix = format!("{symbol}_native");
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
-        "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
+        "x86_64_control_block", "x86_64_control_flow", "x86_64_structured_block", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
         proof.raw(format!("import {name};"));
     }
     let (image, body_bytes) = if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         (Some(calls::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"),
             &format!("{root_name}::{callee}"), [inputs[0], inputs[1]], callable_caller)?), None)
+    } else if !executable && function_ir_source::reflect_elaborated(&elab, &format!("{root_name}::{symbol}")).is_err() {
+        let emission = function_ir_source::generate_elaborated_structured_x86(
+            &elab, &prefix, &format!("{root_name}::{symbol}"),
+            [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11], Gpr::Rax,
+        ).map_err(|e| e.to_string())?;
+        let bytes = encode_structured(&emission.lowered);
+        proof.raw(emission.text);
+        byte_chain(&mut proof, &format!("{prefix}_published"), &bytes);
+        proof.declaration(Declaration::theorem(format!("{prefix}_exported_bytes"),
+            Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::nullary(format!("{prefix}_published"))),
+            Block::expression(Expr::name("refl"))));
+        (None, Some(bytes))
     } else {
         let emission = function_ir_source::generate_elaborated_x86(
             &elab, &prefix, &format!("{root_name}::{symbol}"),
@@ -276,7 +288,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
         println!("Linux loading and syscall delivery remain environment assumptions");
     } else {
-        let bytes = body_bytes.expect("assembly path has a straight-line body");
+        let bytes = body_bytes.expect("assembly path has a certified body");
         write_new(&output, assembly(symbol, &bytes).as_bytes())?;
         println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
     }
@@ -371,6 +383,26 @@ fn encode(instructions: &[Instruction]) -> Vec<u8> {
         bytes.extend([0x48 | (rm >> 3) | ((r >> 3) << 2), opcode, 0xc0 | ((r & 7) << 3) | (rm & 7)]);
     }
     bytes
+}
+
+fn encode_structured(plan: &heather_elab::function_ir_x86_lower::LoweredStructured) -> Vec<u8> {
+    use heather_elab::function_ir_x86_lower::StructuredPlan;
+    match &plan.body {
+        StructuredPlan::Dataflow(dag) => encode(&dag.instructions),
+        StructuredPlan::Sequence { prefix, continuation } => {
+            let mut bytes = encode(&prefix.instructions);
+            bytes.extend(encode_structured(continuation));
+            bytes
+        }
+        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement } => {
+            let r = reg(*condition_register);
+            let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7), 0x74, *false_displacement];
+            bytes.extend(encode_structured(when_true));
+            bytes.extend([0xeb, *join_displacement]);
+            bytes.extend(encode_structured(when_false));
+            bytes
+        }
+    }
 }
 
 fn assembly(symbol: &str, bytes: &[u8]) -> String {

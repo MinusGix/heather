@@ -3,7 +3,9 @@
 Review date: 2026-09-20. Implementation examined: `4db435c`.
 The inventory below describes that commit. Following the review, the user
 authorized removal of the specialized buffer profiles. Calculator expansion
-is paused; the shared compiler extensions below are not implemented yet.
+is paused. Recursive source reflection, selection, physical certificates, and
+assembly export now implement the first bounded checkpoint; broader multi-result
+interfaces remain in the first issue. The inventory remains historical.
 Integration acceptance is tracked in
 [the shared-lowering milestone](../issues/native-shared-lowering-milestone.md).
 

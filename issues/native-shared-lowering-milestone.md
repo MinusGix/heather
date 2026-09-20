@@ -67,3 +67,14 @@ from commit 4db435c and is not retained as active compiler infrastructure.
 
 - 2026-09-20: By user direction, removed the two specialized buffer export profiles, their generators, five model modules, dedicated acceptance targets, examples/drivers, and build guides. Removed the profile-only parameterized valuation helper. General arithmetic, structured lowering, call summaries, shared-value/save-slot support, and test-isolation fixes remain. The implementation queue is now recursive source conditionals, [[function-ir-bounded-readonly-loop]], [[native-bounded-loop-certificates]], then this two-client integration check. The old scanner issues are retired as removed/superseded, without claiming their proofs were completed. Full-suite validation is in progress.
 - 2026-09-20: Cleanup validation: plain scripts/test passed 2832 tests, 0 failed, 5 ignored. The count is three lower because the two retired buffer-profile targets contained three tests. Updated documentation links, issue tracking, and git diff --check pass. No references to the retired profiles remain in crates/, lib/, or examples/. The shared-path implementation issues remain open; this round removes the prototypes and establishes the iteration queue.
+- 2026-09-20: Started [[function-ir-recursive-structured-lowering]] with source reflection,
+  recursive selection, and source-expansion checking. Physical recursive
+  certificates and native publication remain in that issue's next checkpoint.
+- 2026-09-20: [[function-ir-recursive-structured-lowering]] now implements the bounded
+  source-to-native checkpoint, including recursive physical certificates and
+  ordinary assembly export. Full validation is pending in that issue; broader
+  multi-result interfaces remain open.
+- 2026-09-20: The bounded nested-source-to-native checkpoint in
+  [[function-ir-recursive-structured-lowering]] passed full validation. The
+  shared physical certificate/export path is now exercised by both branch
+  shapes; multi-result interfaces remain in that issue.

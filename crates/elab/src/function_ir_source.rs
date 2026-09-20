@@ -7,6 +7,9 @@
 
 use std::collections::BTreeMap;
 
+mod structured;
+pub use structured::{generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction};
+
 use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};
 
@@ -290,10 +293,19 @@ fn reflect_term(
     caller_abs: usize,
     globals: &OperationGlobals,
 ) -> Result<SourceExpr, SourceError> {
+    reflect_term_under(term, caller_abs, globals, 0)
+}
+
+fn reflect_term_under(
+    term: &Term,
+    caller_abs: usize,
+    globals: &OperationGlobals,
+    branch_binders: u32,
+) -> Result<SourceExpr, SourceError> {
     if let Term::Var(LocalVar(index)) = term {
-        return match index {
-            1 => Ok(SourceExpr::Input(0)),
-            0 => Ok(SourceExpr::Input(1)),
+        return match index.checked_sub(branch_binders) {
+            Some(1) => Ok(SourceExpr::Input(0)),
+            Some(0) => Ok(SourceExpr::Input(1)),
             _ => unsupported("the source expression captures an unsupported local binder"),
         };
     }
@@ -311,8 +323,8 @@ fn reflect_term(
         }
         return Ok(SourceExpr::Binary {
             operation,
-            left: Box::new(reflect_term(arguments[1], caller_abs, globals)?),
-            right: Box::new(reflect_term(arguments[2], caller_abs, globals)?),
+            left: Box::new(reflect_term_under(arguments[1], caller_abs, globals, branch_binders)?),
+            right: Box::new(reflect_term_under(arguments[2], caller_abs, globals, branch_binders)?),
         });
     }
     if head_abs == globals.of_nat {

@@ -28,4 +28,5 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_call_summary", include_str!("../../../../lib/std/arch/x86_64/call_summary.hthr")),
     ("elf64_calls", include_str!("../../../../lib/elf64_calls.hthr")),
     ("linux_x86_64_fetch", include_str!("../../../../lib/linux_x86_64_fetch.hthr")),
+    ("x86_64_structured_block", include_str!("../../../../lib/std/arch/x86_64/structured_block.hthr")),
 ];

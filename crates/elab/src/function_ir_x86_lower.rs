@@ -5,6 +5,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+mod structured;
+mod structured_cert;
+pub use structured_cert::{generate_structured, StructuredX86Emission};
+pub use structured::{lower_structured, LoweredStructured, Placements, StructuredPlan};
+
 use crate::function_ir_cert::{
     self as cert, BlockArgument, ControlRegion, Node, Region, StructuredRegion,
 };
@@ -464,6 +469,7 @@ pub enum LoweringError {
         live_temporaries: usize,
     },
     InvalidStructuredRegion(String),
+    StructuredPath { path: String, reason: Box<LoweringError> },
     UnsupportedStructuredRegion,
     MissingConditionPlacement(u64),
     UnsupportedSequenceInterface,
@@ -525,6 +531,7 @@ impl fmt::Display for LoweringError {
                 f,
                 "node {node_index} needs another register while {live_temporaries} temporaries are live",
             ),
+            LoweringError::StructuredPath { path, reason } => write!(f, "{path}: {reason}"),
             LoweringError::InvalidStructuredRegion(message) => {
                 write!(f, "invalid structured region: {message}")
             }
@@ -3014,6 +3021,13 @@ pub fn generate(
         temporary_registers,
         requested_output,
     )?;
+    generate_selected(prefix, region_expr, region, lowered)
+}
+
+pub(super) fn generate_selected(
+    prefix: &str, region_expr: &str, region: &Region, lowered: LoweredDag,
+) -> Result<X86Emission, LoweringError> {
+    let input_registers = &lowered.input_registers;
     let instructions_name = format!("{prefix}_instructions");
     let bytes_name = format!("{prefix}_bytes");
     let after_name = format!("{prefix}_after");
