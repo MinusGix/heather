@@ -36,11 +36,12 @@ analyses its own numbers (§9 stage 0 records what to compare against).
   (`pair@`, `inl@`, `inr@`, `fst@`, `snd@`), each a *checked spelling* of an
   existing former, with a typing-preserving translation to it (§2.4). The
   layer-c code grammar, the code recursors and their 56 branches: untouched.
-- **`typing.rs`:** becomes generic over the `Dom` boundary the way `conv.rs`
-  is; `Values` is the production instantiation, `Syn` is the differential
-  oracle. Inferred types become domain objects (§3). This is the stage
-  `docs/nbe-conversion-design.md` §7 deferred as "cold"; it is 57 % of the
-  gate now.
+- **`typing.rs`:** inferred and expected types become `ITy`, syntax or an
+  un-spelled *selection* of a component (§3); every existing rule stays on
+  syntax, the five `@` rules and the views of a selection use the value
+  domain in a per-query arena, and a `materialize_eagerly` mode is the
+  differential oracle. (The first draft's migration to `Tc<D: Dom>` was
+  withdrawn after stage 1b priced it: §3.7.)
 - **`conv.rs`:** untouched in its arms — no conversion arm compares an
   intro's or projection's annotations today (§3.4). Gains the head views for
   the new forms.
@@ -212,150 +213,169 @@ It is not a `let`, not a Ψ mint, not a readback: §6.
 
 ---
 
-## 3. The checker moves to values
+## 3. The checker: deferred types, not a migration to values
 
-### 3.1 Why this is forced, not chosen
+**Revised 2026-09-20, after stage 1b's two stops** (issue log: the §3.7
+arena at `p10` ×2.63 peak RSS at step 0 alone, with conversion's own
+temporaries still freed per query; and `VTy::UPi`/`CtxPi`/`TyPi` having no
+representation for a body inferred *inside* its telescope). The first
+draft's §3 — `typing.rs` generic over `Dom`, `Values` in production —
+is withdrawn. What replaces it is smaller, arena-free, and keeps every
+existing rule on syntax. The original text's reasoning survives in §3.1;
+§3.2–3.6 are the new mechanism.
+
+### 3.1 Why syntax alone is not enough
 
 `fst@(T; p)` infers `S`, the first component of `T`'s whnf. With the
-rewriter that is a *syntax* — the substitution-expanded component, i.e. the
-exponential object, built in the kernel this time, which is
-`projected-tuple-tower-design.md` §5 F's first objection ("the kernel would
-then build the same reduct in *its* rewriter") and it is correct. With the
-evaluator it is a `TyClo` — one closure, no copy. But the checker's
-`tm_infer` returns `(Type, Level)` today, so a value-typed inferred type has
-nowhere to go. A hybrid (`enum { Syn(Type), Val(VTy) }` threaded through
-51 arms) is the single most error-prone shape available and is refused
-(§6 item 6). The uniform migration is the safe one, and it has a template.
+rewriter that is a *syntax* — the substitution-expanded component, the
+exponential object, built in the kernel this time
+(`projected-tuple-tower-design.md` §5 F's first objection, and it is
+correct). With the evaluator it is a closure, but a closure lives in an
+arena, and stage 1b measured what an arena that outlives a query costs:
+every binder push retained for the declaration is +9.3 GB on
+`probes/str/p10.hthr` before conversion's temporaries even join it. The
+checker may therefore hold neither the syntax of a component nor a value
+of one. What it can hold is a **description**.
 
-### 3.2 The template: `conv.rs`'s `Dom`
+### 3.2 `ITy`: an inferred or expected type is syntax, or a selection
 
-`conv.rs` is one text over `trait Dom` with two instantiations —
-`dom::values::Values` (production) and `dom::Syn` (the rewriter, the
-oracle) — and `tests/conv_differential.rs` runs both over six seeded
-streams of `tests/common/wt.rs`'s well-typed generator, reporting seeds only
-(`OutOfFuel` from either side is "no answer", never a disagreement).
+A checker-internal type (`crates/kernel/src/typing/ity.rs` or inside
+`typing.rs`; never a `Type` variant, so no kernel walker gains an arm):
 
-`typing.rs` becomes `Tc<D: Dom>`: inferred types are `D::Ty`, Γ carries
-entry types as `D::Ty` past the syntactic prefix (conv's `Env` already has
-exactly this — `rho`, `vtys`, `vbase`), the nine `Tc::whnf` sites become
-`D::whnf_ty_root` + `TyView`, the 29 `apply_local` and 21 `shift_local`
-become `D::inst_ty` and free weakening, and `Tc::conv_ty` compares two
-`D::Ty` in one arena instead of re-entering the value domain from syntax
-per query with a fresh arena (`conv.rs` ~209–243 — the per-query arena
-`docs/conversion-query-arena-pooling-design.md` §3 already names as the
-structural cost). `Tc<Syn>` is the current checker up to refactor, and it is
-the oracle.
+```
+ITy = Syn(Rc<Type>)
+    | Sel { of: Rc<ITy>, sel: Sel, at_depth: u32 }
 
-What `Dom` lacks that typing needs — corrected by the implementer's §9.0
-item 5 (issue log, 2026-09-20), which falsified the first draft's "nothing
-structural": `tm_infer_inner` *constructs* 18 type formers and `Dom` has no
-constructors for six of them (`sigma`, `seq`, `unit`, `upi`, `ctx_pi`,
-`ty_pi`); `Dom` is `pub(super)` inside `crate::conv` and every method takes
-`&mut Conv<'v, Self>`; `conv::Env` and `typing::Env` must merge (conv's is a
-strict superset but for `univs`). Six constructors, a visibility widening
-and an `Env` merge are stage 1b's step 0 — a no-op refactor landed with the
-suite green before any arm moves, the way `nbe-conversion-design.md`'s
-stage 2a preceded 2b. The non-mechanical operations (`var_type`, `inst_ty`,
-`under_tele_*`, `wf_step_telescope`, the two motive instantiators,
-`values.rs` ~23–35) are reused, not added to.
+Sel = Fst | Snd(Rc<Term>)          -- of a Σ:  S  |  U[a/x]
+    | Lhs | Rhs                    -- of a sum
+    | Dom | Cod                    -- of a Π:  S  |  T under one binder
+```
 
-### 3.3 Rules under values, the four that matter
+`Syn` is what every rule produces today. `Sel` is *the first component of
+whatever `of` reduces to*, un-spelled — the "reduction provenance" §10.3 of
+the traversal design said the reducer would have to hand its caller,
+written down as a datum instead. `at_depth` is the Γ length the description
+was formed at, so it can be evaluated later under more binders (identity
+environment of that length, weakened by the difference). An `ITy` is
+arena-free, `Rc`-shared, and linear in the source: a `Sel` chain of length
+k over a `Syn` costs k nodes.
 
-- **`pair@(T; a; b)`:** `ty_infer(T) = l`; `v = D::whnf_ty_root(T)`;
-  `TyView::Sigma { fst, snd }` else `HeadMismatch`; `tm_check(a, fst)`;
-  `tm_check(b, D::inst_ty(snd, [eval a]))`; return `(eval T, l)` — the
-  *un-reduced* `T` as a value, i.e. a glued neutral whose unfold is memoized
-  (`VNeutral.unfold`), so a consumer that converts it against a former pays
-  one δ step and a consumer that converts it against another `T` pays a
-  head comparison.
-- **`fst@(T; p)`:** as above to the view; `tm_check(p, v)`; return `(fst, l₁)`.
-  Note `tm_check(p, v)` converts `p`'s inferred type — for a `pair@` that is
-  its own `T'` — against `v`, the *former*; δ-lazy conversion unfolds `T'`
-  one step. That is the one place per node where the tower's type is
-  computed, and it is computed once per closure by the memo.
-- **`snd@(T; p)`:** return `(D::inst_ty(snd, [eval(fst@(T;p))]), l₂)`.
-- **`app`** (unchanged rule, changed cost): `tm_infer(fun)` → `TyView::Pi`;
-  the annotations `dom`/`cod` are `ty_check`ed and the rebuilt Π converted
-  against the inferred one as today. This is the 36 % constant factor of
-  `conversion-typed-eliminator-congruence`; it stays a constant factor over
-  a term that is now linear, and it is **not** taken here, for the reason
-  that issue records.
+**Where `Sel` arises, and only there:** the five `@` rules (§3.4), and the
+views a *checking* position takes of a `Sel` expected type (§3.3). No
+existing rule constructs a `Sel`: `app`'s result is `cod[arg/x]` from its
+own annotations (`Syn`), `fst`'s is its annotation, the Λ inference arms
+wrap the body's inferred type (see §3.5). So on every declaration without an
+`@` form the checker's behaviour is byte-identical to today's, which is the
+stage 1b gate's "counts unchanged to the unit".
 
-### 3.4 What does not move
+### 3.3 Two consumers, and the rule about the rewriter
 
-- **`conv.rs`'s decisions.** None reads an intro's or a projection's
-  annotation (confirmed on the tree: there is no `TmView::Pair` at all; Σ is
-  η at the ambient type). One arm did change in stage 1a, and it was
-  required rather than tolerated: `TmView::Fst`/`Snd` carry the stored
-  *levels*, which the neutral arm `lev_eq`s, and an `@` projection has none
-  — they became `Option`, `None` for `@`, so that `fst@` converts with `fst`.
-  The typed projection arm (`conv.rs` ~2179) reads the head's inferred Σ, so
-  `fst@`-on-a-neutral converts exactly as `fst` does.
-- **`reduce.rs`.** Gains the β arms (`fst@`/`snd@` on either pair; `case` on
-  `inl@`/`inr@`), the neutrality predicate, the whnf grammar lines. No layer
-  guard: reduction is untyped, and the guard is the checker's
-  (`Tc::computing_layer`, stronger than `not_var_layer`). The code-recursor
-  β at ~1571 is untouched: it never meets a `pair@`.
-- **`rec.rs`.** Untouched. Zero new branches.
-- **`subst.rs`, `bounds.rs`, `fmt.rs`, `merkle.rs`, `module_image.rs`**:
-  the mechanical transcription for five new variants, one annotation slot
-  each, no binder in the slot (`snd_ty` bound one; `T` binds none — this is
-  a simplification everywhere the walkers used `under(1)`).
+An `ITy` is consumed by exactly two operations, both of which already exist
+in some form:
 
-### 3.5 The value representation — decided in stage 1a
+- **`conv_ty(expected: &ITy, inferred: &ITy)`.** The reflexivity shortcut
+  is structural `==` on `ITy` (`Syn == Syn` is today's α-test; two equal
+  `Sel` descriptions are the same type by Determinacy). The cross-head memo
+  keys on `ITy` as it keyed on `Type`. A miss evaluates both sides into
+  **one per-query arena** — today's `conv_type_cached` shape, unchanged in
+  lifetime — with `Sel` evaluated as: `eval` the `of` in the identity
+  environment of `at_depth` (weakened to the current depth), `delta_whnf`,
+  take the `TyView`, force or apply the selected closure. Then
+  `Conv::<Values>::ty` on the two domain types. The arena's bounded memo
+  serves the query and is dropped with it, as now; there is no memo cell
+  that could outlive its arena (`TmClo` has none — forced values live in
+  the arena's cache, `value.rs` ~925).
+- **`view(expected: &ITy) -> View`**, the operation behind the nine
+  `Tc::whnf` sites and the `@` rules. For `Syn` it is today's rewriter
+  `Tc::whnf`, exactly — same fuel, same δ policy, same syntax components.
+  For `Sel`, and for the `@` rules' annotation `T` *even when it is `Syn`*,
+  it is the value domain: evaluate in a per-query arena, `delta_whnf_ty`,
+  read the head and levels, **discard the value**, and return a `View`
+  whose components are new `Sel`s over the input (`Pi` → `Dom`/`Cod`,
+  `Sigma` → `Fst`/`Snd(·)`, `Sum` → `Lhs`/`Rhs`). For the other formers
+  (`CodeTy`, `CodeTm`, `UPi`, `CtxPi`, `TyPi`, `Vec`, `Wf`, `Id`, …) the
+  view returns a **materialized** `Syn` former: the value's sub-structures
+  for those are syntax already (`TyClo::as_syn`, `value.rs` ~1054 — the
+  ctx/level/body slots the evaluator never opens), or, where a slot is a
+  closure with a non-identity environment, the rewriter is run on the
+  materialized `of` (§3.5). Correct everywhere; fast on the three formers
+  the tower is made of.
 
-Neither of the first draft's options. The grep (§9.0 item 3, issue log
-2026-09-20) found that every reader of `Val::Pair`/`Inl`/`Inr` takes
-`fst`/`snd`/`val` only, and every reader of the annotation closures reads
-them off a `VTy::Sigma` to *build* an `Elim::Fst`, never off a pair. So the
-evaluator maps the five `@` forms onto the five **existing** value forms:
-`eval(pair@(T;a;b))` forces `T` to its `VTy::Sigma` view and builds the
-existing `Val::Pair` from the view's levels and component closures;
-`inl@`/`inr@` through `VTy::Sum`; `fst@`/`snd@` push the existing
-`Elim::Fst`/`Snd`. The two spellings are *the same value*, so they convert
-with no new arm, and `value.rs`, `value/shift.rs` and the native fast paths
-are untouched.
+**The rule, stated once:** *the rewriter never runs on a type that came
+through an `@` annotation or a `Sel`.* Everything else keeps the rewriter,
+which is why the migration is small and why the differential oracle is
+cheap (§3.6).
 
-### 3.6 What `Tc::conv_ty`'s two shortcuts become — the stage 1b stop
+### 3.4 The five rules
 
-The implementer stopped stage 1b before its first line because §3.2 did
-not say what the checker's reflexivity shortcut (`expected == inferred` on
-syntax, the `conv_shortcut_hits` column, most of `queries`) and its
-cross-head memo (keyed on stored `Type`s) become on domain objects. Decided:
+```
+pair@(T; a; b):  l = ty_infer(T);  view_v(T) = Sigma{l₁,l₂}  else HeadMismatch;
+                 tm_check(a, Sel{T,Fst});  tm_check(b, Sel{T,Snd(a)});  ⇒ (Syn(T), l)
+inl@(T; a):      view_v(T) = Sum;  tm_check(a, Sel{T,Lhs});                ⇒ (Syn(T), l)
+inr@(T; b):      symmetric with Rhs
+fst@(T; p):      view_v(T) = Sigma;  tm_check(p, Syn(T));                  ⇒ (Sel{T,Fst}, l₁)
+snd@(T; p):      view_v(T) = Sigma;  tm_check(p, Syn(T));                  ⇒ (Sel{T,Snd(fst@(T;p))}, l₂)
+```
 
-- **Inferred types are carried unforced.** `tm_infer` returns a `D::TyC` —
-  under `Values` a `TyClo::Syn { env: ρ, body }` over the checker's current
-  ρ, never a forced `VTy`. A consumer forces it only when it needs the head
-  (`TyView`), and the identity ρ at a given Γ is one persistent spine, so
-  every closure built under that Γ shares its environment node.
-- **The reflexivity shortcut is `Dom::ty_eq_fast`, unchanged.** It already
-  says exactly what the syntactic test said: same environment pointer and
-  α-equal bodies (`values.rs` ~1266, `Env::ptr_eq` then `b1 == b2`). Two
-  separately built copies of one type under one Γ — the App rule's rebuilt
-  Π against the inferred Π — hit it as they hit `==` today; `conv.rs`'s
-  comment about the typing seam is about *bodies*, and the bodies are still
-  compared. The shortcut misses exactly when one side is a forced component
-  (`fst@`'s inferred type), which is the case that must run conversion. The
-  `conv_shortcut_hits` column keeps its meaning.
-- **The cross-head memo is ported, not redesigned.** Key on the pair's
-  `CloId`s plus the existing Γ/Ψ/layer/level fields when both sides are
-  `Syn` closures, compare bodies α-equally as the entry does now, skip the
-  memo when either side is forced. Its hit rate is 3 193 in 3.68 M on
-  `complete_post`; `conv_memo_hits` reports whether it still earns its
-  bucket search, and if it reports zero across the routine corpus it is
-  deleted in stage 4.
-- **The arm-by-arm rule for the migration:** no rule forces an inferred type
-  it does not view. A forced type is a value with no syntax, so forcing
-  eagerly is where a correct-but-slower checker would come from.
+`view_v` is the value-domain view of §3.3 (never the rewriter, even for a
+`Syn` `T`). `tm_check(p, Syn(T))` infers `p` — for a `pair@` that is its
+own `T'` — and converts `T'` against `T` in the value domain, δ-lazy: one
+head step if they differ, a `==` hit if the elaborator wrote the same
+spelling twice. The `Snd(a)` argument is the *term* `a` (or `fst@(T;p)`),
+not its value: evaluated per query in the identity environment, so the
+description stays arena-free.
 
-### 3.7 Fuel, depth, and the arena
+### 3.5 The three Λ inference arms, and completeness
 
-Eval's fuel and `NATIVE_DEPTH_LIMIT` apply unchanged. One `ValueArena` per
-gate call (per declaration), not per query: the arena's lifetime becomes
-the checker's, and the memo caches persist across the declaration. The
-address-space rail (`ulimit -v`) is the measurement of whether that
-retention is acceptable; §9 stage 1's gate includes peak RSS on the routine
-corpus, and the pooling design's numbers are the comparison.
+`ULam`/`CtxLam`/`TyLam` inference wraps the body's inferred type in
+`Type::UPi`/`CtxPi`/`TyPi`. When the body's inferred type is `Syn`, as it
+is on every declaration today, nothing changes. When it is a `Sel` — a
+layer-m metaprogram whose body infers a tower component, a shape no
+current file has — the arm **materializes** the `Sel` through the rewriter
+(`Tc::whnf` of the `of`, then the component's syntax) and wraps that. This
+is the one place the rewriter may meet an `@`-derived type, it is complete
+(the rewriter's answer is the checker's current answer), it is never
+silently wrong (the first draft's `Values` route was, for a body that
+depends on ℓ⃗ through its captured environment), and it is exponential
+exactly when today's checker is. `materialize` is also what §3.3's "other
+formers" branch uses. Its call count is a counter column (`ity_materialized`)
+so a workload that hits it is seen, not guessed.
+
+### 3.6 The oracle
+
+`Tc` gains one mode bit: `materialize_eagerly`. Under it every `Sel` is
+materialized the moment it is formed, so the checker is *today's checker*
+on the `@` forms (the reduct spelled by the rewriter), and `typing::oracle`
+is that mode. `tests/typing_differential.rs` runs both modes over
+`wt.rs`'s streams with the `@` option on, both Ψ and `opaque(Ψ)`, ≥ 4 seed
+streams plus a fuel sweep, seed-only reporting, `OutOfFuel` from either
+side never a disagreement. Because the two modes share every arm and differ
+only in when a `Sel` is spelled, the differential tests precisely the new
+thing: that evaluating a description and rewriting it agree — which is
+machine adequacy (`nbe-conversion-design.md` §11.2) applied at the typing
+seam, and already the property `conv_differential.rs` holds conversion to.
+
+### 3.7 Cost, and what is measured before it is optimized
+
+Every miss and every `Sel` view evaluates the tower's type afresh in a
+per-query arena. Per query that is the value graph, linear in the nesting
+(`projected-tuple-tower-design.md` §3); across a declaration it is
+`queries × depth`, against today's `3.5ⁿ` per query. Whether that
+re-evaluation dominates is stage 2's first number (a `sel_evals` column
+beside `queries`). If it does, the fix is a declaration-scoped memo of
+forced heads — which needs an arena that outlives a query and therefore a
+representation whose memoized values can never dangle — and that is a
+separate design, priced against this section's number, not a thing to
+slip into stage 2. The per-query arena is kept because stage 1b measured
+what abandoning it costs.
+
+**Withdrawn from the first draft:** `Tc<D: Dom>`, the `Env` merge, the
+`Dom` widening and the six constructors (step 0 is reverted; its log entry
+is the record of what it cost), one arena per gate (§3.7's sentence "the
+address-space rail is the measurement" was answered: no), and §6 item 6's
+refusal of a hybrid — that refusal was of a checker holding *values*; a
+checker holding *descriptions* is what this section adopts, and the
+distinction is the arena.
 
 ---
 
@@ -502,10 +522,10 @@ controlled curve, measured after stage 2, before its design is written.
    `code_eq` (syntactic payload), but the rule would give them one reduct
    whose type mentions the latter. §2.3's layer restriction is what makes
    this question not arise.
-6. **A hybrid checker** whose inferred types are `Syn | Val`. 51 arms each
-   handling two cases, no oracle instantiation for free, and the failure
-   mode is a soundness hole in the trusted core rather than a mismatch. The
-   generic `Tc<D>` has the oracle built in.
+6. **A hybrid checker whose inferred types are `Syn | Val`** — values in
+   the checker, hence an arena that outlives a query. Refused, and stage 1b
+   measured why (×2.63 RSS at `p10` for the cheap half). The adopted
+   `Syn | Sel` (§3.2) holds descriptions, not values, and is arena-free.
 7. **Annotation as a type code** (`⌜T⌝`). §2.5.
 8. **Whole-type `case` / `elim_W` / `elim_Wf`.** Their motives are forced
    sub-structures (§16.5, "cannot be recovered from anything else"); their
@@ -545,13 +565,12 @@ controlled curve, measured after stage 2, before its design is written.
   checked spellings infer their annotation" ; the Algorithms bullet on
   typing gains the §3.2 sentence, in the shape of §11.3 there.
 
-**Kernel cost.** Stage 1 is the migration of a 2770-line trusted file to
-the `Dom` boundary. It is the exact shape of `nbe-conversion-design.md`'s
-stage 2b, which was 1852 lines and landed. It is mechanical in the same
-way (arms rewritten one-for-one, inputs become domain objects) and
-differential-tested in the same way. Nothing can make it small; the
-containment is that a mistake is a *disagreement with `Tc<Syn>`* on a
-generated well-typed term, reported by seed, and not a silent acceptance.
+**Kernel cost.** Stage 1b changes the *type* of what the checker passes
+between its rules (`Type` → `ITy`) and adds two evaluators of a
+description (§3.3); no existing rule's logic moves. The containment is
+that a mistake is a *disagreement with the eager mode* on a generated
+well-typed term, reported by seed, and not a silent acceptance; and that
+on a declaration with no `@` form the counters must not move at all.
 
 **Boundaries not moved.** `reduce.rs` stays ch. 06's transcription and the
 specification. The trust story of DESIGN.md's "verbatim has moved from the
@@ -613,15 +632,14 @@ views, `merkle.rs`, `module_image.rs`. The rewriter checker `typing.rs`
 gains the five rules *on syntax* — which builds the reduct, and is
 acceptable because it is about to become the oracle.
 
-1b, step 0: the six `Dom` constructors, `Dom` widened out of `conv`, the
-`Env` merge — a no-op refactor, suite green, before any arm moves (§3.2).
-
-1b. `typing.rs` → `Tc<D: Dom>` under §3.6's rules; `Tc<Values>` wired as the gate;
-`typing::oracle::{check_term, infer_term, check_type}` = `Tc<Syn>`;
-`tests/typing_differential.rs` over `wt.rs`'s streams, both Ψ and
-`opaque(Ψ)`, ≥ 4 seed streams, seed-only reporting, `OutOfFuel` not a
-verdict. `wt.rs` gains generators for the five forms (an `@` form is
-generated from a generated component form by wrapping its former).
+1b. `ITy` and `Sel` (§3.2); `tm_check`/`tm_infer`/`conv_ty`/the nine
+`whnf` sites take and return `ITy`; `view` per §3.3 with the value-domain
+path for `Sel` and for the `@` annotations; the five rules per §3.4; the
+Λ arms and `materialize` per §3.5 with the `ity_materialized` and
+`sel_evals` counter columns; the `materialize_eagerly` mode and
+`typing::oracle` per §3.6; `tests/typing_differential.rs`. No arena
+outlives a query. On a declaration without `@` forms the checker must be
+byte-identical in verdicts and counters.
 
 *Gate:* full `scripts/test` green including `tests/typing.rs`'s golden
 suite, `ch05_06_lemmas.rs` (the identity-recursor proxy must be unchanged —

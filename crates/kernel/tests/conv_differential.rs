@@ -41,8 +41,8 @@ mod common;
 use std::sync::Arc as Rc;
 
 use common::wt::{
-    gen_wt_ctx, gen_wt_env, gen_wt_term, gen_wt_term_at, gen_wt_type, identity_branches,
-    identity_motives, perturb_conv, FUEL,
+    gen_wt_ctx, gen_wt_env_at as gen_wt_env, gen_wt_term, gen_wt_term_at, gen_wt_type,
+    identity_branches, identity_motives, perturb_conv, FUEL,
 };
 use common::Rng;
 use heather_kernel::conv::{

@@ -535,3 +535,285 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
   `probes/` is **untracked and not covered by `.gitignore`** — the coordinator
   should decide whether the six corpus files belong in the tree or in the ignore
   list before committing.
+- 2026-09-20: Implementer, **stage 1b step 1 — the bench fixture is isolated, and the 4.5–13.5× is gone.**
+  Standalone, before any `typing.rs` line moves.
+
+  **The change.** `WtEnv` gains one field, `at_forms: bool`, **off by default**; the
+  arm dispatch reads its modulus off it (`r.below(if env.at_forms { 32 } else { 27 })`)
+  and the five `@` arms gain `env.at_forms &&` in their guards. `gen_wt_env` sets it
+  false; the new `gen_wt_env_at` sets it true and is what the differential and lemma
+  tests import (`use common::wt::{gen_wt_env_at as gen_wt_env, …}` — one line per file
+  in `conv_differential.rs`, `eval_differential.rs`, `ch05_06_lemmas.rs`).
+  `tests/typing.rs`'s golden coverage does not use `wt.rs` at all — it is hand-written
+  syntax — so it needed nothing. The benches (`conv/perturbed-pairs`,
+  `check/generated-terms`, both via `gen_wt_env`) are back on the old workload.
+  wt.rs +31/−3; three test files +1/−1 each.
+
+  **Off is byte-identical to the pre-`@` generator, by construction and not by
+  measurement.** `Rng::below` draws exactly one word whatever the bound
+  (`tests/common/mod.rs` ~59), so modulus 27 makes arms 27–31 unreachable *and*
+  leaves the draw schedule untouched. `diff` of `git show 5cf63f2:…/wt.rs` against
+  the current file removes exactly three lines — the two `WtEnv` literals and
+  `match r.below(27)` — each replaced by an `at_forms`-carrying or
+  `at_forms`-conditioned equivalent. Every other hunk is additive.
+
+  **Measurement, on a quiet box** (load average 0.56 / 2.03 at launch; the stage-1a
+  entry's readings were taken at 9.3–12.8 and are the reason this was re-done).
+  Control: `scripts/bench --save` on HEAD *with* this change — the committed baseline
+  is stale against this tree and is not a control (it has **no** `conv/vec-literal`
+  rows at all, which is where the previous entry's "untracked — no baseline entry"
+  came from). Then `scripts/bench --check` against it:
+
+      ok: 112 comparisons within thresholds
+
+  with the two families that had moved reading
+
+  | fixture | slope now | slope with `@` on (stage 1a) | slope before `@` existed |
+  |---|---:|---:|---:|
+  | `check/generated-terms` | **1.04** | 2.5–2.7 | 1.04 |
+  | `conv/perturbed-pairs` | **0.99** (2.90–2.98 µs/pair, flat) | 4.5–13.5× on time | — |
+
+  So the fixture change is fully reverted and the gate is a gate again. The
+  substance the `@` fixture was measuring — that a checked spelling whose
+  annotation is `El ⌜Σ⌝` is expensive **under the syntax checker** — is not lost:
+  it is exactly what `typing_differential` will exercise, and it is the case for
+  stage 1b rather than a bench row.
+
+  **State of `crates/kernel/benches/baseline.tsv`:** overwritten with the fresh
+  control (the committed copy is preserved in the session scratch dir). It is the
+  control the stage-1 gate's `--check` will run against. Whether it is committed is
+  the coordinator's call; if not, `git checkout crates/kernel/benches/baseline.tsv`
+  restores the committed one and the gate's reading below stands on its own.
+
+  `scripts/test --fast` on the tree at this point: `== suite: 2687 passed, 0 failed, 5 ignored ==`.
+- 2026-09-20: Implementer, **stage 1b step 0 (the no-op refactor) — landed and measured**, and then
+  **stage 1b STOPPED again, on a second structural gap**: three of the six missing
+  `Dom` constructors cannot be written at `Values` at all. Details below, in the
+  order the coordinator needs them: what landed, what it costs, and what is blocked.
+
+  ---
+
+  ### What landed (step 0)
+
+  **(a) The `Dom` boundary is out of `conv`.** `pub(super)` → `pub(crate)`
+  throughout `conv/dom.rs` (9 items: `Dom`, `TyView`, `TmView`, `Values`, `Syn`
+  and their inherent methods), `mod values` → `pub(crate) mod values`, and
+  `conv::{Env, Conv, TyEnv, TyEnvNode}` made `pub(crate)`. Mechanical; no method
+  body changed.
+
+  **(b) `conv::Env` absorbed `typing::Env`.** Exactly as the earlier entry
+  predicted: conv's is a strict superset but for `univs`, so the merge is "add
+  `univs` (and, under the feature, `value_metrics`) to `conv::Env` and delete
+  `typing::Env`". New: `Env::for_typing` (the checker's constructor — arena, Ψ,
+  Γ, layer, `|L|`, cache, metrics) and `Env::push_spec_syn` (`Dom::push_spec`
+  without the domain parameter, because the checker has `rec::Tele`'s syntax and
+  never a domain object for it). `typing.rs`'s 30-odd `push_entry` calls became
+  `push_entry_syn`, which was already there for conversion's own
+  syntax-carrying pushes. `ConvMemo::psi` became `Rc<GlobalCtx>` — identity is
+  preserved either way (`GlobalBindings` derives `Clone` over an `Rc<()>` token),
+  so this is strictly cheaper and changes no verdict.
+
+  **(c) §3.7's arena moved to the gate call.** Each public entry
+  (`check_term`, `check_type`, `infer_term`, `infer_type`, `check_local_subst`,
+  `check_local_ctx`, the two `_profiled` twins, and one per binding inside
+  `check_global_ctx_extension`) now builds a `ValueArena` and hands it to
+  `Env::for_typing`. `Tc::conv_ty` still calls `conv_type_cached`, which still
+  builds its **own** arena per query — deliberately, so that step 0 is a no-op
+  in verdicts *and* in counters and the arena's new lifetime can be priced on
+  its own before anything depends on it.
+
+  **(d) Three of the six missing constructors.** `unit`, `sigma`, `seq` at both
+  `Syn` and `Values` — genuinely mechanical, one `Type` constructor and one
+  `VTy` constructor each, `sigma` mirroring `pi` and `seq` mirroring `id`. They
+  are `#[allow(dead_code)]` until `typing.rs` is `Tc<D>`.
+
+  `conv.rs` +71/−14, `conv/dom.rs` +73/−11, `conv/dom/values.rs` +41,
+  `typing.rs` +52/−118.
+
+  ### The gate on step 0
+
+  `scripts/test --fast`: **`== suite: 2687 passed, 0 failed, 5 ignored ==`**,
+  the same count as before the change. Full `scripts/test` is running and is
+  reported in the handover.
+
+  **Counters: inert, to the unit.** Two release binaries from this worktree
+  (`git stash` / `stash pop`), distinct by `cmp` (byte 25), over `--timings`,
+  read with `scripts/timings --diff`:
+
+  | file | items | queries Δ | misses Δ | steps Δ | shortcut Δ | memo Δ |
+  |---|---:|---|---|---|---|---|
+  | `lib/ir_v1.hthr` | 374 rows | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** |
+  | `probes/t_cp9.hthr` | all rows | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** |
+
+  Not one row of either file has a non-zero count delta. So the `Env` merge,
+  the visibility widening and the `Rc<GlobalCtx>` memo key change no verdict and
+  no shortcut/memo/miss outcome — which is what a step-0 refactor owes.
+
+  ### **The cost, which is the finding: §3.7's arena is expensive, and this is only its lower bound**
+
+  Peak RSS, same two binaries, same runs:
+
+  | file | before | after | |
+  |---|---:|---:|---|
+  | `lib/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
+  | `probes/t_cp9.hthr` | 2 201 MB | 3 315 MB | **+51 %** |
+  | `probes/str/p10.hthr` | 5 733 MB | 15 076 MB | **×2.63** |
+
+  `p10` needed the cap raised to 16 GiB to finish at all; at the 8 GiB the
+  `OOM-safe testing` rule uses it would have died. The attribution is exact and
+  there is nothing else it could be: the only allocation the change moves is
+  `Env::push_entry_syn`'s — one `TyClo`, one `Val::var` and one environment cell
+  per binder push. In the before binary those live in conversion's per-query
+  arena and are freed when the query ends; in the after binary they live in the
+  checker's arena and are freed when the **declaration** ends. The growth tracks
+  check volume exactly (ir_v1 ≈ 0, t_cp9 +1.1 GB, p10 +9.3 GB).
+
+  And this is the *cheap* half. At step 0 conversion still frees its own arena
+  per query. Stage 1b proper makes conversion allocate into the checker's arena
+  too — every closure of every one of `p10::char_run`'s 42 887 503 queries
+  retained for the declaration instead of for the query. §3.7 says "the
+  address-space rail is the measurement of whether that retention is
+  acceptable"; on the routine corpus, measured, **the answer at `p10` is no**,
+  and `docs/conversion-query-arena-pooling-design.md` §3's per-query arena is
+  not only a structural cost but also the thing keeping the corpus inside its
+  rail. This should be settled before a line of stage 1b is written, the same
+  way §3.6 was.
+
+  ---
+
+  ### **The stop: `upi`, `ctx_pi` and `ty_pi` have no implementation at `Values`**
+
+  The earlier entry said the six missing constructors are "mechanical, because
+  conversion views these and never builds them — each is one `VTy` constructor
+  on the `Values` side". That is true of `sigma`, `seq` and `unit`, which are
+  landed above. It is **false** of the other three, and the reason is structural,
+  not an oversight in the transcription.
+
+  **The shape of the three arms.** `tm_infer_inner`'s `ULam` / `CtxLam` / `TyLam`
+  each push a telescope, infer the body there, and wrap:
+
+      let e = env.push_univs(*num_vars);
+      let (ty, lt) = self.tm_infer(&e, body)?;      //  ty is scoped in `e`
+      Ok((Type::UPi { num_vars, level, body: Rc::new(ty) }, Level::Omega))
+
+  Under `Tc<D>` that `ty` is a `D::TyC` **scoped inside the pushed telescope**.
+
+  **The shape the value language demands.** `VTy::UPi { num_vars, level, body }`
+  — and `CtxPi`/`TyPi` likewise — stores the body as a closure whose *syntax* is
+  written under the binders and whose *captured environment* is written
+  **outside** them. `eval.rs` ~758 builds exactly that (`yclo(env, body)` /
+  `under_binder_ty(arena, env, body)` over the pre-push environment), and both
+  consumers depend on it:
+
+  - `Values::inst_univ_ty` (`values.rs` ~945) requires `body.clo.as_syn()` and
+    then `bbody.inst_univ(phi)` — it instantiates the **syntax**. A body with no
+    syntax is `NotConvertible`, i.e. a wrong answer.
+  - `inst_global_ty` (~1702) does the same for `CtxPi`/`TyPi`, with a
+    `debug_assert_eq!(benv.gshift(), 0)` pinning "the outer environment is
+    materialized".
+  - conversion's own arms (`conv.rs` ~1040 and ~1399) take the body out of the
+    view, `push_univs(n)`, and then `D::under_tele_ty(body, n, 0)` — which is
+    `value::shift::reenv_ty`, *weakening the captured environment into the
+    telescope*. A body that is already inside the telescope would be shifted a
+    second time.
+
+  So `Dom::upi` would have to map a closure captured **inside** the telescope to
+  one captured **outside** it — the inverse of `under_tele_ty`. That inverse does
+  not exist in `value/shift.rs` (`Outer` only weakens; `Level::shift`,
+  `shift_univ` and `shift_global` have no lowering form), and — this is the part
+  that makes it not merely missing but impossible — **it does not exist
+  mathematically**. A `ΠΠℓ⃗. T` whose body value genuinely depends on ℓ⃗ through
+  its captured environment has no `VTy::UPi` representation at all. The witness
+  is one line:
+
+      Λℓ. f a          -- inferred type  cod[a/x],  where the argument value `a` mentions ℓ
+
+  At `Values` the body's inferred type is `TyClo::Syn { ρ.extend(⟦a⟧), cod }` and
+  `⟦a⟧` carries ℓ. Unshifting it is undefined; leaving it and letting conversion
+  `reenv` it again corrupts it *silently*, which is worse than a rejection.
+
+  **Why this cannot be papered over.** The three arms are layer-m and
+  inference-position only — narrow — but a trusted checker may not be incomplete
+  on a form the rules admit, and it certainly may not be silently wrong. There is
+  no readback in the kernel to fall back on (`grep -rn 'fn quote\|readback\|fn
+  reify' crates/kernel/src` returns nothing), and §5 of the design refuses
+  building one.
+
+  **Candidates, unpriced, in the order I would try them:**
+
+  1. **The three arms stay on the rewriter.** `Tc<Values>`'s `ULam`/`CtxLam`/
+     `TyLam` inference calls `Tc<Syn>`'s — which is the current, trusted
+     checker — and `embed_ty`s the `Rc<Type>` it returns. Correct by
+     construction (the syntax checker is the reference the whole differential
+     test is built on), contained to three cold arms, and needs no new kernel
+     machinery. Costs: a second `Tc` inside the first, and the differential test
+     becomes uninformative on exactly those three arms — which should be said out
+     loud rather than discovered.
+  2. **A second shape for the three value formers**: `VTy::UPi` &c. gain a
+     "domain body already inside the telescope" variant, and `inst_univ_ty` /
+     `inst_global_ty` gain the value-level `inst_univ` / `apply_global` that shape
+     needs. Principled and complete; it is a change to the **value language**,
+     which §3.5 and stage 1a were careful to leave untouched, and it touches
+     every reader of those three variants.
+  3. **Narrow the migration**: `tm_check`'s expected types become `D::TyC` and
+     `tm_infer` keeps returning syntax except at `fst@`/`snd@`. This is §6 item
+     6's hybrid and is refused there, but it is worth re-pricing now that the
+     *reason* for the hybrid is three named arms rather than a general unease.
+
+  **What the coordinator has to decide, in order:**
+
+  1. Whether §3.7's per-gate arena survives the RSS above (`p10` ×2.63 on the
+     cheap half alone), and if it does not, what `Tc<D>`'s arena discipline is —
+     because the `Env` merge is how the arena's lifetime is spelled, and the two
+     are one edit.
+  2. Which of the three candidates above the layer-m λ-inference arms take.
+  3. Whether step 0 as landed (visibility, `Env` merge, three constructors,
+     per-gate arena) is kept, kept-minus-the-arena, or reverted pending (1).
+
+  Nothing else in stage 1b was attempted: `typing.rs` is still the concrete `Tc`
+  on syntax, and `Tc<Syn>`, `typing::oracle` and `tests/typing_differential.rs`
+  do not exist.
+- 2026-09-20: Implementer, **handover: the full suite on the step-0 tree, and one more RSS datum.**
+
+      == suite: 2827 passed, 0 failed, 5 ignored ==
+
+  Not INCOMPLETE, and the same count as stage 1a's gate — so the bench-fixture
+  isolation, the visibility widening, the `Env` merge, the per-gate arena and the
+  three new `Dom` constructors break nothing, including the x86 certificate gates
+  and `showcase_gate`.
+
+  **But `showcase_gate` is the third RSS reading and it is the one with a
+  comment attached to it:**
+
+      calc_text    ok    239.3 s wall    237.8 s cpu    12.5 GiB peak
+
+  against the **9.8 GiB** that `scripts/test`'s `showcase_gate` comment and
+  `CLAUDE.md` both quote (measured 2026-09-19). **+28 %**, from the same one
+  change — `Env::push_entry_syn` now allocating into an arena whose lifetime is
+  the gate call's. `scripts/showcase`'s rail is sized "from the largest this file
+  has actually been checked under (14 GiB) with headroom", so it passed, but the
+  headroom it was sized with is most of what this change just spent. If step 0 is
+  kept, that comment, `CLAUDE.md`'s `calc_text` line and the rail's own rationale
+  need re-recording; if §3.7's arena is reconsidered (the first decision on the
+  previous entry's list), they do not.
+
+  The three readings together, one change, one binary pair, `before-after-binary-provenance` observed:
+
+  | file | before | after | |
+  |---|---:|---:|---|
+  | `lib/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
+  | `docs/showcase/calc_text.hthr` | 9.8 GiB | **12.5 GiB** | +28 % |
+  | `probes/t_cp9.hthr` | 2 201 MB | 3 315 MB | +51 % |
+  | `probes/str/p10.hthr` | 5 733 MB | **15 076 MB** | **×2.63** |
+
+  Counters on `ir_v1` and `t_cp9`: not one row moved.
+
+  **Tree state.** Nothing committed. `crates/kernel/benches/baseline.tsv` holds
+  the **fresh control** this round measured against, not the committed baseline
+  (`git checkout crates/kernel/benches/baseline.tsv` restores the committed one;
+  the `--check` verdict above stands either way, since the control was taken on
+  the same tree it gated). `probes/` is still untracked and still not covered by
+  `.gitignore` — the same decision the stage-1a handover left open. `typing.rs`
+  is unchanged as a checker: still the concrete `Tc` on syntax; `Tc<Syn>`,
+  `typing::oracle` and `tests/typing_differential.rs` do not exist.
+- 2026-09-20: Coordinator: stage 1b's two stops are both answered by one change to the design, §3 rewritten (docs/intro-by-type-design.md, 2026-09-20). The `Tc<D: Dom>` migration is **withdrawn** and step 0 reverted (step 1, the bench-fixture isolation, is kept and committed): the arena finding is decisive on its own — an arena that outlives a query is +9.3 GB at `p10` before conversion's temporaries even join it — and the `UPi`/`CtxPi`/`TyPi` gap is a second symptom of the same thing (the checker was being asked to hold *values*). What replaces it: the checker holds **descriptions** — `ITy = Syn(Rc<Type>) | Sel { of, sel, at_depth }` with `Sel ∈ {Fst, Snd(a), Lhs, Rhs, Dom, Cod}` — arena-free, linear, formed only by the five `@` rules and by views of a `Sel`; consumed by `conv_ty` (structural `==` shortcut, memo keyed on `ITy`, a miss evaluates both sides into today's per-query arena) and by `view` (rewriter for `Syn` as today; value domain for `Sel` and for the `@` annotations, returning new `Sel`s for Π/Σ/Sum components and a materialized former otherwise). The three Λ inference arms materialize a `Sel` body through the rewriter — complete, never silently wrong, exponential exactly when today is, counted. The oracle is a `materialize_eagerly` mode of the same checker, so the differential tests exactly the new thing. Per-query re-evaluation cost is stage 2's first number (`sel_evals`), and a declaration-scoped memo is a separate design if it dominates. §6 item 6's refusal was of values in the checker; descriptions are what is adopted, and the distinction is the arena.

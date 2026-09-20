@@ -100,6 +100,21 @@ pub struct WtEnv {
     pub univs: u32,
     pub layer: Layer,
     pub gamma: LocalCtx,
+    /// Generate the five **checked spellings** (`pair@`/`inl@`/`inr@`/
+    /// `fst@`/`snd@`, `docs/intro-by-type-design.md` §2)? **Off by default**,
+    /// and off is byte-identical to the pre-`@` generator: the arm dispatch
+    /// picks its modulus from this flag (`r.below(27)` vs `r.below(32)`) and
+    /// `Rng::below` draws exactly one word whatever the bound, so a stream
+    /// generated with the flag off is the same stream it was before the
+    /// spellings existed.
+    ///
+    /// That matters because two bench fixtures are built from this generator
+    /// (`conv/perturbed-pairs`, `check/generated-terms`) and their baselines
+    /// gate the kernel: with the spellings on, `perturbed-pairs` moved
+    /// 4.5–13.5× and `generated-terms`' slope 1.04 → 2.5, a *fixture* change
+    /// that would bury the next real regression. The differential and golden
+    /// tests turn it on with [`gen_wt_env_at`]; the benches do not.
+    pub at_forms: bool,
 }
 
 /// `shift_univ_psi` replica (the kernel's is crate-private): weaken every
@@ -146,13 +161,20 @@ impl WtEnv {
             univs: self.univs + n,
             layer: self.layer,
             gamma: self.gamma.shift_univ(n),
+            at_forms: self.at_forms,
         }
     }
 
     fn push_global(&self, b: GlobalBinding) -> WtEnv {
         let mut psi = self.psi.clone();
         psi.push(b);
-        WtEnv { psi, univs: self.univs, layer: self.layer, gamma: self.gamma.shift_global(1) }
+        WtEnv {
+            psi,
+            univs: self.univs,
+            layer: self.layer,
+            gamma: self.gamma.shift_global(1),
+            at_forms: self.at_forms,
+        }
     }
 
     /// Does this term check here? (The kernel checker as generator filter.)
@@ -199,9 +221,16 @@ pub fn gen_wt_env(r: &mut Rng) -> WtEnv {
             ]),
     };
     let layer = if r.below(4) == 0 { Layer::Prog } else { Layer::Meta };
-    let mut env = WtEnv { psi, univs, layer, gamma: nil_ctx() };
+    let mut env = WtEnv { psi, univs, layer, gamma: nil_ctx(), at_forms: false };
     env.gamma = gen_wt_ctx(&env, r, 4, layer);
     env
+}
+
+/// [`gen_wt_env`] with the checked spellings **on** — the differential and
+/// golden tests' entry point. Draws exactly the same random words as
+/// `gen_wt_env`; the streams diverge only at [`gen_wt_term`]'s dispatch.
+pub fn gen_wt_env_at(r: &mut Rng) -> WtEnv {
+    WtEnv { at_forms: true, ..gen_wt_env(r) }
 }
 
 /// A well-formed local context `⊢_layer Δ` over `env.psi` (base `·` or a
@@ -787,7 +816,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(32) {
+        match r.below(if env.at_forms { 32 } else { 27 }) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -1237,7 +1266,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
             //
             // Computing layers only: these forms do not exist at c
             // (design §2.3), and `gen_letbox_tm` generates under `Layer::Code`.
-            27 if b > 0 && env.layer.computes() => {
+            27 if b > 0 && env.at_forms && env.layer.computes() => {
                 // pair@(T; a; b) : T, T = El ⌜Σ(x:El A). El B⌝.
                 let Some((ty, _sigma, fst_ty, snd_ty, dl, cl, lmax)) = gen_at_sigma(env, r, b)
                 else {
@@ -1249,7 +1278,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 let Some(bb) = gen_wt_term_at(env, r, b / 2, &snd_at, &cl) else { continue };
                 return (rt(Term::PairAt { ty: Rc::clone(&ty), fst: a, snd: bb }), ty, lmax);
             }
-            28 | 29 if b > 0 && env.layer.computes() => {
+            28 | 29 if b > 0 && env.at_forms && env.layer.computes() => {
                 // inl@/inr@(T; v) : T, T = El ⌜A + B⌝.
                 let right = r.below(2) == 0;
                 let (lhs_e, dl) = gen_encoding(env, r, b / 2);
@@ -1275,7 +1304,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 };
                 return (rt(t), ty, lmax);
             }
-            30 | 31 if b > 0 && env.layer.computes() => {
+            30 | 31 if b > 0 && env.at_forms && env.layer.computes() => {
                 // fst@/snd@(T; p) : S resp. U[fst@(T;p)/x].
                 let Some((ty, sigma, fst_ty, snd_ty, dl, cl, lmax)) = gen_at_sigma(env, r, b)
                 else {

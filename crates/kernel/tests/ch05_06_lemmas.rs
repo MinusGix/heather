@@ -22,7 +22,7 @@ mod common;
 
 use std::sync::Arc as Rc;
 
-use common::wt::{gen_wt_env, gen_wt_subst, gen_wt_term, gen_wt_type, FUEL};
+use common::wt::{gen_wt_env_at as gen_wt_env, gen_wt_subst, gen_wt_term, gen_wt_type, FUEL};
 use common::{gen_scope, gen_sigma, gen_subst, gen_term, law, BaseRef, Rng, Sc, Shape};
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
