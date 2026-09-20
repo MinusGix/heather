@@ -246,13 +246,18 @@ per query with a fresh arena (`conv.rs` ~209–243 — the per-query arena
 structural cost). `Tc<Syn>` is the current checker up to refactor, and it is
 the oracle.
 
-What `Dom` lacks that typing needs, and must gain: nothing structural. The
-operations are a subset of conversion's — evaluate a syntax type in the
-current ρ, view its head, instantiate a closure at a value, push a binder
-with a domain object, compare two domain types. `values.rs` ~23–35 lists
-where its instantiation "stops being mechanical" (`var_type`, `inst_ty`,
-`under_tele_*`, `wf_step_telescope`, the two motive instantiators); typing
-reuses those, it does not add to them.
+What `Dom` lacks that typing needs — corrected by the implementer's §9.0
+item 5 (issue log, 2026-09-20), which falsified the first draft's "nothing
+structural": `tm_infer_inner` *constructs* 18 type formers and `Dom` has no
+constructors for six of them (`sigma`, `seq`, `unit`, `upi`, `ctx_pi`,
+`ty_pi`); `Dom` is `pub(super)` inside `crate::conv` and every method takes
+`&mut Conv<'v, Self>`; `conv::Env` and `typing::Env` must merge (conv's is a
+strict superset but for `univs`). Six constructors, a visibility widening
+and an `Env` merge are stage 1b's step 0 — a no-op refactor landed with the
+suite green before any arm moves, the way `nbe-conversion-design.md`'s
+stage 2a preceded 2b. The non-mechanical operations (`var_type`, `inst_ty`,
+`under_tele_*`, `wf_step_telescope`, the two motive instantiators,
+`values.rs` ~23–35) are reused, not added to.
 
 ### 3.3 Rules under values, the four that matter
 
@@ -278,36 +283,72 @@ reuses those, it does not add to them.
 
 ### 3.4 What does not move
 
-- **`conv.rs`'s arms.** None reads an intro's or a projection's annotation.
-  The new forms add `TmView` variants (or reuse: a `pair@` value *is* a pair,
-  see 3.5) and `Elim` variants for the neutral projections; the typed
-  projection arm (`conv.rs` ~2179) reads the head's inferred Σ, so
+- **`conv.rs`'s decisions.** None reads an intro's or a projection's
+  annotation (confirmed on the tree: there is no `TmView::Pair` at all; Σ is
+  η at the ambient type). One arm did change in stage 1a, and it was
+  required rather than tolerated: `TmView::Fst`/`Snd` carry the stored
+  *levels*, which the neutral arm `lev_eq`s, and an `@` projection has none
+  — they became `Option`, `None` for `@`, so that `fst@` converts with `fst`.
+  The typed projection arm (`conv.rs` ~2179) reads the head's inferred Σ, so
   `fst@`-on-a-neutral converts exactly as `fst` does.
 - **`reduce.rs`.** Gains the β arms (`fst@`/`snd@` on either pair; `case` on
-  `inl@`/`inr@`), the neutrality predicate, the whnf grammar lines, and —
-  since it is ch. 06's transcription and the oracle — the same layer guard.
-  The code-recursor β at ~1571 is untouched: it never meets a `pair@`.
+  `inl@`/`inr@`), the neutrality predicate, the whnf grammar lines. No layer
+  guard: reduction is untyped, and the guard is the checker's
+  (`Tc::computing_layer`, stronger than `not_var_layer`). The code-recursor
+  β at ~1571 is untouched: it never meets a `pair@`.
 - **`rec.rs`.** Untouched. Zero new branches.
 - **`subst.rs`, `bounds.rs`, `fmt.rs`, `merkle.rs`, `module_image.rs`**:
   the mechanical transcription for five new variants, one annotation slot
   each, no binder in the slot (`snd_ty` bound one; `T` binds none — this is
   a simplification everywhere the walkers used `under(1)`).
 
-### 3.5 The value representation — an implementer's decision, flagged
+### 3.5 The value representation — decided in stage 1a
 
-`Val::Pair` / `Val::Inl` / `Val::Inr` and `Elim::Fst` / `Elim::Snd` carry
-the *annotation closures* (`value.rs` ~1441, ~1710). The evaluator maps a
-`pair@` onto a pair value; the question is what goes in `fst_ty`/`snd_ty`.
-Options: (a) a `TyClo::Syn { env, T }` for the whole type in a new
-`annot` field with the component slots absent; (b) a separate
-`Val::PairAt`. The decision turns on **who reads those closures**: the
-first-hour item §9.0.3 is the grep. If conversion and the native fast paths
-(`eval/bits.rs`, `eval/transduce.rs` pattern-match `Val::Pair`) read only
-`fst`/`snd`, (a) with the slots as an enum is the smaller change; if the
-readback devices are the only readers, they are being deleted (§4.4) and
-the slots can go.
+Neither of the first draft's options. The grep (§9.0 item 3, issue log
+2026-09-20) found that every reader of `Val::Pair`/`Inl`/`Inr` takes
+`fst`/`snd`/`val` only, and every reader of the annotation closures reads
+them off a `VTy::Sigma` to *build* an `Elim::Fst`, never off a pair. So the
+evaluator maps the five `@` forms onto the five **existing** value forms:
+`eval(pair@(T;a;b))` forces `T` to its `VTy::Sigma` view and builds the
+existing `Val::Pair` from the view's levels and component closures;
+`inl@`/`inr@` through `VTy::Sum`; `fst@`/`snd@` push the existing
+`Elim::Fst`/`Snd`. The two spellings are *the same value*, so they convert
+with no new arm, and `value.rs`, `value/shift.rs` and the native fast paths
+are untouched.
 
-### 3.6 Fuel, depth, and the arena
+### 3.6 What `Tc::conv_ty`'s two shortcuts become — the stage 1b stop
+
+The implementer stopped stage 1b before its first line because §3.2 did
+not say what the checker's reflexivity shortcut (`expected == inferred` on
+syntax, the `conv_shortcut_hits` column, most of `queries`) and its
+cross-head memo (keyed on stored `Type`s) become on domain objects. Decided:
+
+- **Inferred types are carried unforced.** `tm_infer` returns a `D::TyC` —
+  under `Values` a `TyClo::Syn { env: ρ, body }` over the checker's current
+  ρ, never a forced `VTy`. A consumer forces it only when it needs the head
+  (`TyView`), and the identity ρ at a given Γ is one persistent spine, so
+  every closure built under that Γ shares its environment node.
+- **The reflexivity shortcut is `Dom::ty_eq_fast`, unchanged.** It already
+  says exactly what the syntactic test said: same environment pointer and
+  α-equal bodies (`values.rs` ~1266, `Env::ptr_eq` then `b1 == b2`). Two
+  separately built copies of one type under one Γ — the App rule's rebuilt
+  Π against the inferred Π — hit it as they hit `==` today; `conv.rs`'s
+  comment about the typing seam is about *bodies*, and the bodies are still
+  compared. The shortcut misses exactly when one side is a forced component
+  (`fst@`'s inferred type), which is the case that must run conversion. The
+  `conv_shortcut_hits` column keeps its meaning.
+- **The cross-head memo is ported, not redesigned.** Key on the pair's
+  `CloId`s plus the existing Γ/Ψ/layer/level fields when both sides are
+  `Syn` closures, compare bodies α-equally as the entry does now, skip the
+  memo when either side is forced. Its hit rate is 3 193 in 3.68 M on
+  `complete_post`; `conv_memo_hits` reports whether it still earns its
+  bucket search, and if it reports zero across the routine corpus it is
+  deleted in stage 4.
+- **The arm-by-arm rule for the migration:** no rule forces an inferred type
+  it does not view. A forced type is a value with no syntax, so forcing
+  eagerly is where a correct-but-slower checker would come from.
+
+### 3.7 Fuel, depth, and the arena
 
 Eval's fuel and `NATIVE_DEPTH_LIMIT` apply unchanged. One `ValueArena` per
 gate call (per declaration), not per query: the arena's lifetime becomes
@@ -572,7 +613,10 @@ views, `merkle.rs`, `module_image.rs`. The rewriter checker `typing.rs`
 gains the five rules *on syntax* — which builds the reduct, and is
 acceptable because it is about to become the oracle.
 
-1b. `typing.rs` → `Tc<D: Dom>`; `Tc<Values>` wired as the gate;
+1b, step 0: the six `Dom` constructors, `Dom` widened out of `conv`, the
+`Env` merge — a no-op refactor, suite green, before any arm moves (§3.2).
+
+1b. `typing.rs` → `Tc<D: Dom>` under §3.6's rules; `Tc<Values>` wired as the gate;
 `typing::oracle::{check_term, infer_term, check_type}` = `Tc<Syn>`;
 `tests/typing_differential.rs` over `wt.rs`'s streams, both Ψ and
 `opaque(Ψ)`, ≥ 4 seed streams, seed-only reporting, `OutOfFuel` not a
@@ -582,8 +626,14 @@ generated from a generated component form by wrapping its former).
 *Gate:* full `scripts/test` green including `tests/typing.rs`'s golden
 suite, `ch05_06_lemmas.rs` (the identity-recursor proxy must be unchanged —
 it never sees an `@`), `conv_differential.rs`, `eval_differential.rs`;
-`typing_differential.rs` green; `scripts/bench --check` (expect movement:
-the per-query arena is gone; re-save with the verdict recorded);
+`typing_differential.rs` green; `scripts/bench --check` against a control freshly saved on the parent
+commit on a quiet box (the committed baseline is stale and the box's
+noise floor was ≳1.5× at load 12.8 in stage 1a — the
+`desktop-bench-gate-for-constants` protocol); the `wt.rs` generation of
+`@` forms is **off by default** and on only for the differential and
+golden tests, so the bench fixtures measure the workload the baseline
+measured, and a `check/at-forms` fixture with its own baseline is added
+only once `Tc<Values>` is the gate; re-save with the verdict recorded;
 `lib/ir_v1.hthr` and the routine corpus not regressed in seconds or peak
 RSS (§3.6); the x86 certificate gates green under their existing fuel.
 
