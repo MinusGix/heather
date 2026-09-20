@@ -1214,3 +1214,66 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
   one (the previous implementer's fresh control was overwritten by
   `git checkout` before this round began; `git status` is clean on it).
   `probes/` is still untracked.
+
+
+### 2026-09-20 — where the constant landed
+
+`issues/ity-widens-the-checker-per-node-constant.md` is **closed**. The three
+questions the stage-1b entry above left open are answered in the first two
+cases and unchanged in the third.
+
+**1. Paid or fixed?** *Fixed*, and the committed baseline was never touched —
+`scripts/bench --save` was not run and did not need to be. `scripts/bench
+--check` is clean on a quiet box (loadavg 2.76): `ok: 112 comparisons within
+thresholds`. The two rows that failed:
+
+```
+nat/check-numeral:512   14.96 µs → 17.65 µs   (stage 1b: 21.18 µs, 1.42×)
+stack/check-numeral     1512 → 1548 levels    (stage 1b: 1341)
+```
+
+The stack row is now *past* the baseline. The corpus, by
+`scripts/perf ab --base 9c16741 --samples 3` on the same box, is back inside
+its own spread on all four files, with **every counter identical to the unit**
+on every file and every sample:
+
+| file | stage 1b | now |
+|---|---:|---|
+| `lib/ir_v1.hthr` | +33 % | **−0.9 %, no change** |
+| `probes/t_cp9.hthr` | +21 % | **+0.2 %, no change** |
+| `probes/t_qt3.hthr` | +26 % | **−0.7 %, no change** |
+| `probes/str/p10.hthr` | −4 % | **+0.3 %, no change** |
+
+And the diagnosis is worth carrying into stage 2, because the entry above
+guessed wrong about it and so did this issue's own candidate list. **`ITy` was
+never the cost.** It is 72 bytes — *exactly* `Type`'s, the tag rides in a
+niche — so widening `tm_infer`'s return was free, and every
+"shrink the return" idea was aimed at a channel that had not moved. What cost
+was that the **checking** direction stopped borrowing: `tm_check` took a
+`&ITy`, so each of the 86 call sites of its two wrappers built a 72-byte
+temporary in its *caller's* frame, and the 24 `Rc` sites paid an `Arc`
+increment and decrement per term node on top. `tm_check_inner`'s frame went
+296 → 712 bytes, which is the whole stack row. The fix is a two-word `Copy`
+borrow (`ITyRef<'a> = Syn(&'a Type) | Ity(&'a ITy)`), plus outlining the
+checking λ — the one arm holding a 200-byte `TyForm` across its own descent —
+off the recursion cycle. The cycle is now 2592 bytes against `9c16741`'s 2656:
+the checker recurses in a *smaller* frame than before `ITy` existed.
+
+The lesson for stage 2 is the instrument, not the fix: `size_of` and the
+`sub $N,%rsp` of each symbol in the release rlib are **load-independent**, and
+they settled this while the box was at load 12–18 and no timing was possible.
+
+**2. `--features value-metrics`.** Now checked. `scripts/test` runs
+`cargo check -p heather-kernel --features value-metrics` beside the
+tree-sitter inventory check — a check and not tests, because the feature
+changes instrumentation and not judgments, and seconds against a hole that
+swallowed stage 1a's missing `term_head` arms.
+
+**3. `probes/`.** Still untracked, and now four rounds have measured against
+it. Unchanged from the stage-1a handover; still a decision for whoever takes
+this thread next.
+
+### Tree state
+
+Nothing committed. `crates/kernel/benches/baseline.tsv` is still the
+**committed** one and is what the clean gate above was measured against.

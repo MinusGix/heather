@@ -115,6 +115,13 @@ impl ITy {
     pub(crate) fn is_syn(&self) -> bool {
         !matches!(self, ITy::Sel { .. })
     }
+
+    /// This description, borrowed — the currency the *checking* direction
+    /// takes. See [`ITyRef`].
+    #[inline]
+    pub(crate) fn as_ref(&self) -> ITyRef<'_> {
+        ITyRef::Ity(self)
+    }
 }
 
 /// Structural equality, which is [`crate::typing::Tc::conv_ty`]'s
@@ -181,3 +188,72 @@ impl SndOf {
         }
     }
 }
+
+/// A **borrowed** expected type: what the *checking* direction passes.
+///
+/// `Tc::tm_check` never stores its expected type — it views it, whnfs it, or
+/// hands it to `Tc::conv_ty` — so it does not need to own one, and stage 1b
+/// made it pay for one anyway: each of the ~86 call sites of the two
+/// `tm_check` wrappers constructed a 72-byte [`ITy`] temporary in the
+/// *caller's* frame (they are `inline(always)`), and the `Rc<Type>` sites
+/// paid an atomic refcount pair per term node on top. That is the whole of
+/// the measured per-node constant
+/// (`issues/ity-widens-the-checker-per-node-constant.md`): it moved
+/// `tm_check_inner`'s frame from 296 to 712 bytes, which is the stack row,
+/// and put an `Arc` increment and decrement on the hot path of every rule
+/// that checks a subterm, which is the routine corpus's.
+///
+/// Two words, `Copy`, constructed by a tag write: the checking direction now
+/// builds nothing at all in the common case. [`ITyRef::Syn`] is a spelling
+/// the caller already holds — by far the common case, and never a selection;
+/// [`ITyRef::Ity`] is a description the caller already holds, which may be
+/// any [`ITy`] including a selection, and is what keeps the cold `@` path
+/// from having to rebuild one.
+#[derive(Clone, Copy)]
+pub(crate) enum ITyRef<'a> {
+    /// Syntax the caller holds.
+    Syn(&'a Type),
+    /// A description the caller holds.
+    Ity(&'a ITy),
+}
+
+impl<'a> ITyRef<'a> {
+    /// The syntax, when there is some — [`ITy::as_syn`] through the borrow.
+    #[inline]
+    pub(crate) fn as_syn(self) -> Option<&'a Type> {
+        match self {
+            ITyRef::Syn(t) => Some(t),
+            ITyRef::Ity(t) => t.as_syn(),
+        }
+    }
+
+    /// The description, when the caller had one. `None` means the borrow is
+    /// a bare spelling, which is never a selection — so a caller that needs
+    /// an [`ITy`] on the selection path may take this and `expect` it there.
+    #[inline]
+    pub(crate) fn as_ity(self) -> Option<&'a ITy> {
+        match self {
+            ITyRef::Syn(_) => None,
+            ITyRef::Ity(t) => Some(t),
+        }
+    }
+}
+
+/// Exactly [`ITy`]'s equality, seen through the borrows: the reflexivity
+/// shortcut of [`crate::typing::Tc::conv_ty`], unchanged to the counter.
+impl PartialEq for ITyRef<'_> {
+    #[inline]
+    fn eq(&self, other: &ITyRef<'_>) -> bool {
+        match (self.as_syn(), other.as_syn()) {
+            (Some(a), Some(b)) => std::ptr::eq(a, b) || a == b,
+            // At least one side is a selection, so both must be, and both
+            // sides then have an `ITy` to compare.
+            _ => match (self.as_ity(), other.as_ity()) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
+        }
+    }
+}
+
+impl Eq for ITyRef<'_> {}

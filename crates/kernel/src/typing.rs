@@ -92,7 +92,7 @@ use std::sync::Arc as Rc;
 
 pub(crate) mod ity;
 
-use ity::{ITy, Sel, SndOf, TyForm};
+use ity::{ITy, ITyRef, Sel, SndOf, TyForm};
 
 use crate::conv::{conv_ity_cached, head_ity_cached, ConvError, ITyHead};
 #[cfg(not(feature = "value-metrics"))]
@@ -930,7 +930,7 @@ impl Tc {
     /// `@`-free declaration identical to the unit. Such a query goes
     /// straight to [`conv_ity_cached`], whose arena is this query's, as
     /// `conv_type_cached`'s always was.
-    fn conv_ty(&self, env: &Env, expected: &ITy, inferred: &ITy, l: &Level) -> R {
+    fn conv_ty(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
         // `Conv::ty_root` spends one unit before the same syntactic
         // reflexivity test. Preserve that exact zero-fuel boundary while
         // avoiding an arena for the overwhelmingly common positive case.
@@ -1064,7 +1064,27 @@ impl Tc {
     /// The miss of a query with a selection on either side: both
     /// descriptions evaluated in **one per-query arena** and compared by the
     /// ordinary conversion arms (`docs/intro-by-type-design.md` §3.3).
-    fn conv_ity(&self, env: &Env, expected: &ITy, inferred: &ITy, l: &Level) -> R {
+    fn conv_ity(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
+        // Reached only when at least one side is a selection, so this is the
+        // `@`-form path and nothing here is on the per-node constant. A side
+        // that is a bare spelling never is a selection, so the borrow it is
+        // held behind has no `ITy` and one is built here — the one place the
+        // borrowing currency has to pay anything back.
+        let (own_e, own_i);
+        let expected = match expected.as_ity() {
+            Some(t) => t,
+            None => {
+                own_e = ITy::Syn(Rc::new(expected.as_syn().expect("not a selection").clone()));
+                &own_e
+            }
+        };
+        let inferred = match inferred.as_ity() {
+            Some(t) => t,
+            None => {
+                own_i = ITy::Syn(Rc::new(inferred.as_syn().expect("not a selection").clone()));
+                &own_i
+            }
+        };
         crate::stats::conv_misses(1);
         let at = env.layer.type_layer();
         let result = conv_ity_cached(
@@ -1096,11 +1116,11 @@ impl Tc {
     /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter, exactly as
     /// before; a selection is spelled first, and paying for that is the
     /// point of [`crate::stats`]'s `ity_materialized`.
-    fn whnf(&self, env: &Env, t: &ITy) -> R<Type> {
+    fn whnf(&self, env: &Env, t: ITyRef) -> R<Type> {
         match t.as_syn() {
             Some(t) => self.whnf_syn(env, t),
             None => {
-                let t = self.materialize(env, t)?;
+                let t = self.materialize(env, t.as_ity().expect("a selection"))?;
                 self.whnf_syn(env, &t)
             }
         }
@@ -1156,6 +1176,35 @@ impl Tc {
         }
     }
 
+    /// [`Tc::view`] in the **syntax** domain: whnf through the rewriter and
+    /// read the former off. Split out of [`Tc::view`] so a borrowed expected
+    /// type that is a bare spelling — which is never a selection, so its view
+    /// is never the value one — reaches it without an [`ITy`] having to
+    /// exist.
+    fn view_syn(&self, env: &Env, t: ITyRef) -> R<TyForm> {
+        Ok(match self.whnf(env, t)? {
+            Type::Pi { dom_level, cod_level, dom, cod } => TyForm::Pi {
+                dom_level,
+                cod_level,
+                dom: ITy::Syn(dom),
+                cod: ITy::Syn(cod),
+            },
+            Type::Sigma { fst_level, snd_level, fst, snd } => TyForm::Sigma {
+                fst_level,
+                snd_level,
+                fst: ITy::Syn(fst),
+                snd: SndOf::Syn(snd),
+            },
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => TyForm::Sum {
+                lhs_level,
+                rhs_level,
+                lhs: ITy::Syn(lhs),
+                rhs: ITy::Syn(rhs),
+            },
+            _ => TyForm::Other,
+        })
+    }
+
     /// **The view** (`docs/intro-by-type-design.md` §3.3): the head former of
     /// a description, with its components as descriptions.
     ///
@@ -1175,28 +1224,7 @@ impl Tc {
     fn view(&self, env: &Env, t: &ITy, value_domain: bool) -> R<TyForm> {
         let depth = env.gamma.entries.len() as u32;
         if !value_domain {
-            let w = self.whnf(env, t)?;
-            return Ok(match w {
-                Type::Pi { dom_level, cod_level, dom, cod } => TyForm::Pi {
-                    dom_level,
-                    cod_level,
-                    dom: ITy::Syn(dom),
-                    cod: ITy::Syn(cod),
-                },
-                Type::Sigma { fst_level, snd_level, fst, snd } => TyForm::Sigma {
-                    fst_level,
-                    snd_level,
-                    fst: ITy::Syn(fst),
-                    snd: SndOf::Syn(snd),
-                },
-                Type::Sum { lhs_level, rhs_level, lhs, rhs } => TyForm::Sum {
-                    lhs_level,
-                    rhs_level,
-                    lhs: ITy::Syn(lhs),
-                    rhs: ITy::Syn(rhs),
-                },
-                _ => TyForm::Other,
-            });
+            return self.view_syn(env, t.as_ref());
         }
         let head = head_ity_cached(
             &env.psi,
@@ -1235,8 +1263,13 @@ impl Tc {
 
     /// [`Tc::view`] of an expected type a *checking* rule is descending
     /// through: the rewriter unless it is a selection (§3.3).
-    fn view_expected(&self, env: &Env, t: &ITy) -> R<TyForm> {
-        self.view(env, t, !t.is_syn() && !self.materialize_eagerly)
+    fn view_expected(&self, env: &Env, t: ITyRef) -> R<TyForm> {
+        match t.as_ity() {
+            Some(t) => self.view(env, t, !t.is_syn() && !self.materialize_eagerly),
+            // A bare spelling is syntax, so `!is_syn()` is false and the view
+            // is the syntactic one — reached without building an `ITy`.
+            None => self.view_syn(env, t),
+        }
     }
 
     /// [`Tc::view`] of an `@` form's annotation (§3.4): the value domain,
@@ -1536,7 +1569,7 @@ impl Tc {
     /// `⊢_i t : T @ l` for a given type and level: structural on `box` and
     /// the function intro forms (so checking-only `box` bodies work), else
     /// infer + conversion at `typeof(i)`.
-    fn tm_check(&self, env: &Env, t: &Term, ty: &ITy, l: &Level) -> R {
+    fn tm_check(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
         self.tm_check_inner(env, t, ty, l)
@@ -1544,21 +1577,68 @@ impl Tc {
 
     /// [`Tc::tm_check`] where the caller already holds the expected type as
     /// shared syntax — every rule but the checked spellings.
+    ///
+    /// The two wrappers exist so the rules can keep spelling their expected
+    /// type the way each already holds it; both now **construct nothing**
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Between them
+    /// they are 86 call sites, so what they build lands 86 times in their
+    /// callers' frames — and until the checking direction started borrowing,
+    /// this one also paid an `Arc` increment and decrement per checked
+    /// subterm.
     #[inline(always)]
     fn tm_check_rc(&self, env: &Env, t: &Term, ty: &Rc<Type>, l: &Level) -> R {
-        self.tm_check(env, t, &ITy::Syn(Rc::clone(ty)), l)
+        self.tm_check(env, t, ITyRef::Syn(ty), l)
     }
 
-    /// [`Tc::tm_check`] where the rule built the expected type itself. The
-    /// clone is shallow — `Type`'s children are `Rc` — and buys the whole
-    /// migration one `Rc::new` per such site instead of a signature change
-    /// at every rule.
+    /// [`Tc::tm_check`] where the rule built the expected type itself and
+    /// still owns it — see [`Tc::tm_check_rc`] for why neither copies it.
     #[inline(always)]
     fn tm_check_ty(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
-        self.tm_check(env, t, &ITy::Owned(ty.clone()), l)
+        self.tm_check(env, t, ITyRef::Syn(ty), l)
     }
 
-    fn tm_check_inner(&self, env: &Env, t: &Term, ty: &ITy, l: &Level) -> R {
+    /// The checking λ — the one *checking* descent whose expected type may
+    /// be a selection (`docs/intro-by-type-design.md` §3.3): a λ checked at
+    /// `Sel { T, Fst }` because it is the first field of a `pair@`. Hence
+    /// the view, and hence `Sel::Dom` / `Sel::Cod` existing at all.
+    ///
+    /// **Outlined deliberately, and measured**
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). It is the one
+    /// arm that takes a [`TyForm`] — 200 bytes, two [`ITy`] components it
+    /// then holds across its own recursive descent — while the arm the
+    /// checker actually recurses *through*, once per term node, is the
+    /// fall-through below. Left in [`Tc::tm_check_inner`] those temporaries
+    /// sit in every frame of the recursion cycle whether or not a λ is being
+    /// checked, and the stack row counts them.
+    #[inline(never)]
+    fn tm_check_lam(
+        &self,
+        env: &Env,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Rc<Type>,
+        body: &Rc<Term>,
+        ty: ITyRef,
+        l: &Level,
+    ) -> R {
+        self.not_var_layer(env)?;
+        let TyForm::Pi { dom_level: pd, cod_level: pc, dom: ps, cod: pt } =
+            self.view_expected(env, ty)?
+        else {
+            return Err(TypeError::HeadMismatch);
+        };
+        self.level_wf(env, dom_level)?;
+        self.level_wf(env, cod_level)?;
+        self.lev_eq(dom_level, &pd)?;
+        self.lev_eq(cod_level, &pc)?;
+        self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
+        self.ty_check(env, dom, dom_level)?;
+        self.conv_ty(env, ps.as_ref(), ITyRef::Syn(dom), dom_level)?;
+        let e = env.push_entry(Rc::clone(dom), dom_level.clone());
+        self.tm_check(&e, body, pt.as_ref(), cod_level)
+    }
+
+    fn tm_check_inner(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
         match t {
             // box T : □(Δ ⊢ Ty l) @ 0 ⟸ Ψ; Δ ⊢_c T @ l
             Term::BoxTy(code) => {
@@ -1579,28 +1659,8 @@ impl Tc {
                 self.tm_check_rc(&env.in_ctx(ctx, Layer::Code), code, &ty, &level)
             }
             // Structural descent through binders (box may hide in bodies).
-            Term::Lam { dom_level, cod_level, dom, body } => {
-                self.not_var_layer(env)?;
-                // The one *checking* descent whose expected type may be a
-                // selection (`docs/intro-by-type-design.md` §3.3): a λ
-                // checked at `Sel { T, Fst }` because it is the first field
-                // of a `pair@`. Hence the view, and hence `Sel::Dom` /
-                // `Sel::Cod` existing at all.
-                let TyForm::Pi { dom_level: pd, cod_level: pc, dom: ps, cod: pt } =
-                    self.view_expected(env, ty)?
-                else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                self.level_wf(env, dom_level)?;
-                self.level_wf(env, cod_level)?;
-                self.lev_eq(dom_level, &pd)?;
-                self.lev_eq(cod_level, &pc)?;
-                self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
-                self.ty_check(env, dom, dom_level)?;
-                self.conv_ty(env, &ps, &ITy::Syn(Rc::clone(dom)), dom_level)?;
-                let e = env.push_entry(Rc::clone(dom), dom_level.clone());
-                self.tm_check(&e, body, &pt, cod_level)
-            }
+            Term::Lam { dom_level, cod_level, dom, body } =>
+                self.tm_check_lam(env, dom_level, cod_level, dom, body, ty, l),
             Term::ULam { num_vars, level, body } => {
                 self.meta_layer(env)?;
                 let Type::UPi { num_vars: pn, level: pl, body: pt } = self.whnf(env, ty)?
@@ -1670,12 +1730,23 @@ impl Tc {
                 {
                     *self.diag_term.borrow_mut() = Some(t.clone());
                 }
-                self.conv_ty(env, ty, &inferred, l)
+                self.conv_ty(env, ty, inferred.as_ref(), l)
             }
         }
     }
 
     /// `⊢_i t : ? @ ?` — infer the canonical type and level.
+    ///
+    /// **`inline(always)` is load-bearing, and measured**
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Before stage
+    /// 1b this was a tail call with its callee's own signature, so LLVM
+    /// merged the two; the `@` dispatch and the `ITy::Owned` wrap made it a
+    /// non-tail call, and it fell out of line — putting a fresh 96-byte
+    /// frame *and* two 96-byte copies of the inferred `(type, level)` on the
+    /// checker's recursion cycle, once per term node. The wrap itself is
+    /// free: `ITy` is 72 bytes, exactly `Type`'s, because the tag rides in a
+    /// niche.
+    #[inline(always)]
     fn tm_infer(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "infer");
@@ -1749,9 +1820,9 @@ impl Tc {
                     else {
                         return Err(TypeError::HeadMismatch);
                     };
-                    self.tm_check(env, fst, &fst_c, &fst_level)?;
+                    self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
                     let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
-                    self.tm_check(env, snd, &snd_at, &snd_level)?;
+                    self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
                     crate::stats::intro_at_nodes(1);
                     Ok((ity, level))
                 }
@@ -1767,7 +1838,7 @@ impl Tc {
                     } else {
                         (lhs, lhs_level)
                     };
-                    self.tm_check(env, val, &summand, &summand_level)?;
+                    self.tm_check(env, val, summand.as_ref(), &summand_level)?;
                     crate::stats::intro_at_nodes(1);
                     Ok((ity, level))
                 }
@@ -1784,7 +1855,7 @@ impl Tc {
                     let TyForm::Sigma { fst_level, fst: fst_c, .. } = form else {
                         return Err(TypeError::HeadMismatch);
                     };
-                    self.tm_check(env, pair, &ity, &level)?;
+                    self.tm_check(env, pair, ity.as_ref(), &level)?;
                     crate::stats::intro_at_nodes(1);
                     Ok((fst_c, fst_level))
                 }
@@ -1798,7 +1869,7 @@ impl Tc {
                     let TyForm::Sigma { snd_level, snd: snd_c, .. } = form else {
                         return Err(TypeError::HeadMismatch);
                     };
-                    self.tm_check(env, pair, &ity, &level)?;
+                    self.tm_check(env, pair, ity.as_ref(), &level)?;
                     let fst_p = Term::FstAt { ty: Rc::clone(ty), pair: Rc::clone(pair) };
                     crate::stats::intro_at_nodes(1);
                     Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
@@ -2677,7 +2748,7 @@ impl Tc {
                 self.meta_layer(env)?;
                 let (fun_ty, fl) = self.tm_infer(env, fun)?;
                 self.lev_eq(&fl, &Level::Omega)?;
-                let Type::UPi { num_vars, level, body } = self.whnf(env, &fun_ty)? else {
+                let Type::UPi { num_vars, level, body } = self.whnf(env, fun_ty.as_ref())? else {
                     return Err(TypeError::HeadMismatch);
                 };
                 if levels.is_empty() || levels.len() != num_vars as usize {
@@ -2704,7 +2775,7 @@ impl Tc {
             Term::CtxApp { fun, ctx } => {
                 self.meta_layer(env)?;
                 let (fun_ty, _) = self.tm_infer(env, fun)?;
-                let Type::CtxPi { level, body } = self.whnf(env, &fun_ty)? else {
+                let Type::CtxPi { level, body } = self.whnf(env, fun_ty.as_ref())? else {
                     return Err(TypeError::HeadMismatch);
                 };
                 self.ctx_wf(env, Layer::Prog, ctx)?;
@@ -2739,7 +2810,7 @@ impl Tc {
                 self.meta_layer(env)?;
                 let (fun_ty, _) = self.tm_infer(env, fun)?;
                 let Type::TyPi { ctx, arg_level, body_level, body } =
-                    self.whnf(env, &fun_ty)?
+                    self.whnf(env, fun_ty.as_ref())?
                 else {
                     return Err(TypeError::HeadMismatch);
                 };
@@ -3151,13 +3222,14 @@ mod memo_tests {
         let tc = Tc::new(DEFAULT_FUEL);
         let first = env(GlobalCtx::default());
         let encoded = encoded_nat();
-        tc.conv_ty(&first, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
+        tc.conv_ty(&first, s(encoded.clone()).as_ref(), s(Type::Nat).as_ref(), &Level::Zero).unwrap();
         assert_eq!(tc.conv_memo_entries.get(), 1);
-        tc.conv_ty(&first, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
+        tc.conv_ty(&first, s(encoded.clone()).as_ref(), s(Type::Nat).as_ref(), &Level::Zero).unwrap();
         assert_eq!(tc.conv_memo_entries.get(), 1, "the exact judgment is a hit");
 
         let second = env(GlobalCtx::default());
-        tc.conv_ty(&second, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
+        tc.conv_ty(&second, s(encoded.clone()).as_ref(), s(Type::Nat).as_ref(), &Level::Zero)
+            .unwrap();
         assert_eq!(
             tc.conv_memo_entries.get(),
             2,
@@ -3170,10 +3242,9 @@ mod memo_tests {
         let tc = Tc::new(DEFAULT_FUEL);
         let e = env(GlobalCtx::default());
         assert_eq!(
-            tc.conv_ty(
-                &e,
-                &s(encoded_nat()),
-                &s(Type::Unit { level: Level::Zero }),
+            tc.conv_ty(&e,
+                s(encoded_nat()).as_ref(),
+                s(Type::Unit { level: Level::Zero }).as_ref(),
                 &Level::Zero,
             ),
             Err(TypeError::NotConvertible),
@@ -3182,10 +3253,12 @@ mod memo_tests {
 
         let empty = Tc::new(0);
         assert_eq!(
-            empty.conv_ty(&e, &s(Type::Nat), &s(Type::Nat), &Level::Zero),
+            empty.conv_ty(&e, s(Type::Nat).as_ref(), s(Type::Nat).as_ref(), &Level::Zero),
             Err(TypeError::OutOfFuel),
         );
-        Tc::new(1).conv_ty(&e, &s(Type::Nat), &s(Type::Nat), &Level::Zero).unwrap();
+        Tc::new(1)
+            .conv_ty(&e, s(Type::Nat).as_ref(), s(Type::Nat).as_ref(), &Level::Zero)
+            .unwrap();
     }
 
     /// A `Ty 0`-coded definition whose body is `code`.
@@ -3306,10 +3379,20 @@ mod memo_tests {
         assert_eq!(tc.whnf_syn(&pushed, &el_of_global(2)), Ok(Type::Nat));
         // Conversion agrees through its own `Env::push_tele`, which is the
         // other half of the invariant: the two must rebuild together.
-        tc.conv_ty(&pushed, &s(el_of_global(1)), &s(Type::Unit { level: Level::Zero }), &Level::Zero)
+        tc.conv_ty(
+            &pushed,
+            s(el_of_global(1)).as_ref(),
+            s(Type::Unit { level: Level::Zero }).as_ref(),
+            &Level::Zero,
+        )
             .unwrap();
         assert_eq!(
-            tc.conv_ty(&pushed, &s(el_of_global(1)), &s(Type::Nat), &Level::Zero),
+            tc.conv_ty(
+                &pushed,
+                s(el_of_global(1)).as_ref(),
+                s(Type::Nat).as_ref(),
+                &Level::Zero,
+            ),
             Err(TypeError::NotConvertible),
         );
     }

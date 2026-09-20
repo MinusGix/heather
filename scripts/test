@@ -40,6 +40,14 @@ suite_started=$SECONDS
 node scripts/check-tree-sitter-inventory.js
 node --test scripts/test-target-runner.test.mjs
 
+# The kernel's `value-metrics` feature is off in every test target — it is the
+# diagnostic build (`--timings`' value counters, the conv-miss sampler, the
+# `diag_enter` frames), so nothing the suite runs compiles it. That means it
+# can rot silently, and it did: it did not build at 9c16741 and no test
+# noticed. A `cargo check` of that one feature is seconds and closes the hole.
+# A *check*, not tests: the feature changes instrumentation, not judgments.
+cargo check --quiet -p heather-kernel --features value-metrics
+
 SKIP=()
 TEST_ARGS=()
 CARGO_FLAGS=()
