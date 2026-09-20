@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 
-use heather_cache::module_image::{ImageFreshness, ModuleCacheKey, ModuleImageCache, SemanticsIdentity};
+use heather_cache::module_image::{
+    ImageFreshness, ImageRefusal, ModuleCacheKey, ModuleImageCache, SemanticsIdentity,
+};
 use heather_elab::{ElabError, Elaborator, LintProfile, ModuleDependencyIdentity, Warning, stats};
 
 use crate::loader::Module;
@@ -105,23 +107,40 @@ pub struct SemanticSession {
 /// refused — over the decode budget — is checked and re-elaborated on every
 /// warm run, so `heather check --cache` succeeds and still leaves nothing to
 /// replay (`issues/check-only-no-stored-image.md`).
+///
+/// Since 2026-09-20 the store leaves a marker when it declines an image, so
+/// the two ways are usually *told apart* rather than merely both named:
+/// `refusal` is `Some` exactly when this world's last publish was refused on
+/// size, and then the message quotes the size and stops advising a re-run
+/// that cannot work.
 #[derive(Debug)]
 pub struct NoPreviousImage {
     pub module: String,
+    pub refusal: Option<ImageRefusal>,
 }
 
 impl fmt::Display for NoPreviousImage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "--only: no stored image of module `{}` over these dependencies to replay the \
-             prefix from. Either it has not been checked with `--cache` over these \
-             dependencies yet — run `heather check --cache` on the file once first — or its \
-             image was refused as too large to store, which that run reports as `cache: could \
-             not store module `{}``; a module whose image does not fit cannot be probed with \
-             --only at all",
-            self.module, self.module
-        )
+        match self.refusal {
+            Some(refusal) => write!(
+                f,
+                "--only: module `{}` has no stored image to replay the prefix from because the \
+                 store refused it: {}. It was checked; re-running `heather check --cache` will \
+                 not help, because the refusal is the image's size and not a missing run. A \
+                 module whose image does not fit cannot be probed with --only at all",
+                self.module, refusal
+            ),
+            None => write!(
+                f,
+                "--only: no stored image of module `{}` over these dependencies to replay the \
+                 prefix from. Either it has not been checked with `--cache` over these \
+                 dependencies yet — run `heather check --cache` on the file once first — or its \
+                 image was refused as too large to store, which that run reports as `cache: could \
+                 not store module `{}``; a module whose image does not fit cannot be probed with \
+                 --only at all",
+                self.module, self.module
+            ),
+        }
     }
 }
 
@@ -360,7 +379,11 @@ impl SemanticSession {
                 self.images_usable = false;
                 return ModuleOutcome {
                     errors: vec![ElabError::Elab {
-                        msg: NoPreviousImage { module: module.name.clone() }.to_string(),
+                        msg: NoPreviousImage {
+                            module: module.name.clone(),
+                            refusal: images.refusal(&module.name, &dependencies),
+                        }
+                        .to_string(),
                         span: heather_syntax::Span { start: 0, end: 0 },
                     }],
                     warnings: Vec::new(),
@@ -379,7 +402,11 @@ impl SemanticSession {
                 self.images_usable = false;
                 return ModuleOutcome {
                     errors: vec![ElabError::Elab {
-                        msg: NoPreviousImage { module: module.name.clone() }.to_string(),
+                        msg: NoPreviousImage {
+                            module: module.name.clone(),
+                            refusal: images.refusal(&module.name, &dependencies),
+                        }
+                        .to_string(),
                         span: heather_syntax::Span { start: 0, end: 0 },
                     }],
                     warnings: Vec::new(),

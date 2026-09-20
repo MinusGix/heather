@@ -165,6 +165,59 @@ impl fmt::Display for ModuleCacheError {
 
 impl std::error::Error for ModuleCacheError {}
 
+/// A publish the store declined on size, recorded beside the `.latest`
+/// pointer so a later `--only` can say so with the number
+/// (`issues/check-only-no-stored-image.md`).
+///
+/// Advisory only — see [`ModuleImageCache::refusal_path`]. The wire form is
+/// one line of ASCII so an unknown future variant reads back as `None`
+/// rather than as a wrong number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageRefusal {
+    /// Past the reader's node budget: the `--only` case this exists for.
+    Nodes { nodes: u64, limit: u64 },
+    /// Past the byte limit. The same user-visible situation, a different
+    /// rail, and a message that must not quote a node count it does not have.
+    Bytes { bytes: u64, limit: u64 },
+}
+
+impl ImageRefusal {
+    fn encode(self) -> String {
+        match self {
+            Self::Nodes { nodes, limit } => format!("v1 nodes {nodes} {limit}\n"),
+            Self::Bytes { bytes, limit } => format!("v1 bytes {bytes} {limit}\n"),
+        }
+    }
+
+    fn parse(line: &str) -> Option<Self> {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != "v1" {
+            return None;
+        }
+        let kind = fields.next()?;
+        let measured: u64 = fields.next()?.parse().ok()?;
+        let limit: u64 = fields.next()?.parse().ok()?;
+        match kind {
+            "nodes" => Some(Self::Nodes { nodes: measured, limit }),
+            "bytes" => Some(Self::Bytes { bytes: measured, limit }),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ImageRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Nodes { nodes, limit } => {
+                write!(f, "its image has {nodes} syntax nodes, past the decode budget of {limit}")
+            }
+            Self::Bytes { bytes, limit } => {
+                write!(f, "its image is {bytes} bytes, past the store's limit of {limit}")
+            }
+        }
+    }
+}
+
 impl From<std::io::Error> for ModuleCacheError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -283,6 +336,25 @@ impl ModuleImageCache {
     /// (`docs/declaration-slice-replay-design.md` §4). One small file per
     /// (module, dependency world), holding the image's cache key.
     fn latest_path(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> PathBuf {
+        self.dir.join(format!("{}.latest", self.world_key(module, dependencies)))
+    }
+
+    /// The refusal marker beside [`Self::latest_path`], same (module,
+    /// dependency world) key: what the store writes *instead of* a pointer
+    /// when it declines an image as over budget
+    /// (`issues/check-only-no-stored-image.md`).
+    ///
+    /// **It is not part of the image or verdict contract.** Nothing decodes
+    /// it, nothing keys a hit on it, `load`/`load_previous`/`sweep` do not
+    /// consult it, and a lost or corrupt marker costs exactly one less
+    /// helpful diagnostic. It exists so `--only` can quote the size at the
+    /// run that fails instead of asking the reader to remember an earlier
+    /// run's notice.
+    fn refusal_path(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> PathBuf {
+        self.dir.join(format!("{}.refused", self.world_key(module, dependencies)))
+    }
+
+    fn world_key(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> String {
         let mut h = Sha256::new();
         h.update(b"heather-module-latest-v1\0");
         put_bytes(&mut h, module.as_bytes());
@@ -290,7 +362,50 @@ impl ModuleImageCache {
         for dependency in dependencies.ordered_interface_hashes() {
             h.update(dependency);
         }
-        self.dir.join(format!("{}.latest", hex(&h.finish())))
+        hex(&h.finish())
+    }
+
+    /// Why the store last declined to publish this module over this
+    /// dependency world, if it did and no publish has succeeded since.
+    /// Best-effort and advisory: `None` means "no marker", never "the image
+    /// fits".
+    pub fn refusal(
+        &self,
+        module: &str,
+        dependencies: &ModuleDependencyIdentity,
+    ) -> Option<ImageRefusal> {
+        let text = std::fs::read_to_string(self.refusal_path(module, dependencies)).ok()?;
+        ImageRefusal::parse(text.trim())
+    }
+
+    /// Record (or clear) the marker. Every failure is swallowed: a store that
+    /// cannot write a diagnostic file still published, or still refused, and
+    /// the caller's own result is the answer.
+    fn note_refusal(
+        &self,
+        module: &str,
+        dependencies: &ModuleDependencyIdentity,
+        refusal: Option<ImageRefusal>,
+    ) {
+        let path = self.refusal_path(module, dependencies);
+        match refusal {
+            Some(refusal) => {
+                // The refusal is reached before `publish_as` creates the
+                // store directory, so the marker is the first thing a store
+                // that has never published anything writes.
+                let _ = std::fs::create_dir_all(&self.dir);
+                let temp = temporary_sibling(&path);
+                if std::fs::write(&temp, refusal.encode())
+                    .and_then(|()| std::fs::rename(&temp, &path))
+                    .is_err()
+                {
+                    let _ = std::fs::remove_file(&temp);
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 
     /// The newest image of `module` over `dependencies`, under the same
@@ -457,9 +572,22 @@ impl ModuleImageCache {
     ) -> Result<[u8; 32], ModuleCacheError> {
         let (semantic, nodes) = delta.to_image();
         if nodes > self.limits.max_nodes {
+            self.note_refusal(
+                delta.module(),
+                delta.dependencies(),
+                Some(ImageRefusal::Nodes { nodes, limit: self.limits.max_nodes }),
+            );
             return Err(ModuleCacheError::OverBudget { nodes, limit: self.limits.max_nodes });
         }
         if semantic.len() > self.limits.max_bytes {
+            self.note_refusal(
+                delta.module(),
+                delta.dependencies(),
+                Some(ImageRefusal::Bytes {
+                    bytes: semantic.len() as u64,
+                    limit: self.limits.max_bytes as u64,
+                }),
+            );
             return Err(ModuleCacheError::Corrupt(
                 "semantic image exceeds the byte limit",
             ));
@@ -503,6 +631,9 @@ impl ModuleImageCache {
             let _ = std::fs::remove_file(&temp_latest);
             return Err(error.into());
         }
+        // A world that now has a pointer has no refusal: an image that fits
+        // must not leave a stale marker behind to mislead the next `--only`.
+        self.note_refusal(delta.module(), delta.dependencies(), None);
         self.sweep();
         Ok(interface_hash)
     }

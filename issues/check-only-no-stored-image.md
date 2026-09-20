@@ -3,7 +3,7 @@ title: "A module whose image is refused as over budget is silently un-probeable,
 status: open
 labels: [tooling, cli, cache, diagnostics]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-20
 ---
 
 `docs/showcase/calc_text.hthr`'s semantic image does not fit the store:
@@ -71,3 +71,51 @@ should fall under the budget on its own; then this issue is only the diagnostic.
   The cost half stays open and is not this issue's: it is the record axis on
   [[elab-emits-normal-form-of-matched-type-argument]], whose family the user
   paused on 2026-09-16.
+- 2026-09-20: Implementer, **day one — `check-only-no-stored-image`**: the refusal marker
+  the 2026-09-18 entry deliberately left out is in, so `--only` now *tells the
+  two cases apart* instead of naming both, and quotes the size.
+
+  `crates/cache/src/module_image.rs` (+112): `ImageRefusal` (`Nodes { nodes,
+  limit }` / `Bytes { bytes, limit }`, one line of ASCII, `v1`-tagged so an
+  unknown future variant parses back as `None` rather than as a wrong number);
+  `ModuleImageCache::{refusal, note_refusal, refusal_path, world_key}`.
+  `latest_path` and `refusal_path` are now the same `world_key` with different
+  extensions, so the marker is per (module, dependency world) exactly as the
+  pointer is. `publish_as` writes it on both size refusals (the node budget and
+  the byte limit — the node one is the issue's case, the byte one is the same
+  user-visible situation on a different rail and must not be reported with a
+  node count it does not have) and **clears it after a successful publish**, so
+  a world that now has a pointer can never report a stale refusal.
+
+  On the on-disk-contract reservation the 09-18 entry raised, which is why this
+  was deferred: the marker is outside the contract by construction and the doc
+  comment says so — `load`, `load_previous`, `publish`'s identity and the
+  verdict store never read it, `sweep` already ignores every extension but
+  `.latest` and `.hmi`, and every write and read is swallowed on error. A lost,
+  truncated or corrupt marker costs one less helpful sentence and nothing else.
+  One wrinkle found in testing: the budget check precedes `publish_as`'s
+  `create_dir_all`, so `note_refusal` creates the store directory itself — a
+  store that has never published anything writes the marker as its first file.
+
+  `crates/cli/src/semantic.rs` (+22/−9): `NoPreviousImage` gains
+  `refusal: Option<ImageRefusal>`, filled from the store at both `--only`
+  failure sites. With a marker the message is *"the store refused it: its image
+  has N syntax nodes, past the decode budget of M. It was checked; re-running
+  `heather check --cache` will not help, because the refusal is the image's size
+  and not a missing run."* Without one the 09-18 two-way message is unchanged,
+  which is still right: no marker means "no marker", never "the image fits"
+  (a store pruned or predating this change).
+
+  *Tests run* (only what could break, per the round's scope):
+  `heather-cache` `module_images` 9 passed, `end_to_end` 17 passed,
+  `heather-cli` `check` 28 passed — including
+  `only_elaborates_the_named_declarations_over_a_replayed_prefix`, whose two
+  assertions on the old message still hold because the no-marker branch is
+  unchanged. `an_image_past_the_node_budget_is_refused_at_publication_not_at_every_load`
+  extended with the two assertions that matter: the refused publish records
+  `Nodes { nodes > 1, limit: 1 }`, and the subsequent publish under the default
+  budget clears it.
+
+  Not done here: exercising it on `calc_text` itself (~6 min, 9.8 GiB); the
+  mechanism is unit-tested and `calc_text` is stage 2's subject anyway.
+  The issue's *cost* half stays open and is this round's stages 1–2.

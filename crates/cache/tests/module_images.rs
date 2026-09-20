@@ -1,5 +1,6 @@
 use heather_cache::module_image::{
-    ImageFreshness, ModuleCacheError, ModuleCacheKey, ModuleImageCache, SemanticsIdentity,
+    ImageFreshness, ImageRefusal, ModuleCacheError, ModuleCacheKey, ModuleImageCache,
+    SemanticsIdentity,
 };
 use heather_elab::{Elaborator, LintProfile, ModuleDependencyIdentity};
 
@@ -259,10 +260,20 @@ fn an_image_past_the_node_budget_is_refused_at_publication_not_at_every_load() {
             .is_none(),
         "a refused image must leave no artifact"
     );
-    // The same delta under the default budget publishes and loads.
+    // ...except the advisory marker, which is what lets a later `--only` say
+    // *why* there is no image instead of advising a re-run that cannot work
+    // (`issues/check-only-no-stored-image.md`). It carries the node count.
+    match cache.refusal("sample", &dependencies) {
+        Some(ImageRefusal::Nodes { nodes, limit: 1 }) => assert!(nodes > 1, "{nodes}"),
+        other => panic!("expected a recorded node-budget refusal, got: {other:?}"),
+    }
+    // The same delta under the default budget publishes and loads — and
+    // clears the marker, so a world that now has a pointer never reports a
+    // stale refusal.
     let cache = ModuleImageCache::new(dir.clone());
     cache.publish(key, &delta, &[]).unwrap();
     assert!(cache.load(key, prefix, src.len(), ImageFreshness::Exact).unwrap().is_some());
+    assert_eq!(cache.refusal("sample", &dependencies), None, "a publish must clear the marker");
     let _ = std::fs::remove_dir_all(dir);
 }
 
