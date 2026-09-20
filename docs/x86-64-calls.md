@@ -8,7 +8,9 @@ also supports `leaf(left, right) XOR (left XOR right)`. The
 [reusable-summary extension](x86-64-call-summaries.md) supports two calls with
 a live caller local and a callee-owned frame. The
 [straight-line composition extension](x86-64-call-composition.md) accepts
-arithmetic and computed/reordered arguments around repeated calls. The leaf supports the existing straight-line
+arithmetic and computed/reordered arguments around repeated calls. The
+[callable composed profile](x86-64-composed-callers.md) adds a reusable caller
+summary and native register preservation with `--callable-caller`. The leaf supports the existing straight-line
 BitVec(64) arithmetic fragment. Both source identities come from elaborated
 terms; the certificate checks the caller/callee equation against the source.
 `--callee` explicitly opts that additional function into this initial driver.

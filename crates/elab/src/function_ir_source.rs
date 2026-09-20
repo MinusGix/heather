@@ -402,7 +402,7 @@ fn application_spine(term: &Term) -> (&Term, Vec<&Term>) {
 
 /// A bounded, pure caller expression. Calls retain resolved source identities;
 /// the native producer must still prove its translation against the source.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CallExpr {
     Input(usize),
     Constant(u64),
@@ -429,7 +429,7 @@ pub fn reflect_call_expression(elaborator: &Elaborator, source: &str, callee: &s
     let Term::Lam { body, .. } = &*body else { return unsupported("expected first caller parameter"); };
     let Term::Lam { body, .. } = &**body else { return unsupported("expected second caller parameter"); };
     let globals = OperationGlobals::resolve(elaborator)?;
-    fn walk(term: &Term, caller: usize, selected: usize, globals: &OperationGlobals, budget: &mut usize, calls: &mut usize) -> Result<CallExpr, SourceError> {
+    fn walk(term: &Term, caller: usize, selected: usize, globals: &OperationGlobals, budget: &mut usize, calls: &mut std::collections::BTreeSet<CallExpr>) -> Result<CallExpr, SourceError> {
         if *budget == 0 { return unsupported("caller expression exceeds the 64-node composition limit"); }
         *budget -= 1;
         if let Term::Var(LocalVar(index)) = term {
@@ -439,9 +439,10 @@ pub fn reflect_call_expression(elaborator: &Elaborator, source: &str, callee: &s
         let Term::GlobalTm { var, .. } = head else { return unsupported("caller supports straight-line arithmetic and direct calls only"); };
         let abs = caller.checked_sub(1 + var.0 as usize).ok_or_else(|| SourceError::Unsupported("caller reference escapes source scope".into()))?;
         if abs == selected && args.len() == 2 {
-            *calls += 1;
-            if *calls > 4 { return unsupported("caller exceeds the four-call composition limit"); }
-            return Ok(CallExpr::Call(Box::new(walk(args[0], caller, selected, globals, budget, calls)?), Box::new(walk(args[1], caller, selected, globals, budget, calls)?)));
+            let call = CallExpr::Call(Box::new(walk(args[0], caller, selected, globals, budget, calls)?), Box::new(walk(args[1], caller, selected, globals, budget, calls)?));
+            calls.insert(call.clone());
+            if calls.len() > 4 { return unsupported("caller exceeds the four-call composition limit"); }
+            return Ok(call);
         }
         if let Some(op) = globals.operations.get(&abs) {
             if args.len() != 3 || nat_literal(args[0]) != Some(64) { return unsupported("caller arithmetic requires width 64"); }
@@ -452,9 +453,9 @@ pub fn reflect_call_expression(elaborator: &Elaborator, source: &str, callee: &s
         }
         unsupported("caller contains an unsupported operation or a call to a function not selected by --callee")
     }
-    let mut calls = 0;
+    let mut calls = std::collections::BTreeSet::new();
     let result = walk(body, caller, selected, &globals, &mut 64, &mut calls)?;
-    if calls == 0 { return unsupported("caller must call the opted-in callee"); }
+    if calls.is_empty() { return unsupported("caller must call the opted-in callee"); }
     Ok(result)
 }
 

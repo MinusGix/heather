@@ -1,0 +1,16 @@
+import bitvec;
+
+fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
+    bitvec::bxor(64, bitvec::add(64, left, right), bitvec::sub(64, left, right))
+}
+
+fn caller(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
+    let saved = bitvec::bor(64, left, right);
+    let other = bitvec::band(64, left, right);
+    let third = bitvec::sub(64, left, right);
+    let argument = bitvec::add(64, left, right);
+    let first = leaf(argument, left);
+    let updated = bitvec::bxor(64, saved, first);
+    bitvec::sub(64, updated, bitvec::add(64, other,
+        bitvec::bxor(64, third, leaf(first, right))))
+}

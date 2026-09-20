@@ -1,0 +1,7 @@
+import bitvec;
+
+// Zero means accepted. The cursor argument is available to classifiers but
+// this single-byte recognizer only needs the loaded byte.
+fn recognize_plus(byte: BitVec(64), cursor: BitVec(64)) -> BitVec(64) {
+    bitvec::bxor(64, byte, bitvec::ofNat(64, 43))
+}

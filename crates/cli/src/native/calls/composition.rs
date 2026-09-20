@@ -2,6 +2,7 @@
 use super::*;
 use function_ir_source::{CallExpr, SourceBinaryOperation as B};
 
+pub(super) const SCRATCH: [Gpr; 6] = [Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11, Gpr::Rcx, Gpr::Rdx];
 const SAVED: [Gpr; 6] = [Gpr::Rbx, Gpr::Rbp, Gpr::R12, Gpr::R13, Gpr::R14, Gpr::R15];
 fn binary(op: B, destination: Gpr, source: Gpr) -> Instruction {
     match op {
@@ -13,52 +14,134 @@ fn binary(op: B, destination: Gpr, source: Gpr) -> Instruction {
     }
 }
 
-pub(super) fn lower(expr: &CallExpr) -> Result<Vec<Op>, String> {
-    fn emit(expr: &CallExpr, free: &[Gpr], ops: &mut Vec<Op>) -> Result<Gpr, String> {
-        let (&dst, rest) = free.split_first().ok_or("caller register pressure exceeds four temporaries; spilling is not supported")?;
-        match expr {
-            CallExpr::Input(i) => ops.push(Op::Normal(Instruction::MovRR { destination: dst, source: [Gpr::R14, Gpr::R15][*i] })),
-            CallExpr::Constant(n) => ops.push(Op::Normal(Instruction::MovRI { destination: dst, immediate: *n })),
-            CallExpr::Binary(op, left, right) => {
-                emit(left, free, ops)?;
-                let rhs = emit(right, rest, ops)?;
-                ops.push(Op::Normal(binary(*op, dst, rhs)));
-            }
-            CallExpr::Call(left, right) => {
-                emit(left, free, ops)?;
-                let rhs = emit(right, rest, ops)?;
-                ops.extend([
-                    Op::Normal(Instruction::MovRR { destination: Gpr::Rdi, source: dst }),
-                    Op::Normal(Instruction::MovRR { destination: Gpr::Rsi, source: rhs }),
-                    Op::Call("leaf".into()),
-                    Op::Normal(Instruction::MovRR { destination: dst, source: Gpr::Rax }),
-                ]);
-            }
+pub(super) fn leaf_clobbers(leaf: &SourceX86Emission) -> Vec<Gpr> {
+    leaf.instructions.iter().filter_map(|i| i.destination()).collect()
+}
+
+pub(super) fn lower(expr: &CallExpr, callable: bool, clobbers: &[Gpr]) -> Result<Vec<Op>, String> {
+    if !callable { return lower_with_registers(expr, &SAVED, &[]); }
+    let preserved: Vec<_> = SCRATCH.iter().copied().filter(|r| !clobbers.contains(r)).collect();
+    if let Ok(ops) = lower_with_registers(expr, &preserved, clobbers) { return Ok(ops); }
+    let borrowable: Vec<_> = SCRATCH.iter().copied().filter(|r| clobbers.contains(r)).collect();
+    // Try smaller borrowed sets first. The register bound is six, so exhaustive
+    // subsets are small and avoid depending on one arbitrary register order.
+    for count in 1..=borrowable.len() {
+        for mask in 1usize..(1 << borrowable.len()) {
+            if mask.count_ones() as usize != count { continue; }
+            let registers: Vec<_> = borrowable.iter().enumerate().filter_map(|(i, r)|
+                ((mask >> i) & 1 == 1).then_some(*r)).chain(preserved.iter().copied()).collect();
+            if let Ok(ops) = lower_with_registers(expr, &registers, clobbers) { return Ok(ops); }
         }
-        Ok(dst)
     }
+    Err("caller register pressure exceeds six scratch registers; general expression spilling is not supported".into())
+}
+
+fn lower_with_registers(expr: &CallExpr, registers: &[Gpr], clobbers: &[Gpr]) -> Result<Vec<Op>, String> {
+    // Intern the pure source tree before selection. Each node has one definition;
+    // use counts retain its register until every distinct consumer has used it.
+    fn intern<'a>(expr: &'a CallExpr, ids: &mut BTreeMap<&'a CallExpr, usize>, nodes: &mut Vec<&'a CallExpr>) -> usize {
+        if let Some(id) = ids.get(expr) { return *id; }
+        match expr {
+            CallExpr::Binary(_, left, right) | CallExpr::Call(left, right) => {
+                intern(left, ids, nodes); intern(right, ids, nodes);
+            }
+            _ => {}
+        }
+        let id = nodes.len(); nodes.push(expr); ids.insert(expr, id); id
+    }
+    let mut ids = BTreeMap::new(); let mut nodes = Vec::new();
+    let root = intern(expr, &mut ids, &mut nodes);
+    let mut uses = vec![0; nodes.len()]; uses[root] = 1;
+    for node in &nodes {
+        if let CallExpr::Binary(_, left, right) | CallExpr::Call(left, right) = node {
+            uses[ids[left.as_ref()]] += 1; uses[ids[right.as_ref()]] += 1;
+        }
+    }
+    if registers.len() < 3 { return Err("caller register pressure: leaf leaves fewer than two input registers and one temporary; spilling is not supported".into()); }
+    let count = registers.len()-2;
+    let inputs = [registers[count], registers[count+1]];
     let mut ops = vec![
         Op::Normal(Instruction::MovRI { destination: Gpr::R11, immediate: 8 }),
         Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, source: Gpr::R11 }),
-        Op::Normal(Instruction::MovRR { destination: Gpr::R14, source: Gpr::Rdi }),
-        Op::Normal(Instruction::MovRR { destination: Gpr::R15, source: Gpr::Rsi }),
+        Op::Normal(Instruction::MovRR { destination: inputs[0], source: Gpr::Rdi }),
+        Op::Normal(Instruction::MovRR { destination: inputs[1], source: Gpr::Rsi }),
     ];
-    let result = emit(expr, &SAVED[..4], &mut ops)?;
+    let mut max_saves = 0;
+    let mut locations = vec![None; nodes.len()];
+    for (id, node) in nodes.iter().enumerate() {
+        let allocate = |locations: &[Option<Gpr>]| registers[..count].iter().copied()
+            .find(|r| !locations.contains(&Some(*r)))
+            .ok_or_else(|| format!("caller register pressure exceeds {count} temporaries after leaf clobbers; spilling is not supported"));
+        let dst = match node {
+            CallExpr::Input(i) => inputs[*i],
+            CallExpr::Constant(n) => {
+                let dst = allocate(&locations)?;
+                ops.push(Op::Normal(Instruction::MovRI { destination: dst, immediate: *n })); dst
+            }
+            CallExpr::Binary(_, left, right) | CallExpr::Call(left, right) => {
+                let l = ids[left.as_ref()]; let r = ids[right.as_ref()];
+                let lhs = locations[l].unwrap(); let rhs = locations[r].unwrap();
+                uses[l] -= 1; uses[r] -= 1;
+                let dst = if let CallExpr::Binary(op, _, _) = node {
+                    let dst = if uses[l] == 0 && !inputs.contains(&lhs) { lhs } else { allocate(&locations)? };
+                    if dst != lhs { ops.push(Op::Normal(Instruction::MovRR { destination: dst, source: lhs })); }
+                    ops.push(Op::Normal(binary(*op, dst, rhs))); dst
+                } else {
+                    ops.extend([
+                        Op::Normal(Instruction::MovRR { destination: Gpr::Rdi, source: lhs }),
+                        Op::Normal(Instruction::MovRR { destination: Gpr::Rsi, source: rhs }),
+                    ]);
+                    let live: Vec<_> = locations.iter().enumerate().filter_map(|(id, r)|
+                        r.filter(|r| uses[id] > 0 && clobbers.contains(r))).collect();
+                    max_saves = max_saves.max(live.len());
+                    slot_walk(&mut ops, &live, false);
+                    ops.push(Op::Call("leaf".into()));
+                    if uses[l] == 0 { locations[l] = None; }
+                    if uses[r] == 0 { locations[r] = None; }
+                    let dst = allocate(&locations)?;
+                    ops.push(Op::Normal(Instruction::MovRR { destination: dst, source: Gpr::Rax }));
+                    slot_walk(&mut ops, &live, true);
+                    dst
+                };
+                if uses[l] == 0 { locations[l] = None; }
+                if uses[r] == 0 { locations[r] = None; }
+                dst
+            }
+        };
+        locations[id] = Some(dst);
+    }
+    let result = locations[root].unwrap();
     ops.extend([
         Op::Normal(Instruction::MovRR { destination: Gpr::Rax, source: result }),
         Op::Normal(Instruction::MovRI { destination: Gpr::R11, immediate: 8 }),
         Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::R11 }),
         Op::Ret,
     ]);
+    // An odd number of words changes the incoming 8-mod-16 RSP to a
+    // 16-byte-aligned call base. Unused padding is outside the write footprint.
+    let frame_words = max_saves.max(1) | 1;
+    let sub = Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, source: Gpr::R11 });
+    let add = Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::R11 });
+    for _ in 1..frame_words { ops.insert(2, sub.clone()); ops.insert(ops.len()-1, add.clone()); }
     Ok(ops)
 }
 
+fn slot_walk(ops: &mut Vec<Op>, registers: &[Gpr], restore: bool) {
+    if registers.len() > 1 { ops.push(Op::Normal(Instruction::MovRI { destination: Gpr::Rax, immediate: 8 })); }
+    for (i, r) in registers.iter().enumerate() {
+        if i > 0 { ops.push(Op::Normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::Rax })); }
+        ops.push(if restore { Op::Restore(*r) } else { Op::Save(*r) });
+    }
+    for _ in 1..registers.len() { ops.push(Op::Normal(Instruction::SubRR { destination: Gpr::Rsp, source: Gpr::Rax })); }
+}
+
 #[derive(Default)]
-pub(super) struct Ledger { registers: BTreeMap<Gpr, (u64, String)> }
+pub(super) struct Ledger { registers: BTreeMap<Gpr, (u64, String)>, saved: BTreeMap<u64, u64> }
 impl Ledger {
     pub(super) fn value(&self, r: Gpr) -> Result<u64, String> {
         self.registers.get(&r).map(|v| v.0).ok_or_else(|| format!("uninitialized caller register {r:?}"))
     }
+    pub(super) fn saved(&self, slot: u64) -> Result<u64, String> { self.saved.get(&slot).copied().ok_or_else(|| "restore without a checked save".into()) }
     pub(super) fn fact(&self, r: Gpr) -> Result<String, String> {
         self.registers.get(&r).map(|v| v.1.clone()).ok_or_else(|| format!("missing caller register evidence {r:?}"))
     }
@@ -67,9 +150,14 @@ impl Ledger {
         state_decl(module, &name, format!("read_gpr({}, {prefix}_state_{i}(gprs, flags, stack).gprs) = {}", r.heather_name(), words.get(value)), proof, true);
         self.registers.insert(r, (value, format!("{name}(gprs, flags, stack)")));
     }
-    pub(super) fn step(&mut self, module: &mut Module, words: &Words, prefix: &str, i: usize, op: &Op) -> Result<(), String> {
+    pub(super) fn step(&mut self, module: &mut Module, words: &Words, prefix: &str, i: usize, op: &Op, rsp: u64) -> Result<(), String> {
         let before = format!("{prefix}_state_{i}(gprs, flags, stack)");
         let mut written = None;
+        if let Op::Save(r) = op { self.saved.insert(rsp, self.value(*r)?); }
+        if let Op::Restore(r) = op {
+            let value = self.saved(rsp)?;
+            written = Some((*r, value, format!("read_gpr_after_write({}, {}, {before}.gprs)", r.heather_name(), words.get(value))));
+        }
         if let Op::Normal(inst) = op {
             let (r, expr, _) = normal_effect_fields(*inst, &before).ok_or("unsupported caller instruction")?;
             if r != Gpr::Rsp {
@@ -105,6 +193,7 @@ impl Ledger {
         // remaining facts locally; never normalize the accumulated execution.
         let changed = match op {
             Op::Normal(inst) => normal_effect_fields(*inst, &before).map(|(r, v, _)| (r, v)),
+            Op::Restore(r) => Some((*r, words.get(self.saved(rsp)?))),
             Op::Call(_) | Op::Ret => Some((Gpr::Rsp, format!("read_gpr(Rsp, {prefix}_state_{}(gprs, flags, stack).gprs)", i+1))),
             _ => None,
         };
@@ -121,14 +210,18 @@ impl Ledger {
         Ok(())
     }
     pub(super) fn returned(&mut self, module: &mut Module, words: &Words, prefix: &str, i: usize,
-        instance: &str, values: &str, leaf: &SourceX86Emission, inputs: [u64; 2]) -> Result<(), String>
+        instance: &str, values: &str, leaf: &SourceX86Emission, inputs: [u64; 2], callable: bool) -> Result<(), String>
     {
         let old = std::mem::take(&mut self.registers);
-        for r in SAVED {
+        // Retain only scratch registers untouched by the selected leaf. Their
+        // preservation is checked against its actual states, not trusted here.
+        let clobbers = leaf_clobbers(leaf);
+        for r in if callable { SCRATCH } else { SAVED } {
+            if callable && clobbers.contains(&r) { continue; }
             if let Some((value, fact)) = old.get(&r) {
                 let field = r.heather_name().to_ascii_lowercase();
                 self.insert(module, words, prefix, i, r, *value,
-                    format!("trans({instance}_callee_contract(gprs, flags, stack).preserved_{field}, {fact})"));
+                    if callable { format!("trans(refl, {fact})") } else { format!("trans({instance}_callee_contract(gprs, flags, stack).preserved_{field}, {fact})") });
             }
         }
         let result = proposed_result(&leaf.reflected.result, inputs);
@@ -139,12 +232,13 @@ impl Ledger {
     }
 }
 
-pub(super) fn finish(module: &mut Module, words: &Words, prefix: &str, caller: &str, inputs: [u64;2], n: usize, pc: u64, ledger: &Ledger) -> Result<(), String> {
+pub(super) fn finish(module: &mut Module, words: &Words, prefix: &str, caller: &str, inputs: [u64;2], n: usize, pc: u64, ledger: &Ledger, callable: bool) -> Result<(), String> {
     let end = format!("{prefix}_state_{n}(gprs, flags, stack)");
     let result = format!("{caller}({}, {})", words.get(inputs[0]), words.get(inputs[1]));
-    thm(module, &format!("{prefix}_source_result"), format!("{result} = {}", words.get(ledger.value(Gpr::Rdi)?)), "refl".into());
+    if !callable { thm(module, &format!("{prefix}_source_result"), format!("{result} = {}", words.get(ledger.value(Gpr::Rdi)?)), "refl".into()); }
     state_decl(module, &format!("{prefix}_exit_status"), format!("read_gpr(Rdi, {end}.gprs) = {result}"),
-        format!("trans({}, sym({prefix}_source_result()))", ledger.fact(Gpr::Rdi)?), true);
+        if callable { format!("trans(refl, {prefix}_caller_contract(gprs, flags, stack).result_correct)") }
+        else { format!("trans({}, sym({prefix}_source_result()))", ledger.fact(Gpr::Rdi)?) }, true);
     state_decl(module, &format!("{prefix}_exit_request"), format!("LinuxExitRequest<CallMemory>({end}, {result})"),
         format!("LinuxExitRequest(number := refl, status := {prefix}_exit_status(gprs, flags, stack))"), true);
     let (fetch, _) = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
@@ -164,7 +258,7 @@ mod tests {
         let source = include_str!("../../../../../examples/x86-native/composition.hthr");
         elab.elab_module_source("composition", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
         let expr = function_ir_source::reflect_call_expression(&elab, "composition::caller", "composition::leaf").unwrap();
-        assert_eq!(lower(&expr).unwrap().iter().filter(|op| matches!(op, Op::Call(_))).count(), 2);
+        assert_eq!(lower(&expr, false, &[]).unwrap().iter().filter(|op| matches!(op, Op::Call(_))).count(), 2);
         for (name, expression, accepted) in [("source_plan", expr.clone(), true),
             ("stale_plan", CallExpr::Binary(B::Add, Box::new(expr.clone()), Box::new(CallExpr::Constant(1))), false)] {
             let result = expression.expression("composition::leaf", &[Expr::name("left"), Expr::name("right")]).render();
@@ -175,12 +269,34 @@ mod tests {
         }
         assert!(function_ir_source::reflect_call_expression(&elab, "composition::caller", "composition::caller").unwrap_err().to_string().contains("not selected"));
         assert!(function_ir_source::reflect_call_expression(&elab, "composition::leaf", "composition::leaf").unwrap_err().to_string().contains("must call"));
-        let mut pressure = CallExpr::Call(Box::new(CallExpr::Input(1)), Box::new(CallExpr::Input(0)));
-        for _ in 0..4 { pressure = CallExpr::Binary(B::Sub, Box::new(CallExpr::Input(0)), Box::new(pressure)); }
-        assert!(lower(&pressure).unwrap_err().contains("register pressure"));
+        fn tree(depth: usize, seed: u64) -> CallExpr {
+            if depth == 0 { return CallExpr::Constant(seed); }
+            CallExpr::Binary(B::Sub, Box::new(tree(depth-1, seed*2)), Box::new(tree(depth-1, seed*2+1)))
+        }
+        let pressure = tree(4, 1);
+        assert!(lower(&pressure, false, &[]).unwrap_err().contains("register pressure"));
+        assert!(lower(&expr, true, &SCRATCH).unwrap().iter().filter(|op| matches!(op, Op::Save(_))).count() > 1);
         let many = "import bitvec; fn leaf(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { bitvec::add(64, a, b) } fn caller(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { leaf(leaf(leaf(leaf(leaf(a, b), b), b), b), b) }";
         elab.elab_module_source("many", many).unwrap();
         assert!(function_ir_source::reflect_call_expression(&elab, "many::caller", "many::leaf").unwrap_err().to_string().contains("four-call"));
+    }
+
+    #[test]
+    fn shared_calls_have_one_definition_and_distinct_arguments_stay_distinct() {
+        let mut elab = super::super::super::native_test_base();
+        let source = include_str!("../../../../../examples/x86-native/sharing.hthr");
+        elab.elab_module_source("sharing", source).unwrap();
+        let expr = function_ir_source::reflect_call_expression(&elab, "sharing::caller", "sharing::leaf").unwrap();
+        for callable in [false, true] {
+            let ops = lower(&expr, callable, &[]).unwrap();
+            assert_eq!(ops.iter().filter(|op| matches!(op, Op::Call(_))).count(), 2);
+            // The shared `first + saved` is selected just once.
+            assert_eq!(ops.iter().filter(|op| matches!(op, Op::Normal(Instruction::AddRR { destination, .. }) if *destination != Gpr::Rsp)).count(), 5);
+            let placed = layout(&[Fragment { name: "caller".into(), ops }, Fragment { name: "leaf".into(), ops: vec![Op::Ret] }]).unwrap();
+            let calls: Vec<_> = placed.placed.values().filter(|(op, _, _)| matches!(op, Op::Call(_))).collect();
+            assert_eq!(calls.len(), 2);
+            assert!(calls.iter().all(|(_, bytes, _)| bytes.len() == 5 && bytes[0] == 0xe8));
+        }
     }
 
     #[test]
@@ -197,7 +313,7 @@ mod tests {
             let before = format!("probe_state_{i}(gprs, flags, stack)");
             state_decl(&mut module, &format!("probe_state_{}", i+1), "MachineState<CallMemory>".into(),
                 format!("MachineState({}, {before}.rip, {before}.memory)", normal_fields(inst, &before).unwrap()), false);
-            ledger.step(&mut module, &words, "probe", i, &Op::Normal(inst)).unwrap();
+            ledger.step(&mut module, &words, "probe", i, &Op::Normal(inst), STACK_TOP).unwrap();
         }
         let source = module.render();
         base.fork().elab_module_source("ledger", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));

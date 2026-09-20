@@ -1,0 +1,189 @@
+// Structured scanner-body semantics over ordinary checked x86 blocks.
+import x86_64;
+import x86_64_block;
+import byte_scan;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+inductive ScanCode {
+    ScanStop,
+    ScanOverflow,
+    ScanNext(List<Instruction>),
+    ScanBranch(List<Instruction>, ScanCode, ScanCode),
+}
+
+fn scan_choose(flag: Bool, yes, no: ScanStep) -> ScanStep {
+    match flag { True => yes, False => no }
+}
+theorem scan_choose_congr(flag: Bool, yes, no, wanted_yes, wanted_no: ScanStep,
+    yes_correct: yes = wanted_yes, no_correct: no = wanted_no):
+    scan_choose(flag, yes, no) = scan_choose(flag, wanted_yes, wanted_no) {
+    match flag { True => yes_correct, False => no_correct }
+}
+
+fn scan_body<M>(code: ScanCode) -> MachineState<M> -> ScanStep {
+    match code {
+        ScanStop => λ before => Stop,
+        ScanOverflow => λ before => Overflow,
+        ScanNext(instructions) => λ before =>
+            Next(read_gpr(Rax, (execute_block_normal(instructions, before)).gprs)),
+        ScanBranch(instructions, yes, no) => λ before => {
+            let middle = execute_block_normal(instructions, before);
+            scan_choose(middle.flags.cf, scan_body(yes, middle), scan_body(no, middle))
+        },
+    }
+}
+
+fn scan_inputs<M>(before: MachineState<M>, byte, value: BitVec(64)) -> MachineState<M> {
+    MachineState(write_gpr(Rsi, value, write_gpr(Rdi, byte, before.gprs)),
+        before.flags, before.rip, before.memory)
+}
+
+// The loop can carry arbitrary scratch contents from one iteration to the
+// next: the body theorem is quantified over the whole machine state.
+theorem scan_body_inputs<M>(code: ScanCode, step: BitVec(64) -> BitVec(64) -> ScanStep,
+    correct: (before: MachineState<M>) -> scan_body(code, before) =
+        step(read_gpr(Rdi, before.gprs), read_gpr(Rsi, before.gprs)),
+    before: MachineState<M>, byte, value: BitVec(64)):
+    scan_body(code, scan_inputs(before, byte, value)) = step(byte, value) {
+    correct(scan_inputs(before, byte, value))
+}
+
+// Relative branches are tied to finite offsets within a <=4096-byte body.
+// Low four bytes of subtraction encode both forward and backward rel32.
+fn scan_relative(next, target: Nat) -> BitVec(32) {
+    bitvec::sub(32, bitvec::ofNat(32, target), bitvec::ofNat(32, next))
+}
+fn scan_displacement(next, target: Nat) -> BitVec(64) {
+    bitvec::zero_extend(32, 32, scan_relative(next, target))
+}
+fn scan_jump(offset, target: Nat) -> List<BitVec(8)> {
+    let d = scan_displacement(offset + 5, target);
+    [bitvec::ofNat(8, 0xe9), imm_byte0(d), imm_byte1(d), imm_byte2(d), imm_byte3(d)]
+}
+fn scan_jcc(opcode, offset, target: Nat) -> List<BitVec(8)> {
+    let d = scan_displacement(offset + 6, target);
+    [bitvec::ofNat(8, 0x0f), bitvec::ofNat(8, opcode), imm_byte0(d), imm_byte1(d), imm_byte2(d), imm_byte3(d)]
+}
+fn scan_body_size(code: ScanCode) -> Nat {
+    match code {
+        ScanStop => 5,
+        ScanOverflow => 5,
+        ScanNext(instructions) => list_len(canonical_block_bytes(instructions)) + 5,
+        ScanBranch(instructions, yes, no) =>
+            (list_len(canonical_block_bytes(instructions)) + 11) + (scan_body_size(yes) + scan_body_size(no)),
+    }
+}
+fn scan_body_bytes(code: ScanCode) -> Nat -> Nat -> Nat -> Nat -> List<BitVec(8)> {
+    match code {
+        ScanStop => λ offset advance done overflow => scan_jump(offset, done),
+        ScanOverflow => λ offset advance done overflow => scan_jump(offset, overflow),
+        ScanNext(instructions) => λ offset advance done overflow =>
+            canonical_block_bytes(instructions) ++ scan_jump(offset + list_len(canonical_block_bytes(instructions)), advance),
+        ScanBranch(instructions, yes, no) => λ offset advance done overflow => {
+            let branch = offset + list_len(canonical_block_bytes(instructions));
+            let yes_start = branch + 11;
+            let no_start = yes_start + scan_body_size(yes);
+            canonical_block_bytes(instructions) ++ scan_jcc(0x82, branch, yes_start) ++
+                scan_jump(branch + 6, no_start) ++
+                scan_body_bytes(yes, yes_start, advance, done, overflow) ++
+                scan_body_bytes(no, no_start, advance, done, overflow)
+        },
+    }
+}
+
+fn scan_init(fuel: Nat) -> List<Instruction> {
+    [MovRR(R8, Rdi), MovRR(R9, Rsi), MovRR(R10, Rdx),
+     MovRI(R11, bitvec::ofNat(64, fuel)), MovRI(Rsi, bitvec::zero(64))]
+}
+fn scan_advance() -> List<Instruction> {
+    [MovRR(Rsi, Rax), MovRI(Rax, bitvec::ofNat(64, 1)), AddRR(R10, Rax), SubRR(R11, Rax)]
+}
+fn scan_status(status: Nat) -> List<Instruction> { [MovRI(Rcx, bitvec::ofNat(64, status))] }
+fn scan_return() -> List<Instruction> { [MovRR(Rax, Rsi), MovRR(Rdx, R10)] }
+fn scan_load_bytes() -> List<BitVec(8)> { [bitvec::ofNat(8, 0x4b), bitvec::ofNat(8, 0x0f), bitvec::ofNat(8, 0xb6), bitvec::ofNat(8, 0x3c), bitvec::ofNat(8, 0x10)] }
+fn scan_bounds_check() -> List<Instruction> { [CmpRR(R10, R9)] }
+fn scan_fuel_check() -> List<Instruction> { [MovRI(Rax, bitvec::zero(64)), CmpRR(R11, Rax)] }
+fn scan_prefix_bytes(fuel, done, limit: Nat) -> List<BitVec(8)> {
+    canonical_block_bytes(scan_init(fuel)) ++
+    canonical_block_bytes(scan_bounds_check()) ++ scan_jcc(0x83, 32, done) ++
+    canonical_block_bytes(scan_fuel_check()) ++ scan_jcc(0x84, 51, limit) ++
+    scan_load_bytes()
+}
+fn scan_suffix_bytes(fuel, advance: Nat) -> List<BitVec(8)> {
+    let done = advance + 24;
+    let finish = done + 74;
+    canonical_block_bytes(scan_advance()) ++ scan_jump(advance + 19, 29) ++
+    canonical_block_bytes([MovRI(Rax, bitvec::ofNat(64, fuel)), CmpRR(R11, Rax)]) ++ scan_jcc(0x84, done + 13, done + 34) ++
+    canonical_block_bytes(scan_status(0)) ++ scan_jump(done + 29, finish) ++
+    canonical_block_bytes(scan_status(1)) ++ scan_jump(done + 44, finish) ++
+    canonical_block_bytes(scan_status(2)) ++ scan_jump(done + 59, finish) ++
+    canonical_block_bytes(scan_status(3)) ++ canonical_block_bytes(scan_return())
+}
+fn scan_program_bytes(code: ScanCode, fuel: Nat) -> List<BitVec(8)> {
+    let advance = 62 + scan_body_size(code);
+    let done = advance + 24;
+    scan_prefix_bytes(fuel, done, done + 64) ++
+        scan_body_bytes(code, 62, advance, done, done + 49) ++ scan_suffix_bytes(fuel, advance)
+}
+theorem scan_bytes_join(a, b, c, d: List<BitVec(8)>, first: a = b, rest: c = d):
+    a ++ c = b ++ d { trans(cong_append_l(c, first), cong_append_r(b, rest)) }
+
+theorem scan_guard_flag<M>(before: MachineState<M>):
+    (execute_block_normal([CmpRR(R10, R9)], before)).flags.cf =
+        bitvec::unsigned_lt_bit(64, read_gpr(R10, before.gprs), read_gpr(R9, before.gprs)) { refl }
+
+theorem scan_advance_value<M>(before: MachineState<M>):
+    read_gpr(Rsi, (execute_block_normal(scan_advance(), before)).gprs) = read_gpr(Rax, before.gprs) { refl }
+theorem scan_advance_cursor<M>(before: MachineState<M>):
+    read_gpr(R10, (execute_block_normal(scan_advance(), before)).gprs) =
+        bitvec::add(64, read_gpr(R10, before.gprs), bitvec::ofNat(64, 1)) { refl }
+theorem scan_advance_fuel<M>(before: MachineState<M>):
+    read_gpr(R11, (execute_block_normal(scan_advance(), before)).gprs) =
+        bitvec::sub(64, read_gpr(R11, before.gprs), bitvec::ofNat(64, 1)) { refl }
+
+// Every body block preserves the loop's live state and the SysV preserved
+// registers. Arithmetic scratch is restricted to RAX, RCX, and RDX.
+fn ScanFrame<M>(before, after: MachineState<M>) -> Type {
+    after.memory = before.memory ∧
+    read_gpr(Rdi, after.gprs) = read_gpr(Rdi, before.gprs) ∧
+    read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs) ∧
+    read_gpr(R8, after.gprs) = read_gpr(R8, before.gprs) ∧
+    read_gpr(R9, after.gprs) = read_gpr(R9, before.gprs) ∧
+    read_gpr(R10, after.gprs) = read_gpr(R10, before.gprs) ∧
+    read_gpr(R11, after.gprs) = read_gpr(R11, before.gprs) ∧
+    read_gpr(Rbx, after.gprs) = read_gpr(Rbx, before.gprs) ∧
+    read_gpr(Rbp, after.gprs) = read_gpr(Rbp, before.gprs) ∧
+    read_gpr(Rsp, after.gprs) = read_gpr(Rsp, before.gprs) ∧
+    read_gpr(R12, after.gprs) = read_gpr(R12, before.gprs) ∧
+    read_gpr(R13, after.gprs) = read_gpr(R13, before.gprs) ∧
+    read_gpr(R14, after.gprs) = read_gpr(R14, before.gprs) ∧
+    read_gpr(R15, after.gprs) = read_gpr(R15, before.gprs)
+}
+fn ScanCodeFrame<M>(code: ScanCode) -> Type {
+    match code {
+        ScanStop => True,
+        ScanOverflow => True,
+        ScanNext(instructions) => (before: MachineState<M>) ->
+            ScanFrame(before, execute_block_normal(instructions, before)),
+        ScanBranch(instructions, yes, no) =>
+            ((before: MachineState<M>) -> ScanFrame(before, execute_block_normal(instructions, before))) ∧
+            ScanCodeFrame<M>(yes) ∧ ScanCodeFrame<M>(no),
+    }
+}
+
+// Name the comparison frame independently of recursively nested body types.
+// Its flags and RIP are deliberately neutral: preserving registers does not
+// require evaluating the comparator's flag arithmetic.
+theorem scan_compare_frame<M>(before: MachineState<M>, left, right: BitVec(64),
+    flags: Flags, rip: BitVec(64)):
+    ScanFrame(before, MachineState(write_gpr(Rcx, right, write_gpr(Rax, left, before.gprs)), flags, rip, before.memory)) {
+    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
+}
+theorem scan_branch_frame<M>(instructions: List<Instruction>, yes, no: ScanCode,
+    head: (before: MachineState<M>) -> ScanFrame(before, execute_block_normal(instructions, before)),
+    yes_frame: ScanCodeFrame<M>(yes), no_frame: ScanCodeFrame<M>(no)):
+    ScanCodeFrame<M>(ScanBranch(instructions, yes, no)) { ⟨head, ⟨yes_frame, no_frame⟩⟩ }

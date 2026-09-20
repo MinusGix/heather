@@ -141,3 +141,58 @@ bindings and Add/Sub/AND/OR/XOR expressions are supported around calls to one
 selected leaf, within explicit expression, call-count, and register limits.
 See [source-call composition](../../docs/x86-64-call-composition.md) for the
 checked boundary and current limits.
+
+## A composed function with its own reusable summary
+
+Add `--callable-caller` to the composition command (with a fresh output path):
+
+```sh
+(ulimit -v 6291456 -t 300; target/debug/heather build-x86 \
+  examples/x86-native/composition.hthr caller --callee leaf --callable-caller \
+  --arg 20 --arg 22 -o target/x86-native/callable \
+  --cache-dir target/native-images)
+./target/x86-native/callable
+```
+
+Expected status: 3. The entry now consumes the composed function's own summary,
+which preserves the native ABI registers and protects the parent's return word.
+This bounded profile reserves caller registers according to the leaf's actual
+clobbers and fixes the incoming stack position; see [composed callers](../../docs/x86-64-composed-callers.md)
+for the generic proof interface and limits.
+
+The same command with `sharing.hthr` and a fresh output path demonstrates
+shared arithmetic and call results (status 50 for 20 and 22). With
+`multi_register.hthr`, a leaf uses RAX and R11 while caller values survive in
+untouched registers (status 108). Both cases use `--callable-caller`.
+
+`stack_save.hthr` exceeds the disjoint register pool and uses checked stack
+saves/restores for R11 around two leaf calls. Use the same command with a fresh
+output path and `--callable-caller`: status 88 for 20 and 22, or status 4 for
+18446744073709551615 and 1. The save word occupies the caller's alignment slot;
+checked non-overlap protects both the live saved value and the parent return.
+
+`multi_stack_save.hthr` saves R10 and R11 simultaneously across a leaf call,
+using two distinct words in a 24-byte frame that preserves call alignment. Run it with
+`--callable-caller --callee leaf`: inputs 20 and 22 exit 66; inputs
+18446744073709551615 and 1 exit 253. Checked disjointness preserves each live
+saved word through writes to the other slot and the child return word, and
+protects the parent return word.
+
+## A character recognizer over runtime input
+
+`recognize_plus.hthr` compiles with `compile-x86 --buffer-cursor` into a guarded
+byte-buffer operation. `recognize_main.c` supplies a fixed input buffer and
+prints the returned status/cursor. One executable handles different runtime
+strings, with no parser allocation. See [buffer cursors](../../docs/x86-64-buffer-cursor.md)
+for build commands, the machine interface, and the checked boundary.
+
+## Experimental bounded decimal scanner
+
+`decimal_step.hthr` compiles digit classification, overflow decisions, and
+accumulation from ordinary Heather source. `--buffer-scan` supplies a reusable
+256-step native buffer loop; `count_spaces.hthr` uses the same compiler and loop.
+The fixed-buffer driver and SysV adapter handle storage and I/O.
+
+See [the build/run guide](../../docs/x86-64-buffer-scan.md). Body/source,
+live-register frame, pure bounded-model refinement, and bytes are checked; the
+complete machine-loop trace and natural-number decimal theorem remain open.

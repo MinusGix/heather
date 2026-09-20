@@ -1,0 +1,14 @@
+// A second body for the same bounded native loop, with no decimal logic.
+import byte_scan;
+import bitvec;
+import bool;
+
+fn count_spaces(byte, value: BitVec(64)) -> ScanStep {
+    match bitvec::unsigned_lt_bit(64, byte, bitvec::ofNat(64, 32)) {
+        True => Stop,
+        False => match bitvec::unsigned_lt_bit(64, bitvec::ofNat(64, 32), byte) {
+            True => Stop,
+            False => Next(bitvec::add(64, value, bitvec::ofNat(64, 1))),
+        },
+    }
+}

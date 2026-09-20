@@ -1,0 +1,34 @@
+// A scanner body: ordinary source arithmetic and decisions. The reusable
+// byte_scan loop owns fuel, checked reads, and cursor movement.
+import bitvec;
+import bool;
+import byte_scan;
+
+fn decimal_step(byte, value: BitVec(64)) -> ScanStep {
+    match bitvec::unsigned_lt_bit(64, byte, bitvec::ofNat(64, 48)) {
+        True => Stop,
+        False => match bitvec::unsigned_lt_bit(64, byte, bitvec::ofNat(64, 58)) {
+            False => Stop,
+            True => match bitvec::unsigned_lt_bit(64, bitvec::ofNat(64, 1844674407370955161), value) {
+                True => Overflow,
+                False => match bitvec::unsigned_lt_bit(64, value, bitvec::ofNat(64, 1844674407370955161)) {
+                    True => {
+                        let twice = bitvec::add(64, value, value);
+                        let four = bitvec::add(64, twice, twice);
+                        let eight = bitvec::add(64, four, four);
+                        Next(bitvec::add(64, bitvec::add(64, eight, twice), bitvec::sub(64, byte, bitvec::ofNat(64, 48))))
+                    },
+                    False => match bitvec::unsigned_lt_bit(64, byte, bitvec::ofNat(64, 54)) {
+                        False => Overflow,
+                        True => {
+                            let twice = bitvec::add(64, value, value);
+                            let four = bitvec::add(64, twice, twice);
+                            let eight = bitvec::add(64, four, four);
+                            Next(bitvec::add(64, bitvec::add(64, eight, twice), bitvec::sub(64, byte, bitvec::ofNat(64, 48))))
+                        },
+                    },
+                },
+            },
+        },
+    }
+}

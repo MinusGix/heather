@@ -6,15 +6,16 @@ use heather_elab::heather_emit::{Block, Declaration, Expr, Module, Parameter};
 use heather_elab::Elaborator;
 
 mod composition;
+mod callable;
 
 const ENTRY: u64 = 0x4000e8;
 const HEADER: usize = 232;
 const STACK_TOP: u64 = 0x402000;
 
 #[derive(Clone, Debug)]
-enum Op { Normal(Instruction), Call(String), Ret, Store, StoreArgument, Load, Syscall }
+enum Op { Normal(Instruction), Call(String), Ret, Store, StoreArgument, Load, Save(Gpr), Restore(Gpr), Syscall }
 impl Op {
-    fn len(&self) -> usize { match self { Self::Normal(i) => super::encode(&[*i]).len(), Self::Call(_) => 5, Self::Ret => 1, Self::Store | Self::StoreArgument | Self::Load => 4, Self::Syscall => 2 } }
+    fn len(&self) -> usize { match self { Self::Normal(i) => super::encode(&[*i]).len(), Self::Call(_) => 5, Self::Ret => 1, Self::Store | Self::StoreArgument | Self::Load | Self::Save(_) | Self::Restore(_) => 4, Self::Syscall => 2 } }
 }
 #[derive(Clone)]
 struct Fragment { name: String, ops: Vec<Op> }
@@ -48,6 +49,12 @@ fn layout(fragments: &[Fragment]) -> Result<Layout, String> {
                 }
                 Op::Ret => (vec![0xc3], "NearReturn".into()),
                 Op::Syscall => (vec![0x0f, 0x05], String::new()),
+                Op::Save(r) | Op::Restore(r) => {
+                    let register = super::reg(*r);
+                    let opcode = if matches!(op, Op::Save(_)) { 0x89 } else { 0x8b };
+                    let constructor = if matches!(op, Op::Save(_)) { "StoreStack64" } else { "LoadStack64" };
+                    (vec![0x48 | ((register >> 3) << 2), opcode, ((register & 7) << 3) | 4, 0x24], format!("{constructor}({})", r.heather_name()))
+                }
                 Op::StoreArgument => (vec![0x48, 0x89, 0x3c, 0x24], "StoreStack64(Rdi)".into()),
                 Op::Store => (vec![0x4c, 0x89, 0x1c, 0x24], "StoreStack64(R11)".into()),
                 Op::Load => (vec![0x4c, 0x8b, 0x1c, 0x24], "LoadStack64(R11)".into()),
@@ -346,18 +353,19 @@ fn certify_return_target(module: &mut Module, words: &Words, prefix: &str, i: us
 }
 
 pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, caller: &str,
-    requested_callee: &str, inputs: [u64; 2]) -> Result<Vec<u8>, String>
+    requested_callee: &str, inputs: [u64; 2], callable: bool) -> Result<Vec<u8>, String>
 {
-    let legacy = function_ir_source::reflect_call_plan(elab, caller);
-    let composition = if legacy.is_err() { Some(function_ir_source::reflect_call_expression(elab, caller, requested_callee).map_err(|e| e.to_string())?) } else { None };
-    let (callee, local, twice) = legacy.unwrap_or_else(|_| (requested_callee.into(), false, false));
+    let legacy = if callable { None } else { function_ir_source::reflect_call_plan(elab, caller).ok() };
+    let composition = if legacy.is_none() { Some(function_ir_source::reflect_call_expression(elab, caller, requested_callee).map_err(|e| e.to_string())?) } else { None };
+    let (callee, local, twice) = legacy.unwrap_or_else(|| (requested_callee.into(), false, false));
     if callee != requested_callee { return Err(format!("caller resolves to `{callee}`, not opted-in callee `{requested_callee}`")); }
     let leaf_prefix = format!("{prefix}_leaf");
     let mut registers = vec![Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11];
+    if callable { registers = vec![Gpr::Rax, Gpr::R11, Gpr::R10, Gpr::R9, Gpr::R8, Gpr::Rcx, Gpr::Rdx]; }
     if twice { registers.retain(|r| *r != Gpr::R10); }
     let leaf = function_ir_source::generate_elaborated_x86(elab, &leaf_prefix, &callee,
         [Gpr::Rdi, Gpr::Rsi], &registers, Gpr::Rax)
-        .map_err(|e| format!("callee: {e}"))?;
+        .map_err(|e| if callable { format!("callable callee: {e}") } else { format!("callee: {e}") })?;
     let normal = |i| Op::Normal(i);
     let mov = |r, value| normal(Instruction::MovRI { destination: r, immediate: value });
     let leaf_ops = selected_leaf_ops(&leaf, local && !twice, twice);
@@ -368,7 +376,7 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     if twice { caller_ops.extend([normal(Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax }), Op::Call("leaf_again".into())]); }
     if local { caller_ops.extend([Op::Load, normal(Instruction::XorRR { destination: Gpr::Rax, source: Gpr::R11 })]); }
     caller_ops.extend([mov(Gpr::R11, 8), normal(Instruction::AddRR { destination: Gpr::Rsp, source: Gpr::R11 }), Op::Ret]);
-    if let Some(expr) = &composition { caller_ops = composition::lower(expr)?; }
+    if let Some(expr) = &composition { caller_ops = composition::lower(expr, callable, &composition::leaf_clobbers(&leaf))?; }
     // Place the leaf before the wrapper: its call deliberately exercises a negative rel32.
     let mut fragments = vec![
         Fragment { name: "entry".into(), ops: vec![mov(Gpr::Rsp, STACK_TOP), mov(Gpr::Rdi, inputs[0]), mov(Gpr::Rsi, inputs[1]),
@@ -421,7 +429,8 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     thm(module, &format!("{prefix}_file_correct"), format!("{prefix}_file() = call_elf_bytes({prefix}_code(), {prefix}_image())"), "refl".into());
     let words = Words { prefix: prefix.into(), values: Default::default() };
     let mut trace = Module::default();
-    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local, twice, composition.is_some())?;
+    if callable { callable::emit(&mut trace, &words, prefix, caller, &leaf, &leaf_prefix, &layout)?; }
+    certify_trace(&mut trace, &words, prefix, caller, inputs, &leaf, &leaf_prefix, &layout, local, twice, composition.is_some(), callable)?;
     for value in words.values.into_inner() {
         fun(module, &format!("{prefix}_word_{value:x}"), "BitVec(64)", word(value));
     }
@@ -470,7 +479,7 @@ fn emit_leaf_summary(module: &mut Module, prefix: &str, leaf: &SourceX86Emission
 }
 
 fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str, inputs: [u64;2], leaf: &SourceX86Emission,
-    leaf_prefix: &str, layout: &Layout, local: bool, twice: bool, composed: bool) -> Result<(), String>
+    leaf_prefix: &str, layout: &Layout, local: bool, twice: bool, composed: bool, callable: bool) -> Result<(), String>
 {
     let word = |n| words.get(n);
     let state = |i| format!("{prefix}_state_{i}(gprs, flags, stack)");
@@ -494,10 +503,13 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
     let mut ledger = composition::Ledger::default();
     let mut call_inputs = [0; 2];
     let mut call_entry = None;
+    let mut caller_start = 0;
+    let mut caller_end = 0;
     loop {
         let (op, encoding, instruction) = layout.placed.get(&pc).ok_or("execution escaped laid-out fragments")?;
         let i = trace.len();
         if matches!(op, Op::Syscall) { break; }
+        if pc == layout.symbols["caller"] { caller_start = i; }
         if pc == layout.symbols["leaf"] || layout.symbols.get("leaf_again") == Some(&pc) { leaf_start = i; }
         let in_leaf = leaf_start != 0 && i < leaf_start + leaf_count;
         if composed && in_leaf && i == leaf_start {
@@ -516,6 +528,8 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
                 if i + 1 == leaf_start + leaf_count { leaf_end = i; }
                 (format!("return_after(call_stack_access(), {before})"), returns.pop().ok_or("return with empty static frame chain")?)
             }
+            Op::Save(r) => (format!("stack_store_after(call_stack_access(), {}, {before})", r.heather_name()), pc + 4),
+            Op::Restore(r) => (format!("stack_load_after(call_stack_access(), {}, {before})", r.heather_name()), pc + 4),
             Op::StoreArgument => (format!("stack_store_after(call_stack_access(), Rdi, {before})"), pc + 4),
             Op::Store => (format!("stack_store_after(call_stack_access(), R11, {before})"), pc + 4),
             Op::Load => (format!("stack_load_after(call_stack_access(), R11, {before})"), pc + 4),
@@ -529,6 +543,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             Op::Call(symbol) => certify_call_memory(module, words, prefix, i, &before, rsp, pc, displacement(pc, layout.symbols[symbol])? as u32, None, None),
             Op::Normal(normal) => (format!("{before}.memory"), format!("sym(normal_memory({}, {before}))", normal.heather_expr().render())),
             Op::Ret => (format!("{before}.memory"), format!("sym(return_memory(call_stack_access(), {before}))")),
+            Op::Save(r) => certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some((ledger.value(*r)?, r.heather_name())), Some(ledger.fact(*r)?)),
             Op::Store => certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some((inputs[0] ^ inputs[1], "R11")), None),
             Op::StoreArgument => {
                 let (value, proof) = if instances.is_empty() { (inputs[0], None) } else {
@@ -539,7 +554,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
                 };
                 certify_call_memory(module, words, prefix, i, &before, rsp, pc, 0, Some((value, "Rdi")), proof)
             },
-            Op::Load => (format!("{before}.memory"), "refl".into()),
+            Op::Load | Op::Restore(_) => (format!("{before}.memory"), "refl".into()),
             _ => unreachable!(),
         };
         let direct_normal = matches!(op, Op::Normal(normal) if normal_fields(*normal, &before).is_some());
@@ -549,7 +564,8 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         let fields = match op {
             Op::Call(_) => format!("write_gpr(Rsp, {}, {before}.gprs), {before}.flags", word(rsp-8)),
             Op::Ret => format!("write_gpr(Rsp, {}, {before}.gprs), {before}.flags", word(rsp+8)),
-            Op::Store | Op::StoreArgument => format!("{before}.gprs, {before}.flags"),
+            Op::Store | Op::StoreArgument | Op::Save(_) => format!("{before}.gprs, {before}.flags"),
+            Op::Restore(r) => format!("write_gpr({}, {}, {before}.gprs), {before}.flags", r.heather_name(), word(ledger.saved(rsp)?)),
             Op::Load => format!("write_gpr(R11, {}, {before}.gprs), {before}.flags", word(inputs[0] ^ inputs[1])),
             Op::Normal(normal) => normal_fields(*normal, &before).unwrap_or_else(|| format!("{computed}.gprs, {computed}.flags")),
             _ => unreachable!(),
@@ -578,6 +594,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         };
         let write = match op {
             Op::Normal(instruction) => normal_effect_fields(*instruction, &before).map(|(register, value, _)| (register, value)),
+            Op::Restore(r) => Some((*r, word(ledger.saved(rsp)?))),
             Op::Load => Some((Gpr::R11, word(inputs[0] ^ inputs[1]))),
             _ => None,
         };
@@ -596,11 +613,11 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         state_decl(module, &format!("{prefix}_rsp_rhs_{i}"), format!("{rhs} = {}", word(next_rsp)), rhs_proof, true);
         state_decl(module, &format!("{prefix}_rsp_{}", i+1), format!("read_gpr(Rsp, {after}.gprs) = {}", word(next_rsp)),
             format!("trans({prefix}_rsp_step_{i}(gprs, flags, stack), {prefix}_rsp_rhs_{i}(gprs, flags, stack))"), true);
-        if matches!(op, Op::Call(_) | Op::Ret | Op::Store | Op::StoreArgument | Op::Load) {
-            if matches!(op, Op::Call(_) | Op::Store | Op::StoreArgument) {
-                let slot = rsp - if matches!(op, Op::Store | Op::StoreArgument) { 0 } else { 8 };
+        if matches!(op, Op::Call(_) | Op::Ret | Op::Store | Op::StoreArgument | Op::Load | Op::Save(_) | Op::Restore(_)) {
+            if matches!(op, Op::Call(_) | Op::Store | Op::StoreArgument | Op::Save(_)) {
+                let slot = rsp - if matches!(op, Op::Store | Op::StoreArgument | Op::Save(_)) { 0 } else { 8 };
                 let base = word(slot);
-                let actual_base = if matches!(op, Op::Store | Op::StoreArgument) { format!("read_gpr(Rsp, {before}.gprs)") }
+                let actual_base = if matches!(op, Op::Store | Op::StoreArgument | Op::Save(_)) { format!("read_gpr(Rsp, {before}.gprs)") }
                     else { format!("bitvec::sub(64, read_gpr(Rsp, {before}.gprs), bitvec::ofNat(64, 8))") };
                 let mut fields = vec!["canonical := refl".to_string(), format!("end_canonical := j(sym({prefix}_store_offset_{i}_7()), λ address _ => LowCanonical(address), refl)"), "no_wrap := refl".into()];
                 for j in 0..8 {
@@ -672,10 +689,14 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
             };
             state_decl(module, &format!("{prefix}_successor_{i}"), format!("{after} = {computed}"), proof, true);
         }
-        if matches!(op, Op::Store | Op::StoreArgument | Op::Load) {
+        if matches!(op, Op::Store | Op::StoreArgument | Op::Load | Op::Save(_) | Op::Restore(_)) {
             state_decl(module, &format!("{prefix}_target_{i}"), format!("{} = next_rip({before}.rip, 4)", word(next)), "refl".into(), true);
-            let proof = if matches!(op, Op::Store | Op::StoreArgument) {
+            let proof = if matches!(op, Op::Store | Op::StoreArgument | Op::Save(_)) {
                 format!("machine_rebuild({computed}, {}, {memory}, {prefix}_target_{i}(gprs, flags, stack), {prefix}_memory_same_{i}(gprs, flags, stack))", word(next))
+            } else if let Op::Restore(r) = op {
+                let value = ledger.saved(rsp)?;
+                certify_return_target(module, words, prefix, i, &before, rsp, value, Some((&current_instance, false)));
+                format!("stack_load_flat(call_stack_access(), {}, {before}, {}, {}, sym({prefix}_return_value_{i}(gprs, flags, stack)), {prefix}_target_{i}(gprs, flags, stack))", r.heather_name(), word(value), word(next))
             } else {
                 certify_return_target(module, words, prefix, i, &before, rsp, inputs[0] ^ inputs[1], Some((&current_instance, twice)));
                 format!("stack_load_flat(call_stack_access(), R11, {before}, {}, {}, sym({prefix}_return_value_{i}(gprs, flags, stack)), {prefix}_target_{i}(gprs, flags, stack))", word(inputs[0] ^ inputs[1]), word(next))
@@ -703,7 +724,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         let step = match op {
             Op::Normal(normal) => format!("ordinary_call_step(call_stack_access(), {}, {before}, {after}, {prefix}_successor_{i}(gprs, flags, stack))", normal.heather_expr().render()),
             Op::Call(_) => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_return_canonical_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩⟩"),
-            Op::Store | Op::StoreArgument | Op::Load => format!("⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩"),
+            Op::Store | Op::StoreArgument | Op::Load | Op::Save(_) | Op::Restore(_) => format!("⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩"),
             Op::Ret => format!("⟨{prefix}_stack_bound_{i}(gprs, flags, stack), ⟨{prefix}_target_canonical_{i}(gprs, flags, stack), ⟨{prefix}_stack_permissions_{i}(gprs, flags, stack), {prefix}_successor_{i}(gprs, flags, stack)⟩⟩⟩"),
             _ => unreachable!(),
         };
@@ -742,14 +763,16 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
                 values
             } else if instances.is_empty() { leaf_prefix.to_string() } else { format!("{leaf_prefix}_second") };
             certify_callee_contract(module, words, prefix, &current_instance, &values, leaf, leaf_prefix, leaf_start, leaf_end, local, twice, instances.last().map(|(_, _, name): &(usize, usize, String)| name.as_str()), call_entry.clone());
-            if composed { ledger.returned(module, words, prefix, i+1, &current_instance, &values, leaf, call_inputs)?; }
+            if composed { ledger.returned(module, words, prefix, i+1, &current_instance, &values, leaf, call_inputs, callable)?; }
             instances.push((leaf_start, leaf_end, current_instance.clone()));
         }
-        if composed && !in_leaf { ledger.step(module, words, prefix, i, op)?; }
+        if matches!(op, Op::Ret) && !in_leaf { caller_end = i; }
+        if composed && !in_leaf { ledger.step(module, words, prefix, i, op, rsp)?; }
         trace.push(instruction.clone()); operations.push(op.clone()); pc = next;
         if trace.len() > 128 { return Err("call trace exceeds the initial bounded profile".into()); }
     }
     let n = trace.len(); let end = state(n);
+    if callable { callable::apply(module, prefix, caller, caller_start, caller_end, &operations, &trace, &instances, words); }
     fun(module, &format!("{prefix}_trace_{n}"), "List<CallInstruction>", "[]".into());
     state_decl(module, &format!("{prefix}_execution_{n}"),
         format!("FetchedCallTrace(call_fetch_access(), call_stack_access(), {prefix}_trace_{n}(), {end}, {end})"), "refl".into(), true);
@@ -757,8 +780,11 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         fun(module, &format!("{prefix}_trace_{i}"), "List<CallInstruction>", format!("Cons({}, {prefix}_trace_{}())", trace[i], i+1));
     }
     for i in (0..n).rev() {
+        if callable && i > caller_start && i <= caller_end { continue; }
         if instances.iter().any(|(start, end, _)| i > *start && i <= *end) { continue; }
-        let proof = if let Some((_, leaf_end, instance)) = instances.iter().find(|(start, _, _)| *start == i) {
+        let proof = if callable && i == caller_start {
+            format!("call_trace_append(call_fetch_access(), call_stack_access(), {prefix}_composed_code(), {prefix}_trace_{}(), {}, {}, {end}, {prefix}_caller_execution(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", caller_end+1, state(i), state(caller_end+1), caller_end+1)
+        } else if let Some((_, leaf_end, instance)) = instances.iter().find(|(start, _, _)| *start == i) {
             format!("call_trace_append(call_fetch_access(), call_stack_access(), {leaf_prefix}_summary_code(), {prefix}_trace_{}(), {}, {}, {end}, {instance}_callee_execution(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", leaf_end+1, state(i), state(leaf_end+1), leaf_end+1)
         } else {
             format!("call_trace_cons(call_fetch_access(), call_stack_access(), {}, {prefix}_trace_{}(), {}, {}, {end}, {prefix}_step_{i}(gprs, flags, stack), {prefix}_execution_{}(gprs, flags, stack))", trace[i], i+1, state(i), state(i+1), i+1)
@@ -771,7 +797,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
         format!("CallImageExecution({prefix}_file(), {prefix}_code(), {prefix}_trace_0(), {}, {end})", state(0)),
         format!("CallImageExecution(image := {prefix}_image(), file_correct := {prefix}_file_correct(), initial_memory := refl, execution := {prefix}_execution_0(gprs, flags, stack))"), true);
     if composed {
-        composition::finish(module, words, prefix, caller, inputs, n, pc, &ledger)?;
+        composition::finish(module, words, prefix, caller, inputs, n, pc, &ledger, callable)?;
         return Ok(());
     }
     let caller_result = format!("{caller}({}, {})", word(inputs[0]), word(inputs[1]));

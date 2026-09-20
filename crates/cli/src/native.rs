@@ -13,37 +13,11 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod calls;
+mod buffer;
+mod scan;
 
-const SUPPORT: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
-    ("relation", include_str!("../../../lib/std/relation.hthr")),
-    ("location", include_str!("../../../lib/std/location.hthr")),
-    ("certified_lookup", include_str!("../../../lib/std/certified_lookup.hthr")),
-    ("x86_64", include_str!("../../../lib/std/arch/x86_64/model.hthr")),
-    ("x86_64_block", include_str!("../../../lib/std/arch/x86_64/block.hthr")),
-    ("x86_64_control_block", include_str!("../../../lib/std/arch/x86_64/control_block.hthr")),
-    ("x86_64_control_flow", include_str!("../../../lib/std/arch/x86_64/control_flow.hthr")),
-    ("function_ir", include_str!("../../../lib/function_ir.hthr")),
-    ("function_ir_x86_support", include_str!("../../../lib/function_ir_x86_support.hthr")),
-    ("elf64", include_str!("../../../lib/elf64.hthr")),
-    ("linux_x86_64_entry", include_str!("../../../lib/linux_x86_64_entry.hthr")),
-    ("x86_64_fetch", include_str!("../../../lib/std/arch/x86_64/fetch.hthr")),
-    ("x86_64_fetch_block", include_str!("../../../lib/std/arch/x86_64/fetch_block.hthr")),
-    ("elf64_load", include_str!("../../../lib/elf64_load.hthr")),
-    ("x86_64_calls", include_str!("../../../lib/std/arch/x86_64/calls.hthr")),
-    ("x86_64_call_frame", include_str!("../../../lib/std/arch/x86_64/call_frame.hthr")),
-    ("x86_64_call_summary", include_str!("../../../lib/std/arch/x86_64/call_summary.hthr")),
-    ("elf64_calls", include_str!("../../../lib/elf64_calls.hthr")),
-    ("linux_x86_64_fetch", include_str!("../../../lib/linux_x86_64_fetch.hthr")),
-];
+mod support;
+use support::{SUPPORT, BUFFER_SUPPORT, SCAN_SUPPORT};
 
 pub fn run(args: &[String]) -> ExitCode {
     report(compile(args, false))
@@ -75,12 +49,18 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut inputs = Vec::new();
     let mut cache = None;
     let mut callee = None;
+    let mut callable_caller = false;
+    let mut buffer_cursor = false;
+    let mut buffer_scan = false;
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--buffer-scan" if !executable => { buffer_scan = true; }
+            "--buffer-cursor" if !executable => { buffer_cursor = true; }
+            "--callable-caller" if executable => { callable_caller = true; }
             "--callee" if executable => {
                 callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
             }
@@ -115,9 +95,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function>] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function> [--callable-caller]] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
-        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+        return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--buffer-cursor|--buffer-scan] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
     let source = Path::new(positional[0]);
     let symbol = positional[1];
@@ -128,6 +108,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     if !executable && output.extension().and_then(|s| s.to_str()) != Some("s") {
         return Err("assembly output must have the .s extension".into());
     }
+    if buffer_scan && buffer_cursor { return Err("choose only one buffer export profile".into()); }
+    if callable_caller && callee.is_none() { return Err("--callable-caller requires --callee".into()); }
     let certificate = if executable {
         let mut name = output.as_os_str().to_os_string();
         name.push(".certificate.hthr");
@@ -142,6 +124,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     let sources = loader::load(source, &search).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
+    if buffer_scan { scan::preflight(&sources.last().unwrap().src, symbol)?; }
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
     // The deferred kernel gate (`docs/parallel-kernel-gate-design.md`). Set
     // after the prelude, which is milliseconds and is checked serially; every
@@ -220,8 +203,15 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             eprintln!("cache: could not write verdicts: {err}");
         }
     }
+    if buffer_cursor || buffer_scan {
+        for &(name, src) in if buffer_scan { SCAN_SUPPORT } else { BUFFER_SUPPORT } {
+            check_module(&mut elab, &mut session, &loader::Module {
+                name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
+            })?;
+        }
+    }
     for module in &sources {
-        if let Some((_, bundled)) = SUPPORT.iter().find(|(name, _)| *name == module.name) {
+        if let Some((_, bundled)) = SUPPORT.iter().chain(if buffer_scan { SCAN_SUPPORT } else if buffer_cursor { BUFFER_SUPPORT } else { &[] }).find(|(name, _)| *name == module.name) {
             if module.src != *bundled {
                 return Err(format!("source module `{}` differs from the compiler's bundled proof library", module.name));
             }
@@ -235,10 +225,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         "x86_64_control_block", "x86_64_control_flow", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
         proof.raw(format!("import {name};"));
     }
-    let (image, body_bytes) = if let Some(callee) = callee {
+    let (image, body_bytes) = if buffer_scan {
+        (None, Some(scan::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"), &sources.last().unwrap().src)?))
+    } else if buffer_cursor {
+        (None, Some(buffer::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"))?))
+    } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         (Some(calls::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"),
-            &format!("{root_name}::{callee}"), [inputs[0], inputs[1]])?), None)
+            &format!("{root_name}::{callee}"), [inputs[0], inputs[1]], callable_caller)?), None)
     } else {
         let emission = function_ir_source::generate_elaborated_x86(
             &elab, &prefix, &format!("{root_name}::{symbol}"),
@@ -258,7 +252,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         (image, Some(bytes))
     };
     let proof = proof.render();
-    eprintln!("checking source refinement, exported bytes, and execution certificate");
+    if buffer_scan {
+        eprintln!("checking scanner source, guarded entry, body frames, bounded model, and byte encodings");
+    } else {
+        eprintln!("checking source refinement, exported bytes, and execution certificate");
+    }
     let certificate_module = format!("{prefix}_certificate");
     // The certificate is a module like any other and gets a module row, the
     // one `check_module` already opens for the library's: without it the
@@ -303,7 +301,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     } else {
         let bytes = body_bytes.expect("assembly path has a straight-line body");
         write_new(&output, assembly(symbol, &bytes).as_bytes())?;
-        println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+        if buffer_scan {
+            println!("{}: {} scanner bytes; source body, guarded entry, frame, bounded model, and encoding checked", output.display(), bytes.len());
+            println!("experimental export: full machine-loop refinement, ABI adapter, and RET are outside this certificate");
+        } else {
+            println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+        }
     }
     println!("certificate: {}", certificate.display());
     Ok(())

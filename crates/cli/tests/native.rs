@@ -5,7 +5,8 @@ use std::process::Command;
 #[test]
 fn source_to_native_binary() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = root.join(format!("target/native-integration-{}", std::process::id()));
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let output = root.join(format!("target/native-integration-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
     let assembly = output.join("mix.s");
     let tsv = output.join("timings.tsv");
@@ -69,7 +70,8 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
 #[test]
 fn source_to_standalone_elf_without_a_toolchain() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = root.join(format!("target/elf-integration-{}", std::process::id()));
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let output = root.join(format!("target/elf-integration-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
     let binary = output.join("mix");
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))

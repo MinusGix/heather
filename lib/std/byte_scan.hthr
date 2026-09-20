@@ -1,0 +1,93 @@
+// Bounded, allocation-free iteration over a caller-owned byte buffer.
+import bitvec;
+import bool;
+import nat;
+import logic;
+import list;
+
+inductive ScanStep { Stop, Overflow, Next(BitVec(64)) }
+record ScanReply { status: BitVec(64), value: BitVec(64), next: BitVec(64) }
+
+fn scan_done(seen: Bool, value, cursor: BitVec(64)) -> ScanReply {
+    ScanReply(match seen { False => bitvec::ofNat(64, 1), True => bitvec::ofNat(64, 0) }, value, cursor)
+}
+
+fn scan_resume(result: ScanStep, value, cursor: BitVec(64), seen: Bool,
+    more: BitVec(64) -> ScanReply) -> ScanReply {
+    match result {
+        Stop => scan_done(seen, value, cursor),
+        Overflow => ScanReply(bitvec::ofNat(64, 2), value, cursor),
+        Next(next) => more(next),
+    }
+}
+
+theorem scan_resume_congr(result: ScanStep, value, cursor: BitVec(64), seen: Bool,
+    left, right: BitVec(64) -> ScanReply,
+    same: (next: BitVec(64)) -> left(next) = right(next)):
+    scan_resume(result, value, cursor, seen, left) = scan_resume(result, value, cursor, seen, right) {
+    match result { Stop => refl, Overflow => refl, Next(next) => same(next) }
+}
+
+fn scan_guard(inside: Bool, value, cursor: BitVec(64), seen: Bool,
+    next: ScanReply) -> ScanReply {
+    match inside { False => scan_done(seen, value, cursor), True => next }
+}
+
+fn scan_run(fuel: Nat, length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    step: BitVec(64) -> BitVec(64) -> ScanStep) ->
+    BitVec(64) -> BitVec(64) -> Bool -> ScanReply {
+    match fuel {
+        Zero => λ cursor value seen =>
+            scan_guard(bitvec::unsigned_lt_bit(64, cursor, length), value, cursor, seen,
+                ScanReply(bitvec::ofNat(64, 3), value, cursor)),
+        Succ(rest) => λ cursor value seen =>
+            scan_guard(bitvec::unsigned_lt_bit(64, cursor, length), value, cursor, seen,
+                scan_resume(step(bitvec::zero_extend(8, 56, at(cursor)), value), value, cursor, seen,
+                    λ next => scan_run(rest, length, at, step,
+                        bitvec::add(64, cursor, bitvec::ofNat(64, 1)), next, True))),
+    }
+}
+
+fn scan(fuel: Nat, length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    cursor: BitVec(64), step: BitVec(64) -> BitVec(64) -> ScanStep) -> ScanReply {
+    scan_run(fuel, length, at, step, cursor, bitvec::zero(64), False)
+}
+
+theorem scan_zero(length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    step: BitVec(64) -> BitVec(64) -> ScanStep, cursor, value: BitVec(64), seen: Bool):
+    scan_run(0, length, at, step, cursor, value, seen) =
+    scan_guard(bitvec::unsigned_lt_bit(64, cursor, length), value, cursor, seen,
+        ScanReply(bitvec::ofNat(64, 3), value, cursor)) { refl }
+
+theorem scan_succ(fuel: Nat, length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    step: BitVec(64) -> BitVec(64) -> ScanStep, cursor, value: BitVec(64), seen: Bool):
+    scan_run(Succ(fuel), length, at, step, cursor, value, seen) =
+    scan_guard(bitvec::unsigned_lt_bit(64, cursor, length), value, cursor, seen,
+        scan_resume(step(bitvec::zero_extend(8, 56, at(cursor)), value), value, cursor, seen,
+            λ next => scan_run(fuel, length, at, step,
+                bitvec::add(64, cursor, bitvec::ofNat(64, 1)), next, True))) { refl }
+
+// Pointwise correctness of a body lifts to any bounded run.
+theorem scan_run_congr(fuel: Nat, length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    left, right: BitVec(64) -> BitVec(64) -> ScanStep,
+    same: (byte, value: BitVec(64)) -> left(byte, value) = right(byte, value)):
+    (cursor, value: BitVec(64)) -> (seen: Bool) ->
+    scan_run(fuel, length, at, left, cursor, value, seen) =
+        scan_run(fuel, length, at, right, cursor, value, seen) {
+    match fuel as λ count => (cursor, value: BitVec(64)) -> (seen: Bool) ->
+        scan_run(count, length, at, left, cursor, value, seen) =
+            scan_run(count, length, at, right, cursor, value, seen) {
+        Zero => λ cursor value seen => refl,
+        Succ(rest, ih) => λ cursor value seen => {
+            let byte = bitvec::zero_extend(8, 56, at(cursor));
+            let a = λ (next: BitVec(64)) => scan_run(rest, length, at, left,
+                bitvec::add(64, cursor, bitvec::ofNat(64, 1)), next, True);
+            let b = λ (next: BitVec(64)) => scan_run(rest, length, at, right,
+                bitvec::add(64, cursor, bitvec::ofNat(64, 1)), next, True);
+            cong_fn<ScanReply, ScanReply>(λ next => scan_guard(bitvec::unsigned_lt_bit(64, cursor, length), value, cursor, seen, next),
+                trans(cong_fn<ScanStep, ScanReply>(λ result => scan_resume(result, value, cursor, seen, a), same(byte, value)),
+                    scan_resume_congr(right(byte, value), value, cursor, seen, a, b,
+                        λ next => ih(bitvec::add(64, cursor, bitvec::ofNat(64, 1)), next, True))))
+        },
+    }
+}

@@ -25,13 +25,17 @@ and produce status 255.
 ## Selection and limits
 
 Reflection uses resolved identities in the elaborated source, including
-elaborated-away `let` bindings. It admits at most 64 expression nodes and four
-call occurrences in that expanded expression. A repeatedly used binding can
-therefore repeat its computation or call; this first selector does not provide
-common-subexpression elimination. Calls are pure within the selected leaf
-fragment, so this does not change the source result.
+elaborated-away `let` bindings. It admits at most 64 nodes in the expanded
+expression and four distinct calls. Structural interning recovers a shared
+value graph: equal arithmetic expressions and calls with equal argument
+expressions are selected once. Different argument pairs remain distinct.
+This sharing is valid for the pure selected leaf fragment; it is not an
+optimization for arbitrary effectful calls.
 
-The selector evaluates binary expressions left to right. R14/R15 retain the
+The selector visits dependencies left to right and tracks each shared node's
+remaining uses. A result stays in its register until its last consumer, even
+across intervening calls. A binary instruction can overwrite its left operand
+only at its last use; a shared left operand is copied first. R14/R15 retain the
 original inputs; RBX/RBP/R12/R13 provide four temporary registers. The leaf's
 existing contract preserves all six. Values needed across calls stay in those
 registers. RDI/RSI receive the selected argument values and RAX carries the
@@ -39,12 +43,16 @@ return. Excess register pressure produces an explicit unsupported-spilling
 error. The existing 128-instruction executed-trace limit and final image bounds
 also apply.
 
-The entry-only caller reserves eight bytes for call alignment and restores RSP
-before returning to the Linux entry fragment. Its temporary registers are not
+Without `--callable-caller`, the entry-only caller reserves eight bytes for call
+alignment and restores RSP before returning to the Linux entry fragment. Its temporary registers are not
 saved for an external caller: this path does **not** export a reusable caller
-ABI contract. The arithmetic leaf retains its generic native call contract.
+ABI contract. The [callable profile](x86-64-composed-callers.md), selected with
+`--callable-caller`, adds one using an explicit scratch-register policy and
+checked saves of multiple live words when needed.
+The arithmetic leaf retains its generic native call contract.
 General call graphs, recursive or indirect calls, branches in callers, caller
-spills, and externally callable composed wrappers remain outside this profile.
+spills, and externally callable composed wrappers remain outside the entry-only
+profile.
 
 The original forwarding, stack-local, and two-placement examples keep their
 specialized lowering. They continue exercising stack-memory footprints and
@@ -71,20 +79,24 @@ fetch, exact ELF bytes, stack-access permissions, alignment, and final RSP
 restoration use the existing checked machinery. Linux loading and syscall
 delivery retain the assumptions described in [the call profile](x86-64-calls.md).
 
-The composed caller is certified for the selected executable arguments; it is
-not a generic machine-level caller summary. The callee summary and the caller's
+Without the callable option, the composed caller is certified for the selected
+executable arguments; it is not a generic machine-level caller summary. The callee summary and the caller's
 source-expression theorem are generic.
 
 ## Validation
 
 `native_composition` builds and runs both input cases above with no external
 toolchain, requiring one summary definition and two applications/compositions.
-Focused controls reject a stale source expression, incorrect register evidence,
+`native_sharing` builds and executes a caller with repeated call results and
+arithmetic, including a shared result live across a distinct call. Selection
+checks count two actual encoded CALL instructions and five caller additions;
+the executable certificate contains two leaf-summary applications and one
+outer application. Focused controls reject a stale source expression, incorrect register evidence,
 a non-selected callee, excess calls, and register pressure requiring spills.
 Existing native tests retain byte, fetch, frame, and summary-interface refusal
 coverage. The new executable test runs in the full test lane.
 
-Final validation on 2026-09-19: plain `scripts/test` passed **2823 passed,
-0 failed, 5 ignored**, including the existing native profiles and the promoted
-20-node scaling gate. No kernel, proof-library, or resource-budget changes were
-needed.
+Final validation on 2026-09-19: plain `scripts/test` passed **2832 passed,
+0 failed, 5 ignored**, including shared-value, multi-register, and simultaneous-save executables,
+existing native profiles, and the promoted 20-node scaling gate. No kernel,
+proof-library, or resource-budget changes were needed.

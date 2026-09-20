@@ -1,0 +1,29 @@
+// Heap-free cursor semantics over a caller-owned byte buffer. The byte
+// function is observed only after the unsigned cursor/length check succeeds.
+import bitvec;
+import bool;
+
+record CursorReply { status: BitVec(64), next: BitVec(64) }
+
+fn recognize(length: BitVec(64), at: BitVec(64) -> BitVec(8),
+    cursor: BitVec(64), accepts: BitVec(8) -> Bool) -> CursorReply {
+    match bitvec::unsigned_lt_bit(64, cursor, length) {
+        False => CursorReply(bitvec::ofNat(64, 2), cursor),
+        True => match accepts(at(cursor)) {
+            False => CursorReply(bitvec::ofNat(64, 1), cursor),
+            True => CursorReply(bitvec::ofNat(64, 0),
+                bitvec::add(64, cursor, bitvec::ofNat(64, 1))),
+        },
+    }
+}
+
+theorem empty_does_not_read(at: BitVec(64) -> BitVec(8), accepts: BitVec(8) -> Bool):
+    recognize(bitvec::zero(64), at, bitvec::zero(64), accepts) =
+        CursorReply(bitvec::ofNat(64, 2), bitvec::zero(64)) { refl }
+
+fn recognized(accepted: Bool, cursor: BitVec(64)) -> CursorReply {
+    match accepted {
+        False => CursorReply(bitvec::ofNat(64, 1), cursor),
+        True => CursorReply(bitvec::ofNat(64, 0), bitvec::add(64, cursor, bitvec::ofNat(64, 1))),
+    }
+}

@@ -19,17 +19,22 @@ pub struct Built {
 
 impl Built {
     /// `build-x86 examples/x86-native/<example>.hthr caller --callee leaf`
-    /// with the two inputs, into `target/native-<name>-<pid>/caller`.
+    /// with the two inputs, into a unique `target/native-<name>-<pid>-<nonce>/caller`.
     pub fn callee_example(name: &str, example: &str, inputs: [&str; 2]) -> Built {
+        Self::callee_example_with_options(name, example, inputs, &[])
+    }
+
+    pub fn callee_example_with_options(name: &str, example: &str, inputs: [&str; 2], options: &[&str]) -> Built {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let directory = root.join(format!("target/native-{name}-{}", std::process::id()));
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = root.join(format!("target/native-{name}-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let executable = directory.join("caller");
         let output = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .env("PATH", &directory)
             .args(["build-x86", &format!("examples/x86-native/{example}.hthr"), "caller", "--callee", "leaf",
                 "--arg", inputs[0], "--arg", inputs[1], "-o"])
-            .arg(&executable).args(["--cache-dir", "target/native-test-images"]).output().unwrap();
+            .arg(&executable).args(options).args(["--cache-dir", "target/native-test-images"]).output().unwrap();
         assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
         Built { directory, executable }
     }
