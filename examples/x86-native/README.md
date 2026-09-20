@@ -177,22 +177,3 @@ using two distinct words in a 24-byte frame that preserves call alignment. Run i
 18446744073709551615 and 1 exit 253. Checked disjointness preserves each live
 saved word through writes to the other slot and the child return word, and
 protects the parent return word.
-
-## A character recognizer over runtime input
-
-`recognize_plus.hthr` compiles with `compile-x86 --buffer-cursor` into a guarded
-byte-buffer operation. `recognize_main.c` supplies a fixed input buffer and
-prints the returned status/cursor. One executable handles different runtime
-strings, with no parser allocation. See [buffer cursors](../../docs/x86-64-buffer-cursor.md)
-for build commands, the machine interface, and the checked boundary.
-
-## Experimental bounded decimal scanner
-
-`decimal_step.hthr` compiles digit classification, overflow decisions, and
-accumulation from ordinary Heather source. `--buffer-scan` supplies a reusable
-256-step native buffer loop; `count_spaces.hthr` uses the same compiler and loop.
-The fixed-buffer driver and SysV adapter handle storage and I/O.
-
-See [the build/run guide](../../docs/x86-64-buffer-scan.md). Body/source,
-live-register frame, pure bounded-model refinement, and bytes are checked; the
-complete machine-loop trace and natural-number decimal theorem remain open.

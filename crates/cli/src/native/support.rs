@@ -29,16 +29,3 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_calls", include_str!("../../../../lib/elf64_calls.hthr")),
     ("linux_x86_64_fetch", include_str!("../../../../lib/linux_x86_64_fetch.hthr")),
 ];
-
-pub(super) const BUFFER_SUPPORT: &[(&str, &str)] = &[
-    ("byte_cursor", include_str!("../../../../lib/std/byte_cursor.hthr")),
-    ("x86_64_buffer_cursor", include_str!("../../../../lib/std/arch/x86_64/buffer_cursor.hthr")),
-];
-
-pub(super) const SCAN_SUPPORT: &[(&str, &str)] = &[
-    ("byte_cursor", include_str!("../../../../lib/std/byte_cursor.hthr")),
-    ("x86_64_buffer_cursor", include_str!("../../../../lib/std/arch/x86_64/buffer_cursor.hthr")),
-    ("byte_scan", include_str!("../../../../lib/std/byte_scan.hthr")),
-    ("x86_64_scan_body", include_str!("../../../../lib/std/arch/x86_64/scan_body.hthr")),
-    ("x86_64_scan_gate", include_str!("../../../../lib/std/arch/x86_64/scan_gate.hthr")),
-];

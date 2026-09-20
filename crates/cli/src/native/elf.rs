@@ -84,15 +84,8 @@ pub(super) fn valuation(module: &mut Module, prefix: &str, region: &Region, inpu
 
 pub(super) fn valuation_expressions(module: &mut Module, prefix: &str, graph_prefix: &str,
     region: &Region, inputs: [Expr; 2]) -> Result<(), String> {
-    valuation_with_parameters(module, prefix, graph_prefix, region, inputs, &[])
-}
-
-pub(super) fn valuation_with_parameters(module: &mut Module, prefix: &str, graph_prefix: &str,
-    region: &Region, inputs: [Expr; 2], parameters: &[(&str, &str)]) -> Result<(), String> {
-    let params = || parameters.iter().map(|(name, ty)| Parameter::explicit(*name, Expr::raw(*ty))).collect::<Vec<_>>();
-    let arguments = || parameters.iter().map(|(name, _)| Expr::name(*name));
     let value_name = |id| format!("{prefix}_value_{id}");
-    let value = |id| Expr::call(value_name(id), arguments().chain([Expr::name("width")]));
+    let value = |id| Expr::call(value_name(id), [Expr::name("width")]);
     let [left, right] = inputs;
     let mut declarations = vec![(0, left), (1, right)];
     for &node in &region.nodes {
@@ -110,7 +103,7 @@ pub(super) fn valuation_with_parameters(module: &mut Module, prefix: &str, graph
     let ids: Vec<u64> = declarations.iter().map(|(id, _)| *id).collect();
     for (id, body) in declarations {
         module.declaration(Declaration::function(value_name(id), Expr::name("BitVec(width)"), Block::expression(body))
-            .parameters(params()).parameter(Parameter::explicit("width", Expr::name("Nat"))));
+            .parameter(Parameter::explicit("width", Expr::name("Nat"))));
 
     }
     let mut cases = "bitvec::ofNat(width, 0)".to_string();
@@ -118,17 +111,16 @@ pub(super) fn valuation_with_parameters(module: &mut Module, prefix: &str, graph
     for id in (0..=last).rev() {
         let scrutinee = if id == 0 { "id".into() } else { format!("id_{id}") };
         let tail = if id == last { "_".into() } else { format!("id_{}", id + 1) };
-        let here = if ids.contains(&id) { value(id).render() }
+        let here = if ids.contains(&id) { format!("{}(width)", value_name(id)) }
             else { "bitvec::ofNat(width, 0)".into() };
         cases = format!("match {scrutinee} {{ Zero => {here}, Succ({tail}) => {cases} }}");
     }
-    module.declaration(Declaration::function(format!("{prefix}_values"), Expr::raw("Valuation()"),
-        Block::expression(Expr::raw(format!("λ width id => {cases}")))).parameters(params()));
+    function(module, &format!("{prefix}_values"), "Valuation()",
+        Expr::raw(format!("λ width id => {cases}")));
     let mut graph = "trivial".to_string();
     for _ in &region.nodes { graph = format!("⟨refl, {graph}⟩"); }
-    let values = Expr::call(format!("{prefix}_values"), arguments()).render();
-    module.declaration(Declaration::theorem(format!("{prefix}_entry_graph"),
-        Expr::raw(format!("RegionHolds({graph_prefix}_raw(), {values})")), Block::expression(Expr::raw(graph))).parameters(params()));
+    theorem(module, &format!("{prefix}_entry_graph"),
+        Expr::raw(format!("RegionHolds({graph_prefix}_raw(), {prefix}_values())")), Expr::raw(graph));
     Ok(())
 }
 

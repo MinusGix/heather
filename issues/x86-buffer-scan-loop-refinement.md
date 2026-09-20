@@ -1,10 +1,18 @@
 ---
 title: Connect bounded scanner certificates to a complete machine-loop trace
-status: open
+status: closed
 labels: [compiler,x86,parsing,proofs]
 created: 2026-09-20
 updated: 2026-09-20
 ---
+
+## Retirement decision (2026-09-20)
+
+The profile-specific implementation, model, examples, tests, and build guide
+were removed by user direction. Commit 4db435c retains the prototype history.
+This issue is retired; closure does not claim that unfinished proof obligations
+were solved. [[native-bounded-loop-certificates]] owns the relevant new shared-path work.
+The original scope and log below are historical.
 
 ## Scope
 
@@ -47,3 +55,4 @@ this limitation visible until this issue is closed.
 - 2026-09-20: Validation also prompted [[native-fixture-namespace-isolation]]: shared and direct native test artifacts now have per-run nonces to avoid process-ID reuse across sandbox namespaces. The scanner permission/path test passes independently; final plain-suite validation is still in progress.
 - 2026-09-20: Both scanner acceptance tests passed in the full run: runtime/oracle/protected-page checks, generated certificates, concrete wrong-RIP refusal, and independent permission/path refusals. That suite had one unrelated fixture-directory collision (tracked separately); the final plain suite includes its fix. Full-loop composition and natural-number decimal interpretation remain open.
 - 2026-09-20: Final plain scripts/test passed: 2835 passed, 0 failed, 5 ignored, including both scanner acceptance tests. Heather formatting, diff whitespace checks, and the issue tracker check are clean. Guarded physical entry is established; complete repeated-loop composition and its Nat-fuel invariant remain open. Reported target CPU includes descendants and is not a single process's CPU-rail usage.
+- 2026-09-20: Calculator expansion is paused by user direction. The architecture review recommends shared structured selection/certificate composition before extending scanner-specific machinery; see [[native-shared-lowering-milestone]] and docs/native-compiler-architecture-review.md. This issue's full machine-loop obligation remains open and unchanged.

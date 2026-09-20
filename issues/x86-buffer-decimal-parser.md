@@ -1,10 +1,18 @@
 ---
 title: Compile decimal runs over a byte-buffer cursor
-status: open
+status: closed
 labels: [compiler,x86,parsing,proofs]
 created: 2026-09-19
 updated: 2026-09-20
 ---
+
+## Retirement decision (2026-09-20)
+
+The profile-specific implementation, model, examples, tests, and build guide
+were removed by user direction. Commit 4db435c retains the prototype history.
+This issue is retired; closure does not claim that unfinished proof obligations
+were solved. [[native-shared-lowering-milestone]] owns the relevant new shared-path work.
+The original scope and log below are historical.
 
 ## Scope
 
@@ -42,3 +50,4 @@ must process different inputs supplied after compilation.
 - 2026-09-20: The final dedicated scanner target passed (1 passed, 0 failed). It covers 65,792 byte/position cases plus 10,000 deterministic oracle cases, examples at the u64 boundary, protected pages and resource exhaustion, the independent space-counting body, standalone certificate replay, six certificate mutations, bundled-model substitution, and bounded alias-expansion refusal. The plain full-suite rerun is still pending; the first full run's two failures were the now-fixed mutation boundary and test-binary re-exec race.
 - 2026-09-20: Final plain scripts/test passed 2834 tests, 0 failed, 5 ignored (363 seconds runner wall time). The scanner target passed in the full suite as well as independently. The runnable artifact is target/decimal-demo/decimal; the build/run and exact proof-boundary guide is docs/x86-64-buffer-scan.md. Runtime/source-body/encoding work is complete for this experimental slice. The full machine-loop trace and generic natural-number decimal interpretation theorem remain open, so this parent milestone remains open.
 - 2026-09-20: The scanner certificate now includes a physical guarded-entry trace for bounds/fuel checks and the byte load, with conditional read permission, preserved state, and concrete branch/body-entry RIP proofs. Full machine-loop composition and the natural-number decimal fold remain open in the existing scope; the CLI continues to label the export experimental.
+- 2026-09-20: Calculator expansion is paused by user direction. The architecture review proposes nested conditional compilation and independent byte-count/search clients as the next reuse checks, owned by [[native-shared-lowering-milestone]]. Decimal-specific natural-number refinement is deferred as an immediate target; the existing correctness obligations remain open.

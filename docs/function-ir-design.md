@@ -21,6 +21,11 @@ Related boundaries are owned by:
 The current `Ir` remains useful bootstrap evidence. Its exact shape is not a
 constraint on this design.
 
+The [2026-09-20 native architecture review](native-compiler-architecture-review.md)
+compares these interfaces with the prototype native profiles and records
+their subsequent removal. It defines an ordered shared-lowering issue sequence,
+not newly implemented FunctionIR capabilities.
+
 ---
 
 ## 1. Direction

@@ -3,8 +3,16 @@ title: Compile a checked byte-buffer cursor recognizer
 status: closed
 labels: [compiler,x86,parsing,proofs]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-20
 ---
+
+## Retirement decision (2026-09-20)
+
+The profile-specific implementation, model, examples, tests, and build guide
+were removed by user direction. Commit 4db435c retains the prototype history.
+This issue is retired; closure does not claim that unfinished proof obligations
+were solved. [[function-ir-bounded-readonly-loop]] owns the relevant new shared-path work.
+The original scope and log below are historical.
 
 ## Scope
 
@@ -40,3 +48,4 @@ input/output without implementing recognition or allocating parser storage.
 - 2026-09-19: Targeted native acceptance is green, including standalone certificate replay and five refusal controls (encoding, branch target, cursor, read permission, stale source). The driver accepts a full 256-byte buffer and refuses longer input. Added publication refusals for replaced bundled models and oversized classifier branch spans. Disassembly independently confirms CMP/JAE before MOVZX and all paths joining at RET. Full plain `scripts/test` is running; budgets and kernel rules are unchanged.
 - 2026-09-19: The first full run passed all functional targets, including bundled-model and oversized-body publication refusals, but the Heather formatting gate rejected whitespace in the new machine model (2832 passed, 1 formatting failure, 5 ignored). Applied the repository's Heather formatter to that one file and started a new plain full run. The new native target used 33.0 CPU-seconds under the unchanged 300-second per-process rail.
 - 2026-09-19: Final plain `scripts/test`: 2833 passed, 0 failed, 5 ignored (294 seconds wall). Closed the first runtime-input recognizer milestone: compiled source classification, guarded byte access, checked cursor/status and memory/register behavior, execution paths and relocated return joins, native exhaustive/guard-page cases, proof mutations, model-replacement refusal, and bounded-layout refusal all pass. The fixed-storage demo is documented in docs/x86-64-buffer-cursor.md. RET/host ABI and I/O remain the explicit assembly-export boundary. [[x86-buffer-decimal-parser]] owns decimal runs; [[x86-composed-summary-test-cpu-margin]] retains the existing CLI unit target's tight resource margin. No kernel or budget changes.
+- 2026-09-20: Removed the specialized profile and its supporting files by user direction. The original implementation remains at 4db435c; new read-only buffer work belongs to [[function-ir-bounded-readonly-loop]] and is not constrained to preserve this prototype's representation.
