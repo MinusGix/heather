@@ -84,6 +84,8 @@ fn run_dag(dag: &LoweredDag, regs: &mut BTreeMap<Gpr, u64>) {
 fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
     match &plan.body {
         StructuredPlan::Dataflow(dag) => run_dag(dag, regs),
+        StructuredPlan::MultiDataflow(parts) => { for (_, dag) in parts { run_dag(dag, regs); } }
+        StructuredPlan::Compose { prefix, continuation } => { run(prefix, regs); run(continuation, regs); }
         StructuredPlan::Sequence { prefix, continuation } => { run_dag(prefix, regs); run(continuation, regs); }
         StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement } => {
             assert_eq!(*false_displacement as usize, when_true.byte_length + 2);
@@ -203,7 +205,7 @@ fn sequence_carries_a_word_result_and_inherited_input_by_id() {
     let mut multiple = region;
     let StructuredRegion::Sequence { prefix, .. } = &mut multiple else { panic!() };
     prefix.outputs.push(Port { id: 7, width: 64 });
-    assert!(lower_structured(&multiple, &inputs, SCRATCH, Gpr::Rax).unwrap_err().to_string().contains("2 outputs"));
+    lower_structured(&multiple, &inputs, SCRATCH, Gpr::Rax).unwrap();
 }
 
 #[test]
@@ -440,4 +442,55 @@ fn helper_expansion_has_a_structural_depth_bound() {
     elab.elab_module_source("helper_depth", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
     assert!(reflect_elaborated_structured(&elab, "helper31").is_ok());
     assert!(reflect_elaborated_structured(&elab, "helper32").unwrap_err().to_string().contains("deep helper"));
+}
+
+#[path = "support/structured_composition.rs"]
+mod composed_fixture;
+
+#[test]
+fn composed_multiple_results_execute_and_protect_each_other() {
+    use heather_elab::function_ir_x86_lower::lower_structured_results;
+    let region = composed_fixture::fixture();
+    let scratch = &[Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::Rbx, Gpr::R8, Gpr::R9];
+    let outputs = Placements::from([(5, Gpr::Rax), (6, Gpr::Rdx)]);
+    let plan = lower_structured_results(&region, &placement(), scratch, &outputs).unwrap();
+    for a in [0u64, 1, 9, u64::MAX, 1 << 63] {
+        for b in [0u64, 1, 10, u64::MAX, 1 << 63] {
+            let mut regs = BTreeMap::from([(Gpr::Rdi, a), (Gpr::Rsi, b)]);
+            for r in scratch { regs.insert(*r, u64::MAX); }
+            run(&plan, &mut regs);
+            let difference = if a < b { b.wrapping_sub(a) } else { a.wrapping_sub(b) };
+            assert_eq!(regs[&Gpr::Rax], a.wrapping_add(b).wrapping_sub(difference));
+            assert_eq!(regs[&Gpr::Rdx], u64::from(difference < a));
+            assert_eq!((regs[&Gpr::Rdi], regs[&Gpr::Rsi]), (a, b));
+        }
+    }
+    for invalid in [Placements::from([(5, Gpr::Rax), (6, Gpr::Rax)]), Placements::from([(5, Gpr::Rax), (7, Gpr::Rdx)])] {
+        assert!(lower_structured_results(&region, &placement(), scratch, &invalid).is_err());
+    }
+    assert!(lower_structured_results(&region, &placement(), &[Gpr::Rax, Gpr::Rdx], &outputs).is_err());
+}
+
+#[test]
+fn composed_branch_preserves_an_inherited_selector() {
+    let word = |id| Port { id, width: 64 };
+    let bit = Port { id: 0, width: 1 };
+    let branch = StructuredRegion::Conditional {
+        inputs: vec![bit, word(1)], condition: 0, arguments: vec![word(1)], outputs: vec![word(2)],
+        when_true: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(1)], nodes: vec![Node::Add { width: 64, output: 2, left: 1, right: 1 }], outputs: vec![word(2)] })),
+        when_false: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(1)], nodes: vec![Node::Sub { width: 64, output: 2, left: 1, right: 1 }], outputs: vec![word(2)] })),
+    };
+    let region = StructuredRegion::Compose { prefix: Box::new(branch), continuation: Box::new(StructuredRegion::Conditional {
+        inputs: vec![bit, word(2)], condition: 0, arguments: vec![word(2)], outputs: vec![word(3)],
+        when_true: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(2)], nodes: vec![Node::Add { width: 64, output: 3, left: 2, right: 2 }], outputs: vec![word(3)] })),
+        when_false: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(2)], nodes: vec![Node::Const { width: 64, output: 3, value: 9 }], outputs: vec![word(3)] })),
+    }) };
+    let plan = lower_structured(&region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), SCRATCH, Gpr::Rax).unwrap();
+    assert!(!plan.clobbered.contains(&Gpr::Rdi));
+    for flag in [0, 1] {
+        let mut regs = BTreeMap::from([(Gpr::Rdi, flag), (Gpr::Rsi, 7)]);
+        run(&plan, &mut regs);
+        assert_eq!(regs[&Gpr::Rax], if flag == 0 { 9 } else { 28 });
+        assert_eq!(regs[&Gpr::Rdi], flag);
+    }
 }

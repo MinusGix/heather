@@ -84,12 +84,20 @@ The public source artifact has no unresolved graph assumptions. A separate
 checked equality ties the published literal bytes to this same code tree.
 The `ret`, ABI, instruction fetch/loading, and host integration remain external.
 
-This first slice has one common word result, one result per prefix, unsigned
-comparison guards, and arithmetic or constant leaves. Register pressure and
-branches outside the forward rel8 range are refused. Structured bodies are
+The same file also supplies `composed`, whose Boolean helper `unequal` contains
+a conditional. Compile it by replacing `nested_true` with `composed` in the
+command above. Its helper and continuation use shared physical composition;
+the generated artifact names the actual source function.
+
+The native source adapter accepts two word inputs and one word result. The
+underlying structured backend additionally supports multiple prefix/results
+with explicit register maps and one artifact per result over the same code.
+Leaf selection still supports word arithmetic and comparisons; byte operations
+and Boolean dataflow inputs/constants remain future work. Register pressure
+and branches outside the forward rel8 range are refused. Structured bodies are
 currently assembly exports; `build-x86` retains its existing arithmetic/call
-fragment. `crates/cli/tests/native_branches.rs` assembles both functions and
-checks each on 10,036 input pairs.
+fragment. The native branch and structured-composition tests assemble all
+three functions and check each on 10,036 input pairs.
 
 ## Direct executable, with no assembler or linker
 

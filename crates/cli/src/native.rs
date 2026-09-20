@@ -389,6 +389,12 @@ fn encode_structured(plan: &heather_elab::function_ir_x86_lower::LoweredStructur
     use heather_elab::function_ir_x86_lower::StructuredPlan;
     match &plan.body {
         StructuredPlan::Dataflow(dag) => encode(&dag.instructions),
+        StructuredPlan::MultiDataflow(parts) => parts.iter().flat_map(|(_, dag)| encode(&dag.instructions)).collect(),
+        StructuredPlan::Compose { prefix, continuation } => {
+            let mut bytes = encode_structured(prefix);
+            bytes.extend(encode_structured(continuation));
+            bytes
+        }
         StructuredPlan::Sequence { prefix, continuation } => {
             let mut bytes = encode(&prefix.instructions);
             bytes.extend(encode_structured(continuation));

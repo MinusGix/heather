@@ -102,3 +102,18 @@ obligations here; they were not silently fixed by the semantic interface.
   native assembly execution regressions. No resource limits changed. Diff and
   issue consistency checks pass. This checkpoint is complete; the broader native
   loop acceptance remains open with the outstanding boundaries recorded above.
+- 2026-09-20: Physical composition and explicit multi-result placement now use shared recursive
+  selection and certificate emission under [[function-ir-recursive-structured-lowering]].
+  Composed prefixes carry multiple outputs plus inherited inputs by port ID;
+  branches share per-port result destinations, and each result is proved over the
+  same physical execution. Conditional helpers also reach ordinary scalar native
+  export. Multi-result DAG slices can recompute shared work; the optimization is
+  tracked in [[function-ir-shared-multi-result-dag]]. Byte/Boolean leaf operations,
+  guarded reads, Nat representation, symbolic edges, and bounded traces remain.
+  Validation is in progress.
+- 2026-09-20: Physical composition/multiple-result placement checkpoint is complete and
+  [[function-ir-recursive-structured-lowering]] is closed. Plain scripts/test:
+  2854 passed, 0 failed, 5 ignored, including the new composed-helper native
+  export on 10,036 input pairs and multi-result kernel certificate controls.
+  The loop body's byte/Boolean dataflow selection, guarded loads, and complete
+  bounded trace remain open; no native search_body certificate is claimed.

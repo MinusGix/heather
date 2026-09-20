@@ -7,8 +7,8 @@ use std::fmt;
 
 mod structured;
 mod structured_cert;
-pub use structured_cert::{generate_structured, StructuredX86Emission};
-pub use structured::{lower_structured, LoweredStructured, Placements, StructuredPlan};
+pub use structured_cert::{generate_structured, generate_structured_results, StructuredX86Emission};
+pub use structured::{lower_structured, lower_structured_results, LoweredStructured, Placements, StructuredPlan};
 
 use crate::function_ir_cert::{
     self as cert, BlockArgument, ControlRegion, Node, Region, StructuredRegion,
@@ -458,6 +458,7 @@ pub enum LoweringError {
     DuplicateValue(u64),
     UndefinedValue(u64),
     OutputCount(usize),
+    OutputPlacementCount { outputs: usize, registers: usize },
     UnsupportedOperation {
         node_index: usize,
     },
@@ -471,7 +472,6 @@ pub enum LoweringError {
     InvalidStructuredRegion(String),
     StructuredPath { path: String, reason: Box<LoweringError> },
     UnsupportedStructuredRegion,
-    UnsupportedStructuredProducer,
     MissingConditionPlacement(u64),
     UnsupportedSequenceInterface,
     UnsupportedJoinArm,
@@ -515,6 +515,7 @@ impl fmt::Display for LoweringError {
                 write!(f, "value {value} is defined more than once")
             }
             LoweringError::UndefinedValue(value) => write!(f, "value {value} is undefined"),
+            LoweringError::OutputPlacementCount { outputs, registers } => write!(f, "result interface has {outputs} outputs but {registers} placements (at least one result is required)"),
             LoweringError::OutputCount(count) => {
                 write!(f, "single-result block lowering received {count} outputs")
             }
@@ -536,7 +537,6 @@ impl fmt::Display for LoweringError {
             LoweringError::InvalidStructuredRegion(message) => {
                 write!(f, "invalid structured region: {message}")
             }
-            LoweringError::UnsupportedStructuredProducer => write!(f, "structured producer composition is not selected yet"),
             LoweringError::UnsupportedStructuredRegion => write!(
                 f,
                 "the first x86 conditional lowering requires two dataflow leaves",

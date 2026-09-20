@@ -1,6 +1,6 @@
 ---
 title: Generalize x86 lowering over recursive StructuredRegion trees
-status: open
+status: closed
 labels: [compiler,function-ir,x86,control-flow]
 blocked-by: [function-ir-conditional-regions]
 created: 2026-09-01
@@ -54,8 +54,8 @@ tail-position unsigned matches. Both nesting directions in
 `examples/x86-native/branches.hthr` retain live inputs and use the same
 source/FunctionIR/physical-code path.
 
-`function_ir_x86_lower::generate_structured` folds selected Dataflow, Sequence,
-and Conditional plans into checked declarations. Leaf refinement reuses the
+`function_ir_x86_lower::generate_structured_results` folds selected Dataflow,
+Sequence, Compose, and Conditional plans into checked declarations. Leaf refinement reuses the
 existing DAG emitter with computed local RegionHolds witnesses. Sequence
 proofs carry placements by port ID using output/frame facts. Conditional
 proofs use selector agreement, actual short-control execution, child spans,
@@ -70,17 +70,34 @@ and exact emitted-byte equality before publishing either file. RET, ABI,
 instruction fetch/loading, and host assembly/linking remain external to this
 assembly-export claim. Structured bodies are not yet accepted by `build-x86`.
 
-The next bounded iteration's source-to-native path is implemented; validation
-is recorded below. The broader issue remains open for multiple prefix outputs
-and result joins (with [[function-ir-x86-join-placement]] owning reconciliation).
+The source-to-native path, physical composition, multiple prefix outputs, and
+explicit multi-result joins are implemented. General edge-copy reconciliation
+remains owned by [[function-ir-x86-join-placement]].
 The source interface for future buffers/loops belongs to
 [[function-ir-bounded-readonly-loop]]. Existing flat certificate APIs remain
 available to their current callers.
 The current slice explicitly refuses unsupported pressure, leaf operations,
-and rel8 ranges and requires one result per prefix/join. No parser-specific
+and rel8 ranges. Multiple results use protected per-result DAG slices, which
+may recompute shared nodes; [[function-ir-shared-multi-result-dag]] tracks
+shared allocation. Every result has an artifact over the same physical
+execution; scalar entry points retain their existing names. No parser-specific
 model, profile flag, kernel extension, or raised resource limit was added.
 
 ## Log
+
+- 2026-09-20: Added physical Compose selection and certificate composition,
+  explicit simultaneous result-register maps, multi-output prefix forwarding,
+  and common per-port branch joins. Result proofs share one selected execution,
+  with intermediate placement, memory, register-frame, decoding, layout, and
+  RIP evidence. Branches preserve inherited selectors as well as arguments.
+  Boolean results use a normalized one-bit representation, with the existing
+  one-bit equality theorem connecting branch results to composed source cases.
+  Multi-result DAGs initially use dependency slices and protect completed
+  results; general allocation and edge reconciliation remain separate work.
+  Regression coverage includes reordered/noncommutative bindings, word and
+  comparison results, placement/pressure refusals, dishonest second-result
+  claims, and a source conditional helper compiled with its caller. Validation
+  is in progress.
 
 - 2026-09-20: The whole-body frontend checkpoint under
   [[native-bounded-loop-certificates]] adds shared Compose regions and generic
@@ -140,3 +157,25 @@ model, profile flag, kernel extension, or raised resource limit was added.
 - 2026-09-20: The shared typed source-interface prerequisite is being extended under
   [[native-bounded-loop-certificates]]; the ordinary recursive reflector now also
   serves byte/Boolean predicates. Multi-result physical joins remain open here.
+- 2026-09-20: Focused validation passes: 13 tests, including composed multi-result kernel
+  certificates, four dishonest claim controls, execution over boundary values,
+  reordered interfaces, and inherited-selector preservation. The new certificate
+  checks have their own target and reuse checked artifacts for negative claims;
+  they fit the existing process limits. Plain full scripts/test is running,
+  including native composed-helper export/execution and existing native gates.
+- 2026-09-20: The native structured-helper test passes: ordinary compile-x86 checks the
+  source equality and physical artifact, verifies exported bytes, and the
+  assembled function returns the expected result on 10,036 input pairs. Boolean
+  branch results are normalized with the existing one-bit equality theorem so
+  that their composed logical representation agrees with source helper cases.
+  The final full-suite rerun is underway.
+- 2026-09-20: Final validation: plain scripts/test passes 2854 tests, 0 failed, 5 ignored.
+  This includes the new source-composed native export on 10,036 input pairs,
+  multiple-result physical certificates and dishonest-claim controls, both
+  existing native branch shapes, and all call/stack-save gates. No resource
+  limits were increased. git diff --check and issue consistency checks pass.
+  Physical composition, multiple live prefix outputs, and explicit common
+  multi-result placements complete this issue's acceptance. Shared DAG allocation
+  remains in [[function-ir-shared-multi-result-dag]] and independent branch-exit
+  reconciliation in [[function-ir-x86-join-placement]]. Byte/Boolean dataflow,
+  guarded reads, and bounded execution remain in [[native-bounded-loop-certificates]].

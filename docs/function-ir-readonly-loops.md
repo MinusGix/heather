@@ -145,9 +145,25 @@ the source certificate. Consuming a Nat still requires a representation proof;
 whole body against its actual source definition, including helper meaning;
 stale helpers, swapped constructors, and changed payloads are rejected.
 
-Physical selection of structured producers, byte/Boolean operations, and
-multiple results remains outstanding, followed by guarded reads and complete
-bounded-loop traces. The selector explicitly declines `Compose`. The native
-export adapter keeps its two-`BitVec(64)`-input, `BitVec(64)`-result restriction;
-source expansion certificates do not establish physical execution or a global
-`StructuredRegionHolds` witness.
+Physical composition and multiple result placement now use the same recursive
+backend. `lower_structured_results` and `generate_structured_results` accept
+explicit result-register maps. Composed prefixes may produce multiple values;
+continuations receive these and inherited inputs by port ID. Both branch arms
+use the requested result placements. Every result has a correctness theorem
+and artifact over the same selected execution, bytes, memory frame, and exit
+RIP. Inherited registers, including consumed selectors, remain protected.
+
+Multi-result dataflow currently selects a dependency slice per result and
+protects each finished result while selecting the next. This can recompute
+shared nodes and decline avoidable register pressure; it does not invent
+spills or edge-copy reconciliation. Existing leaf restrictions still apply:
+64-bit arithmetic and comparisons with normalized one-bit comparison results.
+Byte operations and Boolean dataflow inputs/constants still need selection support,
+followed by guarded reads and complete bounded-loop traces. Thus `search_body`
+has a checked source expansion but does not yet have a physical certificate.
+
+The native export adapter keeps its two-`BitVec(64)`-input,
+`BitVec(64)`-result restriction. Conditional Boolean helpers composed into such
+functions now reach ordinary native export. Source expansion certificates
+alone do not establish physical execution or a global `StructuredRegionHolds`
+witness.

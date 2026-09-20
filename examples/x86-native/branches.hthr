@@ -18,3 +18,15 @@ fn nested_false(a, b: BitVec(64)) → BitVec(64) {
         True => bitvec::add(64, b, a),
     }
 }
+fn unequal(a, b: BitVec(64)) → Bool {
+    match bitvec::unsigned_lt_bit(64, a, b) {
+        False => bitvec::unsigned_lt_bit(64, b, a),
+        True => bitvec::unsigned_lt_bit(64, a, b),
+    }
+}
+fn composed(a, b: BitVec(64)) → BitVec(64) {
+    match unequal(a, b) {
+        False => bitvec::sub(64, a, b),
+        True => bitvec::add(64, a, b),
+    }
+}
