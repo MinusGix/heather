@@ -1,5 +1,6 @@
 //! Untrusted spill-free x86 selection and register assignment for the current
-//! pure FunctionIR 64-bit constant/binary-ALU fragment. Proof emission consumes this explicit plan;
+//! pure FunctionIR word ALU and zero-extended narrow-value fragment.
+//! Proof emission consumes this explicit plan;
 //! neither the allocator nor the plan is trusted by the kernel.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -2699,7 +2700,7 @@ pub fn lower_dag(
     let mut placements = BTreeMap::new();
     let mut widths = BTreeMap::new();
     for (port, &register) in region.inputs.iter().zip(input_registers) {
-        require_width(port.id, port.width)?;
+        require_placement_width(port.id, port.width)?;
         if placements.insert(port.id, register).is_some() {
             return Err(LoweringError::DuplicateValue(port.id));
         }
@@ -2732,8 +2733,8 @@ pub fn lower_dag(
     for (node_index, &raw_node) in region.nodes.iter().enumerate() {
         let selected = selected_node(raw_node, node_index)?;
         match selected {
-            SelectedNode::Comparison(_) => {}
-            _ => require_width(selected.output(), selected.width())?,
+            SelectedNode::Binary(BinaryNode { operation: BinaryOperation::Add | BinaryOperation::Sub, .. }) => require_width(selected.output(), selected.width())?,
+            _ => require_placement_width(selected.output(), selected.width())?,
         }
         if placements.contains_key(&selected.output()) {
             return Err(LoweringError::DuplicateValue(selected.output()));
@@ -2771,7 +2772,7 @@ pub fn lower_dag(
                     OperandOrientation::Original,
                     vec![Instruction::MovRI {
                         destination,
-                        immediate: node.value,
+                        immediate: if node.width == 64 { node.value } else { node.value & ((1u64 << node.width) - 1) },
                     }],
                 )
             }
@@ -2866,7 +2867,7 @@ pub fn lower_dag(
                 if !produces_output {
                     return Err(LoweringError::UnsupportedOperation { node_index });
                 }
-                if node.operand_width != 64 {
+                if node.operand_width > 64 || (node.operand_width != 64 && node.operation == ComparisonOperation::SignedLessThan) {
                     return Err(LoweringError::UnsupportedWidth {
                         value: node.output,
                         width: node.operand_width,
@@ -2879,7 +2880,7 @@ pub fn lower_dag(
                     return Err(LoweringError::UndefinedValue(node.right));
                 };
                 for value in [node.left, node.right] {
-                    if widths.get(&value) != Some(&64) {
+                    if widths.get(&value) != Some(&node.operand_width) {
                         return Err(LoweringError::UnsupportedWidth {
                             value,
                             width: *widths.get(&value).unwrap_or(&0),
@@ -2973,7 +2974,7 @@ pub fn lower_dag(
     }
 
     let output = region.outputs[0];
-    if output.width != 64 && output.width != 1 {
+    if output.width > 64 {
         return Err(LoweringError::UnsupportedWidth {
             value: output.id,
             width: output.width,
@@ -3140,14 +3141,7 @@ pub(super) fn generate_selected(
         &arguments,
         &mut text,
     );
-    let result_expression = match lowered.output_width {
-        64 => format!("values(64, {})", lowered.output_id),
-        1 => format!(
-            "bitvec::zero_extend(1, 63, values(1, {}))",
-            lowered.output_id,
-        ),
-        _ => unreachable!("lowering accepted only 64-bit and one-bit outputs"),
-    };
+    let result_expression = placed_expression(lowered.output_width, &format!("values({}, {})", lowered.output_width, lowered.output_id));
     text.push_str(&format!(
         "theorem {prefix}_refines_compact<M>({compact_parameters}):\n\
          \x20   read_gpr({}, {after_name}(before).gprs) = {result_expression}\n\
@@ -3219,9 +3213,8 @@ fn common_parameters(region_expr: &str, region: &Region, registers: &[Gpr]) -> S
     ];
     for ((index, port), register) in region.inputs.iter().enumerate().zip(registers) {
         parameters.push(format!(
-            "input_{index}_placed: ValuePlaced(values, {}, {}, before)",
-            port.id,
-            register.heather_name(),
+            "input_{index}_placed: {}",
+            placement_type(port.width, port.id, *register, "before"),
         ));
     }
     parameters.push(format!("graph: RegionHolds({region_expr}, values)"));
@@ -3239,10 +3232,8 @@ fn render_context_fields(region: &Region, registers: &[Gpr]) -> String {
     let mut fields = String::new();
     for ((index, port), register) in region.inputs.iter().enumerate().zip(registers) {
         fields.push_str(&format!(
-            "         \x20   input_{index}_placed: ValuePlaced(values, {}, {}, before),\n\
-             ",
-            port.id,
-            register.heather_name(),
+            "    input_{index}_placed: {},\n",
+            placement_type(port.width, port.id, *register, "before"),
         ));
     }
     fields
@@ -3469,6 +3460,8 @@ fn emit_placement_proofs(
     arguments: &str,
     text: &mut String,
 ) -> String {
+    let widths = region.inputs.iter().copied().chain(region.nodes.iter().map(|node| node.output()))
+        .map(|port| (port.id, port.width)).collect::<BTreeMap<_, _>>();
     let mut frame_facts = BTreeSet::new();
     let mut remaining = BTreeMap::<u64, usize>::new();
     for plan in &lowered.node_plans {
@@ -3528,16 +3521,44 @@ fn emit_placement_proofs(
         match plan.node {
             SelectedNode::Constant(node) => {
                 debug_assert_eq!(plan.instructions.len(), 1);
-                text.push_str(&format!(
-                    "theorem {output_name}<M>({parameters}):\n\
-                     \x20   ValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
-                     {{\n\
-                     \x20   trans({equation}, sym({prefix}_step_{before_index}_result(\n\
-                     \x20       {prefix}_state_{before_index}(before))))\n\
-                     }}\n",
-                    node.output,
-                    plan.destination.heather_name(),
-                ));
+                let equation = if node.width == 64 { equation } else {
+                    format!("cong_fn<BitVec({}), BitVec(64)>(λ value => {}, {equation})", node.width, placed_expression(node.width, "value"))
+                };
+                text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ trans({equation}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before)))) }}\n",
+                    placement_type(node.width, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)"))));
+            }
+            SelectedNode::Binary(node) if node.width != 64 => {
+                let left_register = plan.left_register.expect("binary left");
+                let right_register = plan.right_register.expect("binary right");
+                let left_stored = &live[&node.left].1;
+                let right_stored = &live[&node.right].1;
+                let mut left_proof = placement_at_state(prefix, node.left, left_register, before_index, left_stored, &input_indices);
+                let mut right_proof = placement_at_state(prefix, node.right, right_register, before_index, right_stored, &input_indices);
+                let mut actual_left = left_register;
+                let binary_index = after_index - 1;
+                if plan.instructions.len() == 2 {
+                    left_proof = format!("trans({left_proof}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before))))");
+                    let frame = emit_step_frame_fact(prefix, before_index, plan.instructions[0], right_register, &mut frame_facts, text);
+                    right_proof = format!("trans({right_proof}, sym({frame}({prefix}_state_{before_index}(before))))");
+                    actual_left = plan.destination;
+                }
+                let width = node.width;
+                let op = node.operation.semantic_function();
+                let logical_right = placed_expression(width, &format!("values({width}, {})", node.right));
+                let machine_left = format!("read_gpr({}, {prefix}_state_{binary_index}(before).gprs)", actual_left.heather_name());
+                let machine_right = format!("read_gpr({}, {prefix}_state_{binary_index}(before).gprs)", right_register.heather_name());
+                let lifted = format!("sym({op}_zero_extend({width}, {}, values({width}, {}), values({width}, {})))", 64 - width, node.left, node.right);
+                let left_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => {op}(64, found, {logical_right}), {left_proof})");
+                let right_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => {op}(64, {machine_left}, found), {right_proof})");
+                let agreement = format!("trans({lifted}, trans({left_agrees}, {right_agrees}))");
+                let agreement = if plan.orientation == OperandOrientation::Reversed {
+                    format!("trans({agreement}, {}(64, {machine_left}, {machine_right}))", node.operation.commutativity_theorem().unwrap())
+                } else { agreement };
+                let lifted_equation = format!("cong_fn<BitVec({width}), BitVec(64)>(λ value => {}, {equation})", placed_expression(width, "value"));
+                text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ trans({lifted_equation}, trans({agreement}, sym({prefix}_step_{binary_index}_result({prefix}_state_{binary_index}(before))))) }}\n",
+                    placement_type(width, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)"))));
+                consume_known_use(&mut remaining, node.left);
+                consume_known_use(&mut remaining, node.right);
             }
             SelectedNode::Binary(node) => {
                 let plan_left_register = plan.left_register.expect("binary left register");
@@ -3758,17 +3779,8 @@ fn emit_placement_proofs(
                         );
                         let name =
                             format!("{prefix}_comparison_{}_{}_at_cmp", plan.node_index, side,);
-                        text.push_str(&format!(
-                        "theorem {name}<M>({parameters}):\n\
-                         \x20   ValuePlaced(values, {value}, {}, {prefix}_state_{compare_state}(before))\n\
-                         {{\n\
-                         \x20   placed_after_frame(values, {value}, {},\n\
-                         \x20       {prefix}_state_{before_index}(before), {prefix}_state_{compare_state}(before),\n\
-                         \x20       {stored_proof}, {frame}({prefix}_state_{before_index}(before)))\n\
-                         }}\n",
-                        register.heather_name(),
-                        register.heather_name(),
-                    ));
+                        text.push_str(&format!("theorem {name}<M>({parameters}): {} {{ trans({stored_proof}, sym({frame}({prefix}_state_{before_index}(before)))) }}\n",
+                            placement_type(widths[&value], value, register, &format!("{prefix}_state_{compare_state}(before)"))));
                         format!("{name}({arguments})")
                     };
                 let left_proof =
@@ -3796,24 +3808,34 @@ fn emit_placement_proofs(
                     left_register.heather_name(),
                     right_register.heather_name(),
                 ));
-                text.push_str(&format!(
-                    "theorem {output_name}<M>({parameters}):\n\
-                     \x20   BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
-                     {{\n\
-                     \x20   placed_after_comparison(values, {}, {}, {}, {condition}(64, ·, ·),\n\
-                     \x20       {}, {}, {}, {prefix}_state_{compare_state}(before),\n\
-                     \x20       {prefix}_state_{after_index}(before), {equation}, {left_proof}, {right_proof},\n\
-                     \x20       {result_name}(before))\n\
-                     }}\n",
-                    node.output,
-                    plan.destination.heather_name(),
-                    node.output,
-                    node.left,
-                    node.right,
-                    left_register.heather_name(),
-                    right_register.heather_name(),
-                    plan.destination.heather_name(),
-                ));
+                if node.operand_width == 64 {
+                    text.push_str(&format!(
+                        "theorem {output_name}<M>({parameters}):\n\
+                         \x20   BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before))\n\
+                         {{\n\
+                         \x20   placed_after_comparison(values, {}, {}, {}, {condition}(64, ·, ·),\n\
+                         \x20       {}, {}, {}, {prefix}_state_{compare_state}(before),\n\
+                         \x20       {prefix}_state_{after_index}(before), {equation}, {left_proof}, {right_proof},\n\
+                         \x20       {result_name}(before))\n\
+                         }}\n",
+                        node.output,
+                        plan.destination.heather_name(),
+                        node.output,
+                        node.left,
+                        node.right,
+                        left_register.heather_name(),
+                        right_register.heather_name(),
+                        plan.destination.heather_name(),
+                    ));
+                } else {
+                    let logical_right = placed_expression(node.operand_width, &format!("values({}, {})", node.operand_width, node.right));
+                    let machine_left = format!("read_gpr({}, {prefix}_state_{compare_state}(before).gprs)", left_register.heather_name());
+                    let lifted = format!("sym(bitvec::unsigned_lt_zero_extend({}, {}, values({}, {}), values({}, {})))", node.operand_width, 64 - node.operand_width, node.operand_width, node.left, node.operand_width, node.right);
+                    let left_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, found, {logical_right}), {left_proof})");
+                    let right_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, {machine_left}, found), {right_proof})");
+                    let agreement = format!("trans({lifted}, trans({left_agrees}, {right_agrees}))");
+                    text.push_str(&format!("theorem {output_name}<M>({parameters}): BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before)) {{ trans(cong_fn<BitVec(1), BitVec(64)>(λ value => bitvec::zero_extend(1, 63, value), {equation}), trans(cong_fn<bool::Bool, BitVec(64)>(λ bit => bitvec::zero_extend(1, 63, bitvec::ofBool(bit)), {agreement}), sym({result_name}(before)))) }}\n", node.output, plan.destination.heather_name()));
+                }
                 consume_known_use(&mut remaining, node.left);
                 consume_known_use(&mut remaining, node.right);
             }
@@ -3844,18 +3866,8 @@ fn emit_placement_proofs(
                     plan.node_index,
                     step + 1,
                 );
-                text.push_str(&format!(
-                    "theorem {frame_name}<M>({parameters}):\n\
-                     \x20   ValuePlaced(values, {value}, {}, {prefix}_state_{step_after}(before))\n\
-                     {{\n\
-                     \x20   placed_after_frame(values, {value}, {},\n\
-                     \x20       {prefix}_state_{step_before}(before), {prefix}_state_{step_after}(before),\n\
-                     \x20       {frame_proof},\n\
-                     \x20       {frame_fact}({prefix}_state_{step_before}(before)))\n\
-                     }}\n",
-                    register.heather_name(),
-                    register.heather_name(),
-                ));
+                text.push_str(&format!("theorem {frame_name}<M>({parameters}): {} {{ trans({frame_proof}, sym({frame_fact}({prefix}_state_{step_before}(before)))) }}\n",
+                    placement_type(widths[&value], value, register, &format!("{prefix}_state_{step_after}(before)"))));
                 frame_proof = format!("{frame_name}({arguments})");
             }
             next_live.insert(value, (register, frame_proof));
@@ -3883,35 +3895,15 @@ fn emit_placement_proofs(
             text,
         );
         let final_name = format!("{prefix}_output_placed");
-        let (placement, move_theorem) = if lowered.output_width == 1 {
-            ("BitValuePlaced", "bit_placed_after_move")
-        } else {
-            ("ValuePlaced", "placed_after_move")
-        };
-        text.push_str(&format!(
-            "theorem {final_name}<M>({parameters}):\n\
-             \x20   {placement}(values, {}, {}, {prefix}_state_{}(before))\n\
-             {{\n\
-             \x20   {move_theorem}(values, {}, {}, {},\n\
-             \x20       {prefix}_state_{instruction_index}(before),\n\
-             \x20       {prefix}_state_{}(before), {source_proof},\n\
-             \x20       {prefix}_step_{instruction_index}_result(\n\
-             \x20           {prefix}_state_{instruction_index}(before)))\n\
-             }}\n",
-            lowered.output_id,
-            lowered.output_register.heather_name(),
-            lowered.instructions.len(),
-            lowered.output_id,
-            source_register.heather_name(),
-            lowered.output_register.heather_name(),
-            lowered.instructions.len(),
-        ));
+        let _ = source_register;
+        text.push_str(&format!("theorem {final_name}<M>({parameters}): {} {{ trans({source_proof}, sym({prefix}_step_{instruction_index}_result({prefix}_state_{instruction_index}(before)))) }}\n",
+            placement_type(lowered.output_width, lowered.output_id, lowered.output_register, &format!("{prefix}_state_{}(before)", lowered.instructions.len()))));
         format!("{final_name}({arguments})")
     }
 }
 
 fn placement_at_state(
-    prefix: &str,
+    _prefix: &str,
     value: u64,
     register: Gpr,
     state: usize,
@@ -3924,11 +3916,7 @@ fn placement_at_state(
     if state == 0 {
         return format!("context.input_{input_index}_placed");
     }
-    format!(
-        "placed_after_frame(values, {value}, {}, before, {prefix}_state_{state}(before), \
-         context.input_{input_index}_placed, refl)",
-        register.heather_name(),
-    )
+    format!("trans(context.input_{input_index}_placed, equality_refl(read_gpr({}, before.gprs)))", register.heather_name())
 }
 
 fn consume_known_use(remaining: &mut BTreeMap<u64, usize>, value: u64) {
@@ -4175,6 +4163,18 @@ fn binary_instruction(operation: BinaryOperation, destination: Gpr, source: Gpr)
             source,
         },
     }
+}
+
+fn require_placement_width(value: u64, width: u64) -> Result<(), LoweringError> {
+    if width <= 64 { Ok(()) } else { Err(LoweringError::UnsupportedWidth { value, width }) }
+}
+
+fn placed_expression(width: u64, value: &str) -> String {
+    if width == 64 { value.into() } else { format!("bitvec::zero_extend({width}, {}, {value})", 64 - width) }
+}
+
+fn placement_type(width: u64, id: u64, register: Gpr, state: &str) -> String {
+    format!("{} = read_gpr({}, {state}.gprs)", placed_expression(width, &format!("values({width}, {id})")), register.heather_name())
 }
 
 fn require_width(value: u64, width: u64) -> Result<(), LoweringError> {

@@ -92,8 +92,8 @@ theorem add64_x86_block_is_allowed<M>(before: MachineState<M>):
 }
 
 record add64_x86_Context<M>(values: Valuation(), before: MachineState<M>) {
-             input_0_placed: ValuePlaced(values, 0, Rdi, before),
-             input_1_placed: ValuePlaced(values, 1, Rsi, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
     graph: RegionHolds(add64_raw(), values),
 }
 
@@ -136,7 +136,7 @@ theorem add64_x86_value_2_after_node_0<M>(values: Valuation(),
 {
     placed_after_binary(values, 2, 0, 1, bitvec::add(64, ·, ·), Rax, Rsi, Rax,
         add64_x86_state_1(before), add64_x86_state_2(before),
-        add64_x86_graph_0(values, before, context).left, add64_x86_value_0_moved_for_node_0(values, before, context), placed_after_frame(values, 1, Rsi, before, add64_x86_state_1(before), context.input_1_placed, refl),
+        add64_x86_graph_0(values, before, context).left, add64_x86_value_0_moved_for_node_0(values, before, context), trans(context.input_1_placed, equality_refl(read_gpr(Rsi, before.gprs))),
         add64_x86_step_1_result(
             add64_x86_state_1(before)))
 }
@@ -150,8 +150,8 @@ theorem add64_x86_refines_compact<M>(values: Valuation(),
 
 theorem add64_x86_refines_function_ir<M>(values: Valuation(),
     before: MachineState<M>,
-    input_0_placed: ValuePlaced(values, 0, Rdi, before),
-    input_1_placed: ValuePlaced(values, 1, Rsi, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
     graph: RegionHolds(add64_raw(), values)):
     read_gpr(Rax, add64_x86_after(before).gprs) = values(64, 2)
 {
@@ -185,8 +185,8 @@ theorem add64_x86_preserves_protected<M>(register: Gpr,
 
 theorem add64_x86_artifact<M>(values: Valuation(),
     before: MachineState<M>,
-    input_0_placed: ValuePlaced(values, 0, Rdi, before),
-    input_1_placed: ValuePlaced(values, 1, Rsi, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
     graph: RegionHolds(add64_raw(), values)):
     BlockArtifact<M>(add64_x86_instructions(), before, Rax,
         values(64, 2), add64_x86_Protected,
@@ -337,10 +337,10 @@ theorem sum4_x86_block_is_allowed<M>(before: MachineState<M>):
 }
 
 record sum4_x86_Context<M>(values: Valuation(), before: MachineState<M>) {
-             input_0_placed: ValuePlaced(values, 0, Rdi, before),
-             input_1_placed: ValuePlaced(values, 1, Rsi, before),
-             input_2_placed: ValuePlaced(values, 2, Rdx, before),
-             input_3_placed: ValuePlaced(values, 3, Rcx, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
+    input_2_placed: values(64, 2) = read_gpr(Rdx, before.gprs),
+    input_3_placed: values(64, 3) = read_gpr(Rcx, before.gprs),
     graph: RegionHolds(sum4_left_first_raw(), values),
 }
 
@@ -397,7 +397,7 @@ theorem sum4_x86_value_4_after_node_0<M>(values: Valuation(),
 {
     placed_after_binary(values, 4, 0, 1, bitvec::add(64, ·, ·), Rax, Rsi, Rax,
         sum4_x86_state_1(before), sum4_x86_state_2(before),
-        sum4_x86_graph_0(values, before, context).left, sum4_x86_value_0_moved_for_node_0(values, before, context), placed_after_frame(values, 1, Rsi, before, sum4_x86_state_1(before), context.input_1_placed, refl),
+        sum4_x86_graph_0(values, before, context).left, sum4_x86_value_0_moved_for_node_0(values, before, context), trans(context.input_1_placed, equality_refl(read_gpr(Rsi, before.gprs))),
         sum4_x86_step_1_result(
             sum4_x86_state_1(before)))
 }
@@ -416,7 +416,7 @@ theorem sum4_x86_value_2_moved_for_node_1<M>(values: Valuation(),
 {
     placed_after_move(values, 2, Rdx, R8,
         sum4_x86_state_2(before),
-        sum4_x86_state_3(before), placed_after_frame(values, 2, Rdx, before, sum4_x86_state_2(before), context.input_2_placed, refl),
+        sum4_x86_state_3(before), trans(context.input_2_placed, equality_refl(read_gpr(Rdx, before.gprs))),
         sum4_x86_step_2_result(
             sum4_x86_state_2(before)))
 }
@@ -427,7 +427,7 @@ theorem sum4_x86_value_5_after_node_1<M>(values: Valuation(),
 {
     placed_after_binary(values, 5, 2, 3, bitvec::add(64, ·, ·), R8, Rcx, R8,
         sum4_x86_state_3(before), sum4_x86_state_4(before),
-        sum4_x86_graph_1(values, before, context).left, sum4_x86_value_2_moved_for_node_1(values, before, context), placed_after_frame(values, 3, Rcx, before, sum4_x86_state_3(before), context.input_3_placed, refl),
+        sum4_x86_graph_1(values, before, context).left, sum4_x86_value_2_moved_for_node_1(values, before, context), trans(context.input_3_placed, equality_refl(read_gpr(Rcx, before.gprs))),
         sum4_x86_step_3_result(
             sum4_x86_state_3(before)))
 }
@@ -437,28 +437,14 @@ theorem sum4_x86_step_2_preserves_Rax<M>(state: MachineState<M>):
 { refl }
 theorem sum4_x86_value_4_after_node_1_step_1<M>(values: Valuation(),
     before: MachineState<M>,
-    context: sum4_x86_Context<M>(values, before)):
-    ValuePlaced(values, 4, Rax, sum4_x86_state_3(before))
-{
-    placed_after_frame(values, 4, Rax,
-        sum4_x86_state_2(before), sum4_x86_state_3(before),
-        sum4_x86_value_4_after_node_0(values, before, context),
-        sum4_x86_step_2_preserves_Rax(sum4_x86_state_2(before)))
-}
+    context: sum4_x86_Context<M>(values, before)): values(64, 4) = read_gpr(Rax, sum4_x86_state_3(before).gprs) { trans(sum4_x86_value_4_after_node_0(values, before, context), sym(sum4_x86_step_2_preserves_Rax(sum4_x86_state_2(before)))) }
 theorem sum4_x86_step_3_preserves_Rax<M>(state: MachineState<M>):
     read_gpr(Rax, execute_normal(decoded_canonical(AddRR(R8, Rcx)), state).gprs) =
         read_gpr(Rax, state.gprs)
 { refl }
 theorem sum4_x86_value_4_after_node_1_step_2<M>(values: Valuation(),
     before: MachineState<M>,
-    context: sum4_x86_Context<M>(values, before)):
-    ValuePlaced(values, 4, Rax, sum4_x86_state_4(before))
-{
-    placed_after_frame(values, 4, Rax,
-        sum4_x86_state_3(before), sum4_x86_state_4(before),
-        sum4_x86_value_4_after_node_1_step_1(values, before, context),
-        sum4_x86_step_3_preserves_Rax(sum4_x86_state_3(before)))
-}
+    context: sum4_x86_Context<M>(values, before)): values(64, 4) = read_gpr(Rax, sum4_x86_state_4(before).gprs) { trans(sum4_x86_value_4_after_node_1_step_1(values, before, context), sym(sum4_x86_step_3_preserves_Rax(sum4_x86_state_3(before)))) }
 theorem sum4_x86_step_4_result<M>(state: MachineState<M>):
     read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, R8)), state).gprs) =
         bitvec::add(64, read_gpr(Rax, state.gprs), read_gpr(R8, state.gprs))
@@ -484,10 +470,10 @@ theorem sum4_x86_refines_compact<M>(values: Valuation(),
 
 theorem sum4_x86_refines_function_ir<M>(values: Valuation(),
     before: MachineState<M>,
-    input_0_placed: ValuePlaced(values, 0, Rdi, before),
-    input_1_placed: ValuePlaced(values, 1, Rsi, before),
-    input_2_placed: ValuePlaced(values, 2, Rdx, before),
-    input_3_placed: ValuePlaced(values, 3, Rcx, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
+    input_2_placed: values(64, 2) = read_gpr(Rdx, before.gprs),
+    input_3_placed: values(64, 3) = read_gpr(Rcx, before.gprs),
     graph: RegionHolds(sum4_left_first_raw(), values)):
     read_gpr(Rax, sum4_x86_after(before).gprs) = values(64, 6)
 {
@@ -522,10 +508,10 @@ theorem sum4_x86_preserves_protected<M>(register: Gpr,
 
 theorem sum4_x86_artifact<M>(values: Valuation(),
     before: MachineState<M>,
-    input_0_placed: ValuePlaced(values, 0, Rdi, before),
-    input_1_placed: ValuePlaced(values, 1, Rsi, before),
-    input_2_placed: ValuePlaced(values, 2, Rdx, before),
-    input_3_placed: ValuePlaced(values, 3, Rcx, before),
+    input_0_placed: values(64, 0) = read_gpr(Rdi, before.gprs),
+    input_1_placed: values(64, 1) = read_gpr(Rsi, before.gprs),
+    input_2_placed: values(64, 2) = read_gpr(Rdx, before.gprs),
+    input_3_placed: values(64, 3) = read_gpr(Rcx, before.gprs),
     graph: RegionHolds(sum4_left_first_raw(), values)):
     BlockArtifact<M>(sum4_x86_instructions(), before, Rax,
         values(64, 6), sum4_x86_Protected,

@@ -494,3 +494,45 @@ fn composed_branch_preserves_an_inherited_selector() {
         assert_eq!(regs[&Gpr::Rdi], flag);
     }
 }
+
+#[test]
+fn search_body_selects_byte_comparisons_and_boolean_results() {
+    use heather_elab::function_ir_x86_lower::lower_structured_results;
+    let mut elab = source_elaborator();
+    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    elab.elab_module_source("function_ir_loop", model).unwrap();
+    let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
+    elab.elab_module_source("readonly_loops", source).unwrap();
+    let body = reflect_elaborated_structured(&elab, "readonly_loops::search_body").unwrap();
+    let scratch = &[Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::R9, Gpr::R10];
+    let plan = lower_structured_results(&body.region, &Placements::from([(0, Gpr::Rdi), (2, Gpr::Rsi), (3, Gpr::R8)]), scratch,
+        &Placements::from([(4, Gpr::Rax), (5, Gpr::Rdx)])).unwrap();
+    for needle in [0, 1, 127, 128, 255] {
+        for byte in 0..256 {
+            for found in [0, 1] {
+                let mut regs = BTreeMap::from([(Gpr::Rdi, needle), (Gpr::Rsi, byte), (Gpr::R8, found)]);
+                for r in scratch { regs.insert(*r, u64::MAX); }
+                run(&plan, &mut regs);
+                assert_eq!(regs[&Gpr::Rax], if byte == needle { 1 } else { found });
+                assert_eq!(regs[&Gpr::Rdx], u64::from(byte == needle));
+                assert_eq!((regs[&Gpr::Rdi], regs[&Gpr::Rsi], regs[&Gpr::R8]), (needle, byte, found));
+            }
+        }
+    }
+}
+
+#[test]
+fn narrow_placement_widths_constants_and_declines() {
+    use heather_elab::function_ir_x86_lower::lower_dag;
+    for width in [0, 1, 8, 16, 32, 63, 64] {
+        let region = Region { inputs: vec![], nodes: vec![Node::Const { width, output: 0, value: u64::MAX }], outputs: vec![Port { id: 0, width }] };
+        let dag = lower_dag(&region, &[], &[Gpr::Rax], Gpr::Rax).unwrap();
+        let mut regs = BTreeMap::new(); run_dag(&dag, &mut regs);
+        assert_eq!(regs[&Gpr::Rax], if width == 64 { u64::MAX } else { (1u64 << width) - 1 });
+    }
+    for node in [Node::Add { width: 8, output: 2, left: 0, right: 1 }, Node::SignedLessThan { width: 8, output: 2, left: 0, right: 1 }] {
+        let output = node.output();
+        let region = Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![node], outputs: vec![output] };
+        assert!(lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
+    }
+}

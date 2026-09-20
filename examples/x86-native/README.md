@@ -92,8 +92,9 @@ the generated artifact names the actual source function.
 The native source adapter accepts two word inputs and one word result. The
 underlying structured backend additionally supports multiple prefix/results
 with explicit register maps and one artifact per result over the same code.
-Leaf selection still supports word arithmetic and comparisons; byte operations
-and Boolean dataflow inputs/constants remain future work. Register pressure
+Leaf selection supports word arithmetic and zero-extended narrow constants,
+copies, bitwise operations, and unsigned comparisons. Narrow modular arithmetic
+and signed comparisons remain future work. Register pressure
 and branches outside the forward rel8 range are refused. Structured bodies are
 currently assembly exports; `build-x86` retains its existing arithmetic/call
 fragment. The native branch and structured-composition tests assemble all

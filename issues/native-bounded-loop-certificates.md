@@ -117,3 +117,27 @@ obligations here; they were not silently fixed by the semantic interface.
   export on 10,036 input pairs and multi-result kernel certificate controls.
   The loop body's byte/Boolean dataflow selection, guarded loads, and complete
   bounded trace remain open; no native search_body certificate is claimed.
+- 2026-09-20: The next shared-body checkpoint adds explicit zero-extended placements for
+  widths 0–64, normalized constants/copies, narrow bitwise operations, and unsigned
+  comparisons. Generic bitvector zero-extension laws support the proof generator;
+  there is no byte_equal or search-specific machine rule. The complete search_body
+  is the source-driven physical-certificate customer, including its Boolean carry
+  and payload/discriminator outputs. Narrow add/subtract and signed comparisons
+  remain explicit refusals, tracked in [[function-ir-narrow-arithmetic]]. Validation
+  is in progress. Typed source publication, guarded loads, and bounded traces
+  remain separate from this body-certificate checkpoint.
+- 2026-09-20: Focused validation passes: 16 tests, including the complete reflected search_body
+  with kernel-checked physical payload/discriminator results and checked source
+  expansion. Independent selected-instruction execution covers every byte value,
+  five boundary needles, and both Boolean carry values (2,560 cases). Narrow
+  constant normalization, zero-width policy, copies, byte bitwise operations
+  including right-operand register reuse, unsigned comparison, and incorrect
+  word-placement/signed-comparison controls are covered. Plain full scripts/test
+  is now running.
+- 2026-09-20: Shared narrow-value/body-certificate checkpoint validated: plain scripts/test
+  passed 2858 tests, 0 failed, 5 ignored. This includes kernel-checked search_body
+  payload/discriminator certificates, source expansion, negative placement and
+  signed-comparison controls, 2,560 independent execution cases, and existing
+  native regressions. The checked-in generated x86 example matches the emitter.
+  No resource limits changed. Typed source-to-machine publication, guarded reads,
+  and complete bounded-loop traces remain open; this completes the body checkpoint.

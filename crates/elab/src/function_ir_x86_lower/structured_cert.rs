@@ -36,7 +36,7 @@ fn val(values: &Values, id: u64, width: u64) -> String {
 }
 fn placed_value(values: &Values, port: Port) -> String {
     let v = val(values, port.id, port.width);
-    if port.width == 1 { format!("bitvec::zero_extend(1, 63, {v})") } else { v }
+    placed_expression(port.width, &v)
 }
 // Keep Boolean control outside the one-bit vector constructor. The source
 // reflector uses ofBool around a helper's Boolean result; head_bit of this
@@ -90,9 +90,9 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
         let output = node.output().id;
         let body = match *node {
             Node::Const { value, .. } => format!("bitvec::ofNat(width, {value})"),
-            Node::UnsignedLessThan { left, right, .. } | Node::SignedLessThan { left, right, .. } => {
+            Node::UnsignedLessThan { width: operand_width, left, right, .. } | Node::SignedLessThan { width: operand_width, left, right, .. } => {
                 let op = if matches!(node, Node::UnsignedLessThan { .. }) { "unsigned_lt_bit" } else { "signed_lt_bit" };
-                format!("match width as λ n => BitVec(n) {{ Zero => bitvec::zero(0), Succ(k) => bitvec::cons_bit(k, bitvec::{op}(64, {}, {}), bitvec::zero(k)) }}", val(&values, left, 64), val(&values, right, 64))
+                format!("match width as λ n => BitVec(n) {{ Zero => bitvec::zero(0), Succ(k) => bitvec::cons_bit(k, bitvec::{op}({operand_width}, {}, {}), bitvec::zero(k)) }}", val(&values, left, operand_width), val(&values, right, operand_width))
             }
             Node::Add { left, right, .. } | Node::Sub { left, right, .. }
             | Node::BitAnd { left, right, .. } | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. } => {

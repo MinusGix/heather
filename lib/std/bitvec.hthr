@@ -1753,3 +1753,103 @@ theorem toNat_lt_pow(n: Nat): (x: BitVec(n)) → toNat(n, x) < nat::pow(2, n) {
                 ih(tail_bits(k, x)))),
     }
 }
+
+// Zero high columns preserve an incoming borrow, so unsigned comparison can
+// use a wider physical word without changing the narrow logical result.
+theorem borrow_zero_columns(n: Nat): (borrow: Bool) →
+    borrow_bits(n, zero(n), zero(n), borrow) = borrow {
+    match n as λ k => (borrow: Bool) → borrow_bits(k, zero(k), zero(k), borrow) = borrow {
+        Zero => λ borrow => refl,
+        Succ(k, ih) => λ borrow => match borrow { False => ih(False), True => ih(True) },
+    }
+}
+
+theorem borrow_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) → (borrow: Bool) →
+    borrow_bits(extra + n, zero_extend(n, extra, a), zero_extend(n, extra, b), borrow) =
+        borrow_bits(n, a, b, borrow) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) → (borrow: Bool) →
+        borrow_bits(extra + k, zero_extend(k, extra, a), zero_extend(k, extra, b), borrow) =
+            borrow_bits(k, a, b, borrow) {
+        Zero => λ extra a b borrow => borrow_zero_columns(extra, borrow),
+        Succ(k, ih) => λ extra a b borrow =>
+            match borrow_next(head_bit(k, a), head_bit(k, b), borrow) as λ next =>
+                borrow_bits_next(extra + k, zero_extend(k, extra, tail_bits(k, a)),
+                    zero_extend(k, extra, tail_bits(k, b)), next, borrow_bits(extra + k)) =
+                borrow_bits_next(k, tail_bits(k, a), tail_bits(k, b), next, borrow_bits(k)) {
+                False => ih(extra, tail_bits(k, a), tail_bits(k, b), False),
+                True => ih(extra, tail_bits(k, a), tail_bits(k, b), True),
+            },
+    }
+}
+
+theorem unsigned_lt_zero_extend(n, extra: Nat, a, b: BitVec(n)):
+    unsigned_lt_bit(extra + n, zero_extend(n, extra, a), zero_extend(n, extra, b)) =
+        unsigned_lt_bit(n, a, b) {
+    borrow_zero_extend(n, extra, a, b, False)
+}
+
+theorem band_zero_columns(n: Nat): band(n, zero(n), zero(n)) = zero(n) {
+    match n as λ k => band(k, zero(k), zero(k)) = zero(k) {
+        Zero => refl,
+        Succ(k, ih) => @cons_bit_cong(k, False, False, band(k, zero(k), zero(k)), zero(k), refl, ih),
+    }
+}
+
+theorem band_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
+    band(extra + n, zero_extend(n, extra, a), zero_extend(n, extra, b)) =
+        zero_extend(n, extra, band(n, a, b)) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) →
+        band(extra + k, zero_extend(k, extra, a), zero_extend(k, extra, b)) =
+            zero_extend(k, extra, band(k, a, b)) {
+        Zero => λ extra a b => band_zero_columns(extra),
+        Succ(k, ih) => λ extra a b => @cons_bit_cong(extra + k,
+            head_bit(k, band(Succ(k), a, b)), head_bit(k, band(Succ(k), a, b)),
+            band(extra + k, zero_extend(k, extra, tail_bits(k, a)), zero_extend(k, extra, tail_bits(k, b))),
+            zero_extend(k, extra, band(k, tail_bits(k, a), tail_bits(k, b))), refl,
+            ih(extra, tail_bits(k, a), tail_bits(k, b))),
+    }
+}
+
+theorem bor_zero_columns(n: Nat): bor(n, zero(n), zero(n)) = zero(n) {
+    match n as λ k => bor(k, zero(k), zero(k)) = zero(k) {
+        Zero => refl,
+        Succ(k, ih) => @cons_bit_cong(k, False, False, bor(k, zero(k), zero(k)), zero(k), refl, ih),
+    }
+}
+
+theorem bor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
+    bor(extra + n, zero_extend(n, extra, a), zero_extend(n, extra, b)) =
+        zero_extend(n, extra, bor(n, a, b)) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) →
+        bor(extra + k, zero_extend(k, extra, a), zero_extend(k, extra, b)) =
+            zero_extend(k, extra, bor(k, a, b)) {
+        Zero => λ extra a b => bor_zero_columns(extra),
+        Succ(k, ih) => λ extra a b => @cons_bit_cong(extra + k,
+            head_bit(k, bor(Succ(k), a, b)), head_bit(k, bor(Succ(k), a, b)),
+            bor(extra + k, zero_extend(k, extra, tail_bits(k, a)), zero_extend(k, extra, tail_bits(k, b))),
+            zero_extend(k, extra, bor(k, tail_bits(k, a), tail_bits(k, b))), refl,
+            ih(extra, tail_bits(k, a), tail_bits(k, b))),
+    }
+}
+
+theorem bxor_zero_columns(n: Nat): bxor(n, zero(n), zero(n)) = zero(n) {
+    match n as λ k => bxor(k, zero(k), zero(k)) = zero(k) {
+        Zero => refl,
+        Succ(k, ih) => @cons_bit_cong(k, False, False, bxor(k, zero(k), zero(k)), zero(k), refl, ih),
+    }
+}
+
+theorem bxor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
+    bxor(extra + n, zero_extend(n, extra, a), zero_extend(n, extra, b)) =
+        zero_extend(n, extra, bxor(n, a, b)) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) →
+        bxor(extra + k, zero_extend(k, extra, a), zero_extend(k, extra, b)) =
+            zero_extend(k, extra, bxor(k, a, b)) {
+        Zero => λ extra a b => bxor_zero_columns(extra),
+        Succ(k, ih) => λ extra a b => @cons_bit_cong(extra + k,
+            head_bit(k, bxor(Succ(k), a, b)), head_bit(k, bxor(Succ(k), a, b)),
+            bxor(extra + k, zero_extend(k, extra, tail_bits(k, a)), zero_extend(k, extra, tail_bits(k, b))),
+            zero_extend(k, extra, bxor(k, tail_bits(k, a), tail_bits(k, b))), refl,
+            ih(extra, tail_bits(k, a), tail_bits(k, b))),
+    }
+}
