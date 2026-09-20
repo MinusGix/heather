@@ -957,7 +957,7 @@ impl GenDefs {
         self.layers().find_map(|layer| layer.by_key.get(key))
     }
 
-    fn key_for_abs(&self, abs: &u32) -> Option<&GenDef> {
+    pub(crate) fn key_for_abs(&self, abs: &u32) -> Option<&GenDef> {
         self.layers().find_map(|layer| layer.by_abs.get(abs))
     }
 

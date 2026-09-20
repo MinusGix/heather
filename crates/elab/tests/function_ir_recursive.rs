@@ -325,8 +325,119 @@ fn loop_byte_predicate_uses_shared_structured_frontend() {
     let text = generate_structured_source_expansion("wrong_byte", &wrong).unwrap();
     heather_syntax::parse_file(&text).unwrap();
     assert!(image.elaborator().elab_module_source("wrong_byte", &text).is_err());
-    // A source/IR predicate certificate must not be confused with a selected
-    // LoopStep body or a native loop certificate.
+    // Nat carries still need representation proofs; the Boolean body now
+    // lowers completely, while its cursor remains universally quantified.
     assert!(reflect_elaborated_structured(&elab, "readonly_loops::count_body").is_err());
-    assert!(reflect_elaborated_structured(&elab, "readonly_loops::search_body").is_err());
+    let body = reflect_elaborated_structured(&elab, "readonly_loops::search_body").unwrap();
+    assert_eq!(body.parameters[1], heather_elab::function_ir_source::StructuredSourceType::Natural);
+    assert_eq!(body.region.inputs(), [Port { id: 0, width: 8 }, Port { id: 2, width: 8 }, Port { id: 3, width: 1 }]);
+    assert_eq!(body.region.outputs(), [Port { id: 4, width: 1 }, Port { id: 5, width: 1 }]);
+    assert!(matches!(body.region, StructuredRegion::Compose { .. }));
+    let text = generate_structured_source_expansion("search_body", &body).unwrap();
+    elab.elab_module_source("search_body_agreement", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+}
+
+const COMPOSED_SOURCE: &str = r#"
+import bitvec; import bool;
+inductive Decision<A> { Yield(value: A), Stop(value: A) }
+fn below(a, b: BitVec(8)) → Bool { bitvec::unsigned_lt_bit(8, a, b) }
+fn choose(a, b: BitVec(8)) → Bool {
+    match below(a, b) { False => False, True => True }
+}
+fn relay(ignored: Nat, a, b: BitVec(8), old: BitVec(8)) → Decision<BitVec(8)> {
+    match choose(b, bitvec::add(8, a, b)) {
+        False => Yield(old),
+        True => Stop(bitvec::sub(8, a, old)),
+    }
+}
+fn tail_helper(a, b: BitVec(8)) → Bool { below(b, bitvec::add(8, a, b)) }
+fn ignore_natural(n: Nat, bit: Bool) → Bool { bit }
+fn used_natural(n: Nat, bit: Bool) → Bool { match n { Zero => bit, Succ(_) => False } }
+inductive Mixed<A> { One(value: A), Two(value: Nat) }
+fn mixed_result(a: Bool) → Mixed<Bool> { One(a) }
+"#;
+
+#[test]
+fn composed_helpers_and_generic_choice_results_check() {
+    let mut elab = source_elaborator();
+    elab.elab_module_source("composed_source", COMPOSED_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(COMPOSED_SOURCE)));
+    for name in ["relay", "tail_helper", "ignore_natural"] {
+        let reflected = reflect_elaborated_structured(&elab, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let text = generate_structured_source_expansion(name, &reflected).unwrap();
+        elab.elab_module_source(&format!("{name}_agreement"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    }
+    for name in ["used_natural", "mixed_result"] {
+        assert!(reflect_elaborated_structured(&elab, name).is_err(), "must refuse {name}");
+    }
+    let reflected = reflect_elaborated_structured(&elab, "relay").unwrap();
+    assert_eq!(reflected.region.outputs(), [Port { id: 4, width: 8 }, Port { id: 5, width: 1 }]);
+    let image = elab.semantic_image();
+    let stale_text = generate_structured_source_expansion("stale_helper", &reflected).unwrap();
+    let changed_helper = COMPOSED_SOURCE.replace("bitvec::unsigned_lt_bit(8, a, b)", "bitvec::unsigned_lt_bit(8, b, a)");
+    assert_ne!(changed_helper, COMPOSED_SOURCE);
+    let mut changed = source_elaborator();
+    changed.elab_module_source("composed_source", &changed_helper).unwrap_or_else(|e| panic!("{}", e.render(&changed_helper)));
+    reject_structured(&changed.semantic_image(), "stale_helper", &stale_text);
+    let mut swapped = reflected.clone();
+    swapped.choice.as_mut().unwrap().constructors.swap(0, 1);
+    reject_structured(&image, "swapped_constructors", &generate_structured_source_expansion("swapped", &swapped).unwrap());
+    let mut wrong_exit = reflected.clone();
+    let StructuredRegion::Compose { continuation, .. } = &mut wrong_exit.region else { panic!("expected structured predicate producer") };
+    let StructuredRegion::Conditional { when_false, .. } = &mut **continuation else { panic!() };
+    let StructuredRegion::Dataflow(leaf) = &mut **when_false else { panic!() };
+    let Node::Const { value, .. } = leaf.nodes.last_mut().unwrap() else { panic!() };
+    *value = 1;
+    reject_structured(&image, "wrong_exit", &generate_structured_source_expansion("wrong_exit", &wrong_exit).unwrap());
+    let mut wrong_payload = reflected.clone();
+    let StructuredRegion::Compose { continuation, .. } = &mut wrong_payload.region else { panic!() };
+    let StructuredRegion::Conditional { when_true, .. } = &mut **continuation else { panic!() };
+    let StructuredRegion::Dataflow(leaf) = &mut **when_true else { panic!() };
+    let Node::Sub { left, right, .. } = leaf.nodes.iter_mut().find(|node| matches!(node, Node::Sub { .. })).unwrap() else { panic!() };
+    std::mem::swap(left, right);
+    reject_structured(&image, "wrong_payload", &generate_structured_source_expansion("wrong_payload", &wrong_payload).unwrap());
+    let mut unavailable = reflected;
+    let StructuredRegion::Compose { continuation, .. } = &mut unavailable.region else { panic!() };
+    let StructuredRegion::Conditional { inputs, .. } = &mut **continuation else { panic!() };
+    inputs.push(Port { id: 999, width: 8 });
+    assert!(heather_elab::function_ir_cert::validate_structured_region(&unavailable.region).unwrap_err().contains("not available"));
+}
+
+fn reject_structured(image: &heather_elab::SemanticImage, name: &str, source: &str) {
+    heather_syntax::parse_file(source).expect("mutation must parse");
+    let error = image.elaborator().elab_module_source(name, source).expect_err("dishonest source certificate must fail");
+    let message = error.render(source);
+    assert!(!message.contains("unknown") && !message.contains("not in scope"), "wrong rejection: {message}");
+}
+
+#[test]
+fn structured_composition_model_checks_open_contracts() {
+    let mut elab = source_elaborator();
+    let model = include_str!("../../../lib/function_ir.hthr");
+    elab.elab_module_source("function_ir", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let positive = r#"
+import function_ir; import list; import logic;
+theorem composition(prefix, next: StructuredRegion, values: Valuation(),
+    first: StructuredRegionValid(prefix),
+    bindings: InterfaceSubset(structured_inputs(next).entries, structured_inputs(prefix).entries ++ structured_outputs(prefix).entries),
+    last: StructuredRegionValid(next), a: StructuredRegionHolds(values, prefix), b: StructuredRegionHolds(values, next)):
+    StructuredRegionValid(Compose(prefix, next)) ∧ StructuredRegionHolds(values, Compose(prefix, next)) {
+    ⟨structured_compose_valid(prefix, next, first, bindings, last), structured_compose_holds(values, prefix, next, a, b)⟩
+}
+"#;
+    elab.elab_module_source("composition_laws", positive).unwrap_or_else(|e| panic!("{}", e.render(positive)));
+    let negative = positive.replace("structured_compose_holds(values, prefix, next, a, b)", "structured_compose_holds(values, prefix, next, a, a)");
+    assert_ne!(negative, positive);
+    reject_structured(&elab.semantic_image(), "wrong_continuation", &negative);
+}
+
+#[test]
+fn helper_expansion_has_a_structural_depth_bound() {
+    let mut elab = source_elaborator();
+    let mut source = String::from("import bitvec; import bool; fn helper0(a, b: BitVec(8)) → Bool { True }\n");
+    for i in 1..=32 {
+        source.push_str(&format!("fn helper{i}(a, b: BitVec(8)) → Bool {{ helper{}(a, b) }}\n", i - 1));
+    }
+    elab.elab_module_source("helper_depth", &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+    assert!(reflect_elaborated_structured(&elab, "helper31").is_ok());
+    assert!(reflect_elaborated_structured(&elab, "helper32").unwrap_err().to_string().contains("deep helper"));
 }

@@ -65,6 +65,9 @@ from commit 4db435c and is not retained as active compiler infrastructure.
 
 ## Log
 
+- 2026-09-20: [[native-bounded-loop-certificates]] now source-certifies the complete
+  search body through general helper composition and two-constructor scalar
+  results. Physical body/loop realization and Nat counting remain outstanding.
 - 2026-09-20: By user direction, removed the two specialized buffer export profiles, their generators, five model modules, dedicated acceptance targets, examples/drivers, and build guides. Removed the profile-only parameterized valuation helper. General arithmetic, structured lowering, call summaries, shared-value/save-slot support, and test-isolation fixes remain. The implementation queue is now recursive source conditionals, [[function-ir-bounded-readonly-loop]], [[native-bounded-loop-certificates]], then this two-client integration check. The old scanner issues are retired as removed/superseded, without claiming their proofs were completed. Full-suite validation is in progress.
 - 2026-09-20: Cleanup validation: plain scripts/test passed 2832 tests, 0 failed, 5 ignored. The count is three lower because the two retired buffer-profile targets contained three tests. Updated documentation links, issue tracking, and git diff --check pass. No references to the retired profiles remain in crates/, lib/, or examples/. The shared-path implementation issues remain open; this round removes the prototypes and establishes the iteration queue.
 - 2026-09-20: Started [[function-ir-recursive-structured-lowering]] with source reflection,

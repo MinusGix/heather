@@ -8,7 +8,8 @@ a typed region plus a kernel-checked equality with the actual source function.
 There is one evaluator, `loop_run`, for both source and IR meaning.
 
 This does not yet insert a loop into the existing raw `StructuredRegion` node
-family. That family currently admits fixed-width dataflow and conditionals;
+family. That family currently admits fixed-width dataflow, conditionals, and
+composition of structured producers with continuations;
 `ReadonlyLoop<C>` specifies the typed loop interface that native selection must
 realize. In particular, a checked step reference is not evidence that its body
 has been selected into machine instructions.
@@ -122,10 +123,31 @@ The `byte_equal` helper used by both loop clients now reflects into the existing
 expansion certificate. The certificate renderer folds that same IR and retains
 DAG sharing. There is no additional predicate AST or loop-specific node family.
 
-This is a prerequisite for body lowering, not its completion. Calls to helpers,
-Nat-to-word refinement, `LoopStep` result bindings, and physical selection at
-byte/Boolean widths remain outstanding. In particular, `count_body` and
-`search_body` still decline as whole functions. The native export adapter keeps
-its explicit two-`BitVec(64)`-input, `BitVec(64)`-result restriction; source
-expansion certificates do not establish a physical execution or a global
+The complete `search_body` now follows this path too. Transparent monomorphic
+Boolean helpers are reflected into shared regions, including their conditional
+bodies and scalar argument computations. `Compose(prefix, continuation)` lets a
+structured producer feed a later region while retaining inherited inputs by
+port ID. Its validity requires continuation inputs to be available from the
+prefix interface; its semantic contract composes both regions under the same
+valuation. Helper expansion declines cycles or depth beyond 32 functions and
+allocates fresh values only below ID 16384.
+
+Results from a nonrecursive two-constructor family with one common scalar type
+parameter and one field per constructor use two ordinary result ports: payload,
+then a one-bit discriminator. Nominal constructor identities are recovered at
+the source boundary. This handles `LoopStep<Bool>` without a loop-specific IR
+node and is also tested with an unrelated family carrying `BitVec(8)`. The
+source renderer currently accepts one result from each composed prefix.
+
+The unused Nat cursor has no machine port but remains universally quantified in
+the source certificate. Consuming a Nat still requires a representation proof;
+`count_body` therefore remains unsupported. The search certificate checks the
+whole body against its actual source definition, including helper meaning;
+stale helpers, swapped constructors, and changed payloads are rejected.
+
+Physical selection of structured producers, byte/Boolean operations, and
+multiple results remains outstanding, followed by guarded reads and complete
+bounded-loop traces. The selector explicitly declines `Compose`. The native
+export adapter keeps its two-`BitVec(64)`-input, `BitVec(64)`-result restriction;
+source expansion certificates do not establish physical execution or a global
 `StructuredRegionHolds` witness.

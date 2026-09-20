@@ -88,6 +88,7 @@ fn select_here(
     if region.outputs().len() != 1 { return Err(LoweringError::OutputCount(region.outputs().len())); }
     let output = (region.outputs()[0], requested_output);
     let (body, clobbered, byte_length) = match region {
+        StructuredRegion::Compose { .. } => return Err(LoweringError::UnsupportedStructuredProducer),
         StructuredRegion::Dataflow(region) => {
             let dag = lower_dag(region, &registers, temporaries, requested_output)?;
             let length = dag.instructions.iter().map(|i| i.canonical_length()).sum();

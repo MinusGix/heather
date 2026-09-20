@@ -17,7 +17,7 @@ structured graph or inventing bespoke generators for every shape.
 
 ## Acceptance
 
-- Recursively lower `Dataflow`, `Sequence`, and `Conditional` through one
+- Recursively lower `Dataflow`, `Sequence`, `Compose`, and `Conditional` through one
   structured selection interface.
 - Carry multiple live prefix outputs and inherited inputs by stable port ID,
   with explicit placement environments rather than positional special cases.
@@ -82,6 +82,13 @@ model, profile flag, kernel extension, or raised resource limit was added.
 
 ## Log
 
+- 2026-09-20: The whole-body frontend checkpoint under
+  [[native-bounded-loop-certificates]] adds shared Compose regions and generic
+  payload/discriminator source results. Compose validity and semantics have
+  reusable open contracts, and whole-body source equality is kernel-checked.
+  Physical structured-producer selection explicitly declines for now; composing
+  its execution certificates and reconciling multiple physical results remain
+  open here and in [[function-ir-x86-join-placement]].
 - 2026-09-20: Architecture review at 4db435c recommends this as the first implementation checkpoint: nested pure source conditionals through recursive structured lowering before adding buffer loops. docs/native-compiler-architecture-review.md records the findings; [[native-shared-lowering-milestone]] owns the end-to-end two-client acceptance criterion. No backend changes were made in the review.
 - 2026-09-20: First implementation slice: added elaborated-source reflection of nested
   unsigned Boolean matches into the existing StructuredRegion, with payload

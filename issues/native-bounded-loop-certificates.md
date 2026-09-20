@@ -69,6 +69,20 @@ obligations here; they were not silently fixed by the semantic interface.
 
 ## Log
 
+- 2026-09-20: Complete search_body now reflects through shared structured IR and
+  receives a kernel-checked source expansion certificate. Added general Compose
+  for structured producers feeding continuations, with shared validity/semantic
+  contracts; transparent monomorphic Boolean helpers retain inherited inputs and
+  computed scalar arguments. Generic two-constructor results use ordinary payload
+  and discriminator ports, with nominal constructors restored at the source edge.
+  The unused Nat cursor remains in the source theorem without a machine port;
+  consumed Nat values still decline. An unrelated BitVec-carrying choice exercises
+  the same implementation. Controls reject stale helper meaning, swapped result
+  constructors, wrong discriminator/payload, unavailable bindings, and excessive
+  helper depth. All ten focused tests pass. Plain scripts/test passes 2850 tests,
+  0 failed, 5 ignored; diff and issue consistency checks pass. Physical
+  Compose selection explicitly declines. Native multi-result/body execution,
+  guarded reads, Nat representation, symbolic edges, and bounded traces remain.
 - 2026-09-20: Started the shared-body prerequisite by generalizing the existing structured
   source reflector and IR-based source expansion renderer. Typed parameter lists
   now admit Bool and literal BitVec widths 0–64, with matching operation widths,

@@ -471,6 +471,7 @@ pub enum LoweringError {
     InvalidStructuredRegion(String),
     StructuredPath { path: String, reason: Box<LoweringError> },
     UnsupportedStructuredRegion,
+    UnsupportedStructuredProducer,
     MissingConditionPlacement(u64),
     UnsupportedSequenceInterface,
     UnsupportedJoinArm,
@@ -535,6 +536,7 @@ impl fmt::Display for LoweringError {
             LoweringError::InvalidStructuredRegion(message) => {
                 write!(f, "invalid structured region: {message}")
             }
+            LoweringError::UnsupportedStructuredProducer => write!(f, "structured producer composition is not selected yet"),
             LoweringError::UnsupportedStructuredRegion => write!(
                 f,
                 "the first x86 conditional lowering requires two dataflow leaves",

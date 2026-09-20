@@ -650,6 +650,7 @@ fn BlockArgumentsHold(values: Valuation(), arguments: BlockArguments()) → Type
 inductive StructuredRegion {
     Dataflow(region: Region),
     Sequence(prefix: Region, continuation: StructuredRegion),
+    Compose(prefix: StructuredRegion, continuation: StructuredRegion),
     Conditional(
         inputs: Ports,
         condition: Nat,
@@ -663,6 +664,7 @@ fn structured_inputs(region: StructuredRegion) → Ports {
     match region {
         Dataflow(body) => body.inputs,
         Sequence(prefix, _) => prefix.inputs,
+        Compose(prefix, _) => structured_inputs(prefix),
         Conditional(inputs, _, _, _, _, _) => inputs,
     }
 }
@@ -671,6 +673,7 @@ fn structured_outputs(region: StructuredRegion) → Ports {
     match region {
         Dataflow(body) => body.outputs,
         Sequence(_, continuation) => structured_outputs(continuation),
+        Compose(_, continuation) => structured_outputs(continuation),
         Conditional(_, _, _, outputs, _, _) => outputs,
     }
 }
@@ -723,6 +726,11 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
             (InterfaceSubset(structured_inputs(continuation).entries,
                 prefix.inputs.entries ++ prefix.outputs.entries) ∧
              StructuredRegionValid(continuation)),
+        Compose(prefix, continuation) =>
+            StructuredRegionValid(prefix) ∧
+            (InterfaceSubset(structured_inputs(continuation).entries,
+                structured_inputs(prefix).entries ++ structured_outputs(prefix).entries) ∧
+             StructuredRegionValid(continuation)),
         Conditional(inputs, condition, arguments, outputs,
             when_true, when_false) =>
             PortEntriesUnique(inputs.entries) ∧
@@ -743,6 +751,9 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
         Dataflow(body) => RegionHolds(body, values),
         Sequence(prefix, continuation) =>
             RegionHolds(prefix, values) ∧
+            StructuredRegionHolds(values, continuation),
+        Compose(prefix, continuation) =>
+            StructuredRegionHolds(values, prefix) ∧
             StructuredRegionHolds(values, continuation),
         Conditional(_, condition, _, _, when_true, when_false) =>
             match bitvec::head_bit(0, values(1, condition)) {
@@ -1065,3 +1076,16 @@ theorem sum4_denotes(a, b, c, d: BitVec(64), values: Valuation(),
             c_value, d_value, graph.right.left),
         graph.right.right.left)
 }
+
+// Structured producer composition retains both computations' equations and
+// exposes only the producer interface to the following region.
+theorem structured_compose_valid(prefix, continuation: StructuredRegion,
+    first: StructuredRegionValid(prefix),
+    bindings: InterfaceSubset(structured_inputs(continuation).entries,
+        structured_inputs(prefix).entries ++ structured_outputs(prefix).entries),
+    next: StructuredRegionValid(continuation)):
+    StructuredRegionValid(Compose(prefix, continuation)) { ⟨first, ⟨bindings, next⟩⟩ }
+
+theorem structured_compose_holds(values: Valuation(), prefix, continuation: StructuredRegion,
+    first: StructuredRegionHolds(values, prefix), next: StructuredRegionHolds(values, continuation)):
+    StructuredRegionHolds(values, Compose(prefix, continuation)) { ⟨first, next⟩ }

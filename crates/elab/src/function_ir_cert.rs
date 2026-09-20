@@ -101,6 +101,8 @@ pub struct BlockArgument {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StructuredRegion {
     Dataflow(Region),
+    /// A structured producer feeds explicitly bound values to a continuation.
+    Compose { prefix: Box<StructuredRegion>, continuation: Box<StructuredRegion> },
     Sequence {
         prefix: Region,
         continuation: Box<StructuredRegion>,
@@ -150,6 +152,7 @@ impl StructuredRegion {
         match self {
             Self::Dataflow(region) => &region.inputs,
             Self::Sequence { prefix, .. } => &prefix.inputs,
+            Self::Compose { prefix, .. } => prefix.inputs(),
             Self::Conditional { inputs, .. } => inputs,
         }
     }
@@ -157,7 +160,7 @@ impl StructuredRegion {
     pub fn outputs(&self) -> &[Port] {
         match self {
             Self::Dataflow(region) => &region.outputs,
-            Self::Sequence { continuation, .. } => continuation.outputs(),
+            Self::Sequence { continuation, .. } | Self::Compose { continuation, .. } => continuation.outputs(),
             Self::Conditional { outputs, .. } => outputs,
         }
     }
@@ -180,6 +183,15 @@ pub fn validate_structured_region(region: &StructuredRegion) -> Result<(), Strin
                         "continuation input {}:{} is not available from the prefix",
                         input.id, input.width,
                     ));
+                }
+            }
+            validate_structured_region(continuation)
+        }
+        StructuredRegion::Compose { prefix, continuation } => {
+            validate_structured_region(prefix)?;
+            for input in continuation.inputs() {
+                if !prefix.inputs().contains(input) && !prefix.outputs().contains(input) {
+                    return Err(format!("continuation input {}:{} is not available from the structured prefix", input.id, input.width));
                 }
             }
             validate_structured_region(continuation)
