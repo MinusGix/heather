@@ -148,4 +148,22 @@ counters! {
     /// intro_at_nodes` can assert the after binary emits it and the before
     /// one does not.
     intro_at_nodes,
+    /// `ITy::Sel` nodes the value machine evaluated
+    /// (`docs/intro-by-type-design.md` §3.3, §3.7). Every conversion miss
+    /// and every view of a selection re-evaluates the description's chain in
+    /// a fresh per-query arena — linear in the nesting, against the
+    /// rewriter's `3.5ⁿ` per query, but paid again per query. Whether that
+    /// re-evaluation dominates is the number stage 2 reads out of this
+    /// column beside `conv_misses`; the fix, if it does, is a
+    /// declaration-scoped memo, which is a design of its own and not a thing
+    /// to slip in.
+    sel_evals,
+    /// Selections **spelled** — `Tc::materialize` calls
+    /// (`docs/intro-by-type-design.md` §3.5). This is the rewriter running
+    /// on an `@`-derived type, i.e. exactly the exponential object the round
+    /// exists to stop building, and it is a counter rather than a comment so
+    /// that a workload reaching it is seen and not guessed. The four λ
+    /// inference arms and the non-Π/Σ/sum branch of `Tc::view` are its only
+    /// callers.
+    ity_materialized,
 }

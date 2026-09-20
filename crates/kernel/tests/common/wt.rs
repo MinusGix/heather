@@ -720,6 +720,37 @@ pub fn gen_wt_term_at(
             ty: Rc::clone(ity),
             tm: Rc::clone(lhs),
         })),
+        // pair@ / inl@ / inr@ inhabit the *un-reduced* target, which is
+        // what makes the checked spellings **nest**: the field of a `pair@`
+        // is itself checked at a `Sel { T, Fst }`, and if it is another
+        // `pair@` the checker meets a description against an annotation.
+        // That chain is where `docs/intro-by-type-design.md` §3's mechanism
+        // lives, and nothing in the synthesis arms produces it — they build
+        // one `@` form over component-form fields.
+        //
+        // Off unless `at_forms`, so the bench fixtures keep measuring the
+        // workload their baseline measured (the stage-1a finding).
+        Type::Sigma { fst_level: dl, snd_level: cl, fst, snd }
+            if b > 0 && env.at_forms && env.layer.computes() =>
+        {
+            let a = gen_wt_term_at(env, r, b / 2, fst, dl)?;
+            let snd_at = snd.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
+            let bb = gen_wt_term_at(env, r, b / 2, &snd_at, cl)?;
+            Some(rt(Term::PairAt { ty: rty(ty.clone()), fst: a, snd: bb }))
+        }
+        Type::Sum { lhs_level: dl, rhs_level: cl, lhs, rhs }
+            if b > 0 && env.at_forms && env.layer.computes() =>
+        {
+            let right = r.below(2) == 1;
+            let (summand, sl) = if right { (rhs, cl) } else { (lhs, dl) };
+            let v = gen_wt_term_at(env, r, b / 2, summand, sl)?;
+            let ty = rty(ty.clone());
+            Some(rt(if right {
+                Term::InrAt { ty, val: v }
+            } else {
+                Term::InlAt { ty, val: v }
+            }))
+        }
         // pair inhabits Σ: a : S, then b : T[a/x].
         Type::Sigma { fst_level: dl, snd_level: cl, fst, snd } if b > 0 => {
             let a = gen_wt_term_at(env, r, b / 2, fst, dl)?;

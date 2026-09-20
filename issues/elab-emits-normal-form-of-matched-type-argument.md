@@ -817,3 +817,400 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
   is unchanged as a checker: still the concrete `Tc` on syntax; `Tc<Syn>`,
   `typing::oracle` and `tests/typing_differential.rs` do not exist.
 - 2026-09-20: Coordinator: stage 1b's two stops are both answered by one change to the design, §3 rewritten (docs/intro-by-type-design.md, 2026-09-20). The `Tc<D: Dom>` migration is **withdrawn** and step 0 reverted (step 1, the bench-fixture isolation, is kept and committed): the arena finding is decisive on its own — an arena that outlives a query is +9.3 GB at `p10` before conversion's temporaries even join it — and the `UPi`/`CtxPi`/`TyPi` gap is a second symptom of the same thing (the checker was being asked to hold *values*). What replaces it: the checker holds **descriptions** — `ITy = Syn(Rc<Type>) | Sel { of, sel, at_depth }` with `Sel ∈ {Fst, Snd(a), Lhs, Rhs, Dom, Cod}` — arena-free, linear, formed only by the five `@` rules and by views of a `Sel`; consumed by `conv_ty` (structural `==` shortcut, memo keyed on `ITy`, a miss evaluates both sides into today's per-query arena) and by `view` (rewriter for `Syn` as today; value domain for `Sel` and for the `@` annotations, returning new `Sel`s for Π/Σ/Sum components and a materialized former otherwise). The three Λ inference arms materialize a `Sel` body through the rewriter — complete, never silently wrong, exponential exactly when today is, counted. The oracle is a `materialize_eagerly` mode of the same checker, so the differential tests exactly the new thing. Per-query re-evaluation cost is stage 2's first number (`sel_evals`), and a declaration-scoped memo is a separate design if it dominates. §6 item 6's refusal was of values in the checker; descriptions are what is adopted, and the distinction is the arena.
+- 2026-09-20: Implementer, **stage 1b (`ITy`/`Sel`, the rewritten §3) — landed**. The
+  migration to values is not attempted; the checker holds descriptions, no arena
+  outlives a query, and every existing rule is untouched in its logic.
+
+  ### What landed
+
+  **`crates/kernel/src/typing/ity.rs` (146 lines, new).** `ITy = Syn(Rc<Type>) |
+  Sel { of: Rc<ITy>, sel: Sel, at_depth: u32 }` with
+  `Sel ∈ {Fst, Snd(Rc<Term>), Lhs, Rhs, Dom, Cod}`, plus `TyForm` (the checker's
+  view: `Pi`/`Sigma`/`Sum`/`Other`) and `SndOf` (a Σ's codomain before the term it
+  is instantiated at is known). `pub(crate)`, never a `Type` variant, no `Debug`
+  (it is recursive; `CLAUDE.md`'s rule).
+
+  **`at_depth` means the Γ-length the *selection* denotes at**, and
+  `Sel::of_depth` derives the `of`'s from it — only `Cod` moves the scope, by one.
+  Nothing is ever weakened: the value domain's variables are de Bruijn **levels**,
+  so a description formed in a prefix of Γ evaluates in the identity environment
+  of that prefix and is already correct in the longer scope. The design's
+  "weakened to the current depth" is therefore a no-op and is not implemented as
+  one; the rewriter side (`materialize`) *does* need the prefix Γ, and takes it.
+
+  **`typing.rs`.** `tm_check`/`tm_infer` take/return `ITy`;
+  `conv_ty(expected: &ITy, inferred: &ITy)`; nine `whnf` sites behind
+  `Tc::whnf(&ITy)`; `Tc::view` / `view_expected` / `view_at`; `Tc::materialize`;
+  the `materialize_eagerly` mode and `typing::oracle` (`check_term`,
+  `infer_term`, `check_type`, `infer_type`, `check_local_ctx`,
+  `check_local_subst`), documented like `conv::oracle`.
+
+  **`conv.rs` / `conv/dom/values.rs`.** Two new crate-internal entries,
+  `conv_ity_cached` and `head_ity_cached`, each building **its own arena and
+  dropping it with the query** — `conv_type_cached`'s lifetime exactly;
+  `Conv::<Values>::ity_root`; `values::eval_ity`, which evaluates a chain and,
+  for `head_ity_cached`, reads the head and the levels and **throws the value
+  away**. No conversion arm changed. `dom.rs` is `pub(super) mod values` (one
+  word).
+
+  **`stats.rs`.** `sel_evals` and `ity_materialized`, riding `Snapshot::NAMES`.
+
+  **`tests/typing_differential.rs` (572 lines, new)** and 31 lines in
+  `tests/common/wt.rs`.
+
+  ### Six deviations from §3, each with its reason
+
+  1. **`view` returns `TyForm`, not a general head view, and only `Π`/`Σ`/`+` get
+     components.** Those are the only formers a *checking* rule descends into: of
+     the nine `whnf` sites, eight match on `CodeTy`/`CodeTm`/`UPi`/`CtxPi`/`TyPi`
+     and are served by `Tc::whnf` returning ordinary syntax, exactly as today.
+     Only the λ checking descent needs a structured view, and only the five `@`
+     rules need Σ/sum. So there is no second copy of `TyView` in the checker.
+  2. **§3.3's `TyClo::as_syn` fast path for the "other formers" branch is not
+     implemented**; that branch always goes through `materialize`. Same answer,
+     and `ity_materialized` is the counter that says whether a workload ever
+     reaches it. The fast path is an optimization with, so far, no customer.
+  3. **The cross-head memo is skipped when either side is a `Sel`** rather than
+     re-keyed on `ITy`. The bucket key is a `Type`'s discriminant plus a shallow
+     anchor; a selection has neither, and inventing one would have put a new
+     hashing decision underneath the "counters unchanged to the unit" gate. A
+     `Syn`-against-`Syn` query takes the identical path it took before.
+  4. **`Term::Lam`'s inference arm materializes too.** §3.5 names the three
+     layer-m λ arms; the term-level λ has the same shape (it puts the body's
+     inferred type inside a `Type::Pi`) and leaving it out would have been the
+     one incomplete arm.
+  5. **The five `@` rules moved out of `tm_infer_inner` into `Tc::tm_infer_at`,**
+     and `tm_infer_inner` still returns `(Type, Level)` with `tm_infer` wrapping
+     it. This is §3.2's "no existing rule constructs a `Sel`" made a property of
+     the code rather than of a review: an arm in `tm_infer_inner` *cannot*
+     return a description. Cost: one `Rc::new` per inferred type, which is the
+     allocation the design owes anyway — an `ITy::Syn` holds an `Rc`.
+  6. **`Tc::tm_check` has two thin wrappers**, `tm_check_rc` (caller already
+     holds `Rc<Type>`) and `tm_check_ty` (rule built the type itself, shallow
+     clone into an `Rc`). ~85 call sites changed by name only; no rule's logic
+     moved.
+
+  ### One thing found on the way
+
+  `typing.rs`'s `term_head` (the miss sampler's site column, behind
+  `value-metrics`) was never given the five `@` arms in stage 1a, so
+  `cargo check --features value-metrics` did **not** build at `9c16741`. Nothing
+  in `scripts/test` builds that feature — only `scripts/measure-x86-conv-miss`
+  does — which is why it was invisible. Five arms added; the feature build is
+  green. Worth a coordinator decision on whether the suite should build it.
+
+  ### `wt.rs`: where the nesting comes from
+
+  `gen_wt_term`'s `@` arms build one `@` form over component-form children, so
+  nothing in the generator produced a **nested** `@` form and the `Sel` chains
+  this round is about would never have formed. Added, gated on `at_forms` and on
+  `layer.computes()` so the bench fixtures are untouched: `gen_wt_term_at`'s
+  intro-directed descent now inhabits a Σ/sum target with `pair@`/`inl@`/`inr@`
+  annotated by the **un-reduced** target. A `pair@` field is then itself a
+  `pair@`, i.e. a description converted against an annotation. Projection chains
+  (`fst@` of `snd@`) no generator arm reaches; they are handwritten in the test.
+
+  `conv_differential.rs`, `eval_differential.rs` and `ch05_06_lemmas.rs` share
+  `gen_wt_env_at` and so got the richer streams too; all three are green.
+
+  ### `tests/typing_differential.rs`
+
+  Eight tests: three generated streams (synthesis; a negative control at a wrong
+  expected type; open terms in a non-empty Γ at a checked type), the two
+  handwritten nesting tests, a fuel sweep over nine budgets, an identity-
+  substitution stream, and one *softer* claim recorded on purpose —
+  `error_variants_agree_too` — because `agree` compares `Ok` against `Err` and
+  not the variant, and the stronger statement has in fact held.
+
+  Every stream runs over Ψ and over an `opaque(Ψ)` copy. Failures report seeds
+  only. `infer_term` is held to more than a verdict: where both modes answer,
+  each side's inferred type must be accepted by the *other* side's `check_term` —
+  the eager mode returns a spelling and the lazy one a description materialized
+  at the gate, and the two need not be syntactically equal.
+
+  **The vacuity guards matter more than the assertions.**
+  `nested_projection_chains` asserts `intro_at_nodes > 0` and `sel_evals > 0`
+  over its own run: without them a bug that stopped forming descriptions would
+  make the whole file compare the oracle against itself and stay green. The first
+  draft of the negative-control stream also asserted on refusals of
+  `perturb_conv`, which is a *conversion* perturbation and stays well typed —
+  that assertion fired, and the control is now the wrong expected type.
+
+  `scripts/test --fast -p heather-kernel`: `== suite: 400 passed, 0 failed ==`.
+- 2026-09-20: Implementer, **stage 1b gate — the counter and memory half, measured; the
+  seconds are no result and the reason is not ambiguous**.
+
+  **Provenance.** Two release binaries: `before` built from `9c16741` in
+  `/tmp/claude-1000/before-9c16741`, `after` from this tree. `cmp` says they
+  differ (byte 25). `before`'s `probes/str/p10.hthr` peak RSS came out at
+  5 751 100 KB against the **5 733 MB the previous entry recorded for the same
+  commit** — the before side is the before side.
+
+  ### Counters: identical, row for row, on every file
+
+  `heather check -L lib/std -L lib/std/parser --timings`, and
+  `--cache --cache-dir <per-binary> --only parser_primitives::complete_post` over
+  `docs/showcase/calc_parser.hthr` (each binary warmed its **own** cache dir
+  first; `--only` over a shared one is a category error).
+
+  Compared **every count column** the TSV carries — `conv_shortcut_hits`,
+  `conv_memo_hits`, `conv_misses`, `conv_out_of_fuel`, `conv_not_convertible`,
+  `eval_steps`, `eval_delta_steps`, `eval_drives`, `shift_global_nodes`,
+  `delta_body_rescopes`, `global_ref_rescopes`, `global_sig_rescopes`,
+  `check_terms`, `decls_gated`, `gendefs_pushed`, `mints_*`, `resolve_goals`,
+  `unify_calls`, `cache_hashes`, `diag_*`, the four `*_cache_*` — per item,
+  not per run:
+
+  | file | rows | count columns that moved |
+  |---|---:|---|
+  | `lib/ir_v1.hthr` | 353 | **none** |
+  | `probes/t_cp9.hthr` | 716 | **none** |
+  | `probes/t_qt3.hthr` | 716 | **none** |
+  | `probes/str/p10.hthr` | 745 | **none** |
+  | `complete_post` (`--only`) | 42 | **none** |
+
+  `intro_at_nodes`, `sel_evals`, `ity_materialized`: **0** on every row of every
+  file, as required — there is still no emitter of `@` forms, so the checker
+  must never form a description, and it does not.
+
+  ### Peak RSS: flat, which was the point
+
+  The before side was measured **twice** (the second pass is a spread sample),
+  `ru_maxrss` of the child:
+
+  | file | before #1 | before #2 | after | after vs. the before range |
+  |---|---:|---:|---:|---|
+  | `lib/ir_v1.hthr` | 634 380 | 628 948 | 629 496 | inside |
+  | `probes/t_cp9.hthr` | 2 210 196 | 2 262 780 | 2 212 764 | inside |
+  | `probes/t_qt3.hthr` | 4 003 044 | 4 120 576 | 4 039 464 | inside |
+  | `probes/str/p10.hthr` | 5 751 100 | 5 842 132 | **5 739 708** | below both |
+  | `complete_post` | — | 2 881 148 | 2 877 000 | −0.1 % |
+
+  (KB.) **`p10` is the reading this round exists for**: the withdrawn §3.7
+  design put it at 15 076 MB, ×2.63, and that is what killed the migration.
+  Descriptions put it at 5 740 MB, which is *under* both before samples. No
+  arena outlives a query, and the corpus says so.
+
+  ### Seconds: no result, and the box says why
+
+  The desktop was **not quiet**. Another session is running a test suite out of
+  the main checkout (`/home/minus/Kairos/Code/heather/target/debug/deps/
+  function_ir_composed_certificates`, `.../heather compile-x86`, at ~100 % each,
+  started 14:41 and still running at 14:54); load average 10–17 throughout.
+
+  The **before-against-before spread is larger than the before-against-after
+  delta on every file**, which is the whole finding:
+
+  | file | before #1 CPU-s | before #2 CPU-s | after CPU-s |
+  |---|---:|---:|---:|
+  | `lib/ir_v1.hthr` | 4.87 | 7.36 | 5.57 |
+  | `probes/t_cp9.hthr` | 48.19 | 66.09 | 54.81 |
+  | `probes/t_qt3.hthr` | 75.77 | 95.81 | 71.60 |
+  | `probes/str/p10.hthr` | 137.70 | 185.57 | 129.41 |
+
+  Four of four have the after inside or below the before range. The fifth,
+  `complete_post`, has one before sample (17.45 CPU-s) against 28.40 — and it is
+  the one to *ignore* most confidently, because the per-item table shows the
+  same ≈1.6× on rows whose `kernel_gate_ns` is **zero**
+  (`complete_sound` 6.86 s → 10.25 s, `recognize_sound` 1.01 ms → 2.50 ms,
+  `fail_at`, `eof_at`, …). Those are elaboration-only items. Nothing in stage 1b
+  can touch them. A uniform factor on work the change cannot reach is a machine
+  state, not a code change.
+
+  **What the round does owe, and cannot pay on this box:** the change *does* add
+  one `Rc::new` per inferred type (`Tc::tm_infer`'s wrap) and one `Arc` refcount
+  pair per `tm_check` (the `ITy::Syn` temporary). That is a real constant and it
+  should be measured by `scripts/perf ab --before … --after … --marker sel_evals
+  --samples 3` on a quiet box, which is the tool for exactly this and which I
+  did not run because an interleaved A/B against a 100 %-busy neighbour is the
+  `before-after-binary-provenance` mistake with extra steps. If the constant
+  turns out to matter, two cheap moves are available and neither touches the
+  design: `tm_check_ty` can take the `Type` by value instead of cloning it
+  (~50 sites), and `tm_check` can take a borrowed `ITyRef<'_> = Syn(&Type) |
+  Sel(&ITy)` so the checking direction — the overwhelmingly common one — pays no
+  refcount at all.
+
+  ### What is still owed on the gate
+
+  - full `scripts/test` — running, reported next;
+  - `scripts/bench --check` against the committed baseline — deliberately held
+    until the neighbouring suite finishes, per `desktop-bench-gate-for-constants`.
+
+  ### One small tool change
+
+  `scripts/timings` gained three column aliases — `at` (`intro_at_nodes`),
+  `sels` (`sel_evals`), `spelled` (`ity_materialized`) — so the round's three
+  new columns are readable the same way as every other. Note the reader
+  *refuses* `--diff` when one side's TSV predates a column, which is correct and
+  is why the tables above were computed directly from the TSVs.
+- 2026-09-20: Implementer, **the bench gate — it failed, what it caught was real, and two
+  rounds of paying it down**. This is the entry the previous one said it owed.
+
+  ### First reading: `nat/check-numeral` ×4.15
+
+  `scripts/bench --check` against the committed baseline, nine regressions:
+
+  ```
+   REGRESSED  nat/check-numeral:64                     1.47 µs → 6.10 µs (4.15×)
+   REGRESSED  nat/check-numeral:128                    3.19 µs → 13.08 µs (4.10×)
+   REGRESSED  nat/check-numeral:256                    6.41 µs → 28.28 µs (4.41×)
+   REGRESSED  nat/check-numeral:512                    14.96 µs → 59.66 µs (3.99×)
+   REGRESSED  wf/check-tree:683                        111.89 µs → 144.74 µs (1.29×)
+   REGRESSED  wf/check-tree:2963                       477.72 µs → 597.31 µs (1.25×)
+   REGRESSED  code/check-identity-recursor:3           286.21 µs → 358.87 µs (1.25×)
+   REGRESSED  code/check-identity-recursor:33          326.51 µs → 435.67 µs (1.33×)
+   REGRESSED  stack/check-numeral depth                1512 → 1173 levels in 4 MiB (3576 B/level)
+  ```
+
+  A 4× is not box noise, and this is the reading the corpus could not give: the
+  routine files are dominated by conversion, and a per-*node* constant in the
+  checker disappears into them. `nat/check-numeral` is `Succ^n Zero : Nat` and
+  therefore one `tm_infer` and one `tm_check` per node with nothing else in
+  between — the one workload where widening the checker's channels *is* the
+  measurement. **The harness earned its keep here**; without it this would have
+  shipped and been found by someone else later, in something slower.
+
+  ### The cause, and the fix
+
+  `ITy::Syn(Rc<Type>)` was the only syntax shape, so `Tc::tm_infer`'s wrap
+  `Ok((ITy::Syn(Rc::new(ty)), l))` was **one `malloc` per term node**, against
+  a baseline whose per-node work is a `discriminant` compare.
+
+  `ITy` gained a second syntax variant:
+
+  ```
+  ITy = Owned(Type)        -- the value the rule already had on its stack, moved
+      | Syn(Rc<Type>)      -- syntax that is genuinely shared (an `@` annotation)
+      | Sel { of, sel, at_depth }
+  ```
+
+  `as_syn` and a hand-written `PartialEq` treat the two as one case, so no rule
+  and no view distinguishes them; the shape a value is *held* in is not part of
+  the judgment. `tm_infer` wraps with `Owned` (a move), `tm_check_ty` builds
+  `Owned` (a shallow clone, no allocation), `tm_check_rc` keeps `Syn`.
+
+  **That one change took 4.15× → 1.64× and cleared four rows outright** —
+  `wf/check-tree` and `code/check-identity-recursor` are back inside tolerance,
+  which is the tell that the allocation, not the widening, was their whole
+  cost.
+
+  A second pass — `#[inline(always)]` on the two `tm_check` wrappers, which
+  were costing a stack frame per level of a recursion that is measured by
+  frames — took it to **1.42×** and recovered 46 stack levels.
+
+  ### Where it stands, on a **quiet** box (load 1.9; the neighbouring session
+  had finished)
+
+  ```
+   REGRESSED  nat/check-numeral:64      1.47 µs →  2.16 µs (1.47×)
+   REGRESSED  nat/check-numeral:128     3.19 µs →  4.42 µs (1.39×)
+   REGRESSED  nat/check-numeral:256     6.41 µs →  9.27 µs (1.45×)
+   REGRESSED  nat/check-numeral:512    14.96 µs → 21.18 µs (1.42×)
+   REGRESSED  stack/check-numeral depth  1512 → 1341 levels in 4 MiB (3128 B/level)
+  ```
+
+  Everything else passes, including the three rows that measure the same
+  checker over bigger objects: `wf/check-tree`, `code/check-identity-recursor`
+  and `check/generated-terms` (the broad checker-throughput row). So what is
+  left is a per-node constant on the narrowest possible workload, plus the
+  +358 B/frame that one `ITy` per level costs.
+
+  **I did not `--save`**, per the brief. The committed baseline is untouched and
+  the verdict above is reproducible. Filed as
+  `issues/ity-widens-the-checker-per-node-constant.md` with the two candidate
+  fixes (a borrowing `ITyRef` for the checking direction; or accept and
+  re-record) — the choice is the coordinator's, because "a 1.4× per-node
+  constant is the right price for removing a 3.5ⁿ" is a judgment about the
+  round, not about the code.
+
+  ### The suite, twice
+
+  `== suite: 2835 passed, 0 failed, 5 ignored ==` on the tree *before* the
+  `Owned` fix (2827 at stage 1a, plus the differential's 8), with
+  `showcase_gate`'s `calc_text` at **9.8 GiB peak** — the number `CLAUDE.md`
+  and the gate's own comment quote, against the withdrawn design's 12.5 GiB.
+  Nothing to re-record. The suite is being re-run on the tree *after* the
+  `Owned` fix and the inline hints, since those landed after it went green; that
+  result is the next entry.
+- 2026-09-20: Implementer, **stage 1b handover: the gate, on the final tree, on a quiet
+  box** — and the one number the coordinator has to decide about.
+
+  ### Green
+
+  - **`scripts/test`: `== suite: 2835 passed, 0 failed, 5 ignored ==`**, run
+    twice: once on the tree before the `ITy::Owned` fix and once after it, since
+    the fix landed after the first run went green. 2827 at stage 1a plus the
+    differential's 8.
+  - **`showcase_gate` / `calc_text`: `ok  246.0 s wall  244.2 s cpu  9.8 GiB
+    peak`** — the 9.8 GiB `CLAUDE.md` and the gate's comment quote, unchanged.
+    (The withdrawn §3.7 arena had it at 12.5 GiB; nothing to re-record.)
+  - **Counters: not one column moved, on any of the five files.** Every count
+    column the TSV carries (27 of them), per item:
+
+    | file | rows | moved |
+    |---|---:|---|
+    | `lib/ir_v1.hthr` | 353 | none |
+    | `probes/t_cp9.hthr` | 716 | none |
+    | `probes/t_qt3.hthr` | 716 | none |
+    | `probes/str/p10.hthr` | 745 | none |
+    | `complete_post` (`--only`) | 42 | none |
+
+    `intro_at_nodes`, `sel_evals`, `ity_materialized`: **0** everywhere. No
+    emitter, so no description is ever formed, so the checker is the old
+    checker — which is the property the whole stage was designed around.
+  - **Peak RSS: no direction.** −0.1 % to +4.1 % across the five; `p10` at
+    5 774 MB against 5 755 MB, i.e. +0.3 %, where the withdrawn design was
+    15 076 MB. The arena question is settled.
+
+  ### The decision: a per-node constant, and the corpus split that explains it
+
+  `scripts/bench --check` **fails**, on five rows, after two rounds of paying it
+  down (4.15× → 1.64× → 1.42×; the previous entry has the mechanism):
+
+  ```
+   REGRESSED  nat/check-numeral:64      1.47 µs →  2.16 µs (1.47×)
+   REGRESSED  nat/check-numeral:128     3.19 µs →  4.42 µs (1.39×)
+   REGRESSED  nat/check-numeral:256     6.41 µs →  9.27 µs (1.45×)
+   REGRESSED  nat/check-numeral:512    14.96 µs → 21.18 µs (1.42×)
+   REGRESSED  stack/check-numeral depth  1512 → 1341 levels in 4 MiB (3128 B/level)
+  ```
+
+  The corpus, measured on the same quiet box with the same binaries, says the
+  same thing and says **where it does and does not matter**:
+
+  | file | before CPU-s | after CPU-s | | |
+  |---|---:|---:|---|---|
+  | `lib/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations |
+  | `probes/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | " |
+  | `probes/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | " |
+  | `probes/str/p10.hthr` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
+  | `complete_post` | 17.21 | 14.54 | **−16 %** | conversion over a replayed prefix |
+
+  One constant, paid once per **term node**. A file whose time is conversion
+  does not notice it and is, if anything, faster. A file made of many small
+  declarations pays it in full. **The files this round exists for are the
+  second kind** — which is the uncomfortable half of the reading and the reason
+  this is a decision and not a note.
+
+  Filed as `issues/ity-widens-the-checker-per-node-constant.md` with the split,
+  the two attempts already made, and the one candidate that would close it
+  without touching the design (`ITyRef<'a> = Syn(&'a Type) | Sel(&'a ITy)` for
+  the checking direction, which constructs nothing in the common case).
+
+  **The three things to decide, in order:**
+
+  1. **Is the constant paid or fixed before stage 2?** Fixing it is a contained
+     round against a named candidate; paying it is `scripts/bench --save` with
+     the issue as the record. I did **not** `--save` — the committed baseline is
+     untouched and the verdict reproduces.
+  2. **Does the suite build `--features value-metrics`?** It does not today, and
+     that is how stage 1a's missing `term_head` arms survived (fixed here).
+  3. **Does `probes/` get committed or `.gitignore`d?** Still open from the
+     stage-1a handover, and now three rounds have depended on it.
+
+  ### Tree state
+
+  Nothing committed. `crates/kernel/benches/baseline.tsv` is the **committed**
+  one (the previous implementer's fresh control was overwritten by
+  `git checkout` before this round began; `git status` is clean on it).
+  `probes/` is still untracked.

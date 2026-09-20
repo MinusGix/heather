@@ -62,7 +62,7 @@ use crate::term::{
 
 use super::{Conv, Env, R, NC};
 
-mod values;
+pub(super) mod values;
 
 pub(super) use values::Values;
 

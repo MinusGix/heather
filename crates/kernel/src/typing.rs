@@ -51,6 +51,29 @@
 //! `check_global_ctx`, then `check_local_ctx`, then `check_type` on the
 //! goal type, then `check_term`.
 //!
+//! **What a rule passes to the next.** Not a [`Type`] but an
+//! [`ity::ITy`]: syntax, or an un-spelled *description* of a component of
+//! something that reduces to a former
+//! (`docs/intro-by-type-design.md` §3.2). Every rule but the five checked
+//! spellings produces `Syn` and behaves exactly as it did before
+//! descriptions existed; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
+//! consume `Sel`, whose point is that the component is never spelled — the
+//! object the elaborator used to write into an annotation is `3.5ⁿ` in the
+//! nesting as syntax and linear as a value graph, and the checker now names
+//! it instead of building it. A description is consumed by exactly two
+//! operations, [`Tc::conv_ty`] and [`Tc::view`], each of which evaluates it
+//! in a **per-query** value arena and keeps nothing that outlives the query.
+//! Where a description must become syntax after all — the four λ inference
+//! arms, which wrap the body's inferred type in a `Π`-shaped former —
+//! [`Tc::materialize`] runs the rewriter, which is complete, is the answer
+//! this checker gave before, and is counted (`crate::stats`'s
+//! `ity_materialized`).
+//!
+//! [`oracle`] is the same checker with every description spelled on
+//! formation, and `tests/typing_differential.rs` holds the two to the same
+//! verdicts — the compensating control for the weakening, in the shape
+//! [`crate::conv::oracle`] established for conversion.
+//!
 //! **Fuel.** The checker's own recursion is structural, so it terminates
 //! without a budget; only conversion and weak-head normalization need one.
 //! `fuel` is granted *per conversion call / per normalization* (not shared
@@ -67,7 +90,11 @@ use std::hash::{Hash, Hasher};
 use std::mem::{discriminant, Discriminant};
 use std::sync::Arc as Rc;
 
-use crate::conv::ConvError;
+pub(crate) mod ity;
+
+use ity::{ITy, Sel, SndOf, TyForm};
+
+use crate::conv::{conv_ity_cached, head_ity_cached, ConvError, ITyHead};
 #[cfg(not(feature = "value-metrics"))]
 use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
@@ -184,7 +211,7 @@ fn check_global_bindings<'a>(
         let env = binding_env(&prefix, univs);
         check_global_binding_declaration(tc, &env, b)?;
         if let GlobalBinding::Tm { ctx, layer, ty, level, body: Some(t) } = b {
-            tc.tm_check(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
+            tc.tm_check_rc(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
         }
         drop(env);
         prefix.push(b.clone());
@@ -355,7 +382,7 @@ pub fn check_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc::new(fuel).tm_check(&env, t, ty, level)
+    Tc::new(fuel).tm_check_ty(&env, t, ty, level)
 }
 
 /// [`check_term`] while accumulating value-machine activity in `metrics`.
@@ -378,7 +405,7 @@ pub fn check_term_profiled(
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
-    Tc::new(fuel).tm_check(&env, t, ty, level)
+    Tc::new(fuel).tm_check_ty(&env, t, ty, level)
 }
 
 /// `⊢_i t : ? @ ?` — infer the canonical type and level of `t`.
@@ -397,7 +424,126 @@ pub fn infer_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc::new(fuel).tm_infer(&env, t)
+    let (ty, l) = Tc::new(fuel).tm_infer_syn(&env, t)?;
+    Ok(((*ty).clone(), l))
+}
+
+/// The **differential oracle**: the checker with its deferred types spelled
+/// the moment they are formed (`docs/intro-by-type-design.md` §3.6).
+///
+/// Not a checking API. Nothing in the kernel calls anything here, and
+/// nothing outside a test should — [`check_term`] and its siblings are the
+/// checker. This module exists for the same reason [`crate::conv::oracle`]
+/// does, one seam further in: stage 1b moved `typing.rs` from "the type a
+/// rule passes on is syntax" to "…is a description", and the compensating
+/// control for a weakening like that is standing mechanical evidence that
+/// the two answers agree.
+///
+/// Under [`Tc::eager`] every [`ity::ITy::Sel`] is materialized through the
+/// rewriter as soon as it would be formed, and the five `@` rules view
+/// their annotation through the rewriter too — so this *is* the checker as
+/// it stood before descriptions existed, running the same arms on the same
+/// input. `tests/typing_differential.rs` runs the pair over `wt.rs`'s
+/// well-typed streams with the checked spellings on and requires
+/// verdict-for-verdict agreement, which is machine adequacy
+/// (`docs/nbe-conversion-design.md` §11.2) applied at the typing seam.
+pub mod oracle {
+    use super::*;
+
+    /// [`super::check_term`] with every selection spelled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_term(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        t: &Term,
+        ty: &Type,
+        level: &Level,
+        fuel: u64,
+    ) -> R {
+        Tc::eager(fuel).tm_check_ty(&oracle_env(psi, univs, layer, gamma), t, ty, level)
+    }
+
+    /// [`super::infer_term`] with every selection spelled.
+    pub fn infer_term(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        t: &Term,
+        fuel: u64,
+    ) -> R<(Type, Level)> {
+        let (ty, l) =
+            Tc::eager(fuel).tm_infer_syn(&oracle_env(psi, univs, layer, gamma), t)?;
+        Ok(((*ty).clone(), l))
+    }
+
+    /// [`super::check_type`] with every selection spelled. Type formation
+    /// never forms one, so this is the same function twice — it is here so
+    /// a test can hold the whole gate, not a hand-picked half of it.
+    pub fn check_type(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        ty: &Type,
+        level: &Level,
+        fuel: u64,
+    ) -> R {
+        Tc::eager(fuel).ty_check(&oracle_env(psi, univs, layer, gamma), ty, level)
+    }
+
+    /// [`super::infer_type`] with every selection spelled.
+    pub fn infer_type(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        ty: &Type,
+        fuel: u64,
+    ) -> R<Level> {
+        Tc::eager(fuel).ty_infer(&oracle_env(psi, univs, layer, gamma), ty)
+    }
+
+    /// [`super::check_local_ctx`] with every selection spelled.
+    pub fn check_local_ctx(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        fuel: u64,
+    ) -> R {
+        let env = oracle_env(psi, univs, layer, &LocalCtx::nil());
+        Tc::eager(fuel).ctx_wf(&env, layer, gamma)
+    }
+
+    /// [`super::check_local_subst`] with every selection spelled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_local_subst(
+        psi: &GlobalCtx,
+        univs: u32,
+        layer: Layer,
+        gamma: &LocalCtx,
+        delta: &LocalSubst,
+        target: &LocalCtx,
+        fuel: u64,
+    ) -> R {
+        Tc::eager(fuel)
+            .subst_ck(&oracle_env(psi, univs, layer, gamma), delta, target)
+    }
+
+    fn oracle_env(psi: &GlobalCtx, univs: u32, layer: Layer, gamma: &LocalCtx) -> Env {
+        Env {
+            psi: psi.clone(),
+            cache: Rc::new(GlobalCache::new()),
+            gamma: gamma.clone(),
+            layer,
+            univs,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
+        }
+    }
 }
 
 /// `⊢_i δ : Δ` — the local substitution `δ` maps `Δ` into `Γ`. Presupposes
@@ -511,6 +657,14 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
 struct Tc {
     /// Per-conversion / per-normalization budget (see module docs).
     fuel: u64,
+    /// **The oracle mode** (`docs/intro-by-type-design.md` §3.6). Under it
+    /// an [`ITy::Sel`] is spelled the moment it would be formed and the five
+    /// `@` rules view their annotation through the rewriter, so the checker
+    /// is the one that existed before descriptions did: today's answer, at
+    /// today's cost, on the same arms. That is what makes
+    /// `tests/typing_differential.rs` test *only* the new thing — that
+    /// evaluating a description and rewriting it agree.
+    materialize_eagerly: bool,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -636,8 +790,18 @@ struct ConvMemo {
 
 impl Tc {
     fn new(fuel: u64) -> Tc {
+        Tc::with_mode(fuel, false)
+    }
+
+    /// The differential oracle's checker: [`Tc::new`] with §3.6's mode bit.
+    fn eager(fuel: u64) -> Tc {
+        Tc::with_mode(fuel, true)
+    }
+
+    fn with_mode(fuel: u64, materialize_eagerly: bool) -> Tc {
         Tc {
             fuel,
+            materialize_eagerly,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             #[cfg(feature = "value-metrics")]
@@ -754,17 +918,34 @@ impl Tc {
         if a.equiv(b) { Ok(()) } else { Err(TypeError::LevelMismatch) }
     }
 
-    /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`.
-    fn conv_ty(&self, env: &Env, expected: &Type, inferred: &Type, l: &Level) -> R {
+    /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`, over the checker's
+    /// **descriptions** (`docs/intro-by-type-design.md` §3.3).
+    ///
+    /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
+    /// it is the α-test it has always been, and two equal selections are the
+    /// same type by Determinacy. A query with a selection on either side
+    /// skips the cross-head memo — the memo's bucket key is built from a
+    /// `Type`'s outer constructor and anchor, a selection has neither, and
+    /// keeping the key exactly as it was is what makes the counters on an
+    /// `@`-free declaration identical to the unit. Such a query goes
+    /// straight to [`conv_ity_cached`], whose arena is this query's, as
+    /// `conv_type_cached`'s always was.
+    fn conv_ty(&self, env: &Env, expected: &ITy, inferred: &ITy, l: &Level) -> R {
         // `Conv::ty_root` spends one unit before the same syntactic
         // reflexivity test. Preserve that exact zero-fuel boundary while
         // avoiding an arena for the overwhelmingly common positive case.
         if self.fuel > 0 && expected == inferred {
             crate::stats::conv_shortcut_hits(1);
             #[cfg(feature = "value-metrics")]
-            self.query_trace(env, expected);
+            if let Some(e) = expected.as_syn() {
+                self.query_trace(env, e);
+            }
             return Ok(());
         }
+        let (Some(expected), Some(inferred)) = (expected.as_syn(), inferred.as_syn())
+        else {
+            return self.conv_ity(env, expected, inferred, l);
+        };
         // Cross-head conversions necessarily do semantic work before they can
         // succeed and are the repeated family this cache is meant to serve.
         // Same-head judgments are left alone: broad memoization makes large,
@@ -880,13 +1061,191 @@ impl Tc {
         Ok(())
     }
 
+    /// The miss of a query with a selection on either side: both
+    /// descriptions evaluated in **one per-query arena** and compared by the
+    /// ordinary conversion arms (`docs/intro-by-type-design.md` §3.3).
+    fn conv_ity(&self, env: &Env, expected: &ITy, inferred: &ITy, l: &Level) -> R {
+        crate::stats::conv_misses(1);
+        let at = env.layer.type_layer();
+        let result = conv_ity_cached(
+            &env.psi,
+            &env.gamma,
+            at,
+            expected,
+            inferred,
+            l,
+            self.fuel,
+            #[cfg(feature = "value-metrics")]
+            env.value_metrics.as_ref(),
+            Rc::clone(&env.cache),
+        );
+        note_conv_outcome(&result);
+        result?;
+        Ok(())
+    }
+
     /// `T ⇝* W` under the checker's budget. δ-transparent unconditionally:
     /// a *type* lives at `typeof(i)`, which is always a computing layer, so
     /// exposing a former from behind a definition is p's business even
     /// while the term being checked is at c.
-    fn whnf(&self, env: &Env, t: &Type) -> R<Type> {
+    fn whnf_syn(&self, env: &Env, t: &Type) -> R<Type> {
         whnf_type_delta(t, &env.gamma, Defs::transparent_cached(&env.psi, &env.cache), self.fuel)
             .map_err(|_| TypeError::OutOfFuel)
+    }
+
+    /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter, exactly as
+    /// before; a selection is spelled first, and paying for that is the
+    /// point of [`crate::stats`]'s `ity_materialized`.
+    fn whnf(&self, env: &Env, t: &ITy) -> R<Type> {
+        match t.as_syn() {
+            Some(t) => self.whnf_syn(env, t),
+            None => {
+                let t = self.materialize(env, t)?;
+                self.whnf_syn(env, &t)
+            }
+        }
+    }
+
+    /// **Spell a description** (`docs/intro-by-type-design.md` §3.5): whnf
+    /// the `of` through the rewriter and take the component's syntax.
+    ///
+    /// This is the current checker's answer — which is why it is complete
+    /// and why it is never silently wrong — and it is exponential exactly
+    /// where the current checker is. Its callers are the four λ inference
+    /// arms, which must put a `Type` inside a `Π`/`ΠΠ`/`Πg`/`ΠU`, and the
+    /// "other formers" branch of [`Tc::view`]. Unlike the value domain the
+    /// rewriter is a *syntax* machine, so each step is run in the Γ its
+    /// input is scoped in — the prefix `Sel::of_depth` names — rather than
+    /// in the ambient one.
+    fn materialize(&self, env: &Env, t: &ITy) -> R<Rc<Type>> {
+        match t {
+            ITy::Syn(t) => Ok(Rc::clone(t)),
+            ITy::Owned(t) => Ok(Rc::new(t.clone())),
+            ITy::Sel { of, sel, at_depth } => {
+                crate::stats::ity_materialized(1);
+                let of_depth = sel.of_depth(*at_depth);
+                let base = self.materialize(env, of)?;
+                let gamma = if of_depth == env.gamma.entries.len() as u32 {
+                    env.gamma.clone()
+                } else {
+                    env.gamma.prefix(of_depth as usize)
+                };
+                let w = whnf_type_delta(
+                    &base,
+                    &gamma,
+                    Defs::transparent_cached(&env.psi, &env.cache),
+                    self.fuel,
+                )
+                .map_err(|_| TypeError::OutOfFuel)?;
+                let picked = match (&w, sel) {
+                    (Type::Sigma { fst, .. }, Sel::Fst) => Rc::clone(fst),
+                    (Type::Sigma { snd, .. }, Sel::Snd(a)) => Rc::new(
+                        snd.apply_local(&LocalSubst::id(&gamma).extended(Rc::clone(a))),
+                    ),
+                    (Type::Sum { lhs, .. }, Sel::Lhs) => Rc::clone(lhs),
+                    (Type::Sum { rhs, .. }, Sel::Rhs) => Rc::clone(rhs),
+                    (Type::Pi { dom, .. }, Sel::Dom) => Rc::clone(dom),
+                    (Type::Pi { cod, .. }, Sel::Cod) => Rc::clone(cod),
+                    // The rule that formed the description had already
+                    // viewed `of` and found the former, so this is the two
+                    // engines disagreeing, which is a mismatch.
+                    _ => return Err(TypeError::HeadMismatch),
+                };
+                Ok(picked)
+            }
+        }
+    }
+
+    /// **The view** (`docs/intro-by-type-design.md` §3.3): the head former of
+    /// a description, with its components as descriptions.
+    ///
+    /// `value_domain` decides which machine answers, and the rule it
+    /// encodes is stated once in the design: *the rewriter never runs on a
+    /// type that came through an `@` annotation or a selection.* So the λ
+    /// checking descent passes `true` only for a selection, the five `@`
+    /// rules pass `true` for their annotation even though it is syntax, and
+    /// the eager mode passes `false` everywhere — which is what makes it
+    /// today's checker.
+    ///
+    /// In the value domain the head and the levels are read and **the value
+    /// is discarded**; nothing the checker keeps outlives the arena. Only
+    /// `Π`, `Σ` and `+` get components, because they are the only formers a
+    /// checking rule descends into; every other head is
+    /// [`TyForm::Other`] and the caller answers `HeadMismatch`.
+    fn view(&self, env: &Env, t: &ITy, value_domain: bool) -> R<TyForm> {
+        let depth = env.gamma.entries.len() as u32;
+        if !value_domain {
+            let w = self.whnf(env, t)?;
+            return Ok(match w {
+                Type::Pi { dom_level, cod_level, dom, cod } => TyForm::Pi {
+                    dom_level,
+                    cod_level,
+                    dom: ITy::Syn(dom),
+                    cod: ITy::Syn(cod),
+                },
+                Type::Sigma { fst_level, snd_level, fst, snd } => TyForm::Sigma {
+                    fst_level,
+                    snd_level,
+                    fst: ITy::Syn(fst),
+                    snd: SndOf::Syn(snd),
+                },
+                Type::Sum { lhs_level, rhs_level, lhs, rhs } => TyForm::Sum {
+                    lhs_level,
+                    rhs_level,
+                    lhs: ITy::Syn(lhs),
+                    rhs: ITy::Syn(rhs),
+                },
+                _ => TyForm::Other,
+            });
+        }
+        let head = head_ity_cached(
+            &env.psi,
+            &env.gamma,
+            env.layer.type_layer(),
+            t,
+            self.fuel,
+            #[cfg(feature = "value-metrics")]
+            env.value_metrics.as_ref(),
+            Rc::clone(&env.cache),
+        )?;
+        Ok(match head {
+            ITyHead::Pi(dom_level, cod_level) => TyForm::Pi {
+                dom_level,
+                cod_level,
+                dom: ITy::Sel { of: Rc::new(t.clone()), sel: Sel::Dom, at_depth: depth },
+                // The codomain is the one component scoped one binder deeper
+                // than its `of`.
+                cod: ITy::Sel { of: Rc::new(t.clone()), sel: Sel::Cod, at_depth: depth + 1 },
+            },
+            ITyHead::Sigma(fst_level, snd_level) => TyForm::Sigma {
+                fst_level,
+                snd_level,
+                fst: ITy::Sel { of: Rc::new(t.clone()), sel: Sel::Fst, at_depth: depth },
+                snd: SndOf::Sel(Rc::new(t.clone()), depth),
+            },
+            ITyHead::Sum(lhs_level, rhs_level) => TyForm::Sum {
+                lhs_level,
+                rhs_level,
+                lhs: ITy::Sel { of: Rc::new(t.clone()), sel: Sel::Lhs, at_depth: depth },
+                rhs: ITy::Sel { of: Rc::new(t.clone()), sel: Sel::Rhs, at_depth: depth },
+            },
+            ITyHead::Other => TyForm::Other,
+        })
+    }
+
+    /// [`Tc::view`] of an expected type a *checking* rule is descending
+    /// through: the rewriter unless it is a selection (§3.3).
+    fn view_expected(&self, env: &Env, t: &ITy) -> R<TyForm> {
+        self.view(env, t, !t.is_syn() && !self.materialize_eagerly)
+    }
+
+    /// [`Tc::view`] of an `@` form's annotation (§3.4): the value domain,
+    /// even though the annotation is syntax — that is the whole point of the
+    /// form.
+    fn view_at(&self, env: &Env, t: &Rc<Type>) -> R<(ITy, TyForm)> {
+        let t = ITy::Syn(Rc::clone(t));
+        let form = self.view(env, &t, !self.materialize_eagerly)?;
+        Ok((t, form))
     }
 
     /// Reject everything at layer v except the forms listed in ch. 04's
@@ -960,7 +1319,7 @@ impl Tc {
         for (k, entry) in target.entries.iter().enumerate() {
             let prefix = LocalSubst { tail: delta.tail, terms: delta.terms[..k].to_vec() };
             let ty = entry.ty.apply_local(&prefix);
-            self.tm_check(env, &delta.terms[k], &ty, &entry.level)?;
+            self.tm_check_ty(env, &delta.terms[k], &ty, &entry.level)?;
         }
         Ok(())
     }
@@ -1017,7 +1376,7 @@ impl Tc {
             }
             Type::El { level, tm } => {
                 self.level_wf(env, level)?;
-                self.tm_check(env, tm, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check_ty(env, tm, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 Ok(level.clone())
             }
             // Id-formation (extension beyond ch. 04; kernel-v1-extensions):
@@ -1025,8 +1384,8 @@ impl Tc {
             Type::Id { level, ty, lhs, rhs } => {
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
-                self.tm_check(env, lhs, ty, level)?;
-                self.tm_check(env, rhs, ty, level)?;
+                self.tm_check_rc(env, lhs, ty, level)?;
+                self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
             // sEq-formation (extension; docs/sprop-design.md §2.1) — Id's
@@ -1035,8 +1394,8 @@ impl Tc {
             Type::SEq { level, ty, lhs, rhs } => {
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
-                self.tm_check(env, lhs, ty, level)?;
-                self.tm_check(env, rhs, ty, level)?;
+                self.tm_check_rc(env, lhs, ty, level)?;
+                self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
             // sEmpty-formation (extension; docs/sprop-design.md §2.2):
@@ -1098,12 +1457,12 @@ impl Tc {
             Type::Vec { level, elem, len } => {
                 self.level_wf(env, level)?;
                 self.ty_check(env, elem, level)?;
-                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
                 Ok(level.clone())
             }
             // Fin-formation (extension; §1.2): ⊢_i Fin(k) @ 0 ⟸ ⊢_i k : Nat.
             Type::Fin { len } => {
-                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
                 Ok(Level::Zero)
             }
             // Wf-formation (extension; §1.3): ⊢_i Wf^l(x:S). n @ l ⟸
@@ -1113,7 +1472,7 @@ impl Tc {
                 self.level_wf(env, level)?;
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
-                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
                 Ok(level.clone())
             }
             Type::GlobalTy { var, subst } => {
@@ -1177,13 +1536,29 @@ impl Tc {
     /// `⊢_i t : T @ l` for a given type and level: structural on `box` and
     /// the function intro forms (so checking-only `box` bodies work), else
     /// infer + conversion at `typeof(i)`.
-    fn tm_check(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
+    fn tm_check(&self, env: &Env, t: &Term, ty: &ITy, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
         self.tm_check_inner(env, t, ty, l)
     }
 
-    fn tm_check_inner(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
+    /// [`Tc::tm_check`] where the caller already holds the expected type as
+    /// shared syntax — every rule but the checked spellings.
+    #[inline(always)]
+    fn tm_check_rc(&self, env: &Env, t: &Term, ty: &Rc<Type>, l: &Level) -> R {
+        self.tm_check(env, t, &ITy::Syn(Rc::clone(ty)), l)
+    }
+
+    /// [`Tc::tm_check`] where the rule built the expected type itself. The
+    /// clone is shallow — `Type`'s children are `Rc` — and buys the whole
+    /// migration one `Rc::new` per such site instead of a signature change
+    /// at every rule.
+    #[inline(always)]
+    fn tm_check_ty(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
+        self.tm_check(env, t, &ITy::Owned(ty.clone()), l)
+    }
+
+    fn tm_check_inner(&self, env: &Env, t: &Term, ty: &ITy, l: &Level) -> R {
         match t {
             // box T : □(Δ ⊢ Ty l) @ 0 ⟸ Ψ; Δ ⊢_c T @ l
             Term::BoxTy(code) => {
@@ -1201,13 +1576,18 @@ impl Tc {
                     return Err(TypeError::HeadMismatch);
                 };
                 self.lev_eq(l, &Level::Zero)?;
-                self.tm_check(&env.in_ctx(ctx, Layer::Code), code, &ty, &level)
+                self.tm_check_rc(&env.in_ctx(ctx, Layer::Code), code, &ty, &level)
             }
             // Structural descent through binders (box may hide in bodies).
             Term::Lam { dom_level, cod_level, dom, body } => {
                 self.not_var_layer(env)?;
-                let Type::Pi { dom_level: pd, cod_level: pc, dom: ps, cod: pt } =
-                    self.whnf(env, ty)?
+                // The one *checking* descent whose expected type may be a
+                // selection (`docs/intro-by-type-design.md` §3.3): a λ
+                // checked at `Sel { T, Fst }` because it is the first field
+                // of a `pair@`. Hence the view, and hence `Sel::Dom` /
+                // `Sel::Cod` existing at all.
+                let TyForm::Pi { dom_level: pd, cod_level: pc, dom: ps, cod: pt } =
+                    self.view_expected(env, ty)?
                 else {
                     return Err(TypeError::HeadMismatch);
                 };
@@ -1217,7 +1597,7 @@ impl Tc {
                 self.lev_eq(cod_level, &pc)?;
                 self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
                 self.ty_check(env, dom, dom_level)?;
-                self.conv_ty(env, &ps, dom, dom_level)?;
+                self.conv_ty(env, &ps, &ITy::Syn(Rc::clone(dom)), dom_level)?;
                 let e = env.push_entry(Rc::clone(dom), dom_level.clone());
                 self.tm_check(&e, body, &pt, cod_level)
             }
@@ -1234,7 +1614,7 @@ impl Tc {
                 let e = env.push_univs(*num_vars);
                 self.level_wf(&e, level)?;
                 self.lev_eq(level, &pl)?;
-                self.tm_check(&e, body, &pt, level)
+                self.tm_check_rc(&e, body, &pt, level)
             }
             Term::CtxLam { level, body } => {
                 self.meta_layer(env)?;
@@ -1245,7 +1625,7 @@ impl Tc {
                 self.lev_eq(level, &pl)?;
                 self.lev_eq(l, level)?;
                 let e = env.push_global(GlobalBinding::Ctx);
-                self.tm_check(&e, body, &pt, level)
+                self.tm_check_rc(&e, body, &pt, level)
             }
             Term::TyLam { ctx, arg_level, body_level, body } => {
                 self.meta_layer(env)?;
@@ -1279,7 +1659,7 @@ impl Tc {
                     layer: Layer::Prog,
                     level: arg_level.clone(),
                 });
-                self.tm_check(&e, body, &pt, body_level)
+                self.tm_check_rc(&e, body, &pt, body_level)
             }
             _ => {
                 let (inferred, li) = self.tm_infer(env, t)?;
@@ -1296,10 +1676,135 @@ impl Tc {
     }
 
     /// `⊢_i t : ? @ ?` — infer the canonical type and level.
-    fn tm_infer(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
+    fn tm_infer(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "infer");
-        self.tm_infer_inner(env, t)
+        // The checked spellings are the only rules whose inferred type may
+        // be a *description* (`docs/intro-by-type-design.md` §3.2), so they
+        // have their own dispatch and every other rule keeps returning
+        // syntax — which is the sentence "no existing rule constructs a
+        // `Sel`" made true by construction rather than by review.
+        if matches!(
+            t,
+            Term::PairAt { .. }
+                | Term::InlAt { .. }
+                | Term::InrAt { .. }
+                | Term::FstAt { .. }
+                | Term::SndAt { .. }
+        ) {
+            return self.tm_infer_at(env, t);
+        }
+        let (ty, l) = self.tm_infer_inner(env, t)?;
+        Ok((ITy::Owned(ty), l))
+    }
+
+    /// [`Tc::tm_infer`] with the inferred type **spelled**: the four λ
+    /// inference arms, which have to put it inside a syntactic former, and
+    /// the public [`infer_term`]. See [`Tc::materialize`].
+    fn tm_infer_syn(&self, env: &Env, t: &Term) -> R<(Rc<Type>, Level)> {
+        let (ty, l) = self.tm_infer(env, t)?;
+        Ok((self.materialize(env, &ty)?, l))
+    }
+
+    /// The five **checked spellings** (`docs/intro-by-type-design.md` §3.4)
+    /// — the only inference rules whose result may be an un-spelled
+    /// selection, and therefore the only ones that live outside
+    /// [`Tc::tm_infer_inner`]. Keeping them here is what makes §3.2's
+    /// "no existing rule constructs a `Sel`" a property of the code rather
+    /// than of a review: every other arm returns a `Type` and
+    /// [`Tc::tm_infer`] wraps it.
+    fn tm_infer_at(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+        match t {
+                // -- checked spellings (extension; docs/intro-by-type-design.md)
+                //
+                // `pair@(T; a; b)`, `inl@`, `inr@`, `fst@`, `snd@`: one whole-type
+                // annotation instead of the former's components. Each rule is the
+                // component rule with the premise `ty_check(component, level)`
+                // replaced by "whnf `T` and read the component off the former",
+                // and — for the three intros — the *un-reduced* `T` returned as
+                // the synthesized type, which is what keeps every consumer lazy
+                // in δ.
+                //
+                // The layer guard is the design's §2.3 and is what leaves the
+                // code grammar and all 56 recursor branches alone: these forms do
+                // not exist at layers c and v, so `code_eq` never meets one and
+                // `rec.rs` needs no branch. `not_var_layer` would let layer c
+                // through, so the guard is `computes()`.
+                //
+                // **The annotation is viewed in the value domain**, always —
+                // design §3.4's `view_v`, which is the rule of §3.3 read from
+                // the other side: the rewriter never runs on a type that came
+                // through an `@` annotation. The head and the levels are read
+                // out of a value and the value is dropped; the component types
+                // are never spelled at all, they are `ITy::Sel` descriptions,
+                // and spelling one is `Tc::materialize` and is counted. Under
+                // the eager mode (§3.6) this is the rewriter again and the
+                // components come back as syntax, which is what the differential
+                // test holds this against.
+                Term::PairAt { ty, fst, snd } => {
+                    self.computing_layer(env)?;
+                    let level = self.ty_infer(env, ty)?;
+                    let (ity, form) = self.view_at(env, ty)?;
+                    let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form
+                    else {
+                        return Err(TypeError::HeadMismatch);
+                    };
+                    self.tm_check(env, fst, &fst_c, &fst_level)?;
+                    let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
+                    self.tm_check(env, snd, &snd_at, &snd_level)?;
+                    crate::stats::intro_at_nodes(1);
+                    Ok((ity, level))
+                }
+                Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
+                    self.computing_layer(env)?;
+                    let level = self.ty_infer(env, ty)?;
+                    let (ity, form) = self.view_at(env, ty)?;
+                    let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
+                        return Err(TypeError::HeadMismatch);
+                    };
+                    let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
+                        (rhs, rhs_level)
+                    } else {
+                        (lhs, lhs_level)
+                    };
+                    self.tm_check(env, val, &summand, &summand_level)?;
+                    crate::stats::intro_at_nodes(1);
+                    Ok((ity, level))
+                }
+                // `fst@(T; p) : S` — note the scrutinee is checked against `T`
+                // itself, not against the Σ: an argument that is a `pair@` then
+                // converts its own un-reduced annotation against this one, which
+                // is a head comparison and not a walk of two reducts.
+                Term::FstAt { ty, pair } => {
+                    self.computing_layer(env)?;
+                    // `ty_infer` first in all five rules: the view is untyped and
+                    // must not be handed an annotation nothing has checked.
+                    let level = self.ty_infer(env, ty)?;
+                    let (ity, form) = self.view_at(env, ty)?;
+                    let TyForm::Sigma { fst_level, fst: fst_c, .. } = form else {
+                        return Err(TypeError::HeadMismatch);
+                    };
+                    self.tm_check(env, pair, &ity, &level)?;
+                    crate::stats::intro_at_nodes(1);
+                    Ok((fst_c, fst_level))
+                }
+                // `snd@(T; p) : U[fst@(T;p)/x]` — the substituted term is the
+                // checked spelling again, so the inferred type stays source-shaped
+                // even though `U` itself came out of the whnf.
+                Term::SndAt { ty, pair } => {
+                    self.computing_layer(env)?;
+                    let level = self.ty_infer(env, ty)?;
+                    let (ity, form) = self.view_at(env, ty)?;
+                    let TyForm::Sigma { snd_level, snd: snd_c, .. } = form else {
+                        return Err(TypeError::HeadMismatch);
+                    };
+                    self.tm_check(env, pair, &ity, &level)?;
+                    let fst_p = Term::FstAt { ty: Rc::clone(ty), pair: Rc::clone(pair) };
+                    crate::stats::intro_at_nodes(1);
+                    Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
+                }
+            _ => Err(TypeError::NotInferable),
+        }
     }
 
     fn tm_infer_inner(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
@@ -1346,7 +1851,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, dom_level)?;
                 self.level_wf(env, cod_level)?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     dom,
                     &Type::Ty(dom_level.clone()),
@@ -1354,7 +1859,7 @@ impl Tc {
                 )?;
                 let el = Type::El { level: dom_level.clone(), tm: Rc::clone(dom) };
                 let e = env.push_entry(Rc::new(el), dom_level.clone());
-                self.tm_check(
+                self.tm_check_ty(
                     &e,
                     cod,
                     &Type::Ty(cod_level.clone()),
@@ -1372,10 +1877,10 @@ impl Tc {
             Term::TmId { level, ty, lhs, rhs } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check_ty(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 let el = Type::El { level: level.clone(), tm: Rc::clone(ty) };
-                self.tm_check(env, lhs, &el, level)?;
-                self.tm_check(env, rhs, &el, level)?;
+                self.tm_check_ty(env, lhs, &el, level)?;
+                self.tm_check_ty(env, rhs, &el, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of Σ (extension): Σ^{l,l'}(x:s).t : Ty (l⊔l').
@@ -1383,7 +1888,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, fst_level)?;
                 self.level_wf(env, snd_level)?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     fst,
                     &Type::Ty(fst_level.clone()),
@@ -1391,7 +1896,7 @@ impl Tc {
                 )?;
                 let el = Type::El { level: fst_level.clone(), tm: Rc::clone(fst) };
                 let e = env.push_entry(Rc::new(el), fst_level.clone());
-                self.tm_check(
+                self.tm_check_ty(
                     &e,
                     snd,
                     &Type::Ty(snd_level.clone()),
@@ -1411,7 +1916,7 @@ impl Tc {
             Term::TmSquash { level, ty } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check_ty(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of sEq (extension; docs/sprop-design.md §6): mirrors
@@ -1419,10 +1924,10 @@ impl Tc {
             Term::TmSEq { level, ty, lhs, rhs } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check_ty(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 let el = Type::El { level: level.clone(), tm: Rc::clone(ty) };
-                self.tm_check(env, lhs, &el, level)?;
-                self.tm_check(env, rhs, &el, level)?;
+                self.tm_check_ty(env, lhs, &el, level)?;
+                self.tm_check_ty(env, rhs, &el, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of the binary sum (extension): a +^{l,l'} b : Ty (l⊔l').
@@ -1430,13 +1935,13 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, lhs_level)?;
                 self.level_wf(env, rhs_level)?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     lhs,
                     &Type::Ty(lhs_level.clone()),
                     &Level::succ(lhs_level.clone()),
                 )?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     rhs,
                     &Type::Ty(rhs_level.clone()),
@@ -1450,7 +1955,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, shape_level)?;
                 self.level_wf(env, pos_level)?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     shape,
                     &Type::Ty(shape_level.clone()),
@@ -1458,7 +1963,7 @@ impl Tc {
                 )?;
                 let el = Type::El { level: shape_level.clone(), tm: Rc::clone(shape) };
                 let e = env.push_entry(Rc::new(el), shape_level.clone());
-                self.tm_check(
+                self.tm_check_ty(
                     &e,
                     pos,
                     &Type::Ty(pos_level.clone()),
@@ -1473,14 +1978,14 @@ impl Tc {
             Term::TmVec { level, elem, len } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.tm_check(env, elem, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
-                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(env, elem, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of Fin (extension; §6): Fin(k) : Ty 0 ⟸ k : Nat.
             Term::TmFin { len } => {
                 self.not_var_layer(env)?;
-                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(Level::Zero), Level::constant(1)))
             }
             // Encoding of Wf (extension; §6): Wf^l(x:s). n : Ty l ⟸
@@ -1489,7 +1994,7 @@ impl Tc {
             Term::TmWf { level, shape, arity } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     shape,
                     &Type::Ty(level.clone()),
@@ -1497,7 +2002,7 @@ impl Tc {
                 )?;
                 let el = Type::El { level: level.clone(), tm: Rc::clone(shape) };
                 let e = env.push_entry(Rc::new(el), level.clone());
-                self.tm_check(&e, arity, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(&e, arity, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             Term::Zero => {
@@ -1510,7 +2015,7 @@ impl Tc {
             }
             Term::Succ(n) => {
                 self.not_var_layer(env)?;
-                self.tm_check(env, n, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(env, n, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Nat, Level::Zero))
             }
             Term::ElimNat { level, motive, base, step, scrut } => {
@@ -1520,15 +2025,15 @@ impl Tc {
                 self.ty_check(&e_x, motive, level)?;
                 let base_ty =
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(Term::Zero)));
-                self.tm_check(env, base, &base_ty, level)?;
+                self.tm_check_ty(env, base, &base_ty, level)?;
                 // M[su x/x] scoped in (Γ, x : Nat, y : M).
                 let su_x = Term::Succ(Rc::new(Term::Var(LocalVar(1))));
                 let step_ty = motive.apply_local(
                     &LocalSubst::id(&env.gamma).shift_local(2).extended(Rc::new(su_x)),
                 );
                 let e_xy = e_x.push_entry(Rc::clone(motive), level.clone());
-                self.tm_check(&e_xy, step, &step_ty, level)?;
-                self.tm_check(env, scrut, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(&e_xy, step, &step_ty, level)?;
+                self.tm_check_ty(env, scrut, &Type::Nat, &Level::Zero)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
@@ -1541,7 +2046,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
-                self.tm_check(env, tm, ty, level)?;
+                self.tm_check_rc(env, tm, ty, level)?;
                 Ok((
                     Type::Id {
                         level: level.clone(),
@@ -1559,7 +2064,7 @@ impl Tc {
                 self.level_wf(env, ty_level)?;
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, ty, ty_level)?;
-                self.tm_check(env, lhs, ty, ty_level)?;
+                self.tm_check_rc(env, lhs, ty, ty_level)?;
                 // M scoped in (Γ, y : S, p : Id^l(S; a; y)).
                 let e_y = env.push_entry(Rc::clone(ty), ty_level.clone());
                 let p_ty = Type::Id {
@@ -1581,15 +2086,15 @@ impl Tc {
                         .extended(Rc::clone(lhs))
                         .extended(Rc::new(refl_a)),
                 );
-                self.tm_check(env, case, &case_ty, motive_level)?;
-                self.tm_check(env, rhs, ty, ty_level)?;
+                self.tm_check_ty(env, case, &case_ty, motive_level)?;
+                self.tm_check_rc(env, rhs, ty, ty_level)?;
                 let id_ty = Type::Id {
                     level: ty_level.clone(),
                     ty: Rc::clone(ty),
                     lhs: Rc::clone(lhs),
                     rhs: Rc::clone(rhs),
                 };
-                self.tm_check(env, proof, &id_ty, ty_level)?;
+                self.tm_check_ty(env, proof, &id_ty, ty_level)?;
                 Ok((
                     motive.apply_local(
                         &LocalSubst::id(&env.gamma)
@@ -1606,7 +2111,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
-                self.tm_check(env, tm, ty, level)?;
+                self.tm_check_rc(env, tm, ty, level)?;
                 Ok((
                     Type::SEq {
                         level: level.clone(),
@@ -1621,7 +2126,7 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
-                self.tm_check(env, tm, ty, level)?;
+                self.tm_check_rc(env, tm, ty, level)?;
                 Ok((
                     Type::Squash { level: level.clone(), ty: Rc::clone(ty) },
                     level.clone(),
@@ -1636,8 +2141,8 @@ impl Tc {
                 self.level_wf(env, ty_level)?;
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, ty, ty_level)?;
-                self.tm_check(env, lhs, ty, ty_level)?;
-                self.tm_check(env, rhs, ty, ty_level)?;
+                self.tm_check_rc(env, lhs, ty, ty_level)?;
+                self.tm_check_rc(env, rhs, ty, ty_level)?;
                 let e_x = env.push_entry(Rc::clone(ty), ty_level.clone());
                 self.ty_check(&e_x, motive, motive_level)?;
                 let seq_ty = Type::SEq {
@@ -1646,10 +2151,10 @@ impl Tc {
                     lhs: Rc::clone(lhs),
                     rhs: Rc::clone(rhs),
                 };
-                self.tm_check(env, proof, &seq_ty, ty_level)?;
+                self.tm_check_ty(env, proof, &seq_ty, ty_level)?;
                 let tm_ty = motive
                     .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(lhs)));
-                self.tm_check(env, tm, &tm_ty, motive_level)?;
+                self.tm_check_ty(env, tm, &tm_ty, motive_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(rhs))),
                     motive_level.clone(),
@@ -1665,7 +2170,7 @@ impl Tc {
                 let sempty = Type::SEmpty { level: scrut_level.clone() };
                 let e_x = env.push_entry(Rc::new(sempty.clone()), scrut_level.clone());
                 self.ty_check(&e_x, motive, level)?;
-                self.tm_check(env, scrut, &sempty, scrut_level)?;
+                self.tm_check_ty(env, scrut, &sempty, scrut_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
@@ -1697,8 +2202,8 @@ impl Tc {
                     level: dst_level.clone(),
                     ty: Rc::new(case_inner),
                 };
-                self.tm_check(&e_x, case, &case_ty, dst_level)?;
-                self.tm_check(env, scrut, &squash_src, src_level)?;
+                self.tm_check_ty(&e_x, case, &case_ty, dst_level)?;
+                self.tm_check_ty(env, scrut, &squash_src, src_level)?;
                 let result_inner = motive.apply_local(
                     &LocalSubst::id(&env.gamma).extended(Rc::clone(scrut)),
                 );
@@ -1717,11 +2222,11 @@ impl Tc {
                 self.ty_check(env, fst_ty, fst_level)?;
                 let e = env.push_entry(Rc::clone(fst_ty), fst_level.clone());
                 self.ty_check(&e, snd_ty, snd_level)?;
-                self.tm_check(env, fst, fst_ty, fst_level)?;
+                self.tm_check_rc(env, fst, fst_ty, fst_level)?;
                 // b : T[a/x].
                 let snd_at = snd_ty
                     .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(fst)));
-                self.tm_check(env, snd, &snd_at, snd_level)?;
+                self.tm_check_ty(env, snd, &snd_at, snd_level)?;
                 Ok((
                     Type::Sigma {
                         fst_level: fst_level.clone(),
@@ -1746,7 +2251,7 @@ impl Tc {
                     fst: Rc::clone(fst_ty),
                     snd: Rc::clone(snd_ty),
                 };
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     pair,
                     &sigma,
@@ -1768,7 +2273,7 @@ impl Tc {
                     fst: Rc::clone(fst_ty),
                     snd: Rc::clone(snd_ty),
                 };
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     pair,
                     &sigma,
@@ -1788,93 +2293,6 @@ impl Tc {
                 ))
             }
 
-            // -- checked spellings (extension; docs/intro-by-type-design.md)
-            //
-            // `pair@(T; a; b)`, `inl@`, `inr@`, `fst@`, `snd@`: one whole-type
-            // annotation instead of the former's components. Each rule is the
-            // component rule with the premise `ty_check(component, level)`
-            // replaced by "whnf `T` and read the component off the former",
-            // and — for the three intros — the *un-reduced* `T` returned as
-            // the synthesized type, which is what keeps every consumer lazy
-            // in δ.
-            //
-            // The layer guard is the design's §2.3 and is what leaves the
-            // code grammar and all 56 recursor branches alone: these forms do
-            // not exist at layers c and v, so `code_eq` never meets one and
-            // `rec.rs` needs no branch. `not_var_layer` would let layer c
-            // through, so the guard is `computes()`.
-            //
-            // **This is the rewriter's transcription**, and it builds the
-            // reduct: `self.whnf` spells `T`'s former through `reduce.rs` and
-            // the component types come out as syntax. That is the object this
-            // round exists to stop constructing, and it is acceptable here for
-            // exactly one reason — `typing.rs` is about to become the
-            // differential *oracle* (design §9 stage 1b), where the reduct is
-            // the price of being the specification.
-            Term::PairAt { ty, fst, snd } => {
-                self.computing_layer(env)?;
-                let level = self.ty_infer(env, ty)?;
-                let Type::Sigma { fst_level, snd_level, fst: fst_ty, snd: snd_ty } =
-                    self.whnf(env, ty)?
-                else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                self.tm_check(env, fst, &fst_ty, &fst_level)?;
-                let snd_at = snd_ty
-                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(fst)));
-                self.tm_check(env, snd, &snd_at, &snd_level)?;
-                crate::stats::intro_at_nodes(1);
-                Ok((ty.as_ref().clone(), level))
-            }
-            Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
-                self.computing_layer(env)?;
-                let level = self.ty_infer(env, ty)?;
-                let Type::Sum { lhs_level, rhs_level, lhs, rhs } = self.whnf(env, ty)? else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
-                    (rhs, rhs_level)
-                } else {
-                    (lhs, lhs_level)
-                };
-                self.tm_check(env, val, &summand, &summand_level)?;
-                crate::stats::intro_at_nodes(1);
-                Ok((ty.as_ref().clone(), level))
-            }
-            // `fst@(T; p) : S` — note the scrutinee is checked against `T`
-            // itself, not against the Σ: an argument that is a `pair@` then
-            // converts its own un-reduced annotation against this one, which
-            // is a head comparison and not a walk of two reducts.
-            Term::FstAt { ty, pair } => {
-                self.computing_layer(env)?;
-                // `ty_infer` first in all five rules: `whnf` is untyped and
-                // must not be handed an annotation nothing has checked.
-                let level = self.ty_infer(env, ty)?;
-                let Type::Sigma { fst_level, fst: fst_ty, .. } = self.whnf(env, ty)? else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                self.tm_check(env, pair, ty, &level)?;
-                crate::stats::intro_at_nodes(1);
-                Ok(((*fst_ty).clone(), fst_level))
-            }
-            // `snd@(T; p) : U[fst@(T;p)/x]` — the substituted term is the
-            // checked spelling again, so the inferred type stays source-shaped
-            // even though `U` itself came out of the whnf.
-            Term::SndAt { ty, pair } => {
-                self.computing_layer(env)?;
-                let level = self.ty_infer(env, ty)?;
-                let Type::Sigma { snd_level, snd: snd_ty, .. } = self.whnf(env, ty)? else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                self.tm_check(env, pair, ty, &level)?;
-                let fst_p =
-                    Term::FstAt { ty: Rc::clone(ty), pair: Rc::clone(pair) };
-                crate::stats::intro_at_nodes(1);
-                Ok((
-                    snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
-                    snd_level,
-                ))
-            }
 
             // -- unit and empty (extension beyond ch. 04) -------------------
             // ⟨⟩^l : Unit^l @ l.
@@ -1896,7 +2314,7 @@ impl Tc {
                 let empty = Type::Empty { level: scrut_level.clone() };
                 let e_x = env.push_entry(Rc::new(empty.clone()), scrut_level.clone());
                 self.ty_check(&e_x, motive, level)?;
-                self.tm_check(env, scrut, &empty, scrut_level)?;
+                self.tm_check_ty(env, scrut, &empty, scrut_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
@@ -1911,7 +2329,7 @@ impl Tc {
                 self.level_wf(env, rhs_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                self.tm_check(env, val, lhs, lhs_level)?;
+                self.tm_check_rc(env, val, lhs, lhs_level)?;
                 Ok((
                     Type::Sum {
                         lhs_level: lhs_level.clone(),
@@ -1929,7 +2347,7 @@ impl Tc {
                 self.level_wf(env, rhs_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                self.tm_check(env, val, rhs, rhs_level)?;
+                self.tm_check_rc(env, val, rhs, rhs_level)?;
                 Ok((
                     Type::Sum {
                         lhs_level: lhs_level.clone(),
@@ -1980,7 +2398,7 @@ impl Tc {
                 let left_ty = motive.apply_local(
                     &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inl_x)),
                 );
-                self.tm_check(&e_x, case_l, &left_ty, motive_level)?;
+                self.tm_check_ty(&e_x, case_l, &left_ty, motive_level)?;
                 // c_r : M[inr y/z] scoped in (Γ, y : B).
                 let e_y = env.push_entry(Rc::clone(rhs), rhs_level.clone());
                 let inr_y = Term::Inr {
@@ -1993,8 +2411,8 @@ impl Tc {
                 let right_ty = motive.apply_local(
                     &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inr_y)),
                 );
-                self.tm_check(&e_y, case_r, &right_ty, motive_level)?;
-                self.tm_check(env, scrut, &sum, &lmax)?;
+                self.tm_check_ty(&e_y, case_r, &right_ty, motive_level)?;
+                self.tm_check_ty(env, scrut, &sum, &lmax)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),
@@ -2011,7 +2429,7 @@ impl Tc {
                 self.ty_check(env, shape_ty, shape_level)?;
                 let e = env.push_entry(Rc::clone(shape_ty), shape_level.clone());
                 self.ty_check(&e, pos_ty, pos_level)?;
-                self.tm_check(env, label, shape_ty, shape_level)?;
+                self.tm_check_rc(env, label, shape_ty, shape_level)?;
                 let lmax = Level::join(shape_level.clone(), pos_level.clone());
                 let w = Type::W {
                     shape_level: shape_level.clone(),
@@ -2028,7 +2446,7 @@ impl Tc {
                     dom: Rc::new(pos_at),
                     cod: Rc::new(w.shift_local(1)),
                 };
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     children,
                     &f_ty,
@@ -2114,8 +2532,8 @@ impl Tc {
                         .shift_local(3)
                         .extended(Rc::new(sup_af.shift_local(1))),
                 );
-                self.tm_check(&e_step, step, &step_ty, motive_level)?;
-                self.tm_check(env, scrut, &w, &lmax)?;
+                self.tm_check_ty(&e_step, step, &step_ty, motive_level)?;
+                self.tm_check_ty(env, scrut, &w, &lmax)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),
@@ -2129,8 +2547,8 @@ impl Tc {
                 self.level_wf(env, level)?;
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
-                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
-                self.tm_check(env, label, shape, level)?;
+                self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                self.tm_check_rc(env, label, shape, level)?;
                 let wf = Type::Wf {
                     level: level.clone(),
                     shape: Rc::clone(shape),
@@ -2143,7 +2561,7 @@ impl Tc {
                     elem: Rc::new(wf.clone()),
                     len: Rc::new(arity_at),
                 };
-                self.tm_check(env, children, &cs_ty, level)?;
+                self.tm_check_ty(env, children, &cs_ty, level)?;
                 Ok((wf, level.clone()))
             }
             // elim_Wf^{l,l'}(x:S. n; z. M; a cs ih. s; t) : M[t/z] @ l'.
@@ -2156,7 +2574,7 @@ impl Tc {
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
-                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
                 let wf = Type::Wf {
                     level: level.clone(),
                     shape: Rc::clone(shape),
@@ -2176,8 +2594,8 @@ impl Tc {
                 let e_a = env.push_entry(Rc::clone(shape), level.clone());
                 let e_cs = e_a.push_entry(Rc::new(cs_ty), level.clone());
                 let e_step = e_cs.push_entry(Rc::new(ih_ty), motive_level.clone());
-                self.tm_check(&e_step, step, &step_ty, motive_level)?;
-                self.tm_check(env, scrut, &wf, level)?;
+                self.tm_check_ty(&e_step, step, &step_ty, motive_level)?;
+                self.tm_check_ty(env, scrut, &wf, level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),
@@ -2191,14 +2609,18 @@ impl Tc {
                 self.level_wf(env, cod_level)?;
                 self.ty_check(env, dom, dom_level)?;
                 let e = env.push_entry(Rc::clone(dom), dom_level.clone());
-                let (cod, cl) = self.tm_infer(&e, body)?;
+                // §3.5 again — the λ that binds a *term*. The design names
+                // the three layer-m arms; this one has the same shape and
+                // the same reason, and leaving it out would be the one
+                // incomplete arm.
+                let (cod, cl) = self.tm_infer_syn(&e, body)?;
                 self.lev_eq(cod_level, &cl)?;
                 Ok((
                     Type::Pi {
                         dom_level: dom_level.clone(),
                         cod_level: cod_level.clone(),
                         dom: Rc::clone(dom),
-                        cod: Rc::new(cod),
+                        cod,
                     },
                     Level::join(dom_level.clone(), cod_level.clone()),
                 ))
@@ -2216,13 +2638,13 @@ impl Tc {
                     dom: Rc::clone(dom),
                     cod: Rc::clone(cod),
                 };
-                self.tm_check(
+                self.tm_check_ty(
                     env,
                     fun,
                     &pi,
                     &Level::join(dom_level.clone(), cod_level.clone()),
                 )?;
-                self.tm_check(env, arg, dom, dom_level)?;
+                self.tm_check_rc(env, arg, dom, dom_level)?;
                 Ok((
                     cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
                     cod_level.clone(),
@@ -2237,14 +2659,17 @@ impl Tc {
                 }
                 let e = env.push_univs(*num_vars);
                 self.level_wf(&e, level)?;
-                let (ty, lt) = self.tm_infer(&e, body)?;
+                // §3.5: the body's inferred type has to go *inside* a
+                // syntactic former, so a selection is spelled here. On every
+                // declaration that exists today this is a `Syn` and
+                // `materialize` is `Rc::clone`; the shape that is not is a
+                // layer-m metaprogram whose body infers a tower component,
+                // and it is complete rather than fast, which is the right
+                // way round for a trusted checker.
+                let (ty, lt) = self.tm_infer_syn(&e, body)?;
                 self.lev_eq(level, &lt)?;
                 Ok((
-                    Type::UPi {
-                        num_vars: *num_vars,
-                        level: level.clone(),
-                        body: Rc::new(ty),
-                    },
+                    Type::UPi { num_vars: *num_vars, level: level.clone(), body: ty },
                     Level::Omega,
                 ))
             }
@@ -2272,9 +2697,9 @@ impl Tc {
                 self.meta_layer(env)?;
                 self.level_wf(env, level)?;
                 let e = env.push_global(GlobalBinding::Ctx);
-                let (ty, lt) = self.tm_infer(&e, body)?;
+                let (ty, lt) = self.tm_infer_syn(&e, body)?;
                 self.lev_eq(level, &lt)?;
-                Ok((Type::CtxPi { level: level.clone(), body: Rc::new(ty) }, level.clone()))
+                Ok((Type::CtxPi { level: level.clone(), body: ty }, level.clone()))
             }
             Term::CtxApp { fun, ctx } => {
                 self.meta_layer(env)?;
@@ -2298,14 +2723,14 @@ impl Tc {
                     layer: Layer::Prog,
                     level: arg_level.clone(),
                 });
-                let (ty, lt) = self.tm_infer(&e, body)?;
+                let (ty, lt) = self.tm_infer_syn(&e, body)?;
                 self.lev_eq(body_level, &lt)?;
                 Ok((
                     Type::TyPi {
                         ctx: ctx.clone(),
                         arg_level: arg_level.clone(),
                         body_level: body_level.clone(),
-                        body: Rc::new(ty),
+                        body: ty,
                     },
                     body_level.clone(),
                 ))
@@ -2329,6 +2754,16 @@ impl Tc {
             // box carries neither its context nor its level: checking-only.
             Term::BoxTy(_) | Term::BoxTm(_) => Err(TypeError::NotInferable),
 
+            // The checked spellings: [`Tc::tm_infer`] routes them to
+            // [`Tc::tm_infer_at`] before this match is reached, because
+            // their inferred type is an [`ITy`] and every arm here produces
+            // syntax.
+            Term::PairAt { .. }
+            | Term::InlAt { .. }
+            | Term::InrAt { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. } => Err(TypeError::NotInferable),
+
             Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
                 self.meta_layer(env)?;
                 self.level_wf(env, motive_level)?;
@@ -2336,7 +2771,7 @@ impl Tc {
                 self.ctx_wf(env, Layer::Prog, ctx)?;
                 let code_ty =
                     Type::CodeTy { ctx: ctx.clone(), level: code_level.clone() };
-                self.tm_check(env, scrut, &code_ty, &Level::Zero)?;
+                self.tm_check_ty(env, scrut, &code_ty, &Level::Zero)?;
                 let e_x = env.push_entry(Rc::new(code_ty), Level::Zero);
                 self.ty_check(&e_x, motive, motive_level)?;
                 // Body under Ψ, U : Typ_c(Δ, l) at M[box U^id/x_T].
@@ -2349,7 +2784,7 @@ impl Tc {
                 let body_ty = motive
                     .shift_global(1)
                     .apply_local(&LocalSubst::id(&e_u.gamma).extended(Rc::new(box_u)));
-                self.tm_check(&e_u, body, &body_ty, motive_level)?;
+                self.tm_check_ty(&e_u, body, &body_ty, motive_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),
@@ -2366,7 +2801,7 @@ impl Tc {
                     ty: Rc::clone(ty),
                     level: code_level.clone(),
                 };
-                self.tm_check(env, scrut, &code_ty, &Level::Zero)?;
+                self.tm_check_ty(env, scrut, &code_ty, &Level::Zero)?;
                 let e_x = env.push_entry(Rc::new(code_ty), Level::Zero);
                 self.ty_check(&e_x, motive, motive_level)?;
                 // Body under Ψ, u : Trm_c(Δ ⊢ T @ l) at M[box u^id/x_t].
@@ -2381,7 +2816,7 @@ impl Tc {
                 let body_ty = motive
                     .shift_global(1)
                     .apply_local(&LocalSubst::id(&e_u.gamma).extended(Rc::new(box_u)));
-                self.tm_check(&e_u, body, &body_ty, motive_level)?;
+                self.tm_check_ty(&e_u, body, &body_ty, motive_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),
@@ -2404,7 +2839,7 @@ impl Tc {
                 self.ctx_wf(env, Layer::Prog, ctx)?;
                 let code_ty =
                     Type::CodeTy { ctx: ctx.clone(), level: code_level.clone() };
-                self.tm_check(env, scrut, &code_ty, &Level::Zero)?;
+                self.tm_check_ty(env, scrut, &code_ty, &Level::Zero)?;
                 Ok((
                     inst_ty_motive(
                         &motives.ty_motive,
@@ -2437,7 +2872,7 @@ impl Tc {
                     ty: Rc::clone(ty),
                     level: code_level.clone(),
                 };
-                self.tm_check(env, scrut, &code_ty, &Level::Zero)?;
+                self.tm_check_ty(env, scrut, &code_ty, &Level::Zero)?;
                 Ok((
                     inst_tm_motive(
                         &motives.tm_motive,
@@ -2475,7 +2910,7 @@ impl Tc {
         let specs = rec::branch_specs(motives, l1, l2, &env.gamma);
         for (spec, b) in specs.iter().zip(rec::branch_terms(branches)) {
             let e = env.push_spec(&spec.tele);
-            self.tm_check(&e, b, &spec.ty, &spec.level)?;
+            self.tm_check_rc(&e, b, &spec.ty, &spec.level)?;
         }
         Ok(())
     }
@@ -2542,6 +2977,15 @@ fn term_head(t: &Term) -> &'static str {
         Term::BoxTm(..) => "BoxTm",
         Term::LetBoxTy { .. } => "LetBoxTy",
         Term::LetBoxTm { .. } => "LetBoxTm",
+        // The checked spellings (docs/intro-by-type-design.md). Stage 1a
+        // added the `Term` variants and missed this match; the sampler is
+        // behind `value-metrics`, which nothing in `scripts/test` builds, so
+        // nothing said so.
+        Term::PairAt { .. } => "PairAt",
+        Term::InlAt { .. } => "InlAt",
+        Term::InrAt { .. } => "InrAt",
+        Term::FstAt { .. } => "FstAt",
+        Term::SndAt { .. } => "SndAt",
         Term::ElimCodeTy { .. } => "ElimCodeTy",
         Term::ElimCodeTm { .. } => "ElimCodeTm",
     }
@@ -2692,6 +3136,12 @@ mod memo_tests {
         }
     }
 
+    /// The tests below predate [`ITy`] and state their judgments in syntax;
+    /// wrapping at the call is the whole adaptation.
+    fn s(t: Type) -> ITy {
+        ITy::Syn(Rc::new(t))
+    }
+
     fn encoded_nat() -> Type {
         Type::El { level: Level::Zero, tm: Rc::new(Term::TmNat) }
     }
@@ -2701,13 +3151,13 @@ mod memo_tests {
         let tc = Tc::new(DEFAULT_FUEL);
         let first = env(GlobalCtx::default());
         let encoded = encoded_nat();
-        tc.conv_ty(&first, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        tc.conv_ty(&first, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
         assert_eq!(tc.conv_memo_entries.get(), 1);
-        tc.conv_ty(&first, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        tc.conv_ty(&first, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
         assert_eq!(tc.conv_memo_entries.get(), 1, "the exact judgment is a hit");
 
         let second = env(GlobalCtx::default());
-        tc.conv_ty(&second, &encoded, &Type::Nat, &Level::Zero).unwrap();
+        tc.conv_ty(&second, &s(encoded.clone()), &s(Type::Nat), &Level::Zero).unwrap();
         assert_eq!(
             tc.conv_memo_entries.get(),
             2,
@@ -2722,8 +3172,8 @@ mod memo_tests {
         assert_eq!(
             tc.conv_ty(
                 &e,
-                &encoded_nat(),
-                &Type::Unit { level: Level::Zero },
+                &s(encoded_nat()),
+                &s(Type::Unit { level: Level::Zero }),
                 &Level::Zero,
             ),
             Err(TypeError::NotConvertible),
@@ -2732,10 +3182,10 @@ mod memo_tests {
 
         let empty = Tc::new(0);
         assert_eq!(
-            empty.conv_ty(&e, &Type::Nat, &Type::Nat, &Level::Zero),
+            empty.conv_ty(&e, &s(Type::Nat), &s(Type::Nat), &Level::Zero),
             Err(TypeError::OutOfFuel),
         );
-        Tc::new(1).conv_ty(&e, &Type::Nat, &Type::Nat, &Level::Zero).unwrap();
+        Tc::new(1).conv_ty(&e, &s(Type::Nat), &s(Type::Nat), &Level::Zero).unwrap();
     }
 
     /// A `Ty 0`-coded definition whose body is `code`.
@@ -2802,15 +3252,15 @@ mod memo_tests {
             decl(LocalCtx::nil(), Type::Unit { level: Level::Zero }),
         ]));
         let u1 = global_tm(1);
-        assert_eq!(tc.tm_infer(&outer, &u1).map(|(t, _)| t), Ok(Type::Nat));
+        assert_eq!(tc.tm_infer_syn(&outer, &u1).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
         let pushed = outer.push_global(GlobalBinding::Ctx);
         assert_eq!(
-            tc.tm_infer(&pushed, &u1).map(|(t, _)| t),
+            tc.tm_infer_syn(&pushed, &u1).map(|(t, _)| (*t).clone()),
             Ok(Type::Unit { level: Level::Zero }),
             "the signature cache survived a telescope push",
         );
         // And index 2 is the outer binding again, now needing `shift_global(3)`.
-        assert_eq!(tc.tm_infer(&pushed, &global_tm(2)).map(|(t, _)| t), Ok(Type::Nat));
+        assert_eq!(tc.tm_infer_syn(&pushed, &global_tm(2)).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
 
         // The declared *context*, the other field of the signature: `·` at
         // index 1 before the push and `(·, x : Nat)` after, so the length-zero
@@ -2821,10 +3271,10 @@ mod memo_tests {
             decl(LocalCtx::nil(), Type::Nat),
             decl(one, Type::Nat),
         ]));
-        assert_eq!(tc.tm_infer(&outer, &u1).map(|(t, _)| t), Ok(Type::Nat));
+        assert_eq!(tc.tm_infer_syn(&outer, &u1).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
         let pushed = outer.push_global(GlobalBinding::Ctx);
         assert_eq!(
-            tc.tm_infer(&pushed, &u1).map(|(t, _)| t),
+            tc.tm_infer_syn(&pushed, &u1).map(|(t, _)| (*t).clone()),
             Err(TypeError::SubstMismatch),
             "the signature cache's declared context survived a telescope push",
         );
@@ -2844,22 +3294,22 @@ mod memo_tests {
         let tc = Tc::new(DEFAULT_FUEL);
         let outer = env(psi);
         // Index 1 is the outer definition, `⌜Nat⌝`; warm the cache at it.
-        assert_eq!(tc.whnf(&outer, &el_of_global(1)), Ok(Type::Nat));
+        assert_eq!(tc.whnf_syn(&outer, &el_of_global(1)), Ok(Type::Nat));
         // One more binding, and index 1 is the inner definition, `⌜Unit⁰⌝`.
         let pushed = outer.push_global(GlobalBinding::Ctx);
         assert_eq!(
-            tc.whnf(&pushed, &el_of_global(1)),
+            tc.whnf_syn(&pushed, &el_of_global(1)),
             Ok(Type::Unit { level: Level::Zero }),
             "the body cache survived a telescope push",
         );
         // And index 2 is the outer one again, now needing `shift_global(3)`.
-        assert_eq!(tc.whnf(&pushed, &el_of_global(2)), Ok(Type::Nat));
+        assert_eq!(tc.whnf_syn(&pushed, &el_of_global(2)), Ok(Type::Nat));
         // Conversion agrees through its own `Env::push_tele`, which is the
         // other half of the invariant: the two must rebuild together.
-        tc.conv_ty(&pushed, &el_of_global(1), &Type::Unit { level: Level::Zero }, &Level::Zero)
+        tc.conv_ty(&pushed, &s(el_of_global(1)), &s(Type::Unit { level: Level::Zero }), &Level::Zero)
             .unwrap();
         assert_eq!(
-            tc.conv_ty(&pushed, &el_of_global(1), &Type::Nat, &Level::Zero),
+            tc.conv_ty(&pushed, &s(el_of_global(1)), &s(Type::Nat), &Level::Zero),
             Err(TypeError::NotConvertible),
         );
     }

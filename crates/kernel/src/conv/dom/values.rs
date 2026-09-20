@@ -48,6 +48,8 @@ use crate::value::{
     ValueArena,
 };
 
+use crate::typing::ity::{ITy, Sel};
+
 use super::super::{Conv, Env, R, NC};
 use super::{Dom, TmView, TyView};
 
@@ -1941,4 +1943,90 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
             rec: RecEnv(*renv),
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Deferred types (docs/intro-by-type-design.md §3.3)
+// ---------------------------------------------------------------------------
+
+/// Evaluate a checker description into this query's arena.
+///
+/// `depth` is the Γ-length the description denotes in; a `Sel` carries its
+/// own, so only the top-level call has to supply one. Nothing here weakens
+/// anything: a value's variables are de Bruijn **levels**, so a type formed
+/// in a prefix of Γ evaluates in the identity environment of *that* prefix
+/// and is already correct in the longer scope. That is what makes a
+/// description arena-free — the alternative was a closure, and a closure
+/// needs an arena that outlives the query that made it.
+///
+/// `delta_final` is the one policy bit. Selecting a component must expose a
+/// former, so every *intermediate* step unfolds definitions; the result is
+/// unfolded only when the caller is `Tc::view`, whose contract is the
+/// rewriter's δ-transparent whnf. `Conv::ity_root` passes `false` and leaves
+/// δ where conversion's own arms decide it.
+pub(crate) fn eval_ity<'v>(
+    cv: &mut Conv<'v, Values>,
+    env: &Env<'v>,
+    t: &ITy,
+    depth: u32,
+    delta_final: bool,
+) -> R<Rc<VTy<'v>>> {
+    match t {
+        ITy::Owned(s) => eval_ity_syn(cv, env, s, depth, delta_final),
+        ITy::Syn(s) => eval_ity_syn(cv, env, s, depth, delta_final),
+        ITy::Sel { of, sel, at_depth } => {
+            crate::stats::sel_evals(1);
+            let w = eval_ity(cv, env, of, sel.of_depth(*at_depth), true)?;
+            let c: &'v TyClo<'v> = match (&*w, sel) {
+                (VTy::Sigma { fst, .. }, Sel::Fst) => fst,
+                (VTy::Sigma { snd, .. }, Sel::Snd(_)) => snd,
+                (VTy::Sum { lhs, .. }, Sel::Lhs) => lhs,
+                (VTy::Sum { rhs, .. }, Sel::Rhs) => rhs,
+                (VTy::Pi { dom, .. }, Sel::Dom) => dom,
+                (VTy::Pi { cod, .. }, Sel::Cod) => cod,
+                // The description was formed by a rule that had already
+                // viewed `of` and found the former; a different head here
+                // means the two disagree, which is a mismatch and not a
+                // panic.
+                _ => return Err(NC),
+            };
+            drop(w);
+            let arg: Option<&'v TmClo<'v>> = match sel {
+                Sel::Snd(a) => {
+                    let rho = value::Env::identity(env.arena, *at_depth);
+                    let v = run(cv, env, |ev| ev.eval_tm_ref(a, &rho))?;
+                    Some(env.arena.tm(TmClo::val(v)))
+                }
+                Sel::Cod => Some(fresh(env.arena, at_depth.saturating_sub(1))),
+                _ => None,
+            };
+            run(cv, env, |ev| {
+                let v = match arg {
+                    Some(a) => ev.apply_ty(c, &[a])?,
+                    None => ev.force_ty(c)?,
+                };
+                if delta_final { ev.delta_whnf_ty(v) } else { Ok(v) }
+            })
+        }
+    }
+}
+
+/// [`eval_ity`] on the syntax case: evaluate in the identity environment of
+/// the Γ-length the description denotes at.
+fn eval_ity_syn<'v>(
+    cv: &mut Conv<'v, Values>,
+    env: &Env<'v>,
+    s: &Type,
+    depth: u32,
+    delta_final: bool,
+) -> R<Rc<VTy<'v>>> {
+    let rho = if depth == glen(env) {
+        env.rho.clone()
+    } else {
+        value::Env::identity(env.arena, depth)
+    };
+    run(cv, env, |ev| {
+        let v = ev.eval_ty(s, &rho)?;
+        if delta_final { ev.delta_whnf_ty(v) } else { Ok(v) }
+    })
 }

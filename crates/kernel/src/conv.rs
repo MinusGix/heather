@@ -79,7 +79,8 @@ use crate::term::{
     Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
-use crate::value::{self, shift::Outer, TmClo, TyClo, ValueArena};
+use crate::typing::ity::ITy;
+use crate::value::{self, shift::Outer, TmClo, TyClo, ValueArena, VTy};
 #[cfg(feature = "value-metrics")]
 use crate::value::ValueMetrics;
 
@@ -270,6 +271,86 @@ pub(crate) fn conv_local_ctx_cached_with_metrics(
     let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
     let env = Env::new_with(&arena, psi, &LocalCtx::nil(), layer, cache);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
+}
+
+// -- entry points that take the checker's *descriptions* ---------------------
+//
+// `docs/intro-by-type-design.md` §3.3: an [`ITy`] is consumed by exactly two
+// operations, and both of them are a per-query arena's worth of value-domain
+// work. The arena's lifetime is unchanged — it is built here and dropped
+// when the query returns, exactly as `conv_type_cached`'s is — which is the
+// whole point of the checker holding descriptions rather than values
+// (§3.7, and the stage-1b measurement that withdrew the migration).
+//
+// Neither is reached on a declaration with no `@` form: every existing rule
+// produces `ITy::Syn`, `Tc::conv_ty` routes a `Syn`-against-`Syn` query to
+// `conv_type_cached` above, and `Tc::view` runs the rewriter unless it is
+// looking at a selection or at an `@` annotation.
+
+/// The head of a description's weak head normal form, **with the value
+/// discarded**: the levels are syntax in both domains, and the components a
+/// rule descends into become new selections rather than spellings. This is
+/// why nothing the checker keeps can outlive the arena.
+pub(crate) enum ITyHead {
+    Pi(Level, Level),
+    Sigma(Level, Level),
+    Sum(Level, Level),
+    Other,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv_ity_cached(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &ITy,
+    b: &ITy,
+    level: &Level,
+    fuel: u64,
+    #[cfg(feature = "value-metrics")] metrics: Option<&ValueMetrics>,
+    cache: Rc<GlobalCache>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    #[cfg(feature = "value-metrics")]
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    #[cfg(not(feature = "value-metrics"))]
+    let arena = ValueArena::new();
+    let env = Env::new_with(&arena, psi, gamma, layer, cache);
+    Conv::<Values>::new(fuel, psi).ity_root(&env, a, b, level)
+}
+
+/// [`ITyHead`] of one description — `Tc::view`'s value-domain path.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn head_ity_cached(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    t: &ITy,
+    fuel: u64,
+    #[cfg(feature = "value-metrics")] metrics: Option<&ValueMetrics>,
+    cache: Rc<GlobalCache>,
+) -> R<ITyHead> {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    #[cfg(feature = "value-metrics")]
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    #[cfg(not(feature = "value-metrics"))]
+    let arena = ValueArena::new();
+    let env = Env::new_with(&arena, psi, gamma, layer, cache);
+    let mut cv = Conv::<Values>::new(fuel, psi);
+    let d = gamma.entries.len() as u32;
+    let w = dom::values::eval_ity(&mut cv, &env, t, d, true)?;
+    Ok(match &*w {
+        VTy::Pi { dom_level, cod_level, .. } => {
+            ITyHead::Pi(dom_level.clone(), cod_level.clone())
+        }
+        VTy::Sigma { fst_level, snd_level, .. } => {
+            ITyHead::Sigma(fst_level.clone(), snd_level.clone())
+        }
+        VTy::Sum { lhs_level, rhs_level, .. } => {
+            ITyHead::Sum(lhs_level.clone(), rhs_level.clone())
+        }
+        _ => ITyHead::Other,
+    })
 }
 
 
@@ -2552,5 +2633,22 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.tm(&e, &x, &y, &ty, &spec.level)?;
         }
         Ok(())
+    }
+}
+
+impl<'v> Conv<'v, Values> {
+    /// [`Conv::ty_root`] over two *descriptions*
+    /// (`docs/intro-by-type-design.md` §3.3). The reflexivity shortcut and
+    /// the cross-head memo are the checker's, on the descriptions
+    /// themselves; what reaches here is a miss, and it evaluates both sides
+    /// in this query's arena and then runs the ordinary comparison. δ is as
+    /// lazy as `ty_root`'s: the evaluation stops at the value machine's own
+    /// weak head normal form and `ty_w` decides when to unfold.
+    fn ity_root(&mut self, env: &Env<'v>, a: &ITy, b: &ITy, l: &Level) -> R {
+        self.spend()?;
+        let d = env.gamma.entries.len() as u32;
+        let mut wa = dom::values::eval_ity(self, env, a, d, false)?;
+        let mut wb = dom::values::eval_ity(self, env, b, d, false)?;
+        self.ty_w(env, &mut wa, &mut wb, l)
     }
 }

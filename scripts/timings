@@ -47,6 +47,14 @@ COLUMNS = {
     # how much Ψ-multiplicity is left to attack
     # (issues/global-ref-rescope-per-occurrence.md).
     "sigs":      (["global_sig_rescopes"], 1),
+    # The checked spellings (docs/intro-by-type-design.md): `@` forms the
+    # checker judged, `ITy::Sel` descriptions the value machine evaluated, and
+    # descriptions the rewriter had to *spell*. All three are zero until the
+    # elaborator emits the forms, which is what makes `at` the round's marker
+    # column and `spelled` the one to watch once it does.
+    "at":        (["intro_at_nodes"], 1),
+    "sels":      (["sel_evals"], 1),
+    "spelled":   (["ity_materialized"], 1),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 
