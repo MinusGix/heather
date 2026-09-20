@@ -106,3 +106,26 @@ guarded loads, placements, symbolic edges, counter invariants, and a complete
 physical trace. In particular, it must not treat these semantic artifacts as
 native certificates or introduce another source-loop evaluator. General memory
 policy, writes, faults, and packing remain owned by the byte-memory issue.
+
+## Shared body frontend checkpoint
+
+The ordinary structured source reflector now recovers typed parameter lists
+instead of assuming two 64-bit words. It admits `Bool` and literal bitvector
+widths from zero through 64, Boolean matches, unsigned comparisons, constants,
+modular arithmetic/bitwise operations, and passthrough results. Boolean values
+use one-bit FunctionIR ports, with explicit conversion at the source boundary;
+`Bool` and `BitVec(1)` remain different source types. Resolved type/operation
+identities determine recognition, including Boolean constructor payloads.
+
+The `byte_equal` helper used by both loop clients now reflects into the existing
+`StructuredRegion`/`Node` representation and receives a kernel-checked source
+expansion certificate. The certificate renderer folds that same IR and retains
+DAG sharing. There is no additional predicate AST or loop-specific node family.
+
+This is a prerequisite for body lowering, not its completion. Calls to helpers,
+Nat-to-word refinement, `LoopStep` result bindings, and physical selection at
+byte/Boolean widths remain outstanding. In particular, `count_body` and
+`search_body` still decline as whole functions. The native export adapter keeps
+its explicit two-`BitVec(64)`-input, `BitVec(64)`-result restriction; source
+expansion certificates do not establish a physical execution or a global
+`StructuredRegionHolds` witness.

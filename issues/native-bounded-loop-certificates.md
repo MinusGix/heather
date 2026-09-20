@@ -66,3 +66,25 @@ is not a selected body or a physical certificate. The first source clients
 use Nat counting and Bool search carries, byte comparisons, and explicit
 input budgets. Counter representability and outcome ABI encoding remain
 obligations here; they were not silently fixed by the semantic interface.
+
+## Log
+
+- 2026-09-20: Started the shared-body prerequisite by generalizing the existing structured
+  source reflector and IR-based source expansion renderer. Typed parameter lists
+  now admit Bool and literal BitVec widths 0–64, with matching operation widths,
+  Boolean guards/results, passthrough leaves, and retained local DAG sharing.
+  Bool and BitVec(1) remain distinct at the source boundary; recognition uses
+  resolved type/operation identities, including nominal Boolean payload codes.
+  The loop clients' byte_equal helper now uses the ordinary StructuredRegion/Node
+  path and a checked source certificate. No loop-specific predicate AST, node,
+  or native profile was added. The native export adapter explicitly retains its
+  two-word interface. Focused tests passed seven groups, including prior recursive
+  selection/source agreements and the new typed/helper controls. Full validation
+  is running. Whole LoopStep bodies, helper-call composition, Nat representation,
+  physical byte/bit selection, symbolic edges, and complete loop traces remain;
+  this is a bounded frontend checkpoint, not a completed native-loop issue.
+- 2026-09-20: Shared typed frontend checkpoint validated: plain scripts/test passed 2847 tests,
+  0 failed, 5 ignored, including the existing recursive physical certificates and
+  native assembly execution regressions. No resource limits changed. Diff and
+  issue consistency checks pass. This checkpoint is complete; the broader native
+  loop acceptance remains open with the outstanding boundaries recorded above.

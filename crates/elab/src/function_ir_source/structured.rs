@@ -3,223 +3,276 @@
 use super::*;
 use cert::StructuredRegion;
 
+/// Source types remain distinct even when their FunctionIR ports have the same
+/// width: Bool is represented by BitVec(1), but is not a BitVec(1) parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructuredSourceType { Word(u64), Boolean }
+impl StructuredSourceType {
+    fn width(self) -> u64 { match self { Self::Word(width) => width, Self::Boolean => 1 } }
+    fn name(self) -> String { match self { Self::Word(width) => format!("BitVec({width})"), Self::Boolean => "Bool".into() } }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReflectedStructuredFunction {
     pub source_name: String,
+    pub parameters: Vec<StructuredSourceType>,
+    pub result: StructuredSourceType,
     pub region: StructuredRegion,
 }
 
-/// Reflect tail-position Boolean matches on resolved unsigned comparisons.
-/// Arithmetic remains the shared two-word DAG fragment. Kernel `Case` arms
-/// introduce an otherwise unused payload binder, including at nested matches.
-pub fn reflect_elaborated_structured(
-    elaborator: &Elaborator,
-    source_name: &str,
-) -> Result<ReflectedStructuredFunction, SourceError> {
-    let caller_abs = elaborator.global_abs(source_name).ok_or_else(|| {
-        SourceError::Unsupported(format!("unknown source function `{source_name}`"))
-    })?;
-    let source_name = elaborator.global_qualified_name_at(caller_abs).ok_or_else(|| {
-        SourceError::Unsupported("source function has no canonical global name".into())
-    })?;
-    let (ty, body) = elaborator.global_body(&source_name).ok_or_else(|| {
-        SourceError::Unsupported("structured source must be a transparent computing function".into())
-    })?;
-    if pi_arity(&ty) != 2 { return unsupported("structured source requires exactly two word parameters"); }
-    let Term::Lam { body, .. } = &*body else { return unsupported("missing source parameter"); };
-    let Term::Lam { body, .. } = &**body else { return unsupported("missing source parameter"); };
+fn absolute(term: &Term, caller: usize) -> Option<usize> {
+    match term { Term::GlobalTm { var, .. } => caller.checked_sub(1 + var.0 as usize), _ => None }
+}
+
+/// Reflect checked Boolean matches and width-aware pure DAGs. No argument
+/// count or machine ABI is imposed here. Native export validates its narrower
+/// interface separately. Types/operations are recognized by resolved identity.
+pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
+    -> Result<ReflectedStructuredFunction, SourceError>
+{
+    let caller = elaborator.global_abs(source_name).ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source_name}`")))?;
+    let source_name = elaborator.global_qualified_name_at(caller).ok_or_else(|| SourceError::Unsupported("source has no canonical global name".into()))?;
+    let (ty, body) = elaborator.global_body(&source_name).ok_or_else(|| SourceError::Unsupported("structured source must be transparent".into()))?;
+    use crate::gendefs::GenDef;
+    let code = |name: &str, parameterized: bool| elaborator.lookup_inductive(name)
+        .and_then(|ind| elaborator.types.gdefs().abs_for(&if parameterized { GenDef::TyCodeFn(ind.tag) } else { GenDef::TyCode(ind.tag) }))
+        .map(|abs| *abs as usize);
+    let boolean = code("bool::Bool", false);
+    let word = code("bitvec::BitVec", true);
+    let source_type = |ty: &Type| -> Result<StructuredSourceType, SourceError> {
+        if let Type::El { tm, .. } = ty {
+            let (head, args) = application_spine(tm);
+            let abs = absolute(head, caller);
+            if boolean.is_some() && abs == boolean && args.is_empty() { return Ok(StructuredSourceType::Boolean); }
+            if word.is_some() && abs == word && args.len() == 1 {
+                if let Some(width) = nat_literal(args[0]).filter(|width| *width <= 64) { return Ok(StructuredSourceType::Word(width)); }
+            }
+        }
+        unsupported("structured source supports Bool and literal BitVec widths up to 64")
+    };
+    let mut parameters = Vec::new();
+    let mut result = &*ty;
+    let mut term = &*body;
+    while let Type::Pi { dom, cod, .. } = result {
+        parameters.push(source_type(dom)?);
+        result = cod;
+        let Term::Lam { body, .. } = term else { return unsupported("missing source parameter"); };
+        term = body;
+    }
+    let result = source_type(result)?;
     let operations = OperationGlobals::resolve(elaborator)?;
-    let comparison = elaborator.global_abs("bitvec::unsigned_lt_bit").ok_or_else(|| {
-        SourceError::Unsupported("required operation `bitvec::unsigned_lt_bit` is not loaded".into())
-    })?;
-    let mut builder = Builder { caller_abs, operations, comparison, next_id: 3 };
-    let region = builder.region(body, 0)?;
+    let comparison = elaborator.global_abs("bitvec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
+    let payload = |slot| elaborator.lookup_inductive("bool::Bool")
+        .and_then(|ind| elaborator.types.gdefs().abs_for(&GenDef::PayloadCode(ind.tag, slot)))
+        .map(|abs| *abs as usize).ok_or_else(|| SourceError::Unsupported("Boolean payload identities are not loaded".into()));
+    let boolean_payloads = [payload(0)?, payload(1)?];
+    let mut builder = Builder { caller, operations, comparison, boolean_payloads, parameters: parameters.clone(), result, next_id: parameters.len() as u64 + 1 };
+    let region = builder.region(term, 0)?;
     cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
-    Ok(ReflectedStructuredFunction { source_name, region })
+    Ok(ReflectedStructuredFunction { source_name, parameters, result, region })
 }
 
 struct Builder {
-    caller_abs: usize,
+    caller: usize,
     operations: OperationGlobals,
     comparison: usize,
+    boolean_payloads: [usize; 2],
+    parameters: Vec<StructuredSourceType>,
+    result: StructuredSourceType,
     next_id: u64,
 }
 
-fn inputs() -> Vec<Port> { vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }] }
-fn outputs() -> Vec<Port> { vec![Port { id: 2, width: 64 }] }
+// Local interning preserves DAG sharing. There is no parallel source AST;
+// operands are reflected straight into the existing FunctionIR node family.
+#[derive(Default)]
+struct Dag { nodes: Vec<Node>, values: BTreeMap<DagKey, Port> }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum DagKey {
+    Constant(u64, u64),
+    Binary(SourceBinaryOperation, u64, u64, u64),
+    UnsignedLessThan(u64, u64, u64),
+}
+
+fn interface(parameters: &[StructuredSourceType]) -> Vec<Port> {
+    parameters.iter().enumerate().map(|(id, ty)| Port { id: id as u64, width: ty.width() }).collect()
+}
 
 impl Builder {
-    fn dag(&self) -> DagBuilder {
-        DagBuilder { next_id: self.next_id, ids: BTreeMap::new(), nodes: Vec::new(), node_expressions: Vec::new() }
+    fn boolean_components(&self, lhs: &Type, rhs: &Type) -> bool {
+        [lhs, rhs].iter().zip(self.boolean_payloads).all(|(ty, abs)| {
+            matches!(ty, Type::El { tm, .. } if absolute(tm, self.caller) == Some(abs))
+        })
     }
-
-    fn expression(&self, term: &Term, depth: u32) -> Result<SourceExpr, SourceError> {
-        reflect_term_under(term, self.caller_abs, &self.operations, depth)
+    fn output(&self) -> Port { Port { id: self.parameters.len() as u64, width: self.result.width() } }
+    fn fresh(&mut self) -> Result<u64, SourceError> {
+        let id = self.next_id;
+        self.next_id = id.checked_add(1).ok_or_else(|| SourceError::Unsupported("source graph exhausted stable IDs".into()))?;
+        Ok(id)
     }
-
-    fn region(&mut self, term: &Term, depth: u32) -> Result<StructuredRegion, SourceError> {
-        if let Term::Case { scrut, case_l, case_r, .. } = term {
-            let (head, args) = application_spine(scrut);
-            let Term::GlobalTm { var, .. } = head else {
-                return unsupported("structured condition must be a resolved unsigned comparison");
-            };
-            if self.caller_abs.checked_sub(1 + var.0 as usize) != Some(self.comparison)
-                || args.len() != 3 || nat_literal(args[0]) != Some(64) {
-                return unsupported("structured condition must call bitvec::unsigned_lt_bit at width 64");
+    fn node(&mut self, dag: &mut Dag, key: DagKey, width: u64, target: Option<u64>, make: impl FnOnce(u64) -> Node) -> Result<Port, SourceError> {
+        if target.is_none() { if let Some(port) = dag.values.get(&key) { return Ok(*port); } }
+        let port = Port { id: match target { Some(id) => id, None => self.fresh()? }, width };
+        dag.nodes.push(make(port.id));
+        dag.values.insert(key, port);
+        Ok(port)
+    }
+    fn constant(&mut self, dag: &mut Dag, width: u64, value: u64, target: Option<u64>) -> Result<Port, SourceError> {
+        self.node(dag, DagKey::Constant(width, value), width, target, |output| Node::Const { width, output, value })
+    }
+    fn expression(&mut self, term: &Term, depth: u32, expected: StructuredSourceType, dag: &mut Dag, target: Option<u64>) -> Result<Port, SourceError> {
+        let width = expected.width();
+        if let Term::Var(LocalVar(index)) = term {
+            let index = index.checked_sub(depth).and_then(|index| self.parameters.len().checked_sub(index as usize + 1))
+                .ok_or_else(|| SourceError::Unsupported("source expression uses a match payload or an unbound input".into()))?;
+            if self.parameters[index] != expected { return unsupported("source operand has the wrong type"); }
+            let input = Port { id: index as u64, width };
+            return if let Some(output) = target {
+                let zero = self.constant(dag, width, 0, None)?;
+                self.node(dag, DagKey::Binary(SourceBinaryOperation::BitOr, width, zero.id, input.id), width, Some(output), |output| Node::BitOr { width, output, left: zero.id, right: input.id })
+            } else { Ok(input) };
+        }
+        if expected == StructuredSourceType::Boolean {
+            match term {
+                Term::Inl { lhs, rhs, .. } if self.boolean_components(lhs, rhs) => return self.constant(dag, 1, 0, target),
+                Term::Inr { lhs, rhs, .. } if self.boolean_components(lhs, rhs) => return self.constant(dag, 1, 1, target),
+                _ => {}
             }
-            let mut dag = self.dag();
-            let left = dag.lower(&self.expression(args[1], depth)?)?;
-            let right = dag.lower(&self.expression(args[2], depth)?)?;
-            let condition = dag.next_id;
-            self.next_id = condition.checked_add(1).ok_or_else(|| {
-                SourceError::Unsupported("source graph exhausted stable IDs".into())
-            })?;
-            dag.nodes.push(Node::UnsignedLessThan { width: 64, output: condition, left, right });
-            let bit = Port { id: condition, width: 1 };
-            let prefix = Region { inputs: inputs(), nodes: dag.nodes, outputs: vec![bit] };
+        }
+        let (head, args) = application_spine(term);
+        let abs = absolute(head, self.caller).ok_or_else(|| SourceError::Unsupported("source value must use a resolved pure operation".into()))?;
+        if abs == self.comparison && args.len() == 3 && expected == StructuredSourceType::Boolean {
+            let operand_width = nat_literal(args[0]).filter(|width| *width <= 64).ok_or_else(|| SourceError::Unsupported("comparison width must be a literal up to 64".into()))?;
+            let ty = StructuredSourceType::Word(operand_width);
+            let left = self.expression(args[1], depth, ty, dag, None)?.id;
+            let right = self.expression(args[2], depth, ty, dag, None)?.id;
+            return self.node(dag, DagKey::UnsignedLessThan(operand_width, left, right), 1, target, |output| Node::UnsignedLessThan { width: operand_width, output, left, right });
+        }
+        if let StructuredSourceType::Word(width) = expected {
+            if abs == self.operations.of_nat && args.len() == 2 && nat_literal(args[0]) == Some(width) {
+                if let Some(value) = nat_literal(args[1]) { return self.constant(dag, width, value, target); }
+            }
+            if let Some(operation) = self.operations.operations.get(&abs).copied() {
+                if args.len() == 3 && nat_literal(args[0]) == Some(width) {
+                    let left = self.expression(args[1], depth, expected, dag, None)?.id;
+                    let right = self.expression(args[2], depth, expected, dag, None)?.id;
+                    return self.node(dag, DagKey::Binary(operation, width, left, right), width, target, |output| operation.node_at_width(width, output, left, right));
+                }
+            }
+        }
+        unsupported(if expected == StructuredSourceType::Boolean {
+            "Boolean values require an input, constant, or bitvec::unsigned_lt_bit"
+        } else { "unsupported structured source operation or result type" })
+    }
+    fn region(&mut self, term: &Term, depth: u32) -> Result<StructuredRegion, SourceError> {
+        let inputs = interface(&self.parameters);
+        let outputs = vec![self.output()];
+        if let Term::Case { lhs, rhs, scrut, case_l, case_r, .. } = term {
+            if !self.boolean_components(lhs, rhs) { return unsupported("structured matches must use the resolved Bool type"); }
+            let mut dag = Dag::default();
+            let condition = self.expression(scrut, depth, StructuredSourceType::Boolean, &mut dag, None)?;
             let when_false = Box::new(self.region(case_l, depth + 1)?);
             let when_true = Box::new(self.region(case_r, depth + 1)?);
-            let mut available = inputs();
-            available.push(bit);
-            Ok(StructuredRegion::Sequence { prefix, continuation: Box::new(StructuredRegion::Conditional {
-                inputs: available, condition, arguments: inputs(), outputs: outputs(), when_true, when_false,
-            }) })
+            let mut available = inputs.clone();
+            if !available.contains(&condition) { available.push(condition); }
+            let branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
+            if dag.nodes.is_empty() { Ok(branch) }
+            else { Ok(StructuredRegion::Sequence { prefix: Region { inputs, nodes: dag.nodes, outputs: vec![condition] }, continuation: Box::new(branch) }) }
         } else {
-            let expression = self.expression(term, depth)?;
-            let mut dag = self.dag();
-            // Name the last operation with the common result ID directly;
-            // subexpressions keep globally fresh IDs across both successors.
-            let final_node = match &expression {
-                SourceExpr::Binary { operation, left, right } => {
-                    let left = dag.lower(left)?;
-                    let right = dag.lower(right)?;
-                    operation.node(2, left, right)
-                }
-                SourceExpr::Constant(value) => Node::Const { width: 64, output: 2, value: *value },
-                SourceExpr::Input(_) => return unsupported("structured result leaves currently require arithmetic or a constant"),
-            };
-            dag.nodes.push(final_node);
-            self.next_id = dag.next_id;
-            Ok(StructuredRegion::Dataflow(Region { inputs: inputs(), nodes: dag.nodes, outputs: outputs() }))
+            let mut dag = Dag::default();
+            self.expression(term, depth, self.result, &mut dag, Some(self.output().id))?;
+            Ok(StructuredRegion::Dataflow(Region { inputs, nodes: dag.nodes, outputs }))
         }
     }
 }
 
-/// Check recovery of the source expression from a structured graph. This is
-/// deliberately only source agreement: it is neither an inhabitant of
-/// `StructuredRegionHolds` nor a physical execution/byte certificate. Keeping
-/// it separate lets the next composition step reject stale source locally.
-pub fn generate_structured_source_expansion(
-    prefix: &str,
-    reflected: &ReflectedStructuredFunction,
-) -> Result<String, SourceError> {
+/// Source agreement only: this reconstructs expressions from the shared IR.
+/// It is not a physical artifact or a global StructuredRegionHolds witness.
+pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedStructuredFunction) -> Result<String, SourceError> {
     cert::validate_structured_region(&reflected.region).map_err(SourceError::InvalidRegion)?;
-    if reflected.region.inputs() != inputs() || reflected.region.outputs() != outputs() {
-        return unsupported("structured source expansion requires the reflected two-word interface");
+    let output = Port { id: reflected.parameters.len() as u64, width: reflected.result.width() };
+    if reflected.region.inputs() != interface(&reflected.parameters) || reflected.region.outputs() != [output] {
+        return unsupported("structured source interface does not match its reflected types");
     }
     let mut module = Module::default();
     module.raw("import bitvec;\nimport bool;");
-    if let Some((source_module, _)) = reflected.source_name.rsplit_once("::") {
-        module.raw(format!("import {source_module};"));
-    }
-    let parameters = || vec![
-        Parameter::explicit("left", HeatherExpr::name("BitVec(64)")),
-        Parameter::explicit("right", HeatherExpr::name("BitVec(64)")),
-    ];
-    let arguments = || [HeatherExpr::name("left"), HeatherExpr::name("right")];
-    let initial = BTreeMap::from([(0, (64, arguments()[0].clone())), (1, (64, arguments()[1].clone()))]);
-    let mut expansion = Expansion { prefix, module: &mut module, next_name: 0 };
+    if let Some((owner, _)) = reflected.source_name.rsplit_once("::") { module.raw(format!("import {owner};")); }
+    let parameters: Vec<_> = reflected.parameters.iter().enumerate().map(|(i, ty)| Parameter::explicit(format!("arg{i}"), HeatherExpr::raw(ty.name()))).collect();
+    let arguments: Vec<_> = (0..parameters.len()).map(|i| HeatherExpr::name(format!("arg{i}"))).collect();
+    let initial = reflected.parameters.iter().enumerate().map(|(id, ty)| {
+        let expression = if *ty == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::ofBool", [arguments[id].clone()]) } else { arguments[id].clone() };
+        (id as u64, (ty.width(), expression))
+    }).collect();
+    let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result };
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
-    module.declaration(Declaration::function(&name, HeatherExpr::name("BitVec(64)"),
-        Block::expression(result)).parameters(parameters()));
+    module.declaration(Declaration::function(&name, HeatherExpr::raw(reflected.result.name()), Block::expression(result)).parameters(parameters.clone()));
     module.declaration(Declaration::theorem(format!("{prefix}_source_expands"),
-        HeatherExpr::equal(HeatherExpr::call(name.as_str(), arguments()),
-            HeatherExpr::call(reflected.source_name.as_str(), arguments())),
-        Block::expression(HeatherExpr::name("refl"))).parameters(parameters()));
+        HeatherExpr::equal(HeatherExpr::call(name.as_str(), arguments.clone()), HeatherExpr::call(reflected.source_name.as_str(), arguments)),
+        Block::expression(HeatherExpr::name("refl"))).parameters(parameters));
     Ok(module.render())
 }
 
-// The expression renderer folds FunctionIR itself, not a second source AST.
-// Named subexpressions keep repeated DAG uses from duplicating source text.
 struct Expansion<'a> {
     prefix: &'a str,
     module: &'a mut Module,
     next_name: usize,
+    parameters: &'a [Parameter],
+    arguments: &'a [HeatherExpr],
+    result: StructuredSourceType,
 }
 type Expressions = BTreeMap<u64, (u64, HeatherExpr)>;
-
 fn operand(values: &Expressions, id: u64, width: u64) -> Result<HeatherExpr, SourceError> {
     match values.get(&id) {
         Some((actual, expression)) if *actual == width => Ok(expression.clone()),
         _ => unsupported(&format!("source expansion has no value {id} at width {width}")),
     }
 }
-
 impl Expansion<'_> {
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
         for node in &region.nodes {
-            let (id, width, body) = match *node {
-                Node::Const { width: 64, output, value } => (output, 64,
-                    HeatherExpr::call("bitvec::ofNat", [HeatherExpr::nat(64), HeatherExpr::nat(value)])),
-                Node::Add { width: 64, output, left, right }
-                | Node::Sub { width: 64, output, left, right }
-                | Node::BitAnd { width: 64, output, left, right }
-                | Node::BitOr { width: 64, output, left, right }
-                | Node::BitXor { width: 64, output, left, right }
-                | Node::UnsignedLessThan { width: 64, output, left, right } => {
-                    let (function, width) = match node {
-                        Node::Add { .. } => ("bitvec::add", 64),
-                        Node::Sub { .. } => ("bitvec::sub", 64),
-                        Node::BitAnd { .. } => ("bitvec::band", 64),
-                        Node::BitOr { .. } => ("bitvec::bor", 64),
-                        Node::BitXor { .. } => ("bitvec::bxor", 64),
-                        Node::UnsignedLessThan { .. } => ("bitvec::unsigned_lt_bit", 1),
+            let (id, width, expression) = match *node {
+                Node::Const { width, output, value } => (output, width, HeatherExpr::call("bitvec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
+                Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
+                | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
+                | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right } => {
+                    let (function, comparison) = match node {
+                        Node::Add { .. } => ("bitvec::add", false), Node::Sub { .. } => ("bitvec::sub", false),
+                        Node::BitAnd { .. } => ("bitvec::band", false), Node::BitOr { .. } => ("bitvec::bor", false),
+                        Node::BitXor { .. } => ("bitvec::bxor", false), Node::UnsignedLessThan { .. } => ("bitvec::unsigned_lt_bit", true),
                         _ => unreachable!(),
                     };
-                    (output, width, HeatherExpr::call(function, [HeatherExpr::nat(64),
-                        operand(values, left, 64)?, operand(values, right, 64)?]))
+                    let expression = HeatherExpr::call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
+                    (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::ofBool", [expression]) } else { expression })
                 }
-                _ => return unsupported("source expansion encountered an unsupported node"),
+                _ => return unsupported("unsupported source expansion node"),
             };
             let name = format!("{}_value_{}", self.prefix, self.next_name);
             self.next_name += 1;
-            self.module.declaration(Declaration::function(&name,
-                HeatherExpr::name(if width == 1 { "Bool" } else { "BitVec(64)" }),
-                Block::expression(body))
-                .parameter(Parameter::explicit("left", HeatherExpr::name("BitVec(64)")))
-                .parameter(Parameter::explicit("right", HeatherExpr::name("BitVec(64)"))));
-            values.insert(id, (width, HeatherExpr::call(name.as_str(),
-                [HeatherExpr::name("left"), HeatherExpr::name("right")])));
+            self.module.declaration(Declaration::function(&name, HeatherExpr::raw(format!("BitVec({width})")), Block::expression(expression)).parameters(self.parameters.to_vec()));
+            values.insert(id, (width, HeatherExpr::call(name.as_str(), self.arguments.to_vec())));
         }
         Ok(())
     }
-
     fn region(&mut self, region: &StructuredRegion, mut values: Expressions) -> Result<HeatherExpr, SourceError> {
-        // Drop values not explicitly carried by this region's interface.
         values.retain(|id, _| region.inputs().iter().any(|port| port.id == *id));
         for port in region.inputs() { operand(&values, port.id, port.width)?; }
         match region {
             StructuredRegion::Dataflow(body) => {
                 self.dataflow(body, &mut values)?;
                 if body.outputs.len() != 1 { return unsupported("source expansion requires one result"); }
-                operand(&values, body.outputs[0].id, 64)
+                let value = operand(&values, body.outputs[0].id, self.result.width())?;
+                Ok(if self.result == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::head_bit", [HeatherExpr::nat(0), value]) } else { value })
             }
-            StructuredRegion::Sequence { prefix, continuation } => {
-                self.dataflow(prefix, &mut values)?;
-                self.region(continuation, values)
-            }
+            StructuredRegion::Sequence { prefix, continuation } => { self.dataflow(prefix, &mut values)?; self.region(continuation, values) }
             StructuredRegion::Conditional { condition, when_true, when_false, .. } => {
                 let condition = operand(&values, *condition, 1)?;
                 let yes = self.region(when_true, values.clone())?;
                 let no = self.region(when_false, values)?;
-                Ok(HeatherExpr::raw(format!("match {} {{ False => {}, True => {} }}",
-                    condition.render(), no.render(), yes.render())))
+                Ok(HeatherExpr::raw(format!("match bitvec::head_bit(0, {}) {{ False => {}, True => {} }}", condition.render(), no.render(), yes.render())))
             }
         }
     }
 }
-
 /// Compile the reflected structured source and close all internal graph
 /// assumptions. The public artifact needs only an arbitrary entry machine.
 pub fn generate_elaborated_structured_x86(
@@ -227,6 +280,9 @@ pub fn generate_elaborated_structured_x86(
     input_registers: [Gpr; 2], temporaries: &[Gpr], output: Gpr,
 ) -> Result<x86::StructuredX86Emission, SourceError> {
     let reflected = reflect_elaborated_structured(elaborator, source_name)?;
+    if reflected.parameters != [StructuredSourceType::Word(64), StructuredSourceType::Word(64)] || reflected.result != StructuredSourceType::Word(64) {
+        return unsupported("native structured export currently requires two BitVec(64) inputs and a BitVec(64) result");
+    }
     let placements = x86::Placements::from([(0, input_registers[0]), (1, input_registers[1])]);
     let mut emission = x86::generate_structured(prefix, &reflected.region, &placements, temporaries, output).map_err(SourceError::Lowering)?;
     let mut module = Module::default();

@@ -130,3 +130,6 @@ model, profile flag, kernel extension, or raised resource limit was added.
   The bounded nested-source-to-native checkpoint is complete. The broader
   multi-prefix-output/multi-result acceptance remains open; no issue scope or
   proof boundary was silently declared complete.
+- 2026-09-20: The shared typed source-interface prerequisite is being extended under
+  [[native-bounded-loop-certificates]]; the ordinary recursive reflector now also
+  serves byte/Boolean predicates. Multi-result physical joins remain open here.

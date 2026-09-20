@@ -11,7 +11,7 @@ mod readonly_loop;
 pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
 
 mod structured;
-pub use structured::{generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction};
+pub use structured::{generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType};
 
 use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};
@@ -43,37 +43,16 @@ impl SourceBinaryOperation {
     }
 
     fn node(self, output: u64, left: u64, right: u64) -> Node {
+        self.node_at_width(64, output, left, right)
+    }
+
+    fn node_at_width(self, width: u64, output: u64, left: u64, right: u64) -> Node {
         match self {
-            Self::Add => Node::Add {
-                width: 64,
-                output,
-                left,
-                right,
-            },
-            Self::Sub => Node::Sub {
-                width: 64,
-                output,
-                left,
-                right,
-            },
-            Self::BitAnd => Node::BitAnd {
-                width: 64,
-                output,
-                left,
-                right,
-            },
-            Self::BitOr => Node::BitOr {
-                width: 64,
-                output,
-                left,
-                right,
-            },
-            Self::BitXor => Node::BitXor {
-                width: 64,
-                output,
-                left,
-                right,
-            },
+            Self::Add => Node::Add { width, output, left, right },
+            Self::Sub => Node::Sub { width, output, left, right },
+            Self::BitAnd => Node::BitAnd { width, output, left, right },
+            Self::BitOr => Node::BitOr { width, output, left, right },
+            Self::BitXor => Node::BitXor { width, output, left, right },
         }
     }
 

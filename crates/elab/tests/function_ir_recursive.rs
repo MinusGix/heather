@@ -97,7 +97,7 @@ fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
 fn nested_source_selection_in_both_arms_preserves_live_inputs() {
     let elab = source_elaborator();
     for name in ["nested_true", "nested_false"] {
-        let reflected = reflect_elaborated_structured(&elab, name).unwrap();
+        let reflected = reflect_elaborated_structured(&elab, name).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(reflected.source_name, format!("recursive_source::{name}"));
         assert_eq!(reflected, reflect_elaborated_structured(&elab, &reflected.source_name).unwrap());
         let plan = lower_structured(&reflected.region, &placement(), SCRATCH, Gpr::Rax).unwrap();
@@ -211,7 +211,7 @@ fn source_expansion_is_kernel_checked_and_rejects_stale_source_and_bindings() {
     let elab = source_elaborator();
     let image = elab.semantic_image();
     for name in ["nested_true", "nested_false"] {
-        let reflected = reflect_elaborated_structured(&elab, name).unwrap();
+        let reflected = reflect_elaborated_structured(&elab, name).unwrap_or_else(|e| panic!("{name}: {e}"));
         let text = generate_structured_source_expansion("recovered", &reflected).unwrap();
         let mut checker = image.elaborator();
         checker.elab_module_source("agreement", &text).unwrap_or_else(|error| panic!("{}", error.render(&text)));
@@ -228,4 +228,105 @@ fn source_expansion_is_kernel_checked_and_rejects_stale_source_and_bindings() {
         let text = generate_structured_source_expansion("wrong", &wrong).unwrap();
         assert!(image.elaborator().elab_module_source("wrong_agreement", &text).is_err());
     }
+}
+
+const TYPED_SOURCE: &str = r#"
+import bitvec; import bool;
+fn mixed(flag: Bool, left: BitVec(8), right: BitVec(8), fallback: BitVec(8)) → BitVec(8) {
+    match flag {
+        False => fallback,
+        True => match bitvec::unsigned_lt_bit(8, left, right) {
+            False => bitvec::sub(8, left, right), True => bitvec::add(8, left, right),
+        },
+    }
+}
+fn bool_carry(flag: Bool, left: BitVec(8), right: BitVec(8), saved: Bool) → Bool {
+    match flag {
+        False => saved,
+        True => match bitvec::unsigned_lt_bit(8, left, right) { False => False, True => True },
+    }
+}
+fn one_bit_word(word: BitVec(1)) → BitVec(1) { word }
+fn one_bit_bool(value: Bool) → Bool { value }
+fn no_inputs() → Bool { True }
+fn widths(a: BitVec(16), b: BitVec(32), choose: Bool) → BitVec(32) {
+    match bitvec::unsigned_lt_bit(16, a, bitvec::ofNat(16, 12)) {
+        False => b,
+        True => match choose { False => bitvec::ofNat(32, 0), True => bitvec::bxor(32, b, bitvec::ofNat(32, 15)) },
+    }
+}
+fn shared(a, b: BitVec(8)) → BitVec(8) {
+    bitvec::add(8, bitvec::bxor(8, a, b), bitvec::bxor(8, a, b))
+}
+fn too_wide(a: BitVec(128)) → BitVec(128) { a }
+fn dynamic(width: Nat, value: BitVec(width)) → BitVec(width) { value }
+fn natural(value: Nat) → Nat { value }
+fn unsupported_helper(a: BitVec(8)) → BitVec(8) { bitvec::neg(8, a) }
+inductive CounterfeitBool { Off, On }
+fn other_sum() → Bool { match Off { Off => False, On => True } }
+fn unsigned_lt_bit(width: Nat, a, b: BitVec(width)) → Bool { True }
+fn shadowed_compare(a, b: BitVec(8)) → Bool { unsigned_lt_bit(8, a, b) }
+"#;
+
+#[test]
+fn typed_structured_interfaces_and_source_agreement() {
+    use heather_elab::function_ir_source::StructuredSourceType::{Boolean, Word};
+    let mut elab = source_elaborator();
+    elab.elab_module_source("typed_source", TYPED_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(TYPED_SOURCE)));
+    for name in ["mixed", "bool_carry", "one_bit_word", "one_bit_bool", "no_inputs", "widths", "shared"] {
+        let reflected = reflect_elaborated_structured(&elab, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        heather_elab::function_ir_cert::validate_structured_region(&reflected.region).unwrap();
+        let text = generate_structured_source_expansion(name, &reflected).unwrap();
+        elab.elab_module_source(&format!("{name}_agreement"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    }
+    let reflected = reflect_elaborated_structured(&elab, "mixed").unwrap();
+    assert_eq!(reflected.parameters, [Boolean, Word(8), Word(8), Word(8)]);
+    assert_eq!(reflected.result, Word(8));
+    assert_eq!(reflected.region.outputs(), [Port { id: 4, width: 8 }]);
+    let shared = reflect_elaborated_structured(&elab, "shared").unwrap();
+    let StructuredRegion::Dataflow(body) = &shared.region else { panic!() };
+    assert_eq!(body.nodes.len(), 2, "repeated subexpressions must share their DAG node");
+    for name in ["too_wide", "dynamic", "natural", "unsupported_helper", "other_sum", "shadowed_compare"] {
+        assert!(reflect_elaborated_structured(&elab, name).is_err(), "must decline {name}");
+    }
+    assert!(heather_elab::function_ir_source::generate_elaborated_structured_x86(&elab, "mixed_native", "mixed", [Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
+
+    let image = elab.semantic_image();
+    let mut wrong = reflected;
+    wrong.parameters[0] = Word(1); // Same IR width, different source interface.
+    let text = generate_structured_source_expansion("wrong_type", &wrong).unwrap();
+    heather_syntax::parse_file(&text).unwrap();
+    assert!(image.elaborator().elab_module_source("wrong_type", &text).is_err());
+    let mut wrong = reflect_elaborated_structured(&elab, "one_bit_word").unwrap();
+    wrong.source_name = "typed_source::one_bit_bool".into();
+    let text = generate_structured_source_expansion("wrong_source", &wrong).unwrap();
+    heather_syntax::parse_file(&text).unwrap();
+    assert!(image.elaborator().elab_module_source("wrong_source", &text).is_err());
+}
+
+#[test]
+fn loop_byte_predicate_uses_shared_structured_frontend() {
+    use heather_elab::function_ir_source::StructuredSourceType::{Boolean, Word};
+    let mut elab = source_elaborator();
+    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
+    elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    let reflected = reflect_elaborated_structured(&elab, "readonly_loops::byte_equal").unwrap();
+    assert_eq!(reflected.parameters, [Word(8), Word(8)]);
+    assert_eq!(reflected.result, Boolean);
+    let text = generate_structured_source_expansion("byte_equal", &reflected).unwrap();
+    elab.elab_module_source("byte_agreement", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let image = elab.semantic_image();
+    let mut wrong = reflected;
+    let StructuredRegion::Sequence { prefix, .. } = &mut wrong.region else { panic!() };
+    let Node::UnsignedLessThan { left, right, .. } = prefix.nodes.last_mut().unwrap() else { panic!() };
+    std::mem::swap(left, right);
+    let text = generate_structured_source_expansion("wrong_byte", &wrong).unwrap();
+    heather_syntax::parse_file(&text).unwrap();
+    assert!(image.elaborator().elab_module_source("wrong_byte", &text).is_err());
+    // A source/IR predicate certificate must not be confused with a selected
+    // LoopStep body or a native loop certificate.
+    assert!(reflect_elaborated_structured(&elab, "readonly_loops::count_body").is_err());
+    assert!(reflect_elaborated_structured(&elab, "readonly_loops::search_body").is_err());
 }

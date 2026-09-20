@@ -81,3 +81,6 @@ from commit 4db435c and is not retained as active compiler infrastructure.
 - 2026-09-20: [[function-ir-bounded-readonly-loop]] now defines the shared source/IR
   semantic contract and two source clients; native body/loop realization is
   the next step in [[native-bounded-loop-certificates]].
+- 2026-09-20: [[native-bounded-loop-certificates]] now has a shared typed frontend checkpoint:
+  the two loop clients' byte predicate reflects through ordinary structured IR;
+  whole-body and physical-loop realization remain outstanding.
