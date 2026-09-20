@@ -656,6 +656,16 @@ fn put_term(w: &mut Writer, term: &Term) {
             w.byte(52); put_level(w, ty_motive_level); put_level(w, tm_motive_level); put_motives(w, motives); put_branches(w, branches); put_level(w, code_level); put_ctx(w, ctx); put_type(w, ty); put_term(w, scrut);
         }
         Term::NatLit(n) => { w.byte(53); w.u64(*n); }
+        // The checked spellings (docs/intro-by-type-design.md). New tags, so
+        // an older reader refuses the byte rather than mis-decoding it; the
+        // image's `SemanticsIdentity` already changes with the kernel's
+        // sources, so a stored image from before this change is a miss and
+        // never reaches this reader at all.
+        Term::PairAt { ty, fst, snd } => { w.byte(54); put_type(w, ty); put_term(w, fst); put_term(w, snd); }
+        Term::InlAt { ty, val } => { w.byte(55); put_type(w, ty); put_term(w, val); }
+        Term::InrAt { ty, val } => { w.byte(56); put_type(w, ty); put_term(w, val); }
+        Term::FstAt { ty, pair } => { w.byte(57); put_type(w, ty); put_term(w, pair); }
+        Term::SndAt { ty, pair } => { w.byte(58); put_type(w, ty); put_term(w, pair); }
     }
 }
 
@@ -715,6 +725,11 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         51 => Term::ElimCodeTy { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, scrut: Rc::new(get_term(r)?) },
         52 => Term::ElimCodeTm { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
         53 => Term::NatLit(r.u64()?),
+        54 => Term::PairAt { ty: Rc::new(get_type(r)?), fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
+        55 => Term::InlAt { ty: Rc::new(get_type(r)?), val: Rc::new(get_term(r)?) },
+        56 => Term::InrAt { ty: Rc::new(get_type(r)?), val: Rc::new(get_term(r)?) },
+        57 => Term::FstAt { ty: Rc::new(get_type(r)?), pair: Rc::new(get_term(r)?) },
+        58 => Term::SndAt { ty: Rc::new(get_type(r)?), pair: Rc::new(get_term(r)?) },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }

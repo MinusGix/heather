@@ -895,6 +895,14 @@ impl Tc {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
 
+    /// Reject everything but the computing layers p and m. The checked
+    /// spellings' guard (`docs/intro-by-type-design.md` §2.3): stronger than
+    /// [`Tc::not_var_layer`], which admits layer c, because a form layer c
+    /// admits is a form the code recursors must range over.
+    fn computing_layer(&self, env: &Env) -> R {
+        if env.layer.computes() { Ok(()) } else { Err(TypeError::LayerMismatch) }
+    }
+
     fn meta_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
@@ -1777,6 +1785,94 @@ impl Tc {
                     snd_ty
                         .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
                     snd_level.clone(),
+                ))
+            }
+
+            // -- checked spellings (extension; docs/intro-by-type-design.md)
+            //
+            // `pair@(T; a; b)`, `inl@`, `inr@`, `fst@`, `snd@`: one whole-type
+            // annotation instead of the former's components. Each rule is the
+            // component rule with the premise `ty_check(component, level)`
+            // replaced by "whnf `T` and read the component off the former",
+            // and — for the three intros — the *un-reduced* `T` returned as
+            // the synthesized type, which is what keeps every consumer lazy
+            // in δ.
+            //
+            // The layer guard is the design's §2.3 and is what leaves the
+            // code grammar and all 56 recursor branches alone: these forms do
+            // not exist at layers c and v, so `code_eq` never meets one and
+            // `rec.rs` needs no branch. `not_var_layer` would let layer c
+            // through, so the guard is `computes()`.
+            //
+            // **This is the rewriter's transcription**, and it builds the
+            // reduct: `self.whnf` spells `T`'s former through `reduce.rs` and
+            // the component types come out as syntax. That is the object this
+            // round exists to stop constructing, and it is acceptable here for
+            // exactly one reason — `typing.rs` is about to become the
+            // differential *oracle* (design §9 stage 1b), where the reduct is
+            // the price of being the specification.
+            Term::PairAt { ty, fst, snd } => {
+                self.computing_layer(env)?;
+                let level = self.ty_infer(env, ty)?;
+                let Type::Sigma { fst_level, snd_level, fst: fst_ty, snd: snd_ty } =
+                    self.whnf(env, ty)?
+                else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.tm_check(env, fst, &fst_ty, &fst_level)?;
+                let snd_at = snd_ty
+                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(fst)));
+                self.tm_check(env, snd, &snd_at, &snd_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok((ty.as_ref().clone(), level))
+            }
+            Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
+                self.computing_layer(env)?;
+                let level = self.ty_infer(env, ty)?;
+                let Type::Sum { lhs_level, rhs_level, lhs, rhs } = self.whnf(env, ty)? else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
+                    (rhs, rhs_level)
+                } else {
+                    (lhs, lhs_level)
+                };
+                self.tm_check(env, val, &summand, &summand_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok((ty.as_ref().clone(), level))
+            }
+            // `fst@(T; p) : S` — note the scrutinee is checked against `T`
+            // itself, not against the Σ: an argument that is a `pair@` then
+            // converts its own un-reduced annotation against this one, which
+            // is a head comparison and not a walk of two reducts.
+            Term::FstAt { ty, pair } => {
+                self.computing_layer(env)?;
+                // `ty_infer` first in all five rules: `whnf` is untyped and
+                // must not be handed an annotation nothing has checked.
+                let level = self.ty_infer(env, ty)?;
+                let Type::Sigma { fst_level, fst: fst_ty, .. } = self.whnf(env, ty)? else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.tm_check(env, pair, ty, &level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok(((*fst_ty).clone(), fst_level))
+            }
+            // `snd@(T; p) : U[fst@(T;p)/x]` — the substituted term is the
+            // checked spelling again, so the inferred type stays source-shaped
+            // even though `U` itself came out of the whnf.
+            Term::SndAt { ty, pair } => {
+                self.computing_layer(env)?;
+                let level = self.ty_infer(env, ty)?;
+                let Type::Sigma { snd_level, snd: snd_ty, .. } = self.whnf(env, ty)? else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.tm_check(env, pair, ty, &level)?;
+                let fst_p =
+                    Term::FstAt { ty: Rc::clone(ty), pair: Rc::clone(pair) };
+                crate::stats::intro_at_nodes(1);
+                Ok((
+                    snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
+                    snd_level,
                 ))
             }
 

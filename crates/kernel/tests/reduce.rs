@@ -2309,3 +2309,70 @@ fn beta_elim_code_tm_elim_w() {
     ]);
     assert_eq!(step_term(&t, &gamma), Some(expect));
 }
+
+/// β on the projections fires on **either** pair spelling, in all four
+/// combinations, and reads nothing from either annotation
+/// (`docs/intro-by-type-design.md` §2.4; `docs/delam-extensions.md` §16.2
+/// already says this for the component form).
+///
+/// The cross combinations are the ones worth a test: a `fst` over a `pair@`
+/// and a `fst@` over a `pair` are exactly what a module containing both
+/// spellings produces, and neither is reachable from the same-spelling arms.
+/// The annotations here are deliberately *wrong* — `Empty` is not a Σ — to
+/// pin "reads nothing from the annotations": reduction is untyped, and a rule
+/// that consulted them would have to fail or diverge here.
+#[test]
+fn projection_beta_fires_on_either_pair_spelling() {
+    let gamma = nil_ctx(0);
+    let junk = || Rc::new(Type::Empty { level: Level::Zero });
+    let component = || {
+        Term::Pair {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: junk(),
+            snd_ty: junk(),
+            fst: Rc::new(num(3)),
+            snd: Rc::new(num(4)),
+        }
+    };
+    let checked =
+        || Term::PairAt { ty: junk(), fst: Rc::new(num(3)), snd: Rc::new(num(4)) };
+
+    for pair in [component(), checked()] {
+        let p = Rc::new(pair);
+        let fst = Term::Fst {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: junk(),
+            snd_ty: junk(),
+            pair: Rc::clone(&p),
+        };
+        let snd = Term::Snd {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: junk(),
+            snd_ty: junk(),
+            pair: Rc::clone(&p),
+        };
+        let fst_at = Term::FstAt { ty: junk(), pair: Rc::clone(&p) };
+        let snd_at = Term::SndAt { ty: junk(), pair: Rc::clone(&p) };
+        assert_eq!(step_term(&fst, &gamma), Some(num(3)));
+        assert_eq!(step_term(&fst_at, &gamma), Some(num(3)));
+        assert_eq!(step_term(&snd, &gamma), Some(num(4)));
+        assert_eq!(step_term(&snd_at, &gamma), Some(num(4)));
+        // The intros are weak head normal, and the projections over them are
+        // not — the grammar and the step relation must agree, which
+        // `whnf_grammar_agrees_with_the_step_relation` checks in general and
+        // this pins for the new forms.
+        assert!(is_whnf_term(&p));
+        assert!(!is_whnf_term(&fst_at));
+        assert!(!is_neutral_term(&fst_at));
+    }
+
+    // Over a *neutral* pair both spellings are neutral, and the checked one
+    // does not step its annotation looking for a former it cannot use.
+    let stuck = Term::FstAt { ty: junk(), pair: Rc::new(v(0)) };
+    assert!(is_neutral_term(&stuck));
+    assert!(is_whnf_term(&stuck));
+    assert_eq!(step_term(&stuck, &nil_ctx(1)), None);
+}

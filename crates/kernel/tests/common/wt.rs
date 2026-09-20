@@ -787,7 +787,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(27) {
+        match r.below(32) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -1225,10 +1225,111 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                     bl,
                 );
             }
+            // -- the checked spellings (docs/intro-by-type-design.md) -----
+            //
+            // Generated so the premise `T ⇝* former` is exercised in its
+            // *non*-reflexive case: the annotation is `El ⌜Σ⌝` / `El ⌜+⌝`,
+            // which decodes to the former rather than being it, so the rule
+            // has to reduce and a consumer of the inferred type has to see
+            // through one decode. A literal former as the annotation would
+            // make every `@` form a rename of its component sibling and test
+            // nothing the component form does not.
+            //
+            // Computing layers only: these forms do not exist at c
+            // (design §2.3), and `gen_letbox_tm` generates under `Layer::Code`.
+            27 if b > 0 && env.layer.computes() => {
+                // pair@(T; a; b) : T, T = El ⌜Σ(x:El A). El B⌝.
+                let Some((ty, _sigma, fst_ty, snd_ty, dl, cl, lmax)) = gen_at_sigma(env, r, b)
+                else {
+                    continue;
+                };
+                let Some(a) = gen_wt_term_at(env, r, b / 2, &fst_ty, &dl) else { continue };
+                let snd_at =
+                    snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
+                let Some(bb) = gen_wt_term_at(env, r, b / 2, &snd_at, &cl) else { continue };
+                return (rt(Term::PairAt { ty: Rc::clone(&ty), fst: a, snd: bb }), ty, lmax);
+            }
+            28 | 29 if b > 0 && env.layer.computes() => {
+                // inl@/inr@(T; v) : T, T = El ⌜A + B⌝.
+                let right = r.below(2) == 0;
+                let (lhs_e, dl) = gen_encoding(env, r, b / 2);
+                let (rhs_e, cl) = gen_encoding(env, r, b / 2);
+                let lhs = rty(Type::El { level: dl.clone(), tm: Rc::clone(&lhs_e) });
+                let rhs = rty(Type::El { level: cl.clone(), tm: Rc::clone(&rhs_e) });
+                let lmax = Level::max(dl.clone(), cl.clone());
+                let ty = rty(Type::El {
+                    level: lmax.clone(),
+                    tm: rt(Term::TmSum {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs: lhs_e,
+                        rhs: rhs_e,
+                    }),
+                });
+                let (summand, sl) = if right { (&rhs, &cl) } else { (&lhs, &dl) };
+                let Some(v) = gen_wt_term_at(env, r, b / 2, summand, sl) else { continue };
+                let t = if right {
+                    Term::InrAt { ty: Rc::clone(&ty), val: v }
+                } else {
+                    Term::InlAt { ty: Rc::clone(&ty), val: v }
+                };
+                return (rt(t), ty, lmax);
+            }
+            30 | 31 if b > 0 && env.layer.computes() => {
+                // fst@/snd@(T; p) : S resp. U[fst@(T;p)/x].
+                let Some((ty, sigma, fst_ty, snd_ty, dl, cl, lmax)) = gen_at_sigma(env, r, b)
+                else {
+                    continue;
+                };
+                // The pair is generated at the *decoded* Σ, so checking it
+                // against `T` is a real `Sigma`-against-`El⌜Sigma⌝` query —
+                // the head pair the owning issue's 2026-09-18 trace found at
+                // 96 % of a record tower's misses.
+                let Some(p) = gen_wt_term_at(env, r, b / 2, &sigma, &lmax) else { continue };
+                if r.below(2) == 0 {
+                    return (rt(Term::FstAt { ty, pair: p }), fst_ty, dl);
+                }
+                let fst_p = rt(Term::FstAt { ty: Rc::clone(&ty), pair: Rc::clone(&p) });
+                let snd_at = snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(fst_p));
+                return (rt(Term::SndAt { ty, pair: p }), rty(snd_at), cl);
+            }
             _ => continue,
         }
     }
     (rt(Term::Zero), rty(Type::Nat), Level::Zero)
+}
+
+/// A Σ behind one decode, for the checked spellings' generators: the
+/// annotation `El ⌜Σ(x:El A). El B⌝`, the `Type::Sigma` it decodes to, its two
+/// components and their levels.
+#[allow(clippy::type_complexity)]
+fn gen_at_sigma(
+    env: &WtEnv,
+    r: &mut Rng,
+    b: u32,
+) -> Option<(Rc<Type>, Rc<Type>, Rc<Type>, Rc<Type>, Level, Level, Level)> {
+    let (fst_e, dl) = gen_encoding(env, r, b / 2);
+    let fst_ty = rty(Type::El { level: dl.clone(), tm: Rc::clone(&fst_e) });
+    let e = env.push_entry(Rc::clone(&fst_ty), dl.clone());
+    let (snd_e, cl) = gen_encoding(&e, r, b / 2);
+    let snd_ty = rty(Type::El { level: cl.clone(), tm: Rc::clone(&snd_e) });
+    let lmax = Level::max(dl.clone(), cl.clone());
+    let ty = rty(Type::El {
+        level: lmax.clone(),
+        tm: rt(Term::TmSigma {
+            fst_level: dl.clone(),
+            snd_level: cl.clone(),
+            fst: fst_e,
+            snd: snd_e,
+        }),
+    });
+    let sigma = rty(Type::Sigma {
+        fst_level: dl.clone(),
+        snd_level: cl.clone(),
+        fst: Rc::clone(&fst_ty),
+        snd: Rc::clone(&snd_ty),
+    });
+    Some((ty, sigma, fst_ty, snd_ty, dl, cl, lmax))
 }
 
 /// `letbox` over freshly boxed code. Half the time the motive is constant

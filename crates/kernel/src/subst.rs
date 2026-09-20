@@ -659,6 +659,28 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             snd_ty: sub_ty(snd_ty, m, at + dep(0, 0, 1)),
             pair: sub_tm(pair, m, at),
         },
+
+        // The checked spellings (docs/intro-by-type-design.md): one type
+        // annotation each and **no binder in it** — `snd_ty` bound one, `T`
+        // binds none — so every walker here loses the `dep(0, 0, 1)` its
+        // component sibling needs.
+        Term::PairAt { ty, fst, snd } => Term::PairAt {
+            ty: sub_ty(ty, m, at),
+            fst: sub_tm(fst, m, at),
+            snd: sub_tm(snd, m, at),
+        },
+        Term::InlAt { ty, val } => {
+            Term::InlAt { ty: sub_ty(ty, m, at), val: sub_tm(val, m, at) }
+        }
+        Term::InrAt { ty, val } => {
+            Term::InrAt { ty: sub_ty(ty, m, at), val: sub_tm(val, m, at) }
+        }
+        Term::FstAt { ty, pair } => {
+            Term::FstAt { ty: sub_ty(ty, m, at), pair: sub_tm(pair, m, at) }
+        }
+        Term::SndAt { ty, pair } => {
+            Term::SndAt { ty: sub_ty(ty, m, at), pair: sub_tm(pair, m, at) }
+        },
         Term::Triv { level } => Term::Triv { level: m.level(level, at) },
         Term::ElimEmpty { level, scrut_level, motive, scrut } => Term::ElimEmpty {
             level: m.level(level, at),

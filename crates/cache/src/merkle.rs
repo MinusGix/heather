@@ -231,6 +231,16 @@ mod tag {
     pub const E_SQUASH: u8 = 0x73;
     pub const E_ELIMSQUASH: u8 = 0x74;
     pub const E_NATLIT: u8 = 0x75;
+    // The checked spellings (docs/intro-by-type-design.md). Distinct tags,
+    // because `pair@(T;a;b)` and `pair(x:S.U;a;b)` are distinct syntax and a
+    // Merkle hash names syntax: two spellings that convert are still two
+    // terms, and collapsing them here would make a declaration's hash depend
+    // on which spelling the elaborator happened to emit.
+    pub const E_PAIR_AT: u8 = 0x76;
+    pub const E_INL_AT: u8 = 0x77;
+    pub const E_INR_AT: u8 = 0x78;
+    pub const E_FST_AT: u8 = 0x79;
+    pub const E_SND_AT: u8 = 0x7a;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -696,6 +706,32 @@ impl<'a> Walk<'a> {
                 self.ty(motive);
                 self.term(case);
                 self.term(scrut);
+            }
+            Term::PairAt { ty, fst, snd } => {
+                self.tag(tag::E_PAIR_AT);
+                self.ty(ty);
+                self.term(fst);
+                self.term(snd);
+            }
+            Term::InlAt { ty, val } => {
+                self.tag(tag::E_INL_AT);
+                self.ty(ty);
+                self.term(val);
+            }
+            Term::InrAt { ty, val } => {
+                self.tag(tag::E_INR_AT);
+                self.ty(ty);
+                self.term(val);
+            }
+            Term::FstAt { ty, pair } => {
+                self.tag(tag::E_FST_AT);
+                self.ty(ty);
+                self.term(pair);
+            }
+            Term::SndAt { ty, pair } => {
+                self.tag(tag::E_SND_AT);
+                self.ty(ty);
+                self.term(pair);
             }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
                 self.tag(tag::E_PAIR);

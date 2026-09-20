@@ -502,6 +502,7 @@ fn the_generator_oracle_holds_across_seed_streams() {
         0x9ae16a3b2f90404f,
         0x2545f4914f6cdd1d,
     ];
+    let before = heather_kernel::stats::snapshot();
     for mix in STREAMS {
         for seed in 0..800u64 {
             let mut r = Rng::new(seed ^ mix);
@@ -515,6 +516,21 @@ fn the_generator_oracle_holds_across_seed_streams() {
             );
         }
     }
+    // Coverage, not correctness — and the reason it is an assertion rather
+    // than a comment: a generator that stops producing the checked spellings
+    // (docs/intro-by-type-design.md) makes every property test in this crate
+    // silently vacuous on them, which is exactly how a form gets added and
+    // never exercised. `intro_at_nodes` is bumped by the typing rules, so
+    // this counts the `@` forms the *checker* met, not the ones the generator
+    // built and then discarded.
+    let met = heather_kernel::stats::snapshot().since(&before).intro_at_nodes;
+    eprintln!("checked spellings met by the checker: {met}");
+    assert!(
+        met > 0,
+        "the generator reached no checked spelling in {} cases — cases 27-31 of \
+         `gen_wt_term` are unreachable or always `continue`",
+        STREAMS.len() * 800
+    );
 }
 
 // ==========================================================================

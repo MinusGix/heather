@@ -273,6 +273,16 @@ impl fmt::Debug for Term {
                 f,
                 "snd[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {pair:?})"
             ),
+            // The checked spellings print with `@` and their one
+            // annotation, so a `{:?}` says at a glance which spelling a term
+            // carries. Budget-bounded like everything here.
+            Term::PairAt { ty, fst, snd } => {
+                write!(f, "pair@({ty:?}; {fst:?}; {snd:?})")
+            }
+            Term::InlAt { ty, val } => write!(f, "inl@({ty:?}; {val:?})"),
+            Term::InrAt { ty, val } => write!(f, "inr@({ty:?}; {val:?})"),
+            Term::FstAt { ty, pair } => write!(f, "fst@({ty:?}; {pair:?})"),
+            Term::SndAt { ty, pair } => write!(f, "snd@({ty:?}; {pair:?})"),
             Term::Triv { level } => write!(f, "⟨⟩{level:?}"),
             Term::ElimEmpty { level, scrut_level, motive, scrut } => {
                 write!(f, "elimE[{level:?},{scrut_level:?}](M {motive:?}; {scrut:?})")

@@ -212,8 +212,16 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     // application and projection rules read the head's inferred type
     // instead, so the view never builds closures for them.
     App { dom_level: &'a Level, cod_level: &'a Level, fun: D::TmC, arg: D::TmC },
-    Fst { fst_level: &'a Level, snd_level: &'a Level, pair: D::TmC },
-    Snd { fst_level: &'a Level, snd_level: &'a Level, pair: D::TmC },
+    // `levels` is `None` for the checked spellings `fst@` / `snd@`
+    // (docs/intro-by-type-design.md), which store no levels at all — their
+    // annotation is one whole type and finding the levels inside it would
+    // mean reducing, which a view may not do. The arms read them as a
+    // redundant cross-check on the *component* spelling and take the real
+    // answer from the Σ the head infers, so `None` costs nothing but the
+    // check, and it is what makes `fst@(T;p)` convertible with
+    // `fst(x:S.U;p)` — which the translation `⌊·⌋` requires.
+    Fst { levels: Option<(&'a Level, &'a Level)>, pair: D::TmC },
+    Snd { levels: Option<(&'a Level, &'a Level)>, pair: D::TmC },
     UApp { levels: &'a [Level], fun: D::TmC },
     CtxApp { ctx: &'a LocalCtx, fun: D::TmC },
     TyApp { arg: &'a Rc<Type>, fun: D::TmC },
@@ -1217,10 +1225,10 @@ impl<'v> Dom<'v> for Syn {
                 arg: Rc::clone(arg),
             },
             Term::Fst { fst_level, snd_level, pair, .. } => {
-                TmView::Fst { fst_level, snd_level, pair: Rc::clone(pair) }
+                TmView::Fst { levels: Some((fst_level, snd_level)), pair: Rc::clone(pair) }
             }
             Term::Snd { fst_level, snd_level, pair, .. } => {
-                TmView::Snd { fst_level, snd_level, pair: Rc::clone(pair) }
+                TmView::Snd { levels: Some((fst_level, snd_level)), pair: Rc::clone(pair) }
             }
             Term::UApp { fun, levels } => {
                 TmView::UApp { levels, fun: Rc::clone(fun) }
@@ -1287,11 +1295,22 @@ impl<'v> Dom<'v> for Syn {
                 rec: (),
             },
 
+            // The checked spellings view exactly as the forms they spell
+            // (docs/intro-by-type-design.md §9.0 item 3): the annotation is
+            // not part of any of these views, so there is nothing to see
+            // through and nothing to reduce. This is also what makes
+            // `inl@(T;a)` and `inl(A;B;a)` convertible without a new arm.
+            Term::InlAt { val, .. } => TmView::Inl { val: Rc::clone(val) },
+            Term::InrAt { val, .. } => TmView::Inr { val: Rc::clone(val) },
+            Term::FstAt { pair, .. } => TmView::Fst { levels: None, pair: Rc::clone(pair) },
+            Term::SndAt { pair, .. } => TmView::Snd { levels: None, pair: Rc::clone(pair) },
+
             Term::Lam { .. }
             | Term::ULam { .. }
             | Term::CtxLam { .. }
             | Term::TyLam { .. }
             | Term::Pair { .. }
+            | Term::PairAt { .. }
             | Term::Triv { .. }
             | Term::SRefl { .. }
             | Term::Squash { .. } => TmView::Opaque,

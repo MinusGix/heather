@@ -235,6 +235,23 @@ fn ctm(t: &Term, c: &mut Counts) {
             ctm(case, c);
             ctm(scrut, c);
         }
+        // The checked spellings are the readback devices' *terminus*: these
+        // three files (rbcount/rbemit/rbname) are superseded by
+        // docs/intro-by-type-design.md and deleted in its stage 2. The arms
+        // here keep them compiling and are structurally right — one
+        // annotation, no binder.
+        Term::PairAt { ty, fst, snd } => {
+            cty(ty, c);
+            ctm(fst, c);
+            ctm(snd, c);
+        }
+        Term::InlAt { ty, val: t }
+        | Term::InrAt { ty, val: t }
+        | Term::FstAt { ty, pair: t }
+        | Term::SndAt { ty, pair: t } => {
+            cty(ty, c);
+            ctm(t, c);
+        }
         Term::Pair {
             fst_ty,
             snd_ty,

@@ -1767,8 +1767,15 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
         Elim::UApp { levels } => TmView::UApp { levels, fun: head },
         Elim::CtxApp { ctx } => TmView::CtxApp { ctx, fun: head },
         Elim::TyApp { arg } => TmView::TyApp { arg, fun: head },
-        Elim::Fst { fst_level, snd_level, .. } => TmView::Fst { fst_level, snd_level, pair: head },
-        Elim::Snd { fst_level, snd_level, .. } => TmView::Snd { fst_level, snd_level, pair: head },
+        // A value's projection elim always has its levels: the evaluator
+        // reads them off the Σ when it builds the elim, whichever spelling
+        // the syntax used.
+        Elim::Fst { fst_level, snd_level, .. } => {
+            TmView::Fst { levels: Some((fst_level, snd_level)), pair: head }
+        }
+        Elim::Snd { fst_level, snd_level, .. } => {
+            TmView::Snd { levels: Some((fst_level, snd_level)), pair: head }
+        }
         Elim::ElimNat { level, motive, base, step } => TmView::ElimNat {
             level,
             motive: TyC::under(env, *motive, 1),

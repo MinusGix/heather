@@ -2181,11 +2181,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // projected pair is itself neutral (η already handled non-neutral
             // pairs in tm_nf).
             (
-                TmView::Fst { fst_level: dl1, snd_level: cl1, pair: p1 },
-                TmView::Fst { fst_level: dl2, snd_level: cl2, pair: p2 },
+                TmView::Fst { levels: ls1, pair: p1 },
+                TmView::Fst { levels: ls2, pair: p2 },
             ) => {
-                self.lev_eq(dl1, dl2)?;
-                self.lev_eq(cl1, cl2)?;
+                // Both stored: the redundant cross-check the component
+                // spelling affords. Either side a checked spelling: no
+                // stored levels to compare, and the inferred Σ below is the
+                // answer either way.
+                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                }
                 // Typed projection rule — the App arm's argument, verbatim:
                 // on well-typed inputs each stored Σ annotation converts with
                 // the Σ inferred for its own pair, so relating the two
@@ -2201,11 +2207,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 Ok((fst, fst_level.clone()))
             }
             (
-                TmView::Snd { fst_level: dl1, snd_level: cl1, pair: p1 },
-                TmView::Snd { fst_level: dl2, snd_level: cl2, pair: p2 },
+                TmView::Snd { levels: ls1, pair: p1 },
+                TmView::Snd { levels: ls2, pair: p2 },
             ) => {
-                self.lev_eq(dl1, dl2)?;
-                self.lev_eq(cl1, cl2)?;
+                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                }
                 // As for `fst`: the inferred Σ, not the stored annotations.
                 let (w, _) = self.tm_nee_c(env, p1, p2)?;
                 let w = self.delta_to_head_ty(env, w)?;

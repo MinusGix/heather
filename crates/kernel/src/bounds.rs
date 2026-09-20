@@ -439,6 +439,15 @@ impl Cache {
                 .type_use(lhs)
                 .join(self.type_use(rhs))
                 .join(self.term_use(val)),
+            // The checked spellings: one annotation, no binder under it.
+            Term::PairAt { ty, fst, snd } => self
+                .type_use(ty)
+                .join(self.term_use(fst))
+                .join(self.term_use(snd)),
+            Term::InlAt { ty, val: t }
+            | Term::InrAt { ty, val: t }
+            | Term::FstAt { ty, pair: t }
+            | Term::SndAt { ty, pair: t } => self.type_use(ty).join(self.term_use(t)),
             Term::Case {
                 lhs,
                 rhs,

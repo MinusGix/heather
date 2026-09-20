@@ -613,6 +613,27 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// [`Eval::delta_step`] for types: advance exactly one definition in the
     /// term at which an `El`, `Vec`, or `Fin` is δ-stuck, then perform the
     /// newly enabled non-δ type computation.
+    /// Unfold a type value's definitions until its head is a former, or it
+    /// is stuck on something δ cannot move.
+    ///
+    /// The evaluator-side spelling of `Conv::delta_to_head_ty`, and it exists
+    /// for exactly one customer: the checked spellings
+    /// (`docs/intro-by-type-design.md`), whose single annotation is the
+    /// *un-reduced* type the elaborator had. Evaluating one means exposing
+    /// that type's head former and reading the component closures off it —
+    /// which is where the sharing this round is about comes from, because the
+    /// components are closures over an environment and are never copied.
+    pub fn ty_to_former(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+        while matches!(&*v, VTy::Neutral(_)) {
+            let d = self.delta_step_ty(Rc::clone(&v))?;
+            if Rc::ptr_eq(&d, &v) {
+                break;
+            }
+            v = d;
+        }
+        Ok(v)
+    }
+
     pub fn delta_step_ty(&mut self, v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
         enum Next<'v> {
             Done,
@@ -1146,6 +1167,58 @@ impl<'a, 'v> Eval<'a, 'v> {
                 rhs: yclo(env, rhs),
                 val: tclo(env, val),
             },
+
+            // -- the checked spellings (docs/intro-by-type-design.md) -------
+            //
+            // These do not get value forms of their own. The evaluator
+            // exposes the annotation's head former and builds the *existing*
+            // `Val::Pair` / `Val::Inl` / `Val::Inr` from the component
+            // closures it finds there. Three consequences, all of them the
+            // point: `value.rs`, `value/shift.rs` and the native fast paths
+            // (`eval/bits.rs`, `eval/transduce.rs`, `eval/runs.rs`) never
+            // learn the spelling exists; `pair@(T;a;b)` and
+            // `pair(x:S.U;a;b)` are the same value, so they convert with no
+            // new arm; and the components are the Σ value's own closures, so
+            // the object the elaborator used to *write out* is now shared
+            // rather than copied.
+            //
+            // An annotation whose head is not the expected former is
+            // ill-typed. `eval` has one failure and it is `OutOfFuel` — "no
+            // answer", never a verdict — so that is what it returns. The
+            // rejection belongs to the typing rule, which does its own whnf
+            // and reports `HeadMismatch`.
+            Term::PairAt { ty, fst, snd } => {
+                let t = self.eval_ty(ty, env)?;
+                let t = self.ty_to_former(t)?;
+                let VTy::Sigma { fst_level, snd_level, fst: fty, snd: sty } = &*t else {
+                    return Err(OutOfFuel);
+                };
+                Val::Pair {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: *fty,
+                    snd_ty: *sty,
+                    fst: tclo(env, fst),
+                    snd: tclo(env, snd),
+                }
+            }
+            Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
+                let right = matches!(t, Term::InrAt { .. });
+                let s = self.eval_ty(ty, env)?;
+                let s = self.ty_to_former(s)?;
+                let VTy::Sum { lhs_level, rhs_level, lhs, rhs } = &*s else {
+                    return Err(OutOfFuel);
+                };
+                let (lhs_level, rhs_level) = (lhs_level.clone(), rhs_level.clone());
+                let (lhs, rhs) = (*lhs, *rhs);
+                let val = tclo(env, val);
+                if right {
+                    Val::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                } else {
+                    Val::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                }
+            }
+
             Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => {
                 Val::Sup {
                     shape_level: shape_level.clone(),
@@ -1245,6 +1318,28 @@ impl<'a, 'v> Eval<'a, 'v> {
                     snd_level: snd_level.clone(),
                     fst_ty: yclo(env, fst_ty),
                     snd_ty: yclo(env, snd_ty),
+                };
+                return Ok(Work::Elim(p, e));
+            }
+            // The checked projections push the *existing* elims, with the
+            // levels and component closures taken from the annotation's Σ
+            // (see the intro arms above). A neutral `fst@` is therefore
+            // indistinguishable from a neutral `fst` at the value domain,
+            // which is what `conv.rs`'s typed projection arm wants.
+            Term::FstAt { ty, pair } | Term::SndAt { ty, pair } => {
+                let second = matches!(t, Term::SndAt { .. });
+                let s = self.eval_ty(ty, env)?;
+                let s = self.ty_to_former(s)?;
+                let VTy::Sigma { fst_level, snd_level, fst, snd } = &*s else {
+                    return Err(OutOfFuel);
+                };
+                let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+                let (fst_ty, snd_ty) = (*fst, *snd);
+                let p = self.eval_tm(pair, env)?;
+                let e = if second {
+                    Elim::Snd { fst_level, snd_level, fst_ty, snd_ty }
+                } else {
+                    Elim::Fst { fst_level, snd_level, fst_ty, snd_ty }
                 };
                 return Ok(Work::Elim(p, e));
             }

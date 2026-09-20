@@ -136,4 +136,16 @@ counters! {
     /// fill, i.e. per (binding, Ψ) pair some occurrence demanded. The work
     /// behind `global_ref_rescopes`, which is the demand.
     global_sig_rescopes,
+    /// `pair@` / `inl@` / `inr@` / `fst@` / `snd@` nodes the checker judged —
+    /// the **checked spellings** of `docs/intro-by-type-design.md`, whose
+    /// annotation is the un-reduced type the elaborator had rather than the
+    /// reduct's components. One per typing rule fired, so it counts the
+    /// forms a gate actually met and not the ones a source happens to
+    /// contain.
+    ///
+    /// The round's marker column (design §8): it is **zero by construction**
+    /// before the elaborator emits the forms, so `scripts/perf ab --marker
+    /// intro_at_nodes` can assert the after binary emits it and the before
+    /// one does not.
+    intro_at_nodes,
 }

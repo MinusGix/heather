@@ -1843,6 +1843,151 @@ fn pair_projections_and_dependency() {
     assert_eq!(infer_closed(Layer::Var, &mk_pair()).unwrap_err(), TypeError::LayerMismatch);
 }
 
+/// The **checked spellings** (`docs/intro-by-type-design.md`): the same
+/// dependent pair as `pair_projections_and_dependency` above, spelled with the
+/// un-reduced type it was checked at rather than that type's components.
+///
+/// The annotation here is `El ⌜Σ(A : Ty 0). El A⌝`, which *decodes* to the Σ —
+/// the non-reflexive case of the premise `T ⇝* former`, and the only one that
+/// tests anything the component form does not. Four things are asserted, one
+/// per design claim:
+///
+/// 1. `pair@` infers its annotation **un-reduced**, not the former;
+/// 2. `fst@` / `snd@` infer the components of the annotation's whnf, and
+///    `snd@`'s substituted projection is the `@` spelling again;
+/// 3. the spellings are interconvertible with the component forms in both
+///    directions — the translation `⌊·⌋` of §2.4, observed;
+/// 4. the layer guard is `computes()` and not `not_var_layer`: layer **c**
+///    refuses them, which is what leaves the code grammar and the 56
+///    recursor branches alone.
+#[test]
+fn checked_spellings_infer_their_annotation() {
+    // ⌜Σ(A : Ty 0). El A⌝ and the Σ it decodes to.
+    let code = Term::TmSigma {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst: rt(Term::TmTy(Level::Zero)),
+        // `El(A)` for the bound `A : Ty 0` is encoded by `A` itself.
+        snd: rt(v(0)),
+    };
+    let at = Type::El { level: c(1), tm: rt(code) };
+    let snd_ty = Type::El { level: Level::Zero, tm: rt(v(0)) };
+    let sigma = Type::Sigma {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst: rty(Type::Ty(Level::Zero)),
+        snd: rty(snd_ty.clone()),
+    };
+
+    let mk_at = || Term::PairAt {
+        ty: rty(at.clone()),
+        fst: rt(Term::TmNat),
+        snd: rt(Term::Zero),
+    };
+    // (1) The inferred type is `T` itself. This is the whole point: a
+    // consumer that converts it against another `T` pays a head comparison.
+    let (ty, l) = infer_closed(Layer::Prog, &mk_at()).unwrap();
+    assert!(ty == at, "pair@ must infer its annotation un-reduced");
+    assert!(l.equiv(&c(1)));
+    // (3) …and it is the same term as the component spelling, both ways.
+    check_closed(Layer::Prog, &mk_at(), &sigma, &c(1)).unwrap();
+    let component = Term::Pair {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Ty(Level::Zero)),
+        snd_ty: rty(snd_ty.clone()),
+        fst: rt(Term::TmNat),
+        snd: rt(Term::Zero),
+    };
+    check_closed(Layer::Prog, &component, &at, &c(1)).unwrap();
+
+    // (2) fst@ infers the component of the annotation's whnf.
+    let fst_at = Term::FstAt { ty: rty(at.clone()), pair: rt(mk_at()) };
+    let (ty, l) = infer_closed(Layer::Prog, &fst_at).unwrap();
+    assert!(l.equiv(&c(1)));
+    // The component comes out of the *decode*, so it is `El ⌜Ty 0⌝` rather
+    // than `Ty 0` — convertible, and the point is that it is a component of
+    // the annotation and not of a reduct the elaborator wrote down.
+    assert!(ty == Type::El { level: c(1), tm: rt(Term::TmTy(Level::Zero)) }, "{ty:?}");
+    // …and converts with the component projection over the component pair,
+    // which is `⌊·⌋` on a projection.
+    check_closed(Layer::Prog, &fst_at, &Type::Ty(Level::Zero), &c(1)).unwrap();
+
+    // snd@ infers `U[fst@(T;p)/x]` — the substituted projection is the
+    // checked spelling again, so the inferred type stays source-shaped.
+    let snd_at_tm = Term::SndAt { ty: rty(at.clone()), pair: rt(mk_at()) };
+    let (ty, l) = infer_closed(Layer::Prog, &snd_at_tm).unwrap();
+    assert!(l.equiv(&Level::Zero));
+    assert!(ty == Type::El { level: Level::Zero, tm: rt(fst_at.clone()) });
+    // β fires on the checked pair spelling, so this is `Nat`.
+    check_closed(Layer::Prog, &snd_at_tm, &Type::Nat, &Level::Zero).unwrap();
+
+    // The injections, over `El ⌜Nat + Unit 0⌝`. The two summands are
+    // **distinct** on purpose: with `Nat + Nat` an `inl@`/`inr@` swap is
+    // invisible, which is exactly the negative control
+    // `docs/testing-generated-terms.md` asks for.
+    let sum_code = Term::TmSum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rt(Term::TmNat),
+        rhs: rt(Term::TmUnit { level: Level::Zero }),
+    };
+    let sum_at = Type::El { level: Level::Zero, tm: rt(sum_code) };
+    let sum = Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+    };
+    let zero = || rt(Term::Zero);
+    let triv = || rt(Term::Triv { level: Level::Zero });
+    for (right, good, bad) in [(false, zero(), triv()), (true, triv(), zero())] {
+        let mk = |v: Rc<Term>| {
+            if right {
+                Term::InrAt { ty: rty(sum_at.clone()), val: v }
+            } else {
+                Term::InlAt { ty: rty(sum_at.clone()), val: v }
+            }
+        };
+        let (ty, l) = infer_closed(Layer::Prog, &mk(good)).unwrap();
+        assert!(ty == sum_at, "inj@ must infer its annotation un-reduced");
+        assert!(l.equiv(&Level::Zero));
+        check_closed(Layer::Prog, &mk(Rc::clone(&bad)), &sum, &Level::Zero).unwrap_err();
+        // The negative control: the *other* summand's inhabitant is refused,
+        // so the rule really reads the injection's side and not just "some
+        // component of the annotation's whnf".
+        assert!(infer_closed(Layer::Prog, &mk(bad)).is_err());
+    }
+
+    // An annotation whose whnf is not the expected former is a head
+    // mismatch, not a panic and not an acceptance.
+    let wrong = Term::PairAt {
+        ty: rty(Type::Nat),
+        fst: rt(Term::Zero),
+        snd: rt(Term::Zero),
+    };
+    assert_eq!(infer_closed(Layer::Prog, &wrong).unwrap_err(), TypeError::HeadMismatch);
+
+    // (4) The layer guard. Layer v refuses every form, as it refuses the
+    // component ones; layer **c** refuses these and *admits* the component
+    // ones — that asymmetry is the design's §2.3 and it is what keeps
+    // `rec.rs` at zero new branches.
+    for layer in [Layer::Var, Layer::Code] {
+        assert_eq!(
+            infer_closed(layer, &mk_at()).unwrap_err(),
+            TypeError::LayerMismatch,
+            "{layer:?} must refuse a checked spelling"
+        );
+        assert_eq!(
+            infer_closed(layer, &Term::FstAt { ty: rty(at.clone()), pair: rt(mk_at()) })
+                .unwrap_err(),
+            TypeError::LayerMismatch
+        );
+    }
+    // The control: the component spelling is fine at c.
+    infer_closed(Layer::Code, &component).unwrap();
+}
+
 // -------------------------------------------------------------------------
 // Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
 // -------------------------------------------------------------------------

@@ -358,6 +358,16 @@ pub(crate) fn slots_tm(t: &Term) -> Vec<(Kid, Scope)> {
                 tm(scrut, Scope::Same),
             ]
         }
+        // Superseded by docs/intro-by-type-design.md; see rbcount.rs.
+        Term::PairAt { ty: t, fst, snd } => {
+            vec![ty(t, Scope::Same), tm(fst, Scope::Same), tm(snd, Scope::Same)]
+        }
+        Term::InlAt { ty: t, val: x }
+        | Term::InrAt { ty: t, val: x }
+        | Term::FstAt { ty: t, pair: x }
+        | Term::SndAt { ty: t, pair: x } => {
+            vec![ty(t, Scope::Same), tm(x, Scope::Same)]
+        }
         Term::Pair { fst_level, fst_ty, snd_ty, fst, snd, .. } => vec![
             ty(fst_ty, Scope::Same),
             ty(snd_ty, under(fst_ty, fst_level)),
@@ -606,6 +616,11 @@ pub(crate) fn rebuild_tm(t: &Term, kids: &[Kid]) -> Term {
             case: tm(2),
             scrut: tm(3),
         },
+        Term::PairAt { .. } => Term::PairAt { ty: ty(0), fst: tm(1), snd: tm(2) },
+        Term::InlAt { .. } => Term::InlAt { ty: ty(0), val: tm(1) },
+        Term::InrAt { .. } => Term::InrAt { ty: ty(0), val: tm(1) },
+        Term::FstAt { .. } => Term::FstAt { ty: ty(0), pair: tm(1) },
+        Term::SndAt { .. } => Term::SndAt { ty: ty(0), pair: tm(1) },
         Term::Pair { fst_level, snd_level, .. } => Term::Pair {
             fst_level: fst_level.clone(),
             snd_level: snd_level.clone(),

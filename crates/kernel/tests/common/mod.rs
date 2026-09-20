@@ -1112,6 +1112,15 @@ pub fn count_term(t: &Term) -> u64 {
         | Term::TmEmpty { .. }
         | Term::Triv { .. } => 0,
         Term::TmPi { dom, cod, .. } => count_term(dom) + count_term(cod),
+        // The checked spellings (docs/intro-by-type-design.md): one
+        // annotation, no binder.
+        Term::PairAt { ty, fst, snd } => {
+            count_type(ty) + count_term(fst) + count_term(snd)
+        }
+        Term::InlAt { ty, val: t }
+        | Term::InrAt { ty, val: t }
+        | Term::FstAt { ty, pair: t }
+        | Term::SndAt { ty, pair: t } => count_type(ty) + count_term(t),
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }

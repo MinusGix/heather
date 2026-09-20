@@ -447,6 +447,65 @@ pub enum Term {
         pair: Rc<Term>,
     },
 
+    // ---- checked spellings (extension; docs/intro-by-type-design.md) ----
+    //
+    // Five forms, one per intro or projection above, carrying **the type the
+    // term was checked at** in place of that type's components. They exist
+    // because the elaborator normalizes a type to decide a match and would
+    // otherwise have to write the reduct's halves into the annotation — an
+    // object exponential as a tree and linear as a value graph
+    // (`issues/elab-emits-normal-form-of-matched-type-argument.md`). Here the
+    // annotation is the un-reduced type it already had, and whoever needs the
+    // halves computes them in the evaluator, which shares.
+    //
+    // Each is a *checked spelling* of the form above it, related by the
+    // typing-preserving translation `⌊·⌋` of the design's §2.4: erase to the
+    // component form at the whnf the derivation contains. Conservativity is
+    // that translation; the kernel's own guarantee is that nothing reads the
+    // annotation except the rule that exposes its head.
+    //
+    // **Valid at the computing layers only** (p and m). Layer c never sees
+    // them, which is why the code grammar, `code_eq`, and all 56 recursor
+    // branches in `rec.rs` are untouched: `tm_pair`'s branch telescope types
+    // its field sub-structures by `U_S` and `U_T`, and a branch handed one
+    // `U_Σ` could state neither (design §2.2). Inside a `box` the component
+    // forms continue to be the only spelling.
+    /// `pair@(T; a; b) : T` where `T ⇝* Σ^{l,l'}(x:S). U` — the checked
+    /// spelling of [`Term::Pair`]. Infers `T` *un-reduced*, so a consumer
+    /// that compares it against another `T` pays a head comparison and one
+    /// that compares it against the former pays one δ step.
+    PairAt {
+        ty: Rc<Type>,
+        fst: Rc<Term>,
+        snd: Rc<Term>,
+    },
+    /// `inl@(T; a) : T` where `T ⇝* A +^{l,l'} B` and `a : A` — the checked
+    /// spelling of [`Term::Inl`].
+    InlAt {
+        ty: Rc<Type>,
+        val: Rc<Term>,
+    },
+    /// `inr@(T; b) : T` where `T ⇝* A +^{l,l'} B` and `b : B` — the checked
+    /// spelling of [`Term::Inr`].
+    InrAt {
+        ty: Rc<Type>,
+        val: Rc<Term>,
+    },
+    /// `fst@(T; p) : S` where `T ⇝* Σ^{l,l'}(x:S). U` and `p : T` — the
+    /// checked spelling of [`Term::Fst`]. Its inferred type is the component
+    /// `S`, which has no spelling smaller than the reduct; that is what forces
+    /// the checker to values (design §3.1).
+    FstAt {
+        ty: Rc<Type>,
+        pair: Rc<Term>,
+    },
+    /// `snd@(T; p) : U[fst@(T;p)/x]` — the checked spelling of
+    /// [`Term::Snd`], same premises as [`Term::FstAt`].
+    SndAt {
+        ty: Rc<Type>,
+        pair: Rc<Term>,
+    },
+
     // ---- unit and empty (extension beyond DeLaM ch. 04) ----
     /// `⟨⟩^l : Unit^l` — the unique inhabitant of `Unit^l`. By η every term of
     /// `Unit^l` type is convertible to it (proof irrelevance), so `Unit` has

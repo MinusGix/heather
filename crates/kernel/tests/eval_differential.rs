@@ -516,6 +516,54 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(fst, f2, gamma, d)?;
                 self.lazy_tm(snd, s2, gamma, d)
             }
+
+            // -- the checked spellings (docs/intro-by-type-design.md) -------
+            //
+            // `⊩` relates a value to the ch. 06 whnf of the term's
+            // **translation** `⌊·⌋`, which for these five forms means: erase
+            // the `@` to the component form at the whnf the typing derivation
+            // contains. The evaluator does exactly that, so the harness has
+            // to do it too — reduce `T` to its former here and relate the
+            // value's annotation closures to *its* components, which is the
+            // adequacy statement for these arms and not a weakening of it.
+            (
+                Val::Pair { fst_level: a1, snd_level: a2, fst_ty, snd_ty, fst, snd },
+                Term::PairAt { ty, fst: f2, snd: s2 },
+            ) => {
+                let Type::Sigma { fst_level: b1, snd_level: b2, fst: ft2, snd: st2 } =
+                    whnf_type_delta(ty, gamma, self.defs, FUEL)
+                        .map_err(|_| "pair@ annotation exhausted fuel".to_string())?
+                else {
+                    return bad("pair@ annotation is not a Σ");
+                };
+                self.lev(a1, &b1, "pair@ fst level")?;
+                self.lev(a2, &b2, "pair@ snd level")?;
+                self.lazy_ty(fst_ty, &ft2, gamma, d)?;
+                self.under_ty(snd_ty, &st2, gamma, 1, d)?;
+                self.lazy_tm(fst, f2, gamma, d)?;
+                self.lazy_tm(snd, s2, gamma, d)
+            }
+            (
+                Val::Inl { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
+                Term::InlAt { ty, val: v2 },
+            )
+            | (
+                Val::Inr { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
+                Term::InrAt { ty, val: v2 },
+            ) => {
+                let Type::Sum { lhs_level: b1, rhs_level: b2, lhs: l2, rhs: r2 } =
+                    whnf_type_delta(ty, gamma, self.defs, FUEL)
+                        .map_err(|_| "inj@ annotation exhausted fuel".to_string())?
+                else {
+                    return bad("inj@ annotation is not a sum");
+                };
+                self.lev(a1, &b1, "inj@ lhs level")?;
+                self.lev(a2, &b2, "inj@ rhs level")?;
+                self.lazy_ty(lhs, &l2, gamma, d)?;
+                self.lazy_ty(rhs, &r2, gamma, d)?;
+                self.lazy_tm(val, v2, gamma, d)
+            }
+
             (Val::Triv { level: a }, Term::Triv { level: b }) => self.lev(a, b, "⟨⟩ level"),
             (
                 Val::Inl { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
@@ -729,6 +777,29 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lev(a2, b2, "proj snd level")?;
                 self.lazy_ty(fst_ty, f2, gamma, d)?;
                 self.under_ty(snd_ty, s2, gamma, 1, d)?;
+                self.ne(&prefix, pair, gamma, depth)
+            }
+            // The checked projections, related through `⌊·⌋` as the intros
+            // above are: the elim's levels and component closures come from
+            // the annotation's whnf, so that is what the harness reduces to.
+            (
+                Elim::Fst { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
+                Term::FstAt { ty, pair },
+            )
+            | (
+                Elim::Snd { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
+                Term::SndAt { ty, pair },
+            ) => {
+                let Type::Sigma { fst_level: b1, snd_level: b2, fst: f2, snd: s2 } =
+                    whnf_type_delta(ty, gamma, self.defs, FUEL)
+                        .map_err(|_| "proj@ annotation exhausted fuel".to_string())?
+                else {
+                    return bad("proj@ annotation is not a Σ");
+                };
+                self.lev(a1, &b1, "proj@ fst level")?;
+                self.lev(a2, &b2, "proj@ snd level")?;
+                self.lazy_ty(fst_ty, &f2, gamma, d)?;
+                self.under_ty(snd_ty, &s2, gamma, 1, d)?;
                 self.ne(&prefix, pair, gamma, depth)
             }
             (

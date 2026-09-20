@@ -514,7 +514,12 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         }
         // fst (pair a b) ⇝ a; else reduce the pair   (extension)
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
-            Term::Pair { fst, .. } => Some((**fst).clone()),
+            // β fires on **either** pair spelling and reads nothing from the
+            // pair's annotations (docs/intro-by-type-design.md §2.4; the same
+            // statement docs/delam-extensions.md §16.2 already makes for the
+            // component form). This is why the checked spellings need no
+            // rule of their own in the recursor's β.
+            Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
             _ => step_term_delta(pair, gamma, defs).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -523,6 +528,29 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 pair: Rc::new(p),
             }),
         },
+        // fst@ / snd@ (extension; docs/intro-by-type-design.md). β as above,
+        // on either pair spelling; otherwise step the pair, then the
+        // annotation. Stepping `T` is what eventually exposes its former and
+        // it is the only thing these arms use it for — nothing here spells
+        // the components, so this arm is linear in `T` and not in its reduct.
+        Term::FstAt { ty, pair } | Term::SndAt { ty, pair } => {
+            let second = matches!(t, Term::SndAt { .. });
+            let rebuild = |ty: Rc<Type>, pair: Rc<Term>| {
+                if second { Term::SndAt { ty, pair } } else { Term::FstAt { ty, pair } }
+            };
+            match &**pair {
+                Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
+                    Some((**(if second { snd } else { fst })).clone())
+                }
+                // The annotation is **not** stepped, exactly as `Fst`'s
+                // component annotations are not: no β can be found inside it,
+                // and a projection on a neutral pair is neutral whatever
+                // shape `T` is in. Exposing `T`'s former is the *typing*
+                // rule's business (`Tc::whnf`), not reduction's.
+                _ => step_term_delta(pair, gamma, defs)
+                    .map(|p| rebuild(Rc::clone(ty), Rc::new(p))),
+            }
+        }
         // elim_Empty has no β rule (Empty has no constructors); it only ever
         // steps its scrutinee, staying neutral when the scrutinee is.
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
@@ -571,10 +599,12 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             case_r,
             scrut,
         } => match &**scrut {
-            Term::Inl { val, .. } => {
+            // As for the projections: `case` fires on either injection
+            // spelling and reads neither's annotation.
+            Term::Inl { val, .. } | Term::InlAt { val, .. } => {
                 Some(case_l.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
             }
-            Term::Inr { val, .. } => {
+            Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 Some(case_r.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
             }
             _ => step_term_delta(scrut, gamma, defs).map(|s| Term::Case {
@@ -591,7 +621,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         },
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
-            Term::Pair { snd, .. } => Some((**snd).clone()),
+            Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
             _ => step_term_delta(pair, gamma, defs).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -2415,7 +2445,10 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::Transp { proof, .. } => is_neutral_term(proof),
         Term::ElimSEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::ElimSquash { scrut, .. } => is_neutral_term(scrut),
-        Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
+        Term::Fst { pair, .. }
+        | Term::Snd { pair, .. }
+        | Term::FstAt { pair, .. }
+        | Term::SndAt { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
@@ -2463,6 +2496,11 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Triv { .. }
         | Term::Inl { .. }
         | Term::Inr { .. }
+        // The checked spellings are introduction forms and are whnf exactly
+        // as the forms they spell (docs/intro-by-type-design.md).
+        | Term::PairAt { .. }
+        | Term::InlAt { .. }
+        | Term::InrAt { .. }
         | Term::Sup { .. }
         | Term::Supf { .. }
         | Term::Lam { .. }
