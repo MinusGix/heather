@@ -806,6 +806,10 @@ impl Elaborator {
         let mut pcx = Cx::empty();
         pcx.gamma = qctx.shift_global(n);
         pcx.meta = Some(Rc::new(inner));
+        // Inside a `box` the component forms stay the only spelling
+        // (`docs/intro-by-type-design.md` §2.3): this payload is what the
+        // code recursors range over.
+        pcx.quoted = true;
         let expected_p = (*qty).clone().shift_global(n);
         let payload_t = self.elab_check(&pcx, payload, &expected_p, &qlvl);
         // The letbox padding must not outlive this quote, error or not.

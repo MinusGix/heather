@@ -68,6 +68,18 @@ pub(crate) struct Cx {
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
     /// what keeps the entire quotation machinery inert for ordinary code.
     pub(crate) meta: Option<Rc<quote::MetaEnv>>,
+    /// Set while a **quotation payload** elaborates (`quote.rs`'s `pcx`), and
+    /// nowhere else. The checked spellings of
+    /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
+    /// code grammar, `code_eq` and the 56 recursor branches range over that
+    /// payload, and `tm_pair`'s branch telescope types its field
+    /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
+    /// state (§2.2). The design spelled this restriction as "layers p and m",
+    /// which does not transcribe: Heather checks **every** declaration body at
+    /// `Layer::Code` (`lib.rs` ~3637, and `DESIGN.md`'s δ-layer-preservation
+    /// argument is why), so a layer predicate is constantly false. "Under a
+    /// quotation" is the property §2.2 actually needs.
+    pub(crate) quoted: bool,
 }
 
 /// One type parameter, bound to the type it is instantiated at
@@ -108,6 +120,15 @@ pub(crate) struct Alias {
     pub(crate) skel: Option<Rc<Skel>>,
 }
 
+/// The stage-2 spike switch (`issues/elab-emits-normal-form-of-matched-type-argument.md`,
+/// 2026-09-20): whether the emitters write the checked spellings at all. Read
+/// once. Temporary, and paired with the kernel's own `HEATHER_AT_SPIKE` read
+/// in `Tc::computing_layer`.
+pub(crate) fn at_spike() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("HEATHER_AT_SPIKE").is_some())
+}
+
 impl Cx {
     pub(crate) fn empty() -> Cx {
         Cx {
@@ -123,7 +144,20 @@ impl Cx {
             index_ambiguity: vec![],
             op_locals: vec![],
             meta: None,
+            quoted: false,
         }
+    }
+
+    /// Does this context emit the checked spellings
+    /// (`docs/intro-by-type-design.md` §4.1)? Not inside a quotation (§2.3,
+    /// and [`Cx::quoted`] for why that is the predicate and not the layer),
+    /// and — **only for as long as the layer question on the issue is open** —
+    /// only under `HEATHER_AT_SPIKE`, because the kernel refuses the forms at
+    /// `Layer::Code`, which is the layer every declaration body is checked at.
+    /// The env read is the spike's, not a design feature; it goes away with
+    /// whichever of the issue's three candidates the coordinator picks.
+    pub(crate) fn emits_at_forms(&self) -> bool {
+        !self.quoted && at_spike()
     }
 
     pub(crate) fn push(&mut self, name: String, ty: Type, level: Level) {

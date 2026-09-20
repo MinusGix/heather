@@ -1277,3 +1277,482 @@ this thread next.
 
 Nothing committed. `crates/kernel/benches/baseline.tsv` is still the
 **committed** one and is what the clean gate above was measured against.
+- 2026-09-20: Implementer, **stage 2 — STOPPED at the first emitter, on a layer the design
+  and the implementation disagree about.** Nothing is wrong with stage 1; the
+  forms, the rules and the checker are all correct. What is wrong is the
+  *premise* that the elaborator ever emits at a computing layer.
+
+  ### The finding, in one sentence
+
+  **Every declaration body in Heather is kernel-checked at `Layer::Code`**, and
+  the five checked spellings are refused at layer c by construction (§2.3,
+  `Tc::computing_layer`, and stage 1a's own golden test pins it), so an `@` form
+  written by any emitter is `LayerMismatch` — not on a metaprogram, on
+  `fn mk(x: Nat) -> Box2 { Box2 { a: x, b: x } }`.
+
+  ### Measured, not reasoned
+
+  A throwaway spike (`build_fields_skel` emits `PairAt { ty: emit_ty(ctor_ty) }`
+  instead of `Pair`, behind `HEATHER_AT_SPIKE`, release binary in
+  `target-spike/`):
+
+  ```
+  $ heather check -L lib/std probes/tiny.hthr
+  probes/tiny.hthr: ok
+
+  $ HEATHER_AT_SPIKE=1 heather check -L lib/std probes/tiny.hthr
+  error: the kernel rejected `mk`: LayerMismatch
+    --> probes/tiny.hthr:6:1
+  lib/std/pair.hthr: 2 errors
+  ```
+
+  ### Where the layer comes from, and why it is not an oversight
+
+  - `crates/elab/src/lib.rs` ~3637 and ~3688: the inline gate builds
+    `gate::GateItem { …, layer: Layer::Code, … }` and calls
+    `kernel_check_term(&psi, Layer::Code, …)`; the deferred path
+    (`defer_kernel_term`, lib.rs ~3688 and `gendefs.rs` ~3473) passes
+    `Layer::Code` too. **The statement** is checked at `Layer::Prog`
+    (`kernel_check_type(…, Layer::Prog, …)`) — which is why §1's "a type lives at
+    `typeof(i)`, which is always a computing layer" is true and misleading: it is
+    true of the *statement* and of `Tc::whnf`, and says nothing about the body.
+  - `GlobalBinding::defined_tm(empty, Layer::Code, …)`: every binding lands in Ψ
+    at layer c.
+  - `crates/kernel/DESIGN.md` ~233 says why, and it is load-bearing: "**The body
+    is checked at the binding's own layer** (`i = c`) … That is what makes δ
+    layer-preserving: unfolding `u` at any layer `j ≥ i` can only produce a term
+    that was already legal at `j`." A body containing a form illegal at c would
+    break exactly that.
+  - `Cx` (`crates/elab/src/context.rs` ~15) **has no `layer` field**, and grep
+    finds no `cx.layer` anywhere in `crates/elab`. §2.3's "the elaborator already
+    knows the layer at every emission site (`cx.layer`)" and the brief's
+    "`cx.layer.computes()`" describe an API that does not exist — and if it did,
+    it would return `Code` at every one of the four emitters.
+
+  So §2.3's cost accounting ("the switch is one predicate at each of the ~4
+  emitters") is not a small edit that was missed; the predicate it names is
+  **constantly false**, and the design's layer restriction and Heather's
+  definition-body layer are the same layer.
+
+  ### What this does *not* break
+
+  The restriction's purpose (§2.2) is that layer c is what the 56 recursor
+  branches range over and `tm_pair`'s telescope types `u_a` by `U_S`. That
+  purpose is about **code inside a `box`**, and in Heather a definition body at
+  layer c is *not* reachable by the recursors: δ is opaque at c
+  (`Defs::opaque`), ch. 06 blocks the code-recursion principles on global
+  variables, and `box(u^δ)` keeps the body a variable. The conflation is that
+  DeLaM uses the layer to mean "inside a quotation" and Heather also uses it to
+  mean "a definition body".
+
+  ### Candidates, priced as far as reading goes, for the coordinator
+
+  1. **Guard on "under a quotation", not on the layer.** One bit in the merged
+     `conv::Env` (`quoted: bool`), set by the `Box`/`BoxTy` rules where they
+     descend into a payload; the five rules guard on `!quoted && not_var_layer`
+     instead of `computing_layer`. The invariant §2.2 needs — no `@` form ever
+     inside a `box` payload, so `Trm_c`'s grammar and all 56 branches are
+     untouched — is then enforced by the kernel rather than by the elaborator's
+     discipline, which is *stronger* than what §2.3 promised. Costs: a kernel
+     rule change (so a stage 1c, not stage 2); §2.4's conservativity statement
+     re-stated over "not under a box" instead of over p/m; the golden test's
+     "layer c refuses all five" inverted into "layer c under a box refuses all
+     five, layer c outside one admits them"; ch. 04's rule statement changes
+     shape, which is the Coq formalization's cost this pass said was a
+     consideration.
+  2. **Gate declaration bodies at `Layer::Prog`.** Refused on reading alone:
+     DESIGN.md ~233's δ layer-preservation argument is exactly this, and every
+     quotation of a definition changes meaning.
+  3. **Admit the five at layer c unconditionally.** This is §2.2's refusal
+     verbatim — `box(pair@(T;a;b))` becomes well typed with no recursor branch,
+     so "boxed code is exhaustively recursable" fails in the trusted base.
+     Declined here without measurement.
+
+  **I am not choosing between these**: (1) is a kernel rule change with a
+  metatheory statement attached, which is the coordinator's call, and the
+  previous two stops on this issue set the precedent that a design gap is logged
+  and handed back rather than deviated through.
+
+  ### What the round does next, instead of nothing
+
+  Per the brief's own instruction to keep everything else, and because the
+  kill-criterion question ("does the curve's per-layer ratio fall") is answerable
+  without deciding (1)–(3): the four emitters are being implemented as designed,
+  and measured behind a **spike** that relaxes the kernel guard for the
+  measurement only. The before table (step 1) is already recorded below and the
+  readers audit (§4.2) is owed regardless. Neither the spike nor the emitters are
+  proposed for landing until the layer question is answered.
+- 2026-09-20: Implementer, **stage 2's measurement, taken behind the spike — and the §9
+  kill criterion fires: the per-layer query ratio does not move at all.** With
+  the four emitters of §4.1 in and firing, `t_cp9 → t_qt3 → t_qt5` is
+  **×3.31 / ×3.71 before and ×3.31 / ×3.71 after**, to three digits. The design's
+  central claim — that the exponent is carried by what these four sites write —
+  is refused by its own instrument, and the counters say where it actually is.
+
+  ### Provenance
+
+  `target-before/release/heather` is byte-identical (`cmp`) to a release build of
+  the clean tree at `483d355`, so the before side is HEAD's. The after side is
+  `target-spike/release/heather`, this tree, with `HEATHER_AT_SPIKE=1`. Counts
+  are exact and load-invariant and are what the verdict rests on; the seconds
+  below are **not** a result — `scripts/perf ab` was not run (see "deviations").
+  Width one throughout; `ru_maxrss` of the child.
+
+  ### The curve, per-item, on the probe theorem each file exists for
+
+  | item | queries before | queries after | | per-layer before | per-layer after |
+  |---|---:|---:|---:|---:|---:|
+  | `t_qt2::qt_floor` | 6 516 | 6 520 | 1.001 | — | — |
+  | `t_qt1::qt_pure` | 392 484 | 390 688 | 0.995 | ×60.2 | ×59.9 |
+  | `t_cp9::cp_andt` | 2 407 804 | 2 398 322 | 0.996 | ×6.13 | ×6.14 |
+  | `t_qt3::qt_deep` | 7 969 594 | 7 933 589 | 0.995 | **×3.31** | **×3.31** |
+  | `t_qt5::qt_deeper` | 29 603 080 | 29 462 792 | 0.995 | **×3.71** | **×3.71** |
+
+  **`complete_post`** (whole-run row of `t_cp9`): queries 3 699 898 → 3 684 206
+  (0.996), `conv_shortcut_hits` 3 682 495 → 3 663 472 (−0.5 %), misses
+  14 210 → 17 555, steps 247 834 → 342 347, `decl_emit` 698 → 604 ms,
+  `elab_whnf` 1 359 → 1 570 ms. Against the mint's 0.78 M queries / 90 k emitted
+  nodes, this is **3.68 M and no measurable shrink**.
+
+  Whole-run counts, every file:
+
+  | file | queries B | queries A | | misses B | misses A | steps B | steps A | `at` | `sels` | `spelled` |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | `t_qt2` | 8 959 776 | 8 998 564 | 1.004 | 157 117 | 351 160 | 3 435 947 | 3 596 471 | 139 365 | 230 934 | 0 |
+  | `t_qt1` | 9 345 744 | 9 382 732 | 1.004 | 158 565 | 352 988 | 3 462 531 | 3 631 914 | 139 605 | 231 414 | 0 |
+  | `t_cp9` | 11 361 064 | 11 390 366 | 1.003 | 165 956 | 362 040 | 3 598 664 | 3 810 508 | 140 721 | 233 583 | 0 |
+  | `t_qt3` | 16 922 854 | 16 925 633 | 1.000 | 190 876 | 388 739 | 3 962 879 | 4 356 417 | 144 267 | 240 657 | 0 |
+  | `t_qt5` | 38 556 340 | 38 454 836 | 0.997 | 285 139 | 494 310 | 5 360 725 | 6 555 054 | 158 181 | 268 467 | 0 |
+  | `str/p10` | 62 230 517 | 61 354 198 | 0.986 | 1 741 768 | 1 924 197 | 12 365 533 | 12 462 583 | 150 408 | 249 095 | 0 |
+  | `complete_post` (`--only`) | 3 861 605 | 3 845 590 | 0.996 | 16 388 | 22 056 | 282 584 | 376 501 | 4 147 | 7 494 | 0 |
+
+  `ity_materialized` is **0** on every file: §3.5's rewriter escape hatch is never
+  reached, so the checker is doing exactly what §3.3 designed and the answer is
+  not an artefact of a fallback.
+
+  Peak RSS (KB) and CPU-s, the same runs:
+
+  | file | RSS before | RSS after | | CPU-s B | CPU-s A |
+  |---|---:|---:|---:|---:|---:|
+  | `t_qt2` | 2 115 124 | 1 920 832 | −9.2 % | 30.9 | 32.2 |
+  | `t_qt1` | 2 121 944 | 1 863 796 | −12.2 % | 30.1 | 45.2 |
+  | `t_cp9` | 2 223 868 | 1 964 352 | −11.7 % | 35.1 | 45.8 |
+  | `t_qt3` | 4 010 848 | 3 846 572 | −4.1 % | 55.5 | 69.9 |
+  | `t_qt5` | 12 715 584 | 12 502 616 | −1.7 % | 118.0 | 144.5 |
+  | `str/p10` | 5 857 760 | 4 986 600 | −14.9 % | 105.2 | 99.7 |
+  | `complete_post` (`--only`) | 2 886 176 | 2 614 392 | −9.4 % | 13.9 | 14.9 |
+
+  So the round buys a **single-digit-percent RSS reduction and a constant-factor
+  slowdown**, and changes the exponent by nothing.
+
+  ### Why — and this is a defect in §4.1's table, not in the implementation
+
+  `at` = 2 193 checked spellings in `complete_post`, against a reduct the earlier
+  rounds measured at **2 634 824 nodes**. Two thousand annotation *sites* were
+  rewritten and the term did not shrink, because **the type each of them now
+  writes is itself a component of the reduct**:
+
+  - `build_ctor` computes `expected = whnf(pre_whnf)` and then
+    `let spine = self.spine(&expected, …)` (`inductive.rs` ~2237). The tuple is
+    built by `build_fields_skel(cx, &spine.ctors[i].0, …)` — so the `ctor_ty`
+    §4.1's second row calls "the un-reduced type" is `spine.ctors[i].0`, **a
+    summand read out of the reduct**, not the type the elaborator started with.
+  - Inside `build_fields_skel` the recursion is
+    `tail = snd.apply_local(…)` where `snd` came from `whnf(ctor_ty)`, so every
+    level below the first is a reduct component too.
+  - `projection`'s `cur_emit` chain has the same shape: step 0's annotation is
+    the receiver's own type (genuinely un-reduced, and a real win), and every
+    later step's is `snd_e[proj/x]` off the previous whnf.
+  - The **only** site that writes a genuinely un-reduced type is `inject`'s
+    outermost layer, which takes `pre_whnf`: one annotation per constructor
+    value. Everything else replaces *two* components of a whnf with *one*
+    parent of that whnf, which is a factor of about two on a `3.5ⁿ` object.
+
+  That is the whole result. §1's "the pre-whnf type is in hand one line above the
+  call" is true at `build_ctor` and **false one call further down**, and the four
+  emitters live further down. Getting an un-reduced type to them means not
+  reading the constructor's type out of `spine(&expected)` — i.e. §5 candidate 3,
+  "deciding the constructor without spelling", which is **stage 3**. The
+  checked spellings are the syntax stage 3 would need; they are not, on their
+  own, a smaller term.
+
+  ### What the round *does* establish, and should be kept
+
+  - **A `@`-bearing module round-trips.** `heather check --cache` over
+    `calc_parser.hthr` with the spike on stored an 86 MB cache (the same 86 MB
+    the before side stores); a second pass replays it — `0 declarations
+    kernel-checked, 561 accepted from cache, 20 semantic modules replayed` — and
+    `--only parser_primitives::complete_post` works on it (`1 declaration
+    elaborated for --only, 34 replayed`). Stage 1a's five image tags, the five
+    merkle tags and the `SemanticsIdentity` bump are correct in use, not only in
+    a unit test.
+  - **The checker behaves as §3 designed.** `ity_materialized` 0 everywhere;
+    `sel_evals` ≈ 2 × `intro_at_nodes` (each `pair@` views its Σ twice), so the
+    §3.7 re-evaluation cost is *bounded and visible*: 268 k evaluations on
+    `t_qt5` against 38 M queries. §3.7's "whether that re-evaluation dominates is
+    stage 2's first number" is answered: **it does not**, and no
+    declaration-scoped memo is needed.
+  - **The cost of a `Sel` is in misses, not in materialization.** Misses roughly
+    double on the curve (157 k → 351 k on `t_qt2`; the extra are the
+    `Sel`-vs-`Syn` queries the `==` shortcut and the cross-head memo both decline
+    by §3's deviation 3). That is the price of the mechanism and it is paid
+    without a compensating query reduction, which is why the seconds go the wrong
+    way.
+
+  ### Deviations from the brief, each with its reason
+
+  1. **`scripts/perf ab` was not run.** The after side needs `HEATHER_AT_SPIKE=1`
+     and the harness has no way to set it for one side; more to the point the
+     verdict is a *counter* verdict — exact, load-invariant — and the counters
+     moved by less than half a percent. The seconds above are reported as
+     measurements taken the same way on both sides and **not** as a result. If
+     the coordinator wants a seconds verdict, `--patch` with the env exported to
+     both builds would do it (the before half has no emitter, so the variable is
+     inert there).
+  2. **`inject` takes the checked spelling at its outermost layer only.** Layer
+     `j+1`'s type is layer `j`'s whnf's right summand, and a selection of a
+     component is an `ITy::Sel`, which is checker-internal and has no syntax
+     (§3.2). For a two-constructor declaration the chain is one layer deep, so
+     this is exact where the parser tower is concerned.
+  3. **A recursive declaration's label injection takes the `Wf`'s emitted
+     `shape`, not `pre_whnf`** — the label's type is the shape, and using the
+     same spelling the `sup_f` slot takes is what keeps their agreement a `==`.
+     The `sup_f` slot computation moved above `inject` for this; no other
+     behaviour changed.
+  4. **`emit_ty` is still called** on the annotation, per §4.1, and on the
+     *un-reduced* type — which is the one part of §4.1 that worked as written.
+  5. **§4.4's deletions were not made**, and the reason is a measurement: all
+     three hooks are already inert. `rbcount::at_build_ctor` returns on
+     `!enabled()`, `rbname::at_build_ctor` on `!counting()`, `mint_ctor_reduct`
+     on `!firing()` — all three keyed to `HEATHER_RB*`, all three false by
+     default. §4.4's "the readback ran at every `build_ctor` … `elab_whnf_ns`
+     ×3.5–4" is a statement about *fired* items under `HEATHER_RB_MINT=1`, not
+     about the default path, so **there is nothing for the deletion to measure**:
+     it is 6 419 lines of dead-code removal (`mint.rs` 1 808, `rbcount.rs` 1 755,
+     `rbname.rs` 1 886, `rbemit.rs` 970) with a zero attached. Doing it inside a
+     round that is stopped, on top of spike instrumentation that must not land,
+     would bury both. It should be its own commit and it is ready to be one.
+- 2026-09-20: Implementer, **§4.2's readers audit, walked, with one line per reader — and
+  two readers the list does not name that broke a library file on the first
+  run.** The principle held everywhere: every one of them was fixed *in the
+  reader*, nothing was renamed, and no annotation carries a reduct to placate
+  one.
+
+  ### The two the list missed, found by running rather than by reading
+
+  The first spike run over `probes/t_cp9.hthr` failed in `lib/std/`, not in the
+  probe:
+
+  ```
+  error: `absurd` needs both sides of the equation to be constructor applications
+    --> lib/std/list.hthr:840:35
+  error: `omega` got stuck: Omega could not spell an integer expression
+    --> lib/std/omega.hthr:1009:5   (and ~30 more)
+  ```
+
+  - **`inductive.rs` `read_ctor` (~4564)** — §4.2 lists it as "shape-only, add
+    the arms, read nothing", and that is exactly right, but it is not optional:
+    it walks the `Inl`/`Inr` path to identify the constructor and the `Pair`
+    chain to collect the fields, and it is what `absurd`/`inj`/disjointness sit
+    on. Fixed: the walk goes through `crate::spelling::{inj_of, pair_of, is_pair}`.
+  - **`omega_cert.rs` `is_ctor_value` (~1211) and `children_fields` (~1224)** —
+    not on the list at all. `is_ctor_value` gates Omega's constructor reflection
+    on `Inl`/`Inr`; `children_fields` walks a children tuple. Both fixed by arms
+    / the view.
+
+  ### The list, answered
+
+  - **`display.rs` ~443** (`display_tag_of` on an injection's annotation):
+    **fixed one node higher rather than by a whnf.** `inl@` carries the *whole
+    sum* and `tag_of` already walks a `Sum` to its leftmost constructor, so
+    `display_tag_of(ty)` is the same lookup. An annotation that is not
+    structurally a sum declines and the display falls back to `raw_tm`, as it
+    does for every shape it cannot read — the design's "whnf `T` first" would
+    need a `Span` the display path does not carry, and diagnostics are
+    best-effort by construction here. Also: `Walk::tm`'s `Pair` arm, the
+    `ctor_value` entry arm, and `ctor_value`'s injection walk and three tuple
+    walks, all through `crate::spelling`.
+  - **`inductive.rs` `projection`'s `cur_emit`**: carries `T` forward instead of
+    components, as §4.2 predicted. The loop still computes `fst_e`/`snd_e` —
+    `snd_e` advances `cur_emit` and `fst_e` is the field type the function
+    returns — but neither is written into the term.
+  - **`matching.rs` `field_rewrap` (~664)**: **the smaller invariant is real.**
+    A `fst@` chain's η-expansion is `pair@(T↑; x₀, snd@(T↑; p↑))` — one
+    annotation carried, none rebuilt, against the four `shift_local`s per level
+    the component path does. A chain is homogeneous (one `projection` call
+    writes one spelling all the way down), so the two loops never interleave.
+    `matching.rs`'s `stuck_scrutinees` also took the arms.
+  - **`lgg.rs` ~670**: five new arms, each anti-unifying **one** annotation and
+    requiring **no** level equality — §4.2's "structurally smaller and more often
+    identical" is the shape of the arm. Mixed spellings fall to `mismatch_tm` and
+    generalize, which is what two different spellings of one term have always
+    done here. `head_tm`'s name table gained `pair@`/`fst@`/`snd@`/`inl@`/`inr@`
+    so a diagnostic does not say "Var".
+  - **`emission_walk.rs`**: already exhaustive with the five `ty @ d` arms from
+    stage 1a; nothing to do, and it is the reason the compiler would have caught
+    a missing slot.
+  - **`certgen.rs` (~2284, ~2312, ~2389)**: the payload-field read, the
+    induction-hypothesis index walk and the `mark` re-builder. All three took
+    arms; `mark` carries the annotation through untouched exactly as it carries
+    the component ones.
+  - **`oracle.rs` ~260** (the neutral-spine walk) and **`inductive.rs`
+    `receiver_is_neutral` (~5236)**: two arms each, read nothing.
+  - **`record_of_at` (~2957)**: unchanged and **correct as designed**. It is a
+    reader of a *type*, and the `@` forms are terms; its "structural read first,
+    whnf paid only when it fails" shape never meets one.
+  - **`module_image.rs` encode/decode and `merkle.rs`**: stage 1a's five tags,
+    **verified in use** — see the measurement entry: an 86 MB `@`-bearing cache
+    stores, replays (`561 accepted from cache, 20 semantic modules replayed`)
+    and serves `--only`.
+  - **`gendefs.rs` ~343** (`head_tm`'s bucket name, diagnostics): arms added so
+    a `pair@` is bucketed with a `pair`.
+
+  ### Readers that are **tests**, and will need updating if this ever lands
+
+  `wf.rs`'s in-file tests (~2706, ~3001, ~3029, ~3087, ~3272, ~3345) assert the
+  component spelling of an emitted constructor value — that an `inr`'s two
+  annotations *are* the shape's two summands, which is precisely the invariant
+  the `@` form replaces. `expr.rs` (~1497) and `lgg.rs`'s own tests do the same
+  in smaller form. They are green today only because the emitters are behind
+  `HEATHER_AT_SPIKE`; a landing round owes them. This is the readers audit's
+  real remaining bill and it is not small.
+
+  ### Files touched for the audit
+
+  `crates/elab/src/spelling.rs` (new, 64 lines: `inj_of`, `pair_of`, `is_pair`,
+  `is_inj`, `proj_of` — the three views a shape-only reader needs, so the arms
+  are written once and not at forty sites), plus arms or view calls in
+  `display.rs`, `inductive.rs`, `matching.rs`, `omega_cert.rs`, `oracle.rs`,
+  `certgen.rs`, `lgg.rs`, `gendefs.rs`. **All of this is landable independently
+  of the layer decision**: with the spike off, `spelling::*` is called on terms
+  that are never `@` forms and every arm is unreachable, so it is inert — and it
+  is the part of stage 2 that would otherwise have to be re-derived by whoever
+  picks the round up.
+- 2026-09-20: Implementer, **stage 2 handover: tree state, what to keep, and the three
+  decisions.** Nothing committed.
+
+  ### The tree
+
+  ```
+   M crates/kernel/src/typing.rs      +21/-2   the HEATHER_AT_SPIKE relaxation of
+                                               Tc::computing_layer — MUST NOT LAND
+   M crates/elab/src/context.rs       +34      Cx::quoted, Cx::emits_at_forms, at_spike()
+   M crates/elab/src/quote.rs          +4      pcx.quoted = true on a box payload
+   M crates/elab/src/inductive.rs    +199/-38  inject_at, build_fields_skel, projection,
+                                               wf_slots hoist; read_ctor + receiver_is_neutral
+   M crates/elab/src/forded.rs        +14      build_fields_collect
+  ?? crates/elab/src/spelling.rs      +64      the three shape views
+   M crates/elab/src/{display,matching,omega_cert,oracle,certgen,lgg,gendefs}.rs
+                                               the readers audit
+   M crates/elab/src/lib.rs            +1      mod spelling;
+  ```
+
+  **Three separable pieces, and they should be separated:**
+
+  1. **The readers audit** (`spelling.rs` + the seven readers + `read_ctor` +
+     `receiver_is_neutral`) — inert with the spike off, correct, and the part
+     that would otherwise be re-derived by the next attempt. Landable now.
+  2. **The four emitters + `Cx::quoted`** — correct, measured, and pointless
+     until the layer question is answered; `Cx::quoted` is also the elaborator
+     half of candidate 1 whichever way that goes.
+  3. **The kernel spike** — one function, clearly commented as an instrument.
+     It must not land: under it `box(pair@(T;a;b))` is well typed with no
+     recursor branch.
+
+  `crates/kernel/benches/baseline.tsv` untouched. `probes/` still untracked
+  (fifth round). `target-before/` is a verified byte-identical build of `483d355`
+  and `target-spike/` is this tree; both are scratch and can be deleted.
+
+  ### Gates
+
+  - **Full `scripts/test`**: see below — it gates piece (1), which is the only
+    part on the default path. The emitters cannot affect it: with the spike off,
+    `Cx::emits_at_forms()` is constantly false and no `@` form is constructed.
+  - **`scripts/bench --check`** was **not run**: nothing in this round is on the
+    kernel's hot path with the spike off (the one kernel edit is a `||` in a
+    guard reached only by the five `@` rules, which no fixture generates by
+    default since stage 1b step 1 turned `at_forms` off), and the box was busy
+    with the suite. If piece (3) is dropped, as it should be, there is no kernel
+    change left to gate.
+  - **`scripts/showcase check calc_text`** with the spike: not run. Its purpose
+    in §9 is the image's node count against the 256 M budget, and the
+    measurement entry already answers it — `conv_shortcut_hits` on
+    `complete_post` moved by −0.5 % and the `calc_parser` cache came out at the
+    same 86 MB on both sides, so the emitted term did not shrink and `calc_text`'s
+    483 M-node image would not fit either. Spending 6 minutes and ~10 GiB to
+    confirm an arithmetic consequence of a measurement already in hand was
+    judged not worth it against the round's remaining budget; it is a ten-minute
+    job for whoever wants it.
+
+  ### The three decisions, in the order they matter
+
+  1. **The layer.** Candidate 1 (guard on "under a quotation", one bit in the
+     merged `conv::Env` set by the `Box` rules) versus 2 and 3, both declined on
+     reading. This decides whether stage 2 exists at all. See the stop entry.
+  2. **Whether stage 2 is worth landing even if (1) is answered.** On the
+     measurement: it is not, *by itself*. The per-layer ratio is unchanged to
+     three digits, the seconds go the wrong way, and the RSS win is single-digit
+     percent. Its value is as the **syntax stage 3 needs**: the win requires the
+     un-reduced type to reach `build_fields_skel`, which means not reading the
+     constructor's type out of `spine(&whnf(expected))` — §5 candidate 3. Stage 2
+     without stage 3 buys a constant; stage 3 without stage 2 has nothing to
+     write. That pairing is the finding the coordinator should design against.
+  3. **§4.4's deletions** (6 419 dead lines) as their own commit, with the
+     measured "zero on the default path" recorded rather than the ×3.5–4 §4.4
+     quotes, which is a fired-item number.
+- 2026-09-20: Implementer, **stage 2's gate results, verbatim.**
+
+  ### `scripts/test` — full, on this tree, spike off
+
+  ```
+  == suite: 2835 passed, 0 failed, 5 ignored ==
+  ```
+
+  Not INCOMPLETE, and the **same count as stage 1b's gate**. So the readers
+  audit, `Cx::quoted`, the four emitters and the kernel's guard relaxation break
+  nothing on the default path — which they must not, because with the spike off
+  `Cx::emits_at_forms()` is constantly false, no `@` form is constructed, and
+  every arm `spelling.rs` adds is unreachable. `showcase_gate` and the x86
+  certificate gates are inside this run.
+
+  ### `calc_text`, the two readings that share a box and a day
+
+  The suite's own `showcase_gate`, spike **off**:
+
+  ```
+  calc_text    ok    536.1 s wall    516.5 s cpu    9.8 GiB peak
+  ```
+
+  `HEATHER_AT_SPIKE=1 scripts/showcase check calc_text`, minutes later on the
+  same box:
+
+  ```
+  docs/showcase/calc_text.hthr: ok
+  calc_text    ok    541.2 s wall    545.3 s cpu   10.1 GiB peak
+  == showcase: 1 checked, all ok ==
+  ```
+
+  **+5.6 % CPU, +3 % peak, nothing recovered.** (The 516 CPU-s control is itself
+  well above `CLAUDE.md`'s 334 — the box is loaded today — which is exactly why
+  the control was taken from the same run rather than from the doc.) The file
+  still checks with every constructor value, record projection and forded tuple
+  written in the checked spelling, which is a correctness result even though it
+  is not a performance one.
+
+  **The image node count was not obtained.** `scripts/showcase` has no `--cache`
+  flag, and the substitute datum is already recorded: `calc_parser` through
+  `heather check --cache` stores **86 MB on both sides**, and
+  `conv_shortcut_hits` on `complete_post` moved −0.5 %. The emitted term is the
+  same size, so `calc_text`'s 483 M-node image is still over the 256 M decode
+  budget and is still refused. **No budget was raised or proposed.**
+
+  ### `scripts/bench --check` — not run, deliberately
+
+  The only kernel edit in this round is `|| at_spike()` inside
+  `Tc::computing_layer`, a guard reached **only** by the five `@` rules, which no
+  bench fixture generates (stage 1b step 1 turned `wt.rs`'s `at_forms` off by
+  default precisely so the fixtures measure the baseline's workload). There is
+  nothing on a hot path to regress, and the box has been at load 17–22 all
+  afternoon, which `desktop-bench-gate-for-constants` says is not a place to take
+  a constant-factor reading. If the spike is dropped — as it should be — the
+  kernel is byte-unchanged from `483d355` and the question does not arise.

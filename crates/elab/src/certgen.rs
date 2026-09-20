@@ -2281,11 +2281,11 @@ fn mark(
         // A payload-field read: `fst (snd^{j+1} c)` over the arm's case
         // binder. Only meaningful inside a tier-1 arm; anywhere else a
         // projection is outside the fragment (the catch-all).
-        Term::Fst { pair, .. } if wfarm.is_some() => {
+        Term::Fst { pair, .. } | Term::FstAt { pair, .. } if wfarm.is_some() => {
             let a = wfarm.unwrap();
             let mut snds = 0u32;
             let mut inner: &Term = pair;
-            while let Term::Snd { pair, .. } = inner {
+            while let Some((false, pair)) = crate::spelling::proj_of(inner) {
                 snds += 1;
                 inner = pair;
             }
@@ -2308,12 +2308,12 @@ fn mark(
             let mut t_ord = 0u32;
             let mut inner: &Term = arg;
             loop {
-                match inner {
-                    Term::Inr { val, .. } => {
+                match crate::spelling::inj_of(inner) {
+                    Some((false, val)) => {
                         t_ord += 1;
                         inner = val;
                     }
-                    Term::Inl { val, .. } if matches!(&**val, Term::Triv { .. }) => break,
+                    Some((true, val)) if matches!(&**val, Term::Triv { .. }) => break,
                     _ => {
                         return Err(
                             "the induction hypothesis is applied to a non-literal index".into()
@@ -2385,6 +2385,22 @@ fn mark(
         // fragment, and the walker binds and ignores them.
         Term::Triv { level } => Term::Triv {
             level: level.clone(),
+        },
+        // The checked spellings ride through the same way: one annotation
+        // carried untouched instead of two (`docs/intro-by-type-design.md`
+        // §4.2 — a shape-only walk adds the arm and reads nothing).
+        Term::PairAt { ty, fst, snd } => Term::PairAt {
+            ty: Rc::clone(ty),
+            fst: Rc::new(mark(fst, depth, cx, wfarm)?),
+            snd: Rc::new(mark(snd, depth, cx, wfarm)?),
+        },
+        Term::InlAt { ty, val } => Term::InlAt {
+            ty: Rc::clone(ty),
+            val: Rc::new(mark(val, depth, cx, wfarm)?),
+        },
+        Term::InrAt { ty, val } => Term::InrAt {
+            ty: Rc::clone(ty),
+            val: Rc::new(mark(val, depth, cx, wfarm)?),
         },
         Term::Pair {
             fst_level,

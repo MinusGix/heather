@@ -232,6 +232,11 @@ fn former_tm(t: &Term) -> &'static str {
         Term::Snd { .. } => "snd",
         Term::Inl { .. } => "inl",
         Term::Inr { .. } => "inr",
+        Term::PairAt { .. } => "pair@",
+        Term::FstAt { .. } => "fst@",
+        Term::SndAt { .. } => "snd@",
+        Term::InlAt { .. } => "inl@",
+        Term::InrAt { .. } => "inr@",
         Term::Case { .. } => "case",
         Term::Sup { .. } | Term::Supf { .. } => "constructor value",
         Term::ElimW { .. } | Term::ElimWf { .. } => "recursor",
@@ -666,6 +671,39 @@ impl Lgg {
                 motive: Rc::new(self.ty(m1, m2, k + 1)?),
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
+            // The checked spellings (`docs/intro-by-type-design.md` §4.2):
+            // one annotation to anti-unify instead of two components, and
+            // no levels to require equal — structurally smaller, and more
+            // often identical than two reducts. Mixed spellings fall to
+            // `mismatch_tm` and generalize, which is what two different
+            // spellings of one term have always done here.
+            (Term::PairAt { ty: t1, fst: a1, snd: b1 }, Term::PairAt { ty: t2, fst: a2, snd: b2 }) => {
+                Ok(Term::PairAt {
+                    ty: Rc::new(self.ty(t1, t2, k)?),
+                    fst: Rc::new(self.tm(a1, a2, k)?),
+                    snd: Rc::new(self.tm(b1, b2, k)?),
+                })
+            }
+            (Term::InlAt { ty: t1, val: v1 }, Term::InlAt { ty: t2, val: v2 }) => Ok(Term::InlAt {
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (Term::InrAt { ty: t1, val: v1 }, Term::InrAt { ty: t2, val: v2 }) => Ok(Term::InrAt {
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (Term::FstAt { ty: t1, pair: p1 }, Term::FstAt { ty: t2, pair: p2 }) => {
+                Ok(Term::FstAt {
+                    ty: Rc::new(self.ty(t1, t2, k)?),
+                    pair: Rc::new(self.tm(p1, p2, k)?),
+                })
+            }
+            (Term::SndAt { ty: t1, pair: p1 }, Term::SndAt { ty: t2, pair: p2 }) => {
+                Ok(Term::SndAt {
+                    ty: Rc::new(self.ty(t1, t2, k)?),
+                    pair: Rc::new(self.tm(p1, p2, k)?),
+                })
+            }
             (
                 Term::Pair {
                     fst_level: fl1,

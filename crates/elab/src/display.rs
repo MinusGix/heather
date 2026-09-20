@@ -381,7 +381,7 @@ impl Speller<'_> {
             Term::Succ(p) => format!("Succ({})", self.tm(p, d + 1)),
             Term::Refl { .. } => "refl".to_string(),
             Term::Triv { .. } => "trivial".to_string(),
-            Term::Pair { fst, snd, .. } => {
+            Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
                 format!("({}, {})", self.tm(fst, d + 1), self.tm(snd, d + 1))
             }
             Term::Lam { dom, body, .. } => {
@@ -408,9 +408,11 @@ impl Speller<'_> {
             Term::TmFin { len } => format!("Fin({})", self.tm(len, d + 1)),
             Term::TmSquash { ty, .. } => format!("∥{}∥", self.tm(ty, d + 1)),
             Term::Squash { tm, .. } => format!("squash({})", self.tm(tm, d + 1)),
-            Term::Supf { .. } | Term::Inl { .. } | Term::Inr { .. } => {
-                self.ctor_value(t, d).unwrap_or_else(|| self.raw_tm(t))
-            }
+            Term::Supf { .. }
+            | Term::Inl { .. }
+            | Term::Inr { .. }
+            | Term::InlAt { .. }
+            | Term::InrAt { .. } => self.ctor_value(t, d).unwrap_or_else(|| self.raw_tm(t)),
             Term::App { .. } => self.call(t, d),
             Term::GlobalTm { var, subst } => self
                 .global(*var, subst)
@@ -442,6 +444,17 @@ impl Speller<'_> {
             // flat declaration, which the display lookup sees through.
             Term::Inl { lhs, .. } => (t, None, self.el.display_tag_of(lhs)?),
             Term::Inr { rhs, .. } => (t, None, self.el.display_tag_of(rhs)?),
+            // The checked spellings carry the **whole sum**, not a summand,
+            // and `tag_of` already walks a `Sum` to its leftmost constructor
+            // — so the same lookup serves, one node higher
+            // (`docs/intro-by-type-design.md` §4.2). An annotation that is
+            // not structurally a sum (an un-reduced `El(case(…))`) declines,
+            // and the display falls back to `raw_tm` as it does for every
+            // other shape it cannot read; a whnf here would need a span the
+            // display path does not carry.
+            Term::InlAt { ty, .. } | Term::InrAt { ty, .. } => {
+                (t, None, self.el.display_tag_of(ty)?)
+            }
             _ => return None,
         };
         // Walk the injection path: `Inr` steps past a constructor, `Inl`
@@ -450,12 +463,12 @@ impl Speller<'_> {
         let mut i = 0usize;
         let mut cur = label;
         loop {
-            match cur {
-                Term::Inr { val, .. } if i + 1 < n => {
+            match crate::spelling::inj_of(cur) {
+                Some((false, val)) if i + 1 < n => {
                     i += 1;
                     cur = val;
                 }
-                Term::Inl { val, .. } => {
+                Some((true, val)) => {
                     cur = val;
                     break;
                 }
@@ -475,7 +488,7 @@ impl Speller<'_> {
         // identified by the injection path, which is the readable part: name
         // it, and admit the fields were not recovered — the same convention a
         // parameterized inductive's arguments get.
-        let Term::Pair { snd, .. } = cur else {
+        let Some((_, snd)) = crate::spelling::pair_of(cur) else {
             return Some(if ctor.fields.is_empty() {
                 ctor.name.clone()
             } else {
@@ -485,7 +498,7 @@ impl Speller<'_> {
         let mut payload: Vec<&Rc<Term>> = Vec::new();
         let mut p = snd;
         for _ in 0..ctor.payload().count() {
-            let Term::Pair { fst, snd, .. } = &**p else {
+            let Some((fst, snd)) = crate::spelling::pair_of(p) else {
                 return None;
             };
             payload.push(fst);
@@ -495,7 +508,7 @@ impl Speller<'_> {
         if let Some(children) = children {
             let mut c = children;
             for _ in 0..ctor.arity() {
-                let Term::Pair { fst, snd, .. } = c else {
+                let Some((fst, snd)) = crate::spelling::pair_of(c) else {
                     return None;
                 };
                 kids.push(fst);

@@ -166,6 +166,12 @@ impl From<ConvError> for TypeError {
 /// (`issues/generated-proof-cost-diagnostics.md`). Observational: nothing in
 /// the kernel reads what this writes.
 #[inline]
+/// The stage-2 spike switch; see [`Tc::computing_layer`]. Read once.
+fn at_spike() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("HEATHER_AT_SPIKE").is_some())
+}
+
 fn note_conv_outcome(result: &Result<(), ConvError>) {
     match result {
         Ok(()) => {}
@@ -1291,8 +1297,21 @@ impl Tc {
     /// spellings' guard (`docs/intro-by-type-design.md` §2.3): stronger than
     /// [`Tc::not_var_layer`], which admits layer c, because a form layer c
     /// admits is a form the code recursors must range over.
+    ///
+    /// **`HEATHER_AT_SPIKE` relaxes it, and is a measurement instrument, not
+    /// a rule.** Heather checks every declaration body at `Layer::Code`
+    /// (`crates/elab/src/lib.rs` ~3637; `DESIGN.md`'s δ-layer-preservation
+    /// argument is why), so this guard refuses the spellings *everywhere* and
+    /// stage 2's emitters cannot fire. The spike lets the round measure the
+    /// payoff while the layer question is decided on the issue. It must not
+    /// survive that decision: under it `box(pair@(T;a;b))` is well typed and
+    /// no recursor branch ranges over it, which is §2.2's refusal.
     fn computing_layer(&self, env: &Env) -> R {
-        if env.layer.computes() { Ok(()) } else { Err(TypeError::LayerMismatch) }
+        if env.layer.computes() || at_spike() {
+            Ok(())
+        } else {
+            Err(TypeError::LayerMismatch)
+        }
     }
 
     fn meta_layer(&self, env: &Env) -> R {

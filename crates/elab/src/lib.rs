@@ -117,6 +117,7 @@ mod goal_combinators;
 mod goals;
 mod indexed;
 mod inductive;
+mod spelling;
 mod lgg;
 mod lint;
 mod literals;

@@ -1211,7 +1211,13 @@ fn app_spine(tm: &Rc<Term>) -> (&Term, Vec<&Rc<Term>>) {
 fn is_ctor_value(tm: &Rc<Term>) -> bool {
     matches!(
         &**tm,
-        Term::Supf { .. } | Term::Inl { .. } | Term::Inr { .. } | Term::Zero | Term::Succ(_)
+        Term::Supf { .. }
+            | Term::Inl { .. }
+            | Term::Inr { .. }
+            | Term::InlAt { .. }
+            | Term::InrAt { .. }
+            | Term::Zero
+            | Term::Succ(_)
     )
 }
 
@@ -1221,7 +1227,7 @@ fn is_ctor_value(tm: &Rc<Term>) -> bool {
 fn children_fields(children: &Rc<Term>) -> Vec<&Rc<Term>> {
     let mut out = Vec::new();
     let mut cur = children;
-    while let Term::Pair { fst, snd, .. } = &**cur {
+    while let Some((fst, snd)) = crate::spelling::pair_of(cur) {
         out.push(fst);
         cur = snd;
     }

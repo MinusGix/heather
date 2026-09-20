@@ -604,23 +604,62 @@ fn decode_arity_deep(t: &Term) -> Option<Term> {
 /// which are scoped where the spine was read back — 0 at a constructor, and
 /// however many binders the step's case tree has pushed inside `match`.
 pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Term {
-    let mut val = val;
+    inject_at(spine, i, n, val, d, None)
+}
+
+/// [`inject`] with the **checked spelling** at its outermost layer
+/// (`docs/intro-by-type-design.md` §4.1): `at` is the un-reduced type the
+/// whole injection was checked at — `build_ctor`'s `pre_whnf` — and replaces
+/// that layer's `lhs`/`rhs`, which are the two summands of its whnf.
+///
+/// Only the outermost layer takes it, and the reason is that the inner layers
+/// have no un-reduced spelling: layer `j+1`'s type is layer `j`'s whnf's
+/// *right* summand, and a selection of a component is a checker-internal
+/// `ITy::Sel`, not syntax (§3.2). For a two-constructor declaration — the
+/// parser tower's `Reply` among them — the chain is one layer deep and the
+/// outermost layer is the whole of it.
+pub(crate) fn inject_at(
+    spine: &Spine,
+    i: usize,
+    n: usize,
+    val: Term,
+    d: u32,
+    at: Option<Rc<Type>>,
+) -> Term {
+    // The layers, innermost first; the last one applied is the outermost and
+    // is the one `at` describes.
+    let mut layers: Vec<(bool, usize)> = Vec::new();
     if i + 1 < n {
-        val = Term::Inl {
-            lhs_level: spine.ctors[i].1.clone(),
-            rhs_level: spine.tails[i].1.clone(),
-            lhs: Rc::new(spine.ctors[i].0.shift_local(d)),
-            rhs: Rc::new(spine.tails[i].0.shift_local(d)),
-            val: Rc::new(val),
-        };
+        layers.push((true, i));
     }
-    for j in (0..i).rev() {
-        val = Term::Inr {
-            lhs_level: spine.ctors[j].1.clone(),
-            rhs_level: spine.tails[j].1.clone(),
-            lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
-            rhs: Rc::new(spine.tails[j].0.shift_local(d)),
-            val: Rc::new(val),
+    layers.extend((0..i).rev().map(|j| (false, j)));
+    let last = layers.len().saturating_sub(1);
+    let mut val = val;
+    for (k, (is_inl, j)) in layers.into_iter().enumerate() {
+        let outermost = k == last;
+        val = match at.as_ref().filter(|_| outermost) {
+            Some(ty) if is_inl => Term::InlAt {
+                ty: Rc::clone(ty),
+                val: Rc::new(val),
+            },
+            Some(ty) => Term::InrAt {
+                ty: Rc::clone(ty),
+                val: Rc::new(val),
+            },
+            None if is_inl => Term::Inl {
+                lhs_level: spine.ctors[j].1.clone(),
+                rhs_level: spine.tails[j].1.clone(),
+                lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
+                rhs: Rc::new(spine.tails[j].0.shift_local(d)),
+                val: Rc::new(val),
+            },
+            None => Term::Inr {
+                lhs_level: spine.ctors[j].1.clone(),
+                rhs_level: spine.tails[j].1.clone(),
+                lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
+                rhs: Rc::new(spine.tails[j].0.shift_local(d)),
+                val: Rc::new(val),
+            },
         };
     }
     val
@@ -2234,7 +2273,37 @@ impl Elaborator {
         // field types respell. The structural spine above — `build_fields`'
         // checking, the container projection — is untouched.
         let spine_e = self.respell_spine(cx, &spine);
-        let val = inject(&spine_e, i, ind.ctors.len(), fields, 0);
+        // The `sup_f` slots, computed here rather than below because the
+        // checked spelling of a **recursive** declaration's label injection
+        // needs the same `shape` the slot takes: the label's type is the
+        // `Wf`'s shape, not `pre_whnf`, and the two annotations agreeing is
+        // what keeps the kernel's `Sum`-against-`Sum` query a `==`.
+        let wf_slots = match &expected {
+            Type::Wf { shape, arity, .. } if ind.recursive => {
+                Some(match self.wf_slot_refs(cx, shape, arity) {
+                    Some((s, a)) => (Rc::new(s), Rc::new(a)),
+                    None => self
+                        .emit_wf_slots(cx, shape, arity, 0)
+                        .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
+                })
+            }
+            _ => None,
+        };
+        // …and the outermost injection's annotation (§4.1): the un-reduced
+        // expected type for a flat declaration, the emitted shape for a
+        // recursive one. A recursive declaration whose `expected` is not a
+        // `Wf` is the error below; it takes no `@` and falls through to it.
+        let at = if !cx.emits_at_forms() {
+            None
+        } else if ind.recursive {
+            wf_slots.as_ref().map(|(s, _)| Rc::clone(s))
+        } else {
+            Some(match self.emit_ty(cx, pre_whnf, 0) {
+                Some(r) => Rc::new(r),
+                None => Rc::new(pre_whnf.clone()),
+            })
+        };
+        let val = inject_at(&spine_e, i, ind.ctors.len(), fields, 0, at);
         if !ind.recursive {
             return Ok(val);
         }
@@ -2270,11 +2339,14 @@ impl Elaborator {
         // annotations against the inline shape at every constructor value
         // (`Sum` vs `Sum`, 312 queries of the five-node FunctionIR/x86
         // module, 2026-09-06; issues/emission-site-respell-audit.md).
-        let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
-            Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => self
-                .emit_wf_slots(cx, shape, arity, 0)
-                .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
+        let (shape_e, arity_e) = match wf_slots {
+            Some(pair) => pair,
+            None => match self.wf_slot_refs(cx, shape, arity) {
+                Some((s, a)) => (Rc::new(s), Rc::new(a)),
+                None => self
+                    .emit_wf_slots(cx, shape, arity, 0)
+                    .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
+            },
         };
         Ok(Term::Supf {
             level: level.clone(),
@@ -2371,6 +2443,23 @@ impl Elaborator {
         // …and the inline spelling of a component the decode handed back as
         // a code literal (`decode_deep`), so a tuple built at an `El ⌜Σ…⌝`
         // record type spells each link as the next link's own type does.
+        // …unless this is a computing-layer emission, where the *one*
+        // un-reduced type replaces both halves of its whnf
+        // (`docs/intro-by-type-design.md` §4.1). `ctor_ty` is the argument
+        // this call received, `head` above is its whnf, and `fst`/`snd` are
+        // that whnf's components — the object the round exists to stop
+        // writing down. `emit_ty` still runs, on `T` rather than on a reduct.
+        if cx.emits_at_forms() {
+            let ty = match self.emit_ty(cx, ctor_ty, 0) {
+                Some(r) => Rc::new(r),
+                None => Rc::new(ctor_ty.clone()),
+            };
+            return Ok(Term::PairAt {
+                ty,
+                fst: value,
+                snd: Rc::new(tail_tm),
+            });
+        }
         let fst_e = match self.emit_ty(cx, &fst, 0) {
             Some(r) => Rc::new(r),
             None => fst,
@@ -2913,22 +3002,45 @@ impl Elaborator {
                     decode_deep(&snd).map_or_else(|| Rc::clone(&snd), Rc::new),
                 ),
             };
-            let proj = Rc::new(Term::Fst {
-                fst_level: fst_level.clone(),
-                snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(&fst_e),
-                snd_ty: Rc::clone(&snd_e),
-                pair: Rc::clone(&pair),
+            // The checked spellings of the projection chain (§4.1): the one
+            // un-reduced type this step's whnf came from, in place of that
+            // whnf's two components. `cur_emit` is the emission copy of it
+            // where the walk has one; `cur` is the inline copy otherwise.
+            // The chain below still needs `fst_e`/`snd_e` — `snd_e` carries
+            // `cur_emit` forward and `fst_e` is the field's inferred type
+            // this function returns — but neither is written into the term.
+            let at = cx.emits_at_forms().then(|| match &cur_emit {
+                Some(e) => Rc::new(e.clone()),
+                None => Rc::new(cur.clone()),
+            });
+            let proj = Rc::new(match at.as_ref() {
+                Some(ty) => Term::FstAt {
+                    ty: Rc::clone(ty),
+                    pair: Rc::clone(&pair),
+                },
+                None => Term::Fst {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: Rc::clone(&fst_e),
+                    snd_ty: Rc::clone(&snd_e),
+                    pair: Rc::clone(&pair),
+                },
             });
             if step == idx + 1 {
                 return Ok(((*proj).clone(), (*fst_e).clone(), fst_level));
             }
-            let rest = Rc::new(Term::Snd {
-                fst_level,
-                snd_level,
-                fst_ty: Rc::clone(&fst_e),
-                snd_ty: Rc::clone(&snd_e),
-                pair: Rc::clone(&pair),
+            let rest = Rc::new(match at.as_ref() {
+                Some(ty) => Term::SndAt {
+                    ty: Rc::clone(ty),
+                    pair: Rc::clone(&pair),
+                },
+                None => Term::Snd {
+                    fst_level,
+                    snd_level,
+                    fst_ty: Rc::clone(&fst_e),
+                    snd_ty: Rc::clone(&snd_e),
+                    pair: Rc::clone(&pair),
+                },
             });
             cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&proj)));
             if cur_emit.is_some() {
@@ -4471,13 +4583,15 @@ impl Elaborator {
         let mut cur = label;
         let mut injected = false;
         loop {
-            match cur {
-                Term::Inr { val, .. } if i + 1 < n => {
+            // Either injection spelling (`crate::spelling`): this walk reads
+            // the *path*, never an annotation, so `inr@` is an `inr`.
+            match crate::spelling::inj_of(cur) {
+                Some((false, val)) if i + 1 < n => {
                     injected = true;
                     i += 1;
                     cur = val;
                 }
-                Term::Inl { val, .. } => {
+                Some((true, val)) => {
                     injected = true;
                     cur = val;
                     break;
@@ -4489,7 +4603,7 @@ impl Elaborator {
             return Ok(None);
         }
         let ctor = &ind.ctors[i];
-        let canonical = matches!(cur, Term::Pair { .. });
+        let canonical = crate::spelling::is_pair(cur);
         if !canonical && !injected && n > 1 {
             return Ok(None);
         }
@@ -4501,13 +4615,13 @@ impl Elaborator {
         }
         // Skip the nominal tag, then collect one value per *payload* field.
         let mut payload = Vec::new();
-        if let Term::Pair { snd, .. } = cur {
+        if let Some((_, snd)) = crate::spelling::pair_of(cur) {
             let mut p = snd;
             // Not `fields.len() - arity()`: a container field is neither
             // payload nor a *plain* child, so the two no longer partition the
             // fields (docs/container-fields.md §3.1).
             for _ in 0..ctor.payload().count() {
-                let Term::Pair { fst, snd, .. } = &**p else {
+                let Some((fst, snd)) = crate::spelling::pair_of(p) else {
                     return Ok(None);
                 };
                 payload.push(Rc::clone(fst));
@@ -4530,7 +4644,7 @@ impl Elaborator {
         if let Some(children) = children {
             let mut c = children;
             for _ in 0..ctor.arity() {
-                let Term::Pair { fst, snd, .. } = c else {
+                let Some((fst, snd)) = crate::spelling::pair_of(c) else {
                     return Ok(None);
                 };
                 kids.push(Rc::clone(fst));
@@ -5121,7 +5235,10 @@ pub(crate) fn receiver_admits_reference(value: &Term) -> bool {
 fn receiver_is_neutral(value: &Term) -> bool {
     match value {
         Term::Var(_) => true,
-        Term::Fst { pair, .. } | Term::Snd { pair, .. } => receiver_is_neutral(pair),
+        Term::Fst { pair, .. }
+        | Term::Snd { pair, .. }
+        | Term::FstAt { pair, .. }
+        | Term::SndAt { pair, .. } => receiver_is_neutral(pair),
         Term::App { fun, .. } => receiver_is_neutral(fun),
         _ => false,
     }

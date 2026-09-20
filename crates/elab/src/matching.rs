@@ -613,7 +613,10 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
         | Term::Case { scrut, .. }
         | Term::ElimW { scrut, .. }
         | Term::ElimWf { scrut, .. } => Some(scrut),
-        Term::Fst { pair, .. } | Term::Snd { pair, .. } => Some(pair),
+        Term::Fst { pair, .. }
+        | Term::Snd { pair, .. }
+        | Term::FstAt { pair, .. }
+        | Term::SndAt { pair, .. } => Some(pair),
         Term::J { proof, .. } | Term::Transp { proof, .. } => Some(proof),
         _ => None,
     };
@@ -624,10 +627,13 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
     }
     match term {
         Term::Succ(term) => stuck_scrutinees(term, out, budget),
-        Term::Inl { val, .. } | Term::Inr { val, .. } => {
+        Term::Inl { val, .. }
+        | Term::Inr { val, .. }
+        | Term::InlAt { val, .. }
+        | Term::InrAt { val, .. } => {
             stuck_scrutinees(val, out, budget);
         }
-        Term::Pair { fst, snd, .. } => {
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
             stuck_scrutinees(fst, out, budget);
             stuck_scrutinees(snd, out, budget);
         }
@@ -656,6 +662,36 @@ fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Option<(Term, Term)>) 
 }
 
 fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
+    // The checked spelling's η-expansion is the same shape with **one**
+    // annotation carried forward rather than two components rebuilt
+    // (`docs/intro-by-type-design.md` §4.2: "a smaller invariant"). A chain
+    // is homogeneous — one `projection` call writes one spelling all the way
+    // down — so the two loops do not have to interleave.
+    if let Term::FstAt { ty, pair } = scrutinee {
+        let mut base = Rc::clone(pair);
+        let up = Rc::new(ty.shift_local(1));
+        let mut replacement = Term::PairAt {
+            ty: Rc::clone(&up),
+            fst: Rc::new(Term::Var(LocalVar(0))),
+            snd: Rc::new(Term::SndAt {
+                ty: up,
+                pair: Rc::new(pair.shift_local(1)),
+            }),
+        };
+        while let Term::SndAt { ty, pair } = &*base {
+            let up = Rc::new(ty.shift_local(1));
+            replacement = Term::PairAt {
+                ty: Rc::clone(&up),
+                fst: Rc::new(Term::FstAt {
+                    ty: up,
+                    pair: Rc::new(pair.shift_local(1)),
+                }),
+                snd: Rc::new(replacement),
+            };
+            base = Rc::clone(pair);
+        }
+        return Some(((*base).clone(), replacement));
+    }
     let Term::Fst {
         fst_level,
         snd_level,
