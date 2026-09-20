@@ -78,3 +78,6 @@ from commit 4db435c and is not retained as active compiler infrastructure.
   [[function-ir-recursive-structured-lowering]] passed full validation. The
   shared physical certificate/export path is now exercised by both branch
   shapes; multi-result interfaces remain in that issue.
+- 2026-09-20: [[function-ir-bounded-readonly-loop]] now defines the shared source/IR
+  semantic contract and two source clients; native body/loop realization is
+  the next step in [[native-bounded-loop-certificates]].

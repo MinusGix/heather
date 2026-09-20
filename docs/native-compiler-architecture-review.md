@@ -5,7 +5,11 @@ The inventory below describes that commit. Following the review, the user
 authorized removal of the specialized buffer profiles. Calculator expansion
 is paused. Recursive source reflection, selection, physical certificates, and
 assembly export now implement the first bounded checkpoint; broader multi-result
-interfaces remain in the first issue. The inventory remains historical.
+interfaces remain in the first issue. The bounded read-only source/IR contract
+now has a shared evaluator, typed carry/exit interface, and generated source
+agreement for counting and search. It is documented in
+[the loop contract](function-ir-readonly-loops.md); body selection and physical
+loop certificates remain the next step. The inventory remains historical.
 Integration acceptance is tracked in
 [the shared-lowering milestone](../issues/native-shared-lowering-milestone.md).
 

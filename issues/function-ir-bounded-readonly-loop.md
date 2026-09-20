@@ -1,6 +1,6 @@
 ---
 title: Define source and FunctionIR contracts for bounded read-only buffer loops
-status: open
+status: closed
 labels: [compiler,function-ir,memory,design]
 created: 2026-09-20
 updated: 2026-09-20
@@ -52,3 +52,32 @@ preserving the bounded source program's behavior.
 - [[native-bounded-loop-certificates]] will own the native realization of the
   contract chosen here; it must not invent a separate source-loop semantics.
 - [[native-shared-lowering-milestone]] owns the two-client integration check.
+
+## Implementation
+
+The selected contract is documented in `docs/function-ir-readonly-loops.md`.
+`lib/function_ir_loop.hthr` defines one polymorphic semantic loop interface,
+its source combinator, and the evaluator used by both. The first reflector
+admits five-parameter wrappers with Nat or Bool carries and a resolved checked
+step definition. It generates source agreement and a typed artifact carrying
+initial cursor bounds and selected-path read premises.
+
+This is the source/IR semantic contract, not raw `StructuredRegion` loop
+selection. The step remains a qualified source reference; selecting it into
+shared dataflow/conditional regions and proving its physical realization
+belongs to [[native-bounded-loop-certificates]]. No source-side allocation,
+register layout, fixed budget, or parser constructor is introduced.
+
+## Log
+
+- 2026-09-20: Implemented the bounded source/IR interface, explicit denied-read
+  behavior, end-before-budget precedence, consumed-byte early exits, and
+  width-parametric counter/address premises. Counting and first-match source
+  clients share the same evaluator and reflector with different carry types.
+  Kernel regressions cover open types/inputs, local transitions, selected-path
+  access, stale source/body, incorrect carry/cursor/budget bindings, and wrapping
+  address or word relations. Focused validation passed all four test groups;
+  plain `scripts/test` passed 2845 tests, 0 failed, 5 ignored, without changing
+  resource limits. `git diff --check` and issue consistency checks passed.
+  Source/IR contract scope is complete; native body selection, loop integration,
+  word invariants, and physical certificates remain with their named owner.

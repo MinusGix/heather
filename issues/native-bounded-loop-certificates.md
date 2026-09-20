@@ -55,3 +55,14 @@ The experimental scanner implementation at 4db435c was removed intentionally.
 [[x86-buffer-scan-loop-refinement]] records its unfinished proof, not an API to
 preserve or a completed correctness result. Recover individual facts from Git
 only when the new shared interface needs them.
+
+## Integration boundary
+
+The source/IR contract is now concrete in `function_ir_loop.hthr` (see
+`docs/function-ir-readonly-loops.md`). It supplies a typed `ReadonlyLoop<C>`
+body reference and one `loop_run` evaluator. This issue must lower that checked
+body through shared regions before physical selection; a resolved source name
+is not a selected body or a physical certificate. The first source clients
+use Nat counting and Bool search carries, byte comparisons, and explicit
+input budgets. Counter representability and outcome ABI encoding remain
+obligations here; they were not silently fixed by the semantic interface.

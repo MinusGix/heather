@@ -1,0 +1,129 @@
+// Semantic interface for bounded read-only FunctionIR loops. The byte source
+// belongs to the caller; Some is an explicit grant of a read, not a total-load
+// assumption. Addresses and control counters are mathematical Nats here.
+import bitvec;
+import bool;
+import logic;
+import nat;
+import option;
+
+record ReadonlyBytes {
+    source: Nat,
+    base: Nat,
+    length: Nat,
+    read: Nat → Option<BitVec(8)>,
+}
+
+inductive LoopStep<C> { Continue(next: C), Break(result: C) }
+
+// At a successful read, cursor advances and budget decreases even if the
+// callback exits. Thus Early's cursor is the next unread position.
+inductive LoopOutcome<C> {
+    End(cursor: Nat, remaining: Nat, carry: C),
+    Exhausted(cursor: Nat, carry: C),
+    Denied(cursor: Nat, remaining: Nat, carry: C),
+    Early(cursor: Nat, remaining: Nat, result: C),
+}
+
+// The body has no memory argument. Its interface exposes precisely the byte
+// selected by the guard, plus immutable needle/index and the typed carry.
+// This semantic interface does not certify a native implementation of body.
+record ReadonlyLoop<C> {
+    body: BitVec(8) → Nat → BitVec(8) → C → LoopStep<C>,
+}
+
+fn loop_run<C>(budget: Nat) → ReadonlyLoop<C> → ReadonlyBytes → BitVec(8) → Nat → C → LoopOutcome<C> {
+    match budget {
+        Zero => λ region buffer needle cursor carry =>
+            match nat::leb(buffer.length, cursor) {
+                True => End(cursor, 0, carry),
+                False => Exhausted(cursor, carry),
+            },
+        Succ(rest) => λ region buffer needle cursor carry =>
+            match nat::leb(buffer.length, cursor) {
+                True => End(cursor, Succ(rest), carry),
+                False => match buffer.read(buffer.base + cursor) {
+                    None => Denied(cursor, Succ(rest), carry),
+                    Some(byte) => match region.body(needle, cursor, byte, carry) {
+                        Continue(next) => loop_run(rest, region, buffer, needle, Succ(cursor), next),
+                        Break(result) => Early(Succ(cursor), rest, result),
+                    },
+                },
+            },
+    }
+}
+
+// Source entry point: one resolved combinator, with an ordinary checked pure
+// step definition. Reflection recovers this interface, not recursion encodings.
+fn bounded_readonly<C>(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat,
+    cursor: Nat, carry: C, body: BitVec(8) → Nat → BitVec(8) → C → LoopStep<C>) → LoopOutcome<C> {
+    loop_run(budget, ReadonlyLoop<C>(body), buffer, needle, cursor, carry)
+}
+
+fn LoopFinishedNormally<C>(outcome: LoopOutcome<C>) → Type {
+    match outcome {
+        End(_, _, _) => True,
+        Exhausted(_, _) => True,
+        Denied(_, _, _) => False,
+        Early(_, _, _) => True,
+    }
+}
+
+// Define access validity from the evaluator itself, so there is no second
+// recursive account of the chosen path that could drift from execution.
+// End/exhaustion need no access; denied reads make this proposition False.
+fn LoopReadable<C>(budget: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
+    needle: BitVec(8), cursor: Nat, carry: C) → Type {
+    LoopFinishedNormally(loop_run(budget, region, buffer, needle, cursor, carry))
+}
+
+fn ReadsByte(buffer: ReadonlyBytes, cursor: Nat, byte: BitVec(8)) → Type {
+    buffer.read(buffer.base + cursor) = Some(byte)
+}
+
+// Native lowering must discharge these premises at its chosen address width.
+// One-past-end must itself be representable; no modular wrap is hidden here.
+fn LoopBounds(buffer: ReadonlyBytes, cursor: Nat) → Type { cursor <= buffer.length }
+fn LoopWord(width: Nat, word: BitVec(width), counter: Nat) → Type { bitvec::toNat(width, word) = counter }
+fn LoopAddressBound(width: Nat, buffer: ReadonlyBytes) → Type {
+    buffer.base + buffer.length < nat::pow(2, width)
+}
+
+theorem loop_advance_bound(cursor, length: Nat, guarded: IsTrue(nat::leb(Succ(cursor), length))):
+    Succ(cursor) <= length { nat::leb_sound(Succ(cursor), length, guarded) }
+
+theorem loop_budget_predecessor(rest: Nat): nat::sub(Succ(rest), 1) = rest {
+    nat::sub_zero(rest)
+}
+
+// This is the source/IR contract. Native code must separately establish an
+// implementation of region.body, the physical read relation, and counters.
+record ReadonlyLoopArtifact<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
+    needle: BitVec(8), budget: Nat, cursor: Nat, carry: C, result: LoopOutcome<C>) {
+    source_agreement: loop_run(budget, region, buffer, needle, cursor, carry) = result,
+    cursor_bound: LoopBounds(buffer, cursor),
+    selected_reads: LoopReadable(budget, region, buffer, needle, cursor, carry),
+}
+
+theorem loop_artifact_normal<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
+    needle: BitVec(8), budget: Nat, cursor: Nat, carry: C, result: LoopOutcome<C>,
+    artifact: ReadonlyLoopArtifact<C>(region, buffer, needle, budget, cursor, carry, result)):
+    LoopFinishedNormally(result) {
+    j(artifact.source_agreement, λ outcome _ => LoopFinishedNormally(outcome), artifact.selected_reads)
+}
+
+// Local transition equation over open values. It is the interface a later
+// loop-invariant proof can fold without unrolling an arbitrary budget.
+theorem loop_successor<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
+    needle: BitVec(8), cursor: Nat, carry: C):
+    loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
+        match nat::leb(buffer.length, cursor) {
+            True => End(cursor, Succ(rest), carry),
+            False => match buffer.read(buffer.base + cursor) {
+                None => Denied(cursor, Succ(rest), carry),
+                Some(byte) => match region.body(needle, cursor, byte, carry) {
+                    Continue(next) => loop_run(rest, region, buffer, needle, Succ(cursor), next),
+                    Break(result) => Early(Succ(cursor), rest, result),
+                },
+            },
+        } { refl }

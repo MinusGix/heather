@@ -1,0 +1,33 @@
+// Source/IR clients, not native entry points yet. Both use the same bounded
+// loop interface; application-specific behavior is confined to the pure body.
+import function_ir_loop;
+import bitvec;
+import bool;
+import nat;
+
+fn byte_equal(left, right: BitVec(8)) → Bool {
+    match bitvec::unsigned_lt_bit(8, left, right) {
+        True => False,
+        False => match bitvec::unsigned_lt_bit(8, right, left) { True => False, False => True },
+    }
+}
+
+fn count_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), count: Nat) → LoopStep<Nat> {
+    match byte_equal(needle, byte) { False => Continue(count), True => Continue(Succ(count)) }
+}
+
+fn search_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), found: Bool) → LoopStep<Bool> {
+    match byte_equal(needle, byte) { False => Continue(found), True => Break(True) }
+}
+
+fn count_occurrences(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat,
+    cursor: Nat, count: Nat) → LoopOutcome<Nat> {
+    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, count_body)
+}
+
+// Start with found=False. Early(next, remaining, True) reports a match at
+// next-1. The shared semantics count that byte as consumed.
+fn first_match(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat,
+    cursor: Nat, found: Bool) → LoopOutcome<Bool> {
+    bounded_readonly<Bool>(buffer, needle, budget, cursor, found, search_body)
+}

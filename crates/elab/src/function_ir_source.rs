@@ -7,6 +7,9 @@
 
 use std::collections::BTreeMap;
 
+mod readonly_loop;
+pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
+
 mod structured;
 pub use structured::{generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction};
 
