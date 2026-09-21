@@ -168,6 +168,26 @@ fn boolean_not_symbol_uses_the_bool_designation() {
 }
 
 #[test]
+fn semantic_brackets_reflect_bool_into_type() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+        .expect("logic");
+    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+        .expect("bool");
+    e.elab_module_source(
+        "probe",
+        r#"
+        import bool;
+        theorem positive(b: Bool): ⟦b⟧ → bool::IsTrue(b) { λ h => h }
+        theorem negative(b: Bool): ⟦!b⟧ → bool::IsTrue(bool::not(b)) { λ h => h }
+        theorem closed_true(): ⟦True⟧ { trivial }
+        theorem closed_false(): ⟦!False⟧ { trivial }
+        "#,
+    )
+    .expect("semantic brackets elaborate as `bool::IsTrue`");
+}
+
+#[test]
 fn infix_subtraction_is_carrier_directed() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(

@@ -144,6 +144,15 @@ fn prefix_negation_is_written_tight() {
     check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
 }
 
+#[test]
+fn boolean_reflection_delimiters_are_written_tight() {
+    check("theorem t(b: Bool): ⟦ b ⟧ { p }", "theorem t(b: Bool): ⟦b⟧ { p }");
+    check(
+        "theorem t(a, b: Bool): ⟦ ! a && b ⟧ { p }",
+        "theorem t(a, b: Bool): ⟦!a && b⟧ { p }",
+    );
+}
+
 /// The other half of that lint: a comment between operator and operand is not
 /// whitespace, and closing the gap would swallow it.
 #[test]

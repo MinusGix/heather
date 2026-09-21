@@ -2748,6 +2748,7 @@ impl Parser {
         }
         let mut paren = 0usize;
         let mut bracket = 0usize;
+        let mut semantic = 0usize;
         let mut brace = 0usize;
         for tok in self.toks.iter().skip(self.pos + 1) {
             match tok.kind {
@@ -2755,11 +2756,21 @@ impl Parser {
                 TokKind::RParen if paren > 0 => paren -= 1,
                 TokKind::LBracket => bracket += 1,
                 TokKind::RBracket if bracket > 0 => bracket -= 1,
+                TokKind::LSemantic => semantic += 1,
+                TokKind::RSemantic if semantic > 0 => semantic -= 1,
                 TokKind::LBrace => brace += 1,
                 TokKind::RBrace if brace > 0 => brace -= 1,
-                TokKind::Semi if paren == 0 && bracket == 0 && brace == 0 => return true,
-                TokKind::Comma | TokKind::RParen | TokKind::RBracket | TokKind::RBrace
-                    if paren == 0 && bracket == 0 && brace == 0 =>
+                TokKind::Semi
+                    if paren == 0 && bracket == 0 && semantic == 0 && brace == 0 =>
+                {
+                    return true;
+                }
+                TokKind::Comma
+                | TokKind::RParen
+                | TokKind::RBracket
+                | TokKind::RSemantic
+                | TokKind::RBrace
+                    if paren == 0 && bracket == 0 && semantic == 0 && brace == 0 =>
                 {
                     return false;
                 }
@@ -3246,8 +3257,12 @@ impl Parser {
         while i < self.toks.len() {
             match self.toks[i].kind {
                 TokKind::LParen => depth += 1,
-                TokKind::LBrace | TokKind::LBracket if depth == 1 => inner += 1,
-                TokKind::RBrace | TokKind::RBracket if depth == 1 && inner > 0 => inner -= 1,
+                TokKind::LBrace | TokKind::LBracket | TokKind::LSemantic if depth == 1 => inner += 1,
+                TokKind::RBrace | TokKind::RBracket | TokKind::RSemantic
+                    if depth == 1 && inner > 0 =>
+                {
+                    inner -= 1;
+                }
                 TokKind::Colon if depth == 1 && inner == 0 => return true,
                 TokKind::RParen => {
                     depth -= 1;
@@ -3711,6 +3726,28 @@ impl Parser {
         // ordinary subexpressions.
         if matches!(self.peek(), TokKind::LAngle) {
             return self.anonymous_constructor_expr();
+        }
+        // `⟦b⟧` reflects a Boolean into `Type`: exact surface sugar for
+        // `IsTrue(b)`. The delimiters reopen the expression grammar just like
+        // parentheses, so an enclosing comparison or record-literal context
+        // cannot restrict the reflected expression.
+        if matches!(self.peek(), TokKind::LSemantic) {
+            let open = self.bump().span;
+            let inner = self
+                .with_eq(false, |p| p.with_record_lit(false, |p| p.expr()))?;
+            let close = self.expect(&TokKind::RSemantic, "`⟧` to close Boolean reflection")?;
+            let span = open.join(close);
+            let head = Expr { kind: ExprKind::Var("IsTrue".to_string()), span: open };
+            return Ok(Expr {
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: vec![inner],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            });
         }
         // Squash is type syntax in expression position too, just like an
         // arrow type.  This matters in particular under `code { ... }`: the
@@ -5026,6 +5063,18 @@ mod tests {
             ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
         ));
         assert_eq!(as_call(&outer_args[0].kind).0, "!");
+    }
+
+    #[test]
+    fn semantic_brackets_desugar_to_is_true() {
+        let k = body("⟦!b⟧");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "IsTrue");
+        assert_eq!(args.len(), 1);
+        assert_eq!(as_call(&args[0].kind).0, "!");
+
+        let err = parse_file("fn f(b: Bool) -> Type { ⟦b }").unwrap_err();
+        assert!(err.msg.contains("⟧` to close Boolean reflection"), "{}", err.msg);
     }
 
     #[test]

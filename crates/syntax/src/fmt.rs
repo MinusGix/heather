@@ -183,7 +183,9 @@ fn gap_between(a: &Tok, b: &Tok, roles: &HashMap<usize, TokenRole>) -> Gap {
     }
 
     // Delimiters do not pad on the inside.
-    if matches!(a.kind, LParen | LBracket | LAngle) || matches!(b.kind, RParen | RBracket | RAngle) {
+    if matches!(a.kind, LParen | LBracket | LAngle | LSemantic)
+        || matches!(b.kind, RParen | RBracket | RAngle | RSemantic)
+    {
         return Gap::Tight;
     }
     if matches!(a.kind, Lt)

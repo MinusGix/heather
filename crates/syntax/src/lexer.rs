@@ -55,6 +55,9 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
+    /// Boolean-reflection delimiters: `⟦b⟧` is `bool::IsTrue(b)`.
+    LSemantic, // ⟦
+    RSemantic, // ⟧
     /// Anonymous constructor delimiters. `⟨a, b⟩` selects the sole
     /// constructor of the expected type; `⟨a |⟩` / `⟨| b⟩` select
     /// the first / second constructor of a binary sum.
@@ -496,6 +499,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∥" => Some(TokKind::NormBar),
             "⟨" => Some(TokKind::LAngle),
             "⟩" => Some(TokKind::RAngle),
+            "⟦" => Some(TokKind::LSemantic),
+            "⟧" => Some(TokKind::RSemantic),
             _ => None,
         };
         if let Some(kind) = three_kind {
