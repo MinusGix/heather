@@ -727,6 +727,16 @@ impl expr::StructuralTypeElab for Elaborator {
             && self.clone().elab_infer(cx, expression).is_ok()
     }
 
+    fn type_endpoint_may_need_checking(&self, cx: &Cx, expression: &Expr) -> bool {
+        let mut found = false;
+        surface::walk_expr(expression, &mut |part| {
+            if !found && self.is_checking_only(cx, part) {
+                found = true;
+            }
+        });
+        found
+    }
+
     fn lower_named_type(
         &self,
         cx: &Cx,

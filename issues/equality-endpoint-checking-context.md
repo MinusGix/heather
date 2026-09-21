@@ -1,9 +1,9 @@
 ---
 title: Infer equality types from an available endpoint when the other needs checking
-status: open
+status: closed
 labels: [frontend,elaboration,inference,proofs,ergonomics]
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-21
 ---
 
 
@@ -58,3 +58,20 @@ workaround.
   makes the callback in this repro check.
 - **[[equality-orientation-ergonomics]]** owns broader proof-consumer symmetry;
   this issue is only endpoint type inference and keeps oriented `Id` intact.
+
+## Log
+
+- 2026-09-21: LANDED. Equality lowering now gives a left endpoint containing
+  a checking-only form a cheap syntactic classification before doing any
+  extra work. Only in that class does it use the existing isolated cloned
+  inference probe: if the left cannot anchor and the right can, it infers the
+  right and checks the left at that carrier. The constructed `Id` retains the
+  written `(left, right)` order. If either premise is absent, the old
+  left-to-right path runs and retains its diagnostic. This accepts both the
+  issue's reversed annotated-callback example and the motivating parser-style
+  generic call `([xs]).flatten() = xs`, where the collection-literal receiver
+  was deferred behind the call's unsolved type argument. Controls retain
+  incompatible endpoint rejection, kernel rejection of a false equation, the
+  old error when neither endpoint anchors, and numeral-carrier behavior.
+  Tests: `crates/elab/tests/equality_endpoint_checking.rs`,
+  `callback_expected_types.rs`, `carrier_numerals.rs`, and `lib_algebra.rs`.

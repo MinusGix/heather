@@ -38,6 +38,14 @@ pub(crate) trait StructuralTypeElab {
     fn type_endpoint_can_anchor(&self, _cx: &Cx, _expression: &Expr) -> bool {
         true
     }
+    /// Whether this endpoint contains a form whose elaboration may need a
+    /// carrier supplied by checking. This is the cheap syntactic gate before
+    /// [`Self::type_endpoint_can_anchor`]'s isolated semantic probe: ordinary
+    /// equalities must not elaborate their left endpoint twice merely to
+    /// confirm that the direction they already use works.
+    fn type_endpoint_may_need_checking(&self, _cx: &Cx, _expression: &Expr) -> bool {
+        false
+    }
     fn check_type_endpoint(
         &self,
         cx: &Cx,
@@ -309,9 +317,25 @@ impl<'a> ExprElab<'a> {
             TyKind::Eq(lhs, rhs) => Some((|| {
                 // Numerals have a `Nat` default, not an intrinsic carrier.
                 // Infer the other endpoint first when it can direct checking.
-                let flexible = expression_needs_numeral_carrier(lhs, |leaf| {
+                //
+                // The same direction is needed by a larger checking-only
+                // endpoint such as `map(r, λ a => [a])` or
+                // `concat([xs])`: inference reaches a nested form that needs
+                // the result carrier, while the written right endpoint can
+                // provide it. Probe only expressions with such a syntactic
+                // descendant, and only choose right-to-left when the left
+                // really fails and the right really succeeds. Both probes are
+                // isolated by the implementation; the selected endpoints are
+                // then elaborated once in the real session, in written `Id`
+                // order below.
+                let numeral_flexible = expression_needs_numeral_carrier(lhs, |leaf| {
                     !elab.type_endpoint_can_anchor(cx, leaf)
                 });
+                let checking_flexible = !numeral_flexible
+                    && elab.type_endpoint_may_need_checking(cx, lhs)
+                    && !elab.type_endpoint_can_anchor(cx, lhs)
+                    && elab.type_endpoint_can_anchor(cx, rhs);
+                let flexible = numeral_flexible || checking_flexible;
                 let (lhs_t, rhs_t, endpoint_ty, level) = if flexible {
                     let (rhs_t, endpoint_ty, level) = elab.infer_type_endpoint(cx, rhs)?;
                     let lhs_t = elab.check_type_endpoint(cx, lhs, &endpoint_ty, &level)?;
