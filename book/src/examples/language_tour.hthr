@@ -1,0 +1,34 @@
+fn add(m: Nat, n: Nat) -> Nat {
+    match m {
+        Zero => n,
+        Succ(k) => Succ(add(k, n)),
+    }
+}
+
+fn double(n: Nat) -> Nat {
+    add(n, n)
+}
+
+theorem two_plus_two(): add(2, 2) = 4 {
+    refl
+}
+
+fn keep_length({n: Nat}, xs: [Nat; n]) -> [Nat; n] {
+    xs
+}
+
+fn inferred_length(xs: [Nat; 2]) -> [Nat; 2] {
+    keep_length(xs)
+}
+
+fn explicit_length(xs: [Nat; 2]) -> [Nat; 2] {
+    @keep_length(2, xs)
+}
+
+record Point { x: Nat, y: Nat }
+
+fn origin() -> Point {
+    Point { y: 0, x: 0 }
+}
+
+theorem origin_x(): origin().x = 0 {}

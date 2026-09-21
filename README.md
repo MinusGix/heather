@@ -13,6 +13,11 @@ it consumes proof-carrying instances and emits executables. Generators that
 mint `Compile` instances by intensional analysis of boxed code need no
 verification themselves — each output carries its own certificate.
 
+## Documentation
+
+The user-facing language guide lives in [`book/`](book/src/README.md). Build it
+with `mdbook build`; the generated site is written to `target/book`.
+
 Disciplines like lifetimes, uniqueness, or GPU-compatibility are intended to
 be *libraries*: analysis functions over boxed code that mint typeclass
 evidence, not kernel features.
