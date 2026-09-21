@@ -1,0 +1,15 @@
+[package]
+name = "zed-heather"
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"
+
+# This extension is built independently by Zed, not as part of Heather's
+# native Cargo workspace.
+[workspace]

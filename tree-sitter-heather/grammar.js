@@ -257,6 +257,7 @@ module.exports = grammar({
       $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
+      $.boolean_reflection_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
       $.head_propagation_expression,
@@ -269,7 +270,7 @@ module.exports = grammar({
     head_index_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._head_expression), '[', field('index', $._expression), ']',
     )),
-    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '¬'), $._head_expression)),
+    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
@@ -304,6 +305,7 @@ module.exports = grammar({
       $.vector_type,
       $.vector_expression,
       $.squash_type,
+      $.boolean_reflection_expression,
       seq('(', $._declaration_type, ')'),
       $.declaration_type_application,
       $.declaration_call_type,
@@ -338,7 +340,7 @@ module.exports = grammar({
     declaration_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._declaration_type,
     )),
-    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '¬'), $._declaration_type)),
+    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._declaration_type)),
 
     _expression: $ => choice(
       $.identifier,
@@ -354,6 +356,7 @@ module.exports = grammar({
       $.squash_type,
       $.vector_expression,
       $.anonymous_constructor_expression,
+      $.boolean_reflection_expression,
       $.block_expression,
       $.lambda_expression,
       $.quantified_expression,
@@ -446,6 +449,10 @@ module.exports = grammar({
     ),
     named_pattern: $ => seq(field('field', $.identifier), ':=', field('pattern', $._pattern)),
 
+    boolean_reflection_expression: $ => seq(
+      '⟦', field('value', $._expression), '⟧',
+    ),
+
     quote_expression: $ => seq('code', $.block),
     splice_expression: $ => prec(PREC.PREFIX, seq('$', choice($.identifier, seq('{', $._expression, '}')))),
     calc_expression: $ => seq('calc', '{', $.calc_first_step, repeat(seq(',', $.calc_next_step)), optional(','), '}'),
@@ -471,7 +478,12 @@ module.exports = grammar({
       $.operator,
       $._expression,
     )), optional(','), ')'),
-    named_argument: $ => seq(field('name', $.identifier), ':=', field('value', $._expression)),
+    // Contextual words remain ordinary names away from their fixed followers;
+    // `Char(code := n)` is a named argument, not a half-written `code { … }`.
+    named_argument: $ => seq(
+      field('name', choice($.identifier, $.contextual_identifier)),
+      ':=', field('value', $._expression),
+    ),
     member_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), choice('.', '::'), field('member', $.identifier), optional($.argument_list))),
     index_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._expression), '[', field('index', $._expression), ']',
@@ -489,7 +501,7 @@ module.exports = grammar({
     function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
-    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '¬'), $._expression)),
+    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._expression)),
     binary_expression: $ => choice(
       ...binary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...binary($, ['∨'], PREC.OR, 'right'),
@@ -503,7 +515,7 @@ module.exports = grammar({
       ...binary($, ['*', '∙'], PREC.MUL, 'left'),
     ),
 
-    operator: _ => choice('+', '-', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<'),
+    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

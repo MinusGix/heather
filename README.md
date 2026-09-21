@@ -27,6 +27,7 @@ evidence, not kernel features.
 - `crates/kernel` — trusted checker (correctness first; mirrors the in-progress
   Coq formalization of DeLaM)
 - `crates/syntax` — lexer/parser/surface AST (untrusted)
+- `crates/lsp` — editor diagnostics and names over the Language Server Protocol
 - `crates/cli` — `heather` driver binary
 - `docs/` — papers; `docs/delam/` is the type-theory reference
 - `issues/` — repo-local issue tracker (`scripts/issue`, see `issues/README.md`)

@@ -1,2 +1,4 @@
 /grammars/
 /.dev/
+/Cargo.lock
+/target/

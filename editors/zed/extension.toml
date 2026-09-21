@@ -1,10 +1,19 @@
 id = "heather"
 name = "Heather"
-version = "0.1.1"
+version = "0.2.0"
 schema_version = 1
 authors = ["Heather contributors"]
-description = "Heather language support powered by Tree-sitter"
+description = "Heather language support powered by Tree-sitter and heather-lsp"
 repository = "https://github.com/MinusGix/heather"
+
+[language_servers.heather-lsp]
+name = "Heather Language Server"
+language = "Heather"
+
+[[capabilities]]
+kind = "process:exec"
+command = "heather-lsp"
+args = []
 
 [grammars.heather]
 repository = "https://github.com/MinusGix/heather"

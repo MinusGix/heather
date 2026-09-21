@@ -3,3 +3,6 @@ inductive Option<A> { None, Some(value: A) }
 fn id<A>(x: A) -> A { x }
 
 theorem id_eq<A>(x: A): id(x) = x { refl }
+
+designation prefix ! at Bool := bool::not
+theorem reflected_not(b: Bool): ⟦!b⟧ { ?proof }
