@@ -92,6 +92,24 @@ the generated artifact names the actual source function.
 The native source adapter accepts two word inputs and one word result. The
 underlying structured backend additionally supports multiple prefix/results
 with explicit register maps and one artifact per result over the same code.
+The `generate_elaborated_typed_x86` certificate API connects those artifacts to
+actual typed source calls, including Bool/BitVec inputs and scalar choice results.
+Its public premises specify normalized argument placement; it does not extend
+the native CLI calling convention.
+`generate_elaborated_read_x86` additionally publishes a successful byte-load
+prefix feeding a typed body, with explicit access/canonical-address premises
+and exact bytes. The shared encoder serves both this API and existing CLI export;
+the adapter does not select a loop bounds guard or provide a fetched entry point.
+
+`AccessFragment` now composes those read/body certificates with ordinary selected
+pure code and actual TEST/JZ branches. It checks literal published bytes and
+forward branch spans. The bounds/address tests compile an unsigned guard and ADD
+address calculation, connect them to Nat cursor proofs, and verify both granted
+reads and end paths that need no read grant. See
+[`function-ir-readonly-loops.md`](../../docs/function-ir-readonly-loops.md#bounds-selected-access-composition).
+This certificate API still stops before a complete bounded-loop trace and does
+not change the native CLI calling convention.
+
 Leaf selection supports word arithmetic and zero-extended narrow constants,
 copies, bitwise operations, and unsigned comparisons. Narrow modular arithmetic
 and signed comparisons remain future work. Register pressure

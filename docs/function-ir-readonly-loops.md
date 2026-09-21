@@ -169,12 +169,87 @@ The complete reflected `search_body` now selects through these shared rules
 and receives physical certificates for both payload and discriminator over
 arbitrary normalized input placements. Its source expansion also checks
 against the actual source definition, retaining the unused Nat cursor.
-The source-to-machine publication adapter for typed/multiple-result functions,
-guarded reads, and complete bounded-loop traces remain to implement. This
-body checkpoint is not a compiled search loop or a typed native entry point.
+The `generate_elaborated_typed_x86` certificate API now connects these physical
+results to the actual typed source call. It takes explicit input/output register
+maps and emits one source-named `StructuredArtifact` per result over the same
+execution. Public premises bind typed arguments to normalized registers; internal
+valuations and graph witnesses are generated. Unused Nat arguments remain
+universally quantified. For choice results, generated observers retain constructor
+identity: the first constructor has discriminator False and the second True,
+with a separately certified payload. Bool and BitVec(1) stay distinct source types.
+The observation proofs use the shared Boolean-branch computation theorem.
+
+The API emits certificates, not an OS calling-convention wrapper.
+
+A successful physical read can now precede such a body through
+`generate_elaborated_read_x86`. It selects a source `BitVec(8)` parameter and
+an address register, then emits a canonical MOVZX byte load followed by the shared
+body. The public contract replaces that parameter's entry placement with
+`access.read(before.memory, address) = Some(byte)` and a low-canonical-address
+premise. Other input placements are transported across the load automatically.
+`ReadThenArtifact` joins that step to the existing `StructuredArtifact`, including
+exact published bytes, memory preservation, total RIP advancement, and the
+intersection of the load/body register frames. The body may return multiple
+results; no application-specific machine semantics is involved.
+
+This is the selected successful-read path. `None` cannot establish normal load
+execution, and no read premise is imposed on paths outside this adapter. The
+bounds/address composition below selects the actual guard and connects its read
+address to the Nat cursor. A complete bounded-loop trace remains to implement.
+Instruction fetch, fault handling, RET, and the host calling convention remain external.
+The body checkpoint is not yet a compiled search loop.
+
+The memory instruction subset is MOVZX r64, byte [base], without an index or
+segment override. SIB bases and the zero-displacement Rbp/R13 forms are included;
+canonical decoding is exact equality to these supported byte forms. See Intel's
+[SDM, Volume 2B, MOVZX](https://cdrdv2-public.intel.com/868141/253667-089-sdm-vol-2b.pdf).
+The optional byte-read interface is an explicit access grant, not a total memory
+map or a full virtual-memory model.
 
 The native export adapter keeps its two-`BitVec(64)`-input,
 `BitVec(64)`-result restriction. Conditional Boolean helpers composed into such
 functions now reach ordinary native export. Source expansion certificates
 alone do not establish physical execution or a global `StructuredRegionHolds`
 witness.
+
+
+## Bounds-selected access composition
+
+`AccessFragment` composes existing named `LoweredStructured` certificates with
+byte loads, sequences, and branches. `structured` references a checked pure
+leaf; `read` uses the same `ByteLoad` contract as the typed read adapter.
+`branch` resolves its two forward labels from child byte lengths and declines
+spans outside the signed short-branch range. `publish` emits the literal bytes,
+`AccessCode`, encoding equality, and layout proof through structured emission.
+It imports the modules containing the referenced pure certificates.
+
+`ExecuteAccess` in `x86_64_access_code` is relational. A read carries a byte and
+its `ByteLoadStep`; a sequence carries its intermediate state; a branch follows
+the actual `structured_test(...).flags.zf` and `structured_branch_entry`.
+Only the selected arm needs execution evidence. `access_read_then` consumes
+existing `ReadThenArtifact` values, and the sequence/branch constructors compose
+those proofs without repeating pure instruction semantics. `AccessArtifact`
+packages execution, layout, and exact published bytes. It does not invent a
+complete-loop result or ABI; typed child artifacts supply the observed results.
+`access_memory` in the separately imported `x86_64_access_memory` module derives
+memory preservation from execution itself.
+
+`bitvec_nat` supplies width-generic, explicitly bounded addition and unsigned
+comparison bridges. `function_ir_loop_x86` uses them to prove that the compiled
+strict bounds test has the complement of `loop_run`'s end condition, that TEST/JZ
+has the correct polarity, and that a selected ADD address denotes exactly
+`buffer.base + cursor`. `loop_read_address` transports the Nat `ReadsByte`
+premise through a caller-provided memory relation to the actual word operand.
+Cursor advancement is representable on the selected in-bounds path. A wrapped
+sum cannot satisfy these premises; low-canonical address evidence remains
+explicit and separate from the mathematical nonwrapping bound.
+
+The integrated tests select ordinary source functions for the guard, address
+addition, identity/masked byte bodies, and the end result. Open-memory consumers
+check successful-read and end-path artifacts. Native execution uses the exact
+published bytes across 196,628 calls, including reads at the final accessible
+page byte and denied pointers on end paths. Refusal controls cover wrapped sums,
+signed/reversed bounds tests, swapped address operands, incorrect bytes, stale
+branch displacements, and unsupported branch spans. This is one bounds/read transition. Budget selection,
+carried-state updates, backward edges, outcome encoding, and bounded induction
+remain under `native-bounded-loop-certificates`.

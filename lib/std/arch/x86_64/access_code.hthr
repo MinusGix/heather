@@ -1,0 +1,106 @@
+// Effectful composition reuses pure StructuredCode leaves and their existing
+// artifacts. Reads are relational: no byte is invented for a denied access.
+import x86_64;
+import x86_64_block;
+import x86_64_structured_block;
+import x86_64_data_read;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+inductive AccessCode {
+    AccessPure(code: StructuredCode),
+    AccessRead(load: ByteLoad),
+    AccessSequence(prefix: AccessCode, continuation: AccessCode),
+    AccessBranch(register: Gpr, false_displacement: BitVec(8),
+        join_displacement: BitVec(8), when_true: AccessCode, when_false: AccessCode),
+}
+fn access_bytes(code: AccessCode) → List<BitVec(8)> {
+    match code {
+        AccessPure(pure) => structured_bytes(pure),
+        AccessRead(load) => byte_load_bytes(load),
+        AccessSequence(prefix, tail) => access_bytes(prefix) ++ access_bytes(tail),
+        AccessBranch(register, fd, jd, yes, no) =>
+            canonical_bytes(TestRR(register, register)) ++ short_control_bytes(JumpZero(fd)) ++
+            access_bytes(yes) ++ short_control_bytes(Jump(jd)) ++ access_bytes(no),
+    }
+}
+fn AccessLayout(code: AccessCode) → Type {
+    match code {
+        AccessPure(pure) => StructuredLayout(pure),
+        AccessRead(_) => True,
+        AccessSequence(prefix, tail) => AccessLayout(prefix) ∧ AccessLayout(tail),
+        AccessBranch(_, fd, jd, yes, no) =>
+            ((start: BitVec(64)) → short_branch_target(start, fd) = next_rip(start, 2 + (access_bytes(yes).len() + 2))) ∧
+            (((start: BitVec(64)) → short_branch_target(start, jd) = next_rip(start, 2 + access_bytes(no).len())) ∧
+            (AccessLayout(yes) ∧ AccessLayout(no))),
+    }
+}
+fn ExecuteAccess<M>(access: ByteReadAccess<M>, code: AccessCode) → MachineState<M> → MachineState<M> → Type {
+    match code {
+        AccessPure(pure) => λ before after => ExecuteStructured(pure, before, after),
+        AccessRead(load) => λ before after => Exists<BitVec(8)>(λ byte => ByteLoadStep<M>(access, load, byte, before, after)),
+        AccessSequence(prefix, tail) => λ before after => Exists<MachineState<M>>(λ middle =>
+            ExecuteAccess(access, prefix, before, middle) ∧ ExecuteAccess(access, tail, middle, after)),
+        AccessBranch(register, fd, jd, yes, no) => λ before after =>
+            match structured_test(register, before).flags.zf {
+                False => Exists<MachineState<M>>(λ middle =>
+                    ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle) ∧
+                    (after = execute_short_control(Jump(jd), middle))),
+                True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after),
+            },
+    }
+}
+
+// The selected equality comes from the actual TEST/JZ flags. Neither helper
+// asks for execution or access evidence for the unselected arm.
+theorem access_branch_true<M>(access: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(8),
+    yes, no: AccessCode, before, middle: MachineState<M>,
+    selected: structured_test(register, before).flags.zf = False,
+    step: ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle)):
+    ExecuteAccess(access, AccessBranch(register, fd, jd, yes, no), before, execute_short_control(Jump(jd), middle)) {
+    j(sym(selected), λ flag _ => match flag {
+        False => Exists<MachineState<M>>(λ next => ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), next) ∧
+            (execute_short_control(Jump(jd), middle) = execute_short_control(Jump(jd), next))),
+        True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), execute_short_control(Jump(jd), middle)),
+    }, Exists(middle, ⟨step, refl⟩))
+}
+theorem access_branch_false<M>(access: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(8),
+    yes, no: AccessCode, before, after: MachineState<M>,
+    selected: structured_test(register, before).flags.zf = True,
+    step: ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after)):
+    ExecuteAccess(access, AccessBranch(register, fd, jd, yes, no), before, after) {
+    j(sym(selected), λ flag _ => match flag {
+        False => Exists<MachineState<M>>(λ middle => ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle) ∧
+            (after = execute_short_control(Jump(jd), middle))),
+        True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after),
+    }, step)
+}
+
+// Published bytes are checked against the recursive encoding. Child pure
+// artifacts provide their own decoding; memory operands have canonical exact
+// decoding in byte_load_bytes. Layout remains independent of execution.
+record AccessArtifact<M>(access: ByteReadAccess<M>, code: AccessCode,
+    bytes: List<BitVec(8)>, before, after: MachineState<M>) {
+    encoding: bytes = access_bytes(code),
+    layout: AccessLayout(code),
+    execution: ExecuteAccess(access, code, before, after),
+}
+
+theorem access_sequence<M>(access: ByteReadAccess<M>, prefix, tail: AccessCode,
+    before, middle, after: MachineState<M>, first: ExecuteAccess(access, prefix, before, middle),
+    second: ExecuteAccess(access, tail, middle, after)):
+    ExecuteAccess(access, AccessSequence(prefix, tail), before, after) {
+    Exists(middle, ⟨first, second⟩)
+}
+
+theorem access_read_then<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: BitVec(8),
+    code: StructuredCode, bytes: List<BitVec(8)>, before: MachineState<M>,
+    output: Gpr, result: BitVec(64), protected: Gpr → Type,
+    artifact: ReadThenArtifact<M>(access, load, byte, code, bytes, before, output, result, protected)):
+    ExecuteAccess(access, AccessSequence(AccessRead(load), AccessPure(code)), before, artifact.continuation.after) {
+    access_sequence(access, AccessRead(load), AccessPure(code), before, byte_load_after(load, byte, before),
+        artifact.continuation.after, Exists(byte, artifact.load_step), artifact.continuation.execution)
+}

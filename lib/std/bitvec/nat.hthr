@@ -1,0 +1,55 @@
+// Unsigned word/Nat bridges. Bounds are mathematical, never modular.
+import bitvec;
+import bool;
+import logic;
+import nat;
+
+theorem add_ofNat_sum(n: Nat, a, b: BitVec(n),
+    bounded: bitvec::toNat(n, a) + bitvec::toNat(n, b) < nat::pow(2, n)):
+    bitvec::add(n, a, b) = bitvec::ofNat(n, bitvec::toNat(n, a) + bitvec::toNat(n, b)) {
+    let total = bitvec::toNat(n, a) + bitvec::toNat(n, b);
+    trans(sym(bitvec::iter_add_eq_add(n, a, b)),
+      trans(bitvec::cong_iterate_increment(n, bitvec::toNat(n, b), sym(bitvec::iterate_increment_toNat(n, a))),
+      trans(bitvec::iterate_increment_compose(n, bitvec::zero(n), bitvec::toNat(n, a), bitvec::toNat(n, b)),
+      trans(bitvec::cong_iterate_increment_count(n, bitvec::zero(n), sym(bitvec::toNat_ofNat(n, total, bounded))),
+        bitvec::iterate_increment_toNat(n, bitvec::ofNat(n, total))))))
+}
+
+theorem toNat_add(n: Nat, a, b: BitVec(n),
+    bounded: bitvec::toNat(n, a) + bitvec::toNat(n, b) < nat::pow(2, n)):
+    bitvec::toNat(n, bitvec::add(n, a, b)) = bitvec::toNat(n, a) + bitvec::toNat(n, b) {
+    trans(j(add_ofNat_sum(n, a, b, bounded), λ word _ => bitvec::toNat(n, bitvec::add(n, a, b)) = bitvec::toNat(n, word), refl),
+        bitvec::toNat_ofNat(n, bitvec::toNat(n, a) + bitvec::toNat(n, b), bounded))
+}
+
+// The machine's unsigned test decides the same strict bound as Nat.
+theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
+    bitvec::unsigned_lt_bit(n, a, b) = nat::leb(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b)) {
+    (match bitvec::unsigned_lt_bit(n, a, b) as λ found =>
+        (bitvec::unsigned_lt_bit(n, a, b) = found) →
+        found = nat::leb(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b)) {
+        True => λ yes => sym(bool::eq_true_of_is_true(nat::leb(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b)), nat::leb_complete(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b), bitvec::borrow_sub_of_bit_true(n, a, b, yes)))),
+        False => λ no => (match nat::leb(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b)) as λ found =>
+            (nat::leb(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b)) = found) → bool::False = found {
+            False => λ same => refl,
+            True => λ yes => absurd(trans(sym(no), bitvec::borrow_sub_bit_of_borrow(n, a, b,
+                nat::leb_sound(Succ(bitvec::toNat(n, a)), bitvec::toNat(n, b), j(sym(yes), λ flag _ => IsTrue(flag), trivial))))),
+        })(refl),
+    })(refl)
+}
+
+theorem strict_complement(n: Nat): (m: Nat) → nat::leb(Succ(n), m) = bool::not(nat::leb(m, n)) {
+    match n {
+        Zero => λ m => match m { Zero => refl, Succ(_) => refl },
+        Succ(k, ih) => λ m => match m { Zero => refl, Succ(l) => ih(l) },
+    }
+}
+
+theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
+    a_word: bitvec::toNat(n, a) = left, b_word: bitvec::toNat(n, b) = right,
+    bounded: left + right < nat::pow(2, n)):
+    bitvec::toNat(n, bitvec::add(n, a, b)) = left + right {
+    let same = j(a_word, λ x _ => bitvec::toNat(n, a) + bitvec::toNat(n, b) = x + right,
+        j(b_word, λ y _ => bitvec::toNat(n, a) + bitvec::toNat(n, b) = bitvec::toNat(n, a) + y, refl));
+    trans(toNat_add(n, a, b, j(sym(same), λ total _ => total < nat::pow(2, n), bounded)), same)
+}

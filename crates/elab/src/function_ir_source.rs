@@ -11,7 +11,7 @@ mod readonly_loop;
 pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
 
 mod structured;
-pub use structured::{generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType, StructuredSourceChoice};
+pub use structured::{generate_elaborated_read_x86, ReadX86Emission, generate_elaborated_typed_x86, generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType, StructuredSourceChoice};
 
 use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};

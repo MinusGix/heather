@@ -118,3 +118,21 @@ from commit 4db435c and is not retained as active compiler infrastructure.
   native regressions. The checked-in generated x86 example matches the emitter.
   No resource limits changed. Typed source-to-machine publication, guarded reads,
   and complete bounded-loop traces remain open; this completes the body checkpoint.
+- 2026-09-20: Typed source-to-machine publication is being completed under
+  [[function-ir-typed-source-publication]], using shared per-result physical
+  artifacts and explicit normalized argument placements. Guarded reads and
+  bounded-loop execution remain subsequent work here.
+- 2026-09-20: [[function-ir-typed-source-publication]] is complete: typed source-named physical
+  artifacts now cover scalar and choice results, including search_body. Full suite:
+  2860 passed, 0 failed, 5 ignored. Guarded byte reads and bounded-loop execution
+  remain next; the native CLI calling convention is unchanged.
+- 2026-09-20: The normal-path read boundary is being implemented under
+  [[function-ir-byte-load-composition]]: a shared MOVZX byte-load contract and
+  composition with typed source bodies. Selecting the actual bounds guard and
+  bounded-loop trace remain subsequent work here.
+- 2026-09-20: [[function-ir-byte-load-composition]] is complete: a checked successful byte-load
+  prefix now feeds typed scalar/multiple-result bodies and publishes exact bytes.
+  Plain full suite: 2863 passed, 0 failed, 5 ignored. Selecting the bounds branch,
+  relating the address to the Nat cursor, and complete bounded traces remain here.
+- 2026-09-20: The next shared access-composition checkpoint is [[function-ir-bounds-address-composition]], connecting a compiled bounds guard and address ADD to the typed read body.
+- 2026-09-20: [[function-ir-bounds-address-composition]] is complete; shared access composition now connects compiled bounds/address code to typed read bodies. Plain full suite: 2866 passed, 0 failed, 5 ignored. Complete bounded-loop selection remains open.

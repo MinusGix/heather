@@ -2,6 +2,10 @@
 //! source agreement with the shared physical execution artifact.
 use super::*;
 use cert::StructuredRegion;
+mod publication;
+mod read;
+pub use read::{generate_elaborated_read_x86, ReadX86Emission};
+pub use publication::generate_elaborated_typed_x86;
 
 /// Source types remain distinct even when their FunctionIR ports have the same
 /// width: Bool is represented by BitVec(1), but is not a BitVec(1) parameter.

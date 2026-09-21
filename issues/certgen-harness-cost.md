@@ -3,7 +3,7 @@ title: Certgen harness and kit costs: recorded levers if either grows
 status: open
 labels: [elaboration,performance,compiler,testing]
 created: 2026-08-02
-updated: 2026-09-12
+updated: 2026-09-20
 ---
 
 Accumulator issue (perf convention: observations filed small and triggered,
@@ -81,3 +81,9 @@ NO NEW ISSUE FILED, deliberately: both cost centres have live owners ([[conversi
 - 2026-09-11: 2026-09-11: elf_header_mutations_are_rejected_by_heather 88 s → 7.5 s: its cost was the kernel checking the 176-byte list literal definition (quadratic Vec conversion), fixed in [[elf-mutation-test-shape]], not the 27 refusals.
 - 2026-09-12: 2026-09-12 full lane on furnace (warm, tree = 438b499 + x86 test fork/merge): 2580 passed, tests 121 s wall (was 207 s on 2026-09-11), 662 target-s over 191 targets. Tail: heather-cli unit 41 s, certgen_emissions 38, lib_setoid_mergeable 25, native_calls 24, certgen_nonnat 22, certgen_t0param 20, certgen_controls 20, ir_pass_fuel 20, native 19, function_ir_x86_conditionals 19, certgen_tier1 19. The merged function_ir_x86_dataflow is 10 s alone and below the top 20 under load; the x86 shards are no longer a tail item — the certgen family (five targets, ~118 target-s) is.
 - 2026-09-17: 2026-09-17: runner check from the perf dashboard round. The runner already orders targets longest-first from its history file and bounds jobs at one two-thread slot per hyperthread pair minus one (7 on the 16-thread desktop); the fast lane's test wall is that bound (481 target-s / 7 = 69 s, 71 s measured). A job-count sweep on the same tree (fast lane, warm target): 4 jobs → 353 target-s, 91 s wall; 7 → 499 target-s, 74 s; 8 → 487 target-s, 72 s. Fewer jobs cut the per-target inflation (SMT contention: 14 threads on 8 cores ≈ 1.8x standalone) but lose more in slots than they gain, so the default stands and nothing changes. After the showcase test's verdict-store gate and the review-mode motive lint the lane's longest targets are 37 s (lib_setoid_mergeable, showcase_calculator, ir_pass_fuel), down from 90 s.
+- 2026-09-20: The ordinary full-suite narrow certificate target is close to its existing CPU
+  rail; [[function-ir-narrow-certificate-test-margin]] tracks preserving coverage
+  while restoring test-process headroom, without raising limits.
+- 2026-09-20: [[function-ir-narrow-certificate-test-margin]] is closed: the existing primitive
+  and complete-body checks now run in separate processes, retaining all coverage
+  and unchanged limits. The final plain full suite passes.

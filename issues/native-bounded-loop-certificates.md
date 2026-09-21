@@ -141,3 +141,21 @@ obligations here; they were not silently fixed by the semantic interface.
   native regressions. The checked-in generated x86 example matches the emitter.
   No resource limits changed. Typed source-to-machine publication, guarded reads,
   and complete bounded-loop traces remain open; this completes the body checkpoint.
+- 2026-09-20: Typed source-to-machine publication is being completed under
+  [[function-ir-typed-source-publication]], using shared per-result physical
+  artifacts and explicit normalized argument placements. Guarded reads and
+  bounded-loop execution remain subsequent work here.
+- 2026-09-20: [[function-ir-typed-source-publication]] is complete: typed source-named physical
+  artifacts now cover scalar and choice results, including search_body. Full suite:
+  2860 passed, 0 failed, 5 ignored. Guarded byte reads and bounded-loop execution
+  remain next; the native CLI calling convention is unchanged.
+- 2026-09-20: The normal-path read boundary is being implemented under
+  [[function-ir-byte-load-composition]]: a shared MOVZX byte-load contract and
+  composition with typed source bodies. Selecting the actual bounds guard and
+  bounded-loop trace remain subsequent work here.
+- 2026-09-20: [[function-ir-byte-load-composition]] is complete: a checked successful byte-load
+  prefix now feeds typed scalar/multiple-result bodies and publishes exact bytes.
+  Plain full suite: 2863 passed, 0 failed, 5 ignored. Selecting the bounds branch,
+  relating the address to the Nat cursor, and complete bounded traces remain here.
+- 2026-09-20: Bounds-selected reads and cursor/address proofs are in progress under [[function-ir-bounds-address-composition]]. Budget control and complete bounded traces remain separate.
+- 2026-09-20: [[function-ir-bounds-address-composition]] is complete: actual bounds-selected access composition and word/Nat cursor/address proofs, with 196,628 native calls and a green full suite (2866 passed, 0 failed, 5 ignored). Next are budget selection, carried updates, backward edges, and complete bounded traces.
