@@ -7,13 +7,13 @@ import result;
 import option;
 import int;
 import omega;
-import parser_core::{Cursor, rest, Reply, Parser, drop_length_strict, advance, run};
+import parser_core::{Cursor, rest, Reply, Parser, drop_length_strict};
 import parser_contracts::{Consumes, bound_on_success, consumes_zero};
 import parser_combinators::{pure_at, map_at, map, rebase, bind_at, bind, bind_consumes};
 
 // Repeat from begin, stopping at retryable failure and propagating committed failure.
 // The one-token minimum supplies the decreasing measure for every recursive step.
-fn many_at<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1), source: List<T>, begin: Cursor<T>(source)) -> Reply<T, List<A>>(source, begin)
+fn many_at<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1), source: List<T>, begin: Cursor<T>(source)) → Reply<T, List<A>>(source, begin)
     decreases list_len(rest(source, begin)) {
     match shape: p.run(source, begin) {
         Err(e) => match e.retry { Retryable => pure_at<T, List<A>>(source, begin, []), Committed => Err(e) },
@@ -29,12 +29,12 @@ fn many_at<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1), source: List<T
 
 // Parse zero or more occurrences; every successful occurrence must consume at least one token.
 // For example, many(digit,digit_progress) parses a digit prefix and leaves its first non-digit.
-fn many<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) -> Parser<T, List<A>> {
+fn many<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) → Parser<T, List<A>> {
     Parser(λ source begin => many_at(p, progress, source, begin))
 }
 
 // Parse one or more consuming occurrences, failing if the first occurrence fails.
-fn some<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) -> Parser<T, List<A>> {
+fn some<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) → Parser<T, List<A>> {
     bind(p, λ (a: A) => map(many(p, progress), λ (xs: List<A>) => Cons(a, xs)))
 }
 
@@ -42,7 +42,7 @@ fn some<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) -> Parser<T,
 record Counted<A>(count: Nat) { values: List<A>, length: list_len(values) = count }
 
 // Run p exactly count times from begin and construct the resulting length proof.
-fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T>(source)) -> Reply<T, Counted<A>(count)>(source, begin) {
+fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T>(source)) → Reply<T, Counted<A>(count)>(source, begin) {
     match count {
         Zero => pure_at<T, Counted<A>(0)>(source, begin, Counted([], refl)),
         Succ(n) => bind_at<T, A, Counted<A>(Succ(n))>(source, begin, p.run(source, begin), λ value middle forward =>
@@ -53,10 +53,10 @@ fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T
 
 // Parse exactly count values, even when p can succeed without consuming.
 // For example, repeatN(3,pure(7)) returns [7,7,7] with a length proof and leaves the input untouched.
-fn repeatN<T, A>(count: Nat, p: Parser<T, A>) -> Parser<T, Counted<A>(count)> { Parser(λ source begin => repeat_at(count, p, source, begin)) }
+fn repeatN<T, A>(count: Nat, p: Parser<T, A>) → Parser<T, Counted<A>(count)> { Parser(λ source begin => repeat_at(count, p, source, begin)) }
 
 // The required first occurrence gives some its one-token minimum consumption.
-fn some_consumes<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) -> Consumes<T, List<A>>(some(p, progress), 1) {
+fn some_consumes<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) → Consumes<T, List<A>>(some(p, progress), 1) {
     bind_consumes(p, λ (a: A) => map(many(p, progress), λ (xs: List<A>) => Cons(a, xs)), 1, 0, progress,
         λ (a: A) => consumes_zero(map(many(p, progress), λ (xs: List<A>) => Cons(a, xs))))
 }

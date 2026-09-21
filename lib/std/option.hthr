@@ -2,21 +2,21 @@
 
 inductive Option<A> { None, Some(v: A) }
 
-fn map<A, B>(o: Option<A>, f: A → B) → Option<B> {
+fn map<A, B>(self o: Option<A>, f: A → B) → Option<B> {
     match o {
         None => None,
         Some(v) => Some(f(v)),
     }
 }
 
-fn and_then<A, B>(o: Option<A>, f: A → Option<B>) → Option<B> {
+fn and_then<A, B>(self o: Option<A>, f: A → Option<B>) → Option<B> {
     match o {
         None => None,
         Some(v) => f(v),
     }
 }
 
-fn unwrap_or<A>(o: Option<A>, d: A) → A {
+fn unwrap_or<A>(self o: Option<A>, d: A) → A {
     if let Some(v) = o { v } else { d }
 }
 

@@ -83,7 +83,7 @@ theorem add_left_comm(a, b, c: Nat): a + (b + c) = b + (a + c) {
         a + (b + c)
             = (a + b) + c := sym(add_assoc(a, b, c)),
             = (b + a) + c :=
-                cong_nat(fun (q: Nat) => q + c, add_comm(a, b)),
+                cong_nat(λ (q: Nat) => q + c, add_comm(a, b)),
             = b + (a + c) := add_assoc(b, a, c),
     }
 }
@@ -277,7 +277,7 @@ theorem twice_le_twice_iff_curried(n: Nat): (m: Nat) →
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m),
             mpr := λ h => zero_le(twice(m))),
-        Succ(k, ih) => λ m => match m {
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
@@ -296,7 +296,7 @@ theorem twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m),
             mpr := λ h => zero_le(Succ(twice(m)))),
-        Succ(k, ih) => λ m => match m {
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
@@ -320,7 +320,7 @@ theorem twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(_) => Iff(mp := λ h => trivial, mpr := λ h => trivial),
         },
-        Succ(k, ih) => λ m => match m {
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
@@ -338,7 +338,7 @@ theorem twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
 {
     match n {
         Zero => λ m => Iff(mp := λ h => zero_le(m), mpr := λ h => trivial),
-        Succ(k, ih) => λ m => match m {
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },

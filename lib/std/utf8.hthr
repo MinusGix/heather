@@ -742,7 +742,7 @@ theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, re
         True => λ e => match is_true_dec(char::is_scalar(code)) as λ d =>
                 EmitSpec(min, code, rest, emit_dec(code, d, rest)) {
             Inr(_) => trivial,
-            Inl(q) => And(j(sym(e), λ y _ => IsTrue(y), trivial), refl),
+            Inl(_) => And(j(sym(e), λ y _ => IsTrue(y), trivial), refl),
         },
     }(refl)
 }
@@ -969,7 +969,7 @@ theorem strict_2(b, c1: BitVec(8), rest2: List<BitVec(8)>, s: String, h: Header(
     match cont_of(Cons(c1, rest2)) as λ k => ContSpec(c1, rest2, k) →
             push_char(seq2(b, k), decode(rest2)) = Some(s) → encode(s) = Cons(b, Cons(c1, rest2)) {
         None => λ _ q1 => false_elim(none_ne_some(s, q1)),
-        Some(k1) => λ cs q1 => strict_step(0x80, code_2(b, c1), rest2, rest2, [b, c1], s,
+        Some(_) => λ cs q1 => strict_step(0x80, code_2(b, c1), rest2, rest2, [b, c1], s,
             j(cs.left, λ p _ => push_char(seq2(b, Some(p)), decode(rest2)) = Some(s), q1),
             ih, λ low => encode_2_of(b, c1, h, cs.right, low)),
     }(cont_spec(c1, rest2), q)
@@ -982,11 +982,11 @@ theorem strict_3(b, c1, c2: BitVec(8), rest3: List<BitVec(8)>, s: String, h: Hea
             push_char(seq3(b, k), decode(rest3)) = Some(s)
             → encode(s) = Cons(b, Cons(c1, Cons(c2, rest3))) {
         None => λ _ q1 => false_elim(none_ne_some(s, q1)),
-        Some(k1) => λ cs1 q1 => match cont_of(Cons(c2, rest3)) as λ k => ContSpec(c2, rest3, k) →
+        Some(_) => λ cs1 q1 => match cont_of(Cons(c2, rest3)) as λ k => ContSpec(c2, rest3, k) →
                 push_char(seq3_last(b, cont_payload(c1), k), decode(rest3)) = Some(s)
                 → encode(s) = Cons(b, Cons(c1, Cons(c2, rest3))) {
             None => λ _ q2 => false_elim(none_ne_some(s, q2)),
-            Some(k2) => λ cs2 q2 => strict_step(0x800, code_3(b, c1, c2), rest3, rest3,
+            Some(_) => λ cs2 q2 => strict_step(0x800, code_3(b, c1, c2), rest3, rest3,
                 [b, c1, c2], s,
                 j(cs2.left, λ p _ => push_char(seq3_last(b, cont_payload(c1), Some(p)),
                     decode(rest3)) = Some(s), q2),
@@ -1004,17 +1004,17 @@ theorem strict_4(b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>, s: String, h:
             push_char(seq4(b, k), decode(rest4)) = Some(s)
             → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
         None => λ _ q1 => false_elim(none_ne_some(s, q1)),
-        Some(k1) => λ cs1 q1 => match cont_of(Cons(c2, Cons(c3, rest4))) as λ k =>
+        Some(_) => λ cs1 q1 => match cont_of(Cons(c2, Cons(c3, rest4))) as λ k =>
                 ContSpec(c2, Cons(c3, rest4), k) →
                 push_char(seq4_mid(b, cont_payload(c1), k), decode(rest4)) = Some(s)
                 → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
             None => λ _ q2 => false_elim(none_ne_some(s, q2)),
-            Some(k2) => λ cs2 q2 => match cont_of(Cons(c3, rest4)) as λ k => ContSpec(c3, rest4, k) →
+            Some(_) => λ cs2 q2 => match cont_of(Cons(c3, rest4)) as λ k => ContSpec(c3, rest4, k) →
                     push_char(seq4_last(b, cont_payload(c1), cont_payload(c2), k), decode(rest4))
                         = Some(s)
                     → encode(s) = Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))) {
                 None => λ _ q3 => false_elim(none_ne_some(s, q3)),
-                Some(k3) => λ cs3 q3 => strict_step(0x10000, code_4(b, c1, c2, c3), rest4, rest4,
+                Some(_) => λ cs3 q3 => strict_step(0x10000, code_4(b, c1, c2, c3), rest4, rest4,
                     [b, c1, c2, c3], s,
                     j(cs3.left, λ p _ =>
                         push_char(seq4_last(b, cont_payload(c1), cont_payload(c2), Some(p)),
@@ -1130,7 +1130,7 @@ theorem strict_below(n: Nat): Bounded(n) {
     match n {
         Zero => λ bytes => match bytes as λ l => list_len(l) <= 0 → Strict(l) {
             Nil => λ _ s p => strict_nil(s, p),
-            Cons(b, rest) => λ hl => false_elim(hl),
+            Cons(_, _) => λ hl => false_elim(hl),
         },
         Succ(k, ih) => λ bytes => match bytes as λ l => list_len(l) <= Succ(k) → Strict(l) {
             Nil => λ _ s p => strict_nil(s, p),
@@ -1215,7 +1215,7 @@ theorem toString_ofString(s: String): ofString(s).toString() = s {
 theorem decode_toString(u: Utf8): decode(u.bytes) = Some(u.toString()) {
     match decode(u.bytes) as λ y => (w: IsTrue(is_some_string(y))) → y = Some(force_string(y, w)) {
         None => λ w => false_elim(w),
-        Some(z) => λ _ => refl,
+        Some(_) => λ _ => refl,
     }(u.valid)
 }
 

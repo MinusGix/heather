@@ -10,28 +10,34 @@ import omega;
 
 // A position bounded by, and indexed by, the particular source being parsed.
 record Cursor<T>(source: List<T>) {
+    // TODO(minus): is this really necessary? If the list is equivalent then shouldn't that imply they are the same?
     // Value parameters alone are not generative nominal indices. This
     // endpoint-bearing field prevents equal-length sources from collapsing.
     identity: source = source,
     offset: Nat,
-    within: nat::Le(offset, list_len(source)),
+    within: offset <= list_len(source),
 }
 
 // Start at offset zero, with the entire source remaining.
-fn start<T>(source: List<T>) -> Cursor<T>(source) {
+fn Cursor::start<T>(source: List<T>) → Cursor<T>(source) {
     Cursor(refl, 0, nat::zero_le(list_len(source)))
 }
 
 // Return the source suffix beginning at this cursor.
-fn rest<T>(source: List<T>, c: Cursor<T>(source)) -> List<T> {
+fn rest<T>(source: List<T>, c: Cursor<T>(source)) → List<T> {
     drop(source, c.offset)
+}
+
+// Step one token forwards using evidence that this cursor is not at the end.
+fn Cursor::advance<T>(source: List<T>, self c: Cursor<T>(source), room: c.offset < list_len(source)) → Cursor<T>(source) {
+    Cursor(refl, Succ(c.offset), room)
 }
 
 // A parsed value and ending cursor, with evidence that parsing moved forwards or stayed put.
 record Success<T, A>(source: List<T>, begin: Cursor<T>(source)) {
     value: A,
     end: Cursor<T>(source),
-    forward: nat::Le(begin.offset, end.offset),
+    forward: begin.offset <= end.offset,
 }
 
 // Whether an enclosing choice may try its other branch after this failure.
@@ -48,28 +54,45 @@ record Failure<T>(source: List<T>) {
 record ErrorView { offset: Nat, expected: List<Nat>, retry: Retry }
 
 // Either a success measured from begin, or a failure somewhere in the same source.
-fn Reply<T, A>(source: List<T>, begin: Cursor<T>(source)) -> Type {
+fn Reply<T, A>(source: List<T>, begin: Cursor<T>(source)) → Type {
     Result<Success<T, A>(source, begin), Failure<T>(source)>
 }
 
 // Project a failure to its reportable offset, expectations, and retry status.
-fn error_view<T>(source: List<T>, error: Failure<T>(source)) -> ErrorView {
+fn Failure::error_view<T>(source: List<T>, self error: Failure<T>(source)) → ErrorView {
     ErrorView(error.at.offset, error.expected, error.retry)
 }
 
 // A parser that can start at any valid cursor over any source of tokens T.
 record Parser<T, A> {
-    run: (source: List<T>) -> (begin: Cursor<T>(source)) -> Reply<T, A>(source, begin),
+    run: (source: List<T>) → (begin: Cursor<T>(source)) → Reply<T, A>(source, begin),
+}
+
+// Parse from the start and report the value or diagnostic; trailing input is allowed.
+// Use complete(p,expected) before run when the whole input must be consumed.
+fn Parser::run_start<T, A>(self p: Parser<T, A>, source: List<T>) → Result<A, ErrorView> {
+    match p.run(source, Cursor::start(source)) {
+        Ok(s) => Ok(s.value),
+        Err(e) => Err(e.error_view(source))
+    }
+}
+
+// Transform the reply
+fn Parser::transform<T, A, B>(self p: Parser<T, A>, f: (source: List<T>) → (begin: Cursor<T>(source)) → Reply<T, A>(source, begin) → Reply<T, B>(source, begin)) → Parser<T, B> {
+    Parser(λ source begin => f(source, begin, p.run(source, begin)))
 }
 
 // Equality observes the result and position, not the forward witness.
-fn observe<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) -> Result<Pair<A, Nat>, ErrorView> {
-    match r { Err(e) => Err(error_view(source, e)), Ok(s) => Ok(Pair(s.value, s.end.offset)) }
+fn observe<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) → Result<Pair<A, Nat>, ErrorView> {
+    match r {
+        Ok(s) => Ok(Pair(s.value, s.end.offset)),
+        Err(e) => Err(e.error_view(source))
+    }
 }
 
 // The initial cursor's remainder is the original source, including open lists.
-theorem initial_rest<T>(source: List<T>): rest(source, start(source)) = source {
-    match source { Nil => refl, Cons(h, t) => refl }
+theorem initial_rest<T>(source: List<T>): rest(source, Cursor::start(source)) = source {
+    match source { Nil => refl, Cons(_, _) => refl }
 }
 
 // A stored remainder with evidence that it agrees with the source and cursor.
@@ -80,7 +103,7 @@ record CachedCursor<T>(source: List<T>) {
 }
 
 // Store the current suffix together with its equality to rest(source,c).
-fn cache<T>(source: List<T>, c: Cursor<T>(source)) -> CachedCursor<T>(source) {
+fn cache<T>(source: List<T>, c: Cursor<T>(source)) → CachedCursor<T>(source) {
     CachedCursor(c, rest(source, c), refl)
 }
 
@@ -89,7 +112,7 @@ theorem cached_rest<T>(source: List<T>, c: CachedCursor<T>(source)):
     c.suffix = rest(source, c.cursor) { c.coherent }
 
 // Taking a suffix never increases the number of remaining tokens.
-theorem drop_length_le<T>(source: List<T>): (n: Nat) -> nat::Le(list_len(drop(source, n)), list_len(source)) {
+theorem drop_length_le<T>(source: List<T>): (n: Nat) → list_len(drop(source, n)) <= list_len(source) {
     match source {
         Nil => λ n => trivial,
         Cons(h, t) => λ n => match n {
@@ -101,11 +124,14 @@ theorem drop_length_le<T>(source: List<T>): (n: Nat) -> nat::Le(list_len(drop(so
 
 // Moving to a strictly later valid offset strictly shortens the remainder.
 // This converts cursor progress into the decreasing measure used by recursion.
-theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(n, m) -> nat::Le(m, list_len(source)) ->
-    nat::Lt(list_len(drop(source, m)), list_len(drop(source, n))) {
+theorem drop_length_strict<T>(source: List<T>): (n: Nat) → (m: Nat) → n < m → m <= list_len(source) →
+    list_len(drop(source, m)) < list_len(drop(source, n)) {
     match source {
-        Nil => λ n m => match m { Zero => λ smaller within => false_elim(smaller), Succ(k) => λ smaller within => false_elim(within) },
-        Cons(h, t) => λ n m => match m {
+        Nil => λ n m => match m {
+            Zero => λ smaller _ => false_elim(smaller),
+            Succ(_) => λ _ within => false_elim(within)
+        },
+        Cons(_, t) => λ n m => match m {
             Zero => λ smaller within => false_elim(smaller),
             Succ(j) => match n {
                 Zero => λ smaller within => drop_length_le(t, j),
@@ -115,19 +141,8 @@ theorem drop_length_strict<T>(source: List<T>): (n: Nat) -> (m: Nat) -> nat::Lt(
     }
 }
 
-// Step one token forwards using evidence that this cursor is not at the end.
-fn advance<T>(source: List<T>, c: Cursor<T>(source), room: nat::Lt(c.offset, list_len(source))) -> Cursor<T>(source) {
-    Cursor(refl, Succ(c.offset), room)
-}
-
-// Parse from the start and report the value or diagnostic; trailing input is allowed.
-// Use complete(p,expected) before run when the whole input must be consumed.
-fn run<T, A>(p: Parser<T, A>, source: List<T>) -> Result<A, ErrorView> {
-    match p.run(source, start(source)) { Err(e) => Err(error_view(source, e)), Ok(s) => Ok(s.value) }
-}
-
 // Two consecutive suffix operations equal one operation at the summed offset.
-theorem drop_add<T>(source: List<T>): (first: Nat) -> (second: Nat) -> drop(source, first + second) = drop(drop(source, first), second) {
+theorem drop_add<T>(source: List<T>): (first: Nat) → (second: Nat) → drop(source, first + second) = drop(drop(source, first), second) {
     match source {
         Nil => λ first second => refl,
         Cons(head, tail) => λ first => match first {

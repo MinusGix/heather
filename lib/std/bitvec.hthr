@@ -158,7 +158,7 @@ fn sign_extend_zero(extra: Nat, x: BitVec(0)) → BitVec(extra) { zero(extra) }
 fn last_index(n: Nat) → Fin(Succ(n)) {
     match n as λ k => Fin(Succ(k)) {
         Zero => FZ,
-        Succ(k, ih) => FS(ih),
+        Succ(_, ih) => FS(ih),
     }
 }
 
@@ -265,7 +265,7 @@ fn iterate_increment(n: Nat, x: BitVec(n), count: Nat) → BitVec(n) {
 fn iterate_decrement(n: Nat, count: Nat) → BitVec(n) → BitVec(n) {
     match count as λ k => BitVec(n) → BitVec(n) {
         Zero => λ x => x,
-        Succ(k, ih) => λ x => ih(decrement(n, x)),
+        Succ(_, ih) => λ x => ih(decrement(n, x)),
     }
 }
 
@@ -805,10 +805,8 @@ fn unsigned_lt_dec(n: Nat, a, b: BitVec(n)) → unsigned_lt(n, a, b) ∨ ¬unsig
 fn unsigned_le_dec(n: Nat, a, b: BitVec(n)) → unsigned_le(n, a, b) ∨ ¬unsigned_le(n, a, b) {
     match unsigned_lt_bit(n, b, a) as λ c =>
         (unsigned_lt_bit(n, b, a) = c) → (unsigned_le(n, a, b) ∨ ¬unsigned_le(n, a, b)) {
-        True => λ h => Inr(λ p => nat::lt_irrefl(toNat(n, b))(
-            nat::le_trans(Succ(toNat(n, b)), toNat(n, a), toNat(n, b))(
-                borrow_sub_bit_true_iff(n, b, a).mp(h))(p))),
-        False => λ h => Inl(match nat::lt_trichotomy(toNat(n, a))(toNat(n, b)) {
+        True => λ h => Inr(λ p => nat::lt_irrefl(toNat(n, b), nat::le_trans(Succ(toNat(n, b)), toNat(n, a), toNat(n, b), borrow_sub_bit_true_iff(n, b, a).mp(h), p))),
+        False => λ h => Inl(match nat::lt_trichotomy(toNat(n, a), toNat(n, b)) {
             Inl(lt) => nat::le_of_lt(toNat(n, a))(toNat(n, b))(lt),
             Inr(rest) => match rest {
                 Inl(eq) => j(eq, λ z p => toNat(n, a) <= z, nat::le_refl(toNat(n, a))),
@@ -996,7 +994,7 @@ theorem cons_head_tail(n: Nat, x: BitVec(Succ(n))):
         cons_bit(n, head_bit(n, x), tail_bits(n, x)) = x {
     extensionality(Succ(n),
         cons_bit(n, head_bit(n, x), tail_bits(n, x)), x,
-        λ i => match i { FZ => refl, FS(j) => refl })
+        λ i => match i { FZ => refl, FS(_) => refl })
 }
 
 theorem one_bit_eq_ofBool(x: BitVec(1)):
@@ -1760,7 +1758,7 @@ theorem borrow_zero_columns(n: Nat): (borrow: Bool) →
     borrow_bits(n, zero(n), zero(n), borrow) = borrow {
     match n as λ k => (borrow: Bool) → borrow_bits(k, zero(k), zero(k), borrow) = borrow {
         Zero => λ borrow => refl,
-        Succ(k, ih) => λ borrow => match borrow { False => ih(False), True => ih(True) },
+        Succ(_, ih) => λ borrow => match borrow { False => ih(False), True => ih(True) },
     }
 }
 

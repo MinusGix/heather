@@ -14,14 +14,14 @@ fn map_err<A, E, F>(self r: Result<A, E>, f: E → F) → Result<A, F> {
 }
 
 fn unwrap_or<A, E>(self r: Result<A, E>, fallback: A) → A {
-    match r { Ok(value) => value, Err(error) => fallback }
+    match r { Ok(value) => value, Err(_) => fallback }
 }
 
-fn fold<A, E, B>(self r: Result<A, E>, success: A -> B, failure: E -> B) -> B {
+fn fold<A, E, B>(self r: Result<A, E>, success: A → B, failure: E → B) → B {
     match r { Ok(value) => success(value), Err(error) => failure(error) }
 }
 
-theorem fold_ok<A, E, B>(value: A, success: A -> B, failure: E -> B):
+theorem fold_ok<A, E, B>(value: A, success: A → B, failure: E → B):
     fold<A, E, B>(Ok(value), success, failure) = success(value) { refl }
-theorem fold_err<A, E, B>(error: E, success: A -> B, failure: E -> B):
+theorem fold_err<A, E, B>(error: E, success: A → B, failure: E → B):
     fold<A, E, B>(Err(error), success, failure) = failure(error) { refl }

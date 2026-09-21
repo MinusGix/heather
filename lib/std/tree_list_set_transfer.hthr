@@ -20,7 +20,7 @@ theorem enumerate_members<A>(xs: SetTree<A>, a: A):
 {
     match xs {
         Vacant => iff_refl(),
-        Item(b) => Iff(mp := λ h => Inl(h),
+        Item(_) => Iff(mp := λ h => Inl(h),
             mpr := λ h => match h { Inl(p) => p, Inr(p) => false_elim(p) }),
         Join(left, right) => Iff(
             mp := λ h => match h {
@@ -50,7 +50,7 @@ theorem tree_of_list_members<A>(xs: List<A>, a: A):
 {
     match xs {
         Nil => iff_refl(),
-        Cons(b, rest) => Iff(
+        Cons(_, rest) => Iff(
             mp := λ h => match h { Inl(p) => Inl(p), Inr(p) => Inr(tree_of_list_members(rest, a).mp(p)) },
             mpr := λ h => match h { Inl(p) => Inl(p), Inr(p) => Inr(tree_of_list_members(rest, a).mpr(p)) }),
     }

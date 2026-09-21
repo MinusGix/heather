@@ -54,7 +54,7 @@ import logic;
 // `LeHead(x, xs)` — `x` is below `xs`'s head, vacuously at `Nil`. The `True`
 // here is the kernel's `Unit^0`, so the vacuous case is proof-irrelevant for
 // free and `trivial` closes it.
-fn LeHead(x: Nat, xs: List<Nat>) -> Type {
+fn LeHead(x: Nat, xs: List<Nat>) → Type {
     match xs { Nil => True, Cons(h, t) => Le(x, h) }
 }
 
@@ -62,7 +62,7 @@ fn LeHead(x: Nat, xs: List<Nat>) -> Type {
 // elimination is field access — which is precisely what retires `andb_true_l`
 // and `andb_true_r`: `hs.left` and `hs.right` are the same two facts with no
 // lemma between them.
-fn Sorted(xs: List<Nat>) -> Type {
+fn Sorted(xs: List<Nat>) → Type {
     match xs { Nil => True, Cons(h, t) => And<LeHead(h, t), Sorted(t)> }
 }
 
@@ -82,7 +82,7 @@ fn Sorted(xs: List<Nat>) -> Type {
 // value — `std/nat`'s `instance(n, m: Nat) Decide<Le(n, m)>` is the one this
 // resolves to, and the whole difference here is that no declaration below
 // mentions a decision procedure by name.
-fn insert(x: Nat, xs: List<Nat>) -> List<Nat> {
+fn insert(x: Nat, xs: List<Nat>) → List<Nat> {
     match xs {
         Nil => Cons(x, Nil),
         Cons(h, t) =>
@@ -90,7 +90,7 @@ fn insert(x: Nat, xs: List<Nat>) -> List<Nat> {
     }
 }
 
-fn isort(xs: List<Nat>) -> List<Nat> {
+fn isort(xs: List<Nat>) → List<Nat> {
     match xs { Nil => Nil, Cons(h, t) => insert(h, isort(t)) }
 }
 
@@ -102,7 +102,7 @@ fn isort(xs: List<Nat>) -> List<Nat> {
 // reduces the goal and abstracts the decision it is stuck on
 // (issues/goal-motive-by-scrutinee-abstraction.md, closed 2026-08-17).
 theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
-    Le(h, x) -> LeHead(h, t) -> LeHead(h, insert(x, t))
+    Le(h, x) → LeHead(h, t) → LeHead(h, insert(x, t))
 {
     match t {
         Nil => λ hx ht => hx,
@@ -118,7 +118,7 @@ theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
 // projections; `le_of_not_le` replaces `leb_false_flip`; and `And(…, …)`
 // replaces `andb_true`. The refuting branch is the only one that works, and
 // what it does is assemble the conjunction the goal already asks for.
-theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) -> Sorted(insert(x, xs)) {
+theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) → Sorted(insert(x, xs)) {
     match xs {
         Nil => λ hs => And(trivial, trivial),
         Cons(h, t) => λ hs =>
@@ -175,7 +175,7 @@ theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
 
 // Counting with a named decider. `or_pick(d, x, y)` takes `y` on `Inl`, so the
 // equal case is the `Succ`.
-fn count(a: Nat, xs: List<Nat>) -> Nat {
+fn count(a: Nat, xs: List<Nat>) → Nat {
     match xs {
         Nil => 0,
         Cons(h, t) => or_pick(eq_dec(a, h), count(a, t), Succ(count(a, t))),
@@ -269,7 +269,7 @@ theorem len_isort(xs: List<Nat>): isort(xs).len() = xs.len() {
 // and because it is what a caller who only wants "nothing was invented" will
 // cite.
 theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
-    Mem(a, insert(x, xs)) -> Mem(a, Cons(x, xs))
+    Mem(a, insert(x, xs)) → Mem(a, Cons(x, xs))
 {
     match xs {
         Nil => λ m => m,
@@ -287,7 +287,7 @@ theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
     }
 }
 
-theorem mem_isort(xs: List<Nat>, a: Nat): Mem(a, isort(xs)) -> Mem(a, xs) {
+theorem mem_isort(xs: List<Nat>, a: Nat): Mem(a, isort(xs)) → Mem(a, xs) {
     match xs {
         Nil => λ m => m,
         Cons(h, t) => λ m =>
@@ -302,7 +302,7 @@ theorem mem_isort(xs: List<Nat>, a: Nat): Mem(a, isort(xs)) -> Mem(a, xs) {
 // first specification in the library that is a CONJUNCTION of a relation and an
 // extensional equality, and it is the theorem a caller should cite.
 theorem isort_correct(xs: List<Nat>):
-    And<Sorted(isort(xs)), (a: Nat) -> count(a, isort(xs)) = count(a, xs)>
+    And<Sorted(isort(xs)), (a: Nat) → count(a, isort(xs)) = count(a, xs)>
 {
     And(isort_sorted(xs), λ a => count_isort(xs, a))
 }

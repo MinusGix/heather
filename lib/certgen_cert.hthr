@@ -119,7 +119,7 @@ inductive CertOut {
 // induction hypothesis — available only where `ih` says so. Every other
 // instruction form (a nested `LetMatch`, an arm cell, the loop forms) is
 // outside the fragment the emitters can prove, so it declines.
-fn cert_chain(ir: Ir, ih: Ihp) -> Cert {
+fn cert_chain(ir: Ir, ih: Ihp) → Cert {
     match ir {
         Ret(rs) => CRet(rs),
         LetCon(tag, args, rest) => CCon(tag, args, cert_chain(rest, ih)),
@@ -139,7 +139,7 @@ fn cert_chain(ir: Ir, ih: Ihp) -> Cert {
 // rebound as slot 0 and returned. Anything else is a body whose shape the
 // emitted induction does not describe, so it declines here rather than
 // producing a certificate about a different program.
-fn cert_rebind(after: Ir) -> Cert {
+fn cert_rebind(after: Ir) → Cert {
     match after {
         Ret(rs) => match rs {
             RCons(i, next) => match i {
@@ -161,7 +161,7 @@ fn cert_rebind(after: Ir) -> Cert {
 // destructuring the arm chain here. That is both faithful (the lemma and the
 // fold agree by construction on what "the arm for tag `t`" means) and cheap;
 // an arm chain too short answers `NoArm`, which `cert_chain` declines.
-fn cert_arms(scrut: Nat, arms: Ir, after: Ir) -> CertOut {
+fn cert_arms(scrut: Nat, arms: Ir, after: Ir) → CertOut {
     CRec(scrut,
         CMatch(scrut, 0, cert_chain(pick_arm(arms)(0), IhNo), cert_rebind(after)),
         CMatch(scrut, 1, cert_chain(pick_arm(arms)(1), IhYes), cert_rebind(after)))
@@ -170,7 +170,7 @@ fn cert_arms(scrut: Nat, arms: Ir, after: Ir) -> CertOut {
 // The root, and the file's entry point: the elaborator applies exactly this
 // to the transcriber's `Ir` (design doc §5 — an ordinary global application,
 // no analyzer slot, because nothing here is layer m).
-fn cert_body(ir: Ir) -> CertOut {
+fn cert_body(ir: Ir) → CertOut {
     match ir {
         LetMatch(scrut, arms, after) => cert_arms(scrut, arms, after),
         _ => CPlain(cert_chain(ir, IhNo)),
@@ -185,10 +185,10 @@ fn cert_body(ir: Ir) -> CertOut {
 // children), decoded per arm. A self-call in a childless arm still declines,
 // the `Zero`-arm honesty check per constructor.
 
-fn ihp_flip(i: Ihp) -> Ihp { match i { IhNo => IhYes, IhYes => IhNo } }
+fn ihp_flip(i: Ihp) → Ihp { match i { IhNo => IhYes, IhYes => IhNo } }
 
 // Parity: the mask's bit 0.
-fn kid_bit(n: Nat) -> Ihp {
+fn kid_bit(n: Nat) → Ihp {
     match n { Zero => IhNo, Succ(m) => ihp_flip(kid_bit(m)) }
 }
 
@@ -196,7 +196,7 @@ fn kid_bit(n: Nat) -> Ihp {
 // with an alternating carry, because the termination discipline wants a
 // single decreasing argument — the carry rides in the returned function
 // (the file-wide idiom).
-fn kid_shift(n: Nat) -> Ihp -> Nat {
+fn kid_shift(n: Nat) → Ihp → Nat {
     match n {
         Zero => λ (b: Ihp) => Zero,
         Succ(m) => λ (b: Ihp) => match b {
@@ -206,7 +206,7 @@ fn kid_shift(n: Nat) -> Ihp -> Nat {
     }
 }
 
-fn kid_rest(n: Nat) -> Nat { kid_shift(n)(IhNo) }
+fn kid_rest(n: Nat) → Nat { kid_shift(n)(IhNo) }
 
 // One `CMatch` per constructor arm, tags counted up in declaration order.
 // The arm chain drives the recursion (it is the structural argument, passed
@@ -216,7 +216,7 @@ fn kid_rest(n: Nat) -> Nat { kid_shift(n)(IhNo) }
 // as `cert_arms` does for the two `Nat` arms. The tag counter and the
 // remaining mask vary with the recursion, so they ride in the returned
 // function.
-fn cert_arms_w(scrut: Nat, whole: Ir, after: Ir, arms: Ir) -> Nat -> Nat -> CArms {
+fn cert_arms_w(scrut: Nat, whole: Ir, after: Ir, arms: Ir) → Nat → Nat → CArms {
     match arms {
         Arm(b, next) => λ (tag: Nat) (kids: Nat) => CACons(
             CMatch(scrut, tag, cert_chain(pick_arm(whole)(tag), kid_bit(kids)),
@@ -230,7 +230,7 @@ fn cert_arms_w(scrut: Nat, whole: Ir, after: Ir, arms: Ir) -> Nat -> Nat -> CArm
 // `cert_body` — exactly when the scrutinized parameter is tier-1, which it
 // knows from the declaration; the `Ir` alone deliberately cannot tell a
 // two-constructor tier-1 match from a `Nat` match, and nothing needs it to.
-fn cert_body_w(ir: Ir, kids: Nat) -> CertOut {
+fn cert_body_w(ir: Ir, kids: Nat) → CertOut {
     match ir {
         LetMatch(scrut, arms, after) =>
             CRecW(scrut, cert_arms_w(scrut, arms, after, arms)(0)(kids)),

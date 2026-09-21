@@ -22,12 +22,12 @@
 // length with the Π-over-the-vector motive (a vector of neutral length
 // cannot be projected, so the vector is abstracted and re-applied). Where
 // vec.rs spells fourteen `shift_local`s, this spells none — binders bind.
-meta fn map_code(g: Ctx) for vec.map -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> (f: A -> B) -> (k: Nat) -> (v: [A; k]) -> [B; k]
+meta fn map_code(g: Ctx) for vec.map → Code(g |-
+    (A: Type<0>) → (B: Type<0>) → (f: A → B) → (k: Nat) → (v: [A; k]) → [B; k]
 ) {
     code {
-        fun (A: Type<0>) => fun (B: Type<0>) => fun (f: A -> B) => fun (k: Nat) =>
-            match k as λ z => [A; z] -> [B; z] {
+        fun (A: Type<0>) => fun (B: Type<0>) => fun (f: A → B) => fun (k: Nat) =>
+            match k as λ z => [A; z] → [B; z] {
                 Zero => fun (v: [A; 0]) => [],
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
                     cons(f(head(v)), ih(tail(v))),
@@ -52,13 +52,13 @@ meta fn map_code(g: Ctx) for vec.map -> Code(g |-
 // the result is not indexed — which is why the mutated-arm control the map
 // round found unwritable *is* writable here, and is written
 // (crates/elab/tests/in_language_fold.rs).
-meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> (z: B) -> (f: A -> B -> B) -> (k: Nat) -> (v: [A; k]) -> B
+meta fn fold_code(g: Ctx) for vec.fold → Code(g |-
+    (A: Type<0>) → (B: Type<0>) → (z: B) → (f: A → B → B) → (k: Nat) → (v: [A; k]) → B
 ) {
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) =>
-            fun (f: A -> B -> B) => fun (k: Nat) =>
-                match k as λ w => [A; w] -> B {
+            fun (f: A → B → B) => fun (k: Nat) =>
+                match k as λ w => [A; w] → B {
                     Zero => fun (v: [A; 0]) => z,
                     Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
                         f(head(v), ih(tail(v))),
@@ -85,8 +85,8 @@ meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
 // its result `[B; k]` is length-indexed. The index *does* pin the shape — no
 // arm can return a vector of the wrong length — but rigidity needs every
 // *element* pinned too, and here it is not: the elements come out of `f`, and
-// `f : Fin(Succ(zk)) -> B` accepts `FZ` exactly where it accepts `FS(i)`.
-// So the shift `Fin(zk) -> Fin(Succ(zk))` is a choice parametricity does not
+// `f : Fin(Succ(zk)) → B` accepts `FZ` exactly where it accepts `FS(i)`.
+// So the shift `Fin(zk) → Fin(Succ(zk))` is a choice parametricity does not
 // make, and the constant-head tabulate — `ih(fun (i: Fin(zk)) => f(FZ))` —
 // checks at this very signature and registers for this very slot
 // (crates/elab/tests/in_language_tabulate.rs). The heuristic's real boundary is
@@ -95,14 +95,14 @@ meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
 // an indexed *container* of unconstrained elements constrains nothing about
 // them. `map` stays rigid because its elements are `f`'s outputs at the only
 // argument in scope; `tabulate`'s `f` takes an index it can be lied to about.
-meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
-    (B: Type<0>) -> (k: Nat) -> (f: Fin(k) -> B) -> [B; k]
+meta fn tabulate_code(g: Ctx) for vec.tabulate → Code(g |-
+    (B: Type<0>) → (k: Nat) → (f: Fin(k) → B) → [B; k]
 ) {
     code {
         fun (B: Type<0>) => fun (k: Nat) =>
-            match k as λ z => (Fin(z) -> B) -> [B; z] {
-                Zero => fun (f: Fin(0) -> B) => [],
-                Succ(zk, ih) => fun (f: Fin(Succ(zk)) -> B) =>
+            match k as λ z => (Fin(z) → B) → [B; z] {
+                Zero => fun (f: Fin(0) → B) => [],
+                Succ(zk, ih) => fun (f: Fin(Succ(zk)) → B) =>
                     cons(f(FZ), ih(fun (i: Fin(zk)) => f(FS(i)))),
             }
     }
@@ -141,12 +141,12 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
 // three of four rounds have now found a writable mutant where §7's genericity
 // heuristic predicted none. The conversion cross-check, not the type, is what
 // carries adequacy here.
-meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
-    (A: Type<0>) -> (k: Nat) -> (v: [A; k]) -> (i: Fin(k)) -> A
+meta fn nth_code(g: Ctx) for vec.nth → Code(g |-
+    (A: Type<0>) → (k: Nat) → (v: [A; k]) → (i: Fin(k)) → A
 ) {
     code {
         fun (A: Type<0>) => fun (k: Nat) =>
-            match k as λ z => [A; z] -> Fin(z) -> A {
+            match k as λ z => [A; z] → Fin(z) → A {
                 Zero => fun (v: [A; 0]) => fun (i: Fin(0)) => match i { },
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
                     match i {

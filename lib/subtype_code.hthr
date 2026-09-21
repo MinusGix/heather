@@ -1,18 +1,18 @@
 // Explicit binary lifting. The representation and its evidence policy are
 // arguments, not conventions about record field names. All parameters live
 // inside the code so the template stays generic at the code layer.
-meta fn lift_binary_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (S: Type<0>) -> (P: A -> Type<0>) ->
-    (project: S -> A) -> (pack: (a: A) -> P(a) -> S) ->
-    (op: A -> A -> A) ->
-    (closed: (x: S) -> (y: S) -> P(op(project(x), project(y)))) ->
-    S -> S -> S
+meta fn lift_binary_code(g: Ctx) → Code(g |-
+    (A: Type<0>) → (S: Type<0>) → (P: A → Type<0>) →
+    (project: S → A) → (pack: (a: A) → P(a) → S) →
+    (op: A → A → A) →
+    (closed: (x: S) → (y: S) → P(op(project(x), project(y)))) →
+    S → S → S
 ) {
     code {
-        fun (A: Type<0>) => fun (S: Type<0>) => fun (P: A -> Type<0>) =>
-        fun (project: S -> A) => fun (pack: (a: A) -> P(a) -> S) =>
-        fun (op: A -> A -> A) =>
-        fun (closed: (x: S) -> (y: S) -> P(op(project(x), project(y)))) =>
+        fun (A: Type<0>) => fun (S: Type<0>) => fun (P: A → Type<0>) =>
+        fun (project: S → A) => fun (pack: (a: A) → P(a) → S) =>
+        fun (op: A → A → A) =>
+        fun (closed: (x: S) → (y: S) → P(op(project(x), project(y)))) =>
         fun (x: S) => fun (y: S) =>
             pack(op(project(x), project(y)), closed(x, y))
     }
@@ -20,21 +20,21 @@ meta fn lift_binary_code(g: Ctx) -> Code(g |-
 
 // The companion certificate needs the representation's actual projection law.
 // A constructor is not assumed to preserve its input merely from its type.
-meta fn lift_binary_value_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (S: Type<0>) -> (P: A -> Type<0>) ->
-    (project: S -> A) -> (pack: (a: A) -> P(a) -> S) ->
-    (op: A -> A -> A) ->
-    (closed: (x: S) -> (y: S) -> P(op(project(x), project(y)))) ->
-    (law: (a: A) -> (p: P(a)) -> project(pack(a, p)) = a) ->
-    (x: S) -> (y: S) ->
+meta fn lift_binary_value_code(g: Ctx) → Code(g |-
+    (A: Type<0>) → (S: Type<0>) → (P: A → Type<0>) →
+    (project: S → A) → (pack: (a: A) → P(a) → S) →
+    (op: A → A → A) →
+    (closed: (x: S) → (y: S) → P(op(project(x), project(y)))) →
+    (law: (a: A) → (p: P(a)) → project(pack(a, p)) = a) →
+    (x: S) → (y: S) →
         project(pack(op(project(x), project(y)), closed(x, y))) = op(project(x), project(y))
 ) {
     code {
-        fun (A: Type<0>) => fun (S: Type<0>) => fun (P: A -> Type<0>) =>
-        fun (project: S -> A) => fun (pack: (a: A) -> P(a) -> S) =>
-        fun (op: A -> A -> A) =>
-        fun (closed: (x: S) -> (y: S) -> P(op(project(x), project(y)))) =>
-        fun (law: (a: A) -> (p: P(a)) -> project(pack(a, p)) = a) =>
+        fun (A: Type<0>) => fun (S: Type<0>) => fun (P: A → Type<0>) =>
+        fun (project: S → A) => fun (pack: (a: A) → P(a) → S) =>
+        fun (op: A → A → A) =>
+        fun (closed: (x: S) → (y: S) → P(op(project(x), project(y)))) =>
+        fun (law: (a: A) → (p: P(a)) → project(pack(a, p)) = a) =>
         fun (x: S) => fun (y: S) => law(op(project(x), project(y)), closed(x, y))
     }
 }

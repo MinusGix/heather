@@ -217,7 +217,7 @@ inductive Cmp { CLt, CEq, CGt }
 
 // Curried because both arguments descend together — the termination
 // discipline's standard shape (ir_v1's `lookup`, `nat`'s `sub`).
-fn nat_cmp(a: Nat) -> Nat -> Cmp {
+fn nat_cmp(a: Nat) → Nat → Cmp {
     match a {
         Zero => λ (b: Nat) => match b { Zero => CEq, Succ(k) => CLt },
         Succ(a2) => λ (b: Nat) => match b { Zero => CGt, Succ(b2) => nat_cmp(a2)(b2) },
@@ -227,7 +227,7 @@ fn nat_cmp(a: Nat) -> Nat -> Cmp {
 // level `l` seen from an environment of depth `d`. Truncating subtraction
 // makes this total; every call below is in range, because a level reaching
 // here was minted for a binder that is live at `d`.
-fn dist(d: Nat, l: Nat) -> Nat { sub(sub(d)(1))(l) }
+fn dist(d: Nat, l: Nat) → Nat { sub(sub(d)(1))(l) }
 
 // ---------------------------------------------------------------------------
 // Rendering: levels to distances against the layout the instructions are
@@ -235,11 +235,11 @@ fn dist(d: Nat, l: Nat) -> Nat { sub(sub(d)(1))(l) }
 // environment depth `base + i` and its own argument references resolve at
 // THAT depth; the closing `Ret` resolves at `base + len`.
 
-fn pref_lvl(r: PRef, base: Nat) -> Nat {
+fn pref_lvl(r: PRef, base: Nat) → Nat {
     match r { RLvl(l) => l, RLoc(j) => add(base, j), RFld(t) => sub(sub(base)(1))(t) }
 }
 
-fn render_refs(rs: PRefs, base: Nat, d: Nat) -> Refs {
+fn render_refs(rs: PRefs, base: Nat, d: Nat) → Refs {
     match rs {
         QNil => RNil,
         QCons(r, rest) => RCons(dist(d, pref_lvl(r, base)), render_refs(rest, base, d)),
@@ -256,11 +256,11 @@ fn render_refs(rs: PRefs, base: Nat, d: Nat) -> Refs {
 // `c` counts the slots left and `i` is the slot being written, so `i` varies
 // with the recursion and rides in the returned function rather than in a
 // parameter (the `lookup`/`gather` idiom; ir_v1 doc §13 note 2).
-fn self_arg_lvl(i: Nat, j: Nat, k: Nat, base: Nat, t: Nat) -> Nat {
+fn self_arg_lvl(i: Nat, j: Nat, k: Nat, base: Nat, t: Nat) → Nat {
     match nat_cmp(i)(j) { CEq => sub(sub(base)(1))(t), _ => sub(sub(k)(1))(i) }
 }
 
-fn self_args(c: Nat, j: Nat, k: Nat, base: Nat, t: Nat, d: Nat) -> Nat -> Refs {
+fn self_args(c: Nat, j: Nat, k: Nat, base: Nat, t: Nat, d: Nat) → Nat → Refs {
     match c {
         Zero => λ (i: Nat) => RNil,
         Succ(c2) => λ (i: Nat) =>
@@ -277,7 +277,7 @@ fn self_args(c: Nat, j: Nat, k: Nat, base: Nat, t: Nat, d: Nat) -> Nat -> Refs {
 // Callee index 0 is `PSelf` — the enclosing function itself, by
 // convention 3 — and a foreign call renders its marker tag verbatim; the
 // readback maps tags to names.
-fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
+fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) → Nat → Ir → Ir {
     match pre {
         PEnd => λ (d: Nat) (tail: Ir) => tail,
         PCon(tag, args, rest) => λ (d: Nat) (tail: Ir) =>
@@ -295,7 +295,7 @@ fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
 // `instr_0; … ; instr_{len-1}; Ret(res)` at base depth `base`. The head
 // instruction sits at `base + len - 1`; at `len = 0` that expression
 // truncates, and the value is unused because the prefix is `PEnd`.
-fn render_exp(pre: Pre, res: PRef, len: Nat, base: Nat, j: Nat, k: Nat) -> Ir {
+fn render_exp(pre: Pre, res: PRef, len: Nat, base: Nat, j: Nat, k: Nat) → Ir {
     render_pre(pre, base, j, k)(sub(add(base, len))(1),
         Ret(RCons(dist(add(base, len), pref_lvl(res, base)), RNil)))
 }
@@ -303,7 +303,7 @@ fn render_exp(pre: Pre, res: PRef, len: Nat, base: Nat, j: Nat, k: Nat) -> Ir {
 // A numeral used as a VALUE is instructions: `LetCon(0, RNil)` for the zero,
 // then one `LetCon(1, [previous])` per successor. Newest-first, so the
 // successors come off the front and the zero is at the end.
-fn num_pre(n: Nat) -> Pre {
+fn num_pre(n: Nat) → Pre {
     match n {
         Zero => PCon(0, QNil, PEnd),
         Succ(m) => PCon(1, QCons(RLoc(m), QNil), num_pre(m)),
@@ -330,7 +330,7 @@ inductive VOut { VNo, VYes(pre: Pre, res: PRef, len: Nat) }
 // same shape a saturated call renders to. A payload that never met an `inl` or
 // an `inr` is a ONE-constructor enumeration's value and reads index 0, with
 // its fields (`TFlds`) or without them (`TPure`) — convention 4.
-fn ta_val(a: TA) -> VOut {
+fn ta_val(a: TA) → VOut {
     match a {
         TNum(n) => VYes(num_pre(n), RLoc(n), Succ(n)),
         TExp(pre, res, len) => VYes(pre, res, len),
@@ -341,7 +341,7 @@ fn ta_val(a: TA) -> VOut {
     }
 }
 
-fn render_ta(t: TA, base: Nat, j: Nat, k: Nat) -> TOut {
+fn render_ta(t: TA, base: Nat, j: Nat, k: Nat) → TOut {
     match ta_val(t) {
         VYes(pre, res, len) => TYes(render_exp(pre, res, len, base, j, k)),
         VNo => TNo,
@@ -352,17 +352,17 @@ fn render_ta(t: TA, base: Nat, j: Nat, k: Nat) -> TOut {
 // The walker's arms (§3's `match code`). One `fn` per writable branch, plus
 // the finisher; the `meta fn` shell contributes only the traversal.
 
-fn ta_stuck() -> TA { TStuck }
+fn ta_stuck() → TA { TStuck }
 
-fn ta_zero() -> TA { TNum(0) }
+fn ta_zero() → TA { TNum(0) }
 
-fn ta_var() -> TA { TVarLeaf }
+fn ta_var() → TA { TVarLeaf }
 
 // A successor of a numeral is a numeral; a successor of a compiled expression
 // is one more `LetCon(1, [its result])` on the front of the prefix, whose own
 // value is that new instruction — local index `len`, which is why `len` is
 // carried.
-fn ta_succ(t: TA) -> TA {
+fn ta_succ(t: TA) → TA {
     match t {
         TNum(n) => TNum(Succ(n)),
         TExp(pre, res, len) => TExp(PCon(1, QCons(res, QNil), pre), RLoc(len), Succ(len)),
@@ -377,7 +377,7 @@ fn ta_succ(t: TA) -> TA {
 // marker shapes: a body that is a variable leaf makes the identity (a
 // variable marker's head, convention 1); a body that is a numeral — or more
 // chain — grows a callee marker (convention 3).
-fn ta_lam(d: TA, b: TA) -> TA {
+fn ta_lam(d: TA, b: TA) → TA {
     match b {
         TVarLeaf => TIdLam,
         TNum(c) => TFn(c, 1),
@@ -394,7 +394,7 @@ fn ta_lam(d: TA, b: TA) -> TA {
 // a parameter, the field, or the induction hypothesis, per convention 1.
 // (Cross-function calls go through `ta_app`'s callee arms, convention 3;
 // any other application is outside the fragment.)
-fn ta_marker(arity: Nat, i: Nat) -> TA {
+fn ta_marker(arity: Nat, i: Nat) → TA {
     match nat_cmp(i)(arity) {
         // parameter `i`, at distance `i`, so at level `arity - 1 - i`
         CLt => TExp(PEnd, RLvl(sub(sub(arity)(1))(i)), 0),
@@ -417,18 +417,18 @@ fn ta_marker(arity: Nat, i: Nat) -> TA {
 // arm's base — shift by the instructions already there. `RLvl` references
 // name binders and never move.
 
-fn shift_ref(r: PRef, off: Nat) -> PRef {
+fn shift_ref(r: PRef, off: Nat) → PRef {
     match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(add(off, j)), RFld(t) => RFld(t) }
 }
 
-fn shift_refs(rs: PRefs, off: Nat) -> PRefs {
+fn shift_refs(rs: PRefs, off: Nat) → PRefs {
     match rs {
         QNil => QNil,
         QCons(r, rest) => QCons(shift_ref(r, off), shift_refs(rest, off)),
     }
 }
 
-fn shift_pre(p: Pre, off: Nat) -> Pre {
+fn shift_pre(p: Pre, off: Nat) → Pre {
     match p {
         PEnd => PEnd,
         PCon(tag, args, rest) => PCon(tag, shift_refs(args, off), shift_pre(rest, off)),
@@ -439,7 +439,7 @@ fn shift_pre(p: Pre, off: Nat) -> Pre {
 
 // Newest-first lists: `a`'s instructions run AFTER `b`'s, so `a` keeps the
 // front and its terminal `PEnd` becomes `b`.
-fn pre_append(a: Pre, b: Pre) -> Pre {
+fn pre_append(a: Pre, b: Pre) → Pre {
     match a {
         PEnd => b,
         PCon(tag, args, rest) => PCon(tag, args, pre_append(rest, b)),
@@ -449,7 +449,7 @@ fn pre_append(a: Pre, b: Pre) -> Pre {
 }
 
 // Slot order is application order, so arguments append at the tail.
-fn qsnoc(rs: PRefs, r: PRef) -> PRefs {
+fn qsnoc(rs: PRefs, r: PRef) → PRefs {
     match rs {
         QNil => QCons(r, QNil),
         QCons(h, rest) => QCons(h, qsnoc(rest, r)),
@@ -460,14 +460,14 @@ fn qsnoc(rs: PRefs, r: PRef) -> PRefs {
 // what is collected, record its reference, and either stay partial or — on
 // the last slot — become the `PCall` instruction, whose own value is itself
 // (local index `len`, like every emitted instruction).
-fn ta_call_fin(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs) -> TA {
+fn ta_call_fin(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs) → TA {
     match rem {
         Zero => TExp(PCall(c, args, pre), RLoc(len), Succ(len)),
         Succ(r2) => TPart(c, rem, pre, len, args),
     }
 }
 
-fn ta_call(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs, a: TA) -> TA {
+fn ta_call(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs, a: TA) → TA {
     match ta_val(a) {
         VYes(pa, ra, la) =>
             match rem {
@@ -486,7 +486,7 @@ fn ta_call(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs, a: TA) -> TA {
 // `ta_marker_at` is split out for the size reason `VOut` records: a `match` on
 // `TA` nested inside another `match` on `TA` multiplies the per-arm copies of
 // this type's field types, and `Pre` and `Ir` are the file's largest.
-fn ta_marker_at(arity: Nat, a: TA) -> TA {
+fn ta_marker_at(arity: Nat, a: TA) → TA {
     match a { TNum(i) => ta_marker(arity, i), _ => TStuck }
 }
 
@@ -494,23 +494,23 @@ fn ta_marker_at(arity: Nat, a: TA) -> TA {
 // of the enclosing arm, deferred to `RFld` (rendered once the arm's base is
 // known); the ih at recursive field `t`, one `PSelf(t)` instruction; the
 // arm header, holding its field count until the arm value arrives.
-fn ta_fld_at(a: TA) -> TA {
+fn ta_fld_at(a: TA) → TA {
     match a { TNum(t) => TExp(PEnd, RFld(t), 0), _ => TStuck }
 }
 
-fn ta_ih_at(a: TA) -> TA {
+fn ta_ih_at(a: TA) → TA {
     match a { TNum(t) => TExp(PSelf(t, PEnd), RLoc(0), 1), _ => TStuck }
 }
 
-fn ta_hdr_at(a: TA) -> TA {
+fn ta_hdr_at(a: TA) → TA {
     match a { TNum(f) => THdr(f), _ => TStuck }
 }
 
-fn ta_arm_of(f: Nat, v: VOut) -> TA {
+fn ta_arm_of(f: Nat, v: VOut) → TA {
     match v { VYes(pre, res, len) => TArm(f, pre, res, len), VNo => TStuck }
 }
 
-fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
+fn ta_app(arity: Nat, f: TA, a: TA) → TA {
     match f {
         TIdLam => ta_marker_at(arity, a),
         TFn(c, k) => ta_call(c, k, PEnd, 0, QNil, a),
@@ -535,14 +535,14 @@ fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
 // `Triv` is the leaf of every field-free value: the END of a field chain (so
 // the empty chain), a digit of the nominal tag, and the whole payload of a
 // nullary constructor.
-fn ta_triv() -> TA { TPure }
+fn ta_triv() → TA { TPure }
 
 // One field onto a chain, and the only place two compiled sub-expressions meet
 // outside `ta_call` — the same merge, for the same reason: the new field's
 // instructions run AFTER the ones already collected, so its own `RLoc` indices
 // shift by `len` while its `RLvl`s (binders) do not. Fields are collected
 // right-to-left, so the new one is consed at the FRONT of the slot list.
-fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) -> TA {
+fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) → TA {
     match v {
         VYes(pa, ra, la) => TFlds(pre_append(shift_pre(pa, len), pre), add(len, la),
                                   QCons(shift_ref(ra, len), args)),
@@ -553,7 +553,7 @@ fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) -> TA {
 // A `Pair` over the EMPTY chain (`Triv`). A pure first component is a
 // nominal-tag digit or a field-free payload — the same term, deliberately not
 // told apart — and anything else is the chain's last field.
-fn ta_pair_end(a: TA) -> TA {
+fn ta_pair_end(a: TA) → TA {
     match a {
         TPure => TPure,
         _ => ta_flds_cons(ta_val(a), PEnd, 0, QNil),
@@ -564,7 +564,7 @@ fn ta_pair_end(a: TA) -> TA {
 // NOMINAL TAG, which is not a field and contributes nothing: the chain passes
 // through unchanged and is a payload from here on. Anything else is one more
 // field.
-fn ta_pair_cons(a: TA, pre: Pre, len: Nat, args: PRefs) -> TA {
+fn ta_pair_cons(a: TA, pre: Pre, len: Nat, args: PRefs) → TA {
     match a {
         TPure => TFlds(pre, len, args),
         _ => ta_flds_cons(ta_val(a), pre, len, args),
@@ -575,7 +575,7 @@ fn ta_pair_cons(a: TA, pre: Pre, len: Nat, args: PRefs) -> TA {
 // tag-versus-field. Split into three `fn`s because the file's size rule says a
 // `match` on `TA` never contains another (`VOut`'s comment): this is one
 // two-arm `match` per function instead of one nested pair of them.
-fn ta_pair(a: TA, b: TA) -> TA {
+fn ta_pair(a: TA, b: TA) → TA {
     match b {
         TPure => ta_pair_end(a),
         TFlds(pre, len, args) => ta_pair_cons(a, pre, len, args),
@@ -587,7 +587,7 @@ fn ta_pair(a: TA, b: TA) -> TA {
 // `inr` steps past one summand, carrying the payload's collected fields
 // through untouched. In the lowering `inl` never wraps anything but a payload,
 // so an already-indexed value under one is outside the fragment.
-fn ta_inl(t: TA) -> TA {
+fn ta_inl(t: TA) → TA {
     match t {
         TPure => TCtor(0, PEnd, 0, QNil),
         TFlds(pre, len, args) => TCtor(0, pre, len, args),
@@ -595,7 +595,7 @@ fn ta_inl(t: TA) -> TA {
     }
 }
 
-fn ta_inr(t: TA) -> TA {
+fn ta_inr(t: TA) → TA {
     match t {
         TPure => TCtor(1, PEnd, 0, QNil),
         TFlds(pre, len, args) => TCtor(1, pre, len, args),
@@ -612,7 +612,7 @@ fn ta_inr(t: TA) -> TA {
 // Both arms rendered and wrapped. The zero arm runs at base depth `arity` —
 // the parameters alone; the succ arm at `Succ(arity)`, the field pushed on
 // top. The arm's single output is rebound as slot 0 and returned.
-fn ta_elim_arms(arity: Nat, j: Nat, b: TA, s: TA) -> TA {
+fn ta_elim_arms(arity: Nat, j: Nat, b: TA, s: TA) → TA {
     match render_ta(b, arity, j, arity) {
         TNo => TStuck,
         TYes(zero_ir) =>
@@ -628,14 +628,14 @@ fn ta_elim_arms(arity: Nat, j: Nat, b: TA, s: TA) -> TA {
 // The scrutinee's level `l` must name a parameter; the recursion index is
 // then `j = arity - 1 - l`, which is both that parameter's distance in the
 // body's environment (so `LetMatch(j)`) and its slot in the self-call.
-fn ta_elim_at(arity: Nat, b: TA, s: TA, l: Nat) -> TA {
+fn ta_elim_at(arity: Nat, b: TA, s: TA, l: Nat) → TA {
     match nat_cmp(l)(arity) {
         CLt => ta_elim_arms(arity, sub(sub(arity)(1))(l), b, s),
         _ => TStuck,
     }
 }
 
-fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) -> TA {
+fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) → TA {
     match scrut {
         TExp(PEnd, RLvl(l), Zero) => ta_elim_at(arity, base, step, l),
         _ => TStuck,
@@ -656,19 +656,19 @@ fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) -> TA {
 // a bare parameter occurrence, and nothing else.
 inductive LOut { LNo, LYes(lvl: Nat) }
 
-fn scrut_lvl_len(l: Nat, len: Nat) -> LOut {
+fn scrut_lvl_len(l: Nat, len: Nat) → LOut {
     match len { Zero => LYes(l), _ => LNo }
 }
 
-fn scrut_lvl_ref(res: PRef, len: Nat) -> LOut {
+fn scrut_lvl_ref(res: PRef, len: Nat) → LOut {
     match res { RLvl(l) => scrut_lvl_len(l, len), _ => LNo }
 }
 
-fn scrut_lvl_pre(pre: Pre, res: PRef, len: Nat) -> LOut {
+fn scrut_lvl_pre(pre: Pre, res: PRef, len: Nat) → LOut {
     match pre { PEnd => scrut_lvl_ref(res, len), _ => LNo }
 }
 
-fn ta_scrut_lvl(sc: TA) -> LOut {
+fn ta_scrut_lvl(sc: TA) → LOut {
     match sc { TExp(pre, res, len) => scrut_lvl_pre(pre, res, len), _ => LNo }
 }
 
@@ -676,25 +676,25 @@ fn ta_scrut_lvl(sc: TA) -> LOut {
 // case, or the last constructor's arm — on the right. Arms collect FRONT
 // first, so declaration order is preserved; every node's scrutinee level is
 // checked equal to the chain's.
-fn ta_arms2(f: Nat, pre: Pre, res: PRef, len: Nat, f2: Nat, p2: Pre, r2: PRef, l2: Nat, sl: LOut) -> TA {
+fn ta_arms2(f: Nat, pre: Pre, res: PRef, len: Nat, f2: Nat, p2: Pre, r2: PRef, l2: Nat, sl: LOut) → TA {
     match sl {
         LYes(lv) => TArms(lv, PsCons(f, pre, res, len, PsCons(f2, p2, r2, l2, PsNil))),
         LNo => TStuck,
     }
 }
 
-fn ta_arms_join(c: Cmp, f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts) -> TA {
+fn ta_arms_join(c: Cmp, f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts) → TA {
     match c { CEq => TArms(lv, PsCons(f, pre, res, len, parts)), _ => TStuck }
 }
 
-fn ta_arms_more(f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts, sl: LOut) -> TA {
+fn ta_arms_more(f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts, sl: LOut) → TA {
     match sl {
         LYes(lv2) => ta_arms_join(nat_cmp(lv)(lv2), f, pre, res, len, lv, parts),
         LNo => TStuck,
     }
 }
 
-fn ta_case_r(f: Nat, pre: Pre, res: PRef, len: Nat, r: TA, sl: LOut) -> TA {
+fn ta_case_r(f: Nat, pre: Pre, res: PRef, len: Nat, r: TA, sl: LOut) → TA {
     match r {
         TArm(f2, p2, r2, l2) => ta_arms2(f, pre, res, len, f2, p2, r2, l2, sl),
         TArms(lv, parts) => ta_arms_more(f, pre, res, len, lv, parts, sl),
@@ -702,7 +702,7 @@ fn ta_case_r(f: Nat, pre: Pre, res: PRef, len: Nat, r: TA, sl: LOut) -> TA {
     }
 }
 
-fn ta_case(l: TA, r: TA, sc: TA) -> TA {
+fn ta_case(l: TA, r: TA, sc: TA) → TA {
     match l {
         TArm(f, pre, res, len) => ta_case_r(f, pre, res, len, r, ta_scrut_lvl(sc)),
         _ => TStuck,
@@ -712,7 +712,7 @@ fn ta_case(l: TA, r: TA, sc: TA) -> TA {
 // Render the collected arms, each at its own base depth, into the arm chain.
 // Total: the field counts ride in `Parts`, so there is nothing left to
 // disagree.
-fn ta_wf_chain(arity: Nat, j: Nat, parts: Parts) -> Ir {
+fn ta_wf_chain(arity: Nat, j: Nat, parts: Parts) → Ir {
     match parts {
         PsNil => NoArm,
         PsCons(f, pre, res, len, rest) =>
@@ -721,25 +721,25 @@ fn ta_wf_chain(arity: Nat, j: Nat, parts: Parts) -> Ir {
     }
 }
 
-fn ta_wf_arms(arity: Nat, j: Nat, parts: Parts) -> TA {
+fn ta_wf_arms(arity: Nat, j: Nat, parts: Parts) → TA {
     TBody(LetMatch(j, ta_wf_chain(arity, j, parts), Ret(RCons(0, RNil))))
 }
 
 // The recursion index off the scrutinee marker, exactly as `ta_elim` reads
 // it — required equal to the level every case node dispatched on.
-fn ta_wf_j(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TA {
+fn ta_wf_j(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TA {
     match c { CLt => ta_wf_arms(arity, sub(sub(arity)(1))(lv), parts), _ => TStuck }
 }
 
-fn ta_wf_lv(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TA {
+fn ta_wf_lv(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TA {
     match c { CEq => ta_wf_j(nat_cmp(lv)(arity), arity, lv, parts), _ => TStuck }
 }
 
-fn ta_wf_at(arity: Nat, lv: Nat, parts: Parts, sl: LOut) -> TA {
+fn ta_wf_at(arity: Nat, lv: Nat, parts: Parts, sl: LOut) → TA {
     match sl { LYes(lv2) => ta_wf_lv(nat_cmp(lv)(lv2), arity, lv, parts), LNo => TStuck }
 }
 
-fn ta_elim_wf(arity: Nat, step: TA, sc: TA) -> TA {
+fn ta_elim_wf(arity: Nat, step: TA, sc: TA) → TA {
     match step { TArms(lv, parts) => ta_wf_at(arity, lv, parts, ta_scrut_lvl(sc)), _ => TStuck }
 }
 
@@ -753,21 +753,21 @@ fn ta_elim_wf(arity: Nat, step: TA, sc: TA) -> TA {
 // structural, and the surface refuses the recursion before this walker
 // ever sees it — a `PSelf` smuggled in anyway renders a `LetCall(0, …)`
 // whose certificate the fold declines at mask 0).
-fn ta_arms_at(arity: Nat, j: Nat, parts: Parts) -> TOut {
+fn ta_arms_at(arity: Nat, j: Nat, parts: Parts) → TOut {
     TYes(LetMatch(j, ta_wf_chain(arity, j, parts), Ret(RCons(0, RNil))))
 }
 
-fn ta_arms_finish(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TOut {
+fn ta_arms_finish(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TOut {
     match c { CLt => ta_arms_at(arity, sub(sub(arity)(1))(lv), parts), _ => TNo }
 }
 
 // The root. A body that is already an eliminator is done; a bare case tree
 // is a tier-0 parameter match (convention 6); a body that is an
-// expression is a non-recursive fragment fn (`fn seven() -> Nat { 7 }`) and
+// expression is a non-recursive fragment fn (`fn seven() → Nat { 7 }`) and
 // renders at base depth `arity` with no recursion index to speak of — `j` is
 // unused there because no `PSelf` can occur without the eliminator that mints
 // its marker.
-fn ta_finish(arity: Nat, t: TA) -> TOut {
+fn ta_finish(arity: Nat, t: TA) → TOut {
     match t {
         TBody(body) => TYes(body),
         TArms(lv, parts) => ta_arms_finish(nat_cmp(lv)(arity), arity, lv, parts),
@@ -832,7 +832,7 @@ inductive SigOut { SigNo, SigYes(arity: Nat, res: Nat, wf: Nat) }
 // field perfectly well (it is a value like any other), but `embed_T` would
 // have to embed it at the field type's own embedding, which is emitter work
 // (docs/certgen-ctor-fields-design.md §6).
-fn sig_sigma_end(fst: SA) -> SA {
+fn sig_sigma_end(fst: SA) → SA {
     match fst {
         SPure => SPure,
         SNat => SFlds,
@@ -843,7 +843,7 @@ fn sig_sigma_end(fst: SA) -> SA {
 // A Σ over a field spine. `SPure` in the first component is the payload's
 // NOMINAL TAG — consumed, not counted — and `SNat` is one more field; both
 // answer `SFlds`, exactly as `ta_pair_cons` answers `TFlds` for both.
-fn sig_sigma_cons(fst: SA) -> SA {
+fn sig_sigma_cons(fst: SA) → SA {
     match fst {
         SPure => SFlds,
         SNat => SFlds,
@@ -851,7 +851,7 @@ fn sig_sigma_cons(fst: SA) -> SA {
     }
 }
 
-fn sig_sigma(fst: SA, snd: SA) -> SA {
+fn sig_sigma(fst: SA, snd: SA) → SA {
     match snd {
         SPure => sig_sigma_end(fst),
         SFlds => sig_sigma_cons(fst),
@@ -863,7 +863,7 @@ fn sig_sigma(fst: SA, snd: SA) -> SA {
 // left side is always one constructor — with fields (`SFlds`) or without
 // (`SPure`) — and the right side is either the last one or the rest of the
 // enumeration.
-fn sig_sum_pay(rhs: SA) -> SA {
+fn sig_sum_pay(rhs: SA) → SA {
     match rhs {
         SPure => SEnum(2),
         SFlds => SEnum(2),
@@ -872,7 +872,7 @@ fn sig_sum_pay(rhs: SA) -> SA {
     }
 }
 
-fn sig_sum(lhs: SA, rhs: SA) -> SA {
+fn sig_sum(lhs: SA, rhs: SA) → SA {
     match lhs {
         SPure => sig_sum_pay(rhs),
         SFlds => sig_sum_pay(rhs),
@@ -881,11 +881,11 @@ fn sig_sum(lhs: SA, rhs: SA) -> SA {
 }
 
 // A Π is in the fragment iff its domain is a bare `Nat` — a higher-order
-// `Nat -> Nat` domain arrives as `SFn(1, 0)` and declines — and its codomain
+// `Nat → Nat` domain arrives as `SFn(1, 0)` and declines — and its codomain
 // is either the result type or a fragment signature one parameter shorter.
 // A one-constructor enumeration has no sum at all, so a bare payload is a
 // result too — with fields (`SFlds`) or without (`SPure`).
-fn sig_pi_nat(cod: SA) -> SA {
+fn sig_pi_nat(cod: SA) → SA {
     match cod {
         SNat => SFn(1, 0, 0),
         SPure => SFn(1, 1, 0),
@@ -899,11 +899,11 @@ fn sig_pi_nat(cod: SA) -> SA {
 // A tier-1 domain: the fragment admits ONE, so a codomain that already
 // carries one declines. `SWf` in a codomain position is not a result state,
 // which is where "a tier-1 result type declines" still lives.
-fn sig_pi_wf_fn(a: Nat, r: Nat, w: Nat) -> SA {
+fn sig_pi_wf_fn(a: Nat, r: Nat, w: Nat) → SA {
     match w { Zero => SFn(Succ(a), r, Succ(a)), Succ(k) => SNo }
 }
 
-fn sig_pi_wf(cod: SA) -> SA {
+fn sig_pi_wf(cod: SA) → SA {
     match cod {
         SNat => SFn(1, 0, Succ(0)),
         SPure => SFn(1, 1, Succ(0)),
@@ -921,7 +921,7 @@ fn sig_pi_wf(cod: SA) -> SA {
 // fielded one-constructor payload); a fielded summand inside an `SEnum` is
 // invisible to this walk by design, and the rim's field rule declines the
 // declaration — the checker-accepts/rim-declines split, not a drift.
-fn sig_pi(dom: SA, cod: SA) -> SA {
+fn sig_pi(dom: SA, cod: SA) → SA {
     match dom {
         SNat => sig_pi_nat(cod),
         SPure => sig_pi_nat(cod),
@@ -935,7 +935,7 @@ fn sig_pi(dom: SA, cod: SA) -> SA {
 // fields — is a recognized tier-1 parameter type. Which DECLARATION it is,
 // and whether that declaration is nameable, is the rim's question, exactly
 // as for a monomorphized enumeration result.
-fn sig_wf(shape: SA) -> SA {
+fn sig_wf(shape: SA) → SA {
     match shape {
         SPure => SWf,
         SFlds => SWf,
@@ -947,7 +947,7 @@ fn sig_wf(shape: SA) -> SA {
 // The whole-signature rule: only a `SFn` is a signature at all, and arity 0
 // cannot arise from `sig_pi` — a bare `Nat` or a bare enumeration is a nullary
 // fn, which has no calling convention to certify, so it declines here.
-fn sig_finish(s: SA) -> SigOut {
+fn sig_finish(s: SA) → SigOut {
     match s {
         SFn(a, r, w) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k), r, w) },
         _ => SigNo,
@@ -960,7 +960,7 @@ fn sig_finish(s: SA) -> SigOut {
 // what `crates/elab/src/certgen.rs`'s `Compiler` emits for the same function.
 // A divergence is a failed `refl`, here, at library elaboration time.
 
-// `fn seven() -> Nat { 7 }`'s shape at 2: a numeral body is instructions.
+// `fn seven() → Nat { 7 }`'s shape at 2: a numeral body is instructions.
 theorem ta_numeral_body():
     ta_finish(1, ta_succ(ta_succ(ta_zero())))
     = TYes(LetCon(0, RNil,
@@ -973,7 +973,7 @@ theorem ta_zero_body():
     ta_finish(0, ta_zero()) = TYes(LetCon(0, RNil, Ret(RCons(0, RNil))))
 { refl }
 
-// `fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }`
+// `fn dbl(n: Nat) → Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }`
 // — the markers spelled as the walker builds them: `ta_lam(_, ta_var())` is
 // the identity, its argument the numeral from the `zero`/`succ` arms. Level 0
 // is the parameter, level 2 = arity+1 the induction hypothesis.
@@ -993,7 +993,7 @@ theorem dbl_transcribes():
           Ret(RCons(0, RNil))))
 { refl }
 
-// `fn add(a, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }`
+// `fn add(a, b: Nat) → Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }`
 // — arity 2, recursion on the SECOND parameter, so `j` is 1 and the self-call
 // carries `a` unchanged in slot 0 and the field in slot 1. This is the
 // generator's own `add` emission, `crates/elab/tests/certgen.rs`'s
@@ -1013,7 +1013,7 @@ theorem add_transcribes():
           Ret(RCons(0, RNil))))
 { refl }
 
-// `fn viaadd(a, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }`
+// `fn viaadd(a, b: Nat) → Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }`
 // — the cross-function positive (docs/opaque-globals-analysis-design.md §4).
 // The fixture was named `mul` until 2026-08-13, when `std/nat` took that name
 // for a library function with a different body
@@ -1373,7 +1373,7 @@ theorem sig_add():
 // A bare `Nat` is a nullary fn: no calling convention to certify.
 theorem sig_nullary_declines(): sig_finish(SNat) = SigNo { refl }
 
-// A higher-order domain — `(Nat -> Nat) -> Nat` — is outside the fragment.
+// A higher-order domain — `(Nat → Nat) → Nat` — is outside the fragment.
 theorem sig_higher_order_declines():
     sig_pi(sig_pi(SNat, SNat), SNat) = SNo
 { refl }
@@ -1385,7 +1385,7 @@ theorem sig_tag_is_pure():
     sig_sigma(sig_sigma(SPure, SPure), SPure) = SPure
 { refl }
 
-// `Nat -> Flag`, two nullary constructors: the verdict carries the constructor
+// `Nat → Flag`, two nullary constructors: the verdict carries the constructor
 // COUNT beside the arity (docs/certgen-non-nat-embeddings-design.md §5).
 theorem sig_nat_to_two_ctors():
     sig_finish(sig_pi(SNat, sig_sum(SPure, SPure))) = SigYes(1, 2, 0)
@@ -1436,13 +1436,13 @@ theorem sig_unrecognized_result_declines():
 
 // A tier-1 parameter: a `Wf` over an enumeration-shaped payload reads `SWf`,
 // and the verdict carries its suffix position beside the arity
-// (docs/certgen-tier1-source-types-design.md §5). `Toks -> Nat`…
+// (docs/certgen-tier1-source-types-design.md §5). `Toks → Nat`…
 theorem sig_tier1_param():
     sig_finish(sig_pi(sig_wf(sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))), SNat))
     = SigYes(1, 0, Succ(0))
 { refl }
 
-// …`Th -> Nat -> Nat` — the tier-1 parameter two slots from the end.
+// …`Th → Nat → Nat` — the tier-1 parameter two slots from the end.
 theorem sig_tier1_param_first_of_two():
     sig_finish(sig_pi(sig_wf(sig_sum(SPure, SFlds)), sig_pi(SNat, SNat)))
     = SigYes(2, 0, Succ(1))
@@ -1465,12 +1465,12 @@ theorem sig_wf_junk_shape_declines():
 { refl }
 
 // A TIER-0 enumeration parameter (docs/certgen-tier0-params-design.md §5):
-// `Flag -> Nat`…
+// `Flag → Nat`…
 theorem sig_t0_param():
     sig_finish(sig_pi(sig_sum(SPure, SPure), SNat)) = SigYes(1, 0, 0)
 { refl }
 
-// …`Flag -> Nat -> Nat` — a tier-0 parameter beside a `Nat` one…
+// …`Flag → Nat → Nat` — a tier-0 parameter beside a `Nat` one…
 theorem sig_t0_param_beside_nat():
     sig_finish(sig_pi(sig_sum(SPure, SPure), sig_pi(SNat, SNat))) = SigYes(2, 0, 0)
 { refl }
@@ -1483,13 +1483,13 @@ theorem sig_t0_params_two():
     = SigYes(2, 0, 0)
 { refl }
 
-// …`Flag -> Flag` — the tier-0 parameter and the tier-0 RESULT composed…
+// …`Flag → Flag` — the tier-0 parameter and the tier-0 RESULT composed…
 theorem sig_t0_param_enum_result():
     sig_finish(sig_pi(sig_sum(SPure, SPure), sig_sum(SPure, SPure)))
     = SigYes(1, 2, 0)
 { refl }
 
-// …`Toks -> Flag -> Nat` — a tier-0 parameter beside the tier-1 one, the
+// …`Toks → Flag → Nat` — a tier-0 parameter beside the tier-1 one, the
 // `wf` position untouched by the tier-0 domain.
 theorem sig_t0_beside_tier1():
     sig_finish(sig_pi(sig_wf(sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))),
@@ -1536,7 +1536,7 @@ theorem sig_t0_fielded_payload_domain_declines():
 // untrusted, so a body this walker cannot read is a function that does not get
 // a `Compile` instance, never a wrong theorem.
 meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
-    for certgen.transcribe -> TOut
+    for certgen.transcribe → TOut
 {
     ta_finish(arity, match code body as TA {
         tm_zero                   => ta_zero(),
@@ -1573,7 +1573,7 @@ meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
 // inductive's inlined lowering, a dependent codomain that is not a
 // `Nat`-chain — takes the default arm and declines.
 meta fn check_sig(g: Ctx, sig: TyCode(g))
-    for certgen.check_sig -> SigOut
+    for certgen.check_sig → SigOut
 {
     sig_finish(match code sig as SA {
         ty_nat           => SNat,

@@ -1,9 +1,9 @@
 // Public parser interface. Implementations and proofs live in parser/.
 export parser_core::{
-    Cursor, start, rest, Success, Retry,
-    Failure, ErrorView, Reply, error_view, Parser,
+    Cursor, rest, Success, Retry,
+    Failure, ErrorView, Reply, Parser,
     observe, initial_rest, CachedCursor, cache, cached_rest,
-    drop_length_le, drop_length_strict, advance, run, drop_add
+    drop_length_le, drop_length_strict, drop_add
 };
 export parser_combinators::{
     pure_at, pure, map_at, map, rebase,
