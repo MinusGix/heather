@@ -1,0 +1,3 @@
+import base;
+
+fn child() -> Nat { base::base() }

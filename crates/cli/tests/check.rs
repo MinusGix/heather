@@ -62,6 +62,20 @@ fn a_directory_checks_each_module_as_one_deduplicated_closure() {
 }
 
 #[test]
+fn a_directory_exposes_descendant_module_directories_to_its_closure() {
+    // The roots remain the immediate files (`base` and the `facade`), while
+    // the facade can keep its implementation below the public module set.
+    // The nested implementation can in turn import a module from the target
+    // directory without requiring either directory to be repeated as `-L`;
+    // `shadow/base.hthr` proves a descendant cannot conflict with that public
+    // module merely because it has the same flat name.
+    let out = heather(&["check", "nestedset"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "nestedset: ok\n");
+    assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
 fn missing_file_is_a_run_failure() {
     let out = heather(&["check", "no-such.hthr"]);
     assert_eq!(out.status.code(), Some(2));

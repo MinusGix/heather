@@ -3,9 +3,10 @@
 //!
 //! One module is one file and its name is the file stem; there are no
 //! compound paths, so resolving `import nat;` is a search over directories:
-//! the importing file's own directory first, then each `-L <dir>`. The walk
-//! is depth-first with a path stack, which is what makes a cycle reportable
-//! *as* a cycle rather than as a stack overflow.
+//! the importing file's own directory first, then each `-L <dir>`, then any
+//! fallback directories supplied for a directory target. The walk is
+//! depth-first with a path stack, which is what makes a cycle reportable *as*
+//! a cycle rather than as a stack overflow.
 //!
 //! The loader does no elaboration and holds no elaborator: it returns the
 //! modules in the order they must be fed to one. That is also why it parses
@@ -58,8 +59,22 @@ pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
 /// neither duplicated. Roots retain their supplied order, modulo dependencies
 /// appearing before the root that needs them.
 pub fn load_many(roots: &[&Path], search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
+    load_many_with_fallback(roots, search, &[])
+}
+
+/// Load several roots, consulting `fallback` only when neither the importing
+/// file's directory nor an explicit search directory contains the module.
+/// Directory targets use this for implementation modules below a facade:
+/// their descendants must be discoverable without competing with public
+/// modules in the target's own directory.
+pub fn load_many_with_fallback(
+    roots: &[&Path],
+    search: &[PathBuf],
+    fallback: &[PathBuf],
+) -> Result<Vec<Module>, LoadError> {
     let mut w = Walk {
         search,
+        search_fallback: fallback,
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
@@ -73,6 +88,7 @@ pub fn load_many(roots: &[&Path], search: &[PathBuf]) -> Result<Vec<Module>, Loa
 
 struct Walk<'a> {
     search: &'a [PathBuf],
+    search_fallback: &'a [PathBuf],
     /// Canonical path → module name. Dedup is by **path**, so a diamond costs
     /// one elaboration and two spellings of one file are one module.
     done: HashMap<PathBuf, String>,
@@ -148,9 +164,11 @@ impl Walk<'_> {
     }
 
     /// `import m;` from `from`: the importing file's directory, then the `-L`
-    /// dirs. First hit wins — but a module found in **two** search dirs is an
-    /// error rather than a precedence, since which one a build got would
-    /// otherwise depend on flag order.
+    /// dirs, then the directory target's descendant fallback dirs. A fallback
+    /// tier is consulted only after a miss in the primary tier. Within either
+    /// tier, a module found in **two** dirs is an error rather than a
+    /// precedence, since which one a build got would otherwise depend on
+    /// directory enumeration or flag order.
     fn resolve(&self, module: &str, from: &Path) -> Result<PathBuf, LoadError> {
         let file = format!("{module}.hthr");
         if let Some(dir) = from.parent() {
@@ -159,20 +177,29 @@ impl Walk<'_> {
                 return Ok(p);
             }
         }
-        let hits: Vec<PathBuf> =
+        let mut hits: Vec<PathBuf> =
             self.search.iter().map(|d| d.join(&file)).filter(|p| p.is_file()).collect();
+        if hits.is_empty() {
+            hits = self
+                .search_fallback
+                .iter()
+                .map(|d| d.join(&file))
+                .filter(|p| p.is_file())
+                .collect();
+        }
         match hits.len() {
             0 => Err(LoadError::at(
                 format!(
                     "cannot find module `{module}`: no `{file}` beside `{}`{}",
                     from.display(),
-                    if self.search.is_empty() {
+                    if self.search.is_empty() && self.search_fallback.is_empty() {
                         " and no `-L` search directory was given".to_string()
                     } else {
                         format!(
                             " or in {}",
                             self.search
                                 .iter()
+                                .chain(self.search_fallback)
                                 .map(|d| format!("`{}`", d.display()))
                                 .collect::<Vec<_>>()
                                 .join(", ")
@@ -185,7 +212,7 @@ impl Walk<'_> {
             _ => Err(LoadError::at(
                 format!(
                     "module `{module}` is in two search directories ({}) — that is an \
-                     error, not a precedence: drop one `-L`",
+                     error, not a precedence: remove one copy or drop one `-L`",
                     hits.iter().map(|p| format!("`{}`", p.display())).collect::<Vec<_>>().join(", ")
                 ),
                 from,

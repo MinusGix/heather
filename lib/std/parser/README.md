@@ -34,6 +34,10 @@ theorem example(): parser::run(next_number(),[2]) = Ok<Nat,ErrorView>(3) {
 }
 ```
 
+When checking the standard-library directory itself, the CLI adds descendant
+directories to that target's import search automatically, so the whole tree
+is checked with simply `heather check lib/std`.
+
 A reexport is the original declaration under a second visible path
 (`docs/modules-design.md` §3.4): `parser::token` and
 `parser_primitives::token` are one function, `parser::Consumes` and

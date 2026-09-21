@@ -107,7 +107,14 @@ heather check lib/std
 ```
 
 Directory checking is deliberately non-recursive because module names are
-file stems rather than hierarchical paths.
+file stems rather than hierarchical paths. Its immediate `.hthr` files are
+the roots, but descendant directories are fallback search locations for their
+import closure. The target directory and explicit `-L` paths are searched
+first; only a miss there searches descendants. This permits a public facade
+such as `lib/std/parser.hthr` to keep implementation modules below it without
+making callers enumerate internal directories, while a private nested module
+cannot conflict with a public top-level module of the same name:
+`heather check lib/std` remains the whole-library command.
 
 ### 3.4 Reexports: a facade names the same declaration (2026-09-15)
 
