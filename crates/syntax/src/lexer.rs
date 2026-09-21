@@ -37,6 +37,7 @@ pub enum TokKind {
     Dot,       // .
     Plus,      // +
     Minus,     // -   (prefix negation or infix subtraction; `->` is matched first)
+    Bang,      // !   (prefix Boolean negation; `!=` remains unsupported)
     /// `++` — list append notation (issues/list-append-symbol.md). Like the
     /// Boolean doubles, it has no single-name fallback: a designation or a
     /// binder supplies its meaning.
@@ -508,6 +509,15 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             continue;
         }
         let two = src.get(i..i + 2).unwrap_or("");
+        // `!` is Boolean negation, but `!=` is deliberately not an ASCII
+        // alias for `≠`: keep diagnosing the pair at the lexer boundary
+        // instead of tokenizing it as two unrelated operators.
+        if two == "!=" {
+            return Err(LexError {
+                msg: "unexpected character '!' in `!=`; write `≠` for inequality".into(),
+                span: Span { start, end: start + 2 },
+            });
+        }
         if c == b'|' && two != "||" && two != "|-" && anonymous_depth == 0 {
             return Err(LexError {
                 msg: "unexpected character '|'".into(),
@@ -587,6 +597,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'.' => (TokKind::Dot, 1),
                 b'+' => (TokKind::Plus, 1),
                 b'-' => (TokKind::Minus, 1),
+                b'!' => (TokKind::Bang, 1),
                 b'*' => (TokKind::Star, 1),
                 b'<' => (TokKind::Lt, 1),
                 b'>' => (TokKind::Gt, 1),

@@ -203,7 +203,7 @@ fn gap_between(a: &Tok, b: &Tok, roles: &HashMap<usize, TokenRole>) -> Gap {
     // `λ` is not on this list — the library writes `λ source begin =>` in every
     // occurrence — and a bare `?` must keep its gap, because `? p` and `?p` are
     // different programs.
-    if matches!(a.kind, Neg | Minus | Dollar) && !declared(a) {
+    if matches!(a.kind, Neg | Minus | Bang | Dollar) && !declared(a) {
         return Gap::Tight;
     }
 

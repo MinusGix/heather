@@ -70,7 +70,7 @@ pub struct DesignationDecl {
     /// declarations omit the keyword and are infix; prefix declarations write
     /// it explicitly (`designation prefix - at Int := neg`).
     pub fixity: OpFixity,
-    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`.
+    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`.
     pub symbol: String,
     pub carrier: Ty,
     /// The designated operation. A **bare global name** (§3.2): it is emitted
@@ -835,7 +835,7 @@ impl MatchForm {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
-    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`
+    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`
     /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
     /// its own: `a + b` is this node *applied*
     /// (`App { head: OpSymbol { symbol: "+", fixity: Infix }, … }`) and a lone symbol between delimiters

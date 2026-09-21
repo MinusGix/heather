@@ -976,6 +976,7 @@ impl Parser {
         };
         let sym = match fixity {
             OpFixity::Prefix if matches!(self.peek(), TokKind::Minus) => Some("-"),
+            OpFixity::Prefix if matches!(self.peek(), TokKind::Bang) => Some("!"),
             OpFixity::Prefix => None,
             OpFixity::Infix => Self::op_symbol(self.peek()),
         };
@@ -3400,18 +3401,21 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// Arithmetic prefix operators. Unary `-` is an operator symbol rather
-    /// than a literal sign: `-3` has exactly the AST of `-(3)`. It binds more
-    /// tightly than every infix rung, includes postfix applications in its
-    /// operand, and recurses so `--a` is two negations.
+    /// Value-level prefix operators. Unary `-` is an operator symbol rather
+    /// than a literal sign: `-3` has exactly the AST of `-(3)`. Boolean `!`
+    /// follows the same carrier-directed path. They bind more tightly than
+    /// every infix rung, include postfix applications in their operands, and
+    /// recurse so `--a` and `!!b` are nested applications.
     fn prefix(&mut self) -> R<Expr> {
-        if matches!(self.peek(), TokKind::Minus) {
-            let start = self.bump().span;
-            let inner = self.prefix()?;
-            let span = start.join(inner.span);
-            return Ok(op_call("-", OpFixity::Prefix, vec![inner], span));
-        }
-        self.postfix()
+        let symbol = match self.peek() {
+            TokKind::Minus => "-",
+            TokKind::Bang => "!",
+            _ => return self.postfix(),
+        };
+        let start = self.bump().span;
+        let inner = self.prefix()?;
+        let span = start.join(inner.span);
+        Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
     }
 
     /// An atom followed by zero or more field accesses `.f` / `.f(args)`, a
@@ -5010,11 +5014,35 @@ mod tests {
     }
 
     #[test]
+    fn boolean_not_is_a_prefix_symbol_and_nests() {
+        let k = body("!!a && b");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "&&");
+        let (outer, outer_args, _) = as_call(&args[0].kind);
+        assert_eq!(outer, "!");
+        let ExprKind::App { head, .. } = &args[0].kind else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+        ));
+        assert_eq!(as_call(&outer_args[0].kind).0, "!");
+    }
+
+    #[test]
     fn prefix_designation_records_a_distinct_fixity() {
         let f = parse_file("fn neg(a: Nat) -> Nat { a } designation prefix - at Nat := neg")
             .expect("prefix designation");
         let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
         assert_eq!(d.symbol, "-");
+        assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
+    #[test]
+    fn boolean_not_designation_is_prefix() {
+        let f = parse_file("fn not(a: Nat) -> Nat { a } designation prefix ! at Nat := not")
+            .expect("prefix designation");
+        let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
+        assert_eq!(d.symbol, "!");
         assert_eq!(d.fixity, OpFixity::Prefix);
     }
 

@@ -147,6 +147,27 @@ fn prefix_negation_is_carrier_directed() {
 }
 
 #[test]
+fn boolean_not_symbol_uses_the_bool_designation() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+        .expect("logic");
+    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+        .expect("bool");
+    e.elab_module_source(
+        "probe",
+        r#"
+        import bool;
+        theorem open(b: Bool): !b = bool::not(b) { refl }
+        theorem closed(): !True = False { refl }
+        theorem nested(b: Bool): !!b = b {
+            match b { False => refl, True => refl }
+        }
+        "#,
+    )
+    .expect("`!` resolves to `bool::not` at Bool");
+}
+
+#[test]
 fn infix_subtraction_is_carrier_directed() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(

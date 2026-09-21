@@ -8,6 +8,8 @@ inductive Bool { False, True }
 
 fn not(b: Bool) → Bool { match b { False => True, True => False } }
 
+designation prefix ! at Bool := not
+
 fn and(a, b: Bool) → Bool { match a { False => False, True => b } }
 
 designation && at Bool := and

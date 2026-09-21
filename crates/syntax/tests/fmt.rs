@@ -141,6 +141,7 @@ fn projections_and_qualified_names_stay_tight() {
 #[test]
 fn prefix_negation_is_written_tight() {
     check("theorem t(P: Type): ¬ P { p }", "theorem t(P: Type): ¬P { p }");
+    check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
 }
 
 /// The other half of that lint: a comment between operator and operand is not
@@ -212,6 +213,7 @@ fn at_most_one_blank_line_between_items() {
 fn a_declared_operator_symbol_is_not_a_prefix_operator() {
     for src in [
         "designation prefix - at Int := neg\n",
+        "designation prefix ! at Bool := not\n",
         "designation<A> ++ at List<A> := append\n",
         "designation < at Int := lt\n",
     ] {
