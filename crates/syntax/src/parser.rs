@@ -3318,6 +3318,7 @@ impl Parser {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
             TokKind::Plus => Some(("+", 5, 6)),
+            TokKind::Minus => Some(("-", 5, 6)),
             TokKind::Join => Some(("⊔", 5, 6)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
@@ -3347,6 +3348,7 @@ impl Parser {
     fn op_symbol(tok: &TokKind) -> Option<&'static str> {
         match tok {
             TokKind::Plus => Some("+"),
+            TokKind::Minus => Some("-"),
             TokKind::PlusPlus => Some("++"),
             TokKind::Star => Some("*"),
             TokKind::AmpAmp => Some("&&"),
@@ -4972,6 +4974,21 @@ mod tests {
     }
 
     #[test]
+    fn subtraction_is_left_associative_at_additive_precedence() {
+        // `a - b - c * d` ⇒ `-`(`-`(a, b), `*`(c, d)).
+        let k = body("a - b - c * d");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "-");
+        let ExprKind::App { head, .. } = &k else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Infix, .. }
+        ));
+        assert_eq!(as_call(&args[0].kind).0, "-");
+        assert_eq!(as_call(&args[1].kind).0, "*");
+    }
+
+    #[test]
     fn unary_minus_is_a_prefix_symbol_applied_to_an_expression() {
         let k = body("-3");
         let ExprKind::App { head, args, .. } = k else { panic!("expected prefix call") };
@@ -4999,6 +5016,21 @@ mod tests {
         let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
         assert_eq!(d.symbol, "-");
         assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
+    #[test]
+    fn infix_minus_designation_is_distinct_from_prefix_minus() {
+        let f = parse_file(
+            "fn neg(a: Nat) -> Nat { a }
+             fn sub(a: Nat, b: Nat) -> Nat { a }
+             designation prefix - at Nat := neg
+             designation - at Nat := sub",
+        )
+        .expect("prefix and infix minus designations");
+        let Item::Designation(prefix) = &f.items[2] else { panic!("expected designation") };
+        let Item::Designation(infix) = &f.items[3] else { panic!("expected designation") };
+        assert_eq!((prefix.symbol.as_str(), prefix.fixity), ("-", OpFixity::Prefix));
+        assert_eq!((infix.symbol.as_str(), infix.fixity), ("-", OpFixity::Infix));
     }
 
     #[test]

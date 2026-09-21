@@ -147,6 +147,22 @@ fn prefix_negation_is_carrier_directed() {
 }
 
 #[test]
+fn infix_subtraction_is_carrier_directed() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        fn cut(a, b: Nat) -> Nat {
+            match a { Zero => Zero, Succ(k) => match b { Zero => Succ(k), Succ(l) => cut(k, l) } }
+        }
+        designation - at Nat := cut
+        theorem open(a, b: Nat): a - b = cut(a, b) { refl }
+        theorem closed(): 5 - 2 = 3 { refl }
+        "#,
+    )
+    .expect("an infix designation resolves from its left operand's carrier");
+}
+
+#[test]
 fn numerals_use_the_expected_carriers_instance() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(

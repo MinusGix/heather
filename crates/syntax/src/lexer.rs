@@ -36,7 +36,7 @@ pub enum TokKind {
     At,        // @
     Dot,       // .
     Plus,      // +
-    Minus,     // -   (prefix negation; `->` is matched first)
+    Minus,     // -   (prefix negation or infix subtraction; `->` is matched first)
     /// `++` — list append notation (issues/list-append-symbol.md). Like the
     /// Boolean doubles, it has no single-name fallback: a designation or a
     /// binder supplies its meaning.
