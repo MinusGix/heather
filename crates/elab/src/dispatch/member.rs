@@ -171,7 +171,11 @@ impl Elaborator {
         // the receiver has no honest position to take, so it is refused here
         // rather than silently placed one slot early
         // (docs/named-arguments-design.md §5.4).
-        let at = self.subject_index(name);
+        let at = cx
+            .selfref
+            .as_ref()
+            .filter(|self_ref| self_ref.name == *name)
+            .map_or_else(|| self.subject_index(name), |self_ref| self_ref.receiver_slot);
         if !named.is_empty() && at > args.len() {
             return err(
                 format!(

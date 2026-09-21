@@ -4,7 +4,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalVar, Term, Type};
-use heather_syntax::{Expr, Span, Ty, TyKind};
+use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::application::{self, ExplicitArgElab, ParamMeta};
 use crate::{Cx, R, err, matching};
@@ -454,6 +454,52 @@ pub(crate) struct SelfRef {
     /// (issues/at-and-type-arguments.md) — so they are skipped wholesale
     /// rather than filtered by implicitness.
     pub(crate) n_tyvars: usize,
+    /// Where receiver syntax inserts its subject in the written explicit
+    /// argument list. The declaration is not a committed global while its
+    /// body is checked, so ordinary callable metadata cannot answer this for
+    /// a recursive method call.
+    pub(crate) receiver_slot: usize,
+}
+
+/// Read a written self-call in either of its surface spellings.
+///
+/// Direct calls already carry declaration-order arguments. A receiver call
+/// is normalized to that same order by inserting its receiver at the current
+/// declaration's `self` slot. This is analysis only: guarded-call lowering
+/// still checks binders and the kernel still checks the emitted eliminator.
+pub(crate) fn surface_self_call<'a>(
+    self_ref: &SelfRef,
+    expression: &'a Expr,
+) -> Option<(Vec<&'a Expr>, bool)> {
+    match &expression.kind {
+        ExprKind::App {
+            head,
+            args,
+            explicit,
+            ..
+        } => {
+            let head = match &head.kind {
+                ExprKind::TyApp { head, .. } => head,
+                _ => head,
+            };
+            matches!(&head.kind, ExprKind::Var(name) if *name == self_ref.name)
+                .then(|| (args.iter().collect(), *explicit))
+        }
+        ExprKind::Dot {
+            recv,
+            name,
+            args: Some(args),
+            ..
+        } if *name == self_ref.name => {
+            let at = self_ref.receiver_slot.min(args.len());
+            let mut ordered = Vec::with_capacity(args.len() + 1);
+            ordered.extend(args[..at].iter());
+            ordered.push(recv.as_ref());
+            ordered.extend(args[at..].iter());
+            Some((ordered, false))
+        }
+        _ => None,
+    }
 }
 
 /// What a guarded self-call must look like inside a `match` arm, and what it

@@ -3525,6 +3525,12 @@ impl Elaborator {
                     .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
                     .collect(),
                 n_tyvars: decl.tyvars.len(),
+                receiver_slot: decl
+                    .params
+                    .iter()
+                    .filter(|p| !p.implicit)
+                    .position(|p| p.is_self)
+                    .unwrap_or(0),
             }));
         }
         // An axiom has no term to check. Ordinary definitions and theorems

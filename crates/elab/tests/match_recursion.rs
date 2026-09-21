@@ -185,6 +185,58 @@ fn a_deeper_subterm_descends() {
     elab_ok(HALF);
 }
 
+/// Receiver syntax denotes the same guarded call as the direct spelling, so
+/// it must size and convoy the same two-value course-of-values window.
+#[test]
+fn a_receiver_spelled_deeper_subterm_descends() {
+    elab_ok(
+        "
+        fn Nat::half_m(self n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k { Zero => 0, Succ(l) => Succ(l.half_m()) },
+            }
+        }
+        theorem Nat::half_m_refl(self n: Nat): n.half_m() = n.half_m() {
+            match n {
+                Zero => refl,
+                Succ(k) => match k {
+                    Zero => refl,
+                    Succ(l) => cong_succ(l.half_m_refl()),
+                },
+            }
+        }
+        theorem eight_m(): (8).half_m() = 4 { refl }",
+    );
+}
+
+/// While a member is being checked it is not a committed global yet. Its own
+/// `self` marker, rather than the global metadata fallback, therefore decides
+/// where receiver syntax inserts the recursive argument.
+#[test]
+fn a_recursive_receiver_uses_a_nonfirst_self_slot() {
+    elab_ok(
+        "
+        fn Nat::count_from(prefix: Nat, self n: Nat) -> Nat {
+            match n { Zero => prefix, Succ(k) => k.count_from(Succ(prefix)) }
+        }
+        theorem counted(): (3).count_from(4) = 7 { refl }",
+    );
+}
+
+/// Receiver spelling is visible to the IH-generalization sizing pass too: the
+/// accumulator varies while the receiver supplies the decreasing argument.
+#[test]
+fn a_receiver_spelled_self_call_generalizes_varying_parameters() {
+    elab_ok(
+        "
+        fn Nat::add_acc(self n: Nat, acc: Nat) -> Nat {
+            match n { Zero => acc, Succ(k) => k.add_acc(Succ(acc)) }
+        }
+        theorem accumulated(): (3).add_acc(4) = 7 { refl }",
+    );
+}
+
 /// The property the whole transformation is for: it is still ONE `elim_Nat`,
 /// so a closed argument still computes. Half of `issues/nat-parity-and-half.md`'s
 /// acceptance is this line.
