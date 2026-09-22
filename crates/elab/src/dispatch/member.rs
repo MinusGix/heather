@@ -174,7 +174,7 @@ impl Elaborator {
         let at = cx
             .selfref
             .as_ref()
-            .filter(|self_ref| self_ref.name == *name)
+            .filter(|self_ref| self_ref.matches(name))
             .map_or_else(|| self.subject_index(name), |self_ref| self_ref.receiver_slot);
         if !named.is_empty() && at > args.len() {
             return err(

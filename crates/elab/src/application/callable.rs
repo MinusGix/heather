@@ -89,7 +89,7 @@ impl Elaborator {
         if cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.ctor_of(name).is_some()
-            || cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
             return None;
         }
@@ -145,7 +145,7 @@ impl Elaborator {
         if cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.ctor_of(name).is_some()
-            || cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
             return false;
         }

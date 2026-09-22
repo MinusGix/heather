@@ -856,7 +856,7 @@ impl Elaborator {
         };
         if cx.names.iter().any(|local| local == name)
             || cx.aliases.iter().any(|local| local.name == *name)
-            || cx.selfref.as_ref().is_some_and(|local| local.name == *name)
+            || cx.selfref.as_ref().is_some_and(|local| local.matches(name))
         {
             return err(
                 "`emit_code` expects a meta function, not a local value",

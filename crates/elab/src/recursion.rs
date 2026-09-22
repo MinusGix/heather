@@ -441,10 +441,16 @@ pub(crate) fn elab_self_call(
 
 /// The enclosing declaration, in scope throughout its own body so that a
 /// structurally guarded self-call can lower to the induction hypothesis
-/// (issues/match-recursion.md). Nothing else can reference it: the name is
-/// only registered as a global once the declaration is checked.
+/// (issues/match-recursion.md). Nothing else can reference it: neither self
+/// spelling is registered as a global until the declaration is checked.
 pub(crate) struct SelfRef {
+    /// The base spelling used by the recursion machinery and diagnostics.
     pub(crate) name: String,
+    /// The declaration head exactly as written. For an ordinary declaration
+    /// this equals `name`; for a member it is the qualified spelling
+    /// (`List::nth`). Both spellings denote this same in-progress
+    /// self-reference, without publishing a provisional global.
+    pub(crate) written_name: String,
     /// `(parameter name, implicit?)` in declaration order. Parameter `j` is
     /// bound at position `j` of the body's `Cx` (the telescope goes first).
     pub(crate) params: Vec<(String, bool)>,
@@ -459,6 +465,12 @@ pub(crate) struct SelfRef {
     /// body is checked, so ordinary callable metadata cannot answer this for
     /// a recursive method call.
     pub(crate) receiver_slot: usize,
+}
+
+impl SelfRef {
+    pub(crate) fn matches(&self, name: &str) -> bool {
+        self.name == name || self.written_name == name
+    }
 }
 
 /// Read a written self-call in either of its surface spellings.
@@ -482,7 +494,7 @@ pub(crate) fn surface_self_call<'a>(
                 ExprKind::TyApp { head, .. } => head,
                 _ => head,
             };
-            matches!(&head.kind, ExprKind::Var(name) if *name == self_ref.name)
+            matches!(&head.kind, ExprKind::Var(name) if self_ref.matches(name))
                 .then(|| (args.iter().collect(), *explicit))
         }
         ExprKind::Dot {
@@ -490,7 +502,7 @@ pub(crate) fn surface_self_call<'a>(
             name,
             args: Some(args),
             ..
-        } if *name == self_ref.name => {
+        } if self_ref.matches(name) => {
             let at = self_ref.receiver_slot.min(args.len());
             let mut ordered = Vec::with_capacity(args.len() + 1);
             ordered.extend(args[..at].iter());
@@ -772,8 +784,10 @@ mod tests {
         cx.push("predecessor".into(), Type::Nat, Level::Zero);
         cx.selfref = Some(Rc::new(SelfRef {
             name: "f".into(),
+            written_name: "f".into(),
             params: vec![("n".into(), false)],
             n_tyvars: 0,
+            receiver_slot: 0,
         }));
         cx.guard = Some(Rc::new(Guard {
             dec: 0,
@@ -798,8 +812,10 @@ mod tests {
         cx.push("n".into(), Type::Nat, Level::Zero);
         cx.selfref = Some(Rc::new(SelfRef {
             name: "f".into(),
+            written_name: "f".into(),
             params: vec![("n".into(), false)],
             n_tyvars: 0,
+            receiver_slot: 0,
         }));
         assert_eq!(descends_on_param(&cx, &Term::Var(LocalVar(0))), Some(0));
 

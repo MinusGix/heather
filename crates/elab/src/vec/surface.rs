@@ -111,7 +111,7 @@ pub(crate) fn elab_map(
     };
     // The self-call form.
     if let ExprKind::Var(name) = &f.kind
-        && cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+        && cx.selfref.as_ref().is_some_and(|s| s.matches(name))
     {
         return elab_container_ih(elab, cx, name, &xs_t, false, span);
     }
