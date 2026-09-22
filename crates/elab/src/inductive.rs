@@ -615,9 +615,10 @@ pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Te
 /// Only the outermost layer takes it, and the reason is that the inner layers
 /// have no un-reduced spelling: layer `j+1`'s type is layer `j`'s whnf's
 /// *right* summand, and a selection of a component is a checker-internal
-/// `ITy::Sel`, not syntax (§3.2). For a two-constructor declaration — the
-/// parser tower's `Reply` among them — the chain is one layer deep and the
-/// outermost layer is the whole of it.
+/// `ITy::Sel`, not syntax (§3.2). So the inner layers are **unannotated**
+/// checked spellings (§2.1): each is the value of the one above it, a
+/// checking position, and the kernel checks it against a description of that
+/// summand. With `at` absent every layer is the component form, as before.
 pub(crate) fn inject_at(
     spine: &Spine,
     i: usize,
@@ -635,15 +636,23 @@ pub(crate) fn inject_at(
     layers.extend((0..i).rev().map(|j| (false, j)));
     let last = layers.len().saturating_sub(1);
     let mut val = val;
+    // A single-constructor declaration has no injection layer, so the tuple
+    // is the outermost value and takes `at` itself: it is the one layer that
+    // may meet an inferring position (a projection's receiver, a scrutinee).
+    if layers.is_empty() {
+        if let (Some(ty), Term::PairAt { ty: slot @ None, .. }) = (&at, &mut val) {
+            *slot = Some(Rc::clone(ty));
+        }
+    }
     for (k, (is_inl, j)) in layers.into_iter().enumerate() {
         let outermost = k == last;
-        val = match at.as_ref().filter(|_| outermost) {
+        val = match at.as_ref() {
             Some(ty) if is_inl => Term::InlAt {
-                ty: Rc::clone(ty),
+                ty: outermost.then(|| Rc::clone(ty)),
                 val: Rc::new(val),
             },
             Some(ty) => Term::InrAt {
-                ty: Rc::clone(ty),
+                ty: outermost.then(|| Rc::clone(ty)),
                 val: Rc::new(val),
             },
             None if is_inl => Term::Inl {
@@ -2202,8 +2211,19 @@ impl Elaborator {
         // (docs/container-fields.md §3.4).
         let container = match (ctor.container(), &container) {
             (Some((_, p)), Some(arg)) => {
+                // The projection's receiver must infer, and the tuple was
+                // written for a checking position (§2.1): its root takes the
+                // component type it was checked at.
+                let receiver = match &fields {
+                    Term::PairAt { ty: None, fst, snd } => Term::PairAt {
+                        ty: Some(Rc::clone(&spine.ctors[i].0)),
+                        fst: Rc::clone(fst),
+                        snd: Rc::clone(snd),
+                    },
+                    other => other.clone(),
+                };
                 let (len, _, _) =
-                    self.projection(cx, &spine.ctors[i].0, &Rc::new(fields.clone()), p, span)?;
+                    self.projection(cx, &spine.ctors[i].0, &Rc::new(receiver), p, span)?;
                 Some((arg, len))
             }
             _ => None,
@@ -2240,7 +2260,7 @@ impl Elaborator {
         // expected type for a flat declaration, the emitted shape for a
         // recursive one. A recursive declaration whose `expected` is not a
         // `Wf` is the error below; it takes no `@` and falls through to it.
-        let at = if !cx.emits_at_forms() {
+        let at = if !self.emits_at_forms(cx) {
             None
         } else if ind.recursive {
             wf_slots.as_ref().map(|(s, _)| Rc::clone(s))
@@ -2390,19 +2410,17 @@ impl Elaborator {
         // …and the inline spelling of a component the decode handed back as
         // a code literal (`decode_deep`), so a tuple built at an `El ⌜Σ…⌝`
         // record type spells each link as the next link's own type does.
-        // …unless this is a computing-layer emission, where the *one*
-        // un-reduced type replaces both halves of its whnf
-        // (`docs/intro-by-type-design.md` §4.1). `ctor_ty` is the argument
-        // this call received, `head` above is its whnf, and `fst`/`snd` are
-        // that whnf's components — the object the round exists to stop
-        // writing down. `emit_ty` still runs, on `T` rather than on a reduct.
-        if cx.emits_at_forms() {
-            let ty = match self.emit_ty(cx, ctor_ty, 0) {
-                Some(r) => Rc::new(r),
-                None => Rc::new(ctor_ty.clone()),
-            };
+        // …unless the checked spellings are emitted, where the tuple carries
+        // **no** type (`docs/intro-by-type-design.md` §2.1, §4.1): every layer
+        // is a field of the injection or of the layer above it, a checking
+        // position, and the kernel checks it against a description of the
+        // component. `fst`/`snd` are the components of `ctor_ty`'s whnf —
+        // the object the round exists to stop writing down — and they are
+        // still what the fields were checked against above; they are just
+        // not written.
+        if self.emits_at_forms(cx) {
             return Ok(Term::PairAt {
-                ty,
+                ty: None,
                 fst: value,
                 snd: Rc::new(tail_tm),
             });
@@ -2949,23 +2967,15 @@ impl Elaborator {
                     decode_deep(&snd).map_or_else(|| Rc::clone(&snd), Rc::new),
                 ),
             };
-            // The checked spellings of the projection chain (§4.1): the one
-            // un-reduced type this step's whnf came from, in place of that
-            // whnf's two components. `cur_emit` is the emission copy of it
-            // where the walk has one; `cur` is the inline copy otherwise.
-            // The chain below still needs `fst_e`/`snd_e` — `snd_e` carries
+            // The checked spellings of the projection chain (§2.1, §4.1):
+            // no annotation at all — the receiver infers its own type. The
+            // chain below still needs `fst_e`/`snd_e` — `snd_e` carries
             // `cur_emit` forward and `fst_e` is the field's inferred type
             // this function returns — but neither is written into the term.
-            let at = cx.emits_at_forms().then(|| match &cur_emit {
-                Some(e) => Rc::new(e.clone()),
-                None => Rc::new(cur.clone()),
-            });
-            let proj = Rc::new(match at.as_ref() {
-                Some(ty) => Term::FstAt {
-                    ty: Rc::clone(ty),
-                    pair: Rc::clone(&pair),
-                },
-                None => Term::Fst {
+            let at = self.emits_at_forms(cx);
+            let proj = Rc::new(match at {
+                true => Term::FstAt { pair: Rc::clone(&pair) },
+                false => Term::Fst {
                     fst_level: fst_level.clone(),
                     snd_level: snd_level.clone(),
                     fst_ty: Rc::clone(&fst_e),
@@ -2976,12 +2986,9 @@ impl Elaborator {
             if step == idx + 1 {
                 return Ok(((*proj).clone(), (*fst_e).clone(), fst_level));
             }
-            let rest = Rc::new(match at.as_ref() {
-                Some(ty) => Term::SndAt {
-                    ty: Rc::clone(ty),
-                    pair: Rc::clone(&pair),
-                },
-                None => Term::Snd {
+            let rest = Rc::new(match at {
+                true => Term::SndAt { pair: Rc::clone(&pair) },
+                false => Term::Snd {
                     fst_level,
                     snd_level,
                     fst_ty: Rc::clone(&fst_e),

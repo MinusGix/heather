@@ -177,9 +177,11 @@ spelling, and the recursors range over exactly one thing: the payload of a
 payload of `box` (`BoxTy`, `BoxTm`, typing.rs ~1187/1196) contains no
 checked spelling. Implemented as one bit on the checker's `Env`, set when
 those two rules enter their payload and read by the five rules
-(`Tc::not_under_box`, replacing stage 1a's `computing_layer`); the
-elaborator's twin is `Cx::quoted`, set while a quotation payload elaborates
-(`quote.rs`). Consequences:
+(`Tc::checked_spelling_admitted`, which also keeps layer v's refusal,
+replacing stage 1a's `computing_layer`); the elaborator's twin is
+`Elaborator::emits_at_forms`, which reads `Cx::quoted` and a quote-depth
+counter held across payload elaboration (`quote.rs`), so a helper that
+starts from a fresh `Cx` inside a payload cannot escape it. Consequences:
 
 - The code grammar — what a `box` may contain, what `code_eq` compares, what
   the 56 recursor branches range over — is unchanged: no branch is added, no
@@ -192,6 +194,39 @@ elaborator's twin is `Cx::quoted`, set while a quotation payload elaborates
   "closed", not a new judgment index. Ch. 06 is untouched: the recursor β
   rules fire on box payloads, which the side condition keeps free of the
   forms.
+
+**Amended in stage 2 (2026-09-22): the quote boundary.** The second
+bullet's "no checked spelling ever appears inside code" was argued for δ
+only, and δ is not the only way in. A payload is elaborated at the code
+scope, but it also receives terms built **outside** the quotation: applying
+a global inside `code { … }` copies the callee's statement into the `app`'s
+`dom`/`cod` annotations, and a solution or a reduct is pasted in whole.
+Stage 2 met the first at once (`ir_v1`'s `ret_cert`: `ret_conv`'s statement
+holds constructor values, now emitted as `inr@`/`pair@`). Neither
+`Cx::quoted` nor an elaborator-level quote-depth guard reaches a term that
+arrives already built.
+
+So every place a payload is boxed translates it first:
+`typing::spell_checked_in_code` (and `_ty` for a boxed type) is `⌊·⌋` of
+§2.4, computed by the eager checker — which already spells every
+component — recording the former it viewed at each checked spelling and
+rebuilding with the component forms, repeated until none is left (a
+recorded component may carry checked spellings copied from a definition,
+which the rebuilt component form then `ty_check`s). The sites are
+`quote.rs`'s payload, certgen's marked body (`global_body_in_code_form`)
+and the reflection API's boxed statement (`fn_type_code`). It is outside
+the trusted base in effect: the `box` rule re-checks the result, so a wrong
+translation is a refusal, never an acceptance. The cost — the reduct —
+comes back only for terms pasted into a quotation.
+
+Admitting the checked spellings into code instead was considered and
+refused: code equality is syntactic (ch. 05, Static Code), so one term
+would have two unequal codes that every `code_eq` and every user-written
+`match code` must identify, and a `tm_pair`-style branch cannot state an
+unannotated pair's children's types, nor observe that an annotation's code
+reduces to a Σ. Code's own sharing is a separate question with its own
+issue, `issues/code-payload-sharing.md`; the translator is the single place
+a future code-native sharing former would be targeted from.
 
 ### 2.4 Conservativity
 
@@ -444,6 +479,13 @@ The outermost `Some` is there for the one kernel position that infers a
 constructor value (a projection head, a scrutinee); if `NotInferable` shows
 up on the corpus the answer is `Some` at that emitter, never a component.
 
+*Stage 2 found two such emitters (2026-09-22), both on the x86 model:*
+a **single-constructor** declaration has no injection layer, so its tuple
+is the outermost value and takes `pre_whnf` itself (`inject_at`); and the
+container-length projection in `build_ctor` reads the freshly built tuple
+as a receiver, so that copy's root takes the component type it was checked
+at.
+
 `wf.rs` `fin_index` (~1762) already annotates a tail "with `Fin` itself
 rather than its unfolded sum"; the same rationale.
 
@@ -465,7 +507,14 @@ one-line answer in the implementation log:
 - `inductive.rs` `projection`'s `cur_emit` and `matching.rs` `field_rewrap`
   (~664): read `fst_ty`/`snd_ty` off `Fst`/`Snd` to rebuild a projection
   chain; under `fst@` they carry `T` forward instead of components — a
-  smaller invariant.
+  smaller invariant. *Amended in stage 2 (2026-09-22):* with the
+  projections unannotated there is no `T` to carry. `field_rewrap`'s
+  η-expansion writes its inner `pair@`s unannotated (each is a field of the
+  one above) and gives the **root** the type of the chain's base, because the
+  root replaces the base wherever the goal mentions it — including as a
+  projection's receiver, which must infer. That type is at hand only when
+  the base is a local (the field-match case); any other base declines and
+  motive synthesis falls to its later strategies.
 - `lgg.rs` ~670–686: anti-unification requires equal annotations on both
   sides; two `pair@`s compare `T`s, which are structurally smaller and more
   often identical than two reducts.

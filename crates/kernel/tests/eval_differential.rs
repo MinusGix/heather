@@ -63,7 +63,7 @@ use heather_kernel::term::{
     SubstTail, Term, Type,
 };
 use heather_kernel::value::{
-    Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
+    Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
     ValueArena,
 };
 
@@ -499,7 +499,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(tm, m2, gamma, d)
             }
             (
-                Val::Pair { fst_level: a1, snd_level: a2, fst_ty, snd_ty, fst, snd },
+                Val::Pair { ann: Some(SigAnn { fst_level: a1, snd_level: a2, fst_ty, snd_ty }), fst, snd },
                 Term::Pair {
                     fst_level: b1,
                     snd_level: b2,
@@ -526,9 +526,19 @@ impl<'a, 'v> Agree<'a, 'v> {
             // to do it too — reduce `T` to its former here and relate the
             // value's annotation closures to *its* components, which is the
             // adequacy statement for these arms and not a weakening of it.
+            // An unannotated intro has no annotation on either side, so only
+            // the components are related.
+            (Val::Pair { ann: None, fst, snd }, Term::PairAt { ty: None, fst: f2, snd: s2 }) => {
+                self.lazy_tm(fst, f2, gamma, d)?;
+                self.lazy_tm(snd, s2, gamma, d)
+            }
+            (Val::Inl { ann: None, val }, Term::InlAt { ty: None, val: v2 })
+            | (Val::Inr { ann: None, val }, Term::InrAt { ty: None, val: v2 }) => {
+                self.lazy_tm(val, v2, gamma, d)
+            }
             (
-                Val::Pair { fst_level: a1, snd_level: a2, fst_ty, snd_ty, fst, snd },
-                Term::PairAt { ty, fst: f2, snd: s2 },
+                Val::Pair { ann: Some(SigAnn { fst_level: a1, snd_level: a2, fst_ty, snd_ty }), fst, snd },
+                Term::PairAt { ty: Some(ty), fst: f2, snd: s2 },
             ) => {
                 let Type::Sigma { fst_level: b1, snd_level: b2, fst: ft2, snd: st2 } =
                     whnf_type_delta(ty, gamma, self.defs, FUEL)
@@ -544,12 +554,12 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(snd, s2, gamma, d)
             }
             (
-                Val::Inl { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
-                Term::InlAt { ty, val: v2 },
+                Val::Inl { ann: Some(SumAnn { lhs_level: a1, rhs_level: a2, lhs, rhs }), val },
+                Term::InlAt { ty: Some(ty), val: v2 },
             )
             | (
-                Val::Inr { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
-                Term::InrAt { ty, val: v2 },
+                Val::Inr { ann: Some(SumAnn { lhs_level: a1, rhs_level: a2, lhs, rhs }), val },
+                Term::InrAt { ty: Some(ty), val: v2 },
             ) => {
                 let Type::Sum { lhs_level: b1, rhs_level: b2, lhs: l2, rhs: r2 } =
                     whnf_type_delta(ty, gamma, self.defs, FUEL)
@@ -566,11 +576,11 @@ impl<'a, 'v> Agree<'a, 'v> {
 
             (Val::Triv { level: a }, Term::Triv { level: b }) => self.lev(a, b, "⟨⟩ level"),
             (
-                Val::Inl { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
+                Val::Inl { ann: Some(SumAnn { lhs_level: a1, rhs_level: a2, lhs, rhs }), val },
                 Term::Inl { lhs_level: b1, rhs_level: b2, lhs: l2, rhs: r2, val: v2 },
             )
             | (
-                Val::Inr { lhs_level: a1, rhs_level: a2, lhs, rhs, val },
+                Val::Inr { ann: Some(SumAnn { lhs_level: a1, rhs_level: a2, lhs, rhs }), val },
                 Term::Inr { lhs_level: b1, rhs_level: b2, lhs: l2, rhs: r2, val: v2 },
             ) => {
                 self.lev(a1, b1, "inj lhs level")?;
@@ -754,7 +764,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.ne(&prefix, fun, gamma, depth)
             }
             (
-                Elim::Fst { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
+                Elim::Fst { ann: Some(SigAnn { fst_level: a1, snd_level: a2, fst_ty, snd_ty }) },
                 Term::Fst {
                     fst_level: b1,
                     snd_level: b2,
@@ -764,7 +774,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 },
             )
             | (
-                Elim::Snd { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
+                Elim::Snd { ann: Some(SigAnn { fst_level: a1, snd_level: a2, fst_ty, snd_ty }) },
                 Term::Snd {
                     fst_level: b1,
                     snd_level: b2,
@@ -779,29 +789,10 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.under_ty(snd_ty, s2, gamma, 1, d)?;
                 self.ne(&prefix, pair, gamma, depth)
             }
-            // The checked projections, related through `⌊·⌋` as the intros
-            // above are: the elim's levels and component closures come from
-            // the annotation's whnf, so that is what the harness reduces to.
-            (
-                Elim::Fst { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
-                Term::FstAt { ty, pair },
-            )
-            | (
-                Elim::Snd { fst_level: a1, snd_level: a2, fst_ty, snd_ty },
-                Term::SndAt { ty, pair },
-            ) => {
-                let Type::Sigma { fst_level: b1, snd_level: b2, fst: f2, snd: s2 } =
-                    whnf_type_delta(ty, gamma, self.defs, FUEL)
-                        .map_err(|_| "proj@ annotation exhausted fuel".to_string())?
-                else {
-                    return bad("proj@ annotation is not a Σ");
-                };
-                self.lev(a1, &b1, "proj@ fst level")?;
-                self.lev(a2, &b2, "proj@ snd level")?;
-                self.lazy_ty(fst_ty, &f2, gamma, d)?;
-                self.under_ty(snd_ty, &s2, gamma, 1, d)?;
-                self.ne(&prefix, pair, gamma, depth)
-            }
+            // The checked projections carry no annotation (design §2.1), and
+            // neither does the elimination the evaluator builds for one.
+            (Elim::Fst { ann: None }, Term::FstAt { pair })
+            | (Elim::Snd { ann: None }, Term::SndAt { pair }) => self.ne(&prefix, pair, gamma, depth),
             (
                 Elim::ElimNat { level: a, motive, base, step },
                 Term::ElimNat { level: b, motive: m2, base: z2, step: s2, scrut },

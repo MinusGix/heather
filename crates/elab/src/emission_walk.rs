@@ -273,30 +273,30 @@ impl Walk<'_> {
                 self.term(pair, d);
             }
 
-            // The checked spellings (docs/intro-by-type-design.md): one slot
-            // each and **no binder under it** — the component forms' `snd_ty`
-            // is walked at `d + 1`, `T` at `d`.
+            // The checked spellings (docs/intro-by-type-design.md): at most
+            // one slot each and **no binder under it** — the component forms'
+            // `snd_ty` is walked at `d + 1`, `T` at `d`. An unannotated intro
+            // and the projections have no slot at all.
             Term::PairAt { ty, fst, snd } => {
-                self.slot("PairAt.ty", ty, d);
+                if let Some(ty) = ty {
+                    self.slot("PairAt.ty", ty, d);
+                }
                 self.term(fst, d);
                 self.term(snd, d);
             }
             Term::InlAt { ty, val } => {
-                self.slot("InlAt.ty", ty, d);
+                if let Some(ty) = ty {
+                    self.slot("InlAt.ty", ty, d);
+                }
                 self.term(val, d);
             }
             Term::InrAt { ty, val } => {
-                self.slot("InrAt.ty", ty, d);
+                if let Some(ty) = ty {
+                    self.slot("InrAt.ty", ty, d);
+                }
                 self.term(val, d);
             }
-            Term::FstAt { ty, pair } => {
-                self.slot("FstAt.ty", ty, d);
-                self.term(pair, d);
-            }
-            Term::SndAt { ty, pair } => {
-                self.slot("SndAt.ty", ty, d);
-                self.term(pair, d);
-            }
+            Term::FstAt { pair } | Term::SndAt { pair } => self.term(pair, d),
 
             Term::Triv { .. } => {}
             Term::ElimEmpty { motive, scrut, .. } => {

@@ -506,7 +506,7 @@ pub(crate) fn synthesize_motive(
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
-    let rewrap = field_rewrap(scrutinee);
+    let rewrap = field_rewrap(cx, scrutinee);
     if let Some(motive) = abstract_scrut(expected, scrutinee, &rewrap) {
         return motive;
     }
@@ -661,34 +661,36 @@ fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Option<(Term, Term)>) 
     })
 }
 
-fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
-    // The checked spelling's η-expansion is the same shape with **one**
-    // annotation carried forward rather than two components rebuilt
-    // (`docs/intro-by-type-design.md` §4.2: "a smaller invariant"). A chain
-    // is homogeneous — one `projection` call writes one spelling all the way
-    // down — so the two loops do not have to interleave.
-    if let Term::FstAt { ty, pair } = scrutinee {
+fn field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+    // The checked spelling's η-expansion is the same shape with **no**
+    // annotation below the root (`docs/intro-by-type-design.md` §4.2): every
+    // inner `pair@` is a field of the one above it, so it is in checking
+    // position. The root replaces `base` wherever the goal mentions it,
+    // including as the receiver of a projection, so it must infer — and the
+    // only type it can carry without spelling a reduct is `base`'s own. That
+    // is at hand for a local, which is the scrutinee a field match has; any
+    // other root declines and the synthesis falls to its later strategies. A
+    // chain is homogeneous — one `projection` call writes one spelling all
+    // the way down — so the two loops do not have to interleave.
+    if let Term::FstAt { pair } = scrutinee {
         let mut base = Rc::clone(pair);
-        let up = Rc::new(ty.shift_local(1));
         let mut replacement = Term::PairAt {
-            ty: Rc::clone(&up),
+            ty: None,
             fst: Rc::new(Term::Var(LocalVar(0))),
-            snd: Rc::new(Term::SndAt {
-                ty: up,
-                pair: Rc::new(pair.shift_local(1)),
-            }),
+            snd: Rc::new(Term::SndAt { pair: Rc::new(pair.shift_local(1)) }),
         };
-        while let Term::SndAt { ty, pair } = &*base {
-            let up = Rc::new(ty.shift_local(1));
+        while let Term::SndAt { pair } = &*base {
             replacement = Term::PairAt {
-                ty: Rc::clone(&up),
-                fst: Rc::new(Term::FstAt {
-                    ty: up,
-                    pair: Rc::new(pair.shift_local(1)),
-                }),
+                ty: None,
+                fst: Rc::new(Term::FstAt { pair: Rc::new(pair.shift_local(1)) }),
                 snd: Rc::new(replacement),
             };
             base = Rc::clone(pair);
+        }
+        let Term::Var(x) = &*base else { return None };
+        let root_ty = cx.gamma.entries.nth_inner(x.0)?.ty.shift_local(x.0 + 2);
+        if let Term::PairAt { ty, .. } = &mut replacement {
+            *ty = Some(Rc::new(root_ty));
         }
         return Some(((*base).clone(), replacement));
     }

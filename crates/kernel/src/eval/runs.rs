@@ -21,7 +21,7 @@ use std::sync::Arc as Rc;
 
 use crate::value::algebra::{AffineTree, FoldClass, Increment, Proj};
 use crate::value::program::ContextProgram;
-use crate::value::{Elim, TmClo, VTy, Val};
+use crate::value::{Elim, SigAnn, TmClo, VTy, Val};
 
 use super::{Eval, Frame, Res, Work};
 
@@ -158,10 +158,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     return Ok(None);
                 };
                 self.vclo(Rc::new(Val::Pair {
-                    fst_level,
-                    snd_level,
-                    fst_ty,
-                    snd_ty,
+                    ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                     fst: fst_v,
                     snd: snd_v,
                 }))
@@ -185,10 +182,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             let (fst_level, snd_level, fst_ty, snd_ty) =
                 (fst_level.clone(), snd_level.clone(), *fst, *snd);
             let fst_elim = Elim::Fst {
-                fst_level: fst_level.clone(),
-                snd_level: snd_level.clone(),
-                fst_ty,
-                snd_ty,
+                ann: Some(SigAnn {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty,
+                    snd_ty,
+                }),
             };
             let next_ty = match step {
                 Proj::Fst => self.force_ty(fst_ty)?,
@@ -199,7 +198,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             };
             let elim = match step {
                 Proj::Fst => fst_elim,
-                Proj::Snd => Elim::Snd { fst_level, snd_level, fst_ty, snd_ty },
+                Proj::Snd => Elim::Snd {
+                    ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
+                },
             };
             cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
             ty = self.delta_whnf_ty(next_ty)?;

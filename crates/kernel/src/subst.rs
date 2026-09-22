@@ -665,22 +665,20 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         // binds none — so every walker here loses the `dep(0, 0, 1)` its
         // component sibling needs.
         Term::PairAt { ty, fst, snd } => Term::PairAt {
-            ty: sub_ty(ty, m, at),
+            ty: ty.as_ref().map(|t| sub_ty(t, m, at)),
             fst: sub_tm(fst, m, at),
             snd: sub_tm(snd, m, at),
         },
-        Term::InlAt { ty, val } => {
-            Term::InlAt { ty: sub_ty(ty, m, at), val: sub_tm(val, m, at) }
-        }
-        Term::InrAt { ty, val } => {
-            Term::InrAt { ty: sub_ty(ty, m, at), val: sub_tm(val, m, at) }
-        }
-        Term::FstAt { ty, pair } => {
-            Term::FstAt { ty: sub_ty(ty, m, at), pair: sub_tm(pair, m, at) }
-        }
-        Term::SndAt { ty, pair } => {
-            Term::SndAt { ty: sub_ty(ty, m, at), pair: sub_tm(pair, m, at) }
+        Term::InlAt { ty, val } => Term::InlAt {
+            ty: ty.as_ref().map(|t| sub_ty(t, m, at)),
+            val: sub_tm(val, m, at),
         },
+        Term::InrAt { ty, val } => Term::InrAt {
+            ty: ty.as_ref().map(|t| sub_ty(t, m, at)),
+            val: sub_tm(val, m, at),
+        },
+        Term::FstAt { pair } => Term::FstAt { pair: sub_tm(pair, m, at) },
+        Term::SndAt { pair } => Term::SndAt { pair: sub_tm(pair, m, at) },
         Term::Triv { level } => Term::Triv { level: m.level(level, at) },
         Term::ElimEmpty { level, scrut_level, motive, scrut } => Term::ElimEmpty {
             level: m.level(level, at),
@@ -1842,4 +1840,130 @@ mod tests {
         };
         assert_eq!(t2.apply_global(&sigma2), Term::Var(LocalVar(2)));
     }
+}
+
+// -- the quote boundary's rebuild (docs/intro-by-type-design.md §2.3) ------
+
+/// [`crate::typing::spell_checked_in_code`]'s second half: every checked
+/// spelling the eager checker recorded is replaced by its component form,
+/// children first mapped the same way. `base` is the Γ length the record was
+/// keyed at the root. A checked spelling with no record is left in place and
+/// counted, so the caller can tell "nothing to do" from "could not".
+struct RebuildChecked<'a> {
+    spelled: &'a std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    base: u32,
+    replaced: u64,
+    seen: u64,
+    changes: u64,
+}
+
+impl Mapper for RebuildChecked<'_> {
+    const LOCAL_OP: bool = false;
+    const NAME: &'static str = "rebuild_checked_spellings";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
+        use crate::typing::Spelled;
+        if !matches!(
+            &**t,
+            Term::PairAt { .. }
+                | Term::InlAt { .. }
+                | Term::InrAt { .. }
+                | Term::FstAt { .. }
+                | Term::SndAt { .. }
+        ) {
+            return None;
+        }
+        self.seen += 1;
+        let key = (Rc::as_ptr(t) as usize, self.base + at.local);
+        let spelled = self.spelled.get(&key)?.clone();
+        let out = match (&**t, spelled) {
+            (Term::PairAt { fst, snd, .. }, Spelled::Sigma { fst_level, snd_level, fst: s, snd: u }) => {
+                Term::Pair {
+                    fst_level,
+                    snd_level,
+                    fst_ty: s,
+                    snd_ty: u,
+                    fst: sub_tm(fst, self, at),
+                    snd: sub_tm(snd, self, at),
+                }
+            }
+            (Term::FstAt { pair }, Spelled::Sigma { fst_level, snd_level, fst: s, snd: u }) => {
+                Term::Fst { fst_level, snd_level, fst_ty: s, snd_ty: u, pair: sub_tm(pair, self, at) }
+            }
+            (Term::SndAt { pair }, Spelled::Sigma { fst_level, snd_level, fst: s, snd: u }) => {
+                Term::Snd { fst_level, snd_level, fst_ty: s, snd_ty: u, pair: sub_tm(pair, self, at) }
+            }
+            (Term::InlAt { val, .. }, Spelled::Sum { lhs_level, rhs_level, lhs, rhs }) => Term::Inl {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val: sub_tm(val, self, at),
+            },
+            (Term::InrAt { val, .. }, Spelled::Sum { lhs_level, rhs_level, lhs, rhs }) => Term::Inr {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val: sub_tm(val, self, at),
+            },
+            _ => return None,
+        };
+        self.replaced += 1;
+        Some(out)
+    }
+}
+
+/// Rebuild `t` with every recorded checked spelling in its component form;
+/// returns the term and how many were replaced.
+pub(crate) fn rebuild_checked_spellings(
+    t: &Rc<Term>,
+    spelled: &std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    base: u32,
+) -> (Rc<Term>, u64) {
+    let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };
+    let out = sub_tm(t, &mut m, Depths::default());
+    (out, m.replaced)
+}
+
+/// How many checked spellings `t` holds, anywhere.
+pub(crate) fn count_checked_spellings(t: &Rc<Term>) -> u64 {
+    let empty = std::collections::HashMap::new();
+    let mut m = RebuildChecked { spelled: &empty, base: 0, replaced: 0, seen: 0, changes: 0 };
+    let _ = sub_tm(t, &mut m, Depths::default());
+    m.seen
+}
+
+/// [`rebuild_checked_spellings`] over a type.
+pub(crate) fn rebuild_checked_spellings_ty(
+    t: &Rc<Type>,
+    spelled: &std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    base: u32,
+) -> (Rc<Type>, u64) {
+    let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };
+    let out = sub_ty(t, &mut m, Depths::default());
+    (out, m.replaced)
+}
+
+/// [`count_checked_spellings`] over a type.
+pub(crate) fn count_checked_spellings_ty(t: &Rc<Type>) -> u64 {
+    let empty = std::collections::HashMap::new();
+    let mut m = RebuildChecked { spelled: &empty, base: 0, replaced: 0, seen: 0, changes: 0 };
+    let _ = sub_ty(t, &mut m, Depths::default());
+    m.seen
+}
+
+/// Whether `t` holds a checked spelling anywhere — the cheap question a caller
+/// asks before paying for [`crate::typing::spell_checked_in_code`].
+pub fn holds_checked_spelling(t: &Rc<Term>) -> bool {
+    count_checked_spellings(t) > 0
+}
+
+/// [`holds_checked_spelling`] over a type.
+pub fn holds_checked_spelling_ty(t: &Rc<Type>) -> bool {
+    count_checked_spellings_ty(t) > 0
 }

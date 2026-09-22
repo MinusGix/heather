@@ -276,13 +276,16 @@ impl fmt::Debug for Term {
             // The checked spellings print with `@` and their one
             // annotation, so a `{:?}` says at a glance which spelling a term
             // carries. Budget-bounded like everything here.
-            Term::PairAt { ty, fst, snd } => {
+            Term::PairAt { ty: Some(ty), fst, snd } => {
                 write!(f, "pair@({ty:?}; {fst:?}; {snd:?})")
             }
-            Term::InlAt { ty, val } => write!(f, "inl@({ty:?}; {val:?})"),
-            Term::InrAt { ty, val } => write!(f, "inr@({ty:?}; {val:?})"),
-            Term::FstAt { ty, pair } => write!(f, "fst@({ty:?}; {pair:?})"),
-            Term::SndAt { ty, pair } => write!(f, "snd@({ty:?}; {pair:?})"),
+            Term::PairAt { ty: None, fst, snd } => write!(f, "pair@({fst:?}; {snd:?})"),
+            Term::InlAt { ty: Some(ty), val } => write!(f, "inl@({ty:?}; {val:?})"),
+            Term::InlAt { ty: None, val } => write!(f, "inl@({val:?})"),
+            Term::InrAt { ty: Some(ty), val } => write!(f, "inr@({ty:?}; {val:?})"),
+            Term::InrAt { ty: None, val } => write!(f, "inr@({val:?})"),
+            Term::FstAt { pair } => write!(f, "fst@({pair:?})"),
+            Term::SndAt { pair } => write!(f, "snd@({pair:?})"),
             Term::Triv { level } => write!(f, "⟨⟩{level:?}"),
             Term::ElimEmpty { level, scrut_level, motive, scrut } => {
                 write!(f, "elimE[{level:?},{scrut_level:?}](M {motive:?}; {scrut:?})")

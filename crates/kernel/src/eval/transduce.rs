@@ -48,7 +48,9 @@ use crate::term::Type;
 use crate::value::algebra::{add_increments, AffineTree, FoldClass, Increment, Proj};
 use crate::value::program::ContextProgram;
 use crate::value::transducer::{scale, ArgMode, EnumVal, Output, Transducer, TABLE_CAP};
-use crate::value::{BitTy, Elim, Env, Head, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP};
+use crate::value::{
+    BitTy, Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
+};
 
 use super::bits::UNIT_NEST_LIMIT;
 use super::{Eval, Res, Work};
@@ -611,10 +613,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             _ => return Ok(None),
         };
         let inner = self.vclo(Rc::new(Val::Pair {
-            fst_level: at.level.clone(),
-            snd_level: at.level.clone(),
-            fst_ty: at.elem,
-            snd_ty: self.arena.ty_vec(at.level.clone(), at.elem, pred),
+            ann: Some(SigAnn {
+                fst_level: at.level.clone(),
+                snd_level: at.level.clone(),
+                fst_ty: at.elem,
+                snd_ty: self.arena.ty_vec(at.level.clone(), at.elem, pred),
+            }),
             fst: if bit { bt.one } else { bt.zero },
             snd: tail,
         }));
@@ -804,10 +808,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
         };
         Ok(Some(self.vclo(Rc::new(Val::Pair {
-            fst_level,
-            snd_level,
-            fst_ty: fst,
-            snd_ty: snd,
+            ann: Some(SigAnn { fst_level, snd_level, fst_ty: fst, snd_ty: snd }),
             fst: head,
             snd: tail,
         }))))
@@ -853,10 +854,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             let (fst_level, snd_level, fst_ty, snd_ty) =
                 (fst_level.clone(), snd_level.clone(), *fst, *snd);
             let fst_elim = Elim::Fst {
-                fst_level: fst_level.clone(),
-                snd_level: snd_level.clone(),
-                fst_ty,
-                snd_ty,
+                ann: Some(SigAnn {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty,
+                    snd_ty,
+                }),
             };
             let next_ty = match step {
                 Proj::Fst => fst_ty,
@@ -868,7 +871,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             };
             let elim = match step {
                 Proj::Fst => fst_elim,
-                Proj::Snd => Elim::Snd { fst_level, snd_level, fst_ty, snd_ty },
+                Proj::Snd => Elim::Snd {
+                    ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
+                },
             };
             cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
             ty = next_ty;
@@ -946,10 +951,11 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let Some(val) = self.enum_value(if right { rhs } else { lhs }, v)? else {
                     return Ok(None);
                 };
+                let ann = Some(SumAnn { lhs_level, rhs_level, lhs, rhs });
                 Some(self.vclo(Rc::new(if right {
-                    Val::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                    Val::Inr { ann, val }
                 } else {
-                    Val::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                    Val::Inl { ann, val }
                 })))
             }
             (VTy::Sigma { fst_level, snd_level, fst, snd }, EnumVal::Pair(a, b)) => {
@@ -960,10 +966,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let rest = self.arena.ty(TyClo::val(rest));
                 let Some(tail) = self.enum_value(rest, b)? else { return Ok(None) };
                 Some(self.vclo(Rc::new(Val::Pair {
-                    fst_level,
-                    snd_level,
-                    fst_ty,
-                    snd_ty,
+                    ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                     fst: head,
                     snd: tail,
                 })))

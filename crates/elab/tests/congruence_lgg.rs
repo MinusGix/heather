@@ -458,8 +458,9 @@ fn internal_binder_names_are_never_spelled() {
     "#,
     );
     assert!(!msg.contains('#'), "an internal name reached the reader: {msg}");
-    // The clause is dropped, not half-said: the formers still locate the node.
-    assert!(msg.contains("at `variable` against `pair`"), "{msg}");
+    // The clause is dropped, not half-said: the formers still locate the node
+    // (`pair` or, since the emitters write checked spellings, `pair@`).
+    assert!(msg.contains("at `variable` against `pair"), "{msg}");
 }
 
 /// The negative control for both clauses above: an *ordinary* mismatch, whose

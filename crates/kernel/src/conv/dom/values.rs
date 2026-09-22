@@ -44,8 +44,8 @@ use crate::term::{
     wf_step_telescope, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
-    self, shift::Outer, Elim, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val,
-    ValueArena,
+    self, shift::Outer, Elim, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    VSubst, VTy, Val, ValueArena,
 };
 
 use crate::typing::ity::{ITy, Sel};
@@ -1227,9 +1227,9 @@ impl<'v> Dom<'v> for Values {
         Ok(TmC::value(
             env,
             Rc::new(if left {
-                Val::Inl { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r, val: v }
+                Val::Inl { ann: Some(SumAnn { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r }), val: v }
             } else {
-                Val::Inr { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r, val: v }
+                Val::Inr { ann: Some(SumAnn { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r }), val: v }
             }),
         ))
     }
@@ -1723,9 +1723,9 @@ fn proj_elim<'v>(
     let (fl, sl) = (fst_level.clone(), snd_level.clone());
     let (ft, st) = (open_ty(env, fst_ty, 0), open_ty(env, snd_ty, 1));
     if first {
-        Elim::Fst { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st }
+        Elim::Fst { ann: Some(SigAnn { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st }) }
     } else {
-        Elim::Snd { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st }
+        Elim::Snd { ann: Some(SigAnn { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st }) }
     }
 }
 
@@ -1772,12 +1772,18 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
         // A value's projection elim always has its levels: the evaluator
         // reads them off the Σ when it builds the elim, whichever spelling
         // the syntax used.
-        Elim::Fst { fst_level, snd_level, .. } => {
-            TmView::Fst { levels: Some((fst_level, snd_level)), pair: head }
-        }
-        Elim::Snd { fst_level, snd_level, .. } => {
-            TmView::Snd { levels: Some((fst_level, snd_level)), pair: head }
-        }
+        // A checked projection stores no annotation, so the view has no
+        // levels — exactly what the syntax domain has shown for `fst@` since
+        // stage 1a, and the arm in `conv.rs` already treats the pair as
+        // `Option`.
+        Elim::Fst { ann } => TmView::Fst {
+            levels: ann.as_ref().map(|a| (&a.fst_level, &a.snd_level)),
+            pair: head,
+        },
+        Elim::Snd { ann } => TmView::Snd {
+            levels: ann.as_ref().map(|a| (&a.fst_level, &a.snd_level)),
+            pair: head,
+        },
         Elim::ElimNat { level, motive, base, step } => TmView::ElimNat {
             level,
             motive: TyC::under(env, *motive, 1),

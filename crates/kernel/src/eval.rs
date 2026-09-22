@@ -59,8 +59,8 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail,
-    VTy, Val, ValueArena,
+    Elim, ElimSpine, Env, Head, Lookup, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    VSubst, VTail, VTy, Val, ValueArena,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
 use crate::value::program::ContextProgram;
@@ -1145,26 +1145,32 @@ impl<'a, 'v> Eval<'a, 'v> {
                 tm: tclo(env, tm),
             },
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Val::Pair {
-                fst_level: fst_level.clone(),
-                snd_level: snd_level.clone(),
-                fst_ty: yclo(env, fst_ty),
-                snd_ty: yclo(env, snd_ty),
+                ann: Some(SigAnn {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: yclo(env, fst_ty),
+                    snd_ty: yclo(env, snd_ty),
+                }),
                 fst: tclo(env, fst),
                 snd: tclo(env, snd),
             },
             Term::Triv { level } => Val::Triv { level: level.clone() },
             Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Val::Inl {
-                lhs_level: lhs_level.clone(),
-                rhs_level: rhs_level.clone(),
-                lhs: yclo(env, lhs),
-                rhs: yclo(env, rhs),
+                ann: Some(SumAnn {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: yclo(env, lhs),
+                    rhs: yclo(env, rhs),
+                }),
                 val: tclo(env, val),
             },
             Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Val::Inr {
-                lhs_level: lhs_level.clone(),
-                rhs_level: rhs_level.clone(),
-                lhs: yclo(env, lhs),
-                rhs: yclo(env, rhs),
+                ann: Some(SumAnn {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: yclo(env, lhs),
+                    rhs: yclo(env, rhs),
+                }),
                 val: tclo(env, val),
             },
 
@@ -1187,36 +1193,50 @@ impl<'a, 'v> Eval<'a, 'v> {
             // answer", never a verdict — so that is what it returns. The
             // rejection belongs to the typing rule, which does its own whnf
             // and reports `HeadMismatch`.
-            Term::PairAt { ty, fst, snd } => {
+            // The **unannotated** spelling is the one the elaborator writes
+            // at every inner layer, and it is the whole of the round's win:
+            // there is no type to evaluate, no Σ to force, and the value is
+            // the two field closures and nothing else.
+            Term::PairAt { ty: None, fst, snd } => {
+                Val::Pair { ann: None, fst: tclo(env, fst), snd: tclo(env, snd) }
+            }
+            Term::PairAt { ty: Some(ty), fst, snd } => {
                 let t = self.eval_ty(ty, env)?;
                 let t = self.ty_to_former(t)?;
                 let VTy::Sigma { fst_level, snd_level, fst: fty, snd: sty } = &*t else {
                     return Err(OutOfFuel);
                 };
                 Val::Pair {
-                    fst_level: fst_level.clone(),
-                    snd_level: snd_level.clone(),
-                    fst_ty: *fty,
-                    snd_ty: *sty,
+                    ann: Some(SigAnn {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst_ty: *fty,
+                        snd_ty: *sty,
+                    }),
                     fst: tclo(env, fst),
                     snd: tclo(env, snd),
                 }
             }
             Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
                 let right = matches!(t, Term::InrAt { .. });
-                let s = self.eval_ty(ty, env)?;
-                let s = self.ty_to_former(s)?;
-                let VTy::Sum { lhs_level, rhs_level, lhs, rhs } = &*s else {
-                    return Err(OutOfFuel);
+                let ann = match ty {
+                    None => None,
+                    Some(ty) => {
+                        let s = self.eval_ty(ty, env)?;
+                        let s = self.ty_to_former(s)?;
+                        let VTy::Sum { lhs_level, rhs_level, lhs, rhs } = &*s else {
+                            return Err(OutOfFuel);
+                        };
+                        Some(SumAnn {
+                            lhs_level: lhs_level.clone(),
+                            rhs_level: rhs_level.clone(),
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        })
+                    }
                 };
-                let (lhs_level, rhs_level) = (lhs_level.clone(), rhs_level.clone());
-                let (lhs, rhs) = (*lhs, *rhs);
                 let val = tclo(env, val);
-                if right {
-                    Val::Inr { lhs_level, rhs_level, lhs, rhs, val }
-                } else {
-                    Val::Inl { lhs_level, rhs_level, lhs, rhs, val }
-                }
+                if right { Val::Inr { ann, val } } else { Val::Inl { ann, val } }
             }
 
             Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => {
@@ -1304,42 +1324,40 @@ impl<'a, 'v> Eval<'a, 'v> {
             Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
                 let p = self.eval_tm(pair, env)?;
                 let e = Elim::Fst {
-                    fst_level: fst_level.clone(),
-                    snd_level: snd_level.clone(),
-                    fst_ty: yclo(env, fst_ty),
-                    snd_ty: yclo(env, snd_ty),
+                    ann: Some(SigAnn {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst_ty: yclo(env, fst_ty),
+                        snd_ty: yclo(env, snd_ty),
+                    }),
                 };
                 return Ok(Work::Elim(p, e));
             }
             Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
                 let p = self.eval_tm(pair, env)?;
                 let e = Elim::Snd {
-                    fst_level: fst_level.clone(),
-                    snd_level: snd_level.clone(),
-                    fst_ty: yclo(env, fst_ty),
-                    snd_ty: yclo(env, snd_ty),
+                    ann: Some(SigAnn {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst_ty: yclo(env, fst_ty),
+                        snd_ty: yclo(env, snd_ty),
+                    }),
                 };
                 return Ok(Work::Elim(p, e));
             }
-            // The checked projections push the *existing* elims, with the
-            // levels and component closures taken from the annotation's Σ
-            // (see the intro arms above). A neutral `fst@` is therefore
-            // indistinguishable from a neutral `fst` at the value domain,
-            // which is what `conv.rs`'s typed projection arm wants.
-            Term::FstAt { ty, pair } | Term::SndAt { ty, pair } => {
+            // The checked projections push the *existing* elims with no
+            // annotation at all — they carry none (design §2.1). A neutral
+            // `fst@` is therefore indistinguishable from a neutral `fst` at
+            // the value domain except for the stored levels, which
+            // `conv.rs`'s typed projection arm already treats as optional:
+            // it reads the Σ inferred for the pair, never the annotation.
+            Term::FstAt { pair } | Term::SndAt { pair } => {
                 let second = matches!(t, Term::SndAt { .. });
-                let s = self.eval_ty(ty, env)?;
-                let s = self.ty_to_former(s)?;
-                let VTy::Sigma { fst_level, snd_level, fst, snd } = &*s else {
-                    return Err(OutOfFuel);
-                };
-                let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
-                let (fst_ty, snd_ty) = (*fst, *snd);
                 let p = self.eval_tm(pair, env)?;
                 let e = if second {
-                    Elim::Snd { fst_level, snd_level, fst_ty, snd_ty }
+                    Elim::Snd { ann: None }
                 } else {
-                    Elim::Fst { fst_level, snd_level, fst_ty, snd_ty }
+                    Elim::Fst { ann: None }
                 };
                 return Ok(Work::Elim(p, e));
             }

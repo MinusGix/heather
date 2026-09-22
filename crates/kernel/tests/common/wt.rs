@@ -736,7 +736,10 @@ pub fn gen_wt_term_at(
             let a = gen_wt_term_at(env, r, b / 2, fst, dl)?;
             let snd_at = snd.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
             let bb = gen_wt_term_at(env, r, b / 2, &snd_at, cl)?;
-            Some(rt(Term::PairAt { ty: rty(ty.clone()), fst: a, snd: bb }))
+            // Half unannotated: a checking position is exactly where the
+            // elaborator writes no annotation (design §2.1).
+            let ty = if r.below(2) == 0 { None } else { Some(rty(ty.clone())) };
+            Some(rt(Term::PairAt { ty, fst: a, snd: bb }))
         }
         Type::Sum { lhs_level: dl, rhs_level: cl, lhs, rhs }
             if b > 0 && env.at_forms && env.layer.computes() =>
@@ -744,7 +747,7 @@ pub fn gen_wt_term_at(
             let right = r.below(2) == 1;
             let (summand, sl) = if right { (rhs, cl) } else { (lhs, dl) };
             let v = gen_wt_term_at(env, r, b / 2, summand, sl)?;
-            let ty = rty(ty.clone());
+            let ty = if r.below(2) == 0 { None } else { Some(rty(ty.clone())) };
             Some(rt(if right {
                 Term::InrAt { ty, val: v }
             } else {
@@ -1307,7 +1310,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 let snd_at =
                     snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
                 let Some(bb) = gen_wt_term_at(env, r, b / 2, &snd_at, &cl) else { continue };
-                return (rt(Term::PairAt { ty: Rc::clone(&ty), fst: a, snd: bb }), ty, lmax);
+                return (rt(Term::PairAt { ty: Some(Rc::clone(&ty)), fst: a, snd: bb }), ty, lmax);
             }
             28 | 29 if b > 0 && env.at_forms && env.layer.computes() => {
                 // inl@/inr@(T; v) : T, T = El ⌜A + B⌝.
@@ -1329,14 +1332,14 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 let (summand, sl) = if right { (&rhs, &cl) } else { (&lhs, &dl) };
                 let Some(v) = gen_wt_term_at(env, r, b / 2, summand, sl) else { continue };
                 let t = if right {
-                    Term::InrAt { ty: Rc::clone(&ty), val: v }
+                    Term::InrAt { ty: Some(Rc::clone(&ty)), val: v }
                 } else {
-                    Term::InlAt { ty: Rc::clone(&ty), val: v }
+                    Term::InlAt { ty: Some(Rc::clone(&ty)), val: v }
                 };
                 return (rt(t), ty, lmax);
             }
             30 | 31 if b > 0 && env.at_forms && env.layer.computes() => {
-                // fst@/snd@(T; p) : S resp. U[fst@(T;p)/x].
+                // fst@/snd@(p) : S resp. U[fst@(p)/x]; the receiver infers.
                 let Some((ty, sigma, fst_ty, snd_ty, dl, cl, lmax)) = gen_at_sigma(env, r, b)
                 else {
                     continue;
@@ -1345,13 +1348,28 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 // against `T` is a real `Sigma`-against-`El⌜Sigma⌝` query —
                 // the head pair the owning issue's 2026-09-18 trace found at
                 // 96 % of a record tower's misses.
-                let Some(p) = gen_wt_term_at(env, r, b / 2, &sigma, &lmax) else { continue };
+                // Or it is a `pair@^{T}`, so the receiver infers `T` and the
+                // Σ is viewed out of the annotation. An unannotated intro is
+                // not inferable and cannot be a receiver.
+                let p = if r.below(2) == 0 {
+                    let Some(a) = gen_wt_term_at(env, r, b / 2, &fst_ty, &dl) else { continue };
+                    let snd_at =
+                        snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
+                    let Some(bb) = gen_wt_term_at(env, r, b / 2, &snd_at, &cl) else { continue };
+                    rt(Term::PairAt { ty: Some(ty), fst: a, snd: bb })
+                } else {
+                    let Some(p) = gen_wt_term_at(env, r, b / 2, &sigma, &lmax) else { continue };
+                    if matches!(&*p, Term::PairAt { ty: None, .. }) {
+                        continue;
+                    }
+                    p
+                };
                 if r.below(2) == 0 {
-                    return (rt(Term::FstAt { ty, pair: p }), fst_ty, dl);
+                    return (rt(Term::FstAt { pair: p }), fst_ty, dl);
                 }
-                let fst_p = rt(Term::FstAt { ty: Rc::clone(&ty), pair: Rc::clone(&p) });
+                let fst_p = rt(Term::FstAt { pair: Rc::clone(&p) });
                 let snd_at = snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(fst_p));
-                return (rt(Term::SndAt { ty, pair: p }), rty(snd_at), cl);
+                return (rt(Term::SndAt { pair: p }), rty(snd_at), cl);
             }
             _ => continue,
         }

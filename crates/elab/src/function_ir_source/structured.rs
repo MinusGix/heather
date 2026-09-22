@@ -186,6 +186,12 @@ impl Builder<'_> {
             match term {
                 Term::Inl { lhs, rhs, .. } if self.boolean_components(lhs, rhs) => return self.constant(dag, 1, 0, target),
                 Term::Inr { lhs, rhs, .. } if self.boolean_components(lhs, rhs) => return self.constant(dag, 1, 1, target),
+                // The checked spelling carries no summands to test
+                // (docs/intro-by-type-design.md §4.2), and needs none: the
+                // position is already known to be Boolean, and the kernel
+                // checked the injection against that type.
+                Term::InlAt { .. } => return self.constant(dag, 1, 0, target),
+                Term::InrAt { .. } => return self.constant(dag, 1, 1, target),
                 _ => {}
             }
         }
@@ -276,12 +282,13 @@ impl Builder<'_> {
         } else {
             let mut dag = Dag::default();
             if let Some(exit) = self.exit {
-                let (tag, fields) = match term {
-                    Term::Inl { val, .. } => (0, &**val), Term::Inr { val, .. } => (1, &**val),
-                    _ => return unsupported("choice result must construct one of its two alternatives"),
+                // Either spelling (docs/intro-by-type-design.md §4.2).
+                let (tag, fields) = match crate::spelling::inj_of(term) {
+                    Some((true, val)) => (0, &**val), Some((false, val)) => (1, &**val),
+                    None => return unsupported("choice result must construct one of its two alternatives"),
                 };
-                let Term::Pair { snd, .. } = fields else { return unsupported("missing choice constructor fields"); };
-                let Term::Pair { fst, snd, .. } = &**snd else { return unsupported("missing choice payload"); };
+                let Some((_, snd)) = crate::spelling::pair_of(fields) else { return unsupported("missing choice constructor fields"); };
+                let Some((fst, snd)) = crate::spelling::pair_of(snd) else { return unsupported("missing choice payload"); };
                 if !matches!(&**snd, Term::Triv { .. }) { return unsupported("choice constructor has extra fields"); }
                 self.expression(fst, depth, self.result, &mut dag, Some(self.output.id))?;
                 self.constant(&mut dag, 1, tag, Some(exit.id))?;

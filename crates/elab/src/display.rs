@@ -451,9 +451,10 @@ impl Speller<'_> {
             // not structurally a sum (an un-reduced `El(case(…))`) declines,
             // and the display falls back to `raw_tm` as it does for every
             // other shape it cannot read; a whnf here would need a span the
-            // display path does not carry.
+            // display path does not carry. Only the outermost injection of a
+            // chain carries one, which is the one this reads.
             Term::InlAt { ty, .. } | Term::InrAt { ty, .. } => {
-                (t, None, self.el.display_tag_of(ty)?)
+                (t, None, self.el.display_tag_of(ty.as_deref()?)?)
             }
             _ => return None,
         };

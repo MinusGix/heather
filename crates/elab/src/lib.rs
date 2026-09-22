@@ -651,6 +651,12 @@ pub struct Elaborator {
     /// `GlobalVar`s resolve to the right bindings — the goal machinery's
     /// padding trick, one layer up. Empty outside a `meta fn`.
     meta_pushed: RefCell<Vec<GlobalBinding>>,
+    /// Quotation payloads currently elaborating. [`Cx::quoted`] marks the
+    /// payload's own context, but a helper inside it that starts from a
+    /// fresh `Cx` does not inherit the bit; this does, and it is what
+    /// [`Elaborator::emits_at_forms`] reads beside it
+    /// (`docs/intro-by-type-design.md` §2.3).
+    quote_depth: Cell<u32>,
     /// Memo for the telescope walk in
     /// [`Elaborator::call_defers_for_result_only`], keyed by the global's absolute
     /// Ψ position. That test is asked at **every explicit argument of every
@@ -1512,6 +1518,7 @@ impl Elaborator {
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
+            quote_depth: Cell::new(0),
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
             kernel_pool: pool::KernelPool::default(),
@@ -2728,6 +2735,52 @@ impl Elaborator {
     /// A declared global's elaborated statement and body, by written name —
     /// what an analyzer's input is read out of (the fn to transcribe is an
     /// ordinary declaration, already checked and in Ψ).
+    /// The binding at `abs`'s own world: the Ψ prefix its prefix-scoped
+    /// statement and body resolve against.
+    fn prefix_world(&self, abs: usize) -> GlobalCtx {
+        GlobalCtx::new(self.psi.bindings.iter().take(abs).cloned().collect())
+    }
+
+    /// `ty`, a statement scoped at binding `abs`, with its checked spellings
+    /// in component form, for a `box` (`typing::spell_checked_in_code_ty`).
+    fn code_form_ty(&self, abs: usize, ctx: &LocalCtx, ty: Rc<Type>, level: &Level) -> Option<Rc<Type>> {
+        if heather_kernel::subst::holds_checked_spelling_ty(&ty) {
+            let world = self.prefix_world(abs);
+            typing::spell_checked_in_code_ty(&world, 0, Layer::Code, ctx, ty, level, self.fuel).ok()
+        } else {
+            Some(ty)
+        }
+    }
+
+    /// [`Self::global_body`] with the body's checked spellings in component
+    /// form, for code that is going to be boxed (certgen's marking). `None`
+    /// where the translation is refused, which the caller reports as having
+    /// no body to analyse.
+    pub(crate) fn global_body_in_code_form(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
+        let info = self.lookup_global(name)?;
+        let abs = info.abs as usize;
+        let GlobalBinding::Tm { ctx, ty, level, body: Some(body), .. } = &self.psi.bindings[abs]
+        else {
+            return None;
+        };
+        if !heather_kernel::subst::holds_checked_spelling(body) {
+            return Some((Rc::clone(ty), Rc::clone(body)));
+        }
+        let world = self.prefix_world(abs);
+        let body = typing::spell_checked_in_code(
+            &world,
+            0,
+            Layer::Code,
+            ctx,
+            Rc::clone(body),
+            ty,
+            level,
+            self.fuel,
+        )
+        .ok()?;
+        Some((Rc::clone(ty), body))
+    }
+
     pub(crate) fn global_body(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
         let info = self.lookup_global(name)?;
         match &self.psi.bindings[info.abs as usize] {
@@ -2759,9 +2812,14 @@ impl Elaborator {
     pub(crate) fn fn_type_code(&self, name: &str) -> Option<Term> {
         let info = self.lookup_global(name)?;
         let abs = info.abs as usize;
-        let GlobalBinding::Tm { ty, .. } = &self.psi.bindings[abs] else {
+        let GlobalBinding::Tm { ctx, ty, level, .. } = &self.psi.bindings[abs] else {
             return None;
         };
+        // A box payload holds no checked spelling (`docs/intro-by-type-design.md`
+        // §2.3), and a statement elaborated outside a quote may: translate it
+        // in the binding's own world before rescoping.
+        let ty = self.code_form_ty(abs, ctx, Rc::clone(ty), level)?;
+        let ty = &ty;
         let growth = (self.psi.bindings.len() - abs) as u32;
         let ty = ty.shift_global(growth);
         // Unfolding-for-analysis, per the doctrine above, now with a second
@@ -7528,6 +7586,14 @@ impl Elaborator {
     /// goal block. Every site that renumbers a `GlobalVar` against the
     /// padding takes this; only `GoalArena::allocate`'s own
     /// `goal_base − 1 − k` does not.
+    /// Does `cx` emit the checked spellings (`docs/intro-by-type-design.md`
+    /// §4.1)? Everywhere but inside a quotation payload: the kernel refuses
+    /// them there (§2.3), and both the context bit and the elaborator's own
+    /// depth are asked, so no fresh `Cx` inside a payload can escape it.
+    pub(crate) fn emits_at_forms(&self, cx: &Cx) -> bool {
+        !cx.quoted && self.quote_depth.get() == 0
+    }
+
     pub(crate) fn global_padding(&self) -> u32 {
         self.attempt.goal_arena.base()
     }

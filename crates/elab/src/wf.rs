@@ -2682,11 +2682,14 @@ theorem s2(): or_else(3, None) = 3 { refl }
         .expect("a monomorphized instance elaborates beside a coded tag-0 declaration");
     }
 
-    /// A constructor **value** of a flat declaration carries the spine
-    /// references at every level of its injection path — pinned structurally
+    /// A constructor **value** of a flat declaration carries the type it was
+    /// checked at — `El (Flat#tycode^δ)`, the reference, not its unfolding —
+    /// on its outermost injection, and **nothing** on the injections inside
+    /// it (`docs/intro-by-type-design.md` §4.1). Until stage 2 every level
+    /// of the path carried spine references in its `Inl`/`Inr` components;
+    /// the checked spelling writes no components at all. Pinned structurally
     /// at a literal value, in the checking position a `fn`'s declared return
-    /// type provides (the expected type arrives as `El (Flat#tycode^δ)` and
-    /// is read back through `whnf`'s unspell).
+    /// type provides.
     #[test]
     fn a_flat_constructor_value_carries_the_spine_references() {
         let mut e = env();
@@ -2703,16 +2706,13 @@ theorem s2(): or_else(3, None) = 3 { refl }
             let Type::El { tm, .. } = ty else { return false };
             e.el.is_gen_ref(&tm.shift_global(grew), key)
         };
-        let Term::Inr { lhs, rhs, val, .. } = &**body else {
-            panic!("`FB` is the second constructor: `inr`")
+        let Term::InrAt { ty: Some(ty), val } = &**body else {
+            panic!("`FB` is the second constructor: an annotated `inr@`, got {body:?}")
         };
-        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 0)));
-        assert!(is_ref(rhs, GenDef::SuffixCode(flat, 0)));
-        let Term::Inl { lhs, rhs, .. } = &**val else {
-            panic!("…of `inl`")
+        assert!(is_ref(ty, GenDef::TyCode(flat)), "the declared type, as a reference: {ty:?}");
+        let Term::InlAt { ty: None, .. } = &**val else {
+            panic!("…of an unannotated `inl@`, got {val:?}")
         };
-        assert!(is_ref(lhs, GenDef::PayloadCode(flat, 1)));
-        assert!(is_ref(rhs, GenDef::PayloadCode(flat, 2)));
     }
 
     /// …and a `match` on a flat declaration carries them in every `Case` of
@@ -2997,12 +2997,14 @@ theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v)
             panic!("the `sup_f`'s shape respells with the label, not inline")
         };
         assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
-        // …and the label's `inr` annotations are *those* components.
-        let Term::Inr { lhs: il, rhs: ir, .. } = &**label else {
-            panic!("`BCons` is the second constructor: one `inr`")
+        // …and the label's one annotation is *that* shape
+        // (`docs/intro-by-type-design.md` §4.1): the checked spelling carries
+        // the sum whole, where the component spelling carried its summands.
+        let _ = lhs;
+        let Term::InrAt { ty: Some(at), .. } = &**label else {
+            panic!("`BCons` is the second constructor: one annotated `inr@`, got {label:?}")
         };
-        assert_eq!(**il, **lhs, "the injection's left annotation is the shape's left summand");
-        assert_eq!(**ir, **rhs, "…and its right annotation the right summand");
+        assert_eq!(**at, **shape, "the injection's annotation is the `sup_f`'s shape");
         // The child `BNil` is built at the inline expected type and spells
         // its own `sup_f` the same way.
         let mut child: &Term = children;
@@ -3014,19 +3016,17 @@ theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v)
         while let Some(t) = stack.pop() {
             match t {
                 Term::Supf { shape: s, label: l, .. } => {
-                    let Term::Inl { lhs: il, rhs: ir, .. } = &**l else {
-                        panic!("`BNil` is the first constructor: one `inl`")
+                    let Term::InlAt { ty: Some(at), .. } = &**l else {
+                        panic!("`BNil` is the first constructor: one annotated `inl@`")
                     };
-                    let Type::Sum { lhs, rhs, .. } = &**s else { panic!("a sum") };
-                    assert_eq!(**il, **lhs);
-                    assert_eq!(**ir, **rhs);
+                    assert_eq!(**at, **s);
                     found = true;
                 }
                 Term::Case { case_l, case_r, .. } => {
                     stack.push(case_l);
                     stack.push(case_r);
                 }
-                Term::Pair { fst, snd, .. } => {
+                Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
                     stack.push(fst);
                     stack.push(snd);
                 }
@@ -3080,66 +3080,19 @@ fn getb(p: PrT()) -> T { p.b }
         else {
             panic!("a `fn` keeps its body")
         };
-        let Term::Lam { dom, body, .. } = &**body else { panic!("one λ") };
-        let mut cx = Cx::empty();
-        cx.push("p".into(), (**dom).clone(), Level::Zero);
-        // `p.b` is entry 2 of the spine: `fst(snd(snd(p)))`.
-        let Term::Fst {
-            fst_ty: f2,
-            snd_ty: s2,
-            pair: p2,
-            fst_level,
-            snd_level,
-        } = &**body
-        else {
-            panic!("a projection is a `fst`")
+        let Term::Lam { body, .. } = &**body else { panic!("one λ") };
+        // `p.b` is entry 2 of the spine: `fst@(snd@(snd@(p)))`. The checked
+        // projections carry no annotation at all (`docs/intro-by-type-design.md`
+        // §2.1), so the adjacent-link agreement this test pinned for the
+        // component spelling has nothing left to compare: the receiver infers
+        // each link's type. What stays pinned is the chain's shape, and below,
+        // that it computes on a literal and on a neutral.
+        let Term::FstAt { pair: p2 } = &**body else {
+            panic!("a projection is a `fst@`, got {body:?}")
         };
-        let Term::Snd {
-            fst_ty: f1,
-            snd_ty: s1,
-            pair: p1,
-            ..
-        } = &**p2
-        else {
-            panic!("…of a `snd`")
-        };
-        let Term::Snd {
-            fst_ty: f0,
-            snd_ty: s0,
-            pair: p0,
-            ..
-        } = &**p1
-        else {
-            panic!("…of a `snd`")
-        };
+        let Term::SndAt { pair: p1 } = &**p2 else { panic!("…of a `snd@`") };
+        let Term::SndAt { pair: p0 } = &**p1 else { panic!("…of a `snd@`") };
         assert!(matches!(&**p0, Term::Var(_)));
-        // No link's annotation is an undecoded literal.
-        for ann in [f0, s0, f1, s1, f2, s2] {
-            assert!(
-                !matches!(&**ann, Type::El { tm, .. } if matches!(&**tm, Term::TmSigma { .. } | Term::TmUnit { .. })),
-                "an annotation is spelled inline, not as `El` of a code literal"
-            );
-        }
-        // Adjacent links agree exactly: the pair type link `k+1` states is
-        // link `k`'s `snd_ty` instantiated at link `k`'s own projection.
-        let link = |fst_ty: &Rc<Type>, snd_ty: &Rc<Type>, pair: &Rc<Term>| Term::Fst {
-            fst_level: fst_level.clone(),
-            snd_level: snd_level.clone(),
-            fst_ty: Rc::clone(fst_ty),
-            snd_ty: Rc::clone(snd_ty),
-            pair: Rc::clone(pair),
-        };
-        let stated = |fst_ty: &Rc<Type>, snd_ty: &Rc<Type>| Type::Sigma {
-            fst_level: fst_level.clone(),
-            snd_level: snd_level.clone(),
-            fst: Rc::clone(fst_ty),
-            snd: Rc::clone(snd_ty),
-        };
-        let inst = |snd_ty: &Rc<Type>, proj: Term| {
-            snd_ty.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(proj)))
-        };
-        assert_eq!(stated(f1, s1), inst(s0, link(f0, s0, p0)));
-        assert_eq!(stated(f2, s2), inst(s1, link(f1, s1, p1)));
 
         e.el.elab_source(
             "
@@ -3267,22 +3220,27 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
         else {
             panic!("a `fn` keeps its body")
         };
-        // `pair(tag_refl, pair(FB(1), ⟨⟩))`: the field's stated type is the
-        // inner pair's `fst_ty`.
-        let Term::Pair { snd, .. } = &**body else { panic!("a record value is a tuple") };
-        let Term::Pair { fst_ty, fst, .. } = &**snd else { panic!("…with a field link") };
-        assert_ne!(
-            **fst_ty,
-            e.lowered("Flat").0,
-            "the field's stated type is a reference, not the inline lowering"
-        );
-        // …and the value's own annotations are the spine's components, each
-        // already spelled the way the chokepoint would spell it.
-        let (lhs, rhs) = match &**fst {
-            Term::Inl { lhs, rhs, .. } | Term::Inr { lhs, rhs, .. } => (lhs, rhs),
-            _ => panic!("a flat constructor value is an injection"),
+        // `pair@^{R4}(tag_refl; pair@(FB(1); ⟨⟩))` since stage 2
+        // (`docs/intro-by-type-design.md` §4.1): a record has no injection, so
+        // its tuple's root carries the type it was checked at, and the field
+        // links carry nothing. The field value carries the field's stated
+        // type — the declaration's reference — on its outermost injection,
+        // which is the one annotation that can meet an inferring position.
+        let Term::PairAt { ty: Some(root), snd, .. } = &**body else {
+            panic!("a record value is an annotated tuple, got {body:?}")
         };
-        for ann in [fst_ty, lhs, rhs] {
+        let Term::PairAt { ty: None, fst, .. } = &**snd else {
+            panic!("…with an unannotated field link")
+        };
+        let Term::InrAt { ty: Some(field_ty), .. } = &**fst else {
+            panic!("`FB` is the second constructor: an annotated `inr@`, got {fst:?}")
+        };
+        assert_ne!(
+            **field_ty,
+            e.lowered("Flat").0,
+            "the field value's annotation is a reference, not the inline lowering"
+        );
+        for ann in [root, field_ty] {
             assert!(
                 e.el.emit_ty(&e.cx, ann, 0).is_none(),
                 "an annotation the chokepoint would still respell: {ann:?}"
@@ -3342,26 +3300,21 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         let Type::Sigma { snd, .. } = &**dom else { panic!("the instance is a Σ (tag first)") };
         let Type::Sigma { fst, .. } = &**snd else { panic!("…then the field") };
         let Type::Id { lhs, .. } = &**fst else { panic!("`ok` is an equation") };
-        let Term::Fst { fst_ty, pair, .. } = &**lhs else { panic!("its left side projects `a`") };
-        let Term::Snd { pair, .. } = &**pair else { panic!("…past the tag") };
-        let Term::Pair { snd, .. } = &**pair else { panic!("…off the literal") };
-        let Term::Pair { fst_ty: stated, .. } = &**snd else { panic!("the literal's `a` link") };
-        assert_eq!(
-            fst_ty, stated,
-            "the projection states the field's type exactly as the literal does"
-        );
+        // Since stage 2 (`docs/intro-by-type-design.md` §2.1) the projection
+        // carries no annotation and the literal only its root's, so the two
+        // spellings this test held equal no longer exist to disagree: the
+        // projection's type is read off the literal's.
+        let Term::FstAt { pair } = &**lhs else { panic!("its left side projects `a`: {lhs:?}") };
+        let Term::SndAt { pair } = &**pair else { panic!("…past the tag") };
+        let Term::PairAt { ty: Some(root), snd, .. } = &**pair else {
+            panic!("…off the annotated literal")
+        };
+        let Term::PairAt { ty: None, .. } = &**snd else { panic!("the literal's `a` link") };
         assert!(
-            e.el.emit_ty(&e.cx, fst_ty, 0).is_none(),
-            "…and that spelling is the chokepoint's: {fst_ty:?}"
+            e.el.emit_ty(&e.cx, root, 0).is_none(),
+            "the literal's annotation is the chokepoint's spelling: {root:?}"
         );
-        assert_ne!(
-            **fst_ty,
-            e.lowered("Flat").0,
-            "the field's type is a reference, not the inline lowering"
-        );
-        // With the two spellings equal, the kernel's `tm_check` of the literal
-        // against the projection's Σ is the syntactic shortcut, not a
-        // conversion: no `Sigma`/`Sigma` row in the module's miss table.
+        // …and no `Sigma`/`Sigma` row appears in the module's miss table.
         #[cfg(feature = "value-metrics")]
         {
             let report = e.el.value_conv_miss_report().unwrap_or_default();

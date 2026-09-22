@@ -464,45 +464,58 @@ pub enum Term {
     // that translation; the kernel's own guarantee is that nothing reads the
     // annotation except the rule that exposes its head.
     //
-    // **Valid at the computing layers only** (p and m). Layer c never sees
-    // them, which is why the code grammar, `code_eq`, and all 56 recursor
-    // branches in `rec.rs` are untouched: `tm_pair`'s branch telescope types
-    // its field sub-structures by `U_S` and `U_T`, and a branch handed one
-    // `U_Σ` could state neither (design §2.2). Inside a `box` the component
-    // forms continue to be the only spelling.
-    /// `pair@(T; a; b) : T` where `T ⇝* Σ^{l,l'}(x:S). U` — the checked
-    /// spelling of [`Term::Pair`]. Infers `T` *un-reduced*, so a consumer
-    /// that compares it against another `T` pays a head comparison and one
-    /// that compares it against the former pays one δ step.
+    // **Not under a `box`** (design §2.3): the restriction is a side
+    // condition on the two `box` rules — the payload of a quotation contains
+    // no checked spelling — and not a layer predicate, because Heather checks
+    // every declaration body at `Layer::Code` and a layer predicate is
+    // therefore constantly false at the emitters. What §2.2 needs is only
+    // that the code recursors never meet one, and the recursors range over
+    // exactly the payload of a `box`.
+    //
+    // **The intros' annotation is optional** and the projections carry none
+    // (design §2.1, revised after stage 2's first measurement). An
+    // unannotated intro is *not inferable* — the verdict `box` already gets —
+    // and is checked against the expected type, which the checker holds as an
+    // `ITy` and views in the value domain; that is what lets a constructor
+    // value nested inside a constructor value be written with no type at all,
+    // since the expected type of a field is a *description* of a component
+    // and never a spelling. The annotated form exists for the one position
+    // the elaborator cannot make a checking position — a constructor value at
+    // the head of a projection, or a scrutinee — and it carries the
+    // un-reduced type the elaborator had.
+    /// `pair@(a; b)` / `pair@^{T}(a; b) : T` where `T ⇝* Σ^{l,l'}(x:S). U` —
+    /// the checked spelling of [`Term::Pair`]. With an annotation it infers
+    /// `T` *un-reduced*, so a consumer that compares it against another `T`
+    /// pays a head comparison and one that compares it against the former
+    /// pays one δ step; without one it is checking-only.
     PairAt {
-        ty: Rc<Type>,
+        ty: Option<Rc<Type>>,
         fst: Rc<Term>,
         snd: Rc<Term>,
     },
-    /// `inl@(T; a) : T` where `T ⇝* A +^{l,l'} B` and `a : A` — the checked
-    /// spelling of [`Term::Inl`].
+    /// `inl@(a)` / `inl@^{T}(a) : T` where `T ⇝* A +^{l,l'} B` and `a : A` —
+    /// the checked spelling of [`Term::Inl`].
     InlAt {
-        ty: Rc<Type>,
+        ty: Option<Rc<Type>>,
         val: Rc<Term>,
     },
-    /// `inr@(T; b) : T` where `T ⇝* A +^{l,l'} B` and `b : B` — the checked
-    /// spelling of [`Term::Inr`].
+    /// `inr@(b)` / `inr@^{T}(b) : T` where `T ⇝* A +^{l,l'} B` and `b : B` —
+    /// the checked spelling of [`Term::Inr`].
     InrAt {
-        ty: Rc<Type>,
+        ty: Option<Rc<Type>>,
         val: Rc<Term>,
     },
-    /// `fst@(T; p) : S` where `T ⇝* Σ^{l,l'}(x:S). U` and `p : T` — the
-    /// checked spelling of [`Term::Fst`]. Its inferred type is the component
-    /// `S`, which has no spelling smaller than the reduct; that is what forces
-    /// the checker to values (design §3.1).
+    /// `fst@(p) : S` where `p` infers `T`, `T ⇝* Σ^{l,l'}(x:S). U` — the
+    /// checked spelling of [`Term::Fst`]. It carries **no** annotation: the
+    /// receiver infers one, and the component `S` has no spelling smaller
+    /// than the reduct, which is what forces the checker to descriptions
+    /// (design §3.1).
     FstAt {
-        ty: Rc<Type>,
         pair: Rc<Term>,
     },
-    /// `snd@(T; p) : U[fst@(T;p)/x]` — the checked spelling of
-    /// [`Term::Snd`], same premises as [`Term::FstAt`].
+    /// `snd@(p) : U[fst@(p)/x]` — the checked spelling of [`Term::Snd`],
+    /// same premises as [`Term::FstAt`].
     SndAt {
-        ty: Rc<Type>,
         pair: Rc<Term>,
     },
 

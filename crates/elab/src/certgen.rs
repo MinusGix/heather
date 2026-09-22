@@ -2390,16 +2390,16 @@ fn mark(
         // carried untouched instead of two (`docs/intro-by-type-design.md`
         // §4.2 — a shape-only walk adds the arm and reads nothing).
         Term::PairAt { ty, fst, snd } => Term::PairAt {
-            ty: Rc::clone(ty),
+            ty: ty.clone(),
             fst: Rc::new(mark(fst, depth, cx, wfarm)?),
             snd: Rc::new(mark(snd, depth, cx, wfarm)?),
         },
         Term::InlAt { ty, val } => Term::InlAt {
-            ty: Rc::clone(ty),
+            ty: ty.clone(),
             val: Rc::new(mark(val, depth, cx, wfarm)?),
         },
         Term::InrAt { ty, val } => Term::InrAt {
-            ty: Rc::clone(ty),
+            ty: ty.clone(),
             val: Rc::new(mark(val, depth, cx, wfarm)?),
         },
         Term::Pair {
@@ -2775,7 +2775,9 @@ fn global_head(mut t: &Term) -> bool {
 /// depth — its checks survive as the agreement oracle `generate_in_language`
 /// compares the in-language verdict against.
 fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, Term), String> {
-    let Some((ty, body)) = e.global_body(name) else {
+    // The body is going into a `box`, which holds no checked spelling
+    // (`docs/intro-by-type-design.md` §2.3), so it is read in component form.
+    let Some((ty, body)) = e.global_body_in_code_form(name) else {
         return Err(format!("`{name}` has no elaborated body to analyse"));
     };
     // Unfolding-for-analysis at the reflection boundary, exactly as

@@ -656,6 +656,22 @@ impl Walk {
                 self.ty(rhs, former);
                 self.tm(val, former);
             }
+            // The checked spellings (docs/intro-by-type-design.md): at most
+            // one annotation, and the projections none.
+            Term::PairAt { ty, fst, snd } => {
+                if let Some(ty) = ty {
+                    self.ty(ty, former);
+                }
+                self.tm(fst, former);
+                self.tm(snd, former);
+            }
+            Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
+                if let Some(ty) = ty {
+                    self.ty(ty, former);
+                }
+                self.tm(val, former);
+            }
+            Term::FstAt { pair } | Term::SndAt { pair } => self.tm(pair, former),
             Term::Case { lhs, rhs, motive, case_l, case_r, scrut, .. } => {
                 for x in [lhs, rhs, motive] {
                     self.ty(x, former);

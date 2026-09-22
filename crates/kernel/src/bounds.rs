@@ -195,6 +195,15 @@ impl Cache {
         }
     }
 
+    /// The checked spellings' annotation is optional (design §2.1); an
+    /// absent one uses nothing.
+    fn opt_type_use(&mut self, t: &Option<Rc<Type>>) -> LocalUse {
+        match t {
+            Some(t) => self.type_use(t),
+            None => LocalUse::CLOSED,
+        }
+    }
+
     fn type_use(&mut self, t: &Rc<Type>) -> LocalUse {
         match &**t {
             Type::Nat
@@ -441,13 +450,13 @@ impl Cache {
                 .join(self.term_use(val)),
             // The checked spellings: one annotation, no binder under it.
             Term::PairAt { ty, fst, snd } => self
-                .type_use(ty)
+                .opt_type_use(ty)
                 .join(self.term_use(fst))
                 .join(self.term_use(snd)),
-            Term::InlAt { ty, val: t }
-            | Term::InrAt { ty, val: t }
-            | Term::FstAt { ty, pair: t }
-            | Term::SndAt { ty, pair: t } => self.type_use(ty).join(self.term_use(t)),
+            Term::InlAt { ty, val: t } | Term::InrAt { ty, val: t } => {
+                self.opt_type_use(ty).join(self.term_use(t))
+            }
+            Term::FstAt { pair: t } | Term::SndAt { pair: t } => self.term_use(t),
             Term::Case {
                 lhs,
                 rhs,

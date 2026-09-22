@@ -811,7 +811,9 @@ impl Elaborator {
         // code recursors range over.
         pcx.quoted = true;
         let expected_p = (*qty).clone().shift_global(n);
+        self.quote_depth.set(self.quote_depth.get() + 1);
         let payload_t = self.elab_check(&pcx, payload, &expected_p, &qlvl);
+        self.quote_depth.set(self.quote_depth.get() - 1);
         // The letbox padding must not outlive this quote, error or not.
         {
             let mut mp = self.meta_pushed.borrow_mut();
@@ -819,6 +821,35 @@ impl Elaborator {
             mp.truncate(keep);
         }
         let payload_t = payload_t?;
+        // The quote boundary (`docs/intro-by-type-design.md` §2.3, amended):
+        // a term built outside the quotation and pasted into it — a callee's
+        // statement copied into an application's annotations, a solution —
+        // may carry checked spellings, which a payload may not. Translate
+        // them to the component forms; the `box` rule re-checks the result.
+        let payload_t = {
+            let oracle = self.semantic_oracle();
+            match typing::spell_checked_in_code(
+                oracle.world(),
+                0,
+                Layer::Code,
+                &pcx.gamma,
+                Rc::new(payload_t),
+                &expected_p,
+                &qlvl,
+                self.fuel,
+            ) {
+                Ok(t) => (*t).clone(),
+                Err(e) => {
+                    return err(
+                        format!(
+                            "internal: this quotation's payload holds a checked spelling that \
+                             could not be written in code form ({e:?})"
+                        ),
+                        span,
+                    );
+                }
+            }
+        };
 
         // Assemble, innermost out. Letbox `i`'s fields are scoped under `i`
         // earlier letboxes; the motive is constant (the quote's own code

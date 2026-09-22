@@ -2336,7 +2336,7 @@ fn projection_beta_fires_on_either_pair_spelling() {
         }
     };
     let checked =
-        || Term::PairAt { ty: junk(), fst: Rc::new(num(3)), snd: Rc::new(num(4)) };
+        || Term::PairAt { ty: Some(junk()), fst: Rc::new(num(3)), snd: Rc::new(num(4)) };
 
     for pair in [component(), checked()] {
         let p = Rc::new(pair);
@@ -2354,8 +2354,8 @@ fn projection_beta_fires_on_either_pair_spelling() {
             snd_ty: junk(),
             pair: Rc::clone(&p),
         };
-        let fst_at = Term::FstAt { ty: junk(), pair: Rc::clone(&p) };
-        let snd_at = Term::SndAt { ty: junk(), pair: Rc::clone(&p) };
+        let fst_at = Term::FstAt { pair: Rc::clone(&p) };
+        let snd_at = Term::SndAt { pair: Rc::clone(&p) };
         assert_eq!(step_term(&fst, &gamma), Some(num(3)));
         assert_eq!(step_term(&fst_at, &gamma), Some(num(3)));
         assert_eq!(step_term(&snd, &gamma), Some(num(4)));
@@ -2371,7 +2371,7 @@ fn projection_beta_fires_on_either_pair_spelling() {
 
     // Over a *neutral* pair both spellings are neutral, and the checked one
     // does not step its annotation looking for a former it cannot use.
-    let stuck = Term::FstAt { ty: junk(), pair: Rc::new(v(0)) };
+    let stuck = Term::FstAt { pair: Rc::new(v(0)) };
     assert!(is_neutral_term(&stuck));
     assert!(is_whnf_term(&stuck));
     assert_eq!(step_term(&stuck, &nil_ctx(1)), None);

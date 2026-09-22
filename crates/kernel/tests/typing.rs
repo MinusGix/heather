@@ -1857,9 +1857,12 @@ fn pair_projections_and_dependency() {
 ///    `snd@`'s substituted projection is the `@` spelling again;
 /// 3. the spellings are interconvertible with the component forms in both
 ///    directions — the translation `⌊·⌋` of §2.4, observed;
-/// 4. the layer guard is `computes()` and not `not_var_layer`: layer **c**
-///    refuses them, which is what leaves the code grammar and the 56
-///    recursor branches alone.
+/// 4. the guard is §2.3's box side condition, not a layer: layer v refuses
+///    them, layer **c** admits them (every body is checked there), and the
+///    payload of a `box` refuses them, which is what leaves the code grammar
+///    and the 56 recursor branches alone;
+/// 5. without an annotation an intro checks against the expected type and
+///    does not infer (design §2.1).
 #[test]
 fn checked_spellings_infer_their_annotation() {
     // ⌜Σ(A : Ty 0). El A⌝ and the Σ it decodes to.
@@ -1880,7 +1883,7 @@ fn checked_spellings_infer_their_annotation() {
     };
 
     let mk_at = || Term::PairAt {
-        ty: rty(at.clone()),
+        ty: Some(rty(at.clone())),
         fst: rt(Term::TmNat),
         snd: rt(Term::Zero),
     };
@@ -1902,7 +1905,7 @@ fn checked_spellings_infer_their_annotation() {
     check_closed(Layer::Prog, &component, &at, &c(1)).unwrap();
 
     // (2) fst@ infers the component of the annotation's whnf.
-    let fst_at = Term::FstAt { ty: rty(at.clone()), pair: rt(mk_at()) };
+    let fst_at = Term::FstAt { pair: rt(mk_at()) };
     let (ty, l) = infer_closed(Layer::Prog, &fst_at).unwrap();
     assert!(l.equiv(&c(1)));
     // The component comes out of the *decode*, so it is `El ⌜Ty 0⌝` rather
@@ -1915,7 +1918,7 @@ fn checked_spellings_infer_their_annotation() {
 
     // snd@ infers `U[fst@(T;p)/x]` — the substituted projection is the
     // checked spelling again, so the inferred type stays source-shaped.
-    let snd_at_tm = Term::SndAt { ty: rty(at.clone()), pair: rt(mk_at()) };
+    let snd_at_tm = Term::SndAt { pair: rt(mk_at()) };
     let (ty, l) = infer_closed(Layer::Prog, &snd_at_tm).unwrap();
     assert!(l.equiv(&Level::Zero));
     assert!(ty == Type::El { level: Level::Zero, tm: rt(fst_at.clone()) });
@@ -1944,9 +1947,9 @@ fn checked_spellings_infer_their_annotation() {
     for (right, good, bad) in [(false, zero(), triv()), (true, triv(), zero())] {
         let mk = |v: Rc<Term>| {
             if right {
-                Term::InrAt { ty: rty(sum_at.clone()), val: v }
+                Term::InrAt { ty: Some(rty(sum_at.clone())), val: v }
             } else {
-                Term::InlAt { ty: rty(sum_at.clone()), val: v }
+                Term::InlAt { ty: Some(rty(sum_at.clone())), val: v }
             }
         };
         let (ty, l) = infer_closed(Layer::Prog, &mk(good)).unwrap();
@@ -1962,30 +1965,61 @@ fn checked_spellings_infer_their_annotation() {
     // An annotation whose whnf is not the expected former is a head
     // mismatch, not a panic and not an acceptance.
     let wrong = Term::PairAt {
-        ty: rty(Type::Nat),
+        ty: Some(rty(Type::Nat)),
         fst: rt(Term::Zero),
         snd: rt(Term::Zero),
     };
     assert_eq!(infer_closed(Layer::Prog, &wrong).unwrap_err(), TypeError::HeadMismatch);
 
-    // (4) The layer guard. Layer v refuses every form, as it refuses the
-    // component ones; layer **c** refuses these and *admits* the component
-    // ones — that asymmetry is the design's §2.3 and it is what keeps
-    // `rec.rs` at zero new branches.
-    for layer in [Layer::Var, Layer::Code] {
-        assert_eq!(
-            infer_closed(layer, &mk_at()).unwrap_err(),
-            TypeError::LayerMismatch,
-            "{layer:?} must refuse a checked spelling"
-        );
-        assert_eq!(
-            infer_closed(layer, &Term::FstAt { ty: rty(at.clone()), pair: rt(mk_at()) })
-                .unwrap_err(),
-            TypeError::LayerMismatch
-        );
+    // (4) The guard. Layer v refuses every form, as it refuses the
+    // component ones. Layer c admits them — a declaration body is checked
+    // there, and δ at a computing layer unfolds it into a term legal there.
+    assert_eq!(infer_closed(Layer::Var, &mk_at()).unwrap_err(), TypeError::LayerMismatch);
+    assert_eq!(
+        infer_closed(Layer::Var, &Term::FstAt { pair: rt(mk_at()) }).unwrap_err(),
+        TypeError::LayerMismatch
+    );
+    infer_closed(Layer::Code, &mk_at()).unwrap();
+    infer_closed(Layer::Code, &fst_at).unwrap();
+    // The payload of a `box` is what the code recursors range over, so it
+    // refuses them — §2.3's side condition, and the reason `rec.rs` has no
+    // new branch. The component spelling is the control.
+    let code_ty = |ty: Type| Type::CodeTm { ctx: nil_ctx(), ty: rty(ty), level: c(1) };
+    assert_eq!(
+        check_closed(Layer::Meta, &Term::BoxTm(rt(mk_at())), &code_ty(at.clone()), &Level::Zero)
+            .unwrap_err(),
+        TypeError::UnderBox
+    );
+    check_closed(
+        Layer::Meta,
+        &Term::BoxTm(rt(component.clone())),
+        &code_ty(sigma.clone()),
+        &Level::Zero,
+    )
+    .unwrap();
+
+    // (5) Unannotated: checks against the former and against the annotation
+    // alike, and is not inferable, as `box` is not.
+    let bare = Term::PairAt { ty: None, fst: rt(Term::TmNat), snd: rt(Term::Zero) };
+    check_closed(Layer::Prog, &bare, &sigma, &c(1)).unwrap();
+    check_closed(Layer::Prog, &bare, &at, &c(1)).unwrap();
+    assert_eq!(infer_closed(Layer::Prog, &bare).unwrap_err(), TypeError::NotInferable);
+    // A projection's receiver must infer, so it cannot be one.
+    assert_eq!(
+        infer_closed(Layer::Prog, &Term::FstAt { pair: rt(bare.clone()) }).unwrap_err(),
+        TypeError::NotInferable
+    );
+    // The negative control: the field is checked against the component.
+    let bad = Term::PairAt { ty: None, fst: rt(Term::Zero), snd: rt(Term::Zero) };
+    assert!(check_closed(Layer::Prog, &bad, &at, &c(1)).is_err());
+    for (right, good, bad) in [(false, zero(), triv()), (true, triv(), zero())] {
+        let mk = |v: Rc<Term>| {
+            if right { Term::InrAt { ty: None, val: v } } else { Term::InlAt { ty: None, val: v } }
+        };
+        check_closed(Layer::Prog, &mk(Rc::clone(&good)), &sum_at, &Level::Zero).unwrap();
+        check_closed(Layer::Prog, &mk(good), &sum, &Level::Zero).unwrap();
+        assert!(check_closed(Layer::Prog, &mk(bad), &sum_at, &Level::Zero).is_err());
     }
-    // The control: the component spelling is fine at c.
-    infer_closed(Layer::Code, &component).unwrap();
 }
 
 // -------------------------------------------------------------------------

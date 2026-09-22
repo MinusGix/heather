@@ -1048,15 +1048,11 @@ impl Elaborator {
         let tail = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value)));
         let tail_tm = self.build_fields_collect(cx, &tail, rest, false, out, span)?;
         // The forded tuple's checked spelling, exactly as
-        // `build_fields_skel`'s (`docs/intro-by-type-design.md` §4.1): one
-        // un-reduced `ctor_ty` in place of the two components of its whnf.
-        if cx.emits_at_forms() {
-            let ty = match self.emit_ty(cx, ctor_ty, 0) {
-                Some(r) => Rc::new(r),
-                None => Rc::new(ctor_ty.clone()),
-            };
+        // `build_fields_skel`'s (`docs/intro-by-type-design.md` §4.1): no
+        // annotation, since every layer is in checking position.
+        if self.emits_at_forms(cx) {
             return Ok(Term::PairAt {
-                ty,
+                ty: None,
                 fst: value,
                 snd: Rc::new(tail_tm),
             });

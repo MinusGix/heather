@@ -1439,26 +1439,24 @@ pub enum Val<'v> {
         tm: &'v TmClo<'v>,
     },
     Pair {
-        fst_level: Level,
-        snd_level: Level,
-        fst_ty: &'v TyClo<'v>,
-        snd_ty: &'v TyClo<'v>,
+        /// `None` for an unannotated `pair@(a; b)` — the spelling the
+        /// elaborator writes at every inner layer of a constructor value
+        /// (design §2.1, §3.8). Nothing reads a pair value's Σ annotation;
+        /// it exists because the component spelling carries one and the
+        /// differential oracle compares the two.
+        ann: Option<SigAnn<'v>>,
         fst: &'v TmClo<'v>,
         snd: &'v TmClo<'v>,
     },
     Triv { level: Level },
     Inl {
-        lhs_level: Level,
-        rhs_level: Level,
-        lhs: &'v TyClo<'v>,
-        rhs: &'v TyClo<'v>,
+        /// `None` for an unannotated `inl@(a)`; see [`Val::Pair`].
+        ann: Option<SumAnn<'v>>,
         val: &'v TmClo<'v>,
     },
     Inr {
-        lhs_level: Level,
-        rhs_level: Level,
-        lhs: &'v TyClo<'v>,
-        rhs: &'v TyClo<'v>,
+        /// `None` for an unannotated `inr@(b)`; see [`Val::Pair`].
+        ann: Option<SumAnn<'v>>,
         val: &'v TmClo<'v>,
     },
     Sup {
@@ -1559,10 +1557,12 @@ impl<'v> Val<'v> {
             ),
         };
         Val::Pair {
-            fst_level: level.clone(),
-            snd_level: level.clone(),
-            fst_ty: ty.elem,
-            snd_ty: arena.ty_vec(level.clone(), ty.elem, rest_len),
+            ann: Some(SigAnn {
+                fst_level: level.clone(),
+                snd_level: level.clone(),
+                fst_ty: ty.elem,
+                snd_ty: arena.ty_vec(level.clone(), ty.elem, rest_len),
+            }),
             fst: head,
             snd: rest,
         }
@@ -1683,6 +1683,30 @@ impl<'v> Iterator for ElimSpineIter<'v> {
     }
 }
 
+/// A Σ's annotation as a *value* carries: the two levels and the two
+/// component closures, read off the `VTy::Sigma` the evaluator found.
+///
+/// It is one field rather than four so that "there is no annotation" is one
+/// state and not a convention about which of four are `None`, and so that
+/// `Option<SigAnn>` rides in the reference's niche — `Val` is the same 88
+/// bytes it was before the checked spellings existed.
+#[derive(Clone)]
+pub struct SigAnn<'v> {
+    pub fst_level: Level,
+    pub snd_level: Level,
+    pub fst_ty: &'v TyClo<'v>,
+    pub snd_ty: &'v TyClo<'v>,
+}
+
+/// A sum's annotation as a value carries; see [`SigAnn`].
+#[derive(Clone)]
+pub struct SumAnn<'v> {
+    pub lhs_level: Level,
+    pub rhs_level: Level,
+    pub lhs: &'v TyClo<'v>,
+    pub rhs: &'v TyClo<'v>,
+}
+
 /// One elimination of a neutral spine, with the eliminator's annotations
 /// evaluated (or held as closures) exactly as the corresponding [`Term`]
 /// carries them. Conversion compares them where required; for application it
@@ -1707,18 +1731,12 @@ pub enum Elim<'v> {
     /// The argument is a type in the binding's Δ — a *different* local scope
     /// — so it stays syntax (design §3.4).
     TyApp { arg: Rc<Type> },
-    Fst {
-        fst_level: Level,
-        snd_level: Level,
-        fst_ty: &'v TyClo<'v>,
-        snd_ty: &'v TyClo<'v>,
-    },
-    Snd {
-        fst_level: Level,
-        snd_level: Level,
-        fst_ty: &'v TyClo<'v>,
-        snd_ty: &'v TyClo<'v>,
-    },
+    /// `None` for a checked projection `fst@(p)`, which carries no
+    /// annotation at all (design §2.1). The only reader is the neutral
+    /// view's `levels`, which is already `Option` because the syntax domain
+    /// has had nothing to put there since stage 1a.
+    Fst { ann: Option<SigAnn<'v>> },
+    Snd { ann: Option<SigAnn<'v>> },
     ElimNat {
         level: Level,
         motive: &'v TyClo<'v>,

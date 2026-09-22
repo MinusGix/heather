@@ -30,7 +30,8 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    BitTy, Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val, ValueArena,
+    BitTy, Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
+    Val, ValueArena,
 };
 
 /// How far to weaken: `univs` new universe variables, `globals` new global
@@ -58,6 +59,27 @@ fn level<'v>(l: &Level, o: Outer<'v>) -> Level {
         return l.clone();
     }
     l.shift(o.univs, 0)
+}
+
+/// The optional Σ / sum annotation of a pair value, an injection or a
+/// projection elimination (design §2.1): absent for the unannotated checked
+/// spellings, and then there is nothing to shift.
+fn sig_ann<'v>(a: &Option<SigAnn<'v>>, o: Outer<'v>) -> Option<SigAnn<'v>> {
+    a.as_ref().map(|a| SigAnn {
+        fst_level: level(&a.fst_level, o),
+        snd_level: level(&a.snd_level, o),
+        fst_ty: ty_clo(a.fst_ty, o),
+        snd_ty: ty_clo(a.snd_ty, o),
+    })
+}
+
+fn sum_ann<'v>(a: &Option<SumAnn<'v>>, o: Outer<'v>) -> Option<SumAnn<'v>> {
+    a.as_ref().map(|a| SumAnn {
+        lhs_level: level(&a.lhs_level, o),
+        rhs_level: level(&a.rhs_level, o),
+        lhs: ty_clo(a.lhs, o),
+        rhs: ty_clo(a.rhs, o),
+    })
 }
 
 fn ty_syn<'v>(t: &Rc<Type>, o: Outer<'v>) -> Rc<Type> {
@@ -214,18 +236,8 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
         },
         Elim::CtxApp { ctx } => Elim::CtxApp { ctx: ctx_syn(ctx, o) },
         Elim::TyApp { arg } => Elim::TyApp { arg: ty_syn(arg, o) },
-        Elim::Fst { fst_level, snd_level, fst_ty, snd_ty } => Elim::Fst {
-            fst_level: level(fst_level, o),
-            snd_level: level(snd_level, o),
-            fst_ty: ty_clo(fst_ty, o),
-            snd_ty: ty_clo(snd_ty, o),
-        },
-        Elim::Snd { fst_level, snd_level, fst_ty, snd_ty } => Elim::Snd {
-            fst_level: level(fst_level, o),
-            snd_level: level(snd_level, o),
-            fst_ty: ty_clo(fst_ty, o),
-            snd_ty: ty_clo(snd_ty, o),
-        },
+        Elim::Fst { ann } => Elim::Fst { ann: sig_ann(ann, o) },
+        Elim::Snd { ann } => Elim::Snd { ann: sig_ann(ann, o) },
         Elim::ElimNat { level: l, motive, base, step } => Elim::ElimNat {
             level: level(l, o),
             motive: ty_clo(motive, o),
@@ -602,29 +614,18 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             ty: ty_clo(ty, o),
             tm: tm_clo(tm, o),
         },
-        Val::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Val::Pair {
-            fst_level: level(fst_level, o),
-            snd_level: level(snd_level, o),
-            fst_ty: ty_clo(fst_ty, o),
-            snd_ty: ty_clo(snd_ty, o),
+        Val::Pair { ann, fst, snd } => Val::Pair {
+            ann: sig_ann(ann, o),
             fst: tm_clo(fst, o),
             snd: tm_clo(snd, o),
         },
         Val::Triv { level: l } => Val::Triv { level: level(l, o) },
-        Val::Inl { lhs_level, rhs_level, lhs, rhs, val: v } => Val::Inl {
-            lhs_level: level(lhs_level, o),
-            rhs_level: level(rhs_level, o),
-            lhs: ty_clo(lhs, o),
-            rhs: ty_clo(rhs, o),
-            val: tm_clo(v, o),
-        },
-        Val::Inr { lhs_level, rhs_level, lhs, rhs, val: v } => Val::Inr {
-            lhs_level: level(lhs_level, o),
-            rhs_level: level(rhs_level, o),
-            lhs: ty_clo(lhs, o),
-            rhs: ty_clo(rhs, o),
-            val: tm_clo(v, o),
-        },
+        Val::Inl { ann, val: v } => {
+            Val::Inl { ann: sum_ann(ann, o), val: tm_clo(v, o) }
+        }
+        Val::Inr { ann, val: v } => {
+            Val::Inr { ann: sum_ann(ann, o), val: tm_clo(v, o) }
+        }
         Val::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => Val::Sup {
             shape_level: level(shape_level, o),
             pos_level: level(pos_level, o),

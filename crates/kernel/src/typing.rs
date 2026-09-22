@@ -137,7 +137,16 @@ pub enum TypeError {
     /// binding whose declared layer is outside its admissible set).
     LayerMismatch,
     /// A `box` in inference position: its contextual type is not inferable.
+    /// Also an *unannotated* checked spelling in inference position, which
+    /// is checking-only for the same reason (design §2.1).
     NotInferable,
+    /// A checked spelling (`pair@`, `inl@`, `inr@`, `fst@`, `snd@`) inside
+    /// the payload of a `box`. The code recursors range over exactly that
+    /// payload and their branch telescopes type a pair's field
+    /// sub-structures by the Σ's *components*, which a whole-type annotation
+    /// does not give them (design §2.2–2.3), so the payload of a quotation
+    /// carries only the component spellings.
+    UnderBox,
     /// The head of `$`/`@` does not have the corresponding function type,
     /// or a term was checked against a former it cannot inhabit.
     HeadMismatch,
@@ -166,12 +175,6 @@ impl From<ConvError> for TypeError {
 /// (`issues/generated-proof-cost-diagnostics.md`). Observational: nothing in
 /// the kernel reads what this writes.
 #[inline]
-/// The stage-2 spike switch; see [`Tc::computing_layer`]. Read once.
-fn at_spike() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("HEATHER_AT_SPIKE").is_some())
-}
-
 fn note_conv_outcome(result: &Result<(), ConvError>) {
     match result {
         Ok(()) => {}
@@ -232,6 +235,7 @@ fn binding_env(prefix: &GlobalCtx, univs: u32) -> Env {
         gamma: LocalCtx::nil(),
         layer: Layer::Prog,
         univs,
+        under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     }
@@ -305,6 +309,7 @@ pub fn check_local_ctx(
         gamma: LocalCtx::nil(),
         layer,
         univs,
+        under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -323,7 +328,7 @@ pub fn check_type(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -344,7 +349,7 @@ pub fn check_type_profiled(
     _metrics: &ValueMetrics,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -362,7 +367,7 @@ pub fn infer_type(
     fuel: u64,
 ) -> R<Level> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -384,7 +389,7 @@ pub fn check_term(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -407,7 +412,7 @@ pub fn check_term_profiled(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -426,12 +431,123 @@ pub fn infer_term(
     fuel: u64,
 ) -> R<(Type, Level)> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
     let (ty, l) = Tc::new(fuel).tm_infer_syn(&env, t)?;
     Ok(((*ty).clone(), l))
+}
+
+/// A checked spelling's former, as the eager checker viewed it: what the
+/// translation `⌊·⌋` (`docs/intro-by-type-design.md` §2.4) writes into the
+/// component form in its place.
+#[derive(Clone)]
+pub(crate) enum Spelled {
+    Sigma { fst_level: Level, snd_level: Level, fst: Rc<Type>, snd: Rc<Type> },
+    Sum { lhs_level: Level, rhs_level: Level, lhs: Rc<Type>, rhs: Rc<Type> },
+}
+
+/// **The quote boundary** (`docs/intro-by-type-design.md` §2.3, amended
+/// 2026-09-22): `t : ty @ level` in `gamma` with every checked spelling
+/// translated to its component form, so it can be the payload of a `box`.
+///
+/// A payload elaborated inside a quotation is written in the component
+/// forms already; what brings a checked spelling in is a term built
+/// *outside* and pasted in — a callee's statement copied into an
+/// application's annotations, a solution, a reduct. This is `⌊·⌋` of §2.4,
+/// computed by the checker that already spells every component: the eager
+/// mode checks `t`, keeps the former it viewed at each checked spelling, and
+/// the term is rebuilt with those components. A kept component may carry
+/// checked spellings of its own (a type's whnf unfolds definitions written
+/// outside a quote), and the rebuilt component form `ty_check`s it, so the
+/// pass repeats until nothing is left.
+///
+/// **Not trusted.** The result is checked under the `box` rule like any
+/// payload, so a wrong translation is a refusal and never an acceptance.
+/// Returns `t` itself when it holds no checked spelling.
+#[allow(clippy::too_many_arguments)]
+pub fn spell_checked_in_code(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Term>,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+) -> R<Rc<Term>> {
+    const PASSES: usize = 16;
+    let base = gamma.entries.len() as u32;
+    let mut t = t;
+    for _ in 0..PASSES {
+        if crate::subst::count_checked_spellings(&t) == 0 {
+            return Ok(t);
+        }
+        let mut tc = Tc::eager(fuel);
+        tc.spellings = Some(RefCell::new(HashMap::new()));
+        let env = Env {
+            psi: psi.clone(),
+            cache: Rc::new(GlobalCache::new()),
+            gamma: gamma.clone(),
+            layer,
+            univs,
+            under_box: false,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
+        };
+        tc.tm_check_ty(&env, &t, ty, level)?;
+        let spelled = tc.spellings.take().expect("set above").into_inner();
+        let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base);
+        if replaced == 0 {
+            // Checked, yet a checked spelling was never visited at a depth
+            // the walk can name: refuse as the `box` rule would.
+            return Err(TypeError::UnderBox);
+        }
+        t = next;
+    }
+    Err(TypeError::UnderBox)
+}
+
+/// [`spell_checked_in_code`] for a **type** at `level`: the payload of a
+/// `box` over a type — a statement handed to the reflection API.
+pub fn spell_checked_in_code_ty(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Type>,
+    level: &Level,
+    fuel: u64,
+) -> R<Rc<Type>> {
+    const PASSES: usize = 16;
+    let base = gamma.entries.len() as u32;
+    let mut t = t;
+    for _ in 0..PASSES {
+        if crate::subst::count_checked_spellings_ty(&t) == 0 {
+            return Ok(t);
+        }
+        let mut tc = Tc::eager(fuel);
+        tc.spellings = Some(RefCell::new(HashMap::new()));
+        let env = Env {
+            psi: psi.clone(),
+            cache: Rc::new(GlobalCache::new()),
+            gamma: gamma.clone(),
+            layer,
+            univs,
+            under_box: false,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
+        };
+        tc.ty_check(&env, &t, level)?;
+        let spelled = tc.spellings.take().expect("set above").into_inner();
+        let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base);
+        if replaced == 0 {
+            return Err(TypeError::UnderBox);
+        }
+        t = next;
+    }
+    Err(TypeError::UnderBox)
 }
 
 /// The **differential oracle**: the checker with its deferred types spelled
@@ -546,6 +662,7 @@ pub mod oracle {
             gamma: gamma.clone(),
             layer,
             univs,
+            under_box: false,
             #[cfg(feature = "value-metrics")]
             value_metrics: None,
         }
@@ -567,7 +684,7 @@ pub fn check_local_subst(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -594,6 +711,20 @@ struct Env {
     gamma: LocalCtx,
     layer: Layer,
     univs: u32,
+    /// Inside the payload of a `box`: the side condition on the two `box`
+    /// rules that keeps the checked spellings out of code
+    /// (`docs/intro-by-type-design.md` §2.3), read by
+    /// [`Tc::checked_spelling_admitted`].
+    ///
+    /// **Not a layer predicate**, and that is the whole of stage 2's first
+    /// stop: Heather checks *every* declaration body at `Layer::Code`
+    /// (`crates/elab/src/lib.rs` ~3637), so `layer.computes()` is false at
+    /// every emitter and a layer guard refuses the spellings everywhere. The
+    /// recursors range over box payloads and nothing else, which is exactly
+    /// what this bit names. It is sticky: nothing inside a payload returns
+    /// to a computing layer (the two `box` rules are layer-m, so no box
+    /// nests inside one), so no rule clears it.
+    under_box: bool,
     #[cfg(feature = "value-metrics")]
     value_metrics: Option<ValueMetrics>,
 }
@@ -603,6 +734,12 @@ impl Env {
     /// context, e.g. `Ψ; Δ ⊢_p T @ l`.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
         Env { gamma, layer, ..self.clone() }
+    }
+
+    /// [`Env::in_ctx`] for the payload of a `box`: the same context switch,
+    /// plus the side condition of design §2.3.
+    fn in_box_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
+        Env { gamma, layer, under_box: true, ..self.clone() }
     }
 
     /// `Γ, x : T @ l`.
@@ -628,6 +765,7 @@ impl Env {
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             univs: self.univs + tu,
+            under_box: self.under_box,
             #[cfg(feature = "value-metrics")]
             value_metrics: self.value_metrics.clone(),
         }
@@ -671,6 +809,11 @@ struct Tc {
     /// `tests/typing_differential.rs` test *only* the new thing — that
     /// evaluating a description and rewriting it agree.
     materialize_eagerly: bool,
+    /// The quote-boundary translation's record ([`spell_checked_in_code`]):
+    /// at each checked spelling the eager checker visits, the components of
+    /// the former it viewed, keyed by the node's address and Γ's length.
+    /// `None` on every checker but that one.
+    spellings: Option<RefCell<HashMap<(usize, u32), Spelled>>>,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -808,6 +951,7 @@ impl Tc {
         Tc {
             fuel,
             materialize_eagerly,
+            spellings: None,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             #[cfg(feature = "value-metrics")]
@@ -1287,31 +1431,81 @@ impl Tc {
         Ok((t, form))
     }
 
+    /// Design §3.4's `view_v`: [`Tc::view`] for the `@` rules, the value
+    /// domain whether `t` is a selection or a spelling (and the rewriter
+    /// under the eager mode). The projections' receiver type is the case
+    /// that is a spelling: the type a `pair@^{T}` inferred, which is `T`.
+    fn view_v(&self, env: &Env, t: &ITy) -> R<TyForm> {
+        self.view(env, t, !self.materialize_eagerly)
+    }
+
+    /// Keep `form`'s components for `t` when this checker is the quote
+    /// boundary's translator ([`spell_checked_in_code`]). The eager mode's
+    /// views are syntax, so a component that is still a selection means the
+    /// translator is not in eager mode, and nothing is kept.
+    fn record(&self, env: &Env, t: &Term, form: &TyForm) {
+        let Some(rec) = &self.spellings else { return };
+        let syn = |t: &ITy| match t {
+            ITy::Syn(t) => Some(Rc::clone(t)),
+            ITy::Owned(t) => Some(Rc::new(t.clone())),
+            ITy::Sel { .. } => None,
+        };
+        let spelled = match form {
+            TyForm::Sigma { fst_level, snd_level, fst, snd: SndOf::Syn(snd) } => {
+                let Some(fst) = syn(fst) else { return };
+                Spelled::Sigma {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst,
+                    snd: Rc::clone(snd),
+                }
+            }
+            TyForm::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                let (Some(lhs), Some(rhs)) = (syn(lhs), syn(rhs)) else { return };
+                Spelled::Sum {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs,
+                    rhs,
+                }
+            }
+            _ => return,
+        };
+        let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
+        rec.borrow_mut().insert(key, spelled);
+    }
+
+    /// [`Tc::view_v`] of a borrowed expected type — the unannotated intros'
+    /// view. A bare spelling has no [`ITy`] behind the borrow, so one is
+    /// built; that clone is on the `@` path only.
+    fn view_expected_v(&self, env: &Env, t: ITyRef) -> R<TyForm> {
+        match t.as_ity() {
+            Some(t) => self.view_v(env, t),
+            None => {
+                let t = ITy::Owned(t.as_syn().expect("not a selection").clone());
+                self.view_v(env, &t)
+            }
+        }
+    }
+
     /// Reject everything at layer v except the forms listed in ch. 04's
     /// "Note on Layer v Rules".
     fn not_var_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
 
-    /// Reject everything but the computing layers p and m. The checked
-    /// spellings' guard (`docs/intro-by-type-design.md` §2.3): stronger than
-    /// [`Tc::not_var_layer`], which admits layer c, because a form layer c
-    /// admits is a form the code recursors must range over.
+    /// The checked spellings' guard (`docs/intro-by-type-design.md` §2.3):
+    /// they may appear anywhere **but** inside the payload of a `box`.
     ///
-    /// **`HEATHER_AT_SPIKE` relaxes it, and is a measurement instrument, not
-    /// a rule.** Heather checks every declaration body at `Layer::Code`
-    /// (`crates/elab/src/lib.rs` ~3637; `DESIGN.md`'s δ-layer-preservation
-    /// argument is why), so this guard refuses the spellings *everywhere* and
-    /// stage 2's emitters cannot fire. The spike lets the round measure the
-    /// payoff while the layer question is decided on the issue. It must not
-    /// survive that decision: under it `box(pair@(T;a;b))` is well typed and
-    /// no recursor branch ranges over it, which is §2.2's refusal.
-    fn computing_layer(&self, env: &Env) -> R {
-        if env.layer.computes() || at_spike() {
-            Ok(())
-        } else {
-            Err(TypeError::LayerMismatch)
-        }
+    /// A δ-unfolding cannot smuggle one in either: δ inside a box is opaque
+    /// in both directions (`definitions.rs`), so a definition body that
+    /// contains a checked spelling never becomes part of a payload.
+    ///
+    /// Layer v refuses them as it refuses the component forms, which is the
+    /// half of stage 1a's `computing_layer` guard that survives.
+    fn checked_spelling_admitted(&self, env: &Env) -> R {
+        self.not_var_layer(env)?;
+        if env.under_box { Err(TypeError::UnderBox) } else { Ok(()) }
     }
 
     fn meta_layer(&self, env: &Env) -> R {
@@ -1666,7 +1860,7 @@ impl Tc {
                     return Err(TypeError::HeadMismatch);
                 };
                 self.lev_eq(l, &Level::Zero)?;
-                self.ty_check(&env.in_ctx(ctx, Layer::Code), code, &level)
+                self.ty_check(&env.in_box_ctx(ctx, Layer::Code), code, &level)
             }
             // box t : □(Δ ⊢ T @ l) @ 0 ⟸ Ψ; Δ ⊢_c t : T @ l
             Term::BoxTm(code) => {
@@ -1675,8 +1869,12 @@ impl Tc {
                     return Err(TypeError::HeadMismatch);
                 };
                 self.lev_eq(l, &Level::Zero)?;
-                self.tm_check_rc(&env.in_ctx(ctx, Layer::Code), code, &ty, &level)
+                self.tm_check_rc(&env.in_box_ctx(ctx, Layer::Code), code, &ty, &level)
             }
+            // The unannotated checked spellings: checking-only (design §2.1).
+            Term::PairAt { ty: None, .. }
+            | Term::InlAt { ty: None, .. }
+            | Term::InrAt { ty: None, .. } => self.tm_check_at(env, t, ty, l),
             // Structural descent through binders (box may hide in bodies).
             Term::Lam { dom_level, cod_level, dom, body } =>
                 self.tm_check_lam(env, dom_level, cod_level, dom, body, ty, l),
@@ -1805,95 +2003,147 @@ impl Tc {
     /// [`Tc::tm_infer`] wraps it.
     fn tm_infer_at(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
         match t {
-                // -- checked spellings (extension; docs/intro-by-type-design.md)
-                //
-                // `pair@(T; a; b)`, `inl@`, `inr@`, `fst@`, `snd@`: one whole-type
-                // annotation instead of the former's components. Each rule is the
-                // component rule with the premise `ty_check(component, level)`
-                // replaced by "whnf `T` and read the component off the former",
-                // and — for the three intros — the *un-reduced* `T` returned as
-                // the synthesized type, which is what keeps every consumer lazy
-                // in δ.
-                //
-                // The layer guard is the design's §2.3 and is what leaves the
-                // code grammar and all 56 recursor branches alone: these forms do
-                // not exist at layers c and v, so `code_eq` never meets one and
-                // `rec.rs` needs no branch. `not_var_layer` would let layer c
-                // through, so the guard is `computes()`.
-                //
-                // **The annotation is viewed in the value domain**, always —
-                // design §3.4's `view_v`, which is the rule of §3.3 read from
-                // the other side: the rewriter never runs on a type that came
-                // through an `@` annotation. The head and the levels are read
-                // out of a value and the value is dropped; the component types
-                // are never spelled at all, they are `ITy::Sel` descriptions,
-                // and spelling one is `Tc::materialize` and is counted. Under
-                // the eager mode (§3.6) this is the rewriter again and the
-                // components come back as syntax, which is what the differential
-                // test holds this against.
-                Term::PairAt { ty, fst, snd } => {
-                    self.computing_layer(env)?;
-                    let level = self.ty_infer(env, ty)?;
-                    let (ity, form) = self.view_at(env, ty)?;
-                    let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form
-                    else {
-                        return Err(TypeError::HeadMismatch);
-                    };
-                    self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
-                    let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
-                    self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
-                    crate::stats::intro_at_nodes(1);
-                    Ok((ity, level))
-                }
-                Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
-                    self.computing_layer(env)?;
-                    let level = self.ty_infer(env, ty)?;
-                    let (ity, form) = self.view_at(env, ty)?;
-                    let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
-                        return Err(TypeError::HeadMismatch);
-                    };
-                    let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
-                        (rhs, rhs_level)
-                    } else {
-                        (lhs, lhs_level)
-                    };
-                    self.tm_check(env, val, summand.as_ref(), &summand_level)?;
-                    crate::stats::intro_at_nodes(1);
-                    Ok((ity, level))
-                }
-                // `fst@(T; p) : S` — note the scrutinee is checked against `T`
-                // itself, not against the Σ: an argument that is a `pair@` then
-                // converts its own un-reduced annotation against this one, which
-                // is a head comparison and not a walk of two reducts.
-                Term::FstAt { ty, pair } => {
-                    self.computing_layer(env)?;
-                    // `ty_infer` first in all five rules: the view is untyped and
-                    // must not be handed an annotation nothing has checked.
-                    let level = self.ty_infer(env, ty)?;
-                    let (ity, form) = self.view_at(env, ty)?;
-                    let TyForm::Sigma { fst_level, fst: fst_c, .. } = form else {
-                        return Err(TypeError::HeadMismatch);
-                    };
-                    self.tm_check(env, pair, ity.as_ref(), &level)?;
-                    crate::stats::intro_at_nodes(1);
-                    Ok((fst_c, fst_level))
-                }
-                // `snd@(T; p) : U[fst@(T;p)/x]` — the substituted term is the
-                // checked spelling again, so the inferred type stays source-shaped
-                // even though `U` itself came out of the whnf.
-                Term::SndAt { ty, pair } => {
-                    self.computing_layer(env)?;
-                    let level = self.ty_infer(env, ty)?;
-                    let (ity, form) = self.view_at(env, ty)?;
-                    let TyForm::Sigma { snd_level, snd: snd_c, .. } = form else {
-                        return Err(TypeError::HeadMismatch);
-                    };
-                    self.tm_check(env, pair, ity.as_ref(), &level)?;
-                    let fst_p = Term::FstAt { ty: Rc::clone(ty), pair: Rc::clone(pair) };
-                    crate::stats::intro_at_nodes(1);
-                    Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
-                }
+            // -- checked spellings (extension; docs/intro-by-type-design.md)
+            //
+            // `pair@`, `inl@`, `inr@` with an annotation: one whole-type
+            // annotation instead of the former's components. Each rule is
+            // the component rule with the premise `ty_check(component,
+            // level)` replaced by "view `T` and read the component off the
+            // former", and the *un-reduced* `T` returned as the synthesized
+            // type, which is what keeps every consumer lazy in δ. Without an
+            // annotation there is nothing to synthesize and the form is
+            // `NotInferable`, the verdict `box` already gets — it is checked
+            // against the expected type instead ([`Tc::tm_check_at`]).
+            //
+            // The guard is the design's §2.3 and is what leaves the code
+            // grammar and all 56 recursor branches alone: these forms do not
+            // occur inside a `box`, so `code_eq` never meets one and
+            // `rec.rs` needs no branch.
+            //
+            // **The annotation is viewed in the value domain**, always —
+            // design §3.4's `view_v`, which is the rule of §3.3 read from
+            // the other side: the rewriter never runs on a type that came
+            // through an `@` annotation. The head and the levels are read
+            // out of a value and the value is dropped; the component types
+            // are never spelled at all, they are `ITy::Sel` descriptions,
+            // and spelling one is `Tc::materialize` and is counted. Under
+            // the eager mode (§3.6) this is the rewriter again and the
+            // components come back as syntax, which is what the differential
+            // test holds this against.
+            Term::PairAt { ty: Some(ty), fst, snd } => {
+                self.checked_spelling_admitted(env)?;
+                let level = self.ty_infer(env, ty)?;
+                let (ity, form) = self.view_at(env, ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form
+                else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
+                let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
+                self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok((ity, level))
+            }
+            Term::InlAt { ty: Some(ty), val } | Term::InrAt { ty: Some(ty), val } => {
+                self.checked_spelling_admitted(env)?;
+                let level = self.ty_infer(env, ty)?;
+                let (ity, form) = self.view_at(env, ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
+                    (rhs, rhs_level)
+                } else {
+                    (lhs, lhs_level)
+                };
+                self.tm_check(env, val, summand.as_ref(), &summand_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok((ity, level))
+            }
+            // `fst@(p) : S` — **no annotation at all** (design §2.1,
+            // revised): the receiver infers its own type and the Σ is viewed
+            // out of that, so a projection of a `pair@` costs the pair's
+            // annotation and nothing more. This is the rule that made the
+            // first draft's `fst@(T; p)` unnecessary: `T` was always the type
+            // `p` already infers.
+            Term::FstAt { pair } => {
+                self.checked_spelling_admitted(env)?;
+                let (pair_ty, _) = self.tm_infer(env, pair)?;
+                let form = self.view_v(env, &pair_ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sigma { fst_level, fst: fst_c, .. } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                crate::stats::intro_at_nodes(1);
+                Ok((fst_c, fst_level))
+            }
+            // `snd@(p) : U[fst@(p)/x]` — the substituted term is the checked
+            // spelling again, so the inferred type stays source-shaped even
+            // though `U` itself came out of the view.
+            Term::SndAt { pair } => {
+                self.checked_spelling_admitted(env)?;
+                let (pair_ty, _) = self.tm_infer(env, pair)?;
+                let form = self.view_v(env, &pair_ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sigma { snd_level, snd: snd_c, .. } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                let fst_p = Term::FstAt { pair: Rc::clone(pair) };
+                crate::stats::intro_at_nodes(1);
+                Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
+            }
+            // An unannotated intro: checking-only, exactly as `box` is.
             _ => Err(TypeError::NotInferable),
+        }
+    }
+
+    /// The three **unannotated** intros in checking position (design §3.4),
+    /// the rules that make the round's win possible: the expected type is an
+    /// [`ITy`] — for a field of an outer `pair@` a *description* and never a
+    /// spelling — and the fields are checked against `Sel`s of it. Nothing
+    /// here builds a type, so a constructor value nested n deep costs n
+    /// nodes of syntax instead of `3.5ⁿ`.
+    ///
+    /// Outlined for the same reason as [`Tc::tm_check_lam`]: it holds a
+    /// [`TyForm`] across a recursive descent, and leaving those temporaries
+    /// in [`Tc::tm_check_inner`]'s frame would put them on the checker's
+    /// recursion cycle whether or not an `@` form is being checked.
+    #[inline(never)]
+    fn tm_check_at(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
+        self.checked_spelling_admitted(env)?;
+        match t {
+            Term::PairAt { ty: None, fst, snd } => {
+                let form = self.view_expected_v(env, ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.lev_eq(l, &Level::join(fst_level.clone(), snd_level.clone()))?;
+                self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
+                let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
+                self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok(())
+            }
+            Term::InlAt { ty: None, val } | Term::InrAt { ty: None, val } => {
+                let form = self.view_expected_v(env, ty)?;
+                self.record(env, t, &form);
+                let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.lev_eq(l, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+                let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
+                    (rhs, rhs_level)
+                } else {
+                    (lhs, lhs_level)
+                };
+                self.tm_check(env, val, summand.as_ref(), &summand_level)?;
+                crate::stats::intro_at_nodes(1);
+                Ok(())
+            }
+            _ => unreachable!("tm_check_at is reached only for an unannotated intro"),
         }
     }
 
@@ -3221,6 +3471,7 @@ mod memo_tests {
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs: 0,
+            under_box: false,
             #[cfg(feature = "value-metrics")]
             value_metrics: None,
         }

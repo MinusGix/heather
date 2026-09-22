@@ -342,6 +342,21 @@ impl Lgg {
     }
 
     /// One type node, likewise.
+    /// Two checked spellings' annotations: anti-unified when both are
+    /// present, the present one when only one is.
+    fn opt_ty(
+        &mut self,
+        x: &Option<Rc<Type>>,
+        y: &Option<Rc<Type>>,
+        k: u32,
+    ) -> Result<Option<Rc<Type>>, Mismatch> {
+        match (x, y) {
+            (Some(x), Some(y)) => Ok(Some(Rc::new(self.ty(x, y, k)?))),
+            (Some(t), None) | (None, Some(t)) => Ok(Some(Rc::clone(t))),
+            (None, None) => Ok(None),
+        }
+    }
+
     fn ty(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, Mismatch> {
         self.path.push(former_ty(x));
         let r = self.ty_at(x, y, k);
@@ -677,32 +692,126 @@ impl Lgg {
             // often identical than two reducts. Mixed spellings fall to
             // `mismatch_tm` and generalize, which is what two different
             // spellings of one term have always done here.
-            (Term::PairAt { ty: t1, fst: a1, snd: b1 }, Term::PairAt { ty: t2, fst: a2, snd: b2 }) => {
+            // A component form against a checked spelling of the same former
+            // is **one** former written two ways — a reduct beside an emitted
+            // value, the normal case since the emitters write checked
+            // spellings (`docs/intro-by-type-design.md` §4.2). Anti-unify the
+            // children and keep the component side's annotations, which are
+            // valid in inference and checking position alike; the kernel
+            // re-checks the generalization either way.
+            (
+                Term::Inl { lhs_level, rhs_level, lhs, rhs, val: v1 },
+                Term::InlAt { val: v2, .. },
+            ) => Ok(Term::Inl {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::InlAt { val: v1, .. },
+                Term::Inl { lhs_level, rhs_level, lhs, rhs, val: v2 },
+            ) => Ok(Term::Inl {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::Inr { lhs_level, rhs_level, lhs, rhs, val: v1 },
+                Term::InrAt { val: v2, .. },
+            ) => Ok(Term::Inr {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::InrAt { val: v1, .. },
+                Term::Inr { lhs_level, rhs_level, lhs, rhs, val: v2 },
+            ) => Ok(Term::Inr {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst: a1, snd: b1 },
+                Term::PairAt { fst: a2, snd: b2, .. },
+            ) => Ok(Term::Pair {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                fst: Rc::new(self.tm(a1, a2, k)?),
+                snd: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::PairAt { fst: a1, snd: b1, .. },
+                Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst: a2, snd: b2 },
+            ) => Ok(Term::Pair {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                fst: Rc::new(self.tm(a1, a2, k)?),
+                snd: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair: p1 },
+                Term::FstAt { pair: p2 },
+            )
+            | (
+                Term::FstAt { pair: p1 },
+                Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair: p2 },
+            ) => Ok(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::new(self.tm(p1, p2, k)?),
+            }),
+            (
+                Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair: p1 },
+                Term::SndAt { pair: p2 },
+            )
+            | (
+                Term::SndAt { pair: p1 },
+                Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair: p2 },
+            ) => Ok(Term::Snd {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::new(self.tm(p1, p2, k)?),
+            }),
+            // An annotated intro against an unannotated one keeps the
+            // annotation, so the generalization still infers where it must.
+            (Term::PairAt { ty: t1, fst: a1, snd: b1 }, Term::PairAt { ty: t2, fst: a2, snd: b2 }) =>
+            {
                 Ok(Term::PairAt {
-                    ty: Rc::new(self.ty(t1, t2, k)?),
+                    ty: self.opt_ty(t1, t2, k)?,
                     fst: Rc::new(self.tm(a1, a2, k)?),
                     snd: Rc::new(self.tm(b1, b2, k)?),
                 })
             }
-            (Term::InlAt { ty: t1, val: v1 }, Term::InlAt { ty: t2, val: v2 }) => Ok(Term::InlAt {
-                ty: Rc::new(self.ty(t1, t2, k)?),
-                val: Rc::new(self.tm(v1, v2, k)?),
-            }),
-            (Term::InrAt { ty: t1, val: v1 }, Term::InrAt { ty: t2, val: v2 }) => Ok(Term::InrAt {
-                ty: Rc::new(self.ty(t1, t2, k)?),
-                val: Rc::new(self.tm(v1, v2, k)?),
-            }),
-            (Term::FstAt { ty: t1, pair: p1 }, Term::FstAt { ty: t2, pair: p2 }) => {
-                Ok(Term::FstAt {
-                    ty: Rc::new(self.ty(t1, t2, k)?),
-                    pair: Rc::new(self.tm(p1, p2, k)?),
-                })
+            (Term::InlAt { ty: t1, val: v1 }, Term::InlAt { ty: t2, val: v2 }) =>
+            {
+                Ok(Term::InlAt { ty: self.opt_ty(t1, t2, k)?, val: Rc::new(self.tm(v1, v2, k)?) })
             }
-            (Term::SndAt { ty: t1, pair: p1 }, Term::SndAt { ty: t2, pair: p2 }) => {
-                Ok(Term::SndAt {
-                    ty: Rc::new(self.ty(t1, t2, k)?),
-                    pair: Rc::new(self.tm(p1, p2, k)?),
-                })
+            (Term::InrAt { ty: t1, val: v1 }, Term::InrAt { ty: t2, val: v2 }) =>
+            {
+                Ok(Term::InrAt { ty: self.opt_ty(t1, t2, k)?, val: Rc::new(self.tm(v1, v2, k)?) })
+            }
+            (Term::FstAt { pair: p1 }, Term::FstAt { pair: p2 }) => {
+                Ok(Term::FstAt { pair: Rc::new(self.tm(p1, p2, k)?) })
+            }
+            (Term::SndAt { pair: p1 }, Term::SndAt { pair: p2 }) => {
+                Ok(Term::SndAt { pair: Rc::new(self.tm(p1, p2, k)?) })
             }
             (
                 Term::Pair {

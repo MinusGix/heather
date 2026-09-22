@@ -26,7 +26,9 @@
 use std::sync::Arc as Rc;
 
 use crate::level::Level;
-use crate::value::{BitTy, Elim, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP};
+use crate::value::{
+    BitTy, Elim, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
+};
 
 use super::{Eval, Res};
 
@@ -65,11 +67,8 @@ impl<'v> Sigma<'v> {
     fn proj(&self, first: bool) -> Elim<'v> {
         let (fst_level, snd_level) = (self.level.clone(), self.level.clone());
         let (fst_ty, snd_ty) = (self.fst, self.snd);
-        if first {
-            Elim::Fst { fst_level, snd_level, fst_ty, snd_ty }
-        } else {
-            Elim::Snd { fst_level, snd_level, fst_ty, snd_ty }
-        }
+        let ann = Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty });
+        if first { Elim::Fst { ann } } else { Elim::Snd { ann } }
     }
 }
 
@@ -105,17 +104,16 @@ impl<'v> Eval<'_, 'v> {
             return Ok(None);
         };
         let zero = self.vclo(Rc::new(Val::Inl {
-            lhs_level: lhs_level.clone(),
-            rhs_level: rhs_level.clone(),
-            lhs,
-            rhs,
+            ann: Some(SumAnn {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs,
+                rhs,
+            }),
             val: zero,
         }));
         let one = self.vclo(Rc::new(Val::Inr {
-            lhs_level,
-            rhs_level,
-            lhs,
-            rhs,
+            ann: Some(SumAnn { lhs_level, rhs_level, lhs, rhs }),
             val: one,
         }));
         Ok(Some(self.arena.bit_ty(BitTy { elem, zero, one })))
@@ -154,10 +152,12 @@ impl<'v> Eval<'_, 'v> {
                     return Ok(None);
                 };
                 Ok(Some(self.vclo(Rc::new(Val::Pair {
-                    fst_level,
-                    snd_level,
-                    fst_ty: fst,
-                    snd_ty: snd,
+                    ann: Some(SigAnn {
+                        fst_level,
+                        snd_level,
+                        fst_ty: fst,
+                        snd_ty: snd,
+                    }),
                     fst: head,
                     snd: rest,
                 }))))

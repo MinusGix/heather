@@ -120,15 +120,6 @@ pub(crate) struct Alias {
     pub(crate) skel: Option<Rc<Skel>>,
 }
 
-/// The stage-2 spike switch (`issues/elab-emits-normal-form-of-matched-type-argument.md`,
-/// 2026-09-20): whether the emitters write the checked spellings at all. Read
-/// once. Temporary, and paired with the kernel's own `HEATHER_AT_SPIKE` read
-/// in `Tc::computing_layer`.
-pub(crate) fn at_spike() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("HEATHER_AT_SPIKE").is_some())
-}
-
 impl Cx {
     pub(crate) fn empty() -> Cx {
         Cx {
@@ -146,18 +137,6 @@ impl Cx {
             meta: None,
             quoted: false,
         }
-    }
-
-    /// Does this context emit the checked spellings
-    /// (`docs/intro-by-type-design.md` §4.1)? Not inside a quotation (§2.3,
-    /// and [`Cx::quoted`] for why that is the predicate and not the layer),
-    /// and — **only for as long as the layer question on the issue is open** —
-    /// only under `HEATHER_AT_SPIKE`, because the kernel refuses the forms at
-    /// `Layer::Code`, which is the layer every declaration body is checked at.
-    /// The env read is the spike's, not a design feature; it goes away with
-    /// whichever of the issue's three candidates the coordinator picks.
-    pub(crate) fn emits_at_forms(&self) -> bool {
-        !self.quoted && at_spike()
     }
 
     pub(crate) fn push(&mut self, name: String, ty: Type, level: Level) {

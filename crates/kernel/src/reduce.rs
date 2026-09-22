@@ -533,22 +533,21 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         // annotation. Stepping `T` is what eventually exposes its former and
         // it is the only thing these arms use it for — nothing here spells
         // the components, so this arm is linear in `T` and not in its reduct.
-        Term::FstAt { ty, pair } | Term::SndAt { ty, pair } => {
+        Term::FstAt { pair } | Term::SndAt { pair } => {
             let second = matches!(t, Term::SndAt { .. });
-            let rebuild = |ty: Rc<Type>, pair: Rc<Term>| {
-                if second { Term::SndAt { ty, pair } } else { Term::FstAt { ty, pair } }
+            let rebuild = |pair: Rc<Term>| {
+                if second { Term::SndAt { pair } } else { Term::FstAt { pair } }
             };
             match &**pair {
                 Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
                     Some((**(if second { snd } else { fst })).clone())
                 }
-                // The annotation is **not** stepped, exactly as `Fst`'s
-                // component annotations are not: no β can be found inside it,
-                // and a projection on a neutral pair is neutral whatever
-                // shape `T` is in. Exposing `T`'s former is the *typing*
-                // rule's business (`Tc::whnf`), not reduction's.
-                _ => step_term_delta(pair, gamma, defs)
-                    .map(|p| rebuild(Rc::clone(ty), Rc::new(p))),
+                // The checked projections carry no annotation at all (design
+                // §2.1), so there is nothing here but the receiver: a
+                // projection on a neutral pair is neutral, and exposing the
+                // Σ is the *typing* rule's business (`Tc::view`), not
+                // reduction's.
+                _ => step_term_delta(pair, gamma, defs).map(|p| rebuild(Rc::new(p))),
             }
         }
         // elim_Empty has no β rule (Empty has no constructors); it only ever

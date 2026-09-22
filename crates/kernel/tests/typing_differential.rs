@@ -358,30 +358,31 @@ fn nested_projection_chains() {
     let nat = Type::Nat;
     let zero = Rc::new(Term::Zero);
 
-    // `pair@(T; 0; pair@(U; 0; 0))` — an `@` intro whose field is an `@`
-    // intro, i.e. a `pair@` checked against `Sel { T, Snd(0) }`.
+    // `pair@^{T}(0; pair@(0; 0))` — an `@` intro whose field is an
+    // unannotated `@` intro, i.e. a `pair@` checked against `Sel { T, Snd(0) }`
+    // with no type of its own, which is what the elaborator writes.
     let inner_pair = Rc::new(Term::PairAt {
-        ty: Rc::new(inner.clone()),
+        ty: None,
         fst: Rc::clone(&zero),
         snd: Rc::clone(&zero),
     });
     let pair = Rc::new(Term::PairAt {
-        ty: Rc::new(outer.clone()),
+        ty: Some(Rc::new(outer.clone())),
         fst: Rc::clone(&zero),
         snd: Rc::clone(&inner_pair),
     });
 
-    // The projection chains over it. `snd@(T; p) : U[fst@(T;p)/x]`, which is
+    // The projection chains over it. `snd@(p) : U[fst@(p)/x]`, which is
     // `inner` since nothing here is dependent; `fst@`/`snd@` of *that* is
     // the length-2 chain.
-    let snd_p = Rc::new(Term::SndAt { ty: Rc::new(outer.clone()), pair: Rc::clone(&pair) });
+    let snd_p = Rc::new(Term::SndAt { pair: Rc::clone(&pair) });
     let fst_of_snd =
-        Rc::new(Term::FstAt { ty: Rc::new(inner.clone()), pair: Rc::clone(&snd_p) });
+        Rc::new(Term::FstAt { pair: Rc::clone(&snd_p) });
     let snd_of_snd =
-        Rc::new(Term::SndAt { ty: Rc::new(inner.clone()), pair: Rc::clone(&snd_p) });
+        Rc::new(Term::SndAt { pair: Rc::clone(&snd_p) });
     // And one more link: a `pair@` whose field is the projection chain.
     let pair_of_proj = Rc::new(Term::PairAt {
-        ty: Rc::new(inner.clone()),
+        ty: Some(Rc::new(inner.clone())),
         fst: Rc::clone(&fst_of_snd),
         snd: Rc::clone(&snd_of_snd),
     });
@@ -392,7 +393,7 @@ fn nested_projection_chains() {
         ("fst@ of snd@", Rc::clone(&fst_of_snd), nat.clone()),
         ("snd@ of snd@", Rc::clone(&snd_of_snd), nat.clone()),
         ("pair@ of two chains", Rc::clone(&pair_of_proj), inner.clone()),
-        ("fst@ of pair@ of chains", Rc::new(Term::FstAt { ty: Rc::new(inner.clone()), pair: pair_of_proj }), nat.clone()),
+        ("fst@ of pair@ of chains", Rc::new(Term::FstAt { pair: pair_of_proj }), nat.clone()),
     ];
 
     // The stream is only about descriptions if descriptions are formed:
@@ -463,7 +464,7 @@ fn lambda_checked_against_a_selection() {
         body: Rc::new(Term::Var(heather_kernel::term::LocalVar(0))),
     });
     let t = Rc::new(Term::PairAt {
-        ty: Rc::new(ty.clone()),
+        ty: Some(Rc::new(ty.clone())),
         fst: id,
         snd: Rc::new(Term::Zero),
     });

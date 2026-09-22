@@ -280,6 +280,18 @@ impl<'a> Walk<'a> {
     }
 
     #[inline]
+    /// An optional type annotation: one byte for the presence, then the
+    /// type when there is one.
+    fn opt_ty(&mut self, t: &Option<std::sync::Arc<Type>>) {
+        match t {
+            Some(t) => {
+                self.tag(1);
+                self.ty(t);
+            }
+            None => self.tag(0),
+        }
+    }
+
     fn tag(&mut self, t: u8) {
         self.buf.push(t);
         if self.buf.len() >= FLUSH_AT {
@@ -707,30 +719,32 @@ impl<'a> Walk<'a> {
                 self.term(case);
                 self.term(scrut);
             }
+            // The intros' annotation is optional (design §2.1), so its
+            // presence is hashed before it: an annotated and an unannotated
+            // spelling of the same fields are different terms and must not
+            // collide.
             Term::PairAt { ty, fst, snd } => {
                 self.tag(tag::E_PAIR_AT);
-                self.ty(ty);
+                self.opt_ty(ty);
                 self.term(fst);
                 self.term(snd);
             }
             Term::InlAt { ty, val } => {
                 self.tag(tag::E_INL_AT);
-                self.ty(ty);
+                self.opt_ty(ty);
                 self.term(val);
             }
             Term::InrAt { ty, val } => {
                 self.tag(tag::E_INR_AT);
-                self.ty(ty);
+                self.opt_ty(ty);
                 self.term(val);
             }
-            Term::FstAt { ty, pair } => {
+            Term::FstAt { pair } => {
                 self.tag(tag::E_FST_AT);
-                self.ty(ty);
                 self.term(pair);
             }
-            Term::SndAt { ty, pair } => {
+            Term::SndAt { pair } => {
                 self.tag(tag::E_SND_AT);
-                self.ty(ty);
                 self.term(pair);
             }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
