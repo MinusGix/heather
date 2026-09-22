@@ -82,6 +82,27 @@ impl Elaborator {
         }
     }
 
+    /// The committed global a bare `name` resolves to here, as an absolute Ψ
+    /// index — `None` whenever [`Self::resolve`] would land anywhere else
+    /// (a local, an alias, a constructor, a primitive, the declaration's own
+    /// name, a `meta fn` slice). The precedence is [`Self::bare_implicit_prefix`]'s,
+    /// for its reason: the answer is about the entity the name *resolves to*.
+    /// Receiver dispatch asks it of the reading it races
+    /// (issues/receiver-dispatch-coinciding-readings.md).
+    pub(crate) fn bare_global_abs(&self, cx: &Cx, name: &str) -> Option<usize> {
+        if name == "Zero" || name == "Succ" || cx.meta.is_some() {
+            return None;
+        }
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || self.ctor_of(name).is_some()
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return None;
+        }
+        self.global_abs(name)
+    }
+
     pub(crate) fn bare_implicit_prefix(&self, cx: &Cx, name: &str) -> Option<usize> {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return None;

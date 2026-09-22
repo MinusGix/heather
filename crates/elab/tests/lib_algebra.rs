@@ -500,14 +500,24 @@ fn fold_colours(cs: List<Colour>) -> Colour { mconcat(first, cs) }",
 /// different refusal — ambiguity at the value, not at the receiver — and it
 /// would have made this test pass for the wrong reason, so the fixture moved to
 /// a global only `std/nat` declares.
+///
+/// Narrowed 2026-09-22 (issues/receiver-dispatch-coinciding-readings.md): the
+/// refusal is for readings that *differ*. `sub := sub` fills the field with
+/// the very global the bare reading calls, so the two are one term and the
+/// call checks as `sub(a, b)`; the fixture's field is therefore something
+/// else, which is the case the constraint is still about.
 #[test]
 fn slow_acceptance_a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver() {
     let e = bad(
         "class Cmp2<A> { sub: A -> A -> A }
-instance Cmp2<Nat> { sub := sub }
+instance Cmp2<Nat> { sub := fun (x: Nat) => fun (y: Nat) => x }
 fn f(a: Nat, b: Nat) -> Nat { a.sub(b) }",
     );
     assert!(e.contains("write one of them"), "{e}");
+    ok("class Cmp2<A> { sub: A -> A -> A }
+instance Cmp2<Nat> { sub := sub }
+fn f(a: Nat, b: Nat) -> Nat { a.sub(b) }
+theorem t(a: Nat, b: Nat) : f(a, b) = sub(a, b) { refl }");
 }
 
 /// Owner-keyed dispatch (`docs/traits-owner-dispatch-design.md` §2) builds the

@@ -176,6 +176,39 @@ Deterministic, no priorities, decided before implementing.
    two attached names in exactly that sense. The message names both spellings
    (`Rat::op(…)`, `Rat::Monoid.op(…)`), since writing one of them is the fix.
    Same rule, same message shape, for a bare `op` in scope or a builtin.
+
+   **Amended 2026-09-22: the rule refuses readings that *differ*, not
+   readings that exist** (`issues/receiver-dispatch-coinciding-readings.md`).
+   Namespacing `std` made the carrier-owned lemma that fills a class field
+   (`instance Cmp<Nat> { le_dec := Nat::le_dec, … }`) the common case, and
+   there the two readings of `n.le_dec(m)` are one term, so the error
+   protected nothing. After a successful dispatch whose other reading calls a
+   committed global `g` (the type-owned member or the bare name, never a
+   builtin, and never with written type arguments), the dictionary dispatch
+   *actually resolved* is read by one local step — δ of its head global, β of
+   that global's parameters, ι of the record literal's spine — and if the
+   field there is `g` itself, the readings coincide: dispatch answers "not a
+   dispatch" and the other reading runs exactly as rule 5's fallback does, so
+   the emitted term is the direct global, identical to the program with no
+   class in scope. This is not conversion: the step is syntactic, so a local
+   dictionary (rule 4's answer, a variable with no body), a field written as
+   a λ or as a different global, or a derivation whose body is not a literal
+   spine all keep the error. "The same call" is read off `g`'s parameter
+   table: every parameter past the instantiated prefix explicit and the
+   subject first, since the class reading applies the field positionally
+   with the receiver first. A generic instance coincides only where both
+   readings solve one equation for the type arguments — the instance's
+   parameters all type binders, `g` applied to exactly those, in order, as its
+   leading implicit type parameters, and `g`'s declared subject domain
+   syntactically the field's carrier — so an instance with `requires` or value
+   parameters, a universe-polymorphic `g`, or a differently spelled subject
+   domain keeps the error (`Elaborator::field_is_global` gives the argument).
+   Growth still only adds errors: an instance or dictionary that fills the
+   field differently turns the call into this error, never into a different
+   meaning. The type-subject route (`A.op(x, y)`,
+   `docs/traits-type-projection-design.md` §4) is unchanged: its other reading
+   exists only when the callee takes the type as an argument, which the
+   projection does not, so the two can never be one term.
 3. **Two classes both *declaring* the same member name, both resolving at the
    carrier, are an error naming both** — never declaration order, never a first
    hit. (Two classes in one `extends` chain are not two candidates: only the

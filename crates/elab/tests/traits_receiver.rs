@@ -346,3 +346,192 @@ fn a_class_field_named_like_a_builtin_is_ambiguous_not_silent() {
     );
     assert!(e.contains("both"), "{e}");
 }
+
+// -- 5: readings that coincide ---------------------------------------------
+//
+// issues/receiver-dispatch-coinciding-readings.md: rule 2 refuses only
+// readings that *differ*. When the dictionary dispatch resolves fills the
+// field with the very global the other reading calls, there is one meaning,
+// and the call takes the other reading's path — so the emitted term is the
+// direct global, byte for byte what it is with no class in scope. Every
+// positive below is pinned on the **term**, against the direct spelling in
+// an otherwise identical program, not on acceptance alone.
+
+/// A one-field class and a carrier whose own members can fill it by name.
+const PICK: &str = r#"
+class Pick<A> { pick: A -> A -> A }
+inductive Q { Q0, Q1 }
+fn Q::pick(self x: Q, y: Q) -> Q { y }
+fn Q::other(self x: Q, y: Q) -> Q { x }
+"#;
+
+/// The last declaration's binding — statement and body — which is what two
+/// programs with one identical prefix are compared on.
+fn last(e: &Elaborator) -> heather_kernel::term::GlobalBinding {
+    e.psi().bindings.last().expect("a binding").clone()
+}
+
+/// The headline: a literal-form instance whose field *is* `Q::pick`, and
+/// `a.pick(b)` checks — elaborating to exactly `Q::pick(a, b)`, not to the
+/// projection `Q::Pick.pick(a, b)` (the control: the comparison can tell
+/// those two apart).
+#[test]
+fn a_coinciding_literal_instance_emits_the_direct_global() {
+    let prefix = format!("{PICK}\ninstance Pick<Q> {{ pick := Q::pick }}\n");
+    let dispatched = ok(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ a.pick(b) }}"));
+    let direct = ok(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ Q::pick(a, b) }}"));
+    let projected = ok(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ Q::Pick.pick(a, b) }}"));
+    assert!(last(&dispatched) == last(&direct), "the call is not the direct global");
+    assert!(last(&dispatched) != last(&projected), "the control cannot distinguish");
+}
+
+/// The same in **checking** positions — a checked argument and an annotated
+/// `let`, each against its direct spelling — and a proof whose statement has
+/// to convert.
+#[test]
+fn a_coinciding_call_in_checking_position() {
+    let prefix = format!(
+        "{PICK}\ninstance Pick<Q> {{ pick := Q::pick }}\n fn snd(x: Q, y: Q) -> Q {{ y }}\n"
+    );
+    for (dispatched, direct) in [
+        (
+            "fn g(a: Q, b: Q) -> Q { snd(a, a.pick(b)) }",
+            "fn g(a: Q, b: Q) -> Q { snd(a, Q::pick(a, b)) }",
+        ),
+        (
+            "fn g(a: Q, b: Q) -> Q { let c: Q = a.pick(b); c }",
+            "fn g(a: Q, b: Q) -> Q { let c: Q = Q::pick(a, b); c }",
+        ),
+    ] {
+        let d = ok(&format!("{prefix} {dispatched}"));
+        let e = ok(&format!("{prefix} {direct}"));
+        assert!(last(&d) == last(&e), "{dispatched}");
+    }
+    ok(&format!(
+        "{prefix} theorem t(a: Q, b: Q) : a.pick(b) = Q::pick(a, b) {{ refl }}"
+    ));
+}
+
+/// The bare-name kind of other reading: a top-level `pick` in scope, filling
+/// the field by that name.
+#[test]
+fn a_coinciding_bare_name_in_scope_emits_the_direct_global() {
+    let prefix = "class Pick<A> { pick: A -> A -> A }
+         inductive Q { Q0, Q1 }
+         fn pick(x: Q, y: Q) -> Q { y }
+         instance Pick<Q> { pick := pick }\n";
+    let dispatched = ok(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ a.pick(b) }}"));
+    let direct = ok(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ pick(a, b) }}"));
+    assert!(last(&dispatched) == last(&direct));
+}
+
+/// A **generic** instance at an **open** carrier: `a: L<B>` with `B` a
+/// binder. The field is `L::pick` applied to the instance's own type binder
+/// and `L::pick`'s subject domain is that same carrier, so both readings
+/// solve one equation against `L<B>` (`field_is_global`'s doc) — and the
+/// call is `L::pick` at `B`, as written directly.
+#[test]
+fn a_generic_instance_coincides_at_an_open_carrier() {
+    let prefix = "class Pick<A> { pick: A -> A -> A }
+         inductive L<A> { N, C(A, L<A>) }
+         fn L::pick<A>(self x: L<A>, y: L<A>) -> L<A> { y }
+         instance<A> Pick<L<A>> { pick := L::pick }\n";
+    let dispatched = ok(&format!("{prefix} fn h<B>(a: L<B>, b: L<B>) -> L<B> {{ a.pick(b) }}"));
+    let direct = ok(&format!("{prefix} fn h<B>(a: L<B>, b: L<B>) -> L<B> {{ L::pick(a, b) }}"));
+    assert!(last(&dispatched) == last(&direct));
+}
+
+/// Negative control, **scope**: a local dictionary is what dispatch resolves
+/// (rule 4), and it is a variable — it has no body saying its `pick` is
+/// `Q::pick`, and a caller may pass one whose `pick` is `Q::other`. So the
+/// registry instance coinciding is beside the point: still the rule-2 error.
+#[test]
+fn a_local_dictionary_does_not_coincide() {
+    let e = bad(&format!(
+        "{PICK}
+         instance Pick<Q> {{ pick := Q::pick }}
+         fn f(d: Pick<Q>, a: Q, b: Q) -> Q {{ a.pick(b) }}"
+    ));
+    assert!(e.contains("both"), "{e}");
+}
+
+/// Negative controls, **registry**: a field filled by another global, and by
+/// a λ that merely calls the right one (equal after η, which is not the one
+/// local step) — both still the error.
+#[test]
+fn a_registry_field_that_is_not_the_global_does_not_coincide() {
+    let e = bad(&format!(
+        "{PICK}
+         instance Pick<Q> {{ pick := Q::other }}
+         fn f(a: Q, b: Q) -> Q {{ a.pick(b) }}"
+    ));
+    assert!(e.contains("both"), "{e}");
+    let e = bad(&format!(
+        "{PICK}
+         instance Pick<Q> {{ pick := fun (x: Q) => fun (y: Q) => Q::pick(x, y) }}
+         fn f(a: Q, b: Q) -> Q {{ a.pick(b) }}"
+    ));
+    assert!(e.contains("both"), "{e}");
+}
+
+/// Negative control, **argument order**: the same global, but its `self` is
+/// its *second* parameter, so the desugaring is `Q::pick(b, a)` where the
+/// class reading is the field at `(a, b)` — two calls to one name.
+#[test]
+fn the_same_global_with_another_subject_slot_does_not_coincide() {
+    let e = bad(
+        "class Pick<A> { pick: A -> A -> A }
+         inductive Q { Q0, Q1 }
+         fn Q::pick(y: Q, self x: Q) -> Q { y }
+         instance Pick<Q> { pick := Q::pick }
+         fn f(a: Q, b: Q) -> Q { a.pick(b) }",
+    );
+    assert!(e.contains("both"), "{e}");
+}
+
+/// Pinned outside the honest rule: a generic instance with a `requires`
+/// binder. Its dictionary's arguments are not all type binders, so the
+/// field's instantiation is no longer one equation with the desugaring's
+/// inference (`field_is_global`'s doc) — the error, as before.
+#[test]
+fn a_generic_instance_with_requires_binders_still_refuses() {
+    let e = bad(
+        "class Pick<A> { pick: A -> A -> A }
+         inductive L<A> { N, C(A, L<A>) }
+         inductive Q { Q0, Q1 }
+         instance Pick<Q> { fn pick(x: Q, y: Q) -> Q { y } }
+         fn L::pick<A>(self x: L<A>, y: L<A>) -> L<A> { y }
+         instance<A> Pick<L<A>> requires pa: Pick<A> { pick := L::pick }
+         fn h(a: L<Q>, b: L<Q>) -> L<Q> { a.pick(b) }",
+    );
+    assert!(e.contains("both"), "{e}");
+}
+
+/// The motivating shape is `Cmp`'s: several fields, the coinciding ones not
+/// first — `le_dec` is the last of three. Every other positive above has a
+/// one-field class, where the first field is also the last, so this pins the
+/// spine walk at a middle and a final entry, and a sibling filled by a λ that
+/// still refuses on the same instance.
+#[test]
+fn coincidence_reads_the_right_entry_of_a_multi_field_instance() {
+    let prefix = "class Tri<A> { first: A -> A -> A, mid: A -> A -> A, last: A -> A -> A }
+         inductive Q { Q0, Q1 }
+         fn Q::mid(self x: Q, y: Q) -> Q { y }
+         fn Q::last(self x: Q, y: Q) -> Q { x }
+         fn Q::first(self x: Q, y: Q) -> Q { y }
+         instance Tri<Q> {
+             first := fun (x: Q) => fun (y: Q) => x,
+             mid := Q::mid,
+             last := Q::last,
+         }\n";
+    for (dispatched, direct) in [
+        ("fn f(a: Q, b: Q) -> Q { a.mid(b) }", "fn f(a: Q, b: Q) -> Q { Q::mid(a, b) }"),
+        ("fn f(a: Q, b: Q) -> Q { a.last(b) }", "fn f(a: Q, b: Q) -> Q { Q::last(a, b) }"),
+    ] {
+        let d = ok(&format!("{prefix} {dispatched}"));
+        let e = ok(&format!("{prefix} {direct}"));
+        assert!(last(&d) == last(&e), "{dispatched}");
+    }
+    let e = bad(&format!("{prefix} fn f(a: Q, b: Q) -> Q {{ a.first(b) }}"));
+    assert!(e.contains("both"), "{e}");
+}

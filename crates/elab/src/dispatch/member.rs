@@ -13,6 +13,8 @@ use crate::{
     application, vec,
 };
 
+use super::receiver::OtherReading;
+
 /// Only disjoint outer carriers are used to discard imported candidates.
 /// Type arguments and callbacks never break a tie; an unknown carrier keeps
 /// the ambiguity, including a generic `self x: A`.
@@ -132,21 +134,33 @@ impl Elaborator {
         // and what a *failed* one falls back to (rule 5). The builtin list is
         // there because `map`/`fold`/… are Rust rather than declarations, so
         // `shadowed` cannot see them.
-        let other: Option<(String, String)> = if head != name {
-            Some((
-                format!("`{head}`, selected using the receiver's type"),
-                format!("`{head}(…)`"),
-            ))
+        //
+        // The first two kinds also carry the **callee** they desugar to: if it
+        // resolves to a global, a dispatch whose field *is* that global is the
+        // same reading rather than a rival
+        // (issues/receiver-dispatch-coinciding-readings.md). A builtin never
+        // carries one — it is Rust, not a declaration — and neither does a
+        // call with written type arguments, which the class reading would
+        // drop and the desugaring would apply.
+        let callee = |c: &str| tyargs.is_empty().then(|| c.to_string());
+        let other: Option<OtherReading> = if head != name {
+            Some(OtherReading {
+                desc: format!("`{head}`, selected using the receiver's type"),
+                fix: format!("`{head}(…)`"),
+                callee: callee(&head),
+            })
         } else if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
-            Some((
-                format!("`{name}`, a name in scope on its own"),
-                format!("the bare call `{name}(…)` with the receiver as an argument"),
-            ))
+            Some(OtherReading {
+                desc: format!("`{name}`, a name in scope on its own"),
+                fix: format!("the bare call `{name}(…)` with the receiver as an argument"),
+                callee: callee(name),
+            })
         } else if BUILTIN_METHODS.contains(&name) {
-            Some((
-                format!("`{name}`, a built-in method"),
-                format!("the bare call `{name}(…)`"),
-            ))
+            Some(OtherReading {
+                desc: format!("`{name}`, a built-in method"),
+                fix: format!("the bare call `{name}(…)`"),
+                callee: None,
+            })
         } else {
             None
         };
