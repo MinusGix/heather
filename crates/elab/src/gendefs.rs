@@ -3389,6 +3389,7 @@ impl Elaborator {
         // its own bracket, and the exclusive rule keeps the two apart.
         crate::stats::count(crate::stats::Counter::GendefsPushed);
         let _phase = crate::stats::guard(crate::stats::Timer::Gendefs);
+        self.attribute_image(&name, &ty, Some(&body));
         {
             // A generated definition faces the same gate as a `fn` and the same
             // oracle (`gate.rs`): it is an ordinary bodied binding, so it gets

@@ -1865,6 +1865,22 @@ pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {
 /// The image bytes and the syntax-node count the reader will charge for
 /// them — the number a publisher compares against `max_nodes` before writing
 /// an image the reader would only decode up to the budget and refuse.
+/// The syntax nodes `ty` costs in an image, counted by the writer itself so
+/// the number is the one the decode budget charges — a tree size, not a DAG
+/// one. For `HEATHER_IMAGE_ATTRIBUTION` (`emission_walk::tally_decl`).
+pub(crate) fn type_image_nodes(ty: &Type) -> u64 {
+    let mut w = Writer::default();
+    put_type(&mut w, ty);
+    w.nodes
+}
+
+/// [`type_image_nodes`] for a term.
+pub(crate) fn term_image_nodes(t: &Term) -> u64 {
+    let mut w = Writer::default();
+    put_term(&mut w, t);
+    w.nodes
+}
+
 pub(crate) fn encode_delta_counted(delta: &ModuleDelta) -> (Vec<u8>, u64) {
     let mut w = Writer::default();
     encode_delta_into(&mut w, delta, MAGIC);

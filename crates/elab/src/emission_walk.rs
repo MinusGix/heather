@@ -59,6 +59,8 @@ pub(crate) fn walk_decl(
         cx: Cx::empty(),
         decl,
         out: Vec::new(),
+        tally: None,
+        app_head: String::new(),
     };
     // The statement is emitted component-wise by `elab_decl_inner`'s closing
     // loop, and `emit_ty` on the whole `Π` visits binder `i` at depth `i` and
@@ -70,16 +72,68 @@ pub(crate) fn walk_decl(
     w.out
 }
 
+/// **Image attribution** (`HEATHER_IMAGE_ATTRIBUTION`, a measurement
+/// instrument): the same walk, charging each emitted slot the syntax nodes
+/// its content costs in a module image, whole and never descended into —
+/// so a slot's mass is attributed to the outermost slot that wrote it — and
+/// each term-spine node one. Returns `(slot, nodes)` rows.
+pub(crate) fn tally_decl(
+    el: &Elaborator,
+    decl: &str,
+    stmt: &Type,
+    term: Option<&Term>,
+) -> std::collections::BTreeMap<&'static str, u64> {
+    let mut w = Walk {
+        el,
+        cx: Cx::empty(),
+        decl,
+        out: Vec::new(),
+        tally: Some(std::collections::BTreeMap::new()),
+        app_head: String::new(),
+    };
+    w.slot("stmt", stmt, 0);
+    if let Some(term) = term {
+        w.term(term, 0);
+    }
+    w.tally.unwrap_or_default()
+}
+
 struct Walk<'a> {
     el: &'a Elaborator,
     cx: Cx,
     decl: &'a str,
     out: Vec<EmissionFinding>,
+    /// Set by [`tally_decl`]: count instead of asking `emit_ty`.
+    tally: Option<std::collections::BTreeMap<&'static str, u64>>,
+    /// The head of the application whose slots are being tallied, for the
+    /// heavy-slot dump.
+    app_head: String,
 }
 
 impl Walk<'_> {
     /// One emitted annotation slot, at `d` binders past the empty context.
     fn slot(&mut self, name: &'static str, ty: &Type, d: u32) {
+        if let Some(tally) = self.tally.as_mut() {
+            let nodes = crate::module_image::type_image_nodes(ty);
+            *tally.entry(name).or_default() += nodes;
+            // The heaviest single slots, spelled through the kernel's
+            // node-budgeted `Debug`, for reading what the mass is.
+            if nodes >= 1_000_000 {
+                if let Some(path) = std::env::var_os("HEATHER_IMAGE_ATTRIBUTION_BIG") {
+                    use std::io::Write;
+                    if let Ok(mut f) =
+                        std::fs::OpenOptions::new().create(true).append(true).open(path)
+                    {
+                        let _ = writeln!(
+                            f,
+                            "{}\t{name}\t{nodes}\td={d}\thead={}\t{ty:?}",
+                            self.decl, self.app_head
+                        );
+                    }
+                }
+            }
+            return;
+        }
         if let Some(emitted) = self.el.emit_ty(&self.cx, ty, d) {
             self.out.push(EmissionFinding {
                 decl: self.decl.to_string(),
@@ -109,6 +163,11 @@ impl Walk<'_> {
         // has a name for the whole, and that name may not stand in a slot
         // that holds the component (§8).
         let _ = level;
+        if let Some(tally) = self.tally.as_mut() {
+            *tally.entry(name).or_default() += crate::module_image::type_image_nodes(shape)
+                + crate::module_image::term_image_nodes(arity);
+            return;
+        }
         if let Some((s, a)) = self.el.emit_wf_slots(&self.cx, shape, arity, d) {
             self.out.push(EmissionFinding {
                 decl: self.decl.to_string(),
@@ -127,6 +186,9 @@ impl Walk<'_> {
     }
 
     fn term(&mut self, t: &Term, d: u32) {
+        if let Some(tally) = self.tally.as_mut() {
+            *tally.entry("term-spine").or_default() += 1;
+        }
         match t {
             Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero | Term::NatLit(_) => {}
             Term::Succ(t) => self.term(t, d),
@@ -395,6 +457,21 @@ impl Walk<'_> {
                 arg,
                 ..
             } => {
+                if self.tally.is_some() {
+                    let mut head: &Term = fun;
+                    while let Term::App { fun, .. } = head {
+                        head = fun;
+                    }
+                    self.app_head = match head {
+                        Term::GlobalTm { var, .. } => {
+                            let len = self.el.psi.bindings.len();
+                            len.checked_sub(1 + var.0 as usize)
+                                .and_then(|abs| self.el.global_name_at(abs))
+                                .unwrap_or_else(|| format!("u{}", var.0))
+                        }
+                        other => format!("{other:?}").chars().take(60).collect(),
+                    };
+                }
                 self.slot("App.dom", dom, d);
                 self.slot("App.cod", cod, d + 1);
                 self.term(fun, d);

@@ -3656,6 +3656,7 @@ impl Elaborator {
                 emission_walk::walk_decl(self, &decl.name, &stmt, term.as_ref());
             found.borrow_mut().extend(findings);
         }
+        self.attribute_image(&decl.name, &stmt, term.as_ref());
 
         // The kernel is the gate: check the statement, then the term.
         // `stats::time_kernel` attributes exactly this to the kernel half of
@@ -7580,6 +7581,26 @@ impl Elaborator {
         // `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))`, which no structural
         // reader can see the tag through (`unspell_sum_components`).
         Ok(self.unspell_sum_components(&head).unwrap_or(head))
+    }
+
+    /// `HEATHER_IMAGE_ATTRIBUTION=<file>` (a measurement instrument): append
+    /// one `decl<TAB>slot<TAB>nodes` row per emitted slot kind of this
+    /// declaration, charged the syntax nodes a module image spends on it
+    /// (`emission_walk::tally_decl`). Rows only; the file is never truncated.
+    pub(crate) fn attribute_image(&self, decl: &str, stmt: &Type, term: Option<&Term>) {
+        static PATH: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+        let Some(path) = PATH.get_or_init(|| std::env::var_os("HEATHER_IMAGE_ATTRIBUTION")) else {
+            return;
+        };
+        use std::io::Write;
+        let rows = emission_walk::tally_decl(self, decl, stmt, term);
+        let mut out = String::new();
+        for (slot, nodes) in rows {
+            out.push_str(&format!("{decl}\t{slot}\t{nodes}\n"));
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = f.write_all(out.as_bytes());
+        }
     }
 
     /// How far the committed bindings are pushed out by the declaration-local
