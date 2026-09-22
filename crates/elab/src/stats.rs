@@ -105,8 +105,6 @@ registry! {
     counters {
         DeclsGated = "decls_gated",
         GendefsPushed = "gendefs_pushed",
-        MintsPushed = "mints_pushed",
-        MintsDeclined = "mints_declined",
         ResolveGoals = "resolve_goals",
         UnifyCalls = "unify_calls",
         CacheHashes = "cache_hashes",

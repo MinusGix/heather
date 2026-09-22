@@ -2154,59 +2154,6 @@ impl Elaborator {
         }
         let pre_whnf = expected;
         let expected = self.whnf(cx, expected, span)?;
-        // The sharing-preserving readback's spike
-        // (`docs/projected-tuple-tower-design.md` §9 items 2–3): what a
-        // readback of the *value* the machine already produced would write
-        // down, counted beside the reduct the rewriter wrote.
-        crate::rbcount::at_build_ctor(
-            self.semantic_oracle().world(),
-            &cx.gamma,
-            pre_whnf,
-            self.fuel,
-            &expected,
-        );
-        // …and the *naming*'s spike (§11.4): the same readback with its shared
-        // sub-values minted into a **scratch** Ψ block, counted and thrown
-        // away. Nothing on the commit path moves; what this answers is whether
-        // the emitted node count collapses to the graph's and whether every
-        // mint has a type.
-        crate::rbname::at_build_ctor(
-            self.semantic_oracle().world(),
-            &cx.gamma,
-            pre_whnf,
-            self.fuel,
-        );
-        // …and, with `HEATHER_RB=fire`, the components below are read out of
-        // the **value** the machine already produced rather than out of the
-        // rewriter's reduct (`docs/projected-tuple-tower-design.md` §6). The
-        // two rules `Elaborator::whnf` applies to its own answer apply here
-        // too: a reference to a registered lowering is the registry's copy
-        // and is not read back at all, and a sum of the whole-type code's
-        // components is respelled inline — which is the spelling the value
-        // machine leaves folded.
-        let expected = if crate::rbemit::firing() && self.unspell_here(pre_whnf).is_none() {
-            let t = crate::rbemit::at_build_ctor(
-                self.semantic_oracle().world(),
-                &cx.gamma,
-                pre_whnf,
-                self.fuel,
-                expected,
-            );
-            self.unspell_here(&t)
-                .or_else(|| self.unspell_sum_components(&t))
-                .unwrap_or(t)
-        } else {
-            // …and, on the **default** path, the same readback with its
-            // shared sub-values **named**: one mint per value, `Δ` the
-            // value's own free variables, referenced `u^δ` for a term and
-            // `El l (u^δ)` over a code for a type
-            // (`docs/name-per-value-design.md` §4 and §8.3, and the tower
-            // design's §11.4/§12.7 for how the block enters Ψ). Fires only
-            // where the readback buys — a reduct past `mint::FIRE_NODES` —
-            // so a declaration with nothing worth naming keeps the
-            // rewriter's spelling byte for byte.
-            self.mint_ctor_reduct(cx, pre_whnf, expected, span)?
-        };
         match self.tag_of(&expected) {
             Some(found) if found.tag == ind.tag => {}
             _ => {

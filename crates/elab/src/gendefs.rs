@@ -3369,12 +3369,9 @@ impl Elaborator {
         self.push_generated(Some(key), name, LocalCtx::nil(), ty, level, body, span)
     }
 
-    /// The gate-and-push half of [`Self::push_gen_def`], over an arbitrary
-    /// `Δ`. A generated definition is closed and keyed by its declaration's
-    /// tag; a **mint** (`crate::mint`) is neither — its `Δ` is the value's own
-    /// free variables and its identity is its position — so what they share is
-    /// exactly this: an ordinary bodied Ψ binding that faces the same gate and
-    /// takes its own cache identity (`docs/cache-v1-design.md` §4).
+    /// The gate-and-push half of [`Self::push_gen_def`]: an ordinary bodied
+    /// Ψ binding that faces the same gate as a `fn` and takes its own cache
+    /// identity (`docs/cache-v1-design.md` §4).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_generated(
         &mut self,
@@ -3390,11 +3387,7 @@ impl Elaborator {
         // row says how much of it was spent minting the definitions it needed
         // (`docs/instrumentation-design.md` §5). The kernel gate below keeps
         // its own bracket, and the exclusive rule keeps the two apart.
-        crate::stats::count(if key.is_some() {
-            crate::stats::Counter::GendefsPushed
-        } else {
-            crate::stats::Counter::MintsPushed
-        });
+        crate::stats::count(crate::stats::Counter::GendefsPushed);
         let _phase = crate::stats::guard(crate::stats::Timer::Gendefs);
         {
             // A generated definition faces the same gate as a `fn` and the same
