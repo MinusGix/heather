@@ -831,11 +831,13 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Dot {
             recv,
             name,
+            tyargs,
             args,
             named,
         } => Dot {
             recv: Box::new(rename_expr(m, recv)),
             name: name.clone(),
+            tyargs: tyargs.iter().map(|t| rename_ty(m, t)).collect(),
             args: args
                 .as_ref()
                 .map(|v| v.iter().map(|a| rename_expr(m, a)).collect()),
@@ -1009,9 +1011,10 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
             expr_mentions(head, name) || args.iter().any(|a| ty_mentions(a, name))
         }
         ExprKind::Dot {
-            recv, args, named, ..
+            recv, tyargs, args, named, ..
         } => {
             expr_mentions(recv, name)
+                || tyargs.iter().any(|a| ty_mentions(a, name))
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
@@ -2618,6 +2621,7 @@ impl Elaborator {
                                     ExprKind::Dot {
                                         recv: Box::new(var(g, span)),
                                         name: fname.clone(),
+                                        tyargs: Vec::new(),
                                         args: None,
                                         named: Vec::new(),
                                     },
@@ -2796,6 +2800,7 @@ impl Elaborator {
                             ExprKind::Dot {
                                 recv: Box::new(source),
                                 name: component.clone(),
+                                tyargs: Vec::new(),
                                 args: None,
                                 named: Vec::new(),
                             },
@@ -2808,6 +2813,7 @@ impl Elaborator {
                             ExprKind::Dot {
                                 recv: Box::new(source),
                                 name: n,
+                                tyargs: Vec::new(),
                                 args: None,
                                 named: Vec::new(),
                             },

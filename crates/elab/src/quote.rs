@@ -1443,9 +1443,10 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 .try_for_each(|a| scan_splices(&a.body, menv, out))
         }
         ExprKind::Dot {
-            recv, args, named, ..
+            recv, tyargs, args, named, ..
         } => {
             scan_splices(recv, menv, out)?;
+            tyargs.iter().try_for_each(|t| walk_ty(t, menv, out))?;
             args.iter()
                 .flatten()
                 .try_for_each(|a| scan_splices(a, menv, out))?;

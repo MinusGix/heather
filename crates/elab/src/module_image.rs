@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x07";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x06";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x08";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x07";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1002,8 +1002,9 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::MatchCode { scrut, motive, arms } => {
             w.byte(15); put_expr(w, scrut); put_ty(w, motive); w.vec(arms, put_arm);
         }
-        ExprKind::Dot { recv, name, args, named } => {
+        ExprKind::Dot { recv, name, tyargs, args, named } => {
             w.byte(16); put_expr(w, recv); w.string(name);
+            w.vec(tyargs, put_ty);
             w.option(args.as_ref(), |w, args| w.vec(args, put_expr)); w.vec(named, put_named_arg);
         }
         ExprKind::Index { recv, idx } => { w.byte(17); put_expr(w, recv); put_expr(w, idx); }
@@ -1055,6 +1056,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             },
             16 => ExprKind::Dot {
                 recv: Box::new(get_expr(r)?), name: r.string()?,
+                tyargs: r.vec(get_ty)?,
                 args: r.option(|r| r.vec(get_expr))?, named: r.vec(get_named_arg)?,
             },
             17 => ExprKind::Index { recv: Box::new(get_expr(r)?), idx: Box::new(get_expr(r)?) },
@@ -1969,7 +1971,11 @@ mod tests {
         let delta = elaborator
             .elab_module_delta(
                 "codec",
-                "fn id(x: Nat) -> Nat { x }\ntheorem id_zero(): id(0) = 0 { refl }",
+                "inductive Box<A> { Wrap(A) }\n\
+                 fn Box::get<A>(self b: Box<A>) -> A { match b { Wrap(x) => x } }\n\
+                 theorem get_zero(): Wrap(0).get<Nat>() = 0 { refl }\n\
+                 fn id(x: Nat) -> Nat { x }\n\
+                 theorem id_zero(): id(0) = 0 { refl }",
                 identity,
             )
             .expect("build test delta");

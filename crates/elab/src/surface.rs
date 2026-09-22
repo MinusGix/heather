@@ -492,9 +492,10 @@ mod count_holes_impl {
             // and a hole is keyed by span, so one syntactic hole stays one
             // goal either way.
             ExprKind::Dot {
-                recv, args, named, ..
+                recv, tyargs, args, named, ..
             } => {
                 expr(recv, n);
+                tyargs.iter().for_each(|t| ty(t, n));
                 args.iter().flatten().for_each(|a| expr(a, n));
                 named.iter().for_each(|a| expr(&a.expr, n));
             }

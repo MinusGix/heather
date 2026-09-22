@@ -4105,9 +4105,10 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::CollectionLit(es) => es.iter().any(|x| expr_mentions(x, name)),
         ExprKind::Index { recv, idx } => expr_mentions(recv, name) || expr_mentions(idx, name),
         ExprKind::Dot {
-            recv, args, named, ..
+            recv, tyargs, args, named, ..
         } => {
             expr_mentions(recv, name)
+                || tyargs.iter().any(|t| occurs(t, name).is_some())
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
                 || named.iter().any(|a| expr_mentions(&a.expr, name))
         }

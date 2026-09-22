@@ -4568,10 +4568,19 @@ impl Elaborator {
             ExprKind::Dot {
                 recv,
                 name,
+                tyargs,
                 args,
                 named,
             } => {
-                match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+                let resolution =
+                    self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
+                if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {
+                    return err(
+                        format!("type arguments after `.{name}` require a method call"),
+                        e.span,
+                    );
+                }
+                match resolution {
                     DotResolution::Inferred(t, got, _) => {
                         self.note_check_mismatch(cx, &got, expected, lvl, e.span);
                         Ok(t)
@@ -5266,9 +5275,19 @@ impl Elaborator {
             ExprKind::Dot {
                 recv,
                 name,
+                tyargs,
                 args,
                 named,
-            } => match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+            } => {
+                let resolution =
+                    self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
+                if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {
+                    return err(
+                        format!("type arguments after `.{name}` require a method call"),
+                        e.span,
+                    );
+                }
+                match resolution {
                 DotResolution::Inferred(t, ty, l) => Ok((t, ty, l)),
                 DotResolution::Project(t, ty, l, fskel) => match args {
                     None => Ok((t, ty, l)),
@@ -5278,7 +5297,8 @@ impl Elaborator {
                 DotResolution::Dispatch(t, ty, l, fskel, dargs) => self
                     .apply_projection(cx, name, t, ty, l, fskel, &dargs, named, expected, e.span),
                 DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
-            },
+                }
+            }
             // A record literal in inference position: the fields are permuted
             // into declaration order and the instantiation is recovered from
             // them, exactly as for any constructor application

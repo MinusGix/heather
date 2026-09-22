@@ -1,27 +1,27 @@
 // A success value or an error. `?` propagates Err from a function or lambda.
 inductive Result<A, E> { Ok(value: A), Err(error: E) }
 
-fn map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
+fn Result::map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
     match r { Ok(value) => Ok(f(value)), Err(error) => Err(error) }
 }
 
-fn and_then<A, B, E>(self r: Result<A, E>, f: A → Result<B, E>) → Result<B, E> {
+fn Result::and_then<A, B, E>(self r: Result<A, E>, f: A → Result<B, E>) → Result<B, E> {
     match r { Ok(value) => f(value), Err(error) => Err(error) }
 }
 
-fn map_err<A, E, F>(self r: Result<A, E>, f: E → F) → Result<A, F> {
+fn Result::map_err<A, E, F>(self r: Result<A, E>, f: E → F) → Result<A, F> {
     match r { Ok(value) => Ok(value), Err(error) => Err(f(error)) }
 }
 
-fn unwrap_or<A, E>(self r: Result<A, E>, fallback: A) → A {
+fn Result::unwrap_or<A, E>(self r: Result<A, E>, fallback: A) → A {
     match r { Ok(value) => value, Err(_) => fallback }
 }
 
-fn fold<A, E, B>(self r: Result<A, E>, success: A → B, failure: E → B) → B {
+fn Result::fold<A, E, B>(self r: Result<A, E>, success: A → B, failure: E → B) → B {
     match r { Ok(value) => success(value), Err(error) => failure(error) }
 }
 
-theorem fold_ok<A, E, B>(value: A, success: A → B, failure: E → B):
-    fold<A, E, B>(Ok(value), success, failure) = success(value) { refl }
-theorem fold_err<A, E, B>(error: E, success: A → B, failure: E → B):
-    fold<A, E, B>(Err(error), success, failure) = failure(error) { refl }
+theorem Result::fold_ok<A, E, B>(value: A, success: A → B, failure: E → B):
+    Ok(value).fold<A, E, B>(success, failure) = success(value) { refl }
+theorem Result::fold_err<A, E, B>(error: E, success: A → B, failure: E → B):
+    Err(error).fold<A, E, B>(success, failure) = failure(error) { refl }

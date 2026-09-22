@@ -476,6 +476,7 @@ impl Elaborator {
                     kind: ExprKind::Dot {
                         recv: Box::new(source),
                         name: component.clone(),
+                        tyargs: Vec::new(),
                         args: None,
                         named: Vec::new(),
                     },
@@ -488,6 +489,7 @@ impl Elaborator {
                     kind: ExprKind::Dot {
                         recv: Box::new(source.clone()),
                         name: n.clone()?,
+                        tyargs: Vec::new(),
                         args: None,
                         named: Vec::new(),
                     },

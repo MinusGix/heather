@@ -479,6 +479,7 @@ fn project(recv: Expr, proj: Option<(usize, &'static str)>, args: Vec<Expr>, spa
             kind: ExprKind::Dot {
                 recv: Box::new(r),
                 name: "snd".into(),
+                tyargs: Vec::new(),
                 args: None,
                 named: Vec::new(),
             },
@@ -489,6 +490,7 @@ fn project(recv: Expr, proj: Option<(usize, &'static str)>, args: Vec<Expr>, spa
         kind: ExprKind::Dot {
             recv: Box::new(r),
             name: last.to_string(),
+            tyargs: Vec::new(),
             args: Some(args),
             named: Vec::new(),
         },
@@ -1903,11 +1905,13 @@ impl Rewrite<'_> {
             ExprKind::Dot {
                 recv,
                 name,
+                tyargs,
                 args,
                 named,
             } => ExprKind::Dot {
                 recv: Box::new(self.expr(recv)),
                 name: name.clone(),
+                tyargs: tyargs.clone(),
                 args: args
                     .as_ref()
                     .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
@@ -2232,11 +2236,13 @@ fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) -> Expr {
         ExprKind::Dot {
             recv,
             name,
+            tyargs,
             args,
             named,
         } => ExprKind::Dot {
             recv: Box::new(go(recv, bound)),
             name: name.clone(),
+            tyargs: tyargs.clone(),
             args: args
                 .as_ref()
                 .map(|xs| xs.iter().map(|x| go(x, bound)).collect()),

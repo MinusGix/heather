@@ -5,8 +5,8 @@
 
 use std::sync::Arc as Rc;
 
-use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 use heather_kernel::term::{CtxBase, GlobalBinding, Type};
+use heather_syntax::{Expr, ExprKind, NamedArg, Span, Ty};
 
 use crate::{
     BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, err, skel_of_ty,
@@ -42,6 +42,7 @@ impl Elaborator {
         cx: &Cx,
         recv: &Expr,
         name: &str,
+        tyargs: &[Ty],
         args: &Option<Vec<Expr>>,
         named: &[NamedArg],
         span: Span,
@@ -115,7 +116,7 @@ impl Elaborator {
         // receiver's own type (issues/type-owned-members-receiver-slice.md).
         // The `member_bases` test comes first for the same reason the record
         // one does — no receiver is inferred for a name nobody attaches.
-        let head = self.member_head(cx, recv, name, span)?;
+        let head = self.member_head(cx, recv, name, !tyargs.is_empty(), span)?;
         let (head, vector_map) = if head == name && !self.shadowed(cx, name) {
             self.imported_receiver_head(cx, recv, name, span)?
         } else {
@@ -188,10 +189,19 @@ impl Elaborator {
         }
         let at = at.min(args.len());
         args.insert(at, recv.clone());
-        let head = Expr {
+        let mut head = Expr {
             kind: ExprKind::Var(name.to_string()),
             span,
         };
+        if !tyargs.is_empty() {
+            head = Expr {
+                kind: ExprKind::TyApp {
+                    head: Box::new(head),
+                    args: tyargs.to_vec(),
+                },
+                span,
+            };
+        }
         Ok(DotResolution::Method(Expr {
             kind: ExprKind::App {
                 head: Box::new(head),
@@ -214,19 +224,37 @@ impl Elaborator {
     /// Preferring the member would mean that adding `D::name` to a library
     /// silently reinterprets an existing `t.name(…)`, which is the one thing
     /// the growth invariant forbids (docs/modules-design.md §4).
-    fn member_head(&self, cx: &Cx, recv: &Expr, name: &str, span: Span) -> R<String> {
+    fn member_head(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        name: &str,
+        constructor_fallback: bool,
+        span: Span,
+    ) -> R<String> {
         if !self.names.has_member_base(name) {
             return Ok(name.to_string());
         }
-        // Inference failure is not an error here, exactly as for a field: the
-        // fallback is what handles a receiver whose type only the call fixes.
-        let Ok((_, rty, _)) = self.elab_infer(cx, recv) else {
-            return Ok(name.to_string());
-        };
-        let Some(carrier) = self.receiver_carrier(cx, &rty, span) else {
-            return Ok(name.to_string());
-        };
-        let Some(owner) = self.type_namespace(cx, &rty, span) else {
+        // A constructor identifies its nominal owner even when its result
+        // parameters cannot yet be inferred. This matters for an explicitly
+        // instantiated method call such as `Ok(x).fold<A, E, B>(...)`: `E`
+        // is supplied by the method's type arguments, but choosing
+        // `Result::fold` has to happen before those arguments are applied.
+        let inferred = self.elab_infer(cx, recv).ok().and_then(|(_, rty, _)| {
+            Some((
+                self.receiver_carrier(cx, &rty, span)?,
+                self.type_namespace(cx, &rty, span)?,
+            ))
+        });
+        let Some((carrier, owner)) = inferred.or_else(|| {
+            constructor_fallback
+                .then(|| self.constructor_receiver_owner(cx, recv))
+                .flatten()
+        })
+        else {
+            // Inference failure is not an error here, exactly as for a field:
+            // the fallback is what handles a receiver whose type only the
+            // call fixes.
             return Ok(name.to_string());
         };
         let qualified = format!("{owner}::{name}");
@@ -271,6 +299,29 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// A constructor application's declaration, without elaborating its
+    /// fields or solving its result parameters.
+    fn constructor_receiver_owner(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+    ) -> Option<(ReceiverCarrier, String)> {
+        let head = match &recv.kind {
+            ExprKind::App { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let head = match head {
+            ExprKind::TyApp { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let ExprKind::Var(name) = head else {
+            return None;
+        };
+        let (ind, _) = self.ctor_here(cx, name)?;
+        let key = crate::names::qkey(&ind.scope.module, &ind.name);
+        Some((ReceiverCarrier::Named(key), ind.name.clone()))
     }
 
     /// The outer carrier of the in-progress declaration's method subject.

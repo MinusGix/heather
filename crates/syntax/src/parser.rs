@@ -3433,9 +3433,10 @@ impl Parser {
         Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
     }
 
-    /// An atom followed by zero or more field accesses `.f` / `.f(args)`, a
-    /// record literal `D { … }`, and zero or more applications `(args)` — so
-    /// the head of a call can be any expression: `g(a)(b)`, `(λ x => x)(3)`
+    /// An atom followed by zero or more field accesses `.f`, method calls
+    /// `.f(args)` / `.f<T, …>(args)`, a record literal `D { … }`, and zero or
+    /// more applications `(args)` — so the head of a call can be any
+    /// expression: `g(a)(b)`, `(λ x => x)(3)`
     /// (docs/surface-function-types.md §1.3).
     ///
     /// `.f` is **not** desugared here any more. It used to become
@@ -3495,16 +3496,25 @@ impl Parser {
                 TokKind::Dot => {
                     self.bump();
                     let (field, fsp) = self.ident("field or method name")?;
+                    let (tyargs, member_end) = self
+                        .try_tyargs()
+                        .map_or_else(|| (Vec::new(), fsp), |(args, end)| (args, end));
                     let (args, named, end) = if matches!(self.peek(), TokKind::LParen) {
                         self.bump();
                         let (args, named, end) = self.call_args()?;
                         (Some(args), named, end)
                     } else {
-                        (None, Vec::new(), fsp)
+                        (None, Vec::new(), member_end)
                     };
                     let span = e.span.join(end);
                     e = Expr {
-                        kind: ExprKind::Dot { recv: Box::new(e), name: field, args, named },
+                        kind: ExprKind::Dot {
+                            recv: Box::new(e),
+                            name: field,
+                            tyargs,
+                            args,
+                            named,
+                        },
                         span,
                     };
                 }
@@ -5628,6 +5638,28 @@ mod tests {
         assert_eq!(name, "sym");
         assert_eq!(args.as_ref().expect("`()` means a call").len(), 0);
         assert_eq!(as_call(&recv.kind).0, "add_succ");
+    }
+
+    #[test]
+    fn method_call_parses_explicit_type_arguments() {
+        let k = body("x.fold<Nat, List<Nat>>(success, failure)");
+        let ExprKind::Dot { recv, name, tyargs, args, .. } = &k else {
+            panic!("expected a Dot, got {k:?}")
+        };
+        assert!(matches!(&recv.kind, ExprKind::Var(v) if v == "x"));
+        assert_eq!(name, "fold");
+        assert_eq!(tyargs.len(), 2);
+        assert_eq!(args.as_ref().expect("a call").len(), 2);
+    }
+
+    #[test]
+    fn tight_less_than_after_a_member_still_falls_back_to_comparison() {
+        let k = body("x.value<limit");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "<");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, ExprKind::Dot { name, tyargs, .. }
+            if name == "value" && tyargs.is_empty()));
     }
 
     #[test]
