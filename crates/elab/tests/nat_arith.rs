@@ -70,13 +70,13 @@ fn bad(extra: &str) -> String {
 
 #[test]
 fn min_and_max_reduce_at_closed_arguments() {
-    ok("theorem a(): max(2, 5) = 5 { refl }
-theorem b(): max(5, 2) = 5 { refl }
-theorem c(): min(2, 5) = 2 { refl }
-theorem d(): min(5, 2) = 2 { refl }
-theorem e(): max(0, 0) = 0 { refl }
-theorem f(): sub(5)(2) = 3 { refl }
-theorem g(): sub(2)(5) = 0 { refl }");
+    ok("theorem a(): Nat::max(2, 5) = 5 { refl }
+theorem b(): Nat::max(5, 2) = 5 { refl }
+theorem c(): Nat::min(2, 5) = 2 { refl }
+theorem d(): Nat::min(5, 2) = 2 { refl }
+theorem e(): Nat::max(0, 0) = 0 { refl }
+theorem f(): Nat::sub(5, 2) = 3 { refl }
+theorem g(): Nat::sub(2, 5) = 0 { refl }");
 }
 
 /// The control without which the test above is worthless: reduction has to
@@ -84,48 +84,48 @@ theorem g(): sub(2)(5) = 0 { refl }");
 /// `min` that returned its first would both satisfy §1 alone.
 #[test]
 fn min_and_max_do_not_reduce_to_the_wrong_side() {
-    bad("theorem t(): max(2, 5) = 2 { refl }");
-    bad("theorem t(): min(2, 5) = 5 { refl }");
+    bad("theorem t(): Nat::max(2, 5) = 2 { refl }");
+    bad("theorem t(): Nat::min(2, 5) = 5 { refl }");
 }
 
 #[test]
 fn div_and_mod_reduce_together_at_closed_arguments() {
-    ok("theorem a(): div(0, 3) = 0 { refl }
-theorem b(): mod(0, 3) = 0 { refl }
-theorem c(): div(7, 3) = 2 { refl }
-theorem d(): mod(7, 3) = 1 { refl }
-theorem e(): div(9, 3) = 3 { refl }
-theorem f(): mod(9, 3) = 0 { refl }
-theorem g(): div(5, 1) = 5 { refl }
-theorem h(): mod(5, 1) = 0 { refl }
-theorem i(): div(5, 0) = 0 { refl }
-theorem j(): mod(5, 0) = 5 { refl }");
+    ok("theorem a(): Nat::div(0, 3) = 0 { refl }
+theorem b(): Nat::mod(0, 3) = 0 { refl }
+theorem c(): Nat::div(7, 3) = 2 { refl }
+theorem d(): Nat::mod(7, 3) = 1 { refl }
+theorem e(): Nat::div(9, 3) = 3 { refl }
+theorem f(): Nat::mod(9, 3) = 0 { refl }
+theorem g(): Nat::div(5, 1) = 5 { refl }
+theorem h(): Nat::mod(5, 1) = 0 { refl }
+theorem i(): Nat::div(5, 0) = 0 { refl }
+theorem j(): Nat::mod(5, 0) = 5 { refl }");
 }
 
 #[test]
 fn div_and_mod_do_not_compute_to_neighboring_values() {
-    bad("theorem t(): div(7, 3) = 3 { refl }");
-    bad("theorem t(): mod(7, 3) = 0 { refl }");
-    bad("theorem t(): mod(5, 0) = 0 { refl }");
+    bad("theorem t(): Nat::div(7, 3) = 3 { refl }");
+    bad("theorem t(): Nat::mod(7, 3) = 0 { refl }");
+    bad("theorem t(): Nat::mod(5, 0) = 0 { refl }");
 }
 
 #[test]
 fn div_and_mod_euclidean_laws_compose_at_open_arguments() {
     ok(
-        "theorem reconstruct(n, d: Nat): div(n, d) * d + mod(n, d) = n {
-    div_mul_add_mod(n, d)
+        "theorem reconstruct(n, d: Nat): n.div(d) * d + n.mod(d) = n {
+    n.div_mul_add_mod(d)
 }
-theorem bounded(n, d: Nat, h: 0 < d): mod(n, d) < d {
-    mod_lt(n, d, h)
+theorem bounded(n, d: Nat, h: 0 < d): n.mod(d) < d {
+    n.mod_lt(d, h)
 }
-theorem quotient_at_zero(n: Nat): div(n, 0) = 0 { div_zero(n) }
-theorem remainder_at_zero(n: Nat): mod(n, 0) = n { mod_zero(n) }",
+theorem quotient_at_zero(n: Nat): n.div(0) = 0 { n.div_zero() }
+theorem remainder_at_zero(n: Nat): n.mod(0) = n { n.mod_zero() }",
     );
 }
 
 #[test]
 fn the_positive_divisor_hypothesis_is_load_bearing() {
-    bad("theorem t(n, d: Nat): mod(n, d) < d { mod_lt(n, d, trivial) }");
+    bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d, trivial) }");
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +138,8 @@ fn the_positive_divisor_hypothesis_is_load_bearing() {
 
 #[test]
 fn min_and_max_reduce_at_an_open_second_argument() {
-    ok("theorem t(n: Nat): max(0, n) = n { refl }
-theorem u(n: Nat): min(0, n) = 0 { refl }");
+    ok("theorem t(n: Nat): Nat::max(0, n) = n { refl }
+theorem u(n: Nat): Nat::min(0, n) = 0 { refl }");
 }
 
 /// The other side is stuck, and *not* because the fact is false — it is true
@@ -148,8 +148,8 @@ theorem u(n: Nat): min(0, n) = 0 { refl }");
 /// the note above is out of date.
 #[test]
 fn the_descending_argument_is_the_first_one() {
-    bad("theorem t(n: Nat): max(n, 0) = n { refl }");
-    bad("theorem t(n: Nat): min(n, 0) = 0 { refl }");
+    bad("theorem t(n: Nat): n.max(0) = n { refl }");
+    bad("theorem t(n: Nat): n.min(0) = 0 { refl }");
 }
 
 /// The lattice kit at open arguments: the four bounds, the two universal
@@ -158,14 +158,14 @@ fn the_descending_argument_is_the_first_one() {
 /// variables.
 #[test]
 fn the_lattice_kit_composes_at_open_arguments() {
-    ok("theorem a(x, y: Nat): x <= max(x)(y) { le_max_l(x)(y) }
-theorem b(x, y: Nat): y <= max(x)(y) { le_max_r(x)(y) }
-theorem c(x, y: Nat): min(x)(y) <= x { min_le_l(x)(y) }
-theorem d(x, y: Nat): min(x)(y) <= y { min_le_r(x)(y) }
-theorem e(x, y, z: Nat, h1: x <= z, h2: y <= z): max(x)(y) <= z { max_le(x)(y, z, h1, h2) }
-theorem f(x, y, z: Nat, h1: z <= x, h2: z <= y): z <= min(x)(y) { le_min(x)(y, z, h1, h2) }
-theorem g(x, y: Nat, h: x <= y): max(x)(y) = y { max_eq_r(x)(y, h) }
-theorem h(x, y: Nat, h: x <= y): min(x)(y) = x { min_eq_l(x)(y, h) }");
+    ok("theorem a(x, y: Nat): x <= x.max(y) { x.le_max_l(y) }
+theorem b(x, y: Nat): y <= x.max(y) { x.le_max_r(y) }
+theorem c(x, y: Nat): x.min(y) <= x { x.min_le_l(y) }
+theorem d(x, y: Nat): x.min(y) <= y { x.min_le_r(y) }
+theorem e(x, y, z: Nat, h1: x <= z, h2: y <= z): x.max(y) <= z { x.max_le(y, z, h1, h2) }
+theorem f(x, y, z: Nat, h1: z <= x, h2: z <= y): z <= x.min(y) { Nat::le_min(x, y, z, h1, h2) }
+theorem g(x, y: Nat, h: x <= y): x.max(y) = y { x.max_eq_r(y, h) }
+theorem h(x, y: Nat, h: x <= y): x.min(y) = x { Nat::min_eq_l(x, y, h) }");
 }
 
 /// The controls for the two lemmas above whose statement has a side to get
@@ -173,8 +173,8 @@ theorem h(x, y: Nat, h: x <= y): min(x)(y) = x { min_eq_l(x)(y, h) }");
 /// arguments and not the same one twice.
 #[test]
 fn the_order_decided_equations_pick_the_right_side() {
-    bad("theorem t(x, y: Nat, h: x <= y): max(x)(y) = x { max_eq_r(x)(y, h) }");
-    bad("theorem t(x, y, z: Nat, h: x <= z): max(x)(y) <= z { max_le(x)(y, z, h, h) }");
+    bad("theorem t(x, y: Nat, h: x <= y): x.max(y) = x { x.max_eq_r(y, h) }");
+    bad("theorem t(x, y, z: Nat, h: x <= z): x.max(y) <= z { x.max_le(y, z, h, h) }");
 }
 
 /// A **checking** position rather than a computation (the axis
@@ -184,10 +184,10 @@ fn the_order_decided_equations_pick_the_right_side() {
 /// is the smallest real consumer of both at once.
 #[test]
 fn min_and_max_check_inside_a_composite() {
-    ok("fn clamp(lo, hi, x: Nat) -> Nat { max(lo, min(hi, x)) }
-theorem above(lo, hi, x: Nat): lo <= clamp(lo, hi, x) { le_max_l(lo)(min(hi)(x)) }
+    ok("fn clamp(lo, hi, x: Nat) -> Nat { lo.max(hi.min(x)) }
+theorem above(lo, hi, x: Nat): lo <= clamp(lo, hi, x) { lo.le_max_l(hi.min(x)) }
 theorem below(lo, hi, x: Nat, h: lo <= hi): clamp(lo, hi, x) <= hi {
-    max_le(lo)(min(hi)(x), hi, h, min_le_l(hi)(x))
+    lo.max_le(hi.min(x), hi, h, hi.min_le_l(x))
 }
 theorem at_closed(): clamp(2, 7, 9) = 7 { refl }
 theorem inside_the_band(): clamp(2, 7, 5) = 5 { refl }
@@ -200,10 +200,10 @@ theorem below_the_band(): clamp(2, 7, 0) = 2 { refl }");
 
 #[test]
 fn the_sub_kit_composes_at_open_arguments() {
-    ok("theorem a(n: Nat): sub(n)(n) = 0 { sub_self(n) }
-theorem b(n, m: Nat): sub(add(n, m))(m) = n { add_sub_cancel(n, m) }
-theorem c(n, m: Nat, h: n <= m): add(sub(m)(n), n) = m { sub_add_cancel(n, m, h) }
-theorem d(m, n: Nat): sub(m)(n) <= m { sub_le(m)(n) }");
+    ok("theorem a(n: Nat): n - n = 0 { n.sub_self() }
+theorem b(n, m: Nat): (n + m) - m = n { n.add_sub_cancel(m) }
+theorem c(n, m: Nat, h: n <= m): (m - n) + n = m { n.sub_add_cancel(m, h) }
+theorem d(m, n: Nat): m - n <= m { m.sub_le(n) }");
 }
 
 /// `sub_add_cancel`'s hypothesis is load-bearing: without a comparison there is
@@ -213,9 +213,9 @@ theorem d(m, n: Nat): sub(m)(n) <= m { sub_le(m)(n) }");
 /// the difference outright, so the unconditional statement is *false*.
 #[test]
 fn the_conditional_cancellation_needs_its_comparison() {
-    bad("theorem t(n, m: Nat): add(sub(m)(n), n) = m { sub_add_cancel(n, m, trivial) }");
-    bad("theorem t(): add(sub(2)(5), 5) = 2 { refl }");
-    ok("theorem why(): sub(2)(5) = 0 { refl }");
+    bad("theorem t(n, m: Nat): m.sub(n).add(n) = m { n.sub_add_cancel(m, trivial) }");
+    bad("theorem t(): Nat::sub(2, 5).add(5) = 2 { refl }");
+    ok("theorem why(): Nat::sub(2, 5) = 0 { refl }");
 }
 
 // ---------------------------------------------------------------------------
@@ -224,22 +224,22 @@ fn the_conditional_cancellation_needs_its_comparison() {
 
 #[test]
 fn monotonicity_composes_at_open_arguments() {
-    ok("theorem a(x, y, k: Nat, h: x <= y): add(x, k) <= add(y, k) { add_le_mono_r(k)(x, y, h) }
-theorem b(x, y, k: Nat, h: x <= y): add(k, x) <= add(k, y) { add_le_mono_l(k, x, y, h) }
-theorem c(x, y, z, w: Nat, h1: x <= y, h2: z <= w): add(x, z) <= add(y, w) {
-    add_le_mono(x, y, z, w, h1, h2)
+    ok("theorem a(x, y, k: Nat, h: x <= y): x.add(k) <= y.add(k) { k.add_le_mono_r(x, y, h) }
+theorem b(x, y, k: Nat, h: x <= y): k.add(x) <= k.add(y) { k.add_le_mono_l(x, y, h) }
+theorem c(x, y, z, w: Nat, h1: x <= y, h2: z <= w): x.add(z) <= y.add(w) {
+    x.add_le_mono(y, z, w, h1, h2)
 }
-theorem d(x, y, k: Nat, h: x <= y): mul(x, k) <= mul(y, k) { mul_le_mono_r(k)(x, y, h) }
-theorem e(x, y, k: Nat, h: x <= y): mul(k, x) <= mul(k, y) { mul_le_mono_l(k, x, y, h) }
-theorem f(x, y, z, w: Nat, h1: x <= y, h2: z <= w): mul(x, z) <= mul(y, w) {
-    mul_le_mono(x, y, z, w, h1, h2)
+theorem d(x, y, k: Nat, h: x <= y): x.mul(k) <= y.mul(k) { k.mul_le_mono_r(x, y, h) }
+theorem e(x, y, k: Nat, h: x <= y): k.mul(x) <= k.mul(y) { k.mul_le_mono_l(x, y, h) }
+theorem f(x, y, z, w: Nat, h1: x <= y, h2: z <= w): x.mul(z) <= y.mul(w) {
+    x.mul_le_mono(y, z, w, h1, h2)
 }");
 }
 
 #[test]
 fn cancellation_composes_at_open_arguments() {
-    ok("theorem a(x, y, k: Nat, h: add(x, k) <= add(y, k)): x <= y { le_of_add_le_add_r(k)(x, y, h) }
-theorem b(x, y, k: Nat, h: add(k, x) <= add(k, y)): x <= y { le_of_add_le_add_l(k, x, y, h) }");
+    ok("theorem a(x, y, k: Nat, h: x.add(k) <= y.add(k)): x <= y { k.le_of_add_le_add_r(x, y, h) }
+theorem b(x, y, k: Nat, h: k.add(x) <= k.add(y)): x <= y { k.le_of_add_le_add_l(x, y, h) }");
 }
 
 /// The two controls monotonicity most needs: the conclusion is not symmetric,
@@ -249,10 +249,10 @@ theorem b(x, y, k: Nat, h: add(k, x) <= add(k, y)): x <= y { le_of_add_le_add_l(
 /// hypothesis; that is a different lemma, not this one's mirror.)
 #[test]
 fn monotonicity_does_not_run_backwards_or_over_products() {
-    bad("theorem t(x, y, z, w: Nat, h1: x <= y, h2: z <= w): add(y, w) <= add(x, z) {
-    add_le_mono(x, y, z, w, h1, h2)
+    bad("theorem t(x, y, z, w: Nat, h1: x <= y, h2: z <= w): y.add(w) <= x.add(z) {
+    x.add_le_mono(y, z, w, h1, h2)
 }");
-    bad("theorem t(x, y, k: Nat, h: mul(x, k) <= mul(y, k)): x <= y { le_of_add_le_add_r(k)(x, y, h) }");
+    bad("theorem t(x, y, k: Nat, h: x.mul(k) <= y.mul(k)): x <= y { k.le_of_add_le_add_r(x, y, h) }");
 }
 
 /// Monotonicity and cancellation are inverse, asserted by composing them at
@@ -262,10 +262,10 @@ fn monotonicity_does_not_run_backwards_or_over_products() {
 #[test]
 fn monotonicity_and_cancellation_round_trip() {
     ok("theorem there_and_back(x, y, k: Nat, h: x <= y): x <= y {
-    le_of_add_le_add_r(k)(x, y, add_le_mono_r(k)(x, y, h))
+    k.le_of_add_le_add_r(x, y, k.add_le_mono_r(x, y, h))
 }
-theorem back_and_there(x, y, k: Nat, h: add(k, x) <= add(k, y)): add(k, x) <= add(k, y) {
-    add_le_mono_l(k, x, y, le_of_add_le_add_l(k, x, y, h))
+theorem back_and_there(x, y, k: Nat, h: k.add(x) <= k.add(y)): k.add(x) <= k.add(y) {
+    k.add_le_mono_l(x, y, k.le_of_add_le_add_l(x, y, h))
 }");
 }
 
@@ -276,18 +276,18 @@ theorem back_and_there(x, y, k: Nat, h: add(k, x) <= add(k, y)): add(k, x) <= ad
 
 #[test]
 fn pow_and_fact_compute() {
-    ok("theorem a(): pow(2, 5) = 32 { refl }
-theorem b(): pow(3, 3) = 27 { refl }
-theorem c(): pow(5, 0) = 1 { refl }
-theorem d(): pow(0, 4) = 0 { refl }
-theorem e(): fact(0) = 1 { refl }
-theorem f(): fact(5) = 120 { refl }");
+    ok("theorem a(): Nat::pow(2, 5) = 32 { refl }
+theorem b(): Nat::pow(3, 3) = 27 { refl }
+theorem c(): Nat::pow(5, 0) = 1 { refl }
+theorem d(): Nat::pow(0, 4) = 0 { refl }
+theorem e(): Nat::fact(0) = 1 { refl }
+theorem f(): Nat::fact(5) = 120 { refl }");
 }
 
 #[test]
 fn pow_and_fact_compute_the_right_values() {
-    bad("theorem t(): pow(2, 5) = 64 { refl }");
-    bad("theorem t(): fact(5) = 100 { refl }");
+    bad("theorem t(): Nat::pow(2, 5) = 64 { refl }");
+    bad("theorem t(): Nat::fact(5) = 100 { refl }");
 }
 
 /// The exponent endpoints, and the asymmetry between them: `pow(a, 0)` is
@@ -297,43 +297,43 @@ fn pow_and_fact_compute_the_right_values() {
 /// and not an oversight in the kit.
 #[test]
 fn the_exponent_endpoints_are_not_symmetric() {
-    ok("theorem zero(a: Nat): pow(a, 0) = 1 { refl }
-theorem one(a: Nat): pow(a, 1) = a { pow_one(a) }
-theorem base_one(n: Nat): pow(1, n) = 1 { one_pow(n) }");
-    bad("theorem t(a: Nat): pow(a, 1) = a { refl }");
+    ok("theorem zero(a: Nat): a.pow(0) = 1 { refl }
+theorem one(a: Nat): a.pow(1) = a { a.pow_one() }
+theorem base_one(n: Nat): Nat::pow(1, n) = 1 { n.one_pow() }");
+    bad("theorem t(a: Nat): a.pow(1) = a { refl }");
 }
 
 /// The three laws at open arguments, where none of them can be discharged by
 /// reduction — asserted by the controls below, which try exactly that.
 #[test]
 fn the_pow_laws_compose_at_open_arguments() {
-    ok("theorem adds(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
-    pow_add(a, b, c)
+    ok("theorem adds(a, b, c: Nat): a.pow(b.add(c)) = a.pow(b).mul(a.pow(c)) {
+    a.pow_add(b, c)
 }
-theorem muls(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) { pow_mul(a, b, c) }
-theorem over_a_product(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) {
-    mul_pow(a, b, n)
+theorem muls(a, b, c: Nat): a.pow(b.mul(c)) = a.pow(b).pow(c) { a.pow_mul(b, c) }
+theorem over_a_product(a, b, n: Nat): a.mul(b).pow(n) = a.pow(n).mul(b.pow(n)) {
+    a.mul_pow(b, n)
 }
-theorem exchange(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z), mul(y, w)) {
-    mul_shuffle(x, y, z, w)
+theorem exchange(x, y, z, w: Nat): x.mul(y).mul(z.mul(w)) = x.mul(z).mul(y.mul(w)) {
+    Nat::mul_shuffle(x, y, z, w)
 }");
 }
 
 #[test]
 fn the_pow_laws_are_not_definitional() {
-    bad("theorem t(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) { refl }");
-    bad("theorem t(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) { refl }");
+    bad("theorem t(a, b, c: Nat): a.pow(b.add(c)) = a.pow(b).mul(a.pow(c)) { refl }");
+    bad("theorem t(a, b, n: Nat): a.mul(b).pow(n) = a.pow(n).mul(b.pow(n)) { refl }");
 }
 
 /// The order facts, at open arguments and through the hypothesis. `one_le_pow`
 /// is the one lemma here that a reader might expect to hold unconditionally.
 #[test]
 fn the_order_facts_hold_at_open_arguments() {
-    ok("theorem pos(a, n: Nat, h: 1 <= a): 1 <= pow(a, n) { one_le_pow(a, n, h) }
-theorem fac(n: Nat): 1 <= fact(n) { one_le_fact(n) }
-theorem step(n: Nat): fact(n) <= fact(Succ(n)) { fact_le_succ(n) }
-theorem chained(n: Nat): fact(n) <= fact(Succ(Succ(n))) {
-    le_trans(fact(n))(fact(Succ(n)), fact(Succ(Succ(n))), fact_le_succ(n), fact_le_succ(Succ(n)))
+    ok("theorem pos(a, n: Nat, h: 1 <= a): 1 <= a.pow(n) { a.one_le_pow(n, h) }
+theorem fac(n: Nat): 1 <= n.fact() { Nat::fact_pos(n) }
+theorem step(n: Nat): n.fact() <= Succ(n).fact() { n.fact_le_succ() }
+theorem chained(n: Nat): n.fact() <= Succ(Succ(n)).fact() {
+    n.fact().le_trans(Succ(n).fact(), Succ(Succ(n)).fact(), n.fact_le_succ(), Succ(n).fact_le_succ())
 }");
 }
 
@@ -344,10 +344,10 @@ theorem chained(n: Nat): fact(n) <= fact(Succ(Succ(n))) {
 /// than a typing accident.
 #[test]
 fn positivity_needs_its_base_hypothesis() {
-    bad("theorem t(n: Nat): 1 <= pow(0, n) { one_le_pow(0, n, trivial) }");
-    let e = bad("theorem t(): 1 <= pow(0, 3) { trivial }");
+    bad("theorem t(n: Nat): 1 <= Nat::pow(0, n) { Nat::one_le_pow(0, n, trivial) }");
+    let e = bad("theorem t(): 1 <= Nat::pow(0, 3) { trivial }");
     // `False` rather than the kernel's `Empty`: the display spells the surface
     // name (docs/surface-type-display-design.md).
     assert!(e.contains("False"), "expected the refuted comparison to be falsity, got: {e}");
-    ok("theorem why(): pow(0, 3) = 0 { refl }");
+    ok("theorem why(): Nat::pow(0, 3) = 0 { refl }");
 }

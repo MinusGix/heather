@@ -72,7 +72,7 @@ fn size_agrees_with_size_plus_over_rose() {
         "{ROSE}
          theorem same(r: Rose): size(r) = size_plus(r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.cong(same))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.cong(same))),
              }}
          }}"
     ));
@@ -88,7 +88,7 @@ fn a_false_theorem_of_the_same_shape_is_rejected() {
         "{ROSE}
          theorem wrong(r: Rose): size(r) = Succ(size_plus(r)) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.cong(wrong))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.cong(wrong))),
              }}
          }}"
     ));
@@ -175,7 +175,7 @@ fn rejections() {
         "{ROSE}
          theorem same(r: Rose): size(r) = size_plus(r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.map(same))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.map(same))),
              }}
          }}"
     ));
@@ -213,7 +213,7 @@ fn rejections() {
         "{ROSE}
          theorem elsewhere(r: Rose, other: [Rose; 1]): size(r) = size_plus(r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, other.cong(elsewhere))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, other.cong(elsewhere))),
              }}
          }}"
     ));

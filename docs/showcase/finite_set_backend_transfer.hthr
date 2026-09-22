@@ -33,13 +33,13 @@ theorem redundant_branch_is_semantic(): TreeSame(redundant_tree(), singleton_tre
     λ a => Iff(mp := λ h => match h { Inl(p) => p, Inr(p) => false_elim(p) }, mpr := λ p => Inl(p))
 }
 theorem redundant_branch_is_not_identity(): Not(redundant_tree() = singleton_tree()) {
-    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
+    λ eq => Nat::ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
 }
 theorem round_trip_can_change_shape(): Not(tree_of_list(enumerate_tree(singleton_tree())) = singleton_tree()) {
-    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
+    λ eq => Nat::ne_of_gt(2, 1, trivial, cong(eq, f := root_kind<Nat>))
 }
 
 theorem root_kind_is_not_semantic(): Not(PreservesRelation(TreeSame<Nat>, RelId<Nat>, root_kind<Nat>)) {
-    λ respects => ne_of_gt(2, 1, trivial,
+    λ respects => Nat::ne_of_gt(2, 1, trivial,
         respects(redundant_tree(), singleton_tree(), redundant_branch_is_semantic()))
 }

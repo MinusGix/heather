@@ -148,7 +148,7 @@ fn generated_mixed_binary_alu_dag_checks() {
 
 fn source_bitvec_add_reaches_checked_x86_artifact() {
     const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
-         \x20   bitvec::add(64, left, right)\n\
+         \x20   @bitvec::BitVec::add(64, left, right)\n\
          }";
     let declaration = parse_file(ADD)
         .expect("parse source function")
@@ -192,7 +192,7 @@ fn source_bitvec_add_reaches_checked_x86_artifact() {
 
 fn stale_source_function_ir_certificate_is_rejected() {
     const ADD: &str = "fn source_add(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
-         \x20   bitvec::add(64, left, right)\n\
+         \x20   @bitvec::BitVec::add(64, left, right)\n\
          }";
     let declaration = parse_file(ADD)
         .expect("parse source function")
@@ -207,8 +207,8 @@ fn stale_source_function_ir_certificate_is_rejected() {
         frontend.text,
     )
     .replace(
-        "bitvec::add(64, left, right)",
-        "bitvec::sub(64, left, right)",
+        "@bitvec::BitVec::add(64, left, right)",
+        "@bitvec::BitVec::sub(64, left, right)",
     );
     let mut dishonest = base_image(MODULES.len() - 1);
     match dishonest.elab_module_source("stale_source_add_function_ir_x86", &stale_source) {
@@ -218,8 +218,8 @@ fn stale_source_function_ir_certificate_is_rejected() {
         }
         Err(error) => {
             // Either refusal is the control passing. Since
-            // docs/bitvec-width-bounded-defaults-design.md `bitvec::add` and
-            // `bitvec::sub` are both ripples that agree on every sum bit and
+            // docs/bitvec-width-bounded-defaults-design.md `bitvec::BitVec::add` and
+            // `bitvec::BitVec::sub` are both ripples that agree on every sum bit and
             // differ only in the column carry, so at width 64 over open
             // operands the kernel spends the budget before it can say
             // `NotConvertible` — `add_and_sub_differ` in
@@ -235,7 +235,7 @@ fn stale_source_function_ir_certificate_is_rejected() {
 
 fn source_fragment_declines_nested_expressions() {
     let source = "fn nested(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
-        bitvec::add(64, bitvec::add(64, left, right), right)\n}";
+        @bitvec::BitVec::add(64, @bitvec::BitVec::add(64, left, right), right)\n}";
     let declaration = parse_file(source)
         .expect("parse nested source")
         .items
@@ -253,7 +253,7 @@ fn source_fragment_declines_nested_expressions() {
 
 fn structured_source_emission_parses_as_a_complete_module() {
     const SOURCE: &str = "fn source_xor(left: BitVec(64), right: BitVec(64)) → BitVec(64) {\n\
-         \x20   bitvec::bxor(64, left, right)\n\
+         \x20   @bitvec::BitVec::bxor(64, left, right)\n\
          }";
     let declaration = parse_file(SOURCE)
         .expect("parse source function")
@@ -280,13 +280,13 @@ pub fn elaborated_source_reflection_builds_a_shared_dag() {
 import bitvec;
 
 fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
-    let shared = bitvec::add(64, left, right);
-    bitvec::bxor(64, shared,
-        bitvec::add(64, shared, bitvec::ofNat(64, 7)))
+    let shared = @bitvec::BitVec::add(64, left, right);
+    @bitvec::BitVec::bxor(64, shared,
+        @bitvec::BitVec::add(64, shared, @bitvec::BitVec::ofNat(64, 7)))
 }
 
 fn unsupported_shift(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
-    bitvec::shift_left(64, left, 1)
+    @bitvec::BitVec::shift_left(64, left, 1)
 }
 "#;
     let mut elaborator = base_image(MODULES.len() - 1);
@@ -356,9 +356,9 @@ pub fn elaborated_shared_source_reaches_checked_x86_artifact() {
 import bitvec;
 
 fn shared_alu(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
-    let shared = bitvec::add(64, left, right);
-    bitvec::bxor(64, shared,
-        bitvec::add(64, shared, bitvec::ofNat(64, 7)))
+    let shared = @bitvec::BitVec::add(64, left, right);
+    @bitvec::BitVec::bxor(64, shared,
+        @bitvec::BitVec::add(64, shared, @bitvec::BitVec::ofNat(64, 7)))
 }
 "#;
     let mut source_base = base_image(MODULES.len() - 1);
@@ -402,10 +402,10 @@ pub fn elaborated_full_width_constants_reach_checked_x86_artifact() {
 import bitvec;
 
 fn wide_constants(left: BitVec(64), right: BitVec(64)) → BitVec(64) {{
-    let shared = bitvec::add(64, left, right);
-    bitvec::bxor(64,
-        bitvec::add(64, shared, bitvec::ofNat(64, {ASYMMETRIC})),
-        bitvec::band(64, shared, bitvec::ofNat(64, {HIGH_BIT})))
+    let shared = @bitvec::BitVec::add(64, left, right);
+    @bitvec::BitVec::bxor(64,
+        @bitvec::BitVec::add(64, shared, @bitvec::BitVec::ofNat(64, {ASYMMETRIC})),
+        @bitvec::BitVec::band(64, shared, @bitvec::BitVec::ofNat(64, {HIGH_BIT})))
 }}
 "#
     );
@@ -584,7 +584,7 @@ fn mixed_source_alu(node_count: usize) -> String {
             let constant = format!("constant_{value_index}");
             writeln!(
                 source,
-                "    let {constant} = bitvec::ofNat(64, {});",
+                "    let {constant} = @bitvec::BitVec::ofNat(64, {});",
                 value_index + 1,
             )
             .unwrap();
@@ -828,7 +828,7 @@ fn generated_mixed_unsigned_comparison_checks() {
     assert!(emission.text.contains("SetBelow(Bl)"));
     assert!(emission
         .text
-        .contains("bitvec::zero_extend(1, 63, values(1, 4))"));
+        .contains("@bitvec::BitVec::zero_extend(1, 63, values(1, 4))"));
     let source = generated_module(&format!("{raw}\n{}", emission.text));
     let mut e = base.fork();
     if let Err(error) = e.elab_module_source("function_ir_unsigned_comparison_x86", &source) {
@@ -995,8 +995,8 @@ fn generated_comparison_prefixed_conditional_checks() {
     assert!(emission.text.contains("PrefixedConditionalBlock"));
     assert!(emission.text.contains("LinkedConditionalBlock"));
     assert!(emission.text.contains("linked_conditional_bytes"));
-    assert!(emission.text.contains("bitvec::ofNat(8, 8)"));
-    assert!(emission.text.contains("bitvec::ofNat(8, 6)"));
+    assert!(emission.text.contains("@bitvec::BitVec::ofNat(8, 8)"));
+    assert!(emission.text.contains("@bitvec::BitVec::ofNat(8, 6)"));
     assert!(emission.text.contains("LinkedConditionalDecodes"));
     assert!(emission.text.contains("LinkedConditionalLayout"));
     assert!(emission.text.contains("ExecuteLinkedConditionalBlock"));

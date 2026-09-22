@@ -567,7 +567,7 @@ impl Parser {
     }
 
     /// [`Self::ident`] at a **reference** position, where `m::n` is a name:
-    /// a module-qualified global (`nat::le_add`) or a type-qualified
+    /// a module-qualified global (`nat::Nat::le_add`) or a type-qualified
     /// constructor (`Option::None`). Which one it is needs the name tables,
     /// so the parser keeps the two halves in one string and the elaborator
     /// splits it (docs/modules-design.md §4).
@@ -3738,7 +3738,7 @@ impl Parser {
             return self.anonymous_constructor_expr();
         }
         // `⟦b⟧` reflects a Boolean into `Type`: exact surface sugar for
-        // `IsTrue(b)`. The delimiters reopen the expression grammar just like
+        // `Bool::IsTrue(b)`. The delimiters reopen the expression grammar just like
         // parentheses, so an enclosing comparison or record-literal context
         // cannot restrict the reflected expression.
         if matches!(self.peek(), TokKind::LSemantic) {
@@ -3747,7 +3747,7 @@ impl Parser {
                 .with_eq(false, |p| p.with_record_lit(false, |p| p.expr()))?;
             let close = self.expect(&TokKind::RSemantic, "`⟧` to close Boolean reflection")?;
             let span = open.join(close);
-            let head = Expr { kind: ExprKind::Var("IsTrue".to_string()), span: open };
+            let head = Expr { kind: ExprKind::Var("Bool::IsTrue".to_string()), span: open };
             return Ok(Expr {
                 kind: ExprKind::App {
                     head: Box::new(head),
@@ -5079,7 +5079,7 @@ mod tests {
     fn semantic_brackets_desugar_to_is_true() {
         let k = body("⟦!b⟧");
         let (name, args, _) = as_call(&k);
-        assert_eq!(name, "IsTrue");
+        assert_eq!(name, "Bool::IsTrue");
         assert_eq!(args.len(), 1);
         assert_eq!(as_call(&args[0].kind).0, "!");
 

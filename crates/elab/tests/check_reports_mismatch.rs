@@ -160,7 +160,7 @@ fn a_false_equation_reports_at_the_refl() {
 /// whose arms each rebuild the constructor they matched. Neither the kernel
 /// nor the elaborator has a match-eta, so this is refused — the round's claim
 /// is only that the refusal says which two sides failed to meet, at the
-/// `refl`. (`int::add(x, OfNat(0)) = x` is this, one library away.)
+/// `refl`. (`int::Int::add(x, OfNat(0)) = x` is this, one library away.)
 #[test]
 fn a_match_eta_names_both_sides() {
     let src = "

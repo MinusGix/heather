@@ -23,13 +23,13 @@ fn fail<T, A>(expected: Nat) → Parser<T, A> {
 
 // Try pick on the next token; Some consumes one token and None fails retryably.
 fn recognize_at<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) → Reply<T, A>(source, begin) {
-    match nat::le_dec(Succ(begin.offset), list_len(source)) {
+    match Succ(begin.offset).le_dec(source.len()) {
         Inl(room) => match rest(source, begin) {
             Nil => fail_at(source, begin, [expected]),
             Cons(head, _) => match pick(head) {
                 None => fail_at(source, begin, [expected]),
                 Some(value) => Ok(Success(value, begin.advance(source, room),
-                    nat::le_succ_r(begin.offset, begin.offset, nat::le_refl(begin.offset)))),
+                    begin.offset.le_succ_r(begin.offset, begin.offset.le_refl()))),
             },
         },
         Inr(_) => fail_at(source, begin, [expected]),
@@ -64,12 +64,12 @@ fn complete<T, A>(self p: Parser<T, A>, expected: Nat) → Parser<T, A> { before
 theorem recognize_bound<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Bound(source, begin, 1, recognize_at(pick, expected, source, begin)) {
     // TODO(minus): use ifelse here
-    match nat::le_dec(Succ(begin.offset), list_len(source)) {
+    match Succ(begin.offset).le_dec(source.len()) {
         Inl(_) => match rest(source, begin) {
             Nil => trivial,
             Cons(head, _) => match pick(head) {
                 None => trivial,
-                Some(_) => nat::le_refl(Succ(begin.offset))
+                Some(_) => Succ(begin.offset).le_refl()
             },
         },
         Inr(_) => trivial,
@@ -99,7 +99,7 @@ fn Recognized<T, A>(pick: T → Option<A>, source: List<T>, begin, end: Cursor<T
 // Establish the recognition relation for a single recognition reply.
 theorem recognize_post<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Post(source, begin, Recognized<T, A>(pick), recognize_at(pick, expected, source, begin)) {
-    match nat::le_dec(Succ(begin.offset), list_len(source)) {
+    match Succ(begin.offset).le_dec(source.len()) {
         Inl(_) => match input_shape: rest(source, begin) {
             Nil => trivial,
             Cons(head, _) => match picked: pick(head) {
@@ -126,15 +126,15 @@ fn fail_consumes<T, A>(expected, amount: Nat) → Consumes<T, A>(fail<T, A>(expe
 record SelectedHead<T, A>(pick: T → Option<A>, input: List<T>, value: A) {
     head: T,
     selected: pick(head) = Some(value),
-    suffix: input = Cons(head, drop(input, 1)),
+    suffix: input = Cons(head, input.drop(1)),
 }
 
 // Expose the selected head token and exact tail boundary from a selection proof.
 theorem selected_head<T, A>(pick: T → Option<A>, input: List<T>, value: A):
     Selects(pick, input, value) → SelectedHead<T, A>(pick, input, value) {
     let alg: ListElim<T>(λ input => Selects(pick, input, value) → SelectedHead<T, A>(pick, input, value)) =
-        ListElim(λ h => false_elim(h), λ head tail ih h => SelectedHead(head, h, list::cong_cons(head, sym(initial_rest(tail)))));
-    list::list_elim(λ input => Selects(pick, input, value) → SelectedHead<T, A>(pick, input, value), alg, input)
+        ListElim(λ h => false_elim(h), λ head tail ih h => SelectedHead(head, h, List::cong_cons(head, sym(initial_rest(tail)))));
+    List::list_elim(λ input => Selects(pick, input, value) → SelectedHead<T, A>(pick, input, value), alg, input)
 }
 
 // An accepted token with a proof that removing it leaves the ending remainder.
@@ -150,10 +150,10 @@ theorem recognized_head<T, A>(pick: T → Option<A>, source: List<T>, begin, end
     proof: Recognized<T, A>(pick, source, begin, end, value)):
     RecognizedHead<T, A>(pick, source, begin, end, value) {
     let selected = selected_head(pick, rest(source, begin), value, proof.right);
-    let boundary: (rest(source, end) = drop(rest(source, begin), 1)) =
-        trans(j(proof.left, λ offset q => rest(source, end) = drop(source, offset), refl), list::drop_succ(source, begin.offset));
+    let boundary: (rest(source, end) = rest(source, begin).drop(1)) =
+        trans(j(proof.left, λ offset q => rest(source, end) = source.drop(offset), refl), source.drop_succ(begin.offset));
     RecognizedHead(selected.head, selected.selected,
-        trans(selected.suffix, list::cong_cons(selected.head, sym(boundary))))
+        trans(selected.suffix, List::cong_cons(selected.head, sym(boundary))))
 }
 
 // Strengthen a successful reply's relation with end-of-input after the eof check.
@@ -185,6 +185,6 @@ fn recognize_certified<T, A>(pick: T → Option<A>, expected: Nat, source: List<
 
 // Extract the strict cursor advance needed for recursion from recognition evidence.
 theorem recognized_progress<T, A>(pick: T → Option<A>, source: List<T>, begin, end: Cursor<T>(source), value: A,
-    proof: Recognized<T, A>(pick, source, begin, end, value)): nat::Lt(begin.offset, end.offset) {
-    j(sym(proof.left), λ offset q => nat::Lt(begin.offset, offset), nat::le_refl(Succ(begin.offset)))
+    proof: Recognized<T, A>(pick, source, begin, end, value)): begin.offset.Lt(end.offset) {
+    j(sym(proof.left), λ offset q => begin.offset.Lt(offset), Succ(begin.offset).le_refl())
 }

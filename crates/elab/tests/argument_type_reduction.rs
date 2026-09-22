@@ -101,7 +101,7 @@ fn a_motive_applied_hypothesis_fills_implicits() {
     ok("theorem add_zero_r(n: Nat): add(n, 0) = n {
             nat_ind(λ (z: Nat) => add(z, 0) = z,
                 refl,
-                λ (k: Nat) (ih: add(k, 0) = k) => cong_succ(ih),
+                λ (k: Nat) (ih: add(k, 0) = k) => Nat::cong_succ(ih),
                 n)
         }");
 }
@@ -116,7 +116,7 @@ fn the_same_hypothesis_under_sym() {
     ok("theorem add_zero_r2(n: Nat): add(n, 0) = n {
             nat_ind(λ (z: Nat) => add(z, 0) = z,
                 refl,
-                λ (k: Nat) (ih: add(k, 0) = k) => sym(cong_succ(sym(ih))),
+                λ (k: Nat) (ih: add(k, 0) = k) => sym(Nat::cong_succ(sym(ih))),
                 n)
         }");
 }
@@ -128,7 +128,7 @@ fn the_same_hypothesis_under_sym() {
 #[test]
 fn an_already_normal_hypothesis_takes_the_old_path() {
     ok("theorem add_zero_m(n: Nat): add(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+            match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
         }");
 }
 
@@ -162,7 +162,7 @@ fn a_synthesized_motive_composes_with_the_reduced_read() {
             nat_ind(λ (z: Nat) => add(z, 0) = z,
                 refl,
                 λ (k: Nat) (ih: add(k, 0) = k) =>
-                    match b { B0 => cong_succ(ih), B1 => cong_succ(ih) },
+                    match b { B0 => Nat::cong_succ(ih), B1 => Nat::cong_succ(ih) },
                 n)
         }");
 }
@@ -194,7 +194,7 @@ fn a_redex_that_is_not_an_equation_is_refused() {
         "theorem konst(n: Nat): Nat {
              nat_ind(λ (z: Nat) => Nat,
                  0,
-                 λ (k: Nat) (ih: Nat) => cong_succ(ih),
+                 λ (k: Nat) (ih: Nat) => Nat::cong_succ(ih),
                  n)
          }",
     );
@@ -211,7 +211,7 @@ fn a_reduced_hypothesis_at_the_wrong_endpoints_still_fails() {
         "theorem wrong(n: Nat): add(n, 0) = n {
              nat_ind(λ (z: Nat) => add(z, 0) = z,
                  refl,
-                 λ (k: Nat) (ih: add(k, 0) = k) => sym(cong_succ(ih)),
+                 λ (k: Nat) (ih: add(k, 0) = k) => sym(Nat::cong_succ(ih)),
                  n)
          }",
     );

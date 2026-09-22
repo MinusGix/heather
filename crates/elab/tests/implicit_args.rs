@@ -21,28 +21,28 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
 theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
     match m {
         Zero => sym(add_zero(n)),
-        Succ(k, ih) => trans(cong_succ(ih), sym(add_succ(n, k))),
+        Succ(k, ih) => trans(Nat::cong_succ(ih), sym(add_succ(n, k))),
     }
 }
 
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 "#;
@@ -70,7 +70,7 @@ fn implicit_endpoints_are_solved() {
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
         theorem add_zero(n: Nat): add(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+            match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
         }
         theorem flip(n: Nat): n = add(n, 0) { sym(add_zero(n)) }
         "#,
@@ -97,7 +97,7 @@ fn wrong_implicit_proof_is_kernel_rejected() {
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
         theorem add_zero(n: Nat): add(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+            match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
         }
         theorem bogus(n: Nat): add(n, 0) = add(n, 0) { sym(add_zero(n)) }
         "#,

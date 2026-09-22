@@ -84,7 +84,7 @@ theorem surrogates_excluded(p: scalar(55296)): False { p }
 // lemma rather than a projection (docs/string-char-design.md §5.1).
 theorem sound(code: Nat, p: scalar(code)): code < 0x110000 { scalar_sound(code, p).left }
 theorem sound_surrogate(p: scalar(0xD800)): False {
-    scalar_sound(0xD800, p).right(And(le_refl(0xD800), lt_succ_self(0xD800)))
+    scalar_sound(0xD800, p).right(And(Nat::le_refl(0xD800), Nat::lt_succ_self(0xD800)))
 }
 "#,
     );
@@ -129,20 +129,20 @@ theorem open_tail_step(c: Char, rest: List<Char>, i: Fin(rest.len())):
 fn take_and_drop_rebuild_the_string_at_a_literal_and_at_an_open_one() {
     check(
         r#"
-theorem literal(): string::take("abc", 1) ++ string::drop("abc", 1) = "abc" {
+theorem literal(): string::String::take("abc", 1) ++ string::String::drop("abc", 1) = "abc" {
     take_drop("abc", 1)
 }
-theorem literal_computes(): string::take("abc", 1) = "a" {}
-theorem literal_drop_computes(): string::drop("abc", 1) = "bc" {}
-theorem neutral(s: String, n: Nat): string::take(s, n) ++ string::drop(s, n) = s {
+theorem literal_computes(): string::String::take("abc", 1) = "a" {}
+theorem literal_drop_computes(): string::String::drop("abc", 1) = "bc" {}
+theorem neutral(s: String, n: Nat): string::String::take(s, n) ++ string::String::drop(s, n) = s {
     take_drop(s, n)
 }
-theorem neutral_index(n: Nat): string::take("abc", n) ++ string::drop("abc", n) = "abc" {
+theorem neutral_index(n: Nat): string::String::take("abc", n) ++ string::String::drop("abc", n) = "abc" {
     take_drop("abc", n)
 }
 "#,
     );
-    let msg = refused("theorem bad(): string::take(\"abc\", 1) = \"ab\" { refl }\n");
+    let msg = refused("theorem bad(): string::String::take(\"abc\", 1) = \"ab\" { refl }\n");
     assert!(!msg.is_empty(), "a wrong split must be refused");
 }
 

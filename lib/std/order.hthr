@@ -28,18 +28,18 @@ class LinearOrder<A>(R: A → A → Type)
 // The existing carrier-owned kits fill the complete child dictionary once.
 // Canonical parent instances are synthesized from it, so generic preorder and
 // partial-order consumers do not need duplicate registrations.
-instance LinearOrder<Nat>(nat::Le) {
-    rel_refl := nat::le_refl,
-    rel_trans := nat::le_trans,
-    rel_antisym := nat::le_antisym,
-    rel_total := nat::le_total,
+instance LinearOrder<Nat>(Nat::Le) {
+    rel_refl := Nat::le_refl,
+    rel_trans := Nat::le_trans,
+    rel_antisym := Nat::le_antisym,
+    rel_total := Nat::le_total,
 }
 
-instance LinearOrder<Int>(int::Le) {
-    rel_refl := int::le_refl,
-    rel_trans := int::le_trans,
-    rel_antisym := int::le_antisym,
-    rel_total := int::le_total,
+instance LinearOrder<Int>(Int::Le) {
+    rel_refl := Int::le_refl,
+    rel_trans := Int::le_trans,
+    rel_antisym := Int::le_antisym,
+    rel_total := Int::le_total,
 }
 
 // Componentwise products preserve preorders and partial orders. They do not
@@ -72,7 +72,7 @@ fn product_partial_order<A: PartialOrder(RA), B: PartialOrder(RB)>(
         λ x y z hxy hyz => And(
             A.rel_trans(x.fst, y.fst, z.fst, hxy.left, hyz.left),
             B.rel_trans(x.snd, y.snd, z.snd, hxy.right, hyz.right)),
-        λ x y hxy hyx => pair_ext(x, y,
+        λ x y hxy hyx => Pair::ext(x, y,
             A.rel_antisym(x.fst, y.fst, hxy.left, hyx.left),
             B.rel_antisym(x.snd, y.snd, hxy.right, hyx.right)))
 }

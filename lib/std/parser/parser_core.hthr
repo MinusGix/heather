@@ -15,21 +15,21 @@ record Cursor<T>(source: List<T>) {
     // endpoint-bearing field prevents equal-length sources from collapsing.
     identity: source = source,
     offset: Nat,
-    within: offset <= list_len(source),
+    within: offset <= source.len(),
 }
 
 // Start at offset zero, with the entire source remaining.
 fn Cursor::start<T>(source: List<T>) → Cursor<T>(source) {
-    Cursor(refl, 0, nat::zero_le(list_len(source)))
+    Cursor(refl, 0, source.len().nonneg())
 }
 
 // Return the source suffix beginning at this cursor.
 fn rest<T>(source: List<T>, c: Cursor<T>(source)) → List<T> {
-    drop(source, c.offset)
+    source.drop(c.offset)
 }
 
 // Step one token forwards using evidence that this cursor is not at the end.
-fn Cursor::advance<T>(source: List<T>, self c: Cursor<T>(source), room: c.offset < list_len(source)) → Cursor<T>(source) {
+fn Cursor::advance<T>(source: List<T>, self c: Cursor<T>(source), room: c.offset < source.len()) → Cursor<T>(source) {
     Cursor(refl, Succ(c.offset), room)
 }
 
@@ -112,20 +112,20 @@ theorem cached_rest<T>(source: List<T>, c: CachedCursor<T>(source)):
     c.suffix = rest(source, c.cursor) { c.coherent }
 
 // Taking a suffix never increases the number of remaining tokens.
-theorem drop_length_le<T>(source: List<T>): (n: Nat) → list_len(drop(source, n)) <= list_len(source) {
+theorem drop_length_le<T>(source: List<T>): (n: Nat) → source.drop(n).len() <= source.len() {
     match source {
         Nil => λ n => trivial,
         Cons(h, t) => λ n => match n {
-            Zero => nat::le_refl(list_len(Cons(h, t))),
-            Succ(k) => nat::le_succ_r(list_len(drop(t, k)), list_len(t), drop_length_le(t, k)),
+            Zero => Cons(h, t).len().le_refl(),
+            Succ(k) => t.drop(k).len().le_succ_r(t.len(), drop_length_le(t, k)),
         },
     }
 }
 
 // Moving to a strictly later valid offset strictly shortens the remainder.
 // This converts cursor progress into the decreasing measure used by recursion.
-theorem drop_length_strict<T>(source: List<T>): (n: Nat) → (m: Nat) → n < m → m <= list_len(source) →
-    list_len(drop(source, m)) < list_len(drop(source, n)) {
+theorem drop_length_strict<T>(source: List<T>): (n: Nat) → (m: Nat) → n < m → m <= source.len() →
+    source.drop(m).len() < source.drop(n).len() {
     match source {
         Nil => λ n m => match m {
             Zero => λ smaller _ => false_elim(smaller),
@@ -142,12 +142,12 @@ theorem drop_length_strict<T>(source: List<T>): (n: Nat) → (m: Nat) → n < m 
 }
 
 // Two consecutive suffix operations equal one operation at the summed offset.
-theorem drop_add<T>(source: List<T>): (first: Nat) → (second: Nat) → drop(source, first + second) = drop(drop(source, first), second) {
+theorem drop_add<T>(source: List<T>): (first: Nat) → (second: Nat) → source.drop(first + second) = source.drop(first).drop(second) {
     match source {
         Nil => λ first second => refl,
         Cons(head, tail) => λ first => match first {
-            Zero => λ second => j(sym(nat::add_left_zero(second)), λ n q => drop(Cons(head, tail), n) = drop(Cons(head, tail), second), refl),
-            Succ(n) => λ second => j(sym(nat::add_succ_left(n, second)), λ total q => drop(Cons(head, tail), total) = drop(drop(tail, n), second), drop_add(tail, n, second)),
+            Zero => λ second => j(sym(second.add_left_zero()), λ n q => Cons(head, tail).drop(n) = Cons(head, tail).drop(second), refl),
+            Succ(n) => λ second => j(sym(n.add_succ_left(second)), λ total q => Cons(head, tail).drop(total) = tail.drop(n).drop(second), drop_add(tail, n, second)),
         },
     }
 }

@@ -63,11 +63,11 @@ fn bad(extra: &str) -> String {
 
 #[test]
 fn half_computes() {
-    ok("theorem a(): half(0) = 0 { refl }
-theorem b(): half(1) = 0 { refl }
-theorem c(): half(2) = 1 { refl }
-theorem d(): half(7) = 3 { refl }
-theorem e(): half(8) = 4 { refl }");
+    ok("theorem a(): Nat::half(0) = 0 { refl }
+theorem b(): Nat::half(1) = 0 { refl }
+theorem c(): Nat::half(2) = 1 { refl }
+theorem d(): Nat::half(7) = 3 { refl }
+theorem e(): Nat::half(8) = 4 { refl }");
 }
 
 /// A course-of-values `half` at a large closed argument was the first
@@ -79,7 +79,7 @@ theorem e(): half(8) = 4 { refl }");
 /// to cost is no longer spent at all (docs/native-depth-budget-design.md §2).
 #[test]
 fn half_computes_at_a_large_closed_argument() {
-    ok("theorem t(): half(1048576) = 524288 { refl }");
+    ok("theorem t(): Nat::half(1048576) = 524288 { refl }");
 }
 
 /// The control that says the window slides the right way. A tuple assembled
@@ -87,9 +87,9 @@ fn half_computes_at_a_large_closed_argument() {
 /// value that gives it away, and `half(7)` is where an off-by-one shows.
 #[test]
 fn half_computes_the_right_values() {
-    bad("theorem t(): half(7) = 4 { refl }");
-    bad("theorem t(): half(8) = 3 { refl }");
-    bad("theorem t(): half(2) = 2 { refl }");
+    bad("theorem t(): Nat::half(7) = 4 { refl }");
+    bad("theorem t(): Nat::half(8) = 3 { refl }");
+    bad("theorem t(): Nat::half(2) = 2 { refl }");
 }
 
 // ---------------------------------------------------------------------------
@@ -99,19 +99,19 @@ fn half_computes_the_right_values() {
 
 #[test]
 fn parity_reduces_at_closed_arguments() {
-    ok("theorem a(): Even(0) { trivial }
-theorem b(): Even(4) { trivial }
-theorem c(): Odd(1) { trivial }
-theorem d(): Odd(7) { trivial }
-theorem e(): ¬ Even(7) { λ (h: Even(7)) => h }
-theorem f(): ¬ Odd(4) { λ (h: Odd(4)) => h }");
+    ok("theorem a(): Nat::Even(0) { trivial }
+theorem b(): Nat::Even(4) { trivial }
+theorem c(): Nat::Odd(1) { trivial }
+theorem d(): Nat::Odd(7) { trivial }
+theorem e(): ¬ Nat::Even(7) { λ (h: Nat::Even(7)) => h }
+theorem f(): ¬ Nat::Odd(4) { λ (h: Nat::Odd(4)) => h }");
 }
 
 #[test]
 fn parity_reduces_to_the_right_side() {
-    bad("theorem t(): Even(7) { trivial }");
-    bad("theorem t(): Odd(4) { trivial }");
-    bad("theorem t(): Even(0) -> False { λ (h: Even(0)) => h }");
+    bad("theorem t(): Nat::Even(7) { trivial }");
+    bad("theorem t(): Nat::Odd(4) { trivial }");
+    bad("theorem t(): Nat::Even(0) -> False { λ (h: Nat::Even(0)) => h }");
 }
 
 // ---------------------------------------------------------------------------
@@ -121,20 +121,20 @@ fn parity_reduces_to_the_right_side() {
 
 #[test]
 fn the_kit_holds_at_open_arguments() {
-    ok("theorem bound(n: Nat): half(n) <= n { half_le(n) }
-theorem inverts(n: Nat): half(add(n, n)) = n { half_double(n) }
-theorem doubles(n: Nat): Even(add(n, n)) { even_double(n) }
-theorem total(n: Nat): Or<Even(n), Odd(n)> { even_or_odd(n) }
-theorem exclusive(n: Nat): ¬ And<Even(n), Odd(n)> { not_even_and_odd(n) }
-theorem back(n: Nat, h: Even(n)): add(half(n), half(n)) = n { half_add_half(n)(h) }");
+    ok("theorem bound(n: Nat): n.half() <= n { n.half_le() }
+theorem inverts(n: Nat): n.add(n).half() = n { n.half_double() }
+theorem doubles(n: Nat): Nat::Even(n.add(n)) { n.even_double() }
+theorem total(n: Nat): Or<Nat::Even(n), Nat::Odd(n)> { n.even_or_odd() }
+theorem exclusive(n: Nat): ¬ And<Nat::Even(n), Nat::Odd(n)> { n.not_even_and_odd() }
+theorem back(n: Nat, h: Nat::Even(n)): n.half().add(n.half()) = n { n.half_add_half(h) }");
 }
 
 #[test]
 fn the_kit_is_not_definitional_at_open_arguments() {
-    bad("theorem t(n: Nat): half(n) <= n { trivial }");
-    bad("theorem t(n: Nat): half(add(n, n)) = n { refl }");
-    bad("theorem t(n: Nat): Even(add(n, n)) { trivial }");
-    bad("theorem t(n: Nat, h: Even(n)): add(half(n), half(n)) = n { refl }");
+    bad("theorem t(n: Nat): n.half() <= n { trivial }");
+    bad("theorem t(n: Nat): n.add(n).half() = n { refl }");
+    bad("theorem t(n: Nat): Nat::Even(n.add(n)) { trivial }");
+    bad("theorem t(n: Nat, h: Nat::Even(n)): n.half().add(n.half()) = n { refl }");
 }
 
 /// One step of the recursion at an open argument: `Even(Succ(Succ(n)))` and
@@ -144,10 +144,10 @@ fn the_kit_is_not_definitional_at_open_arguments() {
 /// control is what records that this is the real boundary.
 #[test]
 fn two_steps_are_definitional_and_one_is_not() {
-    ok("theorem up(n: Nat, h: Even(n)): Even(Succ(Succ(n))) { h }
-theorem down(n: Nat, h: Even(Succ(Succ(n)))): Even(n) { h }
-theorem odd_up(n: Nat, h: Odd(n)): Odd(Succ(Succ(n))) { h }");
-    bad("theorem t(n: Nat, h: Even(n)): Odd(Succ(n)) { h }");
+    ok("theorem up(n: Nat, h: Nat::Even(n)): Nat::Even(Succ(Succ(n))) { h }
+theorem down(n: Nat, h: Nat::Even(Succ(Succ(n)))): Nat::Even(n) { h }
+theorem odd_up(n: Nat, h: Nat::Odd(n)): Nat::Odd(Succ(Succ(n))) { h }");
+    bad("theorem t(n: Nat, h: Nat::Even(n)): Nat::Odd(Succ(n)) { h }");
 }
 
 // ---------------------------------------------------------------------------
@@ -159,10 +159,10 @@ theorem odd_up(n: Nat, h: Odd(n)): Odd(Succ(Succ(n))) { h }");
 /// use site at an open `n` writes no arguments at all.
 #[test]
 fn parity_decides_and_resolves() {
-    ok("theorem open(n: Nat): Or<Even(n), ¬ Even(n)> { decide<Even(n)>() }
-theorem named(n: Nat): Or<Even(n), ¬ Even(n)> { even_dec(n) }
-theorem closed(): Or<Even(4), ¬ Even(4)> { Inl(trivial) }
-theorem resolved(n: Nat, no: ¬ Odd(n)): Even(n) { or_resolve(even_or_odd(n), no) }");
+    ok("theorem open(n: Nat): Or<Nat::Even(n), ¬ Nat::Even(n)> { decide<Nat::Even(n)>() }
+theorem named(n: Nat): Or<Nat::Even(n), ¬ Nat::Even(n)> { n.even_dec() }
+theorem closed(): Or<Nat::Even(4), ¬ Nat::Even(4)> { Inl(trivial) }
+theorem resolved(n: Nat, no: ¬ Nat::Odd(n)): Nat::Even(n) { or_resolve(n.even_or_odd(), no) }");
 }
 
 /// `half_add_half` needs its hypothesis, and the odd argument is why: `half`
@@ -171,7 +171,7 @@ theorem resolved(n: Nat, no: ¬ Odd(n)): Even(n) { or_resolve(even_or_odd(n), no
 /// what makes the first more than a typing accident.
 #[test]
 fn halving_inverts_only_on_an_even_argument() {
-    bad("theorem t(n: Nat): add(half(n), half(n)) = n { half_add_half(n)(trivial) }");
-    bad("theorem t(): add(half(3), half(3)) = 3 { refl }");
-    ok("theorem why(): add(half(3), half(3)) = 2 { refl }");
+    bad("theorem t(n: Nat): n.half().add(n.half()) = n { n.half_add_half(trivial) }");
+    bad("theorem t(): Nat::half(3).add(Nat::half(3)) = 3 { refl }");
+    ok("theorem why(): Nat::half(3).add(Nat::half(3)) = 2 { refl }");
 }

@@ -12,26 +12,26 @@ const SOURCE: &str = r#"
 import bitvec;
 import bool;
 fn nested_true(a, b: BitVec(64)) → BitVec(64) {
-    match bitvec::unsigned_lt_bit(64, a, b) {
-        False => bitvec::sub(64, a, b),
-        True => match bitvec::unsigned_lt_bit(64, b, bitvec::ofNat(64, 10)) {
-            False => bitvec::bxor(64, b, a),
-            True => bitvec::add(64, a, b),
+    match @bitvec::BitVec::unsigned_lt_bit(64, a, b) {
+        False => @bitvec::BitVec::sub(64, a, b),
+        True => match @bitvec::BitVec::unsigned_lt_bit(64, b, @bitvec::BitVec::ofNat(64, 10)) {
+            False => @bitvec::BitVec::bxor(64, b, a),
+            True => @bitvec::BitVec::add(64, a, b),
         },
     }
 }
 fn nested_false(a, b: BitVec(64)) → BitVec(64) {
-    match bitvec::unsigned_lt_bit(64, a, b) {
-        False => match bitvec::unsigned_lt_bit(64, a, bitvec::ofNat(64, 10)) {
-            False => bitvec::sub(64, b, a),
-            True => bitvec::bor(64, a, b),
+    match @bitvec::BitVec::unsigned_lt_bit(64, a, b) {
+        False => match @bitvec::BitVec::unsigned_lt_bit(64, a, @bitvec::BitVec::ofNat(64, 10)) {
+            False => @bitvec::BitVec::sub(64, b, a),
+            True => @bitvec::BitVec::bor(64, a, b),
         },
-        True => bitvec::add(64, b, a),
+        True => @bitvec::BitVec::add(64, b, a),
     }
 }
 fn wrong_condition(a, b: BitVec(64)) → BitVec(64) {
-    match bitvec::signed_lt_bit(64, a, b) {
-        False => bitvec::sub(64, a, b), True => bitvec::add(64, a, b),
+    match @bitvec::BitVec::signed_lt_bit(64, a, b) {
+        False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
     }
 }
 "#;
@@ -237,33 +237,33 @@ import bitvec; import bool;
 fn mixed(flag: Bool, left: BitVec(8), right: BitVec(8), fallback: BitVec(8)) → BitVec(8) {
     match flag {
         False => fallback,
-        True => match bitvec::unsigned_lt_bit(8, left, right) {
-            False => bitvec::sub(8, left, right), True => bitvec::add(8, left, right),
+        True => match @bitvec::BitVec::unsigned_lt_bit(8, left, right) {
+            False => @bitvec::BitVec::sub(8, left, right), True => @bitvec::BitVec::add(8, left, right),
         },
     }
 }
 fn bool_carry(flag: Bool, left: BitVec(8), right: BitVec(8), saved: Bool) → Bool {
     match flag {
         False => saved,
-        True => match bitvec::unsigned_lt_bit(8, left, right) { False => False, True => True },
+        True => match @bitvec::BitVec::unsigned_lt_bit(8, left, right) { False => False, True => True },
     }
 }
 fn one_bit_word(word: BitVec(1)) → BitVec(1) { word }
 fn one_bit_bool(value: Bool) → Bool { value }
 fn no_inputs() → Bool { True }
 fn widths(a: BitVec(16), b: BitVec(32), choose: Bool) → BitVec(32) {
-    match bitvec::unsigned_lt_bit(16, a, bitvec::ofNat(16, 12)) {
+    match @bitvec::BitVec::unsigned_lt_bit(16, a, @bitvec::BitVec::ofNat(16, 12)) {
         False => b,
-        True => match choose { False => bitvec::ofNat(32, 0), True => bitvec::bxor(32, b, bitvec::ofNat(32, 15)) },
+        True => match choose { False => @bitvec::BitVec::ofNat(32, 0), True => @bitvec::BitVec::bxor(32, b, @bitvec::BitVec::ofNat(32, 15)) },
     }
 }
 fn shared(a, b: BitVec(8)) → BitVec(8) {
-    bitvec::add(8, bitvec::bxor(8, a, b), bitvec::bxor(8, a, b))
+    @bitvec::BitVec::add(8, @bitvec::BitVec::bxor(8, a, b), @bitvec::BitVec::bxor(8, a, b))
 }
 fn too_wide(a: BitVec(128)) → BitVec(128) { a }
 fn dynamic(width: Nat, value: BitVec(width)) → BitVec(width) { value }
 fn natural(value: Nat) → Nat { value }
-fn unsupported_helper(a: BitVec(8)) → BitVec(8) { bitvec::neg(8, a) }
+fn unsupported_helper(a: BitVec(8)) → BitVec(8) { @bitvec::BitVec::neg(8, a) }
 inductive CounterfeitBool { Off, On }
 fn other_sum() → Bool { match Off { Off => False, On => True } }
 fn unsigned_lt_bit(width: Nat, a, b: BitVec(width)) → Bool { True }
@@ -342,17 +342,17 @@ fn loop_byte_predicate_uses_shared_structured_frontend() {
 const COMPOSED_SOURCE: &str = r#"
 import bitvec; import bool;
 inductive Decision<A> { Yield(value: A), Stop(value: A) }
-fn below(a, b: BitVec(8)) → Bool { bitvec::unsigned_lt_bit(8, a, b) }
+fn below(a, b: BitVec(8)) → Bool { @bitvec::BitVec::unsigned_lt_bit(8, a, b) }
 fn choose(a, b: BitVec(8)) → Bool {
     match below(a, b) { False => False, True => True }
 }
 fn relay(ignored: Nat, a, b: BitVec(8), old: BitVec(8)) → Decision<BitVec(8)> {
-    match choose(b, bitvec::add(8, a, b)) {
+    match choose(b, @bitvec::BitVec::add(8, a, b)) {
         False => Yield(old),
-        True => Stop(bitvec::sub(8, a, old)),
+        True => Stop(@bitvec::BitVec::sub(8, a, old)),
     }
 }
-fn tail_helper(a, b: BitVec(8)) → Bool { below(b, bitvec::add(8, a, b)) }
+fn tail_helper(a, b: BitVec(8)) → Bool { below(b, @bitvec::BitVec::add(8, a, b)) }
 fn ignore_natural(n: Nat, bit: Bool) → Bool { bit }
 fn used_natural(n: Nat, bit: Bool) → Bool { match n { Zero => bit, Succ(_) => False } }
 inductive Mixed<A> { One(value: A), Two(value: Nat) }
@@ -375,7 +375,7 @@ fn composed_helpers_and_generic_choice_results_check() {
     assert_eq!(reflected.region.outputs(), [Port { id: 4, width: 8 }, Port { id: 5, width: 1 }]);
     let image = elab.semantic_image();
     let stale_text = generate_structured_source_expansion("stale_helper", &reflected).unwrap();
-    let changed_helper = COMPOSED_SOURCE.replace("bitvec::unsigned_lt_bit(8, a, b)", "bitvec::unsigned_lt_bit(8, b, a)");
+    let changed_helper = COMPOSED_SOURCE.replace("@bitvec::BitVec::unsigned_lt_bit(8, a, b)", "@bitvec::BitVec::unsigned_lt_bit(8, b, a)");
     assert_ne!(changed_helper, COMPOSED_SOURCE);
     let mut changed = source_elaborator();
     changed.elab_module_source("composed_source", &changed_helper).unwrap_or_else(|e| panic!("{}", e.render(&changed_helper)));

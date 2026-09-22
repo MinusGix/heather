@@ -17,7 +17,7 @@ fn checker() -> heather_elab::Elaborator {
 #[test]
 fn byte_read_model_and_typed_body_check() {
     let mut elab = checker();
-    let source = "import bitvec; import bool; fn masked(byte, mask: BitVec(8)) → BitVec(8) { bitvec::band(8, byte, mask) } fn less(byte, bound: BitVec(8)) → Bool { bitvec::unsigned_lt_bit(8, byte, bound) } inductive ReadChoice<A> { Keep(value: A), Stop(value: A) } fn choose(byte, bound: BitVec(8)) → ReadChoice<BitVec(8)> { match bitvec::unsigned_lt_bit(8, byte, bound) { True => Keep<BitVec(8)>(byte), False => Stop<BitVec(8)>(bound) } } fn flag(value: Bool) → Bool { value }";
+    let source = "import bitvec; import bool; fn masked(byte, mask: BitVec(8)) → BitVec(8) { @bitvec::BitVec::band(8, byte, mask) } fn less(byte, bound: BitVec(8)) → Bool { @bitvec::BitVec::unsigned_lt_bit(8, byte, bound) } inductive ReadChoice<A> { Keep(value: A), Stop(value: A) } fn choose(byte, bound: BitVec(8)) → ReadChoice<BitVec(8)> { match @bitvec::BitVec::unsigned_lt_bit(8, byte, bound) { True => Keep<BitVec(8)>(byte), False => Stop<BitVec(8)>(bound) } } fn flag(value: Bool) → Bool { value }";
     elab.elab_module_source("read_clients", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     let mut native = Vec::new();
     for name in ["masked", "less", "choose"] {
@@ -48,7 +48,7 @@ fn byte_load_canonical_encodings_check() {
             let load = ByteLoad { destination: *destination, base: *base };
             assembly.push_str(&format!("movzbq (%{}), %{}\n", base.heather_name().to_lowercase(), destination.heather_name().to_lowercase()));
             expected.extend(load.bytes());
-            let bytes = load.bytes().iter().map(|b| format!("bitvec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
+            let bytes = load.bytes().iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
             source.push_str(&format!("theorem encoding_{i}_{j}(): ByteLoadDecodes([{bytes}], {}) {{ refl }}\n", load.render()));
         }
     }
@@ -124,15 +124,15 @@ fn byte_read_controls_reject_dishonest_boundaries() {
     let imports = "import x86_64_data_read; import x86_64; import bitvec; import bool; import list; import option; import logic;";
     let mut bad_load = ByteLoad { destination: Gpr::Rdx, base: Gpr::Rdi }.bytes();
     bad_load[2] = 0xbe; // MOVSX is not the promised zero-extending load.
-    let bytes = bad_load.iter().map(|b| format!("bitvec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
+    let bytes = bad_load.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
     for (name, declaration) in [
         ("wrong_opcode", format!("theorem bad(): ByteLoadDecodes([{bytes}], ByteLoad(Rdx, Rdi)) {{ refl }}")),
-        ("missing_sib", "theorem bad(): ByteLoadDecodes([bitvec::ofNat(8,72), bitvec::ofNat(8,15), bitvec::ofNat(8,182), bitvec::ofNat(8,20)], ByteLoad(Rdx, Rsp)) { refl }".into()),
-        ("wrong_value", "theorem bad<M>(byte: BitVec(8), before: MachineState<M>): read_gpr(Rdx, byte_load_after(ByteLoad(Rdx, Rdi), byte, before).gprs) = bitvec::zero(64) { byte_load_result(ByteLoad(Rdx, Rdi), byte, before) }".into()),
+        ("missing_sib", "theorem bad(): ByteLoadDecodes([@bitvec::BitVec::ofNat(8,72), @bitvec::BitVec::ofNat(8,15), @bitvec::BitVec::ofNat(8,182), @bitvec::BitVec::ofNat(8,20)], ByteLoad(Rdx, Rsp)) { refl }".into()),
+        ("wrong_value", "theorem bad<M>(byte: BitVec(8), before: MachineState<M>): read_gpr(Rdx, byte_load_after(ByteLoad(Rdx, Rdi), byte, before).gprs) = @bitvec::BitVec::zero(64) { byte_load_result(ByteLoad(Rdx, Rdi), byte, before) }".into()),
         ("wrong_frame", "theorem bad<M>(byte: BitVec(8), before: MachineState<M>): read_gpr(Rdx, byte_load_after(ByteLoad(Rdx, Rdi), byte, before).gprs) = read_gpr(Rdx, before.gprs) { byte_load_preserves(ByteLoad(Rdx, Rdi), byte, before, Rdx, refl) }".into()),
-        ("denied_read", "theorem bad<M>(byte: BitVec(8), before: MachineState<M>, canonical: bitvec::drop_low(47,17,read_gpr(Rdi,before.gprs)) = bitvec::zero(17)): ByteLoadStep<M>(ByteReadAccess<M>(λ memory address => None), ByteLoad(Rdx,Rdi), byte, before, byte_load_after(ByteLoad(Rdx,Rdi),byte,before)) { ByteLoadStep(canonical := canonical, present := refl, execution := refl) }".into()),
-        ("noncanonical_read", "theorem bad<M>(memory: M): ByteLoadStep<M>(ByteReadAccess<M>(λ memory address => Some(bitvec::ofNat(8,7))), ByteLoad(Rdx,Rdi), bitvec::ofNat(8,7), MachineState(write_gpr(Rdi,bitvec::ofNat(64,140737488355328),zero_gprs()),clear_flags(),bitvec::zero(64),memory), byte_load_after(ByteLoad(Rdx,Rdi),bitvec::ofNat(8,7),MachineState(write_gpr(Rdi,bitvec::ofNat(64,140737488355328),zero_gprs()),clear_flags(),bitvec::zero(64),memory))) { ByteLoadStep(canonical := refl, present := refl, execution := refl) }".into()),
-        ("wrong_address", "theorem bad<M>(access: ByteReadAccess<M>, byte: BitVec(8), before: MachineState<M>, canonical: bitvec::drop_low(47,17,read_gpr(Rdi,before.gprs)) = bitvec::zero(17), present: access.read(before.memory,read_gpr(Rsi,before.gprs)) = Some(byte)): ByteLoadStep<M>(access,ByteLoad(Rdx,Rdi),byte,before,byte_load_after(ByteLoad(Rdx,Rdi),byte,before)) { ByteLoadStep(canonical := canonical, present := present, execution := refl) }".into()),
+        ("denied_read", "theorem bad<M>(byte: BitVec(8), before: MachineState<M>, canonical: bitvec::BitVec::drop_low(47,17,read_gpr(Rdi,before.gprs)) = @bitvec::BitVec::zero(17)): ByteLoadStep<M>(ByteReadAccess<M>(λ memory address => None), ByteLoad(Rdx,Rdi), byte, before, byte_load_after(ByteLoad(Rdx,Rdi),byte,before)) { ByteLoadStep(canonical := canonical, present := refl, execution := refl) }".into()),
+        ("noncanonical_read", "theorem bad<M>(memory: M): ByteLoadStep<M>(ByteReadAccess<M>(λ memory address => Some(@bitvec::BitVec::ofNat(8,7))), ByteLoad(Rdx,Rdi), @bitvec::BitVec::ofNat(8,7), MachineState(write_gpr(Rdi,@bitvec::BitVec::ofNat(64,140737488355328),zero_gprs()),clear_flags(),@bitvec::BitVec::zero(64),memory), byte_load_after(ByteLoad(Rdx,Rdi),@bitvec::BitVec::ofNat(8,7),MachineState(write_gpr(Rdi,@bitvec::BitVec::ofNat(64,140737488355328),zero_gprs()),clear_flags(),@bitvec::BitVec::zero(64),memory))) { ByteLoadStep(canonical := refl, present := refl, execution := refl) }".into()),
+        ("wrong_address", "theorem bad<M>(access: ByteReadAccess<M>, byte: BitVec(8), before: MachineState<M>, canonical: bitvec::BitVec::drop_low(47,17,read_gpr(Rdi,before.gprs)) = @bitvec::BitVec::zero(17), present: access.read(before.memory,read_gpr(Rsi,before.gprs)) = Some(byte)): ByteLoadStep<M>(access,ByteLoad(Rdx,Rdi),byte,before,byte_load_after(ByteLoad(Rdx,Rdi),byte,before)) { ByteLoadStep(canonical := canonical, present := present, execution := refl) }".into()),
     ] {
         let source = format!("{imports} {declaration}");
         heather_syntax::parse_file(&source).unwrap();

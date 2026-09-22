@@ -24,10 +24,10 @@ theorem enumerate_members<A>(xs: SetTree<A>, a: A):
             mpr := λ h => match h { Inl(p) => p, Inr(p) => false_elim(p) }),
         Join(left, right) => Iff(
             mp := λ h => match h {
-                Inl(p) => mem_append_l(enumerate_tree(left), enumerate_tree(right), a, enumerate_members(left, a).mp(p)),
-                Inr(p) => mem_append_r(enumerate_tree(left), enumerate_tree(right), a, enumerate_members(right, a).mp(p)),
+                Inl(p) => enumerate_tree(left).mem_append_l(enumerate_tree(right), a, enumerate_members(left, a).mp(p)),
+                Inr(p) => enumerate_tree(left).mem_append_r(enumerate_tree(right), a, enumerate_members(right, a).mp(p)),
             },
-            mpr := λ h => match mem_append(enumerate_tree(left), enumerate_tree(right), a, h) {
+            mpr := λ h => match enumerate_tree(left).mem_append(enumerate_tree(right), a, h) {
                 Inl(p) => Inl(enumerate_members(left, a).mpr(p)),
                 Inr(p) => Inr(enumerate_members(right, a).mpr(p)),
             }),
@@ -65,21 +65,21 @@ theorem list_round_trip<A>(xs: List<A>): SameMembers(enumerate_tree(tree_of_list
 // Imaging and enumeration agree semantically, even though they compute on
 // different data structures. Prove this through source witnesses, not identity.
 theorem enumerate_image_forward<A, B>(xs: SetTree<A>, f: A → B, b: B,
-    h: Mem(b, enumerate_tree(tree_image(f, xs)))): Mem(b, map(enumerate_tree(xs), f))
+    h: Mem(b, enumerate_tree(tree_image(f, xs)))): Mem(b, enumerate_tree(xs).map(f))
 {
     let source = tree_image_source(xs, f, b, enumerate_members(tree_image(f, xs), b).mpr(h));
-    j(source.proof.right, λ value eq => Mem(value, map(enumerate_tree(xs), f)),
-        mem_map(enumerate_tree(xs), source.witness, f, enumerate_members(xs, source.witness).mp(source.proof.left)))
+    j(source.proof.right, λ value eq => Mem(value, enumerate_tree(xs).map(f)),
+        enumerate_tree(xs).mem_map(source.witness, f, enumerate_members(xs, source.witness).mp(source.proof.left)))
 }
 theorem enumerate_image_backward<A, B>(xs: SetTree<A>, f: A → B, b: B,
-    h: Mem(b, map(enumerate_tree(xs), f))): Mem(b, enumerate_tree(tree_image(f, xs)))
+    h: Mem(b, enumerate_tree(xs).map(f))): Mem(b, enumerate_tree(tree_image(f, xs)))
 {
     let source = mem_image_source(enumerate_tree(xs), f, b, h);
     enumerate_members(tree_image(f, xs), b).mp(tree_image_witness(xs, f, b,
         Exists(source.witness, And(enumerate_members(xs, source.witness).mpr(source.proof.left), source.proof.right))))
 }
 theorem enumerate_image<A, B>(xs: SetTree<A>, f: A → B):
-    SameMembers(enumerate_tree(tree_image(f, xs)), map(enumerate_tree(xs), f))
+    SameMembers(enumerate_tree(tree_image(f, xs)), enumerate_tree(xs).map(f))
 { λ b => Iff(mp := λ h => enumerate_image_forward(xs, f, b, h), mpr := λ h => enumerate_image_backward(xs, f, b, h)) }
 
 fn enumerate_selected<A>(xs: SetTree<A>, selected: SetElement<SetTree<A>, A>(tree_member<A>, xs)) →

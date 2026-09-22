@@ -32,11 +32,11 @@ fn GprValuePlaced(values: Valuation(), id: Nat, register: Gpr,
 fn BitValuePlaced<M>(values: Valuation(), id: Nat, register: Gpr,
     state: MachineState<M>) → Type
 {
-    bitvec::zero_extend(1, 63, values(1, id)) =
+    values(1, id).zero_extend(63) =
         read_gpr(register, state.gprs)
 }
 
-fn zero_test_selector(bit: Bool) → Bool { bool::not(bit) }
+fn zero_test_selector(bit: Bool) → Bool { bit.not() }
 
 record GprOnlyStep<M>(instruction: Instruction) {
     run: Gprs → Gprs,
@@ -109,9 +109,9 @@ theorem execute_normal_gprs_congruent<M>(instruction: Instruction,
 }
 
 theorem test_zero_extended_bool(bit: Bool):
-    test_flags(bitvec::zero_extend(1, 63, bitvec::ofBool(bit)),
-        bitvec::zero_extend(1, 63, bitvec::ofBool(bit)), False).zf =
-        bool::not(bit)
+    test_flags(BitVec::ofBool(bit).zero_extend(63),
+        BitVec::ofBool(bit).zero_extend(63), False).zf =
+        bit.not()
 {
     match bit { False => refl, True => refl }
 }
@@ -121,16 +121,16 @@ theorem test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
     placed: BitValuePlaced(values, id, register, state)):
     test_flags(read_gpr(register, state.gprs),
         read_gpr(register, state.gprs), False).zf =
-        zero_test_selector(bitvec::head_bit(0, values(1, id)))
+        zero_test_selector(@BitVec::head_bit(0, values(1, id)))
 {
     j(placed,
         λ actual _ => test_flags(actual, actual, False).zf =
-            bool::not(bitvec::head_bit(0, values(1, id))),
-        j(bitvec::one_bit_eq_ofBool(values(1, id)),
-            λ actual _ => test_flags(bitvec::zero_extend(1, 63, actual),
-                bitvec::zero_extend(1, 63, actual), False).zf =
-                bool::not(bitvec::head_bit(0, values(1, id))),
-            test_zero_extended_bool(bitvec::head_bit(0, values(1, id)))))
+            Bool::not(@BitVec::head_bit(0, values(1, id))),
+        j(BitVec::one_bit_eq_ofBool(values(1, id)),
+            λ actual _ => test_flags(actual.zero_extend(63),
+                actual.zero_extend(63), False).zf =
+                Bool::not(@BitVec::head_bit(0, values(1, id))),
+            test_zero_extended_bool(@BitVec::head_bit(0, values(1, id)))))
 }
 
 theorem linked_test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
@@ -138,7 +138,7 @@ theorem linked_test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
     placed: BitValuePlaced(values, id, block.test_register,
         linked_prefix_after(block, before))):
     linked_test_after(block, before).flags.zf =
-        zero_test_selector(bitvec::head_bit(0, values(1, id)))
+        zero_test_selector(@BitVec::head_bit(0, values(1, id)))
 {
     test_bit_value_placed_zf(values, id, block.test_register,
         linked_prefix_after(block, before), placed)
@@ -264,9 +264,9 @@ theorem control_join_cases(values: Valuation(), join: ConditionalJoinRegion,
     when_true: (RegionHolds(join.when_true, values) ∧
         (BlockArgumentsHold(values, join.true_arguments) ∧
          RegionHolds(join.continuation, values))) → P(True)):
-    P(bitvec::head_bit(0, values(1, join.condition)))
+    P(@BitVec::head_bit(0, values(1, join.condition)))
 {
-    match bitvec::head_bit(0, values(1, join.condition)) as
+    match @BitVec::head_bit(0, values(1, join.condition)) as
         λ selected => (match selected as λ _ => Type {
             False => RegionHolds(join.when_false, values) ∧
                 (BlockArgumentsHold(values, join.false_arguments) ∧
@@ -379,11 +379,11 @@ theorem linked_conditional_read_agrees<M>(selected: Bool, register: Gpr,
 theorem bit_value_placed_condition<M>(values: Valuation(), id: Nat,
     register: Gpr, state: MachineState<M>,
     placed: BitValuePlaced(values, id, register, state)):
-    machine_condition(register, state) = bitvec::head_bit(0, values(1, id))
+    machine_condition(register, state) = @BitVec::head_bit(0, values(1, id))
 {
     j(placed,
-        λ actual _ => bitvec::head_bit(63, actual) =
-            bitvec::head_bit(0, values(1, id)), refl)
+        λ actual _ => @BitVec::head_bit(63, actual) =
+            @BitVec::head_bit(0, values(1, id)), refl)
 }
 
 theorem bit_placed_after_move<M>(values: Valuation(), id: Nat,
@@ -550,28 +550,28 @@ theorem gpr_move_add_reads(destination, left_register, right_register: Gpr,
         read_gpr(right_register, before)):
     read_gpr(destination, execute_add(destination, right_register,
         write_gpr(destination, read_gpr(left_register, before), before)).gprs) =
-        bitvec::add(64, read_gpr(left_register, before),
+        read_gpr(left_register, before).add(
             read_gpr(right_register, before))
 {
     let moved = write_gpr(destination, read_gpr(left_register, before), before);
     calc {
         read_gpr(destination,
             execute_add(destination, right_register, moved).gprs)
-            = bitvec::add(64, read_gpr(destination, moved),
+            = read_gpr(destination, moved).add(
                 read_gpr(right_register, moved)) :=
                 read_gpr_after_write(destination,
-                    bitvec::add(64, read_gpr(destination, moved),
+                    read_gpr(destination, moved).add(
                         read_gpr(right_register, moved)), moved),
-            = bitvec::add(64, read_gpr(left_register, before),
+            = read_gpr(left_register, before).add(
                 read_gpr(right_register, moved)) :=
             cong_fn<BitVec(64), BitVec(64)>(
-                bitvec::add(64, ·, read_gpr(right_register, moved)),
+                BitVec::add(·, read_gpr(right_register, moved)),
                 read_gpr_after_write(destination,
                     read_gpr(left_register, before), before)),
-            = bitvec::add(64, read_gpr(left_register, before),
+            = read_gpr(left_register, before).add(
                 read_gpr(right_register, before)) :=
             cong_fn<BitVec(64), BitVec(64)>(
-                bitvec::add(64, read_gpr(left_register, before), ·),
+                read_gpr(left_register, before).add(·),
                 right_preserved),
     }
 }
@@ -580,28 +580,28 @@ theorem placed_after_comparison<M>(values: Valuation(), output, left, right: Nat
     condition: BitVec(64) → BitVec(64) → Bool,
     left_register, right_register, destination: Gpr,
     before, after: MachineState<M>,
-    equation: values(1, output) = bitvec::ofBool(
+    equation: values(1, output) = BitVec::ofBool(
         condition(values(64, left), values(64, right))),
     left_placed: ValuePlaced(values, left, left_register, before),
     right_placed: ValuePlaced(values, right, right_register, before),
-    computed: read_gpr(destination, after.gprs) = bitvec::zero_extend(1, 63,
-        bitvec::ofBool(condition(read_gpr(left_register, before.gprs),
-            read_gpr(right_register, before.gprs))))):
+    computed: read_gpr(destination, after.gprs) =
+        BitVec::ofBool(condition(read_gpr(left_register, before.gprs),
+            read_gpr(right_register, before.gprs))).zero_extend(63)):
     BitValuePlaced(values, output, destination, after)
 {
     apply trans;
     give list::cong_fn<BitVec(1), BitVec(64)>(
-        bitvec::zero_extend(1, 63, ·), equation);
+        BitVec::zero_extend(63, ·), equation);
     apply trans;
     give j(left_placed,
-        λ found _ => bitvec::zero_extend(1, 63, bitvec::ofBool(
-            condition(values(64, left), values(64, right)))) =
-            bitvec::zero_extend(1, 63, bitvec::ofBool(
-                condition(found, read_gpr(right_register, before.gprs)))),
+        λ found _ => BitVec::ofBool(
+            condition(values(64, left), values(64, right))).zero_extend(63) =
+            BitVec::ofBool(
+                condition(found, read_gpr(right_register, before.gprs))).zero_extend(63),
         j(right_placed,
-            λ found _ => bitvec::zero_extend(1, 63, bitvec::ofBool(
-                condition(values(64, left), values(64, right)))) =
-                bitvec::zero_extend(1, 63, bitvec::ofBool(
-                    condition(values(64, left), found))), refl));
+            λ found _ => BitVec::ofBool(
+                condition(values(64, left), values(64, right))).zero_extend(63) =
+                BitVec::ofBool(
+                    condition(values(64, left), found)).zero_extend(63), refl));
     sym(computed)
 }

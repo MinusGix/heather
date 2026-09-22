@@ -17,8 +17,8 @@ fn bind(input: Expr, slot: &str, body: Expr, span: Span) -> Expr {
     let ExprKind::Lam { body,.. } = &mut continuation.kind else { unreachable!() };
     let name = if let Some(value) = unreturn(body) {
         **body = value;
-        "result::map"
-    } else { "result::and_then" };
+        "result::Result::map"
+    } else { "result::Result::and_then" };
     call(name,vec![input,continuation],span)
 }
 // A local success wrapper can use map, whose callback returns the plain

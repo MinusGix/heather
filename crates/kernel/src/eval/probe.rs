@@ -18,7 +18,7 @@
 //! stuck case split on `k`, `ih`, or `x` was reached by a reduction that
 //! holds for every instantiation of them. So the class is a fact about the
 //! algebra as a function on runs, generic over how the definition was
-//! written — `nat::sub`'s spelling never matched the old syntactic pattern
+//! written — `nat::Nat::sub`'s spelling never matched the old syntactic pattern
 //! and classifies here by what it does.
 //!
 //! Each reading is tried **uniformly** (`k` neutral: the class holds at every

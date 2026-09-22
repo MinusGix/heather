@@ -28,12 +28,12 @@ fn labels_survive_insertion_reordering_and_nesting() {
         "{ let earlier = down(k,0); down(k,earlier) decreasing tail }",
         "down(k,down(k,0) decreasing inner) decreasing tail",
     ] {
-        let inner = if body.contains("decreasing inner") { "on decreasing inner := nat::lt_succ_self(k);" }
-            else if body.contains("earlier") { "on ?dec1 := nat::lt_succ_self(k);" } else { "" };
+        let inner = if body.contains("decreasing inner") { "on decreasing inner := nat::Nat::lt_succ_self(k);" }
+            else if body.contains("earlier") { "on ?dec1 := nat::Nat::lt_succ_self(k);" } else { "" };
         ok(&format!(r#"
             fn down(n: Nat, extra: Nat) -> Nat decreases n {{
                 match n {{ Zero => 0, Succ(k) => {body} }}
-                on decreasing tail := nat::lt_succ_self(k);
+                on decreasing tail := nat::Nat::lt_succ_self(k);
                 {inner}
             }}
             theorem closed(): down(3,0) = 0 {{ refl }}
@@ -43,8 +43,8 @@ fn labels_survive_insertion_reordering_and_nesting() {
         ok(&format!(r#"
             fn down(n: Nat) -> Nat decreases n {{
                 match n {{ Zero => 0, Succ(k) => {{ {order} a }} }}
-                on decreasing first := nat::lt_succ_self(k);
-                on decreasing second := nat::lt_succ_self(k);
+                on decreasing first := nat::Nat::lt_succ_self(k);
+                on decreasing second := nat::Nat::lt_succ_self(k);
             }}
             theorem closed(): down(2) = 0 {{ refl }}
         "#));
@@ -57,11 +57,11 @@ fn mutual_labels_are_per_declaration_and_keep_open_types() {
         import int; import omega;
         fn first<A>(n: Nat, x: A) -> A decreases n {
             second(n,x) decreasing step
-            on decreasing step := nat::le_refl(n);
+            on decreasing step := nat::Nat::le_refl(n);
         }
         fn second<A>(n: Nat, x: A) -> A decreases n {
             match n { Zero => x, Succ(k) => first(k,x) decreasing step }
-            on decreasing step := nat::lt_succ_self(k);
+            on decreasing step := nat::Nat::lt_succ_self(k);
         }
         theorem neutral<A>(x: A): first(3,x) = x { refl }
     "#);
@@ -80,7 +80,7 @@ fn labels_survive_result_propagation_and_do_not_capture_goal_names() {
                     Ok(x)
                 },
             }
-            on decreasing tail := nat::lt_succ_self(k);
+            on decreasing tail := nat::Nat::lt_succ_self(k);
             on ?tail := 7;
         }
         theorem closed(): down(2) = Ok<Nat,Nat>(0) { refl }
@@ -110,8 +110,8 @@ fn label_errors_are_scoped_and_wrong_evidence_is_rejected() {
                 let first = bad(k) decreasing good;
                 bad(Succ(k)) decreasing wrong
             }} }}
-            on decreasing good := nat::lt_succ_self(k);
-            on decreasing wrong := nat::lt_succ_self(k);
+            on decreasing good := nat::Nat::lt_succ_self(k);
+            on decreasing wrong := nat::Nat::lt_succ_self(k);
         }}
     "#);
     assert!(base().elab_module_source("bad", &src).is_err());

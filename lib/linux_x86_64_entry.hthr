@@ -32,11 +32,11 @@ theorem linux_entry_executes<M>(left, right: BitVec(64), before: MachineState<M>
 { canonical_block_executes_normal(linux_entry_instructions(left, right), before) }
 
 fn linux_exit_instructions() → List<Instruction> {
-    [MovRR(Rdi, Rax), MovRI(Rax, bitvec::ofNat(64, 60))]
+    [MovRR(Rdi, Rax), MovRI(Rax, BitVec::ofNat(60))]
 }
 
 fn linux_exit_state<M>(before: MachineState<M>) → MachineState<M> {
-    execute_normal(decoded_canonical(MovRI(Rax, bitvec::ofNat(64, 60))),
+    execute_normal(decoded_canonical(MovRI(Rax, BitVec::ofNat(60))),
         execute_normal(decoded_canonical(MovRR(Rdi, Rax)), before))
 }
 
@@ -45,7 +45,7 @@ theorem linux_exit_executes<M>(before: MachineState<M>):
 { canonical_block_executes_normal(linux_exit_instructions(), before) }
 
 theorem linux_exit_number<M>(before: MachineState<M>):
-    read_gpr(Rax, linux_exit_state(before).gprs) = bitvec::ofNat(64, 60)
+    read_gpr(Rax, linux_exit_state(before).gprs) = BitVec::ofNat(60)
 { refl }
 
 theorem linux_exit_value<M>(before: MachineState<M>):
@@ -53,7 +53,7 @@ theorem linux_exit_value<M>(before: MachineState<M>):
 { refl }
 
 fn linux_syscall_bytes() → List<BitVec(8)> {
-    [bitvec::ofNat(8, 15), bitvec::ofNat(8, 5)]
+    [BitVec::ofNat(15), BitVec::ofNat(5)]
 }
 
 // A request presented to Linux, before the SYSCALL transfer. The environment
@@ -61,7 +61,7 @@ fn linux_syscall_bytes() → List<BitVec(8)> {
 // thread and exposes the low eight status bits to the parent. No theorem
 // here claims to verify Linux, its syscall entry, or architectural fetch.
 record LinuxExitRequest<M>(state: MachineState<M>, result: BitVec(64)) {
-    number: read_gpr(Rax, state.gprs) = bitvec::ofNat(64, 60),
+    number: read_gpr(Rax, state.gprs) = BitVec::ofNat(60),
     status: read_gpr(Rdi, state.gprs) = result,
 }
 

@@ -53,20 +53,20 @@ theorem field_type_infers_hidden_values<K, V>(Valid: K → V → Type,
 }
 
 theorem finds_head():
-    lookup(IsSuccess, nat::eq_dec, 3, rows()) = Some(3)
+    lookup(IsSuccess, nat::Nat::eq_dec, 3, rows()) = Some(3)
 {}
 
 theorem finds_tail():
-    lookup(IsSuccess, nat::eq_dec, 7, rows()) = Some(7)
+    lookup(IsSuccess, nat::Nat::eq_dec, 7, rows()) = Some(7)
 {}
 
-theorem misses(): lookup(IsSuccess, nat::eq_dec, 5, rows()) = None {}
+theorem misses(): lookup(IsSuccess, nat::Nat::eq_dec, 5, rows()) = None {}
 
 theorem found_is_valid(value: Nat,
-    success: lookup(IsSuccess, nat::eq_dec, 7, rows()) = Some(value)):
+    success: lookup(IsSuccess, nat::Nat::eq_dec, 7, rows()) = Some(value)):
     IsSuccess(7, value)
 {
-    lookup_sound(IsSuccess, nat::eq_dec, 7, rows(), value, success)
+    lookup_sound(IsSuccess, nat::Nat::eq_dec, 7, rows(), value, success)
 }
 "#;
     if let Err(err) = e.elab_module_source("certified_lookup_test", src) {

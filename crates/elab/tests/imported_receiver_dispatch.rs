@@ -1,11 +1,29 @@
 //! Receiver selection among ambiguous imported functions is independent of
 //! callback inference. Every callback here has an inferable function type.
+//!
+//! std's `result` and `option` now own their `map`s as `Result::map` and
+//! `Option::map`, which member dispatch reaches and never makes ambiguous, so
+//! the two carriers here are fixtures that keep a free `self` `map` each.
 use heather_elab::Elaborator;
+
+const RESULT: &str = r#"
+    inductive Result<A, E> { Ok(value: A), Err(error: E) }
+    fn map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
+        match r { Ok(value) => Ok(f(value)), Err(error) => Err(error) }
+    }
+"#;
+
+const OPTION: &str = r#"
+    inductive Option<A> { None, Some(v: A) }
+    fn map<A, B>(self o: Option<A>, f: A → B) → Option<B> {
+        match o { None => None, Some(v) => Some(f(v)) }
+    }
+"#;
 
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_module_source("result", include_str!("../../../lib/std/result.hthr")).expect("result");
-    e.elab_module_source("option", include_str!("../../../lib/std/option.hthr")).expect("option");
+    e.elab_module_source("result", RESULT).expect("result");
+    e.elab_module_source("option", OPTION).expect("option");
     e
 }
 

@@ -135,12 +135,12 @@ class Cmp<A> {
 // Both `Bool` monoids register, as equals. Neither is "the" one, because no
 // goal with an unpinned operation ever reaches the registry (design §5).
 
-instance CommMonoid<Nat>(add) {
+instance CommMonoid<Nat>(Nat::add) {
     unit := 0,
-    assoc := add_assoc,
-    unit_l := add_left_zero,
+    assoc := Nat::add_assoc,
+    unit_l := Nat::add_left_zero,
     unit_r := λ (x: Nat) => refl,
-    comm := add_comm,
+    comm := Nat::add_comm,
 }
 
 // The second `Nat` monoid, and the case that shows the unit field earns its
@@ -149,37 +149,37 @@ instance CommMonoid<Nat>(add) {
 // beside `add`'s instance for the reversal — there `unit_r` is the free side
 // and `unit_l` the lemma; here it is the other way round, and `unit_r` is
 // filled by an `add` lemma, because `mul(x, 1)` reduces to `add(0, x)`.
-instance CommMonoid<Nat>(mul) {
+instance CommMonoid<Nat>(Nat::mul) {
     unit := 1,
-    assoc := mul_assoc,
-    unit_l := mul_left_one,
-    unit_r := add_left_zero,
-    comm := mul_comm,
+    assoc := Nat::mul_assoc,
+    unit_l := Nat::mul_left_one,
+    unit_r := Nat::add_left_zero,
+    comm := Nat::mul_comm,
 }
 
-instance CommMonoid<Bool>(and) {
+instance CommMonoid<Bool>(Bool::and) {
     unit := True,
-    assoc := and_assoc,
-    unit_l := and_true_l,
-    unit_r := and_true_r,
-    comm := and_comm,
+    assoc := Bool::and_assoc,
+    unit_l := Bool::and_true_l,
+    unit_r := Bool::and_true_r,
+    comm := Bool::and_comm,
 }
 
-instance CommMonoid<Bool>(or) {
+instance CommMonoid<Bool>(Bool::or) {
     unit := False,
-    assoc := or_assoc,
-    unit_l := or_false_l,
-    unit_r := or_false_r,
-    comm := or_comm,
+    assoc := Bool::or_assoc,
+    unit_l := Bool::or_false_l,
+    unit_r := Bool::or_false_r,
+    comm := Bool::or_comm,
 }
 
 // The generic instance: one declaration, an instance at every element type.
 // The chain is one class per law, and `append` stops at `Monoid`.
-instance<A> Monoid<List<A>>(append) {
+instance<A> Monoid<List<A>>(List::append) {
     unit := Nil,
-    assoc := append_assoc,
+    assoc := List::append_assoc,
     unit_l := λ (xs: List<A>) => refl,
-    unit_r := append_nil,
+    unit_r := List::append_nil,
 }
 
 instance Default<Nat> { default := 0 }
@@ -189,20 +189,8 @@ instance<A> Default<Option<A>> { default := None }
 
 instance Numeral<Nat> { ofNat := λ (n: Nat) => n }
 
-// Both orders are written **qualified**, and this file is where that stopped
-// being optional: `std/bool`'s order dropped its `_bool` suffix on 2026-08-17
-// (docs/instance-resolved-key-design.md §6), so `Le`, `le_refl` and `le_dec`
-// each name two declarations in a file that imports `nat` and `bool` both.
-// Ambiguity at the *use* is the module regime working (docs/modules-design.md
-// §4) — library growth introduces errors, never reinterpretations — and the
-// answer is to say which.
-instance Cmp<Nat> { le := nat::Le, le_refl := nat::le_refl, le_dec := nat::le_dec }
-instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::le_dec }
-
-// Operation designations live beside their definitions in `bool`, `nat`, and
-// `list`. This module consumes those rows; it does not own them. In particular,
-// `concat`'s `mconcat(++, xss)` below passes `++` as a value and resolves the
-// generic `List<A>` row declared immediately after `append`.
+instance Cmp<Nat> { le := Nat::Le, le_refl := Nat::le_refl, le_dec := Nat::le_dec }
+instance Cmp<Bool> { le := Bool::Le, le_refl := Bool::le_refl, le_dec := Bool::le_dec }
 
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
@@ -232,9 +220,9 @@ fn monoid_list_alg<A: Monoid(op)>(op: A → A → A) → ListAlg<A, A> {
 }
 
 theorem list_fold_monoid<A: Monoid(op)>(op: A → A → A, xs: List<A>):
-    list_fold(monoid_list_alg(op), xs) = xs.mconcat(op)
+    ListAlg::list_fold(monoid_list_alg(op), xs) = xs.mconcat(op)
 {
-    list_fold_is_foldr(op, A.unit, xs)
+    ListAlg::list_fold_is_foldr(op, A.unit, xs)
 }
 
 // Proved once against the class; its uses below are at unrelated carriers and
@@ -360,14 +348,14 @@ fn all_of(self bs: List<Bool>) → Bool { bs.mconcat(&&) }
 // regression for issues/class-lemma-instantiation-fuel.md: comparing the
 // instantiated generic statement used to re-walk shared type closures
 // until conversion exhausted its full budget.
-theorem sum_single(self n: Nat): ([n]).sum() = n { n.mconcat_single(add) }
+theorem sum_single(self n: Nat): ([n]).sum() = n { n.mconcat_single(Nat::add) }
 
-theorem all_of_single(self b: Bool): ([b]).all_of() = b { b.mconcat_single(and) }
+theorem all_of_single(self b: Bool): ([b]).all_of() = b { b.mconcat_single(Bool::and) }
 
-theorem any_of_single(self b: Bool): ([b]).any_of() = b { b.mconcat_single(or) }
+theorem any_of_single(self b: Bool): ([b]).any_of() = b { b.mconcat_single(Bool::or) }
 
 theorem concat_single<A>(self xs: List<A>): ([xs]).concat() = xs {
-    xs.mconcat_single(append)
+    xs.mconcat_single(List::append)
 }
 
 // The generic law, spent three times. Each goal names its operation — that is

@@ -29,8 +29,8 @@ fn direct_evidence_works_without_omega_and_ignores_untyped_locals() {
             match n {
                 Zero => 0,
                 Succ(k) => use(λ unrelated => {
-                    let irrelevant: nat::Le(unrelated,unrelated) = nat::le_refl(unrelated);
-                    let small: nat::Lt(k,Succ(k)) = nat::lt_succ_self(k);
+                    let irrelevant: nat::Nat::Le(unrelated,unrelated) = nat::Nat::le_refl(unrelated);
+                    let small: nat::Nat::Lt(k,Succ(k)) = nat::Nat::lt_succ_self(k);
                     down(k)
                 }),
             }
@@ -43,12 +43,12 @@ fn direct_evidence_works_without_omega_and_ignores_untyped_locals() {
 #[test]
 fn an_exposed_dependent_record_field_supplies_progress() {
     ok(r#"
-        record Progress(limit: Nat) { next: Nat, bound: nat::Lt(next,limit) }
+        record Progress(limit: Nat) { next: Nat, bound: nat::Nat::Lt(next,limit) }
         fn down(n: Nat) -> Nat decreases n {
             match n {
                 Zero => 0,
                 Succ(k) => {
-                    let p: Progress(Succ(k)) = Progress(k,nat::lt_succ_self(k));
+                    let p: Progress(Succ(k)) = Progress(k,nat::Nat::lt_succ_self(k));
                     let small = p.bound;
                     down(p.next)
                 },
@@ -67,9 +67,9 @@ fn arithmetic_combines_relevant_local_facts() {
                 Zero => 0,
                 Succ(k) => {
                     let smaller: Nat = k;
-                    let step: (smaller < Succ(k)) = nat::lt_succ_self(k);
+                    let step: (smaller < Succ(k)) = nat::Nat::lt_succ_self(k);
                     let next: Nat = smaller;
-                    let bound: (next <= smaller) = nat::le_refl(smaller);
+                    let bound: (next <= smaller) = nat::Nat::le_refl(smaller);
                     down(next)
                 },
             }
@@ -81,11 +81,11 @@ fn arithmetic_combines_relevant_local_facts() {
 #[test]
 fn false_reversed_insufficient_and_circular_evidence_is_refused() {
     for src in [
-        "fn bad(n: Nat) -> Nat decreases n { let weak = nat::le_refl(n); bad(n) }",
-        "fn bad(n: Nat) -> Nat decreases n { let reversed = nat::lt_succ_self(n); bad(Succ(n)) }",
-        "fn bad(n: Nat) -> Nat decreases n { let false_proof: nat::Lt(n,n) = refl; bad(n) }",
-        "fn bad(n: Nat) -> nat::Lt(n,n) decreases n { let own = bad(n); own }",
-        "fn bad(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => { let good = nat::lt_succ_self(k); bad(k) } } on ?dec1 := refl; }",
+        "fn bad(n: Nat) -> Nat decreases n { let weak = nat::Nat::le_refl(n); bad(n) }",
+        "fn bad(n: Nat) -> Nat decreases n { let reversed = nat::Nat::lt_succ_self(n); bad(Succ(n)) }",
+        "fn bad(n: Nat) -> Nat decreases n { let false_proof: nat::Nat::Lt(n,n) = refl; bad(n) }",
+        "fn bad(n: Nat) -> nat::Nat::Lt(n,n) decreases n { let own = bad(n); own }",
+        "fn bad(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => { let good = nat::Nat::lt_succ_self(k); bad(k) } } on ?dec1 := refl; }",
     ] {
         let mut e = base();
         let src = format!("{IMPORTS} import int; import omega; {src}");

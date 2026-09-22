@@ -15,17 +15,17 @@ import logic;
 // The profile fits inside a single 64-KiB address window. Splitting the
 // address avoids unary subtraction of the 0x400000 mapping base.
 fn static_elf64_address(offset: BitVec(16)) → BitVec(64) {
-    bitvec::concat(16, 48, offset, bitvec::ofNat(48, 64))
+    offset.concat(@BitVec::ofNat(48, 64))
 }
 
 fn static_elf64_entry() → BitVec(64) {
-    static_elf64_address(bitvec::ofNat(16, 176))
+    static_elf64_address(BitVec::ofNat(176))
 }
 
 fn static_elf64_read(file: List<BitVec(8)>, address: BitVec(64)) → Option<BitVec(8)> {
-    match is_zero_bits(48, bitvec::bxor(48,
-        bitvec::drop_low(16, 48, address), bitvec::ofNat(48, 64))) {
-        True => file.nth(bitvec::toNat(16, bitvec::take_low(16, 48, address))),
+    match is_zero_bits(48,
+        address.drop_low(16, 48).bxor(BitVec::ofNat(64))) {
+        True => file.nth(address.take_low(16, 48).toNat()),
         False => None,
     }
 }
@@ -41,15 +41,15 @@ fn static_elf64_executable(file: List<BitVec(8)>, address: BitVec(64)) → Bool 
 // of traversing the header again for every fetched byte.
 theorem static_elf64_read_split(header, code: List<BitVec(8)>, count, index: Nat,
     address: BitVec(64), byte: BitVec(8), length: header.len() = count,
-    page: is_zero_bits(48, bitvec::bxor(48, bitvec::drop_low(16, 48, address), bitvec::ofNat(48, 64))) = True,
-    offset: bitvec::toNat(16, bitvec::take_low(16, 48, address)) = index + count,
+    page: is_zero_bits(48, address.drop_low(16, 48).bxor(BitVec::ofNat(64))) = True,
+    offset: address.take_low(16, 48).toNat() = index + count,
     found: code.nth(index) = Some(byte)):
     static_elf64_read(header ++ code, address) = Some(byte) {
-    let indexed = j(length, λ size _ => (header ++ code).nth(index + size) = code.nth(index), nth_append_r(header, code, index));
+    let indexed = j(length, λ size _ => (header ++ code).nth(index + size) = code.nth(index), header.nth_append_r(code, index));
     let read = trans(cong_fn<Nat, Option<BitVec(8)>>(λ position => (header ++ code).nth(position), offset), trans(indexed, found));
     j(sym(page), λ decision _ =>
         (match decision as λ _ => Option<BitVec(8)> {
-            True => (header ++ code).nth(bitvec::toNat(16, bitvec::take_low(16, 48, address))),
+            True => (header ++ code).nth(address.take_low(16, 48).toNat()),
             False => None,
         }) = Some(byte), read)
 }
@@ -77,7 +77,7 @@ theorem static_elf64_fetch_one(file: List<BitVec(8)>, address: BitVec(64), byte:
 }
 theorem static_elf64_fetch_more(file: List<BitVec(8)>, address, next: BitVec(64), byte, next_byte: BitVec(8), rest: List<BitVec(8)>,
     present: static_elf64_read(file, address) = Some(byte),
-    no_wrap: bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 1)) = False,
+    no_wrap: address.carry_add_bit(BitVec::ofNat(1)) = False,
     next_correct: next_rip(address, 1) = next,
     tail: FetchedFrom(static_elf64_access(), file, InstructionBytes(next, Cons(next_byte, rest)))):
     FetchedFrom(static_elf64_access(), file, InstructionBytes(address, Cons(byte, Cons(next_byte, rest)))) {

@@ -17,5 +17,5 @@ fn observed<A>(known, incoming: List<A>) -> List<A> {
 }
 
 fn counted<A>(known, incoming: List<A>) -> Nat {
-    list_len(known ++ (incoming ++ incoming))
+    (known ++ (incoming ++ incoming)).len()
 }

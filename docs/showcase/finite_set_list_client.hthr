@@ -32,9 +32,9 @@ theorem fusion<A>(f, g: A → A, xs, ys: List<A>):
 // The semantic interface doesn't make raw sequence observations disappear.
 // They remain available, but do not inherit finite-set compatibility.
 theorem raw_length_is_not_a_set_observation():
-    Not(PreservesRelation(SameMembers<Nat>, RelId<Nat>, list_len<Nat>))
+    Not(PreservesRelation(SameMembers<Nat>, RelId<Nat>, List::len<Nat>))
 {
-    λ respects => ne_of_gt(2, 1, trivial,
+    λ respects => Nat::ne_of_gt(2, 1, trivial,
         respects([0, 0], [0], append_self_same_members<Nat>([0])))
 }
 
@@ -46,5 +46,5 @@ fn repeated_zero() → List<Nat> { [0, 0] }
 fn single_zero() → List<Nat> { [0] }
 
 theorem duplication_is_not_list_identity(): Not(repeated_zero() = single_zero()) {
-    λ eq => ne_of_gt(2, 1, trivial, cong(eq, f := list_len<Nat>))
+    λ eq => Nat::ne_of_gt(2, 1, trivial, cong(eq, f := List::len<Nat>))
 }

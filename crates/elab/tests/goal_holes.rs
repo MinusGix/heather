@@ -22,14 +22,14 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
-        Succ(k) => cong_succ(add_zero(k)),
+        Succ(k) => Nat::cong_succ(add_zero(k)),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
-        Succ(k) => cong_succ(add_succ(k, n)),
+        Succ(k) => Nat::cong_succ(add_succ(k, n)),
     }
 }
 "#;
@@ -96,7 +96,7 @@ fn a_goal_captures_its_match_arm() {
                 Zero => refl,
                 Succ(k) => ?step,
             }
-            on ?step := cong_succ(add_zero_hole(k));
+            on ?step := Nat::cong_succ(add_zero_hole(k));
         }
         "#,
     );
@@ -196,7 +196,7 @@ fn goals_coexist_with_implicit_argument_metas() {
         theorem mixed(m: Nat, n: Nat): add(m, n) = add(n, m) {
             match m {
                 Zero => ?base,
-                Succ(k) => trans(cong_succ(mixed(k, n)), sym(add_succ(n, k))),
+                Succ(k) => trans(Nat::cong_succ(mixed(k, n)), sym(add_succ(n, k))),
             }
             on ?base := sym(add_zero(n));
         }

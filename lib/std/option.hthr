@@ -2,27 +2,24 @@
 
 inductive Option<A> { None, Some(v: A) }
 
-fn map<A, B>(self o: Option<A>, f: A → B) → Option<B> {
+fn Option::map<A, B>(self o: Option<A>, f: A → B) → Option<B> {
     match o {
         None => None,
         Some(v) => Some(f(v)),
     }
 }
 
-fn and_then<A, B>(self o: Option<A>, f: A → Option<B>) → Option<B> {
+fn Option::and_then<A, B>(self o: Option<A>, f: A → Option<B>) → Option<B> {
     match o {
         None => None,
         Some(v) => f(v),
     }
 }
 
-fn unwrap_or<A>(self o: Option<A>, d: A) → A {
+fn Option::unwrap_or<A>(self o: Option<A>, d: A) → A {
     if let Some(v) = o { v } else { d }
 }
 
-// `Some` is injective, which is what a decoder's success case is read back
-// through. The rewrite is along `unwrap_or` with the left value as the
-// fallback, so the `None` case cannot arise.
-theorem some_inj<A>(a, b: A, p: Some(a) = Some(b)): a = b {
-    j(p, λ y q => a = unwrap_or(y, a), refl)
+theorem Option::some_inj<A>(a, b: A, p: Some(a) = Some(b)): a = b {
+    j(p, λ y q => a = y.unwrap_or(a), refl)
 }

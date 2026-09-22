@@ -86,7 +86,7 @@ fn elab_err(src: &str) -> String {
 const HV: &str = r#"
 fn hv(n: Nat) -> Nat decreases n {
     match n { Zero => 0, Succ(k) => Succ(hv(k)) }
-    on ?dec1 := nat::lt_succ_self(k);
+    on ?dec1 := nat::Nat::lt_succ_self(k);
 }
 "#;
 
@@ -130,12 +130,12 @@ fn gcd_carries_its_by_hand_obligation_into_the_companions() {
         fn gcd(a, b: Nat) -> Nat decreases b {
             match b {
                 Zero => a,
-                Succ(k) => gcd(Succ(k), nat::mod(a, Succ(k))),
+                Succ(k) => gcd(Succ(k), nat::Nat::mod(a, Succ(k))),
             }
-            on ?dec1 := nat::mod_lt(a, Succ(k), trivial);
+            on ?dec1 := nat::Nat::mod_lt(a, Succ(k), trivial);
         }
 
-        theorem gcd_step(a, k: Nat): gcd(a, Succ(k)) = gcd(Succ(k), nat::mod(a, Succ(k))) {
+        theorem gcd_step(a, k: Nat): gcd(a, Succ(k)) = gcd(Succ(k), nat::Nat::mod(a, Succ(k))) {
             gcd_unfold(a, Succ(k))
         }
 
@@ -158,8 +158,8 @@ fn an_open_element_type_and_a_checking_position() {
                     Cons(y, yt) => Cons(x, every_other(yt)),
                 },
             }
-            on ?dec1 := nat::le_succ_r(Succ(yt.len()), Succ(yt.len()),
-                                       nat::le_refl(Succ(yt.len())));
+            on ?dec1 := nat::Nat::le_succ_r(Succ(yt.len()), Succ(yt.len()),
+                                       nat::Nat::le_refl(Succ(yt.len())));
         }
 
         theorem eo_step<A>(x, y: A, yt: List<A>):
@@ -188,10 +188,10 @@ fn a_theorem_by_measure_gets_no_unfolding_equation() {
     // unfold, and nothing rewrites with a proof's value anyway.
     let msg = elab_err(
         r#"
-        theorem le_self(n: Nat): nat::Le(n, n) decreases n {
-            match n { Zero => nat::le_refl(0), Succ(k) => nat::le_refl(Succ(k)) }
+        theorem le_self(n: Nat): nat::Nat::Le(n, n) decreases n {
+            match n { Zero => nat::Nat::le_refl(0), Succ(k) => nat::Nat::le_refl(Succ(k)) }
         }
-        theorem cite(n: Nat): nat::Le(n, n) { le_self_unfold(n) }
+        theorem cite(n: Nat): nat::Nat::Le(n, n) { le_self_unfold(n) }
         "#,
     );
     assert!(msg.contains("no unfolding equation for `le_self`"), "{msg}");
@@ -210,7 +210,7 @@ fn a_self_call_under_a_lambda_is_refused_but_the_function_still_checks() {
                 Zero => 0,
                 Succ(k) => (λ (g: Nat -> Nat) => g(0))(λ (z: Nat) => under_lam(k)),
             }
-            on ?dec1 := nat::lt_succ_self(k);
+            on ?dec1 := nat::Nat::lt_succ_self(k);
         }
         theorem cite(n: Nat): under_lam(n) = under_lam(n) { under_lam_unfold(n) }
         "#,
@@ -222,34 +222,34 @@ fn a_self_call_under_a_lambda_is_refused_but_the_function_still_checks() {
                 Zero => 0,
                 Succ(k) => (λ (g: Nat -> Nat) => g(0))(λ (z: Nat) => under_lam(k)),
             }
-            on ?dec1 := nat::lt_succ_self(k);
+            on ?dec1 := nat::Nat::lt_succ_self(k);
         }
     "#);
 }
 
 #[test]
 fn a_match_on_a_computed_scrutinee_is_outside_the_walk() {
-    // `merge`'s `match nat::le_dec(x, y)`: the anchors do not reduce past a
+    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past a
     // stuck scrutinee, and equating the arms would need the body rendered
     // into the motive. Amends §3, which had claimed `merge`.
     let msg = elab_err(
         r#"
         theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
-            match b { Zero => nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
+            match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
         }
         fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
             match xs {
                 Nil => ys,
                 Cons(x, xt) => match ys {
                     Nil => Cons(x, xt),
-                    Cons(y, yt) => match nat::le_dec(x, y) {
+                    Cons(y, yt) => match nat::Nat::le_dec(x, y) {
                         Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
                         Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
                     },
                 },
             }
             on ?dec1 := succ_add_le(xt.len(), yt.len());
-            on ?dec2 := nat::le_refl(Succ(xt.len()) + yt.len());
+            on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
         }
         theorem cite(xs, ys: List<Nat>): merge(xs, ys) = merge(xs, ys) { merge_unfold(xs, ys) }
         "#,

@@ -68,14 +68,14 @@ fn fusion_uses_both_branches_at_an_open_leaf_type() {
 fn leaves_alg<A>() -> TreeAlg<A, List<A>> {
     TreeAlg<A, List<A>> {
         leaf: λ (a: A) => Cons(a, Nil),
-        node: append,
+        node: List::append,
     }
 }
 
 fn leaf_count_alg<A>() -> TreeAlg<A, Nat> {
     TreeAlg<A, Nat> {
         leaf: λ (a: A) => 1,
-        node: add,
+        node: Nat::add,
     }
 }
 
@@ -85,7 +85,7 @@ theorem leaf_count_fusion<A>(tree: Tree<A>):
     tree_fold_fusion(
         leaves_alg<A>(), leaf_count_alg<A>(), λ (xs: List<A>) => xs.len(),
         λ (a: A) => refl,
-        λ (left: List<A>) (right: List<A>) => len_append(left, right), tree)
+        λ (left: List<A>) (right: List<A>) => left.len_append(right), tree)
 }
 "#);
 }
@@ -98,7 +98,7 @@ fn sample() -> Tree<Nat> { Node(Leaf(2), Node(Leaf(3), Leaf(5))) }
 theorem leaves_compute():
     tree_fold(TreeAlg<Nat, List<Nat>> {
         leaf: λ (n: Nat) => Cons(n, Nil),
-        node: append,
+        node: List::append,
     }, sample()) = Cons(2, Cons(3, Cons(5, Nil)))
 { refl }
 

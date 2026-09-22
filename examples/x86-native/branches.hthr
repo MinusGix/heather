@@ -1,32 +1,32 @@
 import bitvec;
 import bool;
 fn nested_true(a, b: BitVec(64)) → BitVec(64) {
-    match bitvec::unsigned_lt_bit(64, a, b) {
-        False => bitvec::sub(64, a, b),
-        True => match bitvec::unsigned_lt_bit(64, b, bitvec::ofNat(64, 10)) {
-            False => bitvec::bxor(64, b, a),
-            True => bitvec::add(64, a, b),
+    match a.unsigned_lt_bit(b) {
+        False => a.sub(b),
+        True => match b.unsigned_lt_bit(BitVec::ofNat(10)) {
+            False => b.bxor(a),
+            True => a.add(b),
         },
     }
 }
 fn nested_false(a, b: BitVec(64)) → BitVec(64) {
-    match bitvec::unsigned_lt_bit(64, a, b) {
-        False => match bitvec::unsigned_lt_bit(64, a, bitvec::ofNat(64, 10)) {
-            False => bitvec::sub(64, b, a),
-            True => bitvec::bor(64, a, b),
+    match a.unsigned_lt_bit(b) {
+        False => match a.unsigned_lt_bit(BitVec::ofNat(10)) {
+            False => b.sub(a),
+            True => a.bor(b),
         },
-        True => bitvec::add(64, b, a),
+        True => b.add(a),
     }
 }
 fn unequal(a, b: BitVec(64)) → Bool {
-    match bitvec::unsigned_lt_bit(64, a, b) {
-        False => bitvec::unsigned_lt_bit(64, b, a),
-        True => bitvec::unsigned_lt_bit(64, a, b),
+    match a.unsigned_lt_bit(b) {
+        False => b.unsigned_lt_bit(a),
+        True => a.unsigned_lt_bit(b),
     }
 }
 fn composed(a, b: BitVec(64)) → BitVec(64) {
     match unequal(a, b) {
-        False => bitvec::sub(64, a, b),
-        True => bitvec::add(64, a, b),
+        False => a.sub(b),
+        True => a.add(b),
     }
 }

@@ -1,14 +1,14 @@
 import bitvec;
 
 fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
-    bitvec::sub(64, left, right)
+    left.sub(right)
 }
 
 fn caller(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
-    let saved = bitvec::bor(64, left, right);
+    let saved = left.bor(right);
     let first = leaf(right, left);
     let second = leaf(left, right);
-    let shared = bitvec::add(64, first, saved);
-    bitvec::add(64, bitvec::add(64, shared, shared),
-        bitvec::add(64, first, bitvec::add(64, first, second)))
+    let shared = first.add(saved);
+    shared.add(shared).add(
+        first.add(first.add(second)))
 }

@@ -9,12 +9,12 @@ import list;
 import nat;
 import logic;
 
-fn elf_byte(n: Nat) → BitVec(8) { bitvec::ofNat(8, n) }
+fn elf_byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
 // Multiply on the bounded (256) side: Nat multiplication recurses on its
 // second argument. No unary conversion of a full machine address is needed.
 fn elf_size16(low, high: BitVec(8)) → Nat {
-    bitvec::toNat(8, low) + bitvec::toNat(8, high) * 256
+    low.toNat() + high.toNat() * 256
 }
 
 fn static_elf64_header(low, high: BitVec(8)) → List<BitVec(8)> {
@@ -85,7 +85,7 @@ fn static_elf64_bytes({code: List<BitVec(8)>}, image: StaticElf64Image(code)) �
     static_elf64_header(image.size_low, image.size_high) ++ code
 }
 
-theorem elf_drop_zero<A>(xs: List<A>): list::drop(xs, 0) = xs {
+theorem elf_drop_zero<A>(xs: List<A>): xs.drop(0) = xs {
     match xs { Nil => refl, Cons(_, _) => refl }
 }
 
@@ -93,5 +93,5 @@ theorem elf_drop_zero<A>(xs: List<A>): list::drop(xs, 0) = xs {
 // This theorem is about serialized bytes; OS mapping remains a premise.
 theorem static_elf64_entry_bytes({code: List<BitVec(8)>},
     image: StaticElf64Image(code)):
-    list::drop(static_elf64_bytes(image), 176) = code
+    static_elf64_bytes(image).drop(176) = code
 { elf_drop_zero(code) }

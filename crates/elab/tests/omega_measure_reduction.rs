@@ -14,7 +14,7 @@
 //! its wording, an opaque head still interns unreduced, and the `lift = false`
 //! re-lowering is no longer reached on the reproducer.
 //!
-//! The kept-by-hand sites (`runs`'s `drop_eq_le`, `gcd`'s `nat::mod_lt`) and
+//! The kept-by-hand sites (`runs`'s `drop_eq_le`, `gcd`'s `nat::Nat::mod_lt`) and
 //! the removed ones (`merge`'s two `on`s) live in `termination_measures.rs`,
 //! and the group's in `mutual_recursion.rs`.
 
@@ -87,7 +87,7 @@ fn elab_err(src: &str) -> String {
 }
 
 const DROP1: &str = r#"
-fn drop1(xs: List<Nat>) -> Nat decreases list_len(xs) {
+fn drop1(xs: List<Nat>) -> Nat decreases xs.len() {
     match xs { Nil => 0, Cons(h, t) => Succ(drop1(t)) }
 }
 "#;
@@ -98,7 +98,7 @@ fn a_list_tail_closes_by_omega_alone() {
         "{DROP1}\n\
          theorem drop1_two(): drop1([7, 8]) = 2 {{ refl }}\n\
          // the non-`decreases` occurrence of the same defect (design §1.1)\n\
-         theorem at_ctor(h: Nat, xs: List<Nat>): nat::Lt(list_len(xs), list_len(Cons(h, xs))) {{ omega }}"
+         theorem at_ctor(h: Nat, xs: List<Nat>): nat::Nat::Lt(xs.len(), Cons(h, xs).len()) {{ omega }}"
     ));
 }
 
@@ -117,17 +117,17 @@ fn the_member_spelling_of_the_same_measure_closes_too() {
 
 #[test]
 fn a_tree_measure_names_both_leaves() {
-    // The reduct is `Succ(nat::add(u₁, u₂))`: two unspellable leaves, two
+    // The reduct is `Succ(nat::Nat::add(u₁, u₂))`: two unspellable leaves, two
     // recursive fields, two candidates (design §2's table, row 3).
     ok(r#"
         inductive Tree { Leaf, Node(left: Tree, right: Tree) }
 
         fn tnodes(t: Tree) -> Nat {
-            match t { Leaf => 0, Node(l, r) => Succ(nat::add(tnodes(l), tnodes(r))) }
+            match t { Leaf => 0, Node(l, r) => Succ(nat::Nat::add(tnodes(l), tnodes(r))) }
         }
 
         fn tsum(t: Tree) -> Nat decreases tnodes(t) {
-            match t { Leaf => 1, Node(l, r) => nat::add(tsum(l), tsum(r)) }
+            match t { Leaf => 1, Node(l, r) => nat::Nat::add(tsum(l), tsum(r)) }
         }
 
         theorem tsum_leaf(): tsum(Leaf) = 1 { refl }
@@ -159,7 +159,7 @@ fn the_measure_closes_at_an_open_element_type() {
     // the constructor value's fields are not `Nat`s and nothing about the
     // element computes.
     ok(r#"
-        fn drop1_open<A>(xs: List<A>) -> Nat decreases list_len(xs) {
+        fn drop1_open<A>(xs: List<A>) -> Nat decreases xs.len() {
             match xs { Nil => 0, Cons(h, t) => Succ(drop1_open<A>(t)) }
         }
         theorem drop1_open_two(a, b: Nat): drop1_open<Nat>([a, b]) = 2 { refl }
@@ -198,7 +198,7 @@ fn a_non_decreasing_measure_at_a_constructor_pattern_is_still_refused() {
     // lose §2-of-the-measures-doc's wording.
     let msg = elab_err(
         r#"
-        fn stall(xs: List<Nat>) -> Nat decreases list_len(xs) {
+        fn stall(xs: List<Nat>) -> Nat decreases xs.len() {
             match xs { Nil => 0, Cons(h, t) => Succ(stall(xs)) }
         }
         "#,
@@ -219,7 +219,7 @@ fn a_neutral_measure_head_still_interns_under_its_own_spelling() {
         fn drop_eq(t: Nat, ts: List<Nat>) -> List<Nat> {
             match ts {
                 Nil => Nil,
-                Cons(h, rest) => match nat::eq_dec(t, h) { Inl(_) => drop_eq(t, rest), Inr(_) => Cons(h, rest) },
+                Cons(h, rest) => match nat::Nat::eq_dec(t, h) { Inl(_) => drop_eq(t, rest), Inr(_) => Cons(h, rest) },
             }
         }
 

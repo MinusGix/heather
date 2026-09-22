@@ -24,21 +24,21 @@ fn ok(src: &str) {
 #[test]
 fn inferred_values_and_open_dependent_records() {
     ok(r#"
-        record Remaining<A>(limit: Nat) { rest: List<A>, bound: nat::Le(list_len(rest),limit) }
-        fn identity<A>(xs: List<A>) -> Remaining<A>(list_len(xs)) {
-            Remaining(xs, nat::le_refl(list_len(xs)))
+        record Remaining<A>(limit: Nat) { rest: List<A>, bound: nat::Nat::Le(rest.len(),limit) }
+        fn identity<A>(xs: List<A>) -> Remaining<A>(xs.len()) {
+            Remaining(xs, nat::Nat::le_refl(xs.len()))
         }
         theorem tail_small<A>(limit: Nat, p: Remaining<A>(limit), x: A, xs: List<A>,
-            shape: p.rest = Cons(x,xs)): nat::Lt(list_len(xs),limit) {
-            j(shape, λ ys _ => nat::Le(list_len(ys),limit), p.bound)
+            shape: p.rest = Cons(x,xs)): nat::Nat::Lt(xs.len(),limit) {
+            j(shape, λ ys _ => nat::Nat::Le(ys.len(),limit), p.bound)
         }
-        fn worker<B>(xs: List<B>) -> Nat decreases list_len(xs) { count(xs) }
-        fn count<B>(xs: List<B>) -> Nat decreases list_len(xs) {
+        fn worker<B>(xs: List<B>) -> Nat decreases xs.len() { count(xs) }
+        fn count<B>(xs: List<B>) -> Nat decreases xs.len() {
             let p = identity(xs);
             match shape : p.rest {
                 Nil => 0,
                 Cons(x,rest) => {
-                    let small = tail_small(list_len(xs),p,x,rest,shape);
+                    let small = tail_small(xs.len(),p,x,rest,shape);
                     Succ(worker(rest))
                 },
             }
@@ -61,7 +61,7 @@ fn a_hypothesis_type_keeps_its_match_equation() {
                     down(k)
                 },
             }
-            on ?dec1 := (λ (p: shape = shape) => j(sym(shape), λ m _ => nat::Lt(k,m), nat::lt_succ_self(k)))(witness);
+            on ?dec1 := (λ (p: shape = shape) => j(sym(shape), λ m _ => nat::Nat::Lt(k,m), nat::Nat::lt_succ_self(k)))(witness);
         }
         theorem closed(): down(3) = 0 { refl }
     "#);
@@ -73,7 +73,7 @@ fn invalid_calls_and_evidence_do_not_escape_a_failed_group() {
         "fn a(n: Nat) -> Nat decreases n { b(n) } fn b(n: Nat) -> Nat decreases n { a(n) }",
         "fn a(n: Nat) -> Nat decreases n { b(n) } fn b(n: Nat) -> Nat decreases n { a(Succ(n)) on ?dec1 := refl; }",
         "fn a(n: Nat) -> Nat decreases n { b(n) } fn b(n: Nat) -> Nat decreases n { a([]) }",
-        "fn a(n: Nat) -> nat::Lt(n,n) decreases n { b(n) } fn b(n: Nat) -> nat::Lt(n,n) decreases n { let own = a(n); own on ?dec1 := own; }",
+        "fn a(n: Nat) -> nat::Nat::Lt(n,n) decreases n { b(n) } fn b(n: Nat) -> nat::Nat::Lt(n,n) decreases n { let own = a(n); own on ?dec1 := own; }",
     ] {
         let mut e = base();
         let src = format!("{IMPORTS}\n{bodies}");

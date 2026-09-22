@@ -68,6 +68,12 @@ impl Expr {
         }
     }
 
+    /// `@callee(arguments)`: every parameter positional, implicits included —
+    /// for emitters that know a width the callee declares implicit.
+    pub fn explicit_call(callee: &str, arguments: impl IntoIterator<Item = Expr>) -> Self {
+        Self::call(Self::name(format!("@{callee}")), arguments)
+    }
+
     pub fn nullary(callee: impl Into<Expr>) -> Self {
         Self::call(callee, [])
     }

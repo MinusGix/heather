@@ -14,36 +14,36 @@ import list_setoid;
 theorem receive_names_twice<A>(known, incoming: List<A>):
     SameMembers((known ++ incoming) ++ incoming, known ++ incoming)
 {
-    merge_twice(SameMembers<A>, append<A>, known, incoming)
+    merge_twice(SameMembers<A>, List::append<A>, known, incoming)
 }
 
 // Identity control: feature flags merge by Boolean conjunction. No new equality
 // notion or extra derivation rule is needed to reuse the same generic theorem.
-theorem and_idem(b: Bool): and(b, b) = b {
+theorem and_idem(b: Bool): b.and(b) = b {
     match b { True => refl, False => refl }
 }
 
 theorem and_respects(x, x2: Bool, hx: x = x2, y, y2: Bool, hy: y = y2):
-    and(x, y) = and(x2, y2)
+    x.and(y) = x2.and(y2)
 {
-    j(hx, λ x3 h => and(x, y) = and(x3, y2),
-        j(hy, λ y3 h => and(x, y) = and(x, y3), refl))
+    j(hx, λ x3 h => x.and(y) = x3.and(y2),
+        j(hy, λ y3 h => x.and(y) = x.and(y3), refl))
 }
 
-instance Mergeable<Bool>(RelId<Bool>, and) {
+instance Mergeable<Bool>(RelId<Bool>, Bool::and) {
     rel_refl := λ x => refl,
     rel_sym := λ x y h => sym(h),
     rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
     respects2 := and_respects,
-    assoc := and_assoc,
-    comm := and_comm,
+    assoc := Bool::and_assoc,
+    comm := Bool::and_comm,
     idem := and_idem,
 }
 
 theorem receive_flags_twice(known, incoming: Bool):
-    and(and(known, incoming), incoming) = and(known, incoming)
+    known.and(incoming).and(incoming) = known.and(incoming)
 {
-    merge_twice(RelId<Bool>, and, known, incoming)
+    merge_twice(RelId<Bool>, Bool::and, known, incoming)
 }
 
 // Equivalence really forgets repetition, without asserting identity of lists.
@@ -54,7 +54,7 @@ theorem duplicate_member(): SameMembers<Nat>([0, 0], [0]) {
 // A checked refutation, not a counterexample searcher's guessed explanation.
 // If raw length respected SameMembers it would equate 2 and 1 here.
 theorem length_not_respectful():
-    ¬PreservesRelation(SameMembers<Nat>, RelId<Nat>, list_len<Nat>)
+    ¬PreservesRelation(SameMembers<Nat>, RelId<Nat>, List::len<Nat>)
 {
-    λ h => ne_of_gt(2, 1, trivial, h([0, 0], [0], duplicate_member()))
+    λ h => Nat::ne_of_gt(2, 1, trivial, h([0, 0], [0], duplicate_member()))
 }

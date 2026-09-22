@@ -57,7 +57,7 @@ fn if_is_definitionally_the_explicit_decision_match() {
 
         fn via_if(n, m: Nat) -> Nat { if n <= m { m } else { n } }
         fn via_match(n, m: Nat) -> Nat {
-            match decide<nat::Le(n, m)>() { Inl(h) => m, Inr(h) => n }
+            match decide<nat::Nat::Le(n, m)>() { Inl(h) => m, Inr(h) => n }
         }
         theorem same(n, m: Nat): via_if(n, m) = via_match(n, m) { refl }
         "#,

@@ -22,502 +22,370 @@ record ListElim<A>(P: List<A> → Type) {
     cons: (head: A) → (tail: List<A>) → P(tail) → P(Cons(head, tail)),
 }
 
-fn list_elim<A>(P: List<A> → Type, alg: ListElim<A>(P), xs: List<A>) → P(xs) {
+fn List::list_elim<A>(P: List<A> → Type, alg: ListElim<A>(P), xs: List<A>) → P(xs) {
     match xs {
         Nil => alg.nil,
         Cons(head, tail) => alg.cons(head, tail, list_elim(P, alg, tail)),
     }
 }
 
-theorem list_elim_nil<A>(P: List<A> → Type, alg: ListElim<A>(P)):
-    list_elim(P, alg, Nil) = alg.nil
+theorem List::list_elim_nil<A>(P: List<A> → Type, alg: ListElim<A>(P)):
+    List::list_elim(P, alg, Nil) = alg.nil
 {}
 
-theorem list_elim_cons<A>(P: List<A> → Type, alg: ListElim<A>(P),
+theorem List::list_elim_cons<A>(P: List<A> → Type, alg: ListElim<A>(P),
     head: A, tail: List<A>):
-    list_elim(P, alg, Cons(head, tail)) =
-        alg.cons(head, tail, list_elim(P, alg, tail))
+    List::list_elim(P, alg, Cons(head, tail)) =
+        alg.cons(head, tail, List::list_elim(P, alg, tail))
 {}
 
 // ---------------------------------------------------------------------------
-// append, its laws, and the two congruences the file proves with.
-//
-// `std/algebra` assembles `Monoid<List<A>>` from `append`, `Nil` and exactly
-// these two theorems, in literal form, so a monoid law that lives in a file
-// the class cannot import is a law the instance would have to re-prove.
-//
-// `append` recurses on its first argument, so `append(Nil, ys)` is `ys`
-// definitionally and it is the *right* unit that costs an induction.
 
-fn append<A>(xs, ys: List<A>) → List<A> {
+fn List::append<A>(self xs, ys: List<A>) → List<A> {
     match xs {
         Nil => ys,
-        Cons(h, t) => Cons(h, append(t, ys)),
+        Cons(h, t) => Cons(h, t.append(ys)),
     }
 }
 
-designation<A> ++ at List<A> := append
+designation<A> ++ at List<A> := List::append
 
-theorem cong_cons<A>(h: A, {a, b: List<A>}, p: a = b):
+theorem List::cong_cons<A>(h: A, {a, b: List<A>}, p: a = b):
     Cons(h, a) = Cons(h, b)
 {
     j(p, λ y q => Cons(h, a) = Cons(h, y), refl)
 }
 
-theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
+theorem List::cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
     a ++ zs = b ++ zs
 {
     j(p, λ y q => a ++ zs = y ++ zs, refl)
 }
 
-// `append_nil` is the first existing library theorem expressed by filling a
-// dependent elimination algebra. The recursive proof is no longer named or
-// called here: `list_elim` supplies it to the Cons obligation as `ih`.
-fn append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
+fn ListElim::append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
     ListElim {
         nil: refl,
-        cons: λ (h: A) (t: List<A>) ih => cong_cons(h, ih),
+        cons: λ (h: A) (t: List<A>) ih => List::cong_cons(h, ih),
     }
 }
 
-// The other side of `cong_append_l`: rewriting the tail of an append. A
-// client threading a span through a fixed prefix needs this direction, and
-// wrote the `j` by hand before it was here.
-theorem cong_append_r<A>(xs: List<A>, {a: List<A>}, {b: List<A>}, p: a = b):
+theorem List::cong_append_r<A>(self xs: List<A>, {a: List<A>}, {b: List<A>}, p: a = b):
         xs ++ a = xs ++ b {
     j(p, λ y q => xs ++ a = xs ++ y, refl)
 }
 
-theorem append_nil<A>(xs: List<A>): xs ++ Nil = xs {
-    list_elim(λ (ys: List<A>) => ys ++ Nil = ys, append_nil_elim(), xs)
+theorem List::append_nil<A>(self xs: List<A>): xs ++ Nil = xs {
+    List::list_elim(λ (ys: List<A>) => ys ++ Nil = ys, ListElim::append_nil_elim(), xs)
 }
 
-theorem append_assoc<A>(xs, ys, zs: List<A>):
+theorem List::append_assoc<A>(self xs, ys, zs: List<A>):
     (xs ++ ys) ++ zs = xs ++ (ys ++ zs)
 {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_cons(h, append_assoc(t, ys, zs)),
+        Cons(h, t) => List::cong_cons(h, t.append_assoc(ys, zs)),
     }
 }
 
-// ---------------------------------------------------------------------------
-// length.
-//
-// `len_append` is where the file first has to reach into `std/nat`'s kit
-// rather than compute, and it pays at BOTH ends: `append` peels its FIRST
-// argument while `add` recurses on its SECOND, so `add(0, n)` is stuck at the
-// base (`add_left_zero`) and the two sides are one `Succ` out of phase at the
-// step (`add_succ_left`). Stated the other way round — `add(ys.len(), xs.len())`
-// — both arms are `{}`, and every call site reads backwards. The cost of the
-// readable spelling is these two rewrites, and it is worth it.
+// ---------------------------------------------------------------------------.
 
-fn list_len<A>(xs: List<A>) → Nat {
-    match xs { Nil => 0, Cons(_, t) => Succ(list_len(t)) }
+fn List::len<A>(self xs: List<A>) → Nat {
+    match xs { Nil => 0, Cons(_, t) => Succ(t.len()) }
 }
 
-// Receiver-style public face; `list_len` is the traversal implementation so
-// the member can delegate without looking like an unguarded recursive call.
-fn List::len<A>(self xs: List<A>) → Nat { list_len(xs) }
-
-theorem len_append<A>(xs, ys: List<A>):
+theorem List::len_append<A>(self xs, ys: List<A>):
     (xs ++ ys).len() = xs.len() + ys.len()
 {
     match xs {
-        Nil => sym(add_left_zero(ys.len())),
+        Nil => sym(ys.len().add_left_zero()),
         Cons(_, t) =>
             apply trans;
-            give cong_succ(len_append(t, ys));
-            sym(add_succ_left(t.len(), ys.len())),
+            give Nat::cong_succ(t.len_append(ys));
+            sym(t.len().add_succ_left(ys.len())),
     }
 }
 
 // ---------------------------------------------------------------------------
-// map, and the four laws it had none of.
-//
-// The first higher-order arguments in the library: `map_id` and `map_map`
-// state their functions as literal lambdas in the goal, so what is being
-// tested is whether an equation between *functions applied pointwise* goes
-// through by the same recursion as everything else. It does — every proof here
-// is `cong_cons` over the tail, exactly like the append laws.
 
-fn map<A, B>(xs: List<A>, f: A → B) → List<B> {
+fn List::map<A, B>(self xs: List<A>, f: A → B) → List<B> {
     match xs {
         Nil => Nil,
-        Cons(h, t) => Cons(f(h), map(t, f)),
+        Cons(h, t) => Cons(f(h), List::map(t, f)),
     }
 }
 
-theorem map_id<A>(xs: List<A>): map(xs, λ (a: A) => a) = xs {
+theorem List::map_id<A>(self xs: List<A>): xs.map(λ (a: A) => a) = xs {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_cons(h, map_id(t)),
+        Cons(h, t) => List::cong_cons(h, t.map_id()),
     }
 }
 
-theorem map_map<A, B, C>(xs: List<A>, f: A → B, g: B → C):
-    map(map(xs, f), g) = map(xs, λ (a: A) => g(f(a)))
+theorem List::map_map<A, B, C>(self xs: List<A>, f: A → B, g: B → C):
+    xs.map(f).map(g) = xs.map(λ (a: A) => g(f(a)))
 {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_cons(g(f(h)), map_map(t, f, g)),
+        Cons(h, t) => List::cong_cons(g(f(h)), t.map_map(f, g)),
     }
 }
 
-theorem map_append<A, B>(xs, ys: List<A>, f: A → B):
-    map(xs ++ ys, f) = map(xs, f) ++ map(ys, f)
+theorem List::map_append<A, B>(self xs, ys: List<A>, f: A → B):
+    (xs ++ ys).map(f) = xs.map(f) ++ ys.map(f)
 {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_cons(f(h), map_append(t, ys, f)),
+        Cons(h, t) => List::cong_cons(f(h), t.map_append(ys, f)),
     }
 }
 
-theorem len_map<A, B>(xs: List<A>, f: A → B): map(xs, f).len() = xs.len() {
+theorem List::len_map<A, B>(self xs: List<A>, f: A → B): xs.map(f).len() = xs.len() {
     match xs {
         Nil => {},
-        Cons(_, t) => cong_succ(len_map(t, f)),
+        Cons(_, t) => Nat::cong_succ(t.len_map(f)),
     }
 }
 
 // ---------------------------------------------------------------------------
-// reverse, and the laws that rest on append's.
 
-fn rev<A>(xs: List<A>) → List<A> {
+fn List::rev<A>(self xs: List<A>) → List<A> {
     match xs {
         Nil => Nil,
-        Cons(h, t) => append(rev(t), Cons(h, Nil)),
+        Cons(h, t) => t.rev().append(Cons(h, Nil)),
     }
 }
 
-theorem rev_append<A>(xs: List<A>, ys: List<A>):
-    rev(xs ++ ys) = rev(ys) ++ rev(xs)
+theorem List::rev_append<A>(self xs: List<A>, ys: List<A>):
+    (xs ++ ys).rev() = ys.rev() ++ xs.rev()
 {
     match xs {
-        Nil => sym(append_nil(rev(ys))),
+        Nil => sym(ys.rev().append_nil()),
         Cons(h, t) =>
             apply trans;
-            give cong_append_l(Cons(h, Nil), rev_append(t, ys));
-            append_assoc(rev(ys), rev(t), Cons(h, Nil)),
+            give List::cong_append_l(Cons(h, Nil), t.rev_append(ys));
+            ys.rev().append_assoc(t.rev(), Cons(h, Nil)),
     }
 }
 
-theorem rev_involutive<A>(xs: List<A>): rev(rev(xs)) = xs {
+theorem List::rev_involutive<A>(self xs: List<A>): xs.rev().rev() = xs {
     match xs {
         Nil => {},
         Cons(h, t) =>
             apply trans;
-            give rev_append(rev(t), Cons(h, Nil));
-            cong_cons(h, rev_involutive(t)),
+            give t.rev().rev_append(Cons(h, Nil));
+            List::cong_cons(h, t.rev_involutive()),
     }
 }
 
-// `add(n, 1)` is `Succ(n)` by computation — `add` recurses on its second
-// argument — so unlike `len_append` this one needs no `add_succ_left` and the
-// singleton's length never has to be named.
-theorem rev_len<A>(xs: List<A>): rev(xs).len() = xs.len() {
+theorem List::rev_len<A>(self xs: List<A>): xs.rev().len() = xs.len() {
     match xs {
         Nil => {},
         Cons(h, t) =>
             apply trans;
-            give len_append(rev(t), Cons(h, Nil));
-            cong_succ(rev_len(t)),
+            give t.rev().len_append(Cons(h, Nil));
+            Nat::cong_succ(t.rev_len()),
     }
 }
 
 // ---------------------------------------------------------------------------
-// the folds.
-//
-// `foldr` recurses with its function and seed FIXED, so it is uncurried.
-// `foldl` cannot be: its accumulator changes at every step, and the guard
-// wants the descending argument with the rest unchanged
-// (issues/ih-generalization.md), so the seed is returned as a function.
-// Over-application means call sites still write `foldl(xs, f, z)`.
 
-fn foldr<A, B>(xs: List<A>, f: A → B → B, z: B) → B {
+fn List::foldr<A, B>(self xs: List<A>, f: A → B → B, z: B) → B {
     match xs {
         Nil => z,
-        Cons(h, t) => f(h, foldr(t, f, z)),
+        Cons(h, t) => f(h, t.foldr(f, z)),
     }
 }
 
-fn foldl<A, B>(xs: List<A>, f: B → A → B, z: B) → B {
+fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
     match xs {
         Nil => z,
-        Cons(h, t) => foldl(t, f, f(z, h)),
+        Cons(h, t) => t.foldl(f, f(z, h)),
     }
 }
 
-// The congruence the fold law needs, and the first one in the library at an
-// OPEN function type: `cong_nat` is `nat`'s and is monomorphic, `cong_cons`
-// and `cong_append_l` are each one shape. Here the function is a parameter of
-// the theorem it is used in, which is what `j` wants anyway — a general `cong`
-// is unusable only when the function has to be *inferred*
-// (issues/congruence-by-anti-unification.md).
+// TODO: this should go in general file
 theorem cong_fn<A, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) {
     j(p, λ y q => g(a) = g(y), refl)
 }
 
-theorem foldr_append<A, B>(xs, ys: List<A>, f: A → B → B, z: B):
-    foldr(xs ++ ys, f, z) = foldr(xs, f, foldr(ys, f, z))
+theorem List::foldr_append<A, B>(self xs, ys: List<A>, f: A → B → B, z: B):
+    (xs ++ ys).foldr(f, z) = xs.foldr(f, ys.foldr(f, z))
 {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_fn(f(h), foldr_append(t, ys, f, z)),
+        Cons(h, t) => cong_fn(f(h), t.foldr_append(ys, f, z)),
     }
 }
 
 // ---------------------------------------------------------------------------
-// The fold as a first-class algebra.
-//
-// `foldr` takes its two clauses as separate arguments. `ListAlg` packages the
-// same data into an ordinary value, so an algebra can be passed around,
-// compared through its laws, and eventually generated from the datatype
-// declaration without giving the kernel a new eliminator. The result carrier
-// `B` and the element carrier `A` are both open on purpose: a Nat-only version
-// would miss exactly the level and scoping pressure this experiment is for
-// (issues/datatype-container-algebras.md).
 
 record ListAlg<A, B> {
     nil: B,
     cons: A → B → B,
 }
 
-fn list_fold<A, B>(alg: ListAlg<A, B>, xs: List<A>) → B {
+fn ListAlg::list_fold<A, B>(self alg: ListAlg<A, B>, xs: List<A>) → B {
     match xs {
         Nil => alg.nil,
-        Cons(h, t) => alg.cons(h, list_fold(alg, t)),
+        Cons(h, t) => alg.cons(h, alg.list_fold(t)),
     }
 }
 
-// These equations are the public computational face of the fold. They are
-// theorems for callers, but their proofs are empty because `list_fold` is only
-// the ordinary structural eliminator with its clauses projected from a value.
-theorem list_fold_nil<A, B>(alg: ListAlg<A, B>): list_fold(alg, Nil) = alg.nil {}
+theorem ListAlg::list_fold_nil<A, B>(self alg: ListAlg<A, B>): alg.list_fold(Nil) = alg.nil {}
 
-theorem list_fold_cons<A, B>(alg: ListAlg<A, B>, h: A, t: List<A>):
-    list_fold(alg, Cons(h, t)) = alg.cons(h, list_fold(alg, t))
+theorem ListAlg::list_fold_cons<A, B>(self alg: ListAlg<A, B>, h: A, t: List<A>):
+    alg.list_fold(Cons(h, t)) = alg.cons(h, alg.list_fold(t))
 {}
 
-// Pointwise uniqueness is the form available without function
-// extensionality: any `g` satisfying the same two equations agrees with the
-// fold at every list. The Cons law receives the original tail as well as its
-// folded result; that makes this a characterization of this fold, not a
-// restriction to functions whose clause forgot the substructure.
-theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> → B,
+theorem ListAlg::list_fold_unique<A, B>(self alg: ListAlg<A, B>, g: List<A> → B,
     nil_law: g(Nil) = alg.nil,
     cons_law: (h: A) → (t: List<A>) → g(Cons(h, t)) = alg.cons(h, g(t)),
-    xs: List<A>): g(xs) = list_fold(alg, xs)
+    xs: List<A>): g(xs) = alg.list_fold(xs)
 {
     match xs {
         Nil => nil_law,
         Cons(h, t) =>
             apply trans;
             give cons_law(h, t);
-            cong_fn(alg.cons(h), list_fold_unique(alg, g, nil_law, cons_law, t)),
+            cong_fn(alg.cons(h), alg.list_fold_unique(g, nil_law, cons_law, t)),
     }
 }
 
-// An algebra homomorphism commutes with the fold. This is the usable,
-// pointwise fusion law; stating equality between the two resulting functions
-// would add a funext premise without strengthening what clients can apply.
-theorem list_fold_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
+theorem ListAlg::list_fold_fusion<A, B, C>(self src: ListAlg<A, B>, dst: ListAlg<A, C>,
     hom: B → C,
     nil_comm: hom(src.nil) = dst.nil,
     cons_comm: (a: A) → (b: B) → hom(src.cons(a, b)) = dst.cons(a, hom(b)),
-    xs: List<A>): hom(list_fold(src, xs)) = list_fold(dst, xs)
+    xs: List<A>): hom(src.list_fold(xs)) = dst.list_fold(xs)
 {
     match xs {
         Nil => nil_comm,
         Cons(h, t) =>
             apply trans;
-            give cons_comm(h, list_fold(src, t));
-            cong_fn(dst.cons(h), list_fold_fusion(src, dst, hom, nil_comm, cons_comm, t)),
+            give cons_comm(h, src.list_fold(t));
+            cong_fn(dst.cons(h), ListAlg::list_fold_fusion(src, dst, hom, nil_comm, cons_comm, t)),
     }
 }
 
-// The old API and the first-class one are not competing folds. Packaging
-// `foldr`'s arguments gives the same computation at every list.
-theorem list_fold_is_foldr<A, B>(f: A → B → B, z: B, xs: List<A>):
-    list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = foldr(xs, f, z)
+theorem ListAlg::list_fold_is_foldr<A, B>(f: A → B → B, z: B, xs: List<A>):
+    ListAlg::list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = xs.foldr(f, z)
 {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_fn(f(h), list_fold_is_foldr(f, z, t)),
+        Cons(h, t) => cong_fn(f(h), ListAlg::list_fold_is_foldr(f, z, t)),
     }
 }
 
-// `foldl`'s laws (wave L2′, issues/std-list-l2-prime-laws.md). L2 left `foldl`
-// with none, and the reason is visible in every statement below: the
-// accumulator changes at each step, so a law about `foldl` is never a law about
-// one accumulator. Each one is stated as `(z: B) → …` and each proof applies
-// its IH at a DIFFERENT `z` — the higher-order face of
-// issues/ih-generalization.md, which the L1/L2 round could only rank from the
-// definition's shape because it proved nothing about it.
-//
-// The laws still quantify `z` behind an arrow even though the definition is
-// uncurried now (2026-09-05): `foldl_append` at a fixed `z` is false, so
-// `(z: B) →` is what the law *is*, not a workaround.
-
-theorem foldl_append<A, B>(xs, ys: List<A>, f: B → A → B):
-    (z: B) → foldl(xs ++ ys, f, z) = foldl(ys, f, foldl(xs, f, z))
+theorem List::foldl_append<A, B>(self xs, ys: List<A>, f: B → A → B):
+    (z: B) → (xs ++ ys).foldl(f, z) = ys.foldl(f, xs.foldl(f, z))
 {
     match xs {
         Nil => λ z => {},
-        Cons(h, t) => λ z => foldl_append(t, ys, f, f(z, h)),
+        Cons(h, t) => λ z => t.foldl_append(ys, f, f(z, h)),
     }
 }
 
-// The two folds meet: `foldl` down a reversed list is `foldr` with its function
-// flipped. This is the one law in the file that needs ANOTHER law of the same
-// function to prove it — `foldl_append` at the singleton — because `rev` is
-// defined by `append` and `foldl` has nothing to say about `append` by
-// computation.
-theorem foldl_rev<A, B>(xs: List<A>, f: B → A → B):
-    (z: B) → foldl(rev(xs), f, z) = foldr(xs, λ (a: A) (b: B) => f(b, a), z)
+theorem List::foldl_rev<A, B>(self xs: List<A>, f: B → A → B):
+    (z: B) → xs.rev().foldl(f, z) = xs.foldr(λ (a: A) (b: B) => f(b, a), z)
 {
     match xs {
         Nil => λ z => {},
         Cons(h, t) => z ⊢
             apply trans;
-            give foldl_append(rev(t), Cons(h, Nil), f, z);
-            cong_fn(λ (w: B) => f(w, h), foldl_rev(t, f, z)),
+            give t.rev().foldl_append(Cons(h, Nil), f, z);
+            cong_fn(λ (w: B) => f(w, h), t.foldl_rev(f, z)),
     }
 }
 
-// `foldl` counts. Stated at a generalized accumulator it is not `len` but
-// `add(z, xs.len())`, and then the proof pays `std/nat`'s phase tax once, the
-// same way `len_append` does: the IH lands on `add(Succ(z), t.len())` and the
-// goal wants `Succ(add(z, t.len()))`.
-theorem foldl_len<A>(xs: List<A>):
-    (z: Nat) → foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + xs.len()
+theorem List::foldl_len<A>(self xs: List<A>):
+    (z: Nat) → xs.foldl(λ (k: Nat) (a: A) => Succ(k), z) = z + xs.len()
 {
     match xs {
         Nil => λ z => {},
         Cons(_, t) => z ⊢
             apply trans;
-            give foldl_len(t, Succ(z));
-            add_succ_left(z, t.len()),
+            give t.foldl_len(Succ(z));
+            z.add_succ_left(t.len()),
     }
 }
 
 // ---------------------------------------------------------------------------
-// filter, and the prefix/suffix pair.
-//
-// `filter`'s predicate is a `Bool` and that is not a lapse from
-// issues/class-ops-prop-vs-bool.md: that doctrine bans `Bool` from
-// SPECIFICATIONS, and `filter` is a program. A `Decide`-valued predicate is
-// the other spelling and would make `filter` proof-relevant in its argument;
-// nothing in the library wants that yet, and when something does it is a
-// second function, not a replacement.
-//
-// `take`/`drop` recurse on the list with the index varying alongside it —
-// generalized into the motive by the elaborator
-// (docs/ih-generalization-design.md).
 
-fn filter<A>(xs: List<A>, p: A → Bool) → List<A> {
+fn List::filter<A>(self xs: List<A>, p: A → Bool) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => match p(h) {
-            True => Cons(h, filter(t, p)),
-            False => filter(t, p),
+            True => Cons(h, t.filter(p)),
+            False => t.filter(p),
         },
     }
 }
 
-fn take<A>(xs: List<A>, n: Nat) → List<A> {
+fn List::take<A>(self xs: List<A>, n: Nat) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => match n {
             Zero => Nil,
-            Succ(k) => Cons(h, take(t, k)),
+            Succ(k) => Cons(h, t.take(k)),
         },
     }
 }
 
-fn drop<A>(xs: List<A>, n: Nat) → List<A> {
+fn List::drop<A>(self xs: List<A>, n: Nat) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => match n {
             Zero => Cons(h, t),
-            Succ(k) => drop(t, k),
+            Succ(k) => t.drop(k),
         },
     }
 }
 
-theorem take_append_drop<A>(xs: List<A>):
-    (n: Nat) → take(xs, n) ++ drop(xs, n) = xs
+theorem List::take_append_drop<A>(self xs: List<A>):
+    (n: Nat) → xs.take(n) ++ xs.drop(n) = xs
 {
     match xs {
         Nil => λ n => {},
         Cons(h, t) => λ n => match n {
             Zero => {},
-            Succ(k) => cong_cons(h, take_append_drop(t, k)),
+            Succ(k) => List::cong_cons(h, t.take_append_drop(k)),
         },
     }
 }
 
-// One more element dropped is one element dropped from what is left. A
-// generated certificate that names every suffix of a concrete list uses this
-// to walk the names in one pass: each step is this theorem at the previous
-// one, so the k-th suffix costs a step and not a k-long re-traversal.
-theorem drop_succ<A>(xs: List<A>, n: Nat): drop(xs, n + 1) = drop(drop(xs, n), 1) {
+theorem List::drop_succ<A>(self xs: List<A>, n: Nat): xs.drop(n + 1) = xs.drop(n).drop(1) {
     match xs {
         Nil => {},
         Cons(_, t) => match n {
             Zero => {},
-            Succ(k) => drop_succ(t, k),
+            Succ(k) => t.drop_succ(k),
         },
     }
 }
 
-// Filtering cannot increase length. Both inner branches return `List<A>`, so
-// the match needs no written motive.
-theorem len_filter<A>(xs: List<A>, p: A → Bool): filter(xs, p).len() <= xs.len() {
+theorem List::len_filter<A>(self xs: List<A>, p: A → Bool): xs.filter(p).len() <= xs.len() {
     match xs {
         Nil => trivial,
         Cons(h, t) => match p(h) {
-            True => len_filter(t, p),
-            False => le_succ_r(filter(t, p).len(), t.len(), len_filter(t, p)),
+            True => t.len_filter(p),
+            False => t.filter(p).len().le_succ_r(t.len(), t.len_filter(p)),
         },
     }
 }
 
-// The three principal filter laws differ by whether the other side of the
-// equation branches on the same scrutinee.
-//
-// For `filter_append` and `filter_map` it does, and then the inner motive is
-// enough — each arm's goal reduces on both sides at once. For `filter_filter`
-// it does not: the right-hand side is `filter(xs, p)` with nothing to reduce,
-// while the left has a SECOND stuck `p(h)` that the motive cannot reach, so the
-// arm needs the equation `p(h) = b` and has to rewrite by it. `match e : p(h)`
-// binds that equation, so
-// the convoy costs one token and not a `→ Goal` in the motive plus a trailing
-// `(refl)`; what it does NOT do is use it, and the `j` in the `True` arm is
-// three lines of hand-written motive for a rewrite under a `match` context
-// (issues/congruence-by-anti-unification.md).
-
-theorem filter_append<A>(xs, ys: List<A>, p: A → Bool):
-    filter(xs ++ ys, p) = filter(xs, p) ++ filter(ys, p)
+theorem List::filter_append<A>(self xs, ys: List<A>, p: A → Bool):
+    (xs ++ ys).filter(p) = xs.filter(p) ++ ys.filter(p)
 {
     match xs {
         Nil => {},
         Cons(h, t) => match p(h) {
-            True => cong_cons(h, filter_append(t, ys, p)),
-            False => filter_append(t, ys, p),
+            True => List::cong_cons(h, t.filter_append(ys, p)),
+            False => t.filter_append(ys, p),
         },
     }
 }
 
-// Idempotence, and the one proof in the file that needs the scrutinee's own
-// equation. `match e : p(h)` is the convoy, one token; the `j` inside the
-// `True` arm is what the convoy is FOR — it moves the goal's second,
-// unreachable `p(h)` to `True` so that `filter` steps there too. The two
-// features compose with nothing to say to each other: the equation binding
-// decorates whatever motive synthesis hands it
-// (docs/goal-motive-synthesis-design.md §6).
-theorem filter_filter<A>(xs: List<A>, p: A → Bool):
-    filter(filter(xs, p), p) = filter(xs, p)
+theorem List::filter_filter<A>(self xs: List<A>, p: A → Bool):
+    xs.filter(p).filter(p) = xs.filter(p)
 {
     match xs {
         Nil => {},
@@ -526,105 +394,79 @@ theorem filter_filter<A>(xs: List<A>, p: A → Bool):
                 j(sym(e),
                   λ y q =>
                     (match y {
-                        True => Cons(h, filter(filter(t, p), p)),
-                        False => filter(filter(t, p), p),
-                    }) = Cons(h, filter(t, p)),
-                  cong_cons(h, filter_filter(t, p))),
-            False => filter_filter(t, p),
+                        True => Cons(h, t.filter(p).filter(p)),
+                        False => t.filter(p).filter(p),
+                    }) = Cons(h, t.filter(p)),
+                  List::cong_cons(h, t.filter_filter(p))),
+            False => t.filter_filter(p),
         },
     }
 }
 
-// Filtering a mapped list is mapping a filtered one, with the predicate pulled
-// back through `f`. Both sides branch on `p(f(h))` — the right one after a beta
-// step, since the pulled-back predicate is a literal lambda — so no convoy.
-theorem filter_map<A, B>(xs: List<A>, f: A → B, p: B → Bool):
-    filter(map(xs, f), p) = map(filter(xs, λ (a: A) => p(f(a))), f)
+theorem List::filter_map<A, B>(self xs: List<A>, f: A → B, p: B → Bool):
+    xs.map(f).filter(p) = xs.filter(λ (a: A) => p(f(a))).map(f)
 {
     match xs {
         Nil => {},
         Cons(h, t) => match p(f(h)) {
-            True => cong_cons(f(h), filter_map(t, f, p)),
-            False => filter_map(t, f, p),
+            True => List::cong_cons(f(h), t.filter_map(f, p)),
+            False => t.filter_map(f, p),
         },
     }
 }
 
 // ---------------------------------------------------------------------------
-// replicate and zip.
-//
-// `replicate` recurses on the count with the element fixed, so it needs no
-// currying; `zip` walks both lists at once and therefore does.
-//
-// Write `zip(xs, ys)`: over-application lets the second list determine the
-// curried tail's element type. A deliberately partial `zip<A, B>(xs)` still
-// needs both type arguments because the second list is not present to infer B.
 
-fn replicate<A>(x: A, n: Nat) → List<A> {
+fn List::replicate<A>(x: A, n: Nat) → List<A> {
     match n {
         Zero => Nil,
-        Succ(k) => Cons(x, replicate(x, k)),
+        Succ(k) => Cons(x, List::replicate(x, k)),
     }
 }
 
-theorem len_replicate<A>(x: A, n: Nat): replicate(x, n).len() = n {
+theorem List::len_replicate<A>(x: A, n: Nat): List::replicate(x, n).len() = n {
     match n {
         Zero => {},
-        Succ(k) => cong_succ(len_replicate(x, k)),
+        Succ(k) => Nat::cong_succ(List::len_replicate(x, k)),
     }
 }
 
-fn zip<A, B>(xs: List<A>) → List<B> → List<Pair<A, B>> {
+fn List::zip<A, B>(self xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,
         Cons(h, t) => λ (ys: List<B>) => match ys {
             Nil => Nil,
-            Cons(h2, t2) => Cons(Pair(h, h2), zip(t, t2)),
+            Cons(h2, t2) => Cons(Pair(h, h2), t.zip(t2)),
         },
     }
 }
 
-// `zip`'s laws (wave L2′). L2 left `zip` pinned only by the computation test,
-// and the interaction the wave list asked for is with `len`: zipping truncates,
-// so the length is the `min`. That is the first law in the library to reach for
-// `std/nat`'s `min` rather than `add`, and it costs nothing — `min` descends on
-// both arguments exactly as `zip` descends on both lists, so all three arms are
-// definitional.
-//
-// The other two say what the pairs CONTAIN, which `len_zip` cannot: projecting
-// a zip is taking a prefix, and swapping it is zipping the other way round.
-// `take` appears here for the first time outside its own law, and it lines up
-// for the same reason `min` does.
-
-theorem len_zip<A, B>(xs: List<A>):
-    (ys: List<B>) → zip(xs, ys).len() = min(xs.len(), ys.len())
+theorem List::len_zip<A, B>(self xs: List<A>):
+    (ys: List<B>) → xs.zip(ys).len() = xs.len().min(ys.len())
 {
     match xs {
         Nil => λ ys => {},
         Cons(_, t) => λ ys => match ys {
             Nil => {},
-            Cons(_, t2) => cong_succ(len_zip(t, t2)),
+            Cons(_, t2) => Nat::cong_succ(t.len_zip(t2)),
         },
     }
 }
 
-theorem zip_map_fst<A, B>(xs: List<A>):
-    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, ys.len())
+theorem List::zip_map_fst<A, B>(self xs: List<A>):
+    (ys: List<B>) → xs.zip(ys).map(λ (q: Pair<A, B>) => q.fst) = xs.take(ys.len())
 {
     match xs {
         Nil => λ ys => {},
         Cons(h, t) => λ ys => match ys {
             Nil => {},
-            Cons(_, t2) => cong_cons(h, zip_map_fst(t, t2)),
+            Cons(_, t2) => List::cong_cons(h, t.zip_map_fst(t2)),
         },
     }
 }
 
-// The `Nil` arm splits `ys` and both `zip`'s do not, which is not symmetry
-// lost: at `xs = Nil` the goal is `Nil = take(ys, 0)`, and `take` recurses on
-// its LIST, so it steps only once that is a constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
-theorem zip_map_snd<A, B>(xs: List<A>):
-    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, xs.len())
+theorem List::zip_map_snd<A, B>(self xs: List<A>):
+    (ys: List<B>) → xs.zip(ys).map(λ (q: Pair<A, B>) => q.snd) = ys.take(xs.len())
 {
     match xs {
         Nil => λ ys => match ys {
@@ -633,17 +475,13 @@ theorem zip_map_snd<A, B>(xs: List<A>):
         },
         Cons(_, t) => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => cong_cons(h2, zip_map_snd(t, t2)),
+            Cons(h2, t2) => List::cong_cons(h2, t.zip_map_snd(t2)),
         },
     }
 }
 
-// `std/pair`'s `swap` gets its first law here, and it is not applied by name:
-// `swap` is polymorphic, so as a first-class argument it would have to spell
-// its type arguments, and the η-expanded `λ q => swap(q)` is shorter than
-// `swap<A, B>`. Nothing is lost — it is the same function.
-theorem zip_swap<A, B>(xs: List<A>):
-    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q)) = zip(ys, xs)
+theorem List::zip_swap<A, B>(self xs: List<A>):
+    (ys: List<B>) → xs.zip(ys).map(λ (q: Pair<A, B>) => q.swap()) = ys.zip(xs)
 {
     match xs {
         Nil => λ ys => match ys {
@@ -652,70 +490,52 @@ theorem zip_swap<A, B>(xs: List<A>):
         },
         Cons(h, t) => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => cong_cons(Pair(h2, h), zip_swap(t, t2)),
+            Cons(h2, t2) => List::cong_cons(Pair(h2, h), t.zip_swap(t2)),
         },
     }
 }
 
 // ---------------------------------------------------------------------------
-// membership (wave L3, issues/std-list-mem-and-perm.md).
-//
-// A recursion into `Type`, like `nat::Le` and `list_algos`'s `Sorted`, and for
-// the same three reasons: it REDUCES at closed lists (so `Mem(2, [1,2])` is
-// `Inr(Inl(refl))` and needs no search), it has no inversion machinery (the
-// `Nil` case IS `False`, so refuting it is handing the hypothesis back), and it
-// needs no indexed family (issues/indexed-families.md), which the derivation-
-// shaped spelling would.
-//
-// **`Mem` is polymorphic and `list_algos`'s `count` is not**, and that line is
-// the sharpest thing this wave found: membership needs only `=`, which every
-// type has, while counting needs to DECIDE an equation, and a class cannot be
-// keyed on one (issues/decidable-equation-carrier.md). The same algorithm's two
-// specifications sit on opposite sides of a live language gap.
-//
-// Every lemma below takes its hypothesis AFTER the arrow rather than as a
-// parameter, because a parameter whose type mentions `xs` cannot survive
-// `match xs` without being convoyed through it. That is the ordinary shape in
-// this repo (`nth_append_l`, `le_succ_r`), stated once here for the section.
 
-fn Mem<A>(a: A, xs: List<A>) → Type {
+fn Mem<A>(a: A, self xs: List<A>) → Type {
     match xs {
         Nil => False,
         Cons(h, t) => a = h ∨ Mem(a, t),
     }
 }
 
+// TODO: how should we namespace these?
 theorem not_mem_nil<A>(a: A): ¬Mem(a, Nil) { (h: Mem(a, Nil)) ⊢ h }
 
 theorem mem_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { Inl(refl) }
 
-theorem mem_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { Inr(m) }
+theorem List::mem_cons<A>(a, h: A, self xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { Inr(m) }
 
-theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) → Mem(a, xs ++ ys) {
+theorem List::mem_append_l<A>(self xs, ys: List<A>, a: A): Mem(a, xs) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(_, t) => λ m => match m {
             Inl(e) => Inl(e),
-            Inr(m2) => Inr(mem_append_l(t, ys, a, m2)),
+            Inr(m2) => Inr(t.mem_append_l(ys, a, m2)),
         },
     }
 }
 
-theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) → Mem(a, xs ++ ys) {
+theorem List::mem_append_r<A>(self xs, ys: List<A>, a: A): Mem(a, ys) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => m,
-        Cons(_, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
+        Cons(_, t) => λ m => Inr(t.mem_append_r(ys, a, m)),
     }
 }
 
-theorem mem_append<A>(xs, ys: List<A>, a: A):
+theorem List::mem_append<A>(self xs, ys: List<A>, a: A):
     Mem(a, xs ++ ys) → Mem(a, xs) ∨ Mem(a, ys)
 {
     match xs {
         Nil => λ m => Inr(m),
         Cons(_, t) => λ m => match m {
             Inl(e) => Inl(Inl(e)),
-            Inr(m2) => match mem_append(t, ys, a, m2) {
+            Inr(m2) => match t.mem_append(ys, a, m2) {
                 Inl(mt) => Inl(Inr(mt)),
                 Inr(my) => Inr(my),
             },
@@ -723,56 +543,45 @@ theorem mem_append<A>(xs, ys: List<A>, a: A):
     }
 }
 
-// The `Iff` exists to be cited; the three lemmas above are what get applied.
-theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
+theorem List::mem_append_iff<A>(self xs, ys: List<A>, a: A):
     Mem(a, xs ++ ys) ↔ Mem(a, xs) ∨ Mem(a, ys)
 {
-    Iff(mp := mem_append(xs, ys, a),
+    Iff(mp := xs.mem_append(ys, a),
         mpr := λ (h: Mem(a, xs) ∨ Mem(a, ys)) =>
-            or_elim(h, mem_append_l(xs, ys, a), mem_append_r(xs, ys, a)))
+            or_elim(h, xs.mem_append_l(ys, a), xs.mem_append_r(ys, a)))
 }
 
-theorem mem_map<A, B>(xs: List<A>, a: A, f: A → B): Mem(a, xs) → Mem(f(a), map(xs, f)) {
+theorem List::mem_map<A, B>(self xs: List<A>, a: A, f: A → B): Mem(a, xs) → Mem(f(a), xs.map(f)) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(_, t) => λ m => match m {
             Inl(e) => Inl(cong_fn(f, e)),
-            Inr(m2) => Inr(mem_map(t, a, f, m2)),
+            Inr(m2) => Inr(t.mem_map(a, f, m2)),
         },
     }
 }
 
-// Only ONE direction, and the missing one is a decision the API already made:
-// the converse needs `p(a)` as a hypothesis, and `filter`'s predicate is a
-// `Bool`, so the only spelling available is `p(a) = True` — which
-// issues/class-ops-prop-vs-bool.md bans from a specification. The
-// `Decide`-valued `filter` that issues/std-list-api.md called "a second
-// function, not a replacement" is what would state it, and this is its first
-// customer. Not encoded around: the fact is left unstated.
-theorem mem_filter<A>(xs: List<A>, a: A, p: A → Bool):
-    Mem(a, filter(xs, p)) → Mem(a, xs)
+theorem List::mem_filter<A>(self xs: List<A>, a: A, p: A → Bool):
+    Mem(a, xs.filter(p)) → Mem(a, xs)
 {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => match p(h) {
             True => λ m => match m {
                 Inl(e) => Inl(e),
-                Inr(m2) => Inr(mem_filter(t, a, p, m2)),
+                Inr(m2) => Inr(t.mem_filter(a, p, m2)),
             },
-            False => λ m => Inr(mem_filter(t, a, p, m)),
+            False => λ m => Inr(t.mem_filter(a, p, m)),
         },
     }
 }
 
-// Reversing preserves membership, and this is the lemma that shows the kit
-// working as one: `rev` is defined by `append`, so the proof is `mem_append`
-// followed by refuting the singleton's tail.
-theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
+theorem List::mem_rev<A>(self xs: List<A>, a: A): Mem(a, xs.rev()) → Mem(a, xs) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => λ m =>
-            match mem_append(rev(t), Cons(h, Nil), a, m) {
-                Inl(mr) => Inr(mem_rev(t, a, mr)),
+            match t.rev().mem_append(Cons(h, Nil), a, m) {
+                Inl(mr) => Inr(t.mem_rev(a, mr)),
                 Inr(mh) => match mh {
                     Inl(e) => Inl(e),
                     Inr(bad) => false_elim(bad),
@@ -782,18 +591,7 @@ theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
 }
 
 // ---------------------------------------------------------------------------
-// the type's own namespace: the accessors and `nth` (length is beside its
-// traversal above, because the length laws use it throughout this file).
-//
-// `head` and `last` are the library's first PARTIAL functions, and they are
-// written total, into `Option<A>`. That is the only spelling available today;
-// the alternative — a `head` that demands a non-empty list and gets its
-// `Option` face by adapter — is issues/guarded-to-option-adapter.md, which has
-// no customer until this one.
-//
-// All five are type-owned members, which for `head` and
-// `tail` is forced rather than chosen: `Cons`'s own fields are called `head`
-// and `tail`.
+
 
 fn List::head<A>(self xs: List<A>) → Option<A> {
     match xs {
@@ -814,7 +612,7 @@ fn List::last<A>(self xs: List<A>) → Option<A> {
         Nil => None,
         Cons(h, t) => match t {
             Nil => Some(h),
-            Cons(_, _) => last(t),
+            Cons(_, _) => t.last(),
         },
     }
 }
@@ -826,14 +624,11 @@ fn List::last<A>(self xs: List<A>) → Option<A> {
 fn List::nth<A>(self xs: List<A>, i: Nat) → Option<A> {
     match xs {
         Nil => None,
-        Cons(h, t) => match i { Zero => Some(h), Succ(k) => nth(t, k) },
+        Cons(h, t) => match i { Zero => Some(h), Succ(k) => t.nth(k) },
     }
 }
 
-// Inside `xs`, `append` changes nothing. The index varies with the recursion,
-// so the statement quantifies it behind the arrow and every use is an
-// over-application (issues/call-site-overapplication.md).
-theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
+theorem List::nth_append_l<A>(self xs: List<A>, ys: List<A>):
     (i: Nat, a: A) → xs.nth(i) = Some(a) → (xs ++ ys).nth(i) = Some(a)
 {
     match xs {
@@ -841,185 +636,123 @@ theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
         Cons(_, t) => λ i a =>
             match i {
                 Zero => λ p => p,
-                Succ(k) => λ p => nth_append_l(t, ys, k, a, p),
+                Succ(k) => λ p => t.nth_append_l(ys, k, a, p),
             },
     }
 }
 
-// Past the whole of `xs`, `nth` reads out of `ys`. The index is written
-// `add(i, xs.len())` and not `add(xs.len(), i)`, which is what retires
-// `list_algos`'s private `plusl` (2026-08-17): that function existed only
-// because the sum had to peel a `Succ` as `xs` was peeled, and `nat::add`
-// recurses on its second argument. Written this way round `add` steps exactly
-// when `append` does, and the proof is the bare recursion.
-theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
+theorem List::nth_append_r<A>(self xs: List<A>, ys: List<A>, i: Nat):
     (xs ++ ys).nth(i + xs.len()) = ys.nth(i)
 {
     match xs {
         Nil => {},
-        Cons(_, t) => nth_append_r(t, ys, i),
+        Cons(_, t) => t.nth_append_r(ys, i),
     }
 }
 
-// Past the whole list there is nothing to read. The index is generalized
-// behind the arrow for the same reason as `nth_append_l`, and the order
-// hypothesis is bound *after* the match on it so the arm refines its type:
-// `Succ(t.len()) <= Zero` computes to `False`, `Succ(t.len()) <= Succ(k)` to
-// `t.len() <= k`. A certificate that reads at an address past a concrete
-// file proves `len <= index` by computation instead of walking the file
-// (issues/call-memory-read-file-walk.md).
-theorem nth_past_end<A>(xs: List<A>): (i: Nat) → xs.len() <= i → xs.nth(i) = None {
+theorem List::nth_past_end<A>(self xs: List<A>): (i: Nat) → xs.len() <= i → xs.nth(i) = None {
     match xs {
         Nil => λ _ _ => refl,
         Cons(_, t) => λ i => match i {
             Zero => λ h => false_elim(h),
-            Succ(k) => λ h => nth_past_end(t, k, h),
+            Succ(k) => λ h => t.nth_past_end(k, h),
         },
     }
 }
 
-// Reading at an index is reading the head of what remains after dropping it.
-// The companion to `drop_succ`: with the suffixes already named, a lookup
-// deep in a concrete list is this theorem plus one head read.
-theorem nth_drop<A>(xs: List<A>, n: Nat): xs.nth(n) = drop(xs, n).nth(0) {
+theorem List::nth_drop<A>(self xs: List<A>, n: Nat): xs.nth(n) = xs.drop(n).nth(0) {
     match xs {
         Nil => {},
         Cons(_, t) => match n {
             Zero => {},
-            Succ(k) => nth_drop(t, k),
+            Succ(k) => t.nth_drop(k),
         },
     }
 }
 
-// Literal construction is declared after the core API so opting the type into
-// syntax does not perturb the de Bruijn shape of the long-established list
-// definitions and their conversion-sensitive clients.
 instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
     element := A,
     fromLiteral := λ (xs: [A; n]) => xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),
 }
 
 // ---------------------------------------------------------------------------
-// Decidable equality, given it at the element type. Declared last for the
-// reason the literal instance is: everything below the core API is new
-// vocabulary, and putting it here leaves the de Bruijn shape of the
-// established definitions alone.
-//
-// The premise is `logic::DecEq<A>` and not a `Decide<a = b>` goal: at an
-// abstract element type there is no resolved endpoint carrier for such a goal
-// to key on (docs/decidable-equation-carrier-design.md), which is exactly the
-// hole the carrier-level class fills.
 
-// The `Nil`/`Cons` discriminator, as a recursion into `Type` like `Mem`: it
-// REDUCES at a constructor, so refuting `Nil = Cons(…)` is transporting
-// `trivial` and needs no inversion machinery.
-fn is_nil<A>(xs: List<A>) → Type { match xs { Nil => True, Cons(_, _) => False } }
+fn List::is_nil<A>(self xs: List<A>) → Type { match xs { Nil => True, Cons(_, _) => False } }
 
-// `is_nil`'s dual as a receiver, and the elementwise class test beside it.
-// `all` takes a `Bool` program because that is what a decidable class is
-// (`char::is_digit`), and reflects it with `IsTrue` one element at a time, so
-// a witness is a nested pair a caller can build and take apart positionally.
 fn List::nonempty<A>(self xs: List<A>) → Type {
     match xs { Nil => False, Cons(_, _) => True }
 }
 
 fn List::all<A>(self xs: List<A>, p: A → Bool) → Type {
-    match xs { Nil => True, Cons(c, r) => IsTrue(p(c)) ∧ r.all(p) }
+    match xs { Nil => True, Cons(c, r) => p(c).IsTrue() ∧ r.all(p) }
 }
 
-// A total head. `List::head` is the `Option` face and is the right one for a
-// caller; a congruence wants a function into `A` itself, so this one takes
-// what to say about the empty list. `List::tail` is already total, so there
-// is no `tail_or` beside it.
-fn head_or<A>(fallback: A, xs: List<A>) → A {
+fn List::head_or<A>(self xs: List<A>, fallback: A) → A {
     match xs {
         Nil => fallback,
         Cons(h, _) => h,
     }
 }
 
-theorem nil_ne_cons<A>(head: A, tail: List<A>): ¬(Nil<A> = Cons(head, tail)) {
-    λ (p: (Nil<A> = Cons(head, tail))) => j(p, λ y q => is_nil(y), trivial)
+theorem List::nil_ne_cons<A>(tail: List<A>, head: A): ¬(Nil<A> = Cons(head, tail)) {
+    λ (p: (Nil<A> = Cons(head, tail))) => j(p, λ y q => y.is_nil(), trivial)
 }
 
-theorem cons_ne_nil<A>(head: A, tail: List<A>): ¬(Cons(head, tail) = Nil<A>) {
-    λ (p: (Cons(head, tail) = Nil<A>)) => nil_ne_cons(head, tail, sym(p))
+theorem List::cons_ne_nil<A>(tail: List<A>, head: A): ¬(Cons(head, tail) = Nil<A>) {
+    λ (p: (Cons(head, tail) = Nil<A>)) => tail.nil_ne_cons(head, sym(p))
 }
 
-theorem cong_head<A>(fallback: A, {xs, ys: List<A>}, p: xs = ys):
-    head_or(fallback, xs) = head_or(fallback, ys)
+theorem List::cong_head<A>({xs, ys: List<A>}, fallback: A, p: xs = ys):
+    xs.head_or(fallback) = ys.head_or(fallback)
 {
-    j(p, λ y q => head_or(fallback, xs) = head_or(fallback, y), refl)
+    j(p, λ y q => xs.head_or(fallback) = y.head_or(fallback), refl)
 }
 
-theorem cong_tail<A>({xs, ys: List<A>}, p: xs = ys): xs.tail() = ys.tail() {
+theorem List::cong_tail<A>({xs, ys: List<A>}, p: xs = ys): xs.tail() = ys.tail() {
     j(p, λ y q => xs.tail() = y.tail(), refl)
 }
 
-// `cong_cons` moves an equal tail under a fixed head; this moves both at once,
-// which is the shape a decision on a pair of `Cons` cells needs.
-theorem cons_eq<A>(head1, head2: A, tail1, tail2: List<A>,
+theorem List::cons_eq<A>(tail1, tail2: List<A>, head1, head2: A,
     ph: head1 = head2, pt: tail1 = tail2): Cons(head1, tail1) = Cons(head2, tail2)
 {
-    j(ph, λ y q => Cons(head1, tail1) = Cons(y, tail2), cong_cons(head1, pt))
+    j(ph, λ y q => Cons(head1, tail1) = Cons(y, tail2), List::cong_cons(head1, pt))
 }
 
-// A `fn` and not a `theorem`: a decision has to reduce, or nothing downstream
-// of `Decide<xs = ys>` is `refl` any more (`nat::eq_dec` carries the same
-// note). Both arguments descend together, so the second is bound behind the
-// arrow exactly as `nat::eq_dec` binds its own.
-//
-// `cong_tail<A>(p)` spells a type argument the site would otherwise infer;
-// inferring it is refused (issues/generic-congruence-inferred-type-arg-level-mismatch.md).
-fn list_eq_dec<A: DecEq>(xs: List<A>) → (ys: List<A>) → xs = ys ∨ ¬(xs = ys) {
+fn List::list_eq_dec<A: DecEq>(self xs: List<A>) → (ys: List<A>) → xs = ys ∨ ¬(xs = ys) {
     match xs {
         Nil => λ ys =>
             match ys {
                 Nil => Inl(refl),
-                Cons(head2, tail2) => Inr(nil_ne_cons(head2, tail2)),
+                Cons(head2, tail2) => Inr(tail2.nil_ne_cons(head2)),
             },
         Cons(head1, tail1) => λ ys =>
             match ys {
-                Nil => Inr(cons_ne_nil(head1, tail1)),
+                Nil => Inr(tail1.cons_ne_nil(head1)),
                 Cons(head2, tail2) =>
                     match A.eq_dec(head1, head2) {
                         Inr(head_ne) => Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                            head_ne(cong_head(head1, p))),
+                            head_ne(List::cong_head(head1, p))),
                         Inl(head_eq) =>
-                            match list_eq_dec(tail1, tail2) {
-                                Inl(tail_eq) => Inl(cons_eq(head1, head2, tail1, tail2,
-                                    head_eq, tail_eq)),
+                            match tail1.list_eq_dec(tail2) {
+                                Inl(tail_eq) => Inl(List::cons_eq(tail1, tail2, head1, head2, head_eq, tail_eq)),
                                 Inr(tail_ne) =>
                                     Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                                        tail_ne(cong_tail<A>(p))),
+                                        tail_ne(List::cong_tail<A>(p))),
                             },
                     },
             },
     }
 }
 
-// The carrier-level instance, so that lists of lists decide too.
-instance<A: DecEq> DecEq<List<A>> { eq_dec := list_eq_dec }
+instance<A: DecEq> DecEq<List<A>> { eq_dec := List::list_eq_dec }
 
-// The bridge to `Decide`, so that `decide` and proposition-directed `if`
-// answer a goal at two lists without anyone naming the decider. It is at `Nat`
-// and not at an open element type: an instance generic in `A` here is refused
-// today (issues/instance-binder-occurrence-through-binder-types.md), so every
-// other element type calls `list_eq_dec` by name.
-instance(xs, ys: List<Nat>) Decide<xs = ys> { dec := list_eq_dec(xs, ys) }
+instance(xs, ys: List<Nat>) Decide<xs = ys> { dec := List::list_eq_dec(xs, ys) }
 
 // ---------------------------------------------------------------------------
-// The total read: an index below the length, so out of range is unwritable
-// rather than `None`. The index is generalized behind the arrow because `Fin`
-// has no eliminator of its own — at a neutral length there is no canonical
-// index to match on (docs/surface-fin-indexing-design.md §1.2) — and the
-// motive instantiates the length from the list the match already refined.
-fn list_at<A>(xs: List<A>) → (i: Fin(xs.len())) → A {
+
+fn List::at<A>(self xs: List<A>, i: Fin(xs.len())) → A {
     match xs {
-        Nil => λ (i: Fin(0)) => match i {},
-        Cons(head, tail) => λ (i: Fin(Succ(tail.len()))) =>
-            match i { FZ => head, FS(k) => list_at(tail, k) },
+        Nil => match i {},
+        Cons(head, tail) => match i { FZ => head, FS(k) => tail.at(k) },
     }
 }
-
-fn List::at<A>(self xs: List<A>, i: Fin(xs.len())) → A { list_at(xs, i) }

@@ -121,7 +121,7 @@ fn IrSameProbe(source: Ir) -> Ir -> Type { λ (result: Ir) => source = result }
 fn normalize_tags_alg_probe() -> IrAlgProbe<Ir> {
     IrAlgProbe<Ir> {
         ret: λ (rs: Refs) => Ret(rs),
-        letcon: λ (tag: Nat) (args: Refs) (rest: Ir) => LetCon(add(0, tag), args, rest),
+        letcon: λ (tag: Nat) (args: Refs) (rest: Ir) => LetCon(Nat::add(0, tag), args, rest),
         letmatch: λ (scrut: Nat) (arms: Ir) (rest: Ir) => LetMatch(scrut, arms, rest),
         arm: λ (body: Ir) (next: Ir) => Arm(body, next),
         noarm: NoArm,
@@ -138,8 +138,8 @@ fn normalize_tags_laws_probe() ->
         ret: λ (rs: Refs) => refl,
         letcon: λ (tag: Nat) (args: Refs) (rest: Ir) (rest_r: Ir) ih =>
             trans(
-                cong_probe(λ (n: Nat) => LetCon(n, args, rest), sym(add_left_zero(tag))),
-                cong_probe(λ (r: Ir) => LetCon(add(0, tag), args, r), ih)),
+                cong_probe(λ (n: Nat) => LetCon(n, args, rest), sym(tag.add_left_zero())),
+                cong_probe(λ (r: Ir) => LetCon(Nat::add(0, tag), args, r), ih)),
         letmatch: λ (scrut: Nat) (arms: Ir) (arms_r: Ir) ih_arms
                 (rest: Ir) (rest_r: Ir) ih_rest =>
             trans(cong_probe(λ (a: Ir) => LetMatch(scrut, a, rest), ih_arms),

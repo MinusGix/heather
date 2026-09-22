@@ -30,7 +30,7 @@
 //! cannot be quietly rescued by rung 3, so every miss here is loud.
 //!
 //! Synthetic modules rather than `lib/std`: the collision is latent in the
-//! library — today's colliding heads (`nat::Le`, `int::Le`, `bool::Le`) are
+//! library — today's colliding heads (`nat::Nat::Le`, `int::Int::Le`, `bool::Bool::Le`) are
 //! designated at carriers whose *names* do not collide — so the tests are this
 //! table's only customer, and two declarations say it in ten lines.
 

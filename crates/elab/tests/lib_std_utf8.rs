@@ -95,25 +95,25 @@ fn encoding_a_literal_writes_the_bytes_of_its_class() {
     check(
         r#"
 // One byte per class boundary: ASCII, Latin-1, the BMP, and an astral plane.
-theorem one_byte(): utf8::encode("a") = [bitvec::ofNat(8, 0x61)] { refl }
+theorem one_byte(): utf8::encode("a") = [@bitvec::BitVec::ofNat(8, 0x61)] { refl }
 theorem two_bytes(): utf8::encode("\u{E9}")
-    = [bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)] { refl }
+    = [@bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0xA9)] { refl }
 theorem three_bytes(): utf8::encode("\u{20AC}")
-    = [bitvec::ofNat(8, 0xE2), bitvec::ofNat(8, 0x82), bitvec::ofNat(8, 0xAC)] { refl }
+    = [@bitvec::BitVec::ofNat(8, 0xE2), @bitvec::BitVec::ofNat(8, 0x82), @bitvec::BitVec::ofNat(8, 0xAC)] { refl }
 theorem four_bytes(): utf8::encode("\u{1F600}")
-    = [bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F), bitvec::ofNat(8, 0x98),
-       bitvec::ofNat(8, 0x80)] { refl }
+    = [@bitvec::BitVec::ofNat(8, 0xF0), @bitvec::BitVec::ofNat(8, 0x9F), @bitvec::BitVec::ofNat(8, 0x98),
+       @bitvec::BitVec::ofNat(8, 0x80)] { refl }
 // A mixed string is the concatenation of its characters' bytes.
 theorem mixed(): utf8::encode("a\u{E9}")
-    = [bitvec::ofNat(8, 0x61), bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)] { refl }
+    = [@bitvec::BitVec::ofNat(8, 0x61), @bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0xA9)] { refl }
 theorem empty(): utf8::encode("") = Nil<BitVec(8)> { refl }
 "#,
     );
-    let msg = refused("theorem bad(): utf8::encode(\"a\") = [bitvec::ofNat(8, 0x62)] { refl }\n");
+    let msg = refused("theorem bad(): utf8::encode(\"a\") = [@bitvec::BitVec::ofNat(8, 0x62)] { refl }\n");
     assert!(msg.contains("NotConvertible"), "{msg}");
     // The class boundary is the encoder's own range test: `0x80` is two
     // bytes, not one.
-    let msg = refused("theorem bad(): utf8::encode(\"\\u{80}\") = [bitvec::ofNat(8, 0x80)] { refl }\n");
+    let msg = refused("theorem bad(): utf8::encode(\"\\u{80}\") = [@bitvec::BitVec::ofNat(8, 0x80)] { refl }\n");
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
@@ -121,18 +121,18 @@ theorem empty(): utf8::encode("") = Nil<BitVec(8)> { refl }
 fn decoding_those_bytes_gives_the_string_back() {
     check(
         r#"
-theorem one_byte(): utf8::decode([bitvec::ofNat(8, 0x61)]) = Some("a") { refl }
-theorem two_bytes(): utf8::decode([bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)])
+theorem one_byte(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x61)]) = Some("a") { refl }
+theorem two_bytes(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0xA9)])
     = Some("\u{E9}") { refl }
-theorem three_bytes(): utf8::decode([bitvec::ofNat(8, 0xE2), bitvec::ofNat(8, 0x82),
-    bitvec::ofNat(8, 0xAC)]) = Some("\u{20AC}") { refl }
-theorem four_bytes(): utf8::decode([bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F),
-    bitvec::ofNat(8, 0x98), bitvec::ofNat(8, 0x80)]) = Some("\u{1F600}") { refl }
+theorem three_bytes(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xE2), @bitvec::BitVec::ofNat(8, 0x82),
+    @bitvec::BitVec::ofNat(8, 0xAC)]) = Some("\u{20AC}") { refl }
+theorem four_bytes(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xF0), @bitvec::BitVec::ofNat(8, 0x9F),
+    @bitvec::BitVec::ofNat(8, 0x98), @bitvec::BitVec::ofNat(8, 0x80)]) = Some("\u{1F600}") { refl }
 theorem empty(): utf8::decode(Nil<BitVec(8)>) = Some("") { refl }
 "#,
     );
     let msg = refused(
-        "theorem bad(): utf8::decode([bitvec::ofNat(8, 0x61)]) = Some(\"b\") { refl }\n",
+        "theorem bad(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x61)]) = Some(\"b\") { refl }\n",
     );
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
@@ -143,39 +143,39 @@ fn the_decoder_is_strict_at_every_rejection() {
         r#"
 // An overlong two-byte form of `0x00`: the payload is below the class's
 // least legal value.
-theorem overlong(): utf8::decode([bitvec::ofNat(8, 0xC0), bitvec::ofNat(8, 0x80)]) = None { refl }
+theorem overlong(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xC0), @bitvec::BitVec::ofNat(8, 0x80)]) = None { refl }
 // A lone surrogate, `U+D800` spelled in three bytes: not a scalar value.
-theorem surrogate(): utf8::decode([bitvec::ofNat(8, 0xED), bitvec::ofNat(8, 0xA0),
-    bitvec::ofNat(8, 0x80)]) = None { refl }
+theorem surrogate(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xED), @bitvec::BitVec::ofNat(8, 0xA0),
+    @bitvec::BitVec::ofNat(8, 0x80)]) = None { refl }
 // A three-byte sequence with only two bytes present.
-theorem truncated(): utf8::decode([bitvec::ofNat(8, 0xE2), bitvec::ofNat(8, 0x82)]) = None { refl }
+theorem truncated(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xE2), @bitvec::BitVec::ofNat(8, 0x82)]) = None { refl }
 // A continuation byte where a lead byte belongs.
-theorem stray_continuation(): utf8::decode([bitvec::ofNat(8, 0x80)]) = None { refl }
+theorem stray_continuation(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x80)]) = None { refl }
 // `0xF5` starts a sequence above `0x10FFFF`.
-theorem above_range(): utf8::decode([bitvec::ofNat(8, 0xF5), bitvec::ofNat(8, 0x80),
-    bitvec::ofNat(8, 0x80), bitvec::ofNat(8, 0x80)]) = None { refl }
+theorem above_range(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xF5), @bitvec::BitVec::ofNat(8, 0x80),
+    @bitvec::BitVec::ofNat(8, 0x80), @bitvec::BitVec::ofNat(8, 0x80)]) = None { refl }
 // A lead byte with no continuation marker after it.
-theorem bad_continuation(): utf8::decode([bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0x41)])
+theorem bad_continuation(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0x41)])
     = None { refl }
 // `0xF8` is no lead byte at all.
-theorem no_class(): utf8::decode([bitvec::ofNat(8, 0xF8)]) = None { refl }
+theorem no_class(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xF8)]) = None { refl }
 // A rejection anywhere rejects the whole list, not just its tail.
-theorem rejection_propagates(): utf8::decode([bitvec::ofNat(8, 0x61), bitvec::ofNat(8, 0x80)])
+theorem rejection_propagates(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x61), @bitvec::BitVec::ofNat(8, 0x80)])
     = None { refl }
 "#,
     );
     // The negative controls: a rejected list decodes to nothing at all, so no
     // string is its image.
     let msg = refused(
-        "theorem bad(): utf8::decode([bitvec::ofNat(8, 0xC0), bitvec::ofNat(8, 0x80)]) = Some(\"\") { refl }\n",
+        "theorem bad(): utf8::decode([@bitvec::BitVec::ofNat(8, 0xC0), @bitvec::BitVec::ofNat(8, 0x80)]) = Some(\"\") { refl }\n",
     );
     assert!(msg.contains("NotConvertible"), "{msg}");
     let msg = refused(
-        "theorem bad(): utf8::decode([bitvec::ofNat(8, 0x80)]) = Some(\"\") { refl }\n",
+        "theorem bad(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x80)]) = Some(\"\") { refl }\n",
     );
     assert!(msg.contains("NotConvertible"), "{msg}");
     // And a valid list is not rejected: the strictness is not vacuous.
-    let msg = refused("theorem bad(): utf8::decode([bitvec::ofNat(8, 0x61)]) = None { refl }\n");
+    let msg = refused("theorem bad(): utf8::decode([@bitvec::BitVec::ofNat(8, 0x61)]) = None { refl }\n");
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
@@ -218,7 +218,7 @@ theorem literal_injective(t: String, p: utf8::encode("hi") = utf8::encode(t)): "
 theorem neutral_append(s, t: String):
     utf8::encode(s ++ t) = utf8::encode(s) ++ utf8::encode(t) { utf8::encode_append(s, t) }
 theorem half_open_append(s: String):
-    utf8::encode(s ++ "a") = utf8::encode(s) ++ [bitvec::ofNat(8, 0x61)] {
+    utf8::encode(s ++ "a") = utf8::encode(s) ++ [@bitvec::BitVec::ofNat(8, 0x61)] {
     utf8::encode_append(s, "a")
 }
 theorem literal_append(): utf8::encode("a" ++ "\u{E9}")
@@ -254,7 +254,7 @@ theorem bytes_of_ofString(s: String): utf8::ofString(s).bytes = utf8::encode(s) 
     assert!(!msg.is_empty(), "a wrong byte length must be refused");
     // A byte list that does not decode has no witness, so no `Utf8` value.
     let msg = refused(
-        "theorem bad(): utf8::utf8_valid([bitvec::ofNat(8, 0x80)]) { trivial }\n",
+        "theorem bad(): utf8::utf8_valid([@bitvec::BitVec::ofNat(8, 0x80)]) { trivial }\n",
     );
     assert!(!msg.is_empty(), "an invalid byte list must have no witness");
 }
@@ -264,7 +264,7 @@ theorem bytes_of_ofString(s: String): utf8::ofString(s).bytes = utf8::encode(s) 
 /// `utf8::decode_step` makes per width. The three- and four-byte rows once
 /// died in the kernel: the two sides' first shared δ-head is `bit7`, under
 /// *different* matches (`class_of`'s against `cont_of`'s), and a failed meet
-/// there used to normalize both sides through `nat::leb(0x800, code)` at a
+/// there used to normalize both sides through `nat::Nat::leb(0x800, code)` at a
 /// stuck `code` — a 2048-deep closure chain no comparison can descend
 /// (`issues/utf8-decode-conversion-blowup.md`). The two-byte row is the
 /// control that was always green. The negative control is a wrong tail; a
@@ -322,16 +322,16 @@ fn a_decoded_value_re_encodes_to_its_bytes() {
         r#"
 // Theorem 7 at a literal of each width. The decoding hypothesis computes;
 // the conclusion is the theorem's, not `refl`'s.
-theorem one_byte(): utf8::encode("a") = [bitvec::ofNat(8, 0x61)] {
-    utf8::encode_decode([bitvec::ofNat(8, 0x61)], "a", refl)
+theorem one_byte(): utf8::encode("a") = [@bitvec::BitVec::ofNat(8, 0x61)] {
+    utf8::encode_decode([@bitvec::BitVec::ofNat(8, 0x61)], "a", refl)
 }
-theorem two_bytes(): utf8::encode("\u{E9}") = [bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)] {
-    utf8::encode_decode([bitvec::ofNat(8, 0xC3), bitvec::ofNat(8, 0xA9)], "\u{E9}", refl)
+theorem two_bytes(): utf8::encode("\u{E9}") = [@bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0xA9)] {
+    utf8::encode_decode([@bitvec::BitVec::ofNat(8, 0xC3), @bitvec::BitVec::ofNat(8, 0xA9)], "\u{E9}", refl)
 }
 theorem four_bytes(): utf8::encode("\u{1F600}")
-    = [bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F), bitvec::ofNat(8, 0x98), bitvec::ofNat(8, 0x80)] {
-    utf8::encode_decode([bitvec::ofNat(8, 0xF0), bitvec::ofNat(8, 0x9F), bitvec::ofNat(8, 0x98),
-        bitvec::ofNat(8, 0x80)], "\u{1F600}", refl)
+    = [@bitvec::BitVec::ofNat(8, 0xF0), @bitvec::BitVec::ofNat(8, 0x9F), @bitvec::BitVec::ofNat(8, 0x98), @bitvec::BitVec::ofNat(8, 0x80)] {
+    utf8::encode_decode([@bitvec::BitVec::ofNat(8, 0xF0), @bitvec::BitVec::ofNat(8, 0x9F), @bitvec::BitVec::ofNat(8, 0x98),
+        @bitvec::BitVec::ofNat(8, 0x80)], "\u{1F600}", refl)
 }
 // At a neutral byte list and string, which is the statement: nothing here
 // computes, every rejection of the decoder is inverted.
@@ -356,7 +356,7 @@ theorem determined(u, v: utf8::Utf8, p: u.bytes = v.bytes): u = v { utf8::bytes_
     // something else are not the string's encoding — and the section needs
     // the value it is stated about.
     let msg = refused(
-        "theorem bad(): utf8::encode(\"a\") = [bitvec::ofNat(8, 0x62)] {\n    utf8::encode_decode([bitvec::ofNat(8, 0x62)], \"a\", refl)\n}\n",
+        "theorem bad(): utf8::encode(\"a\") = [@bitvec::BitVec::ofNat(8, 0x62)] {\n    utf8::encode_decode([@bitvec::BitVec::ofNat(8, 0x62)], \"a\", refl)\n}\n",
     );
     assert!(msg.contains("NotConvertible"), "{msg}");
     let msg = refused("theorem bad(u: utf8::Utf8, s: String): utf8::ofString(s) = u { utf8::ofString_toString(u) }\n");

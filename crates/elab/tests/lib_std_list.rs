@@ -67,37 +67,37 @@ import list;
 import nat;
 import bool;
 
-theorem l_map_id<A>(xs: List<A>): map(xs, λ (a: A) => a) = xs { map_id(xs) }
+theorem l_map_id<A>(xs: List<A>): xs.map(λ (a: A) => a) = xs { xs.map_id() }
 
 theorem l_map_map<A, B, C>(xs: List<A>, f: A -> B, g: B -> C):
-    map(map(xs, f), g) = map(xs, λ (a: A) => g(f(a)))
-{ map_map(xs, f, g) }
+    xs.map(f).map(g) = xs.map(λ (a: A) => g(f(a)))
+{ xs.map_map(f, g) }
 
 theorem l_map_append<A, B>(xs, ys: List<A>, f: A -> B):
-    map(append(xs, ys), f) = append(map(xs, f), map(ys, f))
-{ map_append(xs, ys, f) }
+    xs.append(ys).map(f) = xs.map(f).append(ys.map(f))
+{ xs.map_append(ys, f) }
 
-theorem l_len_map<A, B>(xs: List<A>, f: A -> B): map(xs, f).len() = xs.len() { len_map(xs, f) }
+theorem l_len_map<A, B>(xs: List<A>, f: A -> B): xs.map(f).len() = xs.len() { xs.len_map(f) }
 
 theorem l_len_append<A>(xs, ys: List<A>):
-    append(xs, ys).len() = add(xs.len(), ys.len()) {
-    len_append(xs, ys)
+    xs.append(ys).len() = xs.len().add(ys.len()) {
+    xs.len_append(ys)
 }
 
-theorem l_rev_len<A>(xs: List<A>): rev(xs).len() = xs.len() { rev_len(xs) }
+theorem l_rev_len<A>(xs: List<A>): xs.rev().len() = xs.len() { xs.rev_len() }
 
 theorem l_foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
-    foldr(append(xs, ys), f, z) = foldr(xs, f, foldr(ys, f, z))
-{ foldr_append(xs, ys, f, z) }
+    xs.append(ys).foldr(f, z) = xs.foldr(f, ys.foldr(f, z))
+{ xs.foldr_append(ys, f, z) }
 
-theorem l_len_replicate<A>(x: A, n: Nat): replicate(x, n).len() = n { len_replicate(x, n) }
+theorem l_len_replicate<A>(x: A, n: Nat): List::replicate(x, n).len() = n { List::len_replicate(x, n) }
 
-theorem l_take_drop<A>(xs: List<A>, n: Nat): append(take(xs, n), drop(xs, n)) = xs {
-    take_append_drop(xs, n)
+theorem l_take_drop<A>(xs: List<A>, n: Nat): xs.take(n).append(xs.drop(n)) = xs {
+    xs.take_append_drop(n)
 }
 
-theorem l_len_filter<A>(xs: List<A>, p: A -> Bool): filter(xs, p).len() <= xs.len() {
-    len_filter(xs, p)
+theorem l_len_filter<A>(xs: List<A>, p: A -> Bool): xs.filter(p).len() <= xs.len() {
+    xs.len_filter(p)
 }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
@@ -126,44 +126,44 @@ import bool;
 import pair;
 
 theorem l_foldl_append<A, B>(xs, ys: List<A>, f: B -> A -> B, z: B):
-    foldl(append(xs, ys), f, z) = foldl(ys, f, foldl(xs, f, z))
-{ foldl_append(xs, ys, f, z) }
+    xs.append(ys).foldl(f, z) = ys.foldl(f, xs.foldl(f, z))
+{ xs.foldl_append(ys, f, z) }
 
 theorem l_foldl_rev<A, B>(xs: List<A>, f: B -> A -> B, z: B):
-    foldl(rev(xs), f, z) = foldr(xs, λ (a: A) (b: B) => f(b, a), z)
-{ foldl_rev(xs, f, z) }
+    xs.rev().foldl(f, z) = xs.foldr(λ (a: A) (b: B) => f(b, a), z)
+{ xs.foldl_rev(f, z) }
 
 theorem l_foldl_len<A>(xs: List<A>, z: Nat):
-    foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = add(z, xs.len())
-{ foldl_len(xs, z) }
+    xs.foldl(λ (k: Nat) (a: A) => Succ(k), z) = z.add(xs.len())
+{ xs.foldl_len(z) }
 
 theorem l_filter_append<A>(xs, ys: List<A>, p: A -> Bool):
-    filter(append(xs, ys), p) = append(filter(xs, p), filter(ys, p))
-{ filter_append(xs, ys, p) }
+    xs.append(ys).filter(p) = xs.filter(p).append(ys.filter(p))
+{ xs.filter_append(ys, p) }
 
 theorem l_filter_filter<A>(xs: List<A>, p: A -> Bool):
-    filter(filter(xs, p), p) = filter(xs, p)
-{ filter_filter(xs, p) }
+    xs.filter(p).filter(p) = xs.filter(p)
+{ xs.filter_filter(p) }
 
 theorem l_filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
-    filter(map(xs, f), p) = map(filter(xs, λ (a: A) => p(f(a))), f)
-{ filter_map(xs, f, p) }
+    xs.map(f).filter(p) = xs.filter(λ (a: A) => p(f(a))).map(f)
+{ xs.filter_map(f, p) }
 
 theorem l_len_zip<A, B>(xs: List<A>, ys: List<B>):
-    zip(xs, ys).len() = min(xs.len(), ys.len())
-{ len_zip(xs, ys) }
+    xs.zip(ys).len() = xs.len().min(ys.len())
+{ xs.len_zip(ys) }
 
 theorem l_zip_map_fst<A, B>(xs: List<A>, ys: List<B>):
-    map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, ys.len())
-{ zip_map_fst(xs, ys) }
+    xs.zip(ys).map(λ (q: Pair<A, B>) => q.fst) = xs.take(ys.len())
+{ xs.zip_map_fst(ys) }
 
 theorem l_zip_map_snd<A, B>(xs: List<A>, ys: List<B>):
-    map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, xs.len())
-{ zip_map_snd(xs, ys) }
+    xs.zip(ys).map(λ (q: Pair<A, B>) => q.snd) = ys.take(xs.len())
+{ xs.zip_map_snd(ys) }
 
 theorem l_zip_swap<A, B>(xs: List<A>, ys: List<B>):
-    map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q)) = zip(ys, xs)
-{ zip_swap(xs, ys) }
+    xs.zip(ys).map(λ (q: Pair<A, B>) => q.swap()) = ys.zip(xs)
+{ xs.zip_swap(ys) }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {
@@ -184,30 +184,30 @@ fn the_first_class_algebra_laws_are_present() {
     let probe = r#"
 import list;
 
-theorem a_nil<A, B>(alg: ListAlg<A, B>): list_fold(alg, Nil) = alg.nil {
-    list_fold_nil(alg)
+theorem a_nil<A, B>(alg: ListAlg<A, B>): alg.list_fold(Nil) = alg.nil {
+    alg.list_fold_nil()
 }
 
 theorem a_cons<A, B>(alg: ListAlg<A, B>, h: A, t: List<A>):
-    list_fold(alg, Cons(h, t)) = alg.cons(h, list_fold(alg, t))
-{ list_fold_cons(alg, h, t) }
+    alg.list_fold(Cons(h, t)) = alg.cons(h, alg.list_fold(t))
+{ alg.list_fold_cons(h, t) }
 
 theorem a_unique<A, B>(alg: ListAlg<A, B>, g: List<A> -> B,
     nil_law: g(Nil) = alg.nil,
     cons_law: (h: A) -> (t: List<A>) -> g(Cons(h, t)) = alg.cons(h, g(t)),
-    xs: List<A>): g(xs) = list_fold(alg, xs)
-{ list_fold_unique(alg, g, nil_law, cons_law, xs) }
+    xs: List<A>): g(xs) = alg.list_fold(xs)
+{ alg.list_fold_unique(g, nil_law, cons_law, xs) }
 
 theorem a_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
     hom: B -> C,
     nil_comm: hom(src.nil) = dst.nil,
     cons_comm: (a: A) -> (b: B) -> hom(src.cons(a, b)) = dst.cons(a, hom(b)),
-    xs: List<A>): hom(list_fold(src, xs)) = list_fold(dst, xs)
-{ list_fold_fusion(src, dst, hom, nil_comm, cons_comm, xs) }
+    xs: List<A>): hom(src.list_fold(xs)) = dst.list_fold(xs)
+{ src.list_fold_fusion(dst, hom, nil_comm, cons_comm, xs) }
 
 theorem a_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
-    list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = foldr(xs, f, z)
-{ list_fold_is_foldr(f, z, xs) }
+    (ListAlg<A, B> { nil: z, cons: f }).list_fold(xs) = xs.foldr(f, z)
+{ ListAlg::list_fold_is_foldr(f, z, xs) }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {
@@ -228,18 +228,18 @@ fn the_dependent_elimination_algebra_is_first_class() {
 import list;
 
 theorem e_use<A>(P: List<A> -> Type, alg: ListElim<A>(P), xs: List<A>): P(xs) {
-    list_elim(P, alg, xs)
+    List::list_elim(P, alg, xs)
 }
 
 theorem e_nil<A>(P: List<A> -> Type, alg: ListElim<A>(P)):
-    list_elim(P, alg, Nil) = alg.nil
-{ list_elim_nil(P, alg) }
+    List::list_elim(P, alg, Nil) = alg.nil
+{ List::list_elim_nil(P, alg) }
 
 theorem e_cons<A>(P: List<A> -> Type, alg: ListElim<A>(P), h: A, t: List<A>):
-    list_elim(P, alg, Cons(h, t)) = alg.cons(h, t, list_elim(P, alg, t))
-{ list_elim_cons(P, alg, h, t) }
+    List::list_elim(P, alg, Cons(h, t)) = alg.cons(h, t, List::list_elim(P, alg, t))
+{ List::list_elim_cons(P, alg, h, t) }
 
-theorem e_append_nil<A>(xs: List<A>): append(xs, Nil) = xs { append_nil(xs) }
+theorem e_append_nil<A>(xs: List<A>): xs.append(Nil) = xs { xs.append_nil() }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {
@@ -256,7 +256,7 @@ fn a_wrong_list_obligation_is_rejected() {
     let bad = r#"
 import list;
 
-fn bad_append_nil<A>() -> ListElim<A>(λ (xs: List<A>) => append(xs, Nil) = xs) {
+fn bad_append_nil<A>() -> ListElim<A>(λ (xs: List<A>) => xs.append(Nil) = xs) {
     ListElim {
         nil: refl,
         // `ih` proves the property at `tail`, not at `Cons(head, tail)`.
@@ -286,36 +286,36 @@ import bool;
 theorem m_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { mem_head(a, xs) }
 
 theorem m_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) {
-    mem_cons(a, h, xs, m)
+    xs.mem_cons(a, h, m)
 }
 
-theorem m_append_l<A>(xs, ys: List<A>, a: A, m: Mem(a, xs)): Mem(a, append(xs, ys)) {
-    mem_append_l(xs, ys, a, m)
+theorem m_append_l<A>(xs, ys: List<A>, a: A, m: Mem(a, xs)): Mem(a, xs.append(ys)) {
+    xs.mem_append_l(ys, a, m)
 }
 
-theorem m_append_r<A>(xs, ys: List<A>, a: A, m: Mem(a, ys)): Mem(a, append(xs, ys)) {
-    mem_append_r(xs, ys, a, m)
+theorem m_append_r<A>(xs, ys: List<A>, a: A, m: Mem(a, ys)): Mem(a, xs.append(ys)) {
+    xs.mem_append_r(ys, a, m)
 }
 
-theorem m_append<A>(xs, ys: List<A>, a: A, m: Mem(a, append(xs, ys))):
+theorem m_append<A>(xs, ys: List<A>, a: A, m: Mem(a, xs.append(ys))):
     Or<Mem(a, xs), Mem(a, ys)>
-{ mem_append(xs, ys, a, m) }
+{ xs.mem_append(ys, a, m) }
 
 theorem m_append_iff<A>(xs, ys: List<A>, a: A):
-    Iff<Mem(a, append(xs, ys)), Or<Mem(a, xs), Mem(a, ys)>>
-{ mem_append_iff(xs, ys, a) }
+    Iff<Mem(a, xs.append(ys)), Or<Mem(a, xs), Mem(a, ys)>>
+{ xs.mem_append_iff(ys, a) }
 
-theorem m_map<A, B>(xs: List<A>, a: A, f: A -> B, m: Mem(a, xs)): Mem(f(a), map(xs, f)) {
-    mem_map(xs, a, f, m)
+theorem m_map<A, B>(xs: List<A>, a: A, f: A -> B, m: Mem(a, xs)): Mem(f(a), xs.map(f)) {
+    xs.mem_map(a, f, m)
 }
 
-theorem m_filter<A>(xs: List<A>, a: A, p: A -> Bool, m: Mem(a, filter(xs, p))): Mem(a, xs) {
-    mem_filter(xs, a, p, m)
+theorem m_filter<A>(xs: List<A>, a: A, p: A -> Bool, m: Mem(a, xs.filter(p))): Mem(a, xs) {
+    xs.mem_filter(a, p, m)
 }
 
 theorem m_not_nil<A>(a: A): ¬ Mem(a, Nil) { not_mem_nil(a) }
 
-theorem m_rev<A>(xs: List<A>, a: A, m: Mem(a, rev(xs))): Mem(a, xs) { mem_rev(xs, a, m) }
+theorem m_rev<A>(xs: List<A>, a: A, m: Mem(a, xs.rev())): Mem(a, xs) { xs.mem_rev(a, m) }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {
@@ -350,37 +350,37 @@ import logic;
 fn three() -> List<Nat> { Cons(1, Cons(2, Cons(3, Nil))) }
 
 theorem c_len(): three().len() = 3 { refl }
-theorem c_take(): take(three(), 2) = Cons(1, Cons(2, Nil)) { refl }
-theorem c_drop(): drop(three(), 2) = Cons(3, Nil) { refl }
-theorem c_rev(): rev(three()) = Cons(3, Cons(2, Cons(1, Nil))) { refl }
-theorem c_foldr(): foldr(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
-theorem c_foldl(): foldl(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
+theorem c_take(): three().take(2) = Cons(1, Cons(2, Nil)) { refl }
+theorem c_drop(): three().drop(2) = Cons(3, Nil) { refl }
+theorem c_rev(): three().rev() = Cons(3, Cons(2, Cons(1, Nil))) { refl }
+theorem c_foldr(): three().foldr(λ (a: Nat) (b: Nat) => a.add(b), 0) = 6 { refl }
+theorem c_foldl(): three().foldl(λ (a: Nat) (b: Nat) => a.add(b), 0) = 6 { refl }
 theorem c_list_fold():
-    list_fold(ListAlg<Nat, Nat> { nil: 0, cons: λ (a: Nat) (b: Nat) => add(a, b) }, three()) = 6
+    (ListAlg<Nat, Nat> { nil: 0, cons: λ (a: Nat) (b: Nat) => a.add(b) }).list_fold(three()) = 6
 { refl }
-theorem c_filter(): filter(three(), λ (n: Nat) => nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
-theorem c_replicate(): replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
+theorem c_filter(): three().filter(λ (n: Nat) => nat::Nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
+theorem c_replicate(): List::replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
 theorem c_head(): three().head() = Some(1) { refl }
 theorem c_last(): three().last() = Some(3) { refl }
 theorem c_receiver_len(): three().len() = 3 { refl }
-theorem c_zip(): zip(three(), Cons(4, Nil)) = Cons(Pair(1, 4), Nil) { refl }
+theorem c_zip(): three().zip(Cons(4, Nil)) = Cons(Pair(1, 4), Nil) { refl }
 
-theorem receiver_len_open<A>(xs: List<A>): xs.len() = list_len(xs) { refl }
+theorem receiver_len_open<A>(xs: List<A>): xs.len() = xs.len() { refl }
 
 // L2′/L3. `c_mem` is the one that says `Mem` is a *computing* relation and not
 // a derivation to search: the proof is the position, written out.
-theorem c_len_zip(): zip(three(), Cons(4, Nil)).len() = 1 { refl }
-// `list::map` and not `map`: this probe imports `option` too, and a bare `map`
+theorem c_len_zip(): three().zip(Cons(4, Nil)).len() = 1 { refl }
+// `list::List::map` and not `map`: this probe imports `option` too, and a bare `map`
 // with both in scope resolves to NEITHER — it reaches the prelude's vector `map`
 // and fails asking for a vector. `issues/list-algorithms-exercise.md` predicted
 // exactly this in 2026-08-05 and wave L2′ is its first real customer;
 // `issues/type-owned-namespaces.md` owns the fix (`List::map`).
-theorem c_zip_swap(): list::map(zip(three(), Cons(4, Nil)),
-                                λ (q: Pair<Nat, Nat>) => swap(q))
-    = zip(Cons(4, Nil), three()) { refl }
-theorem c_filter_filter(): filter(filter(three(), λ (n: Nat) => nat::leb(2, n)),
-                                  λ (n: Nat) => nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
-theorem c_foldl_rev(): foldl(rev(three()), λ (b: Nat) (a: Nat) => add(b, a), 0) = 6 { refl }
+theorem c_zip_swap(): list::List::map(three().zip(Cons(4, Nil)),
+                                λ (q: Pair<Nat, Nat>) => q.swap())
+    = Cons(4, Nil).zip(three()) { refl }
+theorem c_filter_filter(): three().filter(λ (n: Nat) => nat::Nat::leb(2, n)).filter(
+                                  λ (n: Nat) => nat::Nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
+theorem c_foldl_rev(): three().rev().foldl(λ (b: Nat) (a: Nat) => b.add(a), 0) = 6 { refl }
 theorem c_mem(): Mem(2, three()) { Inr(Inl(refl)) }
 
 // The negative control for `Mem` can now use kernel Nat directly: `absurd`
@@ -433,16 +433,16 @@ theorem empty_differs(): ¬(Nil<Nat> = Cons(1, Nil)) { decide }
 // Neutral: the instance is the declared decider at open endpoints, which is
 // what a literal-only test cannot see.
 theorem neutral_instance(xs, ys: List<Nat>, a, b: Nat):
-    decide_pick<xs = ys, Nat>(a, b) = or_pick(list_eq_dec(xs, ys), a, b) { refl }
+    decide_pick<xs = ys, Nat>(a, b) = or_pick(xs.list_eq_dec(ys), a, b) { refl }
 
 // The element decision is the class's, at an OPEN element type: this is the
 // half that makes the decider generic rather than a second `Nat` program.
 // A `Cons` is never `Nil`, at an open element type and by computation: the
 // decider reduces past the element decision it never has to make.
 theorem open_element<A: DecEq>(x: A, xs: List<A>, a, b: A):
-    or_pick(list_eq_dec(Cons(x, xs), Nil<A>), a, b) = a { refl }
+    or_pick(Cons(x, xs).list_eq_dec(Nil<A>), a, b) = a { refl }
 theorem open_cons_head<A: DecEq>(x: A, xs: List<A>): ¬(Nil<A> = Cons(x, xs)) {
-    nil_ne_cons(x, xs)
+    List::nil_ne_cons(xs, x)
 }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {

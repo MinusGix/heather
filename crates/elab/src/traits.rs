@@ -138,8 +138,8 @@ mod designation_key_tests {
 /// (`docs/instance-resolved-key-design.md` §3).
 ///
 /// The first component is the class's qualified key, the second the carrier
-/// head's — `("logic::Decide", "int::Le", "")` and `("logic::Decide",
-/// "nat::Le", "")` are two instances that coexist, where keying the head on
+/// head's — `("logic::Decide", "int::Int::Le", "")` and `("logic::Decide",
+/// "nat::Nat::Le", "")` are two instances that coexist, where keying the head on
 /// the written name `Le` collided them
 /// (issues/instance-key-collides-across-modules.md).
 ///

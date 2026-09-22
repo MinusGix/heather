@@ -112,7 +112,7 @@ theorem continue_binds_next<C>(source, rest: Nat, needle, byte: BitVec(8), carry
     loop_run(rest, ReadonlyLoop<C>(λ needle index byte carry => Continue(next)),
         ReadonlyBytes(source, 0, 1, λ address => Some(byte)), needle, 1, next) { refl }
 theorem decode_counter(width: Nat, word: BitVec(width)):
-    LoopWord(width, word, bitvec::toNat(width, word)) { refl }
+    LoopWord(width, word, @bitvec::BitVec::toNat(width, word)) { refl }
 theorem representable_end(): LoopAddressBound(3, ReadonlyBytes(0, 1, 6, λ address => None)) { trivial }
 
 "#;
@@ -137,7 +137,7 @@ fn readonly_loop_open_contracts_and_rejections() {
         ("wrong_cursor", "Early(1, rest, result)", "Early(0, rest, result)"),
         ("wrong_carry", "needle, 1, next) { refl }", "needle, 1, carry) { refl }"),
         ("wrapping_end", "ReadonlyBytes(0, 1, 6,", "ReadonlyBytes(0, 1, 7,"),
-        ("wrong_word_relation", "word, bitvec::toNat(width, word))", "word, Succ(bitvec::toNat(width, word)))"),
+        ("wrong_word_relation", "word, @bitvec::BitVec::toNat(width, word))", "word, Succ(@bitvec::BitVec::toNat(width, word)))"),
     ] {
         let mutant = LAWS.replace(original, changed);
         assert_ne!(mutant, LAWS);
@@ -164,22 +164,22 @@ fn readonly_loop_two_clients_compute() {
     let checks = r#"
 import function_ir_loop; import readonly_loops; import bitvec; import bool; import nat; import option;
 fn sample() → ReadonlyBytes {
-    ReadonlyBytes(42, 7, 3, λ address => match nat::sub(address, 7) {
-        Zero => Some(bitvec::ofNat(8, 0)),
+    ReadonlyBytes(42, 7, 3, λ address => match nat::Nat::sub(address, 7) {
+        Zero => Some(@bitvec::BitVec::ofNat(8, 0)),
         Succ(rest) => match rest {
-            Zero => Some(bitvec::ofNat(8, 1)),
-            Succ(rest) => match rest { Zero => Some(bitvec::ofNat(8, 0)), Succ(_) => None },
+            Zero => Some(@bitvec::BitVec::ofNat(8, 1)),
+            Succ(rest) => match rest { Zero => Some(@bitvec::BitVec::ofNat(8, 0)), Succ(_) => None },
         },
     })
 }
-theorem count_all(initial: Nat): count_occurrences(sample(), bitvec::ofNat(8, 0), 3, 0, initial) = End(3, 0, Succ(Succ(initial))) { refl }
-theorem count_budget(initial: Nat): count_occurrences(sample(), bitvec::ofNat(8, 0), 1, 0, initial) = Exhausted(1, Succ(initial)) { refl }
-theorem count_extra_budget(initial: Nat): count_occurrences(sample(), bitvec::ofNat(8, 0), 5, 0, initial) = End(3, 2, Succ(Succ(initial))) { refl }
-theorem search_first(): first_match(sample(), bitvec::ofNat(8, 0), 3, 0, False) = Early(1, 2, True) { refl }
-theorem search_second(): first_match(sample(), bitvec::ofNat(8, 1), 3, 0, False) = Early(2, 1, True) { refl }
-theorem search_missing(): first_match(sample(), bitvec::ofNat(8, 2), 3, 0, False) = End(3, 0, False) { refl }
-theorem search_last_budget(): first_match(sample(), bitvec::ofNat(8, 1), 2, 0, False) = Early(2, 0, True) { refl }
-theorem search_resumed(): first_match(sample(), bitvec::ofNat(8, 0), 2, 1, False) = Early(3, 0, True) { refl }
+theorem count_all(initial: Nat): count_occurrences(sample(), @bitvec::BitVec::ofNat(8, 0), 3, 0, initial) = End(3, 0, Succ(Succ(initial))) { refl }
+theorem count_budget(initial: Nat): count_occurrences(sample(), @bitvec::BitVec::ofNat(8, 0), 1, 0, initial) = Exhausted(1, Succ(initial)) { refl }
+theorem count_extra_budget(initial: Nat): count_occurrences(sample(), @bitvec::BitVec::ofNat(8, 0), 5, 0, initial) = End(3, 2, Succ(Succ(initial))) { refl }
+theorem search_first(): first_match(sample(), @bitvec::BitVec::ofNat(8, 0), 3, 0, False) = Early(1, 2, True) { refl }
+theorem search_second(): first_match(sample(), @bitvec::BitVec::ofNat(8, 1), 3, 0, False) = Early(2, 1, True) { refl }
+theorem search_missing(): first_match(sample(), @bitvec::BitVec::ofNat(8, 2), 3, 0, False) = End(3, 0, False) { refl }
+theorem search_last_budget(): first_match(sample(), @bitvec::BitVec::ofNat(8, 1), 2, 0, False) = Early(2, 0, True) { refl }
+theorem search_resumed(): first_match(sample(), @bitvec::BitVec::ofNat(8, 0), 2, 1, False) = Early(3, 0, True) { refl }
 "#;
     elab.elab_module_source("client_checks", checks).unwrap_or_else(|e| panic!("{}", e.render(checks)));
 }

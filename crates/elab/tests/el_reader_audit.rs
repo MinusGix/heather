@@ -305,7 +305,7 @@ fn a_named_statement_can_be_proved_by_container_induction() {
          fn Agree(r: Rose) -> Type {{ size(r) = size_plus(r) }}
          theorem same(r: Rose): Agree(r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.cong(same))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.cong(same))),
              }}
          }}"
     ));
@@ -321,7 +321,7 @@ fn a_parameterized_statement_can_be_proved_by_container_induction() {
          fn Stmt(f: Rose -> Nat, g: Rose -> Nat, r: Rose) -> Type {{ f(r) = g(r) }}
          theorem same(r: Rose): Stmt(size, size_plus, r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.cong(same))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.cong(same))),
              }}
          }}"
     ));
@@ -338,7 +338,7 @@ fn a_false_named_statement_is_still_rejected() {
          fn Wrong(r: Rose) -> Type {{ size(r) = Succ(size_plus(r)) }}
          theorem wrong(r: Rose): Wrong(r) {{
              match r {{
-                 Node(l, n, kids) => cong_succ(cong_fold(n, kids.cong(wrong))),
+                 Node(l, n, kids) => Nat::cong_succ(cong_fold(n, kids.cong(wrong))),
              }}
          }}"
     ));

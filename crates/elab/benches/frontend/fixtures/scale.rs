@@ -220,10 +220,10 @@ fn certified_dispatch() -> Family {
              fn opcode(form: Opcode) -> Nat {{\n    match form {{\n{}\n    }}\n}}\n\n\
              fn Matches(byte: Nat, form: Opcode) -> Type {{ byte = opcode(form) }}\n\n\
              fn rows() -> List<CertifiedEntry<Nat, Opcode>(Matches)> {{\n    {rows}\n}}\n\n\
-             fn classify(byte: Nat) -> Option<Opcode> {{\n    lookup(Matches, nat::eq_dec, byte, rows())\n}}\n\n\
+             fn classify(byte: Nat) -> Option<Opcode> {{\n    lookup(Matches, nat::Nat::eq_dec, byte, rows())\n}}\n\n\
              theorem classify_sound(byte: Nat, form: Opcode,\n\
                  success: classify(byte) = Some(form)): Matches(byte, form) {{\n\
-                 lookup_sound(Matches, nat::eq_dec, byte, rows(), form, success)\n}}\n\n\
+                 lookup_sound(Matches, nat::Nat::eq_dec, byte, rows(), form, success)\n}}\n\n\
              fn interpret(form: Opcode) -> Nat {{\n    match form {{\n{}\n    }}\n}}\n\n\
              theorem classify_complete(form: Opcode):\n\
                  classify(opcode(form)) = Some(form) {{\n    match form {{\n{}\n    }}\n}}\n",

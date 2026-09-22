@@ -316,7 +316,7 @@ theorem steps_concat<A>(R: A → A → Type, first, second: Nat,
     right: Steps(R, second, middle, finish)):
     Steps(R, first + second, start, finish)
 {
-    j(add_comm(second, first),
+    j(second.add_comm(first),
         λ count q => Steps(R, count, start, finish),
         steps_concat_reversed(R, first, second, start, middle, finish, left, right))
 }

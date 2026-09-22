@@ -90,7 +90,7 @@ fn any_err(src: &str) -> String {
 
 // -- programs -----------------------------------------------------------------
 
-/// Euclid. The obligation `nat::mod(a, Succ(k)) < Succ(k)` is stated at the
+/// Euclid. The obligation `nat::Nat::mod(a, Succ(k)) < Succ(k)` is stated at the
 /// *pattern* — the `match b` was convoyed — so `mod_lt` proves it directly.
 /// The `on` stays: nothing here is at a constructor *measure*
 /// (docs/omega-measure-reduction-design.md §6).
@@ -98,9 +98,9 @@ const GCD: &str = r#"
 fn gcd(a, b: Nat) -> Nat decreases b {
     match b {
         Zero => a,
-        Succ(k) => gcd(Succ(k), nat::mod(a, Succ(k))),
+        Succ(k) => gcd(Succ(k), nat::Nat::mod(a, Succ(k))),
     }
-    on ?dec1 := nat::mod_lt(a, Succ(k), trivial);
+    on ?dec1 := nat::Nat::mod_lt(a, Succ(k), trivial);
 }
 "#;
 
@@ -124,7 +124,7 @@ fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
         Nil => ys,
         Cons(x, xt) => match ys {
             Nil => Cons(x, xt),
-            Cons(y, yt) => match nat::le_dec(x, y) {
+            Cons(y, yt) => match nat::Nat::le_dec(x, y) {
                 Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
                 Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
             },
@@ -169,16 +169,16 @@ fn a_callee_postcondition_feeds_the_decrease() {
         fn drop_eq(t: Nat, ts: List<Nat>) -> List<Nat> {
             match ts {
                 Nil => Nil,
-                Cons(h, rest) => match nat::eq_dec(t, h) { Inl(_) => drop_eq(t, rest), Inr(_) => Cons(h, rest) },
+                Cons(h, rest) => match nat::Nat::eq_dec(t, h) { Inl(_) => drop_eq(t, rest), Inr(_) => Cons(h, rest) },
             }
         }
 
         theorem drop_eq_le(t: Nat, ts: List<Nat>): drop_eq(t, ts).len() <= ts.len() {
             match ts {
                 Nil => trivial,
-                Cons(h, rest) => match nat::eq_dec(t, h) {
-                    Inl(_) => nat::le_succ_r(drop_eq(t, rest).len(), rest.len(), drop_eq_le(t, rest)),
-                    Inr(_) => nat::le_refl(Succ(rest.len())),
+                Cons(h, rest) => match nat::Nat::eq_dec(t, h) {
+                    Inl(_) => nat::Nat::le_succ_r(drop_eq(t, rest).len(), rest.len(), drop_eq_le(t, rest)),
+                    Inr(_) => nat::Nat::le_refl(Succ(rest.len())),
                 },
             }
         }
@@ -201,7 +201,7 @@ fn omega_closes_arithmetic_obligations_through_the_refinement() {
     // at `Succ(Succ(l))`, which `omega` reads as `l + 2` now that an open
     // successor reflects as a sum. No `on` anywhere.
     ok(r#"
-        theorem even_or_odd_wf(n: Nat): Even(n) ∨ Odd(n) decreases n {
+        theorem even_or_odd_wf(n: Nat): Nat::Even(n) ∨ Nat::Odd(n) decreases n {
             match n {
                 Zero => Inl(trivial),
                 Succ(k) => match k {

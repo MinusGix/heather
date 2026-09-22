@@ -2292,7 +2292,7 @@ impl Elaborator {
         }
     }
 
-    /// The base half of a written name — `nat::sub` and `sub` both name `sub`.
+    /// The base half of a written name — `nat::Nat::sub` and `sub` both name `sub`.
     fn base_name(name: &str) -> &str {
         split_qual(name).map(|(_, b)| b).unwrap_or(name)
     }
@@ -2331,7 +2331,7 @@ impl Elaborator {
                 // (issues/type-owned-members-receiver-slice.md), so its key
                 // keeps both halves: `List::nth` in module `list` is
                 // `list::List::nth`. The two other qualified readings —
-                // `nat::sub` (module path) and `Option::None` (constructor by
+                // `nat::Nat::sub` (module path) and `Option::None` (constructor by
                 // type) — declare the base name, and this is what tells them
                 // apart without a second resolution judgment.
                 if split_qual(name).is_some() && self.names.declares(&m, name) {
@@ -2990,14 +2990,14 @@ impl Elaborator {
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
         let measure = decl.decreases.clone().expect("a measure declaration");
         measure::check_shape(decl, &measure)?;
-        // The wrapper spells `nat::Lt`, `nat::le_trans` and `nat::lt_succ_self`;
+        // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
         // the default closer spells `omega`'s certificates, which name the
         // `omega` module. Neither is the prelude's, so the module has to import
         // them — checked here so the message says so.
-        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+        if !matches!(self.resolve_declared("nat::Nat::le_trans"), NameRes::Found(_)) {
             return err(
-                "`decreases` states its obligations with `nat::Lt` and discharges them \
-                 through `nat::le_trans`: `import nat;` first",
+                "`decreases` states its obligations with `nat::Nat::Lt` and discharges them \
+                 through `nat::Nat::le_trans`: `import nat;` first",
                 measure.span,
             );
         }
@@ -3005,7 +3005,7 @@ impl Elaborator {
         // default closer is available only where both modules are imported;
         // otherwise every obligation is an ordinary unsolved goal, reported
         // with its statement.
-        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::Int::negsucc_lt_ofnat"]
             .iter()
             .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
         self.check_measure_is_nat(decl, &measure)?;
@@ -3093,10 +3093,10 @@ impl Elaborator {
         for m in &gm {
             self.check_measure_is_nat(m.decl, &m.measure)?;
         }
-        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+        if !matches!(self.resolve_declared("nat::Nat::le_trans"), NameRes::Found(_)) {
             return err(
-                "`decreases` states its obligations with `nat::Lt` and discharges them \
-                 through `nat::le_trans`: `import nat;` first",
+                "`decreases` states its obligations with `nat::Nat::Lt` and discharges them \
+                 through `nat::Nat::le_trans`: `import nat;` first",
                 span,
             );
         }
@@ -3110,7 +3110,7 @@ impl Elaborator {
                 span,
             );
         }
-        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::Int::negsucc_lt_ofnat"]
             .iter()
             .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
         let family = measure::lower_group(&gm, omega_available, self)?;
@@ -3173,7 +3173,7 @@ impl Elaborator {
 
     /// The measure is a `Nat`, checked in the declaration's own parameter
     /// context and *before* anything is generated, so the message says so
-    /// rather than surfacing as a mismatch inside a generated `nat::Lt`.
+    /// rather than surfacing as a mismatch inside a generated `nat::Nat::Lt`.
     fn check_measure_is_nat(&mut self, decl: &Decl, measure: &Expr) -> R<()> {
         self.attempt.prepare();
         self.attempt.goal_arena.configure(count_holes(decl), 0);
@@ -4851,7 +4851,7 @@ impl Elaborator {
     /// leaves the equation to the kernel — deliberately, and still. The cost
     /// was the message: a false equation came back as `NotConvertible` at the
     /// whole declaration, naming neither side, which is how three library
-    /// proofs about `int::add` were debugged the hard way. The note is filled
+    /// proofs about `int::Int::add` were debugged the hard way. The note is filled
     /// here and read only by the gate, only when the gate rejects, so nothing
     /// is reported that the kernel did not refuse.
     ///

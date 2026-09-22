@@ -60,7 +60,7 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
     }
     let (result, choice) = result_type(elaborator, caller, result)?;
     let operations = OperationGlobals::resolve(elaborator)?;
-    let comparison = elaborator.global_abs("bitvec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
+    let comparison = elaborator.global_abs("bitvec::BitVec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
     let payload = |slot| elaborator.lookup_inductive("bool::Bool")
         .and_then(|ind| elaborator.types.gdefs().abs_for(&crate::gendefs::GenDef::PayloadCode(ind.tag, slot)))
         .map(|abs| *abs as usize).ok_or_else(|| SourceError::Unsupported("Boolean payload identities are not loaded".into()));
@@ -211,7 +211,7 @@ impl Builder<'_> {
             }
         }
         unsupported(if expected == StructuredSourceType::Boolean {
-            "Boolean values require an input, constant, or bitvec::unsigned_lt_bit"
+            "Boolean values require an input, constant, or bitvec::BitVec::unsigned_lt_bit"
         } else { "unsupported structured source operation or result type" })
     }
     fn predicate(&mut self, term: &Term, depth: u32, target: Option<u64>) -> Result<(Option<StructuredRegion>, Port), SourceError> {
@@ -319,7 +319,7 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let arguments: Vec<_> = (0..parameters.len()).map(|i| HeatherExpr::name(format!("arg{i}"))).collect();
     let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| {
         let width = ty.width()?;
-        let expression = if *ty == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::ofBool", [arguments[id].clone()]) } else { arguments[id].clone() };
+        let expression = if *ty == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::BitVec::ofBool", [arguments[id].clone()]) } else { arguments[id].clone() };
         Some((id as u64, (width, expression)))
     }).collect();
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref() };
@@ -353,18 +353,18 @@ impl Expansion<'_> {
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
         for node in &region.nodes {
             let (id, width, expression) = match *node {
-                Node::Const { width, output, value } => (output, width, HeatherExpr::call("bitvec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
+                Node::Const { width, output, value } => (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
                 Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
                 | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
                 | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right } => {
                     let (function, comparison) = match node {
-                        Node::Add { .. } => ("bitvec::add", false), Node::Sub { .. } => ("bitvec::sub", false),
-                        Node::BitAnd { .. } => ("bitvec::band", false), Node::BitOr { .. } => ("bitvec::bor", false),
-                        Node::BitXor { .. } => ("bitvec::bxor", false), Node::UnsignedLessThan { .. } => ("bitvec::unsigned_lt_bit", true),
+                        Node::Add { .. } => ("bitvec::BitVec::add", false), Node::Sub { .. } => ("bitvec::BitVec::sub", false),
+                        Node::BitAnd { .. } => ("bitvec::BitVec::band", false), Node::BitOr { .. } => ("bitvec::BitVec::bor", false),
+                        Node::BitXor { .. } => ("bitvec::BitVec::bxor", false), Node::UnsignedLessThan { .. } => ("bitvec::BitVec::unsigned_lt_bit", true),
                         _ => unreachable!(),
                     };
-                    let expression = HeatherExpr::call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
-                    (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::ofBool", [expression]) } else { expression })
+                    let expression = HeatherExpr::explicit_call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
+                    (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::BitVec::ofBool", [expression]) } else { expression })
                 }
                 _ => return unsupported("unsupported source expansion node"),
             };
@@ -383,10 +383,10 @@ impl Expansion<'_> {
                 self.dataflow(body, &mut values)?;
                 if body.outputs.len() != 1 + usize::from(self.choice.is_some()) { return unsupported("source expansion result arity differs from source interface"); }
                 let value = operand(&values, body.outputs[0].id, self.result.scalar_width()?)?;
-                let value = if self.result == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::head_bit", [HeatherExpr::nat(0), value]) } else { value };
+                let value = if self.result == StructuredSourceType::Boolean { HeatherExpr::explicit_call("bitvec::BitVec::head_bit", [HeatherExpr::nat(0), value]) } else { value };
                 if let Some(choice) = self.choice {
                     let tag = operand(&values, body.outputs[1].id, 1)?;
-                    Ok(HeatherExpr::raw(format!("match bitvec::head_bit(0, {}) {{ False => {}<{}>({}), True => {}<{}>({}) }}", tag.render(), choice.constructors[0], self.result.name(), value.render(), choice.constructors[1], self.result.name(), value.render())))
+                    Ok(HeatherExpr::raw(format!("match @bitvec::BitVec::head_bit(0, {}) {{ False => {}<{}>({}), True => {}<{}>({}) }}", tag.render(), choice.constructors[0], self.result.name(), value.render(), choice.constructors[1], self.result.name(), value.render())))
                 } else { Ok(value) }
             }
             StructuredRegion::Sequence { prefix, continuation } => { self.dataflow(prefix, &mut values)?; self.region(continuation, values) }
@@ -399,7 +399,7 @@ impl Expansion<'_> {
                 let result = self.region(prefix, values.clone())?;
                 self.result = saved_result;
                 self.choice = saved_choice;
-                let result = if port.width == 1 { HeatherExpr::call("bitvec::ofBool", [result]) } else { result };
+                let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
                 values.insert(port.id, (port.width, result));
                 self.region(continuation, values)
             }
@@ -407,7 +407,7 @@ impl Expansion<'_> {
                 let condition = operand(&values, *condition, 1)?;
                 let yes = self.region(when_true, values.clone())?;
                 let no = self.region(when_false, values)?;
-                Ok(HeatherExpr::raw(format!("match bitvec::head_bit(0, {}) {{ False => {}, True => {} }}", condition.render(), no.render(), yes.render())))
+                Ok(HeatherExpr::raw(format!("match @bitvec::BitVec::head_bit(0, {}) {{ False => {}, True => {} }}", condition.render(), no.render(), yes.render())))
             }
         }
     }
@@ -447,9 +447,9 @@ pub fn generate_elaborated_structured_x86(
         format!("{prefix}_result(values) = {source}(values(64, 0), values(64, 1))"),
         format!("trans({prefix}_result_expands(values), {prefix}_source_expands(values(64, 0), values(64, 1)))"), true);
     decl(&mut module, format!("{prefix}_entry_values"), true, before(), "Valuation()".into(),
-        format!("λ width id => match id {{ Zero => bitvec::ofNat(width, bitvec::toNat(64, {left})), Succ(rest) => match rest {{ Zero => bitvec::ofNat(width, bitvec::toNat(64, {right})), Succ(_) => bitvec::zero(width) }} }}"), false);
-    let left_roundtrip = format!("bitvec::ofNat_toNat(64, {left})");
-    let right_roundtrip = format!("bitvec::ofNat_toNat(64, {right})");
+        format!("λ width id => match id {{ Zero => @bitvec::BitVec::ofNat(width, @bitvec::BitVec::toNat(64, {left})), Succ(rest) => match rest {{ Zero => @bitvec::BitVec::ofNat(width, @bitvec::BitVec::toNat(64, {right})), Succ(_) => @bitvec::BitVec::zero(width) }} }}"), false);
+    let left_roundtrip = format!("bitvec::BitVec::ofNat_toNat(64, {left})");
+    let right_roundtrip = format!("bitvec::BitVec::ofNat_toNat(64, {right})");
     let source_roundtrip = format!("trans(cong_fn<BitVec(64), BitVec(64)>(λ left => {source}(left, {vals}(64, 1)), {left_roundtrip}), cong_fn<BitVec(64), BitVec(64)>(λ right => {source}({left}, right), {right_roundtrip}))");
     decl(&mut module, format!("{prefix}_source_correct"), true, before(),
         format!("read_gpr({}, {prefix}_after(before).gprs) = {source}({left}, {right})", output.heather_name()),

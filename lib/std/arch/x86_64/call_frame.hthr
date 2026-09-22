@@ -68,7 +68,7 @@ record NativeIntegerCallContract<M, A>(read: M → BitVec(64) → A,
     writes: BitVec(64) → Type, before, after: MachineState<M>, result, return_address: BitVec(64)) {
     result_correct: read_gpr(Rax, after.gprs) = result,
     returned_to: after.rip = return_address,
-    stack_restored: read_gpr(Rsp, after.gprs) = bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)),
+    stack_restored: read_gpr(Rsp, after.gprs) = read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8)),
     memory_effects: WritesOnly(read, writes, before.memory, after.memory),
     preserved_rbx: read_gpr(Rbx, after.gprs) = read_gpr(Rbx, before.gprs),
     preserved_rbp: read_gpr(Rbp, after.gprs) = read_gpr(Rbp, before.gprs),

@@ -55,7 +55,7 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
-    /// Boolean-reflection delimiters: `⟦b⟧` is `bool::IsTrue(b)`.
+    /// Boolean-reflection delimiters: `⟦b⟧` is `bool::Bool::IsTrue(b)`.
     LSemantic, // ⟦
     RSemantic, // ⟧
     /// Anonymous constructor delimiters. `⟨a, b⟩` selects the sole
@@ -380,7 +380,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            // `nat::sub` is **one** identifier token (docs/modules-design.md
+            // `nat::Nat::sub` is **one** identifier token (docs/modules-design.md
             // §4). Adjacency decides, as it does for `?name`: a `::` followed
             // by an identifier start joins, so `nat::{Le}` (the import-list
             // form) still lexes as `nat` `::` `{`.

@@ -13,7 +13,7 @@
 //! sugar a hypothesis written in the *desugared* spelling and letting
 //! conversion agree or refuse. `p <= q ∧ q <= r ∧ p <= r` typechecking says
 //! nothing on its own — it is only evidence once the term it is fed is
-//! `And<nat::Le(p,q), And<nat::Le(q,r), nat::Le(p,r)>>` and the left-nested rival is refused
+//! `And<nat::Nat::Le(p,q), And<nat::Nat::Le(q,r), nat::Nat::Le(p,r)>>` and the left-nested rival is refused
 //! beside it.
 
 use heather_elab::{ElabError, Elaborator};
@@ -96,7 +96,7 @@ theorem e(P: Type): Iff<P, P> { iff_refl() }
 #[test]
 fn the_two_falses_coexist() {
     ok("
-theorem both(h: False): and(False, True) = False { match h {} }
+theorem both(h: False): Bool::and(False, True) = False { match h {} }
 
 // type position, each spelling
 theorem ann(P: Type, h: False): P { match h {} }
@@ -109,7 +109,7 @@ theorem chk(): Bool { False }
 fn idb(x: Bool) -> Bool { x }
 theorem in_arg(): Bool { idb(False) }
 theorem in_eq(): idb(False) = False { refl }
-theorem nested(b: Bool): Bool { and(False, or(b, False)) }
+theorem nested(b: Bool): Bool { Bool::and(False, Bool::or(b, False)) }
 ");
 }
 
@@ -152,9 +152,9 @@ fn false_eliminates_by_a_zero_arm_match() {
 #[test]
 fn exists_states_and_introduces() {
     ok("
-fn Even(n: Nat) -> Type { Exists<Nat>(λ (k: Nat) => add(k, k) = n) }
+fn Even(n: Nat) -> Type { Exists<Nat>(λ (k: Nat) => k.add(k) = n) }
 theorem four(): Even(4) { Exists(2, refl) }
-theorem out(n: Nat, h: Even(n)): add(h.witness, h.witness) = n { h.proof }
+theorem out(n: Nat, h: Even(n)): h.witness.add(h.witness) = n { h.proof }
 ");
 }
 
@@ -169,10 +169,10 @@ theorem out(n: Nat, h: Even(n)): add(h.witness, h.witness) = n { h.proof }
 #[test]
 fn exists_infers_its_type_argument_from_the_predicate() {
     ok("
-fn Even(n: Nat) -> Type { Exists(λ (k: Nat) => add(k, k) = n) }
+fn Even(n: Nat) -> Type { Exists(λ (k: Nat) => k.add(k) = n) }
 theorem four(): Even(4) { Exists(2, refl) }
-theorem same(n: Nat, h: Exists<Nat>(λ (k: Nat) => add(k, k) = n)): Even(n) { h }
-theorem sugar(n: Nat, h: ∃ k: Nat, add(k, k) = n): Even(n) { h }
+theorem same(n: Nat, h: Exists<Nat>(λ (k: Nat) => k.add(k) = n)): Even(n) { h }
+theorem sugar(n: Nat, h: ∃ k: Nat, k.add(k) = n): Even(n) { h }
 
 // Not hardcoded to `Nat`: an **open** predicate at another carrier, where
 // the domain is a parameter rather than a written type.
@@ -217,8 +217,8 @@ theorem con(P: Type, Q: Type, h: And<P, Q>): P ∧ Q { h }
 theorem dis(P: Type, Q: Type, h: Or<P, Q>): P ∨ Q { h }
 theorem neg(P: Type, h: Not(P)): ¬P { h }
 theorem bi(P: Type, Q: Type, h: Iff<P, Q>): P ↔ Q { h }
-theorem all(h: (n: Nat) -> nat::Le(n, n)): ∀ n: Nat, n <= n { h }
-theorem ex(h: Exists<Nat>(λ (k: Nat) => add(k, k) = 4)): ∃ k: Nat, add(k, k) = 4 { h }
+theorem all(h: (n: Nat) -> nat::Nat::Le(n, n)): ∀ n: Nat, n <= n { h }
+theorem ex(h: Exists<Nat>(λ (k: Nat) => k.add(k) = 4)): ∃ k: Nat, k.add(k) = 4 { h }
 ");
 }
 
@@ -255,7 +255,7 @@ fn no_ascii_digraph_for_the_other_connectives() {
 #[test]
 fn connectives_are_looser_than_comparison() {
     ok("
-theorem t(a: Nat, b: Nat, c: Nat, h: And<nat::Le(a, b), nat::Le(b, c)>): a <= b ∧ b <= c { h }
+theorem t(a: Nat, b: Nat, c: Nat, h: And<nat::Nat::Le(a, b), nat::Nat::Le(b, c)>): a <= b ∧ b <= c { h }
 ");
 }
 
@@ -265,16 +265,16 @@ theorem t(a: Nat, b: Nat, c: Nat, h: And<nat::Le(a, b), nat::Le(b, c)>): a <= b 
 #[test]
 fn wedge_binds_tighter_than_vee_and_both_associate_right() {
     ok("
-theorem assoc(p: Nat, q: Nat, r: Nat, h: And<nat::Le(p, q), And<nat::Le(q, r), nat::Le(p, r)>>):
+theorem assoc(p: Nat, q: Nat, r: Nat, h: And<nat::Nat::Le(p, q), And<nat::Nat::Le(q, r), nat::Nat::Le(p, r)>>):
     p <= q ∧ q <= r ∧ p <= r { h }
-theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Le(p, q), nat::Le(q, r)>, nat::Le(r, p)>):
+theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Nat::Le(p, q), nat::Nat::Le(q, r)>, nat::Nat::Le(r, p)>):
     p <= q ∧ q <= r ∨ r <= p { h }
 ");
     // The left-nested rival, refused. Without this the associativity claim is
     // untested: a left-associative parse would pass `assoc` too if `And` were
     // symmetric, and nothing above says it is not.
     let err = bad(
-        "theorem t(p: Nat, q: Nat, r: Nat, h: And<And<nat::Le(p, q), nat::Le(q, r)>, nat::Le(p, r)>):
+        "theorem t(p: Nat, q: Nat, r: Nat, h: And<And<nat::Nat::Le(p, q), nat::Nat::Le(q, r)>, nat::Nat::Le(p, r)>):
             p <= q ∧ q <= r ∧ p <= r { h }",
     );
     assert!(
@@ -292,7 +292,7 @@ theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Le(p, q), nat::Le(q, r)>, na
 fn neg_binds_tighter_than_wedge_and_looser_than_equality() {
     ok("
 theorem eqn(h: Not(1 = 0)): ¬ 1 = 0 { h }
-theorem conj(P: Type, np: Not(P), q: nat::Le(0, 1)): And<Not(P), nat::Le(0, 1)> { And(np, q) }
+theorem conj(P: Type, np: Not(P), q: nat::Nat::Le(0, 1)): And<Not(P), nat::Nat::Le(0, 1)> { And(np, q) }
 theorem conj_sugar(P: Type, np: ¬P, q: 0 <= 1): ¬P ∧ 0 <= 1 { And(np, q) }
 theorem dbl(P: Type, h: Not(Not(P))): ¬¬P { h }
 ");
@@ -492,9 +492,9 @@ fn anonymous_constructor_notation_is_checking_only_and_shape_checked() {
 #[test]
 fn forall_is_the_arrow_form() {
     ok("
-theorem one(h: (n: Nat) -> nat::Le(n, n)): ∀ n: Nat, n <= n { h }
-theorem many(h: (n: Nat) -> (m: Nat) -> nat::Le(n, add(n, m))): ∀ n, m: Nat, n <= add(n, m) { h }
-theorem body_runs_right(h: (n: Nat) -> And<nat::Le(n, n), nat::Le(0, n)>):
+theorem one(h: (n: Nat) -> nat::Nat::Le(n, n)): ∀ n: Nat, n <= n { h }
+theorem many(h: (n: Nat) -> (m: Nat) -> nat::Nat::Le(n, n.add(m))): ∀ n, m: Nat, n <= n.add(m) { h }
+theorem body_runs_right(h: (n: Nat) -> And<nat::Nat::Le(n, n), nat::Nat::Le(0, n)>):
     ∀ n: Nat, n <= n ∧ 0 <= n { h }
 ");
 }
@@ -504,11 +504,11 @@ theorem body_runs_right(h: (n: Nat) -> And<nat::Le(n, n), nat::Le(0, n)>):
 #[test]
 fn exists_supplies_its_type_argument_from_the_binder() {
     ok("
-fn Even(n: Nat) -> Type { ∃ k: Nat, add(k, k) = n }
+fn Even(n: Nat) -> Type { ∃ k: Nat, k.add(k) = n }
 theorem four(): Even(4) { Exists(2, refl) }
-theorem nested(): ∃ a: Nat, ∃ b: Nat, add(a, b) = 3 { Exists(1, Exists(2, refl)) }
-theorem many(h: Exists<Nat>(λ (a: Nat) => Exists<Nat>(λ (b: Nat) => add(a, b) = 3))):
-    ∃ a, b: Nat, add(a, b) = 3 { h }
+theorem nested(): ∃ a: Nat, ∃ b: Nat, a.add(b) = 3 { Exists(1, Exists(2, refl)) }
+theorem many(h: Exists<Nat>(λ (a: Nat) => Exists<Nat>(λ (b: Nat) => a.add(b) = 3))):
+    ∃ a, b: Nat, a.add(b) = 3 { h }
 ");
 }
 
@@ -540,8 +540,8 @@ fn a_quantifier_binder_needs_its_annotation() {
 /// designated spellings convert without importing `algebra`.
 #[test]
 fn the_boolean_doubles_keep_their_precedence_and_resolve_from_bool() {
-    ok("theorem t(x: Bool): and(x, True) = x { and_true_r(x) }");
-    ok("theorem u(x: Bool, h: and(x, True) = x): x && True = x { h }");
+    ok("theorem t(x: Bool): x.and(True) = x { x.and_true_r() }");
+    ok("theorem u(x: Bool, h: x.and(True) = x): x && True = x { h }");
 }
 
 /// Comparisons still do not chain, and the message is still theirs rather

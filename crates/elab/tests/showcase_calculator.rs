@@ -69,9 +69,9 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
             WholeGrammar(FactorExpr(AtomFactor(Parenthesized(FactorExpr(AtomFactor(Number(n)))))),
                 And(refl,And(refl,And(refl,And(refl,And(refl,trivial))))),refl,refl,refl)
         }
-        fn literal_span(n: Nat, tail: List<PTok>) -> Grammar(2,Cons(TNum(n),tail),parser::start(Cons(TNum(n),tail)),
-            Cursor(refl,1,nat::zero_le(list_len(tail))),Lit(n)) {
-            Grammar(Number(n),trivial,refl,refl,list::cong_cons(TNum(n),sym(parser::initial_rest(tail))))
+        fn literal_span(n: Nat, tail: List<PTok>) -> Grammar(2,Cons(TNum(n),tail),parser::Cursor::start(Cons(TNum(n),tail)),
+            Cursor(refl,1,nat::Nat::nonneg(tail.len())),Lit(n)) {
+            Grammar(Number(n),trivial,refl,refl,list::List::cong_cons(TNum(n),sym(parser::initial_rest(tail))))
         }
         theorem open_success(tokens: List<PTok>, value: Expr, success: parse(tokens) = Ok(value)):
             WholeGrammar(tokens,value) { parse_sound(tokens,value,success) }
@@ -104,7 +104,7 @@ fn calculator_parser_and_compiler_check_and_reject_wrong_answers() {
     }
     // Refuse malformed derivations as well as wrong executable answers.
     for body in [
-        "fn bad() -> Grammar(2,[TNum(7),TNum(8)],parser::start([TNum(7),TNum(8)]),Cursor(refl,2,nat::le_refl(2)),Lit(7)) { Grammar(Number(7),trivial,refl,refl,refl) }",
+        "fn bad() -> Grammar(2,[TNum(7),TNum(8)],parser::Cursor::start([TNum(7),TNum(8)]),Cursor(refl,2,nat::Nat::le_refl(2)),Lit(7)) { Grammar(Number(7),trivial,refl,refl,refl) }",
         "fn bad() -> WholeGrammar([TNum(8)],Lit(7)) { WholeGrammar(FactorExpr(AtomFactor(Number(7))),And(refl,And(refl,trivial)),refl,refl,refl) }",
         "fn bad() -> WholeGrammar([TNum(7)],Lit(8)) { WholeGrammar(FactorExpr(AtomFactor(Number(7))),And(refl,And(refl,trivial)),refl,refl,refl) }",
         "fn bad() -> WellFormed(Sum(Sum(AtomFactor(Number(1)),FactorExpr(AtomFactor(Number(2)))),FactorExpr(AtomFactor(Number(3))))) { And(And(refl,And(And(refl,And(refl,trivial)),And(refl,And(refl,And(refl,trivial))))),And(refl,And(refl,And(refl,trivial)))) }",
@@ -125,7 +125,7 @@ fn check_nested_parser_costs(image: &heather_elab::SemanticImage) {
         let mut expression = "parser::token<Nat>(1)".to_string();
         for _ in 1..depth { expression = format!("parser::then(parser::token<Nat>(1),{expression})"); }
         let tokens = vec!["7";depth].join(",");
-        let source = format!("import parser; import list; import result; fn p() -> Parser<Nat,Nat> {{ {expression} }} theorem correct(): parser::run<Nat,Nat>(parser::complete(p(),99),[{tokens}]) = Ok<Nat,ErrorView>(7) {{ refl }}");
+        let source = format!("import parser; import list; import result; fn p() -> Parser<Nat,Nat> {{ {expression} }} theorem correct(): parser::Parser::run_start<Nat,Nat>(parser::complete(p(),99),[{tokens}]) = Ok<Nat,ErrorView>(7) {{ refl }}");
         measure(image,"composition",depth,&source);
         let mut tokens = vec!["TOpen";depth]; tokens.push("TNum(7)"); tokens.extend(vec!["TClose";depth]);
         let source = format!("import calc; import calc_parser; import result; import list; theorem correct(): parse([{}]) = Ok<Expr,ParseError>(Lit(7)) {{ refl }}",tokens.join(","));

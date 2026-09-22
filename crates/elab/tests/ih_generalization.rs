@@ -29,7 +29,7 @@ fn plus(m: Nat, n: Nat) -> Nat {
 theorem plus_succ_left(m: Nat, n: Nat): plus(Succ(m), n) = Succ(plus(m, n)) {
     match n {
         Zero => refl,
-        Succ(k) => cong_succ(plus_succ_left(m, k)),
+        Succ(k) => Nat::cong_succ(plus_succ_left(m, k)),
     }
 }
 "#;
@@ -193,7 +193,7 @@ fn a_dependent_hypothesis_is_generalized_with_its_parameter() {
          theorem acc_eq(n: Nat, acc: Nat, b: Nat, h: acc = b): add_acc(n, acc) = add_acc(n, b) {{\n\
              match n {{\n\
                  Zero => h,\n\
-                 Succ(k) => acc_eq(k, Succ(acc), Succ(b), cong_succ(h)),\n\
+                 Succ(k) => acc_eq(k, Succ(acc), Succ(b), Nat::cong_succ(h)),\n\
              }}\n\
          }}"
     ));
@@ -303,7 +303,7 @@ fn unchanged_arguments_still_emit_the_plain_recursor() {
     // No self-call varies anything, so nothing is generalized and the term is
     // the one the Nat suite always produced — visible here only as "still
     // checks", which is the point: the empty case is a no-op.
-    let e = ok("theorem plus_zero_left(n: Nat): plus(0, n) = n { match n { Zero => refl, Succ(k) => cong_succ(plus_zero_left(k)) } }");
+    let e = ok("theorem plus_zero_left(n: Nat): plus(0, n) = n { match n { Zero => refl, Succ(k) => Nat::cong_succ(plus_zero_left(k)) } }");
     assert!(e.psi().bindings.len() > 4);
 }
 

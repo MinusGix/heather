@@ -35,7 +35,7 @@ fn narrow_constants_passthrough_and_comparisons_check() {
         let source = format!("{IMPORTS}\n{}", emission.text);
         elab.elab_module_source(name, &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
     }
-    let invalid = "import bitvec; import bool; import logic; theorem signed_is_unsigned(a, b: BitVec(8)): bitvec::signed_lt_bit(8, a, b) = bitvec::unsigned_lt_bit(64, bitvec::zero_extend(8, 56, a), bitvec::zero_extend(8, 56, b)) { sym(bitvec::unsigned_lt_zero_extend(8, 56, a, b)) }";
+    let invalid = "import bitvec; import bool; import logic; theorem signed_is_unsigned(a, b: BitVec(8)): @bitvec::BitVec::signed_lt_bit(8, a, b) = @bitvec::BitVec::unsigned_lt_bit(64, @bitvec::BitVec::zero_extend(8, 56, a), @bitvec::BitVec::zero_extend(8, 56, b)) { sym(bitvec::BitVec::unsigned_lt_zero_extend(8, 56, a, b)) }";
     let error = elab.elab_module_source("wrong_signed_extension", invalid).expect_err("zero extension does not preserve signed comparison");
     assert!(!error.render(invalid).contains("unknown"));
 }

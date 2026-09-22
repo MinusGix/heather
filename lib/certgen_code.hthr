@@ -227,7 +227,7 @@ fn nat_cmp(a: Nat) → Nat → Cmp {
 // level `l` seen from an environment of depth `d`. Truncating subtraction
 // makes this total; every call below is in range, because a level reaching
 // here was minted for a binder that is live at `d`.
-fn dist(d: Nat, l: Nat) → Nat { sub(sub(d)(1))(l) }
+fn dist(d: Nat, l: Nat) → Nat { d.sub(1).sub(l) }
 
 // ---------------------------------------------------------------------------
 // Rendering: levels to distances against the layout the instructions are
@@ -236,7 +236,7 @@ fn dist(d: Nat, l: Nat) → Nat { sub(sub(d)(1))(l) }
 // THAT depth; the closing `Ret` resolves at `base + len`.
 
 fn pref_lvl(r: PRef, base: Nat) → Nat {
-    match r { RLvl(l) => l, RLoc(j) => add(base, j), RFld(t) => sub(sub(base)(1))(t) }
+    match r { RLvl(l) => l, RLoc(j) => base.add(j), RFld(t) => base.sub(1).sub(t) }
 }
 
 fn render_refs(rs: PRefs, base: Nat, d: Nat) → Refs {
@@ -257,7 +257,7 @@ fn render_refs(rs: PRefs, base: Nat, d: Nat) → Refs {
 // with the recursion and rides in the returned function rather than in a
 // parameter (the `lookup`/`gather` idiom; ir_v1 doc §13 note 2).
 fn self_arg_lvl(i: Nat, j: Nat, k: Nat, base: Nat, t: Nat) → Nat {
-    match nat_cmp(i)(j) { CEq => sub(sub(base)(1))(t), _ => sub(sub(k)(1))(i) }
+    match nat_cmp(i)(j) { CEq => base.sub(1).sub(t), _ => k.sub(1).sub(i) }
 }
 
 fn self_args(c: Nat, j: Nat, k: Nat, base: Nat, t: Nat, d: Nat) → Nat → Refs {
@@ -281,13 +281,13 @@ fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) → Nat → Ir → Ir {
     match pre {
         PEnd => λ (d: Nat) (tail: Ir) => tail,
         PCon(tag, args, rest) => λ (d: Nat) (tail: Ir) =>
-            render_pre(rest, base, j, k)(sub(d)(1),
+            render_pre(rest, base, j, k)(d.sub(1),
                 LetCon(tag, render_refs(args, base, d), tail)),
         PSelf(t, rest) => λ (d: Nat) (tail: Ir) =>
-            render_pre(rest, base, j, k)(sub(d)(1),
+            render_pre(rest, base, j, k)(d.sub(1),
                 LetCall(0, self_args(k, j, k, base, t, d)(0), tail)),
         PCall(c, args, rest) => λ (d: Nat) (tail: Ir) =>
-            render_pre(rest, base, j, k)(sub(d)(1),
+            render_pre(rest, base, j, k)(d.sub(1),
                 LetCall(c, render_refs(args, base, d), tail)),
     }
 }
@@ -296,8 +296,8 @@ fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) → Nat → Ir → Ir {
 // instruction sits at `base + len - 1`; at `len = 0` that expression
 // truncates, and the value is unused because the prefix is `PEnd`.
 fn render_exp(pre: Pre, res: PRef, len: Nat, base: Nat, j: Nat, k: Nat) → Ir {
-    render_pre(pre, base, j, k)(sub(add(base, len))(1),
-        Ret(RCons(dist(add(base, len), pref_lvl(res, base)), RNil)))
+    render_pre(pre, base, j, k)(base.add(len).sub(1),
+        Ret(RCons(dist(base.add(len), pref_lvl(res, base)), RNil)))
 }
 
 // A numeral used as a VALUE is instructions: `LetCon(0, RNil)` for the zero,
@@ -397,7 +397,7 @@ fn ta_lam(d: TA, b: TA) → TA {
 fn ta_marker(arity: Nat, i: Nat) → TA {
     match nat_cmp(i)(arity) {
         // parameter `i`, at distance `i`, so at level `arity - 1 - i`
-        CLt => TExp(PEnd, RLvl(sub(sub(arity)(1))(i)), 0),
+        CLt => TExp(PEnd, RLvl(arity.sub(1).sub(i)), 0),
         // the eliminator's field, born after the parameters
         CEq => TExp(PEnd, RLvl(arity), 0),
         CGt => match nat_cmp(i)(Succ(arity)) {
@@ -418,7 +418,7 @@ fn ta_marker(arity: Nat, i: Nat) → TA {
 // name binders and never move.
 
 fn shift_ref(r: PRef, off: Nat) → PRef {
-    match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(add(off, j)), RFld(t) => RFld(t) }
+    match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(off.add(j)), RFld(t) => RFld(t) }
 }
 
 fn shift_refs(rs: PRefs, off: Nat) → PRefs {
@@ -474,7 +474,7 @@ fn ta_call(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs, a: TA) → TA {
                 Zero => TStuck,
                 Succ(r2) => ta_call_fin(c, r2,
                     pre_append(shift_pre(pa, len), pre),
-                    add(len, la),
+                    len.add(la),
                     qsnoc(args, shift_ref(ra, len))),
             },
         VNo => TStuck,
@@ -544,7 +544,7 @@ fn ta_triv() → TA { TPure }
 // right-to-left, so the new one is consed at the FRONT of the slot list.
 fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) → TA {
     match v {
-        VYes(pa, ra, la) => TFlds(pre_append(shift_pre(pa, len), pre), add(len, la),
+        VYes(pa, ra, la) => TFlds(pre_append(shift_pre(pa, len), pre), len.add(la),
                                   QCons(shift_ref(ra, len), args)),
         VNo => TStuck,
     }
@@ -630,7 +630,7 @@ fn ta_elim_arms(arity: Nat, j: Nat, b: TA, s: TA) → TA {
 // body's environment (so `LetMatch(j)`) and its slot in the self-call.
 fn ta_elim_at(arity: Nat, b: TA, s: TA, l: Nat) → TA {
     match nat_cmp(l)(arity) {
-        CLt => ta_elim_arms(arity, sub(sub(arity)(1))(l), b, s),
+        CLt => ta_elim_arms(arity, arity.sub(1).sub(l), b, s),
         _ => TStuck,
     }
 }
@@ -716,7 +716,7 @@ fn ta_wf_chain(arity: Nat, j: Nat, parts: Parts) → Ir {
     match parts {
         PsNil => NoArm,
         PsCons(f, pre, res, len, rest) =>
-            Arm(render_exp(pre, res, len, add(arity, f), j, arity),
+            Arm(render_exp(pre, res, len, arity.add(f), j, arity),
                 ta_wf_chain(arity, j, rest)),
     }
 }
@@ -728,7 +728,7 @@ fn ta_wf_arms(arity: Nat, j: Nat, parts: Parts) → TA {
 // The recursion index off the scrutinee marker, exactly as `ta_elim` reads
 // it — required equal to the level every case node dispatched on.
 fn ta_wf_j(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TA {
-    match c { CLt => ta_wf_arms(arity, sub(sub(arity)(1))(lv), parts), _ => TStuck }
+    match c { CLt => ta_wf_arms(arity, arity.sub(1).sub(lv), parts), _ => TStuck }
 }
 
 fn ta_wf_lv(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TA {
@@ -758,7 +758,7 @@ fn ta_arms_at(arity: Nat, j: Nat, parts: Parts) → TOut {
 }
 
 fn ta_arms_finish(c: Cmp, arity: Nat, lv: Nat, parts: Parts) → TOut {
-    match c { CLt => ta_arms_at(arity, sub(sub(arity)(1))(lv), parts), _ => TNo }
+    match c { CLt => ta_arms_at(arity, arity.sub(1).sub(lv), parts), _ => TNo }
 }
 
 // The root. A body that is already an eliminator is done; a bare case tree

@@ -24,13 +24,13 @@ fn ok(src: &str) {
 fn expected_result_reaches_annotated_callbacks() {
     ok(r#"
         fn qualified<A,E>(r: Result<A,E>) -> Result<Option<List<A>>,E> {
-            result::map(r, λ (a: A) => Some([a]))
+            r.map(λ (a: A) => Some([a]))
         }
         fn receiver<A,E>(r: Result<A,E>) -> Result<Option<List<A>>,E> {
             r.map(λ (a: A) => Some([a]))
         }
         theorem same<A,E>(r: Result<A,E>):
-            qualified(r) = result::map(r, λ (a: A) => Some([a])) { refl }
+            qualified(r) = r.map(λ (a: A) => Some([a])) { refl }
         theorem dot_same<A,E>(r: Result<A,E>):
             qualified(r) = r.map(λ (a: A) => Some([a])) { refl }
         theorem success(): receiver<Nat,Nat>(Ok(2)) = Ok(Some([2])) { refl }
@@ -100,7 +100,7 @@ fn underconstrained_and_wrong_callbacks_are_refused() {
         "fn wrong<A,E>(r: Result<A,E>) -> Result<Option<List<Nat>>,E> { r.map(λ (a: A) => Some([a])) }",
         "fn wrong(r: Result<Nat,Nat>) -> Result<Option<List<Nat>>,Nat> { r.map(λ (n: Option<Nat>) => Some([n])) }",
         "fn wrong(r: Result<Nat,Nat>) -> Result<[Nat;2],Nat> { r.map(λ (n: Nat) => [n]) }",
-        "theorem wrong(): result::map<Nat,Nat,Nat>(Ok(2), λ (n: Nat) => Succ(n)) = Ok(9) { refl }",
+        "theorem wrong(): Result::map<Nat,Nat,Nat>(Ok(2), λ (n: Nat) => Succ(n)) = Ok(9) { refl }",
         "fn wrong(r: Result<Nat,Nat>) -> Result<Nat,Nat> { r.map(λ (n: Nat) => n(n)) }",
     ] {
         let src = format!("import result; import option; import list; {src}");

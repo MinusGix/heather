@@ -14,7 +14,7 @@ import parser_combinators::{pure_at, map_at, map, rebase, bind_at, bind, bind_co
 // Repeat from begin, stopping at retryable failure and propagating committed failure.
 // The one-token minimum supplies the decreasing measure for every recursive step.
 fn many_at<T, A>(p: Parser<T, A>, progress: Consumes<T, A>(p, 1), source: List<T>, begin: Cursor<T>(source)) → Reply<T, List<A>>(source, begin)
-    decreases list_len(rest(source, begin)) {
+    decreases rest(source, begin).len() {
     match shape: p.run(source, begin) {
         Err(e) => match e.retry { Retryable => pure_at<T, List<A>>(source, begin, []), Committed => Err(e) },
         Ok(s) => {
@@ -39,7 +39,7 @@ fn some<T, A>(self p: Parser<T, A>, progress: Consumes<T, A>(p, 1)) → Parser<T
 }
 
 // A finite repetition has a checked length, and needs no progress premise.
-record Counted<A>(count: Nat) { values: List<A>, length: list_len(values) = count }
+record Counted<A>(count: Nat) { values: List<A>, length: values.len() = count }
 
 // Run p exactly count times from begin and construct the resulting length proof.
 fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T>(source)) → Reply<T, Counted<A>(count)>(source, begin) {
@@ -47,7 +47,7 @@ fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T
         Zero => pure_at<T, Counted<A>(0)>(source, begin, Counted([], refl)),
         Succ(n) => bind_at<T, A, Counted<A>(Succ(n))>(source, begin, p.run(source, begin), λ value middle forward =>
             map_at<T, Counted<A>(n), Counted<A>(Succ(n))>(source, middle, repeat_at(n, p, source, middle), λ (tail: Counted<A>(n)) =>
-                Counted(Cons(value, tail.values), cong_succ(tail.length)))),
+                Counted(Cons(value, tail.values), Nat::cong_succ(tail.length)))),
     }
 }
 

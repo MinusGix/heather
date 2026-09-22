@@ -27,14 +27,14 @@ fn binary_source(i: Instruction) -> Option<Gpr> {
 // width-64 input equalities without assuming arbitrary words are literals.
 fn leaf_contract(module: &mut Module, name: &str, leaf_prefix: &str, leaf: &SourceX86Emission) -> Result<(), String> {
     let value = |id| format!("{name}_value_{id}(left, right, width)");
-    let mut definitions = vec![(0, "bitvec::ofNat(width, bitvec::toNat(64, left))".into()), (1, "bitvec::ofNat(width, bitvec::toNat(64, right))".into())];
+    let mut definitions = vec![(0, "@bitvec::BitVec::ofNat(width, @bitvec::BitVec::toNat(64, left))".into()), (1, "@bitvec::BitVec::ofNat(width, @bitvec::BitVec::toNat(64, right))".into())];
     for node in &leaf.reflected.region.nodes {
         let body = match *node {
-            Node::Const { value: n, .. } => format!("bitvec::ofNat(width, {n})"),
+            Node::Const { value: n, .. } => format!("@bitvec::BitVec::ofNat(width, {n})"),
             Node::Add { left, right, .. } | Node::Sub { left, right, .. }
             | Node::BitAnd { left, right, .. } | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. } => {
                 let op = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };
-                format!("bitvec::{op}(width, {}, {})", value(left), value(right))
+                format!("@bitvec::BitVec::{op}(width, {}, {})", value(left), value(right))
             }
             _ => return Err("callable leaf contains unsupported node".into()),
         };
@@ -46,7 +46,7 @@ fn leaf_contract(module: &mut Module, name: &str, leaf_prefix: &str, leaf: &Sour
         let d = d.parameter(Parameter::explicit("left", Expr::raw("BitVec(64)"))).parameter(Parameter::explicit("right", Expr::raw("BitVec(64)")));
         module.declaration(if width { d.parameter(Parameter::explicit("width", Expr::name("Nat"))) } else { d });
     };
-    let mut cases = "bitvec::zero(width)".to_string();
+    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, _) in definitions.iter().rev() {
         let scrutinee = if *id == 0 { "id".into() } else { format!("id_{id}") };
         cases = format!("match {scrutinee} {{ Zero => {}, Succ(id_{}) => {cases} }}", value(*id), id+1);
@@ -62,8 +62,8 @@ fn leaf_contract(module: &mut Module, name: &str, leaf_prefix: &str, leaf: &Sour
     let result = format!("{}({a}, {b})", leaf.reflected.source_name);
     let contract_type = |r: &str| format!("NativeIntegerCallContract<CallMemory, BitVec(8)>(stack_observation, NoWrites, before, {after}, {r}, stack_word(call_stack_access(), before.memory, read_gpr(Rsp, before.gprs)))");
     let leaf_source = &leaf.reflected.source_name;
-    let same = format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ left => {leaf_source}(left, {values}(64, 1)), bitvec::ofNat_toNat(64, {a})), cong_fn<BitVec(64), BitVec(64)>(λ right => {leaf_source}({a}, right), bitvec::ofNat_toNat(64, {b})))");
-    let post = format!("{leaf_prefix}_summary({values}).ensures(before, ⟨bitvec::ofNat_toNat(64, {a}), ⟨bitvec::ofNat_toNat(64, {b}), {name}_graph({a}, {b})⟩⟩).left");
+    let same = format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ left => {leaf_source}(left, {values}(64, 1)), bitvec::BitVec::ofNat_toNat(64, {a})), cong_fn<BitVec(64), BitVec(64)>(λ right => {leaf_source}({a}, right), bitvec::BitVec::ofNat_toNat(64, {b})))");
+    let post = format!("{leaf_prefix}_summary({values}).ensures(before, ⟨bitvec::BitVec::ofNat_toNat(64, {a}), ⟨bitvec::BitVec::ofNat_toNat(64, {b}), {name}_graph({a}, {b})⟩⟩).left");
     module.declaration(Declaration::function(format!("{name}_contract"), Expr::raw(contract_type(&result)),
         Block::expression(Expr::raw(format!("j({same}, λ result _ => {}, {post})", contract_type("result")))))
         .parameter(Parameter::explicit("before", Expr::raw("MachineState<CallMemory>"))));
@@ -143,7 +143,7 @@ fn save_support(module: &mut Module, words: &Words, name: &str, address: u64) {
     };
     let mut fields = Vec::new();
     for j in 0..8 {
-        let pointer = if j == 0 { slot.clone() } else { format!("bitvec::add(64, {slot}, bitvec::ofNat(64, {j}))") };
+        let pointer = if j == 0 { slot.clone() } else { format!("@bitvec::BitVec::add(64, {slot}, @bitvec::BitVec::ofNat(64, {j}))") };
         pair(module, format!("{name}_saved_byte_{address:x}_{j}"), format!("call_stack_access().read({written}, {pointer}) = imm_byte{j}(value)"), "refl".into());
         fields.push(format!("byte{j} := {name}_saved_byte_{address:x}_{j}(memory, value)"));
     }
@@ -157,7 +157,7 @@ fn carry_saved(module: &mut Module, words: &Words, name: &str, index: usize, bef
     for (address, (value, fact)) in saved {
         let slot = words.get(*address);
         let reads: Vec<_> = (0..8).map(|j| {
-            let pointer = if j == 0 { slot.to_string() } else { format!("bitvec::add(64, {slot}, bitvec::ofNat(64, {j}))") };
+            let pointer = if j == 0 { slot.to_string() } else { format!("@bitvec::BitVec::add(64, {slot}, @bitvec::BitVec::ofNat(64, {j}))") };
             let excluded = written.map_or_else(|| "λ impossible => impossible".into(), |w| format!("{}().byte{j}", outside_name(name, w, *address)));
             format!("{effect}({pointer}, {excluded})")
         }).collect();
@@ -194,7 +194,7 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
     for i in 0..=n {
         let suffix = format!("{name}_code_at_{i}");
         let body = if i == 0 { format!("{name}_code()") }
-            else { format!("list::drop({name}_code_at_{}(), 1)", i-1) };
+            else { format!("list::List::drop({name}_code_at_{}(), 1)", i-1) };
         fun(module, &suffix, "List<CallInstruction>", body);
         if i > 0 {
             thm(module, &format!("{name}_instruction_{}", i-1),
@@ -206,7 +206,7 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
     // Catch an extra or changed clobber before converting any state projections.
     for (first, last) in &leaves {
         thm(module, &format!("{name}_leaf_code_{first}"),
-            format!("list::take({name}_code_at_{first}(), {}) = {leaf_prefix}_summary_code()", last-first+1), "refl".into());
+            format!("list::List::take({name}_code_at_{first}(), {}) = {leaf_prefix}_summary_code()", last-first+1), "refl".into());
     }
     decl(module, &format!("{name}_state_0"), "MachineState<CallMemory>".into(),
         format!("MachineState(write_gpr(Rsp, {entry_rsp}, gprs), flags, rip, memory)"), false);
@@ -241,9 +241,9 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
             }
             record(module, &name, end, Gpr::Rax, &result, format!("trans({contract}.result_correct, {relation})"), &mut known);
             let next_rsp = rsp+8;
-            thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("bitvec::add(64, {}, bitvec::ofNat(64, 8)) = {}", word(rsp), word(next_rsp)), "refl".into());
+            thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("@bitvec::BitVec::add(64, {}, @bitvec::BitVec::ofNat(64, 8)) = {}", word(rsp), word(next_rsp)), "refl".into());
             decl(module, &format!("{name}_rsp_{end}"), format!("read_gpr(Rsp, {after}.gprs) = {}", word(next_rsp)),
-                format!("trans({contract}.stack_restored, trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => bitvec::add(64, pointer, bitvec::ofNat(64, 8)), {rsp_fact}), {name}_rsp_arithmetic_{i}()))"), true);
+                format!("trans({contract}.stack_restored, trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => @bitvec::BitVec::add(64, pointer, @bitvec::BitVec::ofNat(64, 8)), {rsp_fact}), {name}_rsp_arithmetic_{i}()))"), true);
             rsp_fact = format!("{name}_rsp_{end}({PARAMS})"); rsp = next_rsp;
             decl(module, &format!("{name}_effects_{end}"), format!("WritesOnly(stack_observation, {writes}, memory, {after}.memory)"),
                 format!("λ address outside => trans({contract}.memory_effects(address, λ impossible => impossible), {effects}(address, outside))"), true);
@@ -282,7 +282,7 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
                     let op = binary_name(inst).ok_or("unsupported stack adjustment")?;
                     let source = binary_source(inst).unwrap();
                     let next = if op == "sub" { rsp-8 } else { rsp+8 };
-                    thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("bitvec::{op}(64, {}, {}) = {}", word(rsp), word(8), word(next)), "refl".into());
+                    thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("@bitvec::BitVec::{op}(64, {}, {}) = {}", word(rsp), word(8), word(next)), "refl".into());
                     let proof = format!("trans<BitVec(64)>(bitvec64_{op}_congruent({rsp_fact}, {}), {name}_rsp_arithmetic_{i}())", known[&source].1);
                     (r, expression, word(next), proof)
                 } else {
@@ -290,7 +290,7 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
                         Instruction::MovRI { immediate, .. } => (word(immediate), "refl".into()),
                         Instruction::MovRR { source, .. } => known[&source].clone(),
                         _ => { let op = binary_name(inst).unwrap(); let source = binary_source(inst).unwrap();
-                            (format!("bitvec::{op}(64, {}, {})", known[&r].0, known[&source].0), format!("bitvec64_{op}_congruent({}, {})", known[&r].1, known[&source].1)) }
+                            (format!("@bitvec::BitVec::{op}(64, {}, {})", known[&r].0, known[&source].0), format!("bitvec64_{op}_congruent({}, {})", known[&r].1, known[&source].1)) }
                     };
                     (r, expression, value, proof)
                 }
@@ -303,9 +303,9 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
             Op::Call(_) | Op::Ret => {
                 let op = if matches!(ops[i], Op::Call(_)) { "sub" } else { "add" };
                 let next = if op == "sub" { rsp-8 } else { rsp+8 };
-                thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("bitvec::{op}(64, {}, bitvec::ofNat(64, 8)) = {}", word(rsp), word(next)), "refl".into());
-                (Gpr::Rsp, format!("bitvec::{op}(64, read_gpr(Rsp, {before}.gprs), bitvec::ofNat(64, 8))"), word(next),
-                    format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => bitvec::{op}(64, pointer, bitvec::ofNat(64, 8)), {rsp_fact}), {name}_rsp_arithmetic_{i}())"))
+                thm(module, &format!("{name}_rsp_arithmetic_{i}"), format!("@bitvec::BitVec::{op}(64, {}, @bitvec::BitVec::ofNat(64, 8)) = {}", word(rsp), word(next)), "refl".into());
+                (Gpr::Rsp, format!("@bitvec::BitVec::{op}(64, read_gpr(Rsp, {before}.gprs), @bitvec::BitVec::ofNat(64, 8))"), word(next),
+                    format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => @bitvec::BitVec::{op}(64, pointer, @bitvec::BitVec::ofNat(64, 8)), {rsp_fact}), {name}_rsp_arithmetic_{i}())"))
             }
             _ => return Err("unsupported symbolic step".into()),
         };
@@ -328,8 +328,8 @@ pub(super) fn emit(module: &mut Module, words: &Words, prefix: &str, caller: &st
         if matches!(ops[i], Op::Call(_)) {
             let child_slot = rsp-8;
             let child_writes = format!("λ address => WordPrefixWrites(8, {}, address)", word(child_slot));
-            let actual = format!("bitvec::sub(64, read_gpr(Rsp, {before}.gprs), bitvec::ofNat(64, 8))");
-            let pointer = format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => bitvec::sub(64, pointer, bitvec::ofNat(64, 8)), {}), {name}_rsp_arithmetic_{i}())", if i == 0 { "refl".into() } else { format!("{name}_rsp_{i}({PARAMS})") });
+            let actual = format!("@bitvec::BitVec::sub(64, read_gpr(Rsp, {before}.gprs), @bitvec::BitVec::ofNat(64, 8))");
+            let pointer = format!("trans<BitVec(64)>(cong_fn<BitVec(64), BitVec(64)>(λ pointer => @bitvec::BitVec::sub(64, pointer, @bitvec::BitVec::ofNat(64, 8)), {}), {name}_rsp_arithmetic_{i}())", if i == 0 { "refl".into() } else { format!("{name}_rsp_{i}({PARAMS})") });
             let effect = format!("j({pointer}, λ pointer _ => WritesOnly(stack_observation, λ address => WordPrefixWrites(8, pointer, address), {before}.memory, {after}.memory), word_stack_effect_8({before}.memory, {actual}, call_return_address({before})))");
             decl(module, &format!("{name}_write_{}", i+1), format!("WritesOnly(stack_observation, {child_writes}, {before}.memory, {after}.memory)"), effect, true);
             carry_saved(module, words, &name, i+1, &before, &after, &mut saved, &format!("{name}_write_{}({PARAMS})", i+1), Some(child_slot));
@@ -373,7 +373,7 @@ fn finish(module: &mut Module, words: &Words, prefix: &str, caller: &str, name: 
     }
     let mut reads = Vec::new();
     for j in 0..8 {
-        let pointer = if j == 0 { ret.clone() } else { format!("bitvec::add(64, {ret}, bitvec::ofNat(64, {j}))") };
+        let pointer = if j == 0 { ret.clone() } else { format!("@bitvec::BitVec::add(64, {ret}, @bitvec::BitVec::ofNat(64, {j}))") };
         let mut body = format!("{}().byte{j}(hit)", outside_name(name, *frame.writes.last().unwrap(), STACK_TOP-8));
         for slot in frame.writes[..frame.writes.len()-1].iter().rev() {
             body = format!("match hit {{ Inl(written) => {}().byte{j}(written), Inr(hit) => {body} }}", outside_name(name, *slot, STACK_TOP-8));
@@ -500,7 +500,7 @@ mod tests {
         }
         for (name, declaration) in [
             ("stale_composed_code", "fn bad(gprs: Gprs, flags: Flags, memory: CallMemory, rip: BitVec(64)) -> CallSummary<CallMemory>(call_stack_access(), [NearReturn], probe_composed_post) { probe_composed_summary(gprs, flags, memory, rip) }"),
-            ("wrong_composed_post", "fn bad(gprs: Gprs, flags: Flags, memory: CallMemory, rip: BitVec(64)) -> CallSummary<CallMemory>(call_stack_access(), probe_composed_code(), λ before after => read_gpr(Rax, after.gprs) = bitvec::zero(64)) { probe_composed_summary(gprs, flags, memory, rip) }"),
+            ("wrong_composed_post", "fn bad(gprs: Gprs, flags: Flags, memory: CallMemory, rip: BitVec(64)) -> CallSummary<CallMemory>(call_stack_access(), probe_composed_code(), λ before after => read_gpr(Rax, after.gprs) = @bitvec::BitVec::zero(64)) { probe_composed_summary(gprs, flags, memory, rip) }"),
             ("missing_composed_entry", "theorem bad(gprs: Gprs, flags: Flags, memory: CallMemory, rip: BitVec(64), before: MachineState<CallMemory>): probe_composed_summary(gprs, flags, memory, rip).requires(before) { refl }"),
         ] {
             let source = format!("import callable; import x86_64; import x86_64_calls; import x86_64_call_summary; import elf64_calls; import bitvec; import list; {declaration}");
@@ -589,9 +589,9 @@ mod tests {
                     let error = proof_base.fork().elab_module_source(label, &corrupt).expect_err("accepted stale multi-slot restoration");
                     assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 }
-                let original = "bitvec::bxor(64, probe_word_401fe8(), probe_word_401fe0())";
+                let original = "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe0())";
                 assert!(text.contains(original));
-                let corrupt = text.replacen(original, "bitvec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
+                let corrupt = text.replacen(original, "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
                 let error = proof_base.fork().elab_module_source("aliased_live_slots", &corrupt).expect_err("accepted overlapping live save words");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 let start = text.find("fn probe_composed_post(").unwrap();
@@ -617,9 +617,9 @@ mod tests {
                     let error = proof_base.fork().elab_module_source(label, &corrupt).expect_err("accepted a stale save/restore proof");
                     assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 }
-                let original = "bitvec::bxor(64, probe_word_401fe8(), probe_word_401ff0())";
+                let original = "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401ff0())";
                 assert!(text.contains(original));
-                let corrupt = text.replacen(original, "bitvec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
+                let corrupt = text.replacen(original, "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
                 let error = proof_base.fork().elab_module_source("overlapping_save", &corrupt).expect_err("accepted overlap with the child's return word");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
             }

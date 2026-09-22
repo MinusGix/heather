@@ -18,7 +18,7 @@ fn observed<A>(known, incoming: List<A>) -> List<A> {
 }
 
 fn counted<A>(known, incoming: List<A>) -> Nat {
-    list_len(known ++ (incoming ++ incoming))
+    (known ++ (incoming ++ incoming)).len()
 }
 
 
@@ -30,7 +30,7 @@ fn receive_generated<A>(known: List<A>) -> PreservesRelation(SameMembers<A>, Sam
     SameMembers<A>,
     λ incoming => known,
     λ incoming => (incoming ++ incoming),
-    append<A>,
+    List::append<A>,
     respectful_const(SameMembers<A>, SameMembers<A>, known, known, same_members_refl(known)),
     preserves_relation_binary(
         SameMembers<A>,
@@ -39,7 +39,7 @@ fn receive_generated<A>(known: List<A>) -> PreservesRelation(SameMembers<A>, Sam
         SameMembers<A>,
         λ incoming => incoming,
         λ incoming => incoming,
-        append<A>,
+        List::append<A>,
         respectful_id(SameMembers<A>),
         respectful_id(SameMembers<A>),
         append_same_members<A>

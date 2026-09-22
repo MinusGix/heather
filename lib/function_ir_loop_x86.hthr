@@ -15,25 +15,25 @@ import function_ir_x86_support;
 // The native strict comparison is the complement of loop_run's end guard.
 theorem loop_bounds_test(width: Nat, cursor_word, length_word: BitVec(width), cursor, length: Nat,
     placed_cursor: LoopWord(width, cursor_word, cursor), placed_length: LoopWord(width, length_word, length)):
-    bitvec::unsigned_lt_bit(width, cursor_word, length_word) = bool::not(nat::leb(length, cursor)) {
+    cursor_word.unsigned_lt_bit(length_word) = length.leb(cursor).not() {
     trans(bitvec_nat::unsigned_lt_nat(width, cursor_word, length_word),
-        trans(j(placed_cursor, λ x _ => nat::leb(Succ(bitvec::toNat(width, cursor_word)), bitvec::toNat(width, length_word)) = nat::leb(Succ(x), length),
-            j(placed_length, λ y _ => nat::leb(Succ(bitvec::toNat(width, cursor_word)), bitvec::toNat(width, length_word)) = nat::leb(Succ(bitvec::toNat(width, cursor_word)), y), refl)),
+        trans(j(placed_cursor, λ x _ => Succ(cursor_word.toNat()).leb(length_word.toNat()) = Succ(x).leb(length),
+            j(placed_length, λ y _ => Succ(cursor_word.toNat()).leb(length_word.toNat()) = Succ(cursor_word.toNat()).leb(y), refl)),
             bitvec_nat::strict_complement(cursor, length)))
 }
 
 theorem loop_address_bound(width: Nat, buffer: ReadonlyBytes, cursor: Nat,
     inside: LoopBounds(buffer, cursor), bounded: LoopAddressBound(width, buffer)):
-    buffer.base + cursor < nat::pow(2, width) {
-    nat::le_trans(Succ(buffer.base + cursor), Succ(buffer.base + buffer.length), nat::pow(2, width),
-        nat::add_le_mono_l(buffer.base, cursor, buffer.length, inside), bounded)
+    buffer.base + cursor < Nat::pow(2, width) {
+    Succ(buffer.base + cursor).le_trans(Succ(buffer.base + buffer.length), Nat::pow(2, width),
+        buffer.base.add_le_mono_l(cursor, buffer.length, inside), bounded)
 }
 
 theorem loop_address_word(width: Nat, buffer: ReadonlyBytes, cursor: Nat,
     base_word, cursor_word: BitVec(width), placed_base: LoopWord(width, base_word, buffer.base),
     placed_cursor: LoopWord(width, cursor_word, cursor), inside: LoopBounds(buffer, cursor),
     bounded: LoopAddressBound(width, buffer)):
-    LoopWord(width, bitvec::add(width, base_word, cursor_word), buffer.base + cursor) {
+    LoopWord(width, base_word.add(cursor_word), buffer.base + cursor) {
     bitvec_nat::add_words(width, base_word, cursor_word, buffer.base, cursor, placed_base, placed_cursor,
         loop_address_bound(width, buffer, cursor, inside, bounded))
 }
@@ -42,11 +42,11 @@ theorem loop_address_word(width: Nat, buffer: ReadonlyBytes, cursor: Nat,
 // ReadsByte's Nat address and the actual machine operand must be identical.
 theorem loop_read_address<M>(access: ByteReadAccess<M>, memory: M, buffer: ReadonlyBytes,
     cursor: Nat, address: BitVec(64), byte: BitVec(8),
-    memory_agrees: (word: BitVec(64)) → access.read(memory, word) = buffer.read(bitvec::toNat(64, word)),
+    memory_agrees: (word: BitVec(64)) → access.read(memory, word) = buffer.read(word.toNat()),
     address_word: LoopWord(64, address, buffer.base + cursor), present: ReadsByte(buffer, cursor, byte)):
     access.read(memory, address) = Some(byte) {
     trans(memory_agrees(address), trans(
-        j(address_word, λ found _ => buffer.read(bitvec::toNat(64, address)) = buffer.read(found), refl), present))
+        j(address_word, λ found _ => buffer.read(address.toNat()) = buffer.read(found), refl), present))
 }
 
 // A typed guard artifact supplies `result`; this lemma connects its physical
@@ -54,39 +54,39 @@ theorem loop_read_address<M>(access: ByteReadAccess<M>, memory: M, buffer: Reado
 // Keeping this separate lets any selected source guard reuse the bridge.
 theorem loop_bounds_zf<M>(register: Gpr, state: MachineState<M>, cursor_word, length_word: BitVec(64), cursor, length: Nat,
     placed_cursor: LoopWord(64, cursor_word, cursor), placed_length: LoopWord(64, length_word, length),
-    result: read_gpr(register, state.gprs) = bitvec::zero_extend(1, 63, bitvec::ofBool(bitvec::unsigned_lt_bit(64, cursor_word, length_word)))):
-    structured_test(register, state).flags.zf = nat::leb(length, cursor) {
+    result: read_gpr(register, state.gprs) = BitVec::ofBool(cursor_word.unsigned_lt_bit(length_word)).zero_extend(63)):
+    structured_test(register, state).flags.zf = length.leb(cursor) {
     trans(j(result, λ word _ => structured_test(register, state).flags.zf = test_flags(word, word, False).zf, refl),
-      trans(test_zero_extended_bool(bitvec::unsigned_lt_bit(64, cursor_word, length_word)),
+      trans(test_zero_extended_bool(cursor_word.unsigned_lt_bit(length_word)),
       trans(j(loop_bounds_test(64, cursor_word, length_word, cursor, length, placed_cursor, placed_length),
-        λ bit _ => bool::not(bitvec::unsigned_lt_bit(64, cursor_word, length_word)) = bool::not(bit), refl),
-        match nat::leb(length, cursor) as λ flag => bool::not(bool::not(flag)) = flag { False => refl, True => refl })))
+        λ bit _ => cursor_word.unsigned_lt_bit(length_word).not() = bit.not(), refl),
+        match length.leb(cursor) as λ flag => flag.not().not() = flag { False => refl, True => refl })))
 }
 
 theorem loop_placed_address<M>(register: Gpr, state: MachineState<M>, buffer: ReadonlyBytes, cursor: Nat,
     base_word, cursor_word: BitVec(64), placed_base: LoopWord(64, base_word, buffer.base),
     placed_cursor: LoopWord(64, cursor_word, cursor), inside: LoopBounds(buffer, cursor), bounded: LoopAddressBound(64, buffer),
-    result: read_gpr(register, state.gprs) = bitvec::add(64, base_word, cursor_word)):
+    result: read_gpr(register, state.gprs) = base_word.add(cursor_word)):
     LoopWord(64, read_gpr(register, state.gprs), buffer.base + cursor) {
-    trans(j(result, λ word _ => bitvec::toNat(64, read_gpr(register, state.gprs)) = bitvec::toNat(64, word), refl),
+    trans(j(result, λ word _ => read_gpr(register, state.gprs).toNat() = word.toNat(), refl),
         loop_address_word(64, buffer, cursor, base_word, cursor_word, placed_base, placed_cursor, inside, bounded))
 }
 
 theorem loop_selected_cursor_bound(width: Nat, cursor_word, length_word: BitVec(width), cursor, length: Nat,
     cw: LoopWord(width, cursor_word, cursor), lw: LoopWord(width, length_word, length),
-    selected: bitvec::unsigned_lt_bit(width, cursor_word, length_word) = True):
+    selected: cursor_word.unsigned_lt_bit(length_word) = True):
     Succ(cursor) <= length {
     j(cw, λ found _ => Succ(found) <= length,
-        j(lw, λ found _ => Succ(bitvec::toNat(width, cursor_word)) <= found,
-            bitvec::borrow_sub_of_bit_true(width, cursor_word, length_word, selected)))
+        j(lw, λ found _ => Succ(cursor_word.toNat()) <= found,
+            BitVec::borrow_sub_of_bit_true(width, cursor_word, length_word, selected)))
 }
 
 theorem loop_cursor_advance(width: Nat, cursor_word, length_word, one_word: BitVec(width), cursor, length: Nat,
     cw: LoopWord(width, cursor_word, cursor), lw: LoopWord(width, length_word, length),
-    unit: LoopWord(width, one_word, 1), selected: bitvec::unsigned_lt_bit(width, cursor_word, length_word) = True):
-    LoopWord(width, bitvec::add(width, cursor_word, one_word), Succ(cursor)) {
+    unit: LoopWord(width, one_word, 1), selected: cursor_word.unsigned_lt_bit(length_word) = True):
+    LoopWord(width, cursor_word.add(one_word), Succ(cursor)) {
     let inside = loop_selected_cursor_bound(width, cursor_word, length_word, cursor, length, cw, lw, selected);
-    let bounded = j(lw, λ found _ => found < nat::pow(2, width), bitvec::toNat_lt_pow(width, length_word));
+    let bounded = j(lw, λ found _ => found < Nat::pow(2, width), BitVec::toNat_lt_pow(width, length_word));
     bitvec_nat::add_words(width, cursor_word, one_word, cursor, 1, cw, unit,
-        nat::le_trans(Succ(Succ(cursor)), Succ(length), nat::pow(2, width), inside, bounded))
+        Succ(Succ(cursor)).le_trans(Succ(length), Nat::pow(2, width), inside, bounded))
 }

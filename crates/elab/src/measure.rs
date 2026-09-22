@@ -6,10 +6,10 @@
 //! and handed to the ordinary checker:
 //!
 //! ```text
-//! match Succ(e) as λ z => (x̄) -> nat::Lt(e, z) -> T {
+//! match Succ(e) as λ z => (x̄) -> nat::Nat::Lt(e, z) -> T {
 //!     Zero        => λ x̄ h => match h {},
-//!     Succ(k, ih) => λ x̄ h => body[ f(ȳ) ↦ ih(ȳ, nat::le_trans(Succ(e[ȳ]), e, k, ?decN, h)) ],
-//! }(x̄, nat::lt_succ_self(e))
+//!     Succ(k, ih) => λ x̄ h => body[ f(ȳ) ↦ ih(ȳ, nat::Nat::le_trans(Succ(e[ȳ]), e, k, ?decN, h)) ],
+//! }(x̄, nat::Nat::lt_succ_self(e))
 //! ```
 //!
 //! …except that the three layers are **named**, not nested inline:
@@ -151,7 +151,7 @@ pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
     let TyKind::OfExpr(e) = &ty.kind else { return false; };
     let ExprKind::App { head, .. } = &e.kind else { return false; };
     let relation = match &head.kind {
-        ExprKind::Var(name) => matches!(name.as_str(), "nat::Lt" | "nat::Le" | "Lt" | "Le"),
+        ExprKind::Var(name) => matches!(name.as_str(), "nat::Nat::Lt" | "nat::Nat::Le" | "Lt" | "Le"),
         ExprKind::OpSymbol { symbol, .. } => matches!(symbol.as_str(), "<" | "<="),
         _ => false,
     };
@@ -343,9 +343,9 @@ fn of_expr(e: Expr) -> Ty {
     }
 }
 
-/// `nat::Lt(a, b)` as a type.
+/// `nat::Nat::Lt(a, b)` as a type.
 fn lt_ty(a: Expr, b: Expr, span: Span) -> Ty {
-    of_expr(app(var("nat::Lt", span), vec![a, b], span))
+    of_expr(app(var("nat::Nat::Lt", span), vec![a, b], span))
 }
 
 fn arrow(binder: Option<String>, dom: Ty, cod: Ty, span: Span) -> Ty {
@@ -611,7 +611,7 @@ pub(crate) fn lower(
         },
     );
 
-    // `f#rec(__dec_z) -> (x̄) -> nat::Lt(e, __dec_z) -> T`, the eliminator.
+    // `f#rec(__dec_z) -> (x̄) -> nat::Nat::Lt(e, __dec_z) -> T`, the eliminator.
     let motive_ty = pi_over(
         &params,
         arrow(
@@ -714,11 +714,11 @@ pub(crate) fn lower(
         block(elim, decl.body.span),
     );
 
-    // `f(x̄) = f#rec(Succ(e), x̄, nat::lt_succ_self(e))`.
+    // `f(x̄) = f#rec(Succ(e), x̄, nat::Nat::lt_succ_self(e))`.
     let mut call_args = vec![app(var("Succ", span), vec![measure.clone()], span)];
     call_args.extend(decl.params.iter().map(|p| var(&p.name, span)));
     call_args.push(app(
-        var("nat::lt_succ_self", span),
+        var("nat::Nat::lt_succ_self", span),
         vec![measure.clone()],
         span,
     ));
@@ -764,7 +764,7 @@ pub(crate) struct GroupMember<'a> {
 }
 
 /// `e * N + r` — §4's flattening of the lexicographic `(measure, rank)` into
-/// the one `Nat` Part A already recurses on. Spelled at `nat::mul`/`nat::add`
+/// the one `Nat` Part A already recurses on. Spelled at `nat::Nat::mul`/`nat::Nat::add`
 /// rather than through the operators, which is what `omega` reflects.
 fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
     let span = e.span;
@@ -773,9 +773,9 @@ fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
         span,
     };
     app(
-        var("nat::add", span),
+        var("nat::Nat::add", span),
         vec![
-            app(var("nat::mul", span), vec![e.clone(), num(n)], span),
+            app(var("nat::Nat::mul", span), vec![e.clone(), num(n)], span),
             num(r),
         ],
         span,
@@ -1151,7 +1151,7 @@ pub(crate) fn lower_group(
             let bound = sibs[i].measure.clone();
             let mut args: Vec<Expr> = m.decl.params.iter().map(|p| var(&p.name, span)).collect();
             args.push(app(
-                var("nat::lt_succ_self", span),
+                var("nat::Nat::lt_succ_self", span),
                 vec![bound.clone()],
                 span,
             ));
@@ -1380,7 +1380,7 @@ impl Rewrite<'_> {
         // Succ(e[ȳ]) <= e, e <= k  ⊢  Succ(e[ȳ]) <= k, which is `e[ȳ] < k`;
         // `h : e < Succ k` *is* `e <= k` by reduction.
         let proof = app(
-            var("nat::le_trans"),
+            var("nat::Nat::le_trans"),
             vec![
                 app(var("Succ"), vec![at_args]),
                 self.measure.clone(),
@@ -1455,7 +1455,7 @@ impl Rewrite<'_> {
         // available, and the bare hole otherwise (reported with its
         // statement, `docs/termination-measures-design.md` §2).
         let goal = match &clean {
-            Some((c, args, raw)) => of_expr(app(var(if c.strict { "nat::Lt" } else { "nat::Le" }, span),
+            Some((c, args, raw)) => of_expr(app(var(if c.strict { "nat::Nat::Lt" } else { "nat::Nat::Le" }, span),
                 vec![args.clone(), raw.clone()], span)),
             None => lt_ty(at_args.clone(), refined.clone(), span),
         };
@@ -1492,7 +1492,7 @@ impl Rewrite<'_> {
                     ty: Some(of_expr(Expr {
                         kind: ExprKind::App {
                             head: Box::new(var(
-                                if c.strict { "nat::Lt" } else { "nat::Le" },
+                                if c.strict { "nat::Nat::Lt" } else { "nat::Nat::Le" },
                                 span,
                             )),
                             args: vec![args.clone(), raw.clone()],
@@ -1548,7 +1548,7 @@ impl Rewrite<'_> {
             },
             span,
         };
-        let lt = |a: Expr, b: Expr| app(var("nat::Lt"), vec![a, b]);
+        let lt = |a: Expr, b: Expr| app(var("nat::Nat::Lt"), vec![a, b]);
         // Transport the obligation back from the refined measure to the
         // measure the ih's hypothesis is stated at, one equation at a time:
         // `j(sym(eq_i), λ y _ => e[ȳ] < e_{i-1}[y/v_i], acc)` turns a proof at
@@ -2905,7 +2905,7 @@ impl Respell<'_> {
         let ys: Vec<Expr> = args.iter().map(|a| self.sigma_apply(a)).collect();
         let trans = |bound: Expr, hyp: Expr| {
             app(
-                var("nat::le_trans", span),
+                var("nat::Nat::le_trans", span),
                 vec![
                     succ(at_args.clone(), span),
                     m.clone(),
@@ -2942,7 +2942,7 @@ impl Respell<'_> {
                 irrel.extend(ys.iter().cloned());
                 irrel.push(q);
                 irrel.push(app(
-                    var("nat::lt_succ_self", span),
+                    var("nat::Nat::lt_succ_self", span),
                     vec![at_args.clone()],
                     span,
                 ));
@@ -3342,7 +3342,7 @@ pub(crate) fn companions(
         source: &rhs_source,
         sigma: Vec::new(),
         hyps: vec![app(
-            var("nat::lt_succ_self", span),
+            var("nat::Nat::lt_succ_self", span),
             vec![measure.clone()],
             span,
         )],

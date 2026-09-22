@@ -43,8 +43,8 @@ fn placed_value(values: &Values, port: Port) -> String {
 // representation reduces to that same neutral case tree when composed.
 fn branch_value(condition: &str, port: Port, yes: &Values, no: &Values) -> String {
     if port.width == 1 {
-        let bit = format!("match {condition} {{ False => bitvec::head_bit(0, {}), True => bitvec::head_bit(0, {}) }}", val(no, port.id, 1), val(yes, port.id, 1));
-        format!("match width as λ n => BitVec(n) {{ Zero => bitvec::zero(0), Succ(k) => bitvec::cons_bit(k, {bit}, bitvec::zero(k)) }}")
+        let bit = format!("match {condition} {{ False => @bitvec::BitVec::head_bit(0, {}), True => @bitvec::BitVec::head_bit(0, {}) }}", val(no, port.id, 1), val(yes, port.id, 1));
+        format!("match width as λ n => BitVec(n) {{ Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, {bit}, @bitvec::BitVec::zero(k)) }}")
     } else {
         format!("match {condition} {{ False => {}, True => {} }}", no[&port.id], yes[&port.id])
     }
@@ -52,7 +52,7 @@ fn branch_value(condition: &str, port: Port, yes: &Values, no: &Values) -> Strin
 
 fn normalize_bit_result(proof: String, values: &Values, port: Port) -> String {
     if port.width != 1 { return proof; }
-    trans(&proof, &format!("cong_fn<BitVec(1), BitVec(64)>(λ value => bitvec::zero_extend(1, 63, value), bitvec::one_bit_eq_ofBool({}))", val(values, port.id, 1)))
+    trans(&proof, &format!("cong_fn<BitVec(1), BitVec(64)>(λ value => @bitvec::BitVec::zero_extend(1, 63, value), bitvec::BitVec::one_bit_eq_ofBool({}))", val(values, port.id, 1)))
 }
 
 fn params(region: &StructuredRegion, plan: &LoweredStructured, values: &Values) -> Vec<Parameter> {
@@ -77,9 +77,9 @@ fn start() -> Vec<Parameter> { vec![emitted_parameter("start", "BitVec(64)")] }
 fn logical() -> Vec<Parameter> { vec![emitted_parameter("values", "Valuation()")] }
 fn step(start: &str, length: usize) -> String { format!("next_rip({start}, {length})") }
 fn compose(start: &str, a: usize, b: usize) -> String {
-    format!("bitvec::iterate_increment_compose(64, {start}, {a}, {b})")
+    format!("bitvec::BitVec::iterate_increment_compose(64, {start}, {a}, {b})")
 }
-fn congr_step(length: usize, proof: &str) -> String { format!("bitvec::cong_iterate_increment(64, {length}, {proof})") }
+fn congr_step(length: usize, proof: &str) -> String { format!("bitvec::BitVec::cong_iterate_increment(64, {length}, {proof})") }
 fn trans(a: &str, b: &str) -> String { format!("trans({a}, {b})") }
 
 // Materialize a local graph valuation from the actual nodes. Inputs are
@@ -89,15 +89,15 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
     for node in &r.nodes {
         let output = node.output().id;
         let body = match *node {
-            Node::Const { value, .. } => format!("bitvec::ofNat(width, {value})"),
+            Node::Const { value, .. } => format!("@bitvec::BitVec::ofNat(width, {value})"),
             Node::UnsignedLessThan { width: operand_width, left, right, .. } | Node::SignedLessThan { width: operand_width, left, right, .. } => {
                 let op = if matches!(node, Node::UnsignedLessThan { .. }) { "unsigned_lt_bit" } else { "signed_lt_bit" };
-                format!("match width as λ n => BitVec(n) {{ Zero => bitvec::zero(0), Succ(k) => bitvec::cons_bit(k, bitvec::{op}({operand_width}, {}, {}), bitvec::zero(k)) }}", val(&values, left, operand_width), val(&values, right, operand_width))
+                format!("match width as λ n => BitVec(n) {{ Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::{op}({operand_width}, {}, {}), @bitvec::BitVec::zero(k)) }}", val(&values, left, operand_width), val(&values, right, operand_width))
             }
             Node::Add { left, right, .. } | Node::Sub { left, right, .. }
             | Node::BitAnd { left, right, .. } | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. } => {
                 let op = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };
-                format!("bitvec::{op}(width, {}, {})", values[&left], values[&right])
+                format!("@bitvec::BitVec::{op}(width, {}, {})", values[&left], values[&right])
             }
             _ => unreachable!("leaf selection declines unsupported nodes"),
         };
@@ -106,10 +106,10 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
         values.insert(output, format!("{name}(values, width)"));
     }
     let last = *values.keys().max().unwrap();
-    let mut cases = "bitvec::zero(width)".to_string();
+    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for id in (0..=last).rev() {
         let name = if id == 0 { "id".into() } else { format!("id_{id}") };
-        let v = values.get(&id).cloned().unwrap_or_else(|| "bitvec::zero(width)".into());
+        let v = values.get(&id).cloned().unwrap_or_else(|| "@bitvec::BitVec::zero(width)".into());
         cases = format!("match {name} {{ Zero => {v}, Succ(id_{}) => {cases} }}", id + 1);
     }
     fun(m, format!("{n}_valuation"), false, logical(), "Valuation()".into(), format!("λ width id => {cases}"));
@@ -156,10 +156,10 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let t = format!("{n}_true"); let f = format!("{n}_false");
             let tv = emit(&t, when_true, yes, incoming, m)?; let fv = emit(&f, when_false, no, incoming, m)?;
             let register = condition_register.heather_name();
-            let fd = format!("bitvec::ofNat(8, {false_displacement})"); let jd = format!("bitvec::ofNat(8, {join_displacement})");
+            let fd = format!("@bitvec::BitVec::ofNat(8, {false_displacement})"); let jd = format!("@bitvec::BitVec::ofNat(8, {join_displacement})");
             let entry = format!("structured_branch_entry({register}, {fd}, before)");
             let branch_args = format!("{register}, {fd}, {jd}, {t}_code(), {f}_code(), before");
-            let bit = format!("bitvec::head_bit(0, {})", val(incoming, *condition, 1));
+            let bit = format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1));
             let placed = format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]);
             let child_args = args(when_true);
             let mut results = Values::new();
@@ -180,8 +180,8 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             }
             let memory = format!("structured_branch_property({branch_args}, λ after => after.memory = before.memory, {t}_memory({entry}), {f}_memory({entry}))");
             for (tag, d) in [("false", *false_displacement as usize), ("join", *join_displacement as usize)] {
-                let body = trans(&format!("sym(bitvec::iter_add_eq_add(64, next_rip(start, 2), bitvec::sign_extend(7, 56, bitvec::ofNat(8, {d}))))"), &compose("start", 2, d));
-                thm(m, format!("{n}_{tag}_target"), false, start(), format!("short_branch_target(start, bitvec::ofNat(8, {d})) = next_rip(start, {})", 2 + d), body);
+                let body = trans(&format!("sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {d}))))"), &compose("start", 2, d));
+                thm(m, format!("{n}_{tag}_target"), false, start(), format!("short_branch_target(start, @bitvec::BitVec::ofNat(8, {d})) = next_rip(start, {})", 2 + d), body);
             }
             let test_rip = step("before.rip", 3);
             let entry_t = trans(&format!("jump_zero_not_taken_rip(structured_test({register}, before).flags.zf, {test_rip}, {fd}, selected)"), &compose("before.rip", 3, 2));

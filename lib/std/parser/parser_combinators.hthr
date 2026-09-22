@@ -13,7 +13,7 @@ import parser_diagnostics::{commit_after, merge_error, commit_same, commit_chain
 
 // Succeed with value at begin, consuming nothing.
 fn pure_at<T, A>(source: List<T>, begin: Cursor<T>(source), value: A) → Reply<T, A>(source, begin) {
-    Ok(Success(value, begin, nat::le_refl(begin.offset)))
+    Ok(Success(value, begin, begin.offset.le_refl()))
 }
 
 // Produce value without reading a token.
@@ -39,7 +39,7 @@ fn map<T, A, B>(self p: Parser<T, A>, f: A → B) → Parser<T, B> {
 fn rebase<T, A>(source: List<T>, begin: Cursor<T>(source), middle: Cursor<T>(source),
     forward: begin.offset <= middle.offset, r: Reply<T, A>(source, middle)) → Reply<T, A>(source, begin) {
     match r {
-        Ok(s) => Ok(Success(s.value, s.end, nat::le_trans(begin.offset, middle.offset, s.end.offset, forward, s.forward))),
+        Ok(s) => Ok(Success(s.value, s.end, begin.offset.le_trans(middle.offset, s.end.offset, forward, s.forward))),
         Err(e) => Err(commit_after(source, begin, middle, e)),
     }
 }
@@ -223,13 +223,13 @@ fn bind_sound<T, A, B>(p: Parser<T, A>, next: A → Parser<T, B>,
 // Quantitative progress composes by addition; weakening needs an explicit bound.
 theorem add_progress(start, middle, end, a, b: Nat, first: start + a <= middle, second: middle + b <= end):
     start + (a + b) <= end {
-    j(nat::add_assoc(start, a, b), λ n q => nat::Le(n, end),
-        nat::le_trans((start + a) + b, middle + b, end, nat::add_le_mono_r(b, start + a, middle, first), second))
+    j(start.add_assoc(a, b), λ n q => n.Le(end),
+        ((start + a) + b).le_trans(middle + b, end, b.add_le_mono_r(start + a, middle, first), second))
 }
 
 // Add an earlier prefix's consumption to a later reply's consumption bound.
-theorem rebase_bound<T, A>(source: List<T>, begin, middle: Cursor<T>(source), forward: nat::Le(begin.offset, middle.offset), a, b: Nat,
-    first: nat::Le(begin.offset + a, middle.offset), r: Reply<T, A>(source, middle)):
+theorem rebase_bound<T, A>(source: List<T>, begin, middle: Cursor<T>(source), forward: begin.offset.Le(middle.offset), a, b: Nat,
+    first: (begin.offset + a).Le(middle.offset), r: Reply<T, A>(source, middle)):
     Bound(source, middle, b, r) → Bound(source, begin, a + b, rebase(source, begin, middle, forward, r)) {
     match r {
         Ok(s) => λ h => add_progress(begin.offset, middle.offset, s.end.offset, a, b, first, h),
@@ -276,16 +276,16 @@ fn choice_consumes<T, A>(left, right: Parser<T, A>, amount: Nat, first: Consumes
 
 // Rebasing at the original cursor preserves the reply's observation.
 theorem rebase_same<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)):
-    observe<T, A>(source, begin, rebase(source, begin, begin, nat::le_refl(begin.offset), r)) = observe<T, A>(source, begin, r) {
+    observe<T, A>(source, begin, rebase(source, begin, begin, begin.offset.le_refl(), r)) = observe<T, A>(source, begin, r) {
     match r { Err(e) => j(commit_same(source, begin.offset, e), λ error q =>
         observe<T, A>(source, begin, Err<Success<T, A>(source, begin), Failure<T>(source)>(commit_after(source, begin, begin, e))) =
         observe<T, A>(source, begin, Err<Success<T, A>(source, begin), Failure<T>(source)>(error)), refl), Ok(_) => refl }
 }
 
 // Combining three successive cursor spans gives the same observation under either grouping.
-theorem rebase_associativity<T, A>(source: List<T>, a, b, c: Cursor<T>(source), ab: nat::Le(a.offset, b.offset), bc: nat::Le(b.offset, c.offset), r: Reply<T, A>(source, c)):
+theorem rebase_associativity<T, A>(source: List<T>, a, b, c: Cursor<T>(source), ab: a.offset.Le(b.offset), bc: b.offset.Le(c.offset), r: Reply<T, A>(source, c)):
     observe<T, A>(source, a, rebase(source, a, b, ab, rebase(source, b, c, bc, r))) =
-    observe<T, A>(source, a, rebase(source, a, c, nat::le_trans(a.offset, b.offset, c.offset, ab, bc), r)) {
+    observe<T, A>(source, a, rebase(source, a, c, a.offset.le_trans(b.offset, c.offset, ab, bc), r)) {
     match r {
         Err(e) => j(commit_chain(source, a.offset, b.offset, c.offset, ab, bc, e), λ error q =>
             observe<T, A>(source, a, Err<Success<T, A>(source, a), Failure<T>(source)>(commit_after(source, a, b, commit_after(source, b, c, e)))) =
@@ -308,7 +308,7 @@ theorem bind_right_unit<T, A>(source: List<T>, begin: Cursor<T>(source), r: Repl
 }
 
 // Rebasing before sequencing and rebasing the combined reply have the same observation.
-theorem bind_rebase<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), move: nat::Le(begin.offset, middle.offset), r: Reply<T, A>(source, middle), next: A → Parser<T, B>):
+theorem bind_rebase<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), move: begin.offset.Le(middle.offset), r: Reply<T, A>(source, middle), next: A → Parser<T, B>):
     observe(source, begin, bind_at<T, A, B>(source, begin, rebase(source, begin, middle, move, r), λ a end forward => next(a).run(source, end))) =
     observe(source, begin, rebase(source, begin, middle, move, bind_at<T, A, B>(source, middle, r, λ a end forward => next(a).run(source, end)))) {
     match r {
@@ -369,7 +369,7 @@ fn certified_map_at<T, A, B>(source: List<T>, begin: Cursor<T>(source),
 // Finish a certified continuation by joining its span to a consumed prefix and transforming its value.
 // For a binary production, close over the left operand and operator in f and transform
 // to build the combined AST and grammar derivation from the right operand.
-fn certified_finish_at<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), forward: nat::Le(begin.offset, middle.offset),
+fn certified_finish_at<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), forward: begin.offset.Le(middle.offset),
     before: (source: List<T>) → Cursor<T>(source) → Cursor<T>(source) → A → Type,
     after: (source: List<T>) → Cursor<T>(source) → Cursor<T>(source) → B → Type,
     f: A → B,
@@ -377,12 +377,12 @@ fn certified_finish_at<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source
     r: Result<Certified<T, A>(source, middle, before), Failure<T>(source)>) → Result<Certified<T, B>(source, begin, after), Failure<T>(source)> {
     match r { Err(e) => Err(commit_after(source, begin, middle, e)),
         Ok(c) => Ok(Certified(f(c.value), c.end,
-            nat::le_trans(begin.offset, middle.offset, c.end.offset, forward, c.forward),
+            begin.offset.le_trans(middle.offset, c.end.offset, forward, c.forward),
             transform(c.end, c.value, c.evidence))) }
 }
 
 // Evidence construction does not change the underlying combinator result.
-theorem certified_finish_forget<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), forward: nat::Le(begin.offset, middle.offset),
+theorem certified_finish_forget<T, A, B>(source: List<T>, begin, middle: Cursor<T>(source), forward: begin.offset.Le(middle.offset),
     before: (source: List<T>) → Cursor<T>(source) → Cursor<T>(source) → A → Type,
     after: (source: List<T>) → Cursor<T>(source) → Cursor<T>(source) → B → Type,
     f: A → B,

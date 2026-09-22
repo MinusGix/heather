@@ -32,9 +32,9 @@ theorem mem_append_transport<A>(xs, xs2, ys, ys2: List<A>,
     hx: SameMembers(xs, xs2), hy: SameMembers(ys, ys2), a: A,
     h: Mem(a, xs ++ ys)): Mem(a, xs2 ++ ys2)
 {
-    match mem_append(xs, ys, a, h) {
-        Inl(left) => mem_append_l(xs2, ys2, a, hx(a).mp(left)),
-        Inr(right) => mem_append_r(xs2, ys2, a, hy(a).mp(right)),
+    match xs.mem_append(ys, a, h) {
+        Inl(left) => xs2.mem_append_l(ys2, a, hx(a).mp(left)),
+        Inr(right) => xs2.mem_append_r(ys2, a, hy(a).mp(right)),
     }
 }
 
@@ -56,15 +56,15 @@ theorem same_members_of_eq<A>(xs, ys: List<A>, h: xs = ys): SameMembers(xs, ys) 
 theorem append_assoc_same_members<A>(xs, ys, zs: List<A>):
     SameMembers((xs ++ ys) ++ zs, xs ++ (ys ++ zs))
 {
-    same_members_of_eq((xs ++ ys) ++ zs, xs ++ (ys ++ zs), append_assoc(xs, ys, zs))
+    same_members_of_eq((xs ++ ys) ++ zs, xs ++ (ys ++ zs), xs.append_assoc(ys, zs))
 }
 
 theorem mem_append_swap<A>(xs, ys: List<A>, a: A, h: Mem(a, xs ++ ys)):
     Mem(a, ys ++ xs)
 {
-    match mem_append(xs, ys, a, h) {
-        Inl(left) => mem_append_r(ys, xs, a, left),
-        Inr(right) => mem_append_l(ys, xs, a, right),
+    match xs.mem_append(ys, a, h) {
+        Inl(left) => ys.mem_append_r(xs, a, left),
+        Inr(right) => ys.mem_append_l(xs, a, right),
     }
 }
 
@@ -75,16 +75,16 @@ theorem append_comm_same_members<A>(xs, ys: List<A>): SameMembers(xs ++ ys, ys +
 
 theorem append_self_same_members<A>(xs: List<A>): SameMembers(xs ++ xs, xs) {
     λ a => Iff(
-        mp := λ h => match mem_append(xs, xs, a, h) {
+        mp := λ h => match xs.mem_append(xs, a, h) {
             Inl(left) => left,
             Inr(right) => right,
         },
-        mpr := mem_append_l(xs, xs, a))
+        mpr := xs.mem_append_l(xs, a))
 }
 
 // Register one child; its selected canonical parent views carry these exact
 // proofs. Clients need not assemble duplicate dictionaries for each law.
-instance<A> Mergeable<List<A>>(SameMembers<A>, append<A>) {
+instance<A> Mergeable<List<A>>(SameMembers<A>, List::append<A>) {
     rel_refl := same_members_refl,
     rel_sym := same_members_sym,
     rel_trans := same_members_trans,

@@ -97,22 +97,22 @@ theorem compile_pushes_eval(e: Expr): (rest: List<Tok>, s: List<Nat>) ->
         Plus(l, r) => λ rest s => calc {
             run((compile(l) ++ compile(r) ++ Cons(TAdd, Nil)) ++ rest)(s)
                 = run(compile(l) ++ ((compile(r) ++ Cons(TAdd, Nil)) ++ rest))(s)
-                    := cong_run(append_assoc(compile(l), compile(r) ++ Cons(TAdd, Nil), rest), s),
+                    := cong_run(compile(l).append_assoc(compile(r) ++ Cons(TAdd, Nil), rest), s),
                 = run((compile(r) ++ Cons(TAdd, Nil)) ++ rest)(Cons(l.eval(), s))
                     := compile_pushes_eval(l, (compile(r) ++ Cons(TAdd, Nil)) ++ rest, s),
                 = run(compile(r) ++ Cons(TAdd, rest))(Cons(l.eval(), s))
-                    := cong_run(append_assoc(compile(r), Cons(TAdd, Nil), rest), Cons(l.eval(), s)),
+                    := cong_run(compile(r).append_assoc(Cons(TAdd, Nil), rest), Cons(l.eval(), s)),
                 = run(rest)(Cons(l.eval() + r.eval(), s))
                     := compile_pushes_eval(r, Cons(TAdd, rest), Cons(l.eval(), s)),
         },
         Times(l, r) => λ rest s => calc {
             run((compile(l) ++ compile(r) ++ Cons(TMul, Nil)) ++ rest)(s)
                 = run(compile(l) ++ ((compile(r) ++ Cons(TMul, Nil)) ++ rest))(s)
-                    := cong_run(append_assoc(compile(l), compile(r) ++ Cons(TMul, Nil), rest), s),
+                    := cong_run(compile(l).append_assoc(compile(r) ++ Cons(TMul, Nil), rest), s),
                 = run((compile(r) ++ Cons(TMul, Nil)) ++ rest)(Cons(l.eval(), s))
                     := compile_pushes_eval(l, (compile(r) ++ Cons(TMul, Nil)) ++ rest, s),
                 = run(compile(r) ++ Cons(TMul, rest))(Cons(l.eval(), s))
-                    := cong_run(append_assoc(compile(r), Cons(TMul, Nil), rest), Cons(l.eval(), s)),
+                    := cong_run(compile(r).append_assoc(Cons(TMul, Nil), rest), Cons(l.eval(), s)),
                 = run(rest)(Cons(l.eval() * r.eval(), s))
                     := compile_pushes_eval(r, Cons(TMul, rest), Cons(l.eval(), s)),
         },
@@ -127,7 +127,7 @@ theorem compile_never_underflows(e: Expr, s: List<Nat>):
 {
     calc {
         run(compile(e))(s)
-            = run(compile(e) ++ Nil)(s) := cong_run(sym(append_nil(compile(e))), s),
+            = run(compile(e) ++ Nil)(s) := cong_run(sym(compile(e).append_nil()), s),
             = Some(Cons(e.eval(), s)) := compile_pushes_eval(e, Nil, s),
     }
 }

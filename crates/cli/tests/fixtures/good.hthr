@@ -7,5 +7,5 @@ fn double(n: Nat) -> Nat {
 }
 
 theorem succ_cong2({a: Nat}, {b: Nat}, p: a = b): Succ(Succ(a)) = Succ(Succ(b)) {
-    cong_succ(cong_succ(p))
+    Nat::cong_succ(Nat::cong_succ(p))
 }

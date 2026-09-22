@@ -3,7 +3,7 @@ title: Export checked FunctionIR x86 bytes as a callable native function
 status: closed
 labels: [compiler,x86,cli,codegen]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-21
 ---
 
 
@@ -41,6 +41,8 @@ See `examples/x86-native/README.md` for the invocation and current limits.
 fuel limit. The initial native example uses a small constant; native runtime
 arguments still cover arbitrary u64 values. General graph-size proof costs
 remain owned by [[function-ir-x86-proof-scaling]].
+The packaging residue from compiling the proof-support source into the general
+CLI binary is owned by [[decouple-native-support-from-cli-binary]].
 
 ## Log
 

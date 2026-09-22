@@ -55,7 +55,7 @@ import logic;
 // here is the kernel's `Unit^0`, so the vacuous case is proof-irrelevant for
 // free and `trivial` closes it.
 fn LeHead(x: Nat, xs: List<Nat>) → Type {
-    match xs { Nil => True, Cons(h, t) => Le(x, h) }
+    match xs { Nil => True, Cons(h, t) => x.Le(h) }
 }
 
 // Sortedness as a conjunction rather than an `andb`. `And` is a record, so its
@@ -86,7 +86,7 @@ fn insert(x: Nat, xs: List<Nat>) → List<Nat> {
     match xs {
         Nil => Cons(x, Nil),
         Cons(h, t) =>
-            or_pick(decide<Le(x, h)>(), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
+            or_pick(decide<x.Le(h)>(), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
     }
 }
 
@@ -102,12 +102,12 @@ fn isort(xs: List<Nat>) → List<Nat> {
 // reduces the goal and abstracts the decision it is stuck on
 // (issues/goal-motive-by-scrutinee-abstraction.md, closed 2026-08-17).
 theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
-    Le(h, x) → LeHead(h, t) → LeHead(h, insert(x, t))
+    h.Le(x) → LeHead(h, t) → LeHead(h, insert(x, t))
 {
     match t {
         Nil => λ hx ht => hx,
         Cons(h2, t2) => λ hx ht =>
-            match decide<Le(x, h2)>() {
+            match decide<x.Le(h2)>() {
                 Inl(good) => hx,
                 Inr(bad) => ht,
             },
@@ -122,10 +122,10 @@ theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) → Sorted(insert(x, xs
     match xs {
         Nil => λ hs => And(trivial, trivial),
         Cons(h, t) => λ hs =>
-            match decide<Le(x, h)>() {
+            match decide<x.Le(h)>() {
                 Inl(good) => And(good, hs),
                 Inr(bad) => And(
-                    le_head_insert(h, x, t, le_of_not_le(x, h, bad), hs.left),
+                    le_head_insert(h, x, t, Nat::le_of_not_le(x, h, bad), hs.left),
                     insert_sorted(x, t, hs.right)),
             },
     }
@@ -178,7 +178,7 @@ theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
 fn count(a: Nat, xs: List<Nat>) → Nat {
     match xs {
         Nil => 0,
-        Cons(h, t) => or_pick(eq_dec(a, h), count(a, t), Succ(count(a, t))),
+        Cons(h, t) => or_pick(a.eq_dec(h), count(a, t), Succ(count(a, t))),
     }
 }
 
@@ -219,12 +219,12 @@ theorem count_insert(x: Nat, xs: List<Nat>, a: Nat):
     match xs {
         Nil => {},
         Cons(h, t) =>
-            match decide<Le(x, h)>() {
+            match decide<x.Le(h)>() {
                 Inl(good) => refl,
                 Inr(bad) =>
-                    trans(cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)),
+                    trans(cong_fn(λ (n: Nat) => or_pick(a.eq_dec(h), n, Succ(n)),
                                   count_insert(x, t, a)),
-                          pick_succ_comm(eq_dec(a, h), eq_dec(a, x), count(a, t))),
+                          pick_succ_comm(a.eq_dec(h), a.eq_dec(x), count(a, t))),
             },
     }
 }
@@ -238,7 +238,7 @@ theorem count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) {
         Nil => {},
         Cons(h, t) =>
             trans(count_insert(h, isort(t), a),
-                  cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)),
+                  cong_fn(λ (n: Nat) => or_pick(a.eq_dec(h), n, Succ(n)),
                           count_isort(t, a))),
     }
 }
@@ -250,9 +250,9 @@ theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = Succ(xs.len()) 
     match xs {
         Nil => {},
         Cons(h, t) =>
-            match decide<Le(x, h)>() {
+            match decide<x.Le(h)>() {
                 Inl(good) => refl,
-                Inr(bad) => cong_succ(len_insert(x, t)),
+                Inr(bad) => Nat::cong_succ(len_insert(x, t)),
             },
     }
 }
@@ -260,7 +260,7 @@ theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = Succ(xs.len()) 
 theorem len_isort(xs: List<Nat>): isort(xs).len() = xs.len() {
     match xs {
         Nil => {},
-        Cons(h, t) => trans(len_insert(h, isort(t)), cong_succ(len_isort(t))),
+        Cons(h, t) => trans(len_insert(h, isort(t)), Nat::cong_succ(len_isort(t))),
     }
 }
 
@@ -274,7 +274,7 @@ theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
     match xs {
         Nil => λ m => m,
         Cons(h, t) =>
-            match decide<Le(x, h)>() {
+            match decide<x.Le(h)>() {
                 Inl(good) => λ m => m,
                 Inr(bad) => λ m => match m {
                     Inl(e) => Inr(Inl(e)),

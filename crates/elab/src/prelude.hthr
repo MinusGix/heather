@@ -41,7 +41,7 @@ theorem trans<A>({a: A}, {b: A}, {c: A}, p: a = b, q: b = c): a = c {
     j(q, λ y r => a = y, p)
 }
 
-theorem cong_succ({a: Nat}, {b: Nat}, p: a = b): Succ(a) = Succ(b) {
+theorem Nat::cong_succ({a: Nat}, {b: Nat}, p: a = b): Succ(a) = Succ(b) {
     j(p, λ y q => Succ(a) = Succ(y), refl)
 }
 

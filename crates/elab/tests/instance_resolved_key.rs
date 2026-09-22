@@ -254,9 +254,9 @@ fn the_lexer_joins_a_chain_and_stops_where_it_did() {
         other => panic!("expected an identifier, got {other:?}"),
     };
     assert_eq!(one("nat"), "nat");
-    assert_eq!(one("nat::sub"), "nat::sub");
-    assert_eq!(one("int::Le::Decide"), "int::Le::Decide");
-    assert_eq!(one("int::Le::Decide::dec"), "int::Le::Decide::dec");
+    assert_eq!(one("nat::Nat::sub"), "nat::Nat::sub");
+    assert_eq!(one("int::Int::Le::Decide"), "int::Int::Le::Decide");
+    assert_eq!(one("int::Int::Le::Decide::dec"), "int::Int::Le::Decide::dec");
     // `_` starts a segment; a digit does not.
     assert_eq!(one("a::_b::c9"), "a::_b::c9");
     // The import-list form: `::` followed by `{` does not join, at any depth.

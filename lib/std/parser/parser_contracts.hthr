@@ -53,7 +53,7 @@ theorem post_on_success<T, A>(source: List<T>, begin: Cursor<T>(source),
 theorem weaken_bound<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin), small, big: Nat, order: small <= big):
     Bound(source, begin, big, r) → Bound(source, begin, small, r) {
     match r {
-        Ok(s) => λ h => nat::le_trans(begin.offset + small, begin.offset + big, s.end.offset, nat::add_le_mono_l(begin.offset, small, big, order), h),
+        Ok(s) => λ h => (begin.offset + small).le_trans(begin.offset + big, s.end.offset, begin.offset.add_le_mono_l(small, big, order), h),
         Err(_) => λ h => trivial
     }
 }
