@@ -6640,12 +6640,21 @@ impl Elaborator {
         }
     }
 
-    /// Is this name bound by something the user wrote? Builtins give way to
-    /// locals, `let` aliases and declarations, so none of them is a keyword.
-    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
+    /// Is this name bound by something the user wrote other than the
+    /// declaration currently being checked? Kept separate because receiver
+    /// dispatch can prove that an in-progress declaration has a different
+    /// subject carrier while any ordinary binding must still win over a
+    /// builtin or race a type-owned member.
+    fn shadowed_without_selfref(&self, cx: &Cx, name: &str) -> bool {
         cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.lookup_global(name).is_some()
+    }
+
+    /// Is this name bound by something the user wrote? Builtins give way to
+    /// locals, `let` aliases and declarations, so none of them is a keyword.
+    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
+        self.shadowed_without_selfref(cx, name)
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
             // self-call took the built-in vector-`map` path instead

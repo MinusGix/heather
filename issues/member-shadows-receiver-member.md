@@ -1,9 +1,9 @@
 ---
 title: A member under declaration shadows the same-named member reached through a receiver
-status: open
+status: closed
 labels: [frontend,elaboration,traits,ergonomics]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-22
 ---
 
 Declaring a member whose body reaches the same-named member of another type
@@ -21,3 +21,12 @@ receiver of another type, so there is nothing ambiguous. Likely one check in
 the receiver-dispatch route (`docs/traits-receiver-dispatch-design.md`,
 `docs/imported-receiver-dispatch-design.md`); remove the two delegations when
 it lands.
+
+- 2026-09-22: Landed the carrier check in nominal member dispatch. The
+  in-progress declaration's subject type is read from its already-elaborated
+  telescope in the prefix where that type is scoped. A known-different outer
+  carrier removes only that self-reference from the competing readings;
+  equal or unknown carriers stay ambiguous, as do every local, alias and
+  committed global. `type_members` pins both halves and retains the existing
+  cross-module ambiguity controls. The two library delegations are no longer
+  required and can disappear with their surrounding API refactors.

@@ -187,6 +187,31 @@ fn an_ambient_name_and_a_member_at_the_same_receiver_are_ambiguous() {
     assert!(e.contains("both"), "{e}");
 }
 
+// The declaration currently being checked is in scope under its base name so
+// that it can recurse. It is not a competing method when its own receiver has
+// a known, different carrier from the written receiver.
+#[test]
+fn an_in_progress_member_of_another_type_does_not_shadow_the_receiver_member() {
+    ok("inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        inductive Box<A> { Mk(contents: List<A>) }
+        fn List::size<A>(self xs: List<A>) -> Nat {
+            match xs { Nil => 0, Cons(_, tail) => Succ(size(tail)) }
+        }
+        fn Box::size<A>(self b: Box<A>) -> Nat {
+            match b { Mk(contents) => contents.size() }
+        }");
+}
+
+// Carrier filtering only removes a provably inapplicable self-reference. A
+// declaration whose receiver has the same carrier remains a genuine second
+// reading, just like an already committed ambient declaration.
+#[test]
+fn an_applicable_in_progress_name_still_competes_with_the_receiver_member() {
+    let e = bad("fn Nat::value(self n: Nat) -> Nat { n }
+        fn value(n: Nat) -> Nat { n.value() }");
+    assert!(e.contains("both `Nat::value`"), "{e}");
+}
+
 // A receiver whose type owns no such member: the ordinary unbound-name error
 // on the base name, i.e. the pre-member behaviour of the method fallback.
 #[test]

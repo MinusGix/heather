@@ -223,6 +223,9 @@ impl Elaborator {
         let Ok((_, rty, _)) = self.elab_infer(cx, recv) else {
             return Ok(name.to_string());
         };
+        let Some(carrier) = self.receiver_carrier(cx, &rty, span) else {
+            return Ok(name.to_string());
+        };
         let Some(owner) = self.type_namespace(cx, &rty, span) else {
             return Ok(name.to_string());
         };
@@ -242,7 +245,21 @@ impl Elaborator {
                 return Ok(name.to_string());
             }
         }
-        if self.shadowed(cx, name) {
+        // The declaration under construction is normally an ambient reading
+        // of its base name, so recursive calls keep working before the global
+        // is committed. It is not a candidate at this receiver, however, when
+        // both outer carriers are known and disjoint. This is the same
+        // conservative filter imported receiver dispatch uses below: unknown
+        // and equal carriers preserve ambiguity, and every other local/global
+        // shadow remains a competing reading.
+        let selfref_shadows = cx.selfref.as_ref().is_some_and(|s| s.matches(name));
+        let selfref_disjoint = selfref_shadows
+            && self
+                .selfref_subject_carrier(cx, name, span)
+                .is_some_and(|subject| subject != carrier);
+        if self.shadowed_without_selfref(cx, name)
+            || (selfref_shadows && !selfref_disjoint)
+        {
             return err(
                 format!(
                     "`{name}` here is both `{qualified}`, reached through the receiver's \
@@ -254,6 +271,28 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// The outer carrier of the in-progress declaration's method subject.
+    /// Its parameters are the outermost entries of `cx`; each stored type is
+    /// scoped over the prefix before its binder, so inspect it in that prefix
+    /// rather than in the (possibly much deeper) use-site context.
+    fn selfref_subject_carrier(
+        &self,
+        cx: &Cx,
+        name: &str,
+        span: Span,
+    ) -> Option<ReceiverCarrier> {
+        let self_ref = cx.selfref.as_ref().filter(|s| s.matches(name))?;
+        let (subject, _) = self_ref
+            .params
+            .iter()
+            .enumerate()
+            .skip(self_ref.n_tyvars)
+            .filter(|(_, (_, implicit))| !implicit)
+            .nth(self_ref.receiver_slot)?;
+        let ty = Rc::clone(&cx.gamma.entries.get(subject)?.ty);
+        self.receiver_carrier(&cx.prefix(subject), &ty, span)
     }
 
     fn receiver_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> Option<ReceiverCarrier> {
