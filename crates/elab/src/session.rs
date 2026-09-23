@@ -94,7 +94,7 @@ pub(crate) struct ModulePassCheckpoint {
     warnings: usize,
     omega_reports: usize,
     omega_failure_reports: usize,
-    rows: usize,
+    rows: crate::stats::RowsMark,
 }
 
 impl Elaborator {

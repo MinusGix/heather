@@ -306,3 +306,33 @@ fn spin() {
     }
     std::hint::black_box(n);
 }
+
+/// `HEATHER_TIMINGS_DIR`: a named test thread keeps an ambient copy of its
+/// rows and writes them when it exits, without turning explicit collection on
+/// — so this binary, re-run as a child with the variable set, leaves a table
+/// for `collection_is_off_until_it_is_asked_for` (which still passes: it
+/// asserts `collecting()` is false) and one for the module check below.
+#[test]
+fn a_timings_dir_leaves_a_table_per_test_thread() {
+    if std::env::var_os("HEATHER_TIMINGS_DIR").is_some() {
+        return; // the child run: nothing to re-spawn
+    }
+    let dir = std::env::temp_dir().join(format!("heather-timings-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "a_checked_module_attributes_by_declaration", "collection_is_off_until_it_is_asked_for", "--test-threads", "2"])
+        .env("HEATHER_TIMINGS_DIR", &dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "child run failed:\n{}", String::from_utf8_lossy(&out.stdout));
+    let tables: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let checked = tables.iter()
+        .find(|p| p.file_name().unwrap().to_string_lossy().contains(".a_checked_module_attributes_by_declaration."))
+        .unwrap_or_else(|| panic!("no table for the module test among {tables:?}"));
+    assert!(checked.file_name().unwrap().to_string_lossy().starts_with("instrumentation."), "{checked:?}");
+    let text = std::fs::read_to_string(checked).unwrap();
+    assert!(text.starts_with("scope\tmodule\titem\t"), "the --timings header");
+    assert!(text.lines().any(|l| l.starts_with("item\tprobe\tdouble\t")), "a row per declaration:\n{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

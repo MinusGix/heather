@@ -189,8 +189,11 @@ function groupDetail(o, i, total) {
 function phaseStack(o) {
   const g = groupSums(o);
   const total = o.total_ns || g.reduce((a, b) => a + b, 0) || 1;
+  // Summaries that keep only some columns leave part of the total unnamed.
+  const unnamed = Math.max(0, total - g.reduce((a, b) => a + b, 0));
   return `<div class="stack">${g.map((v, i) => v / total < 0.004 ? '' :
-    `<div style="flex:${v};background:${groupColor(i)}" data-tip="${esc(groupLabel(i))}: ${(v / total * 100).toFixed(1)}% (${fmtNs(v)})\n${esc(groupDetail(o, i, total))}"></div>`).join('')}</div>`;
+    `<div style="flex:${v};background:${groupColor(i)}" data-tip="${esc(groupLabel(i))}: ${(v / total * 100).toFixed(1)}% (${fmtNs(v)})\n${esc(groupDetail(o, i, total))}"></div>`).join('')}${unnamed / total < 0.004 ? '' :
+    `<div style="flex:${unnamed};background:var(--other)" data-tip="columns this summary does not keep: ${(unnamed / total * 100).toFixed(1)}% (${fmtNs(unnamed)})"></div>`}</div>`;
 }
 function phaseLegend() {
   return `<div class="legend">${PHASE_GROUPS.map(([l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('')}<span><i style="background:var(--other)"></i>${REST_LABEL} (hover a bar for its columns)</span></div>`;
@@ -744,6 +747,59 @@ document.addEventListener('input', ev => {
 });
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (EX.tree && $('#ex-body')) exploreBody(); suiteInsideBody(); }, 150); });
 
+// ---------------------------------------------------------------- what the suite elaborates
+// A HEATHER_SUITE_DECLS run leaves every test thread's declaration rows; the
+// snapshot sums them across the suite. The unit of repetition is the point: a
+// library module elaborated from source by fifteen tests is one row here.
+const DX = { lane: null, sort: 'outside' };
+function suiteDecls(snap) {
+  const lanes = Object.keys(snap.tests || {}).filter(l => snap.tests[l].decls);
+  if (!lanes.length) return `<section id="suite-decls"><h2>What the suite elaborates</h2><p class="note">No declaration rows in this snapshot. Run the suite with <code>HEATHER_SUITE_DECLS=1 scripts/test --fast</code> (every test thread writes its --timings rows; a little slower), then snapshot.</p></section>`;
+  if (!lanes.includes(DX.lane)) DX.lane = lanes.includes('fast') ? 'fast' : lanes[0];
+  return `<section id="suite-decls"><h2>What the suite elaborates</h2>
+    <div class="controls"><label>lane <select data-dctl="lane">${lanes.map(l => `<option${l === DX.lane ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div id="suite-decls-body"></div></section>`;
+}
+function suiteDeclsBody() {
+  const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
+  const t = snap.tests?.[DX.lane], el = $('#suite-decls-body');
+  if (!t?.decls || !el) return;
+  const d = t.decls;
+  const testSecs = new Map((t.tests || []).map(([target, test, secs]) => [`${target}::${test}`, secs]));
+  const phaseObj = o => ({ ...o, total_ns: o.total_ns });
+  const modMax = d.modules[0]?.total_ns || 1;
+  const modRows = d.modules.map(m => `<tr><td class="name mono">${esc(m.name)}</td><td>${m.tests}</td><td>${fmtN(m.rows)}</td>
+    ${barCell(m.total_ns / 1e9, modMax / 1e9, S(1), `${m.name}: ${fmtNs(m.total_ns)} over ${m.tests} tests`)}<td>${fmtNs(m.total_ns / m.tests)}</td>
+    <td style="min-width:180px">${phaseStack(phaseObj(m))}</td><td>${fmtC(m.conv_misses)}</td><td>${fmtC(m.eval_steps)}</td></tr>`);
+  const modHead = `<thead><tr><th>module</th><th>tests elaborating it</th><th>declaration rows</th><th>summed</th><th>per test</th><th>where the time goes</th><th>misses</th><th>steps</th></tr></thead>`;
+  const itemRows = d.items.map(i => `<tr><td class="name mono" title="${esc(i.name)}">${esc(i.name)}</td><td>${i.tests}</td><td>${i.count}</td><td>${fmtNs(i.total_ns)}</td>
+    <td>${fmtNs(i.max_ns)}</td><td>${(i.kernel_gate_ns / Math.max(i.total_ns, 1) * 100).toFixed(0)}%</td></tr>`);
+  const itemHead = `<thead><tr><th>declaration</th><th>tests</th><th>times checked</th><th>summed</th><th>largest once</th><th>gate</th></tr></thead>`;
+  const tests = d.tests.map(([label, test, items, ns, gate]) => {
+    const secs = testSecs.get(`${label}::${test}`);
+    return { label, test, items, ns, gate, secs, outside: secs == null ? null : secs - ns / 1e9 };
+  }).sort((a, b) => DX.sort === 'outside' ? (b.outside ?? -1) - (a.outside ?? -1) : b.ns - a.ns);
+  const testRows = tests.slice(0, 60).map(x => `<tr><td class="name mono" title="${esc(x.label)}::${esc(x.test)}">${esc(binName(x.label))} :: ${esc(x.test)}</td>
+    <td>${x.secs == null ? '—' : fmtS(x.secs)}</td><td>${fmtS(x.ns / 1e9)}</td><td>${x.outside == null ? '—' : fmtS(Math.max(0, x.outside))}</td><td>${fmtN(x.items)}</td>
+    <td>${(x.gate / Math.max(x.ns, 1) * 100).toFixed(0)}%</td></tr>`).join('');
+  const split = (col, label) => `<th class="sort${DX.sort === col ? ' on' : ''}" data-dsort="${col}">${label}${DX.sort === col ? ' ↓' : ''}</th>`;
+  const section = (title, head, rows, n) => `<h3>${title}</h3><table>${head}<tbody>${rows.slice(0, n).join('')}</tbody></table>`
+    + (rows.length > n ? `<details><summary>the other ${rows.length - n}</summary><table>${head}<tbody>${rows.slice(n).join('')}</tbody></table></details>` : '');
+  el.innerHTML = `<p class="note">${fmtN(d.rows)} declaration checks in ${d.tests_with_rows} tests, ${fmtS(d.total_ns / 1e9)} summed (the lane's tests take ${fmtS(Object.values(t.test_totals || {}).reduce((a, v) => a + v[1], 0))}; the rest is outside any declaration — image replay, generators, the tests' own work). Where the declaration time goes:</p>
+    ${phaseStack({ ...d.phases, total_ns: d.total_ns })}${phaseLegend()}
+    ${section('Modules, summed over every test that elaborates them', modHead, modRows, 30)}
+    <h3>Tests: declaration time and time outside any declaration</h3>
+    <table><thead><tr><th>binary :: test</th><th>test seconds</th>${split('decl', 'in declarations')}${split('outside', 'outside them')}<th>declarations</th><th>gate</th></tr></thead><tbody>${testRows}</tbody></table>
+    ${section('Declarations, summed across the suite', itemHead, itemRows, 30)}`;
+}
+document.addEventListener('change', ev => {
+  if (ev.target.closest('#suite-decls [data-dctl="lane"]')) { DX.lane = ev.target.value; suiteDeclsBody(); }
+});
+document.addEventListener('click', ev => {
+  const th = ev.target.closest('#suite-decls th[data-dsort]');
+  if (th) { DX.sort = th.dataset.dsort; suiteDeclsBody(); }
+});
+
 // ---------------------------------------------------------------- page
 function render() {
   const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
@@ -770,6 +826,7 @@ function render() {
       <p class="note">Concentration first: a file whose top declaration is most of its time has one problem; a flat file has a constant-factor problem.</p>
       ${concentration(snap)}<h3>Heaviest declarations across the corpus (cold)</h3>${heavyItems(snap)}</section>` : ''}
     ${suiteInside(snap)}
+    ${suiteDecls(snap)}
     <section><h2>The test suite</h2><p class="note">Latest run per lane of the suite runner's history (scripts/test); seconds per test binary, scheduled in parallel, each at kernel width one.</p>${suiteTable(snap, against)}</section>
     <section><h2>History</h2>
       <p class="note">One line per environment (fixed color). Points are snapshots; hover for the commit. Counts are the honest cross-machine line; seconds within one environment.</p>
@@ -781,6 +838,7 @@ function render() {
     </section>`;
   exploreInit(snap, against);
   suiteInsideBody();
+  suiteDeclsBody();
 }
 async function load() {
   SNAPS = await (await fetch('/api/snapshots')).json();

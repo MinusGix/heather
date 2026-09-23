@@ -28,8 +28,22 @@
 //!
 //! Thread-local by design and not thread-safe: a caller measures the
 //! elaborator it drives on its own thread and nothing else.
+//!
+//! **`HEATHER_TIMINGS_DIR`** is the suite-wide form: every *named* thread
+//! other than `main` keeps an *ambient* copy of every scope row, and when it
+//! exits writes them to `<dir>/<executable>.<thread>.<n>.tsv`. libtest runs
+//! each test on a thread named after it, so one run of the test suite leaves a
+//! table per test with no test changed (`scripts/run-test-targets.mjs`,
+//! `HEATHER_SUITE_DECLS`). The ambient rows are a second buffer: `enable`,
+//! `collecting` and `take_rows` mean exactly what they mean without it, so a
+//! test of the instrumentation itself still sees collection off until it
+//! turns it on. `main` is left out so a CLI child the tests spawn, which
+//! inherits the variable, does not collect behind its own `--timings`.
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use heather_kernel::stats as kstats;
@@ -121,18 +135,64 @@ struct Registry {
     nested: Cell<u64>,
     collecting: Cell<bool>,
     rows: RefCell<Vec<ItemTiming>>,
+    /// Where this thread's ambient rows go when it exits
+    /// (`HEATHER_TIMINGS_DIR`), and the rows. Decided when the registry is
+    /// first touched, because a thread-local destructor cannot ask which
+    /// thread it is on.
+    dump_to: Option<PathBuf>,
+    ambient: RefCell<Vec<ItemTiming>>,
 }
 
 impl Default for Registry {
     fn default() -> Self {
+        let dump_to = thread_dump_path();
         Registry {
             timers: [const { Cell::new(0) }; TIMERS],
             counters: [const { Cell::new(0) }; COUNTERS],
             nested: Cell::new(0),
             collecting: Cell::new(false),
             rows: RefCell::new(Vec::new()),
+            dump_to,
+            ambient: RefCell::new(Vec::new()),
         }
     }
+}
+
+impl Drop for Registry {
+    fn drop(&mut self) {
+        let Some(path) = self.dump_to.take() else { return };
+        let rows = std::mem::take(self.ambient.get_mut());
+        if !rows.is_empty() {
+            // Best effort: a thread exiting has nowhere to report a failure.
+            let _ = std::fs::write(path, render(&rows));
+        }
+    }
+}
+
+fn timings_dir() -> Option<&'static PathBuf> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| std::env::var_os("HEATHER_TIMINGS_DIR").filter(|v| !v.is_empty()).map(PathBuf::from))
+        .as_ref()
+}
+
+/// `<dir>/<executable>.<thread>.<n>.tsv` for a named thread other than
+/// `main`, when `HEATHER_TIMINGS_DIR` is set. The executable loses Cargo's
+/// `-<hash>` suffix; `n` keeps two threads of one name apart.
+fn thread_dump_path() -> Option<PathBuf> {
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let dir = timings_dir()?;
+    let thread = std::thread::current();
+    let name = thread.name().filter(|n| *n != "main")?;
+    let exe = std::env::current_exe().ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let exe = match exe.rsplit_once('-') {
+        Some((stem, hash)) if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => stem.to_string(),
+        _ => exe,
+    };
+    let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || "_-:".contains(c) { c } else { '_' }).collect::<String>();
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    Some(dir.join(format!("{}.{}.{n}.tsv", safe(&exe), safe(name))))
 }
 
 thread_local! {
@@ -381,6 +441,10 @@ pub struct ScopeGuard {
 }
 
 struct Open {
+    /// Collection was on at open (the row goes to `rows`); the thread keeps
+    /// ambient rows (it also goes to `ambient`).
+    explicit: bool,
+    ambient: bool,
     kind: ScopeKind,
     module: String,
     item: String,
@@ -438,9 +502,19 @@ impl Drop for ScopeGuard {
                 .map(|(after, before)| after.saturating_sub(before)),
         };
         REG.with(|r| {
-            let mut rows = r.rows.borrow_mut();
-            if rows.len() < ROW_CAP {
-                rows.push(row);
+            let push = |buf: &RefCell<Vec<ItemTiming>>, row| {
+                let mut buf = buf.borrow_mut();
+                if buf.len() < ROW_CAP {
+                    buf.push(row);
+                }
+            };
+            match (open.explicit, open.ambient) {
+                (true, true) => {
+                    push(&r.ambient, row.clone());
+                    push(&r.rows, row);
+                }
+                (false, true) => push(&r.ambient, row),
+                _ => push(&r.rows, row),
             }
         });
     }
@@ -467,7 +541,8 @@ pub(crate) fn set_value_metrics_source(source: Option<ValueMetrics>) {
 /// Open a scope. Free (one branch, no clock, no allocation) when collection is
 /// off, so an item bracket is paid only by a run that asked for one.
 pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
-    if !REG.with(|r| r.collecting.get()) {
+    let (explicit, ambient) = REG.with(|r| (r.collecting.get(), r.dump_to.is_some()));
+    if !explicit && !ambient {
         return ScopeGuard { open: None };
     }
     let (timers, counters) = REG.with(|r| {
@@ -486,6 +561,8 @@ pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
     }
     ScopeGuard {
         open: Some(Open {
+            explicit,
+            ambient,
             kind,
             module: module.to_string(),
             item: item.to_string(),
@@ -518,9 +595,15 @@ pub fn take_rows() -> Vec<ItemTiming> {
     REG.with(|r| r.rows.borrow_mut().drain(..).collect())
 }
 
-/// How many rows have been collected on this thread.
-pub(crate) fn rows_mark() -> usize {
-    REG.with(|r| r.rows.borrow().len())
+/// How many rows have been collected on this thread, in both buffers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RowsMark {
+    rows: usize,
+    ambient: usize,
+}
+
+pub(crate) fn rows_mark() -> RowsMark {
+    REG.with(|r| RowsMark { rows: r.rows.borrow().len(), ambient: r.ambient.borrow().len() })
 }
 
 /// Drop every row collected since [`rows_mark`]. The one caller is the
@@ -530,12 +613,10 @@ pub(crate) fn rows_mark() -> usize {
 /// that had to be re-checked. The *cells* are deliberately not rolled back —
 /// the abandoned pass really did spend that wall, and the enclosing module
 /// row is the honest place for it.
-pub(crate) fn truncate_rows(mark: usize) {
+pub(crate) fn truncate_rows(mark: RowsMark) {
     REG.with(|r| {
-        let mut rows = r.rows.borrow_mut();
-        if rows.len() > mark {
-            rows.truncate(mark);
-        }
+        r.rows.borrow_mut().truncate(mark.rows);
+        r.ambient.borrow_mut().truncate(mark.ambient);
     });
 }
 

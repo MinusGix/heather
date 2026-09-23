@@ -5,8 +5,9 @@
 // scheduling, buffered output, and exact result accounting.
 
 import { spawn } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Per-child address-space cap (`ulimit -v`): the machine-protection rail.
@@ -83,6 +84,13 @@ export function parseResults(text) {
 // passing and ignored lines are dropped, failures kept. HEATHER_TEST_TIMES=0
 // runs the binaries plain terse, as before.
 export const TEST_TIMES = process.env.HEATHER_TEST_TIMES !== "0";
+// HEATHER_SUITE_DECLS=1 goes one level further down: every test thread writes
+// its declaration rows (the `--timings` table) to target/suite-decls-<lane>/
+// through HEATHER_TIMINGS_DIR (crates/elab/src/stats.rs), and the directory
+// is stamped with the run it belongs to. Off by default — collection costs a
+// little per declaration and a few thousand files — and read by
+// `scripts/perf snapshot`.
+export const SUITE_DECLS = process.env.HEATHER_SUITE_DECLS === "1";
 export function timedLibtestArgs(args) {
   const out = [...args];
   const i = out.indexOf("--format");
@@ -264,7 +272,7 @@ function readOwnCgroupValue(name) {
   }
 }
 
-async function runTargets(targets, jobs, libtestArgs, keepGoing) {
+async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
   const pending = [...targets];
   const completed = [];
   let active = 0;
@@ -280,8 +288,8 @@ async function runTargets(targets, jobs, libtestArgs, keepGoing) {
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
         const command = TEST_TIMES
-          ? limitedCommand(target.executable, timedLibtestArgs(libtestArgs), { RUSTC_BOOTSTRAP: "1" })
-          : limitedCommand(target.executable, libtestArgs);
+          ? limitedCommand(target.executable, timedLibtestArgs(libtestArgs), { RUSTC_BOOTSTRAP: "1", ...extraEnv })
+          : limitedCommand(target.executable, libtestArgs, extraEnv);
         collect(command).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
@@ -342,7 +350,16 @@ async function main() {
     console.log(`requested ${bounds.requestedJobs} jobs, reduced to ${jobs} by memory/CPU bounds; reserving ${reserveGib} GiB for the host`);
   }
 
-  const runs = await runTargets(targets, jobs, libtestArgs, keepGoing);
+  const declsDir = SUITE_DECLS
+    ? (timingsPath.includes("test-target-timings-") ? timingsPath.replace("test-target-timings-", "suite-decls-").replace(/\.tsv$/, "") : `${timingsPath}.decls`)
+    : null;
+  if (declsDir) {
+    rmSync(declsDir, { recursive: true, force: true });
+    mkdirSync(declsDir, { recursive: true });
+    console.log(`declaration rows per test thread go to ${declsDir}/ (HEATHER_SUITE_DECLS)`);
+  }
+  const runs = await runTargets(targets, jobs, libtestArgs, keepGoing,
+    declsDir ? { HEATHER_TIMINGS_DIR: resolve(declsDir) } : {});
   // Complete target blocks are emitted in stable label order, never interleaved.
   runs.sort((a, b) => a.target.label.localeCompare(b.target.label));
   for (const run of runs) {
@@ -392,6 +409,7 @@ async function main() {
     for (const [, label, cpu] of nearRail) console.log(`${cpu.toFixed(1).padStart(8)} CPU-s ${Math.round(100 * cpu / CPU_RAIL_SECONDS).toString().padStart(3)}%  ${label}`);
   }
   const runId = new Date().toISOString();
+  if (declsDir) writeFileSync(`${declsDir}/run.txt`, `${runId}\n`);
   // Row: run, reported seconds, label, CPU seconds (empty when unknown).
   // Older rows have two or three fields and still read (`loadHistory`).
   appendFileSync(timingsPath, runs.map((run) =>

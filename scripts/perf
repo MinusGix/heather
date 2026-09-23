@@ -256,7 +256,91 @@ def suite_timings():
         tests = test_times(path.parent / f"test-times-{lane}.tsv", latest)
         if tests:
             out[lane].update(tests)
+        decls = suite_decls(path.parent / f"suite-decls-{lane}", latest, out[lane])
+        if decls:
+            out[lane]["decls"] = decls
     return out
+
+
+# What a snapshot keeps of a suite-wide declaration run: the heaviest modules
+# and declarations by summed time, and every test with this much declaration
+# time. The raw per-thread tables stay under target/ like the corpus's.
+SUITE_DECLS_TOP = 300
+SUITE_DECLS_TEST_KEEP_NS = 50_000_000
+SUITE_PHASE_KEEP = ["kernel_gate_ns", "decl_type_ns", "decl_body_ns", "decl_emit_ns", "lower_ns", "elab_whnf_ns"]
+
+
+def suite_decls(d: Path, run: str, lane: dict):
+    """Aggregate the per-test-thread `--timings` tables a HEATHER_SUITE_DECLS
+    run left (scripts/run-test-targets.mjs) — only when the directory is
+    stamped with the same run as the lane's target rows.
+
+    The unit of repetition is the point: the same module elaborated from
+    source by fifteen tests is one row here with `tests` = 15, where the
+    target table shows fifteen unrelated seconds."""
+    stamp = d / "run.txt"
+    if not stamp.is_file() or stamp.read_text().strip() != run:
+        return None
+    labels = {}
+    for label, _s, _c in lane.get("targets", []):
+        labels.setdefault(Path(label).stem, label)
+    phases_total = {}
+    modules, items, tests = {}, {}, {}
+    for f in sorted(d.glob("*.tsv")):
+        parts = f.name[:-4].split(".")
+        if len(parts) != 3:
+            continue
+        exe, thread, _n = parts
+        label = labels.get(exe, exe)
+        t = Timings(f)
+        rows = t.scoped("item")
+        if not rows:
+            continue
+        key = (label, thread)
+        tt = tests.setdefault(key, {"items": 0, "total_ns": 0, "kernel_gate_ns": 0})
+        for r in rows:
+            name, mod = t.name(r), r[t.ix["module"]]
+            total = t.cell(r, "total_ns")
+            gate = t.cell(r, "kernel_gate_ns")
+            tt["items"] += 1
+            tt["total_ns"] += total
+            tt["kernel_gate_ns"] += gate
+            for c in t.columns:
+                if c.endswith("_ns") and c != "total_ns":
+                    phases_total[c] = phases_total.get(c, 0) + t.cell(r, c)
+            m = modules.setdefault(mod, {"tests": set(), "rows": 0, "total_ns": 0, **{k: 0 for k in SUITE_PHASE_KEEP},
+                                         "conv_misses": 0, "eval_steps": 0})
+            m["tests"].add(key)
+            m["rows"] += 1
+            m["total_ns"] += total
+            for k in SUITE_PHASE_KEEP:
+                m[k] += t.cell(r, k)
+            m["conv_misses"] += t.cell(r, "conv_misses")
+            m["eval_steps"] += t.cell(r, "eval_steps")
+            it = items.setdefault(name, {"tests": set(), "count": 0, "total_ns": 0, "kernel_gate_ns": 0, "max_ns": 0})
+            it["tests"].add(key)
+            it["count"] += 1
+            it["total_ns"] += total
+            it["kernel_gate_ns"] += gate
+            it["max_ns"] = max(it["max_ns"], total)
+    if not tests:
+        return None
+    mod_rows = sorted(modules.items(), key=lambda kv: -kv[1]["total_ns"])[:SUITE_DECLS_TOP]
+    item_rows = sorted(items.items(), key=lambda kv: -kv[1]["total_ns"])[:SUITE_DECLS_TOP]
+    return {
+        "source": str(d),
+        "tests_with_rows": len(tests),
+        "rows": sum(v["items"] for v in tests.values()),
+        "total_ns": sum(v["total_ns"] for v in tests.values()),
+        "phases": dict(sorted(phases_total.items(), key=lambda kv: -kv[1])),
+        "modules": [dict(name=k, tests=len(v["tests"]), **{x: y for x, y in v.items() if x != "tests"}) for k, v in mod_rows],
+        "items": [dict(name=k, tests=len(v["tests"]), **{x: y for x, y in v.items() if x != "tests"}) for k, v in item_rows],
+        "tests": sorted(([label, test, v["items"], v["total_ns"], v["kernel_gate_ns"]] for (label, test), v in tests.items()
+                         if v["total_ns"] >= SUITE_DECLS_TEST_KEEP_NS), key=lambda r: -r[3]),
+        "note": "declaration rows (--timings item scope) of every test thread, summed across the suite; "
+                "`tests` counts the tests that elaborated a module or declaration; time outside any declaration "
+                "(image replay, generators, the test's own work) is the test's seconds minus these",
+    }
 
 
 # Tests below this are summed per binary but not kept one by one: a snapshot
@@ -606,6 +690,12 @@ def cmd_report(args):
         rest = t["targets"][top:]
         if rest:
             print(f"   {fmt_s(sum(row[1] for row in rest))}                       … {len(rest)} more")
+        if t.get("decls"):
+            dd = t["decls"]
+            print(f"   declarations: {dd['rows']:,} rows in {dd['tests_with_rows']} tests, {dd['total_ns'] / 1e9:.0f}s summed; "
+                  f"heaviest modules (summed over the tests that elaborate them):")
+            for m in dd["modules"][:top]:
+                print(f"   {fmt_s(m['total_ns'] / 1e9)}  {m['tests']:4} tests  gate {m['kernel_gate_ns'] / max(m['total_ns'], 1) * 100:3.0f}%  {m['name']}")
         if t.get("tests"):
             n = sum(v[0] for v in t["test_totals"].values())
             summed = sum(v[1] for v in t["test_totals"].values())
