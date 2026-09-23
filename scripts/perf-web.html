@@ -646,7 +646,7 @@ let resizeTimer = null;
 // outside any test).
 const SX = { lane: null, zoom: null, filter: '', limit: 100 };
 const CRATE_COLOR = { cli: S(2), elab: S(1), kernel: S(3), syntax: S(4), cache: S(7) };
-const crateOf = label => (/^crates\/([^/]+)\//.exec(label) || [])[1] || 'other';
+const crateOf = label => (/crates\/([^/]+)\//.exec(label) || [])[1] || 'other';
 const crateColor = label => CRATE_COLOR[crateOf(label)] || 'var(--other)';
 const binName = label => label.replace(/^crates\//, '').replace(/\/tests\//, '/').replace(/\.rs$/, '');
 function suiteModel(t) {

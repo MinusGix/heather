@@ -35,3 +35,4 @@ module and `--timings`, then `HEATHER_VALUE_METRICS=1` under
 ## Log
 
 - 2026-09-23: 2026-09-23 suite-wide reading (HEATHER_SUITE_DECLS=1 fast lane): the class is checked by 1,855 test threads, 2,531 times, 6.28 s summed — the prelude tax, measured across the suite rather than per file.
+- 2026-09-23: 2026-09-23 suite-wide rows add a wrinkle: of the prelude module's 6.9 s over 1,855 tests, most is the images & cache phase group (image_*, merkle_walk, cache_hash), not the kernel gate — so the per-test prelude price is not only this class's check. Split the two before sizing a fix (dashboard: What the suite elaborates → prelude row).

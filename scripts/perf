@@ -265,7 +265,7 @@ def suite_timings():
 # What a snapshot keeps of a suite-wide declaration run: the heaviest modules
 # and declarations by summed time, and every test with this much declaration
 # time. The raw per-thread tables stay under target/ like the corpus's.
-SUITE_DECLS_TOP = 300
+SUITE_DECLS_TOP = 120
 SUITE_DECLS_TEST_KEEP_NS = 50_000_000
 SUITE_PHASE_KEEP = ["kernel_gate_ns", "decl_type_ns", "decl_body_ns", "decl_emit_ns", "lower_ns", "elab_whnf_ns"]
 
