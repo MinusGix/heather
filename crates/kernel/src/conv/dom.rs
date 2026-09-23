@@ -210,8 +210,10 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     },
     // The stored Π / Σ annotations are not part of these views: the typed
     // application and projection rules read the head's inferred type
-    // instead, so the view never builds closures for them.
-    App { dom_level: &'a Level, cod_level: &'a Level, fun: D::TmC, arg: D::TmC },
+    // instead, so the view never builds closures for them. `levels` is `None`
+    // for the checked spelling `app@` (docs/app-by-head-type-design.md §4),
+    // for the reason given at `Fst` below.
+    App { levels: Option<(&'a Level, &'a Level)>, fun: D::TmC, arg: D::TmC },
     // `levels` is `None` for the checked spellings `fst@` / `snd@`
     // (docs/intro-by-type-design.md), which store no levels at all — their
     // annotation is one whole type and finding the levels inside it would
@@ -960,6 +962,7 @@ impl<'v> Dom<'v> for Syn {
             match t {
                 Term::GlobalTm { .. } => return true,
                 Term::App { fun, .. }
+                | Term::AppAt { fun, .. }
                 | Term::UApp { fun, .. }
                 | Term::CtxApp { fun, .. }
                 | Term::TyApp { fun, .. } => t = fun,
@@ -1219,11 +1222,13 @@ impl<'v> Dom<'v> for Syn {
                 }
             }
             Term::App { fun, dom_level, cod_level, arg, .. } => TmView::App {
-                dom_level,
-                cod_level,
+                levels: Some((dom_level, cod_level)),
                 fun: Rc::clone(fun),
                 arg: Rc::clone(arg),
             },
+            Term::AppAt { fun, arg } => {
+                TmView::App { levels: None, fun: Rc::clone(fun), arg: Rc::clone(arg) }
+            }
             Term::Fst { fst_level, snd_level, pair, .. } => {
                 TmView::Fst { levels: Some((fst_level, snd_level)), pair: Rc::clone(pair) }
             }

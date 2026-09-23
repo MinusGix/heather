@@ -679,6 +679,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         },
         Term::FstAt { pair } => Term::FstAt { pair: sub_tm(pair, m, at) },
         Term::SndAt { pair } => Term::SndAt { pair: sub_tm(pair, m, at) },
+        Term::AppAt { fun, arg } => Term::AppAt { fun: sub_tm(fun, m, at), arg: sub_tm(arg, m, at) },
         Term::Triv { level } => Term::Triv { level: m.level(level, at) },
         Term::ElimEmpty { level, scrut_level, motive, scrut } => Term::ElimEmpty {
             level: m.level(level, at),
@@ -1874,6 +1875,7 @@ impl Mapper for RebuildChecked<'_> {
                 | Term::InrAt { .. }
                 | Term::FstAt { .. }
                 | Term::SndAt { .. }
+                | Term::AppAt { .. }
         ) {
             return None;
         }
@@ -1910,6 +1912,14 @@ impl Mapper for RebuildChecked<'_> {
                 lhs,
                 rhs,
                 val: sub_tm(val, self, at),
+            },
+            (Term::AppAt { fun, arg }, Spelled::Pi { dom_level, cod_level, dom, cod }) => Term::App {
+                fun: sub_tm(fun, self, at),
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+                arg: sub_tm(arg, self, at),
             },
             _ => return None,
         };

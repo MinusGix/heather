@@ -2022,6 +2022,131 @@ fn checked_spellings_infer_their_annotation() {
     }
 }
 
+/// `app@(f; a)` (`docs/app-by-head-type-design.md` §3.1, §9's golden tests):
+///
+/// 1. a head whose type is syntactically a Π — a local here, as a global's
+///    statement is — returns **syntax**, the very type the annotated `app`
+///    infers (the fast path), across a dependent spine;
+/// 2. a head whose type needs reduction — a function stored as a record
+///    field, `fst@(pair@^{T}(λx. x; 0))` — checks, and its argument is
+///    checked at the domain the head infers: the negative control refuses
+///    `⟨⟩` there;
+/// 3. β fires on `app@(λ…; a)`;
+/// 4. `box(app@(…))` is refused, and the quote boundary's translator writes
+///    it as the `app` the box accepts.
+#[test]
+fn checked_application_reads_its_head() {
+    // (1) Γ = f : Π(A : Ty 0). Π(a : El A). El A — dependent, so the second
+    // node's type is an instance of the first's codomain.
+    let poly = Type::Pi {
+        dom_level: c(1),
+        cod_level: Level::Zero,
+        dom: rty(Type::Ty(Level::Zero)),
+        cod: rty(Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rty(Type::El { level: Level::Zero, tm: rt(v(0)) }),
+            cod: rty(Type::El { level: Level::Zero, tm: rt(v(1)) }),
+        }),
+    };
+    let gamma = ext(&nil_ctx(), poly.clone(), c(1));
+    let psi = GlobalCtx::default();
+    let at = Term::AppAt {
+        fun: rt(Term::AppAt { fun: rt(v(0)), arg: rt(Term::TmNat) }),
+        arg: rt(Term::Zero),
+    };
+    let Type::Pi { cod: inner_pi, .. } = &poly else { unreachable!() };
+    let inner_pi_at = inner_pi.apply_local(&LocalSubst::id(&gamma).extended(rt(Term::TmNat)));
+    let Type::Pi { dom: d2n, cod: c2n, .. } = &inner_pi_at else { unreachable!() };
+    let annotated = Term::App {
+        fun: rt(Term::App {
+            fun: rt(v(0)),
+            dom_level: c(1),
+            cod_level: Level::Zero,
+            dom: rty(Type::Ty(Level::Zero)),
+            cod: Rc::clone(inner_pi),
+            arg: rt(Term::TmNat),
+        }),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::clone(d2n),
+        cod: Rc::clone(c2n),
+        arg: rt(Term::Zero),
+    };
+    let (ty_at, l_at) = infer_term(&psi, 0, Layer::Prog, &gamma, &at, FUEL).unwrap();
+    let (ty_app, l_app) = infer_term(&psi, 0, Layer::Prog, &gamma, &annotated, FUEL).unwrap();
+    assert!(ty_at == ty_app, "the fast path must return app's own syntax: {ty_at:?} vs {ty_app:?}");
+    assert!(l_at.equiv(&l_app));
+    check_term(&psi, 0, Layer::Prog, &gamma, &at, &Type::Nat, &Level::Zero, FUEL).unwrap();
+    // The argument is checked at the head's domain: `⟨⟩` is not a `Ty 0`.
+    let bad = Term::AppAt { fun: rt(v(0)), arg: rt(Term::Triv { level: Level::Zero }) };
+    assert!(infer_term(&psi, 0, Layer::Prog, &gamma, &bad, FUEL).is_err());
+
+    // (2) T = El ⌜Σ(g : El ⌜Π(x : Nat). Nat⌝). Nat⌝; the head is its field.
+    let pi_code = Term::TmPi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rt(Term::TmNat),
+        cod: rt(Term::TmNat),
+    };
+    let rec_ty = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmSigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: rt(pi_code),
+            snd: rt(Term::TmNat),
+        }),
+    };
+    let head = || {
+        rt(Term::FstAt {
+            pair: rt(Term::PairAt {
+                ty: Some(rty(rec_ty.clone())),
+                fst: rt(lam(v(0))),
+                snd: rt(Term::Zero),
+            }),
+        })
+    };
+    let call = Term::AppAt { fun: head(), arg: rt(Term::Zero) };
+    check_closed(Layer::Prog, &call, &Type::Nat, &Level::Zero).unwrap();
+    let (_, l) = infer_closed(Layer::Prog, &call).unwrap();
+    assert!(l.equiv(&Level::Zero));
+    // The negative control, at a domain only the head's type reveals.
+    let refused = Term::AppAt { fun: head(), arg: rt(Term::Triv { level: Level::Zero }) };
+    assert!(infer_closed(Layer::Prog, &refused).is_err());
+    // A head whose type reveals no Π is a mismatch, not a panic.
+    let not_fn = Term::AppAt { fun: rt(Term::Zero), arg: rt(Term::Zero) };
+    assert_eq!(infer_closed(Layer::Prog, &not_fn).unwrap_err(), TypeError::HeadMismatch);
+
+    // (3) β, reading nothing from the application.
+    let redex = Term::AppAt { fun: rt(lam(Term::Succ(rt(v(0))))), arg: rt(Term::Zero) };
+    assert_eq!(whnf_term(&redex, &nil_ctx(), FUEL).unwrap(), Term::Succ(rt(Term::Zero)));
+    // And through the record field.
+    check_closed(Layer::Prog, &call, &Type::Nat, &Level::Zero).unwrap();
+
+    // (4) The box side condition, and the quote boundary's translation.
+    let code_ty = Type::CodeTm { ctx: nil_ctx(), ty: rty(Type::Nat), level: Level::Zero };
+    let payload = rt(Term::AppAt { fun: rt(lam(v(0))), arg: rt(Term::Zero) });
+    assert_eq!(
+        check_closed(Layer::Meta, &Term::BoxTm(Rc::clone(&payload)), &code_ty, &Level::Zero)
+            .unwrap_err(),
+        TypeError::UnderBox
+    );
+    let spelled = heather_kernel::typing::spell_checked_in_code(
+        &psi,
+        0,
+        Layer::Code,
+        &nil_ctx(),
+        payload,
+        &Type::Nat,
+        &Level::Zero,
+        FUEL,
+    )
+    .unwrap();
+    assert!(matches!(&*spelled, Term::App { .. }), "{spelled:?}");
+    check_closed(Layer::Meta, &Term::BoxTm(spelled), &code_ty, &Level::Zero).unwrap();
+}
+
 // -------------------------------------------------------------------------
 // Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
 // -------------------------------------------------------------------------

@@ -457,6 +457,7 @@ impl Cache {
                 self.opt_type_use(ty).join(self.term_use(t))
             }
             Term::FstAt { pair: t } | Term::SndAt { pair: t } => self.term_use(t),
+            Term::AppAt { fun, arg } => self.term_use(fun).join(self.term_use(arg)),
             Term::Case {
                 lhs,
                 rhs,

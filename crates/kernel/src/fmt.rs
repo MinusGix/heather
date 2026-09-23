@@ -286,6 +286,7 @@ impl fmt::Debug for Term {
             Term::InrAt { ty: None, val } => write!(f, "inr@({val:?})"),
             Term::FstAt { pair } => write!(f, "fst@({pair:?})"),
             Term::SndAt { pair } => write!(f, "snd@({pair:?})"),
+            Term::AppAt { fun, arg } => write!(f, "app@({fun:?}; {arg:?})"),
             Term::Triv { level } => write!(f, "⟨⟩{level:?}"),
             Term::ElimEmpty { level, scrut_level, motive, scrut } => {
                 write!(f, "elimE[{level:?},{scrut_level:?}](M {motive:?}; {scrut:?})")

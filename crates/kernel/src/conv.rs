@@ -664,8 +664,12 @@ fn delta_head(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
         | Term::ElimCodeTy { scrut, .. }
         | Term::ElimCodeTm { scrut, .. } => delta_head(scrut, defs),
         Term::J { proof, .. } => delta_head(proof, defs),
-        Term::Fst { pair, .. } | Term::Snd { pair, .. } => delta_head(pair, defs),
+        Term::Fst { pair, .. }
+        | Term::Snd { pair, .. }
+        | Term::FstAt { pair }
+        | Term::SndAt { pair } => delta_head(pair, defs),
         Term::App { fun, .. }
+        | Term::AppAt { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
         | Term::TyApp { fun, .. } => delta_head(fun, defs),
@@ -2212,11 +2216,16 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(b1))?, (*ml1).clone()))
             }
             (
-                TmView::App { dom_level: dl1, cod_level: cl1, fun: f1, arg: a1 },
-                TmView::App { dom_level: dl2, cod_level: cl2, fun: f2, arg: a2 },
+                TmView::App { levels: ls1, fun: f1, arg: a1 },
+                TmView::App { levels: ls2, fun: f2, arg: a2 },
             ) => {
-                self.lev_eq(dl1, dl2)?;
-                self.lev_eq(cl1, cl2)?;
+                // Levels as the `Fst` arm below: compared when both sides
+                // store them, and otherwise the inferred Π's are the answer
+                // (`app@`, docs/app-by-head-type-design.md §4).
+                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                }
                 // Typed application rule (extension; the mirror image of the
                 // ch. 06 note below its application rule). The paper compares
                 // the two stored `x:S.T` annotations and *ignores* the type

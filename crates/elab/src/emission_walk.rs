@@ -359,6 +359,11 @@ impl Walk<'_> {
                 self.term(val, d);
             }
             Term::FstAt { pair } | Term::SndAt { pair } => self.term(pair, d),
+            // No annotation, so no slot (docs/app-by-head-type-design.md §6.2).
+            Term::AppAt { fun, arg } => {
+                self.term(fun, d);
+                self.term(arg, d);
+            }
 
             Term::Triv { .. } => {}
             Term::ElimEmpty { motive, scrut, .. } => {
@@ -459,7 +464,7 @@ impl Walk<'_> {
             } => {
                 if self.tally.is_some() {
                     let mut head: &Term = fun;
-                    while let Term::App { fun, .. } = head {
+                    while let Term::App { fun, .. } | Term::AppAt { fun, .. } = head {
                         head = fun;
                     }
                     self.app_head = match head {

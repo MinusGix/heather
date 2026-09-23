@@ -241,6 +241,7 @@ mod tag {
     pub const E_INR_AT: u8 = 0x78;
     pub const E_FST_AT: u8 = 0x79;
     pub const E_SND_AT: u8 = 0x7a;
+    pub const E_APP_AT: u8 = 0x7b;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -746,6 +747,11 @@ impl<'a> Walk<'a> {
             Term::SndAt { pair } => {
                 self.tag(tag::E_SND_AT);
                 self.term(pair);
+            }
+            Term::AppAt { fun, arg } => {
+                self.tag(tag::E_APP_AT);
+                self.term(fun);
+                self.term(arg);
             }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
                 self.tag(tag::E_PAIR);

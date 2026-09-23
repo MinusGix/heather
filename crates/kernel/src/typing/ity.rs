@@ -28,8 +28,10 @@
 //!   counted.
 //!
 //! **Where a `Sel` arises, and only there** (§3.2, verified by construction
-//! on this tree): the five `@` rules of `Tc::tm_infer_inner`, and the Π view
-//! a *checking* λ takes of a `Sel` expected type. No other rule constructs
+//! on this tree): the six `@` rules of `Tc::tm_infer_at`, and the Π view
+//! a *checking* λ takes of a `Sel` expected type. `app@` forms one only when
+//! its head's type is not already a syntactic Π
+//! (`docs/app-by-head-type-design.md` §3.1). No other rule constructs
 //! one — `app`'s result is `cod[arg/x]` from its own annotations, `fst`'s is
 //! its annotation, the four λ inference arms materialize. So on a
 //! declaration with no `@` form the checker's behaviour is byte-identical to
@@ -59,6 +61,11 @@ pub(crate) enum Sel {
     /// `T` of `Π(x:S). T`, **under the binder** — the one selection whose
     /// result is scoped one deeper than its `of`.
     Cod,
+    /// `T[a/x]` of `Π(x:S). T` — the result of a checked application
+    /// `app@(f; a)` whose head's type needed reduction
+    /// (`docs/app-by-head-type-design.md` §3.2). The Π analogue of
+    /// [`Sel::Snd`], and scoped where its `of` is, unlike [`Sel::Cod`].
+    App(Rc<Term>),
 }
 
 impl Sel {

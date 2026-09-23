@@ -49,7 +49,7 @@ use crate::value::algebra::{add_increments, AffineTree, FoldClass, Increment, Pr
 use crate::value::program::ContextProgram;
 use crate::value::transducer::{scale, ArgMode, EnumVal, Output, Transducer, TABLE_CAP};
 use crate::value::{
-    BitTy, Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
+    BitTy, Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
 };
 
 use super::bits::UNIT_NEST_LIMIT;
@@ -647,10 +647,12 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn dummy_app(&self, arg: &'v TmClo<'v>) -> Elim<'v> {
         let nat = self.arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         Elim::App {
-            dom_level: Level::Zero,
-            cod_level: Level::Zero,
-            dom: nat,
-            cod: nat,
+            ann: Some(PiAnn {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: nat,
+                cod: nat,
+            }),
             arg,
         }
     }
@@ -1325,7 +1327,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
                 ArgMode::Carried => args[j],
             };
-            residual_apps.push(Rc::new(Elim::App { dom_level, cod_level, dom, cod, arg }));
+            residual_apps.push(Rc::new(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
             cur = self.apply_ty(cod, &[arg])?;
             cur = self.delta_whnf_ty(cur)?;
         }
@@ -1935,10 +1937,12 @@ mod tests {
         for arg in args {
             let a = arena.tm(TmClo::syn(Env::empty(), Rc::clone(arg)));
             let app = Elim::App {
-                dom_level: Level::Zero,
-                cod_level: Level::Zero,
-                dom: dummy_ty(arena),
-                cod: dummy_ty(arena),
+                ann: Some(PiAnn {
+                    dom_level: Level::Zero,
+                    cod_level: Level::Zero,
+                    dom: dummy_ty(arena),
+                    cod: dummy_ty(arena),
+                }),
                 arg: a,
             };
             v = ev.elim(v, app).expect("fuel");

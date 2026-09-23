@@ -1976,7 +1976,7 @@ use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
-use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val, ValueArena};
+use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
 use heather_kernel::value::program::ContextProgram;
 
 use crate::Elaborator;
@@ -3510,10 +3510,12 @@ fn global_app<'v>(
             return Err(format!("`{name}`'s signature ran out of parameters"));
         };
         let elim = Elim::App {
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: arena.ty(TyClo::new(Env::empty(), Rc::clone(dom))),
-            cod: arena.ty(TyClo::new(Env::empty(), Rc::clone(cod))),
+            ann: Some(PiAnn {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: arena.ty(TyClo::new(Env::empty(), Rc::clone(dom))),
+                cod: arena.ty(TyClo::new(Env::empty(), Rc::clone(cod))),
+            }),
             arg,
         };
         out = arena.tm(TmClo::elim(out, Rc::new(elim)));

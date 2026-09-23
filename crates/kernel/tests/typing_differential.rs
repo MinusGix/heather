@@ -443,6 +443,86 @@ fn nested_projection_chains() {
     );
 }
 
+/// `app@` spines over a head whose Π needs reduction
+/// (`docs/app-by-head-type-design.md` §3.2): a two-argument function stored
+/// as a record field, `fst@(pair@^{T}(λx. λy. x; 0))` with
+/// `T = El ⌜Σ(g : El ⌜Π(x:Nat). Π(y:Nat). Nat⌝). Nat⌝`, applied twice — the
+/// second node's head type is the *first node's description*, so the chain
+/// `Sel{Sel{Fst…}, App(a₁)}` forms, and each argument is checked at a domain
+/// only evaluating that chain reveals. The generator's arm 32 reaches one
+/// link; this is the length-two chain, with the negative control at each
+/// argument position.
+#[test]
+fn app_at_spines_over_record_fields() {
+    let psi = GlobalCtx::new(vec![]);
+    let gamma = LocalCtx::nil();
+    let z = Level::Zero;
+    let pi2 = Term::TmPi {
+        dom_level: z.clone(),
+        cod_level: z.clone(),
+        dom: Rc::new(enc_nat()),
+        cod: Rc::new(Term::TmPi {
+            dom_level: z.clone(),
+            cod_level: z.clone(),
+            dom: Rc::new(enc_nat()),
+            cod: Rc::new(enc_nat()),
+        }),
+    };
+    let rec_ty = el(enc_sigma(pi2, enc_nat()), z.clone());
+    let nat_ty = Rc::new(Type::Nat);
+    let k = Term::Lam {
+        dom_level: z.clone(),
+        cod_level: z.clone(),
+        dom: Rc::clone(&nat_ty),
+        body: Rc::new(Term::Lam {
+            dom_level: z.clone(),
+            cod_level: z.clone(),
+            dom: Rc::clone(&nat_ty),
+            body: Rc::new(Term::Var(heather_kernel::term::LocalVar(1))),
+        }),
+    };
+    let head = Rc::new(Term::FstAt {
+        pair: Rc::new(Term::PairAt {
+            ty: Some(Rc::new(rec_ty)),
+            fst: Rc::new(k),
+            snd: Rc::new(Term::Zero),
+        }),
+    });
+    let one = Rc::new(Term::Succ(Rc::new(Term::Zero)));
+    let triv = Rc::new(Term::Triv { level: z.clone() });
+    let app = |f: Rc<Term>, a: Rc<Term>| Rc::new(Term::AppAt { fun: f, arg: a });
+    let partial = app(Rc::clone(&head), Rc::clone(&one));
+    let full = app(Rc::clone(&partial), Rc::new(Term::Zero));
+    let bad_first = app(app(Rc::clone(&head), Rc::clone(&triv)), Rc::new(Term::Zero));
+    let bad_second = app(Rc::clone(&partial), Rc::clone(&triv));
+
+    let before = heather_kernel::stats::snapshot();
+    for layer in [Layer::Prog, Layer::Meta] {
+        assert_eq!(
+            check_term(&psi, 0, layer, &gamma, &full, &Type::Nat, &z, FUEL),
+            Ok(()),
+            "the spine must check at {layer:?}",
+        );
+        for (seed, (what, t)) in [
+            ("one node", &partial),
+            ("two nodes", &full),
+            ("ill-typed first argument", &bad_first),
+            ("ill-typed second argument", &bad_second),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let seed = seed as u64;
+            infer_tm(seed, what, &psi, 0, layer, &gamma, t, FUEL);
+            check_tm(seed, what, &psi, 0, layer, &gamma, t, &Type::Nat, &z, FUEL);
+        }
+        assert!(check_term(&psi, 0, layer, &gamma, &bad_first, &Type::Nat, &z, FUEL).is_err());
+        assert!(check_term(&psi, 0, layer, &gamma, &bad_second, &Type::Nat, &z, FUEL).is_err());
+    }
+    let met = heather_kernel::stats::snapshot().since(&before);
+    assert!(met.sel_evals > 0, "no Sel::App was evaluated — the stream is vacuous");
+}
+
 /// A λ checked against a *selection*: the one shape that makes the checker
 /// form `Sel::Dom` and `Sel::Cod`. `Σ(f : Nat → Nat). Nat` behind a decode,
 /// inhabited by `pair@(T; λx. x; 0)`.

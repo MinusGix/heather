@@ -850,7 +850,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(if env.at_forms { 32 } else { 27 }) {
+        match r.below(if env.at_forms { 34 } else { 27 }) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -907,7 +907,15 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                     &LocalSubst::id(&env.gamma).extended(Rc::clone(&arg)),
                 );
                 let lvl = cod_level.clone();
-                let app = rt(Term::App { fun: f, dom_level, cod_level, dom, cod, arg });
+                // Half the time the checked spelling, whose Π is the one the
+                // head infers (docs/app-by-head-type-design.md). The head
+                // here infers a syntactic Π or is a λ, so this is the
+                // rule's fast path; arm 32 below is the reducing head.
+                let app = if env.at_forms && env.layer.computes() && r.below(2) == 0 {
+                    rt(Term::AppAt { fun: f, arg })
+                } else {
+                    rt(Term::App { fun: f, dom_level, cod_level, dom, cod, arg })
+                };
                 let res = rty(res);
                 // The dom/cod annotations are copied from the head's Π type,
                 // which may mention globals of a *higher* layer than terms
@@ -1370,6 +1378,55 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 let fst_p = rt(Term::FstAt { pair: Rc::clone(&p) });
                 let snd_at = snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(fst_p));
                 return (rt(Term::SndAt { pair: p }), rty(snd_at), cl);
+            }
+            32 | 33 if b > 0 && env.at_forms && env.layer.computes() => {
+                // app@ over a head whose type needs *reduction* to show its
+                // Π (docs/app-by-head-type-design.md §3.1's second line): a
+                // function stored as a record field, `fst@(pair@^{T}(f; c))`
+                // with T = El ⌜Σ(g: El ⌜Π(x: El A). El B⌝). El C⌝. The head
+                // infers `Sel{T, Fst}`, whose Π is behind two decodes and a
+                // selection, so the result is a `Sel::App` description.
+                let (a_e, al) = gen_encoding(env, r, b / 2);
+                let a_ty = rty(Type::El { level: al.clone(), tm: Rc::clone(&a_e) });
+                let ea = env.push_entry(Rc::clone(&a_ty), al.clone());
+                let (b_e, bl) = gen_encoding(&ea, r, b / 2);
+                let pi_l = Level::max(al.clone(), bl.clone());
+                let pi_e = rt(Term::TmPi {
+                    dom_level: al.clone(),
+                    cod_level: bl.clone(),
+                    dom: Rc::clone(&a_e),
+                    cod: Rc::clone(&b_e),
+                });
+                let fn_ty = rty(Type::El { level: pi_l.clone(), tm: Rc::clone(&pi_e) });
+                let ef = env.push_entry(Rc::clone(&fn_ty), pi_l.clone());
+                let (c_e, cl) = gen_encoding(&ef, r, b / 2);
+                let lmax = Level::max(pi_l.clone(), cl.clone());
+                let ty = rty(Type::El {
+                    level: lmax,
+                    tm: rt(Term::TmSigma {
+                        fst_level: pi_l.clone(),
+                        snd_level: cl.clone(),
+                        fst: pi_e,
+                        snd: Rc::clone(&c_e),
+                    }),
+                });
+                let Some(g) = gen_wt_term_at(env, r, b / 2, &fn_ty, &pi_l) else { continue };
+                let c_at = Type::El {
+                    level: cl.clone(),
+                    tm: rt(c_e.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&g)))),
+                };
+                let Some(c) = gen_wt_term_at(env, r, b / 2, &c_at, &cl) else { continue };
+                let head = rt(Term::FstAt { pair: rt(Term::PairAt { ty: Some(ty), fst: g, snd: c }) });
+                let Some(arg) = gen_wt_term_at(env, r, b / 2, &a_ty, &al) else { continue };
+                let res = Type::El {
+                    level: bl.clone(),
+                    tm: rt(b_e.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&arg)))),
+                };
+                let app = rt(Term::AppAt { fun: head, arg });
+                if !env.checks(&app, &res, &bl) {
+                    continue;
+                }
+                return (app, rty(res), bl);
             }
             _ => continue,
         }

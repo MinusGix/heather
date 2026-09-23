@@ -44,7 +44,7 @@ use crate::term::{
     wf_step_telescope, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
-    self, shift::Outer, Elim, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTy, Val, ValueArena,
 };
 
@@ -1418,10 +1418,12 @@ impl<'v> Dom<'v> for Values {
         arg: &TmC<'v>,
     ) -> R<TmC<'v>> {
         let e = Elim::App {
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: open_ty(env, dom, 0),
-            cod: open_ty(env, cod, 1),
+            ann: Some(PiAnn {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: open_ty(env, dom, 0),
+                cod: open_ty(env, cod, 1),
+            }),
             arg: open_tm(env, arg, 0),
         };
         let f = open_tm(env, fun, 0);
@@ -1491,10 +1493,12 @@ impl<'v> Dom<'v> for Values {
         cod: &TyC<'v>,
     ) -> R<(TmC<'v>, TmC<'v>)> {
         let e = Elim::App {
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: open_ty(outer, dom, 0),
-            cod: open_ty(outer, cod, 1),
+            ann: Some(PiAnn {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: open_ty(outer, dom, 0),
+                cod: open_ty(outer, cod, 1),
+            }),
             arg: var_at(inner, glen(outer)),
         };
         let (a, b) = (Rc::clone(a), Rc::clone(b));
@@ -1763,9 +1767,11 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
     };
     let head = TmC::value(env, spine_head(n));
     match last {
-        Elim::App { dom_level, cod_level, arg, .. } => {
-            TmView::App { dom_level, cod_level, fun: head, arg: TmC::here(env, *arg) }
-        }
+        Elim::App { ann, arg } => TmView::App {
+            levels: ann.as_ref().map(|a| (&a.dom_level, &a.cod_level)),
+            fun: head,
+            arg: TmC::here(env, *arg),
+        },
         Elim::UApp { levels } => TmView::UApp { levels, fun: head },
         Elim::CtxApp { ctx } => TmView::CtxApp { ctx, fun: head },
         Elim::TyApp { arg } => TmView::TyApp { arg, fun: head },
@@ -1990,6 +1996,7 @@ pub(crate) fn eval_ity<'v>(
                 (VTy::Sum { rhs, .. }, Sel::Rhs) => rhs,
                 (VTy::Pi { dom, .. }, Sel::Dom) => dom,
                 (VTy::Pi { cod, .. }, Sel::Cod) => cod,
+                (VTy::Pi { cod, .. }, Sel::App(_)) => cod,
                 // The description was formed by a rule that had already
                 // viewed `of` and found the former; a different head here
                 // means the two disagree, which is a mismatch and not a
@@ -1998,7 +2005,7 @@ pub(crate) fn eval_ity<'v>(
             };
             drop(w);
             let arg: Option<&'v TmClo<'v>> = match sel {
-                Sel::Snd(a) => {
+                Sel::Snd(a) | Sel::App(a) => {
                     let rho = value::Env::identity(env.arena, *at_depth);
                     let v = run(cv, env, |ev| ev.eval_tm_ref(a, &rho))?;
                     Some(env.arena.tm(TmClo::val(v)))

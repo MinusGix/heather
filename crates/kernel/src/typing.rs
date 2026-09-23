@@ -446,6 +446,7 @@ pub fn infer_term(
 pub(crate) enum Spelled {
     Sigma { fst_level: Level, snd_level: Level, fst: Rc<Type>, snd: Rc<Type> },
     Sum { lhs_level: Level, rhs_level: Level, lhs: Rc<Type>, rhs: Rc<Type> },
+    Pi { dom_level: Level, cod_level: Level, dom: Rc<Type>, cod: Rc<Type> },
 }
 
 /// **The quote boundary** (`docs/intro-by-type-design.md` §2.3, amended
@@ -1316,6 +1317,9 @@ impl Tc {
                     (Type::Sum { rhs, .. }, Sel::Rhs) => Rc::clone(rhs),
                     (Type::Pi { dom, .. }, Sel::Dom) => Rc::clone(dom),
                     (Type::Pi { cod, .. }, Sel::Cod) => Rc::clone(cod),
+                    (Type::Pi { cod, .. }, Sel::App(a)) => Rc::new(
+                        cod.apply_local(&LocalSubst::id(&gamma).extended(Rc::clone(a))),
+                    ),
                     // The rule that formed the description had already
                     // viewed `of` and found the former, so this is the two
                     // engines disagreeing, which is a mismatch.
@@ -1467,6 +1471,15 @@ impl Tc {
                     rhs_level: rhs_level.clone(),
                     lhs,
                     rhs,
+                }
+            }
+            TyForm::Pi { dom_level, cod_level, dom, cod } => {
+                let (Some(dom), Some(cod)) = (syn(dom), syn(cod)) else { return };
+                Spelled::Pi {
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom,
+                    cod,
                 }
             }
             _ => return,
@@ -1979,6 +1992,7 @@ impl Tc {
                 | Term::InrAt { .. }
                 | Term::FstAt { .. }
                 | Term::SndAt { .. }
+                | Term::AppAt { .. }
         ) {
             return self.tm_infer_at(env, t);
         }
@@ -2093,6 +2107,65 @@ impl Tc {
                 let fst_p = Term::FstAt { pair: Rc::clone(pair) };
                 crate::stats::intro_at_nodes(1);
                 Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
+            }
+            // `app@(f; a) : T[a/x]` (`docs/app-by-head-type-design.md` §3.1)
+            // — no annotation: the Π is the one `f` infers. Relative to
+            // `app`'s rule this drops the two `ty_check`s of the annotation
+            // and the conversion of `f`'s type against it; the head's
+            // inference is what that rule's `tm_check` of `f` paid anyway.
+            //
+            // **The fast path is today's checker.** A head whose inferred
+            // type is literally a Π — a global's statement, a local's type,
+            // the previous node of a spine — returns `T[a/x]` as syntax, the
+            // same `apply_local` the `app` rule returns, so what follows
+            // sees the syntax it always saw. Only a head whose type needs
+            // reduction to show its Π (a projected record field, a
+            // type-level definition) is viewed in the value domain and
+            // answers a description: §3.3 of the intro design, the rewriter
+            // never runs on a type that came through a checked spelling.
+            Term::AppAt { fun, arg } => {
+                self.checked_spelling_admitted(env)?;
+                let (fun_ty, _) = self.tm_infer(env, fun)?;
+                if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
+                    if let Some(rec) = &self.spellings {
+                        let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
+                        rec.borrow_mut().insert(
+                            key,
+                            Spelled::Pi {
+                                dom_level: dom_level.clone(),
+                                cod_level: cod_level.clone(),
+                                dom: Rc::clone(dom),
+                                cod: Rc::clone(cod),
+                            },
+                        );
+                    }
+                    self.tm_check_rc(env, arg, dom, dom_level)?;
+                    let ty = cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg)));
+                    return Ok((ITy::Owned(ty), cod_level.clone()));
+                }
+                let form = self.view_v(env, &fun_ty)?;
+                self.record(env, t, &form);
+                let TyForm::Pi { dom_level, cod_level, dom, cod } = form else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.tm_check(env, arg, dom.as_ref(), &dom_level)?;
+                // The eager mode's view is the rewriter's, so its codomain
+                // is syntax and the result is too — which is what keeps that
+                // mode today's checker on `app@`.
+                let ty = match cod {
+                    ITy::Syn(cod) => ITy::Owned(
+                        cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
+                    ),
+                    ITy::Owned(cod) => ITy::Owned(
+                        cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
+                    ),
+                    ITy::Sel { .. } => ITy::Sel {
+                        of: Rc::new(fun_ty),
+                        sel: Sel::App(Rc::clone(arg)),
+                        at_depth: env.gamma.entries.len() as u32,
+                    },
+                };
+                Ok((ty, cod_level))
             }
             // An unannotated intro: checking-only, exactly as `box` is.
             _ => Err(TypeError::NotInferable),
@@ -3102,7 +3175,8 @@ impl Tc {
             | Term::InlAt { .. }
             | Term::InrAt { .. }
             | Term::FstAt { .. }
-            | Term::SndAt { .. } => Err(TypeError::NotInferable),
+            | Term::SndAt { .. }
+            | Term::AppAt { .. } => Err(TypeError::NotInferable),
 
             Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
                 self.meta_layer(env)?;
@@ -3326,6 +3400,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::InrAt { .. } => "InrAt",
         Term::FstAt { .. } => "FstAt",
         Term::SndAt { .. } => "SndAt",
+        Term::AppAt { .. } => "AppAt",
         Term::ElimCodeTy { .. } => "ElimCodeTy",
         Term::ElimCodeTm { .. } => "ElimCodeTm",
     }

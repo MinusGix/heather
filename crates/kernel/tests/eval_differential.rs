@@ -63,7 +63,7 @@ use heather_kernel::term::{
     SubstTail, Term, Type,
 };
 use heather_kernel::value::{
-    Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
+    Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
     ValueArena,
 };
 
@@ -728,7 +728,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         });
         match (last, w) {
             (
-                Elim::App { dom_level: a1, cod_level: a2, dom, cod, arg },
+                Elim::App { ann: Some(PiAnn { dom_level: a1, cod_level: a2, dom, cod }), arg },
                 Term::App {
                     fun,
                     dom_level: b1,
@@ -791,6 +791,10 @@ impl<'a, 'v> Agree<'a, 'v> {
             }
             // The checked projections carry no annotation (design §2.1), and
             // neither does the elimination the evaluator builds for one.
+            (Elim::App { ann: None, arg }, Term::AppAt { fun, arg: g2 }) => {
+                self.lazy_tm(arg, g2, gamma, d)?;
+                self.ne(&prefix, fun, gamma, depth)
+            }
             (Elim::Fst { ann: None }, Term::FstAt { pair })
             | (Elim::Snd { ann: None }, Term::SndAt { pair }) => self.ne(&prefix, pair, gamma, depth),
             (

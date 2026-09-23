@@ -794,6 +794,16 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 arg: Rc::clone(arg),
             }),
         },
+        // app@ (extension; docs/app-by-head-type-design.md): β reads nothing
+        // from the application, so it fires as on `app`; the congruence step
+        // has no annotation to carry.
+        Term::AppAt { fun, arg } => match &**fun {
+            Term::Lam { body, .. } => {
+                Some(body.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg))))
+            }
+            _ => step_term_delta(fun, gamma, defs)
+                .map(|f| Term::AppAt { fun: Rc::new(f), arg: Rc::clone(arg) }),
+        },
         Term::UApp { fun, levels } => match &**fun {
             // (Λ ℓ⃗. t) $ l⃗ ⇝ t[l⃗/ℓ⃗]; the written vectors pair positionally
             // (outermost first), instantiation wants innermost-first.
@@ -2449,6 +2459,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         | Term::FstAt { pair, .. }
         | Term::SndAt { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
+        | Term::AppAt { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
         | Term::TyApp { fun, .. } => is_neutral_term(fun),

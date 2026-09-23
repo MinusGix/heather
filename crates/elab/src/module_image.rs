@@ -673,6 +673,7 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::PairAt { ty: None, fst, snd } => { w.byte(59); put_term(w, fst); put_term(w, snd); }
         Term::InlAt { ty: None, val } => { w.byte(60); put_term(w, val); }
         Term::InrAt { ty: None, val } => { w.byte(61); put_term(w, val); }
+        Term::AppAt { fun, arg } => { w.byte(62); put_term(w, fun); put_term(w, arg); }
     }
 }
 
@@ -740,6 +741,7 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         59 => Term::PairAt { ty: None, fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
         60 => Term::InlAt { ty: None, val: Rc::new(get_term(r)?) },
         61 => Term::InrAt { ty: None, val: Rc::new(get_term(r)?) },
+        62 => Term::AppAt { fun: Rc::new(get_term(r)?), arg: Rc::new(get_term(r)?) },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }

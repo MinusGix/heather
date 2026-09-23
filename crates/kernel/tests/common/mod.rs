@@ -1121,6 +1121,7 @@ pub fn count_term(t: &Term) -> u64 {
             ty.as_deref().map_or(0, count_type) + count_term(t)
         }
         Term::FstAt { pair: t } | Term::SndAt { pair: t } => count_term(t),
+        Term::AppAt { fun, arg } => count_term(fun) + count_term(arg),
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }

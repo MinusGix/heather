@@ -30,7 +30,7 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    BitTy, Elim, Env, Head, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
+    BitTy, Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
     Val, ValueArena,
 };
 
@@ -224,11 +224,13 @@ fn head<'v>(h: &Head<'v>, o: Outer<'v>) -> Head<'v> {
 
 fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
     match e {
-        Elim::App { dom_level, cod_level, dom, cod, arg } => Elim::App {
-            dom_level: level(dom_level, o),
-            cod_level: level(cod_level, o),
-            dom: ty_clo(dom, o),
-            cod: ty_clo(cod, o),
+        Elim::App { ann, arg } => Elim::App {
+            ann: ann.as_ref().map(|a| PiAnn {
+                dom_level: level(&a.dom_level, o),
+                cod_level: level(&a.cod_level, o),
+                dom: ty_clo(a.dom, o),
+                cod: ty_clo(a.cod, o),
+            }),
             arg: tm_clo(arg, o),
         },
         Elim::UApp { levels } => Elim::UApp {

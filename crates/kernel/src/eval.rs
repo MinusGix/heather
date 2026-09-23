@@ -59,7 +59,7 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    Elim, ElimSpine, Env, Head, Lookup, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTail, VTy, Val, ValueArena,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
@@ -461,16 +461,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                         }
                         Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
                         Some(Frame::SyncArg { head, app }) => {
-                            let Elim::App { dom_level, cod_level, dom, cod, .. } = &*app else {
+                            let Elim::App { ann, .. } = &*app else {
                                 unreachable!("SyncArg stores an application")
                             };
-                            let app = Elim::App {
-                                dom_level: dom_level.clone(),
-                                cod_level: cod_level.clone(),
-                                dom: *dom,
-                                cod: *cod,
-                                arg: self.vclo(v),
-                            };
+                            let app = Elim::App { ann: ann.clone(), arg: self.vclo(v) };
                             Work::Elim(head, app)
                         }
                         Some(Frame::NatRunTail { program, glued }) => match &*v {
@@ -1301,13 +1295,21 @@ impl<'a, 'v> Eval<'a, 'v> {
             Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
                 let f = self.eval_tm(fun, env)?;
                 let e = Elim::App {
-                    dom_level: dom_level.clone(),
-                    cod_level: cod_level.clone(),
-                    dom: yclo(env, dom),
-                    cod: yclo(env, cod),
+                    ann: Some(PiAnn {
+                        dom_level: dom_level.clone(),
+                        cod_level: cod_level.clone(),
+                        dom: yclo(env, dom),
+                        cod: yclo(env, cod),
+                    }),
                     arg: tclo(env, arg),
                 };
                 return Ok(Work::Elim(f, e));
+            }
+            // app@ stores no Π, and the evaluator does not view the head's
+            // type to invent one (docs/app-by-head-type-design.md §5).
+            Term::AppAt { fun, arg } => {
+                let f = self.eval_tm(fun, env)?;
+                return Ok(Work::Elim(f, Elim::App { ann: None, arg: tclo(env, arg) }));
             }
             Term::UApp { fun, levels } => {
                 let f = self.eval_tm(fun, env)?;
@@ -1659,7 +1661,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             (
                 Val::NatSync { program, tail, elim },
-                Elim::App { dom_level, cod_level, dom, cod, arg },
+                Elim::App { ann, arg },
             ) => {
                 let right = self.force(arg)?;
                 if let Val::Neutral(rn) = &*right {
@@ -1707,13 +1709,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                         let left = self.nat_residual(cancelled.left, tail);
                         let right = self.nat_residual(cancelled.right, right_tail);
                         let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
-                        let app = Elim::App {
-                            dom_level: dom_level.clone(),
-                            cod_level: cod_level.clone(),
-                            dom,
-                            cod,
-                            arg: right,
-                        };
+                        let app = Elim::App { ann: ann.clone(), arg: right };
                         self.frames.push(Frame::Elim(Rc::new(app)));
                         return Ok(Work::Force(folded));
                     }
@@ -2164,7 +2160,7 @@ mod tests {
     use crate::reduce::{Defs, OutOfFuel};
     use crate::term::{CtxBase, LocalVar, Term, Type};
     use crate::value::program::ContextProgram;
-    use crate::value::{Env, TmClo, TyClo, Val, ValueArena};
+    use crate::value::{Env, PiAnn, TmClo, TyClo, Val, ValueArena};
     use std::num::NonZeroU64;
     use std::sync::Arc as Rc;
 
@@ -2223,10 +2219,12 @@ mod tests {
     fn app_elim<'v>(arena: &'v ValueArena<'v>, arg: &'v TmClo<'v>) -> Elim<'v> {
         let ty = arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         Elim::App {
-            dom_level: Level::Zero,
-            cod_level: Level::Zero,
-            dom: ty,
-            cod: ty,
+            ann: Some(PiAnn {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: ty,
+                cod: ty,
+            }),
             arg,
         }
     }

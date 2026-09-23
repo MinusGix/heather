@@ -40,7 +40,7 @@ use crate::level::Level;
 use crate::term::Type;
 use crate::value::algebra::{add_increments, AffineTree, FoldClass, Increment, Path, Proj};
 use crate::value::program::ContextProgram;
-use crate::value::{Elim, Env, Head, TmClo, TyClo, Val};
+use crate::value::{Elim, Env, Head, PiAnn, TmClo, TyClo, Val};
 
 use super::{Eval, Res, Work};
 
@@ -96,10 +96,12 @@ impl<'a, 'v> Eval<'a, 'v> {
         let nat = self.arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         let arg = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
         let app = Elim::App {
-            dom_level: Level::Zero,
-            cod_level: Level::Zero,
-            dom: nat,
-            cod: nat,
+            ann: Some(PiAnn {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: nat,
+                cod: nat,
+            }),
             arg,
         };
         let value = self.drive(Work::Elim(fun, app))?;

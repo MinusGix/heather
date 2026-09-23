@@ -1707,6 +1707,19 @@ pub struct SumAnn<'v> {
     pub rhs: &'v TyClo<'v>,
 }
 
+/// A Π's annotation as an application elimination carries; see
+/// [`SigAnn`]. `None` for a checked application `app@(f; a)`, which stores
+/// none (`docs/app-by-head-type-design.md` §5): nothing reads the closures
+/// but the sites that copy an existing elimination, and conversion takes the
+/// Π from the head it infers.
+#[derive(Clone)]
+pub struct PiAnn<'v> {
+    pub dom_level: Level,
+    pub cod_level: Level,
+    pub dom: &'v TyClo<'v>,
+    pub cod: &'v TyClo<'v>,
+}
+
 /// One elimination of a neutral spine, with the eliminator's annotations
 /// evaluated (or held as closures) exactly as the corresponding [`Term`]
 /// carries them. Conversion compares them where required; for application it
@@ -1719,10 +1732,7 @@ pub struct SumAnn<'v> {
 #[derive(Clone)]
 pub enum Elim<'v> {
     App {
-        dom_level: Level,
-        cod_level: Level,
-        dom: &'v TyClo<'v>,
-        cod: &'v TyClo<'v>,
+        ann: Option<PiAnn<'v>>,
         arg: &'v TmClo<'v>,
     },
     UApp { levels: Vec<Level> },

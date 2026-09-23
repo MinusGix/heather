@@ -450,7 +450,9 @@ pub enum Term {
     // ---- checked spellings (extension; docs/intro-by-type-design.md) ----
     //
     // Five forms, one per intro or projection above, carrying **the type the
-    // term was checked at** in place of that type's components. They exist
+    // term was checked at** in place of that type's components — and a sixth,
+    // `app@`, carrying nothing, whose Π is its head's
+    // (`docs/app-by-head-type-design.md`). They exist
     // because the elaborator normalizes a type to decide a match and would
     // otherwise have to write the reduct's halves into the annotation — an
     // object exponential as a tree and linear as a value graph
@@ -517,6 +519,18 @@ pub enum Term {
     /// same premises as [`Term::FstAt`].
     SndAt {
         pair: Rc<Term>,
+    },
+    /// `app@(f; a) : T[a/x]` where `f` infers `F`, `F ⇝* Π^{l,l'}(x:S). T`
+    /// and `a : S` — the checked spelling of [`Term::App`]
+    /// (`docs/app-by-head-type-design.md`). No annotation and no levels: the
+    /// Π is the one the head infers. When `F` is syntactically a Π the rule
+    /// returns `T[a/x]` as syntax, exactly the `App` rule's result; only a
+    /// head whose type needs reduction yields a description (design §3.1).
+    /// A `λ` head infers only if its body does, so the elaborator keeps
+    /// [`Term::App`] for a β-redex.
+    AppAt {
+        fun: Rc<Term>,
+        arg: Rc<Term>,
     },
 
     // ---- unit and empty (extension beyond DeLaM ch. 04) ----
