@@ -76,6 +76,19 @@ def showcase(name):
     sys.exit(f"error: no `{name}` row in {manifest}")
 
 
+# The x86 line's certificate workload: `build-x86` generates a refinement and
+# execution certificate for the caller and its reused callee and checks it
+# against the bundled proof library. It is the recipe the K1/K2 rounds and
+# their design docs were measured on (docs/native-bitvector-values-design.md),
+# and the corpus files above say nothing about it — the native test binaries
+# are the heaviest rows of the suite. A path here is run through `build-x86`
+# with these arguments instead of `check`; everything else about the entry
+# (modes, cache, `--timings`, the report) is the same.
+X86_CERTIFICATE = ("examples/x86-native/reused_callee.hthr", [])
+BUILD_X86 = {
+    X86_CERTIFICATE[0]: ["caller", "--callee", "leaf", "--arg", "21", "--arg", "1"],
+}
+
 # The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is
 # everything the CLI can check by path. The x86 arch modules are named by
 # the tests, not by their stems, so they are checked here under their stems.
@@ -84,6 +97,7 @@ CORPUS = {
         ("lib/std/omega.hthr", []),
         ("lib/std/nat.hthr", []),
         showcase("calc_parser"),
+        X86_CERTIFICATE,
     ],
     "full": [
         ("lib/std/omega.hthr", []),
@@ -96,6 +110,7 @@ CORPUS = {
         ("lib/ir_v1.hthr", ["lib/std"]),
         ("lib/function_ir.hthr", ["lib/std"]),
         ("lib/std/arch/x86_64/model.hthr", ["lib/std"]),
+        X86_CERTIFICATE,
         # lib/certgen_code.hthr is not in the corpus: it has no imports and
         # elaborates only after a test-only support prelude and ir_v1 in
         # process (crates/elab/tests/certgen_cert.rs), so the CLI refuses it
@@ -320,11 +335,22 @@ def summarize(tsv: Path):
 
 
 def run_check(args, heather: Path, file: str, search, cache: Path, tsv: Path, workers: int):
-    """One capped release `heather check`; wall, CPU and peak RSS from wait4."""
-    cmd = [str(heather), "check"]
+    """One capped release `heather check` (or `build-x86`, for a BUILD_X86
+    path); wall, CPU and peak RSS from wait4."""
+    if file in BUILD_X86:
+        # build-x86 refuses an output that exists, and writes the certificate
+        # beside it; both are scratch.
+        elf = tsv.with_suffix(".elf")
+        for p in (elf, Path(str(elf) + ".certificate.hthr")):
+            p.unlink(missing_ok=True)
+        cmd = [str(heather), "build-x86", file, *BUILD_X86[file], "-o", str(elf)]
+    else:
+        cmd = [str(heather), "check"]
     for d in search:
         cmd += ["-L", d]
-    cmd += ["--cache-dir", str(cache), "--kernel-workers", str(workers), "--timings", str(tsv), file]
+    cmd += ["--cache-dir", str(cache), "--kernel-workers", str(workers), "--timings", str(tsv)]
+    if file not in BUILD_X86:
+        cmd.append(file)
 
     def limits():
         resource.setrlimit(resource.RLIMIT_AS, (args.mem_gib << 30, args.mem_gib << 30))

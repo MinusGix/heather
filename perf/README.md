@@ -25,6 +25,11 @@ Rules, so the diary keeps meaning something:
   landing something that should have moved a column; not every round.
 - The raw `--timings` tables a snapshot summarized are left under
   `target/perf/<stamp>/` (not committed); `scripts/timings` reads them.
+- **One corpus entry is a certificate, not a check**:
+  `examples/x86-native/reused_callee.hthr` runs through `build-x86 caller
+  --callee leaf` (`BUILD_X86` in `scripts/perf`), the x86 line's recipe, so
+  the generated certificate's items are in the report beside the library's.
+  It is the slowest entry by far; `--only` leaves it out of a quick look.
 
 ## What the report shows besides totals
 
