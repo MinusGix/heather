@@ -440,6 +440,7 @@ pub(super) fn apply(module: &mut Module, prefix: &str, caller: &str, first: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Rc;
     #[test]
     fn callable_requires_an_opted_in_leaf() {
         let args = ["composition.hthr", "caller", "--callable-caller", "--arg", "1", "--arg", "2", "-o", "target/unused-callable-output"]
@@ -547,6 +548,40 @@ mod tests {
         composed_summary_fixture("slow_acceptance_multi_register_summary", "multi_register");
     }
 
+    /// A fork of `base` whose kernel gate is the declaration-verdict store at
+    /// `target/decl-cache`, opened afresh. The generator and the elaborator
+    /// run as always; only the kernel's re-check of a term it already accepted
+    /// is skipped, and a mutation is a new term — a miss that faces the real
+    /// kernel. **One store per Ψ lineage:** the store keeps the interface
+    /// hashes of the Ψ it has seen and resyncs only on a *shorter* one, so a
+    /// sibling fork of equal length would be hashed against the wrong
+    /// referents. Each fork gets its own, and extensions of it may share it.
+    fn vouched_fork(base: &Elaborator) -> (Elaborator, Rc<heather_cache::Cache>) {
+        let dir = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/decl-cache"));
+        let (cache, rejected) = heather_cache::Cache::open(dir);
+        if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) { eprintln!("decl-cache: {msg}"); }
+        let cache = Rc::new(cache);
+        let mut fork = base.fork();
+        fork.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        (fork, cache)
+    }
+
+    /// [`vouched_fork`] for a control that must be **refused**: at width one.
+    /// A refusal at a wider gate is a deferred kernel failure, which discards
+    /// the whole parallel pass and re-elaborates the module serially — twice
+    /// the elaboration for one answer. Inline, the pass stops at the first
+    /// refusal, and the unchanged declarations before it are store hits, so
+    /// the serial kernel costs nothing there.
+    fn refusal_fork(base: &Elaborator) -> Elaborator {
+        let (mut fork, _) = vouched_fork(base);
+        fork.set_kernel_workers(1);
+        fork
+    }
+
+    fn save(verdicts: &heather_cache::Cache) {
+        if let Err(err) = verdicts.save() { eprintln!("decl-cache: could not write verdicts: {err}"); }
+    }
+
     fn composed_summary_fixture(test: &str, selected: &str) {
         // Each fixture runs in a child process so it keeps the runner's
         // inherited memory/CPU rails to itself. The parent does no proof work,
@@ -583,8 +618,13 @@ mod tests {
             // independently elaborated caller and mutation.
             let split = complete.find("fn probe_word_").unwrap();
             let imports = complete.lines().filter(|line| line.starts_with("import ")).collect::<Vec<_>>().join("\n");
-            let mut proof_base = elab.fork();
+            // The leaf and the valid caller are kernel-checked once per
+            // accepted term, and every mutation below replays their unchanged
+            // declarations from the store and faces the kernel from the
+            // mutated one on.
+            let (mut proof_base, verdicts) = vouched_fork(&elab);
             proof_base.elab_module_source("checked_leaf", &complete[..split]).unwrap();
+            save(&verdicts);
             let caller_only = |source: &str| format!("{imports}\nimport checked_leaf;\n{}", &source[source.find("fn probe_word_").unwrap()..]);
             let text = caller_only(&complete);
             let mut checked = proof_base.fork();
@@ -592,6 +632,7 @@ mod tests {
                 std::fs::write(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/stack-save-refusal.hthr"), &text).unwrap();
                 panic!("{}", e.render(&text))
             });
+            save(&verdicts);
             if fixture == "multi_stack_save" {
                 for (label, original, replacement) in [
                     ("wrong_multi_save", "StoreStack64(R10)", "StoreStack64(R11)"),
@@ -602,13 +643,13 @@ mod tests {
                     let offset = start + text[start..].find(original).unwrap();
                     let mut corrupt = text.clone();
                     corrupt.replace_range(offset..offset+original.len(), replacement);
-                    let error = proof_base.fork().elab_module_source(label, &corrupt).expect_err("accepted stale multi-slot restoration");
+                    let error = refusal_fork(&proof_base).elab_module_source(label, &corrupt).expect_err("accepted stale multi-slot restoration");
                     assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 }
                 let original = "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe0())";
                 assert!(text.contains(original));
                 let corrupt = text.replacen(original, "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
-                let error = proof_base.fork().elab_module_source("aliased_live_slots", &corrupt).expect_err("accepted overlapping live save words");
+                let error = refusal_fork(&proof_base).elab_module_source("aliased_live_slots", &corrupt).expect_err("accepted overlapping live save words");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 let start = text.find("fn probe_composed_post(").unwrap();
                 let original = " ∨ WordPrefixWrites(8, probe_word_401fe8(), address)";
@@ -618,7 +659,7 @@ mod tests {
                 // This mutation starts at the postcondition. Its earlier state
                 // and memory facts are exactly those already kernel-checked.
                 let corrupt = format!("{imports}\nimport checked_leaf;\nimport valid;\n{}", &corrupt[start..]);
-                let error = checked.fork().elab_module_source("missing_save_footprint", &corrupt).expect_err("accepted an omitted save footprint");
+                let error = refusal_fork(&checked).elab_module_source("missing_save_footprint", &corrupt).expect_err("accepted an omitted save footprint");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
             }
             if fixture == "stack_save" {
@@ -630,17 +671,17 @@ mod tests {
                     let offset = start + text[start..].find(original).unwrap();
                     let mut corrupt = text.clone();
                     corrupt.replace_range(offset..offset+original.len(), replacement);
-                    let error = proof_base.fork().elab_module_source(label, &corrupt).expect_err("accepted a stale save/restore proof");
+                    let error = refusal_fork(&proof_base).elab_module_source(label, &corrupt).expect_err("accepted a stale save/restore proof");
                     assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
                 }
                 let original = "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401ff0())";
                 assert!(text.contains(original));
                 let corrupt = text.replacen(original, "@bitvec::BitVec::bxor(64, probe_word_401fe8(), probe_word_401fe8())", 1);
-                let error = proof_base.fork().elab_module_source("overlapping_save", &corrupt).expect_err("accepted overlap with the child's return word");
+                let error = refusal_fork(&proof_base).elab_module_source("overlapping_save", &corrupt).expect_err("accepted overlap with the child's return word");
                 assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
             }
             let corrupt = caller_only(&certificate(&elab, fixture, true));
-            let error = proof_base.fork().elab_module_source("omitted_clobber", &corrupt).expect_err("accepted a clobbered live caller value");
+            let error = refusal_fork(&proof_base).elab_module_source("omitted_clobber", &corrupt).expect_err("accepted a clobbered live caller value");
             assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&corrupt));
         }
     }
