@@ -3,7 +3,7 @@ title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
 created: 2026-09-06
-updated: 2026-09-19
+updated: 2026-09-23
 ---
 
 Filed from the 2026-09-06 x86 kernel round. Exact first-difference excerpts
@@ -109,3 +109,4 @@ where the fallbacks are paid for.
     same module from source. So this issue's defect is not only paying ×27 in
     conversion: at this size it has taken caching away from the module entirely,
     and no budget raise gets it back.
+- 2026-09-23: Still live at the constructor-value level, measured 2026-09-23 from [[fast-lane-heaviest-declarations]]: `inductive H1 { KH(x: Instruction) }` — `KH(x)` is 13,536 kernel steps, `match h { KH(x) => x }` 13,528, the same over a `Gpr` field 766, `Some(x) : Option<Instruction>` 40. Miss trace of the match: one `Sigma`/`El^δ` (a binder's inline `Σ(⟦Instruction⟧). Unit` against the named type) and one `El^δ`/`Sum` (the `fst` annotation's inline `Instruction` sum against `El(Instruction#tycode^δ)`), ~4 ms each, no reuse across declarations. It is a per-constructor constant wherever a declaration's fields reach `Instruction`: `x86_64_access_code`'s bare constructor-tree definitions (`yes_code`, `whole_code`) are 183 K–348 K steps, and the generated layout proofs in `function_ir_guarded_read` multiply it through reducts (the generator-side fix is on that issue).
