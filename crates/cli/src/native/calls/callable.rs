@@ -525,33 +525,49 @@ mod tests {
         assert!(error.render(&corrupt).contains("probe_composed_instruction_2"), "{}", error.render(&corrupt));
     }
 
+    // One test per fixture, so libtest runs them side by side: as one test
+    // they were the full lane's critical path, four fixtures in series.
     #[test]
-    fn slow_acceptance_shared_and_multi_register_summaries() {
-        // Each independent fixture keeps the runner's inherited memory/CPU
-        // rails. The parent does no proof work, so adding another fixture does
-        // not consume the CLI unit binary's cumulative CPU allowance.
+    fn slow_acceptance_multi_stack_save_summary() {
+        composed_summary_fixture("slow_acceptance_multi_stack_save_summary", "multi_stack_save");
+    }
+
+    #[test]
+    fn slow_acceptance_stack_save_summary() {
+        composed_summary_fixture("slow_acceptance_stack_save_summary", "stack_save");
+    }
+
+    #[test]
+    fn slow_acceptance_sharing_summary() {
+        composed_summary_fixture("slow_acceptance_sharing_summary", "sharing");
+    }
+
+    #[test]
+    fn slow_acceptance_multi_register_summary() {
+        composed_summary_fixture("slow_acceptance_multi_register_summary", "multi_register");
+    }
+
+    fn composed_summary_fixture(test: &str, selected: &str) {
+        // Each fixture runs in a child process so it keeps the runner's
+        // inherited memory/CPU rails to itself. The parent does no proof work,
+        // so adding another fixture does not consume the CLI unit binary's
+        // cumulative CPU allowance.
         const FIXTURE_ENV: &str = "HEATHER_COMPOSED_PROOF_FIXTURE";
-        let selected = match std::env::var(FIXTURE_ENV) {
-            Ok(fixture) => fixture,
-            Err(_) => {
-                // Cargo may replace this binary during an independent build.
-                // Re-exec the running image on Linux, including an unlinked
-                // inode, instead of a current_exe path ending in "(deleted)".
-                let executable = if cfg!(target_os = "linux") {
-                    std::path::PathBuf::from("/proc/self/exe")
-                } else { std::env::current_exe().unwrap() };
-                for fixture in ["multi_stack_save", "stack_save", "sharing", "multi_register"] {
-                    let output = std::process::Command::new(&executable)
-                        .args(["--exact", "native::calls::callable::tests::slow_acceptance_shared_and_multi_register_summaries", "--nocapture", "--test-threads=1"])
-                        .env(FIXTURE_ENV, fixture).output().unwrap();
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    assert!(output.status.success() && stdout.contains("1 passed; 0 failed"), "{fixture}: {stdout}\n{}",
-                        String::from_utf8_lossy(&output.stderr));
-                }
-                return;
-            }
-        };
-        assert!(["multi_stack_save", "stack_save", "sharing", "multi_register"].contains(&selected.as_str()));
+        if std::env::var(FIXTURE_ENV).as_deref() != Ok(selected) {
+            // Cargo may replace this binary during an independent build.
+            // Re-exec the running image on Linux, including an unlinked
+            // inode, instead of a current_exe path ending in "(deleted)".
+            let executable = if cfg!(target_os = "linux") {
+                std::path::PathBuf::from("/proc/self/exe")
+            } else { std::env::current_exe().unwrap() };
+            let output = std::process::Command::new(&executable)
+                .args(["--exact", &format!("native::calls::callable::tests::{test}"), "--nocapture", "--test-threads=1"])
+                .env(FIXTURE_ENV, selected).output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success() && stdout.contains("1 passed; 0 failed"), "{selected}: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr));
+            return;
+        }
         let mut elab = super::super::super::native_test_base();
         for (fixture, source) in [
             ("multi_stack_save", include_str!("../../../../../examples/x86-native/multi_stack_save.hthr")),
