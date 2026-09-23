@@ -424,5 +424,29 @@ fix to take separately); code's own sharing
 
 ## 10. Status
 
-Design written 2026-09-22; no code. Owning issue
+Design written 2026-09-22. Owning issue
 `elab-emits-normal-form-of-matched-type-argument`.
+
+**Landed 2026-09-22**, both stages, every emitter (§6.1 as amended):
+kernel `a471678b`, elaborator `54bb800f`. Full suite 2870 passed / 0
+failed, `bench --check` within thresholds.
+
+Gates, all met:
+- **Image:** `calc_text`'s attribution tally is **11.4 M nodes** (362 M
+  before; `App.dom`/`App.cod` gone, what remains is led by `PairAt.ty`
+  5.4 M, `Lam.dom`, the constructor encoding and case motives). The image
+  publishes: a warm `--cache` run replays it in ~1 s, and `--only
+  checked_run` works (1.4 s). `checked_run#body` 90 M → 0.37 M.
+- **Misses and gate** (`scripts/perf ab --base a471678b`, three interleaved
+  cold samples, every metric separates): `calc_parser` conv_misses 299 k →
+  58 k, kernel gate 27 s → 3.3 s, wall 50 s → 9.3 s, peak 1.16 GB → 164 MB;
+  the curve probes cp9/qt3/qt5 alike (misses −80 %, gate −86 to −88 %,
+  qt5's peak 2.7 GB → 168 MB). `check_terms` and `decls_gated` are
+  identical across the binaries, so the same work was checked.
+- **The showcase gate** checks `calc_text` in 16 s at 0.3 GiB (debug,
+  width one), against the manifest's 334 CPU-s / 9.8 GiB.
+
+The fast path's claim held with room to spare: misses fell rather than
+rose, because the `app` rule's two annotation `ty_check`s and its
+annotation-against-head conversion were the bulk of the kernel's queries on
+these files.
