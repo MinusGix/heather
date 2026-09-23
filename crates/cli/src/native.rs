@@ -171,10 +171,17 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // only the first half was wired here, so every build re-kernel-checked
     // all of the bundled proof library's bindings before it looked at the
     // user's function — ~25 s of a debug-profile build, and ~150 of the
-    // suite's ~220 CPU-s across the four native integration binaries. The
-    // gate covers exactly the bundled prefix and is sealed to `NoGate`
-    // before the user's sources, so the certificate and everything the
-    // caller wrote face the real kernel on every build.
+    // suite's ~220 CPU-s across the four native integration binaries.
+    //
+    // Since 2026-09-23 the gate stays on for the user's sources and the
+    // generated certificate too (it was sealed to `NoGate` before them). The
+    // generator and the elaborator still run on every build — only the
+    // kernel's re-check of a term it already accepted is skipped, and the
+    // key is the elaborated term with its dependencies' interfaces
+    // (docs/cache-v1-design.md §5), so any change to what the generator or
+    // elaborator emits is a new key and a real check, and a changed kernel
+    // discards the store. A second build of the same function with other
+    // `--arg`s re-checks only the declarations the inputs reach.
     let verdicts = cache.as_ref().map(|dir| {
         let (store, rejected) = heather_cache::Cache::open(dir.clone());
         if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
@@ -190,12 +197,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         check_module(&mut elab, &mut session, &loader::Module {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
         })?;
-    }
-    if let Some(store) = verdicts {
-        elab.set_gate(Rc::new(heather_elab::gate::NoGate));
-        if let Err(err) = store.save() {
-            eprintln!("cache: could not write verdicts: {err}");
-        }
     }
     for module in &sources {
         if let Some((_, bundled)) = SUPPORT.iter().find(|(name, _)| *name == module.name) {
@@ -251,7 +252,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let certificate_module = format!("{prefix}_certificate");
     // The certificate is a module like any other and gets a module row, the
     // one `check_module` already opens for the library's: without it the
-    // thousands of generated theorems had no total.
+    // thousands of generated theorems had no total. Deliberately *not*
+    // through the session: an image hit would replay a repeated build, but a
+    // miss elaborates through `check_module_delta`, whose recording made
+    // this module's statements ~25× slower (issues/check-module-delta-certificate-cost.md),
+    // and a suite run after a compiler change is all misses.
     let checked = {
         let _module = timings.as_ref().map(|_| {
             heather_elab::stats::scope(
@@ -263,6 +268,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         elab.elab_module_source(&certificate_module, &proof)
     };
     drop(run_scope);
+    // Written whether or not the certificate was accepted: every entry is a
+    // declaration the kernel did accept.
+    if let Some(store) = verdicts {
+        if let Err(err) = store.save() {
+            eprintln!("cache: could not write verdicts: {err}");
+        }
+    }
     // A refused certificate is the case worth attributing, so the table is
     // written before the failure is reported.
     if let Some(path) = &timings {

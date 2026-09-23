@@ -137,7 +137,25 @@ impl Store {
     /// half-written.
     pub fn save(&self, kernel_semantics: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
-        let body = self.body();
+        // Several processes may share one cache directory (the native test
+        // binaries run side by side against `target/native-test-images`), so
+        // the file on disk can have gained entries since this run loaded it.
+        // Union them in rather than letting the last writer drop the others'
+        // verdicts; a file that does not parse under this kernel is simply
+        // not merged, exactly as `load` would not have trusted it.
+        let merged;
+        let store = match std::fs::read_to_string(Store::path(&self.dir))
+            .ok()
+            .and_then(|text| parse(&text, kernel_semantics).ok())
+        {
+            Some(mut on_disk) if on_disk.keys().any(|k| !self.entries.contains_key(k)) => {
+                on_disk.extend(self.entries.iter().map(|(k, e)| (k.clone(), e.clone())));
+                merged = Store { dir: self.dir.clone(), entries: on_disk, dirty: true };
+                &merged
+            }
+            _ => self,
+        };
+        let body = store.body();
         let mut out = String::new();
         out.push_str(&format!("heather-cache\t{FORMAT}\n"));
         out.push_str(&format!("kernel-semantics\t{kernel_semantics}\n"));
@@ -146,7 +164,12 @@ impl Store {
         // Write beside and rename: a run interrupted mid-write must leave the
         // previous cache intact rather than a truncated one that the checksum
         // would (correctly, but pointlessly) reject on every later run.
-        let tmp = self.dir.join(format!("{FILE}.tmp"));
+        // The temporary name is per writer, so two concurrent saves never
+        // interleave into one torn file; each rename is atomic.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let tmp = self.dir.join(format!("{FILE}.{}-{nonce}.tmp", std::process::id()));
         std::fs::write(&tmp, out)?;
         std::fs::rename(&tmp, Store::path(&self.dir))
     }
