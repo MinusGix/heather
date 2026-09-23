@@ -166,9 +166,10 @@ const PACK: &str =
     "fn pack(n: Nat) -> Both { match n { Zero => BNone, Succ(k) => BSome(k, Succ(k)) } }";
 /// CROSS-FUNCTION COMPOSITION at a non-`Nat` result (non-`Nat` design §2.3):
 /// the foreign call binds a `Nat` temporary, which the constructor field is
-/// the first place in this fragment that can *use*.
+/// the first place in this fragment that can *use*. The callee is written by
+/// its declared name, `Nat::add`, since the std namespace refactor.
 const VIAFIELD: &str =
-    "fn viafield(n: Nat) -> Peek { match n { Zero => PNone, Succ(k) => PSome(add(k, k)) } }";
+    "fn viafield(n: Nat) -> Peek { match n { Zero => PNone, Succ(k) => PSome(Nat::add(k, k)) } }";
 /// A field at ANOTHER INDUCTIVE: the walker would read it, but `embed_T` would
 /// have to embed it at `Flag`'s own embedding rather than at `embed_nat`, so
 /// `sig_sigma`'s field rule declines the declaration whole
@@ -221,7 +222,7 @@ pack_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
 pack_gen_arm_succ() = LetCon(1, RCons(0, RNil), LetCon(1, RCons(1, RCons(0, RNil)), Ret(RCons(0, RNil))))
 pack_gen_body() = LetMatch(0, Arm(pack_gen_arm_zero(), Arm(pack_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
-/// A FOREIGN CALL feeding a field: the two-member closure `[add, viafield]`
+/// A FOREIGN CALL feeding a field: the two-member closure `[Nat::add, viafield]`
 /// puts `add` at index 0, and the constructor reads the call's result.
 const IR_VIAFIELD: &str = "\
 viafield_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
@@ -256,7 +257,7 @@ fn nonnat_transcriptions_and_declines() {
         let em = generate_in_language(&e, &d, &GenCtx::new())
             .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         assert_eq!(em.ir_body, want, "{} transcribes differently", d.name);
-        assert_eq!(em.closure, vec![d.name.clone()], "{}'s closure", d.name);
+        assert_eq!(em.closure_names(), vec![d.name.clone()], "{}'s closure", d.name);
         // The derived artifact travels with the emission, once per type.
         assert!(
             em.support.iter().any(|(k, _)| k.starts_with("embed:")),
@@ -357,7 +358,7 @@ fn nonnat_emissions_and_controls() {
         decl_of(TT),
         decl_of(PEEK),
         decl_of(PACK),
-        nat_decl("add"),
+        nat_decl("Nat::add"),
         decl_of(VIAFIELD),
     ] {
         let em = generate_in_language(&e, &d, &ctx)
@@ -408,11 +409,11 @@ fn nonnat_emissions_and_controls() {
     // two-member program, the callee's invariant re-derived inside it at
     // `embed_nat`, and the caller's constructor spelled over the call.
     let vf = ctx_get(&ctx, "viafield");
-    assert_eq!(vf.closure, vec!["add".to_string(), "viafield".to_string()]);
+    assert_eq!(vf.closure_names(), vec!["Nat::add".to_string(), "viafield".to_string()]);
     assert_eq!(vf.ir_body, IR_VIAFIELD, "viafield transcribes differently");
-    assert!(vf.text.contains("add_gen_conv_in_viafield"), "{}", vf.text);
-    assert!(vf.text.contains("Peek_gen_embed(PSome(add(gk, gk)))"), "{}", vf.text);
-    assert!(vf.text.contains("VCons(embed_nat(add(gk, gk)), VNil)"), "{}", vf.text);
+    assert!(vf.text.contains("Nat__add_gen_conv_in_viafield"), "{}", vf.text);
+    assert!(vf.text.contains("Peek_gen_embed(PSome(Nat::add(gk, gk)))"), "{}", vf.text);
+    assert!(vf.text.contains("VCons(embed_nat(Nat::add(gk, gk)), VNil)"), "{}", vf.text);
 
     // (a) a wrong constructor tag: the body builds `Off` where every emitted
     // proof says `On`, so the exactness fixture's `refl` refuses it.

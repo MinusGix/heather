@@ -128,7 +128,7 @@ const GATE: &str = "fn gate(f: Flag, n: Nat) -> Nat { match f { Off => 0, On => 
 const ROUTE: &str = "fn route(f: Flag, n: Nat) -> Nat { gate(f, n) }";
 const FNOT: &str = "fn fnot(f: Flag) -> Flag { match f { Off => On, On => Off } }";
 const SEL3: &str =
-    "fn sel3(s: Sign3, n: Nat) -> Nat { match s { SNeg => 0, SZero => n, SPos => add(n, n) } }";
+    "fn sel3(s: Sign3, n: Nat) -> Nat { match s { SNeg => 0, SZero => n, SPos => n.add(n) } }";
 const WSUM: &str =
     "fn wsum(f: Flag, n: Nat) -> Nat { match n { Zero => gate(f, 0), Succ(k) => Succ(wsum(f, k)) } }";
 const TSEL: &str =
@@ -155,7 +155,7 @@ const IR_ROUTE: &str =
     "route_gen_body() = LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil)))";
 
 /// Three constructors: a dispatch past tag 1, and a foreign call in an arm
-/// (closure `[add, sel3]`).
+/// (closure `[Nat::add, sel3]`).
 const IR_SEL3: &str = "\
 sel3_gen_arm0() = LetCon(0, RNil, Ret(RCons(0, RNil)))
 sel3_gen_arm1() = Ret(RCons(1, RNil))
@@ -213,7 +213,7 @@ fn t0param_emissions_and_declines() {
     generate(&mut e, &mut ctx, &decl_of(GATE));
     generate(&mut e, &mut ctx, &decl_of(ROUTE));
     generate(&mut e, &mut ctx, &decl_of(FNOT));
-    generate(&mut e, &mut ctx, &lib_decl("add"));
+    generate(&mut e, &mut ctx, &lib_decl("Nat::add"));
     generate(&mut e, &mut ctx, &decl_of(SEL3));
     generate(&mut e, &mut ctx, &decl_of(WSUM));
     generate(&mut e, &mut ctx, &decl_of(TSEL));
@@ -224,9 +224,9 @@ fn t0param_emissions_and_declines() {
     assert_eq!(get("route").ir_body, IR_ROUTE, "route transcribes differently");
     assert_eq!(get("sel3").ir_body, IR_SEL3, "sel3 transcribes differently");
     assert_eq!(get("wsum").ir_body, IR_WSUM, "wsum transcribes differently");
-    assert_eq!(get("route").closure, vec!["gate".to_string(), "route".to_string()]);
-    assert_eq!(get("sel3").closure, vec!["add".to_string(), "sel3".to_string()]);
-    assert_eq!(get("wsum").closure, vec!["gate".to_string(), "wsum".to_string()]);
+    assert_eq!(get("route").closure_names(), vec!["gate".to_string(), "route".to_string()]);
+    assert_eq!(get("sel3").closure_names(), vec!["Nat::add".to_string(), "sel3".to_string()]);
+    assert_eq!(get("wsum").closure_names(), vec!["gate".to_string(), "wsum".to_string()]);
 
     // The composition item: the callee's invariant re-derived inside the
     // caller's program and applied at the caller's own `Flag` parameter —

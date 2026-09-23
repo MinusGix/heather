@@ -1,6 +1,6 @@
 ---
 title: certgen identifies functions by surface name; make it namespace-correct
-status: open
+status: closed
 labels: [certgen,modules,design]
 created: 2026-09-22
 updated: 2026-09-23
@@ -56,3 +56,5 @@ they are shape, not names.
 ## Log
 
 - 2026-09-23: 2026-09-23: confirmed on master after the receiver-style stdlib merge (875109b8). Five certgen emission tests in the full suite fail this way (`unbound name add`). They are the only remaining red besides the lib_algebra, operators_onto_classes and fmt drift, which were test-side respellings and are fixed. The direction is still undecided.
+- 2026-09-23: 2026-09-23: direction 2 chosen (user): key on global identity. Design: docs/certgen-global-identity-design.md (abs identity, declared-name stems with `::`→`__`, collision declines, reference spelling that resolves back). Red targets: certgen, certgen_emissions, certgen_nonnat, certgen_t0param, certgen_tier1.
+- 2026-09-23: 2026-09-23: landed (direction 2), per docs/certgen-global-identity-design.md. Functions are keyed on their Ψ index, generated items are named by `Nat__add`-style stems, and the design's §3 was amended. Two scope dependences remain: an emission's reference spellings, and the certificate fold (`cert_body`, resolved by name), are both checked in the elaborator's scope at generation time, so the caller has to elaborate the emission in that same scope. Direction 3 (hygienic names) remains the principled end state.

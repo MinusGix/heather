@@ -100,7 +100,7 @@ fn support() -> String {
 }
 
 /// A parsed `fn` declaration from the library — or from `nat`, where `add`
-/// lives now — by name.
+/// lives now, as `Nat::add` — by declared name.
 fn lib_decl(name: &str) -> Decl {
     let file = parse_file(LIB).expect("the library parses");
     let file = if file.items.iter().any(|i| matches!(i, Item::Decl(d) if d.name == name)) {
@@ -134,9 +134,10 @@ const THIRD3: &str =
 /// cross-function call rather than about literal spelling. Named `viaadd`
 /// rather than `mul` since 2026-08-13, when `lib/std/nat.hthr` took the
 /// latter name for a differently-spelled library function
-/// (`crates/elab/tests/certgen.rs`'s `VIAADD` carries the reasons).
+/// (`crates/elab/tests/certgen.rs`'s `VIAADD` carries the reasons). The call
+/// is receiver-style since `add` became the member `Nat::add`.
 const VIAADD: &str =
-    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }";
+    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => a.add(viaadd(a, k)) } }";
 
 
 /// Everything here elaborates **as the library module**, so that the
@@ -216,14 +217,31 @@ fn emissions_check_and_controls() {
         elab(e, &em.text, &format!("emission for {}", em.name));
         ctx.push(em);
     };
-    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(VIAADD)] {
+    for d in [lib_decl("Nat::add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(VIAADD)] {
         generate(&mut e, &mut ctx, &mut support_done, &d);
     }
     // The viaadd emission really is the two-function program with the
-    // re-derived callee invariant.
+    // re-derived callee invariant. Generated items carry the callee's STEM,
+    // `Nat__add`; the function itself is spelled `Nat::add`, which resolves
+    // back to it here (docs/certgen-global-identity-design.md §§2–3).
     let viaadd = ctx_get(&ctx, "viaadd");
-    assert_eq!(viaadd.closure, vec!["add".to_string(), "viaadd".to_string()]);
-    assert!(viaadd.text.contains("add_gen_conv_in_viaadd"));
+    assert_eq!(viaadd.closure_names(), vec!["Nat::add".to_string(), "viaadd".to_string()]);
+    assert!(viaadd.text.contains("Nat__add_gen_conv_in_viaadd"), "{}", viaadd.text);
+    assert!(viaadd.text.contains("Nat::add(a, "), "{}", viaadd.text);
+
+    // (a) A MEMBER's emission puts nothing in its type's namespace (§2): the
+    // `Nat::add` emission elaborated above declared `Nat__add_gen_body`, and
+    // `Nat::add_gen_body` names nothing. The two probes are twins, so the
+    // negative one cannot be failing for a reason other than the name.
+    let add = ctx_get(&ctx, "Nat::add");
+    assert!(!add.text.contains("Nat::add_gen"), "{}", add.text);
+    assert!(!add.text.contains("fn add_gen"), "{}", add.text);
+    elab(&mut e, "fn cgns_present() -> Ir { Nat__add_gen_body() }", "the stem resolves");
+    assert!(
+        e.elab_module_source("ir_v1", "fn cgns_absent() -> Ir { Nat::add_gen_body() }")
+            .is_err(),
+        "a generated item landed in `Nat`'s namespace"
+    );
 
     // §9 item 4, the mutation controls: perturb the known-good dbl emission
     // and the certificate refuses. Renamed apart so one elaborator serves
@@ -265,15 +283,30 @@ fn emissions_check_and_controls() {
         .replace("viaadd_gen", "viaaddm5_gen")
         .replace("_in_viaadd", "_in_viaaddm5")
         .replacen(
-            "PFun(add_gen_body(), PFun(viaaddm5_gen_body(), PNil))",
-            "PFun(viaaddm5_gen_body(), PFun(add_gen_body(), PNil))",
+            "PFun(Nat__add_gen_body(), PFun(viaaddm5_gen_body(), PNil))",
+            "PFun(viaaddm5_gen_body(), PFun(Nat__add_gen_body(), PNil))",
             1,
         );
     assert!(
-        mutant.contains("PFun(viaaddm5_gen_body(), PFun(add_gen_body(), PNil))"),
+        mutant.contains("PFun(viaaddm5_gen_body(), PFun(Nat__add_gen_body(), PNil))"),
         "the mutation must apply"
     );
     refuted(&mut e, &mutant, "a program whose members are swapped");
+
+    // (f) The REFERENCE SPELLING is load-bearing
+    // (docs/certgen-global-identity-design.md §3): point every spec
+    // reference to the callee at a different global of the same signature,
+    // `Nat::mul`, leaving the program and every generated name alone. The
+    // re-derived callee invariant now claims `add`'s body computes `mul`, and
+    // the kernel refuses it.
+    let mutant = ctx_get(&ctx, "viaadd")
+        .text
+        .replace("viaadd_gen", "viaaddm6_gen")
+        .replace("_in_viaadd", "_in_viaaddm6")
+        .replace("Nat::add(", "Nat::mul(");
+    assert!(mutant.contains("Nat::mul("), "the mutation must apply");
+    assert!(!mutant.contains("Nat::add("), "the mutation must apply everywhere");
+    refuted(&mut e, &mutant, "a callee spelled as a different global");
 }
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {

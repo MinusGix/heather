@@ -124,10 +124,10 @@ const EXPR2: &str = "inductive Expr2 { Lit2(n: Nat), Plus2(l: Expr2, r: Expr2) }
 /// The `eval` shape (docs/showcase/README.md's derive-`Compile` row): both
 /// children's recursions combined by a foreign call.
 const ESUM: &str =
-    "fn esum(x: Expr2) -> Nat { match x { Lit2(n) => n, Plus2(l, r) => add(esum(l), esum(r)) } }";
+    "fn esum(x: Expr2) -> Nat { match x { Lit2(n) => n, Plus2(l, r) => esum(l).add(esum(r)) } }";
 const TH: &str = "inductive Th { A, B(n: Nat, t: Th), C(t: Th, m: Nat) }";
 const THF: &str =
-    "fn th(x: Th, b: Nat) -> Nat { match x { A => b, B(n, t) => Succ(th(t, b)), C(t, m) => add(m, th(t, b)) } }";
+    "fn th(x: Th, b: Nat) -> Nat { match x { A => b, B(n, t) => Succ(th(t, b)), C(t, m) => Nat::add(m, th(t, b)) } }";
 const FLAG: &str = "inductive Flag { Off, On }";
 const THAS: &str =
     "fn thas(l: Toks) -> Flag { match l { TNil => Off, TCons(n, rest) => On } }";
@@ -199,7 +199,7 @@ fn tier1_emissions_and_declines() {
         ctx.push(em);
     };
     generate(&mut e, &mut ctx, &decl_of(TSUM));
-    generate(&mut e, &mut ctx, &lib_decl("add"));
+    generate(&mut e, &mut ctx, &lib_decl("Nat::add"));
     generate(&mut e, &mut ctx, &decl_of(ESUM));
     generate(&mut e, &mut ctx, &decl_of(THF));
     generate(&mut e, &mut ctx, &decl_of(THAS));
@@ -219,13 +219,13 @@ fn tier1_emissions_and_declines() {
     assert_eq!(get("tsum").ir_body, IR_TSUM, "tsum transcribes differently");
     assert_eq!(get("esum").ir_body, IR_ESUM, "esum transcribes differently");
     assert_eq!(get("th").ir_body, IR_TH, "th transcribes differently");
-    assert_eq!(get("tsum").closure, vec!["tsum".to_string()]);
-    assert_eq!(get("esum").closure, vec!["add".to_string(), "esum".to_string()]);
-    assert_eq!(get("th").closure, vec!["add".to_string(), "th".to_string()]);
+    assert_eq!(get("tsum").closure_names(), vec!["tsum".to_string()]);
+    assert_eq!(get("esum").closure_names(), vec!["Nat::add".to_string(), "esum".to_string()]);
+    assert_eq!(get("th").closure_names(), vec!["Nat::add".to_string(), "th".to_string()]);
     // The callee's invariant is re-derived inside the tier-1 program, and
     // the tier-1 induction consumes its own over-applied self-call as the
     // ih at each child (design doc §1).
-    assert!(get("esum").text.contains("add_gen_conv_in_esum"));
+    assert!(get("esum").text.contains("Nat__add_gen_conv_in_esum"));
     assert!(get("esum").text.contains("esum_gen_conv(gf0, VNil)"));
     assert!(get("esum").text.contains("esum_gen_conv(gf1, VNil)"));
     // The recursive embedding and the per-signature records.

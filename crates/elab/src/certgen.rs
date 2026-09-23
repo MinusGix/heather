@@ -20,7 +20,7 @@
 //!
 //!   1. the **reflection primitive** ([`body_code`], reached as
 //!      [`Elaborator::fn_body_code`]): a declared fn's elaborated body as
-//!      marked, closed, boxed code plus the callee tag→name table — the
+//!      marked, closed, boxed code plus the callee tag→Ψ-index table — the
 //!      coordinate system an analyzer can actually read
 //!      (docs/opaque-globals-analysis-design.md §2);
 //!   2. the **invocation and readback** ([`run_sig_checker`],
@@ -73,10 +73,15 @@ use heather_syntax::ast::{Decl, DeclKind};
 /// One generated emission, carrying what later generations and the harness
 /// need: the callee-closure metadata and the compiled IR model.
 pub struct Emission {
+    /// The emitted function's **declared** name (`Nat::add`, `viaadd`): for
+    /// reading, never for identity (docs/certgen-global-identity-design.md
+    /// §4).
     pub name: String,
     pub arity: usize,
-    /// `Prog` members in order, self last.
-    pub closure: Vec<String>,
+    /// `Prog` members in order, self last, as Ψ absolute indices — the
+    /// identity every lookup here keys on (§1). [`Emission::closure_names`]
+    /// is the readable form.
+    pub closure: Vec<usize>,
     /// The rendered IR declarations (for the acceptance diff).
     pub ir_body: String,
     /// Declarations this emission's text *refers to* and that are shared
@@ -97,6 +102,103 @@ pub struct Emission {
     /// `LetCall` argument slots are checked against them
     /// (docs/certgen-tier0-params-design.md §7).
     pts: Vec<Option<ParamTy>>,
+    /// This function's Ψ coordinate: what [`GenCtx`] finds it by.
+    abs: usize,
+    /// `closure`'s members with their names, in the same order.
+    members: Members,
+}
+
+impl Emission {
+    /// The closure's declared names, in program order: `["Nat::add",
+    /// "viaadd"]`.
+    pub fn closure_names(&self) -> Vec<String> {
+        self.members.0.iter().map(|m| m.declared.clone()).collect()
+    }
+}
+
+/// One closure member's names (docs/certgen-global-identity-design.md
+/// §§1–3). Identity is `abs`; the three strings are derived from it once per
+/// emission and nothing compares them.
+#[derive(Clone)]
+struct Member {
+    abs: usize,
+    /// The declared name, the qualified key minus the module (`Nat::add`,
+    /// `dbl`): diagnostics and [`Emission::closure_names`].
+    declared: String,
+    /// The prefix of this member's `_gen_*` items: the declared name with
+    /// `::` replaced by `__`, so `Nat::add` owns `Nat__add_gen_body` and a
+    /// top-level `dbl` keeps `dbl_gen_body` (§2).
+    stem: String,
+    /// How the emitted text calls or names the function itself: the declared
+    /// name when it resolves back to `abs`, else the qualified one (§3).
+    spell: String,
+}
+
+/// A program's closure with its members' names, in program order — position
+/// `i` is what `LetCall(i, …)` names.
+#[derive(Clone)]
+struct Members(Vec<Member>);
+
+impl Members {
+    /// Name every member of `closure`, or decline.
+    ///
+    /// Two members with one stem decline rather than get a disambiguating
+    /// suffix, because a stem has to be predictable from the source (§2). A
+    /// member neither of whose spellings resolves back to it declines too:
+    /// the emission's text would name some other function, or none.
+    ///
+    /// The spellings are checked against the elaborator's *current* scope,
+    /// which is where the caller elaborates the emission (the tests do so in
+    /// the module the functions were declared in).
+    fn of(e: &Elaborator, closure: &[usize]) -> Result<Members, String> {
+        let mut out: Vec<Member> = Vec::new();
+        for &abs in closure {
+            let qualified = e
+                .global_qualified_name_at(abs)
+                .ok_or_else(|| format!("Ψ#{abs} has no registered name"))?;
+            let declared = e.global_declared_name_at(abs).unwrap_or_else(|| qualified.clone());
+            let stem = declared.replace("::", "__");
+            if let Some(other) = out.iter().find(|m| m.stem == stem) {
+                let first = e
+                    .global_qualified_name_at(other.abs)
+                    .unwrap_or_else(|| other.declared.clone());
+                return Err(format!(
+                    "`{first}` and `{qualified}` would both name their generated items \
+                     `{stem}_gen_*`: two functions with one declared name in one program \
+                     (docs/certgen-global-identity-design.md §2)"
+                ));
+            }
+            let spell = if e.base_name_resolves_to(&declared, abs) {
+                declared.clone()
+            } else if e.base_name_resolves_to(&qualified, abs) {
+                qualified
+            } else {
+                return Err(format!(
+                    "neither `{declared}` nor `{qualified}` resolves back to the \
+                     function where its emission is elaborated"
+                ));
+            };
+            out.push(Member {
+                abs,
+                declared,
+                stem,
+                spell,
+            });
+        }
+        Ok(Members(out))
+    }
+
+    /// The program index of `abs`.
+    fn idx(&self, abs: usize) -> Result<usize, String> {
+        self.0
+            .iter()
+            .position(|m| m.abs == abs)
+            .ok_or_else(|| format!("Ψ#{abs} is not a member of the program"))
+    }
+
+    fn get(&self, abs: usize) -> Result<&Member, String> {
+        Ok(&self.0[self.idx(abs)?])
+    }
 }
 
 /// Previously generated emissions, consulted for foreign calls.
@@ -115,8 +217,8 @@ impl GenCtx {
     pub fn iter(&self) -> impl Iterator<Item = &Emission> {
         self.done.iter()
     }
-    fn get(&self, name: &str) -> Option<&Emission> {
-        self.done.iter().find(|e| e.name == name)
+    fn get(&self, abs: usize) -> Option<&Emission> {
+        self.done.iter().find(|e| e.abs == abs)
     }
 }
 
@@ -812,7 +914,8 @@ fn surface_params(d: &Decl) -> Result<Vec<&str>, String> {
 #[derive(Clone)]
 enum Instr {
     Con { tag: u64, dists: Vec<usize> },
-    Call { callee: String, dists: Vec<usize> },
+    /// `callee` is the Ψ absolute index (docs/certgen-global-identity-design.md §1).
+    Call { callee: usize, dists: Vec<usize> },
 }
 
 #[derive(Clone)]
@@ -862,7 +965,7 @@ fn refs(dists: &[usize]) -> String {
 }
 
 /// Render `instrs[from..] ; Ret`, callee indices resolved against a closure.
-fn render_chain(instrs: &[Instr], from: usize, ret_dist: usize, closure: &[String]) -> String {
+fn render_chain(instrs: &[Instr], from: usize, ret_dist: usize, closure: &[usize]) -> String {
     let mut s = format!("Ret(RCons({ret_dist}, RNil))");
     for i in instrs[from..].iter().rev() {
         s = match i {
@@ -925,15 +1028,15 @@ impl V {
 }
 
 struct Evaluator<'a> {
-    fns: Vec<(&'a str, &'a FnIr)>,
+    fns: Vec<(usize, &'a FnIr)>,
 }
 
 impl<'a> Evaluator<'a> {
-    fn run_fn(&self, name: &str, args: &[V]) -> (V, usize) {
+    fn run_fn(&self, abs: usize, args: &[V]) -> (V, usize) {
         let (_, f) = self
             .fns
             .iter()
-            .find(|(n, _)| *n == name)
+            .find(|(n, _)| *n == abs)
             .expect("fn in closure");
         match &f.kind {
             FnIrKind::Plain(c) => self.run_chain(c, args.to_vec()),
@@ -981,7 +1084,7 @@ impl<'a> Evaluator<'a> {
             }
             Instr::Call { callee, dists } => {
                 let args: Vec<V> = dists.iter().map(|&d| env[d].clone()).collect();
-                let (cv, cn) = self.run_fn(callee, &args);
+                let (cv, cn) = self.run_fn(*callee, &args);
                 env.insert(0, cv);
                 let (out, n) = self.run_from(c, from + 1, env);
                 (out, 1 + cn.max(n))
@@ -1003,13 +1106,13 @@ impl<'a> Evaluator<'a> {
 
 struct ProofCx<'a> {
     prog: String,
-    closure: &'a [String],
-    conv_name: &'a dyn Fn(&str) -> String,
+    members: &'a Members,
+    conv_name: &'a dyn Fn(&Member) -> String,
     ctx: &'a GenCtx,
     /// The closure member whose invariant is being proved: its self-calls
-    /// consume `gih`, its arms are spelled `{self_name}_gen_arm_*`, and its
-    /// own position in the program is what a self-call's `LetCall` names.
-    self_name: &'a str,
+    /// consume `gih`, its arms are spelled `{stem}_gen_arm_*`, and its own
+    /// position in the program is what a self-call's `LetCall` names.
+    self_m: &'a Member,
     self_idx: usize,
     /// The recursion slot, when this member is recursive — the argument
     /// position `gih` does *not* take. `None` for a straight-line member, in
@@ -1112,11 +1215,8 @@ impl ProofCx<'_> {
         }
     }
 
-    fn callee_idx(&self, name: &str) -> Result<usize, String> {
-        self.closure
-            .iter()
-            .position(|c| c == name)
-            .ok_or_else(|| format!("`{name}` is not a member of the program"))
+    fn callee_idx(&self, abs: usize) -> Result<usize, String> {
+        self.members.idx(abs)
     }
 
     /// The IR the certificate is about, spelled as the emitted proofs spell
@@ -1139,7 +1239,7 @@ impl ProofCx<'_> {
                 )
             }
             RCert::Call { callee, args, hr } => {
-                let idx = self.callee_idx(callee)?;
+                let idx = self.callee_idx(*callee)?;
                 format!("LetCall({idx}, {}, {})", refs(args), self.cert_ir(hr)?)
             }
             RCert::Match { .. } => {
@@ -1182,8 +1282,10 @@ impl ProofCx<'_> {
                 // callee is `Nat → … → Nat` by the marker convention, so its
                 // temporary is a `Nat` whatever this function returns.
                 let (name, rt) = match c {
-                    RCert::Call { callee, .. } => (callee.as_str(), &self.nat),
-                    _ => (self.self_name, self.res),
+                    RCert::Call { callee, .. } => {
+                        (self.members.get(*callee)?.spell.as_str(), &self.nat)
+                    }
+                    _ => (self.self_m.spell.as_str(), self.res),
                 };
                 let arg_specs: Vec<String> =
                     slots(env, args)?.into_iter().map(|s| s.spec).collect();
@@ -1233,10 +1335,10 @@ fn render_cert(
             let arg_exprs: Vec<String> = arg_slots.iter().map(|s| s.spec.clone()).collect();
             let (idx, name, hc, rt) = match c {
                 RCert::Call { callee, .. } => {
-                    let cal = cx
-                        .ctx
-                        .get(callee)
-                        .ok_or_else(|| format!("callee `{callee}` has no generated instance"))?;
+                    let cm = cx.members.get(*callee)?;
+                    let cal = cx.ctx.get(*callee).ok_or_else(|| {
+                        format!("callee `{}` has no generated instance", cm.declared)
+                    })?;
                     // Each argument slot must carry the embedding the
                     // callee's declared parameter expects — `embed_nat` at a
                     // `Nat`, the type's own at a tier-0 enumeration
@@ -1253,15 +1355,16 @@ fn render_cert(
                             .unwrap_or("embed_nat");
                         if sl.embed != want {
                             return Err(format!(
-                                "argument {j} of the call to `{callee}` is not a slot \
-                                 of the callee's declared parameter type"
+                                "argument {j} of the call to `{}` is not a slot \
+                                 of the callee's declared parameter type",
+                                cm.declared
                             ));
                         }
                     }
                     (
-                        cx.callee_idx(callee)?,
-                        callee.clone(),
-                        cert_app(&(cx.conv_name)(callee), &cal.model, &arg_exprs),
+                        cx.callee_idx(*callee)?,
+                        cm.spell.clone(),
+                        cert_app(&(cx.conv_name)(cm), &cal.model, &arg_exprs),
                         // A foreign callee's result is a `Nat` (the marker
                         // convention), so its temporary is embedded at
                         // `embed_nat` even inside an `R`-result function —
@@ -1299,12 +1402,12 @@ fn render_cert(
                             // (`issues/certgen-emission-idiomatic-style.md`).
                             format!(
                                 "{}({child}, {})",
-                                (cx.conv_name)(cx.self_name),
+                                (cx.conv_name)(cx.self_m),
                                 others.join(", ")
                             )
                         }
                     };
-                    (cx.self_idx, cx.self_name.to_string(), hc, cx.res)
+                    (cx.self_idx, cx.self_m.spell.clone(), hc, cx.res)
                 }
             };
             let cargs = env_text(&arg_slots, "VNil");
@@ -1332,7 +1435,7 @@ fn render_cert(
             // zero/succ pair, byte-for-byte; over a tier-1 parameter they
             // come off the type's constructor table
             // (docs/certgen-tier1-source-types-design.md §7).
-            let m = cx.self_name;
+            let m = &cx.self_m.stem;
             let (arms_text, fields, field_sls) = match cx.scrut_pt {
                 None => (
                     format!("Arm({m}_gen_arm_zero(), Arm({m}_gen_arm_succ(), NoArm))"),
@@ -1386,8 +1489,10 @@ fn render_cert(
 /// seam the port moved at (docs/certgen-transcriber-in-language-design.md §5):
 /// the transcriber it is fed by is the in-language one, and phases 3 and 4 stay
 /// here for the reasons that section's table gives.
+#[allow(clippy::too_many_arguments)]
 fn emit_with_model(
-    f: &str,
+    e: &Elaborator,
+    abs: usize,
     arity: usize,
     res: &ResTy,
     pts: &[Option<ParamTy>],
@@ -1395,59 +1500,68 @@ fn emit_with_model(
     cert: RCertOut,
     ctx: &GenCtx,
 ) -> Result<Emission, String> {
-    // Closure: callees' closures (prefix-compatible), then self.
-    let mut closure: Vec<String> = Vec::new();
+    // Closure: callees' closures (prefix-compatible), then self. By Ψ
+    // coordinate, so two members sharing a base name stay two members
+    // (docs/certgen-global-identity-design.md §1).
+    let mut closure: Vec<usize> = Vec::new();
     for callee in callees(&model) {
-        if callee == f {
+        if callee == abs {
             continue;
         }
-        let cal = ctx
-            .get(&callee)
-            .ok_or_else(|| format!("callee `{callee}` has no generated instance"))?;
+        let cal = ctx.get(callee).ok_or_else(|| {
+            let name = e.global_qualified_name_at(callee).unwrap_or_else(|| format!("Ψ#{callee}"));
+            format!("callee `{name}` has no generated instance")
+        })?;
         if closure.is_empty() || cal.closure.starts_with(&closure[..]) {
             closure = cal.closure.clone();
         } else if closure.starts_with(&cal.closure[..]) {
             // already covered
         } else {
             return Err(format!(
-                "callee `{callee}`'s program is not a prefix of the caller's \
-                 (v2 boundary; issues/prog-extension-lemma.md is the general answer)"
+                "callee `{}`'s program is not a prefix of the caller's \
+                 (v2 boundary; issues/prog-extension-lemma.md is the general answer)",
+                cal.name
             ));
         }
     }
-    closure.push(f.to_string());
+    closure.push(abs);
+    // Every member's stem and reference spelling, once (§§2–3).
+    let members = Members::of(e, &closure)?;
+    let fm = members.get(abs)?.clone();
+    let f = fm.stem.as_str();
 
     // Emit.
     let mut text = String::new();
     let w = &mut text;
     writeln!(
         w,
-        "// GENERATED by certgen v2 for `{f}` (docs/certifying-generator-design.md)."
+        "// GENERATED by certgen v2 for `{}` (docs/certifying-generator-design.md).",
+        fm.declared
     )
     .unwrap();
     writeln!(w).unwrap();
 
     let ir_body = emit_ir(w, f, &model, &closure);
     let mut prog = String::from("PNil");
-    for m in closure.iter().rev() {
-        prog = format!("PFun({m}_gen_body(), {prog})");
+    for m in members.0.iter().rev() {
+        prog = format!("PFun({}_gen_body(), {prog})", m.stem);
     }
     writeln!(w, "fn {f}_gen_prog() -> Prog {{ {prog} }}").unwrap();
     writeln!(w).unwrap();
 
-    emit_fixtures(w, f, res, pts, &model, &closure, ctx);
+    emit_fixtures(w, &fm, res, pts, &model, &members, ctx);
 
     // Invariants: every non-self closure member's, re-derived inside this
     // program, then self's.
-    let fx = f.to_string();
-    let conv_name = move |m: &str| -> String {
-        if m == fx {
-            format!("{fx}_gen_conv")
+    let fx = fm.clone();
+    let conv_name = move |m: &Member| -> String {
+        if m.abs == fx.abs {
+            format!("{}_gen_conv", fx.stem)
         } else {
-            format!("{m}_gen_conv_in_{fx}")
+            format!("{}_gen_conv_in_{}", m.stem, fx.stem)
         }
     };
-    for m in closure.clone() {
+    for m in members.0.iter() {
         // A closure member other than `f` is a callee, and a callee's RESULT
         // is a `Nat` (the marker pass refuses anything else), so its
         // invariant is re-derived at the `Nat` result type — which is also
@@ -1455,15 +1569,15 @@ fn emit_with_model(
         // PARAMETERS may include tier-0 enumerations since the tier-0 round,
         // so the re-derivation spells them from the callee's own stored
         // descriptions (docs/certgen-tier0-params-design.md §7).
-        let (mm, mc, mpts): (FnIr, RCertOut, Vec<Option<ParamTy>>) = if m == f {
+        let (mm, mc, mpts): (FnIr, RCertOut, Vec<Option<ParamTy>>) = if m.abs == abs {
             (model.clone(), cert.clone(), pts.to_vec())
         } else {
-            let e = ctx.get(&m).unwrap();
+            let e = ctx.get(m.abs).unwrap();
             (e.model.clone(), e.cert.clone(), e.pts.clone())
         };
         let nat = ResTy::nat();
-        let mres = if m == f { res } else { &nat };
-        emit_invariant(w, f, &m, mres, &mpts, &mm, &mc, &closure, ctx, &conv_name)?;
+        let mres = if m.abs == abs { res } else { &nat };
+        emit_invariant(w, &fm, m, mres, &mpts, &mm, &mc, &members, ctx, &conv_name)?;
     }
 
     let (support, instance_record) = {
@@ -1479,9 +1593,9 @@ fn emit_with_model(
         }
         (support, record_name(pts, res, arity))
     };
-    emit_instance(w, f, &model, &instance_record);
+    emit_instance(w, &fm, &model, &instance_record);
     Ok(Emission {
-        name: f.to_string(),
+        name: fm.declared.clone(),
         arity,
         closure,
         ir_body,
@@ -1490,11 +1604,13 @@ fn emit_with_model(
         model,
         cert,
         pts: pts.to_vec(),
+        abs,
+        members,
     })
 }
 
-fn callees(model: &FnIr) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn callees(model: &FnIr) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
     let chains: Vec<&Chain> = match &model.kind {
         FnIrKind::Plain(c) => vec![c],
         FnIrKind::Rec(r) => vec![&r.zero, &r.succ],
@@ -1504,7 +1620,7 @@ fn callees(model: &FnIr) -> Vec<String> {
         for i in &c.instrs {
             if let Instr::Call { callee, .. } = i {
                 if !out.contains(callee) {
-                    out.push(callee.clone());
+                    out.push(*callee);
                 }
             }
         }
@@ -1512,7 +1628,8 @@ fn callees(model: &FnIr) -> Vec<String> {
     out
 }
 
-fn emit_ir(w: &mut String, f: &str, model: &FnIr, closure: &[String]) -> String {
+/// `f` is the emitted function's stem.
+fn emit_ir(w: &mut String, f: &str, model: &FnIr, closure: &[usize]) -> String {
     match &model.kind {
         FnIrKind::Plain(c) => {
             let body = render_chain(&c.instrs, 0, c.ret_dist, closure);
@@ -1570,22 +1687,23 @@ fn emit_ir(w: &mut String, f: &str, model: &FnIr, closure: &[String]) -> String 
 
 fn emit_fixtures(
     w: &mut String,
-    f: &str,
+    fm: &Member,
     res: &ResTy,
     pts: &[Option<ParamTy>],
     model: &FnIr,
-    closure: &[String],
+    members: &Members,
     ctx: &GenCtx,
 ) {
-    let mut fns: Vec<(&str, &FnIr)> = Vec::new();
-    for m in closure {
-        if m == f {
-            fns.push((f, model));
+    let mut fns: Vec<(usize, &FnIr)> = Vec::new();
+    for m in &members.0 {
+        if m.abs == fm.abs {
+            fns.push((fm.abs, model));
         } else {
-            let e = ctx.get(m).unwrap();
-            fns.push((e.name.as_str(), &e.model));
+            let e = ctx.get(m.abs).unwrap();
+            fns.push((m.abs, &e.model));
         }
     }
+    let f = fm.stem.as_str();
     let ev = Evaluator { fns };
     // Literal arguments: `2` at a `Nat` recursion slot, `3` elsewhere, and a
     // depth-2 constructor literal at a tier-1 parameter.
@@ -1608,7 +1726,7 @@ fn emit_fixtures(
         })
         .collect();
     let args: Vec<V> = lits.iter().map(|(_, v, _)| v.clone()).collect();
-    let (_, fuel) = ev.run_fn(f, &args);
+    let (_, fuel) = ev.run_fn(fm.abs, &args);
     let lit_strs: Vec<String> = lits.iter().map(|(t, _, _)| t.clone()).collect();
     let lit_sls: Vec<Sl> = lits
         .iter()
@@ -1618,7 +1736,7 @@ fn emit_fixtures(
         })
         .collect();
     let env = env_text(&lit_sls, "VNil");
-    let call = res.at(format!("{f}({})", lit_strs.join(", ")));
+    let call = res.at(format!("{}({})", fm.spell, lit_strs.join(", ")));
     writeln!(w, "theorem {f}_gen_fix():").unwrap();
     // `eval` is declared 2-ary returning `Val -> Ir -> Res`, so one n-ary
     // argument list reaches the whole spine.
@@ -1653,31 +1771,34 @@ fn emit_fixtures(
 #[allow(clippy::too_many_arguments)]
 fn emit_invariant(
     w: &mut String,
-    f: &str,
-    m: &str,
+    fm: &Member,
+    mm: &Member,
     res: &ResTy,
     pts: &[Option<ParamTy>],
     model: &FnIr,
     cert: &RCertOut,
-    closure: &[String],
+    members: &Members,
     ctx: &GenCtx,
-    conv_name: &dyn Fn(&str) -> String,
+    conv_name: &dyn Fn(&Member) -> String,
 ) -> Result<(), String> {
-    let name = conv_name(m);
-    let prog = format!("{f}_gen_prog()");
+    let name = conv_name(mm);
+    let prog = format!("{}_gen_prog()", fm.stem);
     let params = &model.params;
-    let self_idx = closure
-        .iter()
-        .position(|c| c == m)
-        .ok_or_else(|| format!("`{m}` is not a member of `{f}`'s program"))?;
+    let self_idx = members.idx(mm.abs).map_err(|_| {
+        format!("`{}` is not a member of `{}`'s program", mm.declared, fm.declared)
+    })?;
+    // `m` spells the function itself (a spec call), `ms` names its generated
+    // items (docs/certgen-global-identity-design.md §§2–3).
+    let m = mm.spell.as_str();
+    let ms = mm.stem.as_str();
     match (&model.kind, cert) {
         (FnIrKind::Plain(_), RCertOut::Plain(c)) => {
             let cx = ProofCx {
                 prog: prog.clone(),
-                closure,
+                members,
                 conv_name,
                 ctx,
-                self_name: m,
+                self_m: mm,
                 self_idx,
                 self_rec_idx: None,
                 res,
@@ -1709,7 +1830,7 @@ fn emit_invariant(
             let proof = render_cert(&cx, c, &param_sls, "tail", &call)?;
             writeln!(w, "theorem {name}({psig}tail: Val)").unwrap();
             writeln!(w, "    : Converges({prog}, {env},").unwrap();
-            writeln!(w, "                {m}_gen_body(), {})", out_text(&call)).unwrap();
+            writeln!(w, "                {ms}_gen_body(), {})", out_text(&call)).unwrap();
             writeln!(w, "{{").unwrap();
             writeln!(w, "    {proof}").unwrap();
             writeln!(w, "}}").unwrap();
@@ -1773,10 +1894,10 @@ fn emit_invariant(
             let (_, env_z, call_z) = spell("gz");
             let cx = ProofCx {
                 prog: prog.clone(),
-                closure,
+                members,
                 conv_name,
                 ctx,
-                self_name: m,
+                self_m: mm,
                 self_idx,
                 self_rec_idx: Some(r.rec_idx),
                 res,
@@ -1798,7 +1919,7 @@ fn emit_invariant(
             writeln!(w, "                 {env_rec},").unwrap();
             writeln!(
                 w,
-                "                 {m}_gen_body(), {})",
+                "                 {ms}_gen_body(), {})",
                 out_text(&call_rec)
             )
             .unwrap();
@@ -1809,7 +1930,7 @@ fn emit_invariant(
             writeln!(w, "                     {env_z},").unwrap();
             writeln!(
                 w,
-                "                     {m}_gen_body(), {}) {{",
+                "                     {ms}_gen_body(), {}) {{",
                 out_text(&call_z)
             )
             .unwrap();
@@ -1830,13 +1951,14 @@ fn emit_invariant(
         (FnIrKind::RecT(r), RCertOut::RecT { scrut, arms }) if *scrut == r.rec_idx => {
             let Some(pt) = pts.get(r.rec_idx).and_then(|p| p.as_ref()) else {
                 return Err(format!(
-                    "`{m}` scrutinizes a parameter with no tier-1 description"
+                    "`{}` scrutinizes a parameter with no tier-1 description",
+                    mm.declared
                 ));
             };
             if arms.len() != pt.ctors.len() || r.arms.len() != pt.ctors.len() {
                 return Err(format!(
-                    "`{m}`'s arm count disagrees with `{}`'s constructor count",
-                    pt.name
+                    "`{}`'s arm count disagrees with `{}`'s constructor count",
+                    mm.declared, pt.name
                 ));
             }
             let rec_name = &params[r.rec_idx];
@@ -1887,10 +2009,10 @@ fn emit_invariant(
             let (_, env_rec, call_rec) = spell(rec_name);
             let cx = ProofCx {
                 prog: prog.clone(),
-                closure,
+                members,
                 conv_name,
                 ctx,
-                self_name: m,
+                self_m: mm,
                 self_idx,
                 self_rec_idx: Some(r.rec_idx),
                 res,
@@ -1903,7 +2025,7 @@ fn emit_invariant(
             writeln!(w, "                 {env_rec},").unwrap();
             writeln!(
                 w,
-                "                 {m}_gen_body(), {})",
+                "                 {ms}_gen_body(), {})",
                 out_text(&call_rec)
             )
             .unwrap();
@@ -1922,7 +2044,8 @@ fn emit_invariant(
         }
         _ => {
             return Err(format!(
-                "the certificate fold and the transcription model disagree about `{m}`'s shape"
+                "the certificate fold and the transcription model disagree about `{}`'s shape",
+                mm.declared
             ));
         }
     }
@@ -1932,8 +2055,9 @@ fn emit_invariant(
 // `pts` used to be a parameter here, for the λ's type annotations; the
 // idiomatic λ does not spell them, so the instance emitter no longer needs to
 // know its parameters' types at all.
-fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
+fn emit_instance(w: &mut String, fm: &Member, model: &FnIr, record: &str) {
     let params = &model.params;
+    let f = fm.stem.as_str();
     // One unannotated multi-binder λ. The `cert` field sits in CHECKING
     // position — the record's field type says what each binder's type is — so
     // the annotations the older spelling carried were the type spelled twice.
@@ -1944,7 +2068,7 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
         format!("λ {} => ", params.join(" "))
     };
     let cert = cert_app(&format!("{f}_gen_conv"), model, params);
-    writeln!(w, "fn {f}_gen_instance() -> {record}({f}) {{").unwrap();
+    writeln!(w, "fn {f}_gen_instance() -> {record}({}) {{", fm.spell).unwrap();
     writeln!(w, "    {record} {{").unwrap();
     writeln!(w, "        prog: {f}_gen_prog(),").unwrap();
     writeln!(w, "        entry: {f}_gen_body(),").unwrap();
@@ -2116,7 +2240,8 @@ struct MarkCx<'a> {
     /// `caller_abs - 1 - v` — `Defs::body`'s `shift_global(v + 1)`
     /// convention run backwards.
     caller_abs: usize,
-    callees: Vec<String>,
+    /// Callees by Ψ absolute index (docs/certgen-global-identity-design.md §1).
+    callees: Vec<usize>,
     /// The one tier-1 parameter, when the signature has one: its de Bruijn
     /// *level* (birth order) and its constructor table — what the `ElimWf`
     /// marking reads (docs/certgen-tier1-source-types-design.md §3). Every
@@ -2218,10 +2343,10 @@ impl MarkCx<'_> {
                  and a nullary fn is outside the fragment anyway"
             ));
         }
-        let tag = match self.callees.iter().position(|c| *c == name) {
+        let tag = match self.callees.iter().position(|c| *c == abs) {
             Some(i) => i + 1,
             None => {
-                self.callees.push(name);
+                self.callees.push(abs);
                 self.callees.len()
             }
         };
@@ -2764,10 +2889,15 @@ fn global_head(mut t: &Term) -> bool {
 /// peel is kept because marking needs the body under its binders at a known
 /// depth — its checks survive as the agreement oracle `generate_in_language`
 /// compares the in-language verdict against.
-fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, Term), String> {
+/// `abs` is the fn's Ψ coordinate; `name` is for the messages only.
+fn sig_peel(
+    e: &Elaborator,
+    abs: usize,
+    name: &str,
+) -> Result<(usize, bool, Option<usize>, Term), String> {
     // The body is going into a `box`, which holds no checked spelling
     // (`docs/intro-by-type-design.md` §2.3), so it is read in component form.
-    let Some((ty, body)) = e.global_body_in_code_form(name) else {
+    let Some((ty, body)) = e.global_body_in_code_form_at(abs) else {
         return Err(format!("`{name}` has no elaborated body to analyse"));
     };
     // Unfolding-for-analysis at the reflection boundary, exactly as
@@ -2779,9 +2909,7 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
     // accepts, which reads as fragment drift rather than a decline.
     // The statement is *raw* — prefix-scoped, never `shift_global`ed — so
     // its references resolve against the binding's own world, `abs`.
-    let unspelled = e
-        .global_abs(name)
-        .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
+    let unspelled = e.unspell_ty_deep(abs as u32, &ty);
     let mut t = &*body;
     let mut ty: &Type = match &unspelled {
         Some(t) => t,
@@ -2845,9 +2973,9 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
 pub struct BodyCode {
     pub arity: usize,
     /// Callee-marker tags in first-occurrence order: tag `i + 1` is
-    /// `callees[i]`; tag 0 is the enclosing fn itself (the ih marker's
-    /// `PSelf`), which never appears here.
-    pub callees: Vec<String>,
+    /// `callees[i]`, a Ψ absolute index; tag 0 is the enclosing fn itself
+    /// (the ih marker's `PSelf`), which never appears here.
+    pub callees: Vec<usize>,
     pub code: Term,
 }
 
@@ -2858,8 +2986,12 @@ pub struct BodyCode {
 /// the inductive registry via the lowered domain (`tag_of` sees through a
 /// `Wf` to its shape) — a declaration fact, resolved here so the primitive
 /// stays a one-argument pull.
-pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> {
-    let (arity, _, wf_pos, body) = sig_peel(e, name)?;
+pub(crate) fn body_code(e: &Elaborator, abs: usize) -> Result<BodyCode, String> {
+    let name = e
+        .global_qualified_name_at(abs)
+        .unwrap_or_else(|| format!("Ψ#{abs}"));
+    let name = name.as_str();
+    let (arity, _, wf_pos, body) = sig_peel(e, abs, name)?;
     // Re-walk the (unspelled) type once, collecting the non-`Nat` parameter
     // tables: the tier-1 domain's marking table (at `wf_pos`) and the tier-0
     // enumeration domains' levels and constructor counts
@@ -2867,12 +2999,10 @@ pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> 
     let mut wf = None;
     let mut t0 = Vec::new();
     {
-        let Some((ty, _)) = e.global_body(name) else {
+        let Some((ty, _)) = e.global_body_at(abs) else {
             return Err(format!("`{name}` has no elaborated body to analyse"));
         };
-        let unspelled = e
-            .global_abs(name)
-            .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
+        let unspelled = e.unspell_ty_deep(abs as u32, &ty);
         let mut ty: &Type = unspelled.as_ref().unwrap_or(&ty);
         for p in 0..arity {
             let Type::Pi { dom, cod, .. } = ty else {
@@ -2902,12 +3032,9 @@ pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> 
             ty = cod;
         }
     }
-    let caller_abs = e
-        .global_abs(name)
-        .ok_or_else(|| format!("`{name}` is not a declared global"))?;
     let mut cx = MarkCx {
         e,
-        caller_abs,
+        caller_abs: abs,
         callees: Vec::new(),
         wf,
         t0,
@@ -3236,7 +3363,8 @@ enum RCert {
         hr: Box<RCert>,
     },
     Call {
-        callee: String,
+        /// The callee's Ψ absolute index.
+        callee: usize,
         args: Vec<usize>,
         hr: Box<RCert>,
     },
@@ -3268,7 +3396,7 @@ impl<'v> Reader<'_, 'v> {
     /// `Cert`, in `lib/certgen_cert.hthr`'s declaration order. `callees` is
     /// the reflection table a foreign tag `c ≥ 1` indexes; the self-call
     /// carries no name, because `CIh` says whose it is.
-    fn cert(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<RCert, String> {
+    fn cert(&self, t: &'v TmClo<'v>, callees: &[usize]) -> Result<RCert, String> {
         let left = self.budget.get();
         if left == 0 {
             return Err("the certificate is implausibly large — declining".into());
@@ -3303,9 +3431,8 @@ impl<'v> Reader<'_, 'v> {
                 // Convention 1: tag 0 is the enclosing fn, and the fold routes
                 // it to `CIh` — a `CCall(0, …)` is a fold that lost track of
                 // whose certificate it was applying.
-                let callee = callees
+                let callee = *callees
                     .get(tag.checked_sub(1).ok_or("a foreign call at the self tag")? as usize)
-                    .cloned()
                     .ok_or("a callee tag outside the reflection table")?;
                 Ok(RCert::Call {
                     callee,
@@ -3323,7 +3450,7 @@ impl<'v> Reader<'_, 'v> {
         }
     }
 
-    fn cert_out(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<RCertOut, String> {
+    fn cert_out(&self, t: &'v TmClo<'v>, callees: &[usize]) -> Result<RCertOut, String> {
         let (idx, fields, _) = self.ctor(t, 3)?;
         let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
         match idx {
@@ -3342,7 +3469,7 @@ impl<'v> Reader<'_, 'v> {
     }
 
     /// `CArms { CANil, CACons(c: Cert, rest: CArms) }`.
-    fn cert_arms(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<Vec<RCert>, String> {
+    fn cert_arms(&self, t: &'v TmClo<'v>, callees: &[usize]) -> Result<Vec<RCert>, String> {
         let (idx, fields, children) = self.ctor(t, 2)?;
         match idx {
             0 => Ok(vec![]),
@@ -3528,7 +3655,7 @@ fn global_app<'v>(
 fn run_cert_fold<'v>(
     e: &Elaborator,
     ir: &'v TmClo<'v>,
-    callees: &[String],
+    callees: &[usize],
     kids: Option<u64>,
     arena: &'v ValueArena<'v>,
 ) -> Result<RCertOut, String> {
@@ -3561,9 +3688,9 @@ fn run_cert_fold<'v>(
 /// The decline carries one honest sentence rather than a per-shape reason:
 /// the library's decline discipline is a single value (`SigNo`, like the
 /// walker's `TStuck`), and reasons live at this rim.
-fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String> {
+fn run_sig_checker(e: &Elaborator, abs: usize, name: &str) -> Result<(u64, u64, u64), String> {
     let sig = e
-        .fn_type_code(name)
+        .fn_type_code_at(abs)
         .ok_or_else(|| format!("`{name}` has no declared type to reflect"))?;
     let term = analyzer_app(e, Slot::CertgenCheckSig, "certgen.check_sig", vec![sig])?;
     let arena = e.profiled_value_arena();
@@ -3596,7 +3723,7 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String
 }
 
 /// One instruction chain as the emitters' model: slots, tags and callee
-/// *names*. The spec expressions this used to derive alongside are the
+/// Ψ indices. The spec expressions this used to derive alongside are the
 /// certificate renderer's now (docs/certgen-cert-expression-design.md §3), so
 /// what is left is the structure the chain renderer, the closure computation
 /// and the fixture evaluator read — plus the environment-depth check, which
@@ -3604,9 +3731,9 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String
 /// naming question.
 fn chain_from_rir(
     ir: &RIr,
-    name: &str,
+    self_abs: usize,
     res: &ResTy,
-    callees: &[String],
+    callees: &[usize],
     depth: usize,
 ) -> Result<Chain, String> {
     let mut depth = depth;
@@ -3672,10 +3799,10 @@ fn chain_from_rir(
             RIr::LetCall { callee, args, rest } => {
                 // The walker's numbering (lib/certgen_code.hthr convention
                 // 3): 0 is the enclosing fn itself, `c ≥ 1` is
-                // `callees[c - 1]` from the body-reflection table. Names,
-                // not closure indices — this is the one place the walker's
-                // numbering is converted, and the emitters compute the
-                // program closure from the names, downstream.
+                // `callees[c - 1]` from the body-reflection table. Ψ
+                // indices, not closure indices — this is the one place the
+                // walker's numbering is converted, and the emitters compute
+                // the program closure from the indices, downstream.
                 // A foreign callee is `Nat → … → Nat`, so its temporary is a
                 // `Nat` even in a chain whose returned temporary is an `R`.
                 // That used to be a decline — the renderer had no per-slot
@@ -3683,12 +3810,11 @@ fn chain_from_rir(
                 // one positionally, so cross-function composition at a
                 // non-`Nat` result lands here rather than in a round of its
                 // own (docs/certgen-ctor-fields-design.md §5).
-                let cname = if *callee == 0 {
-                    name
+                let cabs = if *callee == 0 {
+                    self_abs
                 } else {
-                    callees
+                    *callees
                         .get(*callee as usize - 1)
-                        .map(String::as_str)
                         .ok_or("a callee tag outside the reflection table")?
                 };
                 let dists: Vec<usize> = args
@@ -3697,7 +3823,7 @@ fn chain_from_rir(
                     .collect::<Result<_, _>>()?;
                 has_self_call |= *callee == 0;
                 instrs.push(Instr::Call {
-                    callee: cname.to_string(),
+                    callee: cabs,
                     dists,
                 });
                 depth += 1;
@@ -3734,10 +3860,10 @@ fn rir_ret_dist(ir: &RIr) -> Option<usize> {
 /// no names to hand over, and does not need any.
 fn fn_ir_from_rir(
     ir: &RIr,
-    name: &str,
+    self_abs: usize,
     res: &ResTy,
     pts: &[Option<ParamTy>],
-    callees: &[String],
+    callees: &[usize],
     params: &[String],
 ) -> Result<FnIr, String> {
     let params: Vec<String> = params.to_vec();
@@ -3761,7 +3887,7 @@ fn fn_ir_from_rir(
                 let mut chains = Vec::new();
                 for (i, arm) in arms.iter().enumerate() {
                     let fs = &pt.ctors[i].1;
-                    let c = chain_from_rir(arm, name, res, callees, params.len() + fs.len())?;
+                    let c = chain_from_rir(arm, self_abs, res, callees, params.len() + fs.len())?;
                     if c.has_self_call && !fs.iter().any(|f| *f == PF::Slf) {
                         return Err(format!(
                             "a self-call in `{}`'s childless arm cannot be structural",
@@ -3781,11 +3907,11 @@ fn fn_ir_from_rir(
             let [zero, succ] = &arms[..] else {
                 return Err("a `LetMatch` with other than two arms is not a `Nat` match".into());
             };
-            let zc = chain_from_rir(zero, name, res, callees, params.len())?;
+            let zc = chain_from_rir(zero, self_abs, res, callees, params.len())?;
             if zc.has_self_call {
                 return Err("a self-call in the Zero arm cannot be structural".into());
             }
-            let sc = chain_from_rir(succ, name, res, callees, params.len() + 1)?;
+            let sc = chain_from_rir(succ, self_abs, res, callees, params.len() + 1)?;
             Ok(FnIr {
                 params,
                 kind: FnIrKind::Rec(RecIr {
@@ -3796,7 +3922,7 @@ fn fn_ir_from_rir(
             })
         }
         _ => {
-            let c = chain_from_rir(ir, name, res, callees, params.len())?;
+            let c = chain_from_rir(ir, self_abs, res, callees, params.len())?;
             if c.has_self_call {
                 return Err("a self-call outside a match is outside the fragment".into());
             }
@@ -3823,8 +3949,15 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
     // peel, whose checks survive as the agreement oracle. Disagreement is a
     // fragment-definition drift: still an `Err` (the generator must not
     // panic), but one the tests assert never fires.
-    let sig = run_sig_checker(e, &d.name);
-    let peel = sig_peel(e, &d.name);
+    //
+    // The declaration's name is resolved exactly ONCE, here: from this line
+    // on the function is its Ψ coordinate, and every later lookup keys on it
+    // (docs/certgen-global-identity-design.md §1).
+    let abs = e.global_abs(&d.name).ok_or_else(|| {
+        format!("`{}` does not resolve to a declared global where certgen runs", d.name)
+    })?;
+    let sig = run_sig_checker(e, abs, &d.name);
+    let peel = sig_peel(e, abs, &d.name);
     // The result type's NAME, its constructors and its embedding function are
     // read off the declaration and the inductive registry — every one of them
     // an identifier the reflected form cannot carry
@@ -3890,11 +4023,10 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
     let res = &res;
     let pts = &pts[..];
     let names = surface_params(d)?;
-    let f = d.name.as_str();
     // The pull primitive: marked, closed, boxed code plus the callee-marker
     // table the readback resolves `LetCall` tags against
     // (docs/opaque-globals-analysis-design.md §§2–4).
-    let body = e.fn_body_code(f)?;
+    let body = body_code(e, abs)?;
     debug_assert_eq!(body.arity, arity);
     if arity != names.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
@@ -3904,7 +4036,7 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
     let arena = e.profiled_value_arena();
     let (rir, ir) = run_transcriber(e, arity, body.code, &arena)?;
     let params: Vec<String> = names.iter().map(|s| s.to_string()).collect();
-    let model = fn_ir_from_rir(&rir, f, res, pts, &body.callees, &params)?;
+    let model = fn_ir_from_rir(&rir, abs, res, pts, &body.callees, &params)?;
     // The certificate FOLD, over the same `Ir` value the model came from
     // (docs/certgen-cert-expression-design.md): which kit lemma applies where,
     // and whether a call consumes the induction hypothesis, is decided in
@@ -3921,7 +4053,7 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
         _ => None,
     };
     let cert = run_cert_fold(e, ir, &body.callees, kids, &arena)?;
-    emit_with_model(f, arity, res, pts, model, cert, ctx)
+    emit_with_model(e, abs, arity, res, pts, model, cert, ctx)
 }
 
 #[cfg(test)]

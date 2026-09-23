@@ -2759,11 +2759,11 @@ impl Elaborator {
     /// [`Self::global_body`] with the body's checked spellings in component
     /// form, for code that is going to be boxed (certgen's marking). `None`
     /// where the translation is refused, which the caller reports as having
-    /// no body to analyse.
-    pub(crate) fn global_body_in_code_form(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
-        let info = self.lookup_global(name)?;
-        let abs = info.abs as usize;
-        let GlobalBinding::Tm { ctx, ty, level, body: Some(body), .. } = &self.psi.bindings[abs]
+    /// no body to analyse. Keyed on the Ψ coordinate: certgen resolves a
+    /// declaration's name once and reads everything after that by index
+    /// (docs/certgen-global-identity-design.md §1).
+    pub(crate) fn global_body_in_code_form_at(&self, abs: usize) -> Option<(Rc<Type>, Rc<Term>)> {
+        let GlobalBinding::Tm { ctx, ty, level, body: Some(body), .. } = self.psi.bindings.get(abs)?
         else {
             return None;
         };
@@ -2786,8 +2786,12 @@ impl Elaborator {
     }
 
     pub(crate) fn global_body(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
-        let info = self.lookup_global(name)?;
-        match &self.psi.bindings[info.abs as usize] {
+        self.global_body_at(self.lookup_global(name)?.abs as usize)
+    }
+
+    /// [`Self::global_body`] by Ψ coordinate.
+    pub(crate) fn global_body_at(&self, abs: usize) -> Option<(Rc<Type>, Rc<Term>)> {
+        match self.psi.bindings.get(abs)? {
             GlobalBinding::Tm {
                 ty,
                 body: Some(body),
@@ -2813,10 +2817,18 @@ impl Elaborator {
     /// prefix-scoped kernel data) already *is* `u^δ` unfolding-on-request.
     /// No kernel machinery replaces it and no ch. 07 obligation attaches,
     /// because the kernel never learns reflection happened.
+    ///
+    /// By name, this entry is the tests' (`wf.rs`); certgen resolves the name
+    /// once and calls [`Self::fn_type_code_at`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn fn_type_code(&self, name: &str) -> Option<Term> {
-        let info = self.lookup_global(name)?;
-        let abs = info.abs as usize;
-        let GlobalBinding::Tm { ctx, ty, level, .. } = &self.psi.bindings[abs] else {
+        self.fn_type_code_at(self.lookup_global(name)?.abs as usize)
+    }
+
+    /// [`Self::fn_type_code`] by Ψ coordinate, which is how certgen reaches it
+    /// once it has resolved the declaration's name.
+    pub(crate) fn fn_type_code_at(&self, abs: usize) -> Option<Term> {
+        let GlobalBinding::Tm { ctx, ty, level, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
         // A box payload holds no checked spelling (`docs/intro-by-type-design.md`
@@ -2849,7 +2861,7 @@ impl Elaborator {
     /// round"): a declared fn's elaborated body as *marked, closed code* —
     /// every bound-variable occurrence a level marker, every cross-function
     /// call head a callee marker, boxed — with the arity and the
-    /// tag→name table the markers are read against. Pull like
+    /// tag→Ψ-index table the markers are read against. Pull like
     /// [`Self::fn_type_code`]: nothing stored per declaration, the body read
     /// out of Ψ per invocation (`GlobalBinding::Tm`'s `body`, the
     /// definitions round's field).
@@ -2860,7 +2872,10 @@ impl Elaborator {
     /// coordinate system and the key to read it. A body-less global —
     /// theorems' proofs are deliberately opaque — declines.
     pub fn fn_body_code(&self, name: &str) -> Result<certgen::BodyCode, String> {
-        certgen::body_code(self, name)
+        let abs = self
+            .global_abs(name)
+            .ok_or_else(|| format!("`{name}` is not a declared global"))?;
+        certgen::body_code(self, abs)
     }
 
     /// A global's binding index by written name — the Ψ coordinate
@@ -2891,6 +2906,16 @@ impl Elaborator {
     /// oriented base name when they refer across a module boundary.
     pub(crate) fn global_qualified_name_at(&self, abs: usize) -> Option<String> {
         Some(self.names.global_name_at(abs as u32)?.to_string())
+    }
+
+    /// The **declared** name of the global at `abs`: its qualified key minus
+    /// the module, so `nat::Nat::add` gives `Nat::add` and `ir_v1::dbl` gives
+    /// `dbl`. The split is [`names::split_qual`]'s, at the first `::`, since
+    /// module names are single-segment. What certgen derives its generated
+    /// items' stems from (docs/certgen-global-identity-design.md §2).
+    pub(crate) fn global_declared_name_at(&self, abs: usize) -> Option<String> {
+        let key = self.names.global_name_at(abs as u32)?;
+        Some(names::split_qual(key).map_or(key, |(_, d)| d).to_string())
     }
 
     /// The absolute Ψ index a `GlobalVar` *occurring in a term being

@@ -88,7 +88,7 @@ fn lib_item(name: &str) -> String {
 }
 
 /// A parsed `fn` declaration from the library — or from `nat`, where `add`
-/// lives now — by name.
+/// lives now, as `Nat::add` — by declared name.
 fn lib_decl(name: &str) -> Decl {
     let file = parse_file(LIB).expect("the library parses");
     let file = if file.items.iter().any(|i| matches!(i, Item::Decl(d) if d.name == name)) {
@@ -132,8 +132,13 @@ const THIRD3: &str =
 /// the library's. That is the whole reason to rename rather than the reason
 /// not to.) The `via…` naming is `certgen_nonnat.rs`'s — `viafield`,
 /// `viaflag` — and says what the fixture is *for*.
+///
+/// Since the std namespace refactor `add` is the member `Nat::add`, so the call
+/// is spelled receiver-style; it elaborates to the same term, and certgen finds
+/// the callee by its Ψ coordinate, not by the spelling
+/// (docs/certgen-global-identity-design.md).
 const VIAADD: &str =
-    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }";
+    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => a.add(viaadd(a, k)) } }";
 
 
 // ---------------------------------------------------------------------------
@@ -154,10 +159,14 @@ const VIAADD: &str =
 /// on its SECOND parameter (LetMatch on slot 1, gather (1, 0)), where the
 /// hand-run transcribed the swapped spec to match the theta loop's convention
 /// (LetMatch on slot 0, gather (0, 2)).
+///
+/// The generated items carry `Nat::add`'s STEM, `Nat__add`
+/// (docs/certgen-global-identity-design.md §2): the one change this literal
+/// took when `add` moved into `Nat`'s namespace. The instructions did not move.
 const IR_ADD: &str = "\
-add_gen_arm_zero() = Ret(RCons(0, RNil))
-add_gen_arm_succ() = LetCall(0, RCons(1, RCons(0, RNil)), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))
-add_gen_body() = LetMatch(1, Arm(add_gen_arm_zero(), Arm(add_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+Nat__add_gen_arm_zero() = Ret(RCons(0, RNil))
+Nat__add_gen_arm_succ() = LetCall(0, RCons(1, RCons(0, RNil)), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))
+Nat__add_gen_body() = LetMatch(1, Arm(Nat__add_gen_arm_zero(), Arm(Nat__add_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
 /// 1-ary recursive, a `Succ` arm nesting two constructors around the ih.
 const IR_DBL: &str = "\
@@ -246,7 +255,7 @@ fn in_language_transcriber() {
     // (`add`), on the only parameter (`dbl`), on the last of three (`third3`),
     // and no recursion at all over a literal body (`seven`).
     for (index, (d, want)) in [
-        (lib_decl("add"), IR_ADD),
+        (lib_decl("Nat::add"), IR_ADD),
         (lib_decl("dbl"), IR_DBL),
         (decl_of(THIRD3), IR_THIRD3),
         (decl_of(SEVEN), IR_SEVEN),
@@ -257,14 +266,14 @@ fn in_language_transcriber() {
         let em = generate_in_language(&e, &d, &GenCtx::new())
             .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         assert_eq!(em.ir_body, want, "{} transcribes differently", d.name);
-        assert_eq!(em.closure, vec![d.name.clone()], "{}'s closure", d.name);
+        assert_eq!(em.closure_names(), vec![d.name.clone()], "{}'s closure", d.name);
         if report_metrics && index == 0 {
             eprintln!("certgen add value metrics: {:?}", e.value_metrics().unwrap());
             e.reset_value_metrics();
         }
     }
     assert_eq!(
-        generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).unwrap().arity,
+        generate_in_language(&e, &lib_decl("Nat::add"), &GenCtx::new()).unwrap().arity,
         2
     );
     // The hand-run's own slot map, for the divergence `IR_ADD` records.
@@ -276,11 +285,18 @@ fn in_language_transcriber() {
     // closure is the two-member program.
     let viaadd = decl_of(VIAADD);
     let mut cross = GenCtx::new();
-    cross.push(generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).expect("add"));
+    let add = generate_in_language(&e, &lib_decl("Nat::add"), &GenCtx::new()).expect("add");
+    let add_abs = add.closure[0];
+    cross.push(add);
     let em = generate_in_language(&e, &viaadd, &cross)
         .unwrap_or_else(|r| panic!("viaadd declined: {r}"));
     assert_eq!(em.ir_body, IR_VIAADD, "viaadd transcribes differently");
-    assert_eq!(em.closure, vec!["add".to_string(), "viaadd".to_string()]);
+    assert_eq!(em.closure_names(), vec!["Nat::add".to_string(), "viaadd".to_string()]);
+    // The closure is Ψ coordinates, and the callee's is the one `add`'s own
+    // emission recorded — identity, not spelling.
+    assert_eq!(em.closure.len(), 2);
+    assert_eq!(em.closure[0], add_abs);
+    assert_ne!(em.closure[1], add_abs);
 
     // With NO generated instance for the callee in the context, the walk and
     // readback still succeed and the decline is the closure's, downstream —
@@ -371,5 +387,34 @@ fn in_language_transcriber() {
         let em = generate_in_language(&e, &decl_of(src), &GenCtx::new())
             .expect("a Succ arm without a self-call is transcribable");
         assert!(em.ir_body.contains("pred2_gen_arm_succ() = Ret(RCons(0, RNil))"), "{}", em.ir_body);
+    }
+
+    // The STEM-COLLISION decline (docs/certgen-global-identity-design.md §2).
+    // Two modules each declare a top-level `f`, and one program holds both:
+    // the second calls the first. Their generated items would both be
+    // `f_gen_*`, so the generator declines naming both globals rather than
+    // invent a suffix nobody could predict from the source. Both modules
+    // import `ir_v1` because that is where the certificate fold lives, and it
+    // is resolved by name in the scope certgen runs in. Last in this test,
+    // because it leaves the elaborator in another module's scope.
+    {
+        let one = "fn f(n: Nat) -> Nat { Succ(n) }";
+        let src = format!("import ir_v1;\n{one}\n");
+        e.elab_module_source("cgstem1", &src).unwrap_or_else(|err| panic!("{}", err.render(&src)));
+        let mut ctx = GenCtx::new();
+        // The positive half: alone, `cgstem1::f` is an ordinary emission.
+        ctx.push(
+            generate_in_language(&e, &decl_of(one), &GenCtx::new())
+                .unwrap_or_else(|r| panic!("cgstem1's f declined: {r}")),
+        );
+        let two = "fn f(n: Nat) -> Nat { cgstem1::f(n) }";
+        let src = format!("import ir_v1;\nimport cgstem1;\n{two}\n");
+        e.elab_module_source("cgstem2", &src).unwrap_or_else(|err| panic!("{}", err.render(&src)));
+        let Err(msg) = generate_in_language(&e, &decl_of(two), &ctx) else {
+            panic!("two `f`s in one program must decline")
+        };
+        assert!(msg.contains("`cgstem1::f`"), "{msg}");
+        assert!(msg.contains("`cgstem2::f`"), "{msg}");
+        assert!(msg.contains("`f_gen_*`"), "{msg}");
     }
 }
