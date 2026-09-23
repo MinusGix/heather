@@ -30,4 +30,4 @@ fraction of `nat`'s 0.2 s).
 Method: `--only` cannot select a prelude item, so probe it with an empty
 module and `--timings`, then `HEATHER_VALUE_METRICS=1` under
 `--features value-metrics` for what the steps touch
-([[conv-miss-attribution]] has the recipe).
+(the value-metrics build's per-module `ValueMetricsSnapshot`; run without `--cache`, or the declaration is accepted from the cache and nothing is measured).
