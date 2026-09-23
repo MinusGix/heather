@@ -1218,10 +1218,38 @@ impl Elaborator {
         // `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))` the label carries.
         // The guard copy is the inline lowering either way.
         let body = if ind.recursive {
-            inline_body
-        } else {
-            self.register_spine_codes(ind, &d_ty, &l, span)
+            // The same move for a `Wf`: name the slot pair first and spell the
+            // whole type over it, since every constructor value carries
+            // `Wf(El (D#shape^δ); app(D#arity^δ; x))` and one δ of this code
+            // then exposes exactly that, where the literal body made the
+            // kernel walk the inline shape against the reference.
+            self.register_wf_slots(ind, &d_ty, &l, span);
+            let named = match &d_ty {
+                Type::Wf { level, shape, arity } => self
+                    .wf_slot_refs(&cx, shape, arity)
+                    .map(|(shape, arity)| Type::Wf {
+                        level: level.clone(),
+                        shape: Rc::new(shape),
+                        arity: Rc::new(arity),
+                    }),
+                _ => None,
+            };
+            named
+                .and_then(|t| crate::code::code_of(&t))
                 .unwrap_or(inline_body)
+        } else {
+            match self.register_spine_codes(ind, &d_ty, &l, span) {
+                Some(named) => named,
+                // One constructor (every record) has no spine to name, but
+                // its field types still do: the emission spelling, as a
+                // payload code's, so one δ exposes `Σ(El (F#tycode^δ)). …` —
+                // what the constructor tuple is annotated with — rather than
+                // `F` inline, walked per constructor value.
+                None => self
+                    .respell_ty_deep(&cx, &d_ty, 0)
+                    .and_then(|t| crate::code::code_of(&t))
+                    .unwrap_or(inline_body),
+            }
         };
         let ty = Type::Ty(l.clone());
         if self
@@ -1230,7 +1258,6 @@ impl Elaborator {
         {
             self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone());
         }
-        self.register_wf_slots(ind, &d_ty, &l, span);
     }
 
     /// `D#tycode_fn := λ(A₁ : Ty 0)…(v_m : T_m). ⌜⟦D<El A₁,…>(v̄)⟧⌝`, a
@@ -2127,7 +2154,14 @@ impl Elaborator {
         {
             return;
         }
-        let Some(scode) = crate::code::code_of(shape) else {
+        // The emission spelling, as a payload code's: embedded field types
+        // are `El (F#tycode^δ)`, which is what a constructor value's own
+        // payload annotations carry. The literal body made one δ of the
+        // reference expose the inline field lowerings instead, walked against
+        // those names per constructor (`Instruction`: ~13 K kernel steps).
+        let cx = Cx::empty();
+        let emitted = self.respell_ty_deep(&cx, shape, 0);
+        let Some(scode) = crate::code::code_of(emitted.as_ref().unwrap_or(shape)) else {
             return;
         };
         if self
@@ -2146,7 +2180,6 @@ impl Elaborator {
         // The λ's domain is the shape *reference* just registered: the arity
         // definition is the one place where writing the shape out again would
         // undo half of what this pair buys.
-        let cx = Cx::empty();
         let Some(sref) = self.gen_type_ref(&cx, skey, l) else {
             return;
         };
@@ -3092,6 +3125,37 @@ impl Elaborator {
             lhs: nl.map_or_else(|| Rc::clone(lhs), Rc::new),
             rhs: nr.map_or_else(|| Rc::clone(rhs), Rc::new),
         })
+    }
+
+    /// [`Self::unspell_sum_components`]' counterpart for a **recursive**
+    /// declaration: its whole-type code is spelled over its slot pair, so the
+    /// kernel's reduct of a code that computes to it stops at
+    /// `Wf(El (D#shape^δ); app(D#arity^δ; x))`. Back to the registry's inline
+    /// lowering — only when *both* slots are the same declaration's
+    /// references, so a hand-built look-alike (one slot swapped) is left as
+    /// it is. `None` when nothing unspelled.
+    pub(crate) fn unspell_wf_slots(&self, ty: &Type) -> Option<Type> {
+        if !self.types.gdefs().has_wf_slots() {
+            return None;
+        }
+        let Type::Wf { shape, arity, .. } = ty else {
+            return None;
+        };
+        let Type::El { tm, .. } = &**shape else { return None };
+        let Term::GlobalTm { var, .. } = &**tm else {
+            return None;
+        };
+        let GenDef::ShapeCode(tag) = self.gen_def_of(*var)? else {
+            return None;
+        };
+        let (fun, arg) = crate::spelling::app_of(arity)?;
+        let (Term::GlobalTm { var: afun, .. }, Term::Var(LocalVar(0))) = (&**fun, &**arg) else {
+            return None;
+        };
+        if self.gen_def_of(*afun) != Some(GenDef::ArityFn(tag)) {
+            return None;
+        }
+        self.types.gdefs().ty_code(&tag).map(|(inline, _)| (**inline).clone())
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive

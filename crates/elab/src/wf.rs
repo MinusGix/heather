@@ -2352,9 +2352,13 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
     }
 
     /// The **decode look-alike** (design §2.3), which is the copy a naive
-    /// guard misses: `El (T#tycode^δ)` reduces to `Wf(El ⌜S⌝). n`, and a value
-    /// built at that expected type carries *that* shape spelling. The guard
-    /// must accept it, or the whole constructor-value site declines silently.
+    /// guard misses. Since `T#tycode` is spelled over its slot pair
+    /// (`issues/elaborator-canonical-type-spelling.md`, 2026-09-23) the
+    /// reference reduces to exactly the pair every constructor value carries,
+    /// `Wf(El (T#shape^δ); app(T#arity^δ; x))`, which `Elaborator::whnf`
+    /// unspells back to the inline lowering; and one δ further, the shape
+    /// reference decodes to `El ⌜S⌝` — the look-alike the guard must still
+    /// accept, or the whole constructor-value site declines silently.
     #[test]
     fn the_decoded_shape_spelling_respells_too() {
         let e = env();
@@ -2362,11 +2366,6 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         let Type::Wf { shape, arity, .. } = &t_ty else {
             panic!("T is recursive")
         };
-        let decoded_shape = Type::El {
-            level: l.clone(),
-            tm: Rc::new(crate::code::code_of(shape).expect("a shape has a code")),
-        };
-        // It really is the kernel's own reduct, not a hand-built look-alike.
         let whole =
             e.el.respell_ty(&e.cx, &t_ty)
                 .expect("T's lowering respells");
@@ -2377,11 +2376,38 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             e.el.fuel,
         )
         .expect("the reference reduces");
-        let Type::Wf { shape: s2, .. } = &stepped else {
+        let (sref, aref) = e.el.wf_slot_refs(&e.cx, shape, arity).expect("T's slots are named");
+        let Type::Wf { shape: s2, arity: a2, .. } = &stepped else {
             panic!("it reduces to a `Wf`")
         };
-        assert_eq!(**s2, decoded_shape);
+        assert_eq!(**s2, sref);
+        assert_eq!(**a2, aref);
+        assert_eq!(e.el.unspell_wf_slots(&stepped), Some(t_ty.clone()));
+        // One δ of the shape reference: `El` of the shape's code, which is
+        // the emission spelling of `S` (field types named, as a payload
+        // code's are).
+        let emitted = e.el.respell_ty_deep(&e.cx, shape, 0);
+        let decoded_shape = Type::El {
+            level: l.clone(),
+            tm: Rc::new(crate::code::code_of(emitted.as_ref().unwrap_or(shape)).expect("a shape has a code")),
+        };
         assert!(e.el.wf_slot_refs(&e.cx, &decoded_shape, arity).is_some());
+    }
+
+    /// The named pair with one slot swapped is not a spelling of `T`, and
+    /// the unspell leaves it alone rather than handing back `T`'s lowering.
+    #[test]
+    fn a_swapped_slot_pair_does_not_unspell() {
+        let e = env();
+        let (t_ty, _) = e.lowered("T");
+        let (u_ty, _) = e.lowered("U");
+        let (Type::Wf { level, shape: ts, arity: ta }, Type::Wf { shape: us, arity: ua, .. }) = (&t_ty, &u_ty) else {
+            panic!("T and U are recursive")
+        };
+        let (t_sref, _) = e.el.wf_slot_refs(&e.cx, ts, ta).expect("T's slots are named");
+        let (_, u_aref) = e.el.wf_slot_refs(&e.cx, us, ua).expect("U's slots are named");
+        let swapped = Type::Wf { level: level.clone(), shape: Rc::new(t_sref), arity: Rc::new(u_aref) };
+        assert_eq!(e.el.unspell_wf_slots(&swapped), None);
     }
 
     /// The look-alike negative, in this round's discipline: the shape names

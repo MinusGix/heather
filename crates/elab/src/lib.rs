@@ -7685,7 +7685,12 @@ impl Elaborator {
         // so the kernel's reduct of a code that *computes* to it stops at
         // `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))`, which no structural
         // reader can see the tag through (`unspell_sum_components`).
-        Ok(self.unspell_sum_components(&head).unwrap_or(head))
+        // A recursive declaration's code is spelled over its `Wf` slot pair
+        // the same way (`unspell_wf_slots`).
+        Ok(self
+            .unspell_sum_components(&head)
+            .or_else(|| self.unspell_wf_slots(&head))
+            .unwrap_or(head))
     }
 
     /// `HEATHER_IMAGE_ATTRIBUTION=<file>` (a measurement instrument): append

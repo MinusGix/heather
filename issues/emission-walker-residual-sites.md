@@ -3,7 +3,7 @@ title: The slots the emission walker still lists on the library: route each emit
 status: open
 labels: [elaboration,representation,performance]
 created: 2026-09-06
-updated: 2026-09-16
+updated: 2026-09-23
 ---
 
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
@@ -81,3 +81,4 @@ rows 1–2.
 - 2026-09-13: The quote layer's remaining literal had one more site than the walker lists, because it is a definition body and not a slot: `register_ty_code_fn`'s `code_of(template)`. Quoted respelled since 2026-09-13 (docs/record-projection-reference-design.md §9.8); the walker's own listing is unaffected, its slots were already routed.
 - 2026-09-16: The quote residue this table lists as not its own has been attributed to an item: `complete_post`'s 5.73 M conversion queries are the quote layer's inline component lowerings (docs/complete-post-attribution-design.md §4). Verification item for the slice: this walker's `WALK_RESIDUE` list may only shrink (design §8 item 4).
 - 2026-09-16: Re-list after the quote-layer slice (docs/complete-post-attribution-design.md §10.6): `App.dom`/`App.cod` and `Pair.fst_ty`/`snd_ty` were the slots the raw quote fed, so the five-node residue table above is stale until re-run.
+- 2026-09-23: Item 2 (`elab_arm`'s alias projections) landed 2026-09-23 in this issue's fix shape — each link's `fst`/`snd` through `emit_ty` at depth 0 / 1, `cur` kept structural — as part of [[elaborator-canonical-type-spelling]]'s constructor-value round (numbers there: a `match` on an `Instruction`-field declaration 13.5 K kernel steps → 21). The unannotated `FstAt`/`SndAt` `project_field` writes were tried first and refused: the elaborator's reducts substitute a constructor literal for the scrutinee, and the kernel cannot infer a projection of an unannotated tuple (`NotInferable` on two `x86_64` model declarations).

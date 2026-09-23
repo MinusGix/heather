@@ -2750,18 +2750,34 @@ impl Elaborator {
             else {
                 break;
             };
+            // The annotations in the emission spelling: the whnf's components
+            // are the inline lowering of every field type, and each met the
+            // named spelling the value was built with — a whole-type walk per
+            // alias (`issues/emission-walker-residual-sites.md`, item 2). Not
+            // the unannotated `@` projections `project_field` writes: the
+            // elaborator's own reducts substitute a constructor literal for
+            // the scrutinee, and a projection of an unannotated tuple does not
+            // infer. `cur` stays the structural copy.
+            let fst_e = match self.emit_ty(&acx, &fst, 0) {
+                Some(t) => Rc::new(t),
+                None => Rc::clone(&fst),
+            };
+            let snd_e = match self.emit_ty(&acx, &snd, 1) {
+                Some(t) => Rc::new(t),
+                None => Rc::clone(&snd),
+            };
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
                 pair: Rc::clone(&pair),
             });
             let rest = Rc::new(Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level,
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: fst_e,
+                snd_ty: snd_e,
                 pair: Rc::clone(&pair),
             });
             cur = snd.apply_local(&LocalSubst::id(&acx.gamma).extended(Rc::clone(&proj)));
