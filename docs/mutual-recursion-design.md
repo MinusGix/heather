@@ -216,6 +216,26 @@ at an unchanged argument, which is why the customer's `parse_factor(ts)` costs
 the writer nothing. Probed: `let`-bound hypothesis, `on`-discharged, `omega`
 closing the combined goal (`p1.hthr`).
 
+> **Amended 2026-09-23: the arithmetic is two `nat` lemmas, not `omega`.**
+> An `omega` run per site cost 200–500 ms whatever the atoms (a ~5 KB
+> certificate elaborated and then gated), and it was most of the showcase
+> parser's heaviest declaration (`checked_expr`, 797 ms, of which ~640 ms
+> was the five sites' certificates;
+> `issues/measure-obligation-omega-on-a-written-proof.md`). The flattening's
+> two facts are now `lib/std/nat.hthr`'s
+> `scaled_lt(a, b, r, s, n, h: a < b, q: r < n)` and
+> `scaled_le(a, b, r, s, n, h: a <= b, q: r < s)`, both concluding
+> `a * n + r < b * n + s`, proved structurally through `mul_mono_l` and the two
+> `add_mono` lemmas in about a millisecond each. A site's body is
+> `let __dec_clean : … := ?decN; nat::scaled_lt(args, raw, r_to, r_from, N, __dec_clean, trivial)`,
+> with the rank side condition over literals, so `trivial` computes it.
+> A rank-lowering call at an unchanged argument owes `x <= x`, and the
+> lowering closes it with `nat::le_refl(x)` unasked. So `omega` is back to
+> what it is in Part A, the default closer of a site nobody discharges, and a
+> group whose strict sites are written needs neither `import omega` nor
+> `import int`. `checked_expr` went from 797 ms to 48 ms, and `calc_parser`
+> stopped importing `omega`.
+
 **Lifting is not optional for a group.** Part A lifts obligations because
 `omega` reconstructs against the local context (`decreases-unfolding-design.md`
 §4). Here there is a second reason: inside `g#body` the context holds

@@ -13,12 +13,9 @@ import logic;
 import option;
 import parser;
 import calc;
-// The mutual `decreases` group below states its obligations at the flattened
-// measure and closes the arithmetic over these three
-// (docs/mutual-recursion-design.md §3–§4); nothing here names them directly.
+// The mutual `decreases` group below shares one recursion whose motive is a
+// nested `Pair` (docs/mutual-recursion-design.md §3); nothing here names it.
 import pair;
-import int;
-import omega;
 
 inductive PTok { TNum(n: Nat), TPlusSym, TStarSym, TOpen, TClose }
 inductive ParseError { ExpectedAtom, UnexpectedEnd, BadParen, Trailing }

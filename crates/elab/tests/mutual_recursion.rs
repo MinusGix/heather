@@ -159,11 +159,40 @@ fn the_parser_groups_tail_sites_are_closed_by_the_closer() {
     let err = e
         .elab_module_source(
             "m",
-            &format!("import logic;\nimport nat;\nimport list;\n{PARSER}"),
+            &format!("import logic;\nimport nat;\nimport list;\nimport pair;\n{PARSER}"),
         )
         .expect_err("without `omega` the tail sites are ordinary goals");
     let msg = format!("{err}");
-    assert!(msg.contains("dec"), "{msg}");
+    assert!(msg.contains("unsolved goals in `parse_expr#obl_"), "{msg}");
+}
+
+/// §4's arithmetic from the clean statement to the scaled one is
+/// `nat::scaled_lt`/`nat::scaled_le`, not `omega`: a group whose strict sites
+/// the writer discharges checks with neither `omega` nor `int` imported. The
+/// rank-lowering calls at an unchanged argument — one at a literal-refined
+/// `0`, one at an **open** `Succ(k)` — owe `x <= x`, which the lowering closes
+/// with `nat::le_refl` unasked; and at literals the members still compute.
+#[test]
+fn a_group_with_written_discharges_needs_no_omega() {
+    let mut e = base();
+    e.elab_module_source(
+        "m",
+        r#"import logic;
+import nat;
+import pair;
+fn hi(n: Nat) -> Nat decreases n {
+    match n { Zero => lo(n), Succ(k) => nat::add(lo(n), hi(k) decreasing down) }
+    on decreasing down := nat::lt_succ_self(k);
+}
+fn lo(n: Nat) -> Nat decreases n {
+    match n { Zero => 0, Succ(k) => Succ(hi(k) decreasing up) }
+    on decreasing up := nat::lt_succ_self(k);
+}
+theorem hi3(): hi(3) = 7 { refl }
+theorem lo2(): lo(2) = 2 { refl }
+"#,
+    )
+    .unwrap_or_else(|err| panic!("expected this to check, got: {err}"));
 }
 
 /// A member at a **neutral** argument, in a **checking** position: an ordinary

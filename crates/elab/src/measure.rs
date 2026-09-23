@@ -311,6 +311,9 @@ struct Sibling {
 struct Clean {
     args: Expr,
     strict: bool,
+    /// The callee's and the caller's ranks, the literals the scaled
+    /// statement adds (`args * N + to < raw * N + from`).
+    ranks: (usize, usize),
     /// §8's rank rule, where the site is one it explains.
     hint: Option<String>,
 }
@@ -862,14 +865,8 @@ pub(crate) fn lower_group(
     let first = members[0].decl;
     let span = members[0].measure.span;
     check_group_shape(members)?;
-    if !omega_available {
-        return err(
-            "a mutual `decreases` group states its obligations at the flattened measure \
-             of docs/mutual-recursion-design.md §4 and closes the arithmetic with \
-             `omega`: `import omega;` and `import int;` first",
-            span,
-        );
-    }
+    // §4's arithmetic is `nat::scaled_lt`/`nat::scaled_le`, so `omega` is only
+    // the default closer of a site nobody discharges, as in Part A.
     let sibs: Vec<Sibling> = members
         .iter()
         .enumerate()
@@ -1354,6 +1351,7 @@ impl Rewrite<'_> {
             Clean {
                 args: raw_args,
                 strict,
+                ranks: (to.rank, caller.rank),
                 hint,
             }
         });
@@ -1391,6 +1389,30 @@ impl Rewrite<'_> {
         all.push(proof);
         all.extend(spill.iter().cloned());
         project(var(IH), proj, all, span)
+    }
+
+    /// `nat::scaled_lt(args, raw, to, from, N, __dec_clean, trivial)` — §4's
+    /// arithmetic from the clean statement to the scaled one, at this site's
+    /// literal ranks. The rank side condition (`to < N`, or `to < from` at a
+    /// rank-lowering call) is over literals, so `trivial` computes it.
+    fn scale(&self, c: &Clean, args: &Expr, raw: &Expr, span: Span) -> Expr {
+        let num = |k: usize| Expr {
+            kind: ExprKind::Num(k as u64),
+            span,
+        };
+        app(
+            var(if c.strict { "nat::scaled_lt" } else { "nat::scaled_le" }, span),
+            vec![
+                args.clone(),
+                raw.clone(),
+                num(c.ranks.0),
+                num(c.ranks.1),
+                num(self.members.len()),
+                var("__dec_clean", span),
+                var("trivial", span),
+            ],
+            span,
+        )
     }
 
     /// The obligation this self-call site owes, as the body will spell it: a
@@ -1457,8 +1479,17 @@ impl Rewrite<'_> {
                 vec![args.clone(), raw.clone()], span)),
             None => lt_ty(at_args.clone(), refined.clone(), span),
         };
+        // A rank-lowering call at an unchanged argument owes `x <= x` — the
+        // same-measure sibling call §4's rank exists for — which is
+        // `nat::le_refl` whatever else is imported.
+        let reflexive = clean.as_ref().and_then(|(c, args, raw)| {
+            (!c.strict && crate::traits::render_expr(args) == crate::traits::render_expr(raw))
+                .then(|| app(var("nat::le_refl", span), vec![raw.clone()], span))
+        });
         let automatic = if on.is_none() {
-            self.tys.local_evidence(self.decl, &self.scope, &goal, self.omega_available)
+            reflexive.or_else(|| {
+                self.tys.local_evidence(self.decl, &self.scope, &goal, self.omega_available)
+            })
         } else { None };
         let closer = if let Some(proof) = &automatic {
             proof.clone()
@@ -1475,7 +1506,8 @@ impl Rewrite<'_> {
         };
         // The lifted declaration's body. Without a clean statement it is the
         // closer alone, as Part A had it; with one it binds the writer's
-        // statement to the closer and lets `omega` do §4's arithmetic on top.
+        // statement to the closer and does §4's arithmetic on top with
+        // `nat::scaled_lt`/`nat::scaled_le`.
         let on_expr = on.as_ref().map(|o| o.expr.clone()).or(automatic);
         let body = match &clean {
             None => Block {
@@ -1503,7 +1535,7 @@ impl Rewrite<'_> {
                     expr: closer.clone(),
                     span,
                 }],
-                result: Box::new(var("omega", span)),
+                result: Box::new(self.scale(c, args, raw, span)),
                 ons: on.clone().into_iter().collect(),
                 span,
             },

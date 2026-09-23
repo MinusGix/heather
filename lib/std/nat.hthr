@@ -859,6 +859,49 @@ theorem le_add_r(n, m: Nat): m <= n + m {
     match m { Zero => trivial, Succ(m2) => le_add_r(n, m2) }
 }
 
+// Monotonicity, each on the argument its operation recurses on or across it.
+// `add` recurses on the right, so moving the right operand is a walk down both
+// successors and moving the left one is carried unchanged through them.
+theorem add_mono_r(x, u, v: Nat): u <= v → x + u <= x + v {
+    match u {
+        Zero => λ h => le_add_l(x, v),
+        Succ(u2) => match v {
+            Zero => λ bad => false_elim(bad),
+            Succ(v2) => λ h => add_mono_r(x, u2, v2, h),
+        },
+    }
+}
+
+theorem add_mono_l(x, y, u: Nat, h: x <= y): x + u <= y + u {
+    match u { Zero => h, Succ(u2) => add_mono_l(x, y, u2, h) }
+}
+
+theorem mul_mono_l(a, b, n: Nat, h: a <= b): a * n <= b * n {
+    match n {
+        Zero => trivial,
+        Succ(k) => le_trans(a * k + a, b * k + a, b * k + b,
+            add_mono_l(a * k, b * k, a, mul_mono_l(a, b, k, h)),
+            add_mono_r(b * k, a, b, h)),
+    }
+}
+
+// The lexicographic order on `(a, r)` flattened into `a * n + r` for `r < n`
+// (docs/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
+// and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
+// group closes every recursive call's scaled obligation with one of these.
+theorem scaled_lt(a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
+    le_trans(Succ(a * n + r), Succ(a) * n, b * n + s,
+        j(trans(add_comm(a * n, n), sym(mul_succ_left(a, n))),
+          λ y p => Succ(a * n + r) <= y, add_mono_r(a * n, Succ(r), n, q)),
+        le_trans(Succ(a) * n, b * n, b * n + s, mul_mono_l(Succ(a), b, n, h), le_add_l(b * n, s)))
+}
+
+theorem scaled_le(a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r < b * n + s {
+    le_trans(Succ(a * n + r), a * n + s, b * n + s,
+        add_mono_r(a * n, Succ(r), s, q),
+        add_mono_l(a * n, b * n, s, mul_mono_l(a, b, n, h)))
+}
+
 // The bridge itself: `n <= m` and `∃ k, n + k = m` are interchangeable. The
 // forward direction is `le_add` with its witness named; the backward one is
 // `le_add_l` transported along the caller's equation. Route (c) of the design
