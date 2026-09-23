@@ -250,23 +250,20 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let proof = proof.render();
     eprintln!("checking source refinement, exported bytes, and execution certificate");
     let certificate_module = format!("{prefix}_certificate");
-    // The certificate is a module like any other and gets a module row, the
-    // one `check_module` already opens for the library's: without it the
-    // thousands of generated theorems had no total. Deliberately *not*
-    // through the session: an image hit would replay a repeated build, but a
-    // miss elaborates through `check_module_delta`, whose recording made
-    // this module's statements ~25× slower (issues/check-module-delta-certificate-cost.md),
-    // and a suite run after a compiler change is all misses.
-    let checked = {
-        let _module = timings.as_ref().map(|_| {
-            heather_elab::stats::scope(
-                heather_elab::stats::ScopeKind::Module,
-                &certificate_module,
-                "",
-            )
-        });
-        elab.elab_module_source(&certificate_module, &proof)
-    };
+    // The certificate is a module like any other, and goes through the
+    // session like one: a repeated build at the same compiler, sources and
+    // inputs replays its image instead of re-elaborating thousands of
+    // generated theorems, a build with other `--arg`s replays the unchanged
+    // declarations from the previous image's slices, and `check_module`
+    // opens the module row that totals them. A miss elaborates on the
+    // journalled delta path, which costs what `elab_module_source` does since
+    // a clone stopped copying the journal
+    // (issues/check-module-delta-certificate-cost.md).
+    let checked = check_module(&mut elab, &mut session, &loader::Module {
+        name: certificate_module.clone(),
+        path: certificate.clone(),
+        src: proof.clone(),
+    });
     drop(run_scope);
     // Written whether or not the certificate was accepted: every entry is a
     // declaration the kernel did accept.
@@ -289,7 +286,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             eprintln!("conversion-miss report in {}", beside.display());
         }
     }
-    checked.map_err(|e| e.render(&proof))?;
+    checked?;
     write_new(&certificate, proof.as_bytes())?;
     if let Some(image) = image {
         write_new(&output, &image)?;

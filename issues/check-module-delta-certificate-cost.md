@@ -1,6 +1,6 @@
 ---
 title: check_module_delta makes a generated certificate's statements ~25× slower than elab_module_source
-status: open
+status: closed
 labels: [performance,elaboration,cache,x86]
 created: 2026-09-23
 updated: 2026-09-23
@@ -31,3 +31,14 @@ Next step: `--timings` of the same certificate through both paths and diff `decl
   Measured on the `stack_save --callable-caller` certificate (release, width one, `heather check --cache` on an empty cache dir, library modules via a `-L` dir of the bundled SUPPORT sources): total 94 s → 32 s, against 31 s for plain `heather check`. The certificate module: 83 s → 21 s total, `decl_type` 67 s → 5.5 s; every counter column identical to the old `--cache` run. Library modules built into images on the delta path gain the same way, in proportion to their size.
 
   What remains open: whether to route `build-x86`'s certificate through `SemanticSession::check` again (the original goal; a miss should now cost what `elab_module_source` does). It only pays on a repeated build at unchanged compiler and inputs.
+- 2026-09-23: `build-x86`'s certificate goes through `SemanticSession::check` again (`crates/cli/src/native.rs`). Interleaved before/after, two samples each, release, width one, fresh cache dir per sample, `stack_save --callable-caller`:
+
+  | run | before | after |
+  |---|---|---|
+  | cold (library + certificate) | 32.4 / 31.6 s | 31.9 / 32.0 s |
+  | repeat, same inputs | 13.4 / 13.5 s | 1.3 / 1.4 s |
+  | other `--arg`s over the same cache | 16.2 / 17.5 s | 16.4 / 16.4 s |
+
+  A miss costs what `elab_module_source` did; a hit replays. A certificate image is ~16 MB; the store's size budget evicts oldest-first. Full suite green on the first (all-miss) run.
+
+  Other `--arg`s get nothing from slice replay: the inputs first appear ~2% into the certificate (line 758 of 33,462; 431 lines differ in all), and a slice replays only while every earlier item reproduced the previous prefix exactly. Emitting the input-dependent declarations last would let an other-inputs build replay the rest — an idea, not measured.
