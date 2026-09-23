@@ -561,7 +561,7 @@ pub struct Elaborator {
     committed: Rc<CommittedWorld>,
     /// Logical semantic additions made while one module delta is extracted.
     /// Failed transactions truncate this alongside committed state.
-    module_journal: RefCell<Option<module_delta::ModuleJournal>>,
+    module_journal: module_delta::JournalSlot,
     /// The previous delta a module pass may replay slices from
     /// (`check_module_delta_from`); `None` on every other pass.
     slice_plan: Option<module_delta::SlicePlan>,
@@ -1500,7 +1500,7 @@ impl Elaborator {
     pub fn new() -> Self {
         Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
-            module_journal: RefCell::new(None),
+            module_journal: module_delta::JournalSlot::new(),
             slice_plan: None,
             resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: Cell::new(0),
@@ -1603,9 +1603,13 @@ impl Elaborator {
         // cursor mismatches and stops — but the same silent, load-dependent
         // shape the pool's note is about).
         let replayed = std::mem::take(&mut self.kernel_replay);
+        // And the module journal: a clone carries only its lengths
+        // (`module_delta::JournalSlot`), so the live one is cut back to them.
+        let journal = self.module_journal.take();
         *self = snapshot;
         self.kernel_pool = live;
         self.kernel_replay = replayed;
+        self.module_journal.restore(journal);
     }
 
     /// Wait for every queued proof obligation and report the first failure in

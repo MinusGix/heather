@@ -4,6 +4,7 @@
 //! records operations at infallible commit points rather than diffing private
 //! maps or serializing their current storage layout.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::Arc as Rc;
 
@@ -314,6 +315,61 @@ pub(crate) struct ModuleJournal {
 impl ModuleJournal {
     fn new(base_psi: usize, base_warnings: usize) -> Self {
         Self { events: Vec::new(), base_psi, base_warnings, items: Vec::new(), scope_at_entry: None }
+    }
+
+    fn lengths(&self) -> (usize, usize) {
+        (self.events.len(), self.items.len())
+    }
+}
+
+/// The elaborator's journal slot. A clone of the elaborator is a probe or a
+/// snapshot, never a second recorder of the same module: it gets no journal,
+/// only the lengths the live one had. So a clone is O(1) however much the
+/// module has recorded — a deep copy made every speculative probe
+/// (`type_endpoint_can_anchor`, operator carriers, measure queries) linear
+/// in the events so far, which made a large module quadratic on the
+/// delta path (issues/check-module-delta-certificate-cost.md) — and a
+/// probe's registrations are discarded with it, as its Ψ is.
+/// [`Elaborator::restore_from_clone`] truncates the live journal back to the
+/// snapshot's lengths, the way a failed [`Elaborator::session_transaction`]
+/// does.
+pub(crate) struct JournalSlot {
+    live: RefCell<Option<ModuleJournal>>,
+    mark: Option<(usize, usize)>,
+}
+
+impl JournalSlot {
+    pub(crate) fn new() -> Self {
+        Self { live: RefCell::new(None), mark: None }
+    }
+
+    /// The live journal a restored snapshot keeps: `live` cut back to the
+    /// lengths this (snapshot) slot recorded when it was cloned.
+    pub(crate) fn restore(&mut self, live: Option<ModuleJournal>) {
+        *self.live.get_mut() = self.mark.zip(live).map(|((events, items), mut journal)| {
+            journal.events.truncate(events);
+            journal.items.truncate(items);
+            journal
+        });
+        self.mark = None;
+    }
+
+    pub(crate) fn take(&mut self) -> Option<ModuleJournal> {
+        self.live.get_mut().take()
+    }
+}
+
+impl Clone for JournalSlot {
+    fn clone(&self) -> Self {
+        Self { live: RefCell::new(None), mark: self.live.borrow().as_ref().map(ModuleJournal::lengths) }
+    }
+}
+
+impl std::ops::Deref for JournalSlot {
+    type Target = RefCell<Option<ModuleJournal>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.live
     }
 }
 
@@ -1143,6 +1199,27 @@ mod tests {
             "ordinary diagnostic recovery must retain the successful item"
         );
         assert!(e.module_journal.borrow().is_none());
+    }
+
+    #[test]
+    fn a_clone_records_nothing_and_a_restore_cuts_the_journal_back() {
+        // A probe clone must not copy the journal (that made every probe
+        // linear in the module's events) nor record into one; a snapshot
+        // restored over a declaration that failed after recording must leave
+        // the live journal at the snapshot's lengths.
+        let mut e = Elaborator::new();
+        *e.module_journal.borrow_mut() = Some(ModuleJournal::new(0, 0));
+        e.semantic_commit_name("before", NameKind::Global);
+        let snapshot = e.clone();
+        let mut probe = e.clone();
+        assert!(probe.module_journal.borrow().is_none());
+        probe.semantic_commit_name("probed", NameKind::Global);
+        e.semantic_commit_name("failed", NameKind::Global);
+        assert_eq!(e.module_journal.borrow().as_ref().unwrap().events.len(), 2);
+        e.restore_from_clone(snapshot);
+        let journal = e.module_journal.borrow();
+        let events = &journal.as_ref().expect("the live journal survives a restore").events;
+        assert!(matches!(events.as_slice(), [DeltaEvent::Name { name, .. }] if name == "before"));
     }
 
     #[test]

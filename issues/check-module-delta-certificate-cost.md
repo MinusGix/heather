@@ -21,3 +21,13 @@ The time is statement elaboration, concentrated in specific declarations — `ca
 The session route was reverted (`crates/cli/src/native.rs`, the comment at the certificate check names this issue); `build-x86` keeps only the declaration-verdict gate on the certificate. A suite run after a compiler change is all misses, so a 3–4× slower miss would cost more than the hits save.
 
 Next step: `--timings` of the same certificate through both paths and diff `decl_type` per item (`scripts/timings --diff`); then find what `check_module_delta` does in statement elaboration that `elab_module_source` does not (journal recording, respelling for the image, slice hashing). Payoff beyond `build-x86`: `heather check --cache` goes through the same path on a cache miss, so any module with this shape pays it cold.
+
+## Log
+
+- 2026-09-23: Cause found and fixed. The miss was not statement elaboration on the delta path as such: `Elaborator`'s derived `Clone` deep-copied `module_journal`, which is every `DeltaEvent` the module had recorded so far, AST payloads included. Speculative probes clone the elaborator (`type_endpoint_can_anchor` in `lib.rs` is `self.clone().elab_infer(..)` at every equality endpoint; operator carriers, measure queries, slot probes do the same). So on the journalled path each probe was linear in the module's events, and a large module was quadratic. `elab_module_source` has no journal, which is why only the delta path paid. A frame-pointer `perf` of the miss: ~58% under `type_endpoint_can_anchor`, most of it `ModuleJournal::clone` → `ExprKind::clone`/memmove/malloc.
+
+  Fix: `module_delta::JournalSlot`. A clone gets no live journal, only the live one's lengths; `restore_from_clone` (the one snapshot-restore, `elab_instance`) truncates the live journal back to them, as a failed `session_transaction` already did. Probes recorded into a copy that was discarded, so nothing observable changes.
+
+  Measured on the `stack_save --callable-caller` certificate (release, width one, `heather check --cache` on an empty cache dir, library modules via a `-L` dir of the bundled SUPPORT sources): total 94 s → 32 s, against 31 s for plain `heather check`. The certificate module: 83 s → 21 s total, `decl_type` 67 s → 5.5 s; every counter column identical to the old `--cache` run. Library modules built into images on the delta path gain the same way, in proportion to their size.
+
+  What remains open: whether to route `build-x86`'s certificate through `SemanticSession::check` again (the original goal; a miss should now cost what `elab_module_source` does). It only pays on a repeated build at unchanged compiler and inputs.
