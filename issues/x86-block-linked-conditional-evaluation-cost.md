@@ -32,3 +32,7 @@ x86_64_block::LinkedConditionalDecodes --timings` over a replayed prefix.
 Trigger: only if the x86 library's cold check becomes a bottleneck (edits to
 `x86_64_block`, or the suite's first native build after a compiler change).
 Not worth a round by itself today.
+
+## Log
+
+- 2026-09-23: 2026-09-23: the fast lane's critical path is the same shape in the guarded-read test — [[fast-lane-heaviest-declarations]].

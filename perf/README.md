@@ -44,6 +44,23 @@ bar each; and every declaration under it, sortable and filterable, with Δ
 columns when the compared snapshot's table is on disk too. Every `*_ns`
 column is self time and they sum to `total_ns`, so a bar is the whole row.
 
+## Inside the suite: per test, and per declaration
+
+The suite section is not only one number per test binary. The runner records
+**seconds per test** on every run (libtest `--report-time`, in
+`target/test-times-<lane>.tsv`; `HEATHER_TEST_TIMES=0` turns it off), and a
+snapshot keeps every test at or above 50 ms: the dashboard's *Inside the test
+binaries* treemap and table.
+
+One level further down is opt-in: `HEATHER_SUITE_DECLS=1 scripts/test --fast`
+makes every test thread write its `--timings` rows (`HEATHER_TIMINGS_DIR`,
+`crates/elab/src/stats.rs`) to `target/suite-decls-<lane>/`, and the next
+snapshot sums them across the suite — *What the suite elaborates*: modules and
+declarations summed over the tests that elaborate them (a library module
+re-elaborated from source by a hundred tests is one row), and each test's time
+inside declarations against its time outside any (image replay, generators,
+the test's own work).
+
 ## What the report shows besides totals
 
 Every heaviest-declaration row carries the gate's **µs per evaluator step**

@@ -3,7 +3,7 @@ title: prelude::class CollectionLiteral checks at 70–105 µs per evaluator ste
 status: open
 labels: [performance,kernel,prelude,traits]
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 The 2026-09-23 perf snapshot's per-step outlier list names one declaration,
@@ -31,3 +31,7 @@ Method: `--only` cannot select a prelude item, so probe it with an empty
 module and `--timings`, then `HEATHER_VALUE_METRICS=1` under
 `--features value-metrics` for what the steps touch
 (the value-metrics build's per-module `ValueMetricsSnapshot`; run without `--cache`, or the declaration is accepted from the cache and nothing is measured).
+
+## Log
+
+- 2026-09-23: 2026-09-23 suite-wide reading (HEATHER_SUITE_DECLS=1 fast lane): the class is checked by 1,855 test threads, 2,531 times, 6.28 s summed — the prelude tax, measured across the suite rather than per file.

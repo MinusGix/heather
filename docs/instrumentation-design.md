@@ -147,6 +147,13 @@ Environment and flag mapping, old → new:
 
 The `.conv-miss.txt` sidecar beside a timings file is unchanged.
 
+`HEATHER_TIMINGS_DIR=<dir>` is the suite-wide form (2026-09-23): every named
+thread other than `main` keeps an ambient copy of its rows — a second buffer,
+so explicit collection and `take_rows` are unaffected — and writes them to
+`<dir>/<executable>.<thread>.<n>.tsv` when it exits. libtest names each
+test's thread after the test, so a suite run leaves one table per test;
+`HEATHER_SUITE_DECLS=1 scripts/test` sets it per lane (`perf/README.md`).
+
 `HEATHER_GENDEF_DECLINES=1` (`value-metrics`, same rule as the samplers) prints
 one tab-separated `gendef-decline` line per *decline* of the generated-
 definition devices — site, declaration, reason, declaration scope — because a
