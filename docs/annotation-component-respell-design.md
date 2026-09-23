@@ -1,5 +1,13 @@
 # Annotation-component respelling — design
 
+> **Superseded in part, 2026-09-22.** Site family 1 below — the
+> per-application `dom`/`cod` annotations — mostly no longer exists: an
+> application outside a quotation is written `app@(f; a)` and carries no
+> annotation (`docs/app-by-head-type-design.md`). The application respell
+> (`respell_application_annotations`) now runs only where the annotated `app`
+> is still written: a λ head, and inside a quotation. The other site families
+> stand as written.
+
 Deliberate perf round on `issues/wf-field-conversion-cost.md`, 2026-08-13. The
 predecessor (`docs/family-type-code-defs-design.md` §10, the 2026-08-12
 extension) landed `GenDef::TyCode` and collapsed every *whole-type* occurrence

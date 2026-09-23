@@ -26,8 +26,6 @@ pub enum Tier {
     TestOnly,
     /// The release-CLI gate, `crates/cli/tests/showcase.rs`.
     Cli,
-    /// The same gate, skipped by `scripts/test --fast`.
-    CliSlow,
     /// Nothing checks it, by design; the note says why.
     Unchecked,
 }
@@ -39,7 +37,6 @@ impl Tier {
             "test" => Self::Test,
             "test-only" => Self::TestOnly,
             "cli" => Self::Cli,
-            "cli-slow" => Self::CliSlow,
             "unchecked" => Self::Unchecked,
             _ => return None,
         })

@@ -105,12 +105,12 @@ atom   := digit+ spaces | '(' spaces expr ')' spaces
 scripts/showcase check calc_text
 ```
 
-This one is expensive — 343 s wall, 334 CPU-s and 9.8 GiB peak at width one
-(2026-09-19) — and its semantic image is refused as over budget, so nothing
-about it is ever cached and a recheck costs that however small the edit
-(`issues/check-only-no-stored-image.md`). It is gated on the full
-`scripts/test` lane by `showcase_gate`, not as a test target: the runner's
-per-child rails are 300 CPU-s and 6 GiB, which this would exceed on both.
+It checks in 16 s at 0.3 GiB at width one (2026-09-22), its semantic image
+publishes, so a warm recheck replays it in about a second and `--only` works,
+and it is an ordinary row of the CLI showcase test. It was 343 s and 9.8 GiB
+with an image refused as over budget until application annotations stopped
+being written (`docs/app-by-head-type-design.md`); the history is in
+`issues/showcase-harness.md` and `issues/check-only-no-stored-image.md`.
 
 The entry points take a `String`: `parse`, `calculate`, `execute`.
 `parse_sound` gives every accepted text a well-formed derivation that spells it

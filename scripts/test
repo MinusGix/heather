@@ -18,8 +18,7 @@
 # kernel-refusal of mutants — acceptance-class, nothing an inner loop
 # iterates on) and the native x86 certificate gates (crates/cli/tests/native*.rs
 # and their prefix warmup; issues/native-summary-test-cpu-margin.md, ~1200
-# CPU-s that no elaborator edit iterates on) and the slow showcase gate
-# (`showcase_gate`, docs/showcase/calc_text.hthr, ~6 min) — the inner loop
+# CPU-s that no elaborator edit iterates on) — the inner loop
 # while iterating. The fast lane also disables
 # Cargo's cross-target fail-fast, so a red run shows every failing test
 # binary while the expensive acceptance tests stay skipped.
@@ -160,29 +159,6 @@ native_warmup() {
   )
 }
 
-# The showcase gate for `docs/showcase/calc_text.hthr`, which cannot be a test
-# target at all: measured 343 s wall, 334 CPU-s and 9.8 GiB peak at width one
-# (2026-09-19), against the runner's 300 CPU-s and 6 GiB per-child rails — it
-# would be SIGKILLed twice over, and a child at 9.8 GiB alongside parallel
-# siblings planned against a 3 GiB budget is what those rails exist to prevent.
-# So it runs here instead: serially, before the parallel targets, in its own
-# bounded subshell, with rails sized for this one file and no sibling to
-# oversubscribe against. Full lane only — `--fast` skips it, as it skips the
-# other expensive gates. The cheap showcase rows stay an ordinary test target
-# (crates/cli/tests/showcase.rs); this is only the `cli-slow` tier.
-# issues/showcase-harness.md.
-showcase_gate() {
-  local heather="${CARGO_TARGET_DIR:-target}/debug/heather"
-  if [[ ! -x "$heather" ]]; then
-    echo "showcase gate: no $heather to check with; skipped" >&2
-    return 0
-  fi
-  echo "showcase gate: docs/showcase/calc_text.hthr (~6 min, 9.8 GiB peak; --fast skips it)"
-  # scripts/showcase caps each child itself (setrlimit per run), so no `ulimit`
-  # here — one set below 9.8 GiB would kill the thing it is meant to gate.
-  HEATHER_KERNEL_WORKERS=1 scripts/showcase check --tier cli-slow --quiet --heather "$heather"
-}
-
 if (( $# == 0 )); then
   semantic_warmup semantic_x86_warmup
   semantic_warmup semantic_omega_warmup
@@ -190,7 +166,6 @@ if (( $# == 0 )); then
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
     native_warmup
-    showcase_gate
   fi
 else
   requested=" $* "

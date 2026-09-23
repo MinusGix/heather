@@ -3,13 +3,8 @@
 //! A showcase that no test checks is documentation, not a checked artifact,
 //! and `docs/showcase/calc_text.hthr` — the largest and most advanced of them
 //! — was exactly that until this file existed (`issues/showcase-harness.md`).
-//! It cannot join the in-process prefix of
-//! `crates/elab/tests/showcase_calculator.rs`: that harness replays semantic
-//! images, and this module's image is refused as over budget
-//! (`issues/check-only-no-stored-image.md`), so there is nothing to replay and
-//! the cost would be a full re-elaboration inside a test process.
 //!
-//! What runs here instead is the CLI, over the manifest. The dev profile
+//! What runs here is the CLI, over the manifest. The dev profile
 //! builds the kernel, elaborator and syntax crates at `opt-level = 3`
 //! (workspace `Cargo.toml`), so `CARGO_BIN_EXE_heather` checks at
 //! release-grade speed and a separate release build is not needed.
@@ -114,19 +109,12 @@ fn every_search_directory_exists_and_is_not_the_showcase_directory() {
     }
 }
 
-/// The cheap CLI tier: the checked-in generator outputs, which nothing
-/// regenerates, so the gate is that they still check.
+/// The CLI tier: the checked-in generator outputs, which nothing regenerates,
+/// so the gate is that they still check — and `calc_text`, which was a
+/// separate serial gate in `scripts/test` while it cost 334 CPU-s and 9.8 GiB
+/// and is an ordinary row since `docs/app-by-head-type-design.md` (16 s,
+/// 0.3 GiB at width one, 2026-09-22).
 #[test]
 fn cli_tier_showcases_check() {
     check_all(Tier::Cli);
 }
-
-// The `cli-slow` tier — `docs/showcase/calc_text.hthr` — is deliberately *not*
-// a test here. Measured at width one on 2026-09-19: 343 s wall, 334 CPU-s,
-// 9.8 GiB peak. The test runner's per-child rails are 300 CPU-s and 6 GiB
-// (`LIMIT_KIB`/`CPU_RAIL_SECONDS` in scripts/run-test-targets.mjs), so it
-// would be SIGKILLed on both, and raising a rail for one target would hand
-// every other target the same licence on a box whose parallelism is planned
-// against a 3 GiB working set. It is gated by `showcase_gate` in scripts/test
-// instead: serial, full lane only, with rails sized for this one file.
-// issues/showcase-harness.md records the measurement.

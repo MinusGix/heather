@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SHOWCASE = ROOT / "docs" / "showcase"
 MANIFEST = SHOWCASE / "showcases.tsv"
-TIERS = ["suite", "test", "test-only", "cli", "cli-slow", "unchecked"]
+TIERS = ["suite", "test", "test-only", "cli", "unchecked"]
 
 # The per-run rails. `calc_text` is the reason they are not smaller: 9.8 GiB
 # peak RSS and 334 CPU-s at width one (2026-09-19, issues/showcase-harness.md).

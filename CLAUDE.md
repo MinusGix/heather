@@ -123,10 +123,7 @@
   importing file's own directory first, so a sibling import needs no `-L`, and
   `-L docs/showcase` is the thing that breaks — it puts that directory's
   `parser_core` against the library's). A new file under `docs/showcase/` fails
-  `crates/cli/tests/showcase.rs` until it declares a tier. `docs/showcase/calc_text.hthr`
-  is gated by `showcase_gate` in `scripts/test` (full lane only, ~6 min): it
-  cannot be a test target, at 334 CPU-s and 9.8 GiB against the runner's 300 s
-  and 6 GiB rails.
+  `crates/cli/tests/showcase.rs` until it declares a tier.
 - Issue tracker: `scripts/issue` over `issues/*.md` (see `issues/README.md`).
 - Type-theory source of truth: `docs/delam/04–06`; `docs/delam/README.md`
   explains which chapters are implementation-relevant (01–03 are a
