@@ -72,6 +72,36 @@ export function parseResults(text) {
   return total;
 }
 
+// Per-test seconds inside each binary. A target's one number says which
+// binary is slow, not which test, and the suite's time hides in there: a
+// slow test, a shared prefix replay the first test pays, a binary of a
+// thousand cheap tests. libtest reports a time per test only through
+// `--report-time`, which is unstable and prints only in the pretty format,
+// so the runner asks for exactly that (`RUSTC_BOOTSTRAP=1` in the *test
+// binary's* environment enables libtest's own option parsing; nothing is
+// compiled differently) and turns the output back into terse's shape:
+// passing and ignored lines are dropped, failures kept. HEATHER_TEST_TIMES=0
+// runs the binaries plain terse, as before.
+export const TEST_TIMES = process.env.HEATHER_TEST_TIMES !== "0";
+export function timedLibtestArgs(args) {
+  const out = [...args];
+  const i = out.indexOf("--format");
+  if (i >= 0 && out[i + 1] === "terse") out.splice(i, 2, "--format", "pretty", "-Z", "unstable-options", "--report-time");
+  return out;
+}
+export function parseTestTimes(text) {
+  const tests = [];
+  const kept = [];
+  const re = /^test (\S+) \.\.\. (ok|FAILED|ignored)(?:, [^<]*)?(?: <([0-9.]+)s>)?$/;
+  for (const line of text.split("\n")) {
+    const m = re.exec(line);
+    if (!m) { kept.push(line); continue; }
+    tests.push([m[1], m[3] === undefined ? null : Number(m[3]), m[2]]);
+    if (m[2] === "FAILED") kept.push(line);
+  }
+  return { tests, output: kept.join("\n") };
+}
+
 // The wrapper's CPU line: seconds of user+sys the child and its threads
 // spent, or null when the wrapper never got to print it. The line is removed
 // from the returned output so libtest's own text stays as it was.
@@ -249,10 +279,14 @@ async function runTargets(targets, jobs, libtestArgs, keepGoing) {
         active++;
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
-        collect(limitedCommand(target.executable, libtestArgs)).then((run) => {
+        const command = TEST_TIMES
+          ? limitedCommand(target.executable, timedLibtestArgs(libtestArgs), { RUSTC_BOOTSTRAP: "1" })
+          : limitedCommand(target.executable, libtestArgs);
+        collect(command).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
           ({ cpu: run.cpu, output: run.output } = parseCpu(run.output));
+          ({ tests: run.tests, output: run.output } = TEST_TIMES ? parseTestTimes(run.output) : { tests: [], output: run.output });
           run.result = parseResults(run.output);
           if (run.code !== 0 || run.signal || run.result.resultLines !== 1) failed = true;
           completed.push(run);
@@ -363,6 +397,21 @@ async function main() {
   appendFileSync(timingsPath, runs.map((run) =>
     `${runId}\t${(run.result.duration || run.wall).toFixed(3)}\t${run.target.label}\t${run.cpu === null ? "" : run.cpu.toFixed(3)}`).join("\n") + "\n");
   trimHistory(timingsPath, 4000);
+  if (TEST_TIMES) {
+    // The latest run only, overwritten: `scripts/perf snapshot` is what keeps
+    // a dated copy. Beside the target history, one per lane.
+    const testsPath = timingsPath.includes("test-target-timings-")
+      ? timingsPath.replace("test-target-timings-", "test-times-") : `${timingsPath}.tests`;
+    const rows = runs.flatMap((run) => run.tests.map(([name, seconds, status]) =>
+      `${runId}\t${run.target.label}\t${name}\t${seconds === null ? "" : seconds.toFixed(3)}\t${status}`));
+    writeFileSync(testsPath, "run\ttarget\ttest\tseconds\tstatus\n" + rows.join("\n") + "\n");
+    const slowest = runs.flatMap((run) => run.tests.filter(([, s]) => s !== null).map(([name, s]) => [s, `${run.target.label}::${name}`]))
+      .sort((a, b) => b[0] - a[0]).slice(0, 15);
+    if (slowest.length) {
+      console.log(`== slowest tests (seconds inside their binary; all ${rows.length} in ${testsPath}) ==`);
+      for (const [seconds, name] of slowest) console.log(`${seconds.toFixed(2).padStart(8)}s  ${name}`);
+    }
+  }
 
   if (incomplete) {
     console.log(`\n== suite: INCOMPLETE (${total.passed} passed before death, ${total.failed} failed) ==`);

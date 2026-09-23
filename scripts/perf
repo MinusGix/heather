@@ -253,7 +253,45 @@ def suite_timings():
             "note": "seconds per test binary at kernel width one under the suite's parallel scheduler; "
                     "the third cell is the binary's CPU seconds (user+sys) against the runner's 300 s rail",
         }
+        tests = test_times(path.parent / f"test-times-{lane}.tsv", latest)
+        if tests:
+            out[lane].update(tests)
     return out
+
+
+# Tests below this are summed per binary but not kept one by one: a snapshot
+# is committed, and most of the suite's ~3k tests are milliseconds.
+TEST_KEEP_S = 0.05
+
+
+def test_times(path: Path, run: str):
+    """The runner's per-test seconds (scripts/run-test-targets.mjs writes the
+    latest run per lane) when they belong to the same run as the target rows;
+    a stale table from an older run is ignored rather than mixed in."""
+    if not path.is_file():
+        return None
+    rows = [l.split("\t") for l in path.read_text().splitlines()[1:]]
+    rows = [r for r in rows if len(r) == 5 and r[0] == run]
+    if not rows:
+        return None
+    totals = {}
+    kept = []
+    for _, target, test, secs, status in rows:
+        t = totals.setdefault(target, [0, 0.0, 0])  # tests, seconds summed, ignored
+        t[0] += 1
+        if status == "ignored":
+            t[2] += 1
+        if secs:
+            t[1] += float(secs)
+            if float(secs) >= TEST_KEEP_S:
+                kept.append([target, test, float(secs), status])
+    kept.sort(key=lambda r: -r[2])
+    return {
+        "tests": kept,
+        "test_totals": {k: [n, round(sec, 3), ign] for k, (n, sec, ign) in totals.items()},
+        "tests_note": f"seconds per test inside its binary (libtest --report-time; up to RUST_TEST_THREADS=2 run at once); "
+                      f"tests under {TEST_KEEP_S}s are counted in test_totals only",
+    }
 
 
 # ---------------------------------------------------------------- corpus
@@ -568,6 +606,12 @@ def cmd_report(args):
         rest = t["targets"][top:]
         if rest:
             print(f"   {fmt_s(sum(row[1] for row in rest))}                       … {len(rest)} more")
+        if t.get("tests"):
+            n = sum(v[0] for v in t["test_totals"].values())
+            summed = sum(v[1] for v in t["test_totals"].values())
+            print(f"   slowest tests ({n} tests, {summed:.0f}s summed inside their binaries):")
+            for target, test, secs, _ in t["tests"][:top]:
+                print(f"   {fmt_s(secs)}  {target}::{test}")
 
     # --- files
     if snap["files"]:

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CPU_MARKER, collect, jobBounds, limitedCommand, parseArtifacts, parseCpu, parseResults, targetIncomplete } from "./run-test-targets.mjs";
+import { CPU_MARKER, collect, jobBounds, limitedCommand, parseArtifacts, parseCpu, parseResults, parseTestTimes, targetIncomplete, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -61,4 +61,24 @@ test("the limited wrapper reports CPU, keeps the exit code, and re-raises a sign
   const killed = await collect(limitedCommand("bash", ["-c", "kill -9 $$"]));
   assert.equal(killed.signal, "SIGKILL");
   assert.equal(typeof parseCpu(killed.output).cpu, "number");
+});
+
+test("per-test times come from the pretty format and leave terse's shape behind", () => {
+  assert.deepEqual(timedLibtestArgs(["--format", "terse", "--skip", "slow_acceptance"]),
+    ["--format", "pretty", "-Z", "unstable-options", "--report-time", "--skip", "slow_acceptance"]);
+  assert.deepEqual(timedLibtestArgs(["--skip", "x"]), ["--skip", "x"]);
+  const text = "\nrunning 3 tests\ntest a::fast ... ok <0.013s>\ntest slow ... FAILED <2.500s>\n" +
+    "test skipped ... ignored, needs furnace\ntest b has been running for over 60 seconds\n\nfailures:\n" +
+    "test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.52s\n";
+  const { tests, output } = parseTestTimes(text);
+  assert.deepEqual(tests, [["a::fast", 0.013, "ok"], ["slow", 2.5, "FAILED"], ["skipped", null, "ignored"]]);
+  assert.ok(!output.includes("a::fast") && output.includes("test slow ... FAILED") && output.includes("has been running"));
+  assert.equal(parseResults(output).failed, 1);
+});
+
+test("the limited wrapper hands the child its extra environment", async () => {
+  // Stable libtest honours -Z unstable-options only when the test binary's
+  // own environment carries RUSTC_BOOTSTRAP; this checks the wrapper passes it.
+  const run = await collect(limitedCommand("bash", ["-c", "echo $RUSTC_BOOTSTRAP"], { RUSTC_BOOTSTRAP: "1" }));
+  assert.match(run.output, /^1$/m);
 });

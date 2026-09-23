@@ -634,7 +634,115 @@ document.addEventListener('input', ev => {
   if (ev.target.closest('#explore [data-ctl="filter"]')) { EX.filter = ev.target.value; EX.limit = 200; $('#ex-items').innerHTML = itemsTable(); }
 });
 let resizeTimer = null;
-window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (EX.tree && $('#ex-body')) exploreBody(); }, 150); });
+
+// ---------------------------------------------------------------- inside the suite
+// The runner records seconds per test inside each binary (libtest
+// --report-time); the snapshot keeps every test above TEST_KEEP_S and a
+// count and sum per binary. A binary's own seconds are libtest's "finished
+// in", so its tests can sum past it (two run at once) or short of it (time
+// outside any test).
+const SX = { lane: null, zoom: null, filter: '', limit: 100 };
+const CRATE_COLOR = { cli: S(2), elab: S(1), kernel: S(3), syntax: S(4), cache: S(7) };
+const crateOf = label => (/^crates\/([^/]+)\//.exec(label) || [])[1] || 'other';
+const crateColor = label => CRATE_COLOR[crateOf(label)] || 'var(--other)';
+const binName = label => label.replace(/^crates\//, '').replace(/\/tests\//, '/').replace(/\.rs$/, '');
+function suiteModel(t) {
+  const byBin = new Map(t.targets.map(([label, secs, cpu]) => [label, { label, secs, cpu, tests: [], totals: t.test_totals?.[label] || [0, 0, 0] }]));
+  for (const [target, test, secs, status] of t.tests || []) byBin.get(target)?.tests.push({ name: test, secs, status });
+  return [...byBin.values()];
+}
+function suiteTreemap(bins, W, H) {
+  let svg = '';
+  const items = bins.filter(b => b.secs > 0).map(b => ({ n: b, v: b.secs })).sort((a, b) => b.v - a.v);
+  for (const c of squarify(items, 0, 0, W, H)) {
+    const b = c.n, color = crateColor(b.label);
+    const [n, summed, ign] = b.totals;
+    const kept = b.tests.reduce((a, x) => a + x.secs, 0);
+    const tip = `${b.label}\n${fmtS(b.secs)} reported${b.cpu != null ? `, ${fmtS(b.cpu)} CPU` : ''}\n${n} tests (${ign} ignored), ${fmtS(summed)} summed inside`
+      + (b.tests.length ? `\nslowest: ${b.tests[0].name} ${fmtS(b.tests[0].secs)}` : '');
+    const kids = b.tests.map(x => ({ n: { name: x.name, secs: x.secs, status: x.status }, v: x.secs }));
+    if (summed - kept > 0.001) kids.push({ n: { name: `${n - b.tests.length} under ${Math.round(0.05 * 1000)} ms`, secs: summed - kept, small: true }, v: summed - kept });
+    if (c.w > 90 && c.h > 46 && kids.length > 1) {
+      svg += `<rect class="head" x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" data-bin="${esc(b.label)}" data-tip="${esc(tip)}"/>`
+        + label(c.x, c.y, c.w, 16, `${binName(b.label)} · ${fmtS(b.secs)}`, '', 'hd');
+      for (const cc of squarify(kids, c.x + 2, c.y + 16, c.w - 4, c.h - 18)) {
+        const x = cc.n;
+        svg += `<rect class="cell" x="${cc.x}" y="${cc.y}" width="${cc.w}" height="${cc.h}" fill="${x.small ? 'var(--other)' : color}" fill-opacity="${x.small ? 0.6 : 0.85}"
+          data-bin="${esc(b.label)}" data-tip="${esc(`${b.label}\n${x.name}\n${fmtS(x.secs)}${x.status && x.status !== 'ok' ? ' ' + x.status : ''}`)}"/>` + label(cc.x, cc.y, cc.w, cc.h, x.name, fmtS(x.secs), 'lab');
+      }
+    } else {
+      svg += `<rect class="cell" x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" fill="${color}" data-bin="${esc(b.label)}" data-tip="${esc(tip)}"/>` + label(c.x, c.y, c.w, c.h, binName(b.label), fmtS(b.secs), 'lab');
+    }
+  }
+  return `<svg class="tm" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${svg}</svg>`;
+}
+function suiteBinTable(bins) {
+  const rows = bins.slice().sort((a, b) => b.secs - a.secs).map(b => {
+    const [n, summed, ign] = b.totals, top = b.tests[0];
+    return `<tr><td class="name mono"><a class="nav" data-bin="${esc(b.label)}">${esc(b.label)}</a></td><td>${fmtS(b.secs)}</td><td>${b.cpu != null ? fmtS(b.cpu) : '—'}</td>
+      <td>${n}${ign ? ` <span class="kv">(${ign} ign.)</span>` : ''}</td><td>${fmtS(summed)}</td>
+      <td class="name mono">${top ? esc(top.name) : '<span class="kv">—</span>'}</td><td>${top ? fmtS(top.secs) : ''}</td><td>${top && summed ? (top.secs / summed * 100).toFixed(0) + '%' : ''}</td></tr>`;
+  });
+  const head = `<thead><tr><th>test binary</th><th>reported</th><th>CPU</th><th>tests</th><th>test seconds summed</th><th>slowest test</th><th>its seconds</th><th>its share</th></tr></thead>`;
+  return `<table>${head}<tbody>${rows.slice(0, 25).join('')}</tbody></table>`
+    + (rows.length > 25 ? `<details><summary>the other ${rows.length - 25} binaries</summary><table>${head}<tbody>${rows.slice(25).join('')}</tbody></table></details>` : '');
+}
+function suiteTestTable(t) {
+  const f = SX.filter.toLowerCase();
+  const all = (t.tests || []).filter(([target, test]) => (!SX.zoom || target === SX.zoom) && (!f || `${target}::${test}`.toLowerCase().includes(f)));
+  const max = all[0]?.[2] || 1;
+  const rows = all.slice(0, SX.limit).map(([target, test, secs, status]) =>
+    `<tr><td class="name mono" title="${esc(target)}::${esc(test)}">${esc(binName(target))} :: ${esc(test)}${status !== 'ok' ? ` <span class="delta-up">${esc(status)}</span>` : ''}</td>${barCell(secs, max, crateColor(target), `${target}::${test}`)}</tr>`).join('');
+  return `<h3>Slowest tests${SX.zoom ? ' in ' + esc(SX.zoom) : ''} — ${all.length}${f ? ` matching “${esc(SX.filter)}”` : ''} at or above 50 ms</h3>
+    <table><thead><tr><th>binary :: test</th><th>seconds</th></tr></thead><tbody>${rows}</tbody></table>
+    ${all.length > SX.limit ? `<button data-sact="more">show ${Math.min(500, all.length - SX.limit)} more</button>` : ''}`;
+}
+function suiteInsideBody() {
+  const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
+  const t = snap.tests?.[SX.lane];
+  const el = $('#suite-inside-body');
+  if (!t || !el) return;
+  const bins = suiteModel(t).filter(b => !SX.zoom || b.label === SX.zoom);
+  const W = Math.max(320, $('#suite-inside').clientWidth - 34), H = Math.round(Math.min(560, Math.max(300, W * 0.42)));
+  const n = Object.values(t.test_totals).reduce((a, v) => a + v[0], 0), summed = Object.values(t.test_totals).reduce((a, v) => a + v[1], 0);
+  const crumbs = SX.zoom ? `<div class="crumbs"><a class="nav" data-sact="out">${esc(SX.lane)} lane</a> › <b class="mono">${esc(SX.zoom)}</b></div>` : '';
+  el.innerHTML = `<p class="note">${n} tests in ${t.targets.length} binaries: ${fmtS(summed)} of test time inside binaries whose own times sum to ${fmtS(t.sum_s)}.
+      Area is seconds; each binary's cell holds its tests (grey: the ones under 50 ms, summed). Colour is the crate: 
+      ${Object.entries(CRATE_COLOR).map(([k, c]) => `<span class="legend" style="display:inline-flex"><span><i style="background:${c}"></i>${k}</span></span>`).join(' ')}. Click a binary to zoom in.</p>
+    ${crumbs}${suiteTreemap(bins, W, H)}
+    ${SX.zoom ? '' : `<h3>Per binary: how concentrated is it?</h3>${suiteBinTable(bins)}`}
+    <div class="controls"><label>filter <input type="search" data-sctl="filter" placeholder="binary or test substring" value="${esc(SX.filter)}"></label></div>
+    <div id="suite-tests">${suiteTestTable(t)}</div>`;
+}
+function suiteInside(snap) {
+  const lanes = Object.keys(snap.tests || {}).filter(l => snap.tests[l].tests);
+  if (!lanes.length) return `<section id="suite-inside"><h2>Inside the test binaries</h2><p class="note">This snapshot has no per-test times: the suite runner records them from 2026-09-23 on (scripts/run-test-targets.mjs, libtest --report-time). Run scripts/test, then snapshot.</p></section>`;
+  if (!lanes.includes(SX.lane)) SX.lane = lanes.includes('fast') ? 'fast' : lanes[0];
+  const t = snap.tests[SX.lane];
+  return `<section id="suite-inside"><h2>Inside the test binaries</h2>
+    <p class="note">Where the suite's seconds go, test by test. A binary's cost is a slow test, a fixed price its first test pays (a library prefix replayed, a certificate built), or many cheap tests. Run ${esc(t.run)}; seconds at kernel width one, up to two tests at once per binary.</p>
+    <div class="controls"><label>lane <select data-sctl="lane">${lanes.map(l => `<option${l === SX.lane ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div id="suite-inside-body"></div></section>`;
+}
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('#suite-inside')) return;
+  const act = ev.target.closest('[data-sact]')?.dataset.sact;
+  if (act === 'more') { SX.limit += 500; suiteInsideBody(); return; }
+  if (act === 'out') { SX.zoom = null; SX.limit = 100; suiteInsideBody(); return; }
+  const b = ev.target.closest('[data-bin]');
+  if (b) { ev.preventDefault(); SX.zoom = b.dataset.bin; SX.limit = 100; suiteInsideBody(); $('#suite-inside').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+});
+document.addEventListener('change', ev => {
+  if (ev.target.closest('#suite-inside [data-sctl="lane"]')) { SX.lane = ev.target.value; SX.zoom = null; suiteInsideBody(); }
+});
+document.addEventListener('input', ev => {
+  if (ev.target.closest('#suite-inside [data-sctl="filter"]')) {
+    SX.filter = ev.target.value; SX.limit = 100;
+    const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
+    $('#suite-tests').innerHTML = suiteTestTable(snap.tests[SX.lane]);
+  }
+});
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (EX.tree && $('#ex-body')) exploreBody(); suiteInsideBody(); }, 150); });
 
 // ---------------------------------------------------------------- page
 function render() {
@@ -661,6 +769,7 @@ function render() {
     ${snap.files.length ? `<section><h2>Which declarations</h2>
       <p class="note">Concentration first: a file whose top declaration is most of its time has one problem; a flat file has a constant-factor problem.</p>
       ${concentration(snap)}<h3>Heaviest declarations across the corpus (cold)</h3>${heavyItems(snap)}</section>` : ''}
+    ${suiteInside(snap)}
     <section><h2>The test suite</h2><p class="note">Latest run per lane of the suite runner's history (scripts/test); seconds per test binary, scheduled in parallel, each at kernel width one.</p>${suiteTable(snap, against)}</section>
     <section><h2>History</h2>
       <p class="note">One line per environment (fixed color). Points are snapshots; hover for the commit. Counts are the honest cross-machine line; seconds within one environment.</p>
@@ -671,6 +780,7 @@ function render() {
       ${historyCards(SNAPS, [['seconds', false]], s => { const t = byTest(s); return Object.fromEntries(Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 12)); }, (v) => v, v => fmtS(v), 'Slowest test binaries over snapshots (top 12 by the latest run)')}
     </section>`;
   exploreInit(snap, against);
+  suiteInsideBody();
 }
 async function load() {
   SNAPS = await (await fetch('/api/snapshots')).json();
