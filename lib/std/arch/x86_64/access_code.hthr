@@ -38,6 +38,22 @@ fn AccessLayout(code: AccessCode) → Type {
             (AccessLayout(yes) ∧ AccessLayout(no))),
     }
 }
+// Generated layouts are stated through these over the children's codes and
+// layouts. A tuple checked against AccessLayout of a literal code tree makes
+// the elaborator spell the tree's reduct, which the kernel pays for per
+// constructor (issues/fast-lane-heaviest-declarations.md).
+theorem access_sequence_layout(prefix, tail: AccessCode,
+    prefix_layout: AccessLayout(prefix), tail_layout: AccessLayout(tail)):
+    AccessLayout(AccessSequence(prefix, tail)) {
+    ⟨prefix_layout, tail_layout⟩
+}
+theorem access_branch_layout(register: Gpr, fd, jd: BitVec(8), yes, no: AccessCode,
+    false_target: (start: BitVec(64)) → short_branch_target(start, fd) = next_rip(start, 2 + (access_bytes(yes).len() + 2)),
+    join_target: (start: BitVec(64)) → short_branch_target(start, jd) = next_rip(start, 2 + access_bytes(no).len()),
+    yes_layout: AccessLayout(yes), no_layout: AccessLayout(no)):
+    AccessLayout(AccessBranch(register, fd, jd, yes, no)) {
+    ⟨false_target, ⟨join_target, ⟨yes_layout, no_layout⟩⟩⟩
+}
 fn ExecuteAccess<M>(access: ByteReadAccess<M>, code: AccessCode) → MachineState<M> → MachineState<M> → Type {
     match code {
         AccessPure(pure) => λ before after => ExecuteStructured(pure, before, after),

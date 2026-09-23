@@ -22,7 +22,8 @@ impl AccessFragment {
         let mut bytes = self.bytes;
         bytes.extend(tail.bytes);
         let imports = self.imports.union(&tail.imports).cloned().collect();
-        Self { imports, bytes, code: format!("AccessSequence({}, {})", self.code, tail.code), layout: format!("⟨{}, {}⟩", self.layout, tail.layout) }
+        Self { imports, bytes, code: format!("AccessSequence({}, {})", self.code, tail.code),
+            layout: format!("access_sequence_layout({}, {}, {}, {})", self.code, tail.code, self.layout, tail.layout) }
     }
     /// Resolve both forward labels from child byte lengths. Larger spans
     /// decline explicitly until near-branch selection is available.
@@ -37,9 +38,13 @@ impl AccessFragment {
         bytes.extend(no.bytes);
         let target = |d| format!("λ (start: BitVec(64)) => trans(sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {d})))), bitvec::BitVec::iterate_increment_compose(64, start, 2, {d}))");
         let imports = yes.imports.union(&no.imports).cloned().collect();
+        // Through the library lemmas, not a tuple against AccessLayout of the
+        // literal tree: the tuple makes the elaborator spell the tree's reduct.
+        let displacements = format!("@bitvec::BitVec::ofNat(8, {fd}), @bitvec::BitVec::ofNat(8, {jd})");
         Ok(Self { imports, bytes,
-            code: format!("AccessBranch({}, @bitvec::BitVec::ofNat(8, {fd}), @bitvec::BitVec::ofNat(8, {jd}), {}, {})", register.heather_name(), yes.code, no.code),
-            layout: format!("⟨{}, ⟨{}, ⟨{}, {}⟩⟩⟩", target(fd), target(jd), yes.layout, no.layout),
+            code: format!("AccessBranch({}, {displacements}, {}, {})", register.heather_name(), yes.code, no.code),
+            layout: format!("access_branch_layout({}, {displacements}, {}, {}, {}, {}, {}, {})",
+                register.heather_name(), yes.code, no.code, target(fd), target(jd), yes.layout, no.layout),
         })
     }
     pub fn publish(&self, prefix: &str) -> String {
