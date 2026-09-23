@@ -5,13 +5,30 @@
 
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, LocalVar, Term, Type};
 use heather_syntax::{Expr, Span};
 
 use crate::inductive::Inductive;
 use crate::{
     Cx, DotResolution, ElabError, Elaborator, R, Upcast, err, resolve, skel_of_ty, traits,
 };
+
+/// The reading a `.name(…)` call has besides the class member
+/// (docs/traits-receiver-dispatch-design.md §3, "another reading exists"):
+/// what a successful dispatch races under §4 rule 2 and what a failed one
+/// falls back to under rule 5.
+pub(crate) struct OtherReading {
+    /// The reading as the rule-2 diagnostic names it.
+    pub(crate) desc: String,
+    /// The spelling that selects it, for the same diagnostic.
+    pub(crate) fix: String,
+    /// The callee the desugared call is to — never for a builtin. Resolved
+    /// only once a dispatch has succeeded beside it, to the committed global
+    /// [`Elaborator::field_is_global`] compares the dispatched field against
+    /// (issues/receiver-dispatch-coinciding-readings.md). Resolving it only
+    /// there keeps every other method call at its old price.
+    pub(crate) callee: Option<String>,
+}
 
 impl Elaborator {
     /// `x.op(y)` where `op` is a class member and `x`'s type is a carrier with
@@ -31,7 +48,7 @@ impl Elaborator {
         cx: &Cx,
         recv: &Expr,
         name: &str,
-        other: Option<(String, String)>,
+        other: Option<OtherReading>,
         args: &[Expr],
         span: Span,
     ) -> R<Option<DotResolution>> {
@@ -162,16 +179,6 @@ impl Elaborator {
                 trace,
             });
         };
-        if let Some((desc, fix)) = other {
-            return err(
-                format!(
-                    "`{name}` here is both a member of `{display}`, reached through the \
-                     receiver's type, and {desc} — write one of them: \
-                     `⟨instance⟩.{name}(…)` for the class member, or {fix} for the other"
-                ),
-                span,
-            );
-        }
         // An answer that came by **upcast** is read *through*: the field is the
         // child's own (docs/traits-named-upcast-design.md §2).
         let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
@@ -184,6 +191,32 @@ impl Elaborator {
                 span,
             );
         };
+        if let Some(OtherReading { desc, fix, callee }) = other {
+            // The two readings **coincide** when the dictionary dispatch
+            // actually resolved fills this field with the very global the
+            // other reading calls: then there is one meaning, and the other
+            // reading's path runs exactly as a failed dispatch's would, so the
+            // emitted term is the direct global — what it is with no class in
+            // scope at all. Read off the dictionary *after* the upcast, since
+            // that is the one the projection would read. Anything else stays
+            // the error: rule 2 is about readings that differ, and growth
+            // still only ever adds errors, never reinterpretations
+            // (issues/receiver-dispatch-coinciding-readings.md).
+            if callee
+                .and_then(|c| self.bare_global_abs(cx, &c))
+                .is_some_and(|g| self.field_is_global(&dict, idx, g))
+            {
+                return Ok(None);
+            }
+            return err(
+                format!(
+                    "`{name}` here is both a member of `{display}`, reached through the \
+                     receiver's type, and {desc} — write one of them: \
+                     `⟨instance⟩.{name}(…)` for the class member, or {fix} for the other"
+                ),
+                span,
+            );
+        }
         let (t, fty, flvl) = self.project_field(cx, &ind, &goal, Rc::new(dict), idx, span)?;
         let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
         // The receiver is the field's **first explicit argument**: a class
@@ -240,5 +273,214 @@ impl Elaborator {
             return (ind, goal, dict);
         }
         (child, child_ty, child_dict)
+    }
+
+    /// Is field `idx` of the dispatched dictionary `dict` the global at
+    /// absolute Ψ index `g`, called the way the method desugaring would call
+    /// it? The coincidence test of §4 rule 2
+    /// (issues/receiver-dispatch-coinciding-readings.md).
+    ///
+    /// **One local step, read syntactically — not conversion.** `dict` must be
+    /// a global (the instance) applied to exactly as many arguments as its
+    /// stored body has leading `λ`s; the body under them must be the record
+    /// literal's `pair` spine; and the spine's entry `idx + 1` (entry 0 is the
+    /// nominal tag) must be `g` itself, or `g` applied to precisely the
+    /// instance's own binders in order. That is δ of the instance global, β
+    /// of its parameters and ι of the projection, and nothing else: a local
+    /// dictionary (rule 4's scope answer) is a variable and has no body to
+    /// read, a field written as a λ or as another global's partial
+    /// application is not a bare global, and a derivation whose body is not a
+    /// literal spine is declined. Every decline keeps the rule-2 error, which
+    /// is the conservative direction.
+    ///
+    /// **"Called the same way"** is read off `g`'s own parameter table. The
+    /// class reading applies the field to the receiver and the arguments
+    /// positionally, the receiver first; the desugaring puts the receiver at
+    /// `g`'s subject slot and inserts `g`'s implicits. So the two are one call
+    /// only when every parameter past the instantiated prefix is explicit,
+    /// not a type, and the subject is the first of them.
+    ///
+    /// **A generic instance, and what "same type arguments" means there.**
+    /// After instantiation the field is `g(σ⃗)`, σ⃗ the dictionary's type
+    /// arguments, which the resolver found by matching the instance's head
+    /// against the receiver's type. The other reading's arguments are only
+    /// inferred later, by the application solving `g`'s subject domain
+    /// against the same receiver type. Comparing the two answers would be
+    /// elaborating both readings, so the rule is restricted to where they are
+    /// answers to **one equation**: the instance's parameters are all type
+    /// binders, `g` takes them all and in order as its leading implicit type
+    /// parameters, and `g`'s declared subject domain is *syntactically* the
+    /// field's own carrier at those binders. Both solvers then match the same
+    /// pattern against the same receiver type, and a pattern in distinct
+    /// binders has one first-order answer. Excluded by this, and so still
+    /// the error: an instance with `requires` or value parameters (its
+    /// binders are not all type binders, and a `requires` binder handed to
+    /// `g` would be one the desugaring resolves afresh), a universe-
+    /// polymorphic `g` (`UApp`), and a subject domain spelled differently
+    /// from the instance head (an alias, a respelling).
+    ///
+    /// Cost: this runs only where the rule-2 error was about to fire, which
+    /// before this test was every such call — so no call that elaborated
+    /// before pays anything.
+    pub(crate) fn field_is_global(&self, dict: &Term, idx: usize, g: usize) -> bool {
+        // The dictionary's spine: the instance global and its arguments.
+        let (head, dargs) = crate::spelling::app_spine(dict);
+        let n = dargs.len();
+        let Term::GlobalTm { var, .. } = head else {
+            return false;
+        };
+        let Some(inst) = self.global_abs_of(*var) else {
+            return false;
+        };
+        let Some(GlobalBinding::Tm {
+            ctx,
+            body: Some(body),
+            ..
+        }) = self.psi.bindings.get(inst)
+        else {
+            return false;
+        };
+        if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
+            return false;
+        }
+        // β: exactly one `λ` per argument, each binding a type — a value
+        // binder here is a `requires` dictionary or an index (see above).
+        let mut value: &Term = body;
+        for _ in 0..n {
+            let Term::Lam { dom, body, .. } = value else {
+                return false;
+            };
+            if !matches!(**dom, Type::Ty(_)) {
+                return false;
+            }
+            value = body;
+        }
+        // ι: entry `idx + 1` of the literal spine, in either pair spelling.
+        for _ in 0..=idx {
+            let Some((_, snd)) = crate::spelling::pair_of(value) else {
+                return false;
+            };
+            value = snd;
+        }
+        let Some((field, _)) = crate::spelling::pair_of(value) else {
+            return false;
+        };
+        // The field's carrier is written on the `pair` spelling; a `pair@`
+        // layer is checked against its description and carries none
+        // (docs/intro-by-type-design.md), so there it is read off the
+        // instance's declared type below.
+        let field_ty = match value {
+            Term::Pair { fst_ty, .. } => Some(fst_ty),
+            _ => None,
+        };
+        // The field: `g`, applied to the instance's binders outermost first
+        // (`x_{n-1} … x_0` in de Bruijn order), and to nothing else.
+        let (fhead, fargs) = crate::spelling::app_spine(field);
+        if fargs.len() != n {
+            return false;
+        }
+        // Argument `k` from the end is binder `k`.
+        if fargs
+            .iter()
+            .rev()
+            .enumerate()
+            .any(|(k, a)| !matches!(&***a, Term::Var(LocalVar(v)) if *v as usize == k))
+        {
+            return false;
+        }
+        let Term::GlobalTm { var: gv, .. } = fhead else {
+            return false;
+        };
+        // The body is stored scoped over the Ψ prefix before its binding.
+        if inst.checked_sub(gv.0 as usize + 1) != Some(g) {
+            return false;
+        }
+        // Called the same way: `n` leading implicit type parameters, then
+        // explicit value parameters with the subject first.
+        let params = self.params_at(g);
+        if params.len() < n {
+            return false;
+        }
+        let (lead, rest) = params.split_at(n);
+        if !lead.iter().all(|p| p.implicit && p.is_type)
+            || rest.iter().any(|p| p.implicit || p.is_type)
+            || rest.iter().position(|p| p.is_self).is_some_and(|i| i != 0)
+        {
+            return false;
+        }
+        if n == 0 {
+            return true;
+        }
+        // One equation: `g`'s subject domain under its `n` type binders is
+        // the field's carrier under the instance's `n` type binders. The
+        // contexts line up binder for binder, so only the global prefix
+        // differs — `g`'s type is scoped before `g`, the body before `inst`.
+        let Some(GlobalBinding::Tm { ty: gty, .. }) = self.psi.bindings.get(g) else {
+            return false;
+        };
+        let mut gcur: &Type = gty;
+        for _ in 0..n {
+            let Type::Pi { dom, cod, .. } = gcur else {
+                return false;
+            };
+            if !matches!(**dom, Type::Ty(_)) {
+                return false;
+            }
+            gcur = cod;
+        }
+        let Type::Pi { dom: gdom, .. } = gcur else {
+            return false;
+        };
+        match field_ty {
+            Some(field_ty) => {
+                let Type::Pi { dom: cdom, .. } = &**field_ty else {
+                    return false;
+                };
+                gdom.shift_global((inst - g) as u32) == **cdom
+            }
+            None => self
+                .declared_field_carrier(inst, n, idx)
+                .is_some_and(|cdom| {
+                    gdom.shift_global((self.psi.bindings.len() - g) as u32) == cdom
+                }),
+        }
+    }
+
+    /// The subject domain of field `idx` as the instance's declared type
+    /// states it — for a `pair@` dictionary, which writes none. Scoped at the
+    /// current Ψ under the instance's `n` type binders: the declared type is
+    /// unfolded to its record Σ, walked to entry `idx + 1` (strengthened past
+    /// the entries before it, which a carrier that mentions them is not), and
+    /// the field's Π read at its domain. `None` wherever a step does not
+    /// land on that shape, which keeps the rule-2 error.
+    fn declared_field_carrier(&self, inst: usize, n: usize, idx: usize) -> Option<Type> {
+        let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(inst) else {
+            return None;
+        };
+        let oracle = self.semantic_oracle();
+        let mut cur = ty.shift_global((self.psi.bindings.len() - inst) as u32);
+        let mut gamma = LocalCtx::nil();
+        for _ in 0..n {
+            let Type::Pi { dom_level, dom, cod, .. } = cur else {
+                return None;
+            };
+            gamma = gamma.extended(dom, dom_level);
+            cur = (*cod).clone();
+        }
+        let outer = gamma.clone();
+        for _ in 0..=idx {
+            let Ok(Type::Sigma { fst_level, fst, snd, .. }) = oracle.whnf_type(&gamma, &cur) else {
+                return None;
+            };
+            gamma = gamma.extended(fst, fst_level);
+            cur = (*snd).clone();
+        }
+        let Ok(Type::Sigma { fst, .. }) = oracle.whnf_type(&gamma, &cur) else {
+            return None;
+        };
+        let Ok(Type::Pi { dom, .. }) = oracle.whnf_type(&gamma, &fst) else {
+            return None;
+        };
+        crate::unification::strengthen_ty(&outer, &dom, (idx + 1) as u32)
     }
 }

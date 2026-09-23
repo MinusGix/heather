@@ -891,7 +891,7 @@ impl Elaborator {
         };
         if cx.names.iter().any(|local| local == name)
             || cx.aliases.iter().any(|local| local.name == *name)
-            || cx.selfref.as_ref().is_some_and(|local| local.name == *name)
+            || cx.selfref.as_ref().is_some_and(|local| local.matches(name))
         {
             return err(
                 "`emit_code` expects a meta function, not a local value",
@@ -1478,9 +1478,10 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 .try_for_each(|a| scan_splices(&a.body, menv, out))
         }
         ExprKind::Dot {
-            recv, args, named, ..
+            recv, tyargs, args, named, ..
         } => {
             scan_splices(recv, menv, out)?;
+            tyargs.iter().try_for_each(|t| walk_ty(t, menv, out))?;
             args.iter()
                 .flatten()
                 .try_for_each(|a| scan_splices(a, menv, out))?;

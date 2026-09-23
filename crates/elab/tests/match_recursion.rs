@@ -22,28 +22,28 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
-        Succ(k) => cong_succ(add_zero(k)),
+        Succ(k) => Nat::cong_succ(add_zero(k)),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
-        Succ(k) => cong_succ(add_succ(k, n)),
+        Succ(k) => Nat::cong_succ(add_succ(k, n)),
     }
 }
 
 theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
     match m {
         Zero => sym(add_zero(n)),
-        Succ(k) => trans(cong_succ(add_comm(k, n)), sym(add_succ(n, k))),
+        Succ(k) => trans(Nat::cong_succ(add_comm(k, n)), sym(add_succ(n, k))),
     }
 }
 
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a {
         Zero => refl,
-        Succ(k) => cong_succ(add_assoc(k, b, c)),
+        Succ(k) => Nat::cong_succ(add_assoc(k, b, c)),
     }
 }
 "#;
@@ -86,7 +86,7 @@ fn both_spellings_agree() {
             match m { Zero => n, Succ(k) => Succ(add2(k, n)) }
         }
         theorem same(m: Nat, n: Nat): add(m, n) = add2(m, n) {
-            match m { Zero => refl, Succ(k) => cong_succ(same(k, n)) }
+            match m { Zero => refl, Succ(k) => Nat::cong_succ(same(k, n)) }
         }
         "#,
     )
@@ -183,6 +183,58 @@ const HALF: &str = "
 #[test]
 fn a_deeper_subterm_descends() {
     elab_ok(HALF);
+}
+
+/// Receiver syntax denotes the same guarded call as the direct spelling, so
+/// it must size and convoy the same two-value course-of-values window.
+#[test]
+fn a_receiver_spelled_deeper_subterm_descends() {
+    elab_ok(
+        "
+        fn Nat::half_m(self n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k { Zero => 0, Succ(l) => Succ(l.half_m()) },
+            }
+        }
+        theorem Nat::half_m_refl(self n: Nat): n.half_m() = n.half_m() {
+            match n {
+                Zero => refl,
+                Succ(k) => match k {
+                    Zero => refl,
+                    Succ(l) => Nat::cong_succ(l.half_m_refl()),
+                },
+            }
+        }
+        theorem eight_m(): (8).half_m() = 4 { refl }",
+    );
+}
+
+/// While a member is being checked it is not a committed global yet. Its own
+/// `self` marker, rather than the global metadata fallback, therefore decides
+/// where receiver syntax inserts the recursive argument.
+#[test]
+fn a_recursive_receiver_uses_a_nonfirst_self_slot() {
+    elab_ok(
+        "
+        fn Nat::count_from(prefix: Nat, self n: Nat) -> Nat {
+            match n { Zero => prefix, Succ(k) => k.count_from(Succ(prefix)) }
+        }
+        theorem counted(): (3).count_from(4) = 7 { refl }",
+    );
+}
+
+/// Receiver spelling is visible to the IH-generalization sizing pass too: the
+/// accumulator varies while the receiver supplies the decreasing argument.
+#[test]
+fn a_receiver_spelled_self_call_generalizes_varying_parameters() {
+    elab_ok(
+        "
+        fn Nat::add_acc(self n: Nat, acc: Nat) -> Nat {
+            match n { Zero => acc, Succ(k) => k.add_acc(Succ(acc)) }
+        }
+        theorem accumulated(): (3).add_acc(4) = 7 { refl }",
+    );
 }
 
 /// The property the whole transformation is for: it is still ONE `elim_Nat`,
@@ -378,7 +430,7 @@ fn four_deep_at_a_dependent_motive() {
                     Zero => refl,
                     Succ(l) => match l {
                         Zero => refl,
-                        Succ(m) => match m { Zero => refl, Succ(p) => cong_succ(agree(p)) },
+                        Succ(m) => match m { Zero => refl, Succ(p) => Nat::cong_succ(agree(p)) },
                     },
                 },
             }
@@ -524,15 +576,15 @@ fn two_list_depths_in_one_arm() {
 fn a_deeper_list_recursion_at_a_dependent_motive() {
     list_ok(&format!(
         "theorem plus_zero(a: Nat): plus(0, a) = a {{
-            match a {{ Zero => refl, Succ(k) => cong_succ(plus_zero(k)) }}
+            match a {{ Zero => refl, Succ(k) => Nat::cong_succ(plus_zero(k)) }}
         }}
         theorem plus_succ(a: Nat, b: Nat): plus(Succ(a), b) = Succ(plus(a, b)) {{
-            match b {{ Zero => refl, Succ(k) => cong_succ(plus_succ(a, k)) }}
+            match b {{ Zero => refl, Succ(k) => Nat::cong_succ(plus_succ(a, k)) }}
         }}
         theorem plus_comm(a: Nat, b: Nat): plus(a, b) = plus(b, a) {{
             match b {{
                 Zero => sym(plus_zero(a)),
-                Succ(k) => trans(cong_succ(plus_comm(a, k)), sym(plus_succ(k, a))),
+                Succ(k) => trans(Nat::cong_succ(plus_comm(a, k)), sym(plus_succ(k, a))),
             }}
         }}
         theorem cong_plus(h: Nat, a: Nat, b: Nat, p: a = b): plus(h, a) = plus(h, b) {{
@@ -590,7 +642,7 @@ fn three_deep_on_a_list_at_a_dependent_motive() {
                     Nil => refl,
                     Cons(h2, t2) => match t2 {
                         Nil => refl,
-                        Cons(h3, t3) => cong_succ(agree3(t3)),
+                        Cons(h3, t3) => Nat::cong_succ(agree3(t3)),
                     },
                 },
             }
@@ -640,7 +692,7 @@ fn four_deep_on_a_list_at_a_dependent_motive() {
                         Nil => refl,
                         Cons(h3, t3) => match t3 {
                             Nil => refl,
-                            Cons(h4, t4) => cong_succ(agree4(t4)),
+                            Cons(h4, t4) => Nat::cong_succ(agree4(t4)),
                         },
                     },
                 },

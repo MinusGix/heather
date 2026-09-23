@@ -13,6 +13,11 @@ it consumes proof-carrying instances and emits executables. Generators that
 mint `Compile` instances by intensional analysis of boxed code need no
 verification themselves — each output carries its own certificate.
 
+## Documentation
+
+The user-facing language guide lives in [`book/`](book/src/README.md). Build it
+with `mdbook build`; the generated site is written to `target/book`.
+
 Disciplines like lifetimes, uniqueness, or GPU-compatibility are intended to
 be *libraries*: analysis functions over boxed code that mint typeclass
 evidence, not kernel features.
@@ -22,6 +27,7 @@ evidence, not kernel features.
 - `crates/kernel` — trusted checker (correctness first; mirrors the in-progress
   Coq formalization of DeLaM)
 - `crates/syntax` — lexer/parser/surface AST (untrusted)
+- `crates/lsp` — editor diagnostics and names over the Language Server Protocol
 - `crates/cli` — `heather` driver binary
 - `docs/` — papers; `docs/delam/` is the type-theory reference
 - `issues/` — repo-local issue tracker (`scripts/issue`, see `issues/README.md`)

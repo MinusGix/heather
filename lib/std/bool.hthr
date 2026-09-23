@@ -6,50 +6,50 @@ import logic;
 
 inductive Bool { False, True }
 
-fn not(b: Bool) → Bool { match b { False => True, True => False } }
+fn Bool::not(self b: Bool) → Bool { match b { False => True, True => False } }
 
-fn and(a, b: Bool) → Bool { match a { False => False, True => b } }
+designation prefix ! at Bool := Bool::not
 
-designation && at Bool := and
+fn Bool::and(self a, b: Bool) → Bool { match a { False => False, True => b } }
 
-fn or(a, b: Bool) → Bool { match a { False => b, True => True } }
+designation && at Bool := Bool::and
 
-designation || at Bool := or
+fn Bool::or(self a, b: Bool) → Bool { match a { False => b, True => True } }
 
-// `and` is the conjunction monoid: unit `True`, and — because `and` recurses
-// on its *first* argument — `and(True, x)` is `x` definitionally while
-// `and(x, True) = x` is the case split.
+designation || at Bool := Bool::or
 
-theorem and_assoc(a, b, c: Bool): (a && b) && c = a && (b && c) {
+fn Bool::xor(self a, b: Bool) → Bool { match a { False => b, True => !b } }
+
+// TODO: xor theorems
+
+theorem Bool::and_assoc(self a, b, c: Bool): (a && b) && c = a && (b && c) {
     match a { False => refl, True => refl }
 }
 
-theorem and_true_l(a: Bool): True && a = a { refl }
+theorem Bool::and_true_l(self a: Bool): True && a = a { refl }
 
-theorem and_true_r(a: Bool): a && True = a {
+theorem Bool::and_true_r(self a: Bool): a && True = a {
     match a { False => refl, True => refl }
 }
 
-theorem and_comm(a, b: Bool): a && b = b && a {
+theorem Bool::and_comm(self a, b: Bool): a && b = b && a {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },
     }
 }
 
-// `or` is the disjunction monoid: unit `False`. Same shape, dual.
-
-theorem or_assoc(a, b, c: Bool): (a || b) || c = a || (b || c) {
+theorem Bool::or_assoc(self a, b, c: Bool): (a || b) || c = a || (b || c) {
     match a { False => refl, True => refl }
 }
 
-theorem or_false_l(a: Bool): False || a = a { refl }
+theorem Bool::or_false_l(self a: Bool): False || a = a { refl }
 
-theorem or_false_r(a: Bool): a || False = a {
+theorem Bool::or_false_r(self a: Bool): a || False = a {
     match a { False => refl, True => refl }
 }
 
-theorem or_comm(a, b: Bool): a || b = b || a {
+theorem Bool::or_comm(self a, b: Bool): a || b = b || a {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },
@@ -58,90 +58,68 @@ theorem or_comm(a, b: Bool): a || b = b || a {
 
 // ---------------------------------------------------------------------------
 // Reflection into `Type`. `IsTrue(b)` is the proposition "`b` is `True`",
-// spelled as a recursion into the two constants rather than as `b = True`:
-// `IsTrue(True)` is `logic::True`, the kernel's `Unit`, so all its proofs are
-// convertible by η and a witness of it carries no information, while
-// `IsTrue(False)` is `logic::False`, so a witness of it closes its branch.
-//
-// That is what makes the reflection usable as a record's *relevant* validity
-// witness (`char::scalar`, `utf8::utf8_valid`): the decision is a `Bool` the
-// caller can compute with, the witness is unique so it cannot disturb the
-// value it seals, and a decoder's rejection branch can still refute it —
-// which a truncated witness cannot, since `squash` eliminates only into
-// squash-headed types (docs/string-char-design.md §5.1).
 
-fn IsTrue(b: Bool) → Type { match b { False => False, True => True } }
+fn Bool::IsTrue(self b: Bool) → Type { match b { False => False, True => True } }
 
-// Uniqueness, which is why a record sealed by an `IsTrue` still has equality
-// of its data as equality of its values: the `True` arm is `refl` under
-// `Unit`'s η and the `False` arm is absurd.
-theorem is_true_unique(b: Bool, p, q: IsTrue(b)): p = q {
-    match b as λ x => (u, v: IsTrue(x)) → u = v {
+theorem Bool::is_true_unique(self b: Bool, p, q: b.IsTrue()): p = q {
+    match b as λ x => (u, v: x.IsTrue()) → u = v {
         False => λ u v => false_elim(u),
         True => λ u v => refl,
     }(p, q)
 }
 
-// A `fn` and not a `theorem` for `le_dec`'s reason: a decision has to unfold
-// in conversion, since `decide` is judged by running it.
-fn is_true_dec(b: Bool) → IsTrue(b) ∨ ¬IsTrue(b) {
+fn Bool::is_true_dec(self b: Bool) → b.IsTrue() ∨ ¬b.IsTrue() {
     match b { False => Inr(·), True => Inl(trivial) }
 }
 
-instance(b: Bool) Decide<IsTrue(b)> { dec := is_true_dec(b) }
+instance(b: Bool) Decide<Bool::IsTrue(b)> { dec := b.is_true_dec() }
 
 // The two rewrites a consumer of a reflected guard needs: a proved guard IS
 // `True`, and its decision DID go the `Inl` way. Both are what turns a stuck
 // `match` on a guard at an open argument into its taken branch.
-theorem eq_true_of_is_true(b: Bool, p: IsTrue(b)): b = True {
-    match b as λ x => IsTrue(x) → x = True {
+theorem eq_true_of_is_true(b: Bool, p: b.IsTrue()): b = True {
+    match b as λ x => x.IsTrue() → x = True {
         False => λ u => false_elim(u),
         True => λ u => refl,
     }(p)
 }
 
-theorem is_true_dec_yes(b: Bool, p: IsTrue(b)): is_true_dec(b) = Inl(p) {
-    match b as λ x => (u: IsTrue(x)) → is_true_dec(x) = Inl(u) {
+theorem is_true_dec_yes(b: Bool, p: b.IsTrue()): b.is_true_dec() = Inl(p) {
+    match b as λ x => (u: x.IsTrue()) → x.is_true_dec() = Inl(u) {
         False => λ u => false_elim(u),
         True => λ u => refl,
     }(p)
 }
 
-// The connectives commute with the reflection. Each is the case split on the
-// argument `and`/`not` recurses on; nothing here is stated as an `Iff` because
-// the two directions are used in different places.
-theorem is_true_and(a: Bool): (b: Bool) → IsTrue(a && b) → IsTrue(a) ∧ IsTrue(b) {
+theorem Bool::is_true_and(self a: Bool): (b: Bool) → (a && b).IsTrue() → a.IsTrue() ∧ b.IsTrue() {
     match a {
         False => λ b h => false_elim(h),
         True => λ b h => And(trivial, h),
     }
 }
 
-theorem is_true_and_intro(a: Bool): (b: Bool) → IsTrue(a) → IsTrue(b) → IsTrue(a && b) {
+theorem Bool::is_true_and_intro(self a: Bool): (b: Bool) → a.IsTrue() → b.IsTrue() → (a && b).IsTrue() {
     match a {
         False => λ b p q => false_elim(p),
         True => λ b p q => q,
     }
 }
 
-theorem is_true_not(b: Bool): IsTrue(not(b)) → ¬IsTrue(b) {
+theorem Bool::is_true_not(self b: Bool): b.not().IsTrue() → ¬b.IsTrue() {
     match b {
         False => λ h p => p,
         True => λ h p => h,
     }
 }
 
-theorem is_true_not_intro(b: Bool): ¬IsTrue(b) → IsTrue(not(b)) {
+theorem Bool::is_true_not_intro(self b: Bool): ¬b.IsTrue() → b.not().IsTrue() {
     match b {
         False => λ h => trivial,
         True => λ h => h(trivial),
     }
 }
 
-// Equality is a separate decision from the propositional order below. It is
-// stated directly over constructor identity, and registers at Bool's equality
-// carrier without colliding with Nat's corresponding instance.
-fn eq_dec(a, b: Bool) → a = b ∨ a ≠ b {
+fn Bool::eq_dec(self a, b: Bool) → a = b ∨ a ≠ b {
     match a {
         False => match b {
             False => Inl(refl),
@@ -154,54 +132,30 @@ fn eq_dec(a, b: Bool) → a = b ∨ a ≠ b {
     }
 }
 
-instance(a, b: Bool) Decide<a = b> { dec := eq_dec(a, b) }
+instance(a, b: Bool) Decide<a = b> { dec := a.eq_dec(b) }
 
-// The decided order on `Bool`. `False <= True` is the reading, so the relation
-// is implication.
-//
-// `leb` is the Bool-valued decision and `Le` the PROPOSITION, in the shape
-// `nat`'s order took on 2026-08-16 (docs/nat-order-design.md): the
-// specification is a recursion into `Type` with no `= True` in it, and the
-// decision procedure is a separate function nothing above mentions. This
-// module needs both for the reason `nat` does — `Bool` is where Booleans are
-// genuinely the subject.
-//
-// The names carry no `_bool` suffix as of 2026-08-17
-// (docs/instance-resolved-key-design.md §6). They used to: an instance was
-// keyed on its carrier head's *written* name, so `Le` here would have collided
-// with `nat::Le` in the registry and this module paid a suffix to stay
-// registrable. The key is a resolved declaration reference now, `nat::Le` and
-// `bool::Le` are two carriers, and the suffix bought nothing — a module is
-// already a namespace. A file that sees both writes `nat::Le` and `bool::Le`,
-// which is what qualification is for.
-fn leb(a: Bool) → Bool → Bool {
+fn Bool::leb(self a: Bool) → Bool → Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }
 
-theorem leb_refl(a: Bool): leb(a, a) = True {
+theorem Bool::leb_refl(self a: Bool): a.leb(a) = True {
     match a { False => refl, True => refl }
 }
 
-// Two constructors and no recursion, so all four cases are immediate: only
-// `True <= False` is refuted. `logic::False` is the falsity and `bool::False`
-// the constructor, one line apart and neither qualified
-// (issues/false-collides-with-bools-constructor.md).
-fn Le(a: Bool) → Bool → Type {
+fn Bool::Le(self a: Bool) → Bool → Type {
     match a {
         False => λ (b: Bool) => True,
         True => λ (b: Bool) => match b { False => False, True => True },
     }
 }
 
-designation <= at Bool := Le
+designation <= at Bool := Bool::Le
 
-theorem le_refl(a: Bool): a <= a {
+theorem Bool::le_refl(self a: Bool): a <= a {
     match a { False => trivial, True => trivial }
 }
 
-// A `fn`, not a `theorem`: a decision has to unfold in conversion
-// (docs/nat-order-design.md §2).
-fn le_dec(a, b: Bool) → a <= b ∨ ¬(a <= b) {
+fn Bool::le_dec(self a, b: Bool) → a <= b ∨ ¬(a <= b) {
     match a {
         False => Inl(trivial),
         True => match b {
@@ -211,8 +165,4 @@ fn le_dec(a, b: Bool) → a <= b ∨ ¬(a <= b) {
     }
 }
 
-// The order's `Decide` instance, generic in both operands — the same row
-// `std/nat` and `std/int` carry at their own orders
-// (docs/value-generic-instances-design.md). All three register: the key is
-// (`logic::Decide`, `bool::Le`) here, `nat::Le` there, `int::Le` there.
-instance(a, b: Bool) Decide<Le(a, b)> { dec := le_dec(a, b) }
+instance(a, b: Bool) Decide<Bool::Le(a, b)> { dec := a.le_dec(b) }

@@ -1,13 +1,3 @@
-// Integers, represented canonically as `OfNat(n)` for `n` and `NegSucc(n)` for
-// `-(n+1)`. Addition and multiplication are the payload operations by sign
-// case, so a closed sum or product is one `Nat` operation; the order is
-// propositional and decided by `le_dec`.
-//
-// `Int` itself is non-recursive, so proofs over all integers use `int_ind`,
-// which performs the two inductions over constructor payloads. Local names such
-// as `add` and `Le` refer to the integer operations; Nat operations are
-// qualified, while the shared public surface is written with operators.
-
 import nat;
 import logic;
 import algebra;
@@ -17,19 +7,19 @@ inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 // Congruence helpers for the two relevant arrows and the two constructors.
 // They remain explicit where the surrounding chain does not determine the
 // one-place context (issues/congruence-by-anti-unification.md).
-theorem cong_int(f: Int → Int, {a, b: Int}, p: a = b): f(a) = f(b) {
+theorem Int::cong(f: Int → Int, {a, b: Int}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
 
-theorem cong_int_of(f: Nat → Int, {a, b: Nat}, p: a = b): f(a) = f(b) {
+theorem Int::cong_of(f: Nat → Int, {a, b: Nat}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
 
-theorem cong_ofnat({a, b: Nat}, p: a = b): OfNat(a) = OfNat(b) {
+theorem Int::cong_ofnat({a, b: Nat}, p: a = b): OfNat(a) = OfNat(b) {
     j(p, λ y q => OfNat(a) = OfNat(y), refl)
 }
 
-theorem cong_negsucc({a, b: Nat}, p: a = b): NegSucc(a) = NegSucc(b) {
+theorem Int::cong_negsucc({a, b: Nat}, p: a = b): NegSucc(a) = NegSucc(b) {
     j(p, λ y q => NegSucc(a) = NegSucc(y), refl)
 }
 
@@ -41,30 +31,30 @@ theorem cong_negsucc({a, b: Nat}, p: a = b): NegSucc(a) = NegSucc(b) {
 // so a `NegSucc` in any statement below can be read as a negated `OfNat`
 // without a lemma.
 
-fn negOfNat(n: Nat) → Int { match n { Zero => OfNat(0), Succ(k) => NegSucc(k) } }
+fn Int::negOfNat(n: Nat) → Int { match n { Zero => OfNat(0), Succ(k) => NegSucc(k) } }
 
-fn neg(a: Int) → Int {
+fn Int::neg(self a: Int) → Int {
     match a {
-        OfNat(n) => negOfNat(n),
+        OfNat(n) => Int::negOfNat(n),
         NegSucc(n) => OfNat(Succ(n)),
     }
 }
 
-designation prefix - at Int := neg
+designation prefix - at Int := Int::neg
 
 // Truncated, exactly as `nat::sub` is: the integers below zero have no `Nat`,
 // so they land on `0` and the embedding lemma below carries the hypothesis that
 // says when that is lossless.
-fn toNat(a: Int) → Nat { match a { OfNat(n) => n, NegSucc(_) => 0 } }
+fn Int::toNat(self a: Int) → Nat { match a { OfNat(n) => n, NegSucc(_) => 0 } }
 
-theorem toNat_ofNat(n: Nat): toNat(OfNat(n)) = n { refl }
+theorem Int::toNat_ofNat(n: Nat): OfNat(n).toNat() = n { refl }
 
-theorem neg_negOfNat(n: Nat): neg(negOfNat(n)) = OfNat(n) {
+theorem Int::neg_negOfNat(n: Nat): -Int::negOfNat(n) = OfNat(n) {
     match n { Zero => refl, Succ(_) => refl }
 }
 
 // Involutive by case analysis on the integer and, for `OfNat`, its payload.
-theorem neg_neg(a: Int): -(-a) = a {
+theorem Int::neg_neg(self a: Int): -(-a) = a {
     match a {
         OfNat(n) => match n {
             Zero => refl,
@@ -74,26 +64,26 @@ theorem neg_neg(a: Int): -(-a) = a {
     }
 }
 
-theorem neg_ofNat_succ(n: Nat): -OfNat(Succ(n)) = NegSucc(n) { refl }
+theorem Int::neg_ofNat_succ(n: Nat): -OfNat(Succ(n)) = NegSucc(n) { refl }
 
 // ---------------------------------------------------------------------------
-// The successor and predecessor, which are the file's primitives.
 
-fn isucc(a: Int) → Int {
+// TODO(minus) rename to succ/pred as we only used isucc/ipred due to nat
+fn Int::isucc(self a: Int) → Int {
     match a {
         OfNat(n) => OfNat(Succ(n)),
         NegSucc(n) => match n { Zero => OfNat(0), Succ(k) => NegSucc(k) },
     }
 }
 
-fn ipred(a: Int) → Int {
+fn Int::ipred(self a: Int) → Int {
     match a {
         OfNat(n) => match n { Zero => NegSucc(0), Succ(k) => OfNat(k) },
         NegSucc(n) => NegSucc(Succ(n)),
     }
 }
 
-theorem isucc_ipred(a: Int): isucc(ipred(a)) = a {
+theorem Int::isucc_ipred(self a: Int): a.ipred().isucc() = a {
     match a {
         OfNat(n) => match n {
             Zero => refl,
@@ -103,7 +93,7 @@ theorem isucc_ipred(a: Int): isucc(ipred(a)) = a {
     }
 }
 
-theorem ipred_isucc(a: Int): ipred(isucc(a)) = a {
+theorem Int::ipred_isucc(self a: Int): a.isucc().ipred() = a {
     match a {
         OfNat(_) => refl,
         NegSucc(n) => match n {
@@ -113,14 +103,11 @@ theorem ipred_isucc(a: Int): ipred(isucc(a)) = a {
     }
 }
 
-// `ipred` at a negated numeral, which is the one step `negOfNat` does not take
-// definitionally: `negOfNat(k)` is stuck at open `k`, so the successor of a
-// negative needs its own line.
-theorem ipred_negOfNat(n: Nat): ipred(negOfNat(n)) = NegSucc(n) {
+theorem Int::ipred_negOfNat(self n: Nat): Int::negOfNat(n).ipred() = NegSucc(n) {
     match n { Zero => refl, Succ(_) => refl }
 }
 
-theorem neg_isucc(a: Int): neg(isucc(a)) = ipred(neg(a)) {
+theorem Int::neg_isucc(self a: Int): -a.isucc() = (-a).ipred() {
     match a {
         OfNat(n) => match n {
             Zero => refl,
@@ -133,7 +120,7 @@ theorem neg_isucc(a: Int): neg(isucc(a)) = ipred(neg(a)) {
     }
 }
 
-theorem neg_ipred(a: Int): neg(ipred(a)) = isucc(neg(a)) {
+theorem Int::neg_ipred(self a: Int): -a.ipred() = (-a).isucc() {
     match a {
         OfNat(n) => match n {
             Zero => refl,
@@ -144,325 +131,280 @@ theorem neg_ipred(a: Int): neg(ipred(a)) = isucc(neg(a)) {
 }
 
 // ---------------------------------------------------------------------------
-// Addition, on the four constructor cases, so that a closed sum is one `Nat`
-// operation on the payloads: `nat::add` between like signs and `subNatNat` —
-// the difference of two naturals read as an integer — between unlike ones.
-// Both are folds the kernel iterates as one program application over runs
-// (issues/nat-run-algebra-primitives.md), which is what makes
-// `sub(OfNat(2^63), OfNat(2^64))` a step rather than a magnitude
-// (issues/int-arithmetic-over-nat-primitives.md). The earlier definition —
-// `isucc`/`ipred` iterated over the second payload — survives as the theorems
-// `add_isucc`/`add_ipred`, which is the shape every `int_ind` proof below
-// consumes; what is lost is that they held by computation at an open left
-// operand, so an induction step now rewrites by them where it used to be
-// `refl`. What is gained besides the cost: `add_ofnat_ofnat` and the mixed
-// case of `add_comm` ARE `refl`.
 
-// `m - n` as an integer. Structural on `m` with `n` synchronized, exactly as
-// `nat::sub` is, so that `subNatNat(Succ(m), Succ(n))` IS `subNatNat(m, n)`
-// and a closed difference cancels its common prefix in one step; the two base
-// rows read a one-sided remainder with its sign.
-fn subNatNat(m, n: Nat) → Int {
+fn Int::subNatNat(m, n: Nat) → Int {
     match m {
-        Zero => negOfNat(n),
-        Succ(k) => match n { Zero => OfNat(Succ(k)), Succ(l) => subNatNat(k, l) },
+        Zero => Int::negOfNat(n),
+        Succ(k) => match n { Zero => OfNat(Succ(k)), Succ(l) => Int::subNatNat(k, l) },
     }
 }
 
-fn add(a, b: Int) → Int {
+fn Int::add(self a: Int, b: Int) → Int {
     match a {
         OfNat(m) => match b {
             OfNat(n) => OfNat(m + n),
-            NegSucc(n) => subNatNat(m, Succ(n)),
+            NegSucc(n) => Int::subNatNat(m, Succ(n)),
         },
         NegSucc(m) => match b {
-            OfNat(n) => subNatNat(n, Succ(m)),
+            OfNat(n) => Int::subNatNat(n, Succ(m)),
             NegSucc(n) => NegSucc(Succ(m + n)),
         },
     }
 }
 
-designation + at Int := add
+designation + at Int := Int::add
 
-fn sub(a, b: Int) → Int { add(a, neg(b)) }
+fn Int::sub(self a: Int, b: Int) → Int { a + -b }
+
+designation - at Int := Int::sub
 
 // `subNatNat`'s own facts: the right zero, `isucc`/`ipred` moving a `Succ`
 // between the payloads, and the diagonal. The synchronized spelling asks for
 // an induction on `m` with `n` generalized, and the `Succ`/`Succ` arm of each
 // is the hypothesis by computation.
 
-theorem subNatNat_zero(m: Nat): subNatNat(m, 0) = OfNat(m) {
+theorem Int::subNatNat_zero(m: Nat): Int::subNatNat(m, 0) = OfNat(m) {
     match m { Zero => refl, Succ(_) => refl }
 }
 
-theorem isucc_subNatNat(m: Nat): (n: Nat) → isucc(subNatNat(m, Succ(n))) = subNatNat(m, n) {
+theorem Int::isucc_subNatNat(m: Nat): (n: Nat) → Int::subNatNat(m, Succ(n)).isucc() = Int::subNatNat(m, n) {
     match m {
         Zero => λ n => match n { Zero => refl, Succ(_) => refl },
         Succ(k, ih) => λ n =>
             match n {
-                Zero => cong_int(isucc, subNatNat_zero(k)),
+                Zero => Int::cong(Int::isucc, Int::subNatNat_zero(k)),
                 Succ(l) => ih(l),
             },
     }
 }
 
-theorem ipred_subNatNat(m: Nat): (n: Nat) → ipred(subNatNat(m, n)) = subNatNat(m, Succ(n)) {
+theorem Int::ipred_subNatNat(m: Nat): (n: Nat) → Int::subNatNat(m, n).ipred() = Int::subNatNat(m, Succ(n)) {
     match m {
-        Zero => λ n => ipred_negOfNat(n),
+        Zero => λ n => Int::ipred_negOfNat(n),
         Succ(k, ih) => λ n =>
             match n {
-                Zero => sym(subNatNat_zero(k)),
+                Zero => sym(Int::subNatNat_zero(k)),
                 Succ(l) => ih(l),
             },
     }
 }
 
-theorem subNatNat_self(n: Nat): subNatNat(n, n) = OfNat(0) {
-    match n { Zero => refl, Succ(k) => subNatNat_self(k) }
+theorem Int::subNatNat_self(n: Nat): Int::subNatNat(n, n) = OfNat(0) {
+    match n { Zero => refl, Succ(k) => Int::subNatNat_self(k) }
 }
 
-theorem add_zero(a: Int): a + OfNat(0) = a {
+theorem Int::add_zero(self a: Int): a + OfNat(0) = a {
     match a { OfNat(_) => refl, NegSucc(_) => refl }
 }
 
-theorem zero_add(a: Int): OfNat(0) + a = a {
-    match a { OfNat(n) => cong_ofnat(nat::add_left_zero(n)), NegSucc(_) => refl }
+theorem Int::zero_add(self a: Int): OfNat(0) + a = a {
+    match a { OfNat(n) => Int::cong_ofnat(n.add_left_zero()), NegSucc(_) => refl }
 }
 
-theorem add_ofnat_ofnat(m, n: Nat): OfNat(m) + OfNat(n) = OfNat(m + n) { refl }
+theorem Int::add_ofnat_ofnat(m, n: Nat): OfNat(m) + OfNat(n) = OfNat(m + n) { refl }
 
-// The four push lemmas: `isucc` and `ipred` cross an `add` from either side.
-// Everything arithmetical below is these four plus `int_ind`. The two on the
-// right operand are the former definition of `add` read as a theorem: four
-// constructor cases, of which the ones that do not compute are a `subNatNat`
-// fact; the two on the left are those through commutativity.
-
-theorem add_isucc(a, b: Int): a + isucc(b) = isucc(a + b) {
+theorem Int::add_isucc(self a, b: Int): a + b.isucc() = (a + b).isucc() {
     match a {
         OfNat(m) => match b {
             OfNat(_) => refl,
             NegSucc(n) => match n {
-                Zero => sym(trans(isucc_subNatNat(m, 0), subNatNat_zero(m))),
-                Succ(l) => sym(isucc_subNatNat(m, Succ(l))),
+                Zero => sym(trans(Int::isucc_subNatNat(m, 0), Int::subNatNat_zero(m))),
+                Succ(l) => sym(Int::isucc_subNatNat(m, Succ(l))),
             },
         },
         NegSucc(m) => match b {
-            OfNat(n) => sym(isucc_subNatNat(n, m)),
+            OfNat(n) => sym(Int::isucc_subNatNat(n, m)),
             NegSucc(n) => match n { Zero => refl, Succ(_) => refl },
         },
     }
 }
 
-theorem add_ipred(a, b: Int): a + ipred(b) = ipred(a + b) {
+theorem Int::add_ipred(self a, b: Int): a + b.ipred() = (a + b).ipred() {
     match a {
         OfNat(m) => match b {
             OfNat(n) => match n {
-                Zero => sym(trans(cong_int(ipred, sym(subNatNat_zero(m))), ipred_subNatNat(m, 0))),
+                Zero => sym(trans(Int::cong(Int::ipred, sym(Int::subNatNat_zero(m))), Int::ipred_subNatNat(m, 0))),
                 Succ(_) => refl,
             },
-            NegSucc(n) => sym(ipred_subNatNat(m, Succ(n))),
+            NegSucc(n) => sym(Int::ipred_subNatNat(m, Succ(n))),
         },
         NegSucc(m) => match b {
             OfNat(n) => match n {
                 Zero => refl,
-                Succ(l) => sym(ipred_subNatNat(l, m)),
+                Succ(l) => sym(Int::ipred_subNatNat(l, m)),
             },
             NegSucc(_) => refl,
         },
     }
 }
 
-// Commutativity is four cases and no induction: the mixed cases are the same
-// `subNatNat` by definition, and the like-signed ones are `nat::add_comm`.
-theorem add_comm(a, b: Int): a + b = b + a {
+theorem Int::add_comm(self a, b: Int): a + b = b + a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => cong_ofnat(nat::add_comm(m, n)),
+            OfNat(n) => Int::cong_ofnat(m.add_comm(n)),
             NegSucc(_) => refl,
         },
         NegSucc(m) => match b {
             OfNat(_) => refl,
-            NegSucc(n) => cong_negsucc(cong_succ(nat::add_comm(m, n))),
+            NegSucc(n) => Int::cong_negsucc(Nat::cong_succ(m.add_comm(n))),
         },
     }
 }
 
-theorem isucc_add(a, b: Int): isucc(a) + b = isucc(a + b) {
+theorem Int::isucc_add(self a, b: Int): a.isucc() + b = (a + b).isucc() {
     apply trans;
-    give add_comm(isucc(a), b);
+    give a.isucc().add_comm(b);
     apply trans;
-    give add_isucc(b, a);
-    cong_int(isucc, add_comm(b, a))
+    give b.add_isucc(a);
+    Int::cong(Int::isucc, b.add_comm(a))
 }
 
-theorem ipred_add(a, b: Int): ipred(a) + b = ipred(a + b) {
+theorem Int::ipred_add(self a, b: Int): a.ipred() + b = (a + b).ipred() {
     apply trans;
-    give add_comm(ipred(a), b);
+    give a.ipred().add_comm(b);
     apply trans;
-    give add_ipred(b, a);
-    cong_int(ipred, add_comm(b, a))
+    give b.add_ipred(a);
+    Int::cong(Int::ipred, b.add_comm(a))
 }
 
-// The two unit steps, which are the push lemmas at `OfNat(0)`: an `int_ind`
-// whose base case used to be `refl` reads through these.
-theorem add_one(a: Int): a + OfNat(1) = isucc(a) {
-    trans(add_isucc(a, OfNat(0)), cong_int(isucc, add_zero(a)))
+theorem Int::add_one(self a: Int): a + OfNat(1) = a.isucc() {
+    trans(a.add_isucc(OfNat(0)), Int::cong(Int::isucc, a.add_zero()))
 }
 
-theorem add_neg_one(a: Int): a + NegSucc(0) = ipred(a) {
-    trans(add_ipred(a, OfNat(0)), cong_int(ipred, add_zero(a)))
+theorem Int::add_neg_one(self a: Int): a + NegSucc(0) = a.ipred() {
+    trans(a.add_ipred(OfNat(0)), Int::cong(Int::ipred, a.add_zero()))
 }
 // ---------------------------------------------------------------------------
 // The induction principle. `Int` has no structural recursion of its own — it is
 // a two-constructor NON-recursive declaration whose payloads are `Nat`s — so
 // the recursion that proves anything about every integer descends on a payload,
-// and the guard rightly refuses to call that a descent on the integer. Stating
-// the principle once is what makes that a single cost rather than a per-law one:
-// the two halves below are the two `Nat` recursions, and `int_ind` is the case
-// split that dispatches to them.
-//
+// and the guard rightly refuses to call that a descent on the integer.
 // The motive is a value parameter (`P: Int → Type`), so every use spells it.
 // That is one line per law and it is also the documentation of what the
 // induction is over, which is why nothing here tries to infer it.
 
-theorem ofnat_part(P: Int → Type, z: P(OfNat(0)),
+theorem Int::ofnat_part(P: Int → Type, z: P(OfNat(0)),
                    up: (k: Nat) → P(OfNat(k)) → P(OfNat(Succ(k))), n: Nat): P(OfNat(n)) {
     match n {
         Zero => z,
-        Succ(k) => up(k, ofnat_part(P, z, up, k)),
+        Succ(k) => up(k, Int::ofnat_part(P, z, up, k)),
     }
 }
 
-theorem negsucc_part(P: Int → Type, d: P(NegSucc(0)),
+theorem Int::negsucc_part(P: Int → Type, d: P(NegSucc(0)),
                      dn: (k: Nat) → P(NegSucc(k)) → P(NegSucc(Succ(k))), n: Nat): P(NegSucc(n)) {
     match n {
         Zero => d,
-        Succ(k) => dn(k, negsucc_part(P, d, dn, k)),
+        Succ(k) => dn(k, Int::negsucc_part(P, d, dn, k)),
     }
 }
 
 // `z`/`up` climb the non-negative half from `0`; `d`/`dn` descend the negative
 // half from `-1`. Two base cases rather than one, because the two halves of the
 // encoding are two constructors and neither reaches the other by a step.
-theorem int_ind(P: Int → Type,
+theorem Int::ind(P: Int → Type,
                 z: P(OfNat(0)),
                 up: (k: Nat) → P(OfNat(k)) → P(OfNat(Succ(k))),
                 d: P(NegSucc(0)),
                 dn: (k: Nat) → P(NegSucc(k)) → P(NegSucc(Succ(k))),
                 a: Int): P(a) {
     match a {
-        OfNat(n) => ofnat_part(P, z, up, n),
-        NegSucc(n) => negsucc_part(P, d, dn, n),
+        OfNat(n) => Int::ofnat_part(P, z, up, n),
+        NegSucc(n) => Int::negsucc_part(P, d, dn, n),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Associativity, and the two laws that make `add` a group. Associativity is one
-// `int_ind` whose four arms are the push lemmas above; the inverse is
-// `subNatNat`'s diagonal, in both signs.
 
-theorem add_assoc(a, b, c: Int): (a + b) + c = a + (b + c) {
-    int_ind(λ (z: Int) => (a + b) + z = a + (b + z),
-        trans(add_zero(a + b), sym(cong_int(λ (w: Int) => add(a, w), add_zero(b)))),
+theorem Int::add_assoc(self a, b, c: Int): (a + b) + c = a + (b + c) {
+    Int::ind(λ (z: Int) => (a + b) + z = a + (b + z),
+        trans((a + b).add_zero(), sym(Int::cong(λ (w: Int) => a + w, b.add_zero()))),
         (k: Nat) (ih: (a + b) + OfNat(k) = a + (b + OfNat(k))) ⊢
             apply trans;
-            give add_isucc(a + b, OfNat(k));
+            give (a + b).add_isucc(OfNat(k));
             apply trans;
-            give cong_int(isucc, ih);
+            give Int::cong(Int::isucc, ih);
             apply trans;
-            give sym(add_isucc(a, add(b, OfNat(k))));
-            cong_int(λ (w: Int) => add(a, w), sym(add_isucc(b, OfNat(k)))),
+            give sym(a.add_isucc(b + OfNat(k)));
+            Int::cong(λ (w: Int) => a + w, sym(b.add_isucc(OfNat(k)))),
         apply trans;
-        give add_neg_one(a + b);
+        give (a + b).add_neg_one();
         apply trans;
-        give sym(add_ipred(a, b));
-        cong_int(λ (w: Int) => add(a, w), sym(add_neg_one(b))),
+        give sym(a.add_ipred(b));
+        Int::cong(λ (w: Int) => a + w, sym(b.add_neg_one())),
         (k: Nat) (ih: (a + b) + NegSucc(k) = a + (b + NegSucc(k))) ⊢
             apply trans;
-            give add_ipred(a + b, NegSucc(k));
+            give (a + b).add_ipred(NegSucc(k));
             apply trans;
-            give cong_int(ipred, ih);
+            give Int::cong(Int::ipred, ih);
             apply trans;
-            give sym(add_ipred(a, add(b, NegSucc(k))));
-            cong_int(λ (w: Int) => add(a, w), sym(add_ipred(b, NegSucc(k)))),
+            give sym(a.add_ipred(b + NegSucc(k)));
+            Int::cong(λ (w: Int) => a + w, sym(b.add_ipred(NegSucc(k)))),
         c)
 }
 
-theorem add_neg(a: Int): a + neg(a) = OfNat(0) {
+theorem Int::add_neg(self a: Int): a + -a = OfNat(0) {
     match a {
         OfNat(n) => match n {
             Zero => refl,
-            Succ(k) => subNatNat_self(k),
+            Succ(k) => Int::subNatNat_self(k),
         },
-        NegSucc(n) => subNatNat_self(n),
+        NegSucc(n) => Int::subNatNat_self(n),
     }
 }
 
-theorem neg_add_self(a: Int): neg(a) + a = OfNat(0) {
-    trans(add_comm(neg(a), a), add_neg(a))
+theorem Int::neg_add_self(a: Int): -a + a = OfNat(0) {
+    trans((-a).add_comm(a), a.add_neg())
 }
 
-// Negation distributes over addition, stated with the `neg` on the outside
-// because that is the direction a rewrite wants it.
-theorem neg_add(a, b: Int): neg(a + b) = neg(a) + neg(b) {
-    int_ind(λ (z: Int) => neg(a + z) = neg(a) + neg(z),
-        trans(cong_int(neg, add_zero(a)), sym(add_zero(neg(a)))),
-        λ (k: Nat) (ih: neg(a + OfNat(k)) = neg(a) + neg(OfNat(k))) =>
+theorem Int::neg_add(self a, b: Int): -(a + b) = -a + -b {
+    Int::ind(λ (z: Int) => -(a + z) = -a + -z,
+        trans(Int::cong(Int::neg, a.add_zero()), sym((-a).add_zero())),
+        λ (k: Nat) (ih: -(a + OfNat(k)) = -(a) + -(OfNat(k))) =>
             calc {
-                neg(a + OfNat(Succ(k)))
-                    = neg(isucc(a + OfNat(k)))      := cong_int(neg, add_isucc(a, OfNat(k))),
-                    = ipred(neg(a + OfNat(k)))      := neg_isucc(a + OfNat(k)),
-                    = ipred(neg(a) + neg(OfNat(k))) := cong(ih),
-                    = neg(a) + ipred(negOfNat(k))   := sym(add_ipred(neg(a), negOfNat(k))),
-                    = neg(a) + NegSucc(k)           := cong(ipred_negOfNat(k)),
+                -(a + OfNat(Succ(k)))
+                    = -(a + OfNat(k)).isucc()      := Int::cong(Int::neg, a.add_isucc(OfNat(k))),
+                    = (-(a + OfNat(k))).ipred()      := (a + OfNat(k)).neg_isucc(),
+                    = (-a + -OfNat(k)).ipred() := cong(ih),
+                    = -a + Int::negOfNat(k).ipred()   := sym((-a).add_ipred(Int::negOfNat(k))),
+                    = -a + NegSucc(k)           := cong(Int::ipred_negOfNat(k)),
             },
         apply trans;
-        give cong_int(neg, add_neg_one(a));
+        give Int::cong(Int::neg, a.add_neg_one());
         apply trans;
-        give neg_ipred(a);
-        sym(add_one(neg(a))),
-        (k: Nat) (ih: neg(a + NegSucc(k)) = neg(a) + neg(NegSucc(k))) ⊢
+        give a.neg_ipred();
+        sym((-a).add_one()),
+        (k: Nat) (ih: -(a + NegSucc(k)) = -a + -NegSucc(k)) ⊢
             apply trans;
-            give cong_int(neg, add_ipred(a, NegSucc(k)));
+            give Int::cong(Int::neg, a.add_ipred(NegSucc(k)));
             apply trans;
-            give neg_ipred(add(a, NegSucc(k)));
+            give (a + NegSucc(k)).neg_ipred();
             apply trans;
-            give cong_int(isucc, ih);
-            sym(add_isucc(neg(a), OfNat(Succ(k)))),
+            give Int::cong(Int::isucc, ih);
+            sym((-a).add_isucc(OfNat(Succ(k)))),
         b)
 }
 
-// `sub`'s own two facts. It is `add` composed with `neg` by definition, so
-// everything else about it is an `add` law read through that.
-theorem sub_self(a: Int): sub(a, a) = OfNat(0) { add_neg(a) }
+theorem Int::sub_self(self a: Int): a - a = OfNat(0) { a.add_neg() }
 
-theorem sub_zero(a: Int): sub(a, OfNat(0)) = a { add_zero(a) }
+theorem Int::sub_zero(self a: Int): a - OfNat(0) = a { a.add_zero() }
 
 // ---------------------------------------------------------------------------
-// Multiplication, as the sign-and-magnitude product: the payloads multiply in
-// `Nat` and the sign is read off the pair of constructors. Four cases and no
-// recursion of its own, so `mul` at closed arguments costs one `nat::mul`.
-//
-// What makes this spelling affordable in the proofs — the whole question about
-// it — is that `negOfNat(x)` IS `neg(OfNat(x))` definitionally. A stuck product
-// under a `negOfNat` therefore needs no case analysis on the product: the two
-// `mul_neg` lemmas move the sign out at open `x`, which is what the eight cases
-// of `mul_assoc` below are spent on.
 
-fn mul(a, b: Int) → Int {
+fn Int::mul(self a: Int, b: Int) → Int {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => OfNat(nat::mul(m, n)),
-            NegSucc(n) => negOfNat(nat::mul(m, Succ(n))),
+            OfNat(n) => OfNat(m * n),
+            NegSucc(n) => Int::negOfNat(m * Succ(n)),
         },
         NegSucc(m) => match b {
-            OfNat(n) => negOfNat(nat::mul(Succ(m), n)),
-            NegSucc(n) => OfNat(nat::mul(Succ(m), Succ(n))),
+            OfNat(n) => Int::negOfNat(Succ(m) * n),
+            NegSucc(n) => OfNat(Succ(m) * Succ(n)),
         },
     }
 }
 
-designation * at Int := mul
+designation * at Int := Int::mul
 
 // ---------------------------------------------------------------------------
 // Euclidean division.  A nonzero divisor uses its positive magnitude, so the
@@ -472,61 +414,61 @@ designation * at Int := mul
 
 inductive DivMod { MkIntDivMod(quotient: Int, remainder: Int) }
 
-fn divmod_nonneg(dividend: Nat, divisor_pred: Nat) → DivMod {
-    match nat::divmod(dividend, Succ(divisor_pred)) {
+fn Int::divmod_nonneg(dividend: Nat, divisor_pred: Nat) → DivMod {
+    match dividend.divmod(Succ(divisor_pred)) {
         MkDivMod(quotient, remainder) =>
             MkIntDivMod(OfNat(quotient), OfNat(remainder)),
     }
 }
 
-fn divmod_negative(dividend_pred: Nat, divisor_pred: Nat) → DivMod {
-    match nat::divmod(Succ(dividend_pred), Succ(divisor_pred)) {
+fn Int::divmod_negative(dividend_pred: Nat, divisor_pred: Nat) → DivMod {
+    match Succ(dividend_pred).divmod(Succ(divisor_pred)) {
         MkDivMod(quotient, remainder) => match remainder {
-            Zero => MkIntDivMod(negOfNat(quotient), OfNat(0)),
+            Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
             Succ(_) => MkIntDivMod(
                 NegSucc(quotient),
-                OfNat(nat::sub(Succ(divisor_pred), remainder)),
+                OfNat(Succ(divisor_pred) - remainder),
             ),
         },
     }
 }
 
-fn divmod_positive(dividend: Int, divisor_pred: Nat) → DivMod {
+fn Int::divmod_positive(self dividend: Int, divisor_pred: Nat) → DivMod {
     match dividend {
-        OfNat(n) => divmod_nonneg(n, divisor_pred),
-        NegSucc(n) => divmod_negative(n, divisor_pred),
+        OfNat(n) => Int::divmod_nonneg(n, divisor_pred),
+        NegSucc(n) => Int::divmod_negative(n, divisor_pred),
     }
 }
 
-fn negate_divmod_quotient(state: DivMod) → DivMod {
+fn DivMod::negate_divmod_quotient(self state: DivMod) → DivMod {
     match state {
-        MkIntDivMod(quotient, remainder) => MkIntDivMod(neg(quotient), remainder),
+        MkIntDivMod(quotient, remainder) => MkIntDivMod(-quotient, remainder),
     }
 }
 
-fn divmod(dividend, divisor: Int) → DivMod {
+fn Int::divmod(self dividend: Int, divisor: Int) → DivMod {
     match divisor {
         OfNat(n) => match n {
             Zero => MkIntDivMod(OfNat(0), dividend),
-            Succ(k) => divmod_positive(dividend, k),
+            Succ(k) => Int::divmod_positive(dividend, k),
         },
-        NegSucc(k) => negate_divmod_quotient(divmod_positive(dividend, k)),
+        NegSucc(k) => Int::divmod_positive(dividend, k).negate_divmod_quotient(),
     }
 }
 
-fn div(dividend, divisor: Int) → Int {
-    match divmod(dividend, divisor) { MkIntDivMod(quotient, _) => quotient }
+fn Int::div(self dividend: Int, divisor: Int) → Int {
+    match dividend.divmod(divisor) { MkIntDivMod(quotient, _) => quotient }
 }
 
-fn mod(dividend, divisor: Int) → Int {
-    match divmod(dividend, divisor) { MkIntDivMod(_, remainder) => remainder }
+fn Int::mod(self dividend: Int, divisor: Int) → Int {
+    match dividend.divmod(divisor) { MkIntDivMod(_, remainder) => remainder }
 }
 
-fn natAbs(a: Int) → Nat {
+fn Int::natAbs(self a: Int) → Nat {
     match a { OfNat(n) => n, NegSucc(n) => Succ(n) }
 }
 
-fn abs(a: Int) → Int { OfNat(natAbs(a)) }
+fn Int::abs(self a: Int) → Int { OfNat(a.natAbs()) }
 
 fn DivModEquation(dividend, divisor: Int, state: DivMod) → Type {
     match state {
@@ -535,43 +477,39 @@ fn DivModEquation(dividend, divisor: Int, state: DivMod) → Type {
     }
 }
 
-theorem mul_comm(a, b: Int): a * b = b * a {
+theorem Int::mul_comm(self a, b: Int): a * b = b * a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => cong_ofnat(nat::mul_comm(m, n)),
-            NegSucc(n) => cong_int_of(negOfNat, nat::mul_comm(m, Succ(n))),
+            OfNat(n) => Int::cong_ofnat(m.mul_comm(n)),
+            NegSucc(n) => Int::cong_of(Int::negOfNat, m.mul_comm(Succ(n))),
         },
         NegSucc(m) => match b {
-            OfNat(n) => cong_int_of(negOfNat, nat::mul_comm(Succ(m), n)),
-            NegSucc(n) => cong_ofnat(nat::mul_comm(Succ(m), Succ(n))),
+            OfNat(n) => Int::cong_of(Int::negOfNat, Succ(m).mul_comm(n)),
+            NegSucc(n) => Int::cong_ofnat(Succ(m).mul_comm(Succ(n))),
         },
     }
 }
 
-theorem mul_zero(a: Int): a * OfNat(0) = OfNat(0) {
+theorem Int::mul_zero(self a: Int): a * OfNat(0) = OfNat(0) {
     match a { OfNat(_) => refl, NegSucc(_) => refl }
 }
 
-theorem zero_mul(a: Int): OfNat(0) * a = OfNat(0) {
-    trans(mul_comm(OfNat(0), a), mul_zero(a))
+theorem Int::zero_mul(self a: Int): OfNat(0) * a = OfNat(0) {
+    trans(OfNat(0).mul_comm(a), a.mul_zero())
 }
 
-theorem mul_one(a: Int): a * OfNat(1) = a {
+theorem Int::mul_one(self a: Int): a * OfNat(1) = a {
     match a {
-        OfNat(m) => cong_ofnat(nat::add_left_zero(m)),
-        NegSucc(m) => cong_int_of(negOfNat, nat::add_left_zero(Succ(m))),
+        OfNat(m) => Int::cong_ofnat(m.add_left_zero()),
+        NegSucc(m) => Int::cong_of(Int::negOfNat, Succ(m).add_left_zero()),
     }
 }
 
-theorem one_mul(a: Int): OfNat(1) * a = a {
-    trans(mul_comm(OfNat(1), a), mul_one(a))
+theorem Int::one_mul(self a: Int): OfNat(1) * a = a {
+    trans(OfNat(1).mul_comm(a), a.mul_one())
 }
 
-// The sign moves out of either factor. `mul_neg_r` is pure case analysis — the
-// point above about `negOfNat` being a `neg` is what makes two of its four arms
-// `refl` at an open product — and `mul_neg_l` is it read through commutativity.
-
-theorem mul_neg_r(a, b: Int): a * neg(b) = neg(a * b) {
+theorem Int::mul_neg_r(self a, b: Int): a * -b = -(a * b) {
     match a {
         OfNat(m) => match b {
             OfNat(n) =>
@@ -579,286 +517,251 @@ theorem mul_neg_r(a, b: Int): a * neg(b) = neg(a * b) {
                     Zero => refl,
                     Succ(_) => refl,
                 },
-            NegSucc(n) => sym(neg_negOfNat(nat::mul(m, Succ(n)))),
+            NegSucc(n) => sym(Int::neg_negOfNat(m * Succ(n))),
         },
         NegSucc(m) => match b {
             OfNat(n) =>
                 match n {
                     Zero => refl,
-                    Succ(k) => sym(neg_negOfNat(nat::mul(Succ(m), Succ(k)))),
+                    Succ(k) => sym(Int::neg_negOfNat(Succ(m) * Succ(k))),
                 },
             NegSucc(_) => refl,
         },
     }
 }
 
-theorem mul_neg_l(a, b: Int): neg(a) * b = neg(a * b) {
+theorem Int::mul_neg_l(self a, b: Int): -a * b = -(a * b) {
     calc {
-        neg(a) * b
-            = b * neg(a) := mul_comm(neg(a), b),
-            = neg(b * a) := mul_neg_r(b, a),
-            = neg(a * b) := cong(mul_comm(b, a)),
+        -a * b
+            = b * -a := (-a).mul_comm(b),
+            = -(b * a) := b.mul_neg_r(a),
+            = -(a * b) := cong(b.mul_comm(a)),
     }
 }
 
-// Associativity, and the eight cases are the file's most explicit statement of
-// what the encoding costs: three signs, and the two `mul_neg` lemmas plus
-// `neg_negOfNat` to bring each case back to `nat::mul_assoc` under an `OfNat` or
-// a `negOfNat`. Nothing here is deep; there is just a lot of it.
-theorem mul_assoc(a, b, c: Int): (a * b) * c = a * (b * c) {
+theorem Int::mul_assoc(self a, b, c: Int): (a * b) * c = a * (b * c) {
     match a {
         OfNat(m) => match b {
             OfNat(n) => match c {
-                OfNat(p) => cong_ofnat(nat::mul_assoc(m, n, p)),
+                OfNat(p) => Int::cong_ofnat(m.mul_assoc(n, p)),
                 NegSucc(p) =>
                     apply trans;
-                    give cong_int_of(negOfNat, nat::mul_assoc(m, n, Succ(p)));
-                    sym(mul_neg_r(OfNat(m), OfNat(nat::mul(n, Succ(p))))),
+                    give Int::cong_of(Int::negOfNat, m.mul_assoc(n, Succ(p)));
+                    sym(OfNat(m).mul_neg_r(OfNat(n * Succ(p)))),
             },
             NegSucc(n) => match c {
                 OfNat(p) => calc {
                     (OfNat(m) * NegSucc(n)) * OfNat(p)
-                        = neg(OfNat((m * Succ(n)) * p))
-                            := mul_neg_l(OfNat(m * Succ(n)), OfNat(p)),
-                        = neg(OfNat(m * (Succ(n) * p)))
-                            := cong_int(neg, cong_ofnat(nat::mul_assoc(m, Succ(n), p))),
+                        = -OfNat((m * Succ(n)) * p)
+                            := OfNat(m * Succ(n)).mul_neg_l(OfNat(p)),
+                        = -OfNat(m * (Succ(n) * p))
+                            := Int::cong(Int::neg, Int::cong_ofnat(m.mul_assoc(Succ(n), p))),
                         = OfNat(m) * (NegSucc(n) * OfNat(p))
-                            := sym(mul_neg_r(OfNat(m), OfNat(Succ(n) * p))),
+                            := sym(OfNat(m).mul_neg_r(OfNat(Succ(n) * p))),
                 },
                 NegSucc(p) =>
                     apply trans;
-                    give mul_neg_l(OfNat(nat::mul(m, Succ(n))), NegSucc(p));
+                    give OfNat(m * Succ(n)).mul_neg_l(NegSucc(p));
                     apply trans;
-                    give neg_negOfNat(nat::mul(nat::mul(m, Succ(n)), Succ(p)));
-                    cong_ofnat(nat::mul_assoc(m, Succ(n), Succ(p))),
+                    give Int::neg_negOfNat(m * Succ(n) * Succ(p));
+                    Int::cong_ofnat(m.mul_assoc(Succ(n), Succ(p))),
             },
         },
         NegSucc(m) => match b {
             OfNat(n) => match c {
                 OfNat(p) =>
                     apply trans;
-                    give mul_neg_l(OfNat(nat::mul(Succ(m), n)), OfNat(p));
-                    cong_int(neg, cong_ofnat(nat::mul_assoc(Succ(m), n, p))),
+                    give OfNat(Succ(m) * n).mul_neg_l(OfNat(p));
+                    Int::cong(Int::neg, Int::cong_ofnat(Succ(m).mul_assoc(n, p))),
                 NegSucc(p) => calc {
                     (NegSucc(m) * OfNat(n)) * NegSucc(p)
-                        = neg(OfNat(Succ(m) * n) * NegSucc(p))
-                            := mul_neg_l(OfNat(Succ(m) * n), NegSucc(p)),
+                        = -(OfNat(Succ(m) * n) * NegSucc(p))
+                            := OfNat(Succ(m) * n).mul_neg_l(NegSucc(p)),
                         = OfNat((Succ(m) * n) * Succ(p))
-                            := neg_negOfNat((Succ(m) * n) * Succ(p)),
+                            := Int::neg_negOfNat((Succ(m) * n) * Succ(p)),
                         = OfNat(Succ(m) * (n * Succ(p)))
-                            := cong_ofnat(nat::mul_assoc(Succ(m), n, Succ(p))),
-                        = neg(negOfNat(Succ(m) * (n * Succ(p))))
-                            := sym(neg_negOfNat(Succ(m) * (n * Succ(p)))),
+                            := Int::cong_ofnat(Succ(m).mul_assoc(n, Succ(p))),
+                        = -Int::negOfNat(Succ(m) * (n * Succ(p)))
+                            := sym(Int::neg_negOfNat(Succ(m) * (n * Succ(p)))),
                         = NegSucc(m) * (OfNat(n) * NegSucc(p))
-                            := sym(mul_neg_r(NegSucc(m), OfNat(n * Succ(p)))),
+                            := sym(NegSucc(m).mul_neg_r(OfNat(n * Succ(p)))),
                 },
             },
             NegSucc(n) => match c {
                 OfNat(p) =>
                     apply trans;
-                    give cong_ofnat(nat::mul_assoc(Succ(m), Succ(n), p));
+                    give Int::cong_ofnat(Succ(m).mul_assoc(Succ(n), p));
                     apply sym;
                     apply trans;
-                    give mul_neg_r(NegSucc(m), OfNat(nat::mul(Succ(n), p)));
-                    neg_negOfNat(nat::mul(Succ(m), nat::mul(Succ(n), p))),
+                    give NegSucc(m).mul_neg_r(OfNat(Succ(n) * p));
+                    Int::neg_negOfNat(Succ(m) * (Succ(n) * p)),
                 NegSucc(p) =>
-                    cong_int_of(negOfNat, nat::mul_assoc(Succ(m), Succ(n), Succ(p))),
+                    Int::cong_of(Int::negOfNat, Succ(m).mul_assoc(Succ(n), Succ(p))),
             },
         },
     }
 }
 
 // ---------------------------------------------------------------------------
-// Distributivity, which is where the two definitions meet: `mul` is the
-// sign-and-magnitude product and `add` is `isucc`/`ipred` iterated up to the
-// push lemmas, so the law is an `int_ind` over the summand whose step needs
-// `mul` at a successor and at a predecessor. Those two are the section's real
-// content; the law itself is four lines of chaining once they exist.
 
-theorem ofNat_add(m, n: Nat): OfNat(m + n) = OfNat(m) + OfNat(n) {
-    sym(add_ofnat_ofnat(m, n))
+theorem Int::ofNat_add(m, n: Nat): OfNat(m + n) = OfNat(m) + OfNat(n) {
+    sym(Int::add_ofnat_ofnat(m, n))
 }
 
-theorem ofNat_mul(m, n: Nat): OfNat(m * n) = OfNat(m) * OfNat(n) { refl }
+theorem Int::ofNat_mul(m, n: Nat): OfNat(m * n) = OfNat(m) * OfNat(n) { refl }
 
-// Times `-1`, and the two cancellations every rearrangement below spends.
-
-theorem mul_neg_one(a: Int): a * NegSucc(0) = neg(a) {
+theorem Int::mul_neg_one(self a: Int): a * NegSucc(0) = -a {
     apply trans;
-    give mul_neg_r(a, OfNat(1));
-    cong(mul_one(a))
+    give a.mul_neg_r(OfNat(1));
+    cong(a.mul_one())
 }
 
-theorem add_neg_cancel_r(x, y: Int): (x + y) + neg(y) = x {
+theorem Int::add_neg_cancel_r(self x, y: Int): (x + y) + -y = x {
     apply trans;
-    give add_assoc(x, y, neg(y));
+    give x.add_assoc(y, -y);
     apply trans;
-    give cong_int(λ (w: Int) => add(x, w), add_neg(y));
-    add_zero(x)
+    give Int::cong(λ (w: Int) => x + w, y.add_neg());
+    x.add_zero()
 }
 
-theorem add_neg_cancel_l(x, y: Int): (x + neg(y)) + y = x {
+theorem Int::add_neg_cancel_l(self x, y: Int): (x + -y) + y = x {
     apply trans;
-    give add_assoc(x, neg(y), y);
+    give x.add_assoc(-y, y);
     apply trans;
-    give cong_int(λ (w: Int) => add(x, w), neg_add_self(y));
-    add_zero(x)
+    give Int::cong(λ (w: Int) => x + w, y.neg_add_self());
+    x.add_zero()
 }
 
-// `a * (n+1) = a * n + a`, at a NON-negative multiplier — the `mul` step that
-// `nat::mul`'s own definition already takes, lifted through the sign.
-theorem mul_ofnat_succ(a: Int, n: Nat): a * OfNat(Succ(n)) = a * OfNat(n) + a {
+theorem Int::mul_ofnat_succ(self a: Int, n: Nat): a * OfNat(Succ(n)) = a * OfNat(n) + a {
     match a {
-        OfNat(m) => sym(add_ofnat_ofnat(nat::mul(m, n), m)),
+        OfNat(m) => sym(Int::add_ofnat_ofnat(m * n, m)),
         NegSucc(m) =>
             apply sym;
             apply trans;
-            give sym(neg_add(OfNat(nat::mul(Succ(m), n)), OfNat(Succ(m))));
-            cong_int(neg, add_ofnat_ofnat(nat::mul(Succ(m), n), Succ(m))),
+            give sym(OfNat(Succ(m) * n).neg_add(OfNat(Succ(m))));
+            Int::cong(Int::neg, Int::add_ofnat_ofnat(Succ(m) * n, Succ(m))),
     }
 }
 
-// The same step at an arbitrary integer multiplier, which is what an induction
-// over `add`'s iteration needs. The negative half is where the `-1` case and the
-// cancellation lemmas are spent.
-theorem mul_isucc(a, x: Int): a * isucc(x) = a * x + a {
+theorem Int::mul_isucc(self a, x: Int): a * x.isucc() = a * x + a {
     match x {
-        OfNat(n) => mul_ofnat_succ(a, n),
+        OfNat(n) => a.mul_ofnat_succ(n),
         NegSucc(n) =>
             match n {
                 Zero =>
                     apply trans;
-                    give mul_zero(a);
+                    give a.mul_zero();
                     apply sym;
                     apply trans;
-                    give cong_int(λ (w: Int) => add(w, a), mul_neg_one(a));
-                    neg_add_self(a),
+                    give Int::cong(λ (w: Int) => w + a, a.mul_neg_one());
+                    a.neg_add_self(),
                 Succ(j) =>
                     apply trans;
-                    give mul_neg_r(a, OfNat(Succ(j)));
+                    give a.mul_neg_r(OfNat(Succ(j)));
                     apply sym;
                     apply trans;
                     give
-                        apply cong_int;
-                        give λ (w: Int) => add(w, a);
+                        apply Int::cong;
+                        give λ (w: Int) => w + a;
                         apply trans;
-                        give mul_neg_r(a, OfNat(Succ(Succ(j))));
+                        give a.mul_neg_r(OfNat(Succ(Succ(j))));
                         apply trans;
-                        give cong_int(neg, mul_ofnat_succ(a, Succ(j)));
-                        neg_add(mul(a, OfNat(Succ(j))), a);
-                    add_neg_cancel_l(neg(mul(a, OfNat(Succ(j)))), a),
+                        give Int::cong(Int::neg, a.mul_ofnat_succ(Succ(j)));
+                        (a * OfNat(Succ(j))).neg_add(a);
+                    (-(a * OfNat(Succ(j)))).add_neg_cancel_l(a),
             },
     }
 }
 
-theorem mul_ipred(a, x: Int): a * ipred(x) = a * x + neg(a) {
+theorem Int::mul_ipred(self a, x: Int): a * x.ipred() = a * x + -a {
     apply sym;
     apply trans;
     give
-        apply cong_int;
-        give λ (w: Int) => add(w, neg(a));
+        apply Int::cong;
+        give λ (w: Int) => w + -a;
         apply trans;
-        give sym(cong_int(λ (w: Int) => mul(a, w), isucc_ipred(x)));
-        mul_isucc(a, ipred(x));
-    add_neg_cancel_r(mul(a, ipred(x)), a)
+        give sym(Int::cong(λ (w: Int) => a * w, x.isucc_ipred()));
+        a.mul_isucc(x.ipred());
+    (a * x.ipred()).add_neg_cancel_r(a)
 }
 
-theorem mul_add_distr(a, b, c: Int): a * (b + c) = a * b + a * c {
-    int_ind(λ (z: Int) => mul(a, add(b, z)) = add(mul(a, b), mul(a, z)),
+theorem Int::mul_add_distr(self a, b, c: Int): a * (b + c) = a * b + a * c {
+    Int::ind(λ (z: Int) => a * (b + z) = (a * b) + (a * z),
         apply trans;
-        give cong_int(λ (w: Int) => mul(a, w), add_zero(b));
+        give Int::cong(λ (w: Int) => a * w, b.add_zero());
         apply trans;
-        give sym(add_zero(mul(a, b)));
-        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_zero(a))),
-        (k: Nat) (ih: mul(a, add(b, OfNat(k))) = add(mul(a, b), mul(a, OfNat(k)))) ⊢
+        give sym((a * b).add_zero());
+        sym(Int::cong(λ (w: Int) => (a * b) + w, a.mul_zero())),
+        (k: Nat) (ih: a * (b + OfNat(k)) = (a * b) + (a * OfNat(k))) ⊢
             apply trans;
-            give cong_int(λ (w: Int) => mul(a, w), add_isucc(b, OfNat(k)));
+            give Int::cong(λ (w: Int) => a * w, b.add_isucc(OfNat(k)));
             apply trans;
-            give mul_isucc(a, add(b, OfNat(k)));
+            give a.mul_isucc(b + OfNat(k));
             apply trans;
-            give cong_int(λ (w: Int) => add(w, a), ih);
+            give Int::cong(λ (w: Int) => w + a, ih);
             apply trans;
-            give add_assoc(mul(a, b), mul(a, OfNat(k)), a);
-            sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ofnat_succ(a, k))),
+            give (a * b).add_assoc(a * OfNat(k), a);
+            sym(Int::cong(λ (w: Int) => (a * b) + w, a.mul_ofnat_succ(k))),
         apply trans;
-        give cong_int(λ (w: Int) => mul(a, w), add_neg_one(b));
+        give Int::cong(λ (w: Int) => a * w, b.add_neg_one());
         apply trans;
-        give mul_ipred(a, b);
-        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_neg_one(a))),
-        (k: Nat) (ih: mul(a, add(b, NegSucc(k))) = add(mul(a, b), mul(a, NegSucc(k)))) ⊢
+        give a.mul_ipred(b);
+        sym(Int::cong(λ (w: Int) => (a * b) + w, a.mul_neg_one())),
+        (k: Nat) (ih: a * (b + NegSucc(k)) = (a * b) + (a * NegSucc(k))) ⊢
             apply trans;
-            give cong_int(λ (w: Int) => mul(a, w), add_ipred(b, NegSucc(k)));
+            give Int::cong(λ (w: Int) => a * w, b.add_ipred(NegSucc(k)));
             apply trans;
-            give mul_ipred(a, add(b, NegSucc(k)));
+            give a.mul_ipred(b + NegSucc(k));
             apply trans;
-            give cong_int(λ (w: Int) => add(w, neg(a)), ih);
+            give Int::cong(λ (w: Int) => w + -a, ih);
             apply trans;
-            give add_assoc(mul(a, b), mul(a, NegSucc(k)), neg(a));
-            sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ipred(a, NegSucc(k)))),
+            give (a * b).add_assoc(a * NegSucc(k), -a);
+            sym(Int::cong(λ (w: Int) => (a * b) + w, a.mul_ipred(NegSucc(k)))),
         c)
 }
 
-// The other side, through commutativity rather than a second induction.
-theorem add_mul_distr(a, b, c: Int): (a + b) * c = a * c + b * c {
+theorem Int::add_mul_distr(self a, b, c: Int): (a + b) * c = a * c + b * c {
     apply trans;
-    give mul_comm(add(a, b), c);
+    give (a + b).mul_comm(c);
     apply trans;
-    give mul_add_distr(c, a, b);
+    give c.mul_add_distr(a, b);
     apply trans;
-    give cong_int(λ (w: Int) => add(w, mul(c, b)), mul_comm(c, a));
-    cong_int(λ (w: Int) => add(mul(a, c), w), mul_comm(c, b))
+    give Int::cong(λ (w: Int) => w + (c * b), c.mul_comm(a));
+    Int::cong(λ (w: Int) => (a * c) + w, c.mul_comm(b))
 }
 
 // ---------------------------------------------------------------------------
-// The order, stated PROPOSITIONALLY like `nat`'s (docs/nat-order-design.md §1)
-// and reducing for the same reason: `Le(OfNat(2), OfNat(5))` unfolds to
-// `nat::Le(2, 5)` unfolds to `True`, so a closed comparison is `trivial`.
-//
-// Four cases, one line each, and the two that matter are the mixed ones: a
-// negative is below every non-negative unconditionally (`True`), and the
-// converse is refuted outright (`False`). Between two negatives the order
-// REVERSES — `Le(NegSucc(m), NegSucc(n))` is `nat::Le(n, m)` — which is the only
-// place in the file where a payload comparison is written backwards, and every
-// arm of every order proof below that looks odd is this line being honest.
-//
-// Unlike `nat`'s, this relation needs no currying: it is not recursive, so
-// nothing makes the arguments vary together.
 
-fn Le(a, b: Int) → Type {
+fn Int::Le(self a, b: Int) → Type {
     match a {
-        OfNat(m) => match b { OfNat(n) => nat::Le(m, n), NegSucc(_) => False },
-        NegSucc(m) => match b { OfNat(_) => True, NegSucc(n) => nat::Le(n, m) },
+        OfNat(m) => match b { OfNat(n) => m <= n, NegSucc(_) => False },
+        NegSucc(m) => match b { OfNat(_) => True, NegSucc(n) => n <= m },
     }
 }
 
-// `Lt(a, b)` is `Le(a + 1, b)`, as at `Nat` — and `isucc` is what "+1" is here,
-// so `Lt(OfNat(m), OfNat(n))` is `nat::Lt(m, n)` definitionally.
-fn Lt(a, b: Int) → Type { Le(isucc(a), b) }
+fn Int::Lt(self a, b: Int) → Type { a.isucc().Le(b) }
 
-designation <= at Int := Le
-designation < at Int := Lt
+designation <= at Int := Int::Le
+designation < at Int := Int::Lt
 
 fn DivModBounds(divisor: Int, state: DivMod) → Type {
     match state {
         MkIntDivMod(_, remainder) =>
-            (OfNat(0) <= remainder) ∧ (remainder < abs(divisor)),
+            (OfNat(0) <= remainder) ∧ (remainder < divisor.abs()),
     }
 }
 
-theorem le_refl(a: Int): a <= a {
-    match a { OfNat(m) => nat::le_refl(m), NegSucc(m) => nat::le_refl(m) }
+theorem Int::le_refl(self a: Int): a <= a {
+    match a { OfNat(m) => m.le_refl(), NegSucc(m) => m.le_refl() }
 }
 
-// Transitivity, and it is `nat::le_trans` twice with six of the eight cases
-// closed by computation. Keeping the hypotheses as trailing function binders
-// puts each `match` in checking position, so its motive is inferred.
-theorem le_trans(a: Int): (b: Int) → (c: Int) → a <= b → b <= c → a <= c {
+theorem Int::le_trans(self a: Int): (b: Int) → (c: Int) → a <= b → b <= c → a <= c {
     match a {
         OfNat(m) => λ b c =>
             match b {
                 OfNat(n) => λ p =>
                     match c {
-                        OfNat(r) => λ q2 => nat::le_trans(m, n, r, p, q2),
+                        OfNat(r) => λ q2 => m.le_trans(n, r, p, q2),
                         NegSucc(_) => λ q2 => false_elim(q2),
                     },
                 NegSucc(_) => λ p q => false_elim(p),
@@ -873,193 +776,169 @@ theorem le_trans(a: Int): (b: Int) → (c: Int) → a <= b → b <= c → a <= c
                 NegSucc(n) => λ p =>
                     match c {
                         OfNat(_) => λ q2 => trivial,
-                        NegSucc(r) => λ q2 => nat::le_trans(r, n, m, q2, p),
+                        NegSucc(r) => λ q2 => r.le_trans(n, m, q2, p),
                     },
             },
     }
 }
 
-theorem le_antisym(a: Int): (b: Int) → a <= b → b <= a → a = b {
+theorem Int::le_antisym(self a: Int): (b: Int) → a <= b → b <= a → a = b {
     match a {
         OfNat(m) => λ b =>
             match b {
-                OfNat(n) => λ p q => cong_ofnat(nat::le_antisym(m, n, p, q)),
+                OfNat(n) => λ p q => Int::cong_ofnat(m.le_antisym(n, p, q)),
                 NegSucc(_) => λ p q => false_elim(p),
             },
         NegSucc(m) => λ b =>
             match b {
                 OfNat(_) => λ p q => false_elim(q),
-                NegSucc(n) => λ p q => cong_negsucc(sym(nat::le_antisym(n, m, p, q))),
+                NegSucc(n) => λ p q => Int::cong_negsucc(sym(n.le_antisym(m, p, q))),
             },
     }
 }
 
-// Totality. No hypothesis to convoy, so no motive is written: the goal mentions
-// `a` and `b`, both of which are variables here.
-theorem le_total(a, b: Int): a <= b ∨ b <= a {
+theorem Int::le_total(self a, b: Int): a <= b ∨ b <= a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => nat::le_total(m, n),
+            OfNat(n) => m.le_total(n),
             NegSucc(_) => Inr(trivial),
         },
         NegSucc(m) => match b {
             OfNat(_) => Inl(trivial),
-            NegSucc(n) => nat::le_total(n, m),
+            NegSucc(n) => n.le_total(m),
         },
     }
 }
 
-// The decider, and a `fn` rather than a `theorem` for the reason `nat::le_dec`
-// carries: a decision has to unfold in conversion or nothing built on it
-// computes.
-fn le_dec(a, b: Int) → a <= b ∨ ¬(a <= b) {
+fn Int::le_dec(self a, b: Int) → a <= b ∨ ¬(a <= b) {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => nat::le_dec(m, n),
+            OfNat(n) => m.le_dec(n),
             NegSucc(_) => Inr(·),
         },
         NegSucc(m) => match b {
             OfNat(_) => Inl(trivial),
-            NegSucc(n) => nat::le_dec(n, m),
+            NegSucc(n) => n.le_dec(m),
         },
     }
 }
 
-// The order's `Decide` instance, generic in both operands. It lives beside
-// the decider so every later source consumer — notably proposition-directed
-// `if` in `max` and `min` — reaches it through ordinary declaration-order
-// resolution. Nat and Int may both register their relation named `Le` because
-// instance keys use resolved declaration references, not written names
-// (docs/instance-resolved-key-design.md).
-instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
+instance(a, b: Int) Decide<Int::Le(a, b)> { dec := Int::le_dec(a, b) }
 
-theorem le_of_not_le(a, b: Int, h: ¬(a <= b)): b <= a {
-    or_resolve(or_swap(le_total(a, b)), h)
+theorem Int::le_of_not_le(self a, b: Int, h: ¬(a <= b)): b <= a {
+    or_resolve(or_swap(a.le_total(b)), h)
 }
 
-// The strict order's three facts, all of them `Le`'s kit read at `isucc(a)`.
 
-theorem lt_isucc_self(a: Int): a < isucc(a) { le_refl(isucc(a)) }
+theorem Int::lt_isucc_self(self a: Int): a < a.isucc() { a.isucc().le_refl() }
 
-theorem lt_irrefl(a: Int): ¬(a < a) {
+theorem Int::lt_irrefl(self a: Int): ¬(a < a) {
     match a {
-        OfNat(m) => nat::lt_irrefl(m),
+        OfNat(m) => m.lt_irrefl(),
         NegSucc(m) => match m {
             Zero => ·,
-            Succ(j) => nat::lt_irrefl(j),
+            Succ(j) => j.lt_irrefl(),
         },
     }
 }
 
-theorem le_of_lt(a: Int): (b: Int) → a < b → a <= b {
+theorem Int::le_of_lt(self a: Int): (b: Int) → a < b → a <= b {
     match a {
         OfNat(m) => λ b =>
             match b {
-                OfNat(n) => nat::le_of_lt(m, n, ·),
+                OfNat(n) => m.le_of_lt(n, ·),
                 NegSucc(_) => false_elim(·),
             },
         NegSucc(m) => λ b =>
             match b {
                 OfNat(_) => λ p => trivial,
                 NegSucc(n) =>
-                    // Checking the split against the branch's function type
-                    // convoys its hypothesis across the payload cases.
                     match m {
                         Zero => λ p2 => false_elim(p2),
-                        Succ(j) => λ p2 => nat::le_succ_r(n, j, p2),
+                        Succ(j) => λ p2 => n.le_succ_r(j, p2),
                     },
             },
     }
 }
 
-// The rest of the strict linear-order kit. The only representation-facing
-// facts are the two small bridges below: every negative is strictly below
-// every nonnegative integer, and strict order between two `NegSucc`s is Nat's
-// strict order with the payloads reversed. Everything after trichotomy is an
-// order-theoretic consequence and does not inspect the encoding.
-
-theorem negsucc_lt_ofnat(m, n: Nat): NegSucc(m) < OfNat(n) {
+theorem Int::negsucc_lt_ofnat(m, n: Nat): NegSucc(m) < OfNat(n) {
     match m { Zero => trivial, Succ(_) => trivial }
 }
 
-theorem negsucc_lt_of_lt(m, n: Nat, h: n < m): NegSucc(m) < NegSucc(n) {
+theorem Int::negsucc_lt_of_lt(m, n: Nat, h: n < m): NegSucc(m) < NegSucc(n) {
     match m as λ z => n < z → NegSucc(z) < NegSucc(n) {
         Zero => bad ⊢ false_elim(bad),
         Succ(_) => good ⊢ good,
     }(h)
 }
 
-theorem lt_trichotomy(a, b: Int): a < b ∨ a = b ∨ b < a {
+theorem Int::lt_trichotomy(self a, b: Int): a < b ∨ a = b ∨ b < a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => match nat::lt_trichotomy(m, n) {
+            OfNat(n) => match m.lt_trichotomy(n) {
                 Inl(h) => Inl(h),
                 Inr(rest) => match rest {
-                    Inl(eq) => Inr(Inl(cong_ofnat(eq))),
+                    Inl(eq) => Inr(Inl(Int::cong_ofnat(eq))),
                     Inr(h) => Inr(Inr(h)),
                 },
             },
-            NegSucc(n) => Inr(Inr(negsucc_lt_ofnat(n, m))),
+            NegSucc(n) => Inr(Inr(Int::negsucc_lt_ofnat(n, m))),
         },
         NegSucc(m) => match b {
-            OfNat(n) => Inl(negsucc_lt_ofnat(m, n)),
-            NegSucc(n) => match nat::lt_trichotomy(m, n) {
-                Inl(h) => Inr(Inr(negsucc_lt_of_lt(n, m, h))),
+            OfNat(n) => Inl(Int::negsucc_lt_ofnat(m, n)),
+            NegSucc(n) => match m.lt_trichotomy(n) {
+                Inl(h) => Inr(Inr(Int::negsucc_lt_of_lt(n, m, h))),
                 Inr(rest) => match rest {
-                    Inl(eq) => Inr(Inl(cong_negsucc(eq))),
-                    Inr(h) => Inl(negsucc_lt_of_lt(m, n, h)),
+                    Inl(eq) => Inr(Inl(Int::cong_negsucc(eq))),
+                    Inr(h) => Inl(Int::negsucc_lt_of_lt(m, n, h)),
                 },
             },
         },
     }
 }
 
-theorem lt_trans(a, b, c: Int, h1: a < b, h2: b < c): a < c {
-    le_trans(isucc(a), b, c, h1, le_of_lt(b, c, h2))
+theorem Int::lt_trans(self a, b, c: Int, h1: a < b, h2: b < c): a < c {
+    a.isucc().le_trans(b, c, h1, b.le_of_lt(c, h2))
 }
 
-theorem lt_of_lt_of_le(a, b, c: Int, h1: a < b, h2: b <= c): a < c {
-    le_trans(isucc(a), b, c, h1, h2)
+theorem Int::lt_of_lt_of_le(self a, b, c: Int, h1: a < b, h2: b <= c): a < c {
+    a.isucc().le_trans(b, c, h1, h2)
 }
 
-theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: a ≠ b): a < b {
-    match lt_trichotomy(a, b) {
+theorem Int::lt_of_le_of_ne(self a, b: Int, hle: a <= b, hne: a ≠ b): a < b {
+    match a.lt_trichotomy(b) {
         Inl(h) => h,
         Inr(rest) => match rest {
             Inl(eq) => false_elim(hne(eq)),
             Inr(back) =>
-                false_elim(hne(le_antisym(a, b, hle, le_of_lt(b, a, back)))),
+                false_elim(hne(a.le_antisym(b, hle, b.le_of_lt(a, back)))),
         },
     }
 }
 
-theorem le_of_not_lt(a, b: Int, h: ¬(a < b)): b <= a {
-    match lt_trichotomy(a, b) {
+theorem Int::le_of_not_lt(self a, b: Int, h: ¬(a < b)): b <= a {
+    match a.lt_trichotomy(b) {
         Inl(forward) => false_elim(h(forward)),
         Inr(rest) => match rest {
-            Inl(eq) => j(eq, λ y q => y <= a, le_refl(a)),
-            Inr(back) => le_of_lt(b, a, back),
+            Inl(eq) => j(eq, λ y q => y <= a, a.le_refl()),
+            Inr(back) => b.le_of_lt(a, back),
         },
     }
 }
 
-theorem lt_of_not_le(a, b: Int, h: ¬(b <= a)): a < b {
-    match lt_trichotomy(a, b) {
+theorem Int::lt_of_not_le(self a, b: Int, h: ¬(b <= a)): a < b {
+    match a.lt_trichotomy(b) {
         Inl(forward) => forward,
         Inr(rest) => match rest {
-            Inl(eq) => false_elim(h(j(eq, λ y q => y <= a, le_refl(a)))),
-            Inr(back) => false_elim(h(le_of_lt(b, a, back))),
+            Inl(eq) => false_elim(h(j(eq, λ y q => y <= a, a.le_refl()))),
+            Inr(back) => false_elim(h(b.le_of_lt(a, back))),
         },
     }
 }
 
 // ---------------------------------------------------------------------------
-// Where the order meets the arithmetic. `isucc` and `ipred` are monotone, and
-// `add` is monotone because it is their iteration up to the push lemmas:
-// `add_le_mono_r` is an `int_ind` whose two step arms are these two lemmas,
-// transported across `add_isucc`/`add_ipred` on each side.
 
-theorem le_isucc(a: Int): (b: Int) → a <= b → isucc(a) <= isucc(b) {
+theorem Int::le_isucc(self a: Int): (b: Int) → a <= b → a.isucc() <= b.isucc() {
     match a {
         OfNat(_) => λ b =>
             match b {
@@ -1090,19 +969,19 @@ theorem le_isucc(a: Int): (b: Int) → a <= b → isucc(a) <= isucc(b) {
     }
 }
 
-theorem lt_of_le_of_lt(a, b, c: Int, h1: a <= b, h2: b < c): a < c {
-    le_trans(isucc(a), isucc(b), c, le_isucc(a, b, h1), h2)
+theorem Int::lt_of_le_of_lt(self a, b, c: Int, h1: a <= b, h2: b < c): a < c {
+    a.isucc().le_trans(b.isucc(), c, a.le_isucc(b, h1), h2)
 }
 
-theorem not_lt_of_ge(a, b: Int, h: a <= b): ¬(b < a) {
-    (back: b < a) ⊢ lt_irrefl(a, lt_of_le_of_lt(a, b, a, h, back))
+theorem Int::not_lt_of_ge(self a, b: Int, h: a <= b): ¬(b < a) {
+    (back: b < a) ⊢ a.lt_irrefl(a.lt_of_le_of_lt(b, a, h, back))
 }
 
-theorem lt_asymm(a, b: Int, h: a < b): ¬(b < a) {
-    not_lt_of_ge(a, b, le_of_lt(a, b, h))
+theorem Int::lt_asymm(self a, b: Int, h: a < b): ¬(b < a) {
+    a.not_lt_of_ge(b, a.le_of_lt(b, h))
 }
 
-theorem le_ipred(a: Int): (b: Int) → a <= b → ipred(a) <= ipred(b) {
+theorem Int::le_ipred(self a: Int): (b: Int) → a <= b → a.ipred() <= b.ipred() {
     match a {
         OfNat(m) => λ b =>
             match b {
@@ -1133,53 +1012,48 @@ theorem le_ipred(a: Int): (b: Int) → a <= b → ipred(a) <= ipred(b) {
     }
 }
 
-theorem add_le_mono_r(a, b, c: Int, h: a <= b): a + c <= b + c {
-    int_ind(λ (z: Int) => a + z <= b + z,
-        j(sym(add_zero(a)), λ y q => y <= b + OfNat(0),
-          j(sym(add_zero(b)), λ y q => a <= y, h)),
+theorem Int::add_le_mono_r(self a, b, c: Int, h: a <= b): a + c <= b + c {
+    Int::ind(λ (z: Int) => a + z <= b + z,
+        j(sym(a.add_zero()), λ y q => y <= b + OfNat(0),
+          j(sym(b.add_zero()), λ y q => a <= y, h)),
         λ (k: Nat) (ih: a + OfNat(k) <= b + OfNat(k)) =>
-            j(sym(add_isucc(a, OfNat(k))), λ y q => y <= b + OfNat(Succ(k)),
-              j(sym(add_isucc(b, OfNat(k))), λ y q => isucc(a + OfNat(k)) <= y,
-                le_isucc(a + OfNat(k), b + OfNat(k), ih))),
-        j(sym(add_neg_one(a)), λ y q => y <= b + NegSucc(0),
-          j(sym(add_neg_one(b)), λ y q => ipred(a) <= y, le_ipred(a, b, h))),
+            j(sym(a.add_isucc(OfNat(k))), λ y q => y <= b + OfNat(Succ(k)),
+              j(sym(b.add_isucc(OfNat(k))), λ y q => (a + OfNat(k)).isucc() <= y,
+              (a + OfNat(k)).le_isucc(b + OfNat(k), ih))),
+        j(sym(a.add_neg_one()), λ y q => y <= b + NegSucc(0),
+          j(sym(b.add_neg_one()), λ y q => a.ipred() <= y, a.le_ipred(b, h))),
         λ (k: Nat) (ih: a + NegSucc(k) <= b + NegSucc(k)) =>
-            j(sym(add_ipred(a, NegSucc(k))), λ y q => y <= b + NegSucc(Succ(k)),
-              j(sym(add_ipred(b, NegSucc(k))), λ y q => ipred(a + NegSucc(k)) <= y,
-                le_ipred(a + NegSucc(k), b + NegSucc(k), ih))),
+            j(sym(a.add_ipred(NegSucc(k))), λ y q => y <= b + NegSucc(Succ(k)),
+              j(sym(b.add_ipred(Int::NegSucc(k))), λ y q => (a + NegSucc(k)).ipred() <= y,
+                (a + NegSucc(k)).le_ipred(b + NegSucc(k), ih))),
         c)
 }
 
-theorem add_le_mono_l(a, b, c: Int, h: a <= b): c + a <= c + b {
-    j(add_comm(a, c), λ y q => y <= c + b,
-      j(add_comm(b, c), λ y q => a + c <= y, add_le_mono_r(a, b, c, h)))
+theorem Int::add_le_mono_l(self a, b, c: Int, h: a <= b): c + a <= c + b {
+    j(a.add_comm(c), λ y q => y <= c + b,
+      j(b.add_comm(c), λ y q => a + c <= y, a.add_le_mono_r(b, c, h)))
 }
 
-theorem add_le_mono(a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d {
-    le_trans(a + c, b + c, b + d,
-        add_le_mono_r(a, b, c, h1),
-        add_le_mono_l(c, d, b, h2))
+theorem Int::add_le_mono(self a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d {
+    (a + c).le_trans(b + c, b + d,
+        a.add_le_mono_r(b, c, h1),
+        c.add_le_mono_l(d, b, h2))
 }
 
-// Multiplication preserves order at a nonnegative factor. The proof follows
-// the integer induction principle rather than reopening `mul`'s four sign
-// cases: nonnegativity eliminates the negative half, zero is transported
-// through `mul_zero`, and the positive step is two-sided addition
-// monotonicity after `mul_ofnat_succ`.
-theorem mul_le_mono_r(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a * k <= b * k {
-    int_ind(
+theorem Int::mul_le_mono_r(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a * k <= b * k {
+    Int::ind(
         λ (z: Int) => OfNat(0) <= z → a <= b → a * z <= b * z,
         λ hz hab =>
-            j(sym(mul_zero(a)), λ left q => left <= b * OfNat(0),
-              j(sym(mul_zero(b)), λ right q => OfNat(0) <= right, le_refl(OfNat(0)))),
+            j(sym(a.mul_zero()), λ left q => left <= b * OfNat(0),
+            j(sym(b.mul_zero()), λ right q => OfNat(0) <= right, OfNat(0).le_refl())),
         λ (n: Nat)
           (ih: OfNat(0) <= OfNat(n) → a <= b → a * OfNat(n) <= b * OfNat(n))
           hz hab =>
-            j(sym(mul_ofnat_succ(a, n)),
+            j(sym(a.mul_ofnat_succ(n)),
               λ left q => left <= b * OfNat(Succ(n)),
-              j(sym(mul_ofnat_succ(b, n)),
+              j(sym(b.mul_ofnat_succ(n)),
                 λ right q => a * OfNat(n) + a <= right,
-                add_le_mono(a * OfNat(n), b * OfNat(n), a, b,
+                (a * OfNat(n)).add_le_mono(b * OfNat(n), a, b,
                     ih(trivial, hab), hab))),
         λ hz hab => false_elim(hz),
         λ (n: Nat)
@@ -1188,15 +1062,13 @@ theorem mul_le_mono_r(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a * k <= b * 
         k, hk, h)
 }
 
-theorem mul_le_mono_l(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k * a <= k * b {
-    j(mul_comm(a, k), λ left q => left <= k * b,
-      j(mul_comm(b, k), λ right q => a * k <= right,
-        mul_le_mono_r(a, b, k, h, hk)))
+theorem Int::mul_le_mono_l(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k * a <= k * b {
+    j(a.mul_comm(k), λ left q => left <= k * b,
+      j(b.mul_comm(k), λ right q => a * k <= right,
+        a.mul_le_mono_r(b, k, h, hk)))
 }
 
-// Negation reverses the order — the fact that makes `Int`'s order an order on
-// the *integers* rather than two `Nat` orders glued at zero.
-theorem le_neg(a: Int): (b: Int) → a <= b → -b <= -a {
+theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
     match a {
         OfNat(m) => λ b =>
             match b {
@@ -1228,91 +1100,84 @@ theorem le_neg(a: Int): (b: Int) → a <= b → -b <= -a {
 }
 
 // ---------------------------------------------------------------------------
-// Carrier-owned `min` and `max`. Unlike Nat's structural pair, these are the
-// direct propositional decision at `Int`: one neutral decision is shared by
-// the function and every proof below, and closed sign combinations compute.
 
-fn max(a, b: Int) → Int { if a <= b { b } else { a } }
+fn Int::max(self a, b: Int) → Int { if a <= b { b } else { a } }
 
-fn min(a, b: Int) → Int { if a <= b { a } else { b } }
+fn Int::min(self a, b: Int) → Int { if a <= b { a } else { b } }
 
-theorem le_max_l(a, b: Int): a <= max(a, b) {
-    match le_dec(a, b) as λ d => a <= or_pick(d, a, b) {
+theorem Int::le_max_l(self a, b: Int): a <= a.max(b) {
+    match a.le_dec(b) as λ d => a <= or_pick(d, a, b) {
         Inl(h) => h,
-        Inr(_) => le_refl(a),
+        Inr(_) => a.le_refl(),
     }
 }
 
-theorem le_max_r(a, b: Int): b <= max(a, b) {
-    match le_dec(a, b) as λ d => b <= or_pick(d, a, b) {
-        Inl(_) => le_refl(b),
-        Inr(h) => le_of_not_le(a, b, h),
+theorem Int::le_max_r(self a, b: Int): b <= a.max(b) {
+    match a.le_dec(b) as λ d => b <= or_pick(d, a, b) {
+        Inl(_) => b.le_refl(),
+        Inr(h) => a.le_of_not_le(b, h),
     }
 }
 
-theorem min_le_l(a, b: Int): min(a, b) <= a {
-    if h: a <= b { le_refl(a) } else { le_of_not_le(a, b, h) }
+theorem Int::min_le_l(self a, b: Int): a.min(b) <= a {
+    if h: a <= b { a.le_refl() } else { a.le_of_not_le(b, h) }
 }
 
-theorem min_le_r(a, b: Int): min(a, b) <= b {
-    if h: a <= b { h } else { le_refl(b) }
+theorem Int::min_le_r(self a, b: Int): a.min(b) <= b {
+    if h: a <= b { h } else { b.le_refl() }
 }
 
-theorem max_le(a, b, c: Int, h1: a <= c, h2: b <= c): max(a, b) <= c {
+theorem Int::max_le(self a, b, c: Int, h1: a <= c, h2: b <= c): a.max(b) <= c {
     if a <= b { h2 } else { h1 }
 }
 
-theorem le_min(a, b, c: Int, h1: c <= a, h2: c <= b): c <= min(a, b) {
-    match le_dec(a, b) as λ d => c <= or_pick(d, b, a) {
+theorem Int::le_min(self a, b, c: Int, h1: c <= a, h2: c <= b): c <= a.min(b) {
+    match a.le_dec(b) as λ d => c <= or_pick(d, b, a) {
         Inl(_) => h1,
         Inr(_) => h2,
     }
 }
 
-theorem max_eq_r(a, b: Int, h: a <= b): max(a, b) = b {
-    or_pick_dec(le_dec(a, b), a, b, h)
+theorem Int::max_eq_r(self a, b: Int, h: a <= b): a.max(b) = b {
+    or_pick_dec(a.le_dec(b), a, b, h)
 }
 
-theorem min_eq_l(a, b: Int, h: a <= b): min(a, b) = a {
-    or_pick_dec(le_dec(a, b), b, a, h)
+theorem Int::min_eq_l(a, b: Int, h: a <= b): a.min(b) = a {
+    or_pick_dec(a.le_dec(b), b, a, h)
 }
 
-theorem max_eq_l(a, b: Int, h: b <= a): max(a, b) = a {
-    match le_dec(a, b) {
-        Inl(forward) => sym(le_antisym(a, b, forward, h)),
+theorem Int::max_eq_l(self a, b: Int, h: b <= a): a.max(b) = a {
+    match a.le_dec(b) {
+        Inl(forward) => sym(a.le_antisym(b, forward, h)),
         Inr(_) => refl,
     }
 }
 
-theorem min_eq_r(a, b: Int, h: b <= a): min(a, b) = b {
-    match le_dec(a, b) {
-        Inl(forward) => le_antisym(a, b, forward, h),
+theorem Int::min_eq_r(self a, b: Int, h: b <= a): a.min(b) = b {
+    match a.le_dec(b) {
+        Inl(forward) => a.le_antisym(b, forward, h),
         Inr(_) => refl,
     }
 }
 
 // ---------------------------------------------------------------------------
-// The embedding, in both directions. `OfNat` is an order and arithmetic
-// homomorphism from `Nat` — stated because the API is the kit, and every one of
-// these is `refl` or one lemma, which is the evidence that the encoding's
-// non-negative half really is `Nat` and not a copy of it.
 
-theorem ofNat_le_iff(m, n: Nat): m <= n ↔ OfNat(m) <= OfNat(n) {
+theorem Int::ofNat_le_iff(m, n: Nat): m <= n ↔ OfNat(m) <= OfNat(n) {
     Iff(λ (h: m <= n) => h, λ (h: OfNat(m) <= OfNat(n)) => h)
 }
 
-theorem ofNat_lt_iff(m, n: Nat): m < n ↔ OfNat(m) < OfNat(n) {
+theorem Int::ofNat_lt_iff(m, n: Nat): m < n ↔ OfNat(m) < OfNat(n) {
     Iff(λ (h: m < n) => h, λ (h: OfNat(m) < OfNat(n)) => h)
 }
 
-theorem zero_le_ofNat(n: Nat): OfNat(0) <= OfNat(n) { trivial }
+theorem Int::zero_le_ofNat(n: Nat): OfNat(0) <= OfNat(n) { trivial }
 
-theorem negsucc_le_ofNat(m, n: Nat): NegSucc(m) <= OfNat(n) { trivial }
+theorem Int::negsucc_le_ofNat(m, n: Nat): NegSucc(m) <= OfNat(n) { trivial }
 
 // `toNat` is a left inverse exactly where the integer is non-negative, and the
 // hypothesis is convoyed rather than assumed: at a negative argument the
 // hypothesis IS `False`, which is the same economy `nat`'s order kit has.
-theorem ofNat_toNat(a: Int): OfNat(0) <= a → OfNat(toNat(a)) = a {
+theorem Int::ofNat_toNat(self a: Int): OfNat(0) <= a → OfNat(a.toNat()) = a {
     match a {
         OfNat(_) => λ h => refl,
         NegSucc(_) => false_elim(·),
@@ -1320,116 +1185,100 @@ theorem ofNat_toNat(a: Int): OfNat(0) <= a → OfNat(toNat(a)) = a {
 }
 
 // ---------------------------------------------------------------------------
-// What the carrier earns (`std/algebra`). Both monoids, the default, the
-// comparison, and the decision at an OPEN pair of integers — the same
-// value-generic instance shape `nat`'s order has
-// (docs/value-generic-instances-design.md).
-//
-// Instances live with the carrier and the laws that discharge their fields.
 
-instance CommMonoid<Int>(add) {
+instance CommMonoid<Int>(Int::add) {
     unit := OfNat(0),
-    assoc := add_assoc,
-    unit_l := zero_add,
-    unit_r := add_zero,
-    comm := add_comm,
+    assoc := Int::add_assoc,
+    unit_l := Int::zero_add,
+    unit_r := Int::add_zero,
+    comm := Int::add_comm,
 }
 
-instance CommMonoid<Int>(mul) {
+instance CommMonoid<Int>(Int::mul) {
     unit := OfNat(1),
-    assoc := mul_assoc,
-    unit_l := one_mul,
-    unit_r := mul_one,
-    comm := mul_comm,
+    assoc := Int::mul_assoc,
+    unit_l := Int::one_mul,
+    unit_r := Int::mul_one,
+    comm := Int::mul_comm,
 }
 
-// The group, and the only one in the library: `Int` under `add` is what made
-// `algebra`'s `Group` worth declaring (issues/std-int-encoding.md asked; the
-// answer is in that file's header). The monoid half is NOT written again — it
-// comes from the canonical `CommMonoid<Int>(add)` above, and writing it twice is
-// refused unless the two proof terms are convertible, which two proofs of one
-// equation are not (issues/inherited-field-override-owes-conversion.md).
-instance Group<Int>(add) {
-    inv := neg,
-    inv_l := neg_add_self,
-    inv_r := add_neg,
+instance Group<Int>(Int::add) {
+    inv := Int::neg,
+    inv_l := Int::neg_add_self,
+    inv_r := Int::add_neg,
 }
 
-// The class's generic consequence at this carrier, re-proving nothing: the
-// dictionary is found by resolution and `algebra::op_inv_unique` does the work.
-theorem neg_unique(x, y: Int, h: x + y = OfNat(0)): y = neg(x) {
+theorem Int::neg_unique(self x, y: Int, h: x + y = OfNat(0)): y = -x {
     op_inv_unique(x, y, h)
 }
 
-// If `b + c = a`, subtracting `a` from `b` leaves `-c`.  This small group
-// consequence is the algebraic heart of the complemented remainder used for
-// a negative dividend.
-theorem neg_add_left_of_add_eq(a, b, c: Int, h: b + c = a):
-    neg(a) + b = neg(c)
+theorem Int::neg_add_left_of_add_eq(self a, b, c: Int, h: b + c = a):
+    -a + b = -c
 {
     calc {
-        neg(a) + b
-            = neg(b + c) + b :=
-                cong_int(λ (x: Int) => neg(x) + b, sym(h)),
-            = (neg(b) + neg(c)) + b :=
-                cong_int(λ (x: Int) => x + b, neg_add(b, c)),
-            = neg(b) + (neg(c) + b) := add_assoc(neg(b), neg(c), b),
-            = neg(b) + (b + neg(c)) :=
-                cong_int(λ (x: Int) => neg(b) + x, add_comm(neg(c), b)),
-            = (neg(b) + b) + neg(c) := sym(add_assoc(neg(b), b, neg(c))),
-            = OfNat(0) + neg(c) :=
-                cong_int(λ (x: Int) => x + neg(c), neg_add_self(b)),
-            = neg(c) := zero_add(neg(c)),
+        -a + b
+            = -(b + c) + b :=
+                Int::cong(λ (x: Int) => -x + b, sym(h)),
+            = (-b + -c) + b :=
+                Int::cong(λ (x: Int) => x + b, b.neg_add(c)),
+            = -b + (-c + b) := (-b).add_assoc(-c, b),
+            = -b + (b + -c) :=
+                Int::cong(λ (x: Int) => -b + x, (-c).add_comm(b)),
+            = (-b + b) + -c := sym((-b).add_assoc(b, -c)),
+            = OfNat(0) + -c :=
+                Int::cong(λ (x: Int) => x + -c, b.neg_add_self()),
+            = -c := (-c).zero_add(),
     }
 }
 
-theorem ofNat_mul_add(m, n, r: Nat):
+theorem Int::ofNat_mul_add(m, n, r: Nat):
     OfNat(m) * OfNat(n) + OfNat(r) = OfNat(m * n + r)
 {
     calc {
         OfNat(m) * OfNat(n) + OfNat(r)
             = OfNat(m * n) + OfNat(r) :=
-                cong_int(λ (x: Int) => x + OfNat(r), ofNat_mul(m, n)),
-            = OfNat(m * n + r) := add_ofnat_ofnat(m * n, r),
+                Int::cong(λ (x: Int) => x + OfNat(r), Int::ofNat_mul(m, n)),
+            = OfNat(m * n + r) := Int::add_ofnat_ofnat(m * n, r),
     }
 }
 
+// TODO: should this in nat file?
 theorem complement_reconstruct(q, divisor, remainder, dividend: Nat,
                                reconstruct: q * divisor + remainder = dividend,
                                bounded: remainder <= divisor):
-    nat::sub(divisor, remainder) + dividend = Succ(q) * divisor
+    (divisor - remainder) + dividend = Succ(q) * divisor
 {
     calc {
-        nat::sub(divisor, remainder) + dividend
-            = nat::sub(divisor, remainder) + (q * divisor + remainder) :=
-                nat::cong_nat(
-                    λ (x: Nat) => nat::sub(divisor, remainder) + x,
+        (divisor - remainder) + dividend
+            = (divisor - remainder) + (q * divisor + remainder) :=
+                Nat::cong(
+                    λ (x: Nat) => (divisor - remainder) + x,
                     sym(reconstruct)),
-            = (nat::sub(divisor, remainder) + q * divisor) + remainder :=
-                sym(nat::add_assoc(
-                    nat::sub(divisor, remainder), q * divisor, remainder)),
-            = (q * divisor + nat::sub(divisor, remainder)) + remainder :=
-                nat::cong_nat(
+            = ((divisor - remainder) + q * divisor) + remainder :=
+                sym(Nat::add_assoc(
+                    (divisor - remainder), q * divisor, remainder)),
+            = (q * divisor + (divisor - remainder)) + remainder :=
+                Nat::cong(
                     λ (x: Nat) => x + remainder,
-                    nat::add_comm(nat::sub(divisor, remainder), q * divisor)),
-            = q * divisor + (nat::sub(divisor, remainder) + remainder) :=
-                nat::add_assoc(q * divisor, nat::sub(divisor, remainder), remainder),
+                    (divisor - remainder).add_comm(q * divisor)),
+            = q * divisor + ((divisor - remainder) + remainder) :=
+                (q * divisor).add_assoc(divisor - remainder, remainder),
             = q * divisor + divisor :=
-                nat::cong_nat(
+                Nat::cong(
                     λ (x: Nat) => q * divisor + x,
-                    nat::sub_add_cancel(remainder, divisor, bounded)),
-            = divisor + q * divisor := nat::add_comm(q * divisor, divisor),
-            = Succ(q) * divisor := sym(nat::mul_succ_left(q, divisor)),
+                    remainder.sub_add_cancel(divisor, bounded)),
+            = divisor + q * divisor := (q * divisor).add_comm(divisor),
+            = Succ(q) * divisor := sym(q.mul_succ_left(divisor)),
     }
 }
 
-theorem divmod_nonneg_reconstruct(dividend, divisor_pred: Nat):
+theorem Int::divmod_nonneg_reconstruct(dividend, divisor_pred: Nat):
     DivModEquation(
         OfNat(dividend), OfNat(Succ(divisor_pred)),
-        divmod_nonneg(dividend, divisor_pred))
+        Int::divmod_nonneg(dividend, divisor_pred))
 {
-    match nat::divmod(dividend, Succ(divisor_pred)) as λ state =>
-        nat::DivModSpec(dividend, Succ(divisor_pred), state) →
+    match dividend.divmod(Succ(divisor_pred)) as λ state =>
+        DivMod::Spec(dividend, Succ(divisor_pred), state) →
         DivModEquation(
             OfNat(dividend), OfNat(Succ(divisor_pred)),
             match state {
@@ -1439,26 +1288,26 @@ theorem divmod_nonneg_reconstruct(dividend, divisor_pred: Nat):
     {
         MkDivMod(quotient, remainder) => λ spec =>
             trans(
-                ofNat_mul_add(quotient, Succ(divisor_pred), remainder),
-                cong_ofnat(spec.left)),
-    }(nat::divmod_spec(dividend, Succ(divisor_pred)))
+                Int::ofNat_mul_add(quotient, Succ(divisor_pred), remainder),
+                Int::cong_ofnat(spec.left)),
+    }(Nat::divmod_spec(dividend, Succ(divisor_pred)))
 }
 
-theorem divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
+theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
     DivModEquation(
         NegSucc(dividend_pred), OfNat(Succ(divisor_pred)),
-        divmod_negative(dividend_pred, divisor_pred))
+        Int::divmod_negative(dividend_pred, divisor_pred))
 {
-    match nat::divmod(Succ(dividend_pred), Succ(divisor_pred)) as λ state =>
-        nat::DivModSpec(Succ(dividend_pred), Succ(divisor_pred), state) →
+    match Succ(dividend_pred).divmod(Succ(divisor_pred)) as λ state =>
+        DivMod::Spec(Succ(dividend_pred), Succ(divisor_pred), state) →
         DivModEquation(
             NegSucc(dividend_pred), OfNat(Succ(divisor_pred)),
             match state {
                 MkDivMod(quotient, remainder) => match remainder {
-                    Zero => MkIntDivMod(negOfNat(quotient), OfNat(0)),
+                    Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(nat::sub(Succ(divisor_pred), remainder))),
+                        OfNat(Succ(divisor_pred) - remainder)),
                 },
             })
     {
@@ -1468,22 +1317,22 @@ theorem divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
             DivModEquation(
                 NegSucc(dividend_pred), OfNat(Succ(divisor_pred)),
                 match r {
-                    Zero => MkIntDivMod(negOfNat(quotient), OfNat(0)),
+                    Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(nat::sub(Succ(divisor_pred), r))),
+                        OfNat(Succ(divisor_pred) - r)),
                 })
         {
             Zero => λ reconstruct alternatives => calc {
-                negOfNat(quotient) * OfNat(Succ(divisor_pred)) + OfNat(0)
-                    = negOfNat(quotient) * OfNat(Succ(divisor_pred)) :=
-                        add_zero(negOfNat(quotient) * OfNat(Succ(divisor_pred))),
-                    = neg(OfNat(quotient) * OfNat(Succ(divisor_pred))) :=
-                        mul_neg_l(OfNat(quotient), OfNat(Succ(divisor_pred))),
-                    = neg(OfNat(quotient * Succ(divisor_pred))) :=
-                        cong_int(neg, sym(ofNat_mul(quotient, Succ(divisor_pred)))),
-                    = neg(OfNat(Succ(dividend_pred))) :=
-                        cong_int(neg, cong_ofnat(reconstruct)),
+                Int::negOfNat(quotient) * OfNat(Succ(divisor_pred)) + OfNat(0)
+                    = Int::negOfNat(quotient) * OfNat(Succ(divisor_pred)) :=
+                        (Int::negOfNat(quotient) * OfNat(Succ(divisor_pred))).add_zero(),
+                    = -(OfNat(quotient) * OfNat(Succ(divisor_pred))) :=
+                        OfNat(quotient).mul_neg_l(OfNat(Succ(divisor_pred))),
+                    = -(OfNat(quotient * Succ(divisor_pred))) :=
+                        Int::cong(Int::neg, sym(Int::ofNat_mul(quotient, Succ(divisor_pred)))),
+                    = -(OfNat(Succ(dividend_pred))) :=
+                        Int::cong(Int::neg, Int::cong_ofnat(reconstruct)),
                     = NegSucc(dividend_pred) := refl,
             },
             Succ(remainder_pred) => λ reconstruct alternatives =>
@@ -1491,113 +1340,96 @@ theorem divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
                     Inl(impossible) => false_elim(impossible),
                     Inr(bounded) => calc {
                         NegSucc(quotient) * OfNat(Succ(divisor_pred)) +
-                                OfNat(nat::sub(
-                                    Succ(divisor_pred), Succ(remainder_pred)))
-                            = neg(OfNat(Succ(quotient)) * OfNat(Succ(divisor_pred))) +
-                                OfNat(nat::sub(
-                                    Succ(divisor_pred), Succ(remainder_pred))) :=
-                                    cong_int(
-                                        λ (x: Int) => x + OfNat(nat::sub(
-                                            Succ(divisor_pred), Succ(remainder_pred))),
-                                        mul_neg_l(
-                                            OfNat(Succ(quotient)),
-                                            OfNat(Succ(divisor_pred)))),
-                            = neg(OfNat(Succ(quotient) * Succ(divisor_pred))) +
-                                OfNat(nat::sub(
-                                    Succ(divisor_pred), Succ(remainder_pred))) :=
-                                    cong_int(
-                                        λ (x: Int) => neg(x) + OfNat(nat::sub(
-                                            Succ(divisor_pred), Succ(remainder_pred))),
-                                        sym(ofNat_mul(
-                                            Succ(quotient), Succ(divisor_pred)))),
-                            = neg(OfNat(Succ(dividend_pred))) :=
-                                neg_add_left_of_add_eq(
-                                    OfNat(Succ(quotient) * Succ(divisor_pred)),
-                                    OfNat(nat::sub(
-                                        Succ(divisor_pred), Succ(remainder_pred))),
+                                OfNat(Succ(divisor_pred) - Succ(remainder_pred))
+                            = -(OfNat(Succ(quotient)) * OfNat(Succ(divisor_pred))) +
+                                OfNat(Succ(divisor_pred) - Succ(remainder_pred)) :=
+                                    Int::cong(
+                                        λ (x: Int) => x + OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
+                                        OfNat(Succ(quotient)).mul_neg_l(OfNat(Succ(divisor_pred)))),
+                            = -(OfNat(Succ(quotient) * Succ(divisor_pred))) +
+                                OfNat(Succ(divisor_pred) - Succ(remainder_pred)) :=
+                                    Int::cong(
+                                        λ (x: Int) => -x + OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
+                                        sym(Int::ofNat_mul(Succ(quotient), Succ(divisor_pred)))),
+                            = -(OfNat(Succ(dividend_pred))) :=
+                                (OfNat(Succ(quotient) * Succ(divisor_pred))).neg_add_left_of_add_eq(
+                                    OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
                                     OfNat(Succ(dividend_pred)),
                                     trans(
-                                        add_ofnat_ofnat(
-                                            nat::sub(
-                                                Succ(divisor_pred), Succ(remainder_pred)),
+                                        Int::add_ofnat_ofnat(Succ(divisor_pred) - Succ(remainder_pred),
                                             Succ(dividend_pred)),
-                                        cong_ofnat(complement_reconstruct(
+                                        Int::cong_ofnat(complement_reconstruct(
                                             quotient,
                                             Succ(divisor_pred),
                                             Succ(remainder_pred),
                                             Succ(dividend_pred),
                                             reconstruct,
-                                            nat::le_of_lt(
-                                                Succ(remainder_pred),
-                                                Succ(divisor_pred), bounded))))),
+                                            Succ(remainder_pred).le_of_lt(Succ(divisor_pred), bounded))))),
                             = NegSucc(dividend_pred) := refl,
                     },
                 },
         }(spec.left, spec.right),
-    }(nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
+    }(Nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
 }
 
-theorem divmod_positive_reconstruct(dividend: Int, divisor_pred: Nat):
+theorem Int::divmod_positive_reconstruct(dividend: Int, divisor_pred: Nat):
     DivModEquation(
         dividend, OfNat(Succ(divisor_pred)),
-        divmod_positive(dividend, divisor_pred))
+        Int::divmod_positive(dividend, divisor_pred))
 {
     match dividend {
-        OfNat(n) => divmod_nonneg_reconstruct(n, divisor_pred),
-        NegSucc(n) => divmod_negative_reconstruct(n, divisor_pred),
+        OfNat(n) => Int::divmod_nonneg_reconstruct(n, divisor_pred),
+        NegSucc(n) => Int::divmod_negative_reconstruct(n, divisor_pred),
     }
 }
 
-theorem negate_divisor_reconstruct(dividend, positive_divisor: Int,
+theorem Int::negate_divisor_reconstruct(dividend, positive_divisor: Int,
                                    state: DivMod,
                                    h: DivModEquation(
                                        dividend, positive_divisor, state)):
-    DivModEquation(
-        dividend, neg(positive_divisor), negate_divmod_quotient(state))
+    DivModEquation(dividend, -positive_divisor, state.negate_divmod_quotient())
 {
     match state as λ s =>
         DivModEquation(dividend, positive_divisor, s) →
-        DivModEquation(
-            dividend, neg(positive_divisor), negate_divmod_quotient(s))
+        DivModEquation(dividend, -positive_divisor, s.negate_divmod_quotient())
     {
         MkIntDivMod(quotient, remainder) => λ reconstruct => calc {
-            neg(quotient) * neg(positive_divisor) + remainder
-                = neg(neg(quotient) * positive_divisor) + remainder :=
-                    cong_int(
+            -quotient * -positive_divisor + remainder
+                = -(-quotient * positive_divisor) + remainder :=
+                    Int::cong(
                         λ (x: Int) => x + remainder,
-                        mul_neg_r(neg(quotient), positive_divisor)),
-                = neg(neg(quotient * positive_divisor)) + remainder :=
-                    cong_int(
-                        λ (x: Int) => neg(x) + remainder,
-                        mul_neg_l(quotient, positive_divisor)),
+                        (-quotient).mul_neg_r(positive_divisor)),
+                = -(-(quotient * positive_divisor)) + remainder :=
+                    Int::cong(
+                        λ (x: Int) => -x + remainder,
+                        quotient.mul_neg_l(positive_divisor)),
                 = quotient * positive_divisor + remainder :=
-                    cong_int(λ (x: Int) => x + remainder,
-                             neg_neg(quotient * positive_divisor)),
+                    Int::cong(λ (x: Int) => x + remainder, (quotient * positive_divisor).neg_neg()),
                 = dividend := reconstruct,
         },
     }(h)
 }
 
-theorem divmod_reconstruct(dividend, divisor: Int):
-    DivModEquation(dividend, divisor, divmod(dividend, divisor))
+theorem Int::divmod_reconstruct(dividend, divisor: Int):
+    DivModEquation(dividend, divisor, dividend.divmod(divisor))
 {
     match divisor {
         OfNat(n) => match n {
-            Zero => zero_add(dividend),
-            Succ(k) => divmod_positive_reconstruct(dividend, k),
+            Zero => dividend.zero_add(),
+            Succ(k) => Int::divmod_positive_reconstruct(dividend, k),
         },
-        NegSucc(k) => negate_divisor_reconstruct(
+        NegSucc(k) => Int::negate_divisor_reconstruct(
             dividend,
             OfNat(Succ(k)),
-            divmod_positive(dividend, k),
-            divmod_positive_reconstruct(dividend, k)),
+            Int::divmod_positive(dividend, k),
+            Int::divmod_positive_reconstruct(dividend, k)),
     }
 }
 
-theorem div_mul_add_mod(dividend, divisor: Int):
-    div(dividend, divisor) * divisor + mod(dividend, divisor) = dividend
+theorem Int::div_mul_add_mod(dividend, divisor: Int):
+    dividend.div(divisor) * divisor + dividend.mod(divisor) = dividend
 {
-    match divmod(dividend, divisor) as λ state =>
+    match dividend.divmod(divisor) as λ state =>
         DivModEquation(dividend, divisor, state) →
         match state as λ _ => Type {
             MkIntDivMod(quotient, remainder) =>
@@ -1605,15 +1437,15 @@ theorem div_mul_add_mod(dividend, divisor: Int):
         }
     {
         MkIntDivMod(_, _) => λ reconstruct => reconstruct,
-    }(divmod_reconstruct(dividend, divisor))
+    }(Int::divmod_reconstruct(dividend, divisor))
 }
 
-theorem divmod_nonneg_bounds(dividend, divisor_pred: Nat):
+theorem Int::divmod_nonneg_bounds(dividend, divisor_pred: Nat):
     DivModBounds(
-        OfNat(Succ(divisor_pred)), divmod_nonneg(dividend, divisor_pred))
+        OfNat(Succ(divisor_pred)), Int::divmod_nonneg(dividend, divisor_pred))
 {
-    match nat::divmod(dividend, Succ(divisor_pred)) as λ state =>
-        nat::DivModSpec(dividend, Succ(divisor_pred), state) →
+    match dividend.divmod(Succ(divisor_pred)) as λ state =>
+        DivMod::Spec(dividend, Succ(divisor_pred), state) →
         DivModBounds(
             OfNat(Succ(divisor_pred)),
             match state {
@@ -1625,24 +1457,22 @@ theorem divmod_nonneg_bounds(dividend, divisor_pred: Nat):
             Inl(impossible) => false_elim(impossible),
             Inr(bounded) => And(trivial, bounded),
         },
-    }(nat::divmod_spec(dividend, Succ(divisor_pred)))
+    }(Nat::divmod_spec(dividend, Succ(divisor_pred)))
 }
 
-theorem divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
-    DivModBounds(
-        OfNat(Succ(divisor_pred)),
-        divmod_negative(dividend_pred, divisor_pred))
+theorem Int::divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
+    DivModBounds(OfNat(Succ(divisor_pred)), Int::divmod_negative(dividend_pred, divisor_pred))
 {
-    match nat::divmod(Succ(dividend_pred), Succ(divisor_pred)) as λ state =>
-        nat::DivModSpec(Succ(dividend_pred), Succ(divisor_pred), state) →
+    match Succ(dividend_pred).divmod(Succ(divisor_pred)) as λ state =>
+        DivMod::Spec(Succ(dividend_pred), Succ(divisor_pred), state) →
         DivModBounds(
             OfNat(Succ(divisor_pred)),
             match state {
                 MkDivMod(quotient, remainder) => match remainder {
-                    Zero => MkIntDivMod(negOfNat(quotient), OfNat(0)),
+                    Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(nat::sub(Succ(divisor_pred), remainder))),
+                        OfNat(Succ(divisor_pred) - remainder)),
                 },
             })
     {
@@ -1651,10 +1481,10 @@ theorem divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
             DivModBounds(
                 OfNat(Succ(divisor_pred)),
                 match r {
-                    Zero => MkIntDivMod(negOfNat(quotient), OfNat(0)),
+                    Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(nat::sub(Succ(divisor_pred), r))),
+                        OfNat(Succ(divisor_pred) - r)),
                 })
         {
             Zero => λ alternatives => And(trivial, trivial),
@@ -1662,37 +1492,34 @@ theorem divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
                 Inl(impossible) => false_elim(impossible),
                 Inr(bounded) => And(
                     trivial,
-                    nat::sub_lt_of_pos(
-                        Succ(divisor_pred),
+                    Succ(divisor_pred).sub_lt_of_pos(
                         Succ(remainder_pred),
                         trivial,
-                        nat::le_of_lt(
-                            Succ(remainder_pred),
-                            Succ(divisor_pred), bounded)),
+                        Succ(remainder_pred).le_of_lt(Succ(divisor_pred), bounded)),
                 ),
             },
         }(spec.right),
-    }(nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
+    }(Nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
 }
 
-theorem divmod_positive_bounds(dividend: Int, divisor_pred: Nat):
-    DivModBounds(
-        OfNat(Succ(divisor_pred)), divmod_positive(dividend, divisor_pred))
+theorem Int::divmod_positive_bounds(dividend: Int, divisor_pred: Nat):
+    DivModBounds(OfNat(Succ(divisor_pred)), Int::divmod_positive(dividend, divisor_pred))
 {
     match dividend {
-        OfNat(n) => divmod_nonneg_bounds(n, divisor_pred),
-        NegSucc(n) => divmod_negative_bounds(n, divisor_pred),
+        OfNat(n) => Int::divmod_nonneg_bounds(n, divisor_pred),
+        NegSucc(n) => Int::divmod_negative_bounds(n, divisor_pred),
     }
 }
 
-theorem negate_divmod_bounds(positive_divisor: Int, state: DivMod,
+theorem Int::negate_divmod_bounds(positive_divisor: Int, state: DivMod,
                              h: DivModBounds(positive_divisor, state),
-                             same_abs: abs(neg(positive_divisor)) = abs(positive_divisor)):
-    DivModBounds(neg(positive_divisor), negate_divmod_quotient(state))
+                             // TODO: we shouldn't need this!
+                             same_abs: (-positive_divisor).abs() = positive_divisor.abs()):
+    DivModBounds(-positive_divisor, state.negate_divmod_quotient())
 {
     match state as λ s =>
         DivModBounds(positive_divisor, s) →
-        DivModBounds(neg(positive_divisor), negate_divmod_quotient(s))
+        DivModBounds(-positive_divisor, s.negate_divmod_quotient())
     {
         MkIntDivMod(_, _) => λ bounds => And(
             bounds.left,
@@ -1704,59 +1531,59 @@ theorem negate_divmod_bounds(positive_divisor: Int, state: DivMod,
     }(h)
 }
 
-theorem divmod_bounds(dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
-    DivModBounds(divisor, divmod(dividend, divisor))
+theorem Int::divmod_bounds(dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
+    DivModBounds(divisor, dividend.divmod(divisor))
 {
     match divisor as λ d =>
-        d ≠ OfNat(0) → DivModBounds(d, divmod(dividend, d))
+        d ≠ OfNat(0) → DivModBounds(d, dividend.divmod(d))
     {
         OfNat(n) => match n {
             Zero => λ different => false_elim(different(refl)),
-            Succ(k) => λ different => divmod_positive_bounds(dividend, k),
+            Succ(k) => λ different => Int::divmod_positive_bounds(dividend, k),
         },
-        NegSucc(k) => λ different => negate_divmod_bounds(
+        NegSucc(k) => λ different => Int::negate_divmod_bounds(
             OfNat(Succ(k)),
-            divmod_positive(dividend, k),
-            divmod_positive_bounds(dividend, k),
+            Int::divmod_positive(dividend, k),
+            Int::divmod_positive_bounds(dividend, k),
             refl),
     }(nonzero)
 }
 
-theorem mod_nonneg(dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
-    OfNat(0) <= mod(dividend, divisor)
+theorem Int::mod_nonneg(self dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
+    OfNat(0) <= dividend.mod(divisor)
 {
-    match divmod(dividend, divisor) as λ state =>
+    match dividend.divmod(divisor) as λ state =>
         DivModBounds(divisor, state) →
         match state as λ _ => Type {
             MkIntDivMod(_, remainder) => OfNat(0) <= remainder,
         }
     {
         MkIntDivMod(_, _) => λ bounds => bounds.left,
-    }(divmod_bounds(dividend, divisor, nonzero))
+    }(Int::divmod_bounds(dividend, divisor, nonzero))
 }
 
-theorem mod_lt_abs(dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
-    mod(dividend, divisor) < abs(divisor)
+theorem Int::mod_lt_abs(self dividend, divisor: Int, nonzero: divisor ≠ OfNat(0)):
+    dividend.mod(divisor) < divisor.abs()
 {
-    match divmod(dividend, divisor) as λ state =>
+    match dividend.divmod(divisor) as λ state =>
         DivModBounds(divisor, state) →
         match state as λ _ => Type {
-            MkIntDivMod(_, remainder) => remainder < abs(divisor),
+            MkIntDivMod(_, remainder) => remainder < divisor.abs(),
         }
     {
         MkIntDivMod(_, _) => λ bounds => bounds.right,
-    }(divmod_bounds(dividend, divisor, nonzero))
+    }(Int::divmod_bounds(dividend, divisor, nonzero))
 }
 
-theorem div_zero(dividend: Int): div(dividend, OfNat(0)) = OfNat(0) { refl }
+theorem Int::div_zero(self dividend: Int): dividend.div(OfNat(0)) = OfNat(0) { refl }
 
-theorem mod_zero(dividend: Int): mod(dividend, OfNat(0)) = dividend { refl }
+theorem mod_zero(dividend: Int): dividend.mod(OfNat(0)) = dividend { refl }
 
-fn Divides(divisor, dividend: Int) → Type {
-    mod(dividend, divisor) = OfNat(0)
+fn Int::Divides(self divisor, dividend: Int) → Type {
+    dividend.mod(divisor) = OfNat(0)
 }
 
 instance Default<Int> { default := OfNat(0) }
 instance Numeral<Int> { ofNat := OfNat }
 
-instance Cmp<Int> { le := Le, le_refl := le_refl, le_dec := le_dec }
+instance Cmp<Int> { le := Int::Le, le_refl := Int::le_refl, le_dec := Int::le_dec }

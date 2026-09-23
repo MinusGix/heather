@@ -12,10 +12,10 @@ fn receive_repeated<A>(known, incoming: List<A>) → List<A> {
 // The general application rule also handles a varying function: append(x)
 // changes with x, and its argument changes with that same x.
 theorem duplicate_application<A>():
-    PreservesRelation(SameMembers<A>, SameMembers<A>, λ x => append(x, x))
+    PreservesRelation(SameMembers<A>, SameMembers<A>, λ x => x.append(x))
 {
     respectful_ap(SameMembers<A>, SameMembers<A>, SameMembers<A>,
-        append<A>, append<A>, λ x => x, λ x => x,
+        List::append<A>, List::append<A>, λ x => x, λ x => x,
         append_same_members<A>, respectful_id(SameMembers<A>))
 }
 
@@ -29,10 +29,10 @@ theorem receive_repeated_respects<A>(known: List<A>):
         known, known, same_members_refl(known));
     let duplicate = preserves_relation_binary(
         SameMembers<A>, SameMembers<A>, SameMembers<A>, SameMembers<A>,
-        λ x => x, λ x => x, append<A>, variable, variable, append_same_members<A>);
+        λ x => x, λ x => x, List::append<A>, variable, variable, append_same_members<A>);
     preserves_relation_binary(
         SameMembers<A>, SameMembers<A>, SameMembers<A>, SameMembers<A>,
-        λ x => known, λ x => append(x, x), append<A>,
+        λ x => known, λ x => x.append(x), List::append<A>,
         fixed, duplicate, append_same_members<A>)
 }
 

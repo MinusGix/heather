@@ -34,7 +34,7 @@ fn add(m: Nat, n: Nat) -> Nat {
 /// One proof of `add(n, 0) = n`.
 const PROOF_A: &str = r#"match n as λ z => add(z, 0) = z {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }"#;
 
 /// Another proof of the *same* statement: the first one, symmetrised twice.

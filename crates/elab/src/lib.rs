@@ -2295,7 +2295,7 @@ impl Elaborator {
         }
     }
 
-    /// The base half of a written name — `nat::sub` and `sub` both name `sub`.
+    /// The base half of a written name — `nat::Nat::sub` and `sub` both name `sub`.
     fn base_name(name: &str) -> &str {
         split_qual(name).map(|(_, b)| b).unwrap_or(name)
     }
@@ -2334,7 +2334,7 @@ impl Elaborator {
                 // (issues/type-owned-members-receiver-slice.md), so its key
                 // keeps both halves: `List::nth` in module `list` is
                 // `list::List::nth`. The two other qualified readings —
-                // `nat::sub` (module path) and `Option::None` (constructor by
+                // `nat::Nat::sub` (module path) and `Option::None` (constructor by
                 // type) — declare the base name, and this is what tells them
                 // apart without a second resolution judgment.
                 if split_qual(name).is_some() && self.names.declares(&m, name) {
@@ -3033,14 +3033,14 @@ impl Elaborator {
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
         let measure = decl.decreases.clone().expect("a measure declaration");
         measure::check_shape(decl, &measure)?;
-        // The wrapper spells `nat::Lt`, `nat::le_trans` and `nat::lt_succ_self`;
+        // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
         // the default closer spells `omega`'s certificates, which name the
         // `omega` module. Neither is the prelude's, so the module has to import
         // them — checked here so the message says so.
-        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+        if !matches!(self.resolve_declared("nat::Nat::le_trans"), NameRes::Found(_)) {
             return err(
-                "`decreases` states its obligations with `nat::Lt` and discharges them \
-                 through `nat::le_trans`: `import nat;` first",
+                "`decreases` states its obligations with `nat::Nat::Lt` and discharges them \
+                 through `nat::Nat::le_trans`: `import nat;` first",
                 measure.span,
             );
         }
@@ -3048,7 +3048,7 @@ impl Elaborator {
         // default closer is available only where both modules are imported;
         // otherwise every obligation is an ordinary unsolved goal, reported
         // with its statement.
-        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::Int::negsucc_lt_ofnat"]
             .iter()
             .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
         self.check_measure_is_nat(decl, &measure)?;
@@ -3136,10 +3136,10 @@ impl Elaborator {
         for m in &gm {
             self.check_measure_is_nat(m.decl, &m.measure)?;
         }
-        if !matches!(self.resolve_declared("nat::le_trans"), NameRes::Found(_)) {
+        if !matches!(self.resolve_declared("nat::Nat::le_trans"), NameRes::Found(_)) {
             return err(
-                "`decreases` states its obligations with `nat::Lt` and discharges them \
-                 through `nat::le_trans`: `import nat;` first",
+                "`decreases` states its obligations with `nat::Nat::Lt` and discharges them \
+                 through `nat::Nat::le_trans`: `import nat;` first",
                 span,
             );
         }
@@ -3153,7 +3153,7 @@ impl Elaborator {
                 span,
             );
         }
-        let omega_available = ["omega::nat_le_of_not_not_le", "int::negsucc_lt_ofnat"]
+        let omega_available = ["omega::nat_le_of_not_not_le", "int::Int::negsucc_lt_ofnat"]
             .iter()
             .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
         let family = measure::lower_group(&gm, omega_available, self)?;
@@ -3216,7 +3216,7 @@ impl Elaborator {
 
     /// The measure is a `Nat`, checked in the declaration's own parameter
     /// context and *before* anything is generated, so the message says so
-    /// rather than surfacing as a mismatch inside a generated `nat::Lt`.
+    /// rather than surfacing as a mismatch inside a generated `nat::Nat::Lt`.
     fn check_measure_is_nat(&mut self, decl: &Decl, measure: &Expr) -> R<()> {
         self.attempt.prepare();
         self.attempt.goal_arena.configure(count_holes(decl), 0);
@@ -3552,11 +3552,12 @@ impl Elaborator {
         self.attempt.direct_dependencies.borrow_mut().clear();
         if decl.kind != DeclKind::Axiom {
             cx.selfref = Some(Rc::new(SelfRef {
-                // A member recurses under its **base** name: inside
-                // `fn List::nth` the recursive call is `nth(t)`, not
-                // `List::nth(t)`. The self-name is checked before globals in
-                // `resolve`, so this shadows an ambient `nth` for the body.
+                // A member's base name is its canonical recursion name, and
+                // `SelfRef::matches` also accepts the declaration's qualified
+                // spelling. Both are checked before globals, so neither path
+                // publishes or calls a provisional global.
                 name: member.map_or_else(|| decl.name.clone(), |(_, base)| base.to_string()),
+                written_name: decl.name.clone(),
                 // Type parameters participate in guarded-call bookkeeping as
                 // implicit parameters (docs/surface-polymorphism.md §6.1).
                 params: decl
@@ -3566,6 +3567,12 @@ impl Elaborator {
                     .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
                     .collect(),
                 n_tyvars: decl.tyvars.len(),
+                receiver_slot: decl
+                    .params
+                    .iter()
+                    .filter(|p| !p.implicit)
+                    .position(|p| p.is_self)
+                    .unwrap_or(0),
             }));
         }
         // An axiom has no term to check. Ordinary definitions and theorems
@@ -4591,10 +4598,19 @@ impl Elaborator {
             ExprKind::Dot {
                 recv,
                 name,
+                tyargs,
                 args,
                 named,
             } => {
-                match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+                let resolution =
+                    self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
+                if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {
+                    return err(
+                        format!("type arguments after `.{name}` require a method call"),
+                        e.span,
+                    );
+                }
+                match resolution {
                     DotResolution::Inferred(t, got, _) => {
                         self.note_check_mismatch(cx, &got, expected, lvl, e.span);
                         Ok(t)
@@ -4865,7 +4881,7 @@ impl Elaborator {
     /// leaves the equation to the kernel — deliberately, and still. The cost
     /// was the message: a false equation came back as `NotConvertible` at the
     /// whole declaration, naming neither side, which is how three library
-    /// proofs about `int::add` were debugged the hard way. The note is filled
+    /// proofs about `int::Int::add` were debugged the hard way. The note is filled
     /// here and read only by the gate, only when the gate rejects, so nothing
     /// is reported that the kernel did not refuse.
     ///
@@ -5289,9 +5305,19 @@ impl Elaborator {
             ExprKind::Dot {
                 recv,
                 name,
+                tyargs,
                 args,
                 named,
-            } => match self.resolve_dot(cx, recv, name, args, named, e.span)? {
+            } => {
+                let resolution =
+                    self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
+                if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {
+                    return err(
+                        format!("type arguments after `.{name}` require a method call"),
+                        e.span,
+                    );
+                }
+                match resolution {
                 DotResolution::Inferred(t, ty, l) => Ok((t, ty, l)),
                 DotResolution::Project(t, ty, l, fskel) => match args {
                     None => Ok((t, ty, l)),
@@ -5301,7 +5327,8 @@ impl Elaborator {
                 DotResolution::Dispatch(t, ty, l, fskel, dargs) => self
                     .apply_projection(cx, name, t, ty, l, fskel, &dargs, named, expected, e.span),
                 DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
-            },
+                }
+            }
             // A record literal in inference position: the fields are permuted
             // into declaration order and the instantiation is recovered from
             // them, exactly as for any constructor application
@@ -5441,7 +5468,7 @@ impl Elaborator {
                 // report that the declaration takes no type arguments, of a
                 // declaration that visibly takes some.
                 if let ExprKind::Var(n) = &callee.kind
-                    && cx.selfref.as_ref().is_some_and(|s| s.name == *n)
+                    && cx.selfref.as_ref().is_some_and(|s| s.matches(n))
                 {
                     recursion::check_self_tyargs(cx, tyargs, head.span)?;
                     application::refuse_named(
@@ -5573,7 +5600,7 @@ impl Elaborator {
                 // every builtin arm below already carries, so the two cannot
                 // drift apart.
                 if !named.is_empty() {
-                    if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+                    if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
                         return err(
                             format!(
                                 "a recursive call to `{name}` takes positional arguments only:                                  the termination guard reads *which position* decreases, so a                                  self-call's arguments stay where the declaration put them"
@@ -5694,7 +5721,7 @@ impl Elaborator {
                 if name == "cong"
                     && let [xs, f] = args.as_slice()
                     && let ExprKind::Var(f_name) = &f.kind
-                    && cx.selfref.as_ref().is_some_and(|s| s.name == *f_name)
+                    && cx.selfref.as_ref().is_some_and(|s| s.matches(f_name))
                 {
                     let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
                     // Decoded, as in `vec::elab_map`: a coded `Vec` is one.
@@ -5747,7 +5774,7 @@ impl Elaborator {
                     let args = permuted.as_deref().unwrap_or(args);
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
-                if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+                if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
                     return recursion::elab_self_call(self, cx, args, *explicit, e.span);
                 }
                 // A *value* head — a local, or an alias. With a skeleton it
@@ -6537,7 +6564,7 @@ impl Elaborator {
     fn decide_shadowed(&self, cx: &Cx) -> bool {
         cx.names.iter().any(|n| n == "decide")
             || cx.aliases.iter().any(|a| a.name == "decide")
-            || cx.selfref.as_ref().is_some_and(|s| s.name == "decide")
+            || cx.selfref.as_ref().is_some_and(|s| s.matches("decide"))
             || self
                 .key_of("decide")
                 .is_some_and(|key| key != names::qkey("logic", "decide"))
@@ -6663,17 +6690,26 @@ impl Elaborator {
         }
     }
 
-    /// Is this name bound by something the user wrote? Builtins give way to
-    /// locals, `let` aliases and declarations, so none of them is a keyword.
-    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
+    /// Is this name bound by something the user wrote other than the
+    /// declaration currently being checked? Kept separate because receiver
+    /// dispatch can prove that an in-progress declaration has a different
+    /// subject carrier while any ordinary binding must still win over a
+    /// builtin or race a type-owned member.
+    fn shadowed_without_selfref(&self, cx: &Cx, name: &str) -> bool {
         cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.lookup_global(name).is_some()
+    }
+
+    /// Is this name bound by something the user wrote? Builtins give way to
+    /// locals, `let` aliases and declarations, so none of them is a keyword.
+    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
+        self.shadowed_without_selfref(cx, name)
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
             // self-call took the built-in vector-`map` path instead
             // (found writing docs/surface-polymorphism.md §9's headline test).
-            || cx.selfref.as_ref().is_some_and(|s| s.name == name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
     }
 
     /// A projected record field applied to arguments: `w.f(3)`. Routes to
@@ -6768,7 +6804,7 @@ impl Elaborator {
         // because `params_of` finds no global for a self-name and the arity
         // complaint below would otherwise deny a declaration the reader is
         // looking at (issues/recursive-self-call-type-arguments.md).
-        if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
             return err(
                 format!("`{name}` can only be used here as a saturated recursive call"),
                 span,
@@ -7483,7 +7519,7 @@ impl Elaborator {
         }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
-        if cx.selfref.as_ref().is_some_and(|s| s.name == name) {
+        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
             return err(
                 format!("`{name}` can only be used here as a saturated recursive call"),
                 span,

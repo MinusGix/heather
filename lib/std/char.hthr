@@ -22,22 +22,22 @@ import option;
 // because `bool::leb` is the nearer reading of the bare name here, and its
 // operands are not `Bool`.
 fn is_scalar(code: Nat) → Bool {
-    nat::leb(Succ(code), 0x110000)
-        && not(nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000))
+    Succ(code).leb(0x110000)
+        && (Nat::leb(0xD800, code) && Succ(code).leb(0xE000)).not()
 }
 
-fn scalar(code: Nat) → Type { IsTrue(is_scalar(code)) }
+fn scalar(code: Nat) → Type { is_scalar(code).IsTrue() }
 
 // Witnesses are unique, which is what `code_injective` runs on.
 theorem scalar_unique(code: Nat, p, q: scalar(code)): p = q {
-    is_true_unique(is_scalar(code), p, q)
+    is_scalar(code).is_true_unique(p, q)
 }
 
 // The decision is the reflection's own, at this code: no bound is compared
 // twice and no refutation is wired by hand. A `fn` route, not a `theorem`,
 // because a literal's proof is `decide`, which the kernel judges by *running*
 // the instance.
-instance(code: Nat) Decide<scalar(code)> { dec := is_true_dec(is_scalar(code)) }
+instance(code: Nat) Decide<scalar(code)> { dec := is_scalar(code).is_true_dec() }
 
 // ---------------------------------------------------------------------------
 // The type.
@@ -73,27 +73,27 @@ theorem cong_code(a, b: Char, p: a = b): a.code = b.code {
 // The arithmetic reading of the witness, for a client that wants the bounds
 // as an order fact rather than as a decided Boolean. Stated once here; the
 // two directions of the `leb`/`Le` bridge are `nat`'s.
-theorem scalar_bound(code: Nat, p: scalar(code)): IsTrue(nat::leb(Succ(code), 0x110000)) {
-    is_true_and(nat::leb(Succ(code), 0x110000),
-        not(nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000)), p).left
+theorem scalar_bound(code: Nat, p: scalar(code)): Succ(code).leb(0x110000).IsTrue() {
+    Succ(code).leb(0x110000).is_true_and(
+        (Nat::leb(0xD800, code) && Succ(code).leb(0xE000)).not(), p).left
 }
 
 theorem scalar_sound(code: Nat, p: scalar(code)):
         code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) {
-    let surrogate = nat::leb(0xD800, code) && nat::leb(Succ(code), 0xE000);
-    let parts = is_true_and(nat::leb(Succ(code), 0x110000), not(surrogate), p);
-    And(leb_sound(Succ(code), 0x110000, scalar_bound(code, p)),
+    let surrogate = Nat::leb(0xD800, code) && Succ(code).leb(0xE000);
+    let parts = Succ(code).leb(0x110000).is_true_and(surrogate.not(), p);
+    And(Succ(code).leb_sound(0x110000, scalar_bound(code, p)),
         λ (h: 0xD800 <= code ∧ code < 0xE000) =>
-            is_true_not(surrogate, parts.right,
-                is_true_and_intro(nat::leb(0xD800, code), nat::leb(Succ(code), 0xE000),
-                    leb_complete(0xD800, code, h.left),
-                    leb_complete(Succ(code), 0xE000, h.right))))
+            surrogate.is_true_not(parts.right,
+                Nat::leb(0xD800, code).is_true_and_intro(Succ(code).leb(0xE000),
+                    Nat::leb_complete(0xD800, code, h.left),
+                    Succ(code).leb_complete(0xE000, h.right))))
 }
 
 // Equality decides through the code, which is the whole content of a `Char`.
 // A `fn` for the same reason `nat::eq_dec` is one.
 fn char_eq_dec(a, b: Char) → a = b ∨ ¬(a = b) {
-    match nat::eq_dec(a.code, b.code) {
+    match a.code.eq_dec(b.code) {
         Inl(p) => Inl(code_injective(a, b, p)),
         Inr(np) => Inr(λ (h: a = b) => np(cong_code(a, b, h))),
     }
@@ -123,13 +123,13 @@ class CharLiteral<A> { ofChar: Char → A }
 // gets an `Option` form — the shape `parser::recognize` takes.
 
 fn is_digit(c: Char) → Bool {
-    nat::leb(0x30, c.code) && nat::leb(Succ(c.code), 0x3A)
+    Nat::leb(0x30, c.code) && Succ(c.code).leb(0x3A)
 }
 
 // A code equality built from the order, `leb` in both directions. `nat` has
 // no `eqb`, and the two comparisons here are at closed codes.
 fn code_is(c: Char, code: Nat) → Bool {
-    nat::leb(c.code, code) && nat::leb(code, c.code)
+    c.code.leb(code) && code.leb(c.code)
 }
 
 // Rust's `char::is_ascii_whitespace`: space, tab, line feed, form feed and
@@ -142,7 +142,7 @@ fn is_space(c: Char) → Bool {
 
 // The value a digit character denotes. Total on every character, and only
 // meaningful under `is_digit` — `digit_val_lt` is the fact that says so.
-fn digit_val(c: Char) → Nat { nat::sub(c.code, 0x30) }
+fn digit_val(c: Char) → Nat { c.code.sub(0x30) }
 
 // The digit reading as data: `Some` of the value at a digit, `None`
 // otherwise. `digit_selected` inverts it, which is what a parser's
@@ -158,40 +158,40 @@ fn digit_of(c: Char) → Option<Nat> {
 // axis that catches this).
 theorem selected_of_match<A>(b: Bool, v: A, w: A,
         h: (match b { False => None<A>, True => Some(v) }) = Some(w)):
-        IsTrue(b) ∧ v = w {
+        b.IsTrue() ∧ v = w {
     match b as λ x => ((match x { False => None<A>, True => Some(v) }) = Some(w))
-            → IsTrue(x) ∧ v = w {
+            → x.IsTrue() ∧ v = w {
         False => λ (absent: (None<A> = Some(w))) => absurd(absent),
-        True => λ (present: (Some(v) = Some(w))) => And(trivial, some_inj(v, w, present)),
+        True => λ (present: (Some(v) = Some(w))) => And(trivial, Option::some_inj(v, w, present)),
     }(h)
 }
 
 theorem digit_selected(c: Char, n: Nat, h: digit_of(c) = Some(n)):
-        IsTrue(is_digit(c)) ∧ digit_val(c) = n {
+        is_digit(c).IsTrue() ∧ digit_val(c) = n {
     selected_of_match(is_digit(c), digit_val(c), n, h)
 }
 
 // A digit's value is a decimal digit. The two `leb` halves of `is_digit`
 // become order facts, the lower bound cancels against the subtraction, and
 // the upper bound is `0x3A` read as `10 + 0x30`.
-theorem digit_val_lt(c: Char, p: IsTrue(is_digit(c))): digit_val(c) < 10 {
-    let parts = is_true_and(nat::leb(0x30, c.code), nat::leb(Succ(c.code), 0x3A), p);
-    let lower = leb_sound(0x30, c.code, parts.left);
-    let upper = leb_sound(Succ(c.code), 0x3A, parts.right);
-    nat::le_of_add_le_add_r(0x30, Succ(digit_val(c)), 10,
-        j(sym(nat::sub_add_cancel(0x30, c.code, lower)),
-            λ y q => nat::Le(Succ(y), 10 + 0x30), upper))
+theorem digit_val_lt(c: Char, p: is_digit(c).IsTrue()): digit_val(c) < 10 {
+    let parts = Nat::leb(0x30, c.code).is_true_and(Succ(c.code).leb(0x3A), p);
+    let lower = Nat::leb_sound(0x30, c.code, parts.left);
+    let upper = Succ(c.code).leb_sound(0x3A, parts.right);
+    Nat::le_of_add_le_add_r(0x30, Succ(digit_val(c)), 10,
+        j(sym(Nat::sub_add_cancel(0x30, c.code, lower)),
+            λ y q => Succ(y).Le(10 + 0x30), upper))
 }
 
 // A passed code test is an equality of codes, and so an equality of
 // characters. This is what a parser recognizing one particular character
 // needs out of `code_is`: the two `leb` halves are antisymmetry's premises.
-theorem code_is_sound(c: Char, code: Nat, p: IsTrue(code_is(c, code))): c.code = code {
-    let parts = is_true_and(nat::leb(c.code, code), nat::leb(code, c.code), p);
-    nat::le_antisym(c.code, code, leb_sound(c.code, code, parts.left),
-        leb_sound(code, c.code, parts.right))
+theorem code_is_sound(c: Char, code: Nat, p: code_is(c, code).IsTrue()): c.code = code {
+    let parts = c.code.leb(code).is_true_and(code.leb(c.code), p);
+    c.code.le_antisym(code, c.code.leb_sound(code, parts.left),
+        code.leb_sound(c.code, parts.right))
 }
 
-theorem code_is_char(c, target: Char, p: IsTrue(code_is(c, target.code))): c = target {
+theorem code_is_char(c, target: Char, p: code_is(c, target.code).IsTrue()): c = target {
     code_injective(c, target, code_is_sound(c, target.code, p))
 }

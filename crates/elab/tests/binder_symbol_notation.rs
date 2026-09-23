@@ -61,21 +61,21 @@ class CMon<A>(op as ∙: A -> A -> A) extends Mon<A>(op) {
     comm: (x, y: A) -> x ∙ y = y ∙ x,
 }
 
-instance CMon<Nat>(add) {
-    unit := 0, assoc := add_assoc, unit_l := add_left_zero,
-    unit_r := λ (x: Nat) => refl, comm := add_comm,
+instance CMon<Nat>(Nat::add) {
+    unit := 0, assoc := Nat::add_assoc, unit_l := Nat::add_left_zero,
+    unit_r := λ (x: Nat) => refl, comm := Nat::add_comm,
 }
-instance CMon<Bool>(and) {
-    unit := True, assoc := and_assoc, unit_l := and_true_l,
-    unit_r := and_true_r, comm := and_comm,
+instance CMon<Bool>(Bool::and) {
+    unit := True, assoc := Bool::and_assoc, unit_l := Bool::and_true_l,
+    unit_r := Bool::and_true_r, comm := Bool::and_comm,
 }
-instance CMon<Bool>(or) {
-    unit := False, assoc := or_assoc, unit_l := or_false_l,
-    unit_r := or_false_r, comm := or_comm,
+instance CMon<Bool>(Bool::or) {
+    unit := False, assoc := Bool::or_assoc, unit_l := Bool::or_false_l,
+    unit_r := Bool::or_false_r, comm := Bool::or_comm,
 }
-instance<A> Mon<List<A>>(append) {
-    unit := Nil, assoc := append_assoc,
-    unit_l := λ (xs: List<A>) => refl, unit_r := append_nil,
+instance<A> Mon<List<A>>(List::append) {
+    unit := Nil, assoc := List::append_assoc,
+    unit_l := λ (xs: List<A>) => refl, unit_r := List::append_nil,
 }
 
 fn fold<A: Mon(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
@@ -148,18 +148,18 @@ fn the_class_head_spells_its_own_laws() {
         // A concrete carrier, through the dictionary — two structures at one
         // carrier, and the law is each one's own.
         theorem at_and(x: Bool, y: Bool, z: Bool):
-            and(and(x, y), z) = and(x, and(y, z))
-        { Bool::Sem(and).assoc(x, y, z) }
+            x.and(y).and(z) = x.and(y.and(z))
+        { Bool::Sem(Bool::and).assoc(x, y, z) }
         theorem at_or(x: Bool, y: Bool, z: Bool):
-            or(or(x, y), z) = or(x, or(y, z))
-        { Bool::Sem(or).assoc(x, y, z) }
+            x.or(y).or(z) = x.or(y.or(z))
+        { Bool::Sem(Bool::or).assoc(x, y, z) }
 
         // An **open** element type: `up`'s dictionary is found by backchaining
         // through `instance<A> Mon<List<A>>(append)` at the caller's own
         // parameter, and the law it delivers is the one the head spelled.
         theorem at_list<B>(xs: List<B>, ys: List<B>, zs: List<B>):
-            append(append(xs, ys), zs) = append(xs, append(ys, zs))
-        { up(append, xs, ys, zs) }
+            xs.append(ys).append(zs) = xs.append(ys.append(zs))
+        { up(List::append, xs, ys, zs) }
     ");
 }
 
@@ -206,16 +206,16 @@ fn a_value_parameter_spells_the_telescope_the_statement_and_the_body() {
         { p }
 
         // One term with the positional spelling, at three carriers.
-        theorem f_nat(ns: List<Nat>): fold(add, ns) = fold(add, ns) { refl }
-        theorem f_bool(bs: List<Bool>): fold(or, bs) = fold(or, bs) { refl }
+        theorem f_nat(ns: List<Nat>): fold(Nat::add, ns) = fold(Nat::add, ns) { refl }
+        theorem f_bool(bs: List<Bool>): fold(Bool::or, bs) = fold(Bool::or, bs) { refl }
         theorem f_open<B>(xss: List<List<B>>):
-            fold(append, xss) = fold(append, xss) { refl }
+            fold(List::append, xss) = fold(List::append, xss) { refl }
 
         // A **literal** scrutinee, which has to compute all the way, and a
         // **neutral** one, which is stuck on its tail.
-        theorem lit(): fold(add, Cons(2, Cons(3, Nil))) = 5 { refl }
+        theorem lit(): fold(Nat::add, Cons(2, Cons(3, Nil))) = 5 { refl }
         theorem neutral(n: Nat, ns: List<Nat>):
-            fold(add, Cons(n, ns)) = add(n, fold(add, ns)) { refl }
+            fold(Nat::add, Cons(n, ns)) = n.add(fold(Nat::add, ns)) { refl }
     ");
 }
 
@@ -232,15 +232,15 @@ fn slow_acceptance_a_class_free_higher_order_function_takes_a_symbol() {
         // plain type parameter, so there is no class in sight.
         theorem square_is<A>(f as ∙: A -> A -> A, x: A): square(f, x) = x ∙ x { refl }
         // Spent at an unrelated carrier, with the operation passed positionally.
-        theorem at_nat(x: Nat): square(add, x) = add(x, x) { refl }
-        theorem at_list<B>(xs: List<B>): square(append, xs) = append(xs, xs) { refl }
-        theorem at_lit(): square(add, 2) = 4 { refl }
+        theorem at_nat(x: Nat): square(Nat::add, x) = x.add(x) { refl }
+        theorem at_list<B>(xs: List<B>): square(List::append, xs) = xs.append(xs) { refl }
+        theorem at_lit(): square(Nat::add, 2) = 4 { refl }
     ");
     // The negative control beside it: the parameter is what the symbol means,
     // so a *different* operation is a different term.
     let e = bad("
         fn square<A>(f as ∙: A -> A -> A, x: A) -> A { x ∙ x }
-        theorem nope(x: Nat): square(add, x) = mul(x, x) { refl }
+        theorem nope(x: Nat): square(Nat::add, x) = x.mul(x) { refl }
     ");
     assert!(!e.is_empty(), "{e}");
 }
@@ -263,7 +263,7 @@ fn the_reserved_generic_symbol_means_nothing_off_a_binder() {
     assert!(e.contains("designates nothing anywhere in this program"), "{e}");
     // Even at `Nat`, where `+` *is* designated: the two symbols are separate
     // names, and one's table says nothing about the other.
-    ok("theorem u(x: Nat, y: Nat): x + y = add(x, y) { refl }");
+    ok("theorem u(x: Nat, y: Nat): x + y = x.add(y) { refl }");
 }
 
 /// Installation is scoped to the declaration, like the constraint slot's: the
@@ -273,11 +273,11 @@ fn the_reserved_generic_symbol_means_nothing_off_a_binder() {
 fn slow_acceptance_an_installed_symbol_does_not_leak_out_of_its_declaration() {
     ok("
         fn inside<A>(f as ∙: A -> A -> A, x: A) -> A { x ∙ x }
-        theorem outside(x: Nat, y: Nat): x + y = add(x, y) { refl }
+        theorem outside(x: Nat, y: Nat): x + y = x.add(y) { refl }
     ");
     let e = bad("
         fn inside<A>(f as ∙: A -> A -> A, x: A) -> A { x ∙ x }
-        theorem outside(x: Nat, y: Nat): x ∙ y = add(x, y) { refl }
+        theorem outside(x: Nat, y: Nat): x ∙ y = x.add(y) { refl }
     ");
     assert!(e.contains("`∙` has no meaning here"), "{e}");
 }
@@ -343,11 +343,11 @@ fn slow_acceptance_a_symbol_in_a_shared_run_reaches_only_its_own_name() {
 fn slow_acceptance_a_declaration_that_writes_no_symbol_is_unchanged() {
     ok("
         fn plain<A: Mon(op)>(op: A -> A -> A, x: A) -> A { op(x, A.unit) }
-        theorem plain_nat(x: Nat): plain(add, x) = add(x, 0) { refl }
+        theorem plain_nat(x: Nat): plain(Nat::add, x) = x.add(0) { refl }
         // The symbol slot's own device is untouched: it still binds under the
         // SYMBOL and refuses the declared name by name.
         fn sym<A: Mon(+)>(x: A, y: A) -> A { x + y }
-        theorem sym_nat(x: Nat, y: Nat): sym(x, y) = add(x, y) { refl }
+        theorem sym_nat(x: Nat, y: Nat): sym(x, y) = x.add(y) { refl }
     ");
     let e = bad("fn f<A: Mon(+)>(x: A, y: A) -> A { op(x, y) }");
     assert!(e.contains("binds it under the SYMBOL"), "{e}");

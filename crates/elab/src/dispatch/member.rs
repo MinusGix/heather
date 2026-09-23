@@ -5,13 +5,15 @@
 
 use std::sync::Arc as Rc;
 
-use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 use heather_kernel::term::{CtxBase, GlobalBinding, Type};
+use heather_syntax::{Expr, ExprKind, NamedArg, Span, Ty};
 
 use crate::{
     BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, err, skel_of_ty,
     application, vec,
 };
+
+use super::receiver::OtherReading;
 
 /// Only disjoint outer carriers are used to discard imported candidates.
 /// Type arguments and callbacks never break a tie; an unknown carrier keeps
@@ -42,6 +44,7 @@ impl Elaborator {
         cx: &Cx,
         recv: &Expr,
         name: &str,
+        tyargs: &[Ty],
         args: &Option<Vec<Expr>>,
         named: &[NamedArg],
         span: Span,
@@ -115,7 +118,7 @@ impl Elaborator {
         // receiver's own type (issues/type-owned-members-receiver-slice.md).
         // The `member_bases` test comes first for the same reason the record
         // one does — no receiver is inferred for a name nobody attaches.
-        let head = self.member_head(cx, recv, name, span)?;
+        let head = self.member_head(cx, recv, name, !tyargs.is_empty(), span)?;
         let (head, vector_map) = if head == name && !self.shadowed(cx, name) {
             self.imported_receiver_head(cx, recv, name, span)?
         } else {
@@ -131,21 +134,33 @@ impl Elaborator {
         // and what a *failed* one falls back to (rule 5). The builtin list is
         // there because `map`/`fold`/… are Rust rather than declarations, so
         // `shadowed` cannot see them.
-        let other: Option<(String, String)> = if head != name {
-            Some((
-                format!("`{head}`, selected using the receiver's type"),
-                format!("`{head}(…)`"),
-            ))
+        //
+        // The first two kinds also carry the **callee** they desugar to: if it
+        // resolves to a global, a dispatch whose field *is* that global is the
+        // same reading rather than a rival
+        // (issues/receiver-dispatch-coinciding-readings.md). A builtin never
+        // carries one — it is Rust, not a declaration — and neither does a
+        // call with written type arguments, which the class reading would
+        // drop and the desugaring would apply.
+        let callee = |c: &str| tyargs.is_empty().then(|| c.to_string());
+        let other: Option<OtherReading> = if head != name {
+            Some(OtherReading {
+                desc: format!("`{head}`, selected using the receiver's type"),
+                fix: format!("`{head}(…)`"),
+                callee: callee(&head),
+            })
         } else if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
-            Some((
-                format!("`{name}`, a name in scope on its own"),
-                format!("the bare call `{name}(…)` with the receiver as an argument"),
-            ))
+            Some(OtherReading {
+                desc: format!("`{name}`, a name in scope on its own"),
+                fix: format!("the bare call `{name}(…)` with the receiver as an argument"),
+                callee: callee(name),
+            })
         } else if BUILTIN_METHODS.contains(&name) {
-            Some((
-                format!("`{name}`, a built-in method"),
-                format!("the bare call `{name}(…)`"),
-            ))
+            Some(OtherReading {
+                desc: format!("`{name}`, a built-in method"),
+                fix: format!("the bare call `{name}(…)`"),
+                callee: None,
+            })
         } else {
             None
         };
@@ -171,7 +186,11 @@ impl Elaborator {
         // the receiver has no honest position to take, so it is refused here
         // rather than silently placed one slot early
         // (docs/named-arguments-design.md §5.4).
-        let at = self.subject_index(name);
+        let at = cx
+            .selfref
+            .as_ref()
+            .filter(|self_ref| self_ref.matches(name))
+            .map_or_else(|| self.subject_index(name), |self_ref| self_ref.receiver_slot);
         if !named.is_empty() && at > args.len() {
             return err(
                 format!(
@@ -184,10 +203,19 @@ impl Elaborator {
         }
         let at = at.min(args.len());
         args.insert(at, recv.clone());
-        let head = Expr {
+        let mut head = Expr {
             kind: ExprKind::Var(name.to_string()),
             span,
         };
+        if !tyargs.is_empty() {
+            head = Expr {
+                kind: ExprKind::TyApp {
+                    head: Box::new(head),
+                    args: tyargs.to_vec(),
+                },
+                span,
+            };
+        }
         Ok(DotResolution::Method(Expr {
             kind: ExprKind::App {
                 head: Box::new(head),
@@ -210,16 +238,37 @@ impl Elaborator {
     /// Preferring the member would mean that adding `D::name` to a library
     /// silently reinterprets an existing `t.name(…)`, which is the one thing
     /// the growth invariant forbids (docs/modules-design.md §4).
-    fn member_head(&self, cx: &Cx, recv: &Expr, name: &str, span: Span) -> R<String> {
+    fn member_head(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        name: &str,
+        constructor_fallback: bool,
+        span: Span,
+    ) -> R<String> {
         if !self.names.has_member_base(name) {
             return Ok(name.to_string());
         }
-        // Inference failure is not an error here, exactly as for a field: the
-        // fallback is what handles a receiver whose type only the call fixes.
-        let Ok((_, rty, _)) = self.elab_infer(cx, recv) else {
-            return Ok(name.to_string());
-        };
-        let Some(owner) = self.type_namespace(cx, &rty, span) else {
+        // A constructor identifies its nominal owner even when its result
+        // parameters cannot yet be inferred. This matters for an explicitly
+        // instantiated method call such as `Ok(x).fold<A, E, B>(...)`: `E`
+        // is supplied by the method's type arguments, but choosing
+        // `Result::fold` has to happen before those arguments are applied.
+        let inferred = self.elab_infer(cx, recv).ok().and_then(|(_, rty, _)| {
+            Some((
+                self.receiver_carrier(cx, &rty, span)?,
+                self.type_namespace(cx, &rty, span)?,
+            ))
+        });
+        let Some((carrier, owner)) = inferred.or_else(|| {
+            constructor_fallback
+                .then(|| self.constructor_receiver_owner(cx, recv))
+                .flatten()
+        })
+        else {
+            // Inference failure is not an error here, exactly as for a field:
+            // the fallback is what handles a receiver whose type only the
+            // call fixes.
             return Ok(name.to_string());
         };
         let qualified = format!("{owner}::{name}");
@@ -238,7 +287,21 @@ impl Elaborator {
                 return Ok(name.to_string());
             }
         }
-        if self.shadowed(cx, name) {
+        // The declaration under construction is normally an ambient reading
+        // of its base name, so recursive calls keep working before the global
+        // is committed. It is not a candidate at this receiver, however, when
+        // both outer carriers are known and disjoint. This is the same
+        // conservative filter imported receiver dispatch uses below: unknown
+        // and equal carriers preserve ambiguity, and every other local/global
+        // shadow remains a competing reading.
+        let selfref_shadows = cx.selfref.as_ref().is_some_and(|s| s.matches(name));
+        let selfref_disjoint = selfref_shadows
+            && self
+                .selfref_subject_carrier(cx, name, span)
+                .is_some_and(|subject| subject != carrier);
+        if self.shadowed_without_selfref(cx, name)
+            || (selfref_shadows && !selfref_disjoint)
+        {
             return err(
                 format!(
                     "`{name}` here is both `{qualified}`, reached through the receiver's \
@@ -250,6 +313,51 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// A constructor application's declaration, without elaborating its
+    /// fields or solving its result parameters.
+    fn constructor_receiver_owner(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+    ) -> Option<(ReceiverCarrier, String)> {
+        let head = match &recv.kind {
+            ExprKind::App { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let head = match head {
+            ExprKind::TyApp { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let ExprKind::Var(name) = head else {
+            return None;
+        };
+        let (ind, _) = self.ctor_here(cx, name)?;
+        let key = crate::names::qkey(&ind.scope.module, &ind.name);
+        Some((ReceiverCarrier::Named(key), ind.name.clone()))
+    }
+
+    /// The outer carrier of the in-progress declaration's method subject.
+    /// Its parameters are the outermost entries of `cx`; each stored type is
+    /// scoped over the prefix before its binder, so inspect it in that prefix
+    /// rather than in the (possibly much deeper) use-site context.
+    fn selfref_subject_carrier(
+        &self,
+        cx: &Cx,
+        name: &str,
+        span: Span,
+    ) -> Option<ReceiverCarrier> {
+        let self_ref = cx.selfref.as_ref().filter(|s| s.matches(name))?;
+        let (subject, _) = self_ref
+            .params
+            .iter()
+            .enumerate()
+            .skip(self_ref.n_tyvars)
+            .filter(|(_, (_, implicit))| !implicit)
+            .nth(self_ref.receiver_slot)?;
+        let ty = Rc::clone(&cx.gamma.entries.get(subject)?.ty);
+        self.receiver_carrier(&cx.prefix(subject), &ty, span)
     }
 
     fn receiver_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> Option<ReceiverCarrier> {

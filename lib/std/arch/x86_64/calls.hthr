@@ -17,88 +17,88 @@ record StackAccess<M> {
 }
 
 fn LowCanonical(address: BitVec(64)) → Type {
-    bitvec::drop_low(47, 17, address) = bitvec::zero(17)
+    address.drop_low(47, 17) = BitVec::zero()
 }
 fn word_bytes(value: BitVec(64)) → List<BitVec(8)> {
     [imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value),
      imm_byte4(value), imm_byte5(value), imm_byte6(value), imm_byte7(value)]
 }
-fn next_byte(address: BitVec(64)) → BitVec(64) { bitvec::add(64, address, bitvec::ofNat(64, 1)) }
+fn next_byte(address: BitVec(64)) → BitVec(64) { address.add(BitVec::ofNat(1)) }
 fn StackReadsAllowed<M>(access: StackAccess<M>, count: Nat) → BitVec(64) → Type {
     match count {
         Zero => λ address => True,
         Succ(rest, ih) => λ address =>
             access.readable(address) = True ∧ LowCanonical(address) ∧
-            bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 1)) = False ∧
+            address.carry_add_bit(BitVec::ofNat(1)) = False ∧
             ih(next_byte(address)),
     }
 }
 fn stack_word<M>(access: StackAccess<M>, memory: M, address: BitVec(64)) → BitVec(64) {
     immediate_from_bytes(access.read(memory, address),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 1))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 2))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 3))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))),
-        access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7))))
+        access.read(memory, address.add(BitVec::ofNat(1))),
+        access.read(memory, address.add(BitVec::ofNat(2))),
+        access.read(memory, address.add(BitVec::ofNat(3))),
+        access.read(memory, address.add(BitVec::ofNat(4))),
+        access.read(memory, address.add(BitVec::ofNat(5))),
+        access.read(memory, address.add(BitVec::ofNat(6))),
+        access.read(memory, address.add(BitVec::ofNat(7))))
 }
 fn word_write_0<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
     memory
 }
 fn word_write_1<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_0(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 0)), imm_byte0(value))
+    access.write(word_write_0(access, value, memory, address), address.add(BitVec::ofNat(0)), imm_byte0(value))
 }
 fn word_write_2<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_1(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 1)), imm_byte1(value))
+    access.write(word_write_1(access, value, memory, address), address.add(BitVec::ofNat(1)), imm_byte1(value))
 }
 fn word_write_3<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_2(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 2)), imm_byte2(value))
+    access.write(word_write_2(access, value, memory, address), address.add(BitVec::ofNat(2)), imm_byte2(value))
 }
 fn word_write_4<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_3(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 3)), imm_byte3(value))
+    access.write(word_write_3(access, value, memory, address), address.add(BitVec::ofNat(3)), imm_byte3(value))
 }
 fn word_write_5<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_4(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 4)), imm_byte4(value))
+    access.write(word_write_4(access, value, memory, address), address.add(BitVec::ofNat(4)), imm_byte4(value))
 }
 fn word_write_6<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_5(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 5)), imm_byte5(value))
+    access.write(word_write_5(access, value, memory, address), address.add(BitVec::ofNat(5)), imm_byte5(value))
 }
 fn word_write_7<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_6(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 6)), imm_byte6(value))
+    access.write(word_write_6(access, value, memory, address), address.add(BitVec::ofNat(6)), imm_byte6(value))
 }
 fn word_write_8<M>(access: StackAccess<M>, value: BitVec(64), memory: M, address: BitVec(64)) → M {
-    access.write(word_write_7(access, value, memory, address), bitvec::add(64, address, bitvec::ofNat(64, 7)), imm_byte7(value))
+    access.write(word_write_7(access, value, memory, address), address.add(BitVec::ofNat(7)), imm_byte7(value))
 }
 record WordWritesAllowed<M>(access: StackAccess<M>, address: BitVec(64)) {
     canonical: LowCanonical(address),
-    end_canonical: LowCanonical(bitvec::add(64, address, bitvec::ofNat(64, 7))),
-    no_wrap: bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 8)) = False,
-    byte0: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 0))) = True,
-    byte1: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 1))) = True,
-    byte2: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 2))) = True,
-    byte3: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 3))) = True,
-    byte4: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 4))) = True,
-    byte5: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 5))) = True,
-    byte6: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 6))) = True,
-    byte7: access.writable(bitvec::add(64, address, bitvec::ofNat(64, 7))) = True,
+    end_canonical: LowCanonical(address.add(BitVec::ofNat(7))),
+    no_wrap: address.carry_add_bit(BitVec::ofNat(8)) = False,
+    byte0: access.writable(address.add(BitVec::ofNat(0))) = True,
+    byte1: access.writable(address.add(BitVec::ofNat(1))) = True,
+    byte2: access.writable(address.add(BitVec::ofNat(2))) = True,
+    byte3: access.writable(address.add(BitVec::ofNat(3))) = True,
+    byte4: access.writable(address.add(BitVec::ofNat(4))) = True,
+    byte5: access.writable(address.add(BitVec::ofNat(5))) = True,
+    byte6: access.writable(address.add(BitVec::ofNat(6))) = True,
+    byte7: access.writable(address.add(BitVec::ofNat(7))) = True,
 }
 fn call_return_address<M>(before: MachineState<M>) → BitVec(64) {
-    bitvec::add(64, before.rip, bitvec::ofNat(64, 5))
+    before.rip.add(BitVec::ofNat(5))
 }
 fn call_target(start: BitVec(64), displacement: BitVec(32)) → BitVec(64) {
-    bitvec::add(64, bitvec::add(64, start, bitvec::ofNat(64, 5)),
-        bitvec::sign_extend(31, 32, displacement))
+    start.add(BitVec::ofNat(5)).add(
+        displacement.sign_extend(32))
 }
 fn call_after<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>) → MachineState<M> {
-    let stack = bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8));
+    let stack = read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8));
     MachineState(write_gpr(Rsp, stack, before.gprs), before.flags,
         call_target(before.rip, displacement),
         word_write_8(access, call_return_address(before), before.memory, stack))
 }
 fn return_after<M>(access: StackAccess<M>, before: MachineState<M>) → MachineState<M> {
     let stack = read_gpr(Rsp, before.gprs);
-    MachineState(write_gpr(Rsp, bitvec::add(64, stack, bitvec::ofNat(64, 8)), before.gprs),
+    MachineState(write_gpr(Rsp, stack.add(BitVec::ofNat(8)), before.gprs),
         before.flags, stack_word(access, before.memory, stack), before.memory)
 }
 fn stack_store_after<M>(access: StackAccess<M>, register: Gpr, before: MachineState<M>) → MachineState<M> {
@@ -110,19 +110,19 @@ fn stack_load_after<M>(access: StackAccess<M>, register: Gpr, before: MachineSta
         before.flags, next_rip(before.rip, 4), before.memory)
 }
 fn stack_register_bytes(opcode: Nat, register: Gpr) → List<BitVec(8)> {
-    [rex_w_rr(Rsp, register), bitvec::ofNat(8, opcode),
+    [rex_w_rr(Rsp, register), BitVec::ofNat(opcode),
      byte_from_fields(False, False, True, gpr_bit0(register), gpr_bit1(register), gpr_bit2(register), False, False),
-     bitvec::ofNat(8, 0x24)]
+     BitVec::ofNat(0x24)]
 }
 inductive CallInstruction { Ordinary(instruction: Instruction), CallRelative(displacement: BitVec(32)), NearReturn, StoreStack64(register: Gpr), LoadStack64(register: Gpr) }
 fn call_instruction_bytes(instruction: CallInstruction) → List<BitVec(8)> {
     match instruction {
         Ordinary(ordinary) => canonical_bytes(ordinary),
         CallRelative(displacement) => {
-            let extended = bitvec::zero_extend(32, 32, displacement);
-            [bitvec::ofNat(8, 0xe8), imm_byte0(extended), imm_byte1(extended), imm_byte2(extended), imm_byte3(extended)]
+            let extended = displacement.zero_extend(32);
+            [BitVec::ofNat(0xe8), imm_byte0(extended), imm_byte1(extended), imm_byte2(extended), imm_byte3(extended)]
         },
-        NearReturn => [bitvec::ofNat(8, 0xc3)],
+        NearReturn => [BitVec::ofNat(0xc3)],
         StoreStack64(register) => stack_register_bytes(0x89, register),
         LoadStack64(register) => stack_register_bytes(0x8b, register),
     }
@@ -135,13 +135,13 @@ fn CallStep<M>(access: StackAccess<M>, instruction: CallInstruction, before, aft
         LoadStack64(register) => StackReadsAllowed(access, 8, read_gpr(Rsp, before.gprs)) ∧
             after = stack_load_after(access, register, before),
         CallRelative(displacement) =>
-            bitvec::borrow_sub_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            read_gpr(Rsp, before.gprs).borrow_sub_bit(BitVec::ofNat(8)) = False ∧
             LowCanonical(call_return_address(before)) ∧ LowCanonical(call_target(before.rip, displacement)) ∧
             WordWritesAllowed<M>(access,
-                bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))) ∧
+                read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8))) ∧
             after = call_after(access, displacement, before),
         NearReturn =>
-            bitvec::carry_add_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            read_gpr(Rsp, before.gprs).carry_add_bit(BitVec::ofNat(8)) = False ∧
             LowCanonical(stack_word(access, before.memory, read_gpr(Rsp, before.gprs))) ∧
             StackReadsAllowed(access, 8, read_gpr(Rsp, before.gprs)) ∧
             after = return_after(access, before),
@@ -173,7 +173,7 @@ theorem ordinary_call_step<M>(access: StackAccess<M>, instruction: Instruction,
 
 theorem stack_reads_cons<M>(access: StackAccess<M>, count: Nat, address, next: BitVec(64),
     permission: access.readable(address) = True, canonical: LowCanonical(address),
-    nowrap: bitvec::carry_add_bit(64, address, bitvec::ofNat(64, 1)) = False,
+    nowrap: address.carry_add_bit(BitVec::ofNat(1)) = False,
     advanced: next_byte(address) = next, tail: StackReadsAllowed(access, count, next)):
     StackReadsAllowed(access, Succ(count), address)
 {
@@ -202,12 +202,12 @@ theorem return_after_target<M>(access: StackAccess<M>, before: MachineState<M>):
 
 theorem call_after_rsp<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>):
     read_gpr(Rsp, call_after(access, displacement, before).gprs) =
-        bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))
-{ read_gpr_after_write(Rsp, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)), before.gprs) }
+        read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8))
+{ read_gpr_after_write(Rsp, read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)), before.gprs) }
 theorem return_after_rsp<M>(access: StackAccess<M>, before: MachineState<M>):
     read_gpr(Rsp, return_after(access, before).gprs) =
-        bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))
-{ read_gpr_after_write(Rsp, bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)), before.gprs) }
+        read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8))
+{ read_gpr_after_write(Rsp, read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8)), before.gprs) }
 theorem word_writes_at<M>(access: StackAccess<M>,
     address, actual: BitVec(64), same: address = actual, allowed: WordWritesAllowed<M>(access, address)):
     WordWritesAllowed<M>(access, actual)
@@ -215,7 +215,7 @@ theorem word_writes_at<M>(access: StackAccess<M>,
 
 theorem call_after_memory<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>):
     call_after(access, displacement, before).memory = word_write_8(access, call_return_address(before),
-        before.memory, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)))
+        before.memory, read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)))
 { refl }
 theorem normal_memory<M>(instruction: Instruction, before: MachineState<M>):
     execute_normal(decoded_canonical(instruction), before).memory = before.memory
@@ -233,25 +233,25 @@ theorem machine_rebuild<M>(state: MachineState<M>, address: BitVec(64), memory: 
 
 record StackWordReads<M>(access: StackAccess<M>, memory: M, address, value: BitVec(64)) {
     byte0: access.read(memory, address) = imm_byte0(value),
-    byte1: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 1))) = imm_byte1(value),
-    byte2: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 2))) = imm_byte2(value),
-    byte3: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 3))) = imm_byte3(value),
-    byte4: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))) = imm_byte4(value),
-    byte5: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))) = imm_byte5(value),
-    byte6: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))) = imm_byte6(value),
-    byte7: access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7))) = imm_byte7(value),
+    byte1: access.read(memory, address.add(BitVec::ofNat(1))) = imm_byte1(value),
+    byte2: access.read(memory, address.add(BitVec::ofNat(2))) = imm_byte2(value),
+    byte3: access.read(memory, address.add(BitVec::ofNat(3))) = imm_byte3(value),
+    byte4: access.read(memory, address.add(BitVec::ofNat(4))) = imm_byte4(value),
+    byte5: access.read(memory, address.add(BitVec::ofNat(5))) = imm_byte5(value),
+    byte6: access.read(memory, address.add(BitVec::ofNat(6))) = imm_byte6(value),
+    byte7: access.read(memory, address.add(BitVec::ofNat(7))) = imm_byte7(value),
 }
 theorem stack_word_matches<M>(access: StackAccess<M>, memory: M, address, value: BitVec(64),
     reads: StackWordReads(access, memory, address, value)):
     stack_word(access, memory, address) = value
 {
-    trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 1))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 2))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 3))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte0),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 2))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 3))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte1),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 3))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte2),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 4))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte3),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 5))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte4),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), imm_byte4(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 6))), access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte5),
-        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), imm_byte4(value), imm_byte5(value), byte, access.read(memory, bitvec::add(64, address, bitvec::ofNat(64, 7)))), reads.byte6),
+    trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(byte, access.read(memory, address.add(BitVec::ofNat(1))), access.read(memory, address.add(BitVec::ofNat(2))), access.read(memory, address.add(BitVec::ofNat(3))), access.read(memory, address.add(BitVec::ofNat(4))), access.read(memory, address.add(BitVec::ofNat(5))), access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte0),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), byte, access.read(memory, address.add(BitVec::ofNat(2))), access.read(memory, address.add(BitVec::ofNat(3))), access.read(memory, address.add(BitVec::ofNat(4))), access.read(memory, address.add(BitVec::ofNat(5))), access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte1),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), byte, access.read(memory, address.add(BitVec::ofNat(3))), access.read(memory, address.add(BitVec::ofNat(4))), access.read(memory, address.add(BitVec::ofNat(5))), access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte2),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), byte, access.read(memory, address.add(BitVec::ofNat(4))), access.read(memory, address.add(BitVec::ofNat(5))), access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte3),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), byte, access.read(memory, address.add(BitVec::ofNat(5))), access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte4),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), imm_byte4(value), byte, access.read(memory, address.add(BitVec::ofNat(6))), access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte5),
+        trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), imm_byte4(value), imm_byte5(value), byte, access.read(memory, address.add(BitVec::ofNat(7)))), reads.byte6),
         trans(cong_fn<BitVec(8), BitVec(64)>(λ byte => immediate_from_bytes(imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value), imm_byte4(value), imm_byte5(value), imm_byte6(value), byte), reads.byte7),
         immediate_bytes_roundtrip(value)))))))))
 }
@@ -260,81 +260,81 @@ theorem stack_word_matches<M>(access: StackAccess<M>, memory: M, address, value:
 // These laws keep the canonical modular-add semantics and certify the small
 // subtraction used to calculate the proposed target.
 theorem increment_decrement_step(n: Nat, bit: Bool, value: BitVec(n),
-    tail_law: increment(n, decrement(n, value)) = value):
-    increment(Succ(n), decrement(Succ(n), cons_bit(n, bit, value))) = cons_bit(n, bit, value)
+    tail_law: value.decrement().increment() = value):
+    value.cons_bit(bit).decrement().increment() = value.cons_bit(bit)
 {
     match bit {
-        False => @cons_bit_cong(n, False, False, increment(n, decrement(n, value)), value, refl, tail_law),
+        False => @BitVec::cons_bit_cong(n, False, False, value.decrement().increment(), value, refl, tail_law),
         True => refl,
     }
 }
-theorem increment_decrement(n: Nat): (value: BitVec(n)) → increment(n, decrement(n, value)) = value {
-    match n as λ width => (value: BitVec(width)) → increment(width, decrement(width, value)) = value {
+theorem increment_decrement(n: Nat): (value: BitVec(n)) → value.decrement().increment() = value {
+    match n as λ width => (value: BitVec(width)) → value.decrement().increment() = value {
         Zero => λ value => refl,
-        Succ(width, ih) => λ value => increment_decrement_step(width, head_bit(width, value),
-            tail_bits(width, value), ih(tail_bits(width, value))),
+        Succ(width, ih) => λ value => increment_decrement_step(width, value.head_bit(),
+            value.tail_bits(), ih(value.tail_bits())),
     }
 }
 theorem increments_decrement(n, count: Nat): (value: BitVec(n)) →
-    iterate_increment(n, decrement(n, value), count) = decrement(n, iterate_increment(n, value, count))
+    value.decrement().iterate_increment(count) = value.iterate_increment(count).decrement()
 {
     match count as λ steps => (value: BitVec(n)) →
-        iterate_increment(n, decrement(n, value), steps) = decrement(n, iterate_increment(n, value, steps)) {
+        value.decrement().iterate_increment(steps) = value.iterate_increment(steps).decrement() {
         Zero => λ value => refl,
-        Succ(steps, ih) => λ value => trans(cong_increment(n, ih(value)),
-            trans(increment_decrement(n, iterate_increment(n, value, steps)),
-                sym(decrement_increment(n, iterate_increment(n, value, steps))))),
+        Succ(steps, ih) => λ value => trans(BitVec::cong_increment(n, ih(value)),
+            trans(increment_decrement(n, value.iterate_increment(steps)),
+                sym(BitVec::decrement_increment(n, value.iterate_increment(steps))))),
     }
 }
 theorem increments_decrements(n, downs, ups: Nat): (value: BitVec(n)) →
-    iterate_increment(n, iterate_decrement(n, downs, value), ups) =
-        iterate_decrement(n, downs, iterate_increment(n, value, ups))
+    value.iterate_decrement(downs).iterate_increment(ups) =
+        value.iterate_increment(ups).iterate_decrement(downs)
 {
     match downs as λ steps => (value: BitVec(n)) →
-        iterate_increment(n, iterate_decrement(n, steps, value), ups) =
-            iterate_decrement(n, steps, iterate_increment(n, value, ups)) {
+        value.iterate_decrement(steps).iterate_increment(ups) =
+            value.iterate_increment(ups).iterate_decrement(steps) {
         Zero => λ value => refl,
-        Succ(steps, ih) => λ value => trans(ih(decrement(n, value)),
-            cong_iterate_decrement(n, steps, increments_decrement(n, ups, value))),
+        Succ(steps, ih) => λ value => trans(ih(value.decrement()),
+            BitVec::cong_iterate_decrement(n, steps, increments_decrement(n, ups, value))),
     }
 }
 theorem add_negative(n: Nat, value, magnitude: BitVec(n)):
-    bitvec::add(n, value, bitvec::sub(n, zero(n), magnitude)) = bitvec::sub(n, value, magnitude)
+    value.add(BitVec::sub(BitVec::zero(), magnitude)) = BitVec::sub(value, magnitude)
 {
     // `add` and `sub` are the ripples now, so the increment/decrement
     // bookkeeping below is stated over `iter_add`/`iter_sub` and transported
     // back (docs/bitvec-width-bounded-defaults-design.md).
-    trans(@cong_ripple_add(n, value, value,
-            bitvec::sub(n, zero(n), magnitude), iter_sub(n, zero(n), magnitude),
-            refl, sym(iter_sub_eq_sub(n, zero(n), magnitude))),
-        trans(sym(iter_add_eq_add(n, value, iter_sub(n, zero(n), magnitude))),
-            trans(trans(iter_add_comm(n, value, iter_sub(n, zero(n), magnitude)),
-                    trans(increments_decrements(n, toNat(n, magnitude),
-                            toNat(n, value), zero(n)),
-                        cong_iterate_decrement(n, toNat(n, magnitude),
-                            iterate_increment_toNat(n, value)))),
-                iter_sub_eq_sub(n, value, magnitude))))
+    trans(@BitVec::cong_ripple_add(n, value, value,
+            BitVec::sub(BitVec::zero(), magnitude), BitVec::iter_sub(BitVec::zero(), magnitude),
+            refl, sym(BitVec::iter_sub_eq_sub(n, BitVec::zero(), magnitude))),
+        trans(sym(BitVec::iter_add_eq_add(n, value, BitVec::iter_sub(BitVec::zero(), magnitude))),
+            trans(trans(BitVec::iter_add_comm(n, value, BitVec::iter_sub(BitVec::zero(), magnitude)),
+                    trans(increments_decrements(n, magnitude.toNat(),
+                            value.toNat(), BitVec::zero()),
+                        BitVec::cong_iterate_decrement(n, magnitude.toNat(),
+                            BitVec::iterate_increment_toNat(n, value)))),
+                BitVec::iter_sub_eq_sub(n, value, magnitude))))
 }
 
 theorem call_after_flat<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>,
     pointer, rip: BitVec(64), memory: M,
-    pointer_same: pointer = bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)),
+    pointer_same: pointer = read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)),
     rip_same: rip = call_target(before.rip, displacement),
     memory_same: memory = word_write_8(access, call_return_address(before), before.memory,
-        bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)))):
+        read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)))):
     MachineState(write_gpr(Rsp, pointer, before.gprs), before.flags, rip, memory) = call_after(access, displacement, before)
 {
     j(sym(pointer_same), λ actual _ => MachineState(write_gpr(Rsp, actual, before.gprs), before.flags, rip, memory) = call_after(access, displacement, before),
-      j(sym(rip_same), λ actual _ => MachineState(write_gpr(Rsp, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)), before.gprs), before.flags, actual, memory) = call_after(access, displacement, before),
-        j(sym(memory_same), λ actual _ => MachineState(write_gpr(Rsp, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)), before.gprs), before.flags, call_target(before.rip, displacement), actual) = call_after(access, displacement, before), refl)))
+      j(sym(rip_same), λ actual _ => MachineState(write_gpr(Rsp, read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)), before.gprs), before.flags, actual, memory) = call_after(access, displacement, before),
+        j(sym(memory_same), λ actual _ => MachineState(write_gpr(Rsp, read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8)), before.gprs), before.flags, call_target(before.rip, displacement), actual) = call_after(access, displacement, before), refl)))
 }
 theorem return_after_flat<M>(access: StackAccess<M>, before: MachineState<M>, pointer, rip: BitVec(64),
-    pointer_same: pointer = bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)),
+    pointer_same: pointer = read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8)),
     rip_same: rip = stack_word(access, before.memory, read_gpr(Rsp, before.gprs))):
     MachineState(write_gpr(Rsp, pointer, before.gprs), before.flags, rip, before.memory) = return_after(access, before)
 {
     j(sym(pointer_same), λ actual _ => MachineState(write_gpr(Rsp, actual, before.gprs), before.flags, rip, before.memory) = return_after(access, before),
-      j(sym(rip_same), λ actual _ => MachineState(write_gpr(Rsp, bitvec::add(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)), before.gprs), before.flags, actual, before.memory) = return_after(access, before), refl))
+      j(sym(rip_same), λ actual _ => MachineState(write_gpr(Rsp, read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8)), before.gprs), before.flags, actual, before.memory) = return_after(access, before), refl))
 }
 
 theorem stack_store_memory<M>(access: StackAccess<M>, register: Gpr, before: MachineState<M>):

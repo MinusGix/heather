@@ -95,17 +95,17 @@ inductive Res { Stuck, OutOfFuel, Out(vals: Val) }
 // clauses close over. `step_cases` below is the real consumer — its clauses
 // close over the fuel-indexed recursive call `ev`.
 record IrCases<M> {
-    ret: Refs -> M,
-    letcon: Nat -> Refs -> Ir -> M,
-    letmatch: Nat -> Ir -> Ir -> M,
-    arm: Ir -> Ir -> M,
+    ret: Refs → M,
+    letcon: Nat → Refs → Ir → M,
+    letmatch: Nat → Ir → Ir → M,
+    arm: Ir → Ir → M,
     noarm: M,
-    letloop: Refs -> Ir -> Ir -> M,
-    loopiter: Ir -> M,
-    letcall: Nat -> Refs -> Ir -> M,
+    letloop: Refs → Ir → Ir → M,
+    loopiter: Ir → M,
+    letcall: Nat → Refs → Ir → M,
 }
 
-fn ir_cases<M>(cases: IrCases<M>, ir: Ir) -> M {
+fn ir_cases<M>(cases: IrCases<M>, ir: Ir) → M {
     match ir {
         Ret(rs) => cases.ret(rs),
         LetCon(tag, args, rest) => cases.letcon(tag, args, rest),
@@ -125,7 +125,7 @@ fn ir_cases<M>(cases: IrCases<M>, ir: Ir) -> M {
 // function instead (lookup, pick_arm, find_fun).
 
 // slot `i` of the environment, 0 = most recent
-fn lookup(env: Val) -> Nat -> OptVal {
+fn lookup(env: Val) → Nat → OptVal {
     match env {
         VNil => λ (i: Nat) => NoneV,
         VCon(tag, fs) => λ (i: Nat) => NoneV,
@@ -134,7 +134,7 @@ fn lookup(env: Val) -> Nat -> OptVal {
 }
 
 // read the listed slots, in order; NoneV if any is out of range
-fn gather(rs: Refs, env: Val) -> OptVal {
+fn gather(rs: Refs, env: Val) → OptVal {
     match rs {
         RNil => SomeV(VNil),
         RCons(i, next) =>
@@ -150,7 +150,7 @@ fn gather(rs: Refs, env: Val) -> OptVal {
 }
 
 // prepend the chain `a` onto `b` (a's head stays slot 0)
-fn append(a: Val, b: Val) -> Val {
+fn append(a: Val, b: Val) → Val {
     match a {
         VNil => b,
         VCon(tag, fs) => b,
@@ -165,7 +165,7 @@ fn append(a: Val, b: Val) -> Val {
 // guard `pick_arm(next)` reads — because `_` binds nothing the guard looks at
 // (§6.2). The body is elaborated once and shared across the seven expanded
 // arms, since the motive here does not mention the scrutinee (§5).
-fn pick_arm(arms: Ir) -> Nat -> Ir {
+fn pick_arm(arms: Ir) → Nat → Ir {
     match arms {
         Arm(body, next) => λ (tag: Nat) => match tag { Zero => body, Succ(t2) => pick_arm(next)(t2) },
         _ => λ (tag: Nat) => NoArm,
@@ -174,7 +174,7 @@ fn pick_arm(arms: Ir) -> Nat -> Ir {
 
 // body of function `f` in the Prog chain; NoArm (which is Stuck to
 // evaluate) when there is no such function
-fn find_fun(prog: Prog) -> Nat -> Ir {
+fn find_fun(prog: Prog) → Nat → Ir {
     match prog {
         PNil => λ (f: Nat) => NoArm,
         PFun(body, next) => λ (f: Nat) => match f { Zero => body, Succ(g) => find_fun(next)(g) },
@@ -207,11 +207,11 @@ fn find_fun(prog: Prog) -> Nat -> Ir {
 // reading — but it is no longer load-bearing, and a library that wants a
 // different shape is no longer paying orders of magnitude for it.
 
-fn step_ret(env: Val, rs: Refs) -> Res {
+fn step_ret(env: Val, rs: Refs) → Res {
     match gather(rs, env) { NoneV => Stuck, SomeV(vs) => Out(vs) }
 }
 
-fn step_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir) -> Res {
+fn step_letcon(ev: Val → Ir → Res, env: Val, tag: Nat, args: Refs, rest: Ir) → Res {
     match gather(args, env) {
         NoneV => Stuck,
         SomeV(vs) => ev(VCons(VCon(tag, vs), env), rest),
@@ -222,7 +222,7 @@ fn step_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir) -
 // (docs/nested-match-patterns-design.md §3.2). The `_` row is the
 // fallthrough for `VNil`/`VCons` *and* for `NoneV`; the inner `match` on the
 // evaluation result stays written out, because its arms differ.
-fn step_letmatch(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir) -> Res {
+fn step_letmatch(ev: Val → Ir → Res, env: Val, scrut: Nat, arms: Ir, rest: Ir) → Res {
     match lookup(env)(scrut) {
         SomeV(VCon(tag, fields)) =>
             match ev(append(fields, env), pick_arm(arms)(tag)) {
@@ -234,7 +234,7 @@ fn step_letmatch(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir)
     }
 }
 
-fn step_letloop(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir) -> Res {
+fn step_letloop(ev: Val → Ir → Res, env: Val, init: Refs, body: Ir, rest: Ir) → Res {
     match gather(init, env) {
         NoneV => Stuck,
         SomeV(vs) =>
@@ -250,7 +250,7 @@ fn step_letloop(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir) 
 // column is split by the same machinery as the `Val` ones, and the two rows
 // that reach it carry `carried` down past two splits
 // (docs/nested-match-patterns-design.md §3.2).
-fn step_loopiter(ev: Val -> Ir -> Res, env: Val, body: Ir) -> Res {
+fn step_loopiter(ev: Val → Ir → Res, env: Val, body: Ir) → Res {
     match ev(env, body) {
         OutOfFuel => OutOfFuel,
         Out(VCons(VCon(Zero, ffields), carried)) => Out(carried),
@@ -259,7 +259,7 @@ fn step_loopiter(ev: Val -> Ir -> Res, env: Val, body: Ir) -> Res {
     }
 }
 
-fn step_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir) -> Res {
+fn step_letcall(ev: Val → Ir → Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir) → Res {
     match gather(args, env) {
         NoneV => Stuck,
         SomeV(vs) =>
@@ -274,7 +274,7 @@ fn step_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: R
 // Reify the interpreter's clause table. `ev` is deliberately a captured
 // value, not tied recursively here: eval supplies its one fuel-decreasing IH,
 // while another consumer may supply a different open-recursion discipline.
-fn step_cases(ev: Val -> Ir -> Res, prog: Prog, env: Val) -> IrCases<Res> {
+fn step_cases(ev: Val → Ir → Res, prog: Prog, env: Val) → IrCases<Res> {
     IrCases<Res> {
         ret: λ rs => step_ret(env, rs),
         letcon: λ tag args rest => step_letcon(ev, env, tag, args, rest),
@@ -288,11 +288,11 @@ fn step_cases(ev: Val -> Ir -> Res, prog: Prog, env: Val) -> IrCases<Res> {
 }
 
 // one step: select a clause from the first-class table
-fn step(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir) -> Res {
+fn step(ev: Val → Ir → Res, prog: Prog, env: Val, ir: Ir) → Res {
     ir_cases(step_cases(ev, prog, env), ir)
 }
 
-fn eval(fuel: Nat, prog: Prog) -> Val -> Ir -> Res {
+fn eval(fuel: Nat, prog: Prog) → Val → Ir → Res {
     match fuel {
         Zero => λ (env: Val) (ir: Ir) => OutOfFuel,
         Succ(k) => λ (env: Val) (ir: Ir) => step(eval(k, prog), prog, env, ir),
@@ -303,7 +303,7 @@ fn eval(fuel: Nat, prog: Prog) -> Val -> Ir -> Res {
 // Embedding (doc §4): spec Nat as a constructor tree. Zero is tag 0 with no
 // fields, Succ is tag 1 with one field.
 
-fn embed_nat(n: Nat) -> Val {
+fn embed_nat(n: Nat) → Val {
     match n {
         Zero => VCon(0, VNil),
         Succ(k) => VCon(1, VCons(embed_nat(k), VNil)),
@@ -316,11 +316,11 @@ fn embed_nat(n: Nat) -> Val {
 // (pred, Succ(acc)). Loop-body slot map: [n, acc].
 
 // Zero arm: env [n, acc]; emit stop flag; results (flag, n, acc)
-fn add_arm_zero() -> Ir { LetCon(0, RNil, Ret(RCons(0, RCons(1, RCons(2, RNil))))) }
+fn add_arm_zero() → Ir { LetCon(0, RNil, Ret(RCons(0, RCons(1, RCons(2, RNil))))) }
 
 // Succ arm: env [pred, n, acc]; acc' = Succ(acc), flag = continue;
 // results (flag, pred, acc')
-fn add_arm_succ() -> Ir {
+fn add_arm_succ() → Ir {
     LetCon(1, RCons(2, RNil),
         LetCon(1, RNil,
             Ret(RCons(0, RCons(2, RCons(1, RNil))))))
@@ -328,38 +328,38 @@ fn add_arm_succ() -> Ir {
 
 // loop body: match n; the arm's three outputs are rebound, then returned —
 // exactly the VCons(flag, carried') chain LoopIter consumes
-fn add_loop_body() -> Ir {
+fn add_loop_body() → Ir {
     LetMatch(0, Arm(add_arm_zero(), Arm(add_arm_succ(), NoArm)),
         Ret(RCons(0, RCons(1, RCons(2, RNil)))))
 }
 
 // function body: env [a, b]; loop from (a, b); final carried is
 // [n_final, acc_final]; the answer is acc_final
-fn add_body() -> Ir {
+fn add_body() → Ir {
     LetLoop(RCons(0, RCons(1, RNil)), add_loop_body(),
         Ret(RCons(1, RNil)))
 }
 
-fn add_prog() -> Prog { PFun(add_body(), PNil) }
+fn add_prog() → Prog { PFun(add_body(), PNil) }
 
 // a one-function Prog whose function returns its argument; LetCall is
 // exercised against it at the cheapest possible depth. The *combined* path
 // — calling into the add loop and back — is certified below, and it no
 // longer needs a separate file: see the theorems' comment.
-fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
+fn id_prog() → Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 
 // ===========================================================================
 // The fuel interface (doc §6). Continuation helpers first: each names one of
 // `step`'s intermediate scrutinees as a function of the value being
 // scrutinized, so a proof can case on that value with a SMALL motive
-// (`λ o => k(ev1, …, o) = Out(vs) -> k(ev2, …, o) = Out(vs)`) instead of
+// (`λ o => k(ev1, …, o) = Out(vs) → k(ev2, …, o) = Out(vs)`) instead of
 // spelling the whole match inside the motive twice. They are definitionally
 // equal to the corresponding fragment of `step_*`, so nothing in `simulate`
 // changes and no theorem below has to be restated in terms of them.
 
 // the shared tail of LetMatch / LetLoop / LetCall: a sub-region has answered,
 // and its outputs are rebound before `rest` runs
-fn k_bind(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res) -> Res {
+fn k_bind(ev: Val → Ir → Res, env: Val, rest: Ir, r: Res) → Res {
     match r {
         Stuck => Stuck,
         OutOfFuel => OutOfFuel,
@@ -369,15 +369,15 @@ fn k_bind(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res) -> Res {
 
 // `step_ret`'s match, as a function of the gathered slots — the same move as
 // the others, wanted by the ∃-composition kit's `ret_conv` motive
-fn k_ret(o: OptVal) -> Res {
+fn k_ret(o: OptVal) → Res {
     match o { NoneV => Stuck, SomeV(vs) => Out(vs) }
 }
 
-fn k_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, rest: Ir, o: OptVal) -> Res {
+fn k_letcon(ev: Val → Ir → Res, env: Val, tag: Nat, rest: Ir, o: OptVal) → Res {
     match o { NoneV => Stuck, SomeV(ws) => ev(VCons(VCon(tag, ws), env), rest) }
 }
 
-fn k_letmatch_v(ev: Val -> Ir -> Res, env: Val, arms: Ir, rest: Ir, v: Val) -> Res {
+fn k_letmatch_v(ev: Val → Ir → Res, env: Val, arms: Ir, rest: Ir, v: Val) → Res {
     match v {
         VNil => Stuck,
         VCons(h, t) => Stuck,
@@ -386,29 +386,29 @@ fn k_letmatch_v(ev: Val -> Ir -> Res, env: Val, arms: Ir, rest: Ir, v: Val) -> R
     }
 }
 
-fn k_letmatch(ev: Val -> Ir -> Res, env: Val, arms: Ir, rest: Ir, o: OptVal) -> Res {
+fn k_letmatch(ev: Val → Ir → Res, env: Val, arms: Ir, rest: Ir, o: OptVal) → Res {
     match o { NoneV => Stuck, SomeV(v) => k_letmatch_v(ev, env, arms, rest, v) }
 }
 
-fn k_letloop(ev: Val -> Ir -> Res, env: Val, body: Ir, rest: Ir, o: OptVal) -> Res {
+fn k_letloop(ev: Val → Ir → Res, env: Val, body: Ir, rest: Ir, o: OptVal) → Res {
     match o {
         NoneV => Stuck,
         SomeV(ws) => k_bind(ev, env, rest, ev(ws, LoopIter(body))),
     }
 }
 
-fn k_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, rest: Ir, o: OptVal) -> Res {
+fn k_letcall(ev: Val → Ir → Res, prog: Prog, env: Val, callee: Nat, rest: Ir, o: OptVal) → Res {
     match o {
         NoneV => Stuck,
         SomeV(ws) => k_bind(ev, env, rest, ev(ws, find_fun(prog)(callee))),
     }
 }
 
-fn k_iter_tag(ev: Val -> Ir -> Res, body: Ir, carried: Val, ftag: Nat) -> Res {
+fn k_iter_tag(ev: Val → Ir → Res, body: Ir, carried: Val, ftag: Nat) → Res {
     match ftag { Zero => Out(carried), Succ(f2) => ev(carried, LoopIter(body)) }
 }
 
-fn k_iter_flag(ev: Val -> Ir -> Res, body: Ir, carried: Val, flag: Val) -> Res {
+fn k_iter_flag(ev: Val → Ir → Res, body: Ir, carried: Val, flag: Val) → Res {
     match flag {
         VNil => Stuck,
         VCons(h, t) => Stuck,
@@ -416,7 +416,7 @@ fn k_iter_flag(ev: Val -> Ir -> Res, body: Ir, carried: Val, flag: Val) -> Res {
     }
 }
 
-fn k_iter_vals(ev: Val -> Ir -> Res, body: Ir, ws: Val) -> Res {
+fn k_iter_vals(ev: Val → Ir → Res, body: Ir, ws: Val) → Res {
     match ws {
         VNil => Stuck,
         VCon(tag, fields) => Stuck,
@@ -424,7 +424,7 @@ fn k_iter_vals(ev: Val -> Ir -> Res, body: Ir, ws: Val) -> Res {
     }
 }
 
-fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
+fn k_iter(ev: Val → Ir → Res, body: Ir, r: Res) → Res {
     match r {
         Stuck => Stuck,
         OutOfFuel => OutOfFuel,
@@ -443,16 +443,16 @@ fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
 // The refinement chain (doc §6 stress test): the same add function reached
 // through zero, one and two levels of `LetCall`.
 // the chain: fun 0 is the add loop, fun 1 calls fun 0
-fn add_chain() -> Prog {
+fn add_chain() → Prog {
     PFun(add_body(),
         PFun(LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))), PNil))
 }
 
-fn ir_loop() -> Ir { add_body() }
-fn ir_call1() -> Ir { LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
-fn ir_call2() -> Ir { LetCall(1, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
+fn ir_loop() → Ir { add_body() }
+fn ir_call1() → Ir { LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
+fn ir_call2() → Ir { LetCall(1, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
 
-fn plus2() -> Nat -> Nat { λ (n: Nat) => Succ(Succ(n)) }
+fn plus2() → Nat → Nat { λ (n: Nat) => Succ(Succ(n)) }
 
 // ---------------------------------------------------------------------------
 // The first end-to-end certificate (doc §11 item 4): an `equiv`-shaped
@@ -465,7 +465,7 @@ fn plus2() -> Nat -> Nat { λ (n: Nat) => Succ(Succ(n)) }
 
 // succ applied `k` times, curried because the accumulator varies with the
 // recursion (doc §13 note 2, the same reason `lookup` is curried)
-fn bumps(k: Nat) -> Val -> Val {
+fn bumps(k: Nat) → Val → Val {
     match k {
         Zero => λ (a: Val) => a,
         Succ(k2) => λ (a: Val) => bumps(k2)(VCon(1, VCons(a, VNil))),
@@ -542,7 +542,7 @@ theorem ir_cases_letcall<M>(cases: IrCases<M>, callee: Nat, args: Refs, rest: Ir
     ir_cases(cases, LetCall(callee, args, rest)) = cases.letcall(callee, args, rest)
 {}
 
-theorem step_is_cases(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir):
+theorem step_is_cases(ev: Val → Ir → Res, prog: Prog, env: Val, ir: Ir):
     step(ev, prog, env, ir) = ir_cases(step_cases(ev, prog, env), ir)
 {}
 
@@ -579,7 +579,7 @@ theorem call_add_three_four():
 { refl }
 
 // the endpoints agree with the spec function on the same literals
-theorem spec_agrees(): add(1, 1) = 2 { refl }
+theorem spec_agrees(): Nat::add(1, 1) = 2 { refl }
 
 // negative controls (doc §11 item 6):
 // an out-of-range reference is Stuck, not an answer
@@ -610,26 +610,26 @@ theorem short_fuel_mid_loop():
 { refl }
 // sanity: each helper really is the fragment of `step` it claims to be, so
 // the theorems below may move freely between the two spellings
-theorem k_letcon_is_step(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir):
+theorem k_letcon_is_step(ev: Val → Ir → Res, env: Val, tag: Nat, args: Refs, rest: Ir):
     step_letcon(ev, env, tag, args, rest) = k_letcon(ev, env, tag, rest, gather(args, env))
 { refl }
 
-theorem k_letmatch_is_step(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir):
+theorem k_letmatch_is_step(ev: Val → Ir → Res, env: Val, scrut: Nat, arms: Ir, rest: Ir):
     step_letmatch(ev, env, scrut, arms, rest)
     = k_letmatch(ev, env, arms, rest, lookup(env)(scrut))
 { refl }
 
-theorem k_letloop_is_step(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir):
+theorem k_letloop_is_step(ev: Val → Ir → Res, env: Val, init: Refs, body: Ir, rest: Ir):
     step_letloop(ev, env, init, body, rest)
     = k_letloop(ev, env, body, rest, gather(init, env))
 { refl }
 
-theorem k_letcall_is_step(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir):
+theorem k_letcall_is_step(ev: Val → Ir → Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir):
     step_letcall(ev, prog, env, callee, args, rest)
     = k_letcall(ev, prog, env, callee, rest, gather(args, env))
 { refl }
 
-theorem k_iter_is_step(ev: Val -> Ir -> Res, env: Val, body: Ir):
+theorem k_iter_is_step(ev: Val → Ir → Res, env: Val, body: Ir):
     step_loopiter(ev, env, body) = k_iter(ev, body, ev(env, body))
 { refl }
 
@@ -638,7 +638,7 @@ theorem k_iter_is_step(ev: Val -> Ir -> Res, env: Val, body: Ir):
 // value-indexed Σ (docs/surface-value-parameters.md; issues/surface-existential
 // route 1). The statement is the existential the issue could not write:
 //
-//     k_bind(ev, env, rest, r) = Out(vs) -> ∃ ws. r = Out(ws) × ev(ws ++ env, rest) = Out(vs)
+//     k_bind(ev, env, rest, r) = Out(vs) → ∃ ws. r = Out(ws) × ev(ws ++ env, rest) = Out(vs)
 //
 // A record with three fields IS that multi-witness Σ: the spine is
 // right-nested internally and each field's type may mention the earlier ones,
@@ -650,7 +650,7 @@ theorem k_iter_is_step(ev: Val -> Ir -> Res, env: Val, body: Ir):
 // restriction keys on self-occurrence, not on shape. (`inj` on `BindInv` would
 // not derive — it has dependent fields — and nothing needs it.)
 
-record BindInv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val) {
+record BindInv(ev: Val → Ir → Res, env: Val, rest: Ir, r: Res, vs: Val) {
     ws: Val,
     hr: r = Out(ws),
     hk: ev(append(ws, env), rest) = Out(vs),
@@ -660,11 +660,11 @@ record BindInv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val) {
 // — so this does not even need the remember idiom that the inline convoys did:
 // the conclusion's `r` is the scrutinee, so each arm's goal is already
 // specialized.
-theorem k_bind_inv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val,
+theorem k_bind_inv(ev: Val → Ir → Res, env: Val, rest: Ir, r: Res, vs: Val,
                    h: k_bind(ev, env, rest, r) = Out(vs))
     : BindInv(ev, env, rest, r, vs)
 {
-    match r as λ y => k_bind(ev, env, rest, y) = Out(vs) -> BindInv(ev, env, rest, y, vs) {
+    match r as λ y => k_bind(ev, env, rest, y) = Out(vs) → BindInv(ev, env, rest, y, vs) {
         Stuck => λ q => absurd(q),
         OutOfFuel => λ q => absurd(q),
         Out(ws) => λ q => BindInv(ws, refl, q),
@@ -674,8 +674,8 @@ theorem k_bind_inv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val,
 // …and the one consumer `step_mono` needs, three times over: a `k_bind` whose
 // scrutinee is a recursive call is monotone in that call. Destructuring the
 // inversion is a `let { }`, which is what replaces the convoy match.
-theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
-                    hyp: (e: Val, i: Ir, w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+theorem k_bind_mono(ev1: Val → Ir → Res, ev2: Val → Ir → Res,
+                    hyp: (e: Val, i: Ir, w: Val) → ev1(e, i) = Out(w) → ev2(e, i) = Out(w),
                     env: Val, rest: Ir, e0: Val, i0: Ir, vs: Val,
                     q: k_bind(ev1, env, rest, ev1(e0, i0)) = Out(vs))
     : k_bind(ev2, env, rest, ev2(e0, i0)) = Out(vs)
@@ -702,12 +702,12 @@ theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
 // (docs/match-equation-split-design.md §3). Giving it its own inversion record
 // as well is the same move as `k_bind_inv` and is left for a second consumer.
 
-theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
-                  hyp: (e: Val, i: Ir, w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+theorem step_mono(prog: Prog, ev1: Val → Ir → Res, ev2: Val → Ir → Res,
+                  hyp: (e: Val, i: Ir, w: Val) → ev1(e, i) = Out(w) → ev2(e, i) = Out(w),
                   env: Val, ir: Ir, vs: Val)
-    : step(ev1, prog, env, ir) = Out(vs) -> step(ev2, prog, env, ir) = Out(vs)
+    : step(ev1, prog, env, ir) = Out(vs) → step(ev2, prog, env, ir) = Out(vs)
 {
-    match ir as λ z => step(ev1, prog, env, z) = Out(vs) -> step(ev2, prog, env, z) = Out(vs) {
+    match ir as λ z => step(ev1, prog, env, z) = Out(vs) → step(ev2, prog, env, z) = Out(vs) {
         // no recursive call at all
         Ret(rs) => λ q => q,
         Arm(abody, anext) => λ q => q,
@@ -717,7 +717,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         LetCon(tag, args, rest) =>
             match gather(args, env) as λ o =>
                 k_letcon(ev1, env, tag, rest, o) = Out(vs)
-                -> k_letcon(ev2, env, tag, rest, o) = Out(vs) {
+                → k_letcon(ev2, env, tag, rest, o) = Out(vs) {
                 NoneV => λ q => q,
                 SomeV(ws) => λ q => hyp(VCons(VCon(tag, ws), env), rest, vs, q),
             },
@@ -726,12 +726,12 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         LetMatch(scrut, arms, rest) =>
             match lookup(env)(scrut) as λ o =>
                 k_letmatch(ev1, env, arms, rest, o) = Out(vs)
-                -> k_letmatch(ev2, env, arms, rest, o) = Out(vs) {
+                → k_letmatch(ev2, env, arms, rest, o) = Out(vs) {
                 NoneV => λ q => q,
                 SomeV(v) =>
                     match v as λ y =>
                         k_letmatch_v(ev1, env, arms, rest, y) = Out(vs)
-                        -> k_letmatch_v(ev2, env, arms, rest, y) = Out(vs) {
+                        → k_letmatch_v(ev2, env, arms, rest, y) = Out(vs) {
                         VNil => λ q => q,
                         VCons(vh, vt) => λ q => q,
                         VCon(tag, fields) => λ q =>
@@ -743,7 +743,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         LetLoop(init, lbody, rest) =>
             match gather(init, env) as λ o =>
                 k_letloop(ev1, env, lbody, rest, o) = Out(vs)
-                -> k_letloop(ev2, env, lbody, rest, o) = Out(vs) {
+                → k_letloop(ev2, env, lbody, rest, o) = Out(vs) {
                 NoneV => λ q => q,
                 SomeV(cs) => λ q =>
                     k_bind_mono(ev1, ev2, hyp, env, rest, cs, LoopIter(lbody), vs, q),
@@ -752,7 +752,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         LetCall(callee, args, rest) =>
             match gather(args, env) as λ o =>
                 k_letcall(ev1, prog, env, callee, rest, o) = Out(vs)
-                -> k_letcall(ev2, prog, env, callee, rest, o) = Out(vs) {
+                → k_letcall(ev2, prog, env, callee, rest, o) = Out(vs) {
                 NoneV => λ q => q,
                 SomeV(cs) => λ q =>
                     k_bind_mono(ev1, ev2, hyp, env, rest, cs, find_fun(prog)(callee), vs, q),
@@ -763,7 +763,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         LoopIter(lbody) =>
             match h: ev1(env, lbody) as λ r =>
                 k_iter(ev1, lbody, r) = Out(vs)
-                -> k_iter(ev2, lbody, ev2(env, lbody)) = Out(vs) {
+                → k_iter(ev2, lbody, ev2(env, lbody)) = Out(vs) {
                 Stuck => λ q => absurd(q),
                 OutOfFuel => λ q => absurd(q),
                 Out(ws) => λ q =>
@@ -771,19 +771,19 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                       λ y p => k_iter(ev2, lbody, y) = Out(vs),
                       match ws as λ y =>
                           k_iter_vals(ev1, lbody, y) = Out(vs)
-                          -> k_iter_vals(ev2, lbody, y) = Out(vs) {
+                          → k_iter_vals(ev2, lbody, y) = Out(vs) {
                           VNil => λ q2 => q2,
                           VCon(t, f) => λ q2 => q2,
                           VCons(flag, carried) =>
                               match flag as λ g =>
                                   k_iter_flag(ev1, lbody, carried, g) = Out(vs)
-                                  -> k_iter_flag(ev2, lbody, carried, g) = Out(vs) {
+                                  → k_iter_flag(ev2, lbody, carried, g) = Out(vs) {
                                   VNil => λ q2 => q2,
                                   VCons(fh, ft) => λ q2 => q2,
                                   VCon(ftag, ffields) =>
                                       match ftag as λ n =>
                                           k_iter_tag(ev1, lbody, carried, n) = Out(vs)
-                                          -> k_iter_tag(ev2, lbody, carried, n) = Out(vs) {
+                                          → k_iter_tag(ev2, lbody, carried, n) = Out(vs) {
                                           Zero => λ q2 => q2,
                                           Succ(f2) => λ q2 => hyp(carried, LoopIter(lbody), vs, q2),
                                       },
@@ -800,11 +800,11 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
 
 theorem eval_mono_succ(prog: Prog, n: Nat):
     (env: Val, ir: Ir, vs: Val)
-    -> eval(n, prog)(env, ir) = Out(vs) -> eval(Succ(n), prog)(env, ir) = Out(vs)
+    → eval(n, prog)(env, ir) = Out(vs) → eval(Succ(n), prog)(env, ir) = Out(vs)
 {
     match n as λ z =>
         (env: Val, ir: Ir, vs: Val)
-        -> eval(z, prog)(env, ir) = Out(vs) -> eval(Succ(z), prog)(env, ir) = Out(vs) {
+        → eval(z, prog)(env, ir) = Out(vs) → eval(Succ(z), prog)(env, ir) = Out(vs) {
         // no fuel answered nothing: OutOfFuel is not Out
         Zero => λ env ir vs h => absurd(h),
         Succ(k, ih) => λ env ir vs h =>
@@ -816,12 +816,12 @@ theorem eval_mono_succ(prog: Prog, n: Nat):
 // `n` with `k` successors on the outside and both arms are definitional
 theorem eval_mono_plus(prog: Prog, n: Nat, env: Val, ir: Ir, vs: Val,
                        h: eval(n, prog)(env, ir) = Out(vs), k: Nat)
-    : eval(add(n, k), prog)(env, ir) = Out(vs)
+    : eval(n.add(k), prog)(env, ir) = Out(vs)
 {
     match k {
         Zero => h,
         Succ(k2) =>
-            eval_mono_succ(prog, add(n, k2))(env, ir, vs,
+            eval_mono_succ(prog, n.add(k2))(env, ir, vs,
                 eval_mono_plus(prog, n, env, ir, vs, h, k2)),
     }
 }
@@ -829,16 +829,16 @@ theorem eval_mono_plus(prog: Prog, n: Nat, env: Val, ir: Ir, vs: Val,
 // and `le_add_r` — with `cong_nat`, `add_left_zero`, `add_succ_left` and
 // `sub_zero` under them — is `nat`'s (docs/modules-design.md §7).
 
-// doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) -> n <= m ->
+// doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) → n <= m →
 // simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed
 // `eval` — and `n <= m` now spelled `n <= m`.
 theorem fuel_monotone(prog: Prog, env: Val, ir: Ir, vs: Val, n: Nat, m: Nat,
                       h: eval(n, prog)(env, ir) = Out(vs), hle: n <= m)
     : eval(m, prog)(env, ir) = Out(vs)
 {
-    j(le_add(n)(m, hle),
+    j(n.le_add(m, hle),
       λ y p => eval(y, prog)(env, ir) = Out(vs),
-      eval_mono_plus(prog, n, env, ir, vs, h, sub(m)(n)))
+      eval_mono_plus(prog, n, env, ir, vs, h, m.sub(n)))
 }
 
 // ---------------------------------------------------------------------------
@@ -886,8 +886,8 @@ theorem eval_functional(prog: Prog, env: Val, ir: Ir, vs: Val, ws: Val, n: Nat, 
                         h2: eval(m, prog)(env, ir) = Out(ws))
     : vs = ws
 {
-    inj(trans(sym(fuel_monotone(prog, env, ir, vs, n, add(n, m), h1, le_add_l(n, m))),
-              fuel_monotone(prog, env, ir, ws, m, add(n, m), h2, le_add_r(n, m))))
+    inj(trans(sym(fuel_monotone(prog, env, ir, vs, n, n.add(m), h1, n.le_add_l(m))),
+              fuel_monotone(prog, env, ir, ws, m, n.add(m), h2, n.le_add_r(m))))
 }
 
 // …and the same at the ∃-level, where it is the statement a client wants:
@@ -938,18 +938,18 @@ theorem letcall_conv(p: Prog, env: Val, callee: Nat, args: Refs, rest: Ir,
                      hr: Converges(p, append(ws, env), rest, vs))
     : Converges(p, env, LetCall(callee, args, rest), vs)
 {
-    let e1: (eval(add(hc.n, hr.n), p)(cargs, find_fun(p)(callee)) = Out(ws))
+    let e1: (eval(hc.n.add(hr.n), p)(cargs, find_fun(p)(callee)) = Out(ws))
         = fuel_monotone(p, cargs, find_fun(p)(callee), ws,
-                        hc.n, add(hc.n, hr.n), hc.h, le_add_l(hc.n, hr.n));
-    let e2: (eval(add(hc.n, hr.n), p)(append(ws, env), rest) = Out(vs))
+                        hc.n, hc.n.add(hr.n), hc.h, hc.n.le_add_l(hr.n));
+    let e2: (eval(hc.n.add(hr.n), p)(append(ws, env), rest) = Out(vs))
         = fuel_monotone(p, append(ws, env), rest, vs,
-                        hr.n, add(hc.n, hr.n), hr.h, le_add_r(hc.n, hr.n));
-    Converges(Succ(add(hc.n, hr.n)),
+                        hr.n, hc.n.add(hr.n), hr.h, hc.n.le_add_r(hr.n));
+    Converges(Succ(hc.n.add(hr.n)),
         j(sym(hg),
-          λ o q => k_letcall(eval(add(hc.n, hr.n), p), p, env, callee, rest, o)
+          λ o q => k_letcall(eval(hc.n.add(hr.n), p), p, env, callee, rest, o)
                    = Out(vs),
           j(sym(e1),
-            λ r q2 => k_bind(eval(add(hc.n, hr.n), p), env, rest, r) = Out(vs),
+            λ r q2 => k_bind(eval(hc.n.add(hr.n), p), env, rest, r) = Out(vs),
             e2)))
 }
 
@@ -960,18 +960,18 @@ theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
                       hr: Converges(p, append(ws, env), rest, vs))
     : Converges(p, env, LetMatch(scrut, arms, rest), vs)
 {
-    let e1: (eval(add(ha.n, hr.n), p)(append(fields, env), pick_arm(arms)(tag)) = Out(ws))
+    let e1: (eval(ha.n.add(hr.n), p)(append(fields, env), pick_arm(arms)(tag)) = Out(ws))
         = fuel_monotone(p, append(fields, env), pick_arm(arms)(tag), ws,
-                        ha.n, add(ha.n, hr.n), ha.h, le_add_l(ha.n, hr.n));
-    let e2: (eval(add(ha.n, hr.n), p)(append(ws, env), rest) = Out(vs))
+                        ha.n, ha.n.add(hr.n), ha.h, ha.n.le_add_l(hr.n));
+    let e2: (eval(ha.n.add(hr.n), p)(append(ws, env), rest) = Out(vs))
         = fuel_monotone(p, append(ws, env), rest, vs,
-                        hr.n, add(ha.n, hr.n), hr.h, le_add_r(ha.n, hr.n));
-    Converges(Succ(add(ha.n, hr.n)),
+                        hr.n, ha.n.add(hr.n), hr.h, ha.n.le_add_r(hr.n));
+    Converges(Succ(ha.n.add(hr.n)),
         j(sym(hl),
-          λ o q => k_letmatch(eval(add(ha.n, hr.n), p), env, arms, rest, o)
+          λ o q => k_letmatch(eval(ha.n.add(hr.n), p), env, arms, rest, o)
                    = Out(vs),
           j(sym(e1),
-            λ r q2 => k_bind(eval(add(ha.n, hr.n), p), env, rest, r) = Out(vs),
+            λ r q2 => k_bind(eval(ha.n.add(hr.n), p), env, rest, r) = Out(vs),
             e2)))
 }
 
@@ -990,8 +990,8 @@ theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
 // This closes doc §13 note 7's "refines cannot be given a name"
 // ([[type-definitions]]).
 
-fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
-    (env, vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) → Type {
+    (env, vs: Val) → Converges(p1, env, i1, vs) → Converges(p2, env, i2, vs)
 }
 
 theorem refines_refl_conv(prog: Prog, ir: Ir): Refines(prog, ir, prog, ir)
@@ -1008,9 +1008,9 @@ theorem refines_trans_conv(
 // fuel map is a refinement in the ∃-sense. This is why none of the bounded
 // theorems below has to be re-proved — `b` is applied to the hidden witness
 // and then forgotten again.
-theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
+theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat → Nat,
     r: (env, vs: Val, n: Nat)
-       -> eval(n, p1)(env, i1) = Out(vs) -> eval(b(n), p2)(env, i2) = Out(vs))
+       → eval(n, p1)(env, i1) = Out(vs) → eval(b(n), p2)(env, i2) = Out(vs))
     : Refines(p1, i1, p2, i2)
 { λ env vs c => Converges(b(c.n), r(env, vs, c.n, c.h)) }
 
@@ -1023,18 +1023,18 @@ theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
 
 theorem refines_refl(prog: Prog, ir: Ir):
     (env, vs: Val, n: Nat)
-    -> eval(n, prog)(env, ir) = Out(vs) -> eval(n, prog)(env, ir) = Out(vs)
+    → eval(n, prog)(env, ir) = Out(vs) → eval(n, prog)(env, ir) = Out(vs)
 { λ env vs n h => h }
 
 theorem refines_trans(
     p1: Prog, i1: Ir, p2: Prog, i2: Ir, p3: Prog, i3: Ir,
-    b1: Nat -> Nat, b2: Nat -> Nat,
+    b1: Nat → Nat, b2: Nat → Nat,
     r1: (env, vs: Val, n: Nat)
-        -> eval(n, p1)(env, i1) = Out(vs) -> eval(b1(n), p2)(env, i2) = Out(vs),
+        → eval(n, p1)(env, i1) = Out(vs) → eval(b1(n), p2)(env, i2) = Out(vs),
     r2: (env, vs: Val, n: Nat)
-        -> eval(n, p2)(env, i2) = Out(vs) -> eval(b2(n), p3)(env, i3) = Out(vs))
+        → eval(n, p2)(env, i2) = Out(vs) → eval(b2(n), p3)(env, i3) = Out(vs))
     : (env, vs: Val, n: Nat)
-      -> eval(n, p1)(env, i1) = Out(vs) -> eval(b2(b1(n)), p3)(env, i3) = Out(vs)
+      → eval(n, p1)(env, i1) = Out(vs) → eval(b2(b1(n)), p3)(env, i3) = Out(vs)
 { λ env vs n h => r2(env, vs, b1(n), r1(env, vs, n, h)) }
 
 // ---------------------------------------------------------------------------
@@ -1091,19 +1091,19 @@ theorem chain_add_one_one():
     eval(54, add_chain())(VCons(embed_nat(1), VCons(embed_nat(1), VNil)), ir_call2())
     = Out(VCons(embed_nat(2), VNil))
 { refl }
-theorem cong_nat_val(f: Nat -> Val, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
+theorem cong_nat_val(f: Nat → Val, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
 
 // the embedding is a monoid map for the loop's accumulator: bumping an
 // embedded numeral `a` times is embedding the sum. Induction on `a` with `b`
 // generalized — the third explicit motive.
-theorem bumps_embed(a: Nat): (b: Nat) -> bumps(a)(embed_nat(b)) = embed_nat(add(b, a)) {
-    match a as λ z => (b: Nat) -> bumps(z)(embed_nat(b)) = embed_nat(add(b, z)) {
+theorem bumps_embed(a: Nat): (b: Nat) → bumps(a)(embed_nat(b)) = embed_nat(b.add(a)) {
+    match a as λ z => (b: Nat) → bumps(z)(embed_nat(b)) = embed_nat(b.add(z)) {
         Zero => λ b => refl,
         Succ(a2, ih) => λ b =>
             trans(ih(Succ(b)),
-                  cong_nat_val(λ (x: Nat) => embed_nat(x), add_succ_left(b, a2))),
+                  cong_nat_val(λ (x: Nat) => embed_nat(x), b.add_succ_left(a2))),
     }
 }
 
@@ -1114,13 +1114,13 @@ theorem bumps_embed(a: Nat): (b: Nat) -> bumps(a)(embed_nat(b)) = embed_nat(add(
 // constant steps are the sub-region the arm runs.
 theorem add_loop_runs(prog: Prog, k: Nat):
     (acc: Val)
-    -> eval(add(k, 4), prog)(VCons(embed_nat(k), VCons(acc, VNil)),
+    → eval(k.add(4), prog)(VCons(embed_nat(k), VCons(acc, VNil)),
                                    LoopIter(add_loop_body()))
        = Out(VCons(embed_nat(0), VCons(bumps(k)(acc), VNil)))
 {
     match k as λ z =>
         (acc: Val)
-        -> eval(add(z, 4), prog)(VCons(embed_nat(z), VCons(acc, VNil)),
+        → eval(z.add(4), prog)(VCons(embed_nat(z), VCons(acc, VNil)),
                                        LoopIter(add_loop_body()))
            = Out(VCons(embed_nat(0), VCons(bumps(z)(acc), VNil))) {
         Zero => λ acc => refl,
@@ -1131,11 +1131,11 @@ theorem add_loop_runs(prog: Prog, k: Nat):
 // …and the function body around it: gather the two arguments, run the loop,
 // return the accumulator slot.
 theorem add_ir_runs(prog: Prog, a: Nat, b: Nat):
-    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
+    eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
     = Out(VCons(bumps(a)(embed_nat(b)), VNil))
 {
     j(sym(add_loop_runs(prog, a)(embed_nat(b))),
-      λ r p => k_bind(eval(add(a, 4), prog),
+      λ r p => k_bind(eval(a.add(4), prog),
                       VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
                       Ret(RCons(1, RNil)), r)
                = Out(VCons(bumps(a)(embed_nat(b)), VNil)),
@@ -1147,11 +1147,11 @@ theorem add_ir_runs(prog: Prog, a: Nat, b: Nat):
 // implements is `λ a b. b + a` — `add(b, a)` in the spec's own spelling,
 // which recurses on its second argument.
 theorem add_equiv(prog: Prog, a: Nat, b: Nat):
-    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
-    = Out(VCons(embed_nat(add(b, a)), VNil))
+    eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
+    = Out(VCons(embed_nat(b.add(a)), VNil))
 {
     j(bumps_embed(a)(b),
-      λ w p => eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
+      λ w p => eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
                                            add_body())
                = Out(VCons(w, VNil)),
       add_ir_runs(prog, a, b))
@@ -1161,12 +1161,12 @@ theorem add_equiv(prog: Prog, a: Nat, b: Nat):
 // computed bound, `fuel_monotone` doing the bridging. This is the shape a
 // `Compile` instance will export, since a caller has no reason to know the
 // bound the instance computed.
-theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: add(a, 5) <= f):
+theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: a.add(5) <= f):
     eval(f, prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
-    = Out(VCons(embed_nat(add(b, a)), VNil))
+    = Out(VCons(embed_nat(b.add(a)), VNil))
 {
     fuel_monotone(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body(),
-                  VCons(embed_nat(add(b, a)), VNil), add(a, 5), f, add_equiv(prog, a, b), hle)
+                  VCons(embed_nat(b.add(a)), VNil), a.add(5), f, add_equiv(prog, a, b), hle)
 }
 
 // THE SAME CERTIFICATE, exported as the ∃-form. This is the shape a `Compile`
@@ -1175,8 +1175,8 @@ theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: add(a, 5) <= f):
 // intent finally written as a type rather than as a `∀ f ≥ bound` schema.
 theorem add_converges(prog: Prog, a: Nat, b: Nat)
     : Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body(),
-                VCons(embed_nat(add(b, a)), VNil))
-{ Converges(add(a, 5), add_equiv(prog, a, b)) }
+                VCons(embed_nat(b.add(a)), VNil))
+{ Converges(a.add(5), add_equiv(prog, a, b)) }
 
 // …and the refinement chain in ∃-form: the bound `plus2 ∘ plus2` is applied
 // to the hidden witness and hidden again, so the STATEMENT mentions no fuel
@@ -1189,20 +1189,20 @@ theorem loop_refines_call2_conv(x: Val, y: Val, v: Val,
 
 theorem add_converges_through_calls(a: Nat, b: Nat)
     : Converges(add_chain(), VCons(embed_nat(a), VCons(embed_nat(b), VNil)), ir_call2(),
-                VCons(embed_nat(add(b, a)), VNil))
+                VCons(embed_nat(b.add(a)), VNil))
 {
-    loop_refines_call2_conv(embed_nat(a), embed_nat(b), embed_nat(add(b, a)),
+    loop_refines_call2_conv(embed_nat(a), embed_nat(b), embed_nat(b.add(a)),
                             add_converges(add_chain(), a, b))
 }
 
 // and the certificate transports along the refinement chain: the same
 // function, two calls deep, at the composed bound
 theorem add_equiv_through_calls(a: Nat, b: Nat):
-    eval(plus2()(plus2()(add(a, 5))), add_chain())(
+    eval(plus2()(plus2()(a.add(5))), add_chain())(
         VCons(embed_nat(a), VCons(embed_nat(b), VNil)), ir_call2())
-    = Out(VCons(embed_nat(add(b, a)), VNil))
+    = Out(VCons(embed_nat(b.add(a)), VNil))
 {
-    loop_refined_by_call2(embed_nat(a), embed_nat(b), embed_nat(add(b, a)), add(a, 5),
+    loop_refined_by_call2(embed_nat(a), embed_nat(b), embed_nat(b.add(a)), a.add(5),
         add_equiv(add_chain(), a, b))
 }
 
@@ -1214,23 +1214,23 @@ theorem add_equiv_through_calls(a: Nat, b: Nat):
 // the ∃-form. No class machinery: resolution, coherence and `[target]`
 // indexing are the operational layer and wait for a resolver (doc §5).
 
-record CompileNat2(f: Nat -> Nat -> Nat) {
+record CompileNat2(f: Nat → Nat → Nat) {
     prog: Prog,
     entry: Ir,
     cert: (a, b: Nat)
-          -> Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
+          → Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
                        entry, VCons(embed_nat(f(a)(b)), VNil)),
 }
 
 // The spec, spelled the way the loop computes it: the theta-loop counts `a`
 // down onto `b`, so the implemented function is `λ a b. add(b, a)`.
-fn add_spec(a: Nat) -> Nat -> Nat { λ (b: Nat) => add(b, a) }
+fn add_spec(a: Nat) → Nat → Nat { λ (b: Nat) => b.add(a) }
 
 // THE MILESTONE (issues/end-to-end-compile-instance.md): one small pure
 // function, a hand-written instance producing IR for it, and the certificate
 // checked by the kernel. `cert`'s expected type asks conversion for
 // `embed_nat(add_spec(a)(b)) ≡ embed_nat(add(b, a))` — δ then β.
-fn add_instance() -> CompileNat2(add_spec) {
+fn add_instance() → CompileNat2(add_spec) {
     CompileNat2 {
         prog: add_chain(),
         entry: ir_call2(),
@@ -1242,7 +1242,7 @@ fn add_instance() -> CompileNat2(add_spec) {
 // directly rather than two calls deep. Coherence is policy, not soundness:
 // two values of one type, either usable, semantics pinned by both
 // certificates (doc §7 item 4).
-fn add_instance_loop() -> CompileNat2(add_spec) {
+fn add_instance_loop() → CompileNat2(add_spec) {
     CompileNat2 {
         prog: add_chain(),
         entry: ir_loop(),
@@ -1271,24 +1271,24 @@ fn add_instance_loop() -> CompileNat2(add_spec) {
 // transported slot-by-slot the way `add_loop_runs` does.
 
 // Zero arm: env [a, b, …]; the answer is `b`
-fn add_rec_arm_zero() -> Ir { Ret(RCons(1, RNil)) }
+fn add_rec_arm_zero() → Ir { Ret(RCons(1, RNil)) }
 
 // Succ arm: env [pred, a, b, …]; call fun 0 on (pred, b), bind its answer at
 // slot 0, wrap it in Succ, return it
-fn add_rec_arm_succ() -> Ir {
+fn add_rec_arm_succ() → Ir {
     LetCall(0, RCons(0, RCons(2, RNil)),
         LetCon(1, RCons(0, RNil),
             Ret(RCons(0, RNil))))
 }
 
-fn add_rec_body() -> Ir {
+fn add_rec_body() → Ir {
     LetMatch(0, Arm(add_rec_arm_zero(), Arm(add_rec_arm_succ(), NoArm)),
         Ret(RCons(0, RNil)))
 }
 
-fn add_rec_prog() -> Prog { PFun(add_rec_body(), PNil) }
+fn add_rec_prog() → Prog { PFun(add_rec_body(), PNil) }
 
-fn ir_rec() -> Ir { add_rec_body() }
+fn ir_rec() → Ir { add_rec_body() }
 
 // The fuel profile is the other place the two IRs differ. The loop costs
 // `a + 5` (one step per iteration plus a constant); the recursion costs
@@ -1297,7 +1297,7 @@ fn ir_rec() -> Ir { add_rec_body() }
 // at an open `a`: `add(x, 2)` is `Succ(Succ(x))` for any `x` (add recurses on
 // its second argument), which is exactly the two `Succ`s the induction step
 // peels.
-fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+fn dbl(n: Nat) → Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
 
 // concrete fixtures, in the style of the loop's (doc §11 item 2), plus the
 // negative control that the bound is EXACT and not merely sufficient
@@ -1325,15 +1325,15 @@ theorem rec_two_three_short():
 // induction hypothesis.
 theorem add_rec_runs(a: Nat):
     (b: Nat, tail: Val)
-    -> eval(add(dbl(a), 2), add_rec_prog())(
+    → eval(dbl(a).add(2), add_rec_prog())(
            VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_rec_body())
-       = Out(VCons(embed_nat(add(b, a)), VNil))
+       = Out(VCons(embed_nat(b.add(a)), VNil))
 {
     match a as λ z =>
         (b: Nat, tail: Val)
-        -> eval(add(dbl(z), 2), add_rec_prog())(
+        → eval(dbl(z).add(2), add_rec_prog())(
                VCons(embed_nat(z), VCons(embed_nat(b), tail)), add_rec_body())
-           = Out(VCons(embed_nat(add(b, z)), VNil)) {
+           = Out(VCons(embed_nat(b.add(z)), VNil)) {
         Zero => λ b tail => refl,
         // the ih is used at tail = VNil (the call's closed environment); the
         // motive is the two nested `k_bind`s the step unfolds to — the outer
@@ -1342,15 +1342,15 @@ theorem add_rec_runs(a: Nat):
         Succ(a2, ih) => λ b tail =>
             j(sym(ih(b, VNil)),
               λ r p =>
-                k_bind(eval(add(dbl(a2), 3), add_rec_prog()),
+                k_bind(eval(dbl(a2).add(3), add_rec_prog()),
                        VCons(embed_nat(Succ(a2)), VCons(embed_nat(b), tail)),
                        Ret(RCons(0, RNil)),
-                       k_bind(eval(add(dbl(a2), 2), add_rec_prog()),
+                       k_bind(eval(dbl(a2).add(2), add_rec_prog()),
                               VCons(embed_nat(a2),
                                     VCons(embed_nat(Succ(a2)), VCons(embed_nat(b), tail))),
                               LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))),
                               r))
-                = Out(VCons(embed_nat(add(b, Succ(a2))), VNil)),
+                = Out(VCons(embed_nat(b.add(Succ(a2))), VNil)),
               refl),
     }
 }
@@ -1360,11 +1360,11 @@ theorem add_rec_runs(a: Nat):
 // `add_loop_runs` is already about the closed carried environment, and the
 // tail only ever sits under a `gather` of slots 0 and 1.
 theorem add_ir_runs_env(prog: Prog, a: Nat, b: Nat, tail: Val):
-    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
+    eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
     = Out(VCons(bumps(a)(embed_nat(b)), VNil))
 {
     j(sym(add_loop_runs(prog, a)(embed_nat(b))),
-      λ r p => k_bind(eval(add(a, 4), prog),
+      λ r p => k_bind(eval(a.add(4), prog),
                       VCons(embed_nat(a), VCons(embed_nat(b), tail)),
                       Ret(RCons(1, RNil)), r)
                = Out(VCons(bumps(a)(embed_nat(b)), VNil)),
@@ -1372,11 +1372,11 @@ theorem add_ir_runs_env(prog: Prog, a: Nat, b: Nat, tail: Val):
 }
 
 theorem add_equiv_env(prog: Prog, a: Nat, b: Nat, tail: Val):
-    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
-    = Out(VCons(embed_nat(add(b, a)), VNil))
+    eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
+    = Out(VCons(embed_nat(b.add(a)), VNil))
 {
     j(bumps_embed(a)(b),
-      λ w p => eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+      λ w p => eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)),
                                      add_body())
                = Out(VCons(w, VNil)),
       add_ir_runs_env(prog, a, b, tail))
@@ -1387,22 +1387,22 @@ theorem add_equiv_env(prog: Prog, a: Nat, b: Nat, tail: Val):
 // two invariants rather than a lemma feeding them — the induction needs the
 // quantified form, and the equational form is what a reader wants to see.)
 theorem add_rec_env_indep(a: Nat, b: Nat, t1: Val, t2: Val):
-    eval(add(dbl(a), 2), add_rec_prog())(
+    eval(dbl(a).add(2), add_rec_prog())(
         VCons(embed_nat(a), VCons(embed_nat(b), t1)), add_rec_body())
-    = eval(add(dbl(a), 2), add_rec_prog())(
+    = eval(dbl(a).add(2), add_rec_prog())(
         VCons(embed_nat(a), VCons(embed_nat(b), t2)), add_rec_body())
 { trans(add_rec_runs(a)(b, t1), sym(add_rec_runs(a)(b, t2))) }
 
 theorem add_loop_env_indep(prog: Prog, a: Nat, b: Nat, t1: Val, t2: Val):
-    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t1)), add_body())
-    = eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t2)), add_body())
+    eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t1)), add_body())
+    = eval(a.add(5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t2)), add_body())
 { trans(add_equiv_env(prog, a, b, t1), sym(add_equiv_env(prog, a, b, t2))) }
 
 // the recursive IR's certificate, in the ∃-form, at any tail
 theorem add_rec_converges(a: Nat, b: Nat, tail: Val)
     : Converges(add_rec_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
-                add_rec_body(), VCons(embed_nat(add(b, a)), VNil))
-{ Converges(add(dbl(a), 2), add_rec_runs(a)(b, tail)) }
+                add_rec_body(), VCons(embed_nat(b.add(a)), VNil))
+{ Converges(dbl(a).add(2), add_rec_runs(a)(b, tail)) }
 
 // ---------------------------------------------------------------------------
 // The relation. `Refines` itself is UNRESTRICTED — it quantifies over every
@@ -1414,10 +1414,10 @@ theorem add_rec_converges(a: Nat, b: Nat, tail: Val)
 //
 // This is `Refines` with its unrestricted `(env: Val)` guarded by a PREDICATE
 // on the environment, said once and generally: `RefinesOn(dom, …)` takes the
-// domain as a `Val -> Type` value. The family the certificates are about is
+// domain as a `Val → Type` value. The family the certificates are about is
 // then a record — `NatEnv(e)`, which packs the two embedded arguments, the
 // tail, and the proof that `e` has that shape — and a record type applied to
-// its value parameters IS a `Val -> Type` value
+// its value parameters IS a `Val → Type` value
 // (docs/record-type-values.md, [[record-types-as-type-valued-functions]]).
 record NatEnv(e: Val) {
     a: Nat,
@@ -1426,12 +1426,12 @@ record NatEnv(e: Val) {
     shape: e = VCons(embed_nat(a), VCons(embed_nat(b), tail)),
 }
 
-fn RefinesOn(dom: Val -> Type, p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
-    (env: Val) -> dom(env) -> (vs: Val)
-    -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+fn RefinesOn(dom: Val → Type, p1: Prog, i1: Ir, p2: Prog, i2: Ir) → Type {
+    (env: Val) → dom(env) → (vs: Val)
+    → Converges(p1, env, i1, vs) → Converges(p2, env, i2, vs)
 }
 
-fn RefinesNat2(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
+fn RefinesNat2(p1: Prog, i1: Ir, p2: Prog, i2: Ir) → Type {
     RefinesOn(λ (e: Val) => NatEnv(e), p1, i1, p2, i2)
 }
 
@@ -1455,10 +1455,10 @@ theorem loop_refines_rec_at(a: Nat, b: Nat, tail: Val, vs: Val,
 {
     j(sym(conv_functional(add_prog(),
               VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-              vs, VCons(embed_nat(add(b, a)), VNil), c,
+              vs, VCons(embed_nat(b.add(a)), VNil), c,
               converges_intro(add_prog(),
                   VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-                  VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+                  VCons(embed_nat(b.add(a)), VNil), a.add(5),
                   add_equiv_env(add_prog(), a, b, tail)))),
       λ w p => Converges(add_rec_prog(),
                    VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(), w),
@@ -1470,7 +1470,7 @@ theorem loop_refines_rec(): RefinesNat2(add_prog(), ir_loop(), add_rec_prog(), i
     λ env d vs =>
         j(sym(d.shape),
           λ z q => Converges(add_prog(), z, ir_loop(), vs)
-                   -> Converges(add_rec_prog(), z, ir_rec(), vs),
+                   → Converges(add_rec_prog(), z, ir_rec(), vs),
           λ c => loop_refines_rec_at(d.a, d.b, d.tail, vs, c))
 }
 
@@ -1485,13 +1485,13 @@ theorem rec_refines_loop_at(a: Nat, b: Nat, tail: Val, vs: Val,
 {
     j(sym(conv_functional(add_rec_prog(),
               VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(),
-              vs, VCons(embed_nat(add(b, a)), VNil), c,
+              vs, VCons(embed_nat(b.add(a)), VNil), c,
               add_rec_converges(a, b, tail))),
       λ w p => Converges(add_prog(),
                    VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(), w),
       converges_intro(add_prog(),
           VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-          VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+          VCons(embed_nat(b.add(a)), VNil), a.add(5),
           add_equiv_env(add_prog(), a, b, tail)))
 }
 
@@ -1500,7 +1500,7 @@ theorem rec_refines_loop(): RefinesNat2(add_rec_prog(), ir_rec(), add_prog(), ir
     λ env d vs =>
         j(sym(d.shape),
           λ z q => Converges(add_rec_prog(), z, ir_rec(), vs)
-                   -> Converges(add_prog(), z, ir_loop(), vs),
+                   → Converges(add_prog(), z, ir_loop(), vs),
           λ c => rec_refines_loop_at(d.a, d.b, d.tail, vs, c))
 }
 
@@ -1521,10 +1521,10 @@ theorem rec_refines_loop(): RefinesNat2(add_rec_prog(), ir_rec(), add_prog(), ir
 // domain `RefinesNat2` hands to `RefinesOn`. `junk_env()` below is precisely
 // an environment with no `NatEnv` inhabitant.
 
-fn junk_u() -> Val { VCon(7, VNil) }
-fn junk_q() -> Val { VCon(0, VCons(junk_u(), VNil)) }
-fn junk_n() -> Val { VCon(1, VCons(junk_q(), VNil)) }
-fn junk_env() -> Val { VCons(junk_n(), VCons(VCon(8, VNil), VNil)) }
+fn junk_u() → Val { VCon(7, VNil) }
+fn junk_q() → Val { VCon(0, VCons(junk_u(), VNil)) }
+fn junk_n() → Val { VCon(1, VCons(junk_q(), VNil)) }
+fn junk_env() → Val { VCons(junk_n(), VCons(VCon(8, VNil), VNil)) }
 
 theorem loop_on_junk():
     eval(30, add_prog())(junk_env(), ir_loop()) = Out(VCons(junk_q(), VNil))

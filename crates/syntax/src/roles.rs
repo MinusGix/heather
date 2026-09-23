@@ -295,8 +295,19 @@ impl<'a> Walk<'a> {
                     self.expr(&a.body);
                 }
             }
-            ExprKind::Dot { recv, args, named, .. } => {
+            ExprKind::Dot { recv, tyargs, args, named, .. } => {
+                if !tyargs.is_empty() {
+                    self.list_spanned(
+                        "expr-dot",
+                        e.span,
+                        tyargs[0].span,
+                        tyargs[tyargs.len() - 1].span,
+                    );
+                }
                 self.expr(recv);
+                for t in tyargs {
+                    self.ty(t);
+                }
                 for a in args.iter().flatten() {
                     self.expr(a);
                 }
@@ -495,4 +506,3 @@ impl<'a> Walk<'a> {
         }
     }
 }
-

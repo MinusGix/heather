@@ -39,11 +39,11 @@ pub fn generate_elaborated_read_x86(
         m.declaration(if machine { d.generic("M") } else { d });
     };
     declaration(&mut module, format!("{prefix}_load"), false, vec![], "ByteLoad".into(), load.render(), false);
-    let bytes = load.bytes().iter().map(|b| format!("bitvec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
+    let bytes = load.bytes().iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
     declaration(&mut module, format!("{prefix}_load_bytes"), false, vec![], "List<BitVec(8)>".into(), format!("[{bytes}]"), false);
     declaration(&mut module, format!("{prefix}_load_decodes"), false, vec![], format!("ByteLoadDecodes({prefix}_load_bytes(), {prefix}_load())"), "refl".into(), true);
     declaration(&mut module, format!("{prefix}_bytes"), false, vec![], "List<BitVec(8)>".into(), format!("{prefix}_load_bytes() ++ {body_prefix}_bytes()"), false);
-    let literal = published.iter().map(|b| format!("bitvec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
+    let literal = published.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
     declaration(&mut module, format!("{prefix}_published_bytes"), false, vec![], "List<BitVec(8)>".into(), format!("[{literal}]"), false);
     declaration(&mut module, format!("{prefix}_published_agrees"), false, vec![], format!("{prefix}_published_bytes() = {prefix}_bytes()"), "refl".into(), true);
     let mut public: Vec<_> = reflected.parameters.iter().enumerate().map(|(id, ty)| Parameter::explicit(format!("arg{id}"), HeatherExpr::raw(ty.name()))).collect();
@@ -64,14 +64,14 @@ pub fn generate_elaborated_read_x86(
             placements.push(format!("trans({name}, sym(byte_load_preserves({prefix}_load(), {byte}, before, {register}, refl)))"));
         }
     }
-    public.push(Parameter::explicit("canonical", HeatherExpr::raw(format!("bitvec::drop_low(47, 17, read_gpr({}, before.gprs)) = bitvec::zero(17)", address.heather_name()))));
+    public.push(Parameter::explicit("canonical", HeatherExpr::raw(format!("bitvec::BitVec::drop_low(47, 17, read_gpr({}, before.gprs)) = @bitvec::BitVec::zero(17)", address.heather_name()))));
     public.push(Parameter::explicit("present", HeatherExpr::raw(format!("access.read(before.memory, read_gpr({}, before.gprs)) = Some({byte})", address.heather_name()))));
     let body_args = format!("{arguments}, {entry}, {}", placements.join(", "));
     for (i, port) in reflected.region.outputs().iter().enumerate() {
         let name = if i == 0 { prefix.to_string() } else { format!("{prefix}_output_{}", port.id) };
         let body_name = if i == 0 { body_prefix.clone() } else { format!("{body_prefix}_output_{}", port.id) };
         let observed = format!("{body_prefix}_observe_{}({}({arguments}))", port.id, reflected.source_name);
-        let result = encode(port.width, &if port.width == 1 { format!("bitvec::ofBool({observed})") } else { observed });
+        let result = encode(port.width, &if port.width == 1 { format!("bitvec::BitVec::ofBool({observed})") } else { observed });
         let output = outputs[&port.id].heather_name();
         declaration(&mut module, format!("{name}_read_correct"), true, public.clone(),
             format!("read_gpr({output}, {body_prefix}_after({entry}).gprs) = {result}"),

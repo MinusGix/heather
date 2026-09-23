@@ -7,7 +7,7 @@ import result;
 import option;
 import int;
 import omega;
-import parser_core::{Cursor, rest, Success, Reply, Parser, drop_length_strict, advance, run};
+import parser_core::{Cursor, rest, Success, Reply, Parser, drop_length_strict};
 import parser_contracts::{Consumes, bound_on_success};
 import parser_combinators::{rebase};
 
@@ -15,10 +15,10 @@ import parser_combinators::{rebase};
 // Its proof is translated once to the measure used by the well-founded lowering.
 // For nested parentheses, consume the opening token before calling the recursive capability.
 fn guarded<T, A>(source: List<T>,
-    body: (begin: Cursor<T>(source)) ->
-        ((later: Cursor<T>(source)) -> nat::Lt(begin.offset, later.offset) -> Reply<T, A>(source, later)) -> Reply<T, A>(source, begin),
-    begin: Cursor<T>(source)) -> Reply<T, A>(source, begin) decreases list_len(rest(source, begin)) {
-    body(begin, λ (later: Cursor<T>(source)) (advance: nat::Lt(begin.offset, later.offset)) => {
+    body: (begin: Cursor<T>(source)) →
+        ((later: Cursor<T>(source)) → begin.offset.Lt(later.offset) → Reply<T, A>(source, later)) → Reply<T, A>(source, begin),
+    begin: Cursor<T>(source)) → Reply<T, A>(source, begin) decreases rest(source, begin).len() {
+    body(begin, λ (later: Cursor<T>(source)) (advance: begin.offset.Lt(later.offset)) => {
         let small = drop_length_strict(source, begin.offset, later.offset, advance, later.within);
         guarded(source, body, later) decreasing recur
     })
@@ -27,9 +27,9 @@ fn guarded<T, A>(source: List<T>,
 
 // Library-owned composition of prefix movement and a strict next step.
 theorem progress_after<T>(source: List<T>, begin, middle, end: Cursor<T>(source),
-    prefix: nat::Le(begin.offset, middle.offset), step: nat::Lt(middle.offset, end.offset)):
-    nat::Lt(list_len(rest(source, end)), list_len(rest(source, begin))) {
-    let moved: nat::Lt(begin.offset, end.offset) = nat::le_trans(Succ(begin.offset), Succ(middle.offset), end.offset, prefix, step);
+    prefix: begin.offset.Le(middle.offset), step: middle.offset.Lt(end.offset)):
+    rest(source, end).len().Lt(rest(source, begin).len()) {
+    let moved: begin.offset.Lt(end.offset) = Succ(begin.offset).le_trans(Succ(middle.offset), end.offset, prefix, step);
     drop_length_strict(source, begin.offset, end.offset, moved, end.within)
 }
 
@@ -39,7 +39,7 @@ theorem progress_after<T>(source: List<T>, begin, middle, end: Cursor<T>(source)
 // after recognizing '+', parse the right expression with the supplied decrease proof.
 fn extend_at<T, A, B>(source: List<T>, begin: Cursor<T>(source), left: Success<T, A>(source, begin),
     op: Parser<T, B>, progress: Consumes<T, B>(op, 1),
-    next: (value: B) -> (end: Cursor<T>(source)) -> nat::Lt(list_len(rest(source, end)), list_len(rest(source, begin))) -> Reply<T, A>(source, end)) -> Reply<T, A>(source, begin) {
+    next: (value: B) → (end: Cursor<T>(source)) → rest(source, end).len().Lt(rest(source, begin).len()) → Reply<T, A>(source, end)) → Reply<T, A>(source, begin) {
     match shape: op.run(source, left.end) {
         Err(e) => match e.retry { Retryable => Ok(left), Committed => Err(e) },
         Ok(s) => {
@@ -54,7 +54,7 @@ fn extend_at<T, A, B>(source: List<T>, begin: Cursor<T>(source), left: Success<T
 // Parse a consuming prefix, then invoke a continuation with its decrease proof.
 // For parentheses, use the opening token as the prefix before parsing the inner expression.
 fn after_at<T, A, B>(source: List<T>, begin: Cursor<T>(source), p: Parser<T, A>, progress: Consumes<T, A>(p, 1),
-    next: (value: A) -> (end: Cursor<T>(source)) -> nat::Lt(list_len(rest(source, end)), list_len(rest(source, begin))) -> Reply<T, B>(source, end)) -> Reply<T, B>(source, begin) {
+    next: (value: A) → (end: Cursor<T>(source)) → rest(source, end).len().Lt(rest(source, begin).len()) → Reply<T, B>(source, end)) → Reply<T, B>(source, begin) {
     match shape: p.run(source, begin) {
         Err(e) => Err(e),
         Ok(s) => {

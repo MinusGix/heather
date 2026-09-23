@@ -7,139 +7,149 @@ import result;
 import option;
 import int;
 import omega;
-import parser_core::{Cursor, Failure, Reply, Parser, observe, run};
+import parser_core::{Cursor, Failure, Reply, Parser, observe};
 import parser_contracts::{Bound, Consumes};
 
 // Mark a diagnostic committed while keeping its position and expectations.
-fn committed<T>(source: List<T>, error: Failure<T>(source)) -> Failure<T>(source) {
+fn committed<T>(source: List<T>, error: Failure<T>(source)) → Failure<T>(source) {
     Failure(error.at, error.expected, Committed)
 }
 
 // Add commitment when middle is strictly later than begin; otherwise preserve the failure.
-fn commit_offsets<T>(source: List<T>, begin, middle: Nat, error: Failure<T>(source)) -> Failure<T>(source) {
-    match nat::le_dec(Succ(begin), middle) {
-        Inl(moved) => committed(source, error),
-        Inr(stayed) => error,
+fn commit_offsets<T>(source: List<T>, begin, middle: Nat, error: Failure<T>(source)) → Failure<T>(source) {
+    match Succ(begin).le_dec(middle) {
+        Inl(_) => committed(source, error),
+        Inr(_) => error,
     }
 }
 
 // Apply the commitment caused by movement across a parsed prefix.
-fn commit_after<T>(source: List<T>, begin, middle: Cursor<T>(source), error: Failure<T>(source)) -> Failure<T>(source) {
+fn commit_after<T>(source: List<T>, begin, middle: Cursor<T>(source), error: Failure<T>(source)) → Failure<T>(source) {
     commit_offsets(source, begin.offset, middle.offset, error)
 }
 
 // Make a failure retryable while preserving its diagnostic; preserve successful replies.
-fn attempt_at<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) -> Reply<T, A>(source, begin) {
+fn attempt_at<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) → Reply<T, A>(source, begin) {
     match r { Err(e) => Err(Failure(e.at, e.expected, Retryable)), Ok(s) => Ok(s) }
 }
 
 // Allow an enclosing choice to retry after p fails, including after consumed input.
 // For example, word.attempt().choice(identifier) can fall back after a partial word match.
-fn attempt<T, A>(self p: Parser<T, A>) -> Parser<T, A> { Parser(λ source begin => attempt_at(source, begin, p.run(source, begin))) }
+fn attempt<T, A>(self p: Parser<T, A>) → Parser<T, A> { p.transform(attempt_at) }
 
 // Mark a failed reply committed and preserve successful replies.
-fn commit_at<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) -> Reply<T, A>(source, begin) {
+fn commit_at<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)) → Reply<T, A>(source, begin) {
     match r { Err(e) => Err(committed(source, e)), Ok(s) => Ok(s) }
 }
 
 // Make p's failures committed so an enclosing choice cannot retry them.
 // A successful p.commit() does not commit a later failure; this is not a persistent cut.
-fn commit<T, A>(self p: Parser<T, A>) -> Parser<T, A> { Parser(λ source begin => commit_at(source, begin, p.run(source, begin))) }
+fn commit<T, A>(self p: Parser<T, A>) → Parser<T, A> { p.transform(commit_at) }
 
 // Append a missing expected-token code, preserving the order of existing codes.
-fn insert_expected(code: Nat, expected: List<Nat>) -> List<Nat> {
-    match expected { Nil => [code], Cons(head, tail) => match nat::eq_dec(code, head) {
-        Inl(same) => expected, Inr(different) => Cons(head, insert_expected(code, tail)),
-    } }
+fn insert_expected(code: Nat, expected: List<Nat>) → List<Nat> {
+    match expected {
+        Nil => [code],
+        Cons(head, tail) => match Nat::eq_dec(code, head) {
+            Inl(_) => expected,
+            Inr(_) => Cons(head, insert_expected(code, tail)),
+        }
+    }
 }
 
 // Add the right-hand expectations to the left, suppressing newly introduced duplicates.
-fn merge_expected(left, right: List<Nat>) -> List<Nat> {
+fn merge_expected(left, right: List<Nat>) → List<Nat> {
     match right { Nil => left, Cons(code, tail) => merge_expected(insert_expected(code, left), tail) }
 }
 
 // Keep the farther diagnostic, merging expectations in left-to-right order on ties.
 // The resulting retry status always comes from the right-hand failure.
-fn merge_error<T>(source: List<T>, left, right: Failure<T>(source)) -> Failure<T>(source) {
-    match nat::le_dec(Succ(left.at.offset), right.at.offset) {
-        Inl(farther) => right,
-        Inr(no) => match nat::le_dec(Succ(right.at.offset), left.at.offset) {
-            Inl(farther) => Failure(left.at, left.expected, right.retry),
-            Inr(tied) => Failure(right.at, merge_expected(left.expected, right.expected), right.retry),
+fn merge_error<T>(source: List<T>, left, right: Failure<T>(source)) → Failure<T>(source) {
+    match Succ(left.at.offset).le_dec(right.at.offset) {
+        Inl(_) => right,
+        Inr(_) => match Succ(right.at.offset).le_dec(left.at.offset) {
+            Inl(_) => Failure(left.at, left.expected, right.retry),
+            Inr(_) => Failure(right.at, merge_expected(left.expected, right.expected), right.retry),
         },
     }
 }
 
 // Making a failure retryable preserves the consumption bound on successes.
 theorem attempt_bound<T, A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T, A>(source, begin)):
-    Bound(source, begin, amount, r) -> Bound(source, begin, amount, attempt_at(source, begin, r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
+    Bound(source, begin, amount, r) → Bound(source, begin, amount, attempt_at(source, begin, r)) {
+    match r { Err(_) => λ _ => trivial, Ok(_) => λ h => h }
 }
 
 // Transport a consumption certificate through attempt.
-fn attempt_consumes<T, A>(p: Parser<T, A>, amount: Nat, certificate: Consumes<T, A>(p, amount)) -> Consumes<T, A>(attempt(p), amount) {
+fn attempt_consumes<T, A>(p: Parser<T, A>, amount: Nat, certificate: Consumes<T, A>(p, amount)) → Consumes<T, A>(attempt(p), amount) {
     Consumes(λ source begin => attempt_bound(source, begin, amount, p.run(source, begin), certificate.bound(source, begin)))
 }
 
 // Applying attempt twice has the same observation as applying it once.
 theorem attempt_idempotent<T, A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T, A>(source, begin)):
     observe(source, begin, attempt_at(source, begin, attempt_at(source, begin, r))) = observe(source, begin, attempt_at(source, begin, r)) {
-    match r { Err(e) => refl, Ok(s) => refl }
+    match r { Err(_) => refl, Ok(_) => refl }
 }
 
 // An empty prefix does not change a failure's commitment.
 theorem commit_same<T>(source: List<T>, offset: Nat, error: Failure<T>(source)):
     commit_offsets(source, offset, offset, error) = error {
-    match nat::le_dec(Succ(offset), offset) { Inl(impossible) => false_elim(nat::lt_irrefl(offset, impossible)), Inr(no) => refl }
+    match Succ(offset).le_dec(offset) { Inl(impossible) => false_elim(offset.lt_irrefl(impossible)), Inr(_) => refl }
 }
 
 // A strictly consuming prefix makes a later failure committed.
-theorem commit_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), later: nat::Lt(a, b)):
+theorem commit_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), later: a.Lt(b)):
     commit_offsets(source, a, b, error) = committed(source, error) {
-    match nat::le_dec(Succ(a), b) { Inl(yes) => refl, Inr(no) => false_elim(no(later)) }
+    match Succ(a).le_dec(b) {
+        Inl(_) => refl,
+        Inr(no) => false_elim(no(later))
+    }
 }
 
 // A prefix without strictly positive movement leaves commitment unchanged.
-theorem commit_not_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), stayed: nat::Lt(a, b) -> False):
+theorem commit_not_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), stayed: a.Lt(b) → False):
     commit_offsets(source, a, b, error) = error {
-    match nat::le_dec(Succ(a), b) { Inl(yes) => false_elim(stayed(yes)), Inr(no) => refl }
+    match Succ(a).le_dec(b) { Inl(yes) => false_elim(stayed(yes)), Inr(_) => refl }
 }
 
 // Once committed, a failure needs no further commitment from an earlier prefix.
 theorem commit_absorbs<T>(source: List<T>, a, b: Nat, error: Failure<T>(source)):
     committed(source, commit_offsets(source, a, b, error)) = committed(source, error) {
-    match nat::le_dec(Succ(a), b) {
+    match Succ(a).le_dec(b) {
         Inl(yes) => j(commit_later(source, a, b, error, yes), λ changed q => committed(source, commit_offsets(source, a, b, error)) = committed(source, changed), refl),
         Inr(no) => j(commit_not_later(source, a, b, error, no), λ changed q => committed(source, commit_offsets(source, a, b, error)) = committed(source, changed), refl),
     }
 }
 
 // If neither of two consecutive offsets advances, their combined interval cannot advance.
-theorem no_total_progress(a, b, c: Nat, first: nat::Lt(a, b) -> False, second: nat::Lt(b, c) -> False, total: nat::Lt(a, c)): False {
-    nat::lt_irrefl(a, nat::le_trans(Succ(a), c, a, total,
-        nat::le_trans(c, b, a, nat::lt_of_not_le(c, Succ(b), second), nat::lt_of_not_le(b, Succ(a), first))))
+theorem no_total_progress(a, b, c: Nat, first: a.Lt(b) → False, second: b.Lt(c) → False, total: a.Lt(c)): False {
+    a.lt_irrefl(Succ(a).le_trans(c, a, total,
+        c.le_trans(b, a, Nat::lt_of_not_le(c, Succ(b), second), Nat::lt_of_not_le(b, Succ(a), first))))
 }
 
 // Committing across two forward prefixes agrees with committing across their combined span.
-theorem commit_chain<T>(source: List<T>, a, b, c: Nat, ab: nat::Le(a, b), bc: nat::Le(b, c), error: Failure<T>(source)):
+theorem commit_chain<T>(source: List<T>, a, b, c: Nat, ab: a.Le(b), bc: b.Le(c), error: Failure<T>(source)):
     commit_offsets(source, a, b, commit_offsets(source, b, c, error)) = commit_offsets(source, a, c, error) {
-    or_elim(nat::le_dec(Succ(a), b),
+    or_elim(Succ(a).le_dec(b),
         λ first => trans(commit_later(source, a, b, commit_offsets(source, b, c, error), first),
-            trans(commit_absorbs(source, b, c, error), sym(commit_later(source, a, c, error, nat::le_trans(Succ(a), b, c, first, bc))))),
-        λ first => or_elim(nat::le_dec(Succ(b), c),
+            trans(commit_absorbs(source, b, c, error), sym(commit_later(source, a, c, error, Succ(a).le_trans(b, c, first, bc))))),
+        λ first => or_elim(Succ(b).le_dec(c),
             λ second => trans(commit_not_later(source, a, b, commit_offsets(source, b, c, error), first),
-                trans(commit_later(source, b, c, error, second), sym(commit_later(source, a, c, error, nat::le_trans(Succ(a), Succ(b), c, ab, second))))),
+                trans(commit_later(source, b, c, error, second), sym(commit_later(source, a, c, error, Succ(a).le_trans(Succ(b), c, ab, second))))),
             λ second => trans(commit_not_later(source, a, b, commit_offsets(source, b, c, error), first),
                 trans(commit_not_later(source, b, c, error, second), sym(commit_not_later(source, a, c, error, no_total_progress(a, b, c, first, second)))))))
 }
 
 // Explicit commitment preserves consumption bounds on successes.
 theorem commit_bound<T, A>(source: List<T>, begin: Cursor<T>(source), amount: Nat, r: Reply<T, A>(source, begin)):
-    Bound(source, begin, amount, r) -> Bound(source, begin, amount, commit_at(source, begin, r)) {
-    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
+    Bound(source, begin, amount, r) → Bound(source, begin, amount, commit_at(source, begin, r)) {
+    match r {
+        Err(_) => λ _ => trivial,
+        Ok(_) => λ h => h
+    }
 }
 
 // Transport a consumption certificate through commit.
-fn commit_consumes<T, A>(p: Parser<T, A>, amount: Nat, proof: Consumes<T, A>(p, amount)) -> Consumes<T, A>(commit(p), amount) {
+fn commit_consumes<T, A>(p: Parser<T, A>, amount: Nat, proof: Consumes<T, A>(p, amount)) → Consumes<T, A>(commit(p), amount) {
     Consumes(λ source begin => commit_bound(source, begin, amount, p.run(source, begin), proof.bound(source, begin)))
 }

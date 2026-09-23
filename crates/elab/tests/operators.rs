@@ -21,14 +21,14 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): n + 0 = n {
     match n {
         Zero => refl,
-        Succ(k, ih) => ih.cong_succ(),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): m + Succ(n) = Succ(m + n) {
     match m {
         Zero => refl,
-        Succ(k, ih) => ih.cong_succ(),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
@@ -38,7 +38,7 @@ theorem add_comm(m: Nat, n: Nat): m + n = n + m {
         Succ(k, ih) => calc {
             Succ(k) + n
                 = Succ(k + n) := refl,
-                = Succ(n + k) := ih.cong_succ(),
+                = Succ(n + k) := Nat::cong_succ(ih),
                 = n + Succ(k) := add_succ(n, k).sym(),
         },
     }
@@ -47,7 +47,7 @@ theorem add_comm(m: Nat, n: Nat): m + n = n + m {
 theorem add_assoc(a: Nat, b: Nat, c: Nat): (a + b) + c = a + (b + c) {
     match a {
         Zero => refl,
-        Succ(k, ih) => ih.cong_succ(),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 "#;
@@ -147,6 +147,63 @@ fn prefix_negation_is_carrier_directed() {
 }
 
 #[test]
+fn boolean_not_symbol_uses_the_bool_designation() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+        .expect("logic");
+    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+        .expect("bool");
+    e.elab_module_source(
+        "probe",
+        r#"
+        import bool;
+        theorem open(b: Bool): !b = bool::Bool::not(b) { refl }
+        theorem closed(): !True = False { refl }
+        theorem nested(b: Bool): !!b = b {
+            match b { False => refl, True => refl }
+        }
+        "#,
+    )
+    .expect("`!` resolves to `bool::Bool::not` at Bool");
+}
+
+#[test]
+fn semantic_brackets_reflect_bool_into_type() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+        .expect("logic");
+    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+        .expect("bool");
+    e.elab_module_source(
+        "probe",
+        r#"
+        import bool;
+        theorem positive(b: Bool): ⟦b⟧ → bool::Bool::IsTrue(b) { λ h => h }
+        theorem negative(b: Bool): ⟦!b⟧ → bool::Bool::IsTrue(bool::Bool::not(b)) { λ h => h }
+        theorem closed_true(): ⟦True⟧ { trivial }
+        theorem closed_false(): ⟦!False⟧ { trivial }
+        "#,
+    )
+    .expect("semantic brackets elaborate as `bool::Bool::IsTrue`");
+}
+
+#[test]
+fn infix_subtraction_is_carrier_directed() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        fn cut(a, b: Nat) -> Nat {
+            match a { Zero => Zero, Succ(k) => match b { Zero => Succ(k), Succ(l) => cut(k, l) } }
+        }
+        designation - at Nat := cut
+        theorem open(a, b: Nat): a - b = cut(a, b) { refl }
+        theorem closed(): 5 - 2 = 3 { refl }
+        "#,
+    )
+    .expect("an infix designation resolves from its left operand's carrier");
+}
+
+#[test]
 fn numerals_use_the_expected_carriers_instance() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(
@@ -226,9 +283,9 @@ fn le_is_the_proposition_and_not_the_boolean() {
     // `leb`, `h` would be a `Bool` and none of these three would check.
     with_order_kit(
         r#"
-        theorem to_named(n: Nat, m: Nat, h: n <= m): Le(n, m) { h }
-        theorem from_named(n: Nat, m: Nat, h: Le(n, m)): n <= m { h }
-        theorem unfolds(n: Nat, m: Nat, h: n <= m): leb(n)(m) = True { h }
+        theorem to_named(n: Nat, m: Nat, h: n <= m): n.Le(m) { h }
+        theorem from_named(n: Nat, m: Nat, h: n.Le(m)): n <= m { h }
+        theorem unfolds(n: Nat, m: Nat, h: n <= m): n.leb(m) = True { h }
         "#,
     )
     .expect("`<=` is `Le`, transparently");
@@ -236,7 +293,7 @@ fn le_is_the_proposition_and_not_the_boolean() {
     // …and the negative control on the other side: the boolean itself is not
     // a proof of the proposition. `leb` stays callable by name precisely
     // because the two are different things.
-    let e = with_order_kit("theorem bool_is_not_a_proof(n: Nat, m: Nat): n <= m { leb(n)(m) }")
+    let e = with_order_kit("theorem bool_is_not_a_proof(n: Nat, m: Nat): n <= m { n.leb(m) }")
         .expect_err("a Bool must not inhabit the proposition");
     // Rejected at the gate, not by the parser, and the message says which two
     // things were confused (issues/check-fallback-discards-expected-type.md).
@@ -331,10 +388,10 @@ fn a_symbol_with_no_name_behind_it_says_so() {
 const CALC_KIT: &str = r#"
 fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
 theorem add_zero(n: Nat): n + 0 = n {
-    match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+    match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
 }
 theorem add_succ(m: Nat, n: Nat): m + Succ(n) = Succ(m + n) {
-    match m { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+    match m { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
 }
 "#;
 

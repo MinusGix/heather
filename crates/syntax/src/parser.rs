@@ -567,7 +567,7 @@ impl Parser {
     }
 
     /// [`Self::ident`] at a **reference** position, where `m::n` is a name:
-    /// a module-qualified global (`nat::le_add`) or a type-qualified
+    /// a module-qualified global (`nat::Nat::le_add`) or a type-qualified
     /// constructor (`Option::None`). Which one it is needs the name tables,
     /// so the parser keeps the two halves in one string and the elaborator
     /// splits it (docs/modules-design.md §4).
@@ -976,6 +976,7 @@ impl Parser {
         };
         let sym = match fixity {
             OpFixity::Prefix if matches!(self.peek(), TokKind::Minus) => Some("-"),
+            OpFixity::Prefix if matches!(self.peek(), TokKind::Bang) => Some("!"),
             OpFixity::Prefix => None,
             OpFixity::Infix => Self::op_symbol(self.peek()),
         };
@@ -2747,6 +2748,7 @@ impl Parser {
         }
         let mut paren = 0usize;
         let mut bracket = 0usize;
+        let mut semantic = 0usize;
         let mut brace = 0usize;
         for tok in self.toks.iter().skip(self.pos + 1) {
             match tok.kind {
@@ -2754,11 +2756,21 @@ impl Parser {
                 TokKind::RParen if paren > 0 => paren -= 1,
                 TokKind::LBracket => bracket += 1,
                 TokKind::RBracket if bracket > 0 => bracket -= 1,
+                TokKind::LSemantic => semantic += 1,
+                TokKind::RSemantic if semantic > 0 => semantic -= 1,
                 TokKind::LBrace => brace += 1,
                 TokKind::RBrace if brace > 0 => brace -= 1,
-                TokKind::Semi if paren == 0 && bracket == 0 && brace == 0 => return true,
-                TokKind::Comma | TokKind::RParen | TokKind::RBracket | TokKind::RBrace
-                    if paren == 0 && bracket == 0 && brace == 0 =>
+                TokKind::Semi
+                    if paren == 0 && bracket == 0 && semantic == 0 && brace == 0 =>
+                {
+                    return true;
+                }
+                TokKind::Comma
+                | TokKind::RParen
+                | TokKind::RBracket
+                | TokKind::RSemantic
+                | TokKind::RBrace
+                    if paren == 0 && bracket == 0 && semantic == 0 && brace == 0 =>
                 {
                     return false;
                 }
@@ -3245,8 +3257,12 @@ impl Parser {
         while i < self.toks.len() {
             match self.toks[i].kind {
                 TokKind::LParen => depth += 1,
-                TokKind::LBrace | TokKind::LBracket if depth == 1 => inner += 1,
-                TokKind::RBrace | TokKind::RBracket if depth == 1 && inner > 0 => inner -= 1,
+                TokKind::LBrace | TokKind::LBracket | TokKind::LSemantic if depth == 1 => inner += 1,
+                TokKind::RBrace | TokKind::RBracket | TokKind::RSemantic
+                    if depth == 1 && inner > 0 =>
+                {
+                    inner -= 1;
+                }
                 TokKind::Colon if depth == 1 && inner == 0 => return true,
                 TokKind::RParen => {
                     depth -= 1;
@@ -3318,6 +3334,7 @@ impl Parser {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
             TokKind::Plus => Some(("+", 5, 6)),
+            TokKind::Minus => Some(("-", 5, 6)),
             TokKind::Join => Some(("⊔", 5, 6)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
@@ -3347,6 +3364,7 @@ impl Parser {
     fn op_symbol(tok: &TokKind) -> Option<&'static str> {
         match tok {
             TokKind::Plus => Some("+"),
+            TokKind::Minus => Some("-"),
             TokKind::PlusPlus => Some("++"),
             TokKind::Star => Some("*"),
             TokKind::AmpAmp => Some("&&"),
@@ -3398,23 +3416,27 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// Arithmetic prefix operators. Unary `-` is an operator symbol rather
-    /// than a literal sign: `-3` has exactly the AST of `-(3)`. It binds more
-    /// tightly than every infix rung, includes postfix applications in its
-    /// operand, and recurses so `--a` is two negations.
+    /// Value-level prefix operators. Unary `-` is an operator symbol rather
+    /// than a literal sign: `-3` has exactly the AST of `-(3)`. Boolean `!`
+    /// follows the same carrier-directed path. They bind more tightly than
+    /// every infix rung, include postfix applications in their operands, and
+    /// recurse so `--a` and `!!b` are nested applications.
     fn prefix(&mut self) -> R<Expr> {
-        if matches!(self.peek(), TokKind::Minus) {
-            let start = self.bump().span;
-            let inner = self.prefix()?;
-            let span = start.join(inner.span);
-            return Ok(op_call("-", OpFixity::Prefix, vec![inner], span));
-        }
-        self.postfix()
+        let symbol = match self.peek() {
+            TokKind::Minus => "-",
+            TokKind::Bang => "!",
+            _ => return self.postfix(),
+        };
+        let start = self.bump().span;
+        let inner = self.prefix()?;
+        let span = start.join(inner.span);
+        Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
     }
 
-    /// An atom followed by zero or more field accesses `.f` / `.f(args)`, a
-    /// record literal `D { … }`, and zero or more applications `(args)` — so
-    /// the head of a call can be any expression: `g(a)(b)`, `(λ x => x)(3)`
+    /// An atom followed by zero or more field accesses `.f`, method calls
+    /// `.f(args)` / `.f<T, …>(args)`, a record literal `D { … }`, and zero or
+    /// more applications `(args)` — so the head of a call can be any
+    /// expression: `g(a)(b)`, `(λ x => x)(3)`
     /// (docs/surface-function-types.md §1.3).
     ///
     /// `.f` is **not** desugared here any more. It used to become
@@ -3474,16 +3496,25 @@ impl Parser {
                 TokKind::Dot => {
                     self.bump();
                     let (field, fsp) = self.ident("field or method name")?;
+                    let (tyargs, member_end) = self
+                        .try_tyargs()
+                        .map_or_else(|| (Vec::new(), fsp), |(args, end)| (args, end));
                     let (args, named, end) = if matches!(self.peek(), TokKind::LParen) {
                         self.bump();
                         let (args, named, end) = self.call_args()?;
                         (Some(args), named, end)
                     } else {
-                        (None, Vec::new(), fsp)
+                        (None, Vec::new(), member_end)
                     };
                     let span = e.span.join(end);
                     e = Expr {
-                        kind: ExprKind::Dot { recv: Box::new(e), name: field, args, named },
+                        kind: ExprKind::Dot {
+                            recv: Box::new(e),
+                            name: field,
+                            tyargs,
+                            args,
+                            named,
+                        },
                         span,
                     };
                 }
@@ -3705,6 +3736,28 @@ impl Parser {
         // ordinary subexpressions.
         if matches!(self.peek(), TokKind::LAngle) {
             return self.anonymous_constructor_expr();
+        }
+        // `⟦b⟧` reflects a Boolean into `Type`: exact surface sugar for
+        // `Bool::IsTrue(b)`. The delimiters reopen the expression grammar just like
+        // parentheses, so an enclosing comparison or record-literal context
+        // cannot restrict the reflected expression.
+        if matches!(self.peek(), TokKind::LSemantic) {
+            let open = self.bump().span;
+            let inner = self
+                .with_eq(false, |p| p.with_record_lit(false, |p| p.expr()))?;
+            let close = self.expect(&TokKind::RSemantic, "`⟧` to close Boolean reflection")?;
+            let span = open.join(close);
+            let head = Expr { kind: ExprKind::Var("Bool::IsTrue".to_string()), span: open };
+            return Ok(Expr {
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: vec![inner],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            });
         }
         // Squash is type syntax in expression position too, just like an
         // arrow type.  This matters in particular under `code { ... }`: the
@@ -4972,6 +5025,21 @@ mod tests {
     }
 
     #[test]
+    fn subtraction_is_left_associative_at_additive_precedence() {
+        // `a - b - c * d` ⇒ `-`(`-`(a, b), `*`(c, d)).
+        let k = body("a - b - c * d");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "-");
+        let ExprKind::App { head, .. } = &k else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Infix, .. }
+        ));
+        assert_eq!(as_call(&args[0].kind).0, "-");
+        assert_eq!(as_call(&args[1].kind).0, "*");
+    }
+
+    #[test]
     fn unary_minus_is_a_prefix_symbol_applied_to_an_expression() {
         let k = body("-3");
         let ExprKind::App { head, args, .. } = k else { panic!("expected prefix call") };
@@ -4993,12 +5061,63 @@ mod tests {
     }
 
     #[test]
+    fn boolean_not_is_a_prefix_symbol_and_nests() {
+        let k = body("!!a && b");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "&&");
+        let (outer, outer_args, _) = as_call(&args[0].kind);
+        assert_eq!(outer, "!");
+        let ExprKind::App { head, .. } = &args[0].kind else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+        ));
+        assert_eq!(as_call(&outer_args[0].kind).0, "!");
+    }
+
+    #[test]
+    fn semantic_brackets_desugar_to_is_true() {
+        let k = body("⟦!b⟧");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "Bool::IsTrue");
+        assert_eq!(args.len(), 1);
+        assert_eq!(as_call(&args[0].kind).0, "!");
+
+        let err = parse_file("fn f(b: Bool) -> Type { ⟦b }").unwrap_err();
+        assert!(err.msg.contains("⟧` to close Boolean reflection"), "{}", err.msg);
+    }
+
+    #[test]
     fn prefix_designation_records_a_distinct_fixity() {
         let f = parse_file("fn neg(a: Nat) -> Nat { a } designation prefix - at Nat := neg")
             .expect("prefix designation");
         let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
         assert_eq!(d.symbol, "-");
         assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
+    #[test]
+    fn boolean_not_designation_is_prefix() {
+        let f = parse_file("fn not(a: Nat) -> Nat { a } designation prefix ! at Nat := not")
+            .expect("prefix designation");
+        let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
+        assert_eq!(d.symbol, "!");
+        assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
+    #[test]
+    fn infix_minus_designation_is_distinct_from_prefix_minus() {
+        let f = parse_file(
+            "fn neg(a: Nat) -> Nat { a }
+             fn sub(a: Nat, b: Nat) -> Nat { a }
+             designation prefix - at Nat := neg
+             designation - at Nat := sub",
+        )
+        .expect("prefix and infix minus designations");
+        let Item::Designation(prefix) = &f.items[2] else { panic!("expected designation") };
+        let Item::Designation(infix) = &f.items[3] else { panic!("expected designation") };
+        assert_eq!((prefix.symbol.as_str(), prefix.fixity), ("-", OpFixity::Prefix));
+        assert_eq!((infix.symbol.as_str(), infix.fixity), ("-", OpFixity::Infix));
     }
 
     #[test]
@@ -5519,6 +5638,28 @@ mod tests {
         assert_eq!(name, "sym");
         assert_eq!(args.as_ref().expect("`()` means a call").len(), 0);
         assert_eq!(as_call(&recv.kind).0, "add_succ");
+    }
+
+    #[test]
+    fn method_call_parses_explicit_type_arguments() {
+        let k = body("x.fold<Nat, List<Nat>>(success, failure)");
+        let ExprKind::Dot { recv, name, tyargs, args, .. } = &k else {
+            panic!("expected a Dot, got {k:?}")
+        };
+        assert!(matches!(&recv.kind, ExprKind::Var(v) if v == "x"));
+        assert_eq!(name, "fold");
+        assert_eq!(tyargs.len(), 2);
+        assert_eq!(args.as_ref().expect("a call").len(), 2);
+    }
+
+    #[test]
+    fn tight_less_than_after_a_member_still_falls_back_to_comparison() {
+        let k = body("x.value<limit");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "<");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, ExprKind::Dot { name, tyargs, .. }
+            if name == "value" && tyargs.is_empty()));
     }
 
     #[test]

@@ -46,7 +46,7 @@ fn a_match_motive_is_a_lambda() {
         "{ADD}theorem add_zero(n: Nat): add(n, 0) = n {{
             match n as λ z => add(z, 0) = z {{
                 Zero => refl,
-                Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+                Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
             }}
         }}"
     ));
@@ -59,7 +59,7 @@ fn a_motive_accepts_the_ascii_lambda() {
         "{ADD}theorem t(n: Nat): add(n, 0) = n {{
             match n as fun z => add(z, 0) = z {{
                 Zero => refl,
-                Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+                Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
             }}
         }}"
     ));
@@ -122,7 +122,7 @@ fn a_motive_body_may_be_a_function_type() {
             match n {{ Zero => λ (a: Nat) => a, Succ(k) => λ (a: Nat) => addacc(k)(Succ(a)) }}
         }}
         theorem add_succ_l(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {{
-            match b {{ Zero => refl, Succ(k) => cong_succ(add_succ_l(a, k)) }}
+            match b {{ Zero => refl, Succ(k) => Nat::cong_succ(add_succ_l(a, k)) }}
         }}
         theorem addacc_ok(n: Nat): (a: Nat) -> addacc(n)(a) = add(a, n) {{
             match n as λ z => (a: Nat) -> addacc(z)(a) = add(a, z) {{
@@ -152,7 +152,7 @@ fn the_old_motive_bodies_still_parse() {
         theorem eq_body(n: Nat): add(n, 0) = n {{
             match n as λ z => add(z, 0) = z {{
                 Zero => refl,
-                Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+                Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
             }}
         }}
         fn name_body(n: Nat) -> Nat {{ match n as λ z => Nat {{ Zero => 0, Succ(k) => k }} }}

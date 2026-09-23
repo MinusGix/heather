@@ -1,0 +1,13 @@
+[book]
+title = "The Heather Language"
+authors = ["The Heather contributors"]
+description = "Language guide and reference for the Heather theorem prover"
+language = "en"
+src = "book/src"
+
+[build]
+build-dir = "target/book"
+create-missing = false
+
+[output.html]
+additional-css = ["book/theme/heather.css"]

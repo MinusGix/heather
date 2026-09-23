@@ -72,12 +72,12 @@ fn linear_total<A: LinearOrder(R)>(R: A -> A -> Type, x, y: A)
     A.rel_total(x, y)
 }
 
-theorem nat_parent(n: Nat): nat::Le(n, n) { preorder_refl(nat::Le, n) }
+theorem nat_parent(n: Nat): nat::Nat::Le(n, n) { preorder_refl(nat::Nat::Le, n) }
 
-theorem int_parent(n: Int): int::Le(n, n) { preorder_refl(int::Le, n) }
+theorem int_parent(n: Int): int::Int::Le(n, n) { preorder_refl(int::Int::Le, n) }
 
-theorem nat_child(n, m: Nat): nat::Le(n, m) ∨ nat::Le(m, n) {
-    linear_total(nat::Le, n, m)
+theorem nat_child(n, m: Nat): nat::Nat::Le(n, m) ∨ nat::Nat::Le(m, n) {
+    linear_total(nat::Nat::Le, n, m)
 }
 "#;
     e.elab_module_source("order_layers", probe)
@@ -96,25 +96,25 @@ import relation;
 import relation_props;
 
 fn nat_int_product_order()
-    -> PartialOrder<Pair<Nat, Int>>(ProductOrder(nat::Le, int::Le))
+    -> PartialOrder<Pair<Nat, Int>>(ProductOrder(nat::Nat::Le, int::Int::Le))
 {
-    product_partial_order(nat::Le, int::Le)
+    product_partial_order(nat::Nat::Le, int::Int::Le)
 }
 
 theorem product_refl(x: Pair<Nat, Int>):
-    ProductOrder(nat::Le, int::Le, x, x)
+    ProductOrder(nat::Nat::Le, int::Int::Le, x, x)
 {
     nat_int_product_order().rel_refl(x)
 }
 
-fn SuccOrder(a, b: Nat) -> Type { Pullback(Succ, nat::Le, a, b) }
+fn SuccOrder(a, b: Nat) -> Type { Pullback(Succ, nat::Nat::Le, a, b) }
 
 fn succ_injective(x, y: Nat, h: Succ(x) = Succ(y)) -> x = y {
-    nat::succ_inj(x, y, h)
+    nat::Nat::succ_inj(x, y, h)
 }
 
 fn succ_partial_order() -> PartialOrder<Nat>(SuccOrder) {
-    pullback_partial_order(Succ, nat::Le, succ_injective)
+    pullback_partial_order(Succ, nat::Nat::Le, succ_injective)
 }
 
 theorem succ_order_antisym(x, y: Nat,
@@ -129,8 +129,8 @@ theorem succ_order_antisym(x, y: Nat,
     let no_injectivity = r#"
 import order;
 fn constant(n: Nat) -> Nat { 0 }
-fn bad() -> PartialOrder<Nat>(Pullback(constant, nat::Le)) {
-    pullback_partial_order(constant, nat::Le)
+fn bad() -> PartialOrder<Nat>(Pullback(constant, nat::Nat::Le)) {
+    pullback_partial_order(constant, nat::Nat::Le)
 }
 "#;
     assert!(

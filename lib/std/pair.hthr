@@ -3,14 +3,14 @@
 
 record Pair<A, B> { fst: A, snd: B }
 
-fn swap<A, B>(p: Pair<A, B>) → Pair<B, A> { Pair(p.snd, p.fst) }
+fn Pair::swap<A, B>(self p: Pair<A, B>) → Pair<B, A> { Pair(p.snd, p.fst) }
 
-theorem pair_ext<A, B>(x, y: Pair<A, B>,
+theorem Pair::ext<A, B>(x, y: Pair<A, B>,
     fst_eq: x.fst = y.fst, snd_eq: x.snd = y.snd): x = y
 {
     match x {
         Pair(a, b) => match y {
-            Pair(c, d) =>
+            Pair(_, d) =>
                 j(fst_eq, λ c1 q => Pair(a, b) = Pair(c1, d),
                     j(snd_eq, λ d1 q => Pair(a, b) = Pair(a, d1), refl)),
         },

@@ -238,7 +238,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         proof.declaration(Declaration::theorem(
             format!("{prefix}_exported_bytes"),
             Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::list(bytes.iter().map(|b|
-                Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))),
+                Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))),
             Block::expression(Expr::name("refl")),
         ));
         let image = if executable {
@@ -316,22 +316,22 @@ pub(super) fn byte_chain(m: &mut Module, name: &str, list: &[u8]) {
     list_fn(m, name, format!("{name}_from_0()"));
 }
 // Name the suffix each index reaches, once, in one forward pass: step `k+1`
-// is `drop_succ` at step `k`, and `list::drop({name}_from_{k}(), 1)` is the
+// is `drop_succ` at step `k`, and `list::List::drop({name}_from_{k}(), 1)` is the
 // next name by one unfolding. Without this every byte lookup re-traverses the
 // whole file prefix (issues/native-summary-test-cpu-margin.md).
 pub(super) fn drop_chain(m: &mut Module, name: &str, len: usize) {
     let thm = |m: &mut Module, name: &str, ty: String, value: String| m.declaration(
         Declaration::theorem(name, Expr::raw(ty), Block::expression(Expr::raw(value))));
-    thm(m, &format!("{name}_drop_0"), format!("list::drop({name}(), 0) = {name}_from_0()"), "refl".into());
+    thm(m, &format!("{name}_drop_0"), format!("list::List::drop({name}(), 0) = {name}_from_0()"), "refl".into());
     for k in 1..=len {
-        thm(m, &format!("{name}_drop_{k}"), format!("list::drop({name}(), {k}) = {name}_from_{k}()"),
-            format!("trans(drop_succ({name}(), {}), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ suffix => list::drop(suffix, 1), {name}_drop_{}()))", k-1, k-1));
+        thm(m, &format!("{name}_drop_{k}"), format!("list::List::drop({name}(), {k}) = {name}_from_{k}()"),
+            format!("trans(list::List::drop_succ({name}(), {}), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ suffix => list::List::drop(suffix, 1), {name}_drop_{}()))", k-1, k-1));
     }
 }
 // The `found` premise of `static_elf64_read_split` at one code offset: the named
 // suffix, plus one head read. Both steps are constant work.
 pub(super) fn byte_at(name: &str, index: usize) -> String {
-    format!("trans(nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
+    format!("trans(list::List::nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
 }
 
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
@@ -424,7 +424,7 @@ mod tests {
                 module.raw("import x86_64;\nimport bitvec;\nimport list;");
                 module.declaration(Declaration::theorem("encoder_agrees", Expr::equal(
                     Expr::call("canonical_bytes", [instruction.heather_expr()]),
-                    Expr::list(bytes.iter().map(|b| Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))]))),
+                    Expr::list(bytes.iter().map(|b| Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))]))),
                 ), Block::expression(Expr::name("refl"))));
                 let text = module.render();
                 let result = elab.fork().elab_module_source("native_encoder_check", &text);

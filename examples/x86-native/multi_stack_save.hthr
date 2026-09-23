@@ -1,15 +1,15 @@
 import bitvec;
 
 fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
-    bitvec::bor(64, bitvec::bxor(64, left, right),
-        bitvec::bxor(64, bitvec::band(64, left, right), bitvec::bor(64, left, right)))
+    left.bxor(right).bor(
+        left.band(right).bxor(left.bor(right)))
 }
 
 fn caller(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
-    let saved = bitvec::bor(64, left, right);
-    let other = bitvec::band(64, left, right);
-    let third = bitvec::sub(64, left, right);
-    let argument = bitvec::add(64, left, right);
-    bitvec::sub(64, saved, bitvec::add(64, other,
-        bitvec::bxor(64, third, leaf(argument, left))))
+    let saved = left.bor(right);
+    let other = left.band(right);
+    let third = left.sub(right);
+    let argument = left.add(right);
+    saved.sub(other.add(
+        third.bxor(leaf(argument, left))))
 }

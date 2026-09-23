@@ -23,7 +23,7 @@ const DOUBLE: &str = "fn double(n: Nat) -> Nat { add(n, n) }";
 const ADD_ZERO_A: &str = "theorem add_zero(n: Nat): add(n, 0) = n {
     match n as λ z => add(z, 0) = z {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }
 }";
 const DOUBLE_ZERO: &str = "theorem double_zero(): double(0) = 0 { refl }";
@@ -128,7 +128,7 @@ fn a_proof_body_edit_replays_the_declarations_after_it() {
     let proof_b = "theorem add_zero(n: Nat): add(n, 0) = n {
     @sym(n, add(n, 0), @sym(add(n, 0), n, match n as λ z => add(z, 0) = z {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }))
 }";
     let edited = module(&[ADD, DOUBLE, proof_b, DOUBLE_ZERO, TRIPLE]);
@@ -147,7 +147,7 @@ fn two_proof_edits_each_restore_the_prefix() {
         "theorem add_zero(n: Nat): add(n, 0) = n {
     @sym(n, add(n, 0), @sym(add(n, 0), n, match n as λ z => add(z, 0) = z {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }))
 }",
         DOUBLE_ZERO,

@@ -285,7 +285,11 @@ impl Elaborator {
             && let Some(s) = cx.selfref.as_ref()
             && arms
                 .iter()
-                .any(|a| crate::inductive::expr_mentions(&a.body, &s.name))
+                .any(|a| {
+                    crate::inductive::expr_mentions(&a.body, &s.name)
+                        || (s.written_name != s.name
+                            && crate::inductive::expr_mentions(&a.body, &s.written_name))
+                })
         {
             return err(
                 format!(

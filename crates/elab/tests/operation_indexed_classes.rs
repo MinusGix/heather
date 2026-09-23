@@ -2,7 +2,7 @@
 //! (`docs/operation-indexed-classes-design.md`, round one of §13).
 //!
 //! The one sentence the whole feature is: the operation moves from field to
-//! **index**, so `Mon<Bool>(and)` and `Mon<Bool>(or)` are different *types*,
+//! **index**, so `Mon<Bool>(Bool::and)` and `Mon<Bool>(Bool::or)` are different *types*,
 //! both register as equals, and a goal whose value slot nothing pins is
 //! refused by name rather than answered by a nomination.
 //!
@@ -52,21 +52,21 @@ class CMon<A>(op: A -> A -> A) extends Mon<A>(op) {
     comm: (x: A) -> (y: A) -> op(x, y) = op(y, x),
 }
 
-instance CMon<Bool>(and) {
-    assoc := and_assoc, unit := True,
-    unit_l := and_true_l, unit_r := and_true_r, comm := and_comm,
+instance CMon<Bool>(Bool::and) {
+    assoc := Bool::and_assoc, unit := True,
+    unit_l := Bool::and_true_l, unit_r := Bool::and_true_r, comm := Bool::and_comm,
 }
-instance CMon<Bool>(or) {
-    assoc := or_assoc, unit := False,
-    unit_l := or_false_l, unit_r := or_false_r, comm := or_comm,
+instance CMon<Bool>(Bool::or) {
+    assoc := Bool::or_assoc, unit := False,
+    unit_l := Bool::or_false_l, unit_r := Bool::or_false_r, comm := Bool::or_comm,
 }
-instance CMon<Nat>(add) {
-    assoc := add_assoc, unit := 0,
-    unit_l := add_left_zero, unit_r := λ (x: Nat) => refl, comm := add_comm,
+instance CMon<Nat>(Nat::add) {
+    assoc := Nat::add_assoc, unit := 0,
+    unit_l := Nat::add_left_zero, unit_r := λ (x: Nat) => refl, comm := Nat::add_comm,
 }
-instance<A> Mon<List<A>>(append) {
-    assoc := append_assoc, unit := Nil,
-    unit_l := λ (xs: List<A>) => refl, unit_r := append_nil,
+instance<A> Mon<List<A>>(List::append) {
+    assoc := List::append_assoc, unit := Nil,
+    unit_l := λ (xs: List<A>) => refl, unit_r := List::append_nil,
 }
 "#;
 
@@ -128,9 +128,9 @@ fn one_law_three_structures() {
 theorem op_unit_of_comm<A: CMon>(x: A): op(x, A.unit) = x {
   trans(A.comm(x, A.unit), A.unit_l(x))
 }
-theorem at_add(x: Nat):  add(x, 0)     = x { op_unit_of_comm(x) }
-theorem at_and(x: Bool): and(x, True)  = x { op_unit_of_comm(x) }
-theorem at_or(x: Bool):  or(x, False)  = x { op_unit_of_comm(x) }
+theorem at_add(x: Nat):  x.add(0)     = x { op_unit_of_comm(x) }
+theorem at_and(x: Bool): x.and(True)  = x { op_unit_of_comm(x) }
+theorem at_or(x: Bool):  x.or(False)  = x { op_unit_of_comm(x) }
 ");
 }
 
@@ -143,7 +143,7 @@ fn slow_acceptance_the_wrong_unit_is_refused() {
 theorem law<A: CMon>(x: A): op(x, A.unit) = x {
   trans(A.comm(x, A.unit), A.unit_l(x))
 }
-theorem nope(x: Bool): or(x, True) = x { law(x) }
+theorem nope(x: Bool): x.or(True) = x { law(x) }
 ");
     // The refusal is unmoved; what it reads like moved on 2026-09-15 with
     // `docs/telescoped-record-projections-design.md`'s device — `A.unit` is a
@@ -165,12 +165,12 @@ theorem nope(x: Bool): or(x, True) = x { law(x) }
 #[test]
 fn slow_acceptance_both_structures_register_and_each_ground_goal_finds_its_own() {
     ok("
-theorem and_unit(): Bool::Mon(and).unit = True  { refl }
-theorem or_unit():  Bool::Mon(or).unit  = False { refl }
-theorem and_left(x: Bool): and(True, x)  = x { Bool::Mon(and).unit_l(x) }
-theorem or_left(x: Bool):  or(False, x)  = x { Bool::Mon(or).unit_l(x) }
+theorem and_unit(): Bool::Mon(Bool::and).unit = True  { refl }
+theorem or_unit():  Bool::Mon(Bool::or).unit  = False { refl }
+theorem and_left(x: Bool): Bool::and(True, x)  = x { Bool::Mon(Bool::and).unit_l(x) }
+theorem or_left(x: Bool):  Bool::or(False, x)  = x { Bool::Mon(Bool::or).unit_l(x) }
 // the index is the key at every level of the chain.
-theorem chain(): Bool::Sem(or).assoc = Bool::CMon(or).assoc { refl }
+theorem chain(): Bool::Sem(Bool::or).assoc = Bool::CMon(Bool::or).assoc { refl }
 ");
 }
 
@@ -178,7 +178,7 @@ theorem chain(): Bool::Sem(or).assoc = Bool::CMon(or).assoc { refl }
 /// each other.
 #[test]
 fn slow_acceptance_the_two_chains_at_one_carrier_do_not_meet() {
-    let e = bad("theorem nope(): Bool::Mon(or).unit = True { refl }");
+    let e = bad("theorem nope(): Bool::Mon(Bool::or).unit = True { refl }");
     assert!(e.contains("nope"), "{e}");
 }
 
@@ -186,17 +186,17 @@ fn slow_acceptance_the_two_chains_at_one_carrier_do_not_meet() {
 /// message names the **index** as part of the key.
 #[test]
 fn slow_acceptance_a_duplicate_at_one_index_names_the_index() {
-    let e = bad("instance Sem<Bool>(and) { assoc := and_assoc }");
+    let e = bad("instance Sem<Bool>(Bool::and) { assoc := Bool::and_assoc }");
     assert!(e.contains("already has an instance"), "{e}");
     assert!(e.contains("index"), "{e}");
     // The positive control beside it: the same declaration at a *third* index
     // is an ordinary declaration, because the key distinguishes it.
     ok("
-fn nand(a: Bool, b: Bool) -> Bool { not(and(a, b)) }
+fn nand(a: Bool, b: Bool) -> Bool { a.and(b).not() }
 class Mag<A>(op: A -> A -> A) { pt: A }
 instance Mag<Bool>(nand) { pt := True }
-instance Mag<Bool>(and)  { pt := True }
-instance Mag<Bool>(or)   { pt := False }
+instance Mag<Bool>(Bool::and)  { pt := True }
+instance Mag<Bool>(Bool::or)   { pt := False }
 ");
 }
 
@@ -213,8 +213,8 @@ fn slow_acceptance_the_empty_slot_binds_the_index_under_its_declared_name() {
 theorem twice<A: Mon>(x: A): op(x, A.unit) = op(x, A.unit) { refl }
 // at an open carrier the binder answers; at a concrete one the statement pins
 // the index and the registry answers.
-theorem at_and(x: Bool): and(x, True) = and(x, True) { twice(x) }
-theorem at_add(x: Nat):  add(x, 0)    = add(x, 0)    { twice(x) }
+theorem at_and(x: Bool): x.and(True) = x.and(True) { twice(x) }
+theorem at_add(x: Nat):  x.add(0)    = x.add(0)    { twice(x) }
 ");
 }
 
@@ -230,9 +230,9 @@ fn quad<A: Mon>(x: A) -> A { twice(twice(x)) }
 // …and it computes at carriers the generic code never mentioned, with the
 // index supplied at the outermost call and nowhere else.
 theorem at_and(x: Bool):
-  @quad(and, Bool::Mon(and), x) = and(and(x, True), True) { refl }
+  @quad(Bool::and, Bool::Mon(Bool::and), x) = x.and(True).and(True) { refl }
 theorem at_or(x: Bool):
-  @quad(or, Bool::Mon(or), x) = or(or(x, False), False) { refl }
+  @quad(Bool::or, Bool::Mon(Bool::or), x) = x.or(False).or(False) { refl }
 ");
 }
 
@@ -245,8 +245,8 @@ theorem at_or(x: Bool):
 fn slow_acceptance_an_empty_slot_can_be_supplied_by_hand() {
     ok("
 fn twice<A: Mon>(x: A) -> A { op(x, A.unit) }
-fn conj(x: Bool) -> Bool { @twice(and, Bool::Mon(and), x) }
-fn disj(x: Bool) -> Bool { @twice(or, Bool::Mon(or), x) }
+fn conj(x: Bool) -> Bool { @twice(Bool::and, Bool::Mon(Bool::and), x) }
+fn disj(x: Bool) -> Bool { @twice(Bool::or, Bool::Mon(Bool::or), x) }
 theorem they_differ(): conj(False) = False { refl }
 theorem and_the_other(): disj(True) = True { refl }
 ");
@@ -262,12 +262,12 @@ fn fold<A: Mon(o)>(o: A -> A -> A, xs: List<A>) -> A {
 }
 // open: `B` is the probe's own parameter, so only `instance<A> Mon<List<A>>`
 // can answer, and its index is `append` at that very `B`.
-fn flatten<B>(xss: List<List<B>>) -> List<B> { fold(append, xss) }
+fn flatten<B>(xss: List<List<B>>) -> List<B> { fold(List::append, xss) }
 // …and it computes at a closed one.
 theorem flattens(): flatten(Cons(Cons(1, Nil), Nil)) = Cons(1, Nil) { refl }
 // checking position at the open type, dictionary never named.
 fn flatten_then<B>(xss: List<List<B>>, ys: List<B>) -> List<B> {
-  append(flatten(xss), ys)
+  flatten(xss).append(ys)
 }
 ");
 }
@@ -287,8 +287,8 @@ fn the_value_slot_refusal_lists_every_answer() {
     let e = bad("fn nope() -> Bool { Bool.unit }");
     assert!(e.contains("not pinned"), "{e}");
     assert!(e.contains("`op`") && e.contains("Mon"), "the slot and the class: {e}");
-    assert!(e.contains("Mon<Bool>(and)") && e.contains("Mon<Bool>(or)"), "both: {e}");
-    assert!(!e.contains("Mon<Nat>(add)"), "\"would answer\" means at this carrier: {e}");
+    assert!(e.contains("Mon<Bool>(Bool::and)") && e.contains("Mon<Bool>(Bool::or)"), "both: {e}");
+    assert!(!e.contains("Mon<Nat>(Nat::add)"), "\"would answer\" means at this carrier: {e}");
 
     // (b) a call whose index nothing pins.
     let e = bad("
@@ -300,7 +300,7 @@ fn go(x: Bool) -> Bool { twice(x) }
 
     // (c) an unspellable instance-head index, refused at the declaration with
     //     the scope alternative stated.
-    let e = bad("instance Sem<Bool>(λ (a: Bool) (b: Bool) => a) { assoc := and_assoc }");
+    let e = bad("instance Sem<Bool>(λ (a: Bool) (b: Bool) => a) { assoc := Bool::and_assoc }");
     assert!(e.contains("spellable"), "{e}");
     assert!(e.contains("scope"), "the alternative is stated: {e}");
 }
@@ -310,12 +310,12 @@ fn go(x: Bool) -> Bool { twice(x) }
 #[test]
 fn slow_acceptance_receiver_dispatch_at_a_concrete_carrier_is_refused_by_name() {
     let e = bad("theorem nope(a: Bool, b: Bool, c: Bool):
-  and(and(a, b), c) = and(a, and(b, c)) { a.assoc(b, c) }");
+  a.and(b).and(c) = a.and(b.and(c)) { a.assoc(b, c) }");
     assert!(e.contains("not pinned"), "{e}");
-    assert!(e.contains("Sem<Bool>(and)") && e.contains("Sem<Bool>(or)"), "{e}");
+    assert!(e.contains("Sem<Bool>(Bool::and)") && e.contains("Sem<Bool>(Bool::or)"), "{e}");
     // …and the spelling the refusal points at does work.
     ok("theorem yes(a: Bool, b: Bool, c: Bool):
-  and(and(a, b), c) = and(a, and(b, c)) { Bool::Sem(and).assoc(a, b, c) }");
+  a.and(b).and(c) = a.and(b.and(c)) { Bool::Sem(Bool::and).assoc(a, b, c) }");
 }
 
 /// Under a binder the same receiver dispatches, at the class that *declares*
@@ -340,11 +340,11 @@ theorem assoc_from_a_comm_monoid<A: CMon(o)>(o: A -> A -> A, x: A, y: A, z: A):
 #[test]
 fn slow_acceptance_an_alias_and_an_eta_expansion_find_the_keyed_instance() {
     ok("
-fn conj(x: Bool, y: Bool) -> Bool { and(x, y) }
+fn conj(x: Bool, y: Bool) -> Bool { x.and(y) }
 fn need<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
 theorem by_alias(x: Bool): need(conj, x) = conj(x, True) { refl }
 theorem by_eta(x: Bool):
-  need(λ (a: Bool) (b: Bool) => and(a, b), x) = and(x, True) { refl }
+  need(λ (a: Bool) (b: Bool) => a.and(b), x) = x.and(True) { refl }
 ");
 }
 
@@ -354,15 +354,15 @@ theorem by_eta(x: Bool):
 #[test]
 fn slow_acceptance_a_different_operation_does_not_match() {
     let e = bad("
-fn nand(a: Bool, b: Bool) -> Bool { not(and(a, b)) }
+fn nand(a: Bool, b: Bool) -> Bool { a.and(b).not() }
 fn need<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
 fn go(x: Bool) -> Bool { need(nand, x) }
 ");
     assert!(e.contains("Mon<A>(o)") || e.contains("no instance"), "{e}");
     // …and the trace is data: each candidate is named with the index it is
     // keyed at, which is the observability hook of §11.
-    assert!(e.contains("index `bool::and`"), "{e}");
-    assert!(e.contains("index `bool::or`"), "{e}");
+    assert!(e.contains("index `bool::Bool::and`"), "{e}");
+    assert!(e.contains("index `bool::Bool::or`"), "{e}");
 }
 
 // ---------------------------------------------------------------------------
@@ -378,11 +378,11 @@ fn anon<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
 theorem anon_is_the_dictionary<A> requires m: Mon<A>(o) (o: A -> A -> A, x: A):
   anon(o, x) = o(x, m.unit) { refl }
 // concrete, through the index-bearing spelling.
-theorem at_and(x: Bool): anon(and, x) = and(x, Bool::Mon(and).unit) { refl }
+theorem at_and(x: Bool): anon(Bool::and, x) = x.and(Bool::Mon(Bool::and).unit) { refl }
 // literal, and it has to compute.
-theorem computes(): anon(or, False) = False { refl }
+theorem computes(): anon(Bool::or, False) = False { refl }
 // neutral, and it cannot.
-theorem neutral(x: Nat): anon(add, x) = add(x, 0) { refl }
+theorem neutral(x: Nat): anon(Nat::add, x) = x.add(0) { refl }
 ");
 }
 
@@ -400,7 +400,7 @@ fn the_equal_arity_rule_and_its_negative_control() {
 theorem law<A: CMon>(x: A): op(x, A.unit) = x {
   trans(A.comm(x, A.unit), A.unit_l(x))
 }
-theorem spent(x: Nat): add(x, 0) = x { law(x) }
+theorem spent(x: Nat): x.add(0) = x { law(x) }
 ");
     // The guard's own recorded counterexample, kept as this rule's control: a
     // flex spine of length 1 against a rigid spine of length 2 still learns
@@ -408,7 +408,7 @@ theorem spent(x: Nat): add(x, 0) = x { law(x) }
     // "solved" as `?f := add(a)`.
     let e = bad("
 theorem apply1<A>({f: A -> A}, {a: A}): f(a) = f(a) { refl }
-theorem peeled(x: Nat): add(x, x) = add(x, x) { apply1() }
+theorem peeled(x: Nat): x.add(x) = x.add(x) { apply1() }
 ");
     assert!(e.contains("could not infer") || e.contains("cannot infer"), "{e}");
 }
@@ -426,12 +426,12 @@ fn fold<A: Mon(o)>(o: A -> A -> A, xs: List<A>) -> A {
   match xs { Nil => A.unit, Cons(h, t) => o(h, fold(o, t)) }
 }
 // positional, no `:= infer` tail, no `requires`.
-theorem all_of(): fold(and, Cons(True, Cons(False, Nil))) = False { refl }
-theorem any_of(): fold(or,  Cons(True, Cons(False, Nil))) = True  { refl }
-theorem empty_and(): fold(and, Nil) = True  { refl }
-theorem empty_or():  fold(or,  Nil) = False { refl }
+theorem all_of(): fold(Bool::and, Cons(True, Cons(False, Nil))) = False { refl }
+theorem any_of(): fold(Bool::or,  Cons(True, Cons(False, Nil))) = True  { refl }
+theorem empty_and(): fold(Bool::and, Nil) = True  { refl }
+theorem empty_or():  fold(Bool::or,  Nil) = False { refl }
 // neutral scrutinee: nothing reduces past the element.
-theorem single(x: Nat): fold(add, Cons(x, Nil)) = add(x, 0) { refl }
+theorem single(x: Nat): fold(Nat::add, Cons(x, Nil)) = x.add(0) { refl }
 ");
 }
 
@@ -463,7 +463,7 @@ fn slow_acceptance_two_constraints_of_one_class() {
 fn both<A: Mon(f) + Mon(g)>(f: A -> A -> A, g: A -> A -> A, x: A) -> A {
   f(g(x, x), x)
 }
-theorem at_bool(x: Bool): both(and, or, x) = and(or(x, x), x) { refl }
+theorem at_bool(x: Bool): both(Bool::and, Bool::or, x) = x.or(x).and(x) { refl }
 ");
     let e = bad("fn bare<A: Mon + Mon>(x: A) -> A { op(x, x) }");
     assert!(e.contains("twice"), "{e}");
@@ -478,8 +478,8 @@ theorem at_bool(x: Bool): both(and, or, x) = and(or(x, x), x) { refl }
 #[test]
 fn slow_acceptance_the_index_pseudo_projection() {
     ok("
-theorem concrete requires m: Mon<Bool>(and) (x: Bool, y: Bool):
-  m.op(x, y) = and(x, y) { refl }
+theorem concrete requires m: Mon<Bool>(Bool::and) (x: Bool, y: Bool):
+  m.op(x, y) = x.and(y) { refl }
 theorem open<A> requires m: Mon<A>(o) (o: A -> A -> A, x: A, y: A):
   m.op(x, y) = o(x, y) { refl }
 ");
@@ -489,10 +489,10 @@ theorem open<A> requires m: Mon<A>(o) (o: A -> A -> A, x: A, y: A):
 /// and a name that is neither is still the ordinary error.
 #[test]
 fn slow_acceptance_a_field_is_still_a_field() {
-    ok("theorem the_unit requires m: Mon<Bool>(and) (x: Bool): and(m.unit, x) = x {
+    ok("theorem the_unit requires m: Mon<Bool>(Bool::and) (x: Bool): m.unit.and(x) = x {
   m.unit_l(x)
 }");
-    let e = bad("theorem nope requires m: Mon<Bool>(and) (): m.wat = True { refl }");
+    let e = bad("theorem nope requires m: Mon<Bool>(Bool::and) (): m.wat = True { refl }");
     assert!(e.contains("wat"), "{e}");
 }
 

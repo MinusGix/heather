@@ -119,6 +119,7 @@ fn setcc_encoding_decoding_and_execution_check(base: &Elaborator) {
     let mut e = base.clone();
     let src = r#"
 import x86_64;
+import bool;
 import bitvec;
 import list;
 import logic;
@@ -126,9 +127,9 @@ import option;
 
 theorem canonical_setcc_bytes():
     canonical_bytes(SetBelow(Al)) =
-        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192)]
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 146), @bitvec::BitVec::ofNat(8, 192)]
     ∧ canonical_bytes(SetLess(Bl)) =
-        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 156), bitvec::ofNat(8, 195)]
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 156), @bitvec::BitVec::ofNat(8, 195)]
 {
     And(refl, refl)
 }
@@ -144,22 +145,22 @@ theorem canonical_setcc_decodes():
 
 theorem malformed_setcc_is_rejected():
     decode_instruction(
-        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146)]) = None
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 146)]) = None
     ∧ decode_instruction(
-        [bitvec::ofNat(8, 14), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192)]) = None
+        [@bitvec::BitVec::ofNat(8, 14), @bitvec::BitVec::ofNat(8, 146), @bitvec::BitVec::ofNat(8, 192)]) = None
     ∧ decode_instruction(
-        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 196)]) = None
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 146), @bitvec::BitVec::ofNat(8, 196)]) = None
     ∧ decode_instruction(
-        [bitvec::ofNat(8, 15), bitvec::ofNat(8, 146), bitvec::ofNat(8, 192),
-            bitvec::ofNat(8, 0)]) = None
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 146), @bitvec::BitVec::ofNat(8, 192),
+            @bitvec::BitVec::ofNat(8, 0)]) = None
 {
     And(refl, And(refl, And(refl, refl)))
 }
 
 theorem cmp_flags_are_function_ir_conditions(left, right: BitVec(64)):
-    sub_flags(left, right).cf = bitvec::unsigned_lt_bit(64, left, right)
-    ∧ bitvec::xor_bit(sub_flags(left, right).sf, sub_flags(left, right).of) =
-        bitvec::signed_lt_bit(64, left, right)
+    sub_flags(left, right).cf = @bitvec::BitVec::unsigned_lt_bit(64, left, right)
+    ∧ bool::Bool::xor(sub_flags(left, right).sf, sub_flags(left, right).of) =
+        @bitvec::BitVec::signed_lt_bit(64, left, right)
 {
     And(refl, refl)
 }
@@ -228,41 +229,41 @@ theorem test_preserves_the_frame<M>(left, right: Gpr, length: Nat,
 
 theorem canonical_low_register_bytes():
     canonical_bytes(MovRR(Rax, Rbx)) =
-        Cons(ofNat(8, 72), Cons(ofNat(8, 137), Cons(ofNat(8, 216), Nil)))
+        Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137), Cons(@BitVec::ofNat(8, 216), Nil)))
 {
     refl
 }
 
 theorem canonical_extended_register_bytes():
     canonical_bytes(AddRR(R9, R10)) =
-        Cons(ofNat(8, 77), Cons(ofNat(8, 1), Cons(ofNat(8, 209), Nil)))
+        Cons(@BitVec::ofNat(8, 77), Cons(@BitVec::ofNat(8, 1), Cons(@BitVec::ofNat(8, 209), Nil)))
 {
     refl
 }
 
 theorem canonical_sub_and_cmp_bytes():
     canonical_bytes(SubRR(R9, R10)) =
-        Cons(ofNat(8, 77), Cons(ofNat(8, 41), Cons(ofNat(8, 209), Nil)))
+        Cons(@BitVec::ofNat(8, 77), Cons(@BitVec::ofNat(8, 41), Cons(@BitVec::ofNat(8, 209), Nil)))
     ∧ canonical_bytes(CmpRR(Rax, Rbx)) =
-        Cons(ofNat(8, 72), Cons(ofNat(8, 57), Cons(ofNat(8, 216), Nil)))
+        Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 57), Cons(@BitVec::ofNat(8, 216), Nil)))
 {
     And(refl, refl)
 }
 
 theorem canonical_logic_bytes():
     canonical_bytes(AndRR(R9, R10)) =
-        Cons(ofNat(8, 77), Cons(ofNat(8, 33), Cons(ofNat(8, 209), Nil)))
+        Cons(@BitVec::ofNat(8, 77), Cons(@BitVec::ofNat(8, 33), Cons(@BitVec::ofNat(8, 209), Nil)))
     ∧ canonical_bytes(OrRR(Rax, Rbx)) =
-        Cons(ofNat(8, 72), Cons(ofNat(8, 9), Cons(ofNat(8, 216), Nil)))
+        Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 9), Cons(@BitVec::ofNat(8, 216), Nil)))
     ∧ canonical_bytes(XorRR(R15, Rax)) =
-        Cons(ofNat(8, 73), Cons(ofNat(8, 49), Cons(ofNat(8, 199), Nil)))
+        Cons(@BitVec::ofNat(8, 73), Cons(@BitVec::ofNat(8, 49), Cons(@BitVec::ofNat(8, 199), Nil)))
 {
     And(refl, And(refl, refl))
 }
 
 theorem canonical_test_extension_bytes():
     canonical_bytes(TestRR(R15, Rax)) =
-        Cons(ofNat(8, 73), Cons(ofNat(8, 133), Cons(ofNat(8, 199), Nil)))
+        Cons(@BitVec::ofNat(8, 73), Cons(@BitVec::ofNat(8, 133), Cons(@BitVec::ofNat(8, 199), Nil)))
 {
     refl
 }
@@ -272,8 +273,8 @@ theorem mov_direction_encodings_normalize(start: BitVec(64)):
         decoded_rr(MovRR(Rax, Rbx)))
     ∧ DecodedAt(
         InstructionBytes(start := start,
-            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 139),
-                Cons(ofNat(8, 195), Nil)))),
+            bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 139),
+                Cons(@BitVec::ofNat(8, 195), Nil)))),
         decoded_rr(MovRR(Rax, Rbx)))
 {
     And(canonical_encoding_decodes(start, MovRR(Rax, Rbx)),
@@ -285,8 +286,8 @@ theorem add_direction_encodings_normalize(start: BitVec(64)):
         decoded_rr(AddRR(R9, R10)))
     ∧ DecodedAt(
         InstructionBytes(start := start,
-            bytes := Cons(ofNat(8, 77), Cons(ofNat(8, 3),
-                Cons(ofNat(8, 202), Nil)))),
+            bytes := Cons(@BitVec::ofNat(8, 77), Cons(@BitVec::ofNat(8, 3),
+                Cons(@BitVec::ofNat(8, 202), Nil)))),
         decoded_rr(AddRR(R9, R10)))
 {
     And(canonical_encoding_decodes(start, AddRR(R9, R10)),
@@ -426,7 +427,7 @@ theorem direct_decoder_agrees_when_reference_succeeds(
 theorem subtraction_writes_the_difference(destination, source: Gpr,
     before: Gprs):
     read_gpr(destination, execute_sub(destination, source, before).gprs) =
-        bitvec::sub(64, read_gpr(destination, before),
+        @bitvec::BitVec::sub(64, read_gpr(destination, before),
             read_gpr(source, before))
 {
     execute_sub_writes_difference(destination, source, before)
@@ -454,17 +455,17 @@ theorem executable_decoder_accepts_extended_registers():
 }
 
 theorem executable_decoder_rejects_bad_shape_and_opcode():
-    decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))) = None
+    decode_instruction(Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137), Nil))) = None
     ∧ decode_instruction(rr_bytes(144, Rax, Rbx)) = None
 {
     And(refl, refl)
 }
 
 theorem executable_decoder_rejects_missing_rex_w_and_memory_modrm():
-    decode_instruction(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
-        Cons(ofNat(8, 216), Nil)))) = None
-    ∧ decode_instruction(Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-        Cons(ofNat(8, 24), Nil)))) = None
+    decode_instruction(Cons(@BitVec::ofNat(8, 64), Cons(@BitVec::ofNat(8, 137),
+        Cons(@BitVec::ofNat(8, 216), Nil)))) = None
+    ∧ decode_instruction(Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137),
+        Cons(@BitVec::ofNat(8, 24), Nil)))) = None
 {
     And(refl, refl)
 }
@@ -490,15 +491,15 @@ theorem executable_decoder_result_reaches_execution<M>(
 theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
     ExecuteAt(
         InstructionBytes(start := before.rip,
-            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-                Cons(ofNat(8, 216), Nil)))),
+            bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137),
+                Cons(@BitVec::ofNat(8, 216), Nil)))),
         decoded_rr(MovRR(Rax, Rbx)), before,
         Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)))
 {
     external_decoding_executes(
         InstructionBytes(start := before.rip,
-            bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-                Cons(ofNat(8, 216), Nil)))),
+            bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137),
+                Cons(@BitVec::ofNat(8, 216), Nil)))),
         decoded_rr(MovRR(Rax, Rbx)), before,
         Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)),
         refl, And(Inl(And(refl, And(refl, refl))), refl),
@@ -525,65 +526,65 @@ import option;
 import logic;
 
 theorem mov_ri_low_zero_bytes():
-    canonical_bytes(MovRI(Rax, zero(64))) =
-        [ofNat(8, 72), ofNat(8, 184),
-         zero(8), zero(8), zero(8), zero(8),
-         zero(8), zero(8), zero(8), zero(8)]
+    canonical_bytes(MovRI(Rax, @BitVec::zero(64))) =
+        [@BitVec::ofNat(8, 72), @BitVec::ofNat(8, 184),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8)]
 { refl }
 
 theorem mov_ri_extended_ones_bytes():
-    canonical_bytes(MovRI(R15, all_ones(64))) =
-        [ofNat(8, 73), ofNat(8, 191),
-         all_ones(8), all_ones(8), all_ones(8), all_ones(8),
-         all_ones(8), all_ones(8), all_ones(8), all_ones(8)]
+    canonical_bytes(MovRI(R15, @BitVec::all_ones(64))) =
+        [@BitVec::ofNat(8, 73), @BitVec::ofNat(8, 191),
+         @BitVec::all_ones(8), @BitVec::all_ones(8), @BitVec::all_ones(8), @BitVec::all_ones(8),
+         @BitVec::all_ones(8), @BitVec::all_ones(8), @BitVec::all_ones(8), @BitVec::all_ones(8)]
 { refl }
 
 // A full-width asymmetric immediate pins the little-endian byte order, and a
 // high-bit one the top byte; both check under ordinary fuel now that
 // `ofNat` is width-bounded (issues/bitvec-ofnat-large-literals.md).
 theorem mov_ri_full_width_asymmetric_bytes():
-    canonical_bytes(MovRI(R9, ofNat(64, 81985529216486895))) =
-        [ofNat(8, 73), ofNat(8, 185),
-         ofNat(8, 239), ofNat(8, 205), ofNat(8, 171), ofNat(8, 137),
-         ofNat(8, 103), ofNat(8, 69), ofNat(8, 35), ofNat(8, 1)]
+    canonical_bytes(MovRI(R9, @BitVec::ofNat(64, 81985529216486895))) =
+        [@BitVec::ofNat(8, 73), @BitVec::ofNat(8, 185),
+         @BitVec::ofNat(8, 239), @BitVec::ofNat(8, 205), @BitVec::ofNat(8, 171), @BitVec::ofNat(8, 137),
+         @BitVec::ofNat(8, 103), @BitVec::ofNat(8, 69), @BitVec::ofNat(8, 35), @BitVec::ofNat(8, 1)]
 { refl }
 
 theorem mov_ri_high_bit_bytes():
-    canonical_bytes(MovRI(Rax, ofNat(64, 9223372036854775809))) =
-        [ofNat(8, 72), ofNat(8, 184),
-         ofNat(8, 1), zero(8), zero(8), zero(8),
-         zero(8), zero(8), zero(8), ofNat(8, 128)]
+    canonical_bytes(MovRI(Rax, @BitVec::ofNat(64, 9223372036854775809))) =
+        [@BitVec::ofNat(8, 72), @BitVec::ofNat(8, 184),
+         @BitVec::ofNat(8, 1), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::ofNat(8, 128)]
 { refl }
 
 theorem mov_ri_canonical_lengths():
-    canonical_length(MovRI(Rax, zero(64))) = 10
-    ∧ canonical_bytes(MovRI(R15, all_ones(64))).len() = 10
-    ∧ decoded_canonical(MovRI(R8, one(64))).length = 10
+    canonical_length(MovRI(Rax, @BitVec::zero(64))) = 10
+    ∧ canonical_bytes(MovRI(R15, @BitVec::all_ones(64))).len() = 10
+    ∧ decoded_canonical(MovRI(R8, @BitVec::one(64))).length = 10
 { And(refl, And(refl, refl)) }
 
 theorem mov_ri_decoder_accepts_boundaries():
-    decode_instruction(canonical_bytes(MovRI(Rax, zero(64)))) =
-        Some(decoded_canonical(MovRI(Rax, zero(64))))
-    ∧ decode_instruction(canonical_bytes(MovRI(R15, all_ones(64)))) =
-        Some(decoded_canonical(MovRI(R15, all_ones(64))))
+    decode_instruction(canonical_bytes(MovRI(Rax, @BitVec::zero(64)))) =
+        Some(decoded_canonical(MovRI(Rax, @BitVec::zero(64))))
+    ∧ decode_instruction(canonical_bytes(MovRI(R15, @BitVec::all_ones(64)))) =
+        Some(decoded_canonical(MovRI(R15, @BitVec::all_ones(64))))
 {
-    And(decode_mov_ri_complete(Rax, zero(64)),
-        decode_mov_ri_complete(R15, all_ones(64)))
+    And(decode_mov_ri_complete(Rax, @BitVec::zero(64)),
+        decode_mov_ri_complete(R15, @BitVec::all_ones(64)))
 }
 
 theorem mov_ri_decoder_rejects_truncated_trailing_and_bad_head():
     decode_instruction(
-        [ofNat(8, 72), ofNat(8, 184),
-         zero(8), zero(8), zero(8), zero(8),
-         zero(8), zero(8), zero(8)]) = None
+        [@BitVec::ofNat(8, 72), @BitVec::ofNat(8, 184),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8)]) = None
     ∧ decode_instruction(
-        [ofNat(8, 72), ofNat(8, 184),
-         zero(8), zero(8), zero(8), zero(8),
-         zero(8), zero(8), zero(8), zero(8), zero(8)]) = None
+        [@BitVec::ofNat(8, 72), @BitVec::ofNat(8, 184),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8)]) = None
     ∧ decode_instruction(
-        [ofNat(8, 64), ofNat(8, 184),
-         zero(8), zero(8), zero(8), zero(8),
-         zero(8), zero(8), zero(8), zero(8)]) = None
+        [@BitVec::ofNat(8, 64), @BitVec::ofNat(8, 184),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8),
+         @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8), @BitVec::zero(8)]) = None
 { And(refl, And(refl, refl)) }
 
 theorem mov_ri_executes_and_frames<M>(destination: Gpr,
@@ -620,10 +621,10 @@ import bitvec;
 import list;
 
 theorem mov_ri_big_endian_is_wrong():
-    canonical_bytes(MovRI(R9, ofNat(64, 81985529216486895))) =
-        [ofNat(8, 73), ofNat(8, 185),
-         ofNat(8, 1), ofNat(8, 35), ofNat(8, 69), ofNat(8, 103),
-         ofNat(8, 137), ofNat(8, 171), ofNat(8, 205), ofNat(8, 239)]
+    canonical_bytes(MovRI(R9, @BitVec::ofNat(64, 81985529216486895))) =
+        [@BitVec::ofNat(8, 73), @BitVec::ofNat(8, 185),
+         @BitVec::ofNat(8, 1), @BitVec::ofNat(8, 35), @BitVec::ofNat(8, 69), @BitVec::ofNat(8, 103),
+         @BitVec::ofNat(8, 137), @BitVec::ofNat(8, 171), @BitVec::ofNat(8, 205), @BitVec::ofNat(8, 239)]
 { refl }
 "#;
     match e.elab_module_source("mov_ri_swapped", swapped) {
@@ -658,8 +659,8 @@ theorem reference_decoder_accepts_logic():
 { And(refl, And(refl, refl)) }
 
 theorem reference_decoder_rejects_bad_rex():
-    decode_instruction_reference(Cons(ofNat(8, 64), Cons(ofNat(8, 137),
-        Cons(ofNat(8, 216), Nil)))) = None
+    decode_instruction_reference(Cons(@BitVec::ofNat(8, 64), Cons(@BitVec::ofNat(8, 137),
+        Cons(@BitVec::ofNat(8, 216), Nil)))) = None
 { refl }
 "#;
     if let Err(err) = e.elab_module_source("decoder_agreement", src) {
@@ -695,7 +696,7 @@ import bitvec;
 import list;
 fn impossible(start: BitVec(64)) -> DecodedAt(
     InstructionBytes(start := start,
-        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137), Nil))),
+        bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137), Nil))),
     decoded_rr(MovRR(Rax, Rbx)))
 {
     And(refl, refl)
@@ -708,8 +709,8 @@ import bitvec;
 import list;
 fn impossible(start: BitVec(64)) -> DecodedAt(
     InstructionBytes(start := start,
-        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 139),
-            Cons(ofNat(8, 216), Nil)))),
+        bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 139),
+            Cons(@BitVec::ofNat(8, 216), Nil)))),
     decoded_rr(MovRR(Rax, Rbx)))
 {
     And(refl, refl)
@@ -722,8 +723,8 @@ import bitvec;
 import list;
 fn impossible(start: BitVec(64)) -> DecodedAt(
     InstructionBytes(start := start,
-        bytes := Cons(ofNat(8, 64), Cons(ofNat(8, 137),
-            Cons(ofNat(8, 216), Nil)))),
+        bytes := Cons(@BitVec::ofNat(8, 64), Cons(@BitVec::ofNat(8, 137),
+            Cons(@BitVec::ofNat(8, 216), Nil)))),
     decoded_rr(MovRR(Rax, Rbx)))
 {
     And(Inl(And(refl, And(refl, refl))), refl)
@@ -736,8 +737,8 @@ import bitvec;
 import list;
 fn impossible(start: BitVec(64)) -> DecodedAt(
     InstructionBytes(start := start,
-        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-            Cons(ofNat(8, 24), Nil)))),
+        bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137),
+            Cons(@BitVec::ofNat(8, 24), Nil)))),
     decoded_rr(MovRR(Rax, Rbx)))
 {
     And(Inl(And(refl, And(refl, refl))), refl)
@@ -750,8 +751,8 @@ import bitvec;
 import list;
 fn impossible(start: BitVec(64)) -> DecodedAt(
     InstructionBytes(start := start,
-        bytes := Cons(ofNat(8, 72), Cons(ofNat(8, 137),
-            Cons(ofNat(8, 216), Nil)))),
+        bytes := Cons(@BitVec::ofNat(8, 72), Cons(@BitVec::ofNat(8, 137),
+            Cons(@BitVec::ofNat(8, 216), Nil)))),
     DecodedInstruction(instruction := MovRR(Rax, Rbx), length := 2,
         valid_length := squash(And(trivial, trivial))))
 {
@@ -787,26 +788,26 @@ import option;
 import logic;
 import relation;
 fn test_read(bytes: List<BitVec(8)>, address: BitVec(64)) -> Option<BitVec(8)> {
-    bytes.nth(bitvec::toNat(64, address))
+    bytes.nth(@bitvec::BitVec::toNat(64, address))
 }
 fn test_access() -> FetchAccess<List<BitVec(8)>> {
     FetchAccess(test_read, λ memory address => True)
 }
 fn bytes() -> List<BitVec(8)> { canonical_bytes(MovRR(Rax, Rbx)) }
-fn start() -> BitVec(64) { bitvec::ofNat(64, 0) }
+fn start() -> BitVec(64) { @bitvec::BitVec::ofNat(64, 0) }
 theorem read_exact(): fetch_instruction_bytes(test_access(), bytes(), 3, start())
     = FetchedBytes(bytes()) { refl }
 theorem missing_tail(): fetch_instruction_bytes(test_access(), bytes(), 4, start())
-    = FetchMissing(bitvec::ofNat(64, 3)) { refl }
+    = FetchMissing(@bitvec::BitVec::ofNat(64, 3)) { refl }
 theorem denied_before_read(): fetch_instruction_bytes(
     FetchAccess<List<BitVec(8)>>(test_read, λ memory address => False), Nil, 1, start())
     = FetchDenied(start()) { refl }
 fn constant_access() -> FetchAccess<Nat> {
-    FetchAccess(λ memory address => Some(bitvec::ofNat(8, 72)), λ memory address => True)
+    FetchAccess(λ memory address => Some(@bitvec::BitVec::ofNat(8, 72)), λ memory address => True)
 }
-fn last_address() -> BitVec(64) { bitvec::all_ones(64) }
+fn last_address() -> BitVec(64) { @bitvec::BitVec::all_ones(64) }
 theorem last_byte(): fetch_instruction_bytes(constant_access(), 0, 1, last_address())
-    = FetchedBytes([bitvec::ofNat(8, 72)]) { refl }
+    = FetchedBytes([@bitvec::BitVec::ofNat(8, 72)]) { refl }
 theorem wrap_rejected(): fetch_instruction_bytes(constant_access(), 0, 2, last_address())
     = FetchAddressWrap { refl }
 theorem neutral_byte<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
@@ -822,9 +823,9 @@ theorem certificate_agrees<M>(memory: M, address: BitVec(64), byte: BitVec(8)):
 { fetched_result(FetchAccess<M>(λ m a => Some(byte), λ m a => True), memory,
     InstructionBytes(address, [byte]), neutral_certificate(memory, address, byte)) }
 theorem unsupported_bytes_still_fetch(): fetch_instruction_bytes(
-    test_access(), [bitvec::ofNat(8, 0)], 1, start())
-    = FetchedBytes([bitvec::ofNat(8, 0)]) { refl }
-theorem unsupported_decode(): decode_instruction([bitvec::ofNat(8, 0)]) = None { refl }
+    test_access(), [@bitvec::BitVec::ofNat(8, 0)], 1, start())
+    = FetchedBytes([@bitvec::BitVec::ofNat(8, 0)]) { refl }
+theorem unsupported_decode(): decode_instruction([@bitvec::BitVec::ofNat(8, 0)]) = None { refl }
 theorem no_read_for_empty(): fetch_instruction_bytes(test_access(), Nil, 0, start())
     = FetchedBytes(Nil) { refl }
 fn before() -> MachineState<List<BitVec(8)>> {
@@ -839,8 +840,8 @@ theorem fetched_executes(): ExecuteFetched(test_access(),
         panic!("fetch checks: {}", err.render(source));
     }
     for (name, claim) in [
-        ("wrong_byte", "FetchedFrom(test_access(), [bitvec::ofNat(8, 0)], InstructionBytes(start(), [bitvec::ofNat(8, 72)]))"),
-        ("wrong_address", "FetchedFrom(test_access(), bytes(), InstructionBytes(bitvec::ofNat(64, 1), bytes()))"),
+        ("wrong_byte", "FetchedFrom(test_access(), [@bitvec::BitVec::ofNat(8, 0)], InstructionBytes(start(), [@bitvec::BitVec::ofNat(8, 72)]))"),
+        ("wrong_address", "FetchedFrom(test_access(), bytes(), InstructionBytes(@bitvec::BitVec::ofNat(64, 1), bytes()))"),
         ("non_executable", "FetchedFrom(FetchAccess<List<BitVec(8)>>(test_read, λ memory address => False), bytes(), InstructionBytes(start(), bytes()))"),
     ] {
         let count = if name == "wrong_byte" { 1 } else { 3 };

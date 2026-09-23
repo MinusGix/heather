@@ -1,0 +1,15 @@
+# Summary
+
+- [The Heather language](README.md)
+- [Getting started](getting-started.md)
+- [Declarations and modules](language/declarations.md)
+- [Types and universes](language/types.md)
+- [Expressions and functions](language/expressions.md)
+- [Data, records, and patterns](language/data-and-patterns.md)
+- [Classes, instances, and operators](language/classes-and-operators.md)
+- [Proofs and goals](proofs/proofs-and-goals.md)
+- [Case analysis and calculation](proofs/case-analysis.md)
+- [Tactic reference](proofs/tactics.md)
+- [Metaprogramming and representations](advanced/metaprogramming.md)
+- [Command-line reference](reference/cli.md)
+- [Syntax index](reference/syntax-index.md)

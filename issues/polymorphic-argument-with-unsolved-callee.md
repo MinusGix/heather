@@ -3,7 +3,7 @@ title: A polymorphic function passed as an argument cannot be instantiated while
 status: open
 labels: [frontend,elaboration,inference]
 created: 2026-08-17
-updated: 2026-08-26
+updated: 2026-09-21
 ---
 
 Found by wave L2′ ([[std-list-l2-prime-laws]]) writing `zip_swap`. Ranked
@@ -45,6 +45,12 @@ the argument against it and defer.
   value arguments' own types, first-order and domain-only" rule. Assumed here:
   only that it exists and that an unapplied polymorphic name has no value
   argument to feed it.
+
+## Related
+
+- **[[deferred-argument-diagnostic-show-rough-type]]** owns displaying the
+  selected callee and useful rough type information when this deferred path is
+  reached by an ill-typed application.
 
 ## Acceptance
 

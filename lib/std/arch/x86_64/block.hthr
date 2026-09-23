@@ -128,7 +128,7 @@ record ConditionalBlock {
 }
 
 fn machine_condition<M>(register: Gpr, state: MachineState<M>) → Bool {
-    bitvec::head_bit(63, read_gpr(register, state.gprs))
+    read_gpr(register, state.gprs).head_bit()
 }
 
 fn ExecuteSelectedBlock<M>(selected: Bool, block: ConditionalBlock,
@@ -242,8 +242,8 @@ inductive ShortControl {
 
 fn short_control_bytes(control: ShortControl) → List<BitVec(8)> {
     match control {
-        JumpZero(displacement) => [bitvec::ofNat(8, 0x74), displacement],
-        Jump(displacement) => [bitvec::ofNat(8, 0xeb), displacement],
+        JumpZero(displacement) => [BitVec::ofNat(0x74), displacement],
+        Jump(displacement) => [BitVec::ofNat(0xeb), displacement],
     }
 }
 
@@ -264,13 +264,13 @@ fn decode_short_control(bytes: List<BitVec(8)>) →
                     Option<ShortControlDecode(
                         Cons(opcode, Cons(displacement, rest)))> {
                 Cons(_, _) => None,
-                Nil => match bitvec::eq_dec(8, opcode, bitvec::ofNat(8, 0x74)) {
+                Nil => match opcode.eq_dec(BitVec::ofNat(0x74)) {
                     Inl(opcode_exact) => Some(ShortControlDecode(
                         control := JumpZero(displacement),
                         decoding := cong_fn(
                             λ found => [found, displacement], opcode_exact))),
-                    Inr(_) => match bitvec::eq_dec(8, opcode,
-                            bitvec::ofNat(8, 0xeb)) {
+                    Inr(_) => match opcode.eq_dec(
+                            BitVec::ofNat(0xeb)) {
                         Inl(opcode_exact) => Some(ShortControlDecode(
                             control := Jump(displacement),
                             decoding := cong_fn(
@@ -301,63 +301,62 @@ theorem decode_short_control_rejects_empty():
 { refl }
 
 theorem decode_short_control_rejects_truncated():
-    erase_short_control_decode([bitvec::ofNat(8, 0x74)],
-        decode_short_control([bitvec::ofNat(8, 0x74)])) = None
+    erase_short_control_decode([BitVec::ofNat(0x74)],
+        decode_short_control([BitVec::ofNat(0x74)])) = None
 { refl }
 
 theorem decode_short_control_rejects_trailing():
     erase_short_control_decode(
-        [bitvec::ofNat(8, 0x74), bitvec::ofNat(8, 0), bitvec::ofNat(8, 0)],
+        [BitVec::ofNat(0x74), BitVec::ofNat(0), BitVec::ofNat(0)],
         decode_short_control(
-            [bitvec::ofNat(8, 0x74), bitvec::ofNat(8, 0),
-                bitvec::ofNat(8, 0)])) = None
+            [BitVec::ofNat(0x74), BitVec::ofNat(0),
+                BitVec::ofNat(0)])) = None
 { refl }
 
 theorem decode_short_control_rejects_unknown_opcode():
-    erase_short_control_decode([bitvec::ofNat(8, 0x75), bitvec::ofNat(8, 0)],
+    erase_short_control_decode([BitVec::ofNat(0x75), BitVec::ofNat(0)],
         decode_short_control(
-            [bitvec::ofNat(8, 0x75), bitvec::ofNat(8, 0)])) = None
+            [BitVec::ofNat(0x75), BitVec::ofNat(0)])) = None
 { refl }
 
 fn short_branch_target(start: BitVec(64), displacement: BitVec(8)) →
     BitVec(64)
 {
-    bitvec::add(64, next_rip(start, 2),
-        bitvec::sign_extend(7, 56, displacement))
+    next_rip(start, 2).add(
+        displacement.sign_extend(56))
 }
 
 theorem short_branch_target_8(start: BitVec(64)):
-    short_branch_target(start, bitvec::ofNat(8, 8)) =
-        bitvec::iterate_increment(64, next_rip(start, 2), 8)
+    short_branch_target(start, BitVec::ofNat(8)) =
+        next_rip(start, 2).iterate_increment(8)
 {
-    sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),
-        bitvec::sign_extend(7, 56, bitvec::ofNat(8, 8))))
+    sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
+        BitVec::sign_extend(56, @BitVec::ofNat(8, 8))))
 }
 
 theorem short_branch_target_6(start: BitVec(64)):
-    short_branch_target(start, bitvec::ofNat(8, 6)) =
-        bitvec::iterate_increment(64, next_rip(start, 2), 6)
+    short_branch_target(start, BitVec::ofNat(6)) =
+        next_rip(start, 2).iterate_increment(6)
 {
-    sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),
-        bitvec::sign_extend(7, 56, bitvec::ofNat(8, 6))))
+    sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
+        BitVec::sign_extend(56, @BitVec::ofNat(8, 6))))
 }
 
 theorem advance_3_3(x: BitVec(64)):
-    bitvec::iterate_increment(64,
-        bitvec::iterate_increment(64, x, 3), 3) =
-    bitvec::iterate_increment(64, x, 6)
+
+        x.iterate_increment(3).iterate_increment(3) =
+    x.iterate_increment(6)
 {
-    bitvec::iterate_increment_compose(64, x, 3, 3)
+    BitVec::iterate_increment_compose(64, x, 3, 3)
 }
 
 theorem advance_3_3_2(x: BitVec(64)):
-    bitvec::iterate_increment(64,
-        bitvec::iterate_increment(64,
-            bitvec::iterate_increment(64, x, 3), 3), 2) =
-    bitvec::iterate_increment(64, x, 8)
+
+            x.iterate_increment(3).iterate_increment(3).iterate_increment(2) =
+    x.iterate_increment(8)
 {
-    trans(bitvec::cong_iterate_increment(64, 2, advance_3_3(x)),
-        bitvec::iterate_increment_compose(64, x, 6, 2))
+    trans(BitVec::cong_iterate_increment(64, 2, advance_3_3(x)),
+        BitVec::iterate_increment_compose(64, x, 6, 2))
 }
 
 fn with_rip<M>(state: MachineState<M>, rip: BitVec(64)) → MachineState<M> {
@@ -413,7 +412,7 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 fn after_canonical_block(start: BitVec(64),
     instructions: List<Instruction>) → BitVec(64)
 {
-    bitvec::iterate_increment(64, start,
+    start.iterate_increment(
         canonical_block_bytes(instructions).len())
 }
 
@@ -474,10 +473,10 @@ fn linked_join_start(block: LinkedConditionalBlock, start: BitVec(64)) →
 record LinkedConditionalLayout(block: LinkedConditionalBlock)
 {
     false_forward: byte_bit7(block.false_displacement) = False,
-    false_distance: bitvec::toNat(8, block.false_displacement) =
+    false_distance: block.false_displacement.toNat() =
         canonical_block_bytes(block.when_true).len() + 2,
     join_forward: byte_bit7(block.join_displacement) = False,
-    join_distance: bitvec::toNat(8, block.join_displacement) =
+    join_distance: block.join_displacement.toNat() =
         canonical_block_bytes(block.when_false).len(),
     false_target: (start: BitVec(64)) →
         short_branch_target(linked_branch_start(block, start),
@@ -594,7 +593,7 @@ theorem linked_test_reaches_branch_start<M>(block: LinkedConditionalBlock,
     linked_test_after(block, before).rip =
         linked_branch_start(block, before.rip)
 {
-    bitvec::cong_iterate_increment(64, 3, prefix_at)
+    BitVec::cong_iterate_increment(64, 3, prefix_at)
 }
 
 theorem jump_zero_not_taken_rip(selected: Bool, start: BitVec(64),

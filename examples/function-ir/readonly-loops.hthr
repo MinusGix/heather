@@ -6,9 +6,9 @@ import bool;
 import nat;
 
 fn byte_equal(left, right: BitVec(8)) → Bool {
-    match bitvec::unsigned_lt_bit(8, left, right) {
+    match left.unsigned_lt_bit(right) {
         True => False,
-        False => match bitvec::unsigned_lt_bit(8, right, left) { True => False, False => True },
+        False => match right.unsigned_lt_bit(left) { True => False, False => True },
     }
 }
 

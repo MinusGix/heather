@@ -214,10 +214,10 @@ fn comparison_prefixed_conditional() → StructuredRegion {{
     Sequence(conditional_comparison_raw(), selected_conditional())
 }}
 
-theorem conditional_0_ne_1(): 0 ≠ 1 {{ nat::zero_ne_succ(0) }}
-theorem conditional_0_ne_3(): 0 ≠ 3 {{ nat::zero_ne_succ(2) }}
+theorem conditional_0_ne_1(): 0 ≠ 1 {{ nat::Nat::zero_ne_succ(0) }}
+theorem conditional_0_ne_3(): 0 ≠ 3 {{ nat::Nat::zero_ne_succ(2) }}
 theorem conditional_1_ne_3(equal: 1 = 3): False
-{{ nat::zero_ne_succ(1)(nat::succ_inj(0, 2, equal)) }}
+{{ nat::Nat::zero_ne_succ(1)(nat::Nat::succ_inj(0, 2, equal)) }}
 
 theorem conditional_inputs_unique():
     PortEntriesUnique(conditional_inputs().entries)
@@ -275,7 +275,7 @@ theorem comparison_prefixed_conditional_holds(values: Valuation(),
 {{ ⟨comparison, continuation⟩ }}
 
 theorem conditional_takes_false(values: Valuation(),
-    condition_false: bitvec::head_bit(0, values(1, 3)) = False,
+    condition_false: @bitvec::BitVec::head_bit(0, values(1, 3)) = False,
     false_graph: RegionHolds(conditional_sub_raw(), values)):
     StructuredRegionHolds(values, selected_conditional())
 {{
@@ -287,7 +287,7 @@ theorem conditional_takes_false(values: Valuation(),
 }}
 
 theorem conditional_takes_true(values: Valuation(),
-    condition_true: bitvec::head_bit(0, values(1, 3)) = True,
+    condition_true: @bitvec::BitVec::head_bit(0, values(1, 3)) = True,
     true_graph: RegionHolds(conditional_add_raw(), values)):
     StructuredRegionHolds(values, selected_conditional())
 {{
@@ -319,28 +319,28 @@ import bitvec;
 
 theorem const8(values: Valuation(),
     equation: NodeHolds(values, Const(8, 2, 255))):
-    values(8, 2) = bitvec::ofNat(8, 255)
+    values(8, 2) = @bitvec::BitVec::ofNat(8, 255)
 {
     equation
 }
 
 theorem xor64(values: Valuation(),
     equation: NodeHolds(values, BitXor(64, 2, 0, 1))):
-    values(64, 2) = bitvec::bxor(64, values(64, 0), values(64, 1))
+    values(64, 2) = @bitvec::BitVec::bxor(64, values(64, 0), values(64, 1))
 {
     equation
 }
 
 theorem shift8(values: Valuation(),
     equation: NodeHolds(values, LogicalShiftRight(8, 2, 0, 3))):
-    values(8, 2) = bitvec::shift_right(8, values(8, 0), 3)
+    values(8, 2) = @bitvec::BitVec::shift_right(8, values(8, 0), 3)
 {
     equation
 }
 
 theorem signed_compare64(values: Valuation(),
     equation: NodeHolds(values, SignedLessThan(64, 2, 0, 1))):
-    values(1, 2) = bitvec::ofBool(bitvec::signed_lt_bit(64,
+    values(1, 2) = bitvec::BitVec::ofBool(@bitvec::BitVec::signed_lt_bit(64,
         values(64, 0), values(64, 1)))
 {
     equation
@@ -369,7 +369,7 @@ theorem add64_result(x, y: BitVec(64), values: Valuation(),
     hx: values(64, 0) = x,
     hy: values(64, 1) = y,
     graph: RegionHolds(selected().raw, values)):
-    values(64, 2) = bitvec::add(64, x, y)
+    values(64, 2) = @bitvec::BitVec::add(64, x, y)
 {
     add64_denotes(x, y, values, hx, hy, graph)
 }
@@ -410,8 +410,8 @@ theorem sum4_result(a, b, c, d: BitVec(64), values: Valuation(),
     hc: values(64, 2) = c,
     hd: values(64, 3) = d,
     graph: RegionHolds(sum4_right_first_raw(), values)):
-    values(64, 6) = bitvec::add(64,
-        bitvec::add(64, a, b), bitvec::add(64, c, d))
+    values(64, 6) = @bitvec::BitVec::add(64,
+        @bitvec::BitVec::add(64, a, b), @bitvec::BitVec::add(64, c, d))
 {
     sum4_denotes(a, b, c, d, values, ha, hb, hc, hd,
         sum4_schedules_equivalent(values).mpr(graph))

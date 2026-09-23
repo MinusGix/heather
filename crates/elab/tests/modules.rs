@@ -73,7 +73,7 @@ fn a_qualified_name_cannot_be_a_binder() {
 
 #[test]
 fn qualified_names_parse_in_both_positions() {
-    parse_file("fn f(o: option::Option<Nat>) -> Nat { nat::add(1, 2) }").expect("parses");
+    parse_file("fn f(o: option::Option<Nat>) -> Nat { nat::Nat::add(1, 2) }").expect("parses");
 }
 
 // ---------------------------------------------------------------------------
@@ -219,9 +219,9 @@ fn a_qualified_constructor_checks_and_synthesizes() {
             "user",
             "import opt;
              fn none_nat() -> Option<Nat> { Option::None }
-             fn some_three() -> Nat { { let x = Option::Some(3); unwrap_or(x, 0) } }
+             fn some_three() -> Nat { { let x = Option::Some(3); x.unwrap_or(0) } }
              theorem t(): some_three() = 3 { refl }
-             theorem u(): unwrap_or(none_nat(), 9) = 9 { refl }",
+             theorem u(): none_nat().unwrap_or(9) = 9 { refl }",
         ),
     ]);
 }
@@ -296,9 +296,9 @@ fn a_bare_constructor_is_settled_by_the_expected_type() {
              fn s2() -> Maybe<Nat> { Some(3) }
              // Which CONSTRUCTOR, not merely which declaration: each type's
              // own eliminator distinguishes its `None` from its `Some`.
-             theorem a(): unwrap_or(n1(), 9) = 9 { refl }
+             theorem a(): n1().unwrap_or(9) = 9 { refl }
              theorem b(): or_else(n2(), 9) = 9 { refl }
-             theorem c(): unwrap_or(s1(), 9) = 3 { refl }
+             theorem c(): s1().unwrap_or(9) = 3 { refl }
              theorem d(): or_else(s2(), 9) = 3 { refl }",
         ),
     ]);
@@ -321,12 +321,12 @@ fn an_unsaturated_bare_constructor_is_settled_through_the_expected_pi() {
              import opt2;
              fn mk1() -> Nat -> Option<Nat> { Some }
              fn mk2() -> Nat -> Maybe<Nat> { Some }
-             theorem a(): unwrap_or(mk1()(3), 9) = 3 { refl }
+             theorem a(): mk1()(3).unwrap_or(9) = 3 { refl }
              theorem b(): or_else(mk2()(3), 9) = 3 { refl }
              // …and under a written λ, where the expected type is the
              // declaration itself again: the two spellings must agree.
              fn c1() -> Nat -> Option<Nat> { λ (n: Nat) => None }
-             theorem c(): unwrap_or(c1()(0), 9) = 9 { refl }",
+             theorem c(): c1()(0).unwrap_or(9) = 9 { refl }",
         ),
     ]);
 }
@@ -364,7 +364,7 @@ fn a_binder_still_beats_a_constructor_at_its_own_expected_type() {
             "import opt;
              import opt2;
              fn f() -> Option<Nat> { { let None = Option::Some(3); None } }
-             theorem t(): unwrap_or(f(), 0) = 3 { refl }",
+             theorem t(): f().unwrap_or(0) = 3 { refl }",
         ),
     ]);
 }
@@ -654,7 +654,7 @@ fn an_argument_is_checking_position_exactly_when_its_parameter_type_is_concrete(
             "user",
             "import opt;
              import opt2;
-             fn mono(o: Option<Nat>) -> Nat { unwrap_or(o, 9) }
+             fn mono(o: Option<Nat>) -> Nat { o.unwrap_or(9) }
              fn mono2(m: Maybe<Nat>) -> Nat { or_else(m, 8) }
              theorem a(): mono(None) = 9 { refl }
              theorem b(): mono2(None) = 8 { refl }",

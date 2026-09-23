@@ -3,11 +3,11 @@
 use super::*;
 
 pub(super) fn encode(width: u64, value: &str) -> String {
-    if width == 64 { value.into() } else { format!("bitvec::zero_extend({width}, {}, {value})", 64 - width) }
+    if width == 64 { value.into() } else { format!("@bitvec::BitVec::zero_extend({width}, {}, {value})", 64 - width) }
 }
-fn bit(value: &str) -> String { format!("bitvec::head_bit(0, {value})") }
+fn bit(value: &str) -> String { format!("@bitvec::BitVec::head_bit(0, {value})") }
 pub(super) fn vector(ty: StructuredSourceType, value: &str) -> String {
-    if ty == StructuredSourceType::Boolean { format!("bitvec::ofBool({value})") } else { value.into() }
+    if ty == StructuredSourceType::Boolean { format!("bitvec::BitVec::ofBool({value})") } else { value.into() }
 }
 
 // A width-indexed valuation must return the original neutral argument at its
@@ -15,8 +15,8 @@ pub(super) fn vector(ty: StructuredSourceType, value: &str) -> String {
 fn at_width(width: u64, value: &str, depth: u64) -> String {
     let index = if depth == 0 { "width".into() } else { format!("w{depth}") };
     let succ = |s: String| (0..depth).fold(s, |s, _| format!("Succ({s})"));
-    let zero = if depth == width { value.into() } else { format!("bitvec::zero({depth})") };
-    let rest = if depth == width { format!("bitvec::zero({})", succ(format!("Succ(w{})", depth + 1))) }
+    let zero = if depth == width { value.into() } else { format!("@bitvec::BitVec::zero({depth})") };
+    let rest = if depth == width { format!("@bitvec::BitVec::zero({})", succ(format!("Succ(w{})", depth + 1))) }
         else { at_width(width, value, depth + 1) };
     format!("match {index} as λ n => BitVec({}) {{ Zero => {zero}, Succ(w{}) => {rest} }}", succ("n".into()), depth + 1)
 }
@@ -63,7 +63,7 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             let result = expansion.region(prefix, values.clone())?;
             expansion.result = saved_result;
             expansion.choice = saved_choice;
-            let result = if port.width == 1 { HeatherExpr::call("bitvec::ofBool", [result]) } else { result };
+            let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
             values.insert(port.id, (port.width, result));
             observe_tree(expansion, continuation, values, observers, result_type, observation_types)
         }
@@ -114,9 +114,9 @@ pub fn generate_elaborated_typed_x86(
         (id as u64, (width, HeatherExpr::raw(vector(*ty, &format!("arg{id}"))))))).collect();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
-    let mut cases = "bitvec::zero(width)".to_string();
+    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {
-        let value = ty.width().map_or_else(|| "bitvec::zero(width)".into(), |width| at_width(width, &vector(*ty, &format!("arg{id}")), 0));
+        let value = ty.width().map_or_else(|| "@bitvec::BitVec::zero(width)".into(), |width| at_width(width, &vector(*ty, &format!("arg{id}")), 0));
         cases = format!("match id{id} {{ Zero => {value}, Succ(id{}) => {cases} }}", id + 1);
     }
     module.declaration(Declaration::function(format!("{prefix}_typed_values"), HeatherExpr::raw("Valuation()"), Block::expression(HeatherExpr::raw(format!("λ width id0 => {cases}")))).parameters(parameters.clone()));
@@ -137,7 +137,7 @@ pub fn generate_elaborated_typed_x86(
         let name = if i == 0 { prefix.to_string() } else { format!("{prefix}_output_{}", port.id) };
         let observer = &observers[i];
         let observed_value = format!("{observer}({}({args}))", reflected.source_name);
-        let normalized = |v: &str| encode(port.width, &if port.width == 1 { format!("bitvec::ofBool({v})") } else { v.into() });
+        let normalized = |v: &str| encode(port.width, &if port.width == 1 { format!("bitvec::BitVec::ofBool({v})") } else { v.into() });
         let expected = normalized(&observed_value);
         let source_agreement = format!("trans(cong_fn<{result_type}, {}>({observer}, sym({prefix}_source_source_expands({args}))), {})", observation_types[i], observed.proofs[i]);
         module.declaration(Declaration::theorem(format!("{name}_source_observed"), HeatherExpr::raw(format!("{observed_value} = {}", observed.values[i])), Block::expression(HeatherExpr::raw(source_agreement))).parameters(parameters.clone()));

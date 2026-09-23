@@ -20,17 +20,17 @@ fn chosen_bound(x: WitnessedNat) → Nat { x.evidence.witness }
 fn sum_has_bound(x, y: WitnessedNat) → HasBound(x.value + y.value) {
     Exists(
         witness := chosen_bound(x) + chosen_bound(y),
-        proof := add_le_mono(x.value, chosen_bound(x), y.value, chosen_bound(y),
+        proof := x.value.add_le_mono(chosen_bound(x), y.value, chosen_bound(y),
             x.evidence.proof, y.evidence.proof))
 }
 
 fn witnessed_add(x, y: WitnessedNat) → WitnessedNat {
-    lift_binary(witnessed_repr(), add, sum_has_bound, x, y)
+    lift_binary(witnessed_repr(), Nat::add, sum_has_bound, x, y)
 }
 
 theorem witnessed_add_value(x, y: WitnessedNat):
     witnessed_add(x, y).value = x.value + y.value
-{ lift_binary_value(witnessed_repr(), add, sum_has_bound, x, y) }
+{ lift_binary_value(witnessed_repr(), Nat::add, sum_has_bound, x, y) }
 
 // Witness computation survives the lift even though SameNumber ignores it.
 theorem witnessed_add_bound(x, y: WitnessedNat):
@@ -40,7 +40,7 @@ theorem witnessed_add_bound(x, y: WitnessedNat):
 theorem witnessed_add_assoc(x, y, z: WitnessedNat):
     SameNumber(witnessed_add(witnessed_add(x, y), z),
         witnessed_add(x, witnessed_add(y, z)))
-{ add_assoc(x.value, y.value, z.value) }
+{ x.value.add_assoc(y.value, z.value) }
 
 theorem witnessed_add_respects(x, x2: WitnessedNat, hx: SameNumber(x, x2),
     y, y2: WitnessedNat, hy: SameNumber(y, y2)):
@@ -54,7 +54,7 @@ fn bound_zero() → WitnessedNat { WitnessedNat(0, Exists(0, trivial)) }
 fn bound_one() → WitnessedNat { WitnessedNat(0, Exists(1, trivial)) }
 theorem same_number(): SameNumber(bound_zero(), bound_one()) { refl }
 theorem different_bounds(): chosen_bound(bound_zero()) ≠ chosen_bound(bound_one()) {
-    zero_ne_succ(0)
+    Nat::zero_ne_succ(0)
 }
 
 theorem bound_reader_cannot_ignore_evidence(

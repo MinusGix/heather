@@ -63,12 +63,35 @@ fn a_member_declaration_is_reachable_by_qualification() {
     ));
 }
 
-// A member recurses under its base name — inside `fn List::nth` the call is
-// `nth(t)`. Already exercised by `LIST` itself; asserted here so the reason
-// is written down where it can fail.
+// A member may recurse under its base name — inside `fn List::nth` the call is
+// `nth(t)`. Already exercised by `LIST` itself; asserted here so this spelling
+// stays available alongside the qualified one.
 #[test]
 fn a_member_recurses_under_its_base_name() {
     ok(&format!("{LIST} fn probe<A>(xs: List<A>) -> Nat {{ 0 }}"));
+}
+
+// The fully qualified declaration head is an alias for the in-progress
+// self-reference, not a provisionally published global. This is especially
+// useful for type-valued members, whose uses naturally read as qualified
+// predicates.
+#[test]
+fn a_member_recurses_under_its_qualified_name() {
+    ok("fn Nat::Even(n: Nat) -> Type {
+            match n {
+                Zero => True,
+                Succ(k) => Nat::Even(k),
+            }
+        }");
+}
+
+// The alias must take the guarded self-call path. If it fell through ordinary
+// global resolution, this would either be an unknown qualifier or an
+// unrestricted recursive global call.
+#[test]
+fn a_qualified_self_call_is_still_structurally_guarded() {
+    let e = bad("fn Nat::loop(n: Nat) -> Nat { Nat::loop(n) }");
+    assert!(e.contains("not structurally guarded"), "{e}");
 }
 
 // The base name does **not** enter the ambient namespace: that is the
@@ -162,6 +185,31 @@ fn an_ambient_name_and_a_member_at_the_same_receiver_are_ambiguous() {
     ));
     assert!(e.contains("List::nth"), "{e}");
     assert!(e.contains("both"), "{e}");
+}
+
+// The declaration currently being checked is in scope under its base name so
+// that it can recurse. It is not a competing method when its own receiver has
+// a known, different carrier from the written receiver.
+#[test]
+fn an_in_progress_member_of_another_type_does_not_shadow_the_receiver_member() {
+    ok("inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        inductive Box<A> { Mk(contents: List<A>) }
+        fn List::size<A>(self xs: List<A>) -> Nat {
+            match xs { Nil => 0, Cons(_, tail) => Succ(size(tail)) }
+        }
+        fn Box::size<A>(self b: Box<A>) -> Nat {
+            match b { Mk(contents) => contents.size() }
+        }");
+}
+
+// Carrier filtering only removes a provably inapplicable self-reference. A
+// declaration whose receiver has the same carrier remains a genuine second
+// reading, just like an already committed ambient declaration.
+#[test]
+fn an_applicable_in_progress_name_still_competes_with_the_receiver_member() {
+    let e = bad("fn Nat::value(self n: Nat) -> Nat { n }
+        fn value(n: Nat) -> Nat { n.value() }");
+    assert!(e.contains("both `Nat::value`"), "{e}");
 }
 
 // A receiver whose type owns no such member: the ordinary unbound-name error

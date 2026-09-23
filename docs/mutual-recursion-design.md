@@ -223,14 +223,14 @@ closing the combined goal (`p1.hthr`).
 > was the five sites' certificates;
 > `issues/measure-obligation-omega-on-a-written-proof.md`). The flattening's
 > two facts are now `lib/std/nat.hthr`'s
-> `scaled_lt(a, b, r, s, n, h: a < b, q: r < n)` and
-> `scaled_le(a, b, r, s, n, h: a <= b, q: r < s)`, both concluding
-> `a * n + r < b * n + s`, proved structurally through `mul_mono_l` and the two
-> `add_mono` lemmas in about a millisecond each. A site's body is
-> `let __dec_clean : … := ?decN; nat::scaled_lt(args, raw, r_to, r_from, N, __dec_clean, trivial)`,
+> `Nat::scaled_lt(self a, b, r, s, n, h: a < b, q: r < n)` and
+> `Nat::scaled_le(self a, b, r, s, n, h: a <= b, q: r < s)`, both concluding
+> `a * n + r < b * n + s`, proved structurally from the `add_le_mono` and
+> `mul_le_mono_r` kit in about a millisecond each. A site's body is
+> `let __dec_clean : … := ?decN; Nat::scaled_lt(args, raw, r_to, r_from, N, __dec_clean, trivial)`,
 > with the rank side condition over literals, so `trivial` computes it.
 > A rank-lowering call at an unchanged argument owes `x <= x`, and the
-> lowering closes it with `nat::le_refl(x)` unasked. So `omega` is back to
+> lowering closes it with `Nat::le_refl(x)` unasked. So `omega` is back to
 > what it is in Part A, the default closer of a site nobody discharges, and a
 > group whose strict sites are written needs neither `import omega` nor
 > `import int`. `checked_expr` went from 797 ms to 48 ms, and `calc_parser`

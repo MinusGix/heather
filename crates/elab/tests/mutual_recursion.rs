@@ -102,16 +102,16 @@ fn any_err(src: &str) -> String {
 /// here is `omega`'s: the list-tail sites needed a lemma by hand until
 /// docs/omega-measure-reduction-design.md §6 took it out.
 const PARSER: &str = r#"
-fn parse_expr(ts: List<Nat>) -> Nat decreases list_len(ts) {
+fn parse_expr(ts: List<Nat>) -> Nat decreases ts.len() {
     match ts {
         Nil => 0,
-        Cons(t, rest) => Succ(nat::add(parse_factor(ts), parse_expr(rest))),
+        Cons(t, rest) => Succ(nat::Nat::add(parse_factor(ts), parse_expr(rest))),
     }
 }
-fn parse_factor(ts: List<Nat>) -> Nat decreases list_len(ts) {
+fn parse_factor(ts: List<Nat>) -> Nat decreases ts.len() {
     match ts { Nil => 0, Cons(t, rest) => parse_atom(ts) }
 }
-fn parse_atom(ts: List<Nat>) -> Nat decreases list_len(ts) {
+fn parse_atom(ts: List<Nat>) -> Nat decreases ts.len() {
     match ts { Nil => 1, Cons(t, rest) => parse_expr(rest) }
 }
 "#;
@@ -167,11 +167,11 @@ fn the_parser_groups_tail_sites_are_closed_by_the_closer() {
 }
 
 /// §4's arithmetic from the clean statement to the scaled one is
-/// `nat::scaled_lt`/`nat::scaled_le`, not `omega`: a group whose strict sites
+/// `Nat::scaled_lt`/`Nat::scaled_le`, not `omega`: a group whose strict sites
 /// the writer discharges checks with neither `omega` nor `int` imported. The
 /// rank-lowering calls at an unchanged argument — one at a literal-refined
 /// `0`, one at an **open** `Succ(k)` — owe `x <= x`, which the lowering closes
-/// with `nat::le_refl` unasked; and at literals the members still compute.
+/// with `Nat::le_refl` unasked; and at literals the members still compute.
 #[test]
 fn a_group_with_written_discharges_needs_no_omega() {
     let mut e = base();
@@ -181,12 +181,12 @@ fn a_group_with_written_discharges_needs_no_omega() {
 import nat;
 import pair;
 fn hi(n: Nat) -> Nat decreases n {
-    match n { Zero => lo(n), Succ(k) => nat::add(lo(n), hi(k) decreasing down) }
-    on decreasing down := nat::lt_succ_self(k);
+    match n { Zero => lo(n), Succ(k) => nat::Nat::add(lo(n), hi(k) decreasing down) }
+    on decreasing down := k.lt_succ_self();
 }
 fn lo(n: Nat) -> Nat decreases n {
     match n { Zero => 0, Succ(k) => Succ(hi(k) decreasing up) }
-    on decreasing up := nat::lt_succ_self(k);
+    on decreasing up := k.lt_succ_self();
 }
 theorem hi3(): hi(3) = 7 { refl }
 theorem lo2(): lo(2) = 2 { refl }
@@ -203,8 +203,8 @@ theorem lo2(): lo(2) = 2 { refl }
 fn a_member_applies_to_a_neutral_argument_in_a_checking_position() {
     ok(&format!(
         "{PARSER}
-fn total(ts: List<Nat>) -> Nat decreases list_len(ts) {{
-    match ts {{ Nil => 0, Cons(t, rest) => nat::add(parse_expr(ts), total(rest)) }}
+fn total(ts: List<Nat>) -> Nat decreases ts.len() {{
+    match ts {{ Nil => 0, Cons(t, rest) => nat::Nat::add(parse_expr(ts), total(rest)) }}
 }}
 theorem total_two(): total([7, 8]) = 4 {{ refl }}
 // an open *element* under a closed spine: nothing about `t` is scrutinized,
@@ -220,10 +220,10 @@ theorem pf_open(t: Nat): parse_factor([t]) = 0 {{ refl }}
 #[test]
 fn a_polymorphic_group_hoists_its_type_parameters() {
     ok(r#"
-fn evens<A>(xs: List<A>) -> List<A> decreases list_len(xs) {
+fn evens<A>(xs: List<A>) -> List<A> decreases xs.len() {
     match xs { Nil => Nil, Cons(h, t) => Cons(h, odds<A>(t)) }
 }
-fn odds<A>(xs: List<A>) -> List<A> decreases list_len(xs) {
+fn odds<A>(xs: List<A>) -> List<A> decreases xs.len() {
     match xs { Nil => Nil, Cons(h, t) => evens<A>(t) }
 }
 
@@ -241,7 +241,7 @@ theorem ev_one<A>(a: A): evens<A>([a]) = [a] { refl }
 fn members_may_differ_in_telescope_and_result_type() {
     ok(r#"
 fn f(n: Nat) -> Nat decreases n {
-    match n { Zero => 0, Succ(k) => list_len(g(Cons(k, Nil), k)) }
+    match n { Zero => 0, Succ(k) => g(Cons(k, Nil), k).len() }
 }
 fn g(xs: List<Nat>, b: Nat) -> List<Nat> decreases b {
     match b { Zero => xs, Succ(m) => Cons(f(m), g(xs, m)) }
@@ -258,13 +258,13 @@ theorem f2(): f(2) = 2 { refl }
 #[test]
 fn a_group_of_qualified_declarations_recurses_under_base_names() {
     ok(r#"
-fn List::ev2<A>(xs: List<A>) -> Nat decreases list_len(xs) {
+fn List::ev2<A>(xs: List<A>) -> Nat decreases xs.len() {
     match xs { Nil => 0, Cons(h, t) => od2<A>(t) }
-    on ?dec1 := nat::le_succ_r(list_len(t), list_len(t))(nat::le_refl(list_len(t)));
+    on ?dec1 := nat::Nat::le_succ_r(t.len(), t.len())(nat::Nat::le_refl(t.len()));
 }
-fn List::od2<A>(xs: List<A>) -> Nat decreases list_len(xs) {
+fn List::od2<A>(xs: List<A>) -> Nat decreases xs.len() {
     match xs { Nil => 1, Cons(h, t) => ev2<A>(t) }
-    on ?dec1 := nat::lt_succ_self(list_len(t));
+    on ?dec1 := nat::Nat::lt_succ_self(t.len());
 }
 theorem q(): List::ev2<Nat>([1, 2, 3]) = 1 { refl }
 "#);
@@ -318,10 +318,10 @@ fn q(n: Nat) -> Nat decreases n { match n { Zero => 1, Succ(k) => p(k) } }
 #[test]
 fn members_disagreeing_on_type_parameters_are_refused() {
     let msg = elab_err(r#"
-fn u<A>(xs: List<A>) -> Nat decreases list_len(xs) {
+fn u<A>(xs: List<A>) -> Nat decreases xs.len() {
     match xs { Nil => 0, Cons(h, t) => v(t) }
 }
-fn v<B>(xs: List<B>) -> Nat decreases list_len(xs) {
+fn v<B>(xs: List<B>) -> Nat decreases xs.len() {
     match xs { Nil => 0, Cons(h, t) => u<B>(t) }
 }
 "#);
@@ -355,10 +355,10 @@ fn m2(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => m1(k) } }
 #[test]
 fn a_site_whose_obligation_cannot_be_lifted_is_reported() {
     let msg = elab_err(r#"
-fn a1(xs: List<Nat>) -> Nat decreases list_len(xs) {
+fn a1(xs: List<Nat>) -> Nat decreases xs.len() {
     match list_tail(xs) { Nil => 0, Cons(y, ys) => b1(ys) }
 }
-fn b1(xs: List<Nat>) -> Nat decreases list_len(xs) {
+fn b1(xs: List<Nat>) -> Nat decreases xs.len() {
     match xs { Nil => 0, Cons(h, t) => a1(t) }
 }
 "#);

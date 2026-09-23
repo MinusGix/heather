@@ -29,7 +29,7 @@ fn search_body_uses_shared_narrow_physical_certificates() {
         &Placements::from([(4, Gpr::Rax), (5, Gpr::Rdx)])).unwrap();
     let text = format!("{IMPORTS}\n{}", emission.text);
     elab.elab_module_source("search_physical", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
-    let negative = format!("{IMPORTS} import search_physical; theorem wrong_byte_placement<M>(values: Valuation(), before: MachineState<M>, needle: values(64, 0) = read_gpr(Rdi, before.gprs), byte: values(64, 2) = read_gpr(Rsi, before.gprs), found: bitvec::zero_extend(1, 63, values(1, 3)) = read_gpr(R8, before.gprs)): read_gpr(Rax, search_after(before).gprs) = search_result(values) {{ search_correct(values, before, needle, byte, found) }}");
+    let negative = format!("{IMPORTS} import search_physical; theorem wrong_byte_placement<M>(values: Valuation(), before: MachineState<M>, needle: values(64, 0) = read_gpr(Rdi, before.gprs), byte: values(64, 2) = read_gpr(Rsi, before.gprs), found: @bitvec::BitVec::zero_extend(1, 63, values(1, 3)) = read_gpr(R8, before.gprs)): read_gpr(Rax, search_after(before).gprs) = search_result(values) {{ search_correct(values, before, needle, byte, found) }}");
     heather_syntax::parse_file(&negative).unwrap();
     let error = elab.elab_module_source("wrong_byte_placement", &negative).expect_err("unnormalized word placement must not prove a byte placement");
     let message = error.render(&negative);

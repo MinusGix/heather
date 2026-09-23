@@ -52,6 +52,22 @@ pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
     load_many(std::slice::from_ref(&root), search)
 }
 
+/// Load one root from an in-memory source buffer while reading its imports
+/// from disk. Resident editor clients use this so diagnostics describe the
+/// text the user can see, including changes that have not been saved yet.
+pub fn load_overlay(
+    root: &Path,
+    search: &[PathBuf],
+    source: &str,
+) -> Result<Vec<Module>, LoadError> {
+    let root = root
+        .canonicalize()
+        .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;
+    let mut overlays = HashMap::new();
+    overlays.insert(root.clone(), source.to_string());
+    load_many_inner(&[root.as_path()], search, &[], &overlays)
+}
+
 /// Load several roots as one import closure.
 ///
 /// This is the directory-checking form's important semantic detail: a module
@@ -72,9 +88,19 @@ pub fn load_many_with_fallback(
     search: &[PathBuf],
     fallback: &[PathBuf],
 ) -> Result<Vec<Module>, LoadError> {
+    load_many_inner(roots, search, fallback, &HashMap::new())
+}
+
+fn load_many_inner(
+    roots: &[&Path],
+    search: &[PathBuf],
+    fallback: &[PathBuf],
+    overlays: &HashMap<PathBuf, String>,
+) -> Result<Vec<Module>, LoadError> {
     let mut w = Walk {
         search,
         search_fallback: fallback,
+        overlays,
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
@@ -89,6 +115,9 @@ pub fn load_many_with_fallback(
 struct Walk<'a> {
     search: &'a [PathBuf],
     search_fallback: &'a [PathBuf],
+    /// Canonical path → editor buffer. At present the public editor API
+    /// overlays one root; keeping it a map makes recursive visits unambiguous.
+    overlays: &'a HashMap<PathBuf, String>,
     /// Canonical path → module name. Dedup is by **path**, so a diamond costs
     /// one elaboration and two spellings of one file are one module.
     done: HashMap<PathBuf, String>,
@@ -133,8 +162,12 @@ impl Walk<'_> {
                 path,
             ));
         }
-        let src = std::fs::read_to_string(&canon)
-            .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", canon.display()), path))?;
+        let src = match self.overlays.get(&canon) {
+            Some(src) => src.clone(),
+            None => std::fs::read_to_string(&canon).map_err(|e| {
+                LoadError::at(format!("cannot read `{}`: {e}", canon.display()), path)
+            })?,
+        };
         // A parse error is the elaborator's to report, with a snippet: here it
         // only means "no imports readable", and the module still gets fed on so
         // the real diagnostic comes out where it belongs.

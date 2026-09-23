@@ -12,7 +12,7 @@ fn check(src: &str) -> Vec<ElabError> {
 fn clean_file_reports_nothing() {
     let errs = check(
         "theorem succ_cong2({a: Nat}, {b: Nat}, p: a = b): Succ(Succ(a)) = Succ(Succ(b)) {\n\
-             cong_succ(cong_succ(p))\n\
+             Nat::cong_succ(Nat::cong_succ(p))\n\
          }\n",
     );
     assert!(errs.is_empty(), "expected no diagnostics, got {errs:?}");
@@ -57,7 +57,7 @@ fn failed_declaration_registers_nothing() {
                    refl\n\
                }\n\
                theorem wants_broken(n: Nat): Succ(n) = Succ(Succ(n)) {\n\
-                   cong_succ(broken(n))\n\
+                   Nat::cong_succ(broken(n))\n\
                }\n";
     let errs = check(src);
     assert_eq!(errs.len(), 2, "{errs:?}");

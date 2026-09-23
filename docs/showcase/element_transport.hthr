@@ -90,7 +90,7 @@ fn occurrence(e: Element<Nat>([0, 0])) → Nat {
 theorem first_occurrence(): occurrence(first_zero()) = 0 { refl }
 theorem second_occurrence(): occurrence(second_zero()) = 1 { refl }
 theorem different_occurrences(): occurrence(first_zero()) ≠ occurrence(second_zero()) {
-    zero_ne_succ(0)
+    Nat::zero_ne_succ(0)
 }
 
 theorem occurrence_cannot_ignore_membership(

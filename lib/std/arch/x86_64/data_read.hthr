@@ -22,13 +22,13 @@ fn byte_load_sib(base: Gpr) → Bool {
     match base { Rsp => True, R12 => True, _ => False }
 }
 fn byte_load_bytes(load: ByteLoad) → List<BitVec(8)> {
-    list::append<BitVec(8)>([rex_w_rr(load.base, load.destination), bitvec::ofNat(8, 0x0f), bitvec::ofNat(8, 0xb6),
+    List::append<BitVec(8)>([rex_w_rr(load.base, load.destination), BitVec::ofNat(0x0f), BitVec::ofNat(0xb6),
         byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
             gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
             byte_load_displaced(load.base), False)],
-        list::append<BitVec(8)>(
-            match byte_load_sib(load.base) { True => [bitvec::ofNat(8, 0x24)], False => [] },
-            match byte_load_displaced(load.base) { True => [bitvec::ofNat(8, 0)], False => [] }))
+        List::append<BitVec(8)>(
+            match byte_load_sib(load.base) { True => [BitVec::ofNat(0x24)], False => [] },
+            match byte_load_displaced(load.base) { True => [BitVec::ofNat(0)], False => [] }))
 }
 // Exact canonical decoding coverage. Other memory operand encodings are not
 // claimed; corrupt prefixes, ModRM/SIB bytes, or lengths fail this equality.
@@ -36,25 +36,25 @@ fn ByteLoadDecodes(bytes: List<BitVec(8)>, load: ByteLoad) → Type {
     bytes = byte_load_bytes(load)
 }
 fn byte_load_after<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>) → MachineState<M> {
-    MachineState(gprs := write_gpr(load.destination, bitvec::zero_extend(8, 56, byte), before.gprs),
+    MachineState(gprs := write_gpr(load.destination, byte.zero_extend(56), before.gprs),
         flags := before.flags, rip := next_rip(before.rip, byte_load_bytes(load).len()), memory := before.memory)
 }
 record ByteLoadStep<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: BitVec(8),
     before, after: MachineState<M>) {
-    canonical: bitvec::drop_low(47, 17, read_gpr(load.base, before.gprs)) = bitvec::zero(17),
+    canonical: read_gpr(load.base, before.gprs).drop_low(47, 17) = BitVec::zero(),
     present: access.read(before.memory, read_gpr(load.base, before.gprs)) = Some(byte),
     execution: after = byte_load_after(load, byte, before),
 }
 
 theorem byte_load_result<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>):
-    read_gpr(load.destination, byte_load_after(load, byte, before).gprs) = bitvec::zero_extend(8, 56, byte) {
-    read_gpr_after_write(load.destination, bitvec::zero_extend(8, 56, byte), before.gprs)
+    read_gpr(load.destination, byte_load_after(load, byte, before).gprs) = byte.zero_extend(56) {
+    read_gpr_after_write(load.destination, byte.zero_extend(56), before.gprs)
 }
 theorem byte_load_preserves<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>, register: Gpr,
     distinct: nat_same(gpr_index(load.destination), gpr_index(register)) = False):
     read_gpr(register, byte_load_after(load, byte, before).gprs) = read_gpr(register, before.gprs) {
     cong_fn<Bool, BitVec(64)>(λ same => match same {
-        False => read_gpr(register, before.gprs), True => bitvec::zero_extend(8, 56, byte),
+        False => read_gpr(register, before.gprs), True => byte.zero_extend(56),
     }, distinct)
 }
 fn ReadThenProtected(load: ByteLoad, protected: Gpr → Type, register: Gpr) → Type {
@@ -78,7 +78,7 @@ theorem read_then_artifact<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: B
     ReadThenArtifact<M>(access, load, byte, code, byte_load_bytes(load) ++ structured_bytes(code), before, output, result, protected) {
     ReadThenArtifact(load_step := step, encoding := refl, continuation := body,
         memory_preserved := body.memory_preserved,
-        rip_correct := trans(body.rip_correct, bitvec::iterate_increment_compose(64, before.rip,
+        rip_correct := trans(body.rip_correct, BitVec::iterate_increment_compose(64, before.rip,
             byte_load_bytes(load).len(), structured_bytes(code).len())),
         registers_preserved := λ register preserved => trans(body.registers_preserved(register, preserved.right),
             byte_load_preserves(load, byte, before, register, preserved.left)))

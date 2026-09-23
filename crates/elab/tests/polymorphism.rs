@@ -114,6 +114,21 @@ fn explicit_type_arguments_work() {
 }
 
 #[test]
+fn explicit_type_arguments_work_on_a_method_call() {
+    // The receiver constructors deliberately leave one Result parameter
+    // undetermined. The written method arguments both select the owned member
+    // and supply the instantiation needed to check the receiver.
+    ok("inductive Result<A, E> { Ok(A), Err(E) }
+        fn Result::fold<A, E, B>(self r: Result<A, E>, success: A -> B, failure: E -> B) -> B {
+            match r { Ok(value) => success(value), Err(error) => failure(error) }
+        }
+        theorem fold_ok<A, E, B>(value: A, success: A -> B, failure: E -> B):
+            Ok(value).fold<A, E, B>(success, failure) = success(value) { refl }
+        theorem fold_err<A, E, B>(error: E, success: A -> B, failure: E -> B):
+            Err(error).fold<A, E, B>(success, failure) = failure(error) { refl }");
+}
+
+#[test]
 fn at_leaves_type_parameters_inferred() {
     // `@` makes the *value* implicits positional and says nothing about type
     // parameters, so a callee that gains one does not break its `@`-callers

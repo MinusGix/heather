@@ -45,12 +45,14 @@ Expressions gain one form, for the rare case where inference cannot see the
 instantiation:
 
 ```
-postfix := atom ( "<" type ("," type)* ">" )? ( … calls … )*
+postfix := atom ( "<" type ("," type)* ">" )? ( … calls and members … )*
+member  := "." name ( "<" type ("," type)* ">" )? ("(" args? ")")?
 ```
 
 ```heather
 nil<Nat>()                 -- type arguments given explicitly
 map<Nat, Bool>(f, xs)      -- allowed but redundant; both are inferred
+x.fold<Nat, Error, Bool>(ok, err) -- the same arguments on a method call
 ```
 
 `<` is also the `lt` comparison operator (`Parser::comparison`;

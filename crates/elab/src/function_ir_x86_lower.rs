@@ -34,21 +34,21 @@ pub enum BinaryOperation {
 impl BinaryOperation {
     fn semantic_function(self) -> &'static str {
         match self {
-            BinaryOperation::Add => "bitvec::add",
-            BinaryOperation::Sub => "bitvec::sub",
-            BinaryOperation::BitAnd => "bitvec::band",
-            BinaryOperation::BitOr => "bitvec::bor",
-            BinaryOperation::BitXor => "bitvec::bxor",
+            BinaryOperation::Add => "bitvec::BitVec::add",
+            BinaryOperation::Sub => "bitvec::BitVec::sub",
+            BinaryOperation::BitAnd => "bitvec::BitVec::band",
+            BinaryOperation::BitOr => "bitvec::BitVec::bor",
+            BinaryOperation::BitXor => "bitvec::BitVec::bxor",
         }
     }
 
     fn commutativity_theorem(self) -> Option<&'static str> {
         match self {
-            BinaryOperation::Add => Some("bitvec::add_comm"),
+            BinaryOperation::Add => Some("bitvec::BitVec::add_comm"),
             BinaryOperation::Sub => None,
-            BinaryOperation::BitAnd => Some("bitvec::band_comm"),
-            BinaryOperation::BitOr => Some("bitvec::bor_comm"),
-            BinaryOperation::BitXor => Some("bitvec::bxor_comm"),
+            BinaryOperation::BitAnd => Some("bitvec::BitVec::band_comm"),
+            BinaryOperation::BitOr => Some("bitvec::BitVec::bor_comm"),
+            BinaryOperation::BitXor => Some("bitvec::BitVec::bxor_comm"),
         }
     }
 }
@@ -274,7 +274,7 @@ impl Instruction {
                 "MovRI",
                 [
                     Expr::name(destination.heather_name()),
-                    Expr::call("bitvec::ofNat", [Expr::nat(64), Expr::nat(immediate)]),
+                    Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(64), Expr::nat(immediate)]),
                 ],
             ),
             Instruction::AddRR {
@@ -864,7 +864,7 @@ pub fn generate_conditional(
          \x20       λ selected _ => read_gpr({}, selected_block_after(selected,\n\
          \x20           {true_prefix}_after(before),\n\
          \x20           {false_prefix}_after(before)).gprs) = values(64, {output_id}),\n\
-         \x20       (match bitvec::head_bit(0, values(1, {condition})) as λ selected =>\n\
+         \x20       (match @bitvec::BitVec::head_bit(0, values(1, {condition})) as λ selected =>\n\
          \x20           (match selected {{\n\
          \x20               False => RegionHolds({false_region_expr}, values),\n\
          \x20               True => RegionHolds({true_region_expr}, values),\n\
@@ -1101,9 +1101,9 @@ pub fn generate_prefixed_conditional(
          \x20   LinkedConditionalBlock(\n\
          \x20       prefix := {prefix_name}_instructions(),\n\
          \x20       test_register := {},\n\
-         \x20       false_displacement := bitvec::ofNat(8, {false_displacement}),\n\
+         \x20       false_displacement := @bitvec::BitVec::ofNat(8, {false_displacement}),\n\
          \x20       when_true := {true_name}_instructions(),\n\
-         \x20       join_displacement := bitvec::ofNat(8, {join_displacement}),\n\
+         \x20       join_displacement := @bitvec::BitVec::ofNat(8, {join_displacement}),\n\
          \x20       when_false := {false_name}_instructions())\n\
          }}\n\n\
          fn {linked_name}_bytes() → List<BitVec(8)> {{\n\
@@ -1121,27 +1121,27 @@ pub fn generate_prefixed_conditional(
          \x20     test_decoding := canonical_encoding_decodes(\n\
          \x20       linked_test_start({linked_name}_block(), start), TestRR({}, {})),\n\
          \x20     branch_decoding := decode_short_control_complete(JumpZero(\n\
-         \x20           bitvec::ofNat(8, {false_displacement}))),\n\
+         \x20           @bitvec::BitVec::ofNat(8, {false_displacement}))),\n\
          \x20     true_decoding := canonical_block_decodes({true_name}_instructions(),\n\
          \x20           linked_true_start({linked_name}_block(), start)),\n\
          \x20     join_decoding := decode_short_control_complete(Jump(\n\
-         \x20             bitvec::ofNat(8, {join_displacement}))),\n\
+         \x20             @bitvec::BitVec::ofNat(8, {join_displacement}))),\n\
          \x20     false_decoding := canonical_block_decodes(\n\
          \x20       {false_name}_instructions(),\n\
          \x20       linked_false_start({linked_name}_block(), start)))\n\
          }}\n\n\
          theorem {linked_name}_false_span(start: BitVec(64)):\n\
-         \x20   short_branch_target(start, bitvec::ofNat(8, {false_displacement})) =\n\
-         \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
+         \x20   short_branch_target(start, @bitvec::BitVec::ofNat(8, {false_displacement})) =\n\
+         \x20   @bitvec::BitVec::iterate_increment(64, next_rip(start, 2),\n\
          \x20     {false_displacement})\n\
-         {{ sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),\n\
-         \x20     bitvec::sign_extend(7, 56, bitvec::ofNat(8, {false_displacement})))) }}\n\n\
+         {{ sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2),\n\
+         \x20     @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {false_displacement})))) }}\n\n\
          theorem {linked_name}_join_span(start: BitVec(64)):\n\
-         \x20   short_branch_target(start, bitvec::ofNat(8, {join_displacement})) =\n\
-         \x20   bitvec::iterate_increment(64, next_rip(start, 2),\n\
+         \x20   short_branch_target(start, @bitvec::BitVec::ofNat(8, {join_displacement})) =\n\
+         \x20   @bitvec::BitVec::iterate_increment(64, next_rip(start, 2),\n\
          \x20     {join_displacement})\n\
-         {{ sym(bitvec::iter_add_eq_add(64, next_rip(start, 2),\n\
-         \x20     bitvec::sign_extend(7, 56, bitvec::ofNat(8, {join_displacement})))) }}\n\n\
+         {{ sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2),\n\
+         \x20     @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {join_displacement})))) }}\n\n\
          theorem {linked_name}_prefix_span(start: BitVec(64)):\n\
          \x20   {prefix_name}_final_rip(start) =\n\
          \x20     after_canonical_block(start, {prefix_name}_instructions())\n\
@@ -1156,26 +1156,26 @@ pub fn generate_prefixed_conditional(
          {{ {false_span_proof} }}\n\n\
          theorem {linked_name}_false_target(start: BitVec(64)):\n\
          \x20   short_branch_target(linked_branch_start(\n\
-         \x20     {linked_name}_block(), start), bitvec::ofNat(8, {false_displacement})) =\n\
+         \x20     {linked_name}_block(), start), @bitvec::BitVec::ofNat(8, {false_displacement})) =\n\
          \x20   linked_false_start({linked_name}_block(), start)\n\
          {{\n\
          \x20   calc {{\n\
          \x20     short_branch_target(linked_branch_start(\n\
          \x20       {linked_name}_block(), start),\n\
-         \x20       bitvec::ofNat(8, {false_displacement}))\n\
-         \x20       = bitvec::iterate_increment(64,\n\
+         \x20       @bitvec::BitVec::ofNat(8, {false_displacement}))\n\
+         \x20       = @bitvec::BitVec::iterate_increment(64,\n\
          \x20           linked_true_start({linked_name}_block(), start),\n\
          \x20           {false_displacement}) := {linked_name}_false_span(\n\
          \x20             linked_branch_start({linked_name}_block(), start)),\n\
          \x20       = linked_false_start({linked_name}_block(), start) :=\n\
-         \x20             sym(bitvec::iterate_increment_compose(64,\n\
+         \x20             sym(bitvec::BitVec::iterate_increment_compose(64,\n\
          \x20               linked_true_start({linked_name}_block(), start),\n\
          \x20               {true_bytes}, 2)),\n\
          \x20   }}\n\
          }}\n\n\
          theorem {linked_name}_join_target(start: BitVec(64)):\n\
          \x20   short_branch_target(linked_join_jump_start(\n\
-         \x20     {linked_name}_block(), start), bitvec::ofNat(8, {join_displacement})) =\n\
+         \x20     {linked_name}_block(), start), @bitvec::BitVec::ofNat(8, {join_displacement})) =\n\
          \x20   linked_join_start({linked_name}_block(), start)\n\
          {{\n\
          \x20   trans({linked_name}_join_span(\n\
@@ -1236,7 +1236,7 @@ pub fn generate_prefixed_conditional(
          \x20       linked_test_after({linked_name}_block(), before).flags.zf,\n\
          \x20       linked_test_after({linked_name}_block(), before).rip,\n\
          \x20       {linked_name}_block().false_displacement, selected),\n\
-         \x20     bitvec::cong_iterate_increment(64, 2,\n\
+         \x20     bitvec::BitVec::cong_iterate_increment(64, 2,\n\
          \x20       linked_test_reaches_branch_start(\n\
          \x20         {linked_name}_block(), before,\n\
          \x20         {linked_name}_prefix_at(before))))\n\
@@ -1352,7 +1352,7 @@ pub fn generate_prefixed_conditional(
              }}\n\n\
              theorem {linked_name}_test_selects<M>({public_parameters_rendered}):\n\
              \x20   linked_test_after({linked_name}_block(), before).flags.zf =\n\
-             \x20     zero_test_selector(bitvec::head_bit(0, values(1, {condition})))\n\
+             \x20     zero_test_selector(@bitvec::BitVec::head_bit(0, values(1, {condition})))\n\
              {{\n\
              \x20   linked_test_bit_value_placed_zf(values, {condition},\n\
              \x20     {linked_name}_block(), before,\n\
@@ -1361,7 +1361,7 @@ pub fn generate_prefixed_conditional(
              }}\n\n\
              theorem {linked_name}_condition_matches<M>({public_parameters_rendered}):\n\
              \x20   machine_condition({}, {prefix_name}_after(before)) =\n\
-             \x20     bitvec::head_bit(0, values(1, {condition}))\n\
+             \x20     @bitvec::BitVec::head_bit(0, values(1, {condition}))\n\
              {{\n\
              \x20   bit_value_placed_condition(values, {condition}, {},\n\
              \x20     {prefix_name}_after(before),\n\
@@ -1402,7 +1402,7 @@ pub fn generate_prefixed_conditional(
              \x20     read_gpr({}, {after_name}(before).gprs)\n\
              {{\n\
              \x20   linked_conditional_read_agrees(\n\
-             \x20     bitvec::head_bit(0, values(1, {condition})), {},\n\
+             \x20     @bitvec::BitVec::head_bit(0, values(1, {condition})), {},\n\
              \x20     {linked_name}_block(), before, {continuation_control}(),\n\
              \x20     {prefix_name}_after(before),\n\
              \x20     {true_name}_after({prefix_name}_after(before)),\n\
@@ -1749,9 +1749,9 @@ pub fn generate_control_region(
             "LinkedConditionalBlock(\n\
                  prefix := {prefix_name}_instructions(),\n\
                  test_register := {},\n\
-                 false_displacement := bitvec::ofNat(8, {false_displacement}),\n\
+                 false_displacement := @bitvec::BitVec::ofNat(8, {false_displacement}),\n\
                  when_true := {true_name}_instructions(),\n\
-                 join_displacement := bitvec::ofNat(8, {join_displacement}),\n\
+                 join_displacement := @bitvec::BitVec::ofNat(8, {join_displacement}),\n\
                  when_false := {false_name}_instructions())",
             condition_register.heather_name(),
         ),
@@ -1795,11 +1795,11 @@ pub fn generate_control_region(
                  test_decoding := canonical_encoding_decodes(\n\
                    linked_test_start({linked_name}(), start), TestRR({}, {})),\n\
                  branch_decoding := decode_short_control_complete(JumpZero(\n\
-                   bitvec::ofNat(8, {false_displacement}))),\n\
+                   @bitvec::BitVec::ofNat(8, {false_displacement}))),\n\
                  true_decoding := canonical_block_decodes(\n\
                    {true_name}_instructions(), linked_true_start({linked_name}(), start)),\n\
                  join_decoding := decode_short_control_complete(Jump(\n\
-                   bitvec::ofNat(8, {join_displacement}))),\n\
+                   @bitvec::BitVec::ofNat(8, {join_displacement}))),\n\
                  false_decoding := canonical_block_decodes(\n\
                    {false_name}_instructions(), linked_false_start({linked_name}(), start)))",
             condition_register.heather_name(),
@@ -1811,13 +1811,13 @@ pub fn generate_control_region(
         false,
         vec![emitted_parameter("start", "BitVec(64)")],
         format!(
-            "short_branch_target(linked_branch_start({linked_name}(), start), bitvec::ofNat(8, {false_displacement})) = linked_false_start({linked_name}(), start)"
+            "short_branch_target(linked_branch_start({linked_name}(), start), @bitvec::BitVec::ofNat(8, {false_displacement})) = linked_false_start({linked_name}(), start)"
         ),
         format!(
-            "trans(sym(bitvec::iter_add_eq_add(64,\n\
+            "trans(sym(bitvec::BitVec::iter_add_eq_add(64,\n\
                  next_rip(linked_branch_start({linked_name}(), start), 2),\n\
-                 bitvec::sign_extend(7, 56, bitvec::ofNat(8, {false_displacement})))),\n\
-             sym(bitvec::iterate_increment_compose(64,\n\
+                 @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {false_displacement})))),\n\
+             sym(bitvec::BitVec::iterate_increment_compose(64,\n\
                  linked_true_start({linked_name}(), start), {true_bytes}, 2)))"
         ),
     ));
@@ -1826,12 +1826,12 @@ pub fn generate_control_region(
         false,
         vec![emitted_parameter("start", "BitVec(64)")],
         format!(
-            "short_branch_target(linked_join_jump_start({linked_name}(), start), bitvec::ofNat(8, {join_displacement})) = linked_join_start({linked_name}(), start)"
+            "short_branch_target(linked_join_jump_start({linked_name}(), start), @bitvec::BitVec::ofNat(8, {join_displacement})) = linked_join_start({linked_name}(), start)"
         ),
         format!(
-            "sym(bitvec::iter_add_eq_add(64,\n\
+            "sym(bitvec::BitVec::iter_add_eq_add(64,\n\
                  next_rip(linked_join_jump_start({linked_name}(), start), 2),\n\
-                 bitvec::sign_extend(7, 56, bitvec::ofNat(8, {join_displacement}))))"
+                 @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {join_displacement}))))"
         ),
     ));
     module.declaration(emitted_theorem(
@@ -1877,7 +1877,7 @@ pub fn generate_control_region(
                      linked_test_after({linked_name}(), before).flags.zf,\n\
                      linked_test_after({linked_name}(), before).rip,\n\
                      {linked_name}().false_displacement, selected),\n\
-                   bitvec::cong_iterate_increment(64, 2,\n\
+                   bitvec::BitVec::cong_iterate_increment(64, 2,\n\
                      linked_test_reaches_branch_start({linked_name}(), before,\n\
                        {linked_name}_prefix_at(before))))"
             ),
@@ -2035,7 +2035,7 @@ pub fn generate_control_region(
         ),
         (
             format!("{linked_name}_test_selects"),
-            format!("linked_test_after({linked_name}(), before).flags.zf = zero_test_selector(bitvec::head_bit(0, values(1, {})))", region.join.condition),
+            format!("linked_test_after({linked_name}(), before).flags.zf = zero_test_selector(@bitvec::BitVec::head_bit(0, values(1, {})))", region.join.condition),
             format!("linked_test_bit_value_placed_zf(values, {}, {linked_name}(), before, {linked_name}_condition_placed(values, before{prefix_call_args}, prefix_graph))", region.join.condition),
         ),
     ] {
@@ -2149,7 +2149,7 @@ pub fn generate_control_region(
         false,
         vec![emitted_parameter("entry", "Gprs")],
         format!(
-            "read_gpr({continuation_destination}, {prefix}_continuation_gprs(entry)) = bitvec::add(64, read_gpr({continuation_left_register}, entry), read_gpr({continuation_right_register}, entry))"
+            "read_gpr({continuation_destination}, {prefix}_continuation_gprs(entry)) = @bitvec::BitVec::add(64, read_gpr({continuation_left_register}, entry), read_gpr({continuation_right_register}, entry))"
         ),
         format!(
             "gpr_move_add_reads({continuation_destination}, {continuation_left_register}, {continuation_right_register}, entry, refl)"
@@ -2289,7 +2289,7 @@ pub fn generate_control_region(
             machine_before(),
             "BitVec(64)",
             format!(
-                "bitvec::add(64,\n\
+                "@bitvec::BitVec::add(64,\n\
                  \x20 read_gpr({continuation_left_register}, {prefix}_{side}_entry(before).gprs),\n\
                  \x20 read_gpr({continuation_right_register}, {prefix}_{side}_entry(before).gprs))"
             ),
@@ -2303,7 +2303,7 @@ pub fn generate_control_region(
             ],
             "BitVec(64)",
             format!(
-                "bitvec::add(64, values(64, {continuation_left_id}),\n\
+                "@bitvec::BitVec::add(64, values(64, {continuation_left_id}),\n\
                  \x20 read_gpr({continuation_right_register}, {prefix}_{side}_entry(before).gprs))"
             ),
         ));
@@ -2314,7 +2314,7 @@ pub fn generate_control_region(
         vec![emitted_parameter("values", "Valuation()")],
         "BitVec(64)",
         format!(
-            "bitvec::add(64, values(64, {continuation_left_id}), values(64, {continuation_right_id}))"
+            "@bitvec::BitVec::add(64, values(64, {continuation_left_id}), values(64, {continuation_right_id}))"
         ),
     ));
     module.declaration(emitted_theorem(
@@ -2342,7 +2342,7 @@ pub fn generate_control_region(
                 ),
                 format!(
                     "cong_fn<BitVec(64), BitVec(64)>(\n\
-                     \x20 bitvec::add(64, ·, read_gpr({continuation_right_register}, {prefix}_{side}_entry(before).gprs)),\n\
+                     \x20 @bitvec::BitVec::add(64, ·, read_gpr({continuation_right_register}, {prefix}_{side}_entry(before).gprs)),\n\
                      \x20 {prefix}_{side}_left_agrees(values, before{prefix_call_args}, binding))"
                 ),
             ),
@@ -2355,7 +2355,7 @@ pub fn generate_control_region(
                 ),
                 format!(
                     "cong_fn<BitVec(64), BitVec(64)>(\n\
-                     \x20 bitvec::add(64, values(64, {continuation_left_id}), ·),\n\
+                     \x20 @bitvec::BitVec::add(64, values(64, {continuation_left_id}), ·),\n\
                      \x20 {prefix}_{side}_right_agrees(values, before{prefix_call_args}, binding))"
                 ),
             ),
@@ -2408,7 +2408,7 @@ pub fn generate_control_region(
             ),
             format!(
                 "binary_observation_refines(values, {continuation_output},\n\
-                 \x20 {continuation_left_id}, {continuation_right_id}, bitvec::add(64),\n\
+                 \x20 {continuation_left_id}, {continuation_right_id}, @bitvec::BitVec::add(64),\n\
                  \x20 read_gpr({continuation_left_register}, {prefix}_{side}_entry(before).gprs),\n\
                  \x20 read_gpr({continuation_right_register}, {prefix}_{side}_entry(before).gprs),\n\
                  \x20 continuation_graph.left,\n\
@@ -2494,7 +2494,7 @@ pub fn generate_control_region(
             ],
             result,
             format!(
-                "match bitvec::head_bit(0, values(1, {region_expr}.join.condition)) {{\n\
+                "match @bitvec::BitVec::head_bit(0, values(1, {region_expr}.join.condition)) {{\n\
                  \x20 False => {false_body},\n\
                  \x20 True => {true_body},\n\
                  }}"
@@ -2570,7 +2570,7 @@ pub fn generate_control_region(
         format!(
             "trans(linked_control_read_after({continuation_destination}, {control_name}(), before),\n\
              \x20 cong_fn<Gprs, BitVec(64)>(read_gpr({continuation_destination}, ·), selected_results_agree(\n\
-             \x20   bitvec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
+             \x20   @bitvec::BitVec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
              \x20   linked_test_after({linked_name}(), before).flags.zf,\n\
              \x20   execute_block_normal({continuation_name}_instructions(), linked_true_jump_after({linked_name}(), before)).gprs,\n\
              \x20   execute_block_normal({continuation_name}_instructions(), linked_false_after({linked_name}(), before)).gprs,\n\
@@ -2592,7 +2592,7 @@ pub fn generate_control_region(
         ),
         format!(
             "selected_computation_agrees<Gprs, BitVec(64)>(\n\
-             \x20 bitvec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
+             \x20 @bitvec::BitVec::head_bit(0, values(1, {region_expr}.join.condition)),\n\
              \x20 {prefix}_continuation_gprs({prefix}_false_entry(before).gprs),\n\
              \x20 {prefix}_continuation_gprs({prefix}_true_entry(before).gprs),\n\
              \x20 read_gpr({continuation_destination}, ·), {prefix}_false_sum(before),\n\
@@ -3292,10 +3292,10 @@ fn render_block_span_proof(instructions: &[Instruction]) -> String {
         let length = instruction.canonical_length();
         if index != 0 {
             proof = format!(
-                "trans(@bitvec::cong_iterate_increment(64, {length},\n        {nested}, bitvec::iterate_increment(64, start, {total}), {proof}),\n        bitvec::iterate_increment_compose(64, start, {total}, {length}))"
+                "trans(@bitvec::BitVec::cong_iterate_increment(64, {length},\n        {nested}, @bitvec::BitVec::iterate_increment(64, start, {total}), {proof}),\n        bitvec::BitVec::iterate_increment_compose(64, start, {total}, {length}))"
             );
         }
-        nested = format!("bitvec::iterate_increment(64, {nested}, {length})");
+        nested = format!("@bitvec::BitVec::iterate_increment(64, {nested}, {length})");
         total += length;
     }
     proof
@@ -3315,7 +3315,7 @@ fn render_gpr_only_step(instruction: Instruction) -> Option<String> {
             destination,
             immediate,
         } => Some(format!(
-            "gpr_only_mov_ri({}, bitvec::ofNat(64, {}))",
+            "gpr_only_mov_ri({}, @bitvec::BitVec::ofNat(64, {}))",
             destination.heather_name(),
             immediate,
         )),
@@ -3554,8 +3554,8 @@ fn emit_placement_proofs(
                 let machine_left = format!("read_gpr({}, {prefix}_state_{binary_index}(before).gprs)", actual_left.heather_name());
                 let machine_right = format!("read_gpr({}, {prefix}_state_{binary_index}(before).gprs)", right_register.heather_name());
                 let lifted = format!("sym({op}_zero_extend({width}, {}, values({width}, {}), values({width}, {})))", 64 - width, node.left, node.right);
-                let left_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => {op}(64, found, {logical_right}), {left_proof})");
-                let right_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => {op}(64, {machine_left}, found), {right_proof})");
+                let left_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => @{op}(64, found, {logical_right}), {left_proof})");
+                let right_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => @{op}(64, {machine_left}, found), {right_proof})");
                 let agreement = format!("trans({lifted}, trans({left_agrees}, {right_agrees}))");
                 let agreement = if plan.orientation == OperandOrientation::Reversed {
                     format!("trans({agreement}, {}(64, {machine_left}, {machine_right}))", node.operation.commutativity_theorem().unwrap())
@@ -3681,7 +3681,7 @@ fn emit_placement_proofs(
                                 format!("{prefix}_node_{}_commuted_equation", plan.node_index,);
                             text.push_str(&format!(
                                 "theorem {commuted_name}<M>({parameters}):\n\
-                     \x20   values(64, {}) = {}(64, values(64, {}), values(64, {}))\n\
+                     \x20   values(64, {}) = @{}(64, values(64, {}), values(64, {}))\n\
                      {{\n\
                      \x20   trans({equation}, {}(64, values(64, {}), values(64, {})))\n\
                      }}\n",
@@ -3703,7 +3703,7 @@ fn emit_placement_proofs(
                         }
                     };
                 let placement_head = format!(
-                    "placed_after_binary(values, {}, {}, {}, {}(64, ·, ·)",
+                    "placed_after_binary(values, {}, {}, {}, @{}(64, ·, ·)",
                     node.output,
                     machine_left_value,
                     machine_right_value,
@@ -3799,14 +3799,14 @@ fn emit_placement_proofs(
                     text,
                 );
                 let condition = match node.operation {
-                    ComparisonOperation::UnsignedLessThan => "bitvec::unsigned_lt_bit",
-                    ComparisonOperation::SignedLessThan => "bitvec::signed_lt_bit",
+                    ComparisonOperation::UnsignedLessThan => "@bitvec::BitVec::unsigned_lt_bit",
+                    ComparisonOperation::SignedLessThan => "@bitvec::BitVec::signed_lt_bit",
                 };
                 let result_name = format!("{prefix}_comparison_{}_result", plan.node_index);
                 text.push_str(&format!(
                     "theorem {result_name}<M>(before: MachineState<M>):\n\
                      \x20   read_gpr({}, {prefix}_state_{after_index}(before).gprs) =\n\
-                     \x20       bitvec::zero_extend(1, 63, bitvec::ofBool(\n\
+                     \x20       @bitvec::BitVec::zero_extend(1, 63, bitvec::BitVec::ofBool(\n\
                      \x20           {condition}(64, read_gpr({}, {prefix}_state_{compare_state}(before).gprs),\n\
                      \x20               read_gpr({}, {prefix}_state_{compare_state}(before).gprs))))\n\
                      {{ refl }}\n",
@@ -3836,11 +3836,11 @@ fn emit_placement_proofs(
                 } else {
                     let logical_right = placed_expression(node.operand_width, &format!("values({}, {})", node.operand_width, node.right));
                     let machine_left = format!("read_gpr({}, {prefix}_state_{compare_state}(before).gprs)", left_register.heather_name());
-                    let lifted = format!("sym(bitvec::unsigned_lt_zero_extend({}, {}, values({}, {}), values({}, {})))", node.operand_width, 64 - node.operand_width, node.operand_width, node.left, node.operand_width, node.right);
+                    let lifted = format!("sym(bitvec::BitVec::unsigned_lt_zero_extend({}, {}, values({}, {}), values({}, {})))", node.operand_width, 64 - node.operand_width, node.operand_width, node.left, node.operand_width, node.right);
                     let left_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, found, {logical_right}), {left_proof})");
                     let right_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, {machine_left}, found), {right_proof})");
                     let agreement = format!("trans({lifted}, trans({left_agrees}, {right_agrees}))");
-                    text.push_str(&format!("theorem {output_name}<M>({parameters}): BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before)) {{ trans(cong_fn<BitVec(1), BitVec(64)>(λ value => bitvec::zero_extend(1, 63, value), {equation}), trans(cong_fn<bool::Bool, BitVec(64)>(λ bit => bitvec::zero_extend(1, 63, bitvec::ofBool(bit)), {agreement}), sym({result_name}(before)))) }}\n", node.output, plan.destination.heather_name()));
+                    text.push_str(&format!("theorem {output_name}<M>({parameters}): BitValuePlaced(values, {}, {}, {prefix}_state_{after_index}(before)) {{ trans(cong_fn<BitVec(1), BitVec(64)>(λ value => @bitvec::BitVec::zero_extend(1, 63, value), {equation}), trans(cong_fn<bool::Bool, BitVec(64)>(λ bit => @bitvec::BitVec::zero_extend(1, 63, bitvec::BitVec::ofBool(bit)), {agreement}), sym({result_name}(before)))) }}\n", node.output, plan.destination.heather_name()));
                 }
                 consume_known_use(&mut remaining, node.left);
                 consume_known_use(&mut remaining, node.right);
@@ -3941,7 +3941,7 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
         Instruction::MovRI {
             destination,
             immediate,
-        } => (destination, format!("bitvec::ofNat(64, {immediate})")),
+        } => (destination, format!("@bitvec::BitVec::ofNat(64, {immediate})")),
         Instruction::AddRR {
             destination,
             source,
@@ -3984,7 +3984,7 @@ fn render_binary_result(
     (
         destination,
         format!(
-            "{}(64, read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
+            "@{}(64, read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
             operation.semantic_function(),
             destination.heather_name(),
             source.heather_name(),
@@ -4176,7 +4176,7 @@ fn require_placement_width(value: u64, width: u64) -> Result<(), LoweringError> 
 }
 
 fn placed_expression(width: u64, value: &str) -> String {
-    if width == 64 { value.into() } else { format!("bitvec::zero_extend({width}, {}, {value})", 64 - width) }
+    if width == 64 { value.into() } else { format!("@bitvec::BitVec::zero_extend({width}, {}, {value})", 64 - width) }
 }
 
 fn placement_type(width: u64, id: u64, register: Gpr, state: &str) -> String {

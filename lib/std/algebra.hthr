@@ -135,12 +135,12 @@ class Cmp<A> {
 // Both `Bool` monoids register, as equals. Neither is "the" one, because no
 // goal with an unpinned operation ever reaches the registry (design §5).
 
-instance CommMonoid<Nat>(add) {
+instance CommMonoid<Nat>(Nat::add) {
     unit := 0,
-    assoc := add_assoc,
-    unit_l := add_left_zero,
+    assoc := Nat::add_assoc,
+    unit_l := Nat::add_left_zero,
     unit_r := λ (x: Nat) => refl,
-    comm := add_comm,
+    comm := Nat::add_comm,
 }
 
 // The second `Nat` monoid, and the case that shows the unit field earns its
@@ -149,37 +149,37 @@ instance CommMonoid<Nat>(add) {
 // beside `add`'s instance for the reversal — there `unit_r` is the free side
 // and `unit_l` the lemma; here it is the other way round, and `unit_r` is
 // filled by an `add` lemma, because `mul(x, 1)` reduces to `add(0, x)`.
-instance CommMonoid<Nat>(mul) {
+instance CommMonoid<Nat>(Nat::mul) {
     unit := 1,
-    assoc := mul_assoc,
-    unit_l := mul_left_one,
-    unit_r := add_left_zero,
-    comm := mul_comm,
+    assoc := Nat::mul_assoc,
+    unit_l := Nat::mul_left_one,
+    unit_r := Nat::add_left_zero,
+    comm := Nat::mul_comm,
 }
 
-instance CommMonoid<Bool>(and) {
+instance CommMonoid<Bool>(Bool::and) {
     unit := True,
-    assoc := and_assoc,
-    unit_l := and_true_l,
-    unit_r := and_true_r,
-    comm := and_comm,
+    assoc := Bool::and_assoc,
+    unit_l := Bool::and_true_l,
+    unit_r := Bool::and_true_r,
+    comm := Bool::and_comm,
 }
 
-instance CommMonoid<Bool>(or) {
+instance CommMonoid<Bool>(Bool::or) {
     unit := False,
-    assoc := or_assoc,
-    unit_l := or_false_l,
-    unit_r := or_false_r,
-    comm := or_comm,
+    assoc := Bool::or_assoc,
+    unit_l := Bool::or_false_l,
+    unit_r := Bool::or_false_r,
+    comm := Bool::or_comm,
 }
 
 // The generic instance: one declaration, an instance at every element type.
 // The chain is one class per law, and `append` stops at `Monoid`.
-instance<A> Monoid<List<A>>(append) {
+instance<A> Monoid<List<A>>(List::append) {
     unit := Nil,
-    assoc := append_assoc,
+    assoc := List::append_assoc,
     unit_l := λ (xs: List<A>) => refl,
-    unit_r := append_nil,
+    unit_r := List::append_nil,
 }
 
 instance Default<Nat> { default := 0 }
@@ -189,20 +189,8 @@ instance<A> Default<Option<A>> { default := None }
 
 instance Numeral<Nat> { ofNat := λ (n: Nat) => n }
 
-// Both orders are written **qualified**, and this file is where that stopped
-// being optional: `std/bool`'s order dropped its `_bool` suffix on 2026-08-17
-// (docs/instance-resolved-key-design.md §6), so `Le`, `le_refl` and `le_dec`
-// each name two declarations in a file that imports `nat` and `bool` both.
-// Ambiguity at the *use* is the module regime working (docs/modules-design.md
-// §4) — library growth introduces errors, never reinterpretations — and the
-// answer is to say which.
-instance Cmp<Nat> { le := nat::Le, le_refl := nat::le_refl, le_dec := nat::le_dec }
-instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::le_dec }
-
-// Operation designations live beside their definitions in `bool`, `nat`, and
-// `list`. This module consumes those rows; it does not own them. In particular,
-// `concat`'s `mconcat(++, xss)` below passes `++` as a value and resolves the
-// generic `List<A>` row declared immediately after `append`.
+instance Cmp<Nat> { le := Nat::Le, le_refl := Nat::le_refl, le_dec := Nat::le_dec }
+instance Cmp<Bool> { le := Bool::Le, le_refl := Bool::le_refl, le_dec := Bool::le_dec }
 
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
@@ -216,10 +204,10 @@ instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::l
 // with the same consequence: nothing outside changes — the constraint is still
 // the plain linked slot naming `op`, callers still pass positionally — and the
 // fold's own step reads as the operation it is.
-fn mconcat<A: Monoid(op)>(op as ∙: A → A → A, xs: List<A>) → A {
+fn mconcat<A: Monoid(op)>(self xs: List<A>, op as ∙: A → A → A) → A {
     match xs {
         Nil => A.unit,
-        Cons(h, t) => h ∙ mconcat(op, t),
+        Cons(h, t) => h ∙ t.mconcat(op),
     }
 }
 
@@ -232,17 +220,17 @@ fn monoid_list_alg<A: Monoid(op)>(op: A → A → A) → ListAlg<A, A> {
 }
 
 theorem list_fold_monoid<A: Monoid(op)>(op: A → A → A, xs: List<A>):
-    list_fold(monoid_list_alg(op), xs) = mconcat(op, xs)
+    ListAlg::list_fold(monoid_list_alg(op), xs) = xs.mconcat(op)
 {
-    list_fold_is_foldr(op, A.unit, xs)
+    ListAlg::list_fold_is_foldr(op, A.unit, xs)
 }
 
 // Proved once against the class; its uses below are at unrelated carriers and
 // neither re-proves anything. `A.unit_r` is a **proof** field projected from
 // the type — a type projection is an ordinary field projection, so an
 // operation and a law are the same move.
-theorem mconcat_single<A: Monoid(op)>(op: A → A → A, x: A):
-    mconcat(op, Cons(x, Nil)) = x
+theorem mconcat_single<A: Monoid(op)>(self x: A, op: A → A → A):
+    ([x]).mconcat(op) = x
 {
     A.unit_r(x)
 }
@@ -306,7 +294,7 @@ theorem op_inv_unique<A: Group(∙)>(x, y: A, h: x ∙ y = A.unit): y = A.inv(x)
 // dictionary and no fallback value. In the inline constraint form, like
 // `max_of` above — nothing names the dictionary, since `A.default` projects
 // the value straight from the type.
-fn or_default<A: Default>(o: Option<A>) → A { unwrap_or(o, A.default) }
+fn or_default<A: Default>(self o: Option<A>) → A { o.unwrap_or(A.default) }
 
 // The chain's generic consequence: a right unit follows from commutativity and
 // the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
@@ -327,20 +315,20 @@ theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
 // (docs/operators-onto-classes-design.md §5). Inside this declaration `+` IS
 // the bound index, so the two folds are one term; at a call site the index is
 // filled from the designation at the caller's carrier.
-fn sum_all<A: Monoid(+)>(xs: List<A>) → A { mconcat(+, xs) }
+fn sum_all<A: Monoid(+)>(self xs: List<A>) → A { xs.mconcat(+) }
 
 // One declaration, two carriers, and no caller names an operation. The
 // second is at an **open** element type, so its goal is
 // `Monoid<List<A>>(append)` with `A` the caller's own parameter, answered by
 // backchaining through `instance<A> Monoid<List<A>>(append)`.
-fn sum(ns: List<Nat>) → Nat { sum_all(ns) }
+fn sum(self ns: List<Nat>) → Nat { ns.sum_all() }
 
 // The monoid here is at `List<A>`, which is no tyvar, so no constraint slot
 // could ever name a symbol for it — and yet `++` is passed bare, because the
 // slot's own type says the carrier is `List<A>` and the generic designation
 // answers there (docs/bare-symbol-checking-carrier-design.md). Same term as
 // `mconcat(append, xss)`, which is what `concat_single` below still proves.
-fn concat<A>(xss: List<List<A>>) → List<A> { mconcat(++, xss) }
+fn concat<A>(self xss: List<List<A>>) → List<A> { xss.mconcat(++) }
 
 // The `Bool` folds are still NOT `sum_all` — `+` means nothing at `Bool` — but
 // each now writes its own symbol, and the bare symbol takes its meaning from
@@ -350,9 +338,9 @@ fn concat<A>(xss: List<List<A>>) → List<A> { mconcat(++, xss) }
 // sentence that nothing was nominated — two symbols, two structures, one
 // carrier, both registered, both reachable, neither the default. The positional
 // spelling stays legal forever, and the `_single` lemmas below still use it.
-fn any_of(bs: List<Bool>) → Bool { mconcat(||, bs) }
+fn any_of(self bs: List<Bool>) → Bool { bs.mconcat(||) }
 
-fn all_of(bs: List<Bool>) → Bool { mconcat(&&, bs) }
+fn all_of(self bs: List<Bool>) → Bool { bs.mconcat(&&) }
 
 // The class lemma at three carriers. None re-proves anything: each is
 // `mconcat_single` with the dictionary found through the registry, and the two
@@ -360,14 +348,14 @@ fn all_of(bs: List<Bool>) → Bool { mconcat(&&, bs) }
 // regression for issues/class-lemma-instantiation-fuel.md: comparing the
 // instantiated generic statement used to re-walk shared type closures
 // until conversion exhausted its full budget.
-theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(add, n) }
+theorem sum_single(self n: Nat): ([n]).sum() = n { n.mconcat_single(Nat::add) }
 
-theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(and, b) }
+theorem all_of_single(self b: Bool): ([b]).all_of() = b { b.mconcat_single(Bool::and) }
 
-theorem any_of_single(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b) }
+theorem any_of_single(self b: Bool): ([b]).any_of() = b { b.mconcat_single(Bool::or) }
 
-theorem concat_single<A>(xs: List<A>): concat(Cons(xs, Nil)) = xs {
-    mconcat_single(append, xs)
+theorem concat_single<A>(self xs: List<A>): ([xs]).concat() = xs {
+    xs.mconcat_single(List::append)
 }
 
 // The generic law, spent three times. Each goal names its operation — that is

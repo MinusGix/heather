@@ -24,7 +24,7 @@ inductive Outcome<S, E> {
 }
 
 fn empty<A>(capacity: Nat) → BoundedList<A> {
-    BoundedList<A>(capacity := capacity, contents := Nil<A>, fit := squash(zero_le(capacity)))
+    BoundedList<A>(capacity := capacity, contents := Nil<A>, fit := squash(capacity.nonneg()))
 }
 
 fn bounded_len<A>(xs: BoundedList<A>) → Nat { xs.contents.len() }
@@ -43,7 +43,7 @@ fn peek<A>(xs: BoundedList<A>) → Outcome<A, BoundedList<A>> {
 fn push<A>(value: A, xs: BoundedList<A>) →
     Outcome<BoundedList<A>, BoundedList<A>>
 {
-    match le_dec(Succ(xs.contents.len()), xs.capacity) {
+    match Succ(xs.contents.len()).le_dec(xs.capacity) {
         Inl(fit) => Success(BoundedList<A>(
             capacity := xs.capacity,
             contents := Cons(value, xs.contents),
@@ -62,7 +62,7 @@ fn bounded_tail<A>(limit: Nat, tail: List<A>,
         capacity := limit,
         contents := tail,
         fit := squash_map(fit,
-            λ (h: Succ(tail.len()) <= limit) => le_of_lt(tail.len(), limit, h)),
+            λ (h: Succ(tail.len()) <= limit) => tail.len().le_of_lt(limit, h)),
     )
 }
 
@@ -148,7 +148,7 @@ theorem push_success<A>(value: A, xs: BoundedList<A>,
         fit := squash(h),
     ))
 {
-    match le_dec(Succ(xs.contents.len()), xs.capacity) {
+    match Succ(xs.contents.len()).le_dec(xs.capacity) {
         Inl(_) => refl,
         Inr(not_fit) => false_elim(not_fit(h)),
     }
@@ -158,7 +158,7 @@ theorem push_overflow<A>(value: A, xs: BoundedList<A>,
     h: ¬(Succ(xs.len()) <= capacity(xs))):
     push(value, xs) = Overflow(xs)
 {
-    match le_dec(Succ(xs.contents.len()), xs.capacity) {
+    match Succ(xs.contents.len()).le_dec(xs.capacity) {
         Inl(fit) => false_elim(h(fit)),
         Inr(_) => refl,
     }
@@ -250,7 +250,7 @@ theorem run_push_pop<A>(value: A, xs: BoundedList<A>,
     h: Succ(xs.len()) <= capacity(xs)):
     run(Cons(Push(value), Cons(Pop, Nil<StackOp<A>>)), xs) = Success(xs)
 {
-    match le_dec(Succ(xs.contents.len()), xs.capacity) {
+    match Succ(xs.contents.len()).le_dec(xs.capacity) {
         Inl(_) => refl,
         Inr(not_fit) => false_elim(not_fit(h)),
     }

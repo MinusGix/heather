@@ -66,7 +66,7 @@ fn fetch_instruction_bytes<M>(access: FetchAccess<M>, memory: M, count: Nat) →
             access.executable(memory, start), access.read_byte(memory, start),
             λ byte => match rest {
                 Zero => FetchedBytes(Cons(byte, Nil)),
-                Succ(_) => match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
+                Succ(_) => match start.carry_add_bit(BitVec::ofNat(1)) {
                     True => FetchAddressWrap,
                     False => prepend_fetched(byte, ih(next_rip(start, 1))),
                 },
@@ -87,7 +87,7 @@ fn ReadableBytes<M>(access: FetchAccess<M>, memory: M, bytes: List<BitVec(8)>) �
             access.read_byte(memory, start) = Some(byte) ∧
             match rest as λ remaining => Type {
                 Nil => True,
-                Cons(_, _) => bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False ∧
+                Cons(_, _) => start.carry_add_bit(BitVec::ofNat(1)) = False ∧
                     ReadableBytes(access, memory, rest, next_rip(start, 1)),
             },
     }
@@ -128,7 +128,7 @@ theorem fetch_more_bytes<M>(access: FetchAccess<M>, memory: M, start: BitVec(64)
     byte: BitVec(8), rest_count: Nat, rest: List<BitVec(8)>,
     permission: access.executable(memory, start) = True,
     present: access.read_byte(memory, start) = Some(byte),
-    no_wrap: bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False,
+    no_wrap: start.carry_add_bit(BitVec::ofNat(1)) = False,
     tail: fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))
         = FetchedBytes(rest)):
     fetch_instruction_bytes(access, memory, Succ(Succ(rest_count)), start)
@@ -136,7 +136,7 @@ theorem fetch_more_bytes<M>(access: FetchAccess<M>, memory: M, start: BitVec(64)
 {
     trans(fetch_with_byte_success(start, access.executable(memory, start),
         access.read_byte(memory, start), λ found =>
-            match bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) {
+            match start.carry_add_bit(BitVec::ofNat(1)) {
                 True => FetchAddressWrap,
                 False => prepend_fetched(found,
                     fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))),
@@ -155,7 +155,7 @@ theorem fetch_span_more<M>(access: FetchAccess<M>, memory: M,
     start, next_start: BitVec(64), byte, next_byte: BitVec(8), rest: List<BitVec(8)>,
     permission: access.executable(memory, start) = True,
     present: access.read_byte(memory, start) = Some(byte),
-    no_wrap: bitvec::carry_add_bit(64, start, bitvec::ofNat(64, 1)) = False,
+    no_wrap: start.carry_add_bit(BitVec::ofNat(1)) = False,
     next_correct: next_rip(start, 1) = next_start,
     tail: FetchedFrom(access, memory, InstructionBytes(next_start, Cons(next_byte, rest)))):
     FetchedFrom(access, memory, InstructionBytes(start, Cons(byte, Cons(next_byte, rest))))

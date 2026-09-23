@@ -41,15 +41,15 @@ fn decide_discharges_closed_relations_equations_and_connectives() {
         import bool;
         import nat;
 
-        theorem le(): nat::Le(2, 5) { decide }
+        theorem le(): nat::Nat::Le(2, 5) { decide }
         // A magnitude the derived decider peels in one run step, not 2^63 of them.
-        theorem lt_at_magnitude(): nat::Lt(5, 9223372036854775808) { decide }
+        theorem lt_at_magnitude(): nat::Nat::Lt(5, 9223372036854775808) { decide }
         theorem eq(): 7 = 7 { decide }
-        theorem on_bool(): bool::Le(False, True) { decide }
-        theorem composed(): nat::Le(2, 5) ∧ ¬nat::Le(5, 2) { decide }
-        theorem either(): nat::Le(5, 2) ∨ nat::Even(4) { decide }
+        theorem on_bool(): bool::Bool::Le(False, True) { decide }
+        theorem composed(): nat::Nat::Le(2, 5) ∧ ¬nat::Nat::Le(5, 2) { decide }
+        theorem either(): nat::Nat::Le(5, 2) ∨ nat::Nat::Even(4) { decide }
         // The proof is a term like any other: usable as an argument.
-        theorem as_argument(): nat::Le(2, 5) ∧ nat::Le(3, 4) { And(decide, decide) }
+        theorem as_argument(): nat::Nat::Le(2, 5) ∧ nat::Nat::Le(3, 4) { And(decide, decide) }
         "#);
 }
 
@@ -59,7 +59,7 @@ fn decide_is_a_leaf_for_all_goals() {
         import logic;
         import bool;
 
-        theorem every_bool(b: Bool): bool::Le(b, True) { split_all; all_goals { decide } }
+        theorem every_bool(b: Bool): bool::Bool::Le(b, True) { split_all; all_goals { decide } }
         "#);
 }
 
@@ -69,15 +69,15 @@ fn a_false_closed_goal_is_refused_at_the_decide_and_names_the_instance() {
         import logic;
         import nat;
 
-        theorem wrong(): nat::Le(5, 2) { decide }
+        theorem wrong(): nat::Nat::Le(5, 2) { decide }
         "#);
     assert!(msg.contains("NotConvertible"), "{msg}");
     assert!(msg.contains("`decide` resolved `Decide<"), "{msg}");
-    assert!(msg.contains("nat::Le::Decide"), "{msg}");
+    assert!(msg.contains("nat::Nat::Le::Decide"), "{msg}");
     assert!(msg.contains("not `Inl`"), "{msg}");
-    // The span is the `decide` (line 5, column 42 of the source above), not
+    // The span is the `decide` (line 5, column 47 of the source above), not
     // the declaration head.
-    assert!(msg.starts_with("5:42:"), "{msg}");
+    assert!(msg.starts_with("5:47:"), "{msg}");
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn a_passing_decide_is_not_blamed_for_another_refusal() {
         import logic;
         import nat;
 
-        theorem mixed(): nat::Le(2, 5) ∧ (2 = 3) { And(decide, refl) }
+        theorem mixed(): nat::Nat::Le(2, 5) ∧ (2 = 3) { And(decide, refl) }
         "#);
     assert!(msg.contains("NotConvertible"), "{msg}");
     assert!(!msg.contains("`decide` resolved"), "{msg}");
@@ -133,9 +133,9 @@ fn decide_gives_way_to_what_the_writer_bound() {
         import nat;
 
         // A hypothesis named `decide` is the hypothesis.
-        theorem local_wins(decide: nat::Le(2, 5)): nat::Le(2, 5) { decide }
+        theorem local_wins(decide: nat::Nat::Le(2, 5)): nat::Nat::Le(2, 5) { decide }
         // The library's `decide<P>()` keeps its meaning where it is applied.
-        theorem bare_value(): Or<nat::Le(2, 5), ¬nat::Le(2, 5)> { decide<nat::Le(2, 5)>() }
+        theorem bare_value(): Or<nat::Nat::Le(2, 5), ¬nat::Nat::Le(2, 5)> { decide<nat::Nat::Le(2, 5)>() }
         "#);
     // A user global of that name is not the combinator either.
     ok(r#"

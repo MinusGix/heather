@@ -87,25 +87,11 @@ impl Elaborator {
         let mut varying: Vec<usize> = Vec::new();
         for arm in arms {
             walk_expr(&arm.body, &mut |e| {
-                let ExprKind::App {
-                    head,
-                    args,
-                    explicit,
-                    named: _,
-                    ..
-                } = &e.kind
-                else {
+                let Some((args, explicit)) = crate::recursion::surface_self_call(s, e) else {
                     return;
                 };
-                let head = match &head.kind {
-                    ExprKind::TyApp { head, .. } => head,
-                    _ => head,
-                };
-                if !matches!(&head.kind, ExprKind::Var(n) if *n == s.name) {
-                    return;
-                }
                 let positions = (s.n_tyvars..s.params.len())
-                    .filter(|&j| *explicit || !s.params[j].1);
+                    .filter(|&j| explicit || !s.params[j].1);
                 for (slot, position) in positions.enumerate() {
                     if position == dec || fixed.contains(&position) {
                         continue;

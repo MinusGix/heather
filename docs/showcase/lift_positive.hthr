@@ -20,13 +20,13 @@ theorem positive_add_closed(x, y: PositiveNat): 0 < x.value + y.value {
 // The ordinary interface infers the carrier types and invariant from the record.
 // Its implementation invokes the Heather code template.
 fn lifted_add(x, y: PositiveNat) -> PositiveNat {
-    lift_binary(positive_repr(), add, positive_add_closed, x, y)
+    lift_binary(positive_repr(), Nat::add, positive_add_closed, x, y)
 }
 
 theorem lifted_add_value(x, y: PositiveNat):
     lifted_add(x, y).value = x.value + y.value
 {
-    lift_binary_value(positive_repr(), add, positive_add_closed, x, y)
+    lift_binary_value(positive_repr(), Nat::add, positive_add_closed, x, y)
 }
 
 theorem agrees_with_manual(x, y: PositiveNat):
@@ -36,4 +36,4 @@ theorem agrees_with_manual(x, y: PositiveNat):
 // Laws still transfer by ordinary checking through the generated wrapper.
 theorem lifted_add_assoc(x, y, z: PositiveNat):
     SameValue(lifted_add(lifted_add(x, y), z), lifted_add(x, lifted_add(y, z)))
-{ add_assoc(x.value, y.value, z.value) }
+{ x.value.add_assoc(y.value, z.value) }

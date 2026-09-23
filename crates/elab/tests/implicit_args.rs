@@ -21,28 +21,28 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 
 theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
     match m {
         Zero => sym(add_zero(n)),
-        Succ(k, ih) => trans(cong_succ(ih), sym(add_succ(n, k))),
+        Succ(k, ih) => trans(Nat::cong_succ(ih), sym(add_succ(n, k))),
     }
 }
 
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a {
         Zero => refl,
-        Succ(k, ih) => cong_succ(ih),
+        Succ(k, ih) => Nat::cong_succ(ih),
     }
 }
 "#;
@@ -70,7 +70,7 @@ fn implicit_endpoints_are_solved() {
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
         theorem add_zero(n: Nat): add(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+            match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
         }
         theorem flip(n: Nat): n = add(n, 0) { sym(add_zero(n)) }
         "#,
@@ -97,7 +97,7 @@ fn wrong_implicit_proof_is_kernel_rejected() {
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
         theorem add_zero(n: Nat): add(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+            match n { Zero => refl, Succ(k, ih) => Nat::cong_succ(ih) }
         }
         theorem bogus(n: Nat): add(n, 0) = add(n, 0) { sym(add_zero(n)) }
         "#,
@@ -248,4 +248,33 @@ fn a_structural_look_alike_still_fails_at_the_kernel() {
         "#,
     );
     assert!(r.is_err(), "a mismatched family argument must not typecheck, got {r:?}");
+}
+
+#[test]
+fn a_numeral_index_solves_a_successor_pattern() {
+    // `Succ(?n) ≟ 3` learns `?n := 2`: a numeral is `Succ^k(Zero)`. Literal
+    // and neutral indices, an open element type, a checking position (the
+    // call is an argument), and computation through the solved index.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        fn first<A>({n: Nat}, v: [A; Succ(n)]) -> A { v[0] }
+        fn rest_len<A>({n: Nat}, v: [A; Succ(n)]) -> Nat { n }
+        fn at_literal<A>(v: [A; 3]) -> A { first(v) }
+        fn at_neutral<A>(k: Nat, v: [A; Succ(k)]) -> A { first(v) }
+        fn checked(v: [Nat; 3]) -> Nat { Succ(rest_len(v)) }
+        theorem computes(): checked([7, 8, 9]) = 3 { refl }
+        theorem first_computes(): at_literal<Nat>([7, 8, 9]) = 7 { refl }
+        "#,
+    )
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: `Succ(?n) ≟ 0` has no solution.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        fn first<A>({n: Nat}, v: [A; Succ(n)]) -> A { v[0] }
+        fn empty<A>(v: [A; 0]) -> A { first(v) }
+        "#,
+    );
+    assert!(r.is_err(), "a zero-length vector has no first element, got {r:?}");
 }

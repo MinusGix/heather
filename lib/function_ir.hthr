@@ -543,39 +543,39 @@ fn Valuation() → Type { (width: Nat) → Nat → BitVec(width) }
 fn NodeHolds(values: Valuation(), node: Node) → Type {
     match node {
         Const(width, output, value) =>
-            values(width, output) = bitvec::ofNat(width, value),
+            values(width, output) = BitVec::ofNat(value),
         Add(width, output, left, right) =>
             values(width, output) =
-                bitvec::add(width, values(width, left), values(width, right)),
+                values(width, left).add(values(width, right)),
         Sub(width, output, left, right) =>
             values(width, output) =
-                bitvec::sub(width, values(width, left), values(width, right)),
+                values(width, left).sub(values(width, right)),
         BitAnd(width, output, left, right) =>
             values(width, output) =
-                bitvec::band(width, values(width, left), values(width, right)),
+                values(width, left).band(values(width, right)),
         BitOr(width, output, left, right) =>
             values(width, output) =
-                bitvec::bor(width, values(width, left), values(width, right)),
+                values(width, left).bor(values(width, right)),
         BitXor(width, output, left, right) =>
             values(width, output) =
-                bitvec::bxor(width, values(width, left), values(width, right)),
+                values(width, left).bxor(values(width, right)),
         ShiftLeft(width, output, value, amount) =>
             values(width, output) =
-                bitvec::shift_left(width, values(width, value), amount),
+                values(width, value).shift_left(amount),
         LogicalShiftRight(width, output, value, amount) =>
             values(width, output) =
-                bitvec::shift_right(width, values(width, value), amount),
+                values(width, value).shift_right(amount),
         ArithmeticShiftRight(width, output, value, amount) =>
             values(width, output) =
-                bitvec::arithmetic_shift_right(width, values(width, value), amount),
+                values(width, value).arithmetic_shift_right(amount),
         UnsignedLessThan(width, output, left, right) =>
-            values(1, output) = bitvec::ofBool(
-                bitvec::unsigned_lt_bit(width,
-                    values(width, left), values(width, right))),
+            values(1, output) = BitVec::ofBool(
+
+                    values(width, left).unsigned_lt_bit(values(width, right))),
         SignedLessThan(width, output, left, right) =>
-            values(1, output) = bitvec::ofBool(
-                bitvec::signed_lt_bit(width,
-                    values(width, left), values(width, right))),
+            values(1, output) = BitVec::ofBool(
+
+                    values(width, left).signed_lt_bit(values(width, right))),
     }
 }
 
@@ -756,7 +756,7 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
             StructuredRegionHolds(values, prefix) ∧
             StructuredRegionHolds(values, continuation),
         Conditional(_, condition, _, _, when_true, when_false) =>
-            match bitvec::head_bit(0, values(1, condition)) {
+            match values(1, condition).head_bit() {
                 False => StructuredRegionHolds(values, when_false),
                 True => StructuredRegionHolds(values, when_true),
             },
@@ -819,7 +819,7 @@ fn ControlRegionValid(region: ControlRegion) → Type {
 }
 
 fn ControlJoinHolds(values: Valuation(), join: ConditionalJoinRegion) → Type {
-    match bitvec::head_bit(0, values(1, join.condition)) {
+    match values(1, join.condition).head_bit() {
         False => RegionHolds(join.when_false, values) ∧
             (BlockArgumentsHold(values, join.false_arguments) ∧
              RegionHolds(join.continuation, values)),
@@ -834,7 +834,7 @@ fn ControlRegionHolds(values: Valuation(), region: ControlRegion) → Type {
 }
 
 theorem control_join_false(values: Valuation(), join: ConditionalJoinRegion,
-    condition: bitvec::head_bit(0, values(1, join.condition)) = False,
+    condition: values(1, join.condition).head_bit() = False,
     branch: RegionHolds(join.when_false, values),
     arguments: BlockArgumentsHold(values, join.false_arguments),
     continuation: RegionHolds(join.continuation, values)):
@@ -853,7 +853,7 @@ theorem control_join_false(values: Valuation(), join: ConditionalJoinRegion,
 }
 
 theorem control_join_true(values: Valuation(), join: ConditionalJoinRegion,
-    condition: bitvec::head_bit(0, values(1, join.condition)) = True,
+    condition: values(1, join.condition).head_bit() = True,
     branch: RegionHolds(join.when_true, values),
     arguments: BlockArgumentsHold(values, join.true_arguments),
     continuation: RegionHolds(join.continuation, values)):
@@ -897,70 +897,70 @@ theorem bitvec64_add_congruent(
     {left_before, left_after, right_before, right_after: BitVec(64)},
     left: left_before = left_after,
     right: right_before = right_after):
-    bitvec::add(64, left_before, right_before) =
-        bitvec::add(64, left_after, right_after)
+    left_before.add(right_before) =
+        left_after.add(right_after)
 {
     apply trans;
     give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::add(64, ·, right_before), left);
+        BitVec::add(·, right_before), left);
     list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::add(64, left_after, ·), right)
+        left_after.add(·), right)
 }
 
 theorem bitvec64_sub_congruent(
     {left_before, left_after, right_before, right_after: BitVec(64)},
     left: left_before = left_after,
     right: right_before = right_after):
-    bitvec::sub(64, left_before, right_before) =
-        bitvec::sub(64, left_after, right_after)
+    left_before.sub(right_before) =
+        left_after.sub(right_after)
 {
     apply trans;
     give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::sub(64, ·, right_before), left);
+        BitVec::sub(·, right_before), left);
     list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::sub(64, left_after, ·), right)
+        left_after.sub(·), right)
 }
 
 theorem bitvec64_band_congruent(
     {left_before, left_after, right_before, right_after: BitVec(64)},
     left: left_before = left_after,
     right: right_before = right_after):
-    bitvec::band(64, left_before, right_before) =
-        bitvec::band(64, left_after, right_after)
+    left_before.band(right_before) =
+        left_after.band(right_after)
 {
     apply trans;
     give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::band(64, ·, right_before), left);
+        BitVec::band(·, right_before), left);
     list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::band(64, left_after, ·), right)
+        left_after.band(·), right)
 }
 
 theorem bitvec64_bor_congruent(
     {left_before, left_after, right_before, right_after: BitVec(64)},
     left: left_before = left_after,
     right: right_before = right_after):
-    bitvec::bor(64, left_before, right_before) =
-        bitvec::bor(64, left_after, right_after)
+    left_before.bor(right_before) =
+        left_after.bor(right_after)
 {
     apply trans;
     give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::bor(64, ·, right_before), left);
+        BitVec::bor(·, right_before), left);
     list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::bor(64, left_after, ·), right)
+        left_after.bor(·), right)
 }
 
 theorem bitvec64_bxor_congruent(
     {left_before, left_after, right_before, right_after: BitVec(64)},
     left: left_before = left_after,
     right: right_before = right_after):
-    bitvec::bxor(64, left_before, right_before) =
-        bitvec::bxor(64, left_after, right_after)
+    left_before.bxor(right_before) =
+        left_after.bxor(right_after)
 {
     apply trans;
     give list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::bxor(64, ·, right_before), left);
+        BitVec::bxor(·, right_before), left);
     list::cong_fn<BitVec(64), BitVec(64)>(
-        bitvec::bxor(64, left_after, ·), right)
+        left_after.bxor(·), right)
 }
 
 theorem add_node_denotes(width, output, left, right: Nat,
@@ -969,10 +969,10 @@ theorem add_node_denotes(width, output, left, right: Nat,
     y_value: values(width, right) = y,
     equation: NodeHolds(values,
         Add(width := width, output := output, left := left, right := right))):
-    values(width, output) = bitvec::add(width, x, y)
+    values(width, output) = x.add(y)
 {
     binary_node_denotes(width, output, left, right,
-        bitvec::add(width, ·, ·), x, y, values,
+        BitVec::add(·, ·), x, y, values,
         x_value, y_value, equation)
 }
 
@@ -993,7 +993,7 @@ theorem add64_denotes(x, y: BitVec(64), values: Valuation(),
     x_value: values(64, 0) = x,
     y_value: values(64, 1) = y,
     graph: RegionHolds(add64_raw(), values)):
-    values(64, 2) = bitvec::add(64, x, y)
+    values(64, 2) = x.add(y)
 {
     add_node_denotes(64, 2, 0, 1, x, y, values,
         x_value, y_value, graph.left)
@@ -1065,11 +1065,11 @@ theorem sum4_denotes(a, b, c, d: BitVec(64), values: Valuation(),
     c_value: values(64, 2) = c,
     d_value: values(64, 3) = d,
     graph: RegionHolds(sum4_left_first_raw(), values)):
-    values(64, 6) = bitvec::add(64,
-        bitvec::add(64, a, b), bitvec::add(64, c, d))
+    values(64, 6) =
+        a.add(b).add(c.add(d))
 {
     add_node_denotes(64, 6, 4, 5,
-        bitvec::add(64, a, b), bitvec::add(64, c, d), values,
+        a.add(b), c.add(d), values,
         add_node_denotes(64, 4, 0, 1, a, b, values,
             a_value, b_value, graph.left),
         add_node_denotes(64, 5, 2, 3, c, d, values,

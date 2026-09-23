@@ -14,7 +14,7 @@ fn selected_bounds_read_checks_and_executes() {
         ("function_ir_loop", include_str!("../../../lib/function_ir_loop.hthr")),
         ("function_ir_loop_x86", include_str!("../../../lib/function_ir_loop_x86.hthr")),
     ] { elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source))); }
-    let source = "import bitvec; import bool; fn bounds(cursor, length: BitVec(64)) → Bool { bitvec::unsigned_lt_bit(64, cursor, length) } fn address(base, cursor: BitVec(64)) → BitVec(64) { bitvec::add(64, base, cursor) } fn identity(byte: BitVec(8)) → BitVec(8) { byte } fn masked(byte, mask: BitVec(8)) → BitVec(8) { bitvec::band(8, byte, mask) } fn zero() → BitVec(8) { bitvec::ofNat(8, 0) }";
+    let source = "import bitvec; import bool; fn bounds(cursor, length: BitVec(64)) → Bool { @bitvec::BitVec::unsigned_lt_bit(64, cursor, length) } fn address(base, cursor: BitVec(64)) → BitVec(64) { @bitvec::BitVec::add(64, base, cursor) } fn identity(byte: BitVec(8)) → BitVec(8) { byte } fn masked(byte, mask: BitVec(8)) → BitVec(8) { @bitvec::BitVec::band(8, byte, mask) } fn zero() → BitVec(8) { @bitvec::BitVec::ofNat(8, 0) }";
     elab.elab_module_source("clients", source).unwrap();
     let guard = generate_elaborated_typed_x86(&elab, "guard", "clients::bounds",
         &Placements::from([(0,Gpr::Rsi),(1,Gpr::Rdx)]), &[Gpr::Rax,Gpr::R10], &Placements::from([(2,Gpr::Rax)])).unwrap();
@@ -59,9 +59,9 @@ fn selected_bounds_read_checks_and_executes() {
     eprintln!("checking open guard/read consumer");
     elab.elab_module_source("consumer", &consumer).unwrap_or_else(|e| panic!("{}", e.render(&consumer)));
     for (name, from, to) in [
-        ("wrong_guard", "ended: nat::leb(length, cursor) = True", "ended: nat::leb(length, cursor) = False"),
+        ("wrong_guard", "ended: nat::Nat::leb(length, cursor) = True", "ended: nat::Nat::leb(length, cursor) = False"),
         ("wrong_address", "address_typed_correct(base_word, cursor_word", "address_typed_correct(cursor_word, base_word"),
-        ("wrong_byte", "identity_read_artifact(byte, access", "identity_read_artifact(bitvec::zero(8), access"),
+        ("wrong_byte", "identity_read_artifact(byte, access", "identity_read_artifact(@bitvec::BitVec::zero(8), access"),
     ] {
         let bad = consumer.replace(from, to);
         assert_ne!(bad, consumer);

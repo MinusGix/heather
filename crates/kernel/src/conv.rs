@@ -1398,7 +1398,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // both here throws that meet away and unrolls whatever
                     // the bodies hide: `utf8::decode` at a three-byte
                     // sequence against its own `decode_seq` went through
-                    // `nat::leb(0x800, code)` at a stuck `code`, a 2048-deep
+                    // `nat::Nat::leb(0x800, code)` at a stuck `code`, a 2048-deep
                     // closure chain on each side that no comparison can
                     // descend (`issues/utf8-decode-conversion-blowup.md`).
                     // So each side takes one δ-step and the loop looks for

@@ -70,7 +70,7 @@ pub struct DesignationDecl {
     /// declarations omit the keyword and are infix; prefix declarations write
     /// it explicitly (`designation prefix - at Int := neg`).
     pub fixity: OpFixity,
-    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`.
+    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`.
     pub symbol: String,
     pub carrier: Ty,
     /// The designated operation. A **bare global name** (§3.2): it is emitted
@@ -835,7 +835,7 @@ impl MatchForm {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
-    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`
+    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`
     /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
     /// its own: `a + b` is this node *applied*
     /// (`App { head: OpSymbol { symbol: "+", fixity: Infix }, … }`) and a lone symbol between delimiters
@@ -1035,7 +1035,8 @@ pub enum ExprKind {
     /// - the arms are keyed to `heather_kernel::rec::BRANCH_NAMES`, and the
     ///   mandatory default arm stands for every branch not written.
     MatchCode { scrut: Box<Expr>, motive: Box<Ty>, arms: Vec<Arm> },
-    /// `p.f` (`args: None`) or `p.f(a, b)` (`args: Some`)
+    /// `p.f` (`args: None`), `p.f(a, b)` (`args: Some`), or
+    /// `p.f<T, …>(a, b)` (`tyargs` non-empty)
     /// (docs/surface-records.md §4).
     ///
     /// **Resolved in the elaborator, not here.** Until records existed, `.`
@@ -1045,7 +1046,13 @@ pub enum ExprKind {
     /// two needs the receiver's type, so it cannot happen here. The old
     /// desugaring survives as the fallback for every non-field name, which is
     /// what keeps `p.sym()`, `p.inj(1)` and `xs.map(f)` working unchanged.
-    Dot { recv: Box<Expr>, name: String, args: Option<Vec<Expr>>, named: Vec<NamedArg> },
+    Dot {
+        recv: Box<Expr>,
+        name: String,
+        tyargs: Vec<Ty>,
+        args: Option<Vec<Expr>>,
+        named: Vec<NamedArg>,
+    },
     /// `xs[i]` — indexing a vector at a `Fin` index
     /// (docs/surface-fin-indexing-design.md §5). A **postfix** form, produced
     /// in `postfix`'s loop beside `Dot` and the call `(`, so `[1,2,3][0]` and

@@ -1,0 +1,16 @@
+:root {
+  --content-max-width: 920px;
+}
+
+code.language-heather::before {
+  content: "Heather";
+  float: right;
+  color: var(--icons);
+  font: 0.72rem var(--mono-font);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+table {
+  width: 100%;
+}

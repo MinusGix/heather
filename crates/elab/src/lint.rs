@@ -326,9 +326,10 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
             arms.iter().for_each(|a| expr(&a.body, out));
         }
         ExprKind::Dot {
-            recv, args, named, ..
+            recv, tyargs, args, named, ..
         } => {
             expr(recv, out);
+            tyargs.iter().for_each(|t| ty(t, out));
             args.iter().flatten().for_each(|a| expr(a, out));
             named.iter().for_each(|a| expr(&a.expr, out));
         }
@@ -726,9 +727,10 @@ impl BinderUses {
                 }
             }
             ExprKind::Dot {
-                recv, args, named, ..
+                recv, tyargs, args, named, ..
             } => {
                 self.expr(recv);
+                tyargs.iter().for_each(|t| self.ty(t));
                 args.iter().flatten().for_each(|a| self.expr(a));
                 named.iter().for_each(|a| self.expr(&a.expr));
             }

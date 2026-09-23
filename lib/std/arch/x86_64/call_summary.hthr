@@ -29,28 +29,28 @@ theorem call_mov_ri_flat<M>(destination: Gpr, immediate: BitVec(64), before: Mac
 }
 theorem call_add_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
     advanced: address = next_rip(before.rip, decoded_canonical(AddRR(destination, source)).length)):
-    MachineState(write_gpr(destination, bitvec::add(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before) {
-    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::add(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before), refl)
+    MachineState(write_gpr(destination, read_gpr(destination, before.gprs).add(read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(destination, before.gprs).add(read_gpr(source, before.gprs)), before.gprs), add_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(AddRR(destination, source)), before), refl)
 }
 theorem call_sub_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
     advanced: address = next_rip(before.rip, decoded_canonical(SubRR(destination, source)).length)):
-    MachineState(write_gpr(destination, bitvec::sub(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before) {
-    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::sub(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before), refl)
+    MachineState(write_gpr(destination, read_gpr(destination, before.gprs).sub(read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(destination, before.gprs).sub(read_gpr(source, before.gprs)), before.gprs), sub_flags(read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), address, before.memory) = execute_normal(decoded_canonical(SubRR(destination, source)), before), refl)
 }
 theorem call_and_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
     advanced: address = next_rip(before.rip, decoded_canonical(AndRR(destination, source)).length)):
-    MachineState(write_gpr(destination, bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before) {
-    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::band(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before), refl)
+    MachineState(write_gpr(destination, read_gpr(destination, before.gprs).band(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).band(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(destination, before.gprs).band(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).band(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(AndRR(destination, source)), before), refl)
 }
 theorem call_or_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
     advanced: address = next_rip(before.rip, decoded_canonical(OrRR(destination, source)).length)):
-    MachineState(write_gpr(destination, bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before) {
-    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before), refl)
+    MachineState(write_gpr(destination, read_gpr(destination, before.gprs).bor(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).bor(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(destination, before.gprs).bor(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).bor(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(OrRR(destination, source)), before), refl)
 }
 theorem call_xor_rr_flat<M>(destination, source: Gpr, before: MachineState<M>, address: BitVec(64),
     advanced: address = next_rip(before.rip, decoded_canonical(XorRR(destination, source)).length)):
-    MachineState(write_gpr(destination, bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before) {
-    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs)), before.gprs), logic_flags(bitvec::bxor(64, read_gpr(destination, before.gprs), read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before), refl)
+    MachineState(write_gpr(destination, read_gpr(destination, before.gprs).bxor(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).bxor(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before) {
+    j(sym(advanced), λ address _ => MachineState(write_gpr(destination, read_gpr(destination, before.gprs).bxor(read_gpr(source, before.gprs)), before.gprs), logic_flags(read_gpr(destination, before.gprs).bxor(read_gpr(source, before.gprs))), address, before.memory) = execute_normal(decoded_canonical(XorRR(destination, source)), before), refl)
 }
 
 fn call_next<M>(access: StackAccess<M>, instruction: CallInstruction, before: MachineState<M>) → MachineState<M> {
@@ -66,11 +66,11 @@ fn CallAccessAllowed<M>(access: StackAccess<M>, instruction: CallInstruction, be
     match instruction {
         Ordinary(op) => True,
         CallRelative(delta) =>
-            bitvec::borrow_sub_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            read_gpr(Rsp, before.gprs).borrow_sub_bit(BitVec::ofNat(8)) = False ∧
             LowCanonical(call_return_address(before)) ∧ LowCanonical(call_target(before.rip, delta)) ∧
-            WordWritesAllowed<M>(access, bitvec::sub(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8))),
+            WordWritesAllowed<M>(access, read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8))),
         NearReturn =>
-            bitvec::carry_add_bit(64, read_gpr(Rsp, before.gprs), bitvec::ofNat(64, 8)) = False ∧
+            read_gpr(Rsp, before.gprs).carry_add_bit(BitVec::ofNat(8)) = False ∧
             LowCanonical(stack_word(access, before.memory, read_gpr(Rsp, before.gprs))) ∧
             StackReadsAllowed(access, 8, read_gpr(Rsp, before.gprs)),
         StoreStack64(register) => WordWritesAllowed<M>(access, read_gpr(Rsp, before.gprs)),

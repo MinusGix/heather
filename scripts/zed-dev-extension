@@ -55,6 +55,16 @@ if [[ -e "$dev_dir/languages" && ! -L "$dev_dir/languages" ]]; then
 fi
 ln -sfn ../languages "$dev_dir/languages"
 
+# The extension now has a small Rust shim that locates `heather-lsp`. Keep the
+# dev bundle's procedural sources live for the same reason as its queries.
+for path in Cargo.toml src; do
+    if [[ -e "$dev_dir/$path" && ! -L "$dev_dir/$path" ]]; then
+        echo "error: refusing to replace unexpected path: $dev_dir/$path" >&2
+        exit 1
+    fi
+    ln -sfn "../$path" "$dev_dir/$path"
+done
+
 awk -v repository="file://$grammar_repo" -v rev="$rev" '
     /^\[grammars\.heather\]$/ { grammar = 1 }
     grammar && /^repository = / {

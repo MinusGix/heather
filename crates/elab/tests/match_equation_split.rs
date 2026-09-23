@@ -154,7 +154,7 @@ fn a_split_proves_a_theorem_by_induction() {
        theorem add_zero(n: Nat): add(n, 0) = n {
            split n;
            on Zero := refl;
-           on Succ(k) := cong_succ(add_zero(k));
+           on Succ(k) := Nat::cong_succ(add_zero(k));
        }
        "#);
 }
@@ -168,14 +168,14 @@ fn a_split_coexists_with_a_goal_discharge() {
            split n;
            on Zero := refl;
            on Succ(k) := ?step;
-           on ?step := cong_succ(add_zero_g(k));
+           on ?step := Nat::cong_succ(add_zero_g(k));
        }
        "#);
     // …and the arms need not come first.
     ok(r#"
        theorem add_zero_g2(n: Nat): add(n, 0) = n {
            split n;
-           on ?step := cong_succ(add_zero_g2(k));
+           on ?step := Nat::cong_succ(add_zero_g2(k));
            on Zero := refl;
            on Succ(k) := ?step;
        }

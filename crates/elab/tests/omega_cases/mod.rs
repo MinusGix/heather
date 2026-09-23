@@ -239,8 +239,8 @@ theorem opaque_nonlinear(x: Int,
 {{ omega }}
 
 theorem negated_difference(x, y: Int,
-    upper: int::sub(x, y) <= OfNat(0),
-    lower: OfNat(1) <= x + int::neg(y)):
+    upper: int::Int::sub(x, y) <= OfNat(0),
+    lower: OfNat(1) <= x + int::Int::neg(y)):
     False
 {{ omega }}
 "#
@@ -256,7 +256,7 @@ theorem negated_difference(x, y: Int,
     let reports = elab.take_omega_reports();
     assert_eq!(reports.len(), 2);
     assert_eq!(reports[0].atoms, 1);
-    assert_eq!(reports[0].atom_labels, ["int::mul(x, x)"]);
+    assert_eq!(reports[0].atom_labels, ["int::Int::mul(x, x)"]);
     assert_eq!(reports[1].atom_labels, ["x", "y"]);
 }
 
@@ -624,7 +624,7 @@ fn proves_an_affine_equality_consequence() {
     let source = format!(
         r#"{PREFIX}
 theorem affine_equality_goal(x, y: Int, eq: y = x + OfNat(1)):
-    int::sub(y, OfNat(1)) = x
+    int::Int::sub(y, OfNat(1)) = x
 {{ omega }}
 "#
     );
@@ -678,8 +678,8 @@ fn stuck_diagnostics_use_source_level_atom_names() {
     let source = format!(
         r#"{PREFIX}
 theorem satisfiable_affine(x, y: Int,
-    lower: OfNat(3) <= int::sub(x, y * OfNat(2)),
-    upper: int::sub(x, y * OfNat(2)) <= OfNat(9)):
+    lower: OfNat(3) <= int::Int::sub(x, y * OfNat(2)),
+    upper: int::Int::sub(x, y * OfNat(2)) <= OfNat(9)):
     False
 {{ omega }}
 "#
@@ -745,12 +745,12 @@ pub fn omega_logic_suite() {
 fn reconstructs_over_a_member_atom_spelled_qualified() {
     let source = format!(
         r#"{PREFIX}
-theorem member_atom(xs: List<Int>, h: nat::Lt(0, list_len(xs))):
-    nat::Lt(0, nat::add(list_len(xs), 1)) {{ omega }}
-theorem member_atom_dotted(xs: List<Int>, h: nat::Lt(0, xs.len())):
-    nat::Lt(0, nat::add(xs.len(), 1)) {{ omega }}
-theorem member_atoms_two(xs, ys: List<Int>, h: nat::Le(xs.len(), ys.len())):
-    nat::Le(xs.len(), nat::add(ys.len(), 3)) {{ omega }}
+theorem member_atom(xs: List<Int>, h: nat::Nat::Lt(0, xs.len())):
+    nat::Nat::Lt(0, nat::Nat::add(xs.len(), 1)) {{ omega }}
+theorem member_atom_dotted(xs: List<Int>, h: nat::Nat::Lt(0, xs.len())):
+    nat::Nat::Lt(0, nat::Nat::add(xs.len(), 1)) {{ omega }}
+theorem member_atoms_two(xs, ys: List<Int>, h: nat::Nat::Le(xs.len(), ys.len())):
+    nat::Nat::Le(xs.len(), nat::Nat::add(ys.len(), 3)) {{ omega }}
 "#
     );
     elaborator()

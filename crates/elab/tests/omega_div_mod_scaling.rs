@@ -57,25 +57,25 @@ import omega;
 
 theorem small_int_divisor(x: Int,
     upper: x <= OfNat(15),
-    positive_quotient: OfNat(1) <= int::div(x, OfNat(16))):
+    positive_quotient: OfNat(1) <= int::Int::div(x, OfNat(16))):
     False
 { omega }
 
 theorem large_int_divisor(x: Int,
     upper: x <= OfNat(511),
-    positive_quotient: OfNat(1) <= int::div(x, OfNat(512))):
+    positive_quotient: OfNat(1) <= int::Int::div(x, OfNat(512))):
     False
 { omega }
 
 theorem small_nat_divisor(n: Nat,
     upper: n <= 15,
-    positive_quotient: 1 <= nat::div(n, 16)):
+    positive_quotient: 1 <= nat::Nat::div(n, 16)):
     False
 { omega }
 
 theorem large_nat_divisor(n: Nat,
     upper: n <= 511,
-    positive_quotient: 1 <= nat::div(n, 512)):
+    positive_quotient: 1 <= nat::Nat::div(n, 512)):
     False
 { omega }
 "#;
@@ -106,7 +106,7 @@ import omega;
 
 theorem false_large_remainder(x: Int,
     value: x = OfNat(511)):
-    int::mod(x, OfNat(512)) < OfNat(511)
+    int::Int::mod(x, OfNat(512)) < OfNat(511)
 { omega }
 "#;
     let error = elab

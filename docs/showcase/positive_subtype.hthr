@@ -15,7 +15,7 @@ theorem same_value_with_other_evidence(n: Nat, p, q: 0 < n):
 
 // A stronger closure fact: only the left number needs to be positive.
 theorem add_positive(n, m: Nat, positive: 0 < n): 0 < n + m {
-    le_trans(1, n, n + m, positive, le_add_l(n, m))
+    Nat::le_trans(1, n, n + m, positive, n.le_add_l(m))
 }
 
 fn positive_add(x, y: PositiveNat) → PositiveNat {
@@ -33,7 +33,7 @@ theorem positive_add_value(x, y: PositiveNat):
 theorem positive_add_assoc(x, y, z: PositiveNat):
     SameValue(positive_add(positive_add(x, y), z),
         positive_add(x, positive_add(y, z)))
-{ add_assoc(x.value, y.value, z.value) }
+{ x.value.add_assoc(y.value, z.value) }
 
 theorem positive_add_respects(x, x2: PositiveNat, hx: SameValue(x, x2),
     y, y2: PositiveNat, hy: SameValue(y, y2)):
@@ -72,10 +72,10 @@ theorem group_positive_sum(a, b, c, d: PositiveNat):
 
 // The source theorem's domain hypothesis is supplied by the record.
 theorem positive_value_is_not_zero(x: PositiveNat): x.value ≠ 0 {
-    ne_of_gt(x.value, 0, x.valid)
+    x.value.ne_of_gt(0, x.valid)
 }
 
-theorem zero_is_not_positive(): ¬(0 < 0) { lt_irrefl(0) }
+theorem zero_is_not_positive(): ¬(0 < 0) { Nat::lt_irrefl(0) }
 
 theorem one_plus_two():
     positive_add(PositiveNat(1, trivial), PositiveNat(2, trivial)).value = 3

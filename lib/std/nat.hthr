@@ -10,40 +10,42 @@ import logic;
 // so the lemmas that matter are the ones that move a `Succ` — and a zero —
 // across from the *left*.
 
-fn add(a, b: Nat) → Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
+fn Nat::add(self a: Nat, b: Nat) → Nat { match b { Zero => a, Succ(k) => Succ(a.add(k)) } }
 
 // The public spelling belongs beside the operation, so the law kit below is
 // written in the same surface a downstream proof uses.
-designation + at Nat := add
+designation + at Nat := Nat::add
 
-theorem cong_nat(f: Nat → Nat, {a, b: Nat}, p: a = b): f(a) = f(b) {
+theorem Nat::cong(f: Nat → Nat, {a, b: Nat}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
 
-theorem add_left_zero(x: Nat): 0 + x = x {
-    match x { Zero => refl, Succ(k) => cong_succ(add_left_zero(k)) }
+theorem Nat::add_left_zero(self x: Nat): 0 + x = x {
+    match x { Zero => refl, Succ(k) => Nat::cong_succ(k.add_left_zero()) }
 }
 
-theorem add_succ_left(a, b: Nat): Succ(a) + b = Succ(a + b) {
-    match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
+theorem Nat::add_succ_left(self a, b: Nat): Succ(a) + b = Succ(a + b) {
+    match b { Zero => refl, Succ(k) => Nat::cong_succ(a.add_succ_left(k)) }
 }
+
+fn Nat::of_bit(b: Bool) → Nat { match b { False => 0, True => 1 } }
 
 // The two laws that make `add` a commutative monoid — asked for by the traits
 // adoption round (2026-08-07), which registers `AddCommMonoid<Nat>` in
 // `std/algebra` and needs exactly these as its fields. Both recurse on the
 // argument `add` itself recurses on, so both are three lines.
 
-theorem add_assoc(x, y, z: Nat): (x + y) + z = x + (y + z) {
-    match z { Zero => refl, Succ(k) => cong_succ(add_assoc(x, y, k)) }
+theorem Nat::add_assoc(self x, y, z: Nat): (x + y) + z = x + (y + z) {
+    match z { Zero => refl, Succ(k) => Nat::cong_succ(x.add_assoc(y, k)) }
 }
 
-theorem add_comm(x, y: Nat): x + y = y + x {
+theorem Nat::add_comm(self x, y: Nat): x + y = y + x {
     match y {
-        Zero => sym(add_left_zero(x)),
+        Zero => sym(x.add_left_zero()),
         Succ(k) =>
             apply trans;
-            give cong_succ(add_comm(x, k));
-            sym(add_succ_left(k, x)),
+            give Nat::cong_succ(x.add_comm(k));
+            sym(k.add_succ_left(x)),
     }
 }
 
@@ -51,59 +53,59 @@ theorem add_comm(x, y: Nat): x + y = y + x {
 // multiplication recurses on its second argument and is a poor normal form
 // for proofs that consume one binary digit at a time. `twice` exposes two
 // successors per input successor, so order cancellation remains structural.
-fn twice(n: Nat) → Nat {
-    match n { Zero => 0, Succ(k) => Succ(Succ(twice(k))) }
+fn Nat::twice(self n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => Succ(Succ(k.twice())) }
 }
 
-theorem twice_add_self(n: Nat): twice(n) = n + n {
+theorem Nat::twice_add_self(self n: Nat): n.twice() = n + n {
     match n {
         Zero => refl,
         Succ(k) => calc {
-            twice(Succ(k))
-                = Succ(Succ(twice(k))) := refl,
-                = Succ(Succ(k + k)) := cong_succ(cong_succ(twice_add_self(k))),
-                = Succ(Succ(k) + k) := cong_succ(sym(add_succ_left(k, k))),
+            Succ(k).twice()
+                = Succ(Succ(k.twice())) := refl,
+                = Succ(Succ(k + k)) := Nat::cong_succ(Nat::cong_succ(k.twice_add_self())),
+                = Succ(Succ(k) + k) := Nat::cong_succ(sym(k.add_succ_left(k))),
                 = Succ(k) + Succ(k) := refl,
         },
     }
 }
 
-theorem twice_add(a, b: Nat): twice(a + b) = twice(a) + twice(b) {
+theorem Nat::twice_add(self a, b: Nat): (a + b).twice() = a.twice() + b.twice() {
     match b {
         Zero => refl,
-        Succ(k) => cong_succ(cong_succ(twice_add(a, k))),
+        Succ(k) => Nat::cong_succ(Nat::cong_succ(a.twice_add(k))),
     }
 }
 
 // Swap the first two terms without rebuilding associativity and commutativity
 // at every use. This is the right-associated form consumed by certifying AC
 // reconstruction.
-theorem add_left_comm(a, b, c: Nat): a + (b + c) = b + (a + c) {
+theorem Nat::add_left_comm(self a, b, c: Nat): a + (b + c) = b + (a + c) {
     calc {
         a + (b + c)
-            = (a + b) + c := sym(add_assoc(a, b, c)),
+            = (a + b) + c := sym(a.add_assoc(b, c)),
             = (b + a) + c :=
-                cong_nat(fun (q: Nat) => q + c, add_comm(a, b)),
-            = b + (a + c) := add_assoc(b, a, c),
+                Nat::cong(λ (q: Nat) => q + c, a.add_comm(b)),
+            = b + (a + c) := b.add_assoc(a, c),
     }
 }
 
 // Reorder the middle two elements of a four-term sum. Keeping this ordinary
 // commutative-monoid consequence named avoids rebuilding a five-step calc in
 // every binary-arithmetic proof.
-theorem add_swap_middle(a, b, c, d: Nat):
+theorem Nat::add_swap_middle(self a, b, c, d: Nat):
     (a + b) + (c + d) = (a + c) + (b + d)
 {
     calc {
         (a + b) + (c + d)
-            = a + (b + (c + d)) := add_assoc(a, b, c + d),
+            = a + (b + (c + d)) := a.add_assoc(b, c + d),
             = a + ((b + c) + d) :=
-                cong_nat(λ (q: Nat) => a + q, sym(add_assoc(b, c, d))),
+                Nat::cong(λ (q: Nat) => a + q, sym(b.add_assoc(c, d))),
             = a + ((c + b) + d) :=
-                cong_nat(λ (q: Nat) => a + (q + d), add_comm(b, c)),
+                Nat::cong(λ (q: Nat) => a + (q + d), b.add_comm(c)),
             = a + (c + (b + d)) :=
-                cong_nat(λ (q: Nat) => a + q, add_assoc(c, b, d)),
-            = (a + c) + (b + d) := sym(add_assoc(a, c, b + d)),
+                Nat::cong(λ (q: Nat) => a + q, c.add_assoc(b, d)),
+            = (a + c) + (b + d) := sym(a.add_assoc(c, b + d)),
     }
 }
 
@@ -123,34 +125,34 @@ theorem add_swap_middle(a, b, c, d: Nat):
 // pinned byte-for-byte, and it wants the cross-function call shape rather than
 // the cheap lemma kit. Two different programs, so two different names.)
 
-fn mul(a, b: Nat) → Nat { match b { Zero => Zero, Succ(k) => add(mul(a, k), a) } }
+fn Nat::mul(self a, b: Nat) → Nat { match b { Zero => Zero, Succ(k) => a.mul(k) + a } }
 
-designation * at Nat := mul
+designation * at Nat := Nat::mul
 
 // The right zero — `mul(x, 0) = 0` — needs no lemma. The left one does, and it
 // is three lines because the step's `add(_, 0)` reduces away.
-theorem mul_left_zero(x: Nat): 0 * x = 0 {
-    match x { Zero => refl, Succ(k) => mul_left_zero(k) }
+theorem Nat::mul_left_zero(self x: Nat): 0 * x = 0 {
+    match x { Zero => refl, Succ(k) => k.mul_left_zero() }
 }
 
 // The unit on the left, for the same reason: `add(mul(1, k), 1)` reduces to
 // `Succ(mul(1, k))` on its own, so this is `add_left_zero`'s shape exactly.
-theorem mul_left_one(x: Nat): 1 * x = x {
-    match x { Zero => refl, Succ(k) => cong_succ(mul_left_one(k)) }
+theorem Nat::mul_left_one(self x: Nat): 1 * x = x {
+    match x { Zero => refl, Succ(k) => Nat::cong_succ(k.mul_left_one()) }
 }
 
 // `add_succ_left`'s counterpart: the lemma that moves a `Succ` across from the
 // left. It is the one proof here that is not three lines, and every step of it
 // is an `add` law — which is the point of proving `add`'s kit first.
-theorem mul_succ_left(a, b: Nat): Succ(a) * b = b + a * b {
+theorem Nat::mul_succ_left(self a, b: Nat): Succ(a) * b = b + a * b {
     match b {
         Zero => refl,
         Succ(k) => calc {
             Succ(a) * Succ(k)
                 = Succ(Succ(a) * k + a)   := refl,
-                = Succ((k + a * k) + a)   := cong(mul_succ_left(a, k)),
-                = Succ(k + (a * k + a))   := cong(add_assoc(k, a * k, a)),
-                = Succ(k) + a * Succ(k)   := sym(add_succ_left(k, a * k + a)),
+                = Succ((k + a * k) + a)   := cong(a.mul_succ_left(k)),
+                = Succ(k + (a * k + a))   := cong(k.add_assoc(a * k, a)),
+                = Succ(k) + a * Succ(k)   := sym(k.add_succ_left(a * k + a)),
         },
     }
 }
@@ -159,38 +161,38 @@ theorem mul_succ_left(a, b: Nat): Succ(a) * b = b + a * b {
 // `mul_assoc` because `mul_assoc` *is* an instance of it, not the other way
 // round — the associativity step rebuilds `mul(x, mul(y, Succ(k)))` as a sum
 // and needs this to take it apart.
-theorem mul_add_distr(a, b, c: Nat): a * (b + c) = a * b + a * c {
+theorem Nat::mul_add_distr(self a, b, c: Nat): a * (b + c) = a * b + a * c {
     match c {
         Zero => refl,
         Succ(k) =>
             apply trans;
-            give cong_nat(λ (w: Nat) => add(w, a), mul_add_distr(a, b, k));
-            add_assoc(mul(a, b), mul(a, k), a),
+            give Nat::cong(λ (w: Nat) => w + a, a.mul_add_distr(b, k));
+            (a * b).add_assoc(a * k, a),
     }
 }
 
 // The two laws `std/algebra` registers `CommMonoid<Nat>(mul)` from, in the
 // shape its fields want.
 
-theorem mul_assoc(x, y, z: Nat): (x * y) * z = x * (y * z) {
+theorem Nat::mul_assoc(self x, y, z: Nat): (x * y) * z = x * (y * z) {
     match z {
         Zero => refl,
         Succ(k) =>
             apply trans;
-            give cong_nat(λ (w: Nat) => add(w, mul(x, y)), mul_assoc(x, y, k));
-            sym(mul_add_distr(x, mul(y, k), y)),
+            give Nat::cong(λ (w: Nat) => w + (x * y), x.mul_assoc(y, k));
+            sym(x.mul_add_distr(y * k, y)),
     }
 }
 
-theorem mul_comm(x, y: Nat): x * y = y * x {
+theorem Nat::mul_comm(self x, y: Nat): x * y = y * x {
     match y {
-        Zero => sym(mul_left_zero(x)),
+        Zero => sym(x.mul_left_zero()),
         Succ(k) => calc {
             x * Succ(k)
                 = x * k + x := refl,
-                = k * x + x := cong(mul_comm(x, k)),
-                = x + k * x := add_comm(k * x, x),
-                = Succ(k) * x := sym(mul_succ_left(k, x)),
+                = k * x + x := cong(x.mul_comm(k)),
+                = x + k * x := (k * x).add_comm(x),
+                = Succ(k) * x := sym(k.mul_succ_left(x)),
         },
     }
 }
@@ -213,10 +215,10 @@ theorem mul_comm(x, y: Nat): x * y = y * x {
 // (issues/false-collides-with-bools-constructor.md). Two lines of this file
 // hold both readings and neither is qualified.
 
-fn Le(n, m: Nat) → Type {
+fn Nat::Le(self n, m: Nat) → Type {
     match n {
         Zero => True,
-        Succ(k) => match m { Zero => False, Succ(l) => Le(k, l) },
+        Succ(k) => match m { Zero => False, Succ(l) => k.Le(l) },
     }
 }
 
@@ -224,10 +226,10 @@ fn Le(n, m: Nat) → Type {
 // `Le(Succ(n), m)`, so everything `Le` computes `Lt` computes, and the two
 // facts a reader most wants — `lt_succ_iff_le` and `lt_succ_self` — are
 // definitional (see below).
-fn Lt(n, m: Nat) → Type { Le(Succ(n), m) }
+fn Nat::Lt(self n, m: Nat) → Type { Succ(n).Le(m) }
 
-designation <= at Nat := Le
-designation < at Nat := Lt
+designation <= at Nat := Nat::Le
+designation < at Nat := Nat::Lt
 
 // The decision procedure, kept. It is NOT part of the order's specification —
 // nothing above mentions it and no lemma below is stated with it — and as of
@@ -236,22 +238,24 @@ designation < at Nat := Lt
 // `leb` is `certgen_code`, where a Boolean is the subject rather than the
 // statement, which is exactly the role issues/class-ops-prop-vs-bool.md leaves
 // `Bool` in.
-fn leb(n, m: Nat) → Bool {
+fn Nat::leb(self n, m: Nat) → Bool {
     match n {
         Zero => True,
-        Succ(k) => match m { Zero => False, Succ(l) => leb(k, l) },
+        Succ(k) => match m { Zero => False, Succ(l) => k.leb(l) },
     }
 }
 
 // truncated subtraction; both arguments descend together, `n` generalized
-fn sub(m, n: Nat) → Nat {
+fn Nat::sub(self m, n: Nat) → Nat {
     match m {
         Zero => Zero,
-        Succ(m2) => match n { Zero => Succ(m2), Succ(n2) => sub(m2, n2) },
+        Succ(m2) => match n { Zero => Succ(m2), Succ(n2) => m2.sub(n2) },
     }
 }
 
-theorem sub_zero(m: Nat): sub(m, 0) = m {
+designation - at Nat := Nat::sub
+
+theorem Nat::sub_zero(m: Nat): m - 0 = m {
     match m { Zero => refl, Succ(_) => refl }
 }
 
@@ -262,140 +266,131 @@ theorem sub_zero(m: Nat): sub(m, 0) = m {
 // hypothesis that already *is* `False`. Those three together are why this
 // section has no inversion lemmas and no no-confusion machinery.
 
-// `Zero` is below everything, by computation.
-theorem zero_le(m: Nat): 0 <= m { trivial }
+theorem Nat::nonneg(self m: Nat): 0 <= m { trivial }
 
 // Doubling reflects order; an extra odd successor on the right does not
 // change the comparison. Both proofs are just the two-successor recursion of
 // `twice` read alongside the one-successor recursion of `Le`.
-fn TwiceLeTwice(n, m: Nat) → Type { twice(n) <= twice(m) }
-fn TwiceLeOdd(n, m: Nat) → Type { twice(n) <= Succ(twice(m)) }
+fn Nat::TwiceLeTwice(self n, m: Nat) → Type { n.twice() <= m.twice() }
+fn Nat::TwiceLeOdd(self n, m: Nat) → Type { n.twice() <= Succ(m.twice()) }
 
-theorem twice_le_twice_iff_curried(n: Nat): (m: Nat) →
-    (TwiceLeTwice(n, m) ↔ Le(n, m))
+theorem Nat::twice_le_twice_iff_curried(n: Nat): (m: Nat) →
+    (n.TwiceLeTwice(m) ↔ n <= m)
 {
     match n {
-        Zero => λ m => Iff(mp := λ h => zero_le(m),
-            mpr := λ h => zero_le(twice(m))),
-        Succ(k, ih) => λ m => match m {
+        Zero => λ m => Iff(mp := λ h => m.nonneg(),
+            mpr := λ h => m.twice().nonneg()),
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
     }
 }
 
-theorem twice_le_twice_iff(n, m: Nat):
-    (twice(n) <= twice(m)) ↔ (n <= m)
+theorem Nat::twice_le_twice_iff(self n, m: Nat):
+    (n.twice() <= m.twice()) ↔ (n <= m)
 {
-    twice_le_twice_iff_curried(n, m)
+    Nat::twice_le_twice_iff_curried(n, m)
 }
 
-theorem twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
-    (TwiceLeOdd(n, m) ↔ Le(n, m))
+theorem Nat::twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
+    (n.TwiceLeOdd(m) ↔ n <= m)
 {
     match n {
-        Zero => λ m => Iff(mp := λ h => zero_le(m),
-            mpr := λ h => zero_le(Succ(twice(m)))),
-        Succ(k, ih) => λ m => match m {
+        Zero => λ m => Iff(mp := λ h => m.nonneg(),
+            mpr := λ h => Succ(m.twice()).nonneg()),
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
     }
 }
 
-theorem twice_le_succ_twice_iff(n, m: Nat):
-    (twice(n) <= Succ(twice(m))) ↔ (n <= m)
+theorem Nat::twice_le_succ_twice_iff(n, m: Nat):
+    (n.twice() <= Succ(m.twice())) ↔ (n <= m)
 {
-    twice_le_succ_twice_iff_curried(n, m)
+    Nat::twice_le_succ_twice_iff_curried(n, m)
 }
 
-fn TwiceLtTwice(n, m: Nat) → Type { twice(n) < twice(m) }
-fn TwiceLtOdd(n, m: Nat) → Type { twice(n) < Succ(twice(m)) }
+fn Nat::TwiceLtTwice(self n, m: Nat) → Type { n.twice() < m.twice() }
+fn Nat::TwiceLtOdd(self n, m: Nat) → Type { n.twice() < Succ(m.twice()) }
 
-theorem twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
-    (TwiceLtTwice(n, m) ↔ Lt(n, m))
+theorem Nat::twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
+    (n.TwiceLtTwice(m) ↔ n < m)
 {
     match n {
         Zero => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(_) => Iff(mp := λ h => trivial, mpr := λ h => trivial),
         },
-        Succ(k, ih) => λ m => match m {
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
     }
 }
 
-theorem twice_lt_twice_iff(n, m: Nat):
-    (twice(n) < twice(m)) ↔ (n < m)
+theorem Nat::twice_lt_twice_iff(n, m: Nat):
+    (n.twice() < m.twice()) ↔ (n < m)
 {
-    twice_lt_twice_iff_curried(n, m)
+    Nat::twice_lt_twice_iff_curried(n, m)
 }
 
-theorem twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
-    (TwiceLtOdd(n, m) ↔ Le(n, m))
+theorem Nat::twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
+    (n.TwiceLtOdd(m) ↔ n <= m)
 {
     match n {
-        Zero => λ m => Iff(mp := λ h => zero_le(m), mpr := λ h => trivial),
-        Succ(k, ih) => λ m => match m {
+        Zero => λ m => Iff(mp := λ h => m.nonneg(), mpr := λ h => trivial),
+        Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
         },
     }
 }
 
-theorem twice_lt_succ_twice_iff(n, m: Nat):
-    (twice(n) < Succ(twice(m))) ↔ (n <= m)
+theorem Nat::twice_lt_succ_twice_iff(n, m: Nat):
+    (n.twice() < Succ(m.twice())) ↔ (n <= m)
 {
-    twice_lt_succ_twice_iff_curried(n, m)
+    Nat::twice_lt_succ_twice_iff_curried(n, m)
 }
 
-theorem le_refl(n: Nat): n <= n { match n { Zero => trivial, Succ(k) => le_refl(k) } }
+theorem Nat::le_refl(self n: Nat): n <= n { match n { Zero => trivial, Succ(k) => k.le_refl() } }
 
-// The one absurdity, and it is not proved so much as *named*: `Le(Succ n, 0)`
-// unfolds to `False`, so the hypothesis is already the conclusion.
-theorem not_succ_le_zero(n: Nat, h: Succ(n) <= 0): False { h }
+theorem Nat::not_succ_le_zero(self n: Nat, h: Succ(n) <= 0): False { h }
 
 // Both directions of the successor step, and both are the identity function —
 // `Le(Succ n, Succ m)` and `Le(n, m)` are the same type. This is the
 // definitional inversion the recursive definition is chosen for; stated as
 // lemmas anyway, because the API is the kit and downstream never unfolds `Le`.
-theorem le_succ_succ(n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
-theorem le_of_succ_succ(n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
+theorem Nat::le_succ_succ(self n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
+theorem Nat::le_of_succ_succ(self n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
 
-theorem le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
+theorem Nat::le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     (a <= c) ↔ (b <= d)
 {
     j(left, λ y p => (a <= c) ↔ (y <= d),
       j(right, λ z q => (a <= c) ↔ (a <= z), iff_refl()))
 }
 
-theorem lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
+theorem Nat::lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     (a < c) ↔ (b < d)
 {
     j(left, λ y p => (a < c) ↔ (y < d),
       j(right, λ z q => (a < c) ↔ (a < z), iff_refl()))
 }
 
-theorem le_succ_r(n, m: Nat): n <= m → n <= Succ(m) {
+theorem Nat::le_succ_r(self n, m: Nat): n <= m → n <= Succ(m) {
     match n {
         Zero => λ h => trivial,
         Succ(k) =>
             match m {
                 Zero => bad ⊢ false_elim(bad),
-                Succ(m2) => good ⊢ le_succ_r(k, m2, good),
+                Succ(m2) => good ⊢ k.le_succ_r(m2, good),
             },
     }
 }
 
-// Transitivity. Three nested case analyses and no arithmetic: the recursion is
-// on the leftmost argument, `m` and `l` are generalized into its motive
-// (docs/ih-generalization-design.md), and the two inner `match`es exist only
-// to expose the successors that make the hypotheses reducible. The hypotheses
-// stay behind the arrows: a parameter is not refined by an inner `match`, a
-// binder introduced after it is.
-theorem le_trans(n, m, l: Nat): n <= m → m <= l → n <= l {
+theorem Nat::le_trans(self n, m, l: Nat): n <= m → m <= l → n <= l {
     match n {
         Zero => λ h1 h2 => trivial,
         Succ(k) =>
@@ -404,13 +399,13 @@ theorem le_trans(n, m, l: Nat): n <= m → m <= l → n <= l {
                 Succ(m2) => λ a =>
                     match l {
                         Zero => λ bad => false_elim(bad),
-                        Succ(l2) => λ c => le_trans(k, m2, l2, a, c),
+                        Succ(l2) => λ c => k.le_trans(m2, l2, a, c),
                     },
             },
     }
 }
 
-theorem le_antisym(n, m: Nat): n <= m → m <= n → n = m {
+theorem Nat::le_antisym(self n, m: Nat): n <= m → m <= n → n = m {
     match n {
         Zero =>
             match m {
@@ -420,42 +415,29 @@ theorem le_antisym(n, m: Nat): n <= m → m <= n → n = m {
         Succ(k) =>
             match m {
                 Zero => λ bad b => false_elim(bad),
-                Succ(m2) => λ a b => cong_succ(le_antisym(k, m2, a, b)),
+                Succ(m2) => λ a b => Nat::cong_succ(k.le_antisym(m2, a, b)),
             },
     }
 }
 
-// Totality, and the successor case is where the definition pays again: the
-// goal `Succ(k) <= Succ(m2) ∨ Succ(m2) <= Succ(k)` and the IH's
-// `k <= m2 ∨ m2 <= k` are the SAME type, so the step is `ih(m2)` with
-// no repackaging.
-theorem le_total(n, m: Nat): n <= m ∨ m <= n {
+theorem Nat::le_total(self n, m: Nat): n <= m ∨ m <= n {
     match n {
         Zero => Inl(trivial),
         Succ(k) =>
             match m {
                 Zero => Inr(trivial),
-                Succ(m2) => le_total(k, m2),
+                Succ(m2) => k.le_total(m2),
             },
     }
 }
 
-// The decider, and the instance that puts it in the class. It returns
-// `P ∨ ¬P` and nothing else — no `Bool`, no bridge lemma — and it REDUCES at
-// closed arguments, which is what lets `algebra`'s `max_of` compute.
-//
-// A `fn` and NOT a `theorem`, for exactly that reason: a `theorem` is opaque,
-// so a decision spelled as one never unfolds in conversion and
-// `max_of(2, 5) = 5` stops being `refl`. Deciding is computation, whatever it
-// returns. Found by the kernel rejecting that very `refl` rather than by
-// reasoning; `logic::or_pick` carries the same note for the same reason.
-fn le_dec(n, m: Nat) → n <= m ∨ ¬(n <= m) {
+fn Nat::le_dec(self n, m: Nat) → n <= m ∨ ¬(n <= m) {
     match n {
         Zero => Inl(trivial),
         Succ(k) =>
             match m {
                 Zero => Inr(·),
-                Succ(m2) => le_dec(k, m2),
+                Succ(m2) => k.le_dec(m2),
             },
     }
 }
@@ -467,38 +449,38 @@ fn le_dec(n, m: Nat) → n <= m ∨ ¬(n <= m) {
 // runtime fuel and no division-specific termination exception.
 inductive DivMod { MkDivMod(quotient: Nat, remainder: Nat) }
 
-fn divmod_step(divisor_pred: Nat, state: DivMod) → DivMod {
+fn Nat::divmod_step(divisor_pred: Nat, state: DivMod) → DivMod {
     match state {
         MkDivMod(quotient, remainder) =>
-            match le_dec(Succ(divisor_pred), Succ(remainder)) {
+            match Succ(divisor_pred).le_dec(Succ(remainder)) {
                 Inl(_) => MkDivMod(Succ(quotient), 0),
                 Inr(_) => MkDivMod(quotient, Succ(remainder)),
             },
     }
 }
 
-fn divmod(n: Nat) → Nat → DivMod {
+fn Nat::divmod(self n: Nat) → Nat → DivMod {
     match n {
         Zero => λ divisor => MkDivMod(0, 0),
         Succ(k) => λ divisor => match divisor {
             Zero => MkDivMod(0, Succ(k)),
-            Succ(d) => divmod_step(d, divmod(k, Succ(d))),
+            Succ(d) => Nat::divmod_step(d, k.divmod(Succ(d))),
         },
     }
 }
 
-fn div(n, divisor: Nat) → Nat {
-    match divmod(n, divisor) { MkDivMod(quotient, _) => quotient }
+fn Nat::div(self n: Nat, divisor: Nat) → Nat {
+    match n.divmod(divisor) { MkDivMod(quotient, _) => quotient }
 }
 
-fn mod(n, divisor: Nat) → Nat {
-    match divmod(n, divisor) { MkDivMod(_, remainder) => remainder }
+fn Nat::mod(self n: Nat, divisor: Nat) → Nat {
+    match n.divmod(divisor) { MkDivMod(_, remainder) => remainder }
 }
 
 // The computation above maintains both Euclidean facts in one state.  The
 // second field records either the zero-divisor convention (`divisor <= 0`) or
 // the strict remainder bound.
-fn DivModSpec(n, divisor: Nat, state: DivMod) → Type {
+fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
     match state {
         MkDivMod(quotient, remainder) =>
             (quotient * divisor + remainder = n) ∧
@@ -518,40 +500,34 @@ fn DivModSpec(n, divisor: Nat, state: DivMod) → Type {
 // This is what lets `list_algos`'s `insert` decide through the class instead of
 // naming `le_dec`, which is the measurement issues/value-generic-instances.md
 // was filed to take.
-instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n, m) }
+instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m) }
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
 // section is short because `Lt` is a definition rather than a second relation.
 
-// `Lt(n, Succ n)` is `Le(Succ n, Succ n)` is `Le(n, n)`.
-theorem lt_succ_self(n: Nat): n < Succ(n) { le_refl(n) }
+theorem Nat::lt_succ_self(self n: Nat): n < Succ(n) { n.le_refl() }
 
-// Both directions are the identity: `Lt(n, Succ m)` and `Le(n, m)` are one
-// type. The `Iff` exists to be *cited*, not to do work.
-theorem lt_succ_iff_le(n, m: Nat): n < Succ(m) ↔ n <= m {
+theorem Nat::lt_succ_iff_le(self n, m: Nat): n < Succ(m) ↔ n <= m {
     Iff(mp := λ (h: n < Succ(m)) => h, mpr := λ (h: n <= m) => h)
 }
 
-// Irreflexivity, which is `Le(Succ n, n) → False` and recurses to the base
-// case `Le(1, 0)` — already `False`, so the whole proof is the recursion.
-theorem lt_irrefl(n: Nat): ¬(n < n) {
+theorem Nat::lt_irrefl(self n: Nat): ¬(n < n) {
     match n {
         Zero => λ (h: 0 < 0) => h,
         Succ(k, ih) => λ (h: Succ(k) < Succ(k)) => ih(h),
     }
 }
 
-theorem ne_of_lt(n, m: Nat, h: n < m): n ≠ m {
-    λ equal => lt_irrefl(n,
-        lt_congr_iff(n, n, m, n, refl, sym(equal)).mp(h))
+theorem Nat::ne_of_lt(self n, m: Nat, h: n < m): n ≠ m {
+    λ equal => n.lt_irrefl(n.lt_congr_iff(n, m, n, refl, sym(equal)).mp(h))
 }
 
-theorem ne_of_gt(n, m: Nat, h: m < n): n ≠ m {
-    λ equal => ne_of_lt(m, n, h, sym(equal))
+theorem Nat::ne_of_gt(self n, m: Nat, h: m < n): n ≠ m {
+    λ equal => m.ne_of_lt(n, h, sym(equal))
 }
 
-theorem le_of_lt(n: Nat): (m: Nat) → n < m → n <= m {
+theorem Nat::le_of_lt(self n: Nat): (m: Nat) → n < m → n <= m {
     match n {
         Zero => λ m h => trivial,
         Succ(_, ih) => λ m =>
@@ -565,11 +541,11 @@ theorem le_of_lt(n: Nat): (m: Nat) → n < m → n <= m {
 // Transitivity of `<` is transitivity of `<=` with one side weakened, and it
 // is worth seeing why that is enough: `Lt(n, m)` IS `Le(Succ n, m)`, so the
 // chain `Succ(n) <= m <= l` is already the goal.
-theorem lt_trans(n, m, l: Nat, h1: n < m, h2: m < l): n < l {
-    le_trans(Succ(n), m, l, h1, le_of_lt(m, l, h2))
+theorem Nat::lt_trans(self n, m, l: Nat, h1: n < m, h2: m < l): n < l {
+    Succ(n).le_trans(m, l, h1, m.le_of_lt(l, h2))
 }
 
-theorem lt_of_le_of_ne(n: Nat): (m: Nat) → n <= m → n ≠ m → n < m {
+theorem Nat::lt_of_le_of_ne(self n: Nat): (m: Nat) → n <= m → n ≠ m → n < m {
     match n {
         Zero => λ m h =>
             match m {
@@ -580,16 +556,12 @@ theorem lt_of_le_of_ne(n: Nat): (m: Nat) → n <= m → n ≠ m → n < m {
             match m {
                 Zero => λ bad ne => false_elim(bad),
                 Succ(m2) => λ a ne =>
-                    ih(m2, a, λ (e: k = m2) => ne(cong_succ(e))),
+                    ih(m2, a, λ (e: k = m2) => ne(Nat::cong_succ(e))),
             },
     }
 }
 
-// Trichotomy. Nested `Or` rather than a three-constructor inductive, because
-// the connective is what `logic` gives and a bespoke type would need its own
-// eliminator for no gain. The successor step is again a re-use of the IH at
-// the same type, once for each of its three arms.
-theorem lt_trichotomy(n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n {
+theorem Nat::lt_trichotomy(self n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n {
     match n {
         Zero => λ m =>
             match m {
@@ -603,7 +575,7 @@ theorem lt_trichotomy(n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n {
                     match ih(m2) {
                         Inl(a) => Inl(a),
                         Inr(r) => match r {
-                            Inl(e) => Inr(Inl(cong_succ(e))),
+                            Inl(e) => Inr(Inl(Nat::cong_succ(e))),
                             Inr(b) => Inr(Inr(b)),
                         },
                     },
@@ -616,14 +588,14 @@ theorem lt_trichotomy(n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n {
 // the difference is the whole of what going propositional buys: that lemma was
 // an induction on `x` with `y` generalized, ending in `leb(y, x) = True`;
 // this one is `le_total` with the refuted side resolved away, and it is a line.
-theorem le_of_not_le(n, m: Nat, h: ¬(n <= m)): m <= n {
-    or_resolve(or_swap(le_total(n, m)), h)
+theorem Nat::le_of_not_le(n, m: Nat, h: ¬(n <= m)): m <= n {
+    or_resolve(or_swap(n.le_total(m)), h)
 }
 
 // The strict counterpart is one successor stronger.  It is structural rather
 // than a corollary of totality: `¬(m <= n)` computes to exactly the branch in
 // which `Succ(n) <= m` holds.
-theorem lt_of_not_le(n: Nat): (m: Nat) → ¬(m <= n) → n < m {
+theorem Nat::lt_of_not_le(n: Nat): (m: Nat) → ¬(m <= n) → n < m {
     match n {
         Zero => λ m => match m {
             Zero => λ h => false_elim(h(trivial)),
@@ -640,20 +612,20 @@ theorem lt_of_not_le(n: Nat): (m: Nat) → ¬(m <= n) → n < m {
 // the step lemma separate gives its dependent match the precise state it
 // consumes and avoids duplicating quotient/remainder reasoning at the public
 // projections.
-theorem divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
-                         h: DivModSpec(n, Succ(divisor_pred), state)):
-    DivModSpec(Succ(n), Succ(divisor_pred), divmod_step(divisor_pred, state))
+theorem Nat::divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
+                         h: DivMod::Spec(n, Succ(divisor_pred), state)):
+    DivMod::Spec(Succ(n), Succ(divisor_pred), Nat::divmod_step(divisor_pred, state))
 {
     match state as λ s =>
-        DivModSpec(n, Succ(divisor_pred), s) →
-        DivModSpec(Succ(n), Succ(divisor_pred), divmod_step(divisor_pred, s))
+        DivMod::Spec(n, Succ(divisor_pred), s) →
+        DivMod::Spec(Succ(n), Succ(divisor_pred), Nat::divmod_step(divisor_pred, s))
     {
         MkDivMod(quotient, remainder) => λ spec => match spec {
             And(reconstruct, alternatives) => match alternatives {
                 Inl(impossible) => false_elim(impossible),
                 Inr(bounded) =>
-                    match le_dec(Succ(divisor_pred), Succ(remainder)) as λ decision =>
-                        DivModSpec(
+                    match Succ(divisor_pred).le_dec(Succ(remainder)) as λ decision =>
+                        DivMod::Spec(
                             Succ(n),
                             Succ(divisor_pred),
                             match decision {
@@ -666,26 +638,22 @@ theorem divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
                             calc {
                                 Succ(quotient) * Succ(divisor_pred)
                                     = Succ(divisor_pred) + quotient * Succ(divisor_pred) :=
-                                        mul_succ_left(quotient, Succ(divisor_pred)),
+                                        quotient.mul_succ_left(Succ(divisor_pred)),
                                     = quotient * Succ(divisor_pred) + Succ(divisor_pred) :=
-                                        add_comm(
-                                            Succ(divisor_pred),
-                                            quotient * Succ(divisor_pred)),
+                                        Succ(divisor_pred).add_comm(quotient * Succ(divisor_pred)),
                                     = quotient * Succ(divisor_pred) + Succ(remainder) :=
-                                        cong_nat(
+                                        Nat::cong(
                                             λ (x: Nat) =>
                                                 quotient * Succ(divisor_pred) + Succ(x),
-                                            le_antisym(
-                                                divisor_pred, remainder, carry, bounded)),
+                                            divisor_pred.le_antisym(remainder, carry, bounded)),
                                     = Succ(quotient * Succ(divisor_pred) + remainder) := refl,
-                                    = Succ(n) := cong_succ(reconstruct),
+                                    = Succ(n) := Nat::cong_succ(reconstruct),
                             },
                             Inr(trivial),
                         ),
                         Inr(no_carry) => And(
-                            cong_succ(reconstruct),
-                            Inr(lt_of_not_le(
-                                remainder, divisor_pred, no_carry)),
+                            Nat::cong_succ(reconstruct),
+                            Inr(remainder.lt_of_not_le(divisor_pred, no_carry)),
                         ),
                     },
             },
@@ -693,17 +661,17 @@ theorem divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
     }(h)
 }
 
-theorem divmod_spec(n: Nat): (divisor: Nat) →
-    DivModSpec(n, divisor, divmod(n, divisor))
+theorem Nat::divmod_spec(n: Nat): (divisor: Nat) →
+    DivMod::Spec(n, divisor, n.divmod(divisor))
 {
     match n {
         Zero => λ divisor => match divisor {
             Zero => And(refl, Inl(trivial)),
-            Succ(d) => And(mul_left_zero(Succ(d)), Inr(trivial)),
+            Succ(d) => And(Succ(d).mul_left_zero(), Inr(trivial)),
         },
         Succ(k, ih) => λ divisor => match divisor {
-            Zero => And(cong_succ(add_left_zero(k)), Inl(trivial)),
-            Succ(d) => divmod_step_spec(k, d, divmod(k, Succ(d)), ih(Succ(d))),
+            Zero => And(Nat::cong_succ(k.add_left_zero()), Inl(trivial)),
+            Succ(d) => Nat::divmod_step_spec(k, d, k.divmod(Succ(d)), ih(Succ(d))),
         },
     }
 }
@@ -711,28 +679,28 @@ theorem divmod_spec(n: Nat): (divisor: Nat) →
 // Public Euclidean laws.  Both projections below destruct the one shared
 // state, so their `div` and `mod` occurrences are definitionally the same
 // quotient and remainder certified by `divmod_spec`.
-theorem div_mul_add_mod(n, divisor: Nat):
-    div(n, divisor) * divisor + mod(n, divisor) = n
+theorem Nat::div_mul_add_mod(self n, divisor: Nat):
+    n.div(divisor) * divisor + n.mod(divisor) = n
 {
-    match divmod(n, divisor) as λ state =>
-        DivModSpec(n, divisor, state) →
+    match n.divmod(divisor) as λ state =>
+        DivMod::Spec(n, divisor, state) →
         match state as λ _ => Type {
             MkDivMod(quotient, remainder) =>
                 quotient * divisor + remainder = n,
         }
     {
         MkDivMod(_, _) => λ spec => spec.left,
-    }(divmod_spec(n, divisor))
+    }(Nat::divmod_spec(n, divisor))
 }
 
-theorem mod_lt(n, divisor: Nat, positive: 0 < divisor):
-    mod(n, divisor) < divisor
+theorem Nat::mod_lt(self n, divisor: Nat, positive: 0 < divisor):
+    n.mod(divisor) < divisor
 {
-    match divisor as λ d => 0 < d → mod(n, d) < d {
+    match divisor as λ d => 0 < d → n.mod(d) < d {
         Zero => λ impossible => false_elim(impossible),
         Succ(d) => λ _ =>
-            match divmod(n, Succ(d)) as λ state =>
-                DivModSpec(n, Succ(d), state) →
+            match n.divmod(Succ(d)) as λ state =>
+                DivMod::Spec(n, Succ(d), state) →
                 match state as λ _ => Type {
                     MkDivMod(_, remainder) => remainder < Succ(d),
                 }
@@ -741,55 +709,47 @@ theorem mod_lt(n, divisor: Nat, positive: 0 < divisor):
                     Inl(impossible) => false_elim(impossible),
                     Inr(bounded) => bounded,
                 },
-            }(divmod_spec(n, Succ(d))),
+            }(n.divmod_spec(Succ(d))),
     }(positive)
 }
 
-theorem div_zero(n: Nat): div(n, 0) = 0 {
+theorem Nat::div_zero(self n: Nat): n.div(0) = 0 {
     match n { Zero => refl, Succ(_) => refl }
 }
 
-theorem mod_zero(n: Nat): mod(n, 0) = n {
+theorem Nat::mod_zero(self n: Nat): n.mod(0) = n {
     match n { Zero => refl, Succ(_) => refl }
 }
 
 // Divisibility follows the executable Euclidean semantics directly. Keeping
 // it definitionally equal to a zero-remainder proposition lets arithmetic
 // automation consume positive and negated uses without an existential witness.
-fn Divides(divisor, n: Nat) → Type { mod(n, divisor) = 0 }
+fn Nat::Divides(self divisor, n: Nat) → Type { n.mod(divisor) = 0 }
 
 // ---------------------------------------------------------------------------
-// Equality at `Nat`, and its decision (issues/std-api-waves.md wave 2).
-//
-// The two no-confusion facts first, and they are proved by RECURSION rather
-// than by `inj`/`absurd`. Those two special forms want "an equation at a
-// declared inductive type" and `Nat` is a *kernel* type with no declaration —
-// so the constructor-injectivity and constructor-disjointness that every
-// declared inductive gets generated for it have to be written by hand here,
-// once. Each is one auxiliary function on `Nat` and a `j` along it:
-//
-//   - injectivity is `pred`, which undoes `Succ` definitionally, so `cong_nat`
+// The two no-confusion facts proved by RECURSION rather than by `inj`/`absurd`.
+// Those two special forms want "an equation at a declared inductive type" but `Nat` is a *kernel* type
+// so we have to write the injectivity by hand here.
+//   - injectivity is `pred`, which undoes `Succ` definitionally, so `Nat::cong`
 //     is the whole proof and the statement holds by conversion;
 //   - disjointness is a predicate that *separates* the constructors, so
 //     transporting its inhabitant along the absurd equation lands in `False`.
-//
-// This is the small tax `Nat`-as-a-kernel-type charges, and it is worth naming
-// because nothing else in the library pays it.
 
-fn pred(n: Nat) → Nat { match n { Zero => 0, Succ(k) => k } }
+// predecessor of a natural, saturating at zero
+fn Nat::pred(self n: Nat) → Nat { match n { Zero => 0, Succ(k) => k } }
 
-theorem succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { cong_nat(pred, h) }
+theorem Nat::succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { Nat::cong(Nat::pred, h) }
 
 // `IsSucc(Succ k)` is `True` and `IsSucc(0)` is `False`, so the constructors
 // are told apart by a type rather than by a generated no-confusion lemma.
-fn IsSucc(n: Nat) → Type { match n { Zero => False, Succ(_) => True } }
+fn Nat::IsSucc(self n: Nat) → Type { match n { Zero => False, Succ(_) => True } }
 
-theorem succ_ne_zero(n: Nat): Succ(n) ≠ 0 {
-    λ (h: Succ(n) = 0) => j(h, λ y q => IsSucc(y), trivial)
+theorem Nat::succ_ne_zero(self n: Nat): Succ(n) ≠ 0 {
+    λ (h: Succ(n) = 0) => j(h, λ y q => y.IsSucc(), trivial)
 }
 
-theorem zero_ne_succ(n: Nat): 0 ≠ Succ(n) {
-    λ (h: 0 = Succ(n)) => succ_ne_zero(n, sym(h))
+theorem Nat::zero_ne_succ(self n: Nat): 0 ≠ Succ(n) {
+    λ (h: 0 = Succ(n)) => n.succ_ne_zero(sym(h))
 }
 
 // The equality decider, mirroring `le_dec` exactly — same shape, same reason to
@@ -800,30 +760,30 @@ theorem zero_ne_succ(n: Nat): 0 ≠ Succ(n) {
 // registers independently of equality at Bool and every other nominal type
 // (docs/decidable-equation-carrier-design.md). The generated canonical value
 // is deliberately unwritable; ordinary uses reach it through `Decide<n = m>`.
-fn eq_dec(n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
+fn Nat::eq_dec(self n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
     match n {
         Zero => λ m =>
             match m {
                 Zero => Inl(refl),
-                Succ(m2) => Inr(zero_ne_succ(m2)),
+                Succ(m2) => Inr(m2.zero_ne_succ()),
             },
         Succ(k, ih) => λ m =>
             match m {
-                Zero => Inr(succ_ne_zero(k)),
+                Zero => Inr(k.succ_ne_zero()),
                 Succ(m2) =>
                     match ih(m2) {
-                        Inl(e) => Inl(cong_succ(e)),
-                        Inr(ne) => Inr(λ (bad: Succ(k) = Succ(m2)) => ne(succ_inj(k, m2, bad))),
+                        Inl(e) => Inl(Nat::cong_succ(e)),
+                        Inr(ne) => Inr(λ (bad: Succ(k) = Succ(m2)) => ne(Nat::succ_inj(k, m2, bad))),
                     },
             },
     }
 }
 
-instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n, m) }
+instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
 // container's decider requires of its element type (`logic::DecEq`).
-instance DecEq<Nat> { eq_dec := eq_dec }
+instance DecEq<Nat> { eq_dec := Nat::eq_dec }
 
 // ---------------------------------------------------------------------------
 // The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
@@ -831,75 +791,32 @@ instance DecEq<Nat> { eq_dec := eq_dec }
 
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized —
 // by the elaborator, since 2026-09-05.
-theorem le_add(n, m: Nat): n <= m → n + sub(m, n) = m {
+theorem Nat::le_add(self n, m: Nat): n <= m → n + (m - n) = m {
     match n {
         Zero => hle ⊢
             apply trans;
-            give cong_nat(λ (x: Nat) => add(0, x), sub_zero(m));
-            add_left_zero(m),
+            give Nat::cong(λ (x: Nat) => 0 + x, m.sub_zero());
+            m.add_left_zero(),
         Succ(n2) =>
             match m {
                 Zero => bad ⊢ false_elim(bad),
                 Succ(m2) => good ⊢
                     apply trans;
-                    give add_succ_left(n2, sub(m2, n2));
-                    cong_succ(le_add(n2, m2, good)),
+                    give n2.add_succ_left(m2 - n2);
+                    Nat::cong_succ(n2.le_add(m2, good)),
             },
     }
 }
 
 // Two values compared by raising both to `n + m`, which is above each of them.
 
-theorem le_add_l(n, m: Nat): n <= n + m {
-    match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n, n + m2, le_add_l(n, m2)) }
+theorem Nat::le_add_l(self n, m: Nat): n <= n + m {
+    match m { Zero => n.le_refl(), Succ(m2) => n.le_succ_r(n + m2, n.le_add_l(m2)) }
 }
 
 // `add` recurses on its second argument, so this one is the definitional side
-theorem le_add_r(n, m: Nat): m <= n + m {
-    match m { Zero => trivial, Succ(m2) => le_add_r(n, m2) }
-}
-
-// Monotonicity, each on the argument its operation recurses on or across it.
-// `add` recurses on the right, so moving the right operand is a walk down both
-// successors and moving the left one is carried unchanged through them.
-theorem add_mono_r(x, u, v: Nat): u <= v → x + u <= x + v {
-    match u {
-        Zero => λ h => le_add_l(x, v),
-        Succ(u2) => match v {
-            Zero => λ bad => false_elim(bad),
-            Succ(v2) => λ h => add_mono_r(x, u2, v2, h),
-        },
-    }
-}
-
-theorem add_mono_l(x, y, u: Nat, h: x <= y): x + u <= y + u {
-    match u { Zero => h, Succ(u2) => add_mono_l(x, y, u2, h) }
-}
-
-theorem mul_mono_l(a, b, n: Nat, h: a <= b): a * n <= b * n {
-    match n {
-        Zero => trivial,
-        Succ(k) => le_trans(a * k + a, b * k + a, b * k + b,
-            add_mono_l(a * k, b * k, a, mul_mono_l(a, b, k, h)),
-            add_mono_r(b * k, a, b, h)),
-    }
-}
-
-// The lexicographic order on `(a, r)` flattened into `a * n + r` for `r < n`
-// (docs/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
-// and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
-// group closes every recursive call's scaled obligation with one of these.
-theorem scaled_lt(a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
-    le_trans(Succ(a * n + r), Succ(a) * n, b * n + s,
-        j(trans(add_comm(a * n, n), sym(mul_succ_left(a, n))),
-          λ y p => Succ(a * n + r) <= y, add_mono_r(a * n, Succ(r), n, q)),
-        le_trans(Succ(a) * n, b * n, b * n + s, mul_mono_l(Succ(a), b, n, h), le_add_l(b * n, s)))
-}
-
-theorem scaled_le(a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r < b * n + s {
-    le_trans(Succ(a * n + r), a * n + s, b * n + s,
-        add_mono_r(a * n, Succ(r), s, q),
-        add_mono_l(a * n, b * n, s, mul_mono_l(a, b, n, h)))
+theorem Nat::le_add_r(self n, m: Nat): m <= n + m {
+    match m { Zero => trivial, Succ(m2) => n.le_add_r(m2) }
 }
 
 // The bridge itself: `n <= m` and `∃ k, n + k = m` are interchangeable. The
@@ -907,60 +824,42 @@ theorem scaled_le(a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r < b * n + 
 // `le_add_l` transported along the caller's equation. Route (c) of the design
 // is therefore available as a *view* at every call site, without being the
 // definition — which is what makes the definition swappable later.
-theorem le_iff_exists_add(n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m {
+theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m {
     Iff(
-        mp := λ (h: n <= m) => Exists(sub(m, n), le_add(n, m, h)),
-        mpr := λ (h: Exists(λ (k: Nat) => n + k = m)) =>
-            j(h.proof, λ y q => n <= y, le_add_l(n, h.witness)),
+        mp := λ (h: n <= m) => Exists(m - n, n.le_add(m, h)),
+        mpr := λ (h: ∃ k: Nat, n + k = m) =>
+            j(h.proof, λ y q => n <= y, n.le_add_l(h.witness)),
     )
 }
 
 // ---------------------------------------------------------------------------
-// The rest of the `sub` kit (issues/nat-arithmetic-kit.md). `sub` and
-// `sub_zero` are up beside `leb`, where they were needed by `le_add`; these
-// four are the facts that read the *order*, so they live down here where the
-// order kit is in scope.
-//
-// The two cancellations are asymmetric, and the asymmetry is truncation's:
-// `(n + m) - m = n` holds unconditionally, because the subtraction it undoes
-// is the one that was just performed, while `(m - n) + n = m` needs `n <= m`
-// — without it the difference was truncated to zero and the addition cannot
-// put back what was never there.
 
-theorem sub_self(n: Nat): sub(n, n) = 0 {
-    match n { Zero => refl, Succ(k) => sub_self(k) }
+theorem Nat::sub_self(self n: Nat): n - n = 0 {
+    match n { Zero => refl, Succ(k) => k.sub_self() }
 }
 
-// Unconditional, and definitional at every step: `add(n, Succ k)` reduces to
-// `Succ(add(n, k))` and `sub(Succ(x), Succ(y))` to `sub(x, y)`, so each arm is
-// exactly the recursive call with no rewrite between.
-theorem add_sub_cancel(n, m: Nat): sub(n + m, m) = n {
-    match m { Zero => sub_zero(n), Succ(k) => add_sub_cancel(n, k) }
+theorem Nat::add_sub_cancel(self n, m: Nat): (n + m) - m = n {
+    match m { Zero => n.sub_zero(), Succ(k) => n.add_sub_cancel(k) }
 }
 
-// The conditional direction, and it is `le_add` commuted rather than a second
-// induction — `le_add` already proved `n + (m - n) = m` under the hypothesis,
-// and the only difference is which side the difference is written on.
-theorem sub_add_cancel(n, m: Nat, h: n <= m): sub(m, n) + n = m {
-    trans(add_comm(sub(m, n), n), le_add(n, m, h))
+theorem Nat::sub_add_cancel(self n, m: Nat, h: n <= m): (m - n) + n = m {
+    trans((m - n).add_comm(n), n.le_add(m, h))
 }
 
-// Truncation is exactly why this needs no hypothesis: subtracting *more* than
-// there is lands at `0`, which is below `m` like everything else.
-theorem sub_le(m: Nat): (n: Nat) → sub(m, n) <= m {
+theorem Nat::sub_le(self m: Nat): (n: Nat) → m - n <= m {
     match m {
         Zero => λ n => trivial,
         Succ(m2, ih) => λ n =>
             match n {
-                Zero => le_refl(Succ(m2)),
-                Succ(n2) => le_succ_r(sub(m2, n2), m2, ih(n2)),
+                Zero => Succ(m2).le_refl(),
+                Succ(n2) => (m2 - n2).le_succ_r(m2, ih(n2)),
             },
     }
 }
 
 // Removing a positive amount from a value strictly lowers it, provided the
 // amount was available rather than truncated away.
-theorem sub_lt_of_pos(m: Nat): (n: Nat) → 0 < n → n <= m → sub(m, n) < m {
+theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m - n < m {
     match m {
         Zero => λ n => match n {
             Zero => λ positive bounded => false_elim(positive),
@@ -968,115 +867,92 @@ theorem sub_lt_of_pos(m: Nat): (n: Nat) → 0 < n → n <= m → sub(m, n) < m {
         },
         Succ(m2) => λ n => match n {
             Zero => λ positive bounded => false_elim(positive),
-            Succ(n2) => λ positive bounded => sub_le(m2, n2),
+            Succ(n2) => λ positive bounded => m2.sub_le(n2),
         },
     }
 }
 
 // ---------------------------------------------------------------------------
-// Monotonicity and cancellation — the lemmas where the order meets the
-// arithmetic (issues/nat-arithmetic-kit.md).
-//
-// Every one of them recurses on the argument that is *added on* rather than on
-// either compared value, and that is what makes the bodies this short:
-// `add(n, Succ j)` is `Succ(add(n, j))` and `Le(Succ x, Succ y)` is
-// `Le(x, y)`, so a step of the induction is a step of *both* definitions
-// cancelling, and the arm is the IH applied unchanged. The `_r` suffix names
-// the side the operand is added on, as in `add(n, k) <= add(m, k)`.
-//
-// The `_l` halves are then `_r` read through commutativity, transported with
-// `j` rather than reproved: `add` recurses on its second argument, so an
-// induction on the left operand would pay `add_left_zero`/`add_succ_left` at
-// every step to reach a shape the `_r` proof already has.
 
-theorem add_le_mono_r(k: Nat): (n: Nat) → (m: Nat) → n <= m → n + k <= m + k {
+theorem Nat::add_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n + k <= m + k {
     match k {
         Zero => λ n m h => h,
         Succ(_, ih) => λ n m h => ih(n, m, h),
     }
 }
 
-theorem add_le_mono_l(k, n, m: Nat, h: n <= m): k + n <= k + m {
-    j(add_comm(n, k), λ y q => y <= k + m,
-      j(add_comm(m, k), λ y q => n + k <= y, add_le_mono_r(k, n, m, h)))
+theorem Nat::add_le_mono_l(self k, n, m: Nat, h: n <= m): k + n <= k + m {
+    j(n.add_comm(k), λ y q => y <= k + m,
+      j(m.add_comm(k), λ y q => n + k <= y, k.add_le_mono_r(n, m, h)))
 }
 
-// Both sides at once, which is the two one-sided lemmas chained through
-// transitivity at the mixed sum `b + c`.
-theorem add_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a + c <= b + d {
-    le_trans(a + c, b + c, b + d,
-             add_le_mono_r(c, a, b, h1), add_le_mono_l(b, c, d, h2))
+theorem Nat::add_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a + c <= b + d {
+    (a + c).le_trans(b + c, b + d,
+             c.add_le_mono_r(a, b, h1), b.add_le_mono_l(c, d, h2))
 }
 
-// Cancellation, and it is the *same* recursion as the monotonicity above with
-// the implication turned round — which is worth seeing, because it says the
-// two directions are not two facts: at each step both sides shed a `Succ`
-// definitionally, and neither direction ever has anything to do.
-theorem le_of_add_le_add_r(k: Nat): (n: Nat) → (m: Nat) → n + k <= m + k → n <= m {
+theorem Nat::le_of_add_le_add_r(self k: Nat): (n: Nat) → (m: Nat) → n + k <= m + k → n <= m {
     match k {
         Zero => λ n m h => h,
         Succ(_, ih) => λ n m h => ih(n, m, h),
     }
 }
 
-theorem le_of_add_le_add_l(k, n, m: Nat, h: k + n <= k + m): n <= m {
-    le_of_add_le_add_r(k, n, m,
-        j(add_comm(k, n), λ y q => y <= m + k,
-          j(add_comm(k, m), λ y q => k + n <= y, h)))
+theorem Nat::le_of_add_le_add_l(self k, n, m: Nat, h: k + n <= k + m): n <= m {
+    k.le_of_add_le_add_r(n, m,
+        j(k.add_comm(n), λ y q => y <= m + k,
+          j(k.add_comm(m), λ y q => k + n <= y, h)))
 }
 
-// Multiplication is where the induction stops being free and starts *using*
-// the section above: `mul(n, Succ j)` is `add(mul(n, j), n)`, so the step
-// compares two sums and needs both of their sides moved — which is exactly
-// `add_le_mono`, the IH on the left and the hypothesis on the right.
-//
-// Note what is NOT here: cancellation for `mul`. It is false at `k = 0`
-// (`0 <= 0` says nothing about `n` and `m`) and so wants a `0 < k` hypothesis,
-// which is a different lemma and not the mirror of this one.
-theorem mul_le_mono_r(k: Nat): (n: Nat) → (m: Nat) → n <= m → n * k <= m * k {
+theorem Nat::mul_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n * k <= m * k {
     match k {
         Zero => λ n m h => trivial,
         Succ(j, ih) => λ n m h =>
-            add_le_mono(mul(n, j), mul(m, j), n, m, ih(n, m, h), h),
+            (n * j).add_le_mono(m * j, n, m, ih(n, m, h), h),
     }
 }
 
-theorem mul_le_mono_l(k, n, m: Nat, h: n <= m): k * n <= k * m {
-    j(mul_comm(n, k), λ y q => y <= k * m,
-      j(mul_comm(m, k), λ y q => n * k <= y, mul_le_mono_r(k, n, m, h)))
+theorem Nat::mul_le_mono_l(self k, n, m: Nat, h: n <= m): k * n <= k * m {
+    j(n.mul_comm(k), λ y q => y <= k * m,
+      j(m.mul_comm(k), λ y q => n * k <= y, k.mul_le_mono_r(n, m, h)))
 }
 
-theorem mul_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <= b * d {
-    le_trans(a * c, b * c, b * d,
-             mul_le_mono_r(c, a, b, h1), mul_le_mono_l(b, c, d, h2))
+theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <= b * d {
+    (a * c).le_trans(b * c, b * d,
+             c.mul_le_mono_r(a, b, h1), b.mul_le_mono_l(c, d, h2))
+}
+
+// The lexicographic order on `(a, r)` flattened into `a * n + r` for `r < n`
+// (docs/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
+// and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
+// group closes every recursive call's scaled obligation with one of these.
+theorem Nat::scaled_lt(self a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
+    Succ(a * n + r).le_trans(Succ(a) * n, b * n + s,
+        j(trans((a * n).add_comm(n), sym(a.mul_succ_left(n))),
+          λ y p => Succ(a * n + r) <= y, (a * n).add_le_mono_l(Succ(r), n, q)),
+        (Succ(a) * n).le_trans(b * n, b * n + s,
+            n.mul_le_mono_r(Succ(a), b, h), (b * n).le_add_l(s)))
+}
+
+theorem Nat::scaled_le(self a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r < b * n + s {
+    Succ(a * n + r).le_trans(a * n + s, b * n + s,
+        (a * n).add_le_mono_l(Succ(r), s, q),
+        s.add_le_mono_r(a * n, b * n, n.mul_le_mono_r(a, b, h)))
 }
 
 // ---------------------------------------------------------------------------
-// `min` and `max` at `Nat` — plain structural recursions, and the standing
-// correction to the assumption that a "decided" function needs a decider
-// (docs/nat-order-design.md §6). Neither mentions `Le`, `leb` or `le_dec`;
-// both descend on both arguments at once and so are curried for the reason
-// `Le` and `sub` are (issues/ih-generalization.md), and both **reduce**, so
-// `max(2, 5) = 5` is `refl`.
-//
-// `std/algebra`'s `max_of` is a different thing wearing a similar name: it is
-// the `Cmp`-generic pick, one call to a decider at whatever carrier the class
-// was registered at. These two are `Nat`'s own, they compute without deciding
-// anything, and nothing here is proved about the relationship between them —
-// `algebra` imports `nat`, so a lemma bridging the two cannot be stated in
-// this file at all.
 
-fn max(a: Nat) → Nat → Nat {
+fn Nat::max(self a: Nat) → Nat → Nat {
     match a {
         Zero => λ (b: Nat) => b,
-        Succ(k) => λ (b: Nat) => match b { Zero => Succ(k), Succ(l) => Succ(max(k, l)) },
+        Succ(k) => λ (b: Nat) => match b { Zero => Succ(k), Succ(l) => Succ(k.max(l)) },
     }
 }
 
-fn min(a: Nat) → Nat → Nat {
+fn Nat::min(self a: Nat) → Nat → Nat {
     match a {
         Zero => λ (b: Nat) => 0,
-        Succ(k) => λ (b: Nat) => match b { Zero => 0, Succ(l) => Succ(min(k, l)) },
+        Succ(k) => λ (b: Nat) => match b { Zero => 0, Succ(l) => Succ(k.min(l)) },
     }
 }
 
@@ -1084,20 +960,20 @@ fn min(a: Nat) → Nat → Nat {
 // generalized, and each has one arm that is `trivial` because `Zero` is below
 // everything and one that is the IH at the shed successor.
 
-theorem le_max_l(a: Nat): (b: Nat) → a <= max(a, b) {
+theorem Nat::le_max_l(self a: Nat): (b: Nat) → a <= a.max(b) {
     match a {
         Zero => λ b => trivial,
         Succ(k, ih) => λ b =>
             match b {
-                Zero => le_refl(Succ(k)),
+                Zero => Succ(k).le_refl(),
                 Succ(l) => ih(l),
             },
     }
 }
 
-theorem le_max_r(a: Nat): (b: Nat) → b <= max(a, b) {
+theorem Nat::le_max_r(self a: Nat): (b: Nat) → b <= a.max(b) {
     match a {
-        Zero => λ b => le_refl(b),
+        Zero => λ b => b.le_refl(),
         Succ(_, ih) => λ b =>
             match b {
                 Zero => trivial,
@@ -1106,7 +982,7 @@ theorem le_max_r(a: Nat): (b: Nat) → b <= max(a, b) {
     }
 }
 
-theorem min_le_l(a: Nat): (b: Nat) → min(a, b) <= a {
+theorem Nat::min_le_l(self a: Nat): (b: Nat) → a.min(b) <= a {
     match a {
         Zero => λ b => trivial,
         Succ(_, ih) => λ b =>
@@ -1117,7 +993,7 @@ theorem min_le_l(a: Nat): (b: Nat) → min(a, b) <= a {
     }
 }
 
-theorem min_le_r(a: Nat): (b: Nat) → min(a, b) <= b {
+theorem Nat::min_le_r(self a: Nat): (b: Nat) → a.min(b) <= b {
     match a {
         Zero => λ b => trivial,
         Succ(_, ih) => λ b =>
@@ -1134,7 +1010,7 @@ theorem min_le_r(a: Nat): (b: Nat) → min(a, b) <= b {
 // mentions all three values and the hypotheses have to be convoyed past two of
 // them; no arithmetic in any arm.
 
-theorem max_le(a: Nat): (b: Nat) → (c: Nat) → a <= c → b <= c → max(a, b) <= c {
+theorem Nat::max_le(self a: Nat): (b: Nat) → (c: Nat) → a <= c → b <= c → a.max(b) <= c {
     match a {
         Zero => λ b c h1 h2 => h2,
         Succ(_, ih) => λ b c =>
@@ -1149,7 +1025,7 @@ theorem max_le(a: Nat): (b: Nat) → (c: Nat) → a <= c → b <= c → max(a, b
     }
 }
 
-theorem le_min(a: Nat): (b: Nat) → (c: Nat) → c <= a → c <= b → c <= min(a, b) {
+theorem Nat::le_min(a: Nat): (b: Nat) → (c: Nat) → c <= a → c <= b → c <= a.min(b) {
     match a {
         Zero => λ b c h1 h2 => h1,
         Succ(_, ih) => λ b c =>
@@ -1164,240 +1040,167 @@ theorem le_min(a: Nat): (b: Nat) → (c: Nat) → c <= a → c <= b → c <= min
     }
 }
 
-// What the order decides the functions to be, which is the pair of facts a
-// caller with a comparison in hand actually wants. The absurd arm is the
-// hypothesis itself, as everywhere else in this file.
-
-theorem max_eq_r(a: Nat): (b: Nat) → a <= b → max(a, b) = b {
+theorem Nat::max_eq_r(self a: Nat): (b: Nat) → a <= b → a.max(b) = b {
     match a {
         Zero => λ b h => refl,
         Succ(_, ih) => λ b =>
             match b {
                 Zero => λ bad => false_elim(bad),
-                Succ(l) => λ good => cong_succ(ih(l, good)),
+                Succ(l) => λ good => Nat::cong_succ(ih(l, good)),
             },
     }
 }
 
-theorem min_eq_l(a: Nat): (b: Nat) → a <= b → min(a, b) = a {
+theorem Nat::min_eq_l(a: Nat): (b: Nat) → a <= b → a.min(b) = a {
     match a {
         Zero => λ b h => refl,
         Succ(_, ih) => λ b =>
             match b {
                 Zero => λ bad => false_elim(bad),
-                Succ(l) => λ good => cong_succ(ih(l, good)),
+                Succ(l) => λ good => Nat::cong_succ(ih(l, good)),
             },
     }
 }
 
 // ---------------------------------------------------------------------------
-// Exponentiation and factorial (issues/nat-pow-and-fact.md) — the third step
-// of the same progression, written the same way for the same reason. `pow`
-// recurses on its second argument and puts the recursive result on the LEFT of
-// the `mul`, exactly as `mul` does to `add`, so `pow(a, 0)` reduces to `1` and
-// `mul(x, 1)` to `add(0, x)` with no lemma. Every law below is `mul`'s kit read
-// one level up, and the resemblance is not a coincidence: `pow_add` is to
-// `mul_assoc` what `mul_add_distr` is to `add_assoc`.
-//
-// They live at the END of the file, after the order, because two of their
-// lemmas are order facts — `one_le_pow` and `one_le_fact` are `mul_le_mono`
-// applied to themselves, and there is nowhere earlier they could be stated.
 
-fn pow(a, b: Nat) → Nat { match b { Zero => 1, Succ(k) => mul(pow(a, k), a) } }
+fn Nat::pow(self a: Nat, b: Nat) → Nat { match b { Zero => 1, Succ(k) => a.pow(k) * a } }
 
-// Both small exponents, stated because the API is the kit — and they are not
-// the same kind of fact, which is the thing to notice. Exponent zero is `refl`
-// at open `a`; exponent one is not, because it is `mul(1, a)`, which descends
-// on `a` and so is stuck there. The numeral is on the wrong side.
-theorem pow_zero(a: Nat): pow(a, 0) = 1 { refl }
-theorem pow_one(a: Nat): pow(a, 1) = a { mul_left_one(a) }
+theorem Nat::pow_zero(self a: Nat): a.pow(0) = 1 { refl }
+theorem Nat::pow_one(self a: Nat): a.pow(1) = a { a.mul_left_one() }
 
-// The base one. `mul(w, 1)` reduces to `add(0, w)`, which is why the step is a
-// single `cong_nat` with no arithmetic after it: rewriting the IH inside the
-// `mul` lands on `mul(1, 1)`, and that is `1` by computation.
-theorem one_pow(n: Nat): pow(1, n) = 1 {
-    match n { Zero => refl, Succ(k) => cong_nat(λ (w: Nat) => mul(w, 1), one_pow(k)) }
+theorem Nat::one_pow(self n: Nat): (1).pow(n) = 1 {
+    match n { Zero => refl, Succ(k) => Nat::cong(λ (w: Nat) => w * 1, k.one_pow()) }
 }
 
-// Exponents add. The zero arm is the one place the `mul`-shaped definition
-// charges anything — `mul(x, 1)` is `add(0, x)` and not `x` — and it charges
-// exactly one `add_left_zero`.
-theorem pow_add(a, b, c: Nat): pow(a, b + c) = pow(a, b) * pow(a, c) {
+theorem Nat::pow_add(self a: Nat, b, c: Nat): a.pow(b + c) = a.pow(b) * a.pow(c) {
     match c {
-        Zero => sym(add_left_zero(pow(a, b))),
+        Zero => sym(a.pow(b).add_left_zero()),
         Succ(k) =>
             apply trans;
-            give cong_nat(λ (w: Nat) => mul(w, a), pow_add(a, b, k));
-            mul_assoc(pow(a, b), pow(a, k), a),
+            give Nat::cong(λ (w: Nat) => w * a, a.pow_add(b, k));
+            a.pow(b).mul_assoc(a.pow(k), a),
     }
 }
 
-// Exponents multiply, and this one is `pow_add`'s customer rather than a
-// second induction: `mul(b, Succ k)` is `add(mul(b, k), b)`, so the step is
-// `pow_add` at that sum with the IH rewritten into the left factor.
-theorem pow_mul(a, b, c: Nat): pow(a, b * c) = pow(pow(a, b), c) {
+theorem Nat::pow_mul(self a: Nat, b, c: Nat): a.pow(b * c) = a.pow(b).pow(c) {
     match c {
         Zero => refl,
         Succ(k) => calc {
-            pow(a, mul(b, Succ(k)))
-                = mul(pow(a, mul(b, k)), pow(a, b)) := pow_add(a, mul(b, k), b),
-                = mul(pow(pow(a, b), k), pow(a, b)) := cong(pow_mul(a, b, k)),
-                = pow(pow(a, b), Succ(k))           := refl,
+            a.pow(b * Succ(k))
+                = a.pow(b * k) * a.pow(b) := a.pow_add(b * k, b),
+                = a.pow(b).pow(k) * a.pow(b) := cong(a.pow_mul(b, k)),
+                = a.pow(b).pow(Succ(k))           := refl,
         },
     }
 }
 
-// The rearrangement `mul_pow` needs, factored out because it is about `mul`
-// alone and a reader looking for it should not have to find it inside a `pow`
-// proof. Middle-exchange: it is what commutativity and associativity say
-// together, and the only lemma here that is pure monoid algebra.
-theorem mul_shuffle(x, y, z, w: Nat): (x * y) * (z * w) = (x * z) * (y * w) {
+theorem Nat::mul_shuffle(x, y, z, w: Nat): (x * y) * (z * w) = (x * z) * (y * w) {
     calc {
-        mul(mul(x, y), mul(z, w))
-            = mul(x, mul(y, mul(z, w))) := mul_assoc(x, y, mul(z, w)),
-            = mul(x, mul(mul(y, z), w)) := cong(sym(mul_assoc(y, z, w))),
-            = mul(x, mul(mul(z, y), w)) := cong(mul_comm(y, z)),
-            = mul(x, mul(z, mul(y, w))) := cong(mul_assoc(z, y, w)),
-            = mul(mul(x, z), mul(y, w)) := sym(mul_assoc(x, z, mul(y, w))),
+        (x * y) * (z * w)
+            = (x * (y * (z * w))) := x.mul_assoc(y, z * w),
+            = (x * ((y * z) * w)) := cong(sym(y.mul_assoc(z, w))),
+            = (x * ((z * y) * w)) := cong(y.mul_comm(z)),
+            = (x * (z * (y * w))) := cong(z.mul_assoc(y, w)),
+            = ((x * z) * (y * w)) := sym(x.mul_assoc(z, y * w)),
     }
 }
 
-theorem mul_pow(a, b, n: Nat): pow(a * b, n) = pow(a, n) * pow(b, n) {
+theorem Nat::mul_pow(self a, b, n: Nat): (a * b).pow(n) = a.pow(n) * b.pow(n) {
     match n {
         Zero => refl,
         Succ(k) =>
             apply trans;
-            give cong_nat(λ (w: Nat) => mul(w, mul(a, b)), mul_pow(a, b, k));
-            mul_shuffle(pow(a, k), pow(b, k), a, b),
+            give Nat::cong(λ (w: Nat) => w * (a * b), a.mul_pow(b, k));
+            Nat::mul_shuffle(a.pow(k), b.pow(k), a, b),
     }
 }
 
-// The one order fact about `pow`, and it is `mul_le_mono` applied to the IH and
-// the hypothesis — the same shape `mul_le_mono_r`'s own step has. `mul(1, 1)`
-// is `1` by computation, so the conclusion needs no repackaging.
-theorem one_le_pow(a, n: Nat, h: 1 <= a): 1 <= pow(a, n) {
+theorem Nat::one_le_pow(self a, n: Nat, h: 1 <= a): 1 <= a.pow(n) {
     match n {
         Zero => trivial,
-        Succ(k) => mul_le_mono(1, pow(a, k), 1, a, one_le_pow(a, k, h), h),
+        Succ(k) => (1).mul_le_mono(a.pow(k), 1, a, a.one_le_pow(k, h), h),
     }
 }
 
-// Factorial, which recurses on the argument itself rather than on a second
-// one, and so is the shortest definition in this file.
-fn fact(n: Nat) → Nat { match n { Zero => 1, Succ(k) => mul(Succ(k), fact(k)) } }
+fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => Succ(k) * k.fact() } }
 
-theorem fact_zero(): fact(0) = 1 { refl }
+theorem Nat::fact_zero(): (0).fact() = 1 { refl }
 
-// Positivity — the fact everything else about `fact` eventually wants, since a
-// factorial is never `0` and a proof that divides by one needs to know it.
-// `1 <= Succ(k)` is `Le(0, k)` is `True`, hence the bare `trivial` in the
-// middle of an otherwise ordinary application.
-theorem one_le_fact(n: Nat): 1 <= fact(n) {
+theorem Nat::fact_pos(n: Nat): 0 < n.fact() {
     match n {
         Zero => trivial,
-        Succ(k) => mul_le_mono(1, Succ(k), 1, fact(k), trivial, one_le_fact(k)),
+        Succ(k) => (1).mul_le_mono(Succ(k), 1, k.fact(), trivial, k.fact_pos()),
     }
 }
 
-// Monotone at a single step, which is monotonicity in the only form that needs
-// no induction: `fact(Succ n)` is `fact(n)` multiplied by something at least
-// `1`, and `mul_le_mono_r` says so once `fact(n)` is spelled as `mul(1, …)`.
-theorem fact_le_succ(n: Nat): fact(n) <= fact(Succ(n)) {
-    j(mul_left_one(fact(n)), λ y q => y <= Succ(n) * fact(n),
-      mul_le_mono_r(fact(n), 1, Succ(n), trivial))
+theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
+    j(n.fact().mul_left_one(), λ y q => y <= Succ(n) * n.fact(),
+      n.fact().mul_le_mono_r(1, Succ(n), trivial))
 }
 
 // ---------------------------------------------------------------------------
-// Halving and parity (issues/nat-parity-and-half.md). The first declarations
-// in this library whose recursion reads **two** past values rather than one:
-// `half(Succ(Succ(l)))` is `Succ(half(l))`, and the `l` it descends to is the
-// predecessor's predecessor. That shape had no lowering until
-// issues/recursion-at-deeper-subterms.md, and the spelling below is the one it
-// was built for — nothing here is encoded around the recursion.
-//
-// `Even`/`Odd` are propositional and REDUCING, like `Le`
-// (docs/nat-order-design.md §1): `Even(4)` unfolds to `True`, so the proof is
-// `trivial`, and `¬ Even(7)` is the hypothesis itself. No `Bool` appears in the
-// statement of any of it. The decision comes at the end, as `even_dec` and the
-// class instance over it, exactly as the order's does.
-//
-// `Even(n) := ∃k, add(k, k) = n` is the mathematical definition and would
-// check today, with no feature. It is not the definition here because it does
-// not reduce; it is `half_add_half` and `even_double` below, which is the
-// right relationship between the two.
 
-fn half(n: Nat) → Nat {
+fn Nat::half(self n: Nat) → Nat {
     match n {
         Zero => 0,
-        Succ(k) => match k { Zero => 0, Succ(l) => Succ(half(l)) },
+        Succ(k) => match k { Zero => 0, Succ(l) => Succ(l.half()) },
     }
 }
 
-fn Even(n: Nat) → Type {
+fn Nat::Even(n: Nat) → Type {
     match n {
         Zero => True,
-        Succ(k) => match k { Zero => False, Succ(l) => Even(l) },
+        Succ(k) => match k { Zero => False, Succ(l) => Nat::Even(l) },
     }
 }
 
-fn Odd(n: Nat) → Type {
+fn Nat::Odd(n: Nat) → Type {
     match n {
         Zero => False,
-        Succ(k) => match k { Zero => True, Succ(l) => Odd(l) },
+        Succ(k) => match k { Zero => True, Succ(l) => Nat::Odd(l) },
     }
 }
 
-// Halving is bounded by the argument. Two-step induction, and the step is the
-// only place a lemma appears: the goal at `Succ(Succ(l))` reduces to
-// `Le(half(l), Succ(l))` and the IH gives `Le(half(l), l)`.
-theorem half_le(n: Nat): half(n) <= n {
+// TODO: nat not even zero
+// TODO: nat odd zero
+
+theorem Nat::half_le(self n: Nat): n.half() <= n {
     match n {
         Zero => trivial,
-        Succ(k) => match k { Zero => trivial, Succ(l) => le_succ_r(half(l), l, half_le(l)) },
+        Succ(k) => match k { Zero => trivial, Succ(l) => l.half().le_succ_r(l, l.half_le()) },
     }
 }
 
-// Halving undoes doubling, and this one recurses **one** step, not two: it
-// descends on `n` while the doubling supplies the two `Succ`s that let `half`
-// take a step. The rewrite is `add_succ_left`, which is what turns
-// `add(Succ l, l)` into a visible successor for `half` to consume.
-theorem half_double(n: Nat): half(n + n) = n {
+theorem Nat::half_double(self n: Nat): (n + n).half() = n {
     match n {
         Zero => refl,
         Succ(l) =>
             apply trans;
-            give cong_nat(λ (w: Nat) => half(Succ(w)), add_succ_left(l, l));
-            cong_succ(half_double(l)),
+            give Nat::cong(λ (w: Nat) => Succ(w).half(), l.add_succ_left(l));
+            Nat::cong_succ(l.half_double()),
     }
 }
 
-// Doubling is even — the same rewrite as `half_double`, transported instead of
-// composed, because the conclusion is a proposition rather than an equation.
-theorem even_double(n: Nat): Even(n + n) {
+theorem Nat::even_double(self n: Nat): Nat::Even(n + n) {
     match n {
         Zero => trivial,
-        Succ(l) => j(sym(add_succ_left(l, l)), λ y q => Even(Succ(y)), even_double(l)),
+        Succ(l) => j(sym(l.add_succ_left(l)), λ y q => Nat::Even(Succ(y)), l.even_double()),
     }
 }
 
-// Parity is total, and the step needs no repackaging for the reason `le_total`
-// gave: `Even(Succ(Succ(l)))` and `Even(l)` are the SAME type, so the goal at
-// the step and the IH's type are literally equal and the arm is the self-call.
-theorem even_or_odd(n: Nat): Even(n) ∨ Odd(n) {
+theorem Nat::even_or_odd(self n: Nat): Nat::Even(n) ∨ Nat::Odd(n) {
     match n {
         Zero => Inl(trivial),
-        Succ(k) => match k { Zero => Inr(trivial), Succ(l) => even_or_odd(l) },
+        Succ(k) => match k { Zero => Inr(trivial), Succ(l) => l.even_or_odd() },
     }
 }
 
-// And exclusive. Both base arms are a projection out of the conjunction — at
-// `0` the right half is already `False`, at `1` the left half is — which is
-// the same "the absurd case is the hypothesis" economy the order kit has.
-theorem not_even_and_odd(n: Nat): ¬(Even(n) ∧ Odd(n)) {
+theorem Nat::not_even_and_odd(self n: Nat): ¬(Nat::Even(n) ∧ Nat::Odd(n)) {
     match n {
-        Zero => λ (h: Even(0) ∧ Odd(0)) => h.right,
+        Zero => λ (h: Nat::Even(0) ∧ Nat::Odd(0)) => h.right,
         Succ(k) => match k {
-            Zero => λ (h: Even(1) ∧ Odd(1)) => h.left,
+            Zero => λ (h: Nat::Even(1) ∧ Nat::Odd(1)) => h.left,
             Succ(l) => not_even_and_odd(l),
         },
     }
@@ -1407,27 +1210,20 @@ theorem not_even_and_odd(n: Nat): ¬(Even(n) ∧ Odd(n)) {
 // issue rather than two: on an even argument, halving is exactly invertible.
 // Curried, so that the recursion descends on `n` alone and the hypothesis
 // rides along as an argument (issues/ih-generalization.md's shape).
-theorem half_add_half(n: Nat): Even(n) → half(n) + half(n) = n {
+theorem Nat::half_add_half(self n: Nat): Nat::Even(n) → n.half() + n.half() = n {
     match n {
-        Zero => λ (h: Even(0)) => refl,
+        Zero => λ (h: Nat::Even(0)) => refl,
         Succ(k) => match k {
-            Zero => λ (h: Even(1)) => false_elim(h),
-            Succ(l) => (h: Even(Succ(Succ(l)))) ⊢
+            Zero => λ (h: Nat::Even(1)) => false_elim(h),
+            Succ(l) => (h: Nat::Even(Succ(Succ(l)))) ⊢
                 apply trans;
-                give cong_succ(add_succ_left(half(l), half(l)));
-                cong_succ(cong_succ(half_add_half(l, h))),
+                give Nat::cong_succ(l.half().add_succ_left(l.half()));
+                Nat::cong_succ(Nat::cong_succ(l.half_add_half(h))),
         },
     }
 }
 
-// Halving reflects a doubled bound, which is the step of every recursion that
-// consumes one binary digit per level (`bitvec::toNat_ofNat`): the argument
-// loses a bit and the bound loses a factor of two. Stated at `p + p` rather
-// than at `2 * p` because `add` is what `Le` cancels against structurally.
-//
-// Two steps on `x` and one on `p`; the only rewrite is `add_succ_left`, which
-// turns the doubled successor bound into a visible one for `Le` to strip.
-theorem half_lt_of_lt_double(x: Nat): (p: Nat) → x < p + p → half(x) < p {
+theorem half_lt_of_lt_double(self x: Nat): (p: Nat) → x < p + p → x.half() < p {
     match x {
         Zero => λ p => match p {
             Zero => λ bad => false_elim(bad),
@@ -1440,43 +1236,32 @@ theorem half_lt_of_lt_double(x: Nat): (p: Nat) → x < p + p → half(x) < p {
             },
             Succ(l) => λ p => match p {
                 Zero => λ bad => false_elim(bad),
-                Succ(r) => λ h => half_lt_of_lt_double(l, r,
-                    j(add_succ_left(r, r), λ y _ => Succ(l) < y, h)),
+                Succ(r) => λ h => l.half_lt_of_lt_double(r,
+                    j(r.add_succ_left(r), λ y _ => Succ(l) < y, h)),
             },
         },
     }
 }
 
-// The decider, and a `fn` rather than a `theorem` for the reason `le_dec`
-// carries: a `theorem` is opaque, so a decision spelled as one never unfolds
-// in conversion and nothing built on it computes. `Even(1)` is `False`, so the
-// refutation at the odd base is the identity.
-fn even_dec(n: Nat) → Even(n) ∨ ¬Even(n) {
+fn Nat::even_dec(self n: Nat) → Nat::Even(n) ∨ ¬Nat::Even(n) {
     match n {
         Zero => Inl(trivial),
         Succ(k) => match k {
-            Zero => Inr(λ (bad: Even(1)) => bad),
-            Succ(l) => even_dec(l),
+            Zero => Inr(λ (bad: Nat::Even(1)) => bad),
+            Succ(l) => l.even_dec(),
         },
     }
 }
 
-// Value-generic in `n`, like the order's instance
-// (docs/value-generic-instances-design.md): `n` is recovered by unifying
-// `Even(n)` against the goal, so a use site writes nothing.
-instance(n: Nat) Decide<Even(n)> { dec := even_dec(n) }
+instance(n: Nat) Decide<Nat::Even(n)> { dec := Nat::even_dec(n) }
 
 // ---------------------------------------------------------------------------
 // The bridge between the Boolean decision and the propositional order. `leb`
 // and `Le` are the same two-argument recursion written into `Bool` and into
-// `Type`, so each direction is that recursion read twice; there is no
-// arithmetic in either proof.
-//
-// A client that seals a validity witness as `IsTrue(leb(…))` — `char::scalar`
-// is the first — states its bounds this way rather than with `Le` directly,
-// and reads them back through these.
+// `Type`.
 
-theorem leb_sound(n: Nat): (m: Nat) → IsTrue(leb(n, m)) → n <= m {
+// TODO: should "sound" / "complete" w.r.t. some proposition be a definition inofitself or a typeclass?
+theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
     match n {
         Zero => λ m h => trivial,
         Succ(_, ih) => λ m => match m {
@@ -1486,7 +1271,7 @@ theorem leb_sound(n: Nat): (m: Nat) → IsTrue(leb(n, m)) → n <= m {
     }
 }
 
-theorem leb_complete(n: Nat): (m: Nat) → n <= m → IsTrue(leb(n, m)) {
+theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue() {
     match n {
         Zero => λ m h => trivial,
         Succ(_, ih) => λ m => match m {
@@ -1496,25 +1281,16 @@ theorem leb_complete(n: Nat): (m: Nat) → n <= m → IsTrue(leb(n, m)) {
     }
 }
 
-// The order is total, so refuting `n < m` gives `m <= n`. Stated separately
-// from `le_of_not_le` because a Boolean guard refutes the STRICT comparison:
-// the failing branch of a `leb(Succ(n), m)` test is exactly this hypothesis.
-theorem le_of_not_lt(n, m: Nat, h: ¬(n < m)): m <= n {
-    or_resolve(le_dec(m, n), λ (k: ¬(m <= n)) => h(lt_of_not_le(n, m, k)))
+theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
+    or_resolve(m.le_dec(n), λ (k: ¬(m <= n)) => h(n.lt_of_not_le(m, k)))
 }
 
-// The same flip with both sides Boolean, which is the shape an encoder's
-// range ladder hands its next rung: `n < m` came out `False`, so `m <= n`
-// comes out `True`.
-theorem leb_not_lt(n, m: Nat, h: IsTrue(not(leb(Succ(n), m)))): IsTrue(leb(m, n)) {
-    leb_complete(m, n, le_of_not_lt(n, m,
-        λ (k: n < m) => is_true_not(leb(Succ(n), m), h, leb_complete(Succ(n), m, k))))
+// TODO: use symbol for not
+theorem Nat::leb_not_lt(self n, m: Nat, h: Succ(n).leb(m).not().IsTrue()): m.leb(n).IsTrue() {
+    m.leb_complete(n, n.le_of_not_lt(m,
+        λ (k: n < m) => Succ(n).leb(m).is_true_not(h, Succ(n).leb_complete(m, k))))
 }
 
-// A rung's own test and the previous rung's lower bound cannot both come out
-// `True`: `n < m` and `m <= n` together put `n` below itself. This is what
-// refutes the rungs a known class did NOT take, when a ladder is read
-// backwards (`utf8::width_of_bounds`).
-theorem leb_lt_le_absurd(n, m: Nat, lt: IsTrue(leb(Succ(n), m)), le: IsTrue(leb(m, n))): False {
-    lt_irrefl(n, le_trans(Succ(n), m, n, leb_sound(Succ(n), m, lt), leb_sound(m, n, le)))
+theorem Nat::leb_lt_le_absurd(self n, m: Nat, lt: Succ(n).leb(m).IsTrue(), le: m.leb(n).IsTrue()): False {
+    n.lt_irrefl(Succ(n).le_trans(m, n, Succ(n).leb_sound(m, lt), m.leb_sound(n, le)))
 }

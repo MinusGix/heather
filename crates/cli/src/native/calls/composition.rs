@@ -177,11 +177,11 @@ impl Ledger {
                         };
                         let arithmetic = format!("{prefix}_arithmetic_{i}");
                         let proof = match name {
-                            "add" => format!("bitvec::add_eq_of_ripple_add(64, {}, {}, {}, refl)", words.get(a), words.get(b), words.get(result)),
-                            "sub" => format!("bitvec::sub_eq_of_ripple_sub(64, {}, {}, {}, refl)", words.get(a), words.get(b), words.get(result)),
+                            "add" => format!("bitvec::BitVec::add_eq_of_ripple_add(64, {}, {}, {}, refl)", words.get(a), words.get(b), words.get(result)),
+                            "sub" => format!("bitvec::BitVec::sub_eq_of_ripple_sub(64, {}, {}, {}, refl)", words.get(a), words.get(b), words.get(result)),
                             _ => "refl".into(),
                         };
-                        thm(module, &arithmetic, format!("bitvec::{name}(64, {}, {}) = {}", words.get(a), words.get(b), words.get(result)), proof);
+                        thm(module, &arithmetic, format!("@bitvec::BitVec::{name}(64, {}, {}) = {}", words.get(a), words.get(b), words.get(result)), proof);
                         (result, format!("trans(bitvec64_{name}_congruent({}, {}), {arithmetic}())", self.fact(destination)?, self.fact(source)?))
                     }
                     _ => return Err("unsupported caller arithmetic".into()),
@@ -276,7 +276,7 @@ mod tests {
         let pressure = tree(4, 1);
         assert!(lower(&pressure, false, &[]).unwrap_err().contains("register pressure"));
         assert!(lower(&expr, true, &SCRATCH).unwrap().iter().filter(|op| matches!(op, Op::Save(_))).count() > 1);
-        let many = "import bitvec; fn leaf(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { bitvec::add(64, a, b) } fn caller(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { leaf(leaf(leaf(leaf(leaf(a, b), b), b), b), b) }";
+        let many = "import bitvec; fn leaf(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { @bitvec::BitVec::add(64, a, b) } fn caller(a: BitVec(64), b: BitVec(64)) -> BitVec(64) { leaf(leaf(leaf(leaf(leaf(a, b), b), b), b), b) }";
         elab.elab_module_source("many", many).unwrap();
         assert!(function_ir_source::reflect_call_expression(&elab, "many::caller", "many::leaf").unwrap_err().to_string().contains("four-call"));
     }

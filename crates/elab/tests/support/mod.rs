@@ -160,14 +160,14 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n as λ z => add(z, 0) = z {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m as λ z => add(z, Succ(n)) = Succ(add(z, n)) {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
@@ -178,7 +178,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
             Succ(add(k, n)),
             Succ(add(n, k)),
             add(n, Succ(k)),
-            @cong_succ(add(k, n), add(n, k), ih),
+            @Nat::cong_succ(add(k, n), add(n, k), ih),
             @sym(add(n, Succ(k)), Succ(add(n, k)), add_succ(n, k))
         ),
     }
@@ -187,7 +187,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a as λ z => add(add(z, b), c) = add(z, add(b, c)) {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
+        Succ(k, ih) => @Nat::cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
     }
 }
 "#;
@@ -392,7 +392,7 @@ fn bin_of_nat(n: Nat) -> Bin { match n { Zero => BNil, Succ(m) => binc(bin_of_na
 theorem bin_roundtrip(m: Nat): bin_abs(bin_of_nat(m)) = m {
     match m {
         Zero => refl,
-        Succ(k) => trans(bin_succ_abs(bin_of_nat(k)), cong_succ(bin_roundtrip(k))),
+        Succ(k) => trans(bin_succ_abs(bin_of_nat(k)), Nat::cong_succ(bin_roundtrip(k))),
     }
 }
 
@@ -617,7 +617,7 @@ theorem bin_iter_abs(ra: Bin, n: Nat):
         Zero => refl,
         Succ(k) => trans(
             bin_succ_abs(nat_rec_(Bin, ra, λ a b => binc(b), k)),
-            cong_succ(bin_iter_abs(ra, k))),
+            Nat::cong_succ(bin_iter_abs(ra, k))),
     }
 }
 

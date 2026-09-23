@@ -148,21 +148,21 @@ fn identity_does_not_relate_unequal_shifts() {
 #[test]
 fn the_order_kit_composes_at_open_arguments() {
     ok("theorem t(a, b, c: Nat, h1: a <= b, h2: b <= c): a <= c {
-    le_trans(a)(b, c, h1, h2)
+    a.le_trans(b, c, h1, h2)
 }
-theorem u(a, b: Nat, h1: a <= b, h2: b <= a): a = b { le_antisym(a)(b, h1, h2) }
-theorem v(a: Nat): 0 <= a { zero_le(a) }
-theorem w(a, b: Nat): Or<nat::Le(a, b), nat::Le(b, a)> { le_total(a)(b) }");
+theorem u(a, b: Nat, h1: a <= b, h2: b <= a): a = b { a.le_antisym(b, h1, h2) }
+theorem v(a: Nat): 0 <= a { a.nonneg() }
+theorem w(a, b: Nat): Or<nat::Nat::Le(a, b), nat::Nat::Le(b, a)> { a.le_total(b) }");
 }
 
 #[test]
 fn the_strict_kit_composes_at_open_arguments() {
-    ok("theorem t(a, b, c: Nat, h1: a < b, h2: b < c): a < c { lt_trans(a, b, c, h1, h2) }
-theorem u(a: Nat, h: a < a): False { lt_irrefl(a)(h) }
-theorem v(a, b: Nat, h: a < b): a <= b { le_of_lt(a)(b, h) }
-theorem w(a: Nat): a < Succ(a) { lt_succ_self(a) }
-theorem x(a, b: Nat, h: a <= b, ne: ¬ (a = b)): a < b { lt_of_le_of_ne(a)(b, h, ne) }
-theorem y(a, b: Nat): Or<Lt(a, b), Or<(a = b), Lt(b, a)>> { lt_trichotomy(a)(b) }");
+    ok("theorem t(a, b, c: Nat, h1: a < b, h2: b < c): a < c { a.lt_trans(b, c, h1, h2) }
+theorem u(a: Nat, h: a < a): False { a.lt_irrefl()(h) }
+theorem v(a, b: Nat, h: a < b): a <= b { a.le_of_lt(b, h) }
+theorem w(a: Nat): a < Succ(a) { a.lt_succ_self() }
+theorem x(a, b: Nat, h: a <= b, ne: ¬ (a = b)): a < b { a.lt_of_le_of_ne(b, h, ne) }
+theorem y(a, b: Nat): Or<a.Lt(b), Or<(a = b), b.Lt(a)>> { a.lt_trichotomy(b) }");
 }
 
 /// The bridge to addition, both ways, at open arguments. `le_iff_exists_add`
@@ -171,14 +171,14 @@ theorem y(a, b: Nat): Or<Lt(a, b), Or<(a = b), Lt(b, a)>> { lt_trichotomy(a)(b) 
 /// not reach a type-argument slot ([[quantifier-notation-in-type-arguments]]).
 #[test]
 fn the_addition_bridge_goes_both_ways() {
-    ok("theorem fwd(a, b: Nat, h: a <= b): Exists(λ (k: Nat) => add(a, k) = b) {
-    le_iff_exists_add(a, b).mp(h)
+    ok("theorem fwd(a, b: Nat, h: a <= b): Exists(λ (k: Nat) => a.add(k) = b) {
+    a.le_iff_exists_add(b).mp(h)
 }
-theorem bwd(a, b: Nat, h: Exists(λ (k: Nat) => add(a, k) = b)): a <= b {
-    le_iff_exists_add(a, b).mpr(h)
+theorem bwd(a, b: Nat, h: Exists(λ (k: Nat) => a.add(k) = b)): a <= b {
+    a.le_iff_exists_add(b).mpr(h)
 }
-theorem round_trip(a, k: Nat): a <= add(a, k) {
-    le_iff_exists_add(a, add(a, k)).mpr(Exists(k, refl))
+theorem round_trip(a, k: Nat): a <= a.add(k) {
+    a.le_iff_exists_add(a.add(k)).mpr(Exists(k, refl))
 }");
 }
 
@@ -188,9 +188,9 @@ theorem round_trip(a, k: Nat): a <= add(a, k) {
 /// decision rather than a lookup.
 #[test]
 fn the_decider_works_closed_and_open() {
-    ok("theorem closed(): nat::Le(2, 5) { or_resolve(nat::le_dec(2)(5), λ (k: ¬ nat::Le(2, 5)) => k(trivial)) }
-fn branch(a, b: Nat) -> Nat { or_pick(nat::le_dec(a)(b), a, b) }
-theorem at_open(a, b: Nat, h: a <= b): branch(a, b) = b { or_pick_dec(nat::le_dec(a)(b), a, b, h) }
+    ok("theorem closed(): nat::Nat::Le(2, 5) { or_resolve(nat::Nat::le_dec(2)(5), λ (k: ¬ nat::Nat::Le(2, 5)) => k(trivial)) }
+fn branch(a, b: Nat) -> Nat { or_pick(nat::Nat::le_dec(a)(b), a, b) }
+theorem at_open(a, b: Nat, h: a <= b): branch(a, b) = b { or_pick_dec(nat::Nat::le_dec(a)(b), a, b, h) }
 theorem at_closed(): branch(2, 5) = 5 { refl }
 theorem the_other_way(): branch(5, 2) = 5 { refl }");
 }
@@ -231,7 +231,7 @@ fn a_bare_false_at_an_unsolved_carrier_is_ambiguous() {
 #[test]
 fn the_cmp_law_is_the_relation_itself() {
     ok("theorem t(a, b: Nat, h: a <= b): max_of(a, b) = b { max_of_le(a, b, h) }");
-    let e = bad("theorem t(a, b: Nat, h: nat::leb(a)(b) = True): max_of(a, b) = b { max_of_le(a, b, h) }");
+    let e = bad("theorem t(a, b: Nat, h: nat::Nat::leb(a)(b) = True): max_of(a, b) = b { max_of_le(a, b, h) }");
     assert!(!e.is_empty(), "expected a type error, got an empty message");
 }
 
@@ -253,7 +253,7 @@ fn decide_it<A: Cmp>(x, y: A) -> Or<A.le(x, y), Not(A.le(x, y))> { A.le_dec(x, y
 #[test]
 fn lt_parses_in_every_type_position() {
     ok("fn a(n, m: Nat, h: n < m) -> Nat { 0 }
-theorem b(n: Nat): n < Succ(n) { lt_succ_self(n) }
+theorem b(n: Nat): n < Succ(n) { n.lt_succ_self() }
 theorem c(n, m: Nat, h: Or<n < m, m <= n>): Nat { 0 }
 fn len_of(xs: List<Nat>) -> Nat { 0 }
 fn nth_lt(xs: List<Nat>, i: Nat, h: i < len_of(xs)) -> Nat { 0 }");

@@ -35,10 +35,10 @@ impl AccessFragment {
         bytes.extend(yes.bytes);
         bytes.extend([0xeb, jd as u8]);
         bytes.extend(no.bytes);
-        let target = |d| format!("λ (start: BitVec(64)) => trans(sym(bitvec::iter_add_eq_add(64, next_rip(start, 2), bitvec::sign_extend(7, 56, bitvec::ofNat(8, {d})))), bitvec::iterate_increment_compose(64, start, 2, {d}))");
+        let target = |d| format!("λ (start: BitVec(64)) => trans(sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {d})))), bitvec::BitVec::iterate_increment_compose(64, start, 2, {d}))");
         let imports = yes.imports.union(&no.imports).cloned().collect();
         Ok(Self { imports, bytes,
-            code: format!("AccessBranch({}, bitvec::ofNat(8, {fd}), bitvec::ofNat(8, {jd}), {}, {})", register.heather_name(), yes.code, no.code),
+            code: format!("AccessBranch({}, @bitvec::BitVec::ofNat(8, {fd}), @bitvec::BitVec::ofNat(8, {jd}), {}, {})", register.heather_name(), yes.code, no.code),
             layout: format!("⟨{}, ⟨{}, ⟨{}, {}⟩⟩⟩", target(fd), target(jd), yes.layout, no.layout),
         })
     }
@@ -47,7 +47,7 @@ impl AccessFragment {
         module.raw("import x86_64_access_code; import x86_64; import x86_64_block; import bitvec; import list; import logic;");
         for name in &self.imports { module.raw(format!("import {name};")); }
         module.declaration(emitted_function(format!("{prefix}_code"), false, vec![], "AccessCode", &self.code));
-        let bytes = self.bytes.iter().map(|b| format!("bitvec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
+        let bytes = self.bytes.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
         module.declaration(emitted_function(format!("{prefix}_bytes"), false, vec![], "List<BitVec(8)>", format!("[{bytes}]")));
         module.declaration(emitted_theorem(format!("{prefix}_encoding"), false, vec![], format!("{prefix}_bytes() = access_bytes({prefix}_code())"), "refl"));
         module.declaration(emitted_theorem(format!("{prefix}_layout"), false, vec![], format!("AccessLayout({prefix}_code())"), &self.layout));

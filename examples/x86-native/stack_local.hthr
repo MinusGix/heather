@@ -1,10 +1,10 @@
 import bitvec;
 
 fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
-    bitvec::add(64, left, right)
+    left.add(right)
 }
 
 // The native producer saves left XOR right in a frame slot before the call.
 fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
-    bitvec::bxor(64, leaf(left, right), bitvec::bxor(64, left, right))
+    leaf(left, right).bxor(left.bxor(right))
 }

@@ -136,7 +136,7 @@ impl Elaborator {
         for (field, _) in &fields[..index] {
             if let Some(field) = field {
                 let projection = Expr { kind: ExprKind::Dot { recv: recv.clone(), name: field.clone(),
-                    args: None, named: Vec::new() }, span: expr.span };
+                    tyargs: Vec::new(), args: None, named: Vec::new() }, span: expr.span };
                 result = measure::subst_surface_ty(&result, field, &projection);
             }
         }

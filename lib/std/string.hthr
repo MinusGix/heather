@@ -14,7 +14,7 @@ import char;
 
 record String { chars: List<Char> }
 
-fn append(s, t: String) → String { String(s.chars ++ t.chars) }
+fn append(self s: String, t: String) → String { String(s.chars ++ t.chars) }
 
 designation ++ at String := append
 
@@ -32,9 +32,9 @@ fn String::len(self s: String) → Nat { string_len(s) }
 // has; `s.len()` is `s.chars.len()` by definition, so the index carries over.
 fn String::nth(self s: String, i: Fin(s.len())) → Char { s.chars.at(i) }
 
-fn take(s: String, n: Nat) → String { String(list::take(s.chars, n)) }
+fn String::take(self s: String, n: Nat) → String { String(s.chars.take(n)) }
 
-fn drop(s: String, n: Nat) → String { String(list::drop(s.chars, n)) }
+fn String::drop(self s: String, n: Nat) → String { String(s.chars.drop(n)) }
 
 // ---------------------------------------------------------------------------
 // The laws. Each is its list counterpart through `chars_injective` or through
@@ -48,12 +48,12 @@ theorem cong_chars(s, t: String, p: s = t): s.chars = t.chars {
     j(p, λ y q => s.chars = y.chars, refl)
 }
 
-theorem take_drop(s: String, n: Nat): take(s, n) ++ drop(s, n) = s {
-    chars_injective(take(s, n) ++ drop(s, n), s, take_append_drop(s.chars, n))
+theorem take_drop(s: String, n: Nat): s.take(n) ++ s.drop(n) = s {
+    chars_injective(s.take(n) ++ s.drop(n), s, s.chars.take_append_drop(n))
 }
 
 theorem len_append(s, t: String): (s ++ t).len() = s.len() + t.len() {
-    list::len_append(s.chars, t.chars)
+    List::len_append(s.chars, t.chars)
 }
 
 theorem len_nil(): String(chars := Nil<Char>).len() = 0 {}
@@ -65,7 +65,7 @@ theorem len_nil(): String(chars := Nil<Char>).len() = 0 {}
 // restated here.
 
 fn string_eq_dec(s, t: String) → s = t ∨ ¬(s = t) {
-    match list_eq_dec(s.chars, t.chars) {
+    match s.chars.list_eq_dec(t.chars) {
         Inl(p) => Inl(chars_injective(s, t, p)),
         Inr(np) => Inr(λ (h: s = t) => np(cong_chars(s, t, h))),
     }

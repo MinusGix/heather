@@ -70,26 +70,26 @@ class CMon<A>(op: A -> A -> A) extends Mon<A>(op) {
     comm: (x: A) -> (y: A) -> op(x, y) = op(y, x),
 }
 
-instance CMon<Nat>(add) {
-    unit := 0, assoc := add_assoc, unit_l := add_left_zero,
-    unit_r := λ (x: Nat) => refl, comm := add_comm,
+instance CMon<Nat>(Nat::add) {
+    unit := 0, assoc := Nat::add_assoc, unit_l := Nat::add_left_zero,
+    unit_r := λ (x: Nat) => refl, comm := Nat::add_comm,
 }
-instance CMon<Bool>(and) {
-    unit := True, assoc := and_assoc, unit_l := and_true_l,
-    unit_r := and_true_r, comm := and_comm,
+instance CMon<Bool>(Bool::and) {
+    unit := True, assoc := Bool::and_assoc, unit_l := Bool::and_true_l,
+    unit_r := Bool::and_true_r, comm := Bool::and_comm,
 }
-instance CMon<Bool>(or) {
-    unit := False, assoc := or_assoc, unit_l := or_false_l,
-    unit_r := or_false_r, comm := or_comm,
+instance CMon<Bool>(Bool::or) {
+    unit := False, assoc := Bool::or_assoc, unit_l := Bool::or_false_l,
+    unit_r := Bool::or_false_r, comm := Bool::or_comm,
 }
-instance<A> Mon<List<A>>(append) {
-    unit := Nil, assoc := append_assoc,
-    unit_l := λ (xs: List<A>) => refl, unit_r := append_nil,
+instance<A> Mon<List<A>>(List::append) {
+    unit := Nil, assoc := List::append_assoc,
+    unit_l := λ (xs: List<A>) => refl, unit_r := List::append_nil,
 }
 
-designation + at Bool := or
-designation * at Bool := and
-designation<A> + at List<A> := append
+designation + at Bool := Bool::or
+designation * at Bool := Bool::and
+designation<A> + at List<A> := List::append
 
 fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
     match xs { Nil => A.unit, Cons(h, t) => op(h, fold(op, t)) }
@@ -173,9 +173,9 @@ fn one_fold_three_carriers_no_caller_names_an_operation() {
         fn c<B>(xss: List<List<B>>) -> List<B> { sum_all(xss) }
 
         // The designation and the positional index are one term.
-        theorem s_is_add(ns: List<Nat>): s(ns) = fold(add, ns) { refl }
-        theorem a_is_or(bs: List<Bool>): a(bs) = fold(or, bs) { refl }
-        theorem c_is_append<B>(xss: List<List<B>>): c(xss) = fold(append, xss) { refl }
+        theorem s_is_add(ns: List<Nat>): s(ns) = fold(Nat::add, ns) { refl }
+        theorem a_is_or(bs: List<Bool>): a(bs) = fold(Bool::or, bs) { refl }
+        theorem c_is_append<B>(xss: List<List<B>>): c(xss) = fold(List::append, xss) { refl }
 
         // A **literal** scrutinee, which has to compute all the way.
         theorem s_lit(): s(Cons(2, Cons(3, Nil))) = 5 { refl }
@@ -183,7 +183,7 @@ fn one_fold_three_carriers_no_caller_names_an_operation() {
 
         // A **neutral** one, which cannot: the fold is stuck on `ns`, and the
         // agreement above is what carries it.
-        theorem s_neutral(n: Nat, ns: List<Nat>): s(Cons(n, ns)) = add(n, s(ns)) { refl }
+        theorem s_neutral(n: Nat, ns: List<Nat>): s(Cons(n, ns)) = n.add(s(ns)) { refl }
     ");
 }
 
@@ -194,7 +194,7 @@ fn one_fold_three_carriers_no_caller_names_an_operation() {
 fn slow_acceptance_a_designation_does_not_travel_between_carriers() {
     let e = bad("
         fn a(bs: List<Bool>) -> Bool { sum_all(bs) }
-        theorem wrong(bs: List<Bool>): a(bs) = fold(and, bs) { refl }
+        theorem wrong(bs: List<Bool>): a(bs) = fold(Bool::and, bs) { refl }
     ");
     assert!(e.contains("NotConvertible") || e.contains("kernel"), "{e}");
 }
@@ -217,9 +217,9 @@ fn slow_acceptance_theory_is_written_in_notation_and_its_corollaries_still_unify
         theorem unit_of_comm<A: CMon(+)>(x: A): x + A.unit = x {
             trans(A.comm(x, A.unit), A.unit_l(x))
         }
-        theorem nat_add_zero(x: Nat): add(x, 0) = x { unit_of_comm(x) }
-        theorem bool_and_true(x: Bool): and(x, True) = x { unit_of_comm(x) }
-        theorem bool_or_false(x: Bool): or(x, False) = x { unit_of_comm(x) }
+        theorem nat_add_zero(x: Nat): x.add(0) = x { unit_of_comm(x) }
+        theorem bool_and_true(x: Bool): x.and(True) = x { unit_of_comm(x) }
+        theorem bool_or_false(x: Bool): x.or(False) = x { unit_of_comm(x) }
     ");
 }
 
@@ -231,7 +231,7 @@ fn slow_acceptance_the_wrong_unit_is_still_refused_under_a_symbol_binder() {
         theorem unit_of_comm<A: CMon(+)>(x: A): x + A.unit = x {
             trans(A.comm(x, A.unit), A.unit_l(x))
         }
-        theorem nope(x: Bool): or(x, True) = x { unit_of_comm(x) }
+        theorem nope(x: Bool): x.or(True) = x { unit_of_comm(x) }
     ");
     assert!(!e.is_empty(), "{e}");
 }
@@ -247,7 +247,7 @@ fn slow_acceptance_an_installed_symbol_does_not_leak_out_of_its_declaration() {
         theorem inside<A: CMon(+)>(x: A): x + A.unit = x {
             trans(A.comm(x, A.unit), A.unit_l(x))
         }
-        theorem outside(x: Nat, y: Nat): x + y = add(x, y) { refl }
+        theorem outside(x: Nat, y: Nat): x + y = x.add(y) { refl }
     ");
 }
 
@@ -279,16 +279,16 @@ fn the_fallback_rung_is_the_old_desugaring() {
 }
 
 /// (c) With the library's designation *loaded*, `+` at `Nat` is still
-/// `nat::add` — same term, pinned by `refl`. The designation and the fallback
+/// `nat::Nat::add` — same term, pinned by `refl`. The designation and the fallback
 /// agree at `Nat` by construction, which is the whole reason the migration is
 /// not a behaviour change.
 #[test]
 fn slow_acceptance_a_designation_at_nat_agrees_with_the_name_it_replaced() {
     ok("
-        theorem t(x: Nat, y: Nat): x + y = add(x, y) { refl }
+        theorem t(x: Nat, y: Nat): x + y = x.add(y) { refl }
         theorem lit(): 2 + 2 = 4 { refl }
         // Left-associative and precedence-respecting, as ever.
-        theorem chain(a: Nat, b: Nat, c: Nat): a + b + c = add(add(a, b), c) { refl }
+        theorem chain(a: Nat, b: Nat, c: Nat): a + b + c = a.add(b).add(c) { refl }
     ");
 }
 
@@ -303,11 +303,11 @@ fn two_symbols_at_one_carrier_nominate_nothing() {
     ok("
         fn prod_all<A: Mon(*)>(xs: List<A>) -> A { fold(*, xs) }
 
-        theorem plus_is_or(x: Bool, y: Bool): x + y = or(x, y) { refl }
-        theorem star_is_and(x: Bool, y: Bool): x * y = and(x, y) { refl }
+        theorem plus_is_or(x: Bool, y: Bool): x + y = x.or(y) { refl }
+        theorem star_is_and(x: Bool, y: Bool): x * y = x.and(y) { refl }
 
-        theorem sum_is_or(bs: List<Bool>): sum_all(bs) = fold(or, bs) { refl }
-        theorem prod_is_and(bs: List<Bool>): prod_all(bs) = fold(and, bs) { refl }
+        theorem sum_is_or(bs: List<Bool>): sum_all(bs) = fold(Bool::or, bs) { refl }
+        theorem prod_is_and(bs: List<Bool>): prod_all(bs) = fold(Bool::and, bs) { refl }
 
         // Both compute, at a literal scrutinee, to different answers.
         theorem sum_lit(): sum_all(Cons(False, Cons(True, Nil))) = True { refl }
@@ -334,7 +334,7 @@ fn slow_acceptance_the_designation_declaration_refuses_by_name() {
     // A duplicate at one key names the previous entry and where it was written.
     let e = bad("designation + at Nat := add");
     assert!(e.contains("already designates"), "{e}");
-    assert!(e.contains("nat::add"), "{e}");
+    assert!(e.contains("nat::Nat::add"), "{e}");
     // One entry per (symbol, **resolved** carrier): the key stopped being a
     // spelling in issues/designation-key-collides-across-modules.md, and the
     // sentence says so — `crates/elab/tests/designation_resolved_key.rs`.
@@ -358,7 +358,7 @@ fn slow_acceptance_the_designation_declaration_refuses_by_name() {
     assert!(e.contains("attaches to nothing"), "{e}");
 
     // A carrier with no head at all.
-    let e = bad("designation * at (Nat -> Nat) := add");
+    let e = bad("designation * at (Nat -> Nat) := Nat::add");
     assert!(e.contains("no head type name"), "{e}");
 
     // The positive control: a fresh symbol at `Nat` is not a duplicate, and a
@@ -419,7 +419,7 @@ fn slow_acceptance_a_symbol_with_no_rung_names_the_symbol() {
     assert!(e.contains("fallback name `mul`"), "{e}");
     // It says where `*` *does* mean something, as data.
     assert!(e.contains("`Bool`"), "{e}");
-    assert!(e.contains("bool::and"), "{e}");
+    assert!(e.contains("bool::Bool::and"), "{e}");
 }
 
 /// §5.1: each of the index slot's three referents binds exactly one spelling,
@@ -457,18 +457,18 @@ fn the_concrete_carrier_refusal_names_the_designations() {
     assert!(e.contains("a designation the binder names"), "{e}");
     assert!(e.contains("never by search"), "{e}");
     // Both structures, as data — neither preferred.
-    assert!(e.contains("Mon<Bool>(and)"), "{e}");
-    assert!(e.contains("Mon<Bool>(or)"), "{e}");
+    assert!(e.contains("Mon<Bool>(Bool::and)"), "{e}");
+    assert!(e.contains("Mon<Bool>(Bool::or)"), "{e}");
     // The polish: the designations here, and the spelling that works.
-    assert!(e.contains("`+` designates `bool::or`"), "{e}");
-    assert!(e.contains("`*` designates `bool::and`"), "{e}");
+    assert!(e.contains("`+` designates `bool::Bool::or`"), "{e}");
+    assert!(e.contains("`*` designates `bool::Bool::and`"), "{e}");
     assert!(e.contains("take the class as a constraint that names the symbol"), "{e}");
     // And it still offers the dictionary spelling.
     assert!(e.contains("Bool::Mon("), "{e}");
 
     // The two positive controls, physically beside it: the dictionary
     // spelling, and the constraint that names the symbol.
-    ok("theorem t(): Bool::Mon(or).unit = False { refl }");
+    ok("theorem t(): Bool::Mon(Bool::or).unit = False { refl }");
     ok("fn u<A: Mon(+)>() -> A { A.unit }");
 
     // A carrier with *no* designation gets the refusal without the clause,
@@ -494,8 +494,8 @@ fn the_concrete_carrier_refusal_names_the_designations() {
 fn slow_acceptance_a_binder_that_names_the_symbol_beats_the_table() {
     ok("
         fn f<A: Mon(+)>(x: A, y: A) -> A { x + y }
-        theorem at_and(x: Bool, y: Bool): @f(and, Bool::Mon(and), x, y) = and(x, y) { refl }
-        theorem at_or(x: Bool, y: Bool): @f(or, Bool::Mon(or), x, y) = or(x, y) { refl }
+        theorem at_and(x: Bool, y: Bool): @f(Bool::and, Bool::Mon(Bool::and), x, y) = x.and(y) { refl }
+        theorem at_or(x: Bool, y: Bool): @f(Bool::or, Bool::Mon(Bool::or), x, y) = x.or(y) { refl }
     ");
 }
 
@@ -506,12 +506,12 @@ fn slow_acceptance_a_binder_that_names_the_symbol_beats_the_table() {
 #[test]
 fn slow_acceptance_the_carrier_probe_descends_the_left_spine() {
     ok("
-        theorem b3(x: Bool, y: Bool, z: Bool): x + y + z = or(or(x, y), z) { refl }
-        theorem n3(a: Nat, b: Nat, c: Nat): a + b + c = add(add(a, b), c) { refl }
+        theorem b3(x: Bool, y: Bool, z: Bool): x + y + z = x.or(y).or(z) { refl }
+        theorem n3(a: Nat, b: Nat, c: Nat): a + b + c = a.add(b).add(c) { refl }
         // Mixed symbols: `*` binds tighter, and the outer `+`'s left operand
         // is the leaf `x` either way.
-        theorem mixed(x: Bool, y: Bool, z: Bool): x * y + z = or(and(x, y), z) { refl }
-        theorem mixed2(x: Bool, y: Bool, z: Bool): x + y * z = or(x, and(y, z)) { refl }
+        theorem mixed(x: Bool, y: Bool, z: Bool): x * y + z = x.and(y).or(z) { refl }
+        theorem mixed2(x: Bool, y: Bool, z: Bool): x + y * z = x.or(y.and(z)) { refl }
     ");
 }
 
@@ -531,7 +531,7 @@ fn slow_acceptance_a_bare_symbol_between_delimiters_is_the_index() {
     // (docs/bare-symbol-checking-carrier-design.md). `fold`'s `op` parameter is
     // `A -> A -> A` with `A := Bool` pinned by `bs`, so the bare `+` resolves
     // at `Bool` — where the table says `or` — and this used to be a refusal.
-    ok("theorem c(bs: List<Bool>): fold(+, bs) = fold(or, bs) { refl }");
+    ok("theorem c(bs: List<Bool>): fold(+, bs) = fold(Bool::or, bs) { refl }");
     // The boundary is now **inference** position, which is the whole of what
     // "a bare symbol has no carrier" still means — pinned in its own test
     // below (`the_boundary_is_inference_position`).
@@ -559,16 +559,16 @@ fn slow_acceptance_the_dot_sugars_work_under_a_symbol_binder() {
 #[test]
 fn slow_acceptance_the_doubled_symbols_resolve_by_designation() {
     ok("
-        theorem and_notated(x: Bool, y: Bool): x && y = and(x, y) { refl }
-        theorem or_notated(x: Bool, y: Bool): x || y = or(x, y) { refl }
+        theorem and_notated(x: Bool, y: Bool): x && y = x.and(y) { refl }
+        theorem or_notated(x: Bool, y: Bool): x || y = x.or(y) { refl }
         // A literal scrutinee, which has to compute all the way.
         theorem lit(): (True && False) || True = True { refl }
         // Precedence at the term level: `&&` inside `||`, `*` inside `&&`.
-        theorem prec(x: Bool, y: Bool, z: Bool): x || y && z = or(x, and(y, z)) { refl }
-        theorem prec2(x: Bool, y: Bool, z: Bool): x && y * z = and(x, and(y, z)) { refl }
+        theorem prec(x: Bool, y: Bool, z: Bool): x || y && z = x.or(y.and(z)) { refl }
+        theorem prec2(x: Bool, y: Bool, z: Bool): x && y * z = x.and(y.and(z)) { refl }
     ");
     // The negative control: the two spellings are not interchangeable.
-    let e = bad("theorem nope(x: Bool, y: Bool): x && y = or(x, y) { refl }");
+    let e = bad("theorem nope(x: Bool, y: Bool): x && y = x.or(y) { refl }");
     assert!(!e.is_empty(), "{e}");
 }
 
@@ -579,8 +579,8 @@ fn slow_acceptance_the_doubled_symbols_resolve_by_designation() {
 fn slow_acceptance_a_binder_can_name_a_doubled_symbol() {
     ok("
         fn both<A: Mon(&&)>(x: A, y: A) -> A { x && y }
-        theorem at_and(x: Bool, y: Bool): @both(and, Bool::Mon(and), x, y) = and(x, y) { refl }
-        theorem at_or(x: Bool, y: Bool): @both(or, Bool::Mon(or), x, y) = or(x, y) { refl }
+        theorem at_and(x: Bool, y: Bool): @both(Bool::and, Bool::Mon(Bool::and), x, y) = x.and(y) { refl }
+        theorem at_or(x: Bool, y: Bool): @both(Bool::or, Bool::Mon(Bool::or), x, y) = x.or(y) { refl }
         // And the bare symbol between delimiters is that binder's index.
         fn all_such<A: Mon(&&)>(xs: List<A>) -> A { fold(&&, xs) }
     ");
@@ -599,7 +599,7 @@ fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
     assert!(e.contains("`&&` has no meaning here"), "{e}");
     assert!(e.contains("has no fallback name"), "{e}");
     assert!(e.contains("`Bool`"), "{e}");
-    assert!(e.contains("bool::and"), "{e}");
+    assert!(e.contains("bool::Bool::and"), "{e}");
     // And it names the carrier it tried, rather than saying "this carrier"
     // and naming none (docs/bare-symbol-checking-carrier-design.md §6(a)):
     // here rung 2 probed the left operand.
@@ -621,7 +621,7 @@ fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
     // names — so this resolves at `Bool` and used to be a refusal
     // (docs/bare-symbol-checking-carrier-design.md). What stays a refusal is
     // the rung that was missing: a carrier the table does not cover, above.
-    ok("theorem c(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }");
+    ok("theorem c(bs: List<Bool>): fold(&&, bs) = fold(Bool::and, bs) { refl }");
 }
 
 // -- list append (issues/list-append-symbol.md) ----------------------------
@@ -632,10 +632,10 @@ fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
 #[test]
 fn slow_acceptance_append_symbol_resolves_by_designation_and_binder() {
     ok("
-        theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = append(xs, ys) { refl }
+        theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = xs.append(ys) { refl }
         theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
         fn combine<A: Mon(++)>(x: A, y: A) -> A { x ++ y }
-        theorem at_add(x: Nat, y: Nat): @combine(add, Nat::Mon(add), x, y) = add(x, y) { refl }
+        theorem at_add(x: Nat, y: Nat): @combine(Nat::add, Nat::Mon(Nat::add), x, y) = x.add(y) { refl }
         fn fold_all<A: Mon(++)>(xs: List<A>) -> A { fold(++, xs) }
     ");
 }
@@ -669,9 +669,9 @@ fn slow_acceptance_append_symbol_has_no_fallback_rung() {
 #[test]
 fn slow_acceptance_a_bare_symbol_resolves_at_the_carrier_the_position_expects() {
     ok("
-        theorem conj(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }
-        theorem disj(bs: List<Bool>): fold(||, bs) = fold(or, bs) { refl }
-        theorem open_elem<A>(xss: List<List<A>>): fold(++, xss) = fold(append, xss) { refl }
+        theorem conj(bs: List<Bool>): fold(&&, bs) = fold(Bool::and, bs) { refl }
+        theorem disj(bs: List<Bool>): fold(||, bs) = fold(Bool::or, bs) { refl }
+        theorem open_elem<A>(xss: List<List<A>>): fold(++, xss) = fold(List::append, xss) { refl }
         // A **literal** scrutinee, which has to compute all the way, beside the
         // neutral `bs` above.
         theorem lit(): fold(&&, Cons(True, Cons(True, Nil))) = True { refl }
@@ -679,7 +679,7 @@ fn slow_acceptance_a_bare_symbol_resolves_at_the_carrier_the_position_expects() 
     ");
     // The same symbol at the same carrier under the *other* designation is not
     // interchangeable: `&&` is `and`, never `or`.
-    let e = bad("theorem no(bs: List<Bool>): fold(&&, bs) = fold(or, bs) { refl }");
+    let e = bad("theorem no(bs: List<Bool>): fold(&&, bs) = fold(Bool::or, bs) { refl }");
     assert!(!e.is_empty(), "{e}");
 }
 
@@ -724,7 +724,7 @@ fn slow_acceptance_a_carrier_with_no_head_declines_the_probe() {
 /// carrier" named none.
 #[test]
 fn slow_acceptance_a_carrier_with_no_designation_still_refuses() {
-    let e = bad("theorem t(ns: List<Nat>): fold(&&, ns) = fold(add, ns) { refl }");
+    let e = bad("theorem t(ns: List<Nat>): fold(&&, ns) = fold(Nat::add, ns) { refl }");
     assert!(e.contains("`&&` has no meaning here"), "{e}");
     assert!(e.contains("nothing designates `&&` at `Nat`"), "{e}");
     assert!(e.contains("the carrier this position expects"), "{e}");
@@ -736,7 +736,7 @@ fn slow_acceptance_a_carrier_with_no_designation_still_refuses() {
     // rung 3 keeping its guarantee: `++` is designated only at `List`, so at
     // `Bool` the ladder falls through — and `++` has no fallback either, so it
     // refuses naming `Bool`.
-    let e = bad("theorem u(bs: List<Bool>): fold(++, bs) = fold(and, bs) { refl }");
+    let e = bad("theorem u(bs: List<Bool>): fold(++, bs) = fold(Bool::and, bs) { refl }");
     assert!(e.contains("nothing designates `++` at `Bool`"), "{e}");
 }
 
@@ -753,7 +753,7 @@ fn slow_acceptance_a_binder_shadows_the_expected_carrier() {
     ok("
         fn fold_or<A: Mon(||)>(xs: List<A>) -> A { fold(||, xs) }
         theorem shadowed(bs: List<Bool>):
-            @fold_or(and, Bool::Mon(and), bs) = fold(and, bs) { refl }
+            @fold_or(Bool::and, Bool::Mon(Bool::and), bs) = fold(Bool::and, bs) { refl }
     ");
 }
 

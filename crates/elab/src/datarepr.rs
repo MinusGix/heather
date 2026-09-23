@@ -1501,12 +1501,18 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
                 found
             })
         }
-        ExprKind::Dot { recv, args, .. } => {
+        ExprKind::Dot { recv, tyargs, args, named, .. } => {
             mentions_free(recv, names, bound)
+                || tyargs
+                    .iter()
+                    .any(|t| mentions_free_ty(t, names, bound))
                 || args
                     .iter()
                     .flatten()
                     .any(|a| mentions_free(a, names, bound))
+                || named
+                    .iter()
+                    .any(|a| mentions_free(&a.expr, names, bound))
         }
         ExprKind::Index { recv, idx } => {
             mentions_free(recv, names, bound) || mentions_free(idx, names, bound)

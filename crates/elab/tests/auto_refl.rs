@@ -73,7 +73,7 @@ fn an_empty_block_works_in_a_match_arm() {
     ok(&format!(
         "{ADD}
          theorem left_unit(n: Nat): add(0, n) = n {{
-             match n {{ Zero => {{}}, Succ(k) => cong_succ(left_unit(k)) }}
+             match n {{ Zero => {{}}, Succ(k) => Nat::cong_succ(left_unit(k)) }}
          }}"
     ));
 }
@@ -118,7 +118,7 @@ fn an_undischarged_speculation_is_a_goal_an_on_can_close() {
         "{ADD}
          theorem left_unit(n: Nat): add(0, n) = n {{
              {{}}
-             on ?g1 := match n {{ Zero => refl, Succ(k) => cong_succ(left_unit(k)) }};
+             on ?g1 := match n {{ Zero => refl, Succ(k) => Nat::cong_succ(left_unit(k)) }};
          }}"
     ));
 }

@@ -25,7 +25,7 @@ theorem rewrite_receive<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
             SameMembers<A>,
             λ __context_input_0 => known,
             λ __context_input_0 => (__context_input_0 ++ __context_input_0),
-            append<A>,
+            List::append<A>,
             respectful_const(SameMembers<A>, SameMembers<A>, known, known, same_members_refl(known)),
             preserves_relation_binary(
                 SameMembers<A>,
@@ -34,7 +34,7 @@ theorem rewrite_receive<A>(known, xs, ys: List<A>, h: SameMembers<A>(xs, ys)):
                 SameMembers<A>,
                 λ __context_input_0 => __context_input_0,
                 λ __context_input_0 => __context_input_0,
-                append<A>,
+                List::append<A>,
                 respectful_id(SameMembers<A>),
                 respectful_id(SameMembers<A>),
                 append_same_members<A>

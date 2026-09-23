@@ -303,7 +303,7 @@ theorem steps_concat_reversed<A>(R: A → A → Type, first: Nat):
     match first {
         Zero => λ second start middle finish left right =>
             j(sym(left), λ y q => Steps(R, second, y, finish), right),
-        Succ(n, ih) => λ second start middle finish left right =>
+        Succ(_, ih) => λ second start middle finish left right =>
             Exists(left.witness, And(
                 left.proof.left,
                 ih(second, left.witness, middle, finish, left.proof.right, right))),
@@ -316,7 +316,7 @@ theorem steps_concat<A>(R: A → A → Type, first, second: Nat,
     right: Steps(R, second, middle, finish)):
     Steps(R, first + second, start, finish)
 {
-    j(add_comm(second, first),
+    j(second.add_comm(first),
         λ count q => Steps(R, count, start, finish),
         steps_concat_reversed(R, first, second, start, middle, finish, left, right))
 }
@@ -326,7 +326,7 @@ theorem steps_monotone<A>(R, S: A → A → Type, h: Included(R, S), fuel: Nat):
 {
     match fuel {
         Zero => λ start finish path => path,
-        Succ(n, ih) => λ start finish path => Exists(path.witness, And(
+        Succ(_, ih) => λ start finish path => Exists(path.witness, And(
             h(start, path.witness, path.proof.left),
             ih(path.witness, finish, path.proof.right))),
     }

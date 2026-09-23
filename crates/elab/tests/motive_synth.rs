@@ -21,14 +21,14 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, 0), k, ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
+        Succ(k, ih) => @Nat::cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
@@ -39,7 +39,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
             Succ(add(k, n)),
             Succ(add(n, k)),
             add(n, Succ(k)),
-            @cong_succ(add(k, n), add(n, k), ih),
+            @Nat::cong_succ(add(k, n), add(n, k), ih),
             @sym(add(n, Succ(k)), Succ(add(n, k)), add_succ(n, k))
         ),
     }
@@ -48,7 +48,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a {
         Zero => refl,
-        Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
+        Succ(k, ih) => @Nat::cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
     }
 }
 "#;
@@ -142,7 +142,7 @@ fn every_arm_binding_still_asks_for_a_motive() {
 fn the_dependent_synthesis_is_not_disturbed() {
     ok("fn add2(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
         theorem t(n: Nat): add2(n, 0) = n {
-            match n { Zero => refl, Succ(k, ih) => @cong_succ(add2(k, 0), k, ih) }
+            match n { Zero => refl, Succ(k, ih) => @Nat::cong_succ(add2(k, 0), k, ih) }
         }");
 }
 

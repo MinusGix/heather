@@ -472,7 +472,7 @@ fn resolve_kinds(
     let Some((qual, base)) = split_qual(name) else {
         return resolve_bare_kinds(names, scope, name, kinds);
     };
-    // `nat::le_add` — a module path. Visibility is required: qualification
+    // `nat::Nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
     // this file never imported.
     let visible_module =

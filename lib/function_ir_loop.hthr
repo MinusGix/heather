@@ -35,12 +35,12 @@ record ReadonlyLoop<C> {
 fn loop_run<C>(budget: Nat) → ReadonlyLoop<C> → ReadonlyBytes → BitVec(8) → Nat → C → LoopOutcome<C> {
     match budget {
         Zero => λ region buffer needle cursor carry =>
-            match nat::leb(buffer.length, cursor) {
+            match buffer.length.leb(cursor) {
                 True => End(cursor, 0, carry),
                 False => Exhausted(cursor, carry),
             },
         Succ(rest) => λ region buffer needle cursor carry =>
-            match nat::leb(buffer.length, cursor) {
+            match buffer.length.leb(cursor) {
                 True => End(cursor, Succ(rest), carry),
                 False => match buffer.read(buffer.base + cursor) {
                     None => Denied(cursor, Succ(rest), carry),
@@ -84,16 +84,16 @@ fn ReadsByte(buffer: ReadonlyBytes, cursor: Nat, byte: BitVec(8)) → Type {
 // Native lowering must discharge these premises at its chosen address width.
 // One-past-end must itself be representable; no modular wrap is hidden here.
 fn LoopBounds(buffer: ReadonlyBytes, cursor: Nat) → Type { cursor <= buffer.length }
-fn LoopWord(width: Nat, word: BitVec(width), counter: Nat) → Type { bitvec::toNat(width, word) = counter }
+fn LoopWord(width: Nat, word: BitVec(width), counter: Nat) → Type { word.toNat() = counter }
 fn LoopAddressBound(width: Nat, buffer: ReadonlyBytes) → Type {
-    buffer.base + buffer.length < nat::pow(2, width)
+    buffer.base + buffer.length < Nat::pow(2, width)
 }
 
-theorem loop_advance_bound(cursor, length: Nat, guarded: IsTrue(nat::leb(Succ(cursor), length))):
-    Succ(cursor) <= length { nat::leb_sound(Succ(cursor), length, guarded) }
+theorem loop_advance_bound(cursor, length: Nat, guarded: Succ(cursor).leb(length).IsTrue()):
+    Succ(cursor) <= length { Succ(cursor).leb_sound(length, guarded) }
 
-theorem loop_budget_predecessor(rest: Nat): nat::sub(Succ(rest), 1) = rest {
-    nat::sub_zero(rest)
+theorem loop_budget_predecessor(rest: Nat): Succ(rest).sub(1) = rest {
+    Nat::sub_zero(rest)
 }
 
 // This is the source/IR contract. Native code must separately establish an
@@ -117,7 +117,7 @@ theorem loop_artifact_normal<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
 theorem loop_successor<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
     needle: BitVec(8), cursor: Nat, carry: C):
     loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
-        match nat::leb(buffer.length, cursor) {
+        match buffer.length.leb(cursor) {
             True => End(cursor, Succ(rest), carry),
             False => match buffer.read(buffer.base + cursor) {
                 None => Denied(cursor, Succ(rest), carry),

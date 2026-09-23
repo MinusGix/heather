@@ -118,7 +118,7 @@ fn radix_numerals_take_the_carrier_directed_route() {
 fn opcode() -> Int { 0x89 }
 theorem opcode_is_ofnat(): opcode() = OfNat(137) { refl }
 theorem negated(): -0x89 = NegSucc(136) { refl }
-theorem generic_int(): int::add(0x1, 0b1) = OfNat(2) { refl }
+theorem generic_int(): int::Int::add(0x1, 0b1) = OfNat(2) { refl }
 fn slot() -> Fin(0x10) { 0xf }
 fn dec_slot() -> Fin(16) { 15 }
 theorem same_slot(): slot() = dec_slot() { refl }
@@ -134,17 +134,17 @@ theorem same_slot(): slot() = dec_slot() { refl }
 fn x86_bytes_and_bit_masks_compute_at_bitvec() {
     ok(r#"
 fn equal_byte(a, b: BitVec(8)) -> Bool {
-    match bitvec::eq_dec(8, a, b) { Inl(_) => True, Inr(_) => False }
+    match @bitvec::BitVec::eq_dec(8, a, b) { Inl(_) => True, Inr(_) => False }
 }
-theorem rex_w(): equal_byte(ofNat(8, 0x48), ofNat(8, 72)) = True { refl }
-theorem mov_rm64(): equal_byte(ofNat(8, 0x89), ofNat(8, 137)) = True { refl }
-theorem modrm(): equal_byte(ofNat(8, 0b11_011_000), ofNat(8, 216)) = True { refl }
+theorem rex_w(): equal_byte(@BitVec::ofNat(8, 0x48), @BitVec::ofNat(8, 72)) = True { refl }
+theorem mov_rm64(): equal_byte(@BitVec::ofNat(8, 0x89), @BitVec::ofNat(8, 137)) = True { refl }
+theorem modrm(): equal_byte(@BitVec::ofNat(8, 0b11_011_000), @BitVec::ofNat(8, 216)) = True { refl }
 theorem modrm_reg_field():
-    bitvec::toNat(8, band(8, ofNat(8, 0xd8), ofNat(8, 0b0011_1000))) = 0b0001_1000 { refl }
+    @bitvec::BitVec::toNat(8, @BitVec::band(8, @BitVec::ofNat(8, 0xd8), @BitVec::ofNat(8, 0b0011_1000))) = 0b0001_1000 { refl }
 theorem modrm_mod_field():
-    bitvec::toNat(8, band(8, ofNat(8, 0xd8), ofNat(8, 0b1100_0000))) = 0xc0 { refl }
-theorem wraps_like_decimal(): bitvec::toNat(8, ofNat(8, 0x12c)) = 44 { refl }
-theorem not_the_other_opcode(): equal_byte(ofNat(8, 0x89), ofNat(8, 0x8b)) = False { refl }
+    @bitvec::BitVec::toNat(8, @BitVec::band(8, @BitVec::ofNat(8, 0xd8), @BitVec::ofNat(8, 0b1100_0000))) = 0xc0 { refl }
+theorem wraps_like_decimal(): @bitvec::BitVec::toNat(8, @BitVec::ofNat(8, 0x12c)) = 44 { refl }
+theorem not_the_other_opcode(): equal_byte(@BitVec::ofNat(8, 0x89), @BitVec::ofNat(8, 0x8b)) = False { refl }
 "#);
-    bad("theorem wrong(): bitvec::toNat(8, band(8, ofNat(8, 0xd8), ofNat(8, 0b0011_1000))) = 0x19 { refl }");
+    bad("theorem wrong(): @bitvec::BitVec::toNat(8, @BitVec::band(8, @BitVec::ofNat(8, 0xd8), @BitVec::ofNat(8, 0b0011_1000))) = 0x19 { refl }");
 }

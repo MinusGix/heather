@@ -17,8 +17,8 @@ fn bind(input: Expr, slot: &str, body: Expr, span: Span) -> Expr {
     let ExprKind::Lam { body,.. } = &mut continuation.kind else { unreachable!() };
     let name = if let Some(value) = unreturn(body) {
         **body = value;
-        "result::map"
-    } else { "result::and_then" };
+        "result::Result::map"
+    } else { "result::Result::and_then" };
     call(name,vec![input,continuation],span)
 }
 // A local success wrapper can use map, whose callback returns the plain
@@ -67,8 +67,9 @@ fn children(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
         ExprKind::MatchCode { scrut, motive, arms } => {
             f(scrut); ty_children(motive,f); for a in arms { f(&mut a.body); }
         }
-        ExprKind::Dot { recv, args, named, .. } => {
-            f(recv); for a in args.iter_mut().flatten() { f(a); } for a in named { f(&mut a.expr); }
+        ExprKind::Dot { recv, tyargs, args, named, .. } => {
+            f(recv); for t in tyargs { ty_children(t,f); }
+            for a in args.iter_mut().flatten() { f(a); } for a in named { f(&mut a.expr); }
         }
         ExprKind::RecordLit { tyargs, fields, .. } => {
             for t in tyargs { ty_children(t,f); } for a in fields { f(&mut a.expr); }
@@ -117,8 +118,9 @@ fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
         ExprKind::MatchCode { scrut, motive, arms } => {
             f(scrut); ty_visit(motive,f); for a in arms { f(&a.body); }
         }
-        ExprKind::Dot { recv, args, named, .. } => {
-            f(recv); for a in args.iter().flatten() { f(a); } for a in named { f(&a.expr); }
+        ExprKind::Dot { recv, tyargs, args, named, .. } => {
+            f(recv); for t in tyargs { ty_visit(t,f); }
+            for a in args.iter().flatten() { f(a); } for a in named { f(&a.expr); }
         }
         ExprKind::RecordLit { tyargs, fields, .. } => {
             for t in tyargs { ty_visit(t,f); } for a in fields { f(&a.expr); }

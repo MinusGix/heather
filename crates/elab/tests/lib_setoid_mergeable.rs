@@ -68,7 +68,7 @@ fn explicit_subtype_template_builds_positive_addition() {
     );
     let missing = "import nat; import positive_subtype; import subtype; import lift_positive;
         fn pending(x, y: PositiveNat) → PositiveNat {
-            lift_binary(positive_repr(), add, ?closure, x, y)
+            lift_binary(positive_repr(), Nat::add, ?closure, x, y)
         }";
     let error = e
         .elab_module_source("packaged_missing", missing)
@@ -106,7 +106,7 @@ import positive_subtype;
 import subtype_code;
 fn lifted(x, y: PositiveNat) -> PositiveNat {
     emit_code(lift_binary_code)(Nat, PositiveNat, λ n => 0 < n,
-        λ z => z.value, λ n p => PositiveNat(n, p), add,
+        λ z => z.value, λ n p => PositiveNat(n, p), Nat::add,
         ?closure, x, y)
 }
 
@@ -125,7 +125,7 @@ fn lifted(x, y: PositiveNat) -> PositiveNat {
     check(&mut e, "repaired_lift", &repair);
     let wrong = repair.replace("add_positive(a.value, b.value, a.valid)", "a.valid");
     assert!(e.elab_module_source("wrong_lift", &wrong).is_err());
-    let zero = repair.replace(", add,", ", λ a b => 0,");
+    let zero = repair.replace(", Nat::add,", ", λ a b => 0,");
     assert!(e.elab_module_source("zero_lift", &zero).is_err());
 }
 
@@ -227,13 +227,13 @@ import relation_props;
 import relation_context;
 
 fn ElementIn(n: Nat, xs: List<Nat>) -> Type { Mem(n, xs) }
-fn advance(xs: List<Nat>) -> List<Nat> { map(xs, Succ) }
+fn advance(xs: List<Nat>) -> List<Nat> { xs.map(Succ) }
 
 theorem application(n: Nat, xs: List<Nat>, h: Mem(n, xs)):
     Mem(Succ(n), advance(xs))
 {
     let functions = respectful_const(ElementIn, Respectful(ElementIn, ElementIn),
-        Succ, advance, λ n xs h => mem_map(xs, n, Succ, h));
+        Succ, advance, λ n xs h => xs.mem_map(n, Succ, h));
     respectful_ap(ElementIn, ElementIn, ElementIn,
         λ n => Succ, λ xs => advance, λ n => n, λ xs => xs,
         functions, respectful_id(ElementIn))(n, xs, h)
@@ -303,11 +303,11 @@ import list;
 import relation_props;
 
 fn ElementIn(n: Nat, xs: List<Nat>) -> Type { Mem(n, xs) }
-fn advance(xs: List<Nat>) -> List<Nat> { map(xs, Succ) }
+fn advance(xs: List<Nat>) -> List<Nat> { xs.map(Succ) }
 
 theorem advance_related():
     Respectful(ElementIn, ElementIn, Succ, advance)
-{ λ n xs h => mem_map(xs, n, Succ, h) }
+{ λ n xs h => xs.mem_map(n, Succ, h) }
 
 theorem twice_related(n: Nat, xs: List<Nat>, h: Mem(n, xs)):
     Mem(Succ(Succ(n)), advance(advance(xs)))
@@ -345,7 +345,7 @@ fn commute<A: Commutative(same, op)>(same: A -> A -> Type,
 { A.comm(x,y) }
 
 theorem exact_parent<A>(xs, ys: List<A>):
-    commute(SameMembers<A>, append<A>, xs, ys) = append_comm_same_members(xs, ys)
+    commute(SameMembers<A>, List::append<A>, xs, ys) = append_comm_same_members(xs, ys)
 { refl }
 
 // Also exercises use of an open child dictionary through the named parent.
@@ -375,8 +375,8 @@ import list;
 import relation;
 import list_setoid;
 import needs_commutative;
-theorem invalid(): append<Nat>([0], [1]) = append<Nat>([1], [0]) {
-    commute(RelId<List<Nat>>, append<Nat>, [0], [1])
+theorem invalid(): List::append<Nat>([0], [1]) = List::append<Nat>([1], [0]) {
+    commute(RelId<List<Nat>>, List::append<Nat>, [0], [1])
 }
 "#;
     let err = e
@@ -396,7 +396,7 @@ fn generation_request() -> heather_elab::relational_context::Request {
         generated_name: "receive_generated".into(),
         operations: vec![Operation {
             head: "++".into(),
-            function: "append<A>".into(),
+            function: "List::append<A>".into(),
             inputs: vec!["SameMembers<A>".into(), "SameMembers<A>".into()],
             output: "SameMembers<A>".into(),
             certificate: Some("append_same_members<A>".into()),
@@ -501,8 +501,8 @@ fn generator_leaves_length_unproved_and_rejects_a_wrong_certificate() {
     let mut request = generation_request();
     request.output = "RelId<Nat>".into();
     request.operations.push(Operation {
-        head: "list_len".into(),
-        function: "list_len<A>".into(),
+        head: "List::len".into(),
+        function: "List::len<A>".into(),
         inputs: vec!["SameMembers<A>".into()],
         output: "RelId<Nat>".into(),
         certificate: None,
@@ -511,7 +511,7 @@ fn generator_leaves_length_unproved_and_rejects_a_wrong_certificate() {
         .replace("incoming: List<A>) -> List<A>", "incoming: List<A>) -> Nat")
         .replace(
             "known ++ (incoming ++ incoming)",
-            "list_len(known ++ (incoming ++ incoming))",
+            "List::len(known ++ (incoming ++ incoming))",
         );
     let Outcome::Blocked { obligations } = derive(&e, "length", &source, &request).unwrap() else {
         panic!()
@@ -519,7 +519,7 @@ fn generator_leaves_length_unproved_and_rejects_a_wrong_certificate() {
     assert_eq!(obligations.len(), 1);
     assert_eq!(
         obligations[0].goal,
-        "PreservesRelation(SameMembers<A>, RelId<Nat>, list_len<A>)"
+        "PreservesRelation(SameMembers<A>, RelId<Nat>, List::len<A>)"
     );
     request.operations.last_mut().unwrap().certificate =
         Some("preserves_relation_id(SameMembers<A>)".into());
@@ -771,15 +771,15 @@ fn contextual_rewrite_does_not_turn_membership_into_identity() {
     let e = base();
     let mut request = rewrite_request();
     request.operations.push(Operation {
-        head: "list_len".into(),
-        function: "list_len<A>".into(),
+        head: "List::len".into(),
+        function: "List::len<A>".into(),
         inputs: vec!["SameMembers<A>".into()],
         output: "RelId<Nat>".into(),
         certificate: None,
     });
     let source = REWRITE_SOURCE.replace(
         "SameMembers<A>(known ++ (xs ++ xs), known ++ (ys ++ ys))",
-        "RelId<Nat>(list_len(known ++ (xs ++ xs)), list_len(known ++ (ys ++ ys)))",
+        "RelId<Nat>(List::len(known ++ (xs ++ xs)), List::len(known ++ (ys ++ ys)))",
     );
     let Outcome::Blocked { obligations } = rewrite(&e, "length_rewrite", &source, &request)
         .unwrap()
@@ -790,7 +790,7 @@ fn contextual_rewrite_does_not_turn_membership_into_identity() {
     assert_eq!(obligations.len(), 1);
     assert_eq!(
         obligations[0].goal,
-        "PreservesRelation(SameMembers<A>, RelId<Nat>, list_len<A>)"
+        "PreservesRelation(SameMembers<A>, RelId<Nat>, List::len<A>)"
     );
 }
 
@@ -1078,7 +1078,7 @@ fn lift<A: Mergeable(same, op)>(same: A → A → Type, op: A → A → A,
     x, y, fixed: A, h: same(x, y)) -> same(op(fixed, x), op(fixed, y))
 { rel_cong(h) }
 fn Evidence(x, y: Nat) -> Type { Bool }
-instance Mergeable<Nat>(Evidence, add) {
+instance Mergeable<Nat>(Evidence, Nat::add) {
     rel_refl := λ x => True,
     rel_sym := λ x y h => h,
     rel_trans := λ x y z h k => k,
@@ -1087,7 +1087,7 @@ instance Mergeable<Nat>(Evidence, add) {
     comm := λ x y => True,
     idem := λ x => True,
 }
-theorem retained(): lift(Evidence, add, 0, 1, 2, False) = False { refl }
+theorem retained(): lift(Evidence, Nat::add, 0, 1, 2, False) = False { refl }
 "#,
     );
 }

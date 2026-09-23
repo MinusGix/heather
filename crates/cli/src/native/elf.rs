@@ -50,13 +50,13 @@ pub(super) fn image(code: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn byte_list(bytes: &[u8]) -> Expr {
-    Expr::list(bytes.iter().map(|b| Expr::call("bitvec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))
+    Expr::list(bytes.iter().map(|b| Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(8), Expr::nat(u64::from(*b))])))
 }
 
 fn loaded_address(offset: usize) -> String {
     let bits = (0..16).map(|bit| if offset & (1 << bit) == 0 { "False" } else { "True" })
         .collect::<Vec<_>>().join(", ");
-    format!("static_elf64_address(bitvec::from_bits(16, [{bits}]))")
+    format!("static_elf64_address(@bitvec::BitVec::from_bits(16, [{bits}]))")
 }
 
 fn function(module: &mut Module, name: &str, ty: &str, body: Expr) {
@@ -77,8 +77,8 @@ fn machine_theorem(module: &mut Module, name: &str, ty: String, body: String) {
 // reflexivity proofs; no unproved RegionHolds assumption remains at entry.
 pub(super) fn valuation(module: &mut Module, prefix: &str, region: &Region, inputs: [u64; 2]) -> Result<(), String> {
     valuation_expressions(module, prefix, prefix, region, [
-        Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[0])]),
-        Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(inputs[1])]),
+        Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::name("width"), Expr::nat(inputs[0])]),
+        Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::name("width"), Expr::nat(inputs[1])]),
     ])
 }
 
@@ -90,12 +90,12 @@ pub(super) fn valuation_expressions(module: &mut Module, prefix: &str, graph_pre
     let mut declarations = vec![(0, left), (1, right)];
     for &node in &region.nodes {
         let expr = match node {
-            Node::Const { value: constant, .. } => Expr::call("bitvec::ofNat", [Expr::name("width"), Expr::nat(constant)]),
-            Node::Add { left, right, .. } => Expr::call("bitvec::add", [Expr::name("width"), value(left), value(right)]),
-            Node::Sub { left, right, .. } => Expr::call("bitvec::sub", [Expr::name("width"), value(left), value(right)]),
-            Node::BitAnd { left, right, .. } => Expr::call("bitvec::band", [Expr::name("width"), value(left), value(right)]),
-            Node::BitOr { left, right, .. } => Expr::call("bitvec::bor", [Expr::name("width"), value(left), value(right)]),
-            Node::BitXor { left, right, .. } => Expr::call("bitvec::bxor", [Expr::name("width"), value(left), value(right)]),
+            Node::Const { value: constant, .. } => Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::name("width"), Expr::nat(constant)]),
+            Node::Add { left, right, .. } => Expr::explicit_call("bitvec::BitVec::add", [Expr::name("width"), value(left), value(right)]),
+            Node::Sub { left, right, .. } => Expr::explicit_call("bitvec::BitVec::sub", [Expr::name("width"), value(left), value(right)]),
+            Node::BitAnd { left, right, .. } => Expr::explicit_call("bitvec::BitVec::band", [Expr::name("width"), value(left), value(right)]),
+            Node::BitOr { left, right, .. } => Expr::explicit_call("bitvec::BitVec::bor", [Expr::name("width"), value(left), value(right)]),
+            Node::BitXor { left, right, .. } => Expr::explicit_call("bitvec::BitVec::bxor", [Expr::name("width"), value(left), value(right)]),
             _ => return Err("unsupported source node in ELF entry valuation".into()),
         };
         declarations.push((node.output().id, expr));
@@ -106,13 +106,13 @@ pub(super) fn valuation_expressions(module: &mut Module, prefix: &str, graph_pre
             .parameter(Parameter::explicit("width", Expr::name("Nat"))));
 
     }
-    let mut cases = "bitvec::ofNat(width, 0)".to_string();
+    let mut cases = "@bitvec::BitVec::ofNat(width, 0)".to_string();
     let last = *ids.iter().max().unwrap();
     for id in (0..=last).rev() {
         let scrutinee = if id == 0 { "id".into() } else { format!("id_{id}") };
         let tail = if id == last { "_".into() } else { format!("id_{}", id + 1) };
         let here = if ids.contains(&id) { format!("{}(width)", value_name(id)) }
-            else { "bitvec::ofNat(width, 0)".into() };
+            else { "@bitvec::BitVec::ofNat(width, 0)".into() };
         cases = format!("match {scrutinee} {{ Zero => {here}, Succ({tail}) => {cases} }}");
     }
     function(module, &format!("{prefix}_values"), "Valuation()",
@@ -141,8 +141,8 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
     code.extend(&exit);
     code.extend([0x0f, 0x05]);
     let bytes = image(&code)?;
-    let left = format!("bitvec::ofNat(64, {})", inputs[0]);
-    let right = format!("bitvec::ofNat(64, {})", inputs[1]);
+    let left = format!("@bitvec::BitVec::ofNat(64, {})", inputs[0]);
+    let right = format!("@bitvec::BitVec::ofNat(64, {})", inputs[1]);
     let begin = format!("linux_entry_state({left}, {right}, before)");
     let after = format!("{prefix}_after({begin})");
     let result = format!("{}({left}, {right})", emission.reflected.source_name);
@@ -190,7 +190,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
     theorem(module, &format!("{prefix}_elf_file_correct"), Expr::raw(format!(
         "{prefix}_elf_file() = static_elf64_bytes({prefix}_elf_image())")), Expr::name("refl"));
     theorem(module, &format!("{prefix}_elf_entry_code"), Expr::raw(format!(
-        "list::drop({prefix}_elf_file(), 176) = {prefix}_image_code()")),
+        "list::List::drop({prefix}_elf_file(), 176) = {prefix}_image_code()")),
         Expr::call("static_elf64_entry_bytes", [Expr::nullary(format!("{prefix}_elf_image"))]));
     certify_loaded_trace(module, prefix, &emission.instructions, inputs, &left, &right, &result);
     Ok(bytes)
@@ -256,8 +256,8 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
             let offset = instruction_offset + j - HEADER_SIZE;
             let fact = |kind| format!("{prefix}_loaded_{kind}_{i}_{j}");
             for (kind, claim, proof) in [
-                ("page", format!("is_zero_bits(48, bitvec::bxor(48, bitvec::drop_low(16, 48, {address}), bitvec::ofNat(48, 64))) = True"), "refl".to_string()),
-                ("offset", format!("bitvec::toNat(16, bitvec::take_low(16, 48, {address})) = {offset} + {HEADER_SIZE}"), "refl".to_string()),
+                ("page", format!("is_zero_bits(48, @bitvec::BitVec::bxor(48, bitvec::BitVec::drop_low(16, 48, {address}), @bitvec::BitVec::ofNat(48, 64))) = True"), "refl".to_string()),
+                ("offset", format!("@bitvec::BitVec::toNat(16, bitvec::BitVec::take_low(16, 48, {address})) = {offset} + {HEADER_SIZE}"), "refl".to_string()),
                 ("found", format!("{prefix}_image_code().nth({offset}) = Some({byte})"), super::byte_at(&format!("{prefix}_image_code"), offset)),
                 ("read", format!("static_elf64_read({file}, {address}) = Some({byte})"),
                     format!("static_elf64_read_split({prefix}_elf_header(), {prefix}_image_code(), {HEADER_SIZE}, {offset}, {address}, {byte}, {prefix}_elf_header_length(), {}(), {}(), {}())", fact("page"), fact("offset"), fact("found"))),
@@ -267,7 +267,7 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
             } else {
                 let next = loaded_address(instruction_offset + j + 1);
                 for (kind, claim) in [
-                    ("no_wrap", format!("bitvec::carry_add_bit(64, {address}, bitvec::ofNat(64, 1)) = False")),
+                    ("no_wrap", format!("@bitvec::BitVec::carry_add_bit(64, {address}, @bitvec::BitVec::ofNat(64, 1)) = False")),
                     ("next", format!("next_rip({address}, 1) = {next}")),
                 ] { theorem(module, &fact(kind), Expr::raw(claim), Expr::name("refl")); }
                 format!("static_elf64_fetch_more({file}, {address}, {next}, {byte}, elf_byte({}), {span}_from_{}(), {}(), {}(), {}(), {proof})",
@@ -399,7 +399,7 @@ fn image() -> StaticElf64Image(code()) {
     StaticElf64Image(trivial, elf_byte(181), elf_byte(0), refl)
 }
 fn file() -> List<BitVec(8)> { static_elf64_bytes(image()) }
-fn address(n: Nat) -> BitVec(64) { static_elf64_address(bitvec::ofNat(16, n)) }
+fn address(n: Nat) -> BitVec(64) { static_elf64_address(@bitvec::BitVec::ofNat(16, n)) }
 theorem header_read(): static_elf64_read(file(), address(0)) = Some(elf_byte(127)) { refl }
 theorem code_read(): static_elf64_read(file(), static_elf64_entry()) = Some(elf_byte(72)) { refl }
 theorem exact_code(): FetchedFrom(static_elf64_access(), file(),
@@ -408,9 +408,9 @@ theorem file_end(): static_elf64_read(file(), address(181)) = None { refl }
 theorem end_denied(): fetch_instruction_bytes(static_elf64_access(), file(), 1, address(181))
     = FetchDenied(address(181)) { refl }
 theorem below_mapping(): static_elf64_read(file(),
-    bitvec::concat(16, 48, bitvec::ofNat(16, 176), bitvec::ofNat(48, 63))) = None { refl }
+    @bitvec::BitVec::concat(16, 48, @bitvec::BitVec::ofNat(16, 176), @bitvec::BitVec::ofNat(48, 63))) = None { refl }
 theorem next_window(): static_elf64_read(file(),
-    bitvec::concat(16, 48, bitvec::ofNat(16, 0), bitvec::ofNat(48, 65))) = None { refl }
+    @bitvec::BitVec::concat(16, 48, @bitvec::BitVec::ofNat(16, 0), @bitvec::BitVec::ofNat(48, 65))) = None { refl }
 theorem neutral_byte(byte: BitVec(8)):
     static_elf64_read([byte], address(0)) = Some(byte) { refl }
 "#;
@@ -419,7 +419,7 @@ theorem neutral_byte(byte: BitVec(8)):
         for (name, memory, address, expected, access) in [
             ("changed_byte", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ [elf_byte(0), elf_byte(137), elf_byte(216), elf_byte(15), elf_byte(5)]", "static_elf64_entry()", "code()", "static_elf64_access()"),
             ("entry_mismatch", "file()", "address(177)", "code()", "static_elf64_access()"),
-            ("wrong_base", "file()", "bitvec::concat(16, 48, bitvec::ofNat(16, 176), bitvec::ofNat(48, 65))", "code()", "static_elf64_access()"),
+            ("wrong_base", "file()", "@bitvec::BitVec::concat(16, 48, @bitvec::BitVec::ofNat(16, 176), @bitvec::BitVec::ofNat(48, 65))", "code()", "static_elf64_access()"),
             ("missing_tail", "static_elf64_header(elf_byte(180), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15)]", "static_elf64_entry()", "code()", "static_elf64_access()"),
             ("syscall_mismatch", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15), elf_byte(4)]", "address(179)", "linux_syscall_bytes()", "static_elf64_access()"),
             ("non_executable", "file()", "static_elf64_entry()", "code()", "FetchAccess<List<BitVec(8)>>(static_elf64_read, λ file address => False)"),

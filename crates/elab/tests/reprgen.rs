@@ -52,7 +52,7 @@ fn length_derived(r: List<Tok>) -> Nat {{
 theorem length_is_rec(l: List<Tok>):
     ListTok::spec_rec(Nat, Zero, λ a0 a1 b0 => Succ(b0), l)
       = length(l)
-{{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
+{{ match l {{ Nil => refl, Cons(h, t) => Nat::cong_succ(length_is_rec(t)) }} }}
 
 // Phase 4, part two: `fold_law` opens the anchor, the lemma above closes it.
 theorem length_derived_refines(r: List<Tok>, h0: True):
@@ -95,9 +95,9 @@ theorem double_abs_alg(n: Nat):
         Zero => refl,
         Succ(k) => trans(
             bin_succ_abs(binc(BinNat::spec_rec(Bin, BNil, λ a b => binc(binc(b)), k))),
-            cong_succ(trans(
+            Nat::cong_succ(trans(
                 bin_succ_abs(BinNat::spec_rec(Bin, BNil, λ a b => binc(binc(b)), k)),
-                cong_succ(double_abs_alg(k))))),
+                Nat::cong_succ(double_abs_alg(k))))),
     }}
 }}
 
@@ -888,7 +888,7 @@ fn length_derived(r: List<Tok>) -> Nat {{
 theorem length_is_rec(l: List<Tok>):
     ListTok::spec_rec(Nat, Zero, λ a0 a1 b0 => Succ(b0), l)
       = length(l)
-{{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
+{{ match l {{ Nil => refl, Cons(h, t) => Nat::cong_succ(length_is_rec(t)) }} }}
 
 theorem length_derived_refines(r: List<Tok>, h0: True):
     length_derived(r) = length(ListTok::abs(r))
@@ -1126,7 +1126,7 @@ fn slow_acceptance_the_callers_certificate_is_indifferent_to_how_the_callee_was_
 fn length_by_hand(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(length_by_hand(t)) }} }}
 theorem length_by_hand_refines(l: List<Tok>, h0: ListTok::inv(l)):
     length_by_hand(l) = length(ListTok::abs(l))
-{{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_by_hand_refines(t, h0)) }} }}
+{{ match l {{ Nil => refl, Cons(h, t) => Nat::cong_succ(length_by_hand_refines(t, h0)) }} }}
 impl length for ListTok {{
     body := length_by_hand,
     refines := length_by_hand_refines,
@@ -1153,7 +1153,7 @@ fn double_spec(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dou
 fn succ2(n: Nat) -> Nat { Succ(Succ(n)) }
 fn succ2_bin(r: Bin) -> Bin { binc(binc(r)) }
 theorem succ2_bin_refines(r: Bin, h0: bin_canon(r)): bin_abs(succ2_bin(r)) = succ2(bin_abs(r)) {
-    trans(bin_succ_abs(binc(r)), cong_succ(bin_succ_abs(r)))
+    trans(bin_succ_abs(binc(r)), Nat::cong_succ(bin_succ_abs(r)))
 }
 theorem succ2_bin_inv(r: Bin, h0: bin_canon(r)): bin_canon(succ2_bin(r)) {
     bin_canon_succ(binc(r), bin_canon_succ(r, h0))

@@ -254,6 +254,12 @@ impl Elaborator {
                 trace,
             });
         };
+        // Receiver dispatch accepts a class member and a global that are one
+        // term (issues/receiver-dispatch-coinciding-readings.md); a type
+        // subject never can be. Here the subject is *not* an argument of the
+        // projection, and the other reading exists only when it *is* one —
+        // the callee's subject slot takes a type — so the two apply the same
+        // global to different argument lists. The refusal stays unconditional.
         if let Some((desc, fix)) = other {
             return err(
                 format!(

@@ -6,8 +6,10 @@
 import int;
 import list;
 import logic;
-import nat::{cong_nat};
+import nat;
 
+// TODO: various of these should get their own module perhaps, but having it in omega makes it easier to isolate dependency graph.
+//
 // Coefficient rows are deliberately ordinary lists. `dot` stops at the first
 // exhausted list, so generated certificates need no separate length witness;
 // the Rust reifier always emits equally sized rows and atom lists.
@@ -74,34 +76,33 @@ theorem cong_dot(atoms: List<Int>, {left, right: List<Int>},
 
 // The four-term additive permutation used by `dot_add`. Keeping it here pays
 // the associativity/commutativity proof once for every generated certificate.
-theorem int_add_swap_middle(a, b, c, d: Int):
+theorem Int::int_add_swap_middle(a, b, c, d: Int):
     (a + b) + (c + d) = (a + c) + (b + d)
 {
     apply trans;
-    give int::add_assoc(a, b, c + d);
+    give a.add_assoc(b, c + d);
     apply trans;
-    give cong_int(λ (q: Int) => a + q,
-        trans(sym(int::add_assoc(b, c, d)),
-            trans(cong_int(λ (q: Int) => q + d, int::add_comm(b, c)),
-                int::add_assoc(c, b, d))));
-    sym(int::add_assoc(a, c, b + d))
+    give Int::cong(λ (q: Int) => a + q,
+        trans(sym(b.add_assoc(c, d)),
+            trans(Int::cong(λ (q: Int) => q + d, b.add_comm(c)), c.add_assoc(b, d))));
+    sym(a.add_assoc(c, b + d))
 }
 
 theorem dot_scale(k: Int, coeffs: List<Int>): (atoms: List<Int>) →
     dot(scale(k, coeffs), atoms) = k * dot(coeffs, atoms)
 {
     match coeffs {
-        Nil => λ atoms => sym(mul_zero(k)),
+        Nil => λ atoms => sym(k.mul_zero()),
         Cons(c, cs) => λ atoms => match atoms {
-            Nil => sym(mul_zero(k)),
+            Nil => sym(k.mul_zero()),
             Cons(x, xs) =>
                 apply trans;
-                give cong_int(λ (q: Int) => (k * c) * x + q,
+                give Int::cong(λ (q: Int) => (k * c) * x + q,
                     dot_scale(k, cs, xs));
                 apply trans;
-                give cong_int(λ (q: Int) => q + k * dot(cs, xs),
-                    int::mul_assoc(k, c, x));
-                sym(int::mul_add_distr(k, c * x, dot(cs, xs))),
+                give Int::cong(λ (q: Int) => q + k * dot(cs, xs),
+                    k.mul_assoc(c, x));
+                sym(k.mul_add_distr(c * x, dot(cs, xs))),
         },
     }
 }
@@ -110,19 +111,19 @@ theorem dot_add(left: List<Int>): (right, atoms: List<Int>) →
     dot(add_coeffs(left, right), atoms) = dot(left, atoms) + dot(right, atoms)
 {
     match left {
-        Nil => λ right atoms => sym(zero_add(dot(right, atoms))),
+        Nil => λ right atoms => sym(dot(right, atoms).zero_add()),
         Cons(a, as) => λ right atoms => match right {
-            Nil => sym(add_zero(dot(Cons(a, as), atoms))),
+            Nil => sym(dot(Cons(a, as), atoms).add_zero()),
             Cons(b, bs) => match atoms {
-                Nil => sym(add_zero(OfNat(0))),
+                Nil => sym(OfNat(0).add_zero()),
                 Cons(x, xs) =>
                     apply trans;
-                    give cong_int(λ (q: Int) => (a + b) * x + q,
+                    give Int::cong(λ (q: Int) => (a + b) * x + q,
                         dot_add(as, bs, xs));
                     apply trans;
-                    give cong_int(λ (q: Int) => q + (dot(as, xs) + dot(bs, xs)),
-                        add_mul_distr(a, b, x));
-                    int_add_swap_middle(a * x, b * x, dot(as, xs), dot(bs, xs)),
+                    give Int::cong(λ (q: Int) => q + (dot(as, xs) + dot(bs, xs)),
+                        a.add_mul_distr(b, x));
+                    Int::int_add_swap_middle(a * x, b * x, dot(as, xs), dot(bs, xs)),
             },
         },
     }
@@ -135,10 +136,8 @@ theorem dot_combo(a: Int, left: List<Int>, b: Int, right, atoms: List<Int>):
     apply trans;
     give dot_add(scale(a, left), scale(b, right), atoms);
     apply trans;
-    give cong_int(λ (q: Int) => q + dot(scale(b, right), atoms),
-        dot_scale(a, left, atoms));
-    cong_int(λ (q: Int) => a * dot(left, atoms) + q,
-        dot_scale(b, right, atoms))
+    give Int::cong(λ (q: Int) => q + dot(scale(b, right), atoms), dot_scale(a, left, atoms));
+    Int::cong(λ (q: Int) => a * dot(left, atoms) + q, dot_scale(b, right, atoms))
 }
 
 theorem dot_zeros(atoms: List<Int>): dot(zeros(atoms), atoms) = OfNat(0) {
@@ -146,10 +145,10 @@ theorem dot_zeros(atoms: List<Int>): dot(zeros(atoms), atoms) = OfNat(0) {
         Nil => refl,
         Cons(x, xs) =>
             apply trans;
-            give cong_int(λ (q: Int) => OfNat(0) * x + q, dot_zeros(xs));
+            give Int::cong(λ (q: Int) => OfNat(0) * x + q, dot_zeros(xs));
             apply trans;
-            give add_zero(OfNat(0) * x);
-            zero_mul(x),
+            give (OfNat(0) * x).add_zero();
+            x.zero_mul(),
     }
 }
 
@@ -157,16 +156,14 @@ theorem impossible_constant_lower(row, atoms: List<Int>, lower: Int,
     bound: lower <= dot(row, atoms), zero: dot(row, atoms) = OfNat(0),
     positive: OfNat(0) < lower): False
 {
-    int::not_lt_of_ge(lower, OfNat(0),
-        j(zero, λ q p => lower <= q, bound), positive)
+    lower.not_lt_of_ge(OfNat(0), j(zero, λ q p => lower <= q, bound), positive)
 }
 
 theorem impossible_constant_upper(row, atoms: List<Int>, upper: Int,
     bound: dot(row, atoms) <= upper, zero: dot(row, atoms) = OfNat(0),
     negative: upper < OfNat(0)): False
 {
-    int::not_lt_of_ge(OfNat(0), upper,
-        j(zero, λ q p => q <= upper, bound), negative)
+    OfNat(0).not_lt_of_ge(upper, j(zero, λ q p => q <= upper, bound), negative)
 }
 
 theorem dot_basis(index: Nat): (atoms: List<Int>) →
@@ -177,19 +174,19 @@ theorem dot_basis(index: Nat): (atoms: List<Int>) →
             Nil => refl,
             Cons(x, xs) =>
                 apply trans;
-                give cong_int(λ (q: Int) => OfNat(1) * x + q, dot_zeros(xs));
+                give Int::cong(λ (q: Int) => OfNat(1) * x + q, dot_zeros(xs));
                 apply trans;
-                give add_zero(OfNat(1) * x);
-                one_mul(x),
+                give (OfNat(1) * x).add_zero();
+                x.one_mul(),
         },
         Succ(i) => λ atoms => match atoms {
             Nil => refl,
             Cons(x, xs) =>
                 apply trans;
-                give cong_int(λ (q: Int) => OfNat(0) * x + q, dot_basis(i, xs));
+                give Int::cong(λ (q: Int) => OfNat(0) * x + q, dot_basis(i, xs));
                 apply trans;
-                give cong_int(λ (q: Int) => q + nth0(i, xs), zero_mul(x));
-                zero_add(nth0(i, xs)),
+                give Int::cong(λ (q: Int) => q + nth0(i, xs), x.zero_mul());
+                nth0(i, xs).zero_add(),
         },
     }
 }
@@ -197,7 +194,7 @@ theorem dot_basis(index: Nat): (atoms: List<Int>) →
 theorem normalize_const(c: Int, atoms: List<Int>):
     c = c + dot(zeros(atoms), atoms)
 {
-    sym(trans(cong_int(λ (q: Int) => c + q, dot_zeros(atoms)), add_zero(c)))
+    sym(trans(Int::cong(λ (q: Int) => c + q, dot_zeros(atoms)), c.add_zero()))
 }
 
 theorem normalize_atom(index: Nat, atoms: List<Int>):
@@ -205,7 +202,7 @@ theorem normalize_atom(index: Nat, atoms: List<Int>):
 {
     apply trans;
     give sym(dot_basis(index, atoms));
-    sym(zero_add(dot(basis(index, atoms), atoms)))
+    sym(dot(basis(index, atoms), atoms).zero_add())
 }
 
 theorem normalize_add(x, y, cx, cy: Int, left, right, atoms: List<Int>,
@@ -213,21 +210,21 @@ theorem normalize_add(x, y, cx, cy: Int, left, right, atoms: List<Int>,
     x + y = (cx + cy) + dot(add_coeffs(left, right), atoms)
 {
     apply trans;
-    give cong_int(λ (q: Int) => q + y, hx);
+    give Int::cong(λ (q: Int) => q + y, hx);
     apply trans;
-    give cong_int(λ (q: Int) => (cx + dot(left, atoms)) + q, hy);
+    give Int::cong(λ (q: Int) => (cx + dot(left, atoms)) + q, hy);
     apply trans;
-    give int_add_swap_middle(cx, dot(left, atoms), cy, dot(right, atoms));
-    cong_int(λ (q: Int) => (cx + cy) + q, sym(dot_add(left, right, atoms)))
+    give Int::int_add_swap_middle(cx, dot(left, atoms), cy, dot(right, atoms));
+    Int::cong(λ (q: Int) => (cx + cy) + q, sym(dot_add(left, right, atoms)))
 }
 
 theorem normalize_nat_add(x, y: Nat, cx, cy: Int,
     left, right, atoms: List<Int>,
     hx: OfNat(x) = cx + dot(left, atoms),
     hy: OfNat(y) = cy + dot(right, atoms)):
-    OfNat(nat::add(x, y)) = (cx + cy) + dot(add_coeffs(left, right), atoms)
+    OfNat(x + y) = (cx + cy) + dot(add_coeffs(left, right), atoms)
 {
-    trans(int::ofNat_add(x, y),
+    trans(Int::ofNat_add(x, y),
         normalize_add(OfNat(x), OfNat(y), cx, cy,
             left, right, atoms, hx, hy))
 }
@@ -237,32 +234,32 @@ theorem normalize_scale(k, x, c: Int, row, atoms: List<Int>,
     k * x = (k * c) + dot(scale(k, row), atoms)
 {
     apply trans;
-    give cong_int(λ (q: Int) => k * q, hx);
+    give Int::cong(λ (q: Int) => k * q, hx);
     apply trans;
-    give int::mul_add_distr(k, c, dot(row, atoms));
-    cong_int(λ (q: Int) => k * c + q, sym(dot_scale(k, row, atoms)))
+    give k.mul_add_distr(c, dot(row, atoms));
+    Int::cong(λ (q: Int) => k * c + q, sym(dot_scale(k, row, atoms)))
 }
 
 theorem normalize_scale_right(x, k, c: Int, row, atoms: List<Int>,
     hx: x = c + dot(row, atoms)):
     x * k = (k * c) + dot(scale(k, row), atoms)
 {
-    trans(int::mul_comm(x, k), normalize_scale(k, x, c, row, atoms, hx))
+    trans(x.mul_comm(k), normalize_scale(k, x, c, row, atoms, hx))
 }
 
 theorem normalize_nat_scale_left(k, x: Nat, c: Int, row, atoms: List<Int>,
     hx: OfNat(x) = c + dot(row, atoms)):
-    OfNat(nat::mul(k, x)) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
+    OfNat(k * x) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
 {
-    trans(int::ofNat_mul(k, x),
+    trans(Int::ofNat_mul(k, x),
         normalize_scale(OfNat(k), OfNat(x), c, row, atoms, hx))
 }
 
 theorem normalize_nat_scale_right(x, k: Nat, c: Int, row, atoms: List<Int>,
     hx: OfNat(x) = c + dot(row, atoms)):
-    OfNat(nat::mul(x, k)) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
+    OfNat(x * k) = (OfNat(k) * c) + dot(scale(OfNat(k), row), atoms)
 {
-    trans(int::ofNat_mul(x, k),
+    trans(Int::ofNat_mul(x, k),
         normalize_scale_right(OfNat(x), OfNat(k), c, row, atoms, hx))
 }
 
@@ -271,31 +268,31 @@ theorem nat_le_to_int(m, n: Nat, h: m <= n): OfNat(m) <= OfNat(n) { h }
 theorem nat_lt_to_int(m, n: Nat, h: m < n): OfNat(m) < OfNat(n) { h }
 
 theorem nat_lt_of_not_le(a, b: Nat, h: ¬(a <= b)): b < a {
-    match nat::lt_trichotomy(a, b) {
-        Inl(forward) => false_elim(h(nat::le_of_lt(a, b, forward))),
+    match a.lt_trichotomy(b) {
+        Inl(forward) => false_elim(h(a.le_of_lt(b, forward))),
         Inr(rest) => match rest {
-            Inl(eq) => false_elim(h(j(eq, λ y q => a <= y, nat::le_refl(a)))),
+            Inl(eq) => false_elim(h(j(eq, λ y q => a <= y, a.le_refl()))),
             Inr(back) => back,
         },
     }
 }
 
 theorem nat_le_of_not_lt(a, b: Nat, h: ¬(a < b)): b <= a {
-    match nat::lt_trichotomy(a, b) {
+    match a.lt_trichotomy(b) {
         Inl(forward) => false_elim(h(forward)),
         Inr(rest) => match rest {
-            Inl(eq) => j(eq, λ y q => y <= a, nat::le_refl(a)),
-            Inr(back) => nat::le_of_lt(b, a, back),
+            Inl(eq) => j(eq, λ y q => y <= a, a.le_refl()),
+            Inr(back) => b.le_of_lt(a, back),
         },
     }
 }
 
 theorem nat_le_of_not_not_le(a, b: Nat, h: ¬¬(a <= b)): a <= b {
-    match nat::le_dec(a, b) { Inl(proof) => proof, Inr(refute) => false_elim(h(refute)) }
+    match a.le_dec(b) { Inl(proof) => proof, Inr(refute) => false_elim(h(refute)) }
 }
 
 theorem nat_lt_of_not_not_lt(a, b: Nat, h: ¬¬(a < b)): a < b {
-    match nat::le_dec(Succ(a), b) {
+    match Succ(a).le_dec(b) {
         Inl(proof) => proof,
         Inr(refute) => false_elim(h(refute)),
     }
@@ -306,11 +303,11 @@ theorem normalize_neg(x, c: Int, row, atoms: List<Int>,
     -x = (-c) + dot(scale(NegSucc(0), row), atoms)
 {
     apply trans;
-    give sym(trans(mul_neg_l(OfNat(1), x), cong_int(neg, one_mul(x))));
+    give sym(trans(OfNat(1).mul_neg_l(x), Int::cong(Int::neg, x.one_mul())));
     apply trans;
     give normalize_scale(NegSucc(0), x, c, row, atoms, hx);
-    cong_int(λ (q: Int) => q + dot(scale(NegSucc(0), row), atoms),
-        trans(mul_neg_l(OfNat(1), c), cong_int(neg, one_mul(c))))
+    Int::cong(λ (q: Int) => q + dot(scale(NegSucc(0), row), atoms),
+        trans(OfNat(1).mul_neg_l(c), Int::cong(Int::neg, c.one_mul())))
 }
 
 // Transport helpers keep generated terms small and make their direction
@@ -325,16 +322,16 @@ theorem le_transport(a, b, c, d: Int, left: a = b, right: c = d, h: a <= c):
 theorem sub_le_sub_constants(cx, dx, cy, dy: Int,
     h: cx + dx <= cy + dy): dx + (-dy) <= cy + (-cx)
 {
-    let shifted = int::add_le_mono_r(
-        cx + dx, cy + dy, (-cx) + (-dy), h);
+    let shifted =
+        (cx + dx).add_le_mono_r(cy + dy, (-cx) + (-dy), h);
     let left = trans(
-        int_add_swap_middle(cx, dx, -cx, -dy),
-        trans(cong_int(λ (q: Int) => q + (dx + (-dy)), add_neg(cx)),
-            zero_add(dx + (-dy))));
+        Int::int_add_swap_middle(cx, dx, -cx, -dy),
+        trans(Int::cong(λ (q: Int) => q + (dx + (-dy)), cx.add_neg()),
+            (dx + (-dy)).zero_add()));
     let right = trans(
-        int_add_swap_middle(cy, dy, -cx, -dy),
-        trans(cong_int(λ (q: Int) => (cy + (-cx)) + q, add_neg(dy)),
-            add_zero(cy + (-cx))));
+        Int::int_add_swap_middle(cy, dy, -cx, -dy),
+        trans(Int::cong(λ (q: Int) => (cy + (-cx)) + q, dy.add_neg()),
+            (cy + (-cx)).add_zero()));
     le_transport(
         (cx + dx) + ((-cx) + (-dy)), dx + (-dy),
         (cy + dy) + ((-cx) + (-dy)), cy + (-cx),
@@ -342,7 +339,7 @@ theorem sub_le_sub_constants(cx, dx, cy, dy: Int,
 }
 
 theorem neg_one_mul(x: Int): NegSucc(0) * x = -x {
-    trans(mul_neg_l(OfNat(1), x), cong_int(neg, one_mul(x)))
+    trans(OfNat(1).mul_neg_l(x), Int::cong(Int::neg, x.one_mul()))
 }
 
 fn sub_coeffs(left, right: List<Int>) → List<Int> {
@@ -355,24 +352,24 @@ theorem dot_sub(left, right, atoms: List<Int>):
     apply trans;
     give dot_combo(OfNat(1), left, NegSucc(0), right, atoms);
     apply trans;
-    give cong_int(λ (q: Int) => q + NegSucc(0) * dot(right, atoms),
-        one_mul(dot(left, atoms)));
-    cong_int(λ (q: Int) => dot(left, atoms) + q,
+    give Int::cong(λ (q: Int) => q + NegSucc(0) * dot(right, atoms),
+        dot(left, atoms).one_mul());
+    Int::cong(λ (q: Int) => dot(left, atoms) + q,
         neg_one_mul(dot(right, atoms)))
 }
 
 theorem sub_eq_sub_constants(cx, dx, cy, dy: Int,
     h: cx + dx = cy + dy): dx + (-dy) = cy + (-cx)
 {
-    let shifted = cong_int(λ (q: Int) => q + ((-cx) + (-dy)), h);
+    let shifted = Int::cong(λ (q: Int) => q + ((-cx) + (-dy)), h);
     let left = trans(
-        int_add_swap_middle(cx, dx, -cx, -dy),
-        trans(cong_int(λ (q: Int) => q + (dx + (-dy)), add_neg(cx)),
-            zero_add(dx + (-dy))));
+        Int::int_add_swap_middle(cx, dx, -cx, -dy),
+        trans(Int::cong(λ (q: Int) => q + (dx + (-dy)), cx.add_neg()),
+            (dx + (-dy)).zero_add()));
     let right = trans(
-        int_add_swap_middle(cy, dy, -cx, -dy),
-        trans(cong_int(λ (q: Int) => (cy + (-cx)) + q, add_neg(dy)),
-            add_zero(cy + (-cx))));
+        Int::int_add_swap_middle(cy, dy, -cx, -dy),
+        trans(Int::cong(λ (q: Int) => (cy + (-cx)) + q, dy.add_neg()),
+            (cy + (-cx)).add_zero()));
     trans(sym(left), trans(shifted, right))
 }
 
@@ -389,17 +386,17 @@ theorem normalized_eq_value(x, y, cx, cy: Int, left, right, atoms: List<Int>,
 theorem lower_of_eq(row, atoms: List<Int>, value: Int,
     h: dot(row, atoms) = value): value <= dot(row, atoms)
 {
-    j(h, λ q p => q <= dot(row, atoms), int::le_refl(dot(row, atoms)))
+    j(h, λ q p => q <= dot(row, atoms), dot(row, atoms).le_refl())
 }
 
 theorem upper_of_eq(row, atoms: List<Int>, value: Int,
     h: dot(row, atoms) = value): dot(row, atoms) <= value
 {
-    j(h, λ q p => dot(row, atoms) <= q, int::le_refl(dot(row, atoms)))
+    j(h, λ q p => dot(row, atoms) <= q, dot(row, atoms).le_refl())
 }
 
 fn IsPositiveOfNat(value: Int) → Type {
-    match value { OfNat(n) => nat::IsSucc(n), NegSucc(_) => False }
+    match value { OfNat(n) => n.IsSucc(), NegSucc(_) => False }
 }
 
 fn IsNegative(value: Int) → Type {
@@ -416,43 +413,43 @@ theorem negative_int_nonzero(k: Nat): NegSucc(k) ≠ OfNat(0) {
 }
 
 theorem add_lt_mono_l(a, b, c: Int, h: a < b): c + a < c + b {
-    j(int::add_isucc(c, a),
+    j(c.add_isucc(a),
       λ y _ => y <= c + b,
-      int::add_le_mono_l(int::isucc(a), b, c, h))
+      a.isucc().add_le_mono_l(b, c, h))
 }
 
 theorem div_lower_nonzero(dividend, divisor: Int,
     nonzero: divisor ≠ OfNat(0)):
-    int::div(dividend, divisor) * divisor <= dividend
+    dividend.div(divisor) * divisor <= dividend
 {
-    let product = int::div(dividend, divisor) * divisor;
-    let remainder = int::mod(dividend, divisor);
-    j(int::add_zero(product),
+    let product = dividend.div(divisor) * divisor;
+    let remainder = dividend.mod(divisor);
+    j(product.add_zero(),
       λ left _ => left <= dividend,
-      j(int::div_mul_add_mod(dividend, divisor),
+      j(Int::div_mul_add_mod(dividend, divisor),
         λ right _ => product + OfNat(0) <= right,
-        int::add_le_mono_l(
-            OfNat(0), remainder, product,
-            int::mod_nonneg(dividend, divisor, nonzero))))
+
+            OfNat(0).add_le_mono_l(remainder, product,
+            dividend.mod_nonneg(divisor, nonzero))))
 }
 
 theorem div_upper_nonzero(dividend, divisor: Int,
     nonzero: divisor ≠ OfNat(0)):
-    dividend < int::div(dividend, divisor) * divisor + int::abs(divisor)
+    dividend < dividend.div(divisor) * divisor + divisor.abs()
 {
-    let product = int::div(dividend, divisor) * divisor;
-    let remainder = int::mod(dividend, divisor);
-    j(int::div_mul_add_mod(dividend, divisor),
-      λ right _ => right < product + int::abs(divisor),
+    let product = dividend.div(divisor) * divisor;
+    let remainder = dividend.mod(divisor);
+    j(Int::div_mul_add_mod(dividend, divisor),
+      λ right _ => right < product + divisor.abs(),
       add_lt_mono_l(
           remainder,
-          int::abs(divisor),
+          divisor.abs(),
           product,
-          int::mod_lt_abs(dividend, divisor, nonzero)))
+          dividend.mod_lt_abs(divisor, nonzero)))
 }
 
 theorem div_lower(dividend: Int, divisor_pred: Nat):
-    int::div(dividend, OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
+    dividend.div(OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
         <= dividend
 {
     div_lower_nonzero(
@@ -463,7 +460,7 @@ theorem div_lower(dividend: Int, divisor_pred: Nat):
 
 theorem div_upper(dividend: Int, divisor_pred: Nat):
     dividend <
-        int::div(dividend, OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred)) +
+        dividend.div(OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred)) +
             OfNat(Succ(divisor_pred))
 {
     div_upper_nonzero(
@@ -473,142 +470,142 @@ theorem div_upper(dividend: Int, divisor_pred: Nat):
 }
 
 theorem mod_expand(dividend, divisor: Int):
-    int::mod(dividend, divisor) =
-        dividend + int::neg(int::div(dividend, divisor) * divisor)
+    dividend.mod(divisor) =
+        dividend + (dividend.div(divisor) * divisor).neg()
 {
-    let product = int::div(dividend, divisor) * divisor;
-    let remainder = int::mod(dividend, divisor);
+    let product = dividend.div(divisor) * divisor;
+    let remainder = dividend.mod(divisor);
     calc {
-        remainder = OfNat(0) + remainder := sym(int::zero_add(remainder)),
-        = (int::neg(product) + product) + remainder :=
-            cong_int(λ (x: Int) => x + remainder,
-                     sym(int::neg_add_self(product))),
-        = int::neg(product) + (product + remainder) :=
-            int::add_assoc(int::neg(product), product, remainder),
-        = int::neg(product) + dividend :=
-            cong_int(λ (x: Int) => int::neg(product) + x,
-                     int::div_mul_add_mod(dividend, divisor)),
-        = dividend + int::neg(product) :=
-            int::add_comm(int::neg(product), dividend),
+        remainder = OfNat(0) + remainder := sym(remainder.zero_add()),
+        = (product.neg() + product) + remainder :=
+            Int::cong(λ (x: Int) => x + remainder,
+                     sym(Int::neg_add_self(product))),
+        = product.neg() + (product + remainder) :=
+            product.neg().add_assoc(product, remainder),
+        = product.neg() + dividend :=
+            Int::cong(λ (x: Int) => product.neg() + x,
+                     Int::div_mul_add_mod(dividend, divisor)),
+        = dividend + product.neg() :=
+            product.neg().add_comm(dividend),
     }
 }
 
 theorem normalize_mod(dividend, divisor, constant: Int,
     row, atoms: List<Int>,
-    expanded: dividend + int::neg(int::div(dividend, divisor) * divisor) =
+    expanded: dividend + (dividend.div(divisor) * divisor).neg() =
         constant + dot(row, atoms)):
-    int::mod(dividend, divisor) = constant + dot(row, atoms)
+    dividend.mod(divisor) = constant + dot(row, atoms)
 {
     trans(mod_expand(dividend, divisor), expanded)
 }
 
 theorem normalize_div_zero(dividend: Int, atoms: List<Int>):
-    int::div(dividend, OfNat(0)) = OfNat(0) + dot(zeros(atoms), atoms)
+    dividend.div(OfNat(0)) = OfNat(0) + dot(zeros(atoms), atoms)
 {
-    trans(int::div_zero(dividend), normalize_const(OfNat(0), atoms))
+    trans(dividend.div_zero(), normalize_const(OfNat(0), atoms))
 }
 
 theorem normalize_mod_zero(dividend, constant: Int, row, atoms: List<Int>,
     h: dividend = constant + dot(row, atoms)):
-    int::mod(dividend, OfNat(0)) = constant + dot(row, atoms)
+    dividend.mod(OfNat(0)) = constant + dot(row, atoms)
 {
     trans(int::mod_zero(dividend), h)
 }
 
 theorem nat_div_lower(dividend, divisor_pred: Nat):
-    OfNat(nat::div(dividend, Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
+    OfNat(dividend.div(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
         <= OfNat(dividend)
 {
-    let quotient = nat::div(dividend, Succ(divisor_pred));
-    let product = nat::div(dividend, Succ(divisor_pred)) * Succ(divisor_pred);
-    let remainder = nat::mod(dividend, Succ(divisor_pred));
-    j(int::ofNat_mul(quotient, Succ(divisor_pred)),
+    let quotient = dividend.div(Succ(divisor_pred));
+    let product = dividend.div(Succ(divisor_pred)) * Succ(divisor_pred);
+    let remainder = dividend.mod(Succ(divisor_pred));
+    j(Int::ofNat_mul(quotient, Succ(divisor_pred)),
       λ left _ => left <= OfNat(dividend),
       nat_le_to_int(
           product,
           dividend,
-          j(nat::div_mul_add_mod(dividend, Succ(divisor_pred)),
+          j(dividend.div_mul_add_mod(Succ(divisor_pred)),
             λ right _ => product <= right,
-            nat::le_add_l(product, remainder))))
+            product.le_add_l(remainder))))
 }
 
 theorem nat_div_upper(dividend, divisor_pred: Nat):
     OfNat(dividend) <
-        OfNat(nat::div(dividend, Succ(divisor_pred))) *
+        OfNat(dividend.div(Succ(divisor_pred))) *
             OfNat(Succ(divisor_pred)) + OfNat(Succ(divisor_pred))
 {
-    let quotient = nat::div(dividend, Succ(divisor_pred));
+    let quotient = dividend.div(Succ(divisor_pred));
     let product = quotient * Succ(divisor_pred);
-    let remainder = nat::mod(dividend, Succ(divisor_pred));
-    j(sym(int::ofNat_mul_add(
+    let remainder = dividend.mod(Succ(divisor_pred));
+    j(sym(Int::ofNat_mul_add(
           quotient, Succ(divisor_pred), Succ(divisor_pred))),
       λ right _ => OfNat(dividend) < right,
       nat_lt_to_int(
           dividend,
           product + Succ(divisor_pred),
-          j(nat::div_mul_add_mod(dividend, Succ(divisor_pred)),
+          j(dividend.div_mul_add_mod(Succ(divisor_pred)),
             λ right _ => right < product + Succ(divisor_pred),
-            nat::add_le_mono_l(
-                product,
+
+                product.add_le_mono_l(
                 Succ(remainder),
                 Succ(divisor_pred),
-                nat::mod_lt(dividend, Succ(divisor_pred), trivial)))))
+                dividend.mod_lt(Succ(divisor_pred), trivial)))))
 }
 
 theorem nat_mod_expand(dividend, divisor: Nat):
-    OfNat(nat::mod(dividend, divisor)) =
+    OfNat(dividend.mod(divisor)) =
         OfNat(dividend) +
-            int::neg(OfNat(nat::div(dividend, divisor)) * OfNat(divisor))
+            (OfNat(dividend.div(divisor)) * OfNat(divisor)).neg()
 {
-    let product = OfNat(nat::div(dividend, divisor)) * OfNat(divisor);
-    let remainder = OfNat(nat::mod(dividend, divisor));
+    let product = OfNat(dividend.div(divisor)) * OfNat(divisor);
+    let remainder = OfNat(dividend.mod(divisor));
     let reconstruct = trans(
-        int::ofNat_mul_add(
-            nat::div(dividend, divisor), divisor, nat::mod(dividend, divisor)),
-        int::cong_ofnat(nat::div_mul_add_mod(dividend, divisor)));
+        Int::ofNat_mul_add(
+            dividend.div(divisor), divisor, dividend.mod(divisor)),
+        Int::cong_ofnat(dividend.div_mul_add_mod(divisor)));
     calc {
-        remainder = OfNat(0) + remainder := sym(int::zero_add(remainder)),
-        = (int::neg(product) + product) + remainder :=
-            cong_int(λ (x: Int) => x + remainder,
-                     sym(int::neg_add_self(product))),
-        = int::neg(product) + (product + remainder) :=
-            int::add_assoc(int::neg(product), product, remainder),
-        = int::neg(product) + OfNat(dividend) :=
-            cong_int(λ (x: Int) => int::neg(product) + x, reconstruct),
-        = OfNat(dividend) + int::neg(product) :=
-            int::add_comm(int::neg(product), OfNat(dividend)),
+        remainder = OfNat(0) + remainder := sym(remainder.zero_add()),
+        = (product.neg() + product) + remainder :=
+            Int::cong(λ (x: Int) => x + remainder,
+                     sym(Int::neg_add_self(product))),
+        = product.neg() + (product + remainder) :=
+            product.neg().add_assoc(product, remainder),
+        = product.neg() + OfNat(dividend) :=
+            Int::cong(λ (x: Int) => product.neg() + x, reconstruct),
+        = OfNat(dividend) + product.neg() :=
+            product.neg().add_comm(OfNat(dividend)),
     }
 }
 
 theorem normalize_nat_mod(dividend, divisor: Nat, constant: Int,
     row, atoms: List<Int>,
     expanded: OfNat(dividend) +
-        int::neg(OfNat(nat::div(dividend, divisor)) * OfNat(divisor)) =
+        (OfNat(dividend.div(divisor)) * OfNat(divisor)).neg() =
             constant + dot(row, atoms)):
-    OfNat(nat::mod(dividend, divisor)) = constant + dot(row, atoms)
+    OfNat(dividend.mod(divisor)) = constant + dot(row, atoms)
 {
     trans(nat_mod_expand(dividend, divisor), expanded)
 }
 
 theorem normalize_nat_div_zero(dividend: Nat, atoms: List<Int>):
-    OfNat(nat::div(dividend, 0)) = OfNat(0) + dot(zeros(atoms), atoms)
+    OfNat(dividend.div(0)) = OfNat(0) + dot(zeros(atoms), atoms)
 {
-    trans(int::cong_ofnat(nat::div_zero(dividend)),
+    trans(Int::cong_ofnat(dividend.div_zero()),
           normalize_const(OfNat(0), atoms))
 }
 
 theorem normalize_nat_mod_zero(dividend: Nat, constant: Int,
     row, atoms: List<Int>, h: OfNat(dividend) = constant + dot(row, atoms)):
-    OfNat(nat::mod(dividend, 0)) = constant + dot(row, atoms)
+    OfNat(dividend.mod(0)) = constant + dot(row, atoms)
 {
-    trans(int::cong_ofnat(nat::mod_zero(dividend)), h)
+    trans(Int::cong_ofnat(Nat::mod_zero(dividend)), h)
 }
 
 theorem eq_of_bounds(row, atoms: List<Int>, value: Int,
     lower: value <= dot(row, atoms), upper: dot(row, atoms) <= value):
     dot(row, atoms) = value
 {
-    int::le_antisym(dot(row, atoms), value, upper, lower)
+    dot(row, atoms).le_antisym(value, upper, lower)
 }
 
 theorem exact_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
@@ -620,9 +617,9 @@ theorem exact_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
             = a * dot(left, atoms) + b * dot(right, atoms) :=
                 dot_combo(a, left, b, right, atoms),
             = a * l + b * dot(right, atoms) :=
-                cong_int(λ (x: Int) => a * x + b * dot(right, atoms), left_eq),
+                Int::cong(λ (x: Int) => a * x + b * dot(right, atoms), left_eq),
             = a * l + b * r :=
-                cong_int(λ (x: Int) => a * l + b * x, right_eq),
+                Int::cong(λ (x: Int) => a * l + b * x, right_eq),
     }
 }
 
@@ -645,7 +642,7 @@ theorem upper_to_negated_lower(row, atoms: List<Int>, upper: Int,
     h: dot(row, atoms) <= upper):
     -upper <= dot(scale(NegSucc(0), row), atoms)
 {
-    let reversed = le_neg(dot(row, atoms), upper, h);
+    let reversed = dot(row, atoms).le_neg(upper, h);
     let scaled = trans(
         dot_scale(NegSucc(0), row, atoms),
         neg_one_mul(dot(row, atoms)));
@@ -657,7 +654,7 @@ theorem lower_to_negated_upper(row, atoms: List<Int>, lower: Int,
     h: lower <= dot(row, atoms)):
     dot(scale(NegSucc(0), row), atoms) <= -lower
 {
-    let reversed = le_neg(lower, dot(row, atoms), h);
+    let reversed = lower.le_neg(dot(row, atoms), h);
     let scaled = trans(
         dot_scale(NegSucc(0), row, atoms),
         neg_one_mul(dot(row, atoms)));
@@ -696,7 +693,7 @@ theorem upper_transport(coeffs, atoms: List<Int>, upper, value: Int,
 theorem divide_upper(row, reduced, atoms: List<Int>, divisor, upper, rounded: Int,
     decomp: row = scale(divisor, reduced),
     nonnegative: OfNat(0) <= divisor,
-    threshold: upper < divisor * isucc(rounded),
+    threshold: upper < divisor * rounded.isucc(),
     bound: dot(row, atoms) <= upper):
     dot(reduced, atoms) <= rounded
 {
@@ -706,17 +703,17 @@ theorem divide_upper(row, reduced, atoms: List<Int>, divisor, upper, rounded: In
     let normalized: (divisor * dot(reduced, atoms) <= upper) =
         le_transport(dot(row, atoms), divisor * dot(reduced, atoms),
             upper, upper, scaled, refl, bound);
-    match int::le_dec(dot(reduced, atoms), rounded) {
+    match dot(reduced, atoms).le_dec(rounded) {
         Inl(proof) => proof,
         Inr(denied) => {
-            let next_le: (isucc(rounded) <= dot(reduced, atoms)) =
-                int::lt_of_not_le(rounded, dot(reduced, atoms), denied);
-            let multiplied = int::mul_le_mono_l(
-                isucc(rounded), dot(reduced, atoms), divisor,
+            let next_le: (rounded.isucc() <= dot(reduced, atoms)) =
+                rounded.lt_of_not_le(dot(reduced, atoms), denied);
+            let multiplied =
+                rounded.isucc().mul_le_mono_l(dot(reduced, atoms), divisor,
                 next_le, nonnegative);
-            false_elim(int::not_lt_of_ge(
-                divisor * isucc(rounded), upper,
-                int::le_trans(divisor * isucc(rounded),
+            false_elim(
+                (divisor * rounded.isucc()).not_lt_of_ge(upper,
+                (divisor * rounded.isucc()).le_trans(
                     divisor * dot(reduced, atoms), upper,
                     multiplied, normalized), threshold))
         },
@@ -726,7 +723,7 @@ theorem divide_upper(row, reduced, atoms: List<Int>, divisor, upper, rounded: In
 theorem divide_lower(row, reduced, atoms: List<Int>, divisor, lower, rounded: Int,
     decomp: row = scale(divisor, reduced),
     nonnegative: OfNat(0) <= divisor,
-    threshold: divisor * ipred(rounded) < lower,
+    threshold: divisor * rounded.ipred() < lower,
     bound: lower <= dot(row, atoms)):
     rounded <= dot(reduced, atoms)
 {
@@ -736,23 +733,23 @@ theorem divide_lower(row, reduced, atoms: List<Int>, divisor, lower, rounded: In
     let normalized: (lower <= divisor * dot(reduced, atoms)) =
         le_transport(lower, lower, dot(row, atoms),
             divisor * dot(reduced, atoms), refl, scaled, bound);
-    match int::le_dec(rounded, dot(reduced, atoms)) {
+    match rounded.le_dec(dot(reduced, atoms)) {
         Inl(proof) => proof,
         Inr(denied) => {
-            let below: (isucc(dot(reduced, atoms)) <= rounded) =
-                int::lt_of_not_le(dot(reduced, atoms), rounded, denied);
-            let predecessor = int::le_ipred(
-                isucc(dot(reduced, atoms)), rounded, below);
-            let before: (dot(reduced, atoms) <= ipred(rounded)) =
-                j(int::ipred_isucc(dot(reduced, atoms)),
-                    λ q p => q <= ipred(rounded), predecessor);
-            let multiplied = int::mul_le_mono_l(
-                dot(reduced, atoms), ipred(rounded), divisor,
+            let below: (dot(reduced, atoms).isucc() <= rounded) =
+                dot(reduced, atoms).lt_of_not_le(rounded, denied);
+            let predecessor =
+                dot(reduced, atoms).isucc().le_ipred(rounded, below);
+            let before: (dot(reduced, atoms) <= rounded.ipred()) =
+                j(dot(reduced, atoms).ipred_isucc(),
+                    λ q p => q <= rounded.ipred(), predecessor);
+            let multiplied =
+                dot(reduced, atoms).mul_le_mono_l(rounded.ipred(), divisor,
                 before, nonnegative);
-            false_elim(int::not_lt_of_ge(
-                lower, divisor * ipred(rounded),
-                int::le_trans(lower, divisor * dot(reduced, atoms),
-                    divisor * ipred(rounded), normalized, multiplied), threshold))
+            false_elim(
+                lower.not_lt_of_ge(divisor * rounded.ipred(),
+                lower.le_trans(divisor * dot(reduced, atoms),
+                    divisor * rounded.ipred(), normalized, multiplied), threshold))
         },
     }
 }
@@ -762,40 +759,40 @@ theorem lower_scale(k, lower, value: Int,
     hk: OfNat(0) <= k, h: lower <= value):
     k * lower <= k * value
 {
-    int::mul_le_mono_l(lower, value, k, h, hk)
+    lower.mul_le_mono_l(value, k, h, hk)
 }
 
 theorem upper_scale(k, value, upper: Int,
     hk: OfNat(0) <= k, h: value <= upper):
     k * value <= k * upper
 {
-    int::mul_le_mono_l(value, upper, k, h, hk)
+    value.mul_le_mono_l(upper, k, h, hk)
 }
 
 theorem upper_neg_scale(k, value, upper: Int,
     hk: OfNat(0) <= k, h: value <= upper):
     (-k) * upper <= (-k) * value
 {
-    let scaled = int::mul_le_mono_l(value, upper, k, h, hk);
+    let scaled = value.mul_le_mono_l(upper, k, h, hk);
     le_transport(
         -(k * upper), (-k) * upper,
         -(k * value), (-k) * value,
-        sym(mul_neg_l(k, upper)),
-        sym(mul_neg_l(k, value)),
-        le_neg(k * value, k * upper, scaled))
+        sym(k.mul_neg_l(upper)),
+        sym(k.mul_neg_l(value)),
+        (k * value).le_neg(k * upper, scaled))
 }
 
 theorem lower_neg_scale(k, lower, value: Int,
     hk: OfNat(0) <= k, h: lower <= value):
     (-k) * value <= (-k) * lower
 {
-    let scaled = int::mul_le_mono_l(lower, value, k, h, hk);
+    let scaled = lower.mul_le_mono_l(value, k, h, hk);
     le_transport(
         -(k * value), (-k) * value,
         -(k * lower), (-k) * lower,
-        sym(mul_neg_l(k, value)),
-        sym(mul_neg_l(k, lower)),
-        le_neg(k * lower, k * value, scaled))
+        sym(k.mul_neg_l(value)),
+        sym(k.mul_neg_l(lower)),
+        (k * lower).le_neg(k * value, scaled))
 }
 
 // Combining two certified lower bounds is the common nonnegative-certificate
@@ -806,8 +803,8 @@ theorem lower_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: l <= dot(left, atoms), hr: r <= dot(right, atoms)):
     a * l + b * r <= dot(combo(a, left, b, right), atoms)
 {
-    let summed = int::add_le_mono(
-        a * l, a * dot(left, atoms),
+    let summed =
+        (a * l).add_le_mono(a * dot(left, atoms),
         b * r, b * dot(right, atoms),
         lower_scale(a, l, dot(left, atoms), ha, hl),
         lower_scale(b, r, dot(right, atoms), hb, hr));
@@ -820,8 +817,8 @@ theorem upper_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: dot(left, atoms) <= l, hr: dot(right, atoms) <= r):
     dot(combo(a, left, b, right), atoms) <= a * l + b * r
 {
-    let summed = int::add_le_mono(
-        a * dot(left, atoms), a * l,
+    let summed =
+        (a * dot(left, atoms)).add_le_mono(a * l,
         b * dot(right, atoms), b * r,
         upper_scale(a, dot(left, atoms), l, ha, hl),
         upper_scale(b, dot(right, atoms), r, hb, hr));
@@ -834,8 +831,8 @@ theorem lower_neg_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: dot(left, atoms) <= l, hr: dot(right, atoms) <= r):
     (-a) * l + (-b) * r <= dot(combo(-a, left, -b, right), atoms)
 {
-    let summed = int::add_le_mono(
-        (-a) * l, (-a) * dot(left, atoms),
+    let summed =
+        ((-a) * l).add_le_mono((-a) * dot(left, atoms),
         (-b) * r, (-b) * dot(right, atoms),
         upper_neg_scale(a, dot(left, atoms), l, ha, hl),
         upper_neg_scale(b, dot(right, atoms), r, hb, hr));
@@ -848,8 +845,8 @@ theorem upper_neg_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
     hl: l <= dot(left, atoms), hr: r <= dot(right, atoms)):
     dot(combo(-a, left, -b, right), atoms) <= (-a) * l + (-b) * r
 {
-    let summed = int::add_le_mono(
-        (-a) * dot(left, atoms), (-a) * l,
+    let summed =
+        ((-a) * dot(left, atoms)).add_le_mono((-a) * l,
         (-b) * dot(right, atoms), (-b) * r,
         lower_neg_scale(a, l, dot(left, atoms), ha, hl),
         lower_neg_scale(b, r, dot(right, atoms), hb, hr));
@@ -864,8 +861,8 @@ theorem lower_upper_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
     hl: l <= dot(left, atoms), hu: dot(right, atoms) <= u):
     a * l + (-b) * u <= dot(combo(a, left, -b, right), atoms)
 {
-    let summed = int::add_le_mono(
-        a * l, a * dot(left, atoms),
+    let summed =
+        (a * l).add_le_mono(a * dot(left, atoms),
         (-b) * u, (-b) * dot(right, atoms),
         lower_scale(a, l, dot(left, atoms), ha, hl),
         upper_neg_scale(b, dot(right, atoms), u, hb, hu));
@@ -878,8 +875,8 @@ theorem upper_lower_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
     hl: l <= dot(left, atoms), hu: dot(right, atoms) <= u):
     dot(combo(-a, left, b, right), atoms) <= (-a) * l + b * u
 {
-    let summed = int::add_le_mono(
-        (-a) * dot(left, atoms), (-a) * l,
+    let summed =
+        ((-a) * dot(left, atoms)).add_le_mono((-a) * l,
         b * dot(right, atoms), b * u,
         lower_neg_scale(a, l, dot(left, atoms), ha, hl),
         upper_scale(b, dot(right, atoms), u, hb, hu));
@@ -893,8 +890,8 @@ theorem upper_lower_lower_combo(a, b: Int,
     hu: dot(left, atoms) <= u, hl: l <= dot(right, atoms)):
     (-a) * u + b * l <= dot(combo(-a, left, b, right), atoms)
 {
-    let summed = int::add_le_mono(
-        (-a) * u, (-a) * dot(left, atoms),
+    let summed =
+        ((-a) * u).add_le_mono((-a) * dot(left, atoms),
         b * l, b * dot(right, atoms),
         upper_neg_scale(a, dot(left, atoms), u, ha, hu),
         lower_scale(b, l, dot(right, atoms), hb, hl));
@@ -908,8 +905,8 @@ theorem lower_upper_upper_combo(a, b: Int,
     hu: dot(left, atoms) <= u, hl: l <= dot(right, atoms)):
     dot(combo(a, left, -b, right), atoms) <= a * u + (-b) * l
 {
-    let summed = int::add_le_mono(
-        a * dot(left, atoms), a * u,
+    let summed =
+        (a * dot(left, atoms)).add_le_mono(a * u,
         (-b) * dot(right, atoms), (-b) * l,
         upper_scale(a, dot(left, atoms), u, ha, hu),
         lower_neg_scale(b, l, dot(right, atoms), hb, hl));
@@ -920,7 +917,7 @@ theorem lower_upper_upper_combo(a, b: Int,
 theorem nat_diseq_elim(x, y: Nat, different: x ≠ y,
     left: x < y → False, right: y < x → False): False
 {
-    match nat::lt_trichotomy(x, y) {
+    match x.lt_trichotomy(y) {
         Inl(h) => left(h),
         Inr(rest) => match rest {
             Inl(eq) => false_elim(different(eq)),
@@ -932,7 +929,7 @@ theorem nat_diseq_elim(x, y: Nat, different: x ≠ y,
 theorem diseq_elim(x, y: Int, different: x ≠ y,
     left: x < y → False, right: y < x → False): False
 {
-    match int::lt_trichotomy(x, y) {
+    match x.lt_trichotomy(y) {
         Inl(h) => left(h),
         Inr(rest) => match rest {
             Inl(eq) => false_elim(different(eq)),
@@ -992,10 +989,10 @@ theorem cutsat_negative_remainder(remainder: Int, payload: Nat,
 
 theorem cutsat_div_nonnegative(dividend: Int, divisor_pred: Nat,
     h: OfNat(0) <= dividend):
-    OfNat(0) <= int::div(dividend, OfNat(Succ(divisor_pred)))
+    OfNat(0) <= dividend.div(OfNat(Succ(divisor_pred)))
 {
     match dividend as λ d => OfNat(0) <= d →
-        OfNat(0) <= int::div(d, OfNat(Succ(divisor_pred))) {
+        OfNat(0) <= d.div(OfNat(Succ(divisor_pred))) {
         OfNat(_) => λ _ => trivial,
         NegSucc(_) => λ bad => false_elim(bad),
     }(h)
@@ -1027,11 +1024,11 @@ theorem cutsat_quotient_product_nonnegative(quotient: Int, divisor_pred: Nat,
     quotient_nonnegative: OfNat(0) <= quotient):
     OfNat(0) <= quotient * OfNat(Succ(divisor_pred))
 {
-    j(int::zero_mul(OfNat(Succ(divisor_pred))),
+    j(OfNat(Succ(divisor_pred)).zero_mul(),
         λ left _ => left <= quotient * OfNat(Succ(divisor_pred)),
-        int::mul_le_mono_r(
-            OfNat(0), quotient, OfNat(Succ(divisor_pred)),
-            quotient_nonnegative, int::zero_le_ofNat(Succ(divisor_pred))))
+
+            OfNat(0).mul_le_mono_r(quotient, OfNat(Succ(divisor_pred)),
+            quotient_nonnegative, Int::zero_le_ofNat(Succ(divisor_pred))))
 }
 
 theorem cutsat_left_remainder_bound(a_pred: Nat, x, p, remainder, gap: Int,
@@ -1066,11 +1063,11 @@ theorem cutsat_solve_add_left(a, b, c: Int, h: a + b = c):
     b = (-a) + c
 {
     calc {
-        b = OfNat(0) + b := sym(int::zero_add(b)),
+        b = OfNat(0) + b := sym(b.zero_add()),
           = ((-a) + a) + b :=
-                cong_int(λ z => z + b, sym(int::neg_add_self(a))),
-          = (-a) + (a + b) := int::add_assoc(-a, a, b),
-          = (-a) + c := cong_int(λ z => (-a) + z, h),
+                Int::cong(λ z => z + b, sym(Int::neg_add_self(a))),
+          = (-a) + (a + b) := (-a).add_assoc(a, b),
+          = (-a) + c := Int::cong(λ z => (-a) + z, h),
     }
 }
 
@@ -1080,16 +1077,16 @@ theorem cutsat_rotate_cancel(p, u, v: Int):
     calc {
         p + ((-u) + (v + (-p)))
             = (p + (-u)) + (v + (-p)) :=
-                sym(int::add_assoc(p, -u, v + (-p))),
+                sym(p.add_assoc(-u, v + (-p))),
           = ((-u) + p) + (v + (-p)) :=
-                cong_int(λ z => z + (v + (-p)), int::add_comm(p, -u)),
-          = (-u) + (p + (v + (-p))) := int::add_assoc(-u, p, v + (-p)),
+                Int::cong(λ z => z + (v + (-p)), p.add_comm(-u)),
+          = (-u) + (p + (v + (-p))) := (-u).add_assoc(p, v + (-p)),
           = (-u) + ((p + v) + (-p)) :=
-                cong_int(λ z => (-u) + z, sym(int::add_assoc(p, v, -p))),
+                Int::cong(λ z => (-u) + z, sym(p.add_assoc(v, -p))),
           = (-u) + ((v + p) + (-p)) :=
-                cong_int(λ z => (-u) + (z + (-p)), int::add_comm(p, v)),
+                Int::cong(λ z => (-u) + (z + (-p)), p.add_comm(v)),
           = (-u) + v :=
-                cong_int(λ z => (-u) + z, int::add_neg_cancel_r(v, p)),
+                Int::cong(λ z => (-u) + z, v.add_neg_cancel_r(p)),
     }
 }
 
@@ -1116,14 +1113,14 @@ theorem cutsat_left_dvd(a_pred: Nat, x, p, quotient, remainder, gap: Int,
             -(OfNat(Succ(a_pred)) * quotient) + OfNat(Succ(a_pred)) * x) =
         calc {
             p + remainder = p + ((-(quotient * OfNat(Succ(a_pred)))) + gap) :=
-                cong_int(λ z => p + z, remainder_eq),
+                Int::cong(λ z => p + z, remainder_eq),
               = p + ((-(OfNat(Succ(a_pred)) * quotient)) + gap) :=
-                cong_int(
+                Int::cong(
                     λ z => p + ((-z) + gap),
                     commute_quotient),
               = p + ((-(OfNat(Succ(a_pred)) * quotient)) +
                     (OfNat(Succ(a_pred)) * x + (-p))) :=
-                cong_int(
+                Int::cong(
                     λ z => p + ((-(OfNat(Succ(a_pred)) * quotient)) + z),
                     gap_eq),
               = -(OfNat(Succ(a_pred)) * quotient) +
@@ -1139,21 +1136,21 @@ theorem cutsat_left_dvd(a_pred: Nat, x, p, quotient, remainder, gap: Int,
 }
 
 theorem cutsat_abs_positive(pred: Nat):
-    int::abs(OfNat(Succ(pred))) = OfNat(Succ(pred))
+    OfNat(Succ(pred)).abs() = OfNat(Succ(pred))
 {
     refl
 }
 
 theorem cutsat_cooper_left_bound(a_pred: Nat, x, p: Int):
-    int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+    (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred)))
         < OfNat(Succ(a_pred))
 {
     let a = OfNat(Succ(a_pred));
     let gap = a * x + (-p);
-    let bounded_abs = int::mod_lt_abs(
-        gap, a, positive_int_nonzero(a_pred));
+    let bounded_abs =
+        gap.mod_lt_abs(a, positive_int_nonzero(a_pred));
     j(cutsat_abs_positive(a_pred),
-        λ bound _ => int::mod(gap, a) < bound, bounded_abs)
+        λ bound _ => gap.mod(a) < bound, bounded_abs)
 }
 
 theorem cutsat_cooper_left_cut(a_pred, b_pred: Nat, x, p, q, remainder: Int,
@@ -1165,87 +1162,87 @@ theorem cutsat_cooper_left_cut(a_pred, b_pred: Nat, x, p, q, remainder: Int,
 {
     let a = OfNat(Succ(a_pred));
     let b = OfNat(Succ(b_pred));
-    let scaled_lower = int::mul_le_mono_l(
-        p + remainder, a * x, b, remainder_bound,
-        int::zero_le_ofNat(Succ(b_pred)));
+    let scaled_lower =
+        (p + remainder).mul_le_mono_l(a * x, b, remainder_bound,
+        Int::zero_le_ofNat(Succ(b_pred)));
     let upper_bound = cutsat_upper_bound(b_pred, x, q, upper);
-    let scaled_upper = int::mul_le_mono_l(
-        b * x, -q, a, upper_bound,
-        int::zero_le_ofNat(Succ(a_pred)));
+    let scaled_upper =
+        (b * x).mul_le_mono_l(-q, a, upper_bound,
+        Int::zero_le_ofNat(Succ(a_pred)));
     let commute_product: (b * (a * x) = a * (b * x)) = trans(
-        sym(int::mul_assoc(b, a, x)),
+        sym(b.mul_assoc(a, x)),
         trans(
-            cong_int(λ c => c * x, int::mul_comm(b, a)),
-            int::mul_assoc(a, b, x)));
+            Int::cong(λ c => c * x, b.mul_comm(a)),
+            a.mul_assoc(b, x)));
     let cut_remainder = cutsat_left_cut(
         a, b, x, p, q, remainder,
         scaled_lower, scaled_upper, commute_product,
-        int::mul_add_distr(b, p, remainder), int::mul_neg_r(a, q));
+        b.mul_add_distr(p, remainder), a.mul_neg_r(q));
     cut_remainder
 }
 
 theorem cutsat_cooper_left_dvd(a_pred: Nat, x, p: Int):
     cut_dvd(NegSucc(a_pred),
-        p + int::mod(OfNat(Succ(a_pred)) * x + (-p),
+        p + (OfNat(Succ(a_pred)) * x + (-p)).mod(
             OfNat(Succ(a_pred))))
 {
     let a = OfNat(Succ(a_pred));
     let gap = a * x + (-p);
-    let quotient = int::div(gap, a);
-    let remainder = int::mod(gap, a);
-    let negative_quotient = int::mul_neg_l(a, quotient);
+    let quotient = gap.div(a);
+    let remainder = gap.mod(a);
+    let negative_quotient = a.mul_neg_l(quotient);
     let double_negative_product: (NegSucc(a_pred) * (-x) = a * x) = trans(
-        int::mul_neg_l(a, -x),
+        a.mul_neg_l(-x),
         trans(
-            cong_int(λ z => -z, int::mul_neg_r(a, x)),
-            int::neg_neg(a * x)));
+            Int::cong(λ z => -z, a.mul_neg_r(x)),
+            (a * x).neg_neg()));
     let witness_product: (
         NegSucc(a_pred) * (quotient + (-x)) =
             -(a * quotient) + a * x) = trans(
-        int::mul_add_distr(NegSucc(a_pred), quotient, -x),
+        NegSucc(a_pred).mul_add_distr(quotient, -x),
         trans(
-            cong_int(
+            Int::cong(
                 λ z => z + NegSucc(a_pred) * (-x),
                 negative_quotient),
-            cong_int(λ z => -(a * quotient) + z, double_negative_product)));
+            Int::cong(λ z => -(a * quotient) + z, double_negative_product)));
     cutsat_left_dvd(
         a_pred, x, p, quotient, remainder, gap,
-        refl, int::div_mul_add_mod(gap, a),
-        int::mul_comm(quotient, a), witness_product)
+        refl, Int::div_mul_add_mod(gap, a),
+        quotient.mul_comm(a), witness_product)
 }
 
 theorem cutsat_cooper_left_remainder_le_gap(a_pred: Nat, x, p: Int,
     lower: NegSucc(a_pred) * x + p <= OfNat(0)):
-    int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+    (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred)))
         <= OfNat(Succ(a_pred)) * x + (-p)
 {
     cutsat_remainder_le_gap(
         OfNat(Succ(a_pred)) * x + (-p),
-        int::div(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        (OfNat(Succ(a_pred)) * x + (-p)).div(OfNat(Succ(a_pred))),
         OfNat(Succ(a_pred)),
-        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred))),
         cutsat_quotient_product_nonnegative(
-            int::div(OfNat(Succ(a_pred)) * x + (-p),
+            (OfNat(Succ(a_pred)) * x + (-p)).div(
                 OfNat(Succ(a_pred))), a_pred,
             cutsat_div_nonnegative(
                 OfNat(Succ(a_pred)) * x + (-p), a_pred,
                 cutsat_left_gap_nonnegative(
                     a_pred, x, p,
-                    int::mul_neg_l(OfNat(Succ(a_pred)), x), lower))),
-        int::div_mul_add_mod(
+                    OfNat(Succ(a_pred)).mul_neg_l(x), lower))),
+        Int::div_mul_add_mod(
             OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))))
 }
 
 theorem cutsat_cooper_left_remainder_bound(a_pred: Nat, x, p: Int,
     lower: NegSucc(a_pred) * x + p <= OfNat(0)):
-    p + int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+    p + (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred)))
         <= OfNat(Succ(a_pred)) * x
 {
     cutsat_left_remainder_bound(
         a_pred, x, p,
-        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred))),
         OfNat(Succ(a_pred)) * x + (-p),
-        int::mul_neg_l(OfNat(Succ(a_pred)), x), lower, refl,
+        OfNat(Succ(a_pred)).mul_neg_l(x), lower, refl,
         cutsat_cooper_left_remainder_le_gap(a_pred, x, p, lower))
 }
 
@@ -1259,14 +1256,14 @@ theorem cutsat_cooper_left(a_pred, b_pred: Nat, x, p, q: Int,
         cut_dvd(NegSucc(a_pred), p + remainder) → False): False
 {
     close(
-        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
-        int::mod_nonneg(
-            OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)),
+        (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred))),
+
+            (OfNat(Succ(a_pred)) * x + (-p)).mod_nonneg(OfNat(Succ(a_pred)),
             positive_int_nonzero(a_pred)),
         cutsat_cooper_left_bound(a_pred, x, p),
         cutsat_cooper_left_cut(
             a_pred, b_pred, x, p, q,
-            int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+            (OfNat(Succ(a_pred)) * x + (-p)).mod(OfNat(Succ(a_pred))),
             lower, upper,
             cutsat_cooper_left_remainder_bound(a_pred, x, p, lower)),
         cutsat_cooper_left_dvd(a_pred, x, p))
@@ -1318,13 +1315,13 @@ theorem cutsat_right_dvd(b_pred: Nat, x, q, quotient, remainder, gap: Int,
                 + (-(OfNat(Succ(b_pred)) * x))) =
         calc {
             q + remainder = q + ((-(quotient * OfNat(Succ(b_pred)))) + gap) :=
-                cong_int(λ z => q + z, remainder_eq),
+                Int::cong(λ z => q + z, remainder_eq),
               = q + ((-(OfNat(Succ(b_pred)) * quotient)) + gap) :=
-                cong_int(
+                Int::cong(
                     λ z => q + ((-z) + gap), commute_quotient),
               = q + ((-(OfNat(Succ(b_pred)) * quotient)) +
                     ((-q) + (-(OfNat(Succ(b_pred)) * x)))) :=
-                cong_int(
+                Int::cong(
                     λ z => q + ((-(OfNat(Succ(b_pred)) * quotient)) + z),
                     gap_eq),
               = -(OfNat(Succ(b_pred)) * quotient)
@@ -1341,23 +1338,23 @@ theorem cutsat_right_dvd(b_pred: Nat, x, q, quotient, remainder, gap: Int,
 
 theorem cutsat_cooper_right_remainder_le_gap(b_pred: Nat, x, q: Int,
     upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
-    int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)))
+    ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(OfNat(Succ(b_pred)))
         <= (-q) + (-(OfNat(Succ(b_pred)) * x))
 {
     cutsat_remainder_le_gap(
         (-q) + (-(OfNat(Succ(b_pred)) * x)),
-        int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).div(
             OfNat(Succ(b_pred))),
         OfNat(Succ(b_pred)),
-        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
             OfNat(Succ(b_pred))),
         cutsat_quotient_product_nonnegative(
-            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).div(
                 OfNat(Succ(b_pred))), b_pred,
             cutsat_div_nonnegative(
                 (-q) + (-(OfNat(Succ(b_pred)) * x)), b_pred,
                 cutsat_right_gap_nonnegative(b_pred, x, q, upper))),
-        int::div_mul_add_mod(
+        Int::div_mul_add_mod(
             (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred))))
 }
 
@@ -1369,20 +1366,20 @@ theorem cutsat_right_witness_product(b_pred: Nat, x, quotient: Int):
     calc {
         OfNat(Succ(b_pred)) * (-(x + quotient))
             = -(OfNat(Succ(b_pred)) * (x + quotient)) :=
-                int::mul_neg_r(OfNat(Succ(b_pred)), x + quotient),
+                OfNat(Succ(b_pred)).mul_neg_r(x + quotient),
           = -(OfNat(Succ(b_pred)) * x
                 + OfNat(Succ(b_pred)) * quotient) :=
-                cong_int(λ z => -z,
-                    int::mul_add_distr(OfNat(Succ(b_pred)), x, quotient)),
+                Int::cong(λ z => -z,
+                    OfNat(Succ(b_pred)).mul_add_distr(x, quotient)),
           = -(OfNat(Succ(b_pred)) * x)
                 + (-(OfNat(Succ(b_pred)) * quotient)) :=
-                int::neg_add(
-                    OfNat(Succ(b_pred)) * x,
+
+                    (OfNat(Succ(b_pred)) * x).neg_add(
                     OfNat(Succ(b_pred)) * quotient),
           = -(OfNat(Succ(b_pred)) * quotient)
                 + (-(OfNat(Succ(b_pred)) * x)) :=
-                int::add_comm(
-                    -(OfNat(Succ(b_pred)) * x),
+
+                    (-(OfNat(Succ(b_pred)) * x)).add_comm(
                     -(OfNat(Succ(b_pred)) * quotient)),
     }
 }
@@ -1392,80 +1389,80 @@ theorem cutsat_cooper_right_cut(a_pred, b_pred: Nat, x, p, q: Int,
     upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
     OfNat(Succ(b_pred)) * p + OfNat(Succ(a_pred)) * q
         + OfNat(Succ(a_pred)) *
-            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
                 OfNat(Succ(b_pred))) <= OfNat(0)
 {
     cutsat_right_cut(
         OfNat(Succ(a_pred)), OfNat(Succ(b_pred)), x, p, q,
-        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
             OfNat(Succ(b_pred))),
-        int::mul_le_mono_l(
-            p, OfNat(Succ(a_pred)) * x, OfNat(Succ(b_pred)),
+
+            p.mul_le_mono_l(OfNat(Succ(a_pred)) * x, OfNat(Succ(b_pred)),
             cutsat_lower_bound(
                 a_pred, x, p,
-                int::mul_neg_l(OfNat(Succ(a_pred)), x), lower),
-            int::zero_le_ofNat(Succ(b_pred))),
-        int::mul_le_mono_l(
-            q + int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
-                    OfNat(Succ(b_pred))),
+                OfNat(Succ(a_pred)).mul_neg_l(x), lower),
+            Int::zero_le_ofNat(Succ(b_pred))),
+
+            (q + ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
+                    OfNat(Succ(b_pred)))).mul_le_mono_l(
             -(OfNat(Succ(b_pred)) * x), OfNat(Succ(a_pred)),
             cutsat_right_remainder_bound(
                 b_pred, x, q,
-                int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
                     OfNat(Succ(b_pred))),
                 (-q) + (-(OfNat(Succ(b_pred)) * x)), refl,
                 cutsat_cooper_right_remainder_le_gap(b_pred, x, q, upper)),
-            int::zero_le_ofNat(Succ(a_pred))),
+            Int::zero_le_ofNat(Succ(a_pred))),
         trans(
-            sym(int::mul_assoc(
-                OfNat(Succ(b_pred)), OfNat(Succ(a_pred)), x)),
+            sym(
+                OfNat(Succ(b_pred)).mul_assoc(OfNat(Succ(a_pred)), x)),
             trans(
-                cong_int(λ c => c * x,
-                    int::mul_comm(OfNat(Succ(b_pred)), OfNat(Succ(a_pred)))),
-                int::mul_assoc(
-                    OfNat(Succ(a_pred)), OfNat(Succ(b_pred)), x))),
-        int::mul_add_distr(
-            OfNat(Succ(a_pred)), q,
-            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                Int::cong(λ c => c * x,
+                    OfNat(Succ(b_pred)).mul_comm(OfNat(Succ(a_pred)))),
+
+                    OfNat(Succ(a_pred)).mul_assoc(OfNat(Succ(b_pred)), x))),
+
+            OfNat(Succ(a_pred)).mul_add_distr(q,
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
                 OfNat(Succ(b_pred)))),
-        int::mul_neg_r(
-            OfNat(Succ(a_pred)), OfNat(Succ(b_pred)) * x))
+
+            OfNat(Succ(a_pred)).mul_neg_r(OfNat(Succ(b_pred)) * x))
 }
 
 theorem cutsat_cooper_right_dvd(b_pred: Nat, x, q: Int):
     cut_dvd(OfNat(Succ(b_pred)),
-        q + int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        q + ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
             OfNat(Succ(b_pred))))
 {
     cutsat_right_dvd(
         b_pred, x, q,
-        int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).div(
             OfNat(Succ(b_pred))),
-        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
             OfNat(Succ(b_pred))),
         (-q) + (-(OfNat(Succ(b_pred)) * x)), refl,
-        int::div_mul_add_mod(
+        Int::div_mul_add_mod(
             (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred))),
-        int::mul_comm(
-            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
-                OfNat(Succ(b_pred))),
+
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).div(
+                OfNat(Succ(b_pred))).mul_comm(
             OfNat(Succ(b_pred))),
         cutsat_right_witness_product(
             b_pred, x,
-            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).div(
                 OfNat(Succ(b_pred)))))
 }
 
 theorem cutsat_cooper_right_bound(b_pred: Nat, x, q: Int):
-    int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)))
+    ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(OfNat(Succ(b_pred)))
         < OfNat(Succ(b_pred))
 {
     j(cutsat_abs_positive(b_pred),
         λ bound _ =>
-            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
                 OfNat(Succ(b_pred))) < bound,
-        int::mod_lt_abs(
-            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)),
+
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod_lt_abs(OfNat(Succ(b_pred)),
             positive_int_nonzero(b_pred)))
 }
 
@@ -1479,10 +1476,10 @@ theorem cutsat_cooper_right(a_pred, b_pred: Nat, x, p, q: Int,
         cut_dvd(OfNat(Succ(b_pred)), q + remainder) → False): False
 {
     close(
-        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+        ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod(
             OfNat(Succ(b_pred))),
-        int::mod_nonneg(
-            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)),
+
+            ((-q) + (-(OfNat(Succ(b_pred)) * x))).mod_nonneg(OfNat(Succ(b_pred)),
             positive_int_nonzero(b_pred)),
         cutsat_cooper_right_bound(b_pred, x, q),
         cutsat_cooper_right_cut(a_pred, b_pred, x, p, q, lower, upper),

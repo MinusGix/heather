@@ -618,30 +618,11 @@ impl Elaborator {
             }
         }
         walk_expr(body, &mut |e| {
-            // `named: _`: a named argument on a *self-call* is refused by
-            // `elab_self_call` (a recursive call's argument positions are what
-            // the termination guard reads), so a declaration that carries one
-            // never reaches a kernel term. Skipping it here can only make this
-            // analysis less informative, never wrongly permissive.
-            let ExprKind::App {
-                head,
-                args,
-                explicit,
-                named: _,
-                ..
-            } = &e.kind
-            else {
+            let Some((args, explicit)) = crate::recursion::surface_self_call(s, e) else {
                 return;
             };
-            let head = match &head.kind {
-                ExprKind::TyApp { head, .. } => head,
-                _ => head,
-            };
-            if !matches!(&head.kind, ExprKind::Var(n) if *n == s.name) {
-                return;
-            }
             let positions: Vec<usize> = (s.n_tyvars..s.params.len())
-                .filter(|&j| *explicit || !s.params[j].1)
+                .filter(|&j| explicit || !s.params[j].1)
                 .collect();
             let Some(slot) = positions.iter().position(|&j| j == dec) else {
                 return;

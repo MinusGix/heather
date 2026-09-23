@@ -33,11 +33,11 @@ pub enum SourceBinaryOperation {
 impl SourceBinaryOperation {
     fn from_name(name: &str) -> Option<Self> {
         match name {
-            "bitvec::add" => Some(Self::Add),
-            "bitvec::sub" => Some(Self::Sub),
-            "bitvec::band" => Some(Self::BitAnd),
-            "bitvec::bor" => Some(Self::BitOr),
-            "bitvec::bxor" => Some(Self::BitXor),
+            "bitvec::BitVec::add" => Some(Self::Add),
+            "bitvec::BitVec::sub" => Some(Self::Sub),
+            "bitvec::BitVec::band" => Some(Self::BitAnd),
+            "bitvec::BitVec::bor" => Some(Self::BitOr),
+            "bitvec::BitVec::bxor" => Some(Self::BitXor),
             _ => None,
         }
     }
@@ -58,11 +58,11 @@ impl SourceBinaryOperation {
 
     fn semantic_name(self) -> &'static str {
         match self {
-            Self::Add => "bitvec::add",
-            Self::Sub => "bitvec::sub",
-            Self::BitAnd => "bitvec::band",
-            Self::BitOr => "bitvec::bor",
-            Self::BitXor => "bitvec::bxor",
+            Self::Add => "bitvec::BitVec::add",
+            Self::Sub => "bitvec::BitVec::sub",
+            Self::BitAnd => "bitvec::BitVec::band",
+            Self::BitOr => "bitvec::BitVec::bor",
+            Self::BitXor => "bitvec::BitVec::bxor",
         }
     }
 
@@ -242,19 +242,19 @@ impl OperationGlobals {
     fn resolve(elaborator: &Elaborator) -> Result<Self, SourceError> {
         let mut operations = BTreeMap::new();
         for (name, operation) in [
-            ("bitvec::add", SourceBinaryOperation::Add),
-            ("bitvec::sub", SourceBinaryOperation::Sub),
-            ("bitvec::band", SourceBinaryOperation::BitAnd),
-            ("bitvec::bor", SourceBinaryOperation::BitOr),
-            ("bitvec::bxor", SourceBinaryOperation::BitXor),
+            ("bitvec::BitVec::add", SourceBinaryOperation::Add),
+            ("bitvec::BitVec::sub", SourceBinaryOperation::Sub),
+            ("bitvec::BitVec::band", SourceBinaryOperation::BitAnd),
+            ("bitvec::BitVec::bor", SourceBinaryOperation::BitOr),
+            ("bitvec::BitVec::bxor", SourceBinaryOperation::BitXor),
         ] {
             let abs = elaborator.global_abs(name).ok_or_else(|| {
                 SourceError::Unsupported(format!("required operation `{name}` is not loaded"))
             })?;
             operations.insert(abs, operation);
         }
-        let of_nat = elaborator.global_abs("bitvec::ofNat").ok_or_else(|| {
-            SourceError::Unsupported("required operation `bitvec::ofNat` is not loaded".to_string())
+        let of_nat = elaborator.global_abs("bitvec::BitVec::ofNat").ok_or_else(|| {
+            SourceError::Unsupported("required operation `bitvec::BitVec::ofNat` is not loaded".to_string())
         })?;
         Ok(Self { operations, of_nat })
     }
@@ -311,7 +311,7 @@ fn reflect_term_under(
     }
     if head_abs == globals.of_nat {
         if arguments.len() != 2 || nat_literal(arguments[0]) != Some(64) {
-            return unsupported("BitVec constants must use `bitvec::ofNat(64, literal)`");
+            return unsupported("BitVec constants must use `@bitvec::BitVec::ofNat(64, literal)`");
         }
         let Some(value) = nat_literal(arguments[1]) else {
             return unsupported("the initial constant fragment requires a closed Nat literal");
@@ -353,10 +353,10 @@ pub fn reflect_call_plan(elaborator: &Elaborator, source_name: &str) -> Result<(
     };
     let (mut head, mut args) = application_spine(body);
     let mut saved_local = false;
-    if abs(head) == elaborator.global_abs("bitvec::bxor") {
+    if abs(head) == elaborator.global_abs("bitvec::BitVec::bxor") {
         if args.len() != 3 || nat_literal(args[0]) != Some(64) { return unsupported("expected width-64 caller XOR"); }
         let (saved, values) = application_spine(args[2]);
-        if abs(saved) != elaborator.global_abs("bitvec::bxor") || values.len() != 3
+        if abs(saved) != elaborator.global_abs("bitvec::BitVec::bxor") || values.len() != 3
             || nat_literal(values[0]) != Some(64) || !matches!(values[1], Term::Var(LocalVar(1)))
             || !matches!(values[2], Term::Var(LocalVar(0))) {
             return unsupported("supported frame expression is leaf(left, right) XOR (left XOR right)");
@@ -408,8 +408,8 @@ impl CallExpr {
     pub fn expression(&self, callee: &str, inputs: &[HeatherExpr; 2]) -> HeatherExpr {
         match self {
             Self::Input(i) => inputs[*i].clone(),
-            Self::Constant(n) => HeatherExpr::call("bitvec::ofNat", [HeatherExpr::nat(64), HeatherExpr::nat(*n)]),
-            Self::Binary(op, left, right) => HeatherExpr::call(op.semantic_name(), [HeatherExpr::nat(64), left.expression(callee, inputs), right.expression(callee, inputs)]),
+            Self::Constant(n) => HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(64), HeatherExpr::nat(*n)]),
+            Self::Binary(op, left, right) => HeatherExpr::explicit_call(op.semantic_name(), [HeatherExpr::nat(64), left.expression(callee, inputs), right.expression(callee, inputs)]),
             Self::Call(left, right) => HeatherExpr::call(callee, [left.expression(callee, inputs), right.expression(callee, inputs)]),
         }
     }
@@ -816,15 +816,15 @@ fn emit_source_semantics(
     for (id, expression) in &reflected.node_expressions {
         let body = match expression {
             SourceExpr::Input(_) => unreachable!(),
-            SourceExpr::Constant(value) => HeatherExpr::call(
-                "bitvec::ofNat",
+            SourceExpr::Constant(value) => HeatherExpr::explicit_call(
+                "bitvec::BitVec::ofNat",
                 [HeatherExpr::nat(64), HeatherExpr::nat(*value)],
             ),
             SourceExpr::Binary {
                 operation,
                 left,
                 right,
-            } => HeatherExpr::call(
+            } => HeatherExpr::explicit_call(
                 operation.semantic_name(),
                 [
                     HeatherExpr::nat(64),
@@ -1007,7 +1007,7 @@ fn source_value_proof(
 fn operation_lambda(operation: SourceBinaryOperation) -> HeatherExpr {
     HeatherExpr::lambda(
         ["left", "right"],
-        HeatherExpr::call(
+        HeatherExpr::explicit_call(
             operation.semantic_name(),
             [
                 HeatherExpr::nat(64),
@@ -1119,15 +1119,15 @@ fn source_expansion_name(prefix: &str, id: u64) -> String {
 fn source_expression(expression: &SourceExpr) -> HeatherExpr {
     match expression {
         SourceExpr::Input(id) => valuation(*id),
-        SourceExpr::Constant(value) => HeatherExpr::call(
-            "bitvec::ofNat",
+        SourceExpr::Constant(value) => HeatherExpr::explicit_call(
+            "bitvec::BitVec::ofNat",
             [HeatherExpr::nat(64), HeatherExpr::nat(*value)],
         ),
         SourceExpr::Binary {
             operation,
             left,
             right,
-        } => HeatherExpr::call(
+        } => HeatherExpr::explicit_call(
             operation.semantic_name(),
             [
                 HeatherExpr::nat(64),
@@ -1251,7 +1251,7 @@ fn binary_call(body: &Expr) -> Result<(SourceBinaryOperation, &Expr, &Expr), Sou
         return unsupported("the body call must have a named operation at its head");
     };
     let Some(operation) = SourceBinaryOperation::from_name(name) else {
-        return unsupported("supported operations are bitvec::add/sub/band/bor/bxor");
+        return unsupported("supported operations are bitvec::BitVec::add/sub/band/bor/bxor");
     };
     if !named.is_empty() || args.len() != 3 {
         return unsupported("the BitVec operation must have width, left, and right arguments");

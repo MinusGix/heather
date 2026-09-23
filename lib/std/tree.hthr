@@ -118,7 +118,7 @@ theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
 fn tree_size<A>(tree: Tree<A>) → Nat {
     tree_fold(TreeAlg<A, Nat> {
         leaf: λ (a: A) => 1,
-        node: λ (left: Nat) (right: Nat) => Succ(add(left, right)),
+        node: λ (left: Nat) (right: Nat) => Succ(left.add(right)),
     }, tree)
 }
 
@@ -142,12 +142,12 @@ fn mirror_size_laws<A>() → TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
         leaf: λ (value: A) => refl,
         node: (left: Tree<A>) (left_r: Tree<A>) ih_left
               (right: Tree<A>) (right_r: Tree<A>) ih_right ⊢
-            apply cong_succ;
+            apply Nat::cong_succ;
             apply trans;
-            give cong_fn(λ (n: Nat) => add(n, tree_size(left_r)), ih_right);
+            give cong_fn(λ (n: Nat) => n.add(tree_size(left_r)), ih_right);
             apply trans;
-            give cong_fn(add(tree_size(right)), ih_left);
-            add_comm(tree_size(right), tree_size(left)),
+            give cong_fn(tree_size(right).add(), ih_left);
+            tree_size(right).add_comm(tree_size(left)),
     }
 }
 

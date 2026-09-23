@@ -36,7 +36,8 @@ pub enum TokKind {
     At,        // @
     Dot,       // .
     Plus,      // +
-    Minus,     // -   (prefix negation; `->` is matched first)
+    Minus,     // -   (prefix negation or infix subtraction; `->` is matched first)
+    Bang,      // !   (prefix Boolean negation; `!=` remains unsupported)
     /// `++` — list append notation (issues/list-append-symbol.md). Like the
     /// Boolean doubles, it has no single-name fallback: a designation or a
     /// binder supplies its meaning.
@@ -54,6 +55,9 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
+    /// Boolean-reflection delimiters: `⟦b⟧` is `bool::Bool::IsTrue(b)`.
+    LSemantic, // ⟦
+    RSemantic, // ⟧
     /// Anonymous constructor delimiters. `⟨a, b⟩` selects the sole
     /// constructor of the expected type; `⟨a |⟩` / `⟨| b⟩` select
     /// the first / second constructor of a binary sum.
@@ -376,7 +380,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            // `nat::sub` is **one** identifier token (docs/modules-design.md
+            // `nat::Nat::sub` is **one** identifier token (docs/modules-design.md
             // §4). Adjacency decides, as it does for `?name`: a `::` followed
             // by an identifier start joins, so `nat::{Le}` (the import-list
             // form) still lexes as `nat` `::` `{`.
@@ -495,6 +499,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∥" => Some(TokKind::NormBar),
             "⟨" => Some(TokKind::LAngle),
             "⟩" => Some(TokKind::RAngle),
+            "⟦" => Some(TokKind::LSemantic),
+            "⟧" => Some(TokKind::RSemantic),
             _ => None,
         };
         if let Some(kind) = three_kind {
@@ -508,6 +514,15 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             continue;
         }
         let two = src.get(i..i + 2).unwrap_or("");
+        // `!` is Boolean negation, but `!=` is deliberately not an ASCII
+        // alias for `≠`: keep diagnosing the pair at the lexer boundary
+        // instead of tokenizing it as two unrelated operators.
+        if two == "!=" {
+            return Err(LexError {
+                msg: "unexpected character '!' in `!=`; write `≠` for inequality".into(),
+                span: Span { start, end: start + 2 },
+            });
+        }
         if c == b'|' && two != "||" && two != "|-" && anonymous_depth == 0 {
             return Err(LexError {
                 msg: "unexpected character '|'".into(),
@@ -587,6 +602,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'.' => (TokKind::Dot, 1),
                 b'+' => (TokKind::Plus, 1),
                 b'-' => (TokKind::Minus, 1),
+                b'!' => (TokKind::Bang, 1),
                 b'*' => (TokKind::Star, 1),
                 b'<' => (TokKind::Lt, 1),
                 b'>' => (TokKind::Gt, 1),

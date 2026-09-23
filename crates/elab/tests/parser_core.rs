@@ -29,12 +29,12 @@ fn invalid_cursors_progress_and_dependent_values_are_refused() {
     e.elab_module_source("parser_core", source).unwrap_or_else(|err| panic!("{}",err.render(source)));
     for (i, source) in [
         "fn bad() -> Cursor<Nat>([1]) { Cursor(refl,2,refl) }",
-        "fn bad() -> CachedCursor<Nat>([1]) { CachedCursor(start([1]),[2],refl) }",
-        "fn bad() -> Cursor<Nat>([1]) { start([2]) }",
-        "fn bad() -> Success<Nat,Nat>([1],Cursor(refl,1,refl)) { Success(0,start([1]),refl) }",
-        "fn bad(source: List<Nat>, begin: Cursor<Nat>(source), recur: (later: Cursor<Nat>(source)) -> nat::Lt(begin.offset,later.offset) -> Reply<Nat,Nat>(source,later)) -> Reply<Nat,Nat>(source,begin) { recur(begin,nat::le_refl(begin.offset)) }",
-        "fn bad() -> Dep<Nat>(witness) { Dep(0,nat::lt_succ_self(0)) }",
-        "theorem bad(): observe([1,2],start([1,2]),count([1,2])) = Ok<Pair<Nat,Nat>,Nat>(Pair(1,2)) { refl }",
+        "fn bad() -> CachedCursor<Nat>([1]) { CachedCursor(Cursor::start([1]),[2],refl) }",
+        "fn bad() -> Cursor<Nat>([1]) { Cursor::start([2]) }",
+        "fn bad() -> Success<Nat,Nat>([1],Cursor(refl,1,refl)) { Success(0,Cursor::start([1]),refl) }",
+        "fn bad(source: List<Nat>, begin: Cursor<Nat>(source), recur: (later: Cursor<Nat>(source)) -> nat::Nat::Lt(begin.offset,later.offset) -> Reply<Nat,Nat>(source,later)) -> Reply<Nat,Nat>(source,begin) { recur(begin,nat::Nat::le_refl(begin.offset)) }",
+        "fn bad() -> Dep<Nat>(witness) { Dep(0,nat::Nat::lt_succ_self(0)) }",
+        "theorem bad(): observe([1,2],Cursor::start([1,2]),count([1,2])) = Ok<Pair<Nat,Nat>,Nat>(Pair(1,2)) { refl }",
     ].iter().enumerate() {
         let source = format!("import parser_core; import logic; import nat; import list; import result; import pair; {source}");
         let error = e.elab_module_source(&format!("bad{i}"), &source).expect_err(source.as_str());

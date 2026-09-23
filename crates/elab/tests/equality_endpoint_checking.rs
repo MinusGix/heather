@@ -37,12 +37,12 @@ fn bad(src: &str) -> String {
 fn an_inferable_right_endpoint_types_a_deferred_left_call() {
     ok(r#"
         fn boxed<A,E>(r: Result<A,E>) -> Result<Option<List<A>>,E> {
-            result::map(r, λ (a: A) => Some([a]))
+            r.map(λ (a: A) => Some([a]))
         }
         theorem forward<A,E>(r: Result<A,E>):
-            boxed(r) = result::map(r, λ (a: A) => Some([a])) { refl }
+            boxed(r) = r.map(λ (a: A) => Some([a])) { refl }
         theorem reverse<A,E>(r: Result<A,E>):
-            result::map(r, λ (a: A) => Some([a])) = boxed(r) { refl }
+            r.map(λ (a: A) => Some([a])) = boxed(r) { refl }
     "#);
 }
 
