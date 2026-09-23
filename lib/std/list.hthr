@@ -592,7 +592,6 @@ theorem List::mem_rev<A>(self xs: List<A>, a: A): Mem(a, xs.rev()) → Mem(a, xs
 
 // ---------------------------------------------------------------------------
 
-
 fn List::head<A>(self xs: List<A>) → Option<A> {
     match xs {
         Nil => None,

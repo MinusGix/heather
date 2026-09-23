@@ -255,7 +255,7 @@ fn Nat::sub(self m, n: Nat) → Nat {
 
 designation - at Nat := Nat::sub
 
-theorem Nat::sub_zero(m: Nat): m - 0 = m {
+theorem Nat::sub_zero(m: Nat): m -0 = m {
     match m { Zero => refl, Succ(_) => refl }
 }
 
@@ -791,7 +791,7 @@ instance DecEq<Nat> { eq_dec := Nat::eq_dec }
 
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized —
 // by the elaborator, since 2026-09-05.
-theorem Nat::le_add(self n, m: Nat): n <= m → n + (m - n) = m {
+theorem Nat::le_add(self n, m: Nat): n <= m → n + (m -n) = m {
     match n {
         Zero => hle ⊢
             apply trans;
@@ -802,7 +802,7 @@ theorem Nat::le_add(self n, m: Nat): n <= m → n + (m - n) = m {
                 Zero => bad ⊢ false_elim(bad),
                 Succ(m2) => good ⊢
                     apply trans;
-                    give n2.add_succ_left(m2 - n2);
+                    give n2.add_succ_left(m2 -n2);
                     Nat::cong_succ(n2.le_add(m2, good)),
             },
     }
@@ -826,7 +826,7 @@ theorem Nat::le_add_r(self n, m: Nat): m <= n + m {
 // definition — which is what makes the definition swappable later.
 theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m {
     Iff(
-        mp := λ (h: n <= m) => Exists(m - n, n.le_add(m, h)),
+        mp := λ (h: n <= m) => Exists(m -n, n.le_add(m, h)),
         mpr := λ (h: ∃ k: Nat, n + k = m) =>
             j(h.proof, λ y q => n <= y, n.le_add_l(h.witness)),
     )
@@ -834,32 +834,32 @@ theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m
 
 // ---------------------------------------------------------------------------
 
-theorem Nat::sub_self(self n: Nat): n - n = 0 {
+theorem Nat::sub_self(self n: Nat): n -n = 0 {
     match n { Zero => refl, Succ(k) => k.sub_self() }
 }
 
-theorem Nat::add_sub_cancel(self n, m: Nat): (n + m) - m = n {
+theorem Nat::add_sub_cancel(self n, m: Nat): (n + m) -m = n {
     match m { Zero => n.sub_zero(), Succ(k) => n.add_sub_cancel(k) }
 }
 
-theorem Nat::sub_add_cancel(self n, m: Nat, h: n <= m): (m - n) + n = m {
-    trans((m - n).add_comm(n), n.le_add(m, h))
+theorem Nat::sub_add_cancel(self n, m: Nat, h: n <= m): (m -n) + n = m {
+    trans((m -n).add_comm(n), n.le_add(m, h))
 }
 
-theorem Nat::sub_le(self m: Nat): (n: Nat) → m - n <= m {
+theorem Nat::sub_le(self m: Nat): (n: Nat) → m -n <= m {
     match m {
         Zero => λ n => trivial,
         Succ(m2, ih) => λ n =>
             match n {
                 Zero => Succ(m2).le_refl(),
-                Succ(n2) => (m2 - n2).le_succ_r(m2, ih(n2)),
+                Succ(n2) => (m2 -n2).le_succ_r(m2, ih(n2)),
             },
     }
 }
 
 // Removing a positive amount from a value strictly lowers it, provided the
 // amount was available rather than truncated away.
-theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m - n < m {
+theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m -n < m {
     match m {
         Zero => λ n => match n {
             Zero => λ positive bounded => false_elim(positive),

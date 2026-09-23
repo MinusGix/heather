@@ -385,9 +385,9 @@ theorem Int::neg_add(self a, b: Int): -(a + b) = -a + -b {
         b)
 }
 
-theorem Int::sub_self(self a: Int): a - a = OfNat(0) { a.add_neg() }
+theorem Int::sub_self(self a: Int): a -a = OfNat(0) { a.add_neg() }
 
-theorem Int::sub_zero(self a: Int): a - OfNat(0) = a { a.add_zero() }
+theorem Int::sub_zero(self a: Int): a -OfNat(0) = a { a.add_zero() }
 
 // ---------------------------------------------------------------------------
 
@@ -427,7 +427,7 @@ fn Int::divmod_negative(dividend_pred: Nat, divisor_pred: Nat) → DivMod {
             Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
             Succ(_) => MkIntDivMod(
                 NegSucc(quotient),
-                OfNat(Succ(divisor_pred) - remainder),
+                OfNat(Succ(divisor_pred) -remainder),
             ),
         },
     }
@@ -828,7 +828,6 @@ instance(a, b: Int) Decide<Int::Le(a, b)> { dec := Int::le_dec(a, b) }
 theorem Int::le_of_not_le(self a, b: Int, h: ¬(a <= b)): b <= a {
     or_resolve(or_swap(a.le_total(b)), h)
 }
-
 
 theorem Int::lt_isucc_self(self a: Int): a < a.isucc() { a.isucc().le_refl() }
 
@@ -1246,23 +1245,23 @@ theorem Int::ofNat_mul_add(m, n, r: Nat):
 theorem complement_reconstruct(q, divisor, remainder, dividend: Nat,
                                reconstruct: q * divisor + remainder = dividend,
                                bounded: remainder <= divisor):
-    (divisor - remainder) + dividend = Succ(q) * divisor
+    (divisor -remainder) + dividend = Succ(q) * divisor
 {
     calc {
-        (divisor - remainder) + dividend
-            = (divisor - remainder) + (q * divisor + remainder) :=
+        (divisor -remainder) + dividend
+            = (divisor -remainder) + (q * divisor + remainder) :=
                 Nat::cong(
-                    λ (x: Nat) => (divisor - remainder) + x,
+                    λ (x: Nat) => (divisor -remainder) + x,
                     sym(reconstruct)),
-            = ((divisor - remainder) + q * divisor) + remainder :=
+            = ((divisor -remainder) + q * divisor) + remainder :=
                 sym(Nat::add_assoc(
-                    (divisor - remainder), q * divisor, remainder)),
-            = (q * divisor + (divisor - remainder)) + remainder :=
+                    (divisor -remainder), q * divisor, remainder)),
+            = (q * divisor + (divisor -remainder)) + remainder :=
                 Nat::cong(
                     λ (x: Nat) => x + remainder,
-                    (divisor - remainder).add_comm(q * divisor)),
-            = q * divisor + ((divisor - remainder) + remainder) :=
-                (q * divisor).add_assoc(divisor - remainder, remainder),
+                    (divisor -remainder).add_comm(q * divisor)),
+            = q * divisor + ((divisor -remainder) + remainder) :=
+                (q * divisor).add_assoc(divisor -remainder, remainder),
             = q * divisor + divisor :=
                 Nat::cong(
                     λ (x: Nat) => q * divisor + x,
@@ -1307,7 +1306,7 @@ theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
                     Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(Succ(divisor_pred) - remainder)),
+                        OfNat(Succ(divisor_pred) -remainder)),
                 },
             })
     {
@@ -1320,7 +1319,7 @@ theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
                     Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(Succ(divisor_pred) - r)),
+                        OfNat(Succ(divisor_pred) -r)),
                 })
         {
             Zero => λ reconstruct alternatives => calc {
@@ -1340,23 +1339,23 @@ theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
                     Inl(impossible) => false_elim(impossible),
                     Inr(bounded) => calc {
                         NegSucc(quotient) * OfNat(Succ(divisor_pred)) +
-                                OfNat(Succ(divisor_pred) - Succ(remainder_pred))
+                                OfNat(Succ(divisor_pred) -Succ(remainder_pred))
                             = -(OfNat(Succ(quotient)) * OfNat(Succ(divisor_pred))) +
-                                OfNat(Succ(divisor_pred) - Succ(remainder_pred)) :=
+                                OfNat(Succ(divisor_pred) -Succ(remainder_pred)) :=
                                     Int::cong(
-                                        λ (x: Int) => x + OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
+                                        λ (x: Int) => x + OfNat(Succ(divisor_pred) -Succ(remainder_pred)),
                                         OfNat(Succ(quotient)).mul_neg_l(OfNat(Succ(divisor_pred)))),
                             = -(OfNat(Succ(quotient) * Succ(divisor_pred))) +
-                                OfNat(Succ(divisor_pred) - Succ(remainder_pred)) :=
+                                OfNat(Succ(divisor_pred) -Succ(remainder_pred)) :=
                                     Int::cong(
-                                        λ (x: Int) => -x + OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
+                                        λ (x: Int) => -x + OfNat(Succ(divisor_pred) -Succ(remainder_pred)),
                                         sym(Int::ofNat_mul(Succ(quotient), Succ(divisor_pred)))),
                             = -(OfNat(Succ(dividend_pred))) :=
                                 (OfNat(Succ(quotient) * Succ(divisor_pred))).neg_add_left_of_add_eq(
-                                    OfNat(Succ(divisor_pred) - Succ(remainder_pred)),
+                                    OfNat(Succ(divisor_pred) -Succ(remainder_pred)),
                                     OfNat(Succ(dividend_pred)),
                                     trans(
-                                        Int::add_ofnat_ofnat(Succ(divisor_pred) - Succ(remainder_pred),
+                                        Int::add_ofnat_ofnat(Succ(divisor_pred) -Succ(remainder_pred),
                                             Succ(dividend_pred)),
                                         Int::cong_ofnat(complement_reconstruct(
                                             quotient,
@@ -1472,7 +1471,7 @@ theorem Int::divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
                     Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(Succ(divisor_pred) - remainder)),
+                        OfNat(Succ(divisor_pred) -remainder)),
                 },
             })
     {
@@ -1484,7 +1483,7 @@ theorem Int::divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
                     Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
                     Succ(_) => MkIntDivMod(
                         NegSucc(quotient),
-                        OfNat(Succ(divisor_pred) - r)),
+                        OfNat(Succ(divisor_pred) -r)),
                 })
         {
             Zero => λ alternatives => And(trivial, trivial),
