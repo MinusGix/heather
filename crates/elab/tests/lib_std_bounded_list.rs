@@ -1,6 +1,7 @@
 //! `lib/std/bounded_list.hthr` — capacity-bounded lists, their stack API, and
 //! the first ordinary client of propositional truncation.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -12,8 +13,7 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const BOUNDED_LIST: &str = include_str!("../../../lib/std/bounded_list.hthr");
 
 fn elaborated() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -21,15 +21,7 @@ fn elaborated() -> Elaborator {
         ("pair", PAIR),
         ("list", LIST),
         ("bounded_list", BOUNDED_LIST),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            let msg = match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            };
-            panic!("{name} did not check: {msg}");
-        }
-    }
+    ]);
     e
 }
 

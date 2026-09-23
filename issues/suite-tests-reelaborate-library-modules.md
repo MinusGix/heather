@@ -50,3 +50,7 @@ rule, not a new one.
 Trigger: any time the fast lane's summed time matters — it is ~12 % for
 `list` alone. Wall-clock is dominated elsewhere (the lane's critical path is
 one test; see [[fast-lane-heaviest-declarations]]).
+
+## Log
+
+- 2026-09-23: 2026-09-23: **Lever 2 landed** — `support::library(modules)` (`crates/elab/tests/support/mod.rs`): the module list elaborated from source on the prelude **once per test process** (current frontend, real kernel, no image replay — the same checks as the hand loops), each call a fork of its `SemanticImage`. Eighteen binaries converted (`lib_std_{string,list,tree,relation,order,bounded_list,certified_lookup,location}`, `char_string_literals`, `nat_{order,arith,parity,run_primitives}`, `logic`, `lib_list_algos`, `binder_symbol_notation`, `operators_onto_classes`, and `lib_std_int`'s probes — its module test keeps its own review-lint elaboration). Fast lane: library modules re-elaborated in test threads 125 s → 49 s summed (`list` 64 → 18 s), lane summed 271 → 223 s, CPU 360 → 266 s, tests wall 41 → 34 s; 2759 passed. Full lane 2916 passed, 95 s tests wall, 855 CPU-s. Lever 1 is moot: `x86_64_structured_block` is 4 s summed since [[elaborator-canonical-type-spelling]]'s constructor fix (was 30 s). Not converted (other shapes, ~3 s each): `radix_numerals`, `lib_algebra`, `operation_indexed_classes`; `lib_setoid_mergeable`'s 9 s is `omega`/`tree_finite_set` in its own module tests.

@@ -33,6 +33,7 @@
 //! `the_concrete_carrier_refusal_names_the_designations` (item 8 — the
 //! regression this round decided to *keep*, pinned positively).
 
+mod support;
 use std::cell::OnceCell;
 
 use heather_elab::{ElabError, Elaborator};
@@ -108,12 +109,7 @@ thread_local! {
 }
 
 fn build_base() -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(format!("{name}: {err}"));
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]);
     let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),
@@ -393,10 +389,7 @@ fn slow_acceptance_an_instance_head_will_not_take_a_symbol() {
 /// so the trim costs the test nothing, but it is the first place a widened
 /// `std/list` closure has been felt.
 fn without_nat(extra: &str) -> String {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("option", OPTION)] {
-        e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{name}: {err}"));
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("option", OPTION)]);
     let src = format!("import bool;\nimport option;\ndesignation * at Bool := Bool::and\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => panic!("expected a refusal, but it checked:\n{extra}"),

@@ -1,5 +1,6 @@
 //! `lib/std/relation.hthr` — finitary relational semantics and refinement.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -12,8 +13,7 @@ const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
 const RELATION_PROPS: &str = include_str!("../../../lib/std/relation_props.hthr");
 
 fn elaborated() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -22,15 +22,7 @@ fn elaborated() -> Elaborator {
         ("list", LIST),
         ("relation", RELATION),
         ("relation_props", RELATION_PROPS),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            let msg = match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            };
-            panic!("{name} did not check: {msg}");
-        }
-    }
+    ]);
     e
 }
 

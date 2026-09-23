@@ -10,6 +10,7 @@
 //! The negatives beside each positive are what say the arithmetic is exact
 //! and not merely fast: one off in the answer is `NotConvertible`.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -17,15 +18,7 @@ const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 
 fn run(extra: &str) -> Result<(), String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT)]);
     let src = format!("import logic;\nimport bool;\nimport nat;\n{extra}");
     e.elab_module_source("probe", &src).map_err(|err| match err {
         ElabError::Elab { msg, .. } => msg,

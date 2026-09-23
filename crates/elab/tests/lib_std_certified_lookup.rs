@@ -1,5 +1,6 @@
 //! `lib/std/certified_lookup.hthr` — generic proof-carrying finite lookup.
 
+mod support;
 use heather_elab::Elaborator;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -12,8 +13,7 @@ const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.h
 
 #[test]
 fn certified_lookup_checks_and_computes() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -21,11 +21,7 @@ fn certified_lookup_checks_and_computes() {
         ("pair", PAIR),
         ("list", LIST),
         ("certified_lookup", CERTIFIED_LOOKUP),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            panic!("{name} did not check: {}", err.render(src));
-        }
-    }
+    ]);
 
     let src = r#"
 import certified_lookup;

@@ -6,6 +6,7 @@
 //! type stays open, and the tree is neutral. That is the control a linear list
 //! fold cannot provide.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -17,8 +18,7 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const TREE: &str = include_str!("../../../lib/std/tree.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -26,14 +26,7 @@ fn run(extra: &str) -> Result<Elaborator, String> {
         ("pair", PAIR),
         ("list", LIST),
         ("tree", TREE),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
-        }
-    }
+    ]);
     if !extra.is_empty() {
         let src = format!("import list;\nimport nat;\nimport tree;\n{extra}");
         if let Err(err) = e.elab_module_source("probe", &src) {

@@ -24,6 +24,7 @@
 //! against a `max` that returned its second argument, and the controls are
 //! what rule that out.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -31,15 +32,7 @@ const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT)]);
     if !extra.is_empty() {
         let src = format!("import logic;\nimport bool;\nimport nat;\n{extra}");
         if let Err(err) = e.elab_module_source("probe", &src) {

@@ -30,31 +30,11 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    let mut prefix_error = None;
-    let mut load = |e: &mut Elaborator| {
-        for (name, src) in [
-            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
-            ("option", OPTION), ("pair", PAIR), ("list", LIST),
-            ("algebra", ALGEBRA),
-        ] {
-            if let Err(err) = e.elab_module_source(name, src) {
-                prefix_error = Some(match err {
-                    ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                    other => format!("{name}: {other}"),
-                });
-                break;
-            }
-        }
-    };
-    if extra.is_empty() {
-        load(&mut e);
-    } else {
-        support::with_decl_cache(&mut e, load);
-    }
-    if let Some(err) = prefix_error {
-        return Err(err);
-    }
+    let mut e = support::library(&[
+        ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
+        ("option", OPTION), ("pair", PAIR), ("list", LIST),
+        ("algebra", ALGEBRA),
+    ]);
     if !extra.is_empty() {
         let src = format!(
             "import logic;\nimport bool;\nimport nat;\nimport option;\n\

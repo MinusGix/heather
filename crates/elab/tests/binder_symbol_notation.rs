@@ -29,6 +29,7 @@
 //! (the negative control the reservation exists for), and
 //! `a_declaration_installs_each_spelling_once` (§5.2 over both namespaces).
 
+mod support;
 use std::cell::OnceCell;
 
 use heather_elab::{ElabError, Elaborator};
@@ -91,12 +92,7 @@ thread_local! {
 }
 
 fn build_base() -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(format!("{name}: {err}"));
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]);
     let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),

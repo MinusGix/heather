@@ -32,6 +32,16 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 const INT: &str = include_str!("../../../lib/std/int.hthr");
 
 fn elaborated(cached: bool) -> Elaborator {
+    if cached {
+        // The probes: the library checked once per process, a fork each.
+        let mut e = support::library(&[
+            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
+            ("option", OPTION), ("pair", PAIR), ("list", LIST),
+            ("algebra", ALGEBRA), ("int", INT),
+        ]);
+        e.set_review_lints(true);
+        return e;
+    }
     let mut e = Elaborator::with_prelude().expect("prelude");
     // The retained-motive control in `the_int_module_checks` reads the
     // review-mode lint.
@@ -51,11 +61,7 @@ fn elaborated(cached: bool) -> Elaborator {
             }
         }
     };
-    if cached {
-        support::with_decl_cache(&mut e, load);
-    } else {
-        load(&mut e);
-    }
+    load(&mut e);
     e
 }
 

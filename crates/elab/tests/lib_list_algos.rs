@@ -14,6 +14,7 @@
 //! is proof content that either checks or does not. Cheap — under a second of
 //! the suite's budget.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -41,8 +42,7 @@ fn the_list_algorithms_check() {
 }
 
 fn elaborated() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -50,15 +50,7 @@ fn elaborated() -> Elaborator {
         ("pair", PAIR),
         ("list", LIST),
         ("list_algos", ALGOS),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            let msg = match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            };
-            panic!("{name} did not check: {msg}");
-        }
-    }
+    ]);
     e
 }
 

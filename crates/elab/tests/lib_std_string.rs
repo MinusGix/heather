@@ -6,6 +6,7 @@
 //! position, with a negative control beside it. A closed scrutinee alone hid
 //! three of the five defects that document was written about.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -20,8 +21,7 @@ const STRING: &str = include_str!("../../../lib/std/string.hthr");
 const PREAMBLE: &str = "import logic;\nimport nat;\nimport list;\nimport char;\nimport string;\n";
 
 fn elaborated() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
+    let mut e = support::library(&[
         ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
@@ -30,15 +30,7 @@ fn elaborated() -> Elaborator {
         ("list", LIST),
         ("char", CHAR),
         ("string", STRING),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            let msg = match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            };
-            panic!("{name} did not check: {msg}");
-        }
-    }
+    ]);
     e
 }
 

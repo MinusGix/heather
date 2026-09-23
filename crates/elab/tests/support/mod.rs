@@ -256,6 +256,46 @@ pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mu
     }
 }
 
+/// `modules` elaborated from source on top of the prelude **once per test
+/// process**, and every call a fork of that checked state
+/// (`issues/suite-tests-reelaborate-library-modules.md`).
+///
+/// The checks are exactly the hand-written loop's — the current frontend
+/// and the real kernel over every module's source, no image replay — only
+/// not repeated by every test of the binary: `list` alone was re-elaborated
+/// by 108 tests in about twenty binaries. A fork shares the committed prefix
+/// and nothing else (`SemanticImage::elaborator`), so a test's own modules,
+/// mutations and controls cannot leak into another test. A module that does
+/// not check panics with its rendered error, as each loop did.
+pub fn library(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
+    use std::sync::{Mutex, OnceLock};
+    static BUILT: OnceLock<Mutex<Vec<(u64, heather_elab::SemanticImage)>>> = OnceLock::new();
+    let mut key = Fnv1a::new();
+    for (name, src) in modules {
+        key.write(name.as_bytes());
+        key.write(&[0]);
+        key.write(src.as_bytes());
+        key.write(&[0]);
+    }
+    let key = key.0;
+    // Held across the build, so parallel tests of one binary wait for the
+    // first rather than all elaborating the same prefix at once.
+    let mut built = BUILT.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((_, image)) = built.iter().find(|(k, _)| *k == key) {
+        return image.elaborator();
+    }
+    let mut e = heather_elab::Elaborator::with_prelude().expect("prelude");
+    for (name, src) in modules {
+        if let Err(err) = e.elab_module_source(name, src) {
+            panic!("{name} did not check:\n{}", err.render(src));
+        }
+    }
+    let image = e.semantic_image();
+    let fork = image.elaborator();
+    built.push((key, image));
+    fork
+}
+
 /// A mutated emission (or mutated-library emission) elaborated into the
 /// `ir_v1` module, required to be **refused, and refused by the kernel**.
 ///

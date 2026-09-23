@@ -16,6 +16,7 @@
 //! `And<nat::Nat::Le(p,q), And<nat::Nat::Le(q,r), nat::Nat::Le(p,r)>>` and the left-nested rival is refused
 //! beside it.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -23,15 +24,7 @@ const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT)]);
     if !extra.is_empty() {
         let src = format!("import bool;\nimport nat;\nimport logic;\n{extra}");
         if let Err(err) = e.elab_module_source("probe", &src) {

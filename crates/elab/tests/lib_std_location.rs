@@ -1,17 +1,13 @@
 //! Total location laws at open carriers, plus a concrete nested-record probe.
 
+mod support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
 
 fn elaborated() -> Elaborator {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("location", LOCATION)] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            panic!("{name} did not check: {}", err.render(src));
-        }
-    }
+    let mut e = support::library(&[("logic", LOGIC), ("location", LOCATION)]);
     e
 }
 
