@@ -55,6 +55,30 @@ svg .grid { stroke: var(--line); stroke-dasharray: 2 3; }
 #tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; z-index: 5; max-width: 420px; white-space: pre; font-family: ui-monospace, Menlo, monospace; }
 .empty { color: var(--muted); padding: 30px; text-align: center; }
 .kv { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 6px 0 10px; }
+input[type=search] { font: inherit; color: inherit; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; min-width: 240px; }
+.crumbs { margin: 4px 0 8px; font-size: 13px; }
+a.nav { color: var(--accent); cursor: pointer; text-decoration: none; }
+a.nav:hover { text-decoration: underline; }
+svg.tm { display: block; max-width: 100%; height: auto; border-radius: 6px; background: var(--sunk); margin: 6px 0 2px; }
+svg.tm rect.cell { stroke: var(--panel); stroke-width: 1; cursor: pointer; }
+svg.tm rect.cell:hover { fill-opacity: 1; stroke: var(--fg); }
+svg.tm rect.cell.sel { stroke: var(--fg); stroke-width: 2; }
+svg.tm rect.head { fill: var(--panel); stroke: var(--faint); stroke-width: 1; cursor: pointer; }
+svg.tm text { pointer-events: none; font-size: 11px; }
+svg.tm text.lab { fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.35); stroke-width: 2px; }
+svg.tm text.lab.sub { font-size: 10px; }
+svg.tm text.hd { fill: var(--fg); font-weight: 600; }
+th.sort { cursor: pointer; user-select: none; }
+th.sort:hover, th.on { color: var(--fg); }
+td.name { max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+details > summary { cursor: pointer; color: var(--muted); margin: 8px 0; }
+.detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 6px 24px; }
+.detail-card { margin: 10px 0; }
+i.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+select { max-width: 100%; }
+header label { min-width: 0; max-width: 100%; }
+@media (max-width: 640px) { main { padding: 8px 16px 40px; } header { padding: 8px 16px; position: static; } input[type=search] { min-width: 0; width: 100%; } }
 </style>
 </head>
 <body>
@@ -72,15 +96,33 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = n => `var(--s${n})`;
 const ENV_COLOR = {};          // environment -> categorical slot, assigned in fixed first-seen order
-const PHASES = [               // fixed order, fixed colors: the phase keeps its color across every chart
-  ['kernel_gate_ns', 'kernel gate', S(1)], ['decl_body_ns', 'decl body', S(2)], ['decl_emit_ns', 'decl emit', S(3)],
-  ['decl_type_ns', 'decl type', S(4)], ['lower_ns', 'lower', S(5)], ['elab_whnf_ns', 'elab whnf', S(6)],
-  ['image_recheck_ns', 'image recheck', S(7)], ['image_decode_ns', 'image decode', S(8)],
+// Every `*_ns` column of a --timings row is exclusive (self) time and together
+// they sum to total_ns (crates/elab/src/stats.rs), so a stack over these groups
+// is the whole of a row. Fixed order, fixed colors: a phase keeps its color in
+// every chart; the tooltip names the columns behind a group.
+const PHASE_GROUPS = [
+  ['kernel gate', S(1), c => c === 'kernel_gate_ns'],
+  ['decl body', S(2), c => c === 'decl_body_ns'],
+  ['decl emit', S(3), c => c === 'decl_emit_ns'],
+  ['decl type', S(4), c => c === 'decl_type_ns'],
+  ['lower', S(5), c => c === 'lower_ns'],
+  ['elab whnf', S(6), c => c === 'elab_whnf_ns'],
+  ['omega', S(7), c => c.startsWith('omega_')],
+  ['images & cache', S(8), c => c.startsWith('image_') || c === 'merkle_walk_ns' || c === 'cache_hash_ns'],
 ];
+const REST_LABEL = 'everything else';
+const groupOf = c => { const i = PHASE_GROUPS.findIndex(g => g[2](c)); return i < 0 ? PHASE_GROUPS.length : i; };
+const groupColor = i => i < PHASE_GROUPS.length ? PHASE_GROUPS[i][1] : 'var(--other)';
+const groupLabel = i => i < PHASE_GROUPS.length ? PHASE_GROUPS[i][0] : REST_LABEL;
+const isPhase = k => k.endsWith('_ns') && k !== 'total_ns';
 let SNAPS = [];
+const MODES = ['cold', 'warm', 'edit', 'wait'];
 const fmtS = v => v == null ? '—' : v >= 100 ? v.toFixed(0) + 's' : v >= 10 ? v.toFixed(1) + 's' : v.toFixed(2) + 's';
 const fmtN = v => v == null ? '—' : v.toLocaleString();
 const fmtMs = ns => (ns / 1e6).toFixed(1) + 'ms';
+const fmtNs = ns => ns == null ? '—' : Math.abs(ns) >= 1e9 ? (ns / 1e9).toFixed(2) + 's' : Math.abs(ns) >= 1e6 ? (ns / 1e6).toFixed(1) + 'ms'
+  : Math.abs(ns) >= 1e3 ? (ns / 1e3).toFixed(0) + 'µs' : ns.toFixed(0) + 'ns';
+const fmtC = v => v == null ? '—' : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.abs(v) >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v).toLocaleString();
 const stem = p => p.split('/').pop().replace('.hthr', '');
 const queries = run => run ? (run.conv_shortcut_hits || 0) + (run.conv_memo_hits || 0) + (run.conv_misses || 0) : null;
 
@@ -134,23 +176,29 @@ function corpusTable(snap, against) {
   return `<table><thead><tr><th>file</th><th>wait</th><th>Δ</th><th>cold</th><th>Δ</th><th>warm</th><th>edit</th><th>Δ</th><th>gate</th><th>decls</th>
     <th>misses</th><th>Δ</th><th>queries</th><th>Δ</th><th>eval steps</th><th>RSS MB</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
-function phaseStack(run) {
-  const total = run.total_ns || 1;
-  let acc = 0;
-  const segs = PHASES.map(([k, label, color]) => {
-    const v = run[k] || 0; acc += v;
-    return v / total < 0.004 ? '' : `<div style="flex:${v};background:${color}" data-tip="${label}: ${(v / total * 100).toFixed(1)}% (${fmtMs(v)})"></div>`;
-  }).join('');
-  const rest = Math.max(total - acc, 0);
-  const named = Object.entries(run).filter(([k, v]) => k.endsWith('_ns') && k !== 'total_ns' && !PHASES.some(p => p[0] === k) && v / total >= 0.01)
-    .map(([k, v]) => `${k.slice(0, -3)} ${(v / total * 100).toFixed(1)}%`).join(', ');
-  return `<div class="stack">${segs}<div style="flex:${rest};background:var(--other)" data-tip="everything else: ${(rest / total * 100).toFixed(1)}%${named ? '\n' + named : ''}"></div></div>`;
+function groupSums(o) {
+  const g = new Array(PHASE_GROUPS.length + 1).fill(0);
+  for (const k in o) if (isPhase(k)) g[groupOf(k)] += o[k] || 0;
+  return g;
+}
+// The columns behind group i of row o, largest first, as tooltip lines.
+function groupDetail(o, i, total) {
+  return Object.keys(o).filter(k => isPhase(k) && groupOf(k) === i && o[k] / total >= 0.002).sort((a, b) => o[b] - o[a])
+    .map(k => `  ${k.slice(0, -3).padEnd(18)} ${(o[k] / total * 100).toFixed(1).padStart(5)}%  ${fmtNs(o[k])}`).join('\n');
+}
+function phaseStack(o) {
+  const g = groupSums(o);
+  const total = o.total_ns || g.reduce((a, b) => a + b, 0) || 1;
+  return `<div class="stack">${g.map((v, i) => v / total < 0.004 ? '' :
+    `<div style="flex:${v};background:${groupColor(i)}" data-tip="${esc(groupLabel(i))}: ${(v / total * 100).toFixed(1)}% (${fmtNs(v)})\n${esc(groupDetail(o, i, total))}"></div>`).join('')}</div>`;
+}
+function phaseLegend() {
+  return `<div class="legend">${PHASE_GROUPS.map(([l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('')}<span><i style="background:var(--other)"></i>${REST_LABEL} (hover a bar for its columns)</span></div>`;
 }
 function phaseTable(snap, mode) {
   const rows = snap.files.filter(f => f[mode]?.run?.total_ns).map(f =>
     `<tr><td class="mono">${esc(stem(f.path))}</td><td style="width:60%">${phaseStack(f[mode].run)}</td><td>${fmtS(f[mode].run.total_ns / 1e9)}</td></tr>`).join('');
-  const legend = PHASES.map(([, l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('') + `<span><i style="background:var(--other)"></i>everything else (hover)</span>`;
-  return `<div class="legend">${legend}</div><table><tbody>${rows}</tbody></table>`;
+  return `${phaseLegend()}<table><tbody>${rows}</tbody></table>`;
 }
 function corpusPhaseTotals(snap, mode) {
   const tot = {};
@@ -183,15 +231,17 @@ function concentration(snap) {
 function suiteTable(snap, against) {
   return Object.entries(snap.tests || {}).map(([lane, t]) => {
     const prev = Object.fromEntries(against?.tests?.[lane]?.targets || []);
-    const top = t.targets.slice(0, 25), max = top[0]?.[1] || 1;
-    const rest = t.targets.slice(25).reduce((a, [, s]) => a + s, 0);
+    const max = t.targets[0]?.[1] || 1;
     // Rows are [label, seconds] before 2026-09-17 and [label, seconds, cpu] after.
     const cpuCell = (cpu) => cpu == null ? '' : `${fmtS(cpu)} (${Math.round(100 * cpu / 300)}%)`;
-    const rows = top.map(([label, s, cpu]) => `<tr><td class="mono">${esc(label)}</td>${barCell(s, max, S(1), label)}<td>${cpuCell(cpu)}</td><td>${delta(prev[label], s, true)}</td></tr>`).join('');
+    let acc = 0;
+    const row = ([label, s, cpu]) => { acc += s; return `<tr><td class="mono">${esc(label)}</td>${barCell(s, max, S(1), label)}<td>${cpuCell(cpu)}</td><td>${(acc / t.sum_s * 100).toFixed(0)}%</td><td>${delta(prev[label], s, true)}</td></tr>`; };
+    const head = `<thead><tr><th>test binary</th><th>seconds</th><th>CPU-s (of the 300 s rail)</th><th>cumulative</th><th>Δ</th></tr></thead>`;
+    const top = t.targets.slice(0, 25).map(row).join(''), tail = t.targets.slice(25).map(row).join('');
     const cpuSum = t.cpu_sum_s == null ? '' : ` · ${fmtS(t.cpu_sum_s)} CPU`;
     return `<h3>${lane} lane · run ${esc(t.run)} · ${t.targets.length} targets · ${fmtS(t.sum_s)} summed at kernel width one${cpuSum}</h3>
-      <table><thead><tr><th>test binary</th><th>seconds</th><th>CPU-s (of the 300 s rail)</th><th>Δ</th></tr></thead><tbody>${rows}
-      <tr><td class="kv">${t.targets.length - top.length} more</td><td>${fmtS(rest)}</td><td></td><td></td></tr></tbody></table>`;
+      <table>${head}<tbody>${top}</tbody></table>
+      ${tail ? `<details><summary>the other ${t.targets.length - 25} targets</summary><table>${head}<tbody>${tail}</tbody></table></details>` : ''}`;
   }).join('') || '<p class="note">no suite history in this snapshot</p>';
 }
 
@@ -241,6 +291,351 @@ function historyCards(snaps, measures, keyOf, valueOf, fmt, title) {
   return `<h3>${title}</h3><div class="legend">${legend}</div><div class="grid">${cards}</div>`;
 }
 
+// ---------------------------------------------------------------- explore
+// The snapshot keeps a file's top declarations; the raw --timings table it
+// summarized keeps every row and column, and `serve` hands it out while it is
+// still under target/perf/. This section reads it: a treemap of the run (module
+// → family → declaration, sized by any column, colored by the phase that
+// dominates), the groups at the current level, and every declaration under it.
+const EX = { snap: null, against: null, file: null, mode: 'cold', metric: 'total_ns', path: [], filter: '', sort: null, limit: 200, leaf: null };
+const RAW = new Map();
+let NODES = [];
+try { Object.assign(EX, JSON.parse(localStorage.getItem('heather-perf-explore') || '{}')); } catch (_) {}
+EX.path = []; EX.leaf = null; EX.sort = null; EX.limit = 200;
+function exSave() { try { localStorage.setItem('heather-perf-explore', JSON.stringify({ file: EX.file, mode: EX.mode, metric: EX.metric })); } catch (_) {} }
+
+function parseTsv(text) {
+  const lines = text.split('\n').filter(l => l);
+  const cols = lines[0].split('\t'), rows = [];
+  for (const line of lines.slice(1)) {
+    const c = line.split('\t');
+    if (c.length !== cols.length) continue;
+    const r = {};
+    cols.forEach((k, i) => { r[k] = k === 'scope' || k === 'module' || k === 'item' ? c[i] : (c[i] === '' ? 0 : +c[i]); });
+    r.queries = (r.conv_shortcut_hits || 0) + (r.conv_memo_hits || 0) + (r.conv_misses || 0);
+    rows.push(r);
+  }
+  return { cols, rows };
+}
+function fetchRaw(snap, file, mode) {
+  const k = `${snap._path}|${file}|${mode}`;
+  if (!RAW.has(k)) RAW.set(k, fetch(`/api/raw?snap=${encodeURIComponent(snap._path)}&file=${encodeURIComponent(file)}&mode=${mode}`)
+    .then(r => r.ok ? r.text() : null).then(t => t ? parseTsv(t) : null).catch(() => null));
+  return RAW.get(k);
+}
+// Generated declarations differ only in their numeric segments
+// (caller_native_read_literal_28_3), so a family is the name with each
+// all-digit segment replaced; a library declaration is its own family.
+const familyOf = name => name.replace(/(^|_)\d+(?=_|$)/g, '$1#');
+
+function mkNode(name, parent, kind) {
+  const n = { id: NODES.length, name, parent, kind, kids: [], index: new Map(), agg: {}, count: 0, row: null };
+  NODES.push(n);
+  return n;
+}
+function kid(n, name, kind) {
+  let k = n.index.get(name);
+  if (!k) { k = mkNode(name, n, kind); n.index.set(name, k); n.kids.push(k); }
+  return k;
+}
+function buildTree(items, title) {
+  NODES = [];
+  const root = mkNode(title, null, 'run');
+  for (const r of items) {
+    const m = kid(root, r.module || '(no module)', 'module');
+    const f = kid(m, familyOf(r.item), 'family');
+    const leaf = kid(f, r.item, 'item');
+    leaf.row = r;
+    r._node = leaf.id;
+    for (const n of [root, m, f, leaf]) {
+      n.count++;
+      for (const k in r) if (typeof r[k] === 'number' && k[0] !== '_') n.agg[k] = (n.agg[k] || 0) + r[k];
+    }
+  }
+  // A family of one is just its declaration.
+  for (const m of root.kids) m.kids = m.kids.map(f => { if (f.kids.length !== 1) return f; const l = f.kids[0]; l.parent = m; return l; });
+  return root;
+}
+const ancestors = n => { const out = []; for (; n; n = n.parent) out.unshift(n); return out; };
+const leavesOf = n => n.row ? [n] : n.kids.flatMap(leavesOf);
+const qname = r => `${r.module}::${r.item}`;
+const metricVal = (o, m) => Math.max(0, o[m] || 0);
+const fmtMetric = (m, v) => m.endsWith('_ns') ? fmtNs(v) : fmtC(v);
+const metricLabel = m => m.endsWith('_ns') ? m.slice(0, -3) + ' (time)' : m;
+function dominant(o) {
+  const g = groupSums(o);
+  let best = 0;
+  g.forEach((v, i) => { if (v > g[best]) best = i; });
+  const sum = g.reduce((a, b) => a + b, 0) || 1;
+  return [best, g[best] / sum];
+}
+function nodeTip(n) {
+  const a = n.agg, total = a.total_ns || 1, g = groupSums(a);
+  const lines = [n.row ? qname(n.row) : `${n.name}  (${n.kind}, ${n.count} declaration${n.count === 1 ? '' : 's'})`,
+    `total ${fmtNs(a.total_ns)}` + (EX.metric !== 'total_ns' ? `   ${metricLabel(EX.metric)} ${fmtMetric(EX.metric, a[EX.metric] || 0)}` : '')];
+  g.map((v, i) => [v, i]).sort((x, y) => y[0] - x[0]).filter(([v]) => v / total >= 0.01)
+    .forEach(([v, i]) => lines.push(`  ${groupLabel(i).padEnd(16)} ${(v / total * 100).toFixed(0).padStart(3)}%  ${fmtNs(v)}`));
+  lines.push(`misses ${fmtC(a.conv_misses || 0)}   queries ${fmtC(a.queries || 0)}   steps ${fmtC(a.eval_steps || 0)}`);
+  if ((a.eval_steps || 0) >= 100) lines.push(`gate ${(a.kernel_gate_ns / a.eval_steps / 1e3).toFixed(1)} µs per step   rescope ${fmtC(a.shift_global_nodes || 0)}`);
+  return lines.join('\n');
+}
+
+// Squarified treemap (Bruls, Huizing, van Wijk): rows along the short side,
+// each grown while it improves the worst aspect ratio in it.
+function squarify(items, x, y, w, h) {
+  const out = [], total = items.reduce((a, b) => a + b.v, 0);
+  if (!total || w <= 0 || h <= 0) return out;
+  const scale = w * h / total;
+  let rest = items.map(it => ({ it, a: it.v * scale }));
+  while (rest.length) {
+    const side = Math.min(w, h);
+    let row = [], sum = 0, worst = Infinity;
+    for (const c of rest) {
+      const s = sum + c.a, mx = Math.max(c.a, row.length ? row[0].a : 0), mn = c.a;
+      const r = Math.max(side * side * mx / (s * s), s * s / (side * side * mn));
+      if (r > worst) break;
+      row.push(c); sum = s; worst = r;
+    }
+    rest = rest.slice(row.length);
+    if (w >= h) {
+      const cw = sum / h; let yy = y;
+      for (const c of row) { const ch = c.a / cw; out.push({ n: c.it.n, x, y: yy, w: cw, h: ch }); yy += ch; }
+      x += cw; w -= cw;
+    } else {
+      const rh = sum / w; let xx = x;
+      for (const c of row) { const cw = c.a / rh; out.push({ n: c.it.n, x: xx, y, w: cw, h: rh }); xx += cw; }
+      y += rh; h -= rh;
+    }
+  }
+  return out;
+}
+// Largest first; past `cap` the rest is one grey cell (not a node).
+function sized(kids, cap) {
+  const m = EX.metric;
+  const list = kids.map(n => ({ n, v: metricVal(n.agg, m) })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+  if (list.length <= cap) return list;
+  const tail = list.slice(cap);
+  return list.slice(0, cap).concat([{ n: { id: -1, name: `${tail.length} smaller`, tail }, v: tail.reduce((a, b) => a + b.v, 0) }]);
+}
+function label(x, y, w, h, text, sub, cls) {
+  const chars = Math.floor((w - 6) / 6.3);
+  if (chars < 3 || h < 13) return '';
+  const t = text.length > chars ? text.slice(0, chars - 1) + '…' : text;
+  let out = `<text class="${cls}" x="${x + 4}" y="${y + 12}">${esc(t)}</text>`;
+  if (sub && h >= 27 && sub.length <= chars) out += `<text class="${cls} sub" x="${x + 4}" y="${y + 24}">${esc(sub)}</text>`;
+  return out;
+}
+function cellSvg(c) {
+  const { n, x, y, w, h } = c;
+  if (n.id < 0) return `<rect class="cell" x="${x}" y="${y}" width="${w}" height="${h}" fill="var(--other)" data-tip="${esc(n.name)}: ${fmtMetric(EX.metric, n.tail.reduce((a, b) => a + b.v, 0))}"/>` + label(x, y, w, h, n.name, '', 'lab');
+  const [g, share] = dominant(n.agg);
+  const op = (0.55 + 0.45 * share).toFixed(2);
+  const sel = EX.leaf && EX.leaf === n ? ' sel' : '';
+  return `<rect class="cell${sel}" x="${x}" y="${y}" width="${w}" height="${h}" fill="${groupColor(g)}" fill-opacity="${op}" data-node="${n.id}" data-tip="${esc(nodeTip(n))}"/>`
+    + label(x, y, w, h, n.row ? n.name : `${n.name} (${n.count})`, fmtMetric(EX.metric, n.agg[EX.metric] || 0), 'lab');
+}
+function treemap(node, W, H) {
+  let svg = '';
+  for (const c of squarify(sized(node.kids, 250), 0, 0, W, H)) {
+    const n = c.n;
+    // One level of nesting: a group big enough shows its own children under a header.
+    if (n.id >= 0 && n.kids.length > 1 && c.w > 90 && c.h > 50) {
+      svg += `<rect class="head" x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" data-node="${n.id}" data-tip="${esc(nodeTip(n))}"/>`
+        + label(c.x, c.y, c.w, 16, `${n.name} · ${fmtMetric(EX.metric, n.agg[EX.metric] || 0)}`, '', 'hd');
+      for (const cc of squarify(sized(n.kids, 120), c.x + 2, c.y + 16, c.w - 4, c.h - 18)) svg += cellSvg(cc);
+    } else svg += cellSvg(c);
+  }
+  return `<svg class="tm" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${svg}</svg>`;
+}
+
+// Declarations table: every item under the current node.
+function itemCols(prev) {
+  const m = EX.metric;
+  const cols = [
+    ['item', 'declaration', r => qname(r), 'text'],
+    ['total_ns', 'total', r => r.total_ns, 'ns'],
+    ['phases', 'where its time goes', null, 'stack'],
+    ['gate', 'gate', r => r.total_ns ? r.kernel_gate_ns / r.total_ns : 0, 'pct'],
+    ['conv_misses', 'misses', r => r.conv_misses, 'n'],
+    ['queries', 'queries', r => r.queries, 'n'],
+    ['eval_steps', 'steps', r => r.eval_steps, 'n'],
+    ['usstep', 'gate µs/step', r => r.eval_steps >= 100 ? r.kernel_gate_ns / r.eval_steps / 1e3 : null, 'f1'],
+    ['shift_global_nodes', 'rescope', r => r.shift_global_nodes, 'n'],
+  ];
+  if (!cols.some(c => c[0] === m)) cols.splice(2, 0, [m, metricLabel(m), r => r[m], m.endsWith('_ns') ? 'ns' : 'n']);
+  if (prev) cols.push(['dtotal', 'Δ total', r => { const p = prev.get(qname(r)); return p ? r.total_ns - p.total_ns : null; }, 'dns'],
+    ['dmiss', 'Δ misses', r => { const p = prev.get(qname(r)); return p ? r.conv_misses - p.conv_misses : null; }, 'dn']);
+  return cols;
+}
+function cellFmt(kind, v) {
+  if (v == null) return '<span class="kv">—</span>';
+  switch (kind) {
+    case 'ns': return fmtNs(v);
+    case 'n': return fmtC(v);
+    case 'pct': return (v * 100).toFixed(0) + '%';
+    case 'f1': return v.toFixed(1);
+    case 'dns': case 'dn': {
+      if (!v) return '<span class="delta-flat">0</span>';
+      const s = (v > 0 ? '+' : '−') + (kind === 'dns' ? fmtNs(Math.abs(v)) : fmtC(Math.abs(v)));
+      return `<span class="${v > 0 ? 'delta-up' : 'delta-down'}">${s}</span>`;
+    }
+    default: return esc(v);
+  }
+}
+function itemsTable() {
+  const node = EX.path[EX.path.length - 1];
+  const cols = itemCols(EX.prev);
+  const sort = EX.sort || { key: EX.metric, dir: -1 };
+  const col = cols.find(c => c[0] === sort.key) || cols[1];
+  const f = EX.filter.toLowerCase();
+  let rows = leavesOf(node).map(n => n.row).filter(r => !f || qname(r).toLowerCase().includes(f));
+  const get = col[2];
+  rows.sort((a, b) => {
+    const x = get(a), y = get(b);
+    if (col[3] === 'text') return sort.dir * String(x).localeCompare(String(y));
+    // Deltas sort by size of the move; missing values last either way.
+    const kx = x == null ? -Infinity : col[3][0] === 'd' ? Math.abs(x) : x, ky = y == null ? -Infinity : col[3][0] === 'd' ? Math.abs(y) : y;
+    return sort.dir < 0 ? ky - kx : kx - ky;
+  });
+  const shown = rows.slice(0, EX.limit);
+  const head = cols.map(c => c[3] === 'stack' ? `<th>${c[1]}</th>` :
+    `<th class="sort${c[0] === col[0] ? ' on' : ''}" data-sort="${c[0]}">${c[1]}${c[0] === col[0] ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('');
+  const body = shown.map(r => {
+    return `<tr>${cols.map(c => c[3] === 'stack' ? `<td style="min-width:160px">${phaseStack(r)}</td>`
+      : c[3] === 'text' ? `<td class="name mono"><a class="nav" data-node="${r._node}" title="${esc(qname(r))}">${esc(qname(r))}</a></td>`
+      : `<td>${cellFmt(c[3], c[2](r))}</td>`).join('')}</tr>`;
+  }).join('');
+  const more = rows.length > shown.length ? `<button data-act="more">show ${Math.min(rows.length - shown.length, 1000)} more of ${rows.length - shown.length}</button>` : '';
+  return `<h3>Declarations under ${esc(node.name)} — ${rows.length}${f ? ` matching “${esc(EX.filter)}”` : ''}${EX.prev ? ', Δ against ' + esc(EX.against.stamp) : ''}</h3>
+    <table class="items"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${more}`;
+}
+function groupsTable(node) {
+  if (node.row || !node.kids.length) return '';
+  const m = EX.metric, total = metricVal(node.agg, m) || 1;
+  const kids = node.kids.slice().sort((a, b) => metricVal(b.agg, m) - metricVal(a.agg, m));
+  let acc = 0;
+  const row = n => {
+    const v = metricVal(n.agg, m); acc += v;
+    const a = n.agg;
+    return `<tr><td class="name mono"><a class="nav" data-node="${n.id}">${esc(n.name)}</a></td><td>${n.count}</td>
+      <td>${fmtMetric(m, v)}</td><td>${(v / total * 100).toFixed(1)}%</td><td>${(acc / total * 100).toFixed(0)}%</td>
+      <td style="min-width:200px">${phaseStack(a)}</td><td>${fmtNs(a.total_ns)}</td><td>${fmtNs(a.total_ns / n.count)}</td>
+      <td>${fmtC(a.conv_misses || 0)}</td><td>${fmtC(a.eval_steps || 0)}</td>
+      <td>${(a.eval_steps || 0) >= 100 ? (a.kernel_gate_ns / a.eval_steps / 1e3).toFixed(1) : '—'}</td></tr>`;
+  };
+  const head = `<thead><tr><th>${node.kind === 'run' ? 'module' : node.kind === 'module' ? 'family / declaration' : 'declaration'}</th><th>decls</th>
+    <th>${esc(metricLabel(m))}</th><th>share</th><th>cumulative</th><th>where the time goes</th><th>total</th><th>per decl</th><th>misses</th><th>steps</th><th>gate µs/step</th></tr></thead>`;
+  const top = kids.slice(0, 40).map(row).join(''), tail = kids.slice(40).map(row).join('');
+  return `<h3>${node.kind === 'run' ? 'Modules' : node.kind === 'module' ? 'Families in ' + esc(node.name) + ' (numeric segments of generated names as #)' : 'Declarations in ' + esc(node.name)}</h3>
+    <table>${head}<tbody>${top}</tbody></table>${tail ? `<details><summary>the other ${kids.length - 40}</summary><table>${head}<tbody>${tail}</tbody></table></details>` : ''}`;
+}
+function leafDetail(n) {
+  if (!n) return '';
+  const r = n.row, total = r.total_ns || 1, p = EX.prev?.get(qname(r));
+  const d = (k) => p ? ` ${cellFmt(k.endsWith('_ns') ? 'dns' : 'dn', r[k] - (p[k] || 0))}` : '';
+  const phases = Object.keys(r).filter(k => isPhase(k) && r[k]).sort((a, b) => r[b] - r[a]).map(k =>
+    `<tr><td class="mono"><i class="sw" style="background:${groupColor(groupOf(k))}"></i>${esc(k.slice(0, -3))}</td><td>${fmtNs(r[k])}</td><td>${(r[k] / total * 100).toFixed(1)}%</td><td>${d(k)}</td></tr>`).join('');
+  const counts = Object.keys(r).filter(k => k[0] !== '_' && !k.endsWith('_ns') && typeof r[k] === 'number' && r[k]).sort().map(k =>
+    `<tr><td class="mono">${esc(k)}</td><td>${fmtN(r[k])}</td><td>${d(k)}</td></tr>`).join('');
+  return `<div class="card detail-card"><h4 class="mono">${esc(qname(r))} <a class="nav" data-act="close">close</a></h4>
+    <p class="note">total ${fmtNs(r.total_ns)}${p ? ` (was ${fmtNs(p.total_ns)} in ${esc(EX.against.stamp)})` : EX.prev ? ' (not in the compared run)' : ''}</p>
+    <div class="detail"><table><thead><tr><th>phase (self time)</th><th>time</th><th>share</th><th>${p ? 'Δ' : ''}</th></tr></thead><tbody>${phases}</tbody></table>
+    <table><thead><tr><th>counter</th><th>value</th><th>${p ? 'Δ' : ''}</th></tr></thead><tbody>${counts}</tbody></table></div></div>`;
+}
+function exploreBody() {
+  const node = EX.path[EX.path.length - 1];
+  const crumbs = EX.path.map((n, i) => i === EX.path.length - 1 ? `<b class="mono">${esc(n.name)}</b>` : `<a class="nav mono" data-node="${n.id}">${esc(n.name)}</a>`).join(' › ');
+  const W = Math.max(320, $('#explore').clientWidth - 34), H = Math.round(Math.min(560, Math.max(300, W * 0.45)));
+  const a = node.agg;
+  $('#ex-body').innerHTML = `<div class="crumbs">${crumbs} <span class="kv">· ${node.count} declarations · ${fmtNs(a.total_ns)} · ${fmtC(a.conv_misses || 0)} misses · ${fmtC(a.eval_steps || 0)} steps</span></div>
+    ${phaseStack(a)}
+    <p class="note" style="margin-top:8px">Area is <b>${esc(metricLabel(EX.metric))}</b>; color is the phase that dominates the cell (paler = less dominant). Click a cell to go in, a declaration to see every column; the breadcrumbs go back out.</p>
+    ${treemap(node, W, H)}${phaseLegend()}${leafDetail(EX.leaf)}${groupsTable(node)}`;
+  $('#ex-items').innerHTML = itemsTable();
+}
+function exploreNav(id) {
+  const n = NODES[id];
+  if (!n) return;
+  if (n.row) { EX.leaf = n; EX.path = ancestors(n.parent); }
+  else { EX.leaf = null; EX.path = ancestors(n); }
+  EX.limit = 200;
+  exploreBody();
+  if (n.row) $('#explore .detail-card')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+async function exploreLoad() {
+  const el = $('#explore');
+  const files = EX.snap.files || [];
+  const f = files.find(x => x.path === EX.file) || files[0];
+  if (!f) { el.innerHTML = '<h2>Explore a run</h2><p class="note">no corpus in this snapshot</p>'; return; }
+  EX.file = f.path;
+  const modes = MODES.filter(m => f[m]?.raw_ok);
+  if (!modes.length) {
+    el.innerHTML = `<h2>Explore a run</h2><p class="note">The raw --timings tables of ${esc(EX.snap.stamp)} are not on disk (they live under target/perf/, uncommitted). Take a snapshot here, or pick a newer one.</p>`;
+    return;
+  }
+  if (!modes.includes(EX.mode)) EX.mode = modes.includes('cold') ? 'cold' : modes[0];
+  const pf = EX.against?.files?.find(x => x.path === EX.file);
+  const [cur, prev] = await Promise.all([fetchRaw(EX.snap, EX.file, EX.mode), pf?.[EX.mode]?.raw_ok ? fetchRaw(EX.against, EX.file, EX.mode) : null]);
+  if (!cur) { el.innerHTML = '<h2>Explore a run</h2><p class="note">could not load the raw table</p>'; return; }
+  const items = cur.rows.filter(r => r.scope === 'item');
+  const run = cur.rows.find(r => r.scope === 'run');
+  const numeric = cur.cols.filter(c => !['scope', 'module', 'item'].includes(c)).concat(['queries'])
+    .filter(c => items.some(r => r[c]));
+  if (!numeric.includes(EX.metric)) EX.metric = 'total_ns';
+  const oldPath = EX.path.map(n => n.name);
+  EX.tree = buildTree(items, stem(EX.file));
+  EX.prev = prev ? new Map(prev.rows.filter(r => r.scope === 'item').map(r => [qname(r), r])) : null;
+  // Keep the drill-down across a snapshot or mode switch where the names still exist.
+  EX.path = [EX.tree];
+  for (const name of oldPath.slice(1)) { const k = EX.path[EX.path.length - 1].kids.find(n => n.name === name); if (!k) break; EX.path.push(k); }
+  if (EX.leaf) EX.leaf = null;
+  exSave();
+  const opt = (v, l, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(l)}</option>`;
+  const times = numeric.filter(c => c.endsWith('_ns')), counts = numeric.filter(c => !c.endsWith('_ns'));
+  const itemSum = items.reduce((a, r) => a + r.total_ns, 0);
+  const widthNote = f[EX.mode].kernel_workers > 1 ? ` At width ${f[EX.mode].kernel_workers} the gate runs on workers, so declaration times sum past the run's.` : '';
+  el.innerHTML = `<h2>Explore a run</h2>
+    <p class="note">Every declaration of one run, from the raw <code>--timings</code> table the snapshot summarized (<code>${esc(f[EX.mode].raw)}</code>). ${items.length} declarations summing to ${fmtNs(itemSum)} of the run's ${fmtNs(run?.total_ns)}; the rest is outside any declaration (parse, prelude, module bookkeeping).${widthNote}</p>
+    <div class="controls">
+      <label>file <select data-ctl="file">${files.map(x => opt(x.path, x.path, x.path === EX.file)).join('')}</select></label>
+      <label>run <select data-ctl="mode">${modes.map(m => opt(m, m, m === EX.mode)).join('')}</select></label>
+      <label>size by <select data-ctl="metric"><optgroup label="time (self, per phase)">${opt('total_ns', 'total', EX.metric === 'total_ns')}${times.filter(c => c !== 'total_ns').map(c => opt(c, c.slice(0, -3), c === EX.metric)).join('')}</optgroup>
+        <optgroup label="counts">${counts.map(c => opt(c, c, c === EX.metric)).join('')}</optgroup></select></label>
+      <label>filter <input type="search" data-ctl="filter" placeholder="module::declaration substring" value="${esc(EX.filter)}"></label>
+      <span class="kv">${EX.prev ? 'Δ columns against ' + esc(EX.against.stamp) + ' ' + esc(EX.against.commit) : EX.against ? 'no raw table for the compared snapshot, so no Δ columns' : ''}</span>
+    </div><div id="ex-body"></div><div id="ex-items"></div>`;
+  exploreBody();
+}
+function exploreInit(snap, against) {
+  EX.snap = snap; EX.against = against;
+  exploreLoad();
+}
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('#explore')) return;
+  const act = ev.target.closest('[data-act]')?.dataset.act;
+  if (act === 'more') { EX.limit += 1000; $('#ex-items').innerHTML = itemsTable(); return; }
+  if (act === 'close') { EX.leaf = null; exploreBody(); return; }
+  const th = ev.target.closest('th[data-sort]');
+  if (th) {
+    const key = th.dataset.sort;
+    EX.sort = { key, dir: EX.sort?.key === key ? -EX.sort.dir : (key === 'item' ? 1 : -1) };
+    $('#ex-items').innerHTML = itemsTable();
+    return;
+  }
+  const n = ev.target.closest('[data-node]');
+  if (n) { ev.preventDefault(); exploreNav(+n.dataset.node); }
+});
+document.addEventListener('change', ev => {
+  const ctl = ev.target.closest('#explore [data-ctl]')?.dataset.ctl;
+  if (ctl === 'file' || ctl === 'mode') { EX[ctl] = ev.target.value; EX.path = []; EX.leaf = null; EX.sort = null; exploreLoad(); }
+  if (ctl === 'metric') { EX.metric = ev.target.value; EX.sort = null; exSave(); exploreBody(); }
+});
+document.addEventListener('input', ev => {
+  if (ev.target.closest('#explore [data-ctl="filter"]')) { EX.filter = ev.target.value; EX.limit = 200; $('#ex-items').innerHTML = itemsTable(); }
+});
+let resizeTimer = null;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (EX.tree && $('#ex-body')) exploreBody(); }, 150); });
+
 // ---------------------------------------------------------------- page
 function render() {
   const snap = SNAPS.find(s => s._path === $('#pick').value) || SNAPS[SNAPS.length - 1];
@@ -262,6 +657,7 @@ function render() {
       <p class="note">Corpus total: ${corpusPhaseTotals(snap, 'cold')}</p>
       <h3>Where edit time goes</h3>${phaseTable(snap, 'edit')}<p class="note">Corpus total: ${corpusPhaseTotals(snap, 'edit')}</p>` : ''}
     </section>
+    <section id="explore"><h2>Explore a run</h2><p class="note">loading…</p></section>
     ${snap.files.length ? `<section><h2>Which declarations</h2>
       <p class="note">Concentration first: a file whose top declaration is most of its time has one problem; a flat file has a constant-factor problem.</p>
       ${concentration(snap)}<h3>Heaviest declarations across the corpus (cold)</h3>${heavyItems(snap)}</section>` : ''}
@@ -274,6 +670,7 @@ function render() {
       ${historyCards(SNAPS, [['eval steps', false]], byFile, f => f.cold?.run?.eval_steps ?? null, v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v.toFixed(0), 'Evaluator steps per file, cold')}
       ${historyCards(SNAPS, [['seconds', false]], s => { const t = byTest(s); return Object.fromEntries(Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 12)); }, (v) => v, v => fmtS(v), 'Slowest test binaries over snapshots (top 12 by the latest run)')}
     </section>`;
+  exploreInit(snap, against);
 }
 async function load() {
   SNAPS = await (await fetch('/api/snapshots')).json();

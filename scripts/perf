@@ -681,14 +681,54 @@ def cmd_list(args):
               f"suite {lanes:9} files {len(s['files']):2d}  {files[:60]}{'  ' + s['label'] if s.get('label') else ''}")
 
 
+MODES = ("wait", "cold", "warm", "edit")
+
+
+def checkout_roots():
+    """This checkout first, then every other worktree of the repository."""
+    roots = [ROOT]
+    for line in sh("git", "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            r = Path(line[len("worktree "):])
+            if r not in roots:
+                roots.append(r)
+    return roots
+
+
+def raw_table(rel, roots=None):
+    """A snapshot's raw `--timings` table, if it is still on disk. The raw
+    tables are not committed (`target/perf/<stamp>/`) and the path is recorded
+    relative to the checkout that took the snapshot, so it is looked for under
+    every worktree; an old one, or one from a removed worktree, finds nothing."""
+    if not rel:
+        return None
+    p = Path(rel)
+    cands = [p] if p.is_absolute() else [r / p for r in (roots or checkout_roots())]
+    return next((c for c in cands if c.suffix == ".tsv" and c.is_file()), None)
+
+
 def cmd_serve(args):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
 
     def payload():
-        snaps = load_all()
+        snaps, roots = load_all(), checkout_roots()
         for s in snaps:
             s["_path"] = s["_path"].name
+            for f in s.get("files", []):
+                for m in MODES:
+                    if isinstance(f.get(m), dict):
+                        f[m]["raw_ok"] = raw_table(f[m].get("raw"), roots) is not None
         return json.dumps(snaps).encode()
+
+    def raw(query):
+        # Looked up by (snapshot, file, mode), never by a path the request names.
+        q = {k: v[0] for k, v in parse_qs(query).items()}
+        snap = next((s for s in load_all() if s["_path"].name == q.get("snap")), None)
+        f = next((f for f in (snap or {}).get("files", []) if f["path"] == q.get("file")), None)
+        mode = (f or {}).get(q.get("mode")) if q.get("mode") in MODES else None
+        path = raw_table(mode.get("raw")) if isinstance(mode, dict) else None
+        return path.read_bytes() if path else None
 
     class Handler(BaseHTTPRequestHandler):
         def send(self, body, ctype):
@@ -700,11 +740,18 @@ def cmd_serve(args):
             self.wfile.write(body)
 
         def do_GET(self):
-            path = self.path.split("?", 1)[0]
+            url = urlsplit(self.path)
+            path = url.path
             if path in ("/", "/index.html"):
                 self.send(WEB.read_bytes(), "text/html; charset=utf-8")
             elif path == "/api/snapshots":
                 self.send(payload(), "application/json")
+            elif path == "/api/raw":
+                body = raw(url.query)
+                if body is None:
+                    self.send_error(404, "raw table not on disk")
+                else:
+                    self.send(body, "text/tab-separated-values; charset=utf-8")
             else:
                 self.send_error(404)
 

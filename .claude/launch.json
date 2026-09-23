@@ -6,6 +6,12 @@
       "runtimeExecutable": "scripts/issue",
       "runtimeArgs": ["serve", "--port", "8765"],
       "port": 8765
+    },
+    {
+      "name": "perf",
+      "runtimeExecutable": "scripts/perf",
+      "runtimeArgs": ["serve", "--port", "8766"],
+      "port": 8766
     }
   ]
 }

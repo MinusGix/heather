@@ -31,6 +31,19 @@ Rules, so the diary keeps meaning something:
   the generated certificate's items are in the report beside the library's.
   It is the slowest entry by far; `--only` leaves it out of a quick look.
 
+## Exploring one run: the dashboard's Explore section
+
+`scripts/perf serve` (or the `perf` entry of `.claude/launch.json`) also
+serves each snapshot's raw `--timings` tables while they are on disk, found
+under any worktree of the repository. Explore reads them: a treemap of one
+file's run, module → family → declaration (a family is a generated name with
+its numeric segments as `#`, so `caller_native_read_literal_28_3` is one of
+`caller_native_read_literal_#_#`), sized by any column and colored by the
+phase that dominates; the groups at the current level with a stacked phase
+bar each; and every declaration under it, sortable and filterable, with Δ
+columns when the compared snapshot's table is on disk too. Every `*_ns`
+column is self time and they sum to `total_ns`, so a bar is the whole row.
+
 ## What the report shows besides totals
 
 Every heaviest-declaration row carries the gate's **µs per evaluator step**
