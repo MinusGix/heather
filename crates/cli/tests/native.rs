@@ -32,6 +32,13 @@ fn source_to_native_binary() {
 /// `--item-timings` is attribution, so its table must account for every
 /// declaration of the certificate it was asked about — a table that silently
 /// omits the expensive ones would mislead exactly where it is consulted.
+///
+/// The certificate goes through the semantic session, so a run at an
+/// unchanged compiler replays its image from `target/native-test-images`:
+/// then nothing was elaborated and the module row, carrying the replay's
+/// decode and recheck, is the whole account. The per-declaration check runs
+/// whenever the certificate was elaborated — every first run after a change
+/// to the compiler or the generator.
 fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::path::Path) {
     let table = std::fs::read_to_string(tsv).unwrap();
     let mut lines = table.lines();
@@ -39,7 +46,10 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
     assert_eq!(&header[..5], ["scope", "module", "item", "total_ns", "other_ns"]);
     assert!(header.contains(&"kernel_gate_ns"), "the gate keeps a column of its own");
     assert!(header.contains(&"conv_misses"), "the kernel's counters are columns too");
+    let column = |name: &str| header.iter().position(|h| *h == name).unwrap();
+    let (decode, recheck) = (column("image_decode_ns"), column("image_recheck_ns"));
     let mut rows = std::collections::HashSet::new();
+    let mut replayed = None;
     for line in lines {
         let cells: Vec<&str> = line.split('\t').collect();
         assert_eq!(cells.len(), header.len(), "row {line:?}");
@@ -47,6 +57,14 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
         if cells[0] == "item" && cells[1] == "mix_native_certificate" {
             rows.insert(cells[2].to_string());
         }
+        if cells[0] == "module" && cells[1] == "mix_native_certificate" {
+            replayed = Some(cells[decode] != "0" && cells[recheck] != "0");
+        }
+    }
+    let replayed = replayed.expect("the certificate has a module row");
+    if rows.is_empty() {
+        assert!(replayed, "an elaborated certificate has item rows; this one has none and no replay either");
+        return;
     }
     let source = std::fs::read_to_string(certificate).unwrap();
     let mut declarations = 0;
