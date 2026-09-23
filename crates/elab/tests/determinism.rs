@@ -92,7 +92,9 @@ fn same_source_elaborates_identically() {
 /// (`fromLiteral` mentions `element`), so its projections are now named and Ψ
 /// carries `3·nfields + 1 = 7` more bindings. The hash is over Ψ's printed
 /// form, so it moves whenever Ψ does.
-const NAT_SUITE_GOLDEN: u64 = 0x9d693d5d3245eccb;
+/// Moved 2026-09-22 by `docs/app-by-head-type-design.md`: every emitted
+/// application is `app@(f; a)` now, with no annotations.
+const NAT_SUITE_GOLDEN: u64 = 0x67f02d6ccda1f6af;
 
 #[test]
 fn nat_suite_golden_hash() {

@@ -138,6 +138,11 @@ pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
             cod: Rc::clone(cod),
             arg: scrut,
         },
+        // …and in the checked spelling, which has no annotation to carry
+        // (docs/app-by-head-type-design.md §6.2).
+        Term::AppAt { fun, .. } if matches!(&**fun, Term::GlobalTm { .. }) => {
+            Term::AppAt { fun: Rc::clone(fun), arg: scrut }
+        }
         _ => return None,
     })
 }
@@ -147,7 +152,11 @@ fn scrut_of(t: &Term) -> Option<&Rc<Term>> {
         Term::ElimNat { scrut, .. } | Term::ElimWf { scrut, .. } | Term::Case { scrut, .. } => {
             Some(scrut)
         }
-        Term::App { fun, arg, .. } if matches!(&**fun, Term::GlobalTm { .. }) => Some(arg),
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg }
+            if matches!(&**fun, Term::GlobalTm { .. }) =>
+        {
+            Some(arg)
+        }
         _ => None,
     }
 }
@@ -227,7 +236,7 @@ fn tag_in(t: &Term, fuel: u32) -> Option<u32> {
         }
         Term::ElimWf { step, .. } => tag_in(step, fuel - 1),
         Term::Lam { body, .. } => tag_in(body, fuel - 1),
-        Term::App { fun, .. } => tag_in(fun, fuel - 1),
+        Term::App { fun, .. } | Term::AppAt { fun, .. } => tag_in(fun, fuel - 1),
         _ => None,
     }
 }
@@ -334,16 +343,16 @@ pub(crate) fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
             Rc::new(Term::Var(LocalVar(2))),
             Rc::new(Term::Var(LocalVar(0))),
         ))));
-    Term::App {
-        fun: Rc::new(Term::Var(LocalVar(0))),
-        dom_level: Level::Zero,
-        cod_level: tel.mlvl.clone(),
-        dom: Rc::new(Type::Fin {
+    crate::spelling::checked_app(
+        Rc::new(Term::Var(LocalVar(0))),
+        Level::Zero,
+        tel.mlvl.clone(),
+        Rc::new(Type::Fin {
             len: Rc::clone(&len),
         }),
-        cod: Rc::new(cod),
-        arg: Rc::new(crate::wf::fin_index(t, m, &Term::Zero)),
-    }
+        Rc::new(cod),
+        Rc::new(crate::wf::fin_index(t, m, &Term::Zero)),
+    )
 }
 
 impl Elaborator {
@@ -364,7 +373,7 @@ impl Elaborator {
         // mod fingerprint`'s look-alike discipline at route 1. The structural
         // search stays as the fallback: a parameterized family never had a
         // definition, and a pre-unfolded occurrence no longer shows one (§4).
-        if let Term::App { fun, arg, .. } = &**tm
+        if let Some((fun, arg)) = crate::spelling::app_of(tm)
             && let Term::GlobalTm { var, .. } = &**fun
         {
             let GenDef::Fam(tag) = self.gen_def_of(*var)? else {
@@ -1411,19 +1420,19 @@ impl Elaborator {
 
         // The recursion applied to the scrutinee: `M[idx, scrut]` directly —
         // no repackaging (§6, "minus one composition point").
-        Ok(Term::App {
-            fun: Rc::new(elim),
-            dom_level: l,
-            cod_level: mlvl,
-            dom: Rc::new(fam.el_at((*fam.idx).clone(), 0)),
-            cod: Rc::new(msub(
+        Ok(crate::spelling::checked_app(
+            Rc::new(elim),
+            l,
+            mlvl,
+            Rc::new(fam.el_at((*fam.idx).clone(), 0)),
+            Rc::new(msub(
                 &gamma,
                 1,
                 fam.idx.shift_local(1),
                 Term::Var(LocalVar(0)),
             )),
-            arg: Rc::new(scrut),
-        })
+            Rc::new(scrut),
+        ))
     }
 
     /// One class's arms, inside a branch whose payload binder `v : El (fam h)`
@@ -1794,19 +1803,19 @@ impl Elaborator {
                 // ih = ⟨the branch's rec at this argument⟩ child : M[at, child]
                 // (§6) — one per recursive field, each drawn from the `rec` of
                 // the index-constructor argument its pattern variable fills.
-                let ih = Term::App {
-                    fun: Rc::new(ihfn),
-                    dom_level: env.level.clone(),
-                    cod_level: env.mlvl.clone(),
-                    dom: Rc::new((*fst).clone()),
-                    cod: Rc::new(env.mot_at(
+                let ih = crate::spelling::checked_app(
+                    Rc::new(ihfn),
+                    env.level.clone(),
+                    env.mlvl.clone(),
+                    Rc::new((*fst).clone()),
+                    Rc::new(env.mot_at(
                         &acx.gamma,
                         at.shift_local(1),
                         Term::Var(LocalVar(0)),
                         extra(env) + 1,
                     )),
-                    arg: Rc::clone(&proj),
-                };
+                    Rc::clone(&proj),
+                );
                 let ih_ty = env.mot_at(&acx.gamma, (*at).clone(), (*proj).clone(), extra(env));
                 children.push((Rc::clone(&proj), Rc::new(ih), ih_ty, env.mlvl.clone()));
                 rebind.push(at);
@@ -1929,27 +1938,12 @@ inductive W : (n: Nat) -> Type {
         let Type::El { level, tm } = ty else {
             panic!("a route-1 family is an El")
         };
-        let Term::App {
-            dom_level,
-            cod_level,
-            dom,
-            cod,
-            arg,
-            ..
-        } = (**tm).clone()
-        else {
+        let Some((_, arg)) = crate::spelling::app_of(tm) else {
             panic!("the occurrence is the family function applied to the index")
         };
         Type::El {
             level: level.clone(),
-            tm: Rc::new(Term::App {
-                fun: Rc::new(head),
-                dom_level,
-                cod_level,
-                dom,
-                cod,
-                arg,
-            }),
+            tm: Rc::new(Term::AppAt { fun: Rc::new(head), arg: Rc::clone(arg) }),
         }
     }
 
@@ -1962,7 +1956,7 @@ inductive W : (n: Nat) -> Type {
         let Type::El { tm, .. } = &ty else {
             panic!("a route-1 family is an El")
         };
-        let Term::App { fun, .. } = &**tm else {
+        let Some((fun, _)) = crate::spelling::app_of(tm) else {
             panic!("…of the family function")
         };
         assert!(t.el.is_gen_ref(fun, GenDef::Fam(t.v.tag)));
@@ -1977,7 +1971,7 @@ inductive W : (n: Nat) -> Type {
         assert_eq!(fam.level, l);
         assert!(matches!(
             fam.at(Term::Succ(Rc::new(Term::Zero)), 0),
-            Term::App { .. }
+            Term::App { .. } | Term::AppAt { .. }
         ));
     }
 
@@ -2066,7 +2060,7 @@ inductive Pv<A> : (n: Nat) -> Type {
         let Type::El { tm, .. } = &pty else {
             panic!("a route-1 family is an El")
         };
-        assert!(!matches!(&**tm, Term::App { .. }));
+        assert!(!crate::spelling::is_app(tm));
         let (ind, _) = el.indexed_of(&pty).expect("reads back structurally");
         assert_eq!(ind.tag, p.tag);
         // …and `V`'s reference is `V`, never `Pv`.
@@ -2122,14 +2116,16 @@ inductive Bal : (s: Shape) -> Type {
             let Type::El { tm, .. } = &ty else {
                 panic!("a route-1 family is an El")
             };
-            let Term::App { fun, dom, .. } = &**tm else {
+            let Some((fun, _)) = crate::spelling::app_of(tm) else {
                 panic!("…of the family function")
             };
             assert!(el.is_gen_ref(fun, GenDef::Fam(ind.tag)));
-            let Type::El { tm: dcode, .. } = &**dom else {
-                panic!("the domain is the index type's code reference")
-            };
-            assert!(el.is_gen_ref(dcode, GenDef::IdxCode(iind.tag)));
+            // The occurrence used to state its domain, which had to be the
+            // index type's code reference so that every occurrence did not
+            // copy the index type inline. Since
+            // `docs/app-by-head-type-design.md` it states none: the domain
+            // is the family function's, once, in Ψ.
+            assert!(matches!(&**tm, Term::AppAt { .. }), "the occurrence is `app@`");
             assert_eq!(el.indexed_of(&ty).expect("reads back").0.tag, ind.tag);
         }
     }

@@ -429,7 +429,7 @@ struct BoundProof {
 fn named_args<'a>(elab: &Elaborator, t: &'a Term, wanted: &str) -> Option<Vec<&'a Rc<Term>>> {
     let mut args = Vec::new();
     let mut head = t;
-    while let Term::App { fun, arg, .. } = head {
+    while let Some((fun, arg)) = crate::spelling::app_of(head) {
         args.push(arg);
         head = fun;
     }
@@ -1200,7 +1200,7 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
 fn app_spine(tm: &Rc<Term>) -> (&Term, Vec<&Rc<Term>>) {
     let mut args = Vec::new();
     let mut head = &**tm;
-    while let Term::App { fun, arg, .. } = head {
+    while let Some((fun, arg)) = crate::spelling::app_of(head) {
         args.push(arg);
         head = fun;
     }
@@ -1261,6 +1261,16 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
 
 /// `tm` with the argument `outward` applications from the outside replaced.
 fn with_arg_at(tm: &Rc<Term>, outward: usize, new: &Rc<Term>) -> Rc<Term> {
+    // The checked spelling carries no annotation that a replaced argument
+    // could leave stale (docs/app-by-head-type-design.md §6.2).
+    if let Term::AppAt { fun, arg } = &**tm {
+        let (fun, arg) = if outward == 0 {
+            (Rc::clone(fun), Rc::clone(new))
+        } else {
+            (with_arg_at(fun, outward - 1, new), Rc::clone(arg))
+        };
+        return Rc::new(Term::AppAt { fun, arg });
+    }
     let Term::App {
         fun,
         dom_level,

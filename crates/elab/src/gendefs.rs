@@ -338,7 +338,7 @@ fn tm_former(t: &Term) -> &'static str {
     match t {
         Term::Var(_) => "Var",
         Term::GlobalTm { .. } => "Global",
-        Term::App { .. } => "App",
+        Term::App { .. } | Term::AppAt { .. } => "App",
         Term::Lam { .. } => "Lam",
         Term::Fst { .. } | Term::FstAt { .. } => "Fst",
         Term::Snd { .. } | Term::SndAt { .. } => "Snd",
@@ -653,6 +653,15 @@ impl Holes<'_> {
                 self.ty(c1, c2, md + 1)?;
                 self.tm(a1, a2, md)
             }
+            // `app@` on either side (docs/app-by-head-type-design.md §6.2):
+            // no annotation, so head and argument are all there is to place
+            // a hole in, and an `app` against it is the same former.
+            (a, b) if crate::spelling::is_app(a) && crate::spelling::is_app(b) => {
+                let (f1, a1) = crate::spelling::app_of(a)?;
+                let (f2, a2) = crate::spelling::app_of(b)?;
+                self.tm(f1, f2, md)?;
+                self.tm(a1, a2, md)
+            }
             (
                 Term::Fst {
                     fst_level: fl1,
@@ -851,7 +860,7 @@ fn instance_of_template(entry: &TyCodeFn, args: &[Rc<Term>], frame: SubstTail) -
 /// anchor and not their `Γ`.
 fn spine_frame(t: &Term) -> Option<SubstTail> {
     let mut cur = t;
-    while let Term::App { fun, .. } = cur {
+    while let Some((fun, _)) = crate::spelling::app_of(cur) {
         cur = fun;
     }
     match cur {
@@ -2195,15 +2204,15 @@ impl Elaborator {
         }
         let sref = self.gen_type_ref(cx, GenDef::ShapeCode(ind.tag), l)?;
         let fun = self.gen_ref_deeper(cx, GenDef::ArityFn(ind.tag), 1)?;
-        let aref = Term::App {
-            fun: Rc::new(fun),
-            dom_level: l.clone(),
-            cod_level: Level::Zero,
-            dom: Rc::new(sref.shift_local(1)),
+        let aref = crate::spelling::checked_app(
+            Rc::new(fun),
+            l.clone(),
+            Level::Zero,
+            Rc::new(sref.shift_local(1)),
             // `Nat` binds nothing, so the `App`'s codomain needs no shift.
-            cod: Rc::new(Type::Nat),
-            arg: Rc::new(Term::Var(LocalVar(0))),
-        };
+            Rc::new(Type::Nat),
+            Rc::new(Term::Var(LocalVar(0))),
+        );
         Some((sref, aref))
     }
 
@@ -2496,14 +2505,14 @@ impl Elaborator {
             else {
                 return None;
             };
-            head = Term::App {
-                fun: Rc::new(head),
+            head = crate::spelling::checked_app(
+                Rc::new(head),
                 dom_level,
                 cod_level,
                 dom,
-                cod: Rc::clone(&cod),
-                arg: Rc::clone(arg),
-            };
+                Rc::clone(&cod),
+                Rc::clone(arg),
+            );
             cur = cod.apply_local(&id_subst_at(cx, d).extended(Rc::clone(arg)));
         }
         matches!(cur, Type::Ty(_)).then_some(head)
@@ -3020,7 +3029,7 @@ impl Elaborator {
     fn gen_app_of_at(&self, len_at: u32, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
         let mut args = Vec::new();
         let mut cur = t;
-        while let Term::App { fun, arg, .. } = cur {
+        while let Some((fun, arg)) = crate::spelling::app_of(cur) {
             args.push(Rc::clone(arg));
             cur = fun;
         }
@@ -3575,7 +3584,7 @@ impl Elaborator {
     pub(crate) fn gen_app_of(&self, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
         let mut args = Vec::new();
         let mut cur = t;
-        while let Term::App { fun, arg, .. } = cur {
+        while let Some((fun, arg)) = crate::spelling::app_of(cur) {
             args.push(Rc::clone(arg));
             cur = fun;
         }
@@ -3600,14 +3609,14 @@ impl Elaborator {
         cod: &Type,
         arg: Term,
     ) -> Term {
-        Term::App {
-            fun: Rc::new(fun),
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::new(dom.clone()),
-            cod: Rc::new(cod.shift_local(1)),
-            arg: Rc::new(arg),
-        }
+        crate::spelling::checked_app(
+            Rc::new(fun),
+            dom_level.clone(),
+            cod_level.clone(),
+            Rc::new(dom.clone()),
+            Rc::new(cod.shift_local(1)),
+            Rc::new(arg),
+        )
     }
 
     // -- the bodies ---------------------------------------------------------
@@ -3912,14 +3921,14 @@ fn saturate(
         else {
             return None;
         };
-        head = Term::App {
-            fun: Rc::new(head),
+        head = crate::spelling::checked_app(
+            Rc::new(head),
             dom_level,
-            cod_level: cod_level.clone(),
+            cod_level.clone(),
             dom,
-            cod: Rc::clone(&cod),
-            arg: Rc::clone(arg),
-        };
+            Rc::clone(&cod),
+            Rc::clone(arg),
+        );
         cur = cod.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg)));
         level = Some(cod_level);
     }

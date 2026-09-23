@@ -2301,7 +2301,7 @@ fn mark(
         }
         // The induction hypothesis at a recursive field: `ih'(ι_t)` — the
         // arm's innermost binder applied to a literal `Fin` index.
-        Term::App { fun, arg, .. }
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg }
             if wfarm.is_some() && matches!(&**fun, Term::Var(LocalVar(0))) =>
         {
             let a = wfarm.unwrap();
@@ -2508,20 +2508,10 @@ fn mark_elim_wf(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, Strin
     }
     let param_marker = marker(wf_level);
     // The step: `app(app(⟨case tree⟩; cs); ih)` in context (…, a, cs, ih).
-    let Term::App {
-        fun: outer,
-        arg: ih_arg,
-        ..
-    } = &**step
-    else {
+    let Some((outer, ih_arg)) = crate::spelling::app_of(step) else {
         return Err("a tier-1 eliminator step without the cs/ih applications".into());
     };
-    let Term::App {
-        fun: tree,
-        arg: cs_arg,
-        ..
-    } = &**outer
-    else {
+    let Some((tree, cs_arg)) = crate::spelling::app_of(outer) else {
         return Err("a tier-1 eliminator step without the cs/ih applications".into());
     };
     if !matches!(&**ih_arg, Term::Var(LocalVar(0))) || !matches!(&**cs_arg, Term::Var(LocalVar(1)))
@@ -2759,7 +2749,7 @@ fn mark_t0_arm(arm: &Term, depth: u32, cx: &mut MarkCx<'_>, ys: u32) -> Result<T
 
 /// Is the head of this application spine a global reference?
 fn global_head(mut t: &Term) -> bool {
-    while let Term::App { fun, .. } = t {
+    while let Some((fun, _)) = crate::spelling::app_of(t) {
         t = fun;
     }
     matches!(t, Term::GlobalTm { .. })

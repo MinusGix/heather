@@ -520,23 +520,23 @@ impl Elaborator {
             WfRec::Convoy(convoy) => {
                 let at = convoy.window(&cx.gamma, 0, scrut.clone());
                 let comps = cov_comps(&cx.gamma, &convoy.step, &convoy.motive, convoy.d, 0, &at);
-                Ok(Term::App {
-                    fun: Rc::new(elim),
-                    dom_level: convoy.lvl.clone(),
-                    cod_level: mlvl.clone(),
-                    dom: Rc::new(cov_ty(&comps, &convoy.lvl)),
+                Ok(crate::spelling::checked_app(
+                    Rc::new(elim),
+                    convoy.lvl.clone(),
+                    mlvl.clone(),
+                    Rc::new(cov_ty(&comps, &convoy.lvl)),
                     // The whole `match` computes the enclosing recursion's
                     // motive at the anchor, which is `chain[0]` — the very
                     // obligation the enclosing arm is being checked against.
-                    cod: Rc::new(convoy.motive.apply_local(
+                    Rc::new(convoy.motive.apply_local(
                         &embed(&cx.gamma, 1).extended(Rc::new(convoy.goal(
                             &cx.gamma,
                             1,
                             scrut.shift_local(1),
                         ))),
                     )),
-                    arg: Rc::new(convoy.tuple.clone()),
-                })
+                    Rc::new(convoy.tuple.clone()),
+                ))
             }
         }
     }
@@ -1007,22 +1007,22 @@ impl Elaborator {
                 .extended(var(2))
                 .extended(var(0)),
         );
-        let at_cs = Term::App {
-            fun: Rc::new(cased),
-            dom_level: tel.level.clone(),
-            cod_level: tel.mlvl.clone(),
-            dom: Rc::new(dom_cs),
-            cod: Rc::new(cod1),
-            arg: var(1),
-        };
-        Term::App {
-            fun: Rc::new(at_cs),
-            dom_level: tel.mlvl.clone(),
-            cod_level: tel.mlvl.clone(),
-            dom: Rc::new(dom_ih),
-            cod: Rc::new(cod2),
-            arg: var(0),
-        }
+        let at_cs = crate::spelling::checked_app(
+            Rc::new(cased),
+            tel.level.clone(),
+            tel.mlvl.clone(),
+            Rc::new(dom_cs),
+            Rc::new(cod1),
+            var(1),
+        );
+        crate::spelling::checked_app(
+            Rc::new(at_cs),
+            tel.mlvl.clone(),
+            tel.mlvl.clone(),
+            Rc::new(dom_ih),
+            Rc::new(cod2),
+            var(0),
+        )
     }
 
     /// The step's case tree (§6.2). Structurally tier 0 §5.2's: right-nested
@@ -1373,16 +1373,16 @@ impl Elaborator {
                                 Rc::new(Term::Var(LocalVar(2))),
                                 Rc::new(Term::Var(LocalVar(0))),
                             ))));
-                        let ih_at = Rc::new(Term::App {
-                            fun: Rc::new(Term::Var(LocalVar(0))),
-                            dom_level: Level::Zero,
-                            cod_level: tel.mlvl.clone(),
-                            dom: Rc::new(Type::Fin {
+                        let ih_at = Rc::new(crate::spelling::checked_app(
+                            Rc::new(Term::Var(LocalVar(0))),
+                            Level::Zero,
+                            tel.mlvl.clone(),
+                            Rc::new(Type::Fin {
                                 len: Rc::clone(&len),
                             }),
-                            cod: Rc::new(cod),
-                            arg: Rc::new(fin_index(rec_t, m, &base)),
-                        });
+                            Rc::new(cod),
+                            Rc::new(fin_index(rec_t, m, &base)),
+                        ));
                         let ih_ty = tel
                             .motive
                             .apply_local(&embed(tel.gamma0, d_body).extended(Rc::clone(&c)));
@@ -2188,9 +2188,10 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
         let Type::El { .. } = &**cod else {
             panic!("the result respells too")
         };
-        // The cascade: a later declaration's call reads its `App` annotations
-        // off that statement.
-        let before = e.el.psi.bindings.len();
+        // The cascade: a later declaration's call reads its domain off that
+        // statement. Since `docs/app-by-head-type-design.md` it reads it at
+        // check time and writes none: the call is `app@(tid; t)`, so no
+        // annotation exists that could carry an inline copy of `T`.
         e.el.elab_source("fn call_it(t: T) -> T { tid(t) }")
             .expect("elaborates");
         let GlobalBinding::Tm {
@@ -2202,14 +2203,10 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
         let Term::Lam { body, .. } = &**body else {
             panic!("one λ")
         };
-        let Term::App { dom, .. } = &**body else {
-            panic!("the body is the call")
+        let Term::AppAt { fun, .. } = &**body else {
+            panic!("the body is the call, written `app@`")
         };
-        let Type::El { tm, .. } = &**dom else {
-            panic!("the call's dom annotation is the reference — the cascade")
-        };
-        let grew = (e.el.psi.bindings.len() - before) as u32;
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
+        assert!(matches!(&**fun, Term::GlobalTm { .. }), "the head is `tid`");
     }
 
     /// A declaration with a coded declaration as a **field type**: the
@@ -2340,7 +2337,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         assert!(e.el.is_gen_ref(tm, GenDef::ShapeCode(e.ind("T").tag)));
         // The arity is an *application* to the shape's own binder, because the
         // slot is read one binder deep — §2.1's asymmetry, pinned.
-        let Term::App { fun, arg, .. } = &aref else {
+        let Some((fun, arg)) = crate::spelling::app_of(&aref) else {
             panic!("an arity slot takes an application, not a code")
         };
         assert!(e.el.is_gen_ref(fun, GenDef::ArityFn(e.ind("T").tag)));
@@ -2432,7 +2429,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("the shape slot is the reference")
         };
         assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
-        let Term::App { fun, .. } = &**arity else {
+        let Some((fun, _)) = crate::spelling::app_of(arity) else {
             panic!("the arity slot is the application")
         };
         assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
@@ -2465,7 +2462,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("the shape slot is the reference")
         };
         assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
-        let Term::App { fun, .. } = &**arity else {
+        let Some((fun, _)) = crate::spelling::app_of(arity) else {
             panic!("the arity slot is an application")
         };
         assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
@@ -2871,10 +2868,8 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
     #[test]
     fn a_local_callees_application_respells_its_annotations() {
         let mut e = env();
-        let before = e.el.psi.bindings.len();
         e.el.elab_source("fn app_local(f: T -> Flat, t: T) -> Flat { f(t) }")
             .expect("elaborates");
-        let grew = (e.el.psi.bindings.len() - before) as u32;
         let GlobalBinding::Tm {
             body: Some(body), ..
         } = e.el.psi.bindings.last().expect("a binding")
@@ -2885,20 +2880,15 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
         while let Term::Lam { body, .. } = cur {
             cur = body;
         }
-        let Term::App { fun, dom, cod, .. } = cur else {
-            panic!("the body is the call")
+        // Since `docs/app-by-head-type-design.md` the call is `app@(f; t)`:
+        // it states no `dom`/`cod`, so there is no annotation left for the
+        // binder's inline type to leak into — the respell's whole subject is
+        // gone. What stays pinned is that the call is written that way at a
+        // local head, and (below) that everything still checks and computes.
+        let Term::AppAt { fun, .. } = cur else {
+            panic!("the body is the call, written `app@`")
         };
         assert!(matches!(&**fun, Term::Var(_)), "a local callee");
-        let Type::El { tm, .. } = &**dom else {
-            panic!("a local callee's `dom` annotation is the reference, not the inline `Wf`")
-        };
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
-        let Type::El { tm, .. } = &**cod else {
-            panic!("…and so is its `cod`")
-        };
-        // `cod` sits one binder deeper (the argument's), so the reference's
-        // tail is one longer; `is_gen_ref` reads the variable only.
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
 
         // An open domain: the element type respells inside the `Vec`, at a
         // depth of three binders, and the kernel agrees with the binder's own
@@ -2915,16 +2905,7 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
         while let Term::Lam { body, .. } = cur {
             cur = body;
         }
-        let Term::App { dom, .. } = cur else {
-            panic!("the body is the call")
-        };
-        let Type::Vec { elem, .. } = &**dom else {
-            panic!("the domain is the vector")
-        };
-        assert!(
-            matches!(&**elem, Type::El { .. }),
-            "the element type is the reference inside the `Vec`"
-        );
+        assert!(matches!(cur, Term::AppAt { .. }), "the body is the call, written `app@`");
 
         // The statement side of the same pair: a lemma whose hypothesis
         // embeds `op(a)` carries the reference in that application's `dom`…
@@ -2942,10 +2923,9 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
         }
         let Type::Pi { dom, .. } = cur else { panic!("the hypothesis binder") };
         let Type::Id { lhs, .. } = &**dom else { panic!("`h` is an equation") };
-        let Term::App { dom, .. } = &**lhs else { panic!("its left side is `op(a)`") };
         assert!(
-            matches!(&**dom, Type::El { .. }),
-            "an application embedded in a statement spells its `dom` as the reference"
+            matches!(&**lhs, Term::AppAt { .. }),
+            "an application embedded in a statement is `app@`, with no `dom` to spell"
         );
         // …so a section substituted for `op` — whose binder type is copied off
         // the respelled Π — meets its own spelling at the use, and everything
@@ -3030,7 +3010,7 @@ theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v)
                     stack.push(fst);
                     stack.push(snd);
                 }
-                Term::App { fun, arg, .. } => {
+                Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
                     stack.push(fun);
                     stack.push(arg);
                 }
@@ -3603,9 +3583,21 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
                     else { panic!("function body") };
                 let Term::Lam { body, .. } = &**body else { panic!("parameter") };
                 let Term::ElimWf { step, .. } = &**body else { panic!("match") };
-                let Term::App { fun, .. } = &**step else { panic!("apply ih") };
-                let Term::App { dom, .. } = &**fun else { panic!("apply children") };
-                let Type::Vec { elem, .. } = &**dom else { panic!("children vector") };
+                let Some((fun, _)) = crate::spelling::app_of(step) else { panic!("apply ih") };
+                // Since `docs/app-by-head-type-design.md` the application is
+                // `app@` and carries no annotation to copy a payload into; the
+                // children vector's type is the case tree's motive's domain.
+                let cs_ty = match &**fun {
+                    Term::App { dom, .. } => Rc::clone(dom),
+                    // The case tree's motive is `Π(cs : Vec(…)). …`.
+                    Term::AppAt { fun: tree, .. } => {
+                        let Term::Case { motive, .. } = &**tree else { panic!("a case tree") };
+                        let Type::Pi { dom, .. } = &**motive else { panic!("its motive takes cs") };
+                        Rc::clone(dom)
+                    }
+                    _ => panic!("apply children"),
+                };
+                let Type::Vec { elem, .. } = &*cs_ty else { panic!("children vector") };
                 let Type::El { tm, .. } = &**elem else { panic!("named element") };
                 let grew = (e.el.psi.bindings.len() - before) as u32;
                 let (key, args) = e.el.gen_app_of(&tm.shift_global(grew)).expect("registered container");
@@ -3631,9 +3623,21 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             // The step applies its case tree to cs and then ih. Inspect the
             // actual cs domain: an inline Wf here passes semantic tests but
             // copies every payload into each child-vector annotation.
-            let Term::App { fun, .. } = &**step else { panic!("apply ih") };
-            let Term::App { dom, .. } = &**fun else { panic!("apply cs") };
-            let Type::Vec { elem, .. } = &**dom else { panic!("children vector") };
+            let Some((fun, _)) = crate::spelling::app_of(step) else { panic!("apply ih") };
+            // Since `docs/app-by-head-type-design.md` the application is
+            // `app@` and carries no annotation to copy a payload into; the
+            // children vector's type is the case tree's motive's domain.
+            let cs_ty = match &**fun {
+                Term::App { dom, .. } => Rc::clone(dom),
+                // The case tree's motive is `Π(cs : Vec(…)). …`.
+                Term::AppAt { fun: tree, .. } => {
+                    let Term::Case { motive, .. } = &**tree else { panic!("a case tree") };
+                    let Type::Pi { dom, .. } = &**motive else { panic!("its motive takes cs") };
+                    Rc::clone(dom)
+                }
+                _ => panic!("apply cs"),
+            };
+            let Type::Vec { elem, .. } = &*cs_ty else { panic!("children vector") };
             let Type::El { tm, .. } = &**elem else { panic!("named children element") };
             let grew = (e.el.psi.bindings.len() - before) as u32;
             assert_eq!(

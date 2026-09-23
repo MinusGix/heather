@@ -146,7 +146,7 @@ impl Elaborator {
     fn measure_decl_result(&self, cx: &Cx, term: &Term) -> Option<Ty> {
         let mut args = Vec::new();
         let mut head = term;
-        while let Term::App { fun, arg, .. } = head {
+        while let Some((fun, arg)) = crate::spelling::app_of(head) {
             args.push(arg);
             head = fun;
         }

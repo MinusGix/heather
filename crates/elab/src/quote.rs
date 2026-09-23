@@ -1110,14 +1110,14 @@ impl Elaborator {
                 );
             };
             let arg = Rc::new(arg);
-            term = Term::App {
-                fun: Rc::new(term),
+            term = crate::spelling::checked_app(
+                Rc::new(term),
                 dom_level,
-                cod_level: cod_level.clone(),
+                cod_level.clone(),
                 dom,
-                cod: Rc::clone(&cod),
-                arg: Rc::clone(&arg),
-            };
+                Rc::clone(&cod),
+                Rc::clone(&arg),
+            );
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(arg));
         }
         Ok(Some(term))

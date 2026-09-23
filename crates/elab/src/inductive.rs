@@ -5193,7 +5193,7 @@ fn receiver_is_neutral(value: &Term) -> bool {
         | Term::Snd { pair, .. }
         | Term::FstAt { pair, .. }
         | Term::SndAt { pair, .. } => receiver_is_neutral(pair),
-        Term::App { fun, .. } => receiver_is_neutral(fun),
+        Term::App { fun, .. } | Term::AppAt { fun, .. } => receiver_is_neutral(fun),
         _ => false,
     }
 }

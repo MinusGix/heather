@@ -553,14 +553,14 @@ pub(crate) fn elab_container_ih(
         dom: Rc::new(Type::Fin {
             len: Rc::clone(&len_rc),
         }),
-        body: Rc::new(Term::App {
-            fun: Rc::new(ih.shift_local(1)),
-            dom_level: Level::Zero,
-            cod_level: c.mlvl.clone(),
-            dom: ih_dom,
-            cod: ih_cod,
-            arg: Rc::new(idx),
-        }),
+        body: Rc::new(crate::spelling::checked_app(
+            Rc::new(ih.shift_local(1)),
+            Level::Zero,
+            c.mlvl.clone(),
+            ih_dom,
+            ih_cod,
+            Rc::new(idx),
+        )),
     };
     // Phase 2: an independent motive tabulates into a vector of results.
     if let Some(result) = &c.result {
@@ -623,14 +623,14 @@ pub(crate) fn elab_container_ih(
             dom: Rc::new(Type::Fin {
                 len: Rc::clone(&len_rc),
             }),
-            body: Rc::new(Term::App {
-                fun: Rc::new(f.shift_local(by + 1)),
-                dom_level: c.level.clone(),
-                cod_level: e.level.clone(),
-                dom: Rc::new(elem.shift_local(1)),
-                cod: Rc::new(a_ty.shift_local(2)),
-                arg: Rc::new(child),
-            }),
+            body: Rc::new(crate::spelling::checked_app(
+                Rc::new(f.shift_local(by + 1)),
+                c.level.clone(),
+                e.level.clone(),
+                Rc::new(elem.shift_local(1)),
+                Rc::new(a_ty.shift_local(2)),
+                Rc::new(child),
+            )),
         })
     };
     let (f_side, g_side) = (side(&e.lhs), side(&e.rhs));

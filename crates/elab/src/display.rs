@@ -413,7 +413,7 @@ impl Speller<'_> {
             | Term::Inr { .. }
             | Term::InlAt { .. }
             | Term::InrAt { .. } => self.ctor_value(t, d).unwrap_or_else(|| self.raw_tm(t)),
-            Term::App { .. } => self.call(t, d),
+            Term::App { .. } | Term::AppAt { .. } => self.call(t, d),
             Term::GlobalTm { var, subst } => self
                 .global(*var, subst)
                 .map(|(n, _)| n)
@@ -545,7 +545,7 @@ impl Speller<'_> {
     fn call(&self, t: &Term, d: u32) -> String {
         let mut args: Vec<&Rc<Term>> = Vec::new();
         let mut head = t;
-        while let Term::App { fun, arg, .. } = head {
+        while let Some((fun, arg)) = crate::spelling::app_of(head) {
             args.push(arg);
             head = fun;
         }
@@ -568,7 +568,7 @@ impl Speller<'_> {
             && let Some((Some(name), _)) = record.ctors[0].fields.get(field)
         {
             let shown = self.tm(receiver, d + 1);
-            return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. }) {
+            return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. }) {
                 format!("{shown}.{name}")
             } else {
                 format!("({shown}).{name}")

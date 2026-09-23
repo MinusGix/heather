@@ -215,7 +215,7 @@ constructions keep writing `Some`.
 
 ### 6.1 The emitters that change
 
-The mass comes through **three sites**, and only they change:
+The mass comes through **three sites**:
 `application.rs`'s `apply_explicit` (~515) and `apply_implicit` (~665 for
 the main Π walk, ~705 for spilling onto a callable result), through which
 almost every surface call goes (about twenty call sites in `lib.rs`, plus
@@ -232,19 +232,32 @@ instantiated by the goal substitution later. `app@` has no annotation to
 respell or instantiate, so this round also removes an elaboration-time
 per-node constant (`decl_emit_ns` is where it shows).
 
-**Unchanged, deliberately:**
-- The secondary spine builders: `gen_app` (gendefs.rs ~3595), `gen_spine`
-  (~2482), `saturate` (~3891), `analyzer_app` (certgen.rs ~3382),
-  `try_code_template` (quote.rs ~1113), `elab_ty_app` (lib.rs ~6825) and
-  `generalize.rs` ~241. They apply generated definitions and type arguments
-  to small, closed arguments, so their annotations are not where the mass
-  is (the attribution's heavy-slot dump names only surface callees).
-- The ~45 one-off constructions in `vec.rs`, `wf.rs`, `forded.rs`,
-  `indexed.rs`, `matching*.rs`, `certgen.rs`'s markers and the rest. They
-  are built from a Π known by construction.
+**Every other emitter switches in the same sweep** (amended 2026-09-22, the
+user's call over this section's first draft, which left them on `App`). The
+first draft's reason for leaving them was that their annotations are not
+where the mass is; the reason for moving them anyway is that a term built by
+a generator and a term built by a surface call meet in `==` comparisons
+(`relational_context`, the registry's slot checks, lgg's witnesses), and one
+spelling everywhere is what keeps those from declining on an `App` beside an
+`app@` for the same call.
 
-Both groups keep writing `App`, which is always valid. Moving any of them is
-a later, measured change; §9 records it as out of scope.
+- The secondary spine builders — `gen_app`, `gen_spine`, `saturate`
+  (gendefs.rs), `try_code_template` (quote.rs), `elab_ty_app` (lib.rs),
+  `generalize.rs` — and the ~40 one-off constructions in `vec.rs`, `wf.rs`,
+  `forded.rs`, `indexed.rs`, `matching*.rs`, `relational_context` and the
+  rest go through `spelling::checked_app(fun, levels, dom, cod, arg)`, which
+  writes `app@` unless the head is a λ. It takes the annotations so each
+  call site reads as the `app` it replaces.
+- It is **unconditional on the quotation state**: none of these builders
+  writes a `box` payload itself, and a term pasted into one goes through
+  the quote boundary's translator (§7).
+- **Still `App`, by necessity:** code that is *built as* a payload —
+  certgen's markers and its `mark` walk, whose input is
+  `global_body_in_code_form`, already translated; the kernel's own
+  recursor-branch and η constructions; the two rebuilders of §6.2 on an
+  `App` input; lgg's `App`/`App` generalization. `analyzer_app` (certgen)
+  stays too: it applies a registered analyzer to closed arguments and
+  nothing reads it but the evaluator.
 
 ### 6.2 The readers
 
@@ -377,7 +390,7 @@ on the parent commit.
 
 §6.2 first: `spelling::app_of`/`app_spine`/`app_domains` and every reader
 through them, while no emitter writes `app@` yet, so the reader changes are
-checked with the corpus unchanged. Then §6.1's three emitters.
+checked with the corpus unchanged. Then §6.1's emitters, all of them.
 
 *Gate:*
 - full `scripts/test`, and the `calc_text` showcase gate green;
@@ -385,7 +398,7 @@ checked with the corpus unchanged. Then §6.1's three emitters.
   `--only` working on it. The attribution predicts on the order of 30 M,
   the tally less its `App` slots;
 - `HEATHER_IMAGE_ATTRIBUTION`'s `App.dom`/`App.cod` near zero outside the
-  §6.1 "unchanged" sites;
+  §6.1 "still `App`" sites and λ heads;
 - `scripts/perf ab --base <stage-1 commit>` on `calc_parser` and the three
   curve probes: **`conv_misses` and the kernel gate not up** on the
   corpus. This is the fast path's claim (§3.1), stated as a gate because
@@ -401,7 +414,7 @@ checked with the corpus unchanged. Then §6.1's three emitters.
 
 ### Out of scope
 
-The secondary spine builders and one-off constructions (§6.1); stage 3 of
+Stage 3 of
 `intro-by-type-design.md` (the elaborator's transient reduct); naming
 `Char`'s representation by reference (×2 on character values, a spelling
 fix to take separately); code's own sharing

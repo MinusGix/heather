@@ -472,18 +472,18 @@ impl Elaborator {
         if let Some(c) = &convoy {
             // …and the window goes in, which is what refines it.
             let comps = cov_comps(&cx.gamma, &ChainStep::Pred, &c.motive, c.d, 0, &c.anchor(scrut_t.clone()));
-            return Ok(Term::App {
-                fun: Rc::new(elim),
-                dom_level: c.lvl.clone(),
-                cod_level: mlvl.clone(),
-                dom: Rc::new(cov_ty(&comps, &c.lvl)),
-                cod: Rc::new(
+            return Ok(crate::spelling::checked_app(
+                Rc::new(elim),
+                c.lvl.clone(),
+                mlvl.clone(),
+                Rc::new(cov_ty(&comps, &c.lvl)),
+                Rc::new(
                     motive.apply_local(
                         &embed(&cx.gamma, 1).extended(Rc::new(scrut_t.shift_local(1))),
                     ),
                 ),
-                arg: Rc::new(c.tuple.clone()),
-            });
+                Rc::new(c.tuple.clone()),
+            ));
         }
         if d == 1 {
             return Ok(elim);

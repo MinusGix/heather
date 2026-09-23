@@ -450,6 +450,40 @@ pub(crate) trait ExplicitArgElab {
         hint: Option<(&str, &str)>,
         skel: Option<&Skel>,
     ) -> R<Term>;
+
+    /// Whether an application is written `app@(f; a)` here
+    /// (`docs/app-by-head-type-design.md` §6.1): outside a quotation. The
+    /// fakes answer `false` and keep the annotated form their tests read.
+    fn emits_checked_applications(&self, _cx: &Cx) -> bool {
+        false
+    }
+}
+
+/// One node of an application spine as it is written
+/// (`docs/app-by-head-type-design.md` §6.1): `app@(f; a)`, whose Π is the one
+/// `f` infers, wherever the checked spellings are admitted and the head is
+/// not a λ (a λ infers only if its body does); otherwise the annotated `app`
+/// with its annotations respelled. `scratch` is the width of the
+/// application's metavariable world. The Π the caller walked is unchanged
+/// either way — only the written node differs, and with `app@` goes the
+/// per-node respell of `dom` and `cod` that the annotated form pays.
+#[allow(clippy::too_many_arguments)]
+fn emit_app(
+    elab: &impl ExplicitArgElab,
+    cx: &Cx,
+    fun: Term,
+    dom_level: Level,
+    cod_level: Level,
+    dom: Rc<Type>,
+    cod: Rc<Type>,
+    arg: Rc<Term>,
+    scratch: u32,
+) -> Term {
+    if elab.emits_checked_applications(cx) && !matches!(fun, Term::Lam { .. }) {
+        return Term::AppAt { fun: Rc::new(fun), arg };
+    }
+    let (dom, cod) = emitted_annotations(elab, cx, dom, cod, scratch);
+    Term::App { fun: Rc::new(fun), dom_level, cod_level, dom, cod, arg }
 }
 
 /// `dom`/`cod` as an emitted `App` spells them
@@ -511,15 +545,7 @@ pub(crate) fn apply_explicit(
         let arg = Rc::new(arg);
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
         lvl = cod_level.clone();
-        let (dom, cod) = emitted_annotations(elab, cx, dom, cod, 0);
-        term = Term::App {
-            fun: Rc::new(term),
-            dom_level,
-            cod_level,
-            dom,
-            cod,
-            arg,
-        };
+        term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, arg, 0);
     }
     Ok((term, ty, lvl))
 }
@@ -661,15 +687,7 @@ pub(crate) fn apply_implicit(
         };
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
         level = cod_level.clone();
-        let (dom, cod) = emitted_annotations(elab, cx, dom, cod, n);
-        term = Term::App {
-            fun: Rc::new(term),
-            dom_level,
-            cod_level,
-            dom,
-            cod,
-            arg: argument,
-        };
+        term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, argument, n);
     }
 
     // Arguments beyond the declared mask spill onto a callable result. While
@@ -701,15 +719,7 @@ pub(crate) fn apply_implicit(
             let argument = Rc::new(inferred.shift_global(n));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
             level = cod_level.clone();
-            let (dom, cod) = emitted_annotations(elab, cx, dom, cod, n);
-            term = Term::App {
-                fun: Rc::new(term),
-                dom_level,
-                cod_level,
-                dom,
-                cod,
-                arg: argument,
-            };
+            term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, argument, n);
             taken += 1;
         }
         spill.drain(..taken);

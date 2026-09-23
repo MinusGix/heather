@@ -52,6 +52,7 @@
 use std::fmt;
 use std::sync::Arc as Rc;
 
+use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};
 
 /// Where the walk stopped, as **data**.
@@ -226,7 +227,7 @@ fn former_tm(t: &Term) -> &'static str {
         Term::Var(_) => "variable",
         Term::Zero | Term::Succ(_) => "numeral",
         Term::Lam { .. } => "λ",
-        Term::App { .. } => "application",
+        Term::App { .. } | Term::AppAt { .. } => "application",
         Term::Pair { .. } => "pair",
         Term::Fst { .. } => "fst",
         Term::Snd { .. } => "snd",
@@ -1112,6 +1113,28 @@ impl Lgg {
                 cod: Rc::new(self.ty(c1, c2, k + 1)?),
                 arg: Rc::new(self.tm(a1, a2, k)?),
             }),
+            // `app@` (docs/app-by-head-type-design.md §6.2): no annotation to
+            // relate, and against an `app` it is one former written two ways.
+            // The generalization is `app@` — its head generalizes two heads
+            // that infer, and it carries no annotation that could mention a
+            // generalized position — except over a λ head, which does not
+            // infer and keeps the annotated side's Π.
+            (Term::AppAt { fun: f1, arg: a1 }, Term::AppAt { fun: f2, arg: a2 }) => {
+                Ok(Term::AppAt {
+                    fun: Rc::new(self.tm(f1, f2, k)?),
+                    arg: Rc::new(self.tm(a1, a2, k)?),
+                })
+            }
+            (Term::App { fun: f1, dom_level, cod_level, dom, cod, arg: a1 }, Term::AppAt { fun: f2, arg: a2 }) => {
+                let fun = Rc::new(self.tm(f1, f2, k)?);
+                let arg = Rc::new(self.tm(a1, a2, k)?);
+                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg))
+            }
+            (Term::AppAt { fun: f1, arg: a1 }, Term::App { fun: f2, dom_level, cod_level, dom, cod, arg: a2 }) => {
+                let fun = Rc::new(self.tm(f1, f2, k)?);
+                let arg = Rc::new(self.tm(a1, a2, k)?);
+                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg))
+            }
             // Everything else — mismatched heads, differing level or context
             // annotations, and the layer-m code formers this module declines
             // to walk into.
@@ -1284,6 +1307,30 @@ impl Lgg {
             }),
             _ => self.mismatch_ty(x, y, k),
         }
+    }
+}
+
+/// The generalization of an `app` against an `app@`: `app@` unless the
+/// generalized head is a λ, which would not infer.
+fn mixed_app(
+    fun: Rc<Term>,
+    dom_level: &Level,
+    cod_level: &Level,
+    dom: &Rc<Type>,
+    cod: &Rc<Type>,
+    arg: Rc<Term>,
+) -> Term {
+    if matches!(&*fun, Term::Lam { .. }) {
+        Term::App {
+            fun,
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg,
+        }
+    } else {
+        Term::AppAt { fun, arg }
     }
 }
 

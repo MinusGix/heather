@@ -333,7 +333,7 @@ impl Elaborator {
         // the old structural read stands, unchanged.
         let key = GenDef::Mu(ind.tag);
         if self.gen_ref(cx, key).is_some() {
-            let Term::App { fun, .. } = &*lhs else {
+            let Some((fun, _)) = crate::spelling::app_of(&lhs) else {
                 return None;
             };
             if !self.is_gen_ref(fun, key) {
@@ -1252,12 +1252,12 @@ impl Elaborator {
             )?
         };
         // …applied at the index and the stored proof.
-        let r1 = Term::App {
-            fun: Rc::new(recursion),
-            dom_level: li.clone(),
-            cod_level: ql.clone(),
-            dom: Rc::new(fam.ity_emit(0)),
-            cod: Rc::new(Type::Pi {
+        let r1 = crate::spelling::checked_app(
+            Rc::new(recursion),
+            li.clone(),
+            ql.clone(),
+            Rc::new(fam.ity_emit(0)),
+            Rc::new(Type::Pi {
                 dom_level: li.clone(),
                 cod_level: mlvl.clone(),
                 dom: Rc::new(fam.eq_at(s_val.shift_local(1), Term::Var(LocalVar(0)), 1)),
@@ -1272,14 +1272,14 @@ impl Elaborator {
                     2,
                 )),
             }),
-            arg: Rc::clone(&fam.idx),
-        };
-        Ok(Term::App {
-            fun: Rc::new(r1),
-            dom_level: li,
-            cod_level: mlvl,
-            dom: Rc::new(fam.eq_at(s_val.clone(), (*fam.idx).clone(), 0)),
-            cod: Rc::new(mot_at(
+            Rc::clone(&fam.idx),
+        );
+        Ok(crate::spelling::checked_app(
+            Rc::new(r1),
+            li,
+            mlvl,
+            Rc::new(fam.eq_at(s_val.clone(), (*fam.idx).clone(), 0)),
+            Rc::new(mot_at(
                 fam.idx.shift_local(1),
                 fam.pair_at(
                     fam.idx.shift_local(1),
@@ -1289,8 +1289,8 @@ impl Elaborator {
                 ),
                 1,
             )),
-            arg: Rc::new(fam.snd_at((*fam.idx).clone(), scrut, 0)),
-        })
+            Rc::new(fam.snd_at((*fam.idx).clone(), scrut, 0)),
+        ))
     }
 
     /// One arm of §8, in whichever form §8.2's rule gives its constructor.
@@ -1530,12 +1530,12 @@ impl Elaborator {
                 dom_level: env.li.clone(),
                 cod_level: env.mlvl.clone(),
                 dom: Rc::new(fam.eq_at(sh.shift_local(1), Term::Var(LocalVar(0)), d + 1)),
-                body: Rc::new(Term::App {
-                    fun: Rc::new(transp),
-                    dom_level: env.li.clone(),
-                    cod_level: env.mlvl.clone(),
-                    dom: Rc::new(fam.eq_at(sh.shift_local(2), Term::Var(LocalVar(1)), d + 2)),
-                    cod: Rc::new(env.mot_at(
+                body: Rc::new(crate::spelling::checked_app(
+                    Rc::new(transp),
+                    env.li.clone(),
+                    env.mlvl.clone(),
+                    Rc::new(fam.eq_at(sh.shift_local(2), Term::Var(LocalVar(1)), d + 2)),
+                    Rc::new(env.mot_at(
                         Term::Var(LocalVar(2)),
                         fam.pair_at(
                             Term::Var(LocalVar(2)),
@@ -1545,8 +1545,8 @@ impl Elaborator {
                         ),
                         d + 3,
                     )),
-                    arg: Rc::new(Term::Var(LocalVar(0))),
-                }),
+                    Rc::new(Term::Var(LocalVar(0))),
+                )),
             }),
         })
     }
@@ -2015,14 +2015,14 @@ impl Elaborator {
                             dom: Rc::new(ity.shift_local(1)),
                             cod: Rc::new(ity.shift_local(2)),
                         };
-                        let applied = Term::App {
-                            fun: Rc::new(f),
-                            dom_level: fam.ilvl.clone(),
-                            cod_level: fam.ilvl.clone(),
-                            dom: Rc::new(ity.clone()),
-                            cod: Rc::new(inner),
-                            arg: Rc::new(Term::Var(LocalVar(0))),
-                        };
+                        let applied = crate::spelling::checked_app(
+                            Rc::new(f),
+                            fam.ilvl.clone(),
+                            fam.ilvl.clone(),
+                            Rc::new(ity.clone()),
+                            Rc::new(inner),
+                            Rc::new(Term::Var(LocalVar(0))),
+                        );
                         Self::gen_app(
                             applied,
                             &fam.ilvl,
@@ -2336,14 +2336,14 @@ impl Elaborator {
         };
         // `ih' ι_t : Q[child_t]`. The codomain is `ih'`'s own, so it mentions
         // the **bound** index (Var 0), not `ι_t`.
-        let ihq = Term::App {
-            fun: Rc::new(Term::Var(LocalVar(j))),
-            dom_level: Level::Zero,
-            cod_level: env.ql.clone(),
-            dom: Rc::new(Type::Fin {
+        let ihq = crate::spelling::checked_app(
+            Rc::new(Term::Var(LocalVar(j))),
+            Level::Zero,
+            env.ql.clone(),
+            Rc::new(Type::Fin {
                 len: Rc::clone(&len),
             }),
-            cod: Rc::new(q_at(
+            Rc::new(q_at(
                 heather_kernel::term::nth(
                     &fam.level,
                     &Rc::new(fam.skel_emit(dd + 1)),
@@ -2353,15 +2353,15 @@ impl Elaborator {
                 ),
                 dd + 1,
             )),
-            arg: Rc::new(fin_index(t, m, &Term::Zero)),
-        };
+            Rc::new(fin_index(t, m, &Term::Zero)),
+        );
         let child = child_at(0);
-        let inner = Term::App {
-            fun: Rc::new(ihq),
-            dom_level: env.li.clone(),
-            cod_level: env.ql.clone(),
-            dom: Rc::new(fam.ity_emit(dd)),
-            cod: Rc::new(Type::Pi {
+        let inner = crate::spelling::checked_app(
+            Rc::new(ihq),
+            env.li.clone(),
+            env.ql.clone(),
+            Rc::new(fam.ity_emit(dd)),
+            Rc::new(Type::Pi {
                 dom_level: env.li.clone(),
                 cod_level: env.mlvl.clone(),
                 dom: Rc::new(fam.eq_at(child_at(1), Term::Var(LocalVar(0)), dd + 1)),
@@ -2376,14 +2376,14 @@ impl Elaborator {
                     dd + 2,
                 )),
             }),
-            arg: Rc::new(at.clone()),
-        };
-        Term::App {
-            fun: Rc::new(inner),
-            dom_level: env.li.clone(),
-            cod_level: env.mlvl.clone(),
-            dom: Rc::new(fam.eq_at(child.clone(), at.clone(), dd)),
-            cod: Rc::new(env.mot_at(
+            Rc::new(at.clone()),
+        );
+        crate::spelling::checked_app(
+            Rc::new(inner),
+            env.li.clone(),
+            env.mlvl.clone(),
+            Rc::new(fam.eq_at(child.clone(), at.clone(), dd)),
+            Rc::new(env.mot_at(
                 at.shift_local(1),
                 fam.pair_at(
                     at.shift_local(1),
@@ -2393,8 +2393,8 @@ impl Elaborator {
                 ),
                 dd + 1,
             )),
-            arg: Rc::new(proof),
-        }
+            Rc::new(proof),
+        )
     }
 }
 
@@ -2873,15 +2873,9 @@ inductive G : (n: Nat) -> Type {
             lhs,
             rhs,
         } = parts(t);
-        let Term::App {
-            dom_level,
-            cod_level,
-            dom,
-            cod,
-            arg,
-            ..
-        } = (*lhs).clone()
-        else {
+        // The μ slot is written `app@` since `docs/app-by-head-type-design.md`,
+        // so the forgery carries no annotation of the real family's either.
+        let Some((_, arg)) = crate::spelling::app_of(&lhs) else {
             panic!("after `issues/generated-term-defs.md` the μ slot is an application")
         };
         Type::Sigma {
@@ -2891,14 +2885,7 @@ inductive G : (n: Nat) -> Type {
             snd: Rc::new(Type::SEq {
                 level: ilvl,
                 ty: ity,
-                lhs: Rc::new(Term::App {
-                    fun: Rc::new(head),
-                    dom_level,
-                    cod_level,
-                    dom,
-                    cod,
-                    arg,
-                }),
+                lhs: Rc::new(Term::AppAt { fun: Rc::new(head), arg: Rc::clone(arg) }),
                 rhs,
             }),
         }
@@ -2920,7 +2907,7 @@ inductive G : (n: Nat) -> Type {
         // …and the μ node still fills at a scrutinee, which is what every
         // consumer downstream (`ty_at`, `eq_at`, the arm builders) needs.
         let filled = fam.mu_at(Term::Zero, 0);
-        assert!(matches!(filled, Term::App { .. }));
+        assert!(crate::spelling::is_app(&filled));
         // The slot is really a *definition*, not an inlined eliminator.
         assert!(t.el.gen_ref(&t.cx, GenDef::Mu(t.f.tag)).is_some());
         // Since `docs/family-type-code-defs-design.md` the Σ's first

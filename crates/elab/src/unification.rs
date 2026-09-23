@@ -7,7 +7,7 @@ use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
 use heather_syntax::Expr;
 
-use crate::{code, inductive};
+use crate::{code, inductive, spelling};
 
 /// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
 /// **not** a first-class constraint in a queue on the [`crate::Elaborator`],
@@ -108,11 +108,35 @@ impl Sol {
 /// x)` would happily solve a meta to a term mentioning `x`, which is
 /// ill-scoped where it lands (the kernel would reject it, but a rejection is
 /// a worse message than a refusal to guess).
+/// What the syntactic congruence is run against: the scope a solution lands
+/// in, and the one question it cannot answer from syntax alone.
+///
+/// `type_args` answers, for a rigid application spine in the subject under
+/// `d` binders, which of its arguments sit at a `Ty` domain — the spine's
+/// parameter telescope read off its **head's** type. An `app(…)` node
+/// states its domain, but `app@(f; a)` (`docs/app-by-head-type-design.md`
+/// §6.2) does not, so [`matching_value_spine`] asks here for those. `None`
+/// is "cannot read it", and the spine is then not a matching value spine,
+/// which is the refusal the rule already gave a head it could not read.
+pub(super) struct U<'a> {
+    pub(super) gamma: &'a LocalCtx,
+    pub(super) type_args: &'a dyn Fn(&Term, u32) -> Option<Vec<bool>>,
+}
+
+impl<'a> U<'a> {
+    /// No head can be read: every `app@` spine is refused by
+    /// [`matching_value_spine`], and nothing else changes.
+    #[cfg(test)]
+    pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
+        U { gamma, type_args: &|_, _| None }
+    }
+}
+
 /// [`unify_ty`] as the elaborator enters it: one bracket per *root* attempt,
 /// so the timer measures unification and the recursive congruence below it
 /// carries no clock at all (`docs/instrumentation-design.md` §5).
 pub(super) fn unify_ty_root(
-    gamma: &LocalCtx,
+    u: &U<'_>,
     pat: &Type,
     subj: &Type,
     n: u32,
@@ -120,11 +144,11 @@ pub(super) fn unify_ty_root(
     sols: &mut [Sol],
 ) {
     crate::stats::count(crate::stats::Counter::UnifyCalls);
-    crate::stats::timed(crate::stats::Timer::Unify, || unify_ty(gamma, pat, subj, n, d, sols));
+    crate::stats::timed(crate::stats::Timer::Unify, || unify_ty(u, pat, subj, n, d, sols));
 }
 
 pub(super) fn unify_ty(
-    gamma: &LocalCtx,
+    u: &U<'_>,
     pat: &Type,
     subj: &Type,
     n: u32,
@@ -146,8 +170,8 @@ pub(super) fn unify_ty(
         // non-variable payload, and the today-unreachable permuted or
         // dropping renamings — is declined, which learn-only always permits.
         if matches!(sols[var.0 as usize], Sol::Unsolved)
-            && *subst == embed(gamma, d)
-            && let Some(s) = strengthen_ty(gamma, subj, d)
+            && *subst == embed(u.gamma, d)
+            && let Some(s) = strengthen_ty(u.gamma, subj, d)
             && let Some(c) = code::code_of(&s)
         {
             sols[var.0 as usize] = Sol::Solved(Rc::new(c));
@@ -177,9 +201,9 @@ pub(super) fn unify_ty(
                 ..
             },
         ) => {
-            unify_ty(gamma, t1, t2, n, d, sols);
-            unify_tm(gamma, a1, a2, n, d, sols);
-            unify_tm(gamma, b1, b2, n, d, sols);
+            unify_ty(u, t1, t2, n, d, sols);
+            unify_tm(u, a1, a2, n, d, sols);
+            unify_tm(u, b1, b2, n, d, sols);
         }
         // `Π`/`Σ`/`W` bind in their second component; `+` does not.
         (
@@ -206,8 +230,8 @@ pub(super) fn unify_ty(
                 shape: a2, pos: b2, ..
             },
         ) => {
-            unify_ty(gamma, a1, a2, n, d, sols);
-            unify_ty(gamma, b1, b2, n, d + 1, sols);
+            unify_ty(u, a1, a2, n, d, sols);
+            unify_ty(u, b1, b2, n, d + 1, sols);
         }
         (
             Type::Sum {
@@ -217,8 +241,8 @@ pub(super) fn unify_ty(
                 lhs: a2, rhs: b2, ..
             },
         ) => {
-            unify_ty(gamma, a1, a2, n, d, sols);
-            unify_ty(gamma, b1, b2, n, d, sols);
+            unify_ty(u, a1, a2, n, d, sols);
+            unify_ty(u, b1, b2, n, d, sols);
         }
         (
             Type::Vec {
@@ -228,8 +252,8 @@ pub(super) fn unify_ty(
                 elem: e2, len: k2, ..
             },
         ) => {
-            unify_ty(gamma, e1, e2, n, d, sols);
-            unify_tm(gamma, k1, k2, n, d, sols);
+            unify_ty(u, e1, e2, n, d, sols);
+            unify_tm(u, k1, k2, n, d, sols);
         }
         // A `Wf`'s arity is scoped under its shape binder — the same +1 a `Σ`
         // tail gets, and the reason this is not a flat structural walk.
@@ -245,14 +269,14 @@ pub(super) fn unify_ty(
                 ..
             },
         ) => {
-            unify_ty(gamma, s1, s2, n, d, sols);
-            unify_tm(gamma, a1, a2, n, d + 1, sols);
+            unify_ty(u, s1, s2, n, d, sols);
+            unify_tm(u, a1, a2, n, d + 1, sols);
         }
         (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
-            unify_tm(gamma, k1, k2, n, d, sols);
+            unify_tm(u, k1, k2, n, d, sols);
         }
         (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
-            unify_tm(gamma, t1, t2, n, d, sols);
+            unify_tm(u, t1, t2, n, d, sols);
         }
         // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
         // learn. A mismatch is not an error here — this function only ever
@@ -272,7 +296,7 @@ pub(super) fn unify_ty(
 /// How many arguments a spine applies. Used by the value-spine rule.
 fn spine_len(mut t: &Term) -> usize {
     let mut k = 0;
-    while let Term::App { fun, .. } = t {
+    while let Some((fun, _)) = spelling::app_of(t) {
         k += 1;
         t = fun;
     }
@@ -282,7 +306,7 @@ fn spine_len(mut t: &Term) -> usize {
 /// The subject is in the committed world, so even global index zero is
 /// rigid: only the pattern uses indices below `n` as scratch metas.
 fn rigid_head(mut t: &Term) -> bool {
-    while let Term::App { fun, .. } = t {
+    while let Some((fun, _)) = spelling::app_of(t) {
         t = fun;
     }
     matches!(t, Term::Var(_) | Term::GlobalTm { .. })
@@ -291,18 +315,36 @@ fn rigid_head(mut t: &Term) -> bool {
 /// Align value arguments, allowing only a leading type-argument prefix on
 /// the rigid side: `?op(x, y)` can learn `append<A>`, but `?f(x)` must not
 /// learn `add(a)` from `add(a, x)`.
-fn matching_value_spine(pat: &Term, mut subj: &Term) -> bool {
+fn matching_value_spine(u: &U<'_>, pat: &Term, mut subj: &Term, d: u32) -> bool {
     if !rigid_head(subj) {
         return false;
     }
     for _ in 0..spine_len(pat) {
-        let Term::App { fun, .. } = subj else {
+        let Some((fun, _)) = spelling::app_of(subj) else {
             return false;
         };
         subj = fun;
     }
-    while let Term::App { fun, dom, .. } = subj {
-        if !matches!(&**dom, Type::Ty(_)) {
+    // The remaining prefix must be type arguments. An `app` node states its
+    // domain; an `app@` node's is its head's, read once for the whole
+    // prefix only when one is present.
+    let mut heads: Option<Vec<bool>> = None;
+    let mut k = spine_len(subj);
+    while let Some((fun, _)) = spelling::app_of(subj) {
+        k -= 1;
+        let is_ty = match subj {
+            Term::App { dom, .. } => matches!(&**dom, Type::Ty(_)),
+            _ => {
+                if heads.is_none() {
+                    heads = (u.type_args)(subj, d);
+                }
+                match heads.as_ref().and_then(|h| h.get(k)) {
+                    Some(t) => *t,
+                    None => return false,
+                }
+            }
+        };
+        if !is_ty {
             return false;
         }
         subj = fun;
@@ -310,28 +352,26 @@ fn matching_value_spine(pat: &Term, mut subj: &Term) -> bool {
     true
 }
 
-fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
     if let Term::GlobalTm { var, subst } = pat
         && var.0 < n
     {
         if matches!(sols[var.0 as usize], Sol::Unsolved)
-            && *subst == embed(gamma, d)
-            && let Some(s) = strengthen_tm(gamma, subj, d)
+            && *subst == embed(u.gamma, d)
+            && let Some(s) = strengthen_tm(u.gamma, subj, d)
         {
             sols[var.0 as usize] = Sol::Solved(Rc::new(s));
         }
         return;
     }
     match (pat, subj) {
-        (Term::Succ(a), Term::Succ(b)) => unify_tm(gamma, a, b, n, d, sols),
-        (
-            Term::App {
-                fun: f1, arg: a1, ..
-            },
-            Term::App {
-                fun: f2, arg: a2, ..
-            },
-        ) => {
+        (Term::Succ(a), Term::Succ(b)) => unify_tm(u, a, b, n, d, sols),
+        // Either spelling on either side: `app` and `app@` are one former
+        // (`docs/app-by-head-type-design.md` §6.2), and this congruence
+        // never read the annotations.
+        (p, s) if spelling::is_app(p) && spelling::is_app(s) => {
+            let (f1, a1) = spelling::app_of(p).expect("an application");
+            let (f2, a2) = spelling::app_of(s).expect("an application");
             // The flex-head guard (design §5.4): a pattern application whose
             // spine head is one of this call's not-yet-solved metas learns
             // nothing here. The `App` congruence would otherwise "solve"
@@ -344,7 +384,7 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
             // committed globals sit at `var.0 >= n`, so `D#fam` family spines
             // (the type-arg-inference-through-index walker) are untouched.
             let mut head = pat;
-            while let Term::App { fun, .. } = head {
+            while let Some((fun, _)) = spelling::app_of(head) {
                 head = fun;
             }
             //
@@ -357,12 +397,12 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
             if let Term::GlobalTm { var, .. } = head
                 && var.0 < n
                 && sols[var.0 as usize].solved().is_none()
-                && !matching_value_spine(pat, subj)
+                && !matching_value_spine(u, pat, subj, d)
             {
                 return;
             }
-            unify_tm(gamma, f1, f2, n, d, sols);
-            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(u, f1, f2, n, d, sols);
+            unify_tm(u, a1, a2, n, d, sols);
         }
         // A declared-index family's type is `El` of an **index recursion
         // choosing among quoted codes** — `elimN(M; z «Σ…+…»; s «…»; i)`
@@ -390,10 +430,10 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
                 ..
             },
         ) => {
-            unify_ty(gamma, m1, m2, n, d + 1, sols);
-            unify_tm(gamma, b1, b2, n, d, sols);
-            unify_tm(gamma, s1, s2, n, d + 2, sols);
-            unify_tm(gamma, t1, t2, n, d, sols);
+            unify_ty(u, m1, m2, n, d + 1, sols);
+            unify_tm(u, b1, b2, n, d, sols);
+            unify_tm(u, s1, s2, n, d + 2, sols);
+            unify_tm(u, t1, t2, n, d, sols);
         }
         (
             Term::TmPi {
@@ -431,8 +471,8 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
                 ..
             },
         ) => {
-            unify_tm(gamma, a1, a2, n, d, sols);
-            unify_tm(gamma, b1, b2, n, d + 1, sols);
+            unify_tm(u, a1, a2, n, d, sols);
+            unify_tm(u, b1, b2, n, d + 1, sols);
         }
         (
             Term::TmSum {
@@ -442,8 +482,8 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
                 lhs: a2, rhs: b2, ..
             },
         ) => {
-            unify_tm(gamma, a1, a2, n, d, sols);
-            unify_tm(gamma, b1, b2, n, d, sols);
+            unify_tm(u, a1, a2, n, d, sols);
+            unify_tm(u, b1, b2, n, d, sols);
         }
         (
             Term::TmVec {
@@ -453,11 +493,11 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
                 elem: e2, len: k2, ..
             },
         ) => {
-            unify_tm(gamma, e1, e2, n, d, sols);
-            unify_tm(gamma, k1, k2, n, d, sols);
+            unify_tm(u, e1, e2, n, d, sols);
+            unify_tm(u, k1, k2, n, d, sols);
         }
         (Term::TmFin { len: k1 }, Term::TmFin { len: k2 }) => {
-            unify_tm(gamma, k1, k2, n, d, sols);
+            unify_tm(u, k1, k2, n, d, sols);
         }
         (
             Term::TmId {
@@ -487,9 +527,9 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
                 ..
             },
         ) => {
-            unify_tm(gamma, t1, t2, n, d, sols);
-            unify_tm(gamma, a1, a2, n, d, sols);
-            unify_tm(gamma, b1, b2, n, d, sols);
+            unify_tm(u, t1, t2, n, d, sols);
+            unify_tm(u, a1, a2, n, d, sols);
+            unify_tm(u, b1, b2, n, d, sols);
         }
         _ => {}
     }
@@ -662,7 +702,7 @@ mod tests {
     fn el_meta_learns_the_subjects_code_without_an_elaborator() {
         let gamma = LocalCtx::nil();
         let mut solutions = [Sol::Unsolved];
-        unify_ty(&gamma, &meta(&gamma), &Type::Nat, 1, 0, &mut solutions);
+        unify_ty(&U::syntactic(&gamma), &meta(&gamma), &Type::Nat, 1, 0, &mut solutions);
 
         assert!(matches!(
             &solutions[0],
@@ -696,17 +736,17 @@ mod tests {
         let specialized = app(global.clone(), Type::Ty(Level::Zero), Term::TmNat);
         let subject = app(specialized.clone(), Type::Nat, Term::Zero);
         let mut solutions = [Sol::Unsolved];
-        unify_tm(&gamma, &pat, &subject, 1, 0, &mut solutions);
+        unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut solutions);
         assert!(matches!(&solutions[0], Sol::Solved(t) if **t == specialized));
 
         let value_prefix = app(global, Type::Nat, Term::Zero);
         let subject = app(value_prefix, Type::Nat, Term::Zero);
         let mut solutions = [Sol::Unsolved];
-        unify_tm(&gamma, &pat, &subject, 1, 0, &mut solutions);
+        unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut solutions);
         assert!(matches!(solutions[0], Sol::Unsolved));
 
         let mut withheld = [Sol::Withheld];
-        unify_tm(&gamma, &pat, &subject, 1, 0, &mut withheld);
+        unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut withheld);
         assert!(matches!(withheld[0], Sol::Withheld));
     }
 

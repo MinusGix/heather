@@ -439,11 +439,11 @@ pub(crate) fn finish_convoy(
 ) -> Term {
     let scrutinee = Rc::new(scrutinee);
     let scrutinee_type = Rc::new(scrutinee_type.clone());
-    Term::App {
-        fun: Rc::new(eliminator),
-        dom_level: scrutinee_level.clone(),
-        cod_level: motive_level.clone(),
-        dom: Rc::new(Type::Id {
+    crate::spelling::checked_app(
+        Rc::new(eliminator),
+        scrutinee_level.clone(),
+        motive_level.clone(),
+        Rc::new(Type::Id {
             level: scrutinee_level.clone(),
             ty: Rc::clone(&scrutinee_type),
             lhs: Rc::clone(&scrutinee),
@@ -451,13 +451,13 @@ pub(crate) fn finish_convoy(
         }),
         // The Π is non-dependent, so the result is weakened past its equation
         // binder.
-        cod: Rc::new(result.shift_local(1)),
-        arg: Rc::new(Term::Refl {
+        Rc::new(result.shift_local(1)),
+        Rc::new(Term::Refl {
             level: scrutinee_level.clone(),
             ty: scrutinee_type,
             tm: scrutinee,
         }),
-    }
+    )
 }
 
 /// Take apart a written motive lambda into its binders and type body.
@@ -646,7 +646,7 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
             stuck_scrutinees(label, out, budget);
             stuck_scrutinees(children, out, budget);
         }
-        Term::App { fun, arg, .. } => {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
             stuck_scrutinees(fun, out, budget);
             stuck_scrutinees(arg, out, budget);
         }
@@ -1056,6 +1056,9 @@ mod tests {
             &Level::Zero,
             &Type::Nat,
         );
-        assert!(matches!(finished, Term::App { arg, .. } if matches!(&*arg, Term::Refl { .. })));
+        assert!(matches!(
+            crate::spelling::app_of(&finished),
+            Some((_, arg)) if matches!(&**arg, Term::Refl { .. })
+        ));
     }
 }

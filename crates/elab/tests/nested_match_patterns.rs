@@ -406,7 +406,7 @@ fn children(t: &Term) -> Vec<&Term> {
     match t {
         Term::Succ(k) => vec![k],
         Term::Lam { body, .. } => vec![body],
-        Term::App { fun, arg, .. } => vec![fun, arg],
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => vec![fun, arg],
         Term::Pair { fst, snd, .. } => vec![fst, snd],
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => vec![pair],
         Term::Inl { val, .. } | Term::Inr { val, .. } => vec![val],

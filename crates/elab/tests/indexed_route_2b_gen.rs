@@ -716,6 +716,10 @@ impl Walk {
                 self.ty(cod, former);
                 self.tm(arg, former);
             }
+            Term::AppAt { fun, arg } => {
+                self.tm(fun, former);
+                self.tm(arg, former);
+            }
             Term::GlobalTm { subst, .. } => {
                 for x in &subst.terms {
                     self.tm(x, former);

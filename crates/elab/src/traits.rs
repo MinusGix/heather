@@ -1411,13 +1411,13 @@ impl Elaborator {
         {
             let mut type_args = Vec::new();
             let mut head = applied;
-            while let Term::App { fun, arg, .. } = head {
+            while let Some((fun, arg)) = crate::spelling::app_of(head) {
                 type_args.push(&**arg);
                 head = fun;
             }
             type_args.reverse();
             let mut head = *type_args.get(position)?;
-            while let Term::App { fun, .. } = head {
+            while let Some((fun, _)) = crate::spelling::app_of(head) {
                 head = fun;
             }
             let Term::GlobalTm { var, .. } = head else {

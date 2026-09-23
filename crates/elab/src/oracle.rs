@@ -262,6 +262,7 @@ fn term_head_may_compute(t: &Term) -> bool {
             | Term::FstAt { pair, .. }
             | Term::SndAt { pair, .. } => pair,
             Term::App { fun, .. }
+            | Term::AppAt { fun, .. }
             | Term::UApp { fun, .. }
             | Term::CtxApp { fun, .. }
             | Term::TyApp { fun, .. } => fun,

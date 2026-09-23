@@ -238,14 +238,7 @@ impl Elaborator {
             };
             let arg = Rc::new(Term::Var(LocalVar((m - 1 - p) as u32)));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
-            term = Term::App {
-                fun: Rc::new(term),
-                dom_level,
-                cod_level,
-                dom,
-                cod,
-                arg,
-            };
+            term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
         term
     }

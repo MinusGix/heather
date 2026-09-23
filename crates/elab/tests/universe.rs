@@ -331,7 +331,7 @@ fn a_quoted_component_carries_the_reference_and_not_the_inline_lowering() {
     e.elab_source(&src).unwrap_or_else(|err| panic!("{}", err.render(&src)));
     let rendered = format!("{:?}", e.psi().bindings.last().expect("a binding"));
     assert!(
-        rendered.contains("«Id[0](app("),
+        rendered.contains("«Id[0](app@("),
         "the quoted equation should spell its element type as `Cell`'s reference: {rendered}"
     );
     assert!(

@@ -105,22 +105,22 @@ pub(crate) fn map(
             pair: var(0),
         };
         // g head : B, and r tail : Vec(B; k̂).
-        let g_head = Term::App {
-            fun: Rc::new(g.shift_local(3)),
-            dom_level: al.clone(),
-            cod_level: bl.clone(),
-            dom: Rc::new(a_ty.shift_local(3)),
-            cod: Rc::new(b_ty.shift_local(4)),
-            arg: Rc::new(head),
-        };
-        let r_tail = Term::App {
-            fun: var(1),
-            dom_level: al.clone(),
-            cod_level: bl.clone(),
-            dom: Rc::new(vec(al, a_ty, 3, var(2))),
-            cod: Rc::new(vec(bl, b_ty, 4, var(3))),
-            arg: Rc::new(tail),
-        };
+        let g_head = crate::spelling::checked_app(
+            Rc::new(g.shift_local(3)),
+            al.clone(),
+            bl.clone(),
+            Rc::new(a_ty.shift_local(3)),
+            Rc::new(b_ty.shift_local(4)),
+            Rc::new(head),
+        );
+        let r_tail = crate::spelling::checked_app(
+            var(1),
+            al.clone(),
+            bl.clone(),
+            Rc::new(vec(al, a_ty, 3, var(2))),
+            Rc::new(vec(bl, b_ty, 4, var(3))),
+            Rc::new(tail),
+        );
         Term::Lam {
             dom_level: al.clone(),
             cod_level: bl.clone(),
@@ -138,20 +138,20 @@ pub(crate) fn map(
             }),
         }
     };
-    Term::App {
-        fun: Rc::new(Term::ElimNat {
+    crate::spelling::checked_app(
+        Rc::new(Term::ElimNat {
             level: ml,
             motive: Rc::new(motive),
             base: Rc::new(base),
             step: Rc::new(step),
             scrut: Rc::clone(len),
         }),
-        dom_level: al.clone(),
-        cod_level: bl.clone(),
-        dom: Rc::new(vec(al, a_ty, 0, Rc::clone(len))),
-        cod: Rc::new(vec(bl, b_ty, 1, Rc::new(len.shift_local(1)))),
-        arg: xs,
-    }
+        al.clone(),
+        bl.clone(),
+        Rc::new(vec(al, a_ty, 0, Rc::clone(len))),
+        Rc::new(vec(bl, b_ty, 1, Rc::new(len.shift_local(1)))),
+        xs,
+    )
 }
 
 /// `fold^{l,l'}(A; B; k; z; g; xs) : B` for `g : A → B → B`.
@@ -206,28 +206,28 @@ pub(crate) fn fold(
             snd_ty: Rc::new(vec(al, a_ty, 4, var(3))),
             pair: var(0),
         };
-        let r_tail = Term::App {
-            fun: var(1),
-            dom_level: al.clone(),
-            cod_level: bl.clone(),
-            dom: Rc::new(vec(al, a_ty, 3, var(2))),
-            cod: Rc::new(b_ty.shift_local(4)),
-            arg: Rc::new(tail),
-        };
+        let r_tail = crate::spelling::checked_app(
+            var(1),
+            al.clone(),
+            bl.clone(),
+            Rc::new(vec(al, a_ty, 3, var(2))),
+            Rc::new(b_ty.shift_local(4)),
+            Rc::new(tail),
+        );
         // g head (r tail).
-        let g_head = Term::App {
-            fun: Rc::new(g.shift_local(3)),
-            dom_level: al.clone(),
-            cod_level: bl.clone(),
-            dom: Rc::new(a_ty.shift_local(3)),
-            cod: Rc::new(Type::Pi {
+        let g_head = crate::spelling::checked_app(
+            Rc::new(g.shift_local(3)),
+            al.clone(),
+            bl.clone(),
+            Rc::new(a_ty.shift_local(3)),
+            Rc::new(Type::Pi {
                 dom_level: bl.clone(),
                 cod_level: bl.clone(),
                 dom: Rc::new(b_ty.shift_local(4)),
                 cod: Rc::new(b_ty.shift_local(5)),
             }),
-            arg: Rc::new(head),
-        };
+            Rc::new(head),
+        );
         Term::Lam {
             dom_level: al.clone(),
             cod_level: bl.clone(),
@@ -235,30 +235,30 @@ pub(crate) fn fold(
             // `S k̂` — which is exactly what makes `fst`/`snd` below legal,
             // since `Vec(A; S k̂) ⇝ Σ(_ : A). Vec(A; k̂)`.
             dom: Rc::new(vec(al, a_ty, 2, Rc::new(Term::Succ(var(1))))),
-            body: Rc::new(Term::App {
-                fun: Rc::new(g_head),
-                dom_level: bl.clone(),
-                cod_level: bl.clone(),
-                dom: Rc::new(b_ty.shift_local(3)),
-                cod: Rc::new(b_ty.shift_local(4)),
-                arg: Rc::new(r_tail),
-            }),
+            body: Rc::new(crate::spelling::checked_app(
+                Rc::new(g_head),
+                bl.clone(),
+                bl.clone(),
+                Rc::new(b_ty.shift_local(3)),
+                Rc::new(b_ty.shift_local(4)),
+                Rc::new(r_tail),
+            )),
         }
     };
-    Term::App {
-        fun: Rc::new(Term::ElimNat {
+    crate::spelling::checked_app(
+        Rc::new(Term::ElimNat {
             level: ml,
             motive: Rc::new(motive),
             base: Rc::new(base),
             step: Rc::new(step),
             scrut: Rc::clone(len),
         }),
-        dom_level: al.clone(),
-        cod_level: bl.clone(),
-        dom: Rc::new(vec(al, a_ty, 0, Rc::clone(len))),
-        cod: Rc::new(b_ty.shift_local(1)),
-        arg: xs,
-    }
+        al.clone(),
+        bl.clone(),
+        Rc::new(vec(al, a_ty, 0, Rc::clone(len))),
+        Rc::new(b_ty.shift_local(1)),
+        xs,
+    )
 }
 
 /// `tabulate^l(B; k; f) : Vec^l(B; k)` for `f : Π(i : Fin k). B`.
@@ -313,43 +313,43 @@ pub(crate) fn tabulate(bl: &Level, b_ty: &Type, len: &Rc<Term>, f: Rc<Term>) -> 
             rhs: fin(var(2)),
             val: Rc::new(Term::Triv { level: Level::Zero }),
         };
-        let head = Term::App {
-            fun: var(0),
-            dom_level: Level::Zero,
-            cod_level: bl.clone(),
-            dom: fin(Rc::new(Term::Succ(var(2)))),
-            cod: Rc::new(b_ty.shift_local(4)),
-            arg: Rc::new(zero_idx),
-        };
+        let head = crate::spelling::checked_app(
+            var(0),
+            Level::Zero,
+            bl.clone(),
+            fin(Rc::new(Term::Succ(var(2)))),
+            Rc::new(b_ty.shift_local(4)),
+            Rc::new(zero_idx),
+        );
         // λ(j : Fin k̂). f (inr j) — the tail's index function, one binder
         // deeper: (Γ, k̂=3, r=2, f=1, j=0).
         let shifted = Term::Lam {
             dom_level: Level::Zero,
             cod_level: bl.clone(),
             dom: fin(var(2)),
-            body: Rc::new(Term::App {
-                fun: var(1),
-                dom_level: Level::Zero,
-                cod_level: bl.clone(),
-                dom: fin(Rc::new(Term::Succ(var(3)))),
-                cod: Rc::new(b_ty.shift_local(5)),
-                arg: Rc::new(Term::Inr {
+            body: Rc::new(crate::spelling::checked_app(
+                var(1),
+                Level::Zero,
+                bl.clone(),
+                fin(Rc::new(Term::Succ(var(3)))),
+                Rc::new(b_ty.shift_local(5)),
+                Rc::new(Term::Inr {
                     lhs_level: Level::Zero,
                     rhs_level: Level::Zero,
                     lhs: unit(),
                     rhs: fin(var(3)),
                     val: var(0),
                 }),
-            }),
+            )),
         };
-        let r_shifted = Term::App {
-            fun: var(1),
-            dom_level: bl.clone(),
-            cod_level: bl.clone(),
-            dom: Rc::new(idx_fun(3, var(2))),
-            cod: Rc::new(vec(bl, b_ty, 4, var(3))),
-            arg: Rc::new(shifted),
-        };
+        let r_shifted = crate::spelling::checked_app(
+            var(1),
+            bl.clone(),
+            bl.clone(),
+            Rc::new(idx_fun(3, var(2))),
+            Rc::new(vec(bl, b_ty, 4, var(3))),
+            Rc::new(shifted),
+        );
         Term::Lam {
             dom_level: bl.clone(),
             cod_level: bl.clone(),
@@ -364,20 +364,20 @@ pub(crate) fn tabulate(bl: &Level, b_ty: &Type, len: &Rc<Term>, f: Rc<Term>) -> 
             }),
         }
     };
-    Term::App {
-        fun: Rc::new(Term::ElimNat {
+    crate::spelling::checked_app(
+        Rc::new(Term::ElimNat {
             level: bl.clone(),
             motive: Rc::new(motive),
             base: Rc::new(base),
             step: Rc::new(step),
             scrut: Rc::clone(len),
         }),
-        dom_level: bl.clone(),
-        cod_level: bl.clone(),
-        dom: Rc::new(idx_fun(0, Rc::clone(len))),
-        cod: Rc::new(vec(bl, b_ty, 1, Rc::new(len.shift_local(1)))),
-        arg: f,
-    }
+        bl.clone(),
+        bl.clone(),
+        Rc::new(idx_fun(0, Rc::clone(len))),
+        Rc::new(vec(bl, b_ty, 1, Rc::new(len.shift_local(1)))),
+        f,
+    )
 }
 
 // -- `tab_cong` and its pieces (docs/container-proofs.md §4) ----------------
@@ -400,14 +400,14 @@ fn idx_fun(al: &Level, a_ty: &Type, d: u32, k: Rc<Term>) -> Type {
 
 /// `fv i` for `fv : Π(i : Fin k). A`, everything at depth `d`.
 fn idx_app(al: &Level, a_ty: &Type, d: u32, k: Rc<Term>, fv: Rc<Term>, i: Rc<Term>) -> Term {
-    Term::App {
-        fun: fv,
-        dom_level: Level::Zero,
-        cod_level: al.clone(),
-        dom: Rc::new(Type::Fin { len: k }),
-        cod: Rc::new(a_ty.shift_local(d + 1)),
-        arg: i,
-    }
+    crate::spelling::checked_app(
+        fv,
+        Level::Zero,
+        al.clone(),
+        Rc::new(Type::Fin { len: k }),
+        Rc::new(a_ty.shift_local(d + 1)),
+        i,
+    )
 }
 
 /// `Id^l(A; fv i; gv i)` **under** the `i` binder, for `k`/`fv`/`gv` at `d`.
@@ -611,14 +611,14 @@ pub(crate) fn tab_cong(
             dom_level: Level::Zero,
             cod_level: al.clone(),
             dom: fin(Rc::clone(&k)),
-            body: Rc::new(Term::App {
-                fun: var(1),
-                dom_level: Level::Zero,
-                cod_level: al.clone(),
-                dom: fin(Rc::clone(&sk6)),
-                cod: Rc::new(pw_cod(al, a_ty, 6, &sk6, &var(3), &var(2))),
-                arg: inr_j,
-            }),
+            body: Rc::new(crate::spelling::checked_app(
+                var(1),
+                Level::Zero,
+                al.clone(),
+                fin(Rc::clone(&sk6)),
+                Rc::new(pw_cod(al, a_ty, 6, &sk6, &var(3), &var(2))),
+                inr_j,
+            )),
         });
         // The two heads and the two tails.
         let head_f = Rc::new(idx_app(
@@ -640,31 +640,31 @@ pub(crate) fn tab_cong(
         let tail_f = Rc::new(tabulate(al, &a5, &k, Rc::clone(&f_tl)));
         let tail_g = Rc::new(tabulate(al, &a5, &k, Rc::clone(&g_tl)));
         // p : Id(A; f ι₀; g ι₀), from the hypothesis at index 0.
-        let p = Rc::new(Term::App {
-            fun: var(0),
-            dom_level: Level::Zero,
-            cod_level: al.clone(),
-            dom: fin(Rc::clone(&sk)),
-            cod: Rc::new(pw_cod(al, a_ty, 5, &sk, &var(2), &var(1))),
-            arg: zero_idx,
-        });
+        let p = Rc::new(crate::spelling::checked_app(
+            var(0),
+            Level::Zero,
+            al.clone(),
+            fin(Rc::clone(&sk)),
+            Rc::new(pw_cod(al, a_ty, 5, &sk, &var(2), &var(1))),
+            zero_idx,
+        ));
         // q : Id(Vec(A; k̂); tail_f; tail_g), from the recursive result.
         let q = {
             let k1 = Rc::new(k.shift_local(1));
-            let app1 = Term::App {
-                fun: var(3),
-                dom_level: al.clone(),
-                cod_level: al.clone(),
-                dom: Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
-                cod: Rc::new(m_from_g(al, a_ty, 6, &k1, &var(0))),
-                arg: Rc::clone(&f_tl),
-            };
-            let app2 = Term::App {
-                fun: Rc::new(app1),
-                dom_level: al.clone(),
-                cod_level: al.clone(),
-                dom: Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
-                cod: Rc::new(m_from_h(
+            let app1 = crate::spelling::checked_app(
+                var(3),
+                al.clone(),
+                al.clone(),
+                Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
+                Rc::new(m_from_g(al, a_ty, 6, &k1, &var(0))),
+                Rc::clone(&f_tl),
+            );
+            let app2 = crate::spelling::checked_app(
+                Rc::new(app1),
+                al.clone(),
+                al.clone(),
+                Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
+                Rc::new(m_from_h(
                     al,
                     a_ty,
                     6,
@@ -672,14 +672,14 @@ pub(crate) fn tab_cong(
                     &Rc::new(f_tl.shift_local(1)),
                     &var(0),
                 )),
-                arg: Rc::clone(&g_tl),
-            };
-            Rc::new(Term::App {
-                fun: Rc::new(app2),
-                dom_level: al.clone(),
-                cod_level: al.clone(),
-                dom: Rc::new(pointwise(al, a_ty, 5, &k, &f_tl, &g_tl)),
-                cod: Rc::new(concl(
+                Rc::clone(&g_tl),
+            );
+            Rc::new(crate::spelling::checked_app(
+                Rc::new(app2),
+                al.clone(),
+                al.clone(),
+                Rc::new(pointwise(al, a_ty, 5, &k, &f_tl, &g_tl)),
+                Rc::new(concl(
                     al,
                     a_ty,
                     6,
@@ -687,8 +687,8 @@ pub(crate) fn tab_cong(
                     Rc::new(f_tl.shift_local(1)),
                     Rc::new(g_tl.shift_local(1)),
                 )),
-                arg: h_tl,
-            })
+                h_tl,
+            ))
         };
         // `(x, y) : Vec(A; S k̂)` — the snd type is under the fst binder.
         let pair = |d: u32, x: Rc<Term>, y: Rc<Term>| {
@@ -798,20 +798,20 @@ pub(crate) fn tab_cong(
         scrut: Rc::clone(len),
     };
     let len1 = Rc::new(len.shift_local(1));
-    let app1 = Term::App {
-        fun: Rc::new(elim),
-        dom_level: al.clone(),
-        cod_level: al.clone(),
-        dom: Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
-        cod: Rc::new(m_from_g(al, a_ty, 1, &len1, &var(0))),
-        arg: Rc::clone(&f),
-    };
-    let app2 = Term::App {
-        fun: Rc::new(app1),
-        dom_level: al.clone(),
-        cod_level: al.clone(),
-        dom: Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
-        cod: Rc::new(m_from_h(
+    let app1 = crate::spelling::checked_app(
+        Rc::new(elim),
+        al.clone(),
+        al.clone(),
+        Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
+        Rc::new(m_from_g(al, a_ty, 1, &len1, &var(0))),
+        Rc::clone(&f),
+    );
+    let app2 = crate::spelling::checked_app(
+        Rc::new(app1),
+        al.clone(),
+        al.clone(),
+        Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
+        Rc::new(m_from_h(
             al,
             a_ty,
             1,
@@ -819,14 +819,14 @@ pub(crate) fn tab_cong(
             &Rc::new(f.shift_local(1)),
             &var(0),
         )),
-        arg: Rc::clone(&g),
-    };
-    Term::App {
-        fun: Rc::new(app2),
-        dom_level: al.clone(),
-        cod_level: al.clone(),
-        dom: Rc::new(pointwise(al, a_ty, 0, len, &f, &g)),
-        cod: Rc::new(concl(
+        Rc::clone(&g),
+    );
+    crate::spelling::checked_app(
+        Rc::new(app2),
+        al.clone(),
+        al.clone(),
+        Rc::new(pointwise(al, a_ty, 0, len, &f, &g)),
+        Rc::new(concl(
             al,
             a_ty,
             1,
@@ -834,8 +834,8 @@ pub(crate) fn tab_cong(
             Rc::new(f.shift_local(1)),
             Rc::new(g.shift_local(1)),
         )),
-        arg: h,
-    }
+        h,
+    )
 }
 
 #[cfg(test)]

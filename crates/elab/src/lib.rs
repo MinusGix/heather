@@ -1056,6 +1056,10 @@ impl application::ExplicitArgElab for Elaborator {
         self.whnf(cx, ty, span)
     }
 
+    fn emits_checked_applications(&self, cx: &Cx) -> bool {
+        self.emits_at_forms(cx)
+    }
+
     fn respell_application_annotations(
         &self,
         cx: &Cx,
@@ -6434,14 +6438,14 @@ impl Elaborator {
                 span,
             );
         }
-        let converted = Term::App {
-            fun: Rc::new(from),
-            dom_level: element_level,
-            cod_level: expected_level.clone(),
-            dom: Rc::new(literal_dom),
-            cod: Rc::new(expected.shift_local(1)),
-            arg: vector,
-        };
+        let converted = crate::spelling::checked_app(
+            Rc::new(from),
+            element_level,
+            expected_level.clone(),
+            Rc::new(literal_dom),
+            Rc::new(expected.shift_local(1)),
+            vector,
+        );
         Ok((*self.whnf_tm(cx, &converted, span)?).clone())
     }
 
@@ -6571,7 +6575,7 @@ impl Elaborator {
         // whose left side is `or_index(inst.dec)`, then the dictionary.
         let mut args = Vec::new();
         let mut head = &t;
-        while let Term::App { fun, arg, .. } = head {
+        while let Some((fun, arg)) = crate::spelling::app_of(head) {
             args.push(&**arg);
             head = fun;
         }
@@ -6580,7 +6584,7 @@ impl Elaborator {
             // way a resolution trace names a candidate — when the dictionary
             // is a declared instance's global; a minted derivation is spelled.
             let mut head = *inst;
-            while let Term::App { fun, .. } = head {
+            while let Some((fun, _)) = crate::spelling::app_of(head) {
                 head = fun;
             }
             let instance = match head {
@@ -6822,14 +6826,7 @@ impl Elaborator {
             let arg = Rc::new(c);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
             lvl = cod_level.clone();
-            t = Term::App {
-                fun: Rc::new(t),
-                dom_level,
-                cod_level,
-                dom,
-                cod,
-                arg,
-            };
+            t = crate::spelling::checked_app(Rc::new(t), dom_level, cod_level, dom, cod, arg);
         }
         let mask = params.iter().skip(n_ty).map(|p| p.implicit).collect();
         Ok((name.clone(), t, ty, lvl, mask))
@@ -6934,6 +6931,63 @@ impl Elaborator {
         }
     }
 
+    /// [`unification::U::type_args`]: which arguments of the rigid spine `t`
+    /// — in the committed world, `d` binders past `cx.gamma` — sit at a `Ty`
+    /// domain, read off the **head's** type. An `app(…)` node states its
+    /// domain; an `app@` node's is its head's (`docs/app-by-head-type-design.md`
+    /// §6.2), so the unifier's type-argument prefix asks here. The domain is
+    /// read as the `app` emitter would have written it: the Π of the running
+    /// type's weak head, instantiated at the earlier arguments. `None` under
+    /// binders (their types are not in `cx.gamma`) and for a head whose type
+    /// does not expose a Π per argument — the refusal the rule already gives
+    /// a head it cannot read.
+    fn spine_type_args(&self, cx: &Cx, t: &Term, d: u32, span: Span) -> Option<Vec<bool>> {
+        if d != 0 {
+            return None;
+        }
+        let doms = self.app_domains(cx, t, span)?;
+        Some(doms.iter().map(|(dom, _)| matches!(&**dom, Type::Ty(_))).collect())
+    }
+
+    /// The domain, and its level, of every argument of the application spine
+    /// `t` in `cx`, outermost last — what an `app(…)` node would state, read
+    /// off the head's type instead (`docs/app-by-head-type-design.md` §6.2's
+    /// `app_domains`): the head is inferred, and each argument peels one Π
+    /// off the weak head of the running type, which is then instantiated at
+    /// it — the walk `application.rs` makes when it writes the node. `None`
+    /// when the head does not infer in `cx` or its type runs out of Π's.
+    pub(crate) fn app_domains(
+        &self,
+        cx: &Cx,
+        t: &Term,
+        span: Span,
+    ) -> Option<Vec<(Rc<Type>, Level)>> {
+        let (head, args) = spelling::app_spine(t);
+        let oracle = self.semantic_oracle();
+        let (mut ty, _) =
+            typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, head, self.fuel).ok()?;
+        let mut out = Vec::with_capacity(args.len());
+        for a in args {
+            // A syntactic Π is read as it stands, as the kernel's fast path
+            // reads it; only a type that has to reduce is whnf'd.
+            let w = if matches!(ty, Type::Pi { .. }) { ty } else { self.whnf(cx, &ty, span).ok()? };
+            let Type::Pi { dom, cod, dom_level, .. } = w else {
+                return None;
+            };
+            out.push((dom, dom_level));
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(a)));
+        }
+        Some(out)
+    }
+
+    /// The unifier's context for a root attempt in `cx`: the scope, and
+    /// [`Self::spine_type_args`] for the `app@` nodes of a subject.
+    fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], span: Span) {
+        let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
+        let u = unification::U { gamma: &cx.gamma, type_args: &type_args };
+        unify_ty_root(&u, pat, subj, n, 0, sols);
+    }
+
     /// Application with implicit-argument insertion
     /// (issues/elab-stage2-metas.md). Each implicit parameter becomes a fresh
     /// metavariable — represented, per the architecture, as an *innermost*
@@ -7010,13 +7064,13 @@ impl Elaborator {
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
-        unify_ty_root(&cx.gamma, dom, arg_ty, n, 0, sols);
+        self.unify_root(cx, dom, arg_ty, n, sols, span);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
         if let Ok(head) = self.whnf(cx, arg_ty, span) {
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            unify_ty_root(&cx.gamma, dom, &head, n, 0, sols);
+            self.unify_root(cx, dom, &head, n, sols, span);
         }
     }
 
@@ -7067,18 +7121,8 @@ impl Elaborator {
             let Type::Id { lhs, rhs, .. } = result_ty else {
                 return None;
             };
-            let (
-                Term::App {
-                    fun: f_lhs,
-                    arg: s_raw,
-                    ..
-                },
-                Term::App {
-                    fun: f_rhs,
-                    arg: t_raw,
-                    ..
-                },
-            ) = (&**lhs, &**rhs)
+            let (Some((f_lhs, s_raw)), Some((f_rhs, t_raw))) =
+                (spelling::app_of(lhs), spelling::app_of(rhs))
             else {
                 return None;
             };
@@ -7108,10 +7152,10 @@ impl Elaborator {
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
             // unfolding a transparent relation into its definition.
-            unify_ty_root(&cx.gamma, result_ty, expected, n, 0, sols);
+            self.unify_root(cx, result_ty, expected, n, sols, span);
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            unify_ty_root(&cx.gamma, result_ty, &head, n, 0, sols);
+            self.unify_root(cx, result_ty, &head, n, sols, span);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -7119,10 +7163,10 @@ impl Elaborator {
         // spines it heads). The pattern is in the scratch world and the
         // subject in the committed one, exactly as at an argument's domain.
         sols[m] = Sol::Withheld;
-        unify_ty_root(&cx.gamma, result_ty, expected, n, 0, sols);
+        self.unify_root(cx, result_ty, expected, n, sols, span);
         let expected_head = self.whnf(cx, expected, span)?;
         let expected_head = self.unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
-        unify_ty_root(&cx.gamma, result_ty, &expected_head, n, 0, sols);
+        self.unify_root(cx, result_ty, &expected_head, n, sols, span);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an

@@ -386,7 +386,7 @@ pub fn reflect_call_plan(elaborator: &Elaborator, source_name: &str) -> Result<(
 fn application_spine(term: &Term) -> (&Term, Vec<&Term>) {
     let mut head = term;
     let mut arguments = Vec::new();
-    while let Term::App { fun, arg, .. } = head {
+    while let Some((fun, arg)) = crate::spelling::app_of(head) {
         arguments.push(&**arg);
         head = fun;
     }

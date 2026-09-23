@@ -27,35 +27,40 @@ struct Relation {
     level: Level,
 }
 
-fn relation(ty: &Type, span: Span) -> R<Relation> {
-    if let Type::El { tm, .. } = ty {
-        if let Term::App {
-            fun,
-            arg: right,
-            dom,
-            dom_level,
-            ..
-        } = tm.as_ref()
-        {
-            if let Term::App {
-                fun: head,
-                arg: left,
-                dom: first,
-                ..
-            } = fun.as_ref()
-            {
-                if first == dom {
-                    return Ok(Relation {
-                        head: head.clone(),
-                        left: left.clone(),
-                        right: right.clone(),
-                        carrier: dom.clone(),
-                        level: dom_level.clone(),
-                    });
-                }
+fn relation(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> R<Relation> {
+    if let Type::El { tm, .. } = ty
+        && let Some((fun, right)) = crate::spelling::app_of(tm)
+        && let Some((head, left)) = crate::spelling::app_of(fun)
+    {
+        // The two domains: stated by an `app` node, the head's for an
+        // `app@` one (`docs/app-by-head-type-design.md` §6.2).
+        let (first, dom) = match (fun.as_ref(), tm.as_ref()) {
+            (
+                Term::App { dom: first, dom_level: fl, .. },
+                Term::App { dom, dom_level, .. },
+            ) => ((first.clone(), fl.clone()), (dom.clone(), dom_level.clone())),
+            _ => {
+                let doms = e.app_domains(cx, tm, span).unwrap_or_default();
+                let [.., first, dom] = doms.as_slice() else {
+                    return relation_err(span);
+                };
+                (first.clone(), dom.clone())
             }
+        };
+        if first.0 == dom.0 {
+            return Ok(Relation {
+                head: head.clone(),
+                left: left.clone(),
+                right: right.clone(),
+                carrier: dom.0,
+                level: dom.1,
+            });
         }
     }
+    relation_err(span)
+}
+
+fn relation_err(span: Span) -> R<Relation> {
     err(
         "`rel_cong` needs a homogeneous binary relation application; native identity and dependent relations are outside this first fragment",
         span,
@@ -275,14 +280,14 @@ impl Builder<'_> {
                 if !self.core_converts(&at_fixed, goal, level) {
                     continue;
                 }
-                let candidate = Term::App {
-                    fun: field.clone(),
-                    arg: fixed.clone(),
-                    dom_level: dom_level.clone(),
-                    cod_level: cod_level.clone(),
-                    dom: dom.clone(),
-                    cod: cod.clone(),
-                };
+                let candidate = crate::spelling::checked_app(
+                    field.clone(),
+                    dom_level.clone(),
+                    cod_level.clone(),
+                    dom.clone(),
+                    cod.clone(),
+                    fixed.clone(),
+                );
                 if self.core_checks(&candidate, goal, level) {
                     if found.as_ref().is_some_and(|prior| prior != &candidate) {
                         return None;
@@ -363,7 +368,7 @@ impl Builder<'_> {
     fn choice(&self, term: &Term) -> Option<Vec<Rc<Term>>> {
         let mut args = Vec::new();
         let mut head = term;
-        while let Term::App { fun, arg, .. } = head {
+        while let Some((fun, arg)) = crate::spelling::app_of(head) {
             args.push(arg.clone());
             head = fun;
         }
@@ -388,13 +393,9 @@ impl Builder<'_> {
         let same = if l[0] == r[0] {
             "refl".to_string()
         } else if let (
-            Term::App {
-                fun: lf, arg: lx, ..
-            },
-            Term::App {
-                fun: rf, arg: rx, ..
-            },
-        ) = (l[0].as_ref(), r[0].as_ref())
+            Some((lf, lx)),
+            Some((rf, rx)),
+        ) = (crate::spelling::app_of(l[0].as_ref()), crate::spelling::app_of(r[0].as_ref()))
         {
             let (op_ty, op_level) = self.type_of(&format!("{} → bool::Bool", self.carrier))?;
             if lf == rf && self.core_checks(lf, &op_ty, &op_level) {
@@ -463,22 +464,14 @@ impl Builder<'_> {
             return Ok(self.witness.clone());
         }
         if let (
-            Term::App {
-                fun: lf, arg: ly, ..
-            },
-            Term::App {
-                fun: rf, arg: ry, ..
-            },
-        ) = (left.as_ref(), right.as_ref())
+            Some((lf, ly)),
+            Some((rf, ry)),
+        ) = (crate::spelling::app_of(left.as_ref()), crate::spelling::app_of(right.as_ref()))
         {
             if let (
-                Term::App {
-                    fun: lop, arg: lx, ..
-                },
-                Term::App {
-                    fun: rop, arg: rx, ..
-                },
-            ) = (lf.as_ref(), rf.as_ref())
+                Some((lop, lx)),
+                Some((rop, rx)),
+            ) = (crate::spelling::app_of(lf.as_ref()), crate::spelling::app_of(rf.as_ref()))
             {
                 let (op_ty, op_level) = self.type_of(&format!(
                     "{} → {} → {}",
@@ -510,13 +503,9 @@ impl Builder<'_> {
             }
         }
         if let (
-            Term::App {
-                fun: lf, arg: lx, ..
-            },
-            Term::App {
-                fun: rf, arg: rx, ..
-            },
-        ) = (left.as_ref(), right.as_ref())
+            Some((lf, lx)),
+            Some((rf, rx)),
+        ) = (crate::spelling::app_of(left.as_ref()), crate::spelling::app_of(right.as_ref()))
         {
             let (op_ty, op_level) =
                 self.type_of(&format!("{} → {}", self.carrier, self.carrier))?;
@@ -527,7 +516,7 @@ impl Builder<'_> {
                     r = self.rel
                 ))?;
                 let family = if self.resolve(&ty, &level).is_none() {
-                    if let Term::App { arg: fixed, .. } = lf.as_ref() {
+                    if let Some((_, fixed)) = crate::spelling::app_of(lf) {
                         self.family_certificate(fixed, &ty, &level)
                     } else {
                         None
@@ -577,8 +566,8 @@ pub(crate) fn check(
     derive: bool,
 ) -> R<Term> {
     let (witness, proof_ty, proof_level) = e.elab_infer(cx, proof)?;
-    let input = relation(&proof_ty, span)?;
-    let output = relation(expected, span)?;
+    let input = relation(e, cx, &proof_ty, span)?;
+    let output = relation(e, cx, expected, span)?;
     if input.head != output.head || input.carrier != output.carrier || input.level != Level::Zero {
         return err(
             "`rel_cong` requires the same resolved relation and Type<0> carrier in its proof and goal",

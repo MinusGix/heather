@@ -20,7 +20,8 @@
 
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::Term;
+use heather_kernel::level::Level;
+use heather_kernel::term::{Term, Type};
 
 /// The injected value of either injection spelling, with `true` for `inl`.
 pub(crate) fn inj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
@@ -58,5 +59,61 @@ pub(crate) fn proj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
         Term::Fst { pair, .. } | Term::FstAt { pair, .. } => Some((true, pair)),
         Term::Snd { pair, .. } | Term::SndAt { pair, .. } => Some((false, pair)),
         _ => None,
+    }
+}
+
+/// The head and argument of either application spelling — `app` with its
+/// annotations or the checked `app@(f; a)`, whose Π is the one the head
+/// infers (`docs/app-by-head-type-design.md` §6.2). A reader that needs the
+/// Π itself has a decision to make and does not come here.
+pub(crate) fn app_of(t: &Term) -> Option<(&Rc<Term>, &Rc<Term>)> {
+    match t {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => Some((fun, arg)),
+        _ => None,
+    }
+}
+
+/// Is this an application, in either spelling?
+pub(crate) fn is_app(t: &Term) -> bool {
+    matches!(t, Term::App { .. } | Term::AppAt { .. })
+}
+
+/// `f a₁ … aₙ` as its head and its arguments, outermost last, through
+/// either spelling at every node.
+pub(crate) fn app_spine(t: &Term) -> (&Term, Vec<&Rc<Term>>) {
+    let mut args = Vec::new();
+    let mut head = t;
+    while let Some((fun, arg)) = app_of(head) {
+        args.push(arg);
+        head = fun;
+    }
+    args.reverse();
+    (head, args)
+}
+
+/// An application the elaborator **constructs** from a Π it holds, outside
+/// the surface-call path (`docs/app-by-head-type-design.md` §6.1, every
+/// emitter switched): `app@(f; a)` unless the head is a λ, which infers only
+/// if its body does and so keeps the annotated form. The annotations are
+/// taken so a call site reads as the `app` it replaces and are dropped for
+/// `app@`: its Π is the one the head infers.
+///
+/// Unconditional on the quotation state, because none of these builders
+/// writes a `box` payload itself: a term pasted into a quotation goes through
+/// the quote boundary's translator (`typing::spell_checked_in_code`), which
+/// writes `app` back from the Π the checker read. Code that is *built* as a
+/// payload (certgen's markers, the code recursor's branches) writes `app`.
+pub(crate) fn checked_app(
+    fun: Rc<Term>,
+    dom_level: Level,
+    cod_level: Level,
+    dom: Rc<Type>,
+    cod: Rc<Type>,
+    arg: Rc<Term>,
+) -> Term {
+    if matches!(&*fun, Term::Lam { .. }) {
+        Term::App { fun, dom_level, cod_level, dom, cod, arg }
+    } else {
+        Term::AppAt { fun, arg }
     }
 }
