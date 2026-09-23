@@ -756,7 +756,7 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
             StructuredRegionHolds(values, prefix) ∧
             StructuredRegionHolds(values, continuation),
         Conditional(_, condition, _, _, when_true, when_false) =>
-            match @BitVec::head_bit(0, values(1, condition)) {
+            match values(1, condition).head_bit() {
                 False => StructuredRegionHolds(values, when_false),
                 True => StructuredRegionHolds(values, when_true),
             },
@@ -819,7 +819,7 @@ fn ControlRegionValid(region: ControlRegion) → Type {
 }
 
 fn ControlJoinHolds(values: Valuation(), join: ConditionalJoinRegion) → Type {
-    match @BitVec::head_bit(0, values(1, join.condition)) {
+    match values(1, join.condition).head_bit() {
         False => RegionHolds(join.when_false, values) ∧
             (BlockArgumentsHold(values, join.false_arguments) ∧
              RegionHolds(join.continuation, values)),
@@ -834,7 +834,7 @@ fn ControlRegionHolds(values: Valuation(), region: ControlRegion) → Type {
 }
 
 theorem control_join_false(values: Valuation(), join: ConditionalJoinRegion,
-    condition: @BitVec::head_bit(0, values(1, join.condition)) = False,
+    condition: values(1, join.condition).head_bit() = False,
     branch: RegionHolds(join.when_false, values),
     arguments: BlockArgumentsHold(values, join.false_arguments),
     continuation: RegionHolds(join.continuation, values)):
@@ -853,7 +853,7 @@ theorem control_join_false(values: Valuation(), join: ConditionalJoinRegion,
 }
 
 theorem control_join_true(values: Valuation(), join: ConditionalJoinRegion,
-    condition: @BitVec::head_bit(0, values(1, join.condition)) = True,
+    condition: values(1, join.condition).head_bit() = True,
     branch: RegionHolds(join.when_true, values),
     arguments: BlockArgumentsHold(values, join.true_arguments),
     continuation: RegionHolds(join.continuation, values)):

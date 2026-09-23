@@ -88,7 +88,7 @@ fn call_return_address<M>(before: MachineState<M>) → BitVec(64) {
 }
 fn call_target(start: BitVec(64), displacement: BitVec(32)) → BitVec(64) {
     start.add(BitVec::ofNat(5)).add(
-        @BitVec::sign_extend(31, 32, displacement))
+        displacement.sign_extend(32))
 }
 fn call_after<M>(access: StackAccess<M>, displacement: BitVec(32), before: MachineState<M>) → MachineState<M> {
     let stack = read_gpr(Rsp, before.gprs).sub(BitVec::ofNat(8));

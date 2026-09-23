@@ -324,6 +324,15 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
     }
     match (pat, subj) {
         (Term::Succ(a), Term::Succ(b)) => unify_tm(gamma, a, b, n, d, sols),
+        // A numeral is `Succ^k(Zero)` (kernel `NatLit`), so `Succ(?n) ≟ 8`
+        // learns `?n := 7` — the width a method on `BitVec(Succ(n))` needs
+        // at a literal-width receiver. Learn-only, like every case here.
+        (Term::Succ(a), Term::NatLit(k)) if *k > 0 => {
+            unify_tm(gamma, a, &Term::NatLit(k - 1), n, d, sols)
+        }
+        (Term::NatLit(k), Term::Succ(b)) if *k > 0 => {
+            unify_tm(gamma, &Term::NatLit(k - 1), b, n, d, sols)
+        }
         (
             Term::App {
                 fun: f1, arg: a1, ..

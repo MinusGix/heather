@@ -128,7 +128,7 @@ record ConditionalBlock {
 }
 
 fn machine_condition<M>(register: Gpr, state: MachineState<M>) → Bool {
-    @BitVec::head_bit(63, read_gpr(register, state.gprs))
+    read_gpr(register, state.gprs).head_bit()
 }
 
 fn ExecuteSelectedBlock<M>(selected: Bool, block: ConditionalBlock,
@@ -323,7 +323,7 @@ fn short_branch_target(start: BitVec(64), displacement: BitVec(8)) →
     BitVec(64)
 {
     next_rip(start, 2).add(
-        @BitVec::sign_extend(7, 56, displacement))
+        displacement.sign_extend(56))
 }
 
 theorem short_branch_target_8(start: BitVec(64)):
@@ -331,7 +331,7 @@ theorem short_branch_target_8(start: BitVec(64)):
         next_rip(start, 2).iterate_increment(8)
 {
     sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
-        @BitVec::sign_extend(7, 56, @BitVec::ofNat(8, 8))))
+        BitVec::sign_extend(56, @BitVec::ofNat(8, 8))))
 }
 
 theorem short_branch_target_6(start: BitVec(64)):
@@ -339,7 +339,7 @@ theorem short_branch_target_6(start: BitVec(64)):
         next_rip(start, 2).iterate_increment(6)
 {
     sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
-        @BitVec::sign_extend(7, 56, @BitVec::ofNat(8, 6))))
+        BitVec::sign_extend(56, @BitVec::ofNat(8, 6))))
 }
 
 theorem advance_3_3(x: BitVec(64)):

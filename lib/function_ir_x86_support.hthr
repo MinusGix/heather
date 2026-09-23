@@ -121,16 +121,16 @@ theorem test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
     placed: BitValuePlaced(values, id, register, state)):
     test_flags(read_gpr(register, state.gprs),
         read_gpr(register, state.gprs), False).zf =
-        zero_test_selector(@BitVec::head_bit(0, values(1, id)))
+        zero_test_selector(values(1, id).head_bit())
 {
     j(placed,
         λ actual _ => test_flags(actual, actual, False).zf =
-            Bool::not(@BitVec::head_bit(0, values(1, id))),
+            Bool::not(values(1, id).head_bit()),
         j(BitVec::one_bit_eq_ofBool(values(1, id)),
             λ actual _ => test_flags(actual.zero_extend(63),
                 actual.zero_extend(63), False).zf =
-                Bool::not(@BitVec::head_bit(0, values(1, id))),
-            test_zero_extended_bool(@BitVec::head_bit(0, values(1, id)))))
+                Bool::not(values(1, id).head_bit()),
+            test_zero_extended_bool(values(1, id).head_bit())))
 }
 
 theorem linked_test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
@@ -138,7 +138,7 @@ theorem linked_test_bit_value_placed_zf<M>(values: Valuation(), id: Nat,
     placed: BitValuePlaced(values, id, block.test_register,
         linked_prefix_after(block, before))):
     linked_test_after(block, before).flags.zf =
-        zero_test_selector(@BitVec::head_bit(0, values(1, id)))
+        zero_test_selector(values(1, id).head_bit())
 {
     test_bit_value_placed_zf(values, id, block.test_register,
         linked_prefix_after(block, before), placed)
@@ -264,9 +264,9 @@ theorem control_join_cases(values: Valuation(), join: ConditionalJoinRegion,
     when_true: (RegionHolds(join.when_true, values) ∧
         (BlockArgumentsHold(values, join.true_arguments) ∧
          RegionHolds(join.continuation, values))) → P(True)):
-    P(@BitVec::head_bit(0, values(1, join.condition)))
+    P(values(1, join.condition).head_bit())
 {
-    match @BitVec::head_bit(0, values(1, join.condition)) as
+    match values(1, join.condition).head_bit() as
         λ selected => (match selected as λ _ => Type {
             False => RegionHolds(join.when_false, values) ∧
                 (BlockArgumentsHold(values, join.false_arguments) ∧
@@ -379,11 +379,11 @@ theorem linked_conditional_read_agrees<M>(selected: Bool, register: Gpr,
 theorem bit_value_placed_condition<M>(values: Valuation(), id: Nat,
     register: Gpr, state: MachineState<M>,
     placed: BitValuePlaced(values, id, register, state)):
-    machine_condition(register, state) = @BitVec::head_bit(0, values(1, id))
+    machine_condition(register, state) = values(1, id).head_bit()
 {
     j(placed,
         λ actual _ => @BitVec::head_bit(63, actual) =
-            @BitVec::head_bit(0, values(1, id)), refl)
+            values(1, id).head_bit(), refl)
 }
 
 theorem bit_placed_after_move<M>(values: Valuation(), id: Nat,

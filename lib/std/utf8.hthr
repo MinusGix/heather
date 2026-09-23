@@ -50,11 +50,11 @@ fn cont_payload(b: BitVec(8)) → BitVec(6) { b.take_low(6, 2) }
 
 // The top five bits, one at a time. `drop_low(k, m, b)` is the part of `b`
 // above bit `k`, so its first bit is bit `k` of the byte.
-fn bit7(b: BitVec(8)) → Bool { @BitVec::head_bit(0, b.drop_low(7, 1)) }
-fn bit6(b: BitVec(8)) → Bool { @BitVec::head_bit(1, b.drop_low(6, 2)) }
-fn bit5(b: BitVec(8)) → Bool { @BitVec::head_bit(2, b.drop_low(5, 3)) }
-fn bit4(b: BitVec(8)) → Bool { @BitVec::head_bit(3, b.drop_low(4, 4)) }
-fn bit3(b: BitVec(8)) → Bool { @BitVec::head_bit(4, b.drop_low(3, 5)) }
+fn bit7(b: BitVec(8)) → Bool { b.drop_low(7, 1).head_bit() }
+fn bit6(b: BitVec(8)) → Bool { b.drop_low(6, 2).head_bit() }
+fn bit5(b: BitVec(8)) → Bool { b.drop_low(5, 3).head_bit() }
+fn bit4(b: BitVec(8)) → Bool { b.drop_low(4, 4).head_bit() }
+fn bit3(b: BitVec(8)) → Bool { b.drop_low(3, 5).head_bit() }
 
 // ---------------------------------------------------------------------------
 // Widths. A scalar value's encoded length is decided by three range tests,
@@ -448,7 +448,7 @@ theorem emit_yes(min, code: Nat, p: char::scalar(code),
 theorem decode_emit(min, n, code: Nat, p: char::scalar(code),
         low: min.leb(code).IsTrue(), bound: code < Nat::pow(2, n),
         rest: List<BitVec(8)>):
-        emit(min, @BitVec::toNat(n, @BitVec::ofNat(n, code)), rest)
+        emit(min, (@BitVec::ofNat(n, code)).toNat(), rest)
             = Some(Pair(char::ofNat(code, p), rest)) {
     j(sym(BitVec::toNat_ofNat(n, code, bound)),
         λ y _ => emit(min, y, rest) = Some(Pair(char::ofNat(code, p), rest)),
@@ -614,14 +614,14 @@ fn Header(cl: Class, b: BitVec(8)) → Type {
 }
 
 theorem header_1(b: BitVec(8), e7: bit7(b) = False): b.drop_low(7, 1) = BitVec::from_bits([False]) {
-    j(sym(e7), λ y _ => @BitVec::from_bits(1, [y]) = @BitVec::from_bits(1, [False]), refl)
+    j(sym(e7), λ y _ => @BitVec::from_bits(1, [y]) = BitVec::from_bits([False]), refl)
 }
 
 theorem header_2(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = False):
         b.drop_low(5, 3) = BitVec::from_bits([False, True, True]) {
-    j(sym(e5), λ y _ => @BitVec::from_bits(3, [y, bit6(b), bit7(b)]) = @BitVec::from_bits(3, [False, True, True]),
-        j(sym(e6), λ y _ => @BitVec::from_bits(3, [False, y, bit7(b)]) = @BitVec::from_bits(3, [False, True, True]),
-            j(sym(e7), λ y _ => @BitVec::from_bits(3, [False, True, y]) = @BitVec::from_bits(3, [False, True, True]),
+    j(sym(e5), λ y _ => @BitVec::from_bits(3, [y, bit6(b), bit7(b)]) = BitVec::from_bits([False, True, True]),
+        j(sym(e6), λ y _ => @BitVec::from_bits(3, [False, y, bit7(b)]) = BitVec::from_bits([False, True, True]),
+            j(sym(e7), λ y _ => @BitVec::from_bits(3, [False, True, y]) = BitVec::from_bits([False, True, True]),
                 refl)))
 }
 
@@ -711,8 +711,8 @@ theorem cont_marked_spec(b: BitVec(8), rest: List<BitVec(8)>, e7: bit7(b) = True
             ContSpec(b, rest, match x { True => None, False => Some(Pair(cont_payload(b), rest)) }) {
         True => λ _ => trivial,
         False => λ e6 => And(refl,
-            j(sym(e6), λ y _ => @BitVec::from_bits(2, [y, bit7(b)]) = @BitVec::from_bits(2, [False, True]),
-                j(sym(e7), λ y _ => @BitVec::from_bits(2, [False, y]) = @BitVec::from_bits(2, [False, True]), refl))),
+            j(sym(e6), λ y _ => @BitVec::from_bits(2, [y, bit7(b)]) = BitVec::from_bits([False, True]),
+                j(sym(e7), λ y _ => @BitVec::from_bits(2, [False, y]) = BitVec::from_bits([False, True]), refl))),
     }(refl)
 }
 
