@@ -3,7 +3,7 @@ title: certgen identifies functions by surface name; make it namespace-correct
 status: open
 labels: [certgen,modules,design]
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 certgen identifies a function by its **surface declaration name**, and the
@@ -52,3 +52,7 @@ In every direction the test inputs need the new spelling: `Nat::add(a, …)` or
 `a.add(…)` in the callers, and a declaration lookup that understands `Nat::add`.
 The reflected IR fixtures (`IR_ADD`, `IR_VIAADD`) should not need to change:
 they are shape, not names.
+
+## Log
+
+- 2026-09-23: 2026-09-23: confirmed on master after the receiver-style stdlib merge (875109b8). Five certgen emission tests in the full suite fail this way (`unbound name add`). They are the only remaining red besides the lib_algebra, operators_onto_classes and fmt drift, which were test-side respellings and are fixed. The direction is still undecided.

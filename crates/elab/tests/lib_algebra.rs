@@ -159,11 +159,11 @@ theorem neutral_singleton(n: Nat): sum(Cons(n, Nil)) = n { sum_single(n) }
 fn slow_acceptance_the_monoid_fold_is_the_list_algebra_fold() {
     ok("
 theorem alg_nat(xs: List<Nat>):
-    monoid_list_alg<Nat>(Nat::add).list_fold(xs) = mconcat(Nat::add, xs)
+    monoid_list_alg<Nat>(Nat::add).list_fold(xs) = xs.mconcat(Nat::add)
 { list_fold_monoid(Nat::add, xs) }
 
 theorem alg_bool(xs: List<Bool>):
-    monoid_list_alg<Bool>(Bool::and).list_fold(xs) = mconcat(Bool::and, xs)
+    monoid_list_alg<Bool>(Bool::and).list_fold(xs) = xs.mconcat(Bool::and)
 { list_fold_monoid(Bool::and, xs) }
 
 theorem alg_open<A>(xs, ys: List<A>):
@@ -270,11 +270,11 @@ fn slow_acceptance_the_list_spelling_is_append_not_add() {
 theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = xs.append(ys) { refl }
 theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
 theorem concat_is_positional<A>(xss: List<List<A>>):
-  concat(xss) = mconcat(List::append, xss) { refl }
+  concat(xss) = xss.mconcat(List::append) { refl }
 ");
 
     let e = bad("theorem old<A>(xs: List<A>, ys: List<A>): xs + ys = xs.append(ys) { refl }");
-    assert!(e.contains("`+` has no designation at `List`"), "{e}");
+    assert!(e.contains("nothing designates `+` at `List`"), "{e}");
     assert!(e.contains("fallback name `add`"), "{e}");
 }
 
@@ -289,8 +289,8 @@ theorem concat_is_positional<A>(xss: List<List<A>>):
 #[test]
 fn slow_acceptance_a_derived_list_monoid_is_not_shared_between_use_sites() {
     let e = ok("
-fn f(xss: List<List<Nat>>) -> List<Nat> { mconcat(List::append, xss) }
-fn g(xss: List<List<Nat>>) -> List<Nat> { mconcat(List::append, xss) }
+fn f(xss: List<List<Nat>>) -> List<Nat> { xss.mconcat(List::append) }
+fn g(xss: List<List<Nat>>) -> List<Nat> { xss.mconcat(List::append) }
 theorem same(xss: List<List<Nat>>): f(xss) = g(xss) { refl }
 ");
     assert!(e.derived_instances().is_empty(), "{:?}", e.derived_instances());
@@ -383,9 +383,9 @@ theorem at_or(x: Bool): x.or(False) = x { op_unit_of_comm(x) }
 #[test]
 fn slow_acceptance_one_class_lemma_serves_two_carriers() {
     ok("
-theorem at_nat(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(Nat::add, n) }
-theorem at_bool(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(Bool::and, b) }
-theorem at_bool_again(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(Bool::or, b) }
+theorem at_nat(n: Nat): sum(Cons(n, Nil)) = n { n.mconcat_single(Nat::add) }
+theorem at_bool(b: Bool): all_of(Cons(b, Nil)) = b { b.mconcat_single(Bool::and) }
+theorem at_bool_again(b: Bool): any_of(Cons(b, Nil)) = b { b.mconcat_single(Bool::or) }
 ");
 }
 
@@ -483,7 +483,7 @@ fn slow_acceptance_a_carrier_with_no_monoid_is_a_reported_failure() {
     let e = bad(
         "inductive Colour { Red, Green }
 fn first(a: Colour, b: Colour) -> Colour { a }
-fn fold_colours(cs: List<Colour>) -> Colour { mconcat(first, cs) }",
+fn fold_colours(cs: List<Colour>) -> Colour { cs.mconcat(first) }",
     );
     assert!(e.contains("Monoid"), "the goal must be named: {e}");
 }
@@ -708,7 +708,7 @@ fn slow_acceptance_the_library_projects_from_its_types() {
 // open, which is where `A.unit` lives in the library: the binder in scope
 // pins the index and the projection is an ordinary field read.
 theorem the_empty_fold_is_the_projected_unit<A: Monoid(o)>(o: A -> A -> A):
-  mconcat(o, Nil) = A.unit { refl }
+  mconcat(Nil<A>, o) = A.unit { refl }
 // concrete, through the index-bearing spelling `T::C(args)` — an indexed
 // class has no shorter one at a carrier with two structures.
 theorem the_unit_is_the_same_value(): Nat::Monoid(Nat::add).unit = 0 { refl }

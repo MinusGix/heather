@@ -332,7 +332,7 @@ fn slow_acceptance_the_two_symbols_do_not_meet() {
 #[test]
 fn slow_acceptance_the_designation_declaration_refuses_by_name() {
     // A duplicate at one key names the previous entry and where it was written.
-    let e = bad("designation + at Nat := add");
+    let e = bad("designation + at Nat := Nat::add");
     assert!(e.contains("already designates"), "{e}");
     assert!(e.contains("nat::Nat::add"), "{e}");
     // One entry per (symbol, **resolved** carrier): the key stopped being a
@@ -353,7 +353,7 @@ fn slow_acceptance_the_designation_declaration_refuses_by_name() {
     assert!(e.contains("no_such_operation"), "{e}");
 
     // A carrier that names no type in scope.
-    let e = bad("designation * at NoSuchType := add");
+    let e = bad("designation * at NoSuchType := Nat::add");
     assert!(e.contains("NoSuchType"), "{e}");
     assert!(e.contains("attaches to nothing"), "{e}");
 
@@ -363,8 +363,8 @@ fn slow_acceptance_the_designation_declaration_refuses_by_name() {
 
     // The positive control: a fresh symbol at `Nat` is not a duplicate, and a
     // fresh carrier for `+` is not either.
-    ok("designation ++ at Nat := add
-        designation + at Option := add");
+    ok("designation ++ at Nat := Nat::add
+        designation + at Option := Nat::add");
 }
 
 /// An instance head names its index by the **operation**, never by a symbol —
@@ -397,7 +397,7 @@ fn without_nat(extra: &str) -> String {
     for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("option", OPTION)] {
         e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{name}: {err}"));
     }
-    let src = format!("import bool;\nimport option;\ndesignation * at Bool := and\n{extra}");
+    let src = format!("import bool;\nimport option;\ndesignation * at Bool := Bool::and\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => panic!("expected a refusal, but it checked:\n{extra}"),
         Err(ElabError::Elab { msg, .. }) => msg,
