@@ -35,18 +35,23 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     (out.status.success(), text)
 }
 
-fn check_all(tier: Tier) {
-    let rows = showcase::at_tier(tier);
-    assert!(!rows.is_empty(), "no showcase at tier {tier:?}; the manifest lost a row");
-    for row in &rows {
-        let (ok, output) = check(row);
-        assert!(ok, "{} did not check:\n{output}", row.path.display());
-        assert!(
-            output.contains(&format!("{}: ok", row.path.display())),
-            "{} checked without the ok line:\n{output}",
-            row.path.display()
-        );
-    }
+/// The CLI tier's rows, one test each (below) so libtest checks them side by
+/// side: as one loop they were the fast lane's critical path.
+/// [`cli_tier_rows_each_have_a_test`] keeps this list and the manifest equal,
+/// so a new CLI row fails until it has its own test.
+const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relational_generator_generated"];
+
+fn check_row(name: &str) {
+    let rows = showcase::at_tier(Tier::Cli);
+    let row = rows.iter().find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("no CLI-tier showcase `{name}`; the manifest lost a row"));
+    let (ok, output) = check(row);
+    assert!(ok, "{} did not check:\n{output}", row.path.display());
+    assert!(
+        output.contains(&format!("{}: ok", row.path.display())),
+        "{} checked without the ok line:\n{output}",
+        row.path.display()
+    );
 }
 
 /// Every `.hthr` under `docs/showcase/` declares its tier in the manifest.
@@ -115,6 +120,25 @@ fn every_search_directory_exists_and_is_not_the_showcase_directory() {
 /// and is an ordinary row since `docs/app-by-head-type-design.md` (16 s,
 /// 0.3 GiB at width one, 2026-09-22).
 #[test]
-fn cli_tier_showcases_check() {
-    check_all(Tier::Cli);
+fn cli_tier_rows_each_have_a_test() {
+    let mut manifest: Vec<String> = showcase::at_tier(Tier::Cli).into_iter().map(|r| r.name).collect();
+    manifest.sort();
+    let mut tested: Vec<String> = CLI_ROWS.iter().map(|s| s.to_string()).collect();
+    tested.sort();
+    assert_eq!(manifest, tested, "the CLI tier and CLI_ROWS disagree: give a new row its own test");
+}
+
+#[test]
+fn cli_showcase_calc_text() {
+    check_row("calc_text");
+}
+
+#[test]
+fn cli_showcase_contextual_rewrite_generated() {
+    check_row("contextual_rewrite_generated");
+}
+
+#[test]
+fn cli_showcase_relational_generator_generated() {
+    check_row("relational_generator_generated");
 }
