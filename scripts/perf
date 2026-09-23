@@ -700,8 +700,8 @@ def cmd_report(args):
             n = sum(v[0] for v in t["test_totals"].values())
             summed = sum(v[1] for v in t["test_totals"].values())
             print(f"   slowest tests ({n} tests, {summed:.0f}s summed inside their binaries):")
-            for target, test, secs, _ in t["tests"][:top]:
-                print(f"   {fmt_s(secs)}  {target}::{test}")
+            for target, test, seconds, _ in t["tests"][:top]:
+                print(f"   {fmt_s(seconds)}  {target}::{test}")
 
     # --- files
     if snap["files"]:
