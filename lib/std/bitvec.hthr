@@ -57,7 +57,7 @@ fn BitVec::all_ones({n: Nat}) → BitVec(n) { BitVec::repeat_bit(True) }
 fn BitVec::one({n: Nat}) → BitVec(n) {
     match n as λ k => BitVec(k) {
         Zero => BitVec::nil(),
-        Succ(k) => @BitVec::zero(k).cons_bit(True),
+        Succ(_) => BitVec::zero().cons_bit(True),
     }
 }
 
@@ -288,7 +288,7 @@ fn BitVec::iter_sub({n: Nat}, self a, b: BitVec(n)) → BitVec(n) {
 }
 
 fn BitVec::iter_neg({n: Nat}, self a: BitVec(n)) → BitVec(n) {
-    @BitVec::zero(n).iter_sub(a)
+    BitVec::zero().iter_sub(a)
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +364,7 @@ fn BitVec::sub_bits({n: Nat}, self a, b: BitVec(n), borrow: Bool) → BitVec(n) 
 fn BitVec::ripple_sub({n: Nat}, self a, b: BitVec(n)) → BitVec(n) { a.sub_bits(b, False) }
 
 fn BitVec::ripple_neg({n: Nat}, self a: BitVec(n)) → BitVec(n) {
-    @BitVec::zero(n).ripple_sub(a)
+    BitVec::zero().ripple_sub(a)
 }
 
 // The canonical operations. `ripple_add` and `add` are the same definition
@@ -798,9 +798,9 @@ fn BitVec::unsigned_le_bit({n: Nat}, self a, b: BitVec(n)) → Bool { !b.unsigne
 fn BitVec::unsigned_lt_dec({n: Nat}, self a, b: BitVec(n)) → a.unsigned_lt(b) ∨ ¬a.unsigned_lt(b) {
     match a.unsigned_lt_bit(b) as λ c =>
         (a.unsigned_lt_bit(b) = c) → (a.unsigned_lt(b) ∨ ¬a.unsigned_lt(b)) {
-        True => λ h => Inl(@BitVec::borrow_sub_bit_true_iff(n, a, b).mp(h)),
+        True => λ h => Inl(BitVec::borrow_sub_bit_true_iff(n, a, b).mp(h)),
         False => λ h => Inr(λ p => absurd(trans(sym(h),
-            (@BitVec::borrow_sub_bit_true_iff(n, a, b)).mpr(p)))),
+            BitVec::borrow_sub_bit_true_iff(n, a, b).mpr(p)))),
     }(refl)
 }
 
@@ -811,13 +811,13 @@ fn BitVec::unsigned_le_dec({n: Nat}, self a, b: BitVec(n)) → a.unsigned_le(b) 
         (b.unsigned_lt_bit(a) = c) → (a.unsigned_le(b) ∨ ¬a.unsigned_le(b)) {
         True => λ h => Inr(λ p => Nat::lt_irrefl(b.toNat(), Nat::le_trans(
             Succ(b.toNat()), a.toNat(), b.toNat(),
-            @BitVec::borrow_sub_bit_true_iff(n, b, a).mp(h), p))),
+            BitVec::borrow_sub_bit_true_iff(n, b, a).mp(h), p))),
         False => λ h => Inl(match Nat::lt_trichotomy(a.toNat(), b.toNat()) {
             Inl(lt) => Nat::le_of_lt(a.toNat())(b.toNat())(lt),
             Inr(rest) => match rest {
                 Inl(eq) => j(eq, λ z p => a.toNat() <= z, a.toNat().le_refl()),
                 Inr(gt) => absurd(trans(sym(h),
-                    (@BitVec::borrow_sub_bit_true_iff(n, b, a)).mpr(gt))),
+                    BitVec::borrow_sub_bit_true_iff(n, b, a).mpr(gt))),
             },
         }),
     }(refl)
@@ -1023,21 +1023,21 @@ theorem BitVec::iterate_increment_toNat_cons(n: Nat, bit: Bool, x: BitVec(n),
         BitVec::iterate_increment(BitVec::zero(), (x.cons_bit(bit)).toNat()) = x.cons_bit(bit) {
     match bit {
         False => calc {
-            (@BitVec::zero(Succ(n))).iterate_increment(0 + Nat::twice(x.toNat()))
-                = (@BitVec::zero(Succ(n))).iterate_increment(Nat::twice(x.toNat())) :=
+            BitVec::zero(n := Succ(n)).iterate_increment(0 + Nat::twice(x.toNat()))
+                = BitVec::zero(n := Succ(n)).iterate_increment(Nat::twice(x.toNat())) :=
                     BitVec::cong_iterate_increment_count(Succ(n), BitVec::zero(),
                         Nat::add_left_zero(Nat::twice(x.toNat()))),
-                = (@BitVec::iterate_increment(n, BitVec::zero(), x.toNat())).cons_bit(False) :=
+                = BitVec::zero(n := n).iterate_increment(x.toNat()).cons_bit(False) :=
                     BitVec::iterate_increment_twice(n, BitVec::zero(), x.toNat()),
                 = x.cons_bit(False) := BitVec::cons_bit_cong(n, refl, tail_law),
         },
         True => calc {
-            (@BitVec::zero(Succ(n))).iterate_increment(1 + Nat::twice(x.toNat()))
-                = (@BitVec::zero(Succ(n))).iterate_increment(Succ(Nat::twice(x.toNat()))) :=
+            BitVec::zero(n := Succ(n)).iterate_increment(1 + Nat::twice(x.toNat()))
+                = BitVec::zero(n := Succ(n)).iterate_increment(Succ(Nat::twice(x.toNat()))) :=
                     BitVec::cong_iterate_increment_count(Succ(n), BitVec::zero(),
                         trans(Nat::add_succ_left(0, Nat::twice(x.toNat())),
                             Nat::cong_succ(Nat::add_left_zero(Nat::twice(x.toNat()))))),
-                = (@BitVec::iterate_increment(n, BitVec::zero(), x.toNat())).cons_bit(True) :=
+                = BitVec::zero(n := n).iterate_increment(x.toNat()).cons_bit(True) :=
                     BitVec::iterate_increment_succ_twice(n, BitVec::zero(), x.toNat()),
                 = x.cons_bit(True) := BitVec::cons_bit_cong(n, refl, tail_law),
         },
@@ -1065,16 +1065,16 @@ theorem BitVec::iter_add_comm(n: Nat, left, right: BitVec(n)):
         left.iter_add(right) = right.iter_add(left) {
     calc {
         left.iter_add(right)
-            = ((@BitVec::zero(n)).iterate_increment(left.toNat())).iterate_increment(right.toNat()) :=
+            = BitVec::zero(n := n).iterate_increment(left.toNat()).iterate_increment(right.toNat()) :=
                 BitVec::cong_iterate_increment(n, right.toNat(),
                     sym(BitVec::iterate_increment_toNat(n, left))),
-            = (@BitVec::zero(n)).iterate_increment(left.toNat() + right.toNat()) :=
+            = BitVec::zero(n := n).iterate_increment(left.toNat() + right.toNat()) :=
                 BitVec::iterate_increment_compose(n, BitVec::zero(),
                     left.toNat(), right.toNat()),
-            = (@BitVec::zero(n)).iterate_increment(right.toNat() + left.toNat()) :=
+            = BitVec::zero(n := n).iterate_increment(right.toNat() + left.toNat()) :=
                 BitVec::cong_iterate_increment_count(n, BitVec::zero(),
                     Nat::add_comm(left.toNat(), right.toNat())),
-            = ((@BitVec::zero(n)).iterate_increment(right.toNat())).iterate_increment(left.toNat()) :=
+            = BitVec::zero(n := n).iterate_increment(right.toNat()).iterate_increment(left.toNat()) :=
                 sym(BitVec::iterate_increment_compose(n, BitVec::zero(),
                     right.toNat(), left.toNat())),
             = right.iter_add(left) :=
@@ -1107,8 +1107,8 @@ theorem BitVec::decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),
         ((x.cons_bit(b)).increment()).decrement() = x.cons_bit(b) {
     match b {
         False => refl,
-        True => @BitVec::cons_bit_cong(n, True, True,
-            (x.increment()).decrement(), x, refl, tail_law),
+        True => BitVec::cons_bit_cong(n, refl, tail_law, a := True, b := True,
+            xs := (x.increment()).decrement(), ys := x),
     }
 }
 
@@ -1169,10 +1169,9 @@ theorem BitVec::split_concat_low(n: Nat): (m: Nat) → (lo: BitVec(n)) →
                            BitVec::take_low(k, m, lo.concat(hi)) = lo {
         Zero => λ m lo hi => refl,
         Succ(k, ih) => λ m lo hi =>
-            @BitVec::cons_bit_cong(k,
-                lo.head_bit(), lo.head_bit(),
-                BitVec::take_low(k, m, (lo.tail_bits()).concat(hi)), lo.tail_bits(),
-                refl, ih(m, lo.tail_bits(), hi)),
+            BitVec::cons_bit_cong(k, refl, ih(m, lo.tail_bits(), hi),
+                a := lo.head_bit(), b := lo.head_bit(),
+                xs := BitVec::take_low(k, m, (lo.tail_bits()).concat(hi)), ys := lo.tail_bits()),
     }
 }
 
@@ -1194,11 +1193,10 @@ theorem BitVec::concat_split(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
             BitVec::take_low(k, m, x).concat(BitVec::drop_low(k, m, x)) = x {
         Zero => λ m x => refl,
         Succ(k, ih) => λ m x => trans(
-            @BitVec::cons_bit_cong(m + k,
-                @BitVec::head_bit(m + k, x), @BitVec::head_bit(m + k, x),
-                BitVec::take_low(k, m, x.tail_bits()).concat(BitVec::drop_low(k, m, x.tail_bits())),
-                x.tail_bits(), refl,
-                ih(m, x.tail_bits())),
+            BitVec::cons_bit_cong(m + k, refl, ih(m, x.tail_bits()),
+                a := @BitVec::head_bit(m + k, x), b := @BitVec::head_bit(m + k, x),
+                xs := BitVec::take_low(k, m, x.tail_bits()).concat(BitVec::drop_low(k, m, x.tail_bits())),
+                ys := x.tail_bits()),
             BitVec::cons_head_tail(m + k, x)),
     }
 }
@@ -1642,8 +1640,8 @@ theorem BitVec::odd_bit_add_twice_half(x: Nat): Nat::of_bit(BitVec::odd_bit(x)) 
 // hypothesis applies at `Nat::half(x)`, whose bound is the argument's halved
 // by `Nat::half_lt_of_lt_double`, and the step is then the digit equation
 // above.
-theorem BitVec::toNat_ofNat(n: Nat): (x: Nat) → x < Nat::pow(2, n) → (@BitVec::ofNat(n, x)).toNat() = x {
-    match n as λ k => (x: Nat) → x < Nat::pow(2, k) → (@BitVec::ofNat(k, x)).toNat() = x {
+theorem BitVec::toNat_ofNat(n: Nat): (x: Nat) → x < Nat::pow(2, n) → BitVec::ofNat(x, n := n).toNat() = x {
+    match n as λ k => (x: Nat) → x < Nat::pow(2, k) → BitVec::ofNat(x, n := k).toNat() = x {
         Zero => λ x h => sym(Nat::le_antisym(x, 0, h, x.nonneg())),
         Succ(k, ih) => λ x h => {
             let p = Nat::pow(2, k);
@@ -1712,12 +1710,13 @@ theorem BitVec::ofNat_toNat(n: Nat): (x: BitVec(n)) → BitVec::ofNat(x.toNat())
             let h = x.head_bit();
             let m = (x.tail_bits()).toNat();
             trans(
-                @BitVec::cons_bit_cong(k, BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), h,
-                    BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m))), x.tail_bits(),
-                    BitVec::odd_bit_digit(h, m),
+                BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(h, m),
                     trans(j(BitVec::half_digit(h, m),
-                            λ y _ => @BitVec::ofNat(k, Nat::half(Nat::of_bit(h) + Nat::twice(m))) = BitVec::ofNat(y), refl),
-                        ih(x.tail_bits()))),
+                            λ y _ => BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m)), n := k)
+                                = BitVec::ofNat(y), refl),
+                        ih(x.tail_bits())),
+                    a := BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), b := h,
+                    xs := BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m))), ys := x.tail_bits()),
                 BitVec::cons_head_tail(k, x))
         },
     }
@@ -1748,8 +1747,8 @@ theorem BitVec::toNat_lt_pow(n: Nat): (x: BitVec(n)) → x.toNat() < Nat::pow(2,
 // Zero high columns preserve an incoming borrow, so unsigned comparison can
 // use a wider physical word without changing the narrow logical result.
 theorem BitVec::borrow_zero_columns(n: Nat): (borrow: Bool) →
-    (@BitVec::zero(n)).borrow_bits(BitVec::zero(), borrow) = borrow {
-    match n as λ k => (borrow: Bool) → (@BitVec::zero(k)).borrow_bits(BitVec::zero(), borrow) = borrow {
+    BitVec::zero(n := n).borrow_bits(BitVec::zero(), borrow) = borrow {
+    match n as λ k => (borrow: Bool) → BitVec::zero(n := k).borrow_bits(BitVec::zero(), borrow) = borrow {
         Zero => λ borrow => refl,
         Succ(_, ih) => λ borrow => match borrow { False => ih(False), True => ih(True) },
     }
@@ -1778,10 +1777,11 @@ theorem BitVec::unsigned_lt_zero_extend(n, extra: Nat, a, b: BitVec(n)):
     BitVec::borrow_zero_extend(n, extra, a, b, False)
 }
 
-theorem BitVec::band_zero_columns(n: Nat): (@BitVec::zero(n)).band(BitVec::zero()) = BitVec::zero() {
-    match n as λ k => (@BitVec::zero(k)).band(BitVec::zero()) = BitVec::zero() {
+theorem BitVec::band_zero_columns(n: Nat): BitVec::zero(n := n).band(BitVec::zero()) = BitVec::zero() {
+    match n as λ k => BitVec::zero(n := k).band(BitVec::zero()) = BitVec::zero() {
         Zero => refl,
-        Succ(k, ih) => @BitVec::cons_bit_cong(k, False, False, BitVec::band(BitVec::zero(), BitVec::zero()), BitVec::zero(), refl, ih),
+        Succ(k, ih) => BitVec::cons_bit_cong(k, refl, ih, a := False, b := False,
+            xs := BitVec::band(BitVec::zero(), BitVec::zero()), ys := BitVec::zero()),
     }
 }
 
@@ -1792,18 +1792,19 @@ theorem BitVec::band_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
         (a.zero_extend(extra)).band(b.zero_extend(extra)) =
             (a.band(b)).zero_extend(extra) {
         Zero => λ extra a b => BitVec::band_zero_columns(extra),
-        Succ(k, ih) => λ extra a b => @BitVec::cons_bit_cong(extra + k,
-            (a.band(b)).head_bit(), (a.band(b)).head_bit(),
-            ((a.tail_bits()).zero_extend(extra)).band((b.tail_bits()).zero_extend(extra)),
-            ((a.tail_bits()).band(b.tail_bits())).zero_extend(extra), refl,
-            ih(extra, a.tail_bits(), b.tail_bits())),
+        Succ(k, ih) => λ extra a b => BitVec::cons_bit_cong(extra + k, refl,
+            ih(extra, a.tail_bits(), b.tail_bits()),
+            a := (a.band(b)).head_bit(), b := (a.band(b)).head_bit(),
+            xs := ((a.tail_bits()).zero_extend(extra)).band((b.tail_bits()).zero_extend(extra)),
+            ys := ((a.tail_bits()).band(b.tail_bits())).zero_extend(extra)),
     }
 }
 
-theorem BitVec::bor_zero_columns(n: Nat): (@BitVec::zero(n)).bor(BitVec::zero()) = BitVec::zero() {
-    match n as λ k => (@BitVec::zero(k)).bor(BitVec::zero()) = BitVec::zero() {
+theorem BitVec::bor_zero_columns(n: Nat): BitVec::zero(n := n).bor(BitVec::zero()) = BitVec::zero() {
+    match n as λ k => BitVec::zero(n := k).bor(BitVec::zero()) = BitVec::zero() {
         Zero => refl,
-        Succ(k, ih) => @BitVec::cons_bit_cong(k, False, False, BitVec::bor(BitVec::zero(), BitVec::zero()), BitVec::zero(), refl, ih),
+        Succ(k, ih) => BitVec::cons_bit_cong(k, refl, ih, a := False, b := False,
+            xs := BitVec::bor(BitVec::zero(), BitVec::zero()), ys := BitVec::zero()),
     }
 }
 
@@ -1814,18 +1815,19 @@ theorem BitVec::bor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
         (a.zero_extend(extra)).bor(b.zero_extend(extra)) =
             (a.bor(b)).zero_extend(extra) {
         Zero => λ extra a b => BitVec::bor_zero_columns(extra),
-        Succ(k, ih) => λ extra a b => @BitVec::cons_bit_cong(extra + k,
-            (a.bor(b)).head_bit(), (a.bor(b)).head_bit(),
-            ((a.tail_bits()).zero_extend(extra)).bor((b.tail_bits()).zero_extend(extra)),
-            ((a.tail_bits()).bor(b.tail_bits())).zero_extend(extra), refl,
-            ih(extra, a.tail_bits(), b.tail_bits())),
+        Succ(k, ih) => λ extra a b => BitVec::cons_bit_cong(extra + k, refl,
+            ih(extra, a.tail_bits(), b.tail_bits()),
+            a := (a.bor(b)).head_bit(), b := (a.bor(b)).head_bit(),
+            xs := ((a.tail_bits()).zero_extend(extra)).bor((b.tail_bits()).zero_extend(extra)),
+            ys := ((a.tail_bits()).bor(b.tail_bits())).zero_extend(extra)),
     }
 }
 
-theorem BitVec::bxor_zero_columns(n: Nat): (@BitVec::zero(n)).bxor(BitVec::zero()) = BitVec::zero() {
-    match n as λ k => (@BitVec::zero(k)).bxor(BitVec::zero()) = BitVec::zero() {
+theorem BitVec::bxor_zero_columns(n: Nat): BitVec::zero(n := n).bxor(BitVec::zero()) = BitVec::zero() {
+    match n as λ k => BitVec::zero(n := k).bxor(BitVec::zero()) = BitVec::zero() {
         Zero => refl,
-        Succ(k, ih) => @BitVec::cons_bit_cong(k, False, False, BitVec::bxor(BitVec::zero(), BitVec::zero()), BitVec::zero(), refl, ih),
+        Succ(k, ih) => BitVec::cons_bit_cong(k, refl, ih, a := False, b := False,
+            xs := BitVec::bxor(BitVec::zero(), BitVec::zero()), ys := BitVec::zero()),
     }
 }
 
@@ -1836,10 +1838,10 @@ theorem BitVec::bxor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
         (a.zero_extend(extra)).bxor(b.zero_extend(extra)) =
             (a.bxor(b)).zero_extend(extra) {
         Zero => λ extra a b => BitVec::bxor_zero_columns(extra),
-        Succ(k, ih) => λ extra a b => @BitVec::cons_bit_cong(extra + k,
-            (a.bxor(b)).head_bit(), (a.bxor(b)).head_bit(),
-            ((a.tail_bits()).zero_extend(extra)).bxor((b.tail_bits()).zero_extend(extra)),
-            ((a.tail_bits()).bxor(b.tail_bits())).zero_extend(extra), refl,
-            ih(extra, a.tail_bits(), b.tail_bits())),
+        Succ(k, ih) => λ extra a b => BitVec::cons_bit_cong(extra + k, refl,
+            ih(extra, a.tail_bits(), b.tail_bits()),
+            a := (a.bxor(b)).head_bit(), b := (a.bxor(b)).head_bit(),
+            xs := ((a.tail_bits()).zero_extend(extra)).bxor((b.tail_bits()).zero_extend(extra)),
+            ys := ((a.tail_bits()).bxor(b.tail_bits())).zero_extend(extra)),
     }
 }

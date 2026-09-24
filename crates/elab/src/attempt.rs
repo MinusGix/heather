@@ -32,6 +32,14 @@ pub(super) struct DeclAttempt {
     /// common path — the declaration checks — the whole list is dropped
     /// unread.
     pub(super) check_notes: RefCell<Vec<CheckNote>>,
+    /// Receivers a dot call placed into a type-owned member that marks no
+    /// parameter `self`, by the receiver's span and the member's name. Read
+    /// only by the probe of a [`CheckNote`] at that span, to say the receiver
+    /// was meant for a later parameter
+    /// (issues/type-member-missing-self-diagnostic.md). A mismatch there is
+    /// no elaboration error — the kernel is the judge — so the dot call's own
+    /// failure path never sees it.
+    pub(super) unmarked_receivers: RefCell<Vec<(Span, String)>>,
     /// Written `refl`s whose two sides are not syntactically equal, in the
     /// order they were met — [`Self::check_notes`]' counterpart, deferred for
     /// its reason and probed the same way. Unlike a checking mismatch this
@@ -70,6 +78,7 @@ impl DeclAttempt {
         self.op_fallback_notes.get_mut().clear();
         self.op_fallback_uses.get_mut().clear();
         self.check_notes.get_mut().clear();
+        self.unmarked_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
@@ -86,6 +95,7 @@ impl DeclAttempt {
         self.goal_arena.finish();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
+        self.unmarked_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
     }

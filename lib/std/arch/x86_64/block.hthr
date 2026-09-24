@@ -331,7 +331,7 @@ theorem short_branch_target_8(start: BitVec(64)):
         next_rip(start, 2).iterate_increment(8)
 {
     sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
-        BitVec::sign_extend(56, @BitVec::ofNat(8, 8))))
+        BitVec::sign_extend(56, BitVec::ofNat(8, n := 8))))
 }
 
 theorem short_branch_target_6(start: BitVec(64)):
@@ -339,7 +339,7 @@ theorem short_branch_target_6(start: BitVec(64)):
         next_rip(start, 2).iterate_increment(6)
 {
     sym(BitVec::iter_add_eq_add(64, next_rip(start, 2),
-        BitVec::sign_extend(56, @BitVec::ofNat(8, 6))))
+        BitVec::sign_extend(56, BitVec::ofNat(6, n := 8))))
 }
 
 theorem advance_3_3(x: BitVec(64)):

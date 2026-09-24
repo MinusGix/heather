@@ -276,3 +276,240 @@ fn two_modules_attaching_the_same_member_are_ambiguous() {
     assert!(e.contains("ambiguous"), "{e}");
     assert!(e.contains('a') && e.contains('b'), "{e}");
 }
+
+// -- 4: receivers that do not infer on their own --------------------------
+//
+// docs/receiver-member-resolution-design.md §1. `R::mk()` and `Nil` are not
+// inferable alone — their implicit is solved by the use — yet the head names
+// the owner. The owner only picks the qualified name; the desugared call,
+// with the expected type in hand, decides whether it typechecks.
+
+/// A record whose parameter only a use site can fix. The field `p` keeps
+/// `n` recoverable from `R(n)`: a parameter no field mentions is not.
+const REC: &str = r#"
+record R(n: Nat) { x: Nat, p: x = n }
+fn R::mk({n: Nat}) -> R(n) { R(x := n, p := refl) }
+fn R::bump({n: Nat}, self r: R(n)) -> R(n) { r }
+fn R::get({n: Nat}, self r: R(n)) -> Nat { r.x }
+"#;
+
+// Axis: a **checking** position pins the receiver's implicit through the
+// member's result. Before this round: "unbound name `bump`".
+#[test]
+fn a_receiver_owned_by_its_head_reaches_the_member_in_checking_position() {
+    ok(&format!("{REC} fn c(n: Nat) -> R(n) {{ R::mk().bump() }}"));
+}
+
+// The receiver spelling is the qualified one, as a term the kernel compares —
+// in a **statement**, where nothing but the named argument fixes `n`.
+#[test]
+fn a_named_argument_pins_a_receiver_in_a_statement() {
+    ok(&format!(
+        "{REC} theorem t(n: Nat): R::mk(n := n).bump() = R::bump(R::mk(n := n)) {{ refl }}"
+    ));
+}
+
+// The receiver of a method chain: the outer receiver `R::mk().bump()` is
+// itself a method call, owned by the result of the member it resolves to.
+// Pinned by a named argument, the chain checks as a term equal to the
+// qualified spelling.
+#[test]
+fn the_receiver_of_a_method_chain_is_owned_by_the_inner_members_result() {
+    ok(&format!(
+        "{REC} theorem t(n: Nat): R::mk(n := n).bump().bump() = R::bump(R::bump(R::mk(n := n))) {{ refl }}"
+    ));
+    // Pinned only by the goal, the chain now reaches `R::bump` at both
+    // levels and fails exactly as the qualified spelling does — the nested
+    // uninferable argument is the unifier's, not member resolution's.
+    for body in ["R::mk().bump().bump()", "R::bump(R::bump(R::mk()))"] {
+        let e = bad(&format!("{REC} fn c(n: Nat) -> R(n) {{ {body} }}"));
+        assert!(e.contains("could not infer the implicit argument `n` of `R::mk`"), "{e}");
+        assert!(!e.contains("unbound name"), "{e}");
+    }
+}
+
+// A constructor with no written type arguments names its inductive: the gate
+// on written type arguments is lifted on this path. `Nil` at an **open**
+// element type reaches `List::rev`, and then fails exactly as `List::rev(Nil)`
+// does (issues/nullary-ctor-argument-not-deferred.md) — not as an unbound
+// name.
+#[test]
+fn a_bare_constructor_receiver_names_its_inductive() {
+    for body in ["Nil.rev()", "List::rev(Nil)"] {
+        let e = bad(&format!(
+            "{LIST}
+             fn List::rev<A>(self xs: List<A>) -> List<A> {{ xs }}
+             fn e<A>() -> List<A> {{ {body} }}"
+        ));
+        assert!(e.contains("cannot infer the type argument `A` of `List`"), "{e}");
+    }
+}
+
+// Genuinely unpinned: the honest failure of the desugared call, with the
+// spelling that fixes it, and never "unbound name".
+#[test]
+fn an_unpinned_receiver_reports_its_implicit_with_the_named_spelling() {
+    let e = bad(&format!("{REC} fn u() -> Nat {{ R::mk().get() }}"));
+    assert!(e.contains("could not infer the implicit argument `n` of `R::mk`"), "{e}");
+    assert!(e.contains("R::mk(n := …)"), "{e}");
+    assert!(!e.contains("unbound name"), "{e}");
+}
+
+// Negative control: a head that is a **local** says nothing about the owner —
+// the local `mk` shadows the global of that name, whose result is an `R`, and
+// its implicit leaves the receiver uninferable — so the call falls back to
+// the bare name, as before this round. The global head is the control.
+#[test]
+fn a_receiver_headed_by_a_local_still_falls_back_to_the_bare_name() {
+    let prefix = format!("{REC} fn mk({{n: Nat}}) -> R(n) {{ R::mk() }}");
+    let e = bad(&format!("{prefix} fn u(mk: {{n: Nat}} -> R(n)) -> Nat {{ mk().get() }}"));
+    assert!(e.contains("unbound name `get`"), "{e}");
+    let e = bad(&format!("{prefix} fn u() -> Nat {{ mk().get() }}"));
+    assert!(e.contains("could not infer the implicit argument `n` of `mk`"), "{e}");
+}
+
+// -- 5: ambient readings that cannot take the receiver --------------------
+//
+// docs/receiver-member-resolution-design.md §2. An ambient reading is dropped
+// only when it provably cannot typecheck at this receiver; anything less is
+// still the ambiguity of
+// `an_ambient_name_and_a_member_at_the_same_receiver_are_ambiguous`.
+
+// An ambient global whose subject is a `Nat`, at an `R` receiver — and the
+// call is the member, as a term.
+#[test]
+fn an_ambient_global_with_a_disjoint_subject_does_not_block_the_member() {
+    ok(&format!(
+        "{REC}
+         fn get(k: Nat) -> Nat {{ k }}
+         theorem t(n: Nat, r: R(n)): r.get() = R::get(r) {{ refl }}"
+    ));
+}
+
+// A `let` alias that is not a function at all: `len` is a `Nat` here.
+#[test]
+fn a_local_that_is_not_a_function_does_not_block_the_member() {
+    ok(&format!(
+        "{LIST}
+         fn add(a: Nat, b: Nat) -> Nat {{ match b {{ Zero => a, Succ(k) => Succ(add(a, k)) }} }}
+         fn List::len<A>(self xs: List<A>) -> Nat {{
+             match xs {{ Nil => 0, Cons(_, t) => Succ(len(t)) }}
+         }}
+         fn l(xs: List<Nat>, ys: List<Nat>) -> Nat {{ let len = xs.len(); add(len, ys.len()) }}"
+    ));
+}
+
+// A local function whose first explicit parameter is a `Nat`.
+#[test]
+fn a_local_function_with_a_disjoint_subject_does_not_block_the_member() {
+    ok(&format!("{REC} fn l(n: Nat, get: Nat -> Nat, r: R(n)) -> Nat {{ r.get() }}"));
+}
+
+// The same filter on the class-dispatch race: a bare `op` over `Nat` is no
+// rival to `Mag<Z>`'s `op` at a `Z` receiver (before: "both").
+#[test]
+fn an_ambient_global_with_a_disjoint_subject_does_not_race_a_class_member() {
+    ok("class Mag<A> { op: A -> A -> A }
+        inductive Z { Z0, Z1 }
+        instance Mag<Z> { fn op(x: Z, y: Z) -> Z { y } }
+        fn op(x: Nat, y: Nat) -> Nat { x }
+        theorem f(a: Z, b: Z) : a.op(b) = b { refl }");
+}
+
+// Negative control: a **generic** subject can take any receiver, so the
+// ambiguity stands.
+#[test]
+fn an_ambient_global_with_a_generic_subject_stays_ambiguous() {
+    let e = bad(&format!(
+        "{REC}
+         fn get<A>(self a: A) -> Nat {{ 0 }}
+         fn u(n: Nat, r: R(n)) -> Nat {{ r.get() }}"
+    ));
+    assert!(e.contains("both `R::get`"), "{e}");
+}
+
+// Negative control: the **same** carrier is a real second reading.
+#[test]
+fn an_ambient_global_with_the_same_carrier_stays_ambiguous() {
+    let e = bad(&format!(
+        "{REC}
+         fn get({{n: Nat}}, r: R(n)) -> Nat {{ 0 }}
+         fn u(n: Nat, r: R(n)) -> Nat {{ r.get() }}"
+    ));
+    assert!(e.contains("both `R::get`"), "{e}");
+}
+
+// Negative control: a local whose subject is an open type variable stays a
+// rival too.
+#[test]
+fn a_local_function_with_an_open_subject_stays_ambiguous() {
+    let e = bad(&format!("{REC} fn l<A>(n: Nat, get: A -> Nat, r: R(n)) -> Nat {{ r.get() }}"));
+    assert!(e.contains("both `R::get`"), "{e}");
+}
+
+// -- 6: diagnostics -------------------------------------------------------
+
+// "declared below" is about the name that missed: a member `V::get` further
+// down is not a bare `get`, and a member's base name is never ambient.
+#[test]
+fn a_member_declared_below_is_not_the_bare_name_declared_below() {
+    let e = bad("inductive V { V0 }
+        fn u(n: Nat) -> Nat { get(n) }
+        fn V::get(self v: V) -> Nat { 0 }");
+    assert!(e.contains("unbound name `get`"), "{e}");
+    assert!(!e.contains("declared below"), "{e}");
+    // Control: a bare `get` further down still gets the hint.
+    let e = bad("fn u(n: Nat) -> Nat { get(n) }
+        fn get(n: Nat) -> Nat { n }");
+    assert!(e.contains("`get` is declared below"), "{e}");
+}
+
+/// issues/type-member-missing-self-diagnostic.md: the receiver is meant for
+/// a later parameter, and the declaration forgot to mark it.
+const UNMARKED: &str = r#"
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+record Failure<T>(source: List<T>) { at: Nat }
+record View { at: Nat }
+fn Failure::view<T>(source: List<T>, error: Failure<T>(source)) -> View { View(at := error.at) }
+inductive Box { Mk(v: Nat) }
+fn Box::shift(n: Nat, b: Box) -> Nat { n }
+fn Box::two(n: Nat, a: Box, b: Box) -> Nat { n }
+fn Box::fine(b: Box, n: Nat) -> Nat { n }
+"#;
+
+// The issue's shape: an implicit type argument, and a dependent value
+// parameter before the intended receiver. Not "give the type arguments".
+#[test]
+fn a_missing_self_marker_is_named_for_a_generic_member() {
+    let e = bad(&format!(
+        "{UNMARKED} fn u<T>(source: List<T>, e: Failure<T>(source)) -> View {{ e.view(source) }}"
+    ));
+    assert!(e.contains("marks no parameter `self`"), "{e}");
+    assert!(e.contains("self error:"), "{e}");
+    assert!(!e.contains("type argument"), "{e}");
+}
+
+// Non-generic: here the mismatch is the kernel's, found at the gate, and the
+// note at the receiver says the same thing.
+#[test]
+fn a_missing_self_marker_is_named_for_a_plain_member() {
+    let e = bad(&format!("{UNMARKED} fn u(b: Box) -> Nat {{ b.shift(3) }}"));
+    assert!(e.contains("self b: Box"), "{e}");
+}
+
+// Controls: an unmarked member whose receiver *is* its first parameter works;
+// two candidate parameters, a qualified call and a bare global call never get
+// the suggestion.
+#[test]
+fn the_missing_self_suggestion_is_narrow() {
+    ok(&format!("{UNMARKED} fn u(b: Box) -> Nat {{ b.fine(3) }}"));
+    let e = bad(&format!("{UNMARKED} fn u(b: Box) -> Nat {{ b.two(3, b) }}"));
+    assert!(!e.contains("`self`"), "{e}");
+    let e = bad(&format!("{UNMARKED} fn u(b: Box) -> Nat {{ Box::shift(b, 3) }}"));
+    assert!(!e.contains("`self`"), "{e}");
+    let e = bad(&format!(
+        "{UNMARKED} fn shift(n: Nat, b: Box) -> Nat {{ n }}
+         fn u(b: Box) -> Nat {{ shift(b, 3) }}"
+    ));
+    assert!(!e.contains("`self`"), "{e}");
+}

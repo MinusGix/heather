@@ -36,11 +36,7 @@ impl Elaborator {
     /// that predates the marker keeps working and a one-premise lemma never
     /// has to write it (issues/method-receiver-position.md).
     pub(crate) fn subject_index(&self, name: &str) -> usize {
-        self.params_of(name)
-            .iter()
-            .filter(|p| !p.implicit && !p.is_type)
-            .position(|p| p.is_self)
-            .unwrap_or(0)
+        subject_index_in(&self.params_of(name))
     }
 
     /// The parameters of a callable global, for defaulting goal names.
@@ -223,4 +219,14 @@ impl Elaborator {
                 })
         })
     }
+}
+
+/// [`Elaborator::subject_index`] over a parameter table already in hand, so a
+/// caller that also reads the table's `self` markers looks it up once.
+pub(crate) fn subject_index_in(params: &[ParamMeta]) -> usize {
+    params
+        .iter()
+        .filter(|p| !p.implicit && !p.is_type)
+        .position(|p| p.is_self)
+        .unwrap_or(0)
 }

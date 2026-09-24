@@ -119,15 +119,12 @@ agreement across. Fifteen `refl` equations run the pipeline on text, including
 multi-digit numerals, spacing, and five error cases.
 
 The derivation's theory is namespaced — `d.tier()`, `d.meaning()`,
-`d.WellFormed()`, `d.spelling()` — and the elementwise class tests are `list`'s
-own `ds.all(is_digit)` and `ds.nonempty()`. The relations handed to the
-library's `Certified` are records partially applied — `Grammar(level)`,
-`RunSpec(cls)`, `OpRun(target)` — so their evidence is read by name
-(`op.evidence.progress`, `run.span`) rather than by `.left.right` into a
-conjunction. One spelling in the file is not what a reader would write, and it
-is filed rather than excused: `spell` is the one declaration that is not a
-member because IH generalization does not see a self-call spelled as a receiver
-(`../../issues/receiver-member-ih-generalization.md`).
+`d.WellFormed()`, `d.spell(tail)`, `d.spelling()` — and the elementwise class
+tests are `list`'s own `ds.all(is_digit)` and `ds.nonempty()`. The relations
+handed to the library's `Certified` are records partially applied —
+`Grammar(level)`, `RunSpec(cls)`, `OpRun(target)` — so their evidence is read
+by name (`op.evidence.progress`, `run.span`) rather than by `.left.right` into
+a conjunction.
 
 The cap above is deliberate and the reason this file is **not yet** in
 `crates/elab/tests/showcase_calculator.rs`: it needs more than 8 GiB cold,

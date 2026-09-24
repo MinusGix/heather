@@ -16,9 +16,9 @@
 //    span theorem therefore still says the derivation spells the source
 //    character for character — nothing is skipped behind the proof's back.
 //
-// The spelling is written as a *difference list* — `spell(d, tail)` rather
+// The spelling is written as a *difference list* — `d.spell(tail)` rather
 // than `d.spelling() ++ tail` — which is why no `append_assoc` appears below.
-// Every production's span proof is a congruence under `spell(d, ·)` applied
+// Every production's span proof is a congruence under `d.spell(·)` applied
 // to the next cursor's equation (`cong_spell`), where the token version
 // needed a three-way `span_join` at each step.
 import nat;
@@ -120,30 +120,26 @@ fn Derivation::meaning(self d: Derivation) -> Expr {
         Parenthesized(_, e, _) => e.meaning() }
 }
 
-// The spelling, in difference-list form: `spell(d, tail)` is what `d` spells
+// The spelling, in difference-list form: `d.spell(tail)` is what `d` spells
 // followed by `tail`. Concrete character lists still use `++`; what is never
-// appended is one derivation's spelling to another's.
-// The one declaration here that is *not* a `Derivation::` member, and not by
-// choice: a difference list varies its `tail` on the recursive call, and the
-// IH-generalization analysis does not recognize a self-call spelled as a
-// receiver, so `spell(d, …)` inside the body is refused where `spell(d, …)`
-// checks (issues/receiver-member-ih-generalization.md). Its callers below
-// therefore read `spell(d, tail)` among neighbours that read `d.tier()`.
-fn spell(d: Derivation, tail: List<Char>) -> List<Char> {
+// appended is one derivation's spelling to another's. The recursive calls vary
+// `tail`, and a self-call spelled as a receiver generalizes it exactly as a
+// plain one does.
+fn Derivation::spell(self d: Derivation, tail: List<Char>) -> List<Char> {
     match d {
         Number(ds, tr) => ds ++ (tr ++ tail),
-        AtomFactor(a) => spell(a, tail),
-        FactorExpr(f) => spell(f, tail),
-        Sum(l, tr, r) => spell(l, Cons('+', tr ++ spell(r, tail))),
-        Product(l, tr, r) => spell(l, Cons('*', tr ++ spell(r, tail))),
-        Parenthesized(otr, e, ctr) => Cons('(', otr ++ spell(e, Cons(')', ctr ++ tail))),
+        AtomFactor(a) => a.spell(tail),
+        FactorExpr(f) => f.spell(tail),
+        Sum(l, tr, r) => l.spell(Cons('+', tr ++ r.spell(tail))),
+        Product(l, tr, r) => l.spell(Cons('*', tr ++ r.spell(tail))),
+        Parenthesized(otr, e, ctr) => Cons('(', otr ++ e.spell(Cons(')', ctr ++ tail))),
     }
 }
 
-fn Derivation::spelling(self d: Derivation) -> List<Char> { spell(d, Nil<Char>) }
+fn Derivation::spelling(self d: Derivation) -> List<Char> { d.spell(Nil<Char>) }
 
-theorem Derivation::cong_spell(self d: Derivation, x, y: List<Char>, p: x = y): spell(d, x) = spell(d, y) {
-    j(p, λ z q => spell(d, x) = spell(d, z), refl)
+theorem Derivation::cong_spell(self d: Derivation, x, y: List<Char>, p: x = y): d.spell(x) = d.spell(y) {
+    j(p, λ z q => d.spell(x) = d.spell(z), refl)
 }
 
 fn Derivation::WellFormed(self d: Derivation) -> Type {
@@ -165,7 +161,7 @@ record Grammar(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source),
     valid: derivation.WellFormed(),
     at_level: derivation.tier() = level,
     yields: derivation.meaning() = value,
-    span: rest(source, begin) = spell(derivation, rest(source, end)),
+    span: rest(source, begin) = derivation.spell(rest(source, end)),
 }
 
 // What a tier's parser returns: a certified `Expr` whose evidence is the
@@ -229,7 +225,7 @@ fn sum_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(source
         j(l.yields, λ value q => Plus(l.derivation.meaning(), r.derivation.meaning()) = Plus(value, right),
             j(r.yields, λ value q => Plus(l.derivation.meaning(), r.derivation.meaning()) = Plus(l.derivation.meaning(), value), refl)),
         trans(l.span, l.derivation.cong_spell(rest(source, middle),
-            Cons('+', trail ++ spell(r.derivation, rest(source, end))),
+            Cons('+', trail ++ r.derivation.spell(rest(source, end))),
             trans(op, List::cong_cons('+', trail.cong_append_r(r.span))))))
 }
 
@@ -243,7 +239,7 @@ fn product_grammar(source: List<Char>, begin, middle, next, end: Cursor<Char>(so
         j(l.yields, λ value q => Times(l.derivation.meaning(), r.derivation.meaning()) = Times(value, right),
             j(r.yields, λ value q => Times(l.derivation.meaning(), r.derivation.meaning()) = Times(l.derivation.meaning(), value), refl)),
         trans(l.span, l.derivation.cong_spell(rest(source, middle),
-            Cons('*', trail ++ spell(r.derivation, rest(source, end))),
+            Cons('*', trail ++ r.derivation.spell(rest(source, end))),
             trans(op, List::cong_cons('*', trail.cong_append_r(r.span))))))
 }
 
@@ -478,7 +474,7 @@ fn finish_text(source: List<Char>,
                     source
                         = rest(source, Cursor::start(source))          := sym(initial_rest(source)),
                         = lead.value ++ rest(source, lead.end) := lead.evidence.span,
-                        = lead.value ++ spell(got.evidence.derivation, Nil<Char>) :=
+                        = lead.value ++ got.evidence.derivation.spell(Nil<Char>) :=
                             lead.value.cong_append_r(
                                 trans(got.evidence.span,
                                     got.evidence.derivation.cong_spell(

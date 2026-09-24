@@ -28,6 +28,11 @@ pub(crate) struct OtherReading {
     /// (issues/receiver-dispatch-coinciding-readings.md). Resolving it only
     /// there keeps every other method call at its old price.
     pub(crate) callee: Option<String>,
+    /// The bare name, when this reading is an ambient local, alias or
+    /// declaration: one that is **discarded** once the receiver's type shows
+    /// it cannot take the receiver (docs/receiver-member-resolution-design.md
+    /// §2). `None` for a member, a constructor or a builtin.
+    pub(crate) ambient: Option<String>,
 }
 
 impl Elaborator {
@@ -62,6 +67,15 @@ impl Elaborator {
         let Ok((_, rty, rlvl)) = self.elab_infer(cx, recv) else {
             return Ok(None);
         };
+        // An ambient reading that provably cannot take this receiver is no
+        // reading: it neither races a successful dispatch nor catches a
+        // failed one. Read off the carrier just inferred, so it costs no
+        // inference of its own.
+        let other = other.filter(|o| {
+            !o.ambient
+                .as_ref()
+                .is_some_and(|n| self.ambient_cannot_take(cx, n, &rty, span))
+        });
         // Candidates: every class **visible here** (the ordinary §4 regime,
         // asked by resolving the class's own name) that **declares** this
         // field, with exactly one type parameter (§2.1), in sorted
@@ -191,7 +205,7 @@ impl Elaborator {
                 span,
             );
         };
-        if let Some(OtherReading { desc, fix, callee }) = other {
+        if let Some(OtherReading { desc, fix, callee, .. }) = other {
             // The two readings **coincide** when the dictionary dispatch
             // actually resolved fills this field with the very global the
             // other reading calls: then there is one meaning, and the other

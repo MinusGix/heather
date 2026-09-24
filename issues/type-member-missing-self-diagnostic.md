@@ -1,9 +1,9 @@
 ---
 title: A forgotten self marker on a type-owned member masquerades as failed generic inference
-status: open
+status: closed
 labels: [frontend,elaboration,diagnostics,ergonomics]
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-24
 ---
 
 Found while moving the parser library's helpers into type-owned namespaces.
@@ -96,3 +96,4 @@ contain declarations intended primarily for qualified calls.
   failure first looked like a question about generic placement and inference;
   tracing method desugaring showed that the receiver had been inserted into the
   unmarked first parameter instead.
+- 2026-09-24: 2026-09-24: Landed with the namespace round (docs/receiver-member-resolution-design.md; §7 lists what was built and where it deviated). Full suite 2939 passed.

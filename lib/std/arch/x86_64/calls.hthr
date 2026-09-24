@@ -264,7 +264,8 @@ theorem increment_decrement_step(n: Nat, bit: Bool, value: BitVec(n),
     value.cons_bit(bit).decrement().increment() = value.cons_bit(bit)
 {
     match bit {
-        False => @BitVec::cons_bit_cong(n, False, False, value.decrement().increment(), value, refl, tail_law),
+        False => BitVec::cons_bit_cong(n, refl, tail_law, a := False, b := False,
+            xs := value.decrement().increment(), ys := value),
         True => refl,
     }
 }
@@ -304,9 +305,9 @@ theorem add_negative(n: Nat, value, magnitude: BitVec(n)):
     // `add` and `sub` are the ripples now, so the increment/decrement
     // bookkeeping below is stated over `iter_add`/`iter_sub` and transported
     // back (docs/bitvec-width-bounded-defaults-design.md).
-    trans(@BitVec::cong_ripple_add(n, value, value,
-            BitVec::sub(BitVec::zero(), magnitude), BitVec::iter_sub(BitVec::zero(), magnitude),
-            refl, sym(BitVec::iter_sub_eq_sub(n, BitVec::zero(), magnitude))),
+    trans(BitVec::cong_ripple_add(n, refl, sym(BitVec::iter_sub_eq_sub(n, BitVec::zero(), magnitude)),
+            a := value, b := value,
+            c := BitVec::sub(BitVec::zero(), magnitude), d := BitVec::iter_sub(BitVec::zero(), magnitude)),
         trans(sym(BitVec::iter_add_eq_add(n, value, BitVec::iter_sub(BitVec::zero(), magnitude))),
             trans(trans(BitVec::iter_add_comm(n, value, BitVec::iter_sub(BitVec::zero(), magnitude)),
                     trans(increments_decrements(n, magnitude.toNat(),

@@ -29,3 +29,7 @@ Found by the 2026-09-24 probe of the remaining `@` sites: `@BitVec::head_bit(m +
 Slice #1b with [[vector-literal-length-pins-implicit]], under
 [[elab-unifier-completeness]]. Unifier is on the hot path: the reduction should
 fire only when a flex/rigid pair would otherwise fail.
+
+## Log
+
+- 2026-09-24: 2026-09-24: A second shape of the same gap, from the namespace round's sweep: a plain `BitVec::cons_bit_cong(n, refl, ih)` fails wherever the goal has to unfold before it shows `xs.cons_bit(a)` (`decrement_increment_step`'s `True` arm). The library now spells those sites with named implicits (`a := …, xs := …`). They are acceptance for this slice.

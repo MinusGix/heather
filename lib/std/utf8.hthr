@@ -136,19 +136,19 @@ theorem width_bounds(code: Nat): WidthBounds(width_of(code), code) {
 fn encode_1(code: Nat) → List<BitVec(8)> { [ascii_byte(BitVec::ofNat(code))] }
 
 fn encode_2(code: Nat) → List<BitVec(8)> {
-    let p = @BitVec::ofNat(11, code);
+    let p: BitVec(11) = BitVec::ofNat(code);
     [lead2_byte(p.drop_low(6, 5)), cont_byte(p.take_low(6, 5))]
 }
 
 fn encode_3(code: Nat) → List<BitVec(8)> {
-    let p = @BitVec::ofNat(16, code);
+    let p: BitVec(16) = BitVec::ofNat(code);
     let upper = p.drop_low(6, 10);
     [lead3_byte(upper.drop_low(6, 4)), cont_byte(upper.take_low(6, 4)),
         cont_byte(p.take_low(6, 10))]
 }
 
 fn encode_4(code: Nat) → List<BitVec(8)> {
-    let p = @BitVec::ofNat(21, code);
+    let p: BitVec(21) = BitVec::ofNat(code);
     let upper = p.drop_low(6, 15);
     let upper2 = upper.drop_low(6, 9);
     [lead4_byte(upper2.drop_low(6, 3)), cont_byte(upper2.take_low(6, 3)),
@@ -448,7 +448,7 @@ theorem emit_yes(min, code: Nat, p: char::scalar(code),
 theorem decode_emit(min, n, code: Nat, p: char::scalar(code),
         low: min.leb(code).IsTrue(), bound: code < Nat::pow(2, n),
         rest: List<BitVec(8)>):
-        emit(min, (@BitVec::ofNat(n, code)).toNat(), rest)
+        emit(min, BitVec::ofNat(code, n := n).toNat(), rest)
             = Some(Pair(char::ofNat(code, p), rest)) {
     j(sym(BitVec::toNat_ofNat(n, code, bound)),
         λ y _ => emit(min, y, rest) = Some(Pair(char::ofNat(code, p), rest)),

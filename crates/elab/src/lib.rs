@@ -632,9 +632,12 @@ pub struct Elaborator {
     /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
     /// the body shape that stopped the walk rather than an unknown name.
     unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
-    /// The base names the container being elaborated declares, and whether
-    /// each carries `decreases` — what `docs/mutual-recursion-design.md` §8's
-    /// sentence on an unbound forward reference needs.
+    /// The names the container being elaborated declares, and whether each
+    /// carries `decreases` — what `docs/mutual-recursion-design.md` §8's
+    /// sentence on an unbound forward reference needs. Full declared names:
+    /// a member `V::get` further down does not make a bare `get` "declared
+    /// below", since a member's base name is never ambient
+    /// (docs/receiver-member-resolution-design.md §3).
     container_decls: RefCell<Vec<(String, bool, usize)>>,
     /// How far the container's item loop has got — only a declaration still
     /// *ahead* of it is the forward reference §8 explains.
@@ -1927,7 +1930,7 @@ impl Elaborator {
             .enumerate()
             .filter_map(|(i, it)| match it {
                 Item::Decl(d) => {
-                    Some((base_name(&d.name).to_string(), d.decreases.is_some(), i))
+                    Some((d.name.clone(), d.decreases.is_some(), i))
                 }
                 _ => None,
             })
@@ -4719,9 +4722,9 @@ impl Elaborator {
                         )?;
                         Ok(t)
                     }
-                    DotResolution::Method(m) => {
-                        self.elab_check_skel_slots(cx, &m, expected, lvl, hint, skel, capture_slots)
-                    }
+                    DotResolution::Method(m) => self
+                        .elab_check_skel_slots(cx, &m, expected, lvl, hint, skel, capture_slots)
+                        .map_err(|e| self.method_call_failure(cx, recv, &m, e)),
                 }
             }
             _ => {
@@ -4881,6 +4884,12 @@ impl Elaborator {
         // `And<…>` against `And<…>`, whose type arguments are the whole
         // difference ([[display-inductive-type-arguments]]). Both filters are
         // silence, not error: the declaration is still rejected, by the gate.
+        // A receiver placed into a type-owned member's unmarked first
+        // parameter says more than the two types do: the declaration forgot
+        // `self` (issues/type-member-missing-self-diagnostic.md).
+        if let Some(msg) = self.unmarked_receiver_note(cx, *span, got) {
+            return Some((msg, *span));
+        }
         let got_s = self.display_type_clean(cx, got)?;
         let want_s = self.display_type_clean(cx, expected)?;
         if got_s == want_s {
@@ -5357,7 +5366,9 @@ impl Elaborator {
                 },
                 DotResolution::Dispatch(t, ty, l, fskel, dargs) => self
                     .apply_projection(cx, name, t, ty, l, fskel, &dargs, named, expected, e.span),
-                DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
+                DotResolution::Method(m) => self
+                    .elab_infer_at(cx, &m, expected)
+                    .map_err(|e| self.method_call_failure(cx, recv, &m, e)),
                 }
             }
             // A record literal in inference position: the fields are permuted
@@ -6721,21 +6732,15 @@ impl Elaborator {
         }
     }
 
-    /// Is this name bound by something the user wrote other than the
-    /// declaration currently being checked? Kept separate because receiver
-    /// dispatch can prove that an in-progress declaration has a different
-    /// subject carrier while any ordinary binding must still win over a
-    /// builtin or race a type-owned member.
-    fn shadowed_without_selfref(&self, cx: &Cx, name: &str) -> bool {
+    /// Is this name bound by something the user wrote? Builtins give way to
+    /// locals, `let` aliases and declarations, so none of them is a keyword.
+    /// (Which of these readings races a type-owned member is finer than
+    /// this: `member_head` asks `ambient_reading_survives`,
+    /// docs/receiver-member-resolution-design.md §2.)
+    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
         cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.lookup_global(name).is_some()
-    }
-
-    /// Is this name bound by something the user wrote? Builtins give way to
-    /// locals, `let` aliases and declarations, so none of them is a keyword.
-    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
-        self.shadowed_without_selfref(cx, name)
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
             // self-call took the built-in vector-`map` path instead

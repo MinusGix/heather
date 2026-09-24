@@ -1151,7 +1151,7 @@ fn rr_opcode_entries() →
 }
 
 fn classify_rr_opcode(byte: BitVec(8)) → Option<RrOpcode> {
-    certified_lookup::lookup(RrOpcodeMatches, @BitVec::eq_dec(8), byte,
+    certified_lookup::lookup(RrOpcodeMatches, BitVec::eq_dec, byte,
         rr_opcode_entries())
 }
 
@@ -1159,7 +1159,7 @@ theorem classify_rr_opcode_sound(byte: BitVec(8), form: RrOpcode,
     success: classify_rr_opcode(byte) = Some(form)):
     RrOpcodeMatches(byte, form)
 {
-    certified_lookup::lookup_sound(RrOpcodeMatches, @BitVec::eq_dec(8), byte,
+    certified_lookup::lookup_sound(RrOpcodeMatches, BitVec::eq_dec, byte,
         rr_opcode_entries(), form, success)
 }
 

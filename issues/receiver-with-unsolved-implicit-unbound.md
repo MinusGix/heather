@@ -1,6 +1,6 @@
 ---
 title: A method on a receiver whose type has an unsolved implicit is refused as an unbound name
-status: open
+status: closed
 labels: [frontend,elaboration,inference,modules,diagnostics]
 created: 2026-09-24
 updated: 2026-09-24
@@ -47,3 +47,8 @@ zero()` inside a statement); for those the right spelling is a named argument,
 Part of the namespace round (#1a) with the rest of the refactor residue on
 [[type-owned-namespaces]]. Acceptance: the probe above, and the library's
 receiver-position `@BitVec::zero`/`@BitVec::ofNat` sites respelled.
+
+## Log
+
+- 2026-09-24: 2026-09-24: Mechanism corrected and design written (docs/receiver-member-resolution-design.md §1). The cause is not `tag_of`. `member_head` infers the whole receiver and swallows the failure, so an uninferable `R::mk()` never names its owner. Fix: read the owner from the receiver's head (constructor, global result type, member result) only when inference fails. The false "declared below" is `begin_container` keying by `base_name` (§3.1).
+- 2026-09-24: 2026-09-24: Landed with the namespace round (docs/receiver-member-resolution-design.md; §7 lists what was built and where it deviated). Full suite 2939 passed.

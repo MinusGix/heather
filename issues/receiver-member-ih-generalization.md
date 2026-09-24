@@ -1,9 +1,9 @@
 ---
 title: IH generalization does not see a self-call spelled as a receiver, so a varying parameter cannot be a method
-status: open
+status: closed
 labels: [frontend,elaboration,recursion,ergonomics]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-24
 ---
 
 A structurally recursive function that varies a non-decreasing parameter checks
@@ -49,3 +49,8 @@ Found converting `docs/showcase/calc_text.hthr`'s derivation theory to
 so it is the one declaration that has to stay freestanding, in a file where
 every neighbour is a member. That asymmetry is the cost: a difference list — the
 idiom that removed every `append_assoc` from that showcase — cannot be a method.
+
+## Log
+
+- 2026-09-24: 2026-09-24: No longer reproduces on master: the issue's `Tree::flat_m` repro and the qualified self-call both check. It closes when calc_text's `spell` converts to a member in the namespace round (docs/receiver-member-resolution-design.md §5).
+- 2026-09-24: 2026-09-24: Landed with the namespace round (docs/receiver-member-resolution-design.md; §7 lists what was built and where it deviated). Full suite 2939 passed.

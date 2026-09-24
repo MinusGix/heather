@@ -119,6 +119,7 @@ impl Elaborator {
         // The `member_bases` test comes first for the same reason the record
         // one does — no receiver is inferred for a name nobody attaches.
         let head = self.member_head(cx, recv, name, !tyargs.is_empty(), span)?;
+        let member_selected = head != name;
         let (head, vector_map) = if head == name && !self.shadowed(cx, name) {
             self.imported_receiver_head(cx, recv, name, span)?
         } else {
@@ -148,18 +149,26 @@ impl Elaborator {
                 desc: format!("`{head}`, selected using the receiver's type"),
                 fix: format!("`{head}(…)`"),
                 callee: callee(&head),
+                ambient: None,
             })
         } else if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
             Some(OtherReading {
                 desc: format!("`{name}`, a name in scope on its own"),
                 fix: format!("the bare call `{name}(…)` with the receiver as an argument"),
                 callee: callee(name),
+                // A constructor is the bare reading unless a local or alias
+                // shadows it, and a constructor is never discarded.
+                ambient: (cx.names.iter().any(|n| n == name)
+                    || cx.aliases.iter().any(|a| a.name == *name)
+                    || self.ctor_of(name).is_none())
+                .then(|| name.to_string()),
             })
         } else if BUILTIN_METHODS.contains(&name) {
             Some(OtherReading {
                 desc: format!("`{name}`, a built-in method"),
                 fix: format!("the bare call `{name}(…)`"),
                 callee: None,
+                ambient: None,
             })
         } else {
             None
@@ -186,11 +195,23 @@ impl Elaborator {
         // the receiver has no honest position to take, so it is refused here
         // rather than silently placed one slot early
         // (docs/named-arguments-design.md §5.4).
-        let at = cx
-            .selfref
-            .as_ref()
-            .filter(|self_ref| self_ref.matches(name))
-            .map_or_else(|| self.subject_index(name), |self_ref| self_ref.receiver_slot);
+        let at = match cx.selfref.as_ref().filter(|self_ref| self_ref.matches(name)) {
+            Some(self_ref) => self_ref.receiver_slot,
+            None => {
+                let params = self.params_of(name);
+                // A member the receiver's type selected that marks no `self`:
+                // remembered by the receiver's span, since a receiver meant
+                // for a later parameter shows up only when the gate rejects
+                // (`missing_self_message`). One push per such call; no probe.
+                if member_selected && !params.iter().any(|p| p.is_self) {
+                    self.attempt
+                        .unmarked_receivers
+                        .borrow_mut()
+                        .push((recv.span, name.to_string()));
+                }
+                application::subject_index_in(&params)
+            }
+        };
         if !named.is_empty() && at > args.len() {
             return err(
                 format!(
@@ -254,17 +275,23 @@ impl Elaborator {
         // instantiated method call such as `Ok(x).fold<A, E, B>(...)`: `E`
         // is supplied by the method's type arguments, but choosing
         // `Result::fold` has to happen before those arguments are applied.
-        let inferred = self.elab_infer(cx, recv).ok().and_then(|(_, rty, _)| {
-            Some((
-                self.receiver_carrier(cx, &rty, span)?,
-                self.type_namespace(cx, &rty, span)?,
-            ))
-        });
-        let Some((carrier, owner)) = inferred.or_else(|| {
+        let inferred = self
+            .elab_infer(cx, recv)
+            .ok()
+            .and_then(|(_, rty, _)| self.receiver_owner(cx, &rty, span));
+        let inferred = inferred.or_else(|| {
             constructor_fallback
                 .then(|| self.constructor_receiver_owner(cx, recv))
                 .flatten()
-        })
+        });
+        // A receiver whose type only the use site fixes — `BitVec::zero()`,
+        // `R::mk()`, `Nil` — does not infer, yet its head already names its
+        // owner. Asked only here, where the route above gave up, so nothing
+        // that resolved before reaches it
+        // (docs/receiver-member-resolution-design.md §1).
+        let by_head = inferred.is_none();
+        let Some((carrier, owner)) =
+            inferred.or_else(|| self.receiver_owner_by_head(cx, recv, span))
         else {
             // Inference failure is not an error here, exactly as for a field:
             // the fallback is what handles a receiver whose type only the
@@ -287,21 +314,15 @@ impl Elaborator {
                 return Ok(name.to_string());
             }
         }
-        // The declaration under construction is normally an ambient reading
-        // of its base name, so recursive calls keep working before the global
-        // is committed. It is not a candidate at this receiver, however, when
-        // both outer carriers are known and disjoint. This is the same
-        // conservative filter imported receiver dispatch uses below: unknown
-        // and equal carriers preserve ambiguity, and every other local/global
-        // shadow remains a competing reading.
-        let selfref_shadows = cx.selfref.as_ref().is_some_and(|s| s.matches(name));
-        let selfref_disjoint = selfref_shadows
-            && self
-                .selfref_subject_carrier(cx, name, span)
-                .is_some_and(|subject| subject != carrier);
-        if self.shadowed_without_selfref(cx, name)
-            || (selfref_shadows && !selfref_disjoint)
-        {
+        if self.ambient_reading_survives(cx, name, &carrier, span) {
+            // A receiver owned by its head reached this point only because
+            // inference gave up, and before this route the call went to the
+            // ambient reading from there. It still does: §0 keeps every
+            // program that resolved resolving the same way, and the
+            // desugared ambient call reports its own failure if it has one.
+            if by_head {
+                return Ok(name.to_string());
+            }
             return err(
                 format!(
                     "`{name}` here is both `{qualified}`, reached through the receiver's \
@@ -313,6 +334,101 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// Does the bare `name` have a reading that could take a receiver of
+    /// this carrier? Such a reading races `D::name`, and the answer is an
+    /// ambiguity rather than a preference.
+    ///
+    /// A reading is **discarded** only when it provably cannot take the
+    /// receiver (docs/receiver-member-resolution-design.md §2): a local or
+    /// alias that is not a function at all, or a reading whose subject has a
+    /// known outer carrier disjoint from the receiver's. That is the filter
+    /// imported receiver dispatch already applies below, extended to every
+    /// ambient kind. An unknown carrier on either side, a generic subject, or
+    /// equal carriers keep the ambiguity — so adding `D::name` only ever
+    /// reaches a receiver no ambient reading could have typechecked at.
+    ///
+    /// A local or alias is the whole bare reading when there is one: it
+    /// shadows every declaration. Otherwise the declaration under
+    /// construction (in scope under its base name so that it can recurse)
+    /// and a committed global each count.
+    fn ambient_reading_survives(
+        &self,
+        cx: &Cx,
+        name: &str,
+        carrier: &ReceiverCarrier,
+        span: Span,
+    ) -> bool {
+        if let Some(takes) = self.local_reading_takes(cx, name, carrier, span) {
+            return takes;
+        }
+        let selfref = cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+            && !self
+                .selfref_subject_carrier(cx, name, span)
+                .is_some_and(|subject| subject != *carrier);
+        let global = self.lookup_global(name).is_some()
+            && !self
+                .global_subject_carrier(name, span)
+                .is_some_and(|subject| subject != *carrier);
+        selfref || global
+    }
+
+    /// [`Self::ambient_reading_survives`] for the class-dispatch race, where
+    /// the receiver has already been inferred: is the bare reading one that
+    /// cannot take a receiver of type `rty`? An unknown carrier answers no.
+    pub(crate) fn ambient_cannot_take(&self, cx: &Cx, name: &str, rty: &Type, span: Span) -> bool {
+        self.receiver_carrier(cx, rty, span)
+            .is_some_and(|carrier| !self.ambient_reading_survives(cx, name, &carrier, span))
+    }
+
+    /// Whether the local or `let` alias `name` resolves to could take the
+    /// receiver; `None` when no local or alias is in scope. The precedence
+    /// is `resolve`'s: an alias bound at depth `d` shadows every binder at a
+    /// position below `d`. Its subject is its first explicit parameter — a
+    /// local has no `self` marker to consult.
+    fn local_reading_takes(
+        &self,
+        cx: &Cx,
+        name: &str,
+        carrier: &ReceiverCarrier,
+        span: Span,
+    ) -> Option<bool> {
+        let local_pos = cx.names.iter().rposition(|n| n == name);
+        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        let (mut ty, skel) = match (local_pos, alias) {
+            (Some(pos), Some(a)) if a.depth <= pos => (self.local(cx, pos).1, cx.skels[pos].clone()),
+            (_, Some(a)) => (a.ty.shift_local((cx.names.len() - a.depth) as u32), a.skel.clone()),
+            (Some(pos), None) => (self.local(cx, pos).1, cx.skels[pos].clone()),
+            (None, None) => return None,
+        };
+        let Some(subject) = skel.as_ref().map_or(Some(0), |s| {
+            s.params.iter().position(|b| !b.implicit && !b.is_type)
+        }) else {
+            return Some(true);
+        };
+        let mut cx = cx.clone();
+        for i in 0..=subject {
+            match self.whnf(&cx, &ty, span) {
+                Ok(Type::Pi { dom, dom_level, cod, .. }) => {
+                    if i == subject {
+                        let disjoint = self
+                            .receiver_carrier(&cx, &dom, span)
+                            .is_some_and(|subject| subject != *carrier);
+                        return Some(!disjoint);
+                    }
+                    cx.push(format!("#{i}"), (*dom).clone(), dom_level);
+                    ty = (*cod).clone();
+                }
+                // Not a Π at all, so not callable: `let len = xs.len()`
+                // cannot be applied to anything. A level-polymorphic value,
+                // a failed reduction, or a skeleton promising more binders
+                // than the type has keeps the ambiguity.
+                Ok(Type::UPi { .. }) | Err(_) => return Some(true),
+                Ok(_) => return Some(i != 0),
+            }
+        }
+        Some(true)
     }
 
     /// A constructor application's declaration, without elaborating its
@@ -368,10 +484,293 @@ impl Elaborator {
         self.carrier_of_ty(cx, ty, span).map(|c| ReceiverCarrier::Named(c.key))
     }
 
+    /// A desugared method call failed: say what the author can act on, when
+    /// that is narrower than the failure itself. Only ever on the error path,
+    /// so a call that elaborates pays nothing for it.
+    pub(crate) fn method_call_failure(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        call: &Expr,
+        e: ElabError,
+    ) -> ElabError {
+        match self.missing_self_marker(cx, recv, call) {
+            Some(msg) => {
+                let span = match &e {
+                    ElabError::Elab { span, .. } => *span,
+                    _ => call.span,
+                };
+                ElabError::Elab { msg, span }
+            }
+            None => self.receiver_implicit_hint(recv, e),
+        }
+    }
+
+    /// The failure path of a dot call to a member with no `self` marker:
+    /// [`Self::missing_self_message`] at the receiver's carrier.
+    fn missing_self_marker(&self, cx: &Cx, recv: &Expr, call: &Expr) -> Option<String> {
+        let ExprKind::App { head, .. } = &call.kind else {
+            return None;
+        };
+        let head = match &head.kind {
+            ExprKind::TyApp { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let ExprKind::Var(member) = head else {
+            return None;
+        };
+        // A member the receiver's type selected — recorded by `resolve_dot`
+        // — and not the bare name or an imported candidate.
+        if !self
+            .attempt
+            .unmarked_receivers
+            .borrow()
+            .iter()
+            .any(|(at, m)| *at == recv.span && m == member)
+        {
+            return None;
+        }
+        let carrier = match self.elab_infer(cx, recv) {
+            Ok((_, rty, _)) => self.receiver_carrier(cx, &rty, call.span),
+            Err(_) => self.receiver_owner_by_head(cx, recv, call.span).map(|(c, _)| c),
+        }?;
+        self.missing_self_message(member, &carrier, call.span)
+    }
+
+    /// The gate's half of the same diagnostic: a recorded checking mismatch
+    /// at the span of a receiver placed into an unmarked member. The receiver
+    /// is what the note inferred, so its carrier comes for free.
+    pub(crate) fn unmarked_receiver_note(&self, cx: &Cx, span: Span, got: &Type) -> Option<String> {
+        let member = self
+            .attempt
+            .unmarked_receivers
+            .borrow()
+            .iter()
+            .find(|(at, _)| *at == span)
+            .map(|(_, m)| m.clone())?;
+        let carrier = self.receiver_carrier(cx, got, span)?;
+        self.missing_self_message(&member, &carrier, span)
+    }
+
+    /// A type-owned member reached through a receiver, whose declaration
+    /// forgot `self` on the parameter the receiver was meant for
+    /// (issues/type-member-missing-self-diagnostic.md). Unmarked means the
+    /// first explicit parameter is the subject, deliberately, so this claims
+    /// the mistake only when the carriers say so: the first explicit
+    /// parameter's carrier is known and differs from the receiver's, and
+    /// exactly one later explicit parameter's is the receiver's. Anything
+    /// less leaves the original error standing.
+    fn missing_self_message(
+        &self,
+        member: &str,
+        carrier: &ReceiverCarrier,
+        span: Span,
+    ) -> Option<String> {
+        let params = self.params_of(member);
+        if params.iter().any(|p| p.is_self) {
+            return None;
+        }
+        let explicit: Vec<usize> = params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.implicit && !p.is_type)
+            .map(|(i, _)| i)
+            .collect();
+        let (&first, later) = explicit.split_first()?;
+        // Each explicit domain's carrier and spelling, read under the
+        // binders before it. A signature is short and this is the error
+        // path, so one telescope walk per parameter is fine.
+        let domain = |i: usize| {
+            self.read_signature(
+                member,
+                span,
+                |_| Some(i),
+                |scx, dom| {
+                    Some((
+                        self.receiver_carrier(scx, dom, span),
+                        self.display_type_clean(scx, dom),
+                    ))
+                },
+            )
+        };
+        let (first_carrier, _) = domain(first)?;
+        if !first_carrier.is_some_and(|c| c != *carrier) {
+            return None;
+        }
+        let mut matching = Vec::new();
+        for &i in later {
+            let (c, spelled) = domain(i)?;
+            if c.as_ref() == Some(carrier) {
+                matching.push((i, spelled));
+            }
+        }
+        let [(at, spelled)] = matching.as_slice() else {
+            return None;
+        };
+        let intended = &params[*at].name;
+        let written = spelled.clone().unwrap_or_else(|| "…".to_string());
+        Some(format!(
+            "`{member}` treats its first explicit parameter `{}` as the receiver, because the \
+             declaration marks no parameter `self`, but this receiver has the type `{intended}` \
+             expects — did you mean to declare it `self {intended}: {written}`?",
+            params[first].name
+        ))
+    }
+
+    /// The named-argument spelling, added to an unsolved implicit of the
+    /// *receiver's* callee: `R::mk().get()` in a position that pins nothing
+    /// has no other fix, and `@` is the last rung of the ladder, not the
+    /// first (docs/receiver-member-resolution-design.md §0, §1). Runs on the
+    /// failure path of a method call only; every other error passes through.
+    pub(crate) fn receiver_implicit_hint(&self, recv: &Expr, e: ElabError) -> ElabError {
+        let ElabError::Elab { msg, span } = e else {
+            return e;
+        };
+        let (head, has_args) = match &recv.kind {
+            ExprKind::App { head, args, explicit: false, .. } => (&head.kind, !args.is_empty()),
+            kind => (kind, false),
+        };
+        let head = match head {
+            ExprKind::TyApp { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let param = match head {
+            ExprKind::Var(g) => msg
+                .strip_prefix("could not infer the implicit argument `")
+                .and_then(|rest| rest.split_once('`'))
+                .filter(|(_, rest)| rest.starts_with(&format!(" of `{g}`")))
+                .map(|(p, _)| (g, p.to_string())),
+            _ => None,
+        };
+        let Some((g, p)) = param else {
+            return ElabError::Elab { msg, span };
+        };
+        let args = if has_args { "…, " } else { "" };
+        ElabError::Elab {
+            msg: format!(
+                "{msg} — nothing here fixes the receiver's `{p}`; name it: `{g}({args}{p} := …)`"
+            ),
+            span,
+        }
+    }
+
+    /// A type's carrier together with the namespace its members live in —
+    /// the pair `member_head` selects `D::name` by.
+    fn receiver_owner(&self, cx: &Cx, ty: &Type, span: Span) -> Option<(ReceiverCarrier, String)> {
+        Some((self.receiver_carrier(cx, ty, span)?, self.type_namespace(cx, ty, span)?))
+    }
+
+    /// The owner of a receiver that does not infer on its own, read off its
+    /// **head** without elaborating it
+    /// (docs/receiver-member-resolution-design.md §1): a constructor names its
+    /// inductive, a saturated call to a global names its declared result's
+    /// carrier, and a method call names the result carrier of the member it
+    /// resolves to. The owner only chooses the qualified name; whether the
+    /// call typechecks is still the desugared application's to decide, with
+    /// the expected type in hand. Anything else declines.
+    fn receiver_owner_by_head(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        span: Span,
+    ) -> Option<(ReceiverCarrier, String)> {
+        if let ExprKind::Dot { recv: inner, name, tyargs, args: Some(args), named } = &recv.kind {
+            // Only a *member* reading: a bare `name` may still be a class
+            // dispatch or an imported candidate, whose result this cannot
+            // read without running those routes.
+            let head = self.member_head(cx, inner, name, !tyargs.is_empty(), span).ok()?;
+            if head == *name {
+                return None;
+            }
+            return self.global_result_owner(&head, args.len() + 1, named, span);
+        }
+        if let Some(owner) = self.constructor_receiver_owner(cx, recv) {
+            return Some(owner);
+        }
+        let (head, positional, named) = match &recv.kind {
+            // `@g(…)` spells its implicits, so its arity is not the one below;
+            // it also infers whenever it can be read at all.
+            ExprKind::App { explicit: true, .. } => return None,
+            ExprKind::App { head, args, named, .. } => (&head.kind, args.len(), named.as_slice()),
+            kind => (kind, 0, &[][..]),
+        };
+        let head = match head {
+            ExprKind::TyApp { head, .. } => &head.kind,
+            kind => kind,
+        };
+        let ExprKind::Var(g) = head else {
+            return None;
+        };
+        // The global must be what the name means here: a local, a `let`
+        // alias or the declaration under construction shadows it, and its
+        // type is not a committed signature.
+        if cx.names.iter().any(|n| n == g)
+            || cx.aliases.iter().any(|a| a.name == *g)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(g))
+        {
+            return None;
+        }
+        self.global_result_owner(g, positional, named, span)
+    }
+
+    /// The owner of a saturated call's result: the carrier of the global's
+    /// declared result type under its own telescope. A call that does not
+    /// supply exactly the explicit parameters declines — an over-application
+    /// applies the result further and a partial one is a function — and so
+    /// does a result whose head depends on the arguments.
+    fn global_result_owner(
+        &self,
+        name: &str,
+        positional: usize,
+        named: &[NamedArg],
+        span: Span,
+    ) -> Option<(ReceiverCarrier, String)> {
+        self.read_signature(
+            name,
+            span,
+            |params| {
+                let explicit: Vec<&str> = params
+                    .iter()
+                    .filter(|p| !p.implicit && !p.is_type)
+                    .map(|p| p.name.as_str())
+                    .collect();
+                let named_explicit =
+                    named.iter().filter(|a| explicit.contains(&a.name.as_str())).count();
+                (positional + named_explicit == explicit.len()).then_some(params.len())
+            },
+            |cx, result| self.receiver_owner(cx, result, span),
+        )
+    }
+
     /// Read the subject's outer carrier from a committed signature, under
     /// its own parameter telescope. No callback elaboration, speculative
     /// application, or scratch metavariable solutions escape this query.
-    fn imported_subject_carrier(&self, name: &str, span: Span) -> Option<ReceiverCarrier> {
+    /// Any global, not only an imported candidate: the ambient reading a
+    /// member races is filtered by the same read (§2 of
+    /// docs/receiver-member-resolution-design.md).
+    fn global_subject_carrier(&self, name: &str, span: Span) -> Option<ReceiverCarrier> {
+        self.read_signature(
+            name,
+            span,
+            |params| {
+                params.iter().position(|p| p.is_self)
+                    .or_else(|| params.iter().position(|p| !p.implicit && !p.is_type))
+            },
+            |cx, dom| self.receiver_carrier(cx, dom, span),
+        )
+    }
+
+    /// Walk a committed global's parameter telescope and `read` one type
+    /// under it: parameter `at`'s domain, or the declared result when `at` is
+    /// the parameter count. A signature under a section context, or one that
+    /// stops being a Π early, answers `None`.
+    fn read_signature<T>(
+        &self,
+        name: &str,
+        span: Span,
+        at: impl FnOnce(&[crate::application::ParamMeta]) -> Option<usize>,
+        read: impl FnOnce(&Cx, &Type) -> Option<T>,
+    ) -> Option<T> {
         let info = self.lookup_global(name)?;
         let GlobalBinding::Tm { ctx, ty, .. } = &self.psi.bindings[info.abs as usize] else {
             return None;
@@ -381,17 +780,16 @@ impl Elaborator {
             + self.global_padding() + self.meta_pushed.borrow().len() as u32;
         let mut ty = ty.shift_global(growth);
         let mut cx = Cx::empty();
-        let subject = info.params.iter().position(|p| p.is_self)
-            .or_else(|| info.params.iter().position(|p| !p.implicit && !p.is_type))?;
+        let at = at(&info.params)?;
         for (i, p) in info.params.iter().enumerate() {
             let Type::Pi { dom, dom_level, cod, .. } = self.whnf(&cx, &ty, span).ok()? else {
                 return None;
             };
-            if i == subject { return self.receiver_carrier(&cx, &dom, span); }
+            if i == at { return read(&cx, &dom); }
             cx.push(p.name.clone(), (*dom).clone(), dom_level);
             ty = (*cod).clone();
         }
-        None
+        if at == info.params.len() { read(&cx, &ty) } else { None }
     }
 
     /// Only an ambiguous unqualified import set enters this route. Local
@@ -411,7 +809,7 @@ impl Elaborator {
         let mut unknown = false;
         for origin in &origins {
             let candidate = format!("{origin}::{name}");
-            match self.imported_subject_carrier(&candidate, span) {
+            match self.global_subject_carrier(&candidate, span) {
                 Some(c) if c == carrier => compatible.push(candidate),
                 Some(_) => {}
                 None => unknown = true,

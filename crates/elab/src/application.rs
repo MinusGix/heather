@@ -16,6 +16,7 @@ use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
 use crate::{Cx, ElabError, R, err};
 
 mod callable;
+pub(crate) use callable::subject_index_in;
 mod named;
 pub(crate) use named::{
     permute_by_name, refuse_named, resolve_constructor_arguments, resolve_named,
