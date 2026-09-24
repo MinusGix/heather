@@ -65,6 +65,11 @@ record Grammar(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), 
     yields: meaning(derivation) = value,
     span: rest(source,begin) = spelling(derivation) ++ rest(source,end),
 }
+// `Grammar(level)` fills a relation slot whose type arguments are written
+// (`Certified<PTok,Expr>(…)`), but a record's partial application is refused
+// where the callee's `<T, A>` are still being inferred, and a global's is not.
+// So this wrapper survives for the eight `forget_at`/`forget_post`/
+// `post_on_success`/`complete_sound` calls below, and nowhere else.
 fn GrammarSpec(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr) -> Type {
     Grammar(level,source,begin,end,value)
 }
@@ -72,7 +77,7 @@ fn GrammarSpec(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), 
 // grammar at that tier, or a failure over the same source. Spelled out, this
 // type runs to sixty-nine columns and appears twenty-five times below.
 fn Checked(level: Nat, source: List<PTok>, begin: Cursor<PTok>(source)) -> Type {
-    Result<Certified<PTok,Expr>(source,begin,GrammarSpec(level)),Failure<PTok>(source)>
+    Result<Certified<PTok,Expr>(source,begin,Grammar(level)),Failure<PTok>(source)>
 }
 fn factor_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr,
     atom: Grammar(2,source,begin,end,value)) -> Grammar(1,source,begin,end,value) {
@@ -207,7 +212,7 @@ fn factor_body(source: List<PTok>, begin: Cursor<PTok>(source),
 }
 fn close_body(source: List<PTok>, begin: Cursor<PTok>(source),
     op: Certified<PTok,Nat>(source,begin,Recognized<PTok,Nat>(opening)),
-    inner: Certified<PTok,Expr>(source,op.end,GrammarSpec(0))) -> Checked(2,source,begin) {
+    inner: Certified<PTok,Expr>(source,op.end,Grammar(0))) -> Checked(2,source,begin) {
     recognize_certified(closing,2,source,inner.end).fold(
         λ close => Ok(Certified(inner.value,close.end,
                 begin.offset.le_trans(op.end.offset, close.end.offset, op.forward,
@@ -274,13 +279,13 @@ fn parse_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Exp
     forget_at(source,begin,GrammarSpec(2),checked_atom(source,begin))
 }
 fn grammar() -> Parser<PTok,Expr> { Parser(λ source begin => parse_expr(source,begin)) }
-fn grammar_sound() -> Sound<PTok,Expr>(grammar(),GrammarSpec(0)) {
+fn grammar_sound() -> Sound<PTok,Expr>(grammar(),Grammar(0)) {
     Sound(λ source begin => forget_post(source,begin,GrammarSpec(0),checked_expr(source,begin)))
 }
-fn factor_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_factor(source,begin)),GrammarSpec(1)) {
+fn factor_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_factor(source,begin)),Grammar(1)) {
     Sound(λ source begin => forget_post(source,begin,GrammarSpec(1),checked_factor(source,begin)))
 }
-fn atom_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_atom(source,begin)),GrammarSpec(2)) {
+fn atom_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_atom(source,begin)),Grammar(2)) {
     Sound(λ source begin => forget_post(source,begin,GrammarSpec(2),checked_atom(source,begin)))
 }
 theorem expression_sound(source: List<PTok>, begin: Cursor<PTok>(source), s: Success<PTok,Expr>(source,begin), shape: parse_expr(source,begin) = Ok(s)):
@@ -302,7 +307,7 @@ record WholeGrammar(source: List<PTok>, value: Expr) {
     tokens: spelling(derivation) = source,
 }
 fn whole_grammar(source: List<PTok>, end: Cursor<PTok>(source), value: Expr,
-    proof: CompleteSpec<PTok,Expr>(GrammarSpec(0),source,Cursor::start(source),end,value)) -> WholeGrammar(source,value) {
+    proof: CompleteSpec<PTok,Expr>(Grammar(0),source,Cursor::start(source),end,value)) -> WholeGrammar(source,value) {
     let g = proof.left;
     WholeGrammar(g.derivation,g.valid,g.at_level,g.yields,
         sym(trans(sym(initial_rest(source)),trans(g.span,
@@ -315,7 +320,7 @@ fn ParsedGrammar(source: List<PTok>, r: Result<Expr,ParseError>) -> Type {
     match r { Err(_) => True, Ok(value) => WholeGrammar(source,value) }
 }
 theorem public_reply_sound(source: List<PTok>, r: Reply<PTok,Expr>(source,Cursor::start(source))):
-    Post(source,Cursor::start(source),CompleteSpec<PTok,Expr>(GrammarSpec(0)),r) -> ParsedGrammar(source,public_reply(source,r)) {
+    Post(source,Cursor::start(source),CompleteSpec<PTok,Expr>(Grammar(0)),r) -> ParsedGrammar(source,public_reply(source,r)) {
     match r { Err(_) => λ h => trivial, Ok(s) => λ h => whole_grammar(source,s.end,s.value,h) }
 }
 fn parse(ts: List<PTok>) -> Result<Expr,ParseError> {

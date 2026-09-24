@@ -3,7 +3,7 @@ title: "Type-owned namespaces: names attach to subjects, reachability through ev
 status: open
 labels: [frontend, syntax, elaboration, design, modules]
 created: 2026-08-05
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 namespace
@@ -183,3 +183,4 @@ the prelude layer-2 round or the first file that wants two order kits.
   understands.
 - 2026-09-22: The 2026-09-22 std namespacing refactor moved `nat`'s `add` to `Nat::add`; certgen still identifies functions by surface name, filed as [[certgen-namespaced-function-identity]].
 - 2026-09-23: 2026-09-23: the refactor's fallout on master is fixed and the full suite is green (2904 passed). The fixes were fmt drift, lib_algebra and operators_onto_classes test respellings, and certgen now keys functions on global identity (certgen-namespaced-function-identity, closed).
+- 2026-09-24: 2026-09-24: Namespace round (#1a) chartered from the refactor's residue. Probe of the 80 remaining lib `@` sites (all BitVec) found [[receiver-with-unsolved-implicit-unbound]]: member lookup refuses any receiver whose type carries a meta (`R::mk().get()`, `Nil.len()`), with a false "declared below" hint. It joins the facade re-export of members, `x.f()` vs a bare `f` in scope, [[type-member-missing-self-diagnostic]] and [[receiver-member-ih-generalization]].

@@ -1,9 +1,9 @@
 ---
 title: The showcases' five spec-relation wrappers can go, and RunSpec/OpRun become records
-status: open
+status: closed
 labels: [showcase,ergonomics,perf,stdlib]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-24
 ---
 
 [[record-type-partial-application]] landed the language half on 2026-09-19: a
@@ -65,3 +65,4 @@ one candidate cause.
 - 2026-09-19: The "in **no test**" note above, plus the ~95 s/4:24 recheck tax, are now
   [[showcase-harness]]'s to fix — a manifest, a release-CLI gate for `calc_text` in the
   `--fast`-skipped tier, and the cacheability question measured rather than chased.
+- 2026-09-24: 2026-09-24: Landed. `RunSpec` and `OpRun` are records (`in_class`/`span`; `trail_spaces`/`span`/`progress`), every positional projection into them is named, and `GrammarSpec` is gone from calc_text and from calc_parser's relation slots. calc_parser keeps it, with a comment, at eight calls whose callee's type arguments are still being inferred: [[record-partial-application-under-inferred-callee]]. Cost recorded, not gated: calc_text 19.8 s → 22.0 s cold, the relation-comparing bodies 6–24× kernel steps, [[record-relation-structural-comparison-cost]]. Showcase tests 2 + 6 passed.

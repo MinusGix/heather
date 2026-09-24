@@ -50,8 +50,9 @@ fn class_pick(cls: Char -> Bool) -> Char -> Option<Char> {
 
 // What a run certifies: its characters are in the class, and they are exactly
 // the span between the two cursors.
-fn RunSpec(cls: Char -> Bool, source: List<Char>, begin, end: Cursor<Char>(source), cs: List<Char>) -> Type {
-    cs.all(cls) ∧ (rest(source, begin) = cs ++ rest(source, end))
+record RunSpec(cls: Char -> Bool, source: List<Char>, begin, end: Cursor<Char>(source), cs: List<Char>) {
+    in_class: cs.all(cls),
+    span: rest(source, begin) = cs ++ rest(source, end),
 }
 
 // A run cannot fail — an empty run is a run — so this returns a certificate
@@ -63,7 +64,7 @@ fn checked_run(cls: Char -> Bool, source: List<Char>, begin: Cursor<Char>(source
     -> Certified<Char, List<Char>>(source, begin, RunSpec(cls))
     decreases rest(source, begin).len() {
     match recognize_certified(class_pick(cls), 0, source, begin) {
-        Err(_) => Certified([], begin, begin.offset.le_refl(), ⟨trivial, refl⟩),
+        Err(_) => Certified([], begin, begin.offset.le_refl(), RunSpec(trivial, refl)),
         Ok(one) => {
             let head = recognized_head(class_pick(cls), source, begin, one.end, one.value, one.evidence);
             let inside = selected_of_match(cls(head.head), head.head, one.value, head.selected);
@@ -72,15 +73,15 @@ fn checked_run(cls: Char -> Bool, source: List<Char>, begin: Cursor<Char>(source
             let more = checked_run(cls, source, one.end) decreasing tail;
             Certified(Cons(one.value, more.value), more.end,
                 begin.offset.le_trans(one.end.offset, more.end.offset, one.forward, more.forward),
-                ⟨⟨j(inside.right, λ y q => cls(y).IsTrue(), inside.left), more.evidence.left⟩,
+                RunSpec(⟨j(inside.right, λ y q => cls(y).IsTrue(), inside.left), more.evidence.in_class⟩,
                     calc {
                         rest(source, begin)
                             = Cons(head.head, rest(source, one.end)) := head.suffix,
                             = Cons(one.value, rest(source, one.end)) :=
                                 j(inside.right, λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
                             = Cons(one.value, more.value ++ rest(source, more.end)) :=
-                                List::cong_cons(one.value, more.evidence.right),
-                    }⟩)
+                                List::cong_cons(one.value, more.evidence.span),
+                    }))
         },
     }
     on decreasing tail := small;
@@ -167,14 +168,10 @@ record Grammar(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source),
     span: rest(source, begin) = spell(derivation, rest(source, end)),
 }
 
-fn GrammarSpec(level: Nat, source: List<Char>, begin, end: Cursor<Char>(source), value: Expr) -> Type {
-    Grammar(level, source, begin, end, value)
-}
-
 // What a tier's parser returns: a certified `Expr` whose evidence is the
 // grammar at that tier, or a failure over the same source.
 fn Checked(level: Nat, source: List<Char>, begin: Cursor<Char>(source)) -> Type {
-    Result<Certified<Char, Expr>(source, begin, GrammarSpec(level)), Failure<Char>(source)>
+    Result<Certified<Char, Expr>(source, begin, Grammar(level)), Failure<Char>(source)>
 }
 
 // What a production body is handed to close its recursion: a parser for
@@ -212,8 +209,8 @@ fn number_grammar(source: List<Char>, begin, middle, end: Cursor<Char>(source),
     run: RunSpec(is_digit, source, begin, middle, digits),
     spaces: RunSpec(is_space, source, middle, end, trail))
     -> Grammar(2, source, begin, end, Lit(digits_value(digits))) {
-    Grammar(Number(digits, trail), ⟨⟨more, run.left⟩, spaces.left⟩, refl, refl,
-        trans(run.right, digits.cong_append_r(spaces.right)))
+    Grammar(Number(digits, trail), ⟨⟨more, run.in_class⟩, spaces.in_class⟩, refl, refl,
+        trans(run.span, digits.cong_append_r(spaces.span)))
 }
 
 // The three span proofs below stay as `trans`/`cong_spell` towers where
@@ -284,13 +281,14 @@ fn exact_pick(target: Char) -> Char -> Option<Nat> {
 }
 
 // One operator character followed by its run of spaces: what a production
-// consumes between its operands. This is a *spec relation* over the library's
-// own `Certified`, not a new record of its own — the value is the run of
-// spaces, and the evidence is that they are spaces, that the two together are
-// exactly the span, and that the span is non-empty.
-fn OpRun(target: Char, source: List<Char>, begin, end: Cursor<Char>(source), trail: List<Char>) -> Type {
-    (trail.all(is_space) ∧ OpSpan(target, trail, source, begin, end))
-        ∧ begin.offset.Lt(end.offset)
+// consumes between its operands. The library's own `Certified` carries the run
+// of spaces as its value; this record is only the evidence, handed over as the
+// relation `OpRun(target)` rather than wrapped in a result type of its own.
+record OpRun(target: Char, source: List<Char>, begin, end: Cursor<Char>(source), trail: List<Char>) {
+    trail_spaces: trail.all(is_space),
+    span: OpSpan(target, trail, source, begin, end),
+    // The span is never empty, which is the measure's step past an operator.
+    progress: begin.offset.Lt(end.offset),
 }
 
 fn operator(target: Char, expected: Nat, source: List<Char>, begin: Cursor<Char>(source))
@@ -309,11 +307,11 @@ fn operator(target: Char, expected: Nat, source: List<Char>, begin: Cursor<Char>
                         j(code_is_char(head.head, target, matched.left),
                             λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
                     = Cons(target, spaces.value ++ rest(source, spaces.end)) :=
-                        List::cong_cons(target, spaces.evidence.right),
+                        List::cong_cons(target, spaces.evidence.span),
             };
             Ok(Certified(spaces.value, spaces.end,
                 begin.offset.le_of_lt(spaces.end.offset, step),
-                ⟨⟨spaces.evidence.left, span⟩, step⟩))
+                OpRun(spaces.evidence.in_class, span, step)))
     })
 }
 
@@ -334,16 +332,16 @@ fn number_body(source: List<Char>, begin: Cursor<Char>(source)) -> Checked(2, so
 
 fn close_body(source: List<Char>, begin: Cursor<Char>(source),
     op: Certified<Char, List<Char>>(source, begin, OpRun('(')),
-    inner: Certified<Char, Expr>(source, op.end, GrammarSpec(0))) -> Checked(2, source, begin) {
+    inner: Certified<Char, Expr>(source, op.end, Grammar(0))) -> Checked(2, source, begin) {
     operator(')', 2, source, inner.end).fold(
         λ close => Ok(Certified(inner.value, close.end,
             begin.offset.le_trans(op.end.offset, close.end.offset,
-                begin.offset.le_of_lt(op.end.offset, op.evidence.right),
+                begin.offset.le_of_lt(op.end.offset, op.evidence.progress),
                 op.end.offset.le_trans(inner.end.offset, close.end.offset, inner.forward,
-                    inner.end.offset.le_of_lt(close.end.offset, close.evidence.right))),
+                    inner.end.offset.le_of_lt(close.end.offset, close.evidence.progress))),
             paren_grammar(source, begin, op.end, inner.end, close.end, close.end, inner.value,
-                op.value, close.value, op.evidence.left.right, inner.evidence, close.evidence.left.right,
-                op.evidence.left.left, close.evidence.left.left, refl))),
+                op.value, close.value, op.evidence.span, inner.evidence, close.evidence.span,
+                op.evidence.trail_spaces, close.evidence.trail_spaces, refl))),
         λ e => Err(commit_after(source, begin, inner.end, e)))
 }
 
@@ -351,7 +349,7 @@ fn parentheses_body(source: List<Char>, begin: Cursor<Char>(source),
     recur: Recur(0, source, begin))
     -> Checked(2, source, begin) {
     operator('(', 0, source, begin).and_then(λ op => {
-        let small = drop_length_strict(source, begin.offset, op.end.offset, op.evidence.right, op.end.within);
+        let small = drop_length_strict(source, begin.offset, op.end.offset, op.evidence.progress, op.end.within);
         recur(op.end, small).fold(λ inner => close_body(source, begin, op, inner),
             λ e => Err(commit_after(source, begin, op.end, e)))
     })
@@ -372,16 +370,16 @@ fn factor_body(source: List<Char>, begin: Cursor<Char>(source),
     first.and_then(λ left =>
         operator('*', 1, source, left.end).fold(
             λ op => {
-                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.right);
+                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.progress);
                 recur(op.end, small).fold(
                     λ right => Ok(Certified(Times(left.value, right.value), right.end,
                         begin.offset.le_trans(op.end.offset, right.end.offset,
                             begin.offset.le_trans(left.end.offset, op.end.offset, left.forward,
-                                left.end.offset.le_of_lt(op.end.offset, op.evidence.right)),
+                                left.end.offset.le_of_lt(op.end.offset, op.evidence.progress)),
                             right.forward),
                         product_grammar(source, begin, left.end, op.end, right.end,
-                            left.value, right.value, op.value, op.evidence.left.left,
-                            left.evidence, op.evidence.left.right, right.evidence))),
+                            left.value, right.value, op.value, op.evidence.trail_spaces,
+                            left.evidence, op.evidence.span, right.evidence))),
                     λ e => Err(commit_after(source, begin, op.end, e)))
             },
             λ ignored => Ok(Certified(left.value, left.end, left.forward,
@@ -395,16 +393,16 @@ fn expr_body(source: List<Char>, begin: Cursor<Char>(source),
     first.and_then(λ left =>
         operator('+', 1, source, left.end).fold(
             λ op => {
-                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.right);
+                let small = progress_after(source, begin, left.end, op.end, left.forward, op.evidence.progress);
                 recur(op.end, small).fold(
                     λ right => Ok(Certified(Plus(left.value, right.value), right.end,
                         begin.offset.le_trans(op.end.offset, right.end.offset,
                             begin.offset.le_trans(left.end.offset, op.end.offset, left.forward,
-                                left.end.offset.le_of_lt(op.end.offset, op.evidence.right)),
+                                left.end.offset.le_of_lt(op.end.offset, op.evidence.progress)),
                             right.forward),
                         sum_grammar(source, begin, left.end, op.end, right.end,
-                            left.value, right.value, op.value, op.evidence.left.left,
-                            left.evidence, op.evidence.left.right, right.evidence))),
+                            left.value, right.value, op.value, op.evidence.trail_spaces,
+                            left.evidence, op.evidence.span, right.evidence))),
                     λ e => Err(commit_after(source, begin, op.end, e)))
             },
             λ ignored => Ok(Certified(left.value, left.end, left.forward,
@@ -469,17 +467,17 @@ fn public_error(source: List<Char>, error: ErrorView) -> ParseError {
 // remainder at the final cursor is empty.
 fn finish_text(source: List<Char>,
     lead: Certified<Char, List<Char>>(source, Cursor::start(source), RunSpec(is_space)),
-    got: Certified<Char, Expr>(source, lead.end, GrammarSpec(0)))
+    got: Certified<Char, Expr>(source, lead.end, Grammar(0)))
     -> Result<Parsed(source), ParseError> {
     match shape: rest(source, got.end) {
         Cons(_, _) => Err(Trailing),
         Nil => Ok(Parsed(got.value,
-            WholeGrammar(lead.value, lead.evidence.left,
+            WholeGrammar(lead.value, lead.evidence.in_class,
                 got.evidence.derivation, got.evidence.valid, got.evidence.at_level, got.evidence.yields,
                 sym(calc {
                     source
                         = rest(source, Cursor::start(source))          := sym(initial_rest(source)),
-                        = lead.value ++ rest(source, lead.end) := lead.evidence.right,
+                        = lead.value ++ rest(source, lead.end) := lead.evidence.span,
                         = lead.value ++ spell(got.evidence.derivation, Nil<Char>) :=
                             lead.value.cong_append_r(
                                 trans(got.evidence.span,
