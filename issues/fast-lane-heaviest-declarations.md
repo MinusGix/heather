@@ -3,7 +3,7 @@ title: The fast lane's wall clock is guarded_read's four layout declarations (6�
 status: open
 labels: [performance,testing,x86,kernel]
 created: 2026-09-23
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 
 The fast lane's wall clock is one test, and that test is four declarations.
@@ -55,3 +55,6 @@ the next-longest test is ~35 s (`showcase::cli_tier_showcases_check`).
   - Unexplained, for whoever measures after: `identity_selected::whole_layout` and `masked_selected::whole_layout` have identical counters and 13.5 s vs 5.8 s in the suite run (8.9 s standalone). Seconds under 7-way load; the counters are the datum.
 - 2026-09-23: **Fixed (generator side).** `x86_64_access_code` gains `access_sequence_layout` and `access_branch_layout`; `AccessFragment::{sequence,branch}` state their layouts by applying them to the children's codes and layouts instead of a nested tuple against the literal tree. Suite rows for the test (width one, `HEATHER_TIMINGS_DIR`), before → after: the four layouts 3.88 M / 3.27 M / 3.27 M / 3.88 M steps → 700 K / 403 K / 403 K / 700 K, ~42 s → ~4.2 s gate; the two `yes_layout`s 437 K → 185 K; the lemmas themselves 1.34 M and 102 K steps, once. The test: 68 s → 21 s standalone. What is left in the layouts is mostly the per-constructor walk of [[elaborator-canonical-type-spelling]] (the codes are still spelled as constructor trees in the lemma arguments). Full `scripts/test`: 2905 passed, 0 failed.
 - 2026-09-23: The per-constructor walk is fixed too ([[elaborator-canonical-type-spelling]], 2026-09-23): with both, the test is 82 s → 15 s in a full run, and the suite's summed target time 1698 s → 921 s.
+- 2026-09-24: Test-phase look after the build rounds ([[rust-edit-loop-build-bound]]), desktop, warm caches. The fast lane was ~32 s of tests, set both by throughput (~196 s summed shard wall over 7 jobs) and by one shard: `cli_showcase_calc_text`, a plain `heather check` of `docs/showcase/calc_text.hthr` from source (16 s alone, 26 s contended). That test now checks through the semantic session (`--cache`, one `target/showcase-test-images/<row>` per row; `--accept-stale-images` in the fast lane, as the elab test support does): 13 s cold, 0.9 s warm. Negative control: a wrong `refl` theorem appended to the showcase is still refused by the kernel with the cache warm. Fast lane: tests ~32 s → 23–25 s, 2765 passed.
+
+  Tried and not kept: raising the runner's CPU bound from `cores/2 − 1` (7) to 1.25 CPUs per child (memory then caps it at 9). Three runs at 9 jobs gave the same 23 s wall with summed CPU up ~20% (contention). The lane is now bound by genuine test CPU: per-process fixed cost is negligible (the cheapest elab shards are 0.00–0.02 CPU-s), and 24 shards of 2 s or more carry ~110 of ~185 CPU-s. Further cuts are per-test elaboration work; pick them from `scripts/perf report`. The full lane's wall: [[shard-long-unit-test-binaries]].

@@ -1,6 +1,6 @@
 ---
 title: The elab rebuild floor: a second O3 compile for unit tests and a 22 s lib rebuild per edit
-status: open
+status: closed
 labels: [testing,performance,build]
 created: 2026-09-24
 updated: 2026-09-24
@@ -49,3 +49,4 @@ Re-measure after the first lever lands before choosing.
   What remains without distorting code: elab's dev opt-level (a loop-level trade, measured as build + fast lane), and nothing for the generic buckets (`alloc::vec` 6.1 MB, `iter::adapters::map` 4.4 MB, `fallback` 4.5 MB), which every same-line probe rewrote.
 
   Correction to [[rust-edit-loop-build-bound]]'s kernel-edit numbers: they were confounded. The measuring script reverted the elab probe edit just before applying the kernel one, so every "kernel body edit" build also rebuilt elab. A kernel body edit alone (`nat_residual`, not inlined into elab) builds in ~7 s (elab lib 2.4 s, elab-unit 4.4 s). The elab-edit column stands.
+- 2026-09-24: Decision (user, 2026-09-24): elab keeps its dev opt-level 3; the opt-level trade is not taken. With the module split refuted and code-reshaping ruled out, this issue has no open lever; the build floor is the Elaborator CGU plus the generic buckets.

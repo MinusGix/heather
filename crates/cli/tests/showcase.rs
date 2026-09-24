@@ -28,7 +28,19 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // Width one, as `scripts/test` runs every child: the runner already
     // budgets two CPUs per target, and eight kernel workers underneath that
     // measures contention rather than the check (see CLAUDE.md).
-    cmd.env("HEATHER_KERNEL_WORKERS", "1").arg(&row.path);
+    cmd.env("HEATHER_KERNEL_WORKERS", "1");
+    // Through the semantic session, like the native certificates: a run at
+    // an unchanged compiler replays the row's image (its kernel verdicts
+    // vouched for by the store), and a changed compiler or source checks
+    // from source again. One directory per row, since the rows run side by
+    // side and share the library prefix. The fast lane's trade
+    // (`HEATHER_SEMANTIC_IMAGES=accept-stale`, set by scripts/test) replays
+    // an image an earlier build wrote, as crates/elab/tests/support does.
+    cmd.arg("--cache").arg("--cache-dir").arg(format!("target/showcase-test-images/{}", row.name));
+    if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
+        cmd.arg("--accept-stale-images");
+    }
+    cmd.arg(&row.path);
     let out = cmd.output().expect("run heather check");
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
