@@ -115,6 +115,7 @@ registry! {
         ImagePublish = "image_publish_ns",
         CacheHash = "cache_hash_ns",
         MerkleWalk = "merkle_walk_ns",
+        Cow = "cow_ns",
     }
     counters {
         DeclsGated = "decls_gated",
@@ -124,6 +125,7 @@ registry! {
         CacheHashes = "cache_hashes",
         DiagNotes = "diag_notes",
         DiagCandidates = "diag_candidates",
+        CowCopies = "cow_copies",
     }
 }
 
@@ -281,6 +283,96 @@ pub fn count(counter: Counter) {
         let cell = &r.counters[counter as usize];
         cell.set(cell.get().wrapping_add(1));
     });
+}
+
+// ---------------------------------------------------------------------------
+// Copy-on-write
+// ---------------------------------------------------------------------------
+
+// The elaborator's registries are persistent by `Rc` sharing: a clone, a
+// checkpoint or a semantic image holds the same maps, and the first write
+// after one copies what it writes through. That copy is usually of a
+// *current-module* layer — the part that grows with the module — so a write
+// made once per declaration while something else holds the layer is
+// O(module) per declaration, and a large module goes quadratic without any
+// counter moving. It happened twice before this seam existed
+// (issues/check-module-delta-certificate-cost.md: the journal clone, the
+// per-slice replay checkpoint), both found only by a profiler.
+//
+// [`make_mut`] is `Rc::make_mut` with the copying case made visible: the
+// `cow_copies` column counts writes that copied, `cow_ns` is the time they
+// took, and the per-site table beside a `--timings` file (`*.cow-sites.txt`)
+// names the write that paid, through `#[track_caller]`.
+
+thread_local! {
+    static COW_SITES: RefCell<std::collections::BTreeMap<(&'static str, u32, &'static str), (u64, u64)>> =
+        const { RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// `Rc::make_mut`, counted and timed when it copies. Every registry
+/// copy-on-write write goes through here.
+#[track_caller]
+#[inline]
+pub fn make_mut<T: Clone>(rc: &mut std::sync::Arc<T>) -> &mut T {
+    if std::sync::Arc::strong_count(rc) == 1 && std::sync::Arc::weak_count(rc) == 0 {
+        return std::sync::Arc::make_mut(rc);
+    }
+    cow_copy(std::panic::Location::caller(), rc)
+}
+
+#[cold]
+#[inline(never)]
+fn cow_copy<'a, T: Clone>(site: &'static std::panic::Location<'static>, rc: &'a mut std::sync::Arc<T>) -> &'a mut T {
+    count(Counter::CowCopies);
+    let guard = guard(Timer::Cow);
+    std::sync::Arc::make_mut(rc);
+    let ns = guard.finish();
+    COW_SITES.with(|sites| {
+        let mut sites = sites.borrow_mut();
+        let entry = sites.entry((site.file(), site.line(), std::any::type_name::<T>())).or_default();
+        entry.0 += 1;
+        entry.1 += ns;
+    });
+    std::sync::Arc::get_mut(rc).expect("make_mut left the value unshared")
+}
+
+/// `alloc::vec::Vec<heather_kernel::term::Type>` as `Vec<Type>`: every
+/// module path dropped, generics kept.
+fn short_type(ty: &str) -> String {
+    let mut out = String::new();
+    let mut word = String::new();
+    let mut chars = ty.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ':' && chars.peek() == Some(&':') {
+            chars.next();
+            word.clear();
+        } else if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            out.push_str(&word);
+            word.clear();
+            out.push(c);
+        }
+    }
+    out + &word
+}
+
+/// This thread's copying writes by site and copied type since the last call,
+/// costliest first: `copies\tms\ttype\tfile:line`. Empty when nothing
+/// copied. The type is what tells a cheap copy from a costly one: a
+/// persistent `GlobalCtx` or the committed world's handle struct copies in
+/// O(1), a registry layer in O(what it holds).
+pub fn take_cow_sites() -> String {
+    let sites = COW_SITES.with(|sites| std::mem::take(&mut *sites.borrow_mut()));
+    let mut rows: Vec<_> = sites.into_iter().collect();
+    rows.sort_by_key(|(_, (_, ns))| std::cmp::Reverse(*ns));
+    let mut out = String::new();
+    for ((file, line, ty), (copies, ns)) in rows {
+        use std::fmt::Write as _;
+        let ty = short_type(ty);
+        let _ = writeln!(out, "{copies}\t{:.1}\t{ty}\t{file}:{line}", ns as f64 / 1e6);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +811,12 @@ pub fn dump(dest: &Dest, rows: &[ItemTiming]) -> std::io::Result<()> {
         Dest::File(path) => {
             std::fs::write(path, text)?;
             eprintln!("timings: {} rows in {}", rows.len(), path.display());
+            // The copy-on-write sites behind the `cow_*` columns, beside it.
+            let sites = take_cow_sites();
+            if !sites.is_empty() {
+                let beside = path.with_extension("cow-sites.txt");
+                std::fs::write(&beside, format!("copies\tms\ttype\tsite\n{sites}"))?;
+            }
             Ok(())
         }
     }
@@ -798,4 +896,27 @@ pub fn with_env_timings<T>(label: &str, f: impl FnOnce() -> T) -> T {
     let _ = dump(&dest, &rows);
     disable();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc as Rc;
+
+    use super::*;
+
+    #[test]
+    fn only_a_write_that_copies_is_counted_and_named() {
+        take_cow_sites();
+        let mut alone = Rc::new(vec![1u32]);
+        make_mut(&mut alone).push(2);
+        assert_eq!(take_cow_sites(), "", "an unshared write copies nothing");
+
+        let mut shared = Rc::new(vec![1u32]);
+        let held = Rc::clone(&shared);
+        make_mut(&mut shared).push(2);
+        assert_eq!((held.len(), shared.len()), (1, 2), "make_mut semantics are unchanged");
+        let sites = take_cow_sites();
+        assert!(sites.starts_with("1\t") && sites.contains(file!()), "the copy names this file: {sites:?}");
+        assert!(sites.contains("\tVec<u32>\t"), "and the type it copied: {sites:?}");
+    }
 }

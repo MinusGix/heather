@@ -61,3 +61,19 @@ Next step: `--timings` of the same certificate through both paths and diff `decl
   | then (20, 22) again | 1.33 / 1.26 s | 1.56 / 1.47 s |
 
   The repeat pays the two probe generations (~0.2 s) before the image hits. What an other-inputs build still elaborates is the input-dependent 1,780 declarations and the library replay.
+- 2026-09-23: Copy-on-write counter and audit. Every registry copy-on-write write now goes through `stats::make_mut` (`Rc::make_mut`, counted and timed when it actually copies, with `#[track_caller]` on the elaborator's and `Shared`'s `deref_mut`). Two `--timings` columns, `cow_ns` and `cow_copies` (`scripts/timings --columns "cow ms,copies"`), and a `*.cow-sites.txt` beside the TSV: copies, ms, copied type, write site, costliest first (docs/instrumentation-design.md, "Elaborator state").
+
+  Audit, release, after this issue's two fixes:
+
+  | workload | copying |
+  |---|---|
+  | perf full corpus, `check --cache` cold, width one (omega, nat, int, list, bitvec, algebra, calc_parser, ir_v1, function_ir, x86_64 model, calc_text) | ≤ 0.02 s per file |
+  | the `stack_save` certificate, `--cache` cold | 0.013 s of 31 s |
+  | x86_64 model / calc_text warm (image replay), width 1 and 8 | ~0 |
+  | x86_64 model cold at width 8 | 0.033 s |
+  | calc_text edited (appended decl, slice replay), width 1 and 8 | ~0 |
+  | `slow_acceptance_multi_stack_save_summary` (in-process forks) | 0.012 s of 20.7 s |
+
+  What remains is healthy by construction: one copy of each registry's current layer per module boundary (`names.rs` `NameLayer` dominates, ~0.3 ms per module), and the persistent `GlobalCtx` pushed on every commit while `delta_psi` shares it (O(1)). No path measured has an O(module) copy per declaration left.
+
+  Guard: `crates/elab/tests/slice_replay.rs::registry_layers_are_not_copied_per_declaration` elaborates and slice-replays a 121-declaration module and bounds registry-layer copies (types other than `GlobalCtx` and `CommittedWorld`) below N/2. With the per-slice checkpoint put back it fails naming 121 `NameLayer` copies at `names.rs:416` — verified. The counter does not see a derived `Clone` of a plain collection, which is what the journal bug was; that class still needs a profiler.

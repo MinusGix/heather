@@ -54,7 +54,7 @@ impl Types {
         if empty {
             return;
         }
-        Rc::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
+        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
         self.current = Rc::new(TypeLayer::default());
     }
 
@@ -112,7 +112,7 @@ impl Types {
         debug_assert!(reserved_collection_literal || ind.tag == ind_tag);
         debug_assert!(self.by_tag(ind.tag).is_none());
 
-        let layer = Rc::make_mut(&mut self.current);
+        let layer = crate::stats::make_mut(&mut self.current);
         if let Some(skeleton) = &ind.skel {
             layer.by_tag.insert(skeleton.tag, Rc::clone(skeleton));
             layer.inductives

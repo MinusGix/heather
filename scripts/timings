@@ -55,6 +55,12 @@ COLUMNS = {
     "at":        (["intro_at_nodes"], 1),
     "sels":      (["sel_evals"], 1),
     "spelled":   (["ity_materialized"], 1),
+    # Copy-on-write writes that copied, and what they cost
+    # (docs/instrumentation-design.md, "Elaborator state"): the column that
+    # moves when a clone or checkpoint makes every declaration copy a
+    # module-sized layer. `*.cow-sites.txt` beside the TSV names the sites.
+    "cow ms":    (["cow_ns"], 1e6),
+    "copies":    (["cow_copies"], 1),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 

@@ -253,7 +253,7 @@ impl Names {
             self.seal_current();
         }
         if self.module_scope(&scope.module) != Some(&scope) {
-            Rc::make_mut(&mut self.current)
+            crate::stats::make_mut(&mut self.current)
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
         }
@@ -267,7 +267,7 @@ impl Names {
                     if self.entries(name).any(|e| e.module == scope.module
                         && e.origin == entry.origin && e.kind == entry.kind) { continue; }
                     entry.module = scope.module.clone();
-                    Rc::make_mut(&mut self.current).index.by_name
+                    crate::stats::make_mut(&mut self.current).index.by_name
                         .entry(name.clone()).or_default().push(entry);
                 }
             }
@@ -287,7 +287,7 @@ impl Names {
         if self.current.is_empty() {
             return;
         }
-        Rc::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
+        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
         self.current = Rc::new(NameLayer::default());
     }
 
@@ -364,7 +364,7 @@ impl Names {
     }
 
     pub(crate) fn insert_current(&mut self, name: &str, kind: NameKind) {
-        Rc::make_mut(&mut self.current)
+        crate::stats::make_mut(&mut self.current)
             .index
             .insert(&self.scope.module, name, kind);
     }
@@ -413,7 +413,7 @@ impl Names {
         } = reg;
         debug_assert!(self.global(&key).is_none());
         debug_assert!(self.global_name_at(abs).is_none());
-        let current = Rc::make_mut(&mut self.current);
+        let current = crate::stats::make_mut(&mut self.current);
         current
             .index
             .insert(&self.scope.module, &name, NameKind::Global);

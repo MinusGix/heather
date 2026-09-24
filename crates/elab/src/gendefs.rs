@@ -948,7 +948,7 @@ impl GenDefs {
     pub(crate) fn semantic_snapshot(&self) -> Self {
         let mut defs = self.clone();
         if !defs.current.by_key.is_empty() {
-            Rc::make_mut(&mut defs.sealed).push(Rc::clone(&defs.current));
+            crate::stats::make_mut(&mut defs.sealed).push(Rc::clone(&defs.current));
             defs.current = Rc::new(GenDefLayer::default());
         }
         defs
@@ -995,7 +995,7 @@ impl GenDefs {
     }
 
     pub(crate) fn insert_ty_code_fn(&mut self, tag: u32, value: TyCodeFn) {
-        Rc::make_mut(&mut self.current).ty_code_fn.insert(tag, value);
+        crate::stats::make_mut(&mut self.current).ty_code_fn.insert(tag, value);
     }
 
     fn wf_slots(&self, tag: &u32) -> Option<&WfSlots> {
@@ -1035,23 +1035,23 @@ impl GenDefs {
     }
 
     pub(crate) fn insert_spine_codes(&mut self, tag: u32, value: SpineCodes) {
-        Rc::make_mut(&mut self.current).spine_codes.insert(tag, value);
+        crate::stats::make_mut(&mut self.current).spine_codes.insert(tag, value);
     }
 
     pub(crate) fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
-        Rc::make_mut(&mut self.current).ty_code.insert(tag, value);
+        crate::stats::make_mut(&mut self.current).ty_code.insert(tag, value);
     }
 
     pub(crate) fn insert_wf_slots(&mut self, tag: u32, value: WfSlots) {
-        Rc::make_mut(&mut self.current).wf_slots.insert(tag, value);
+        crate::stats::make_mut(&mut self.current).wf_slots.insert(tag, value);
     }
 
     pub(crate) fn insert_fam_levels(&mut self, tag: u32, value: (Level, Level)) {
-        Rc::make_mut(&mut self.current).fam_lvl.insert(tag, value);
+        crate::stats::make_mut(&mut self.current).fam_lvl.insert(tag, value);
     }
 
     pub(crate) fn insert_binding(&mut self, key: GenDef, abs: u32) {
-        let layer = Rc::make_mut(&mut self.current);
+        let layer = crate::stats::make_mut(&mut self.current);
         layer.by_key.insert(key, abs);
         layer.by_abs.insert(abs, key);
     }

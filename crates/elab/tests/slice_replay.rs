@@ -409,3 +409,38 @@ fn a_refused_proof_before_a_replayed_slice_still_refuses_the_module() {
         );
     }
 }
+
+/// Copy-on-write stays O(1) per module, not per declaration
+/// (`heather_elab::stats::make_mut`, docs/instrumentation-design.md). A
+/// registry layer is copied when something still holds it at the next
+/// write; a per-declaration holder — a checkpoint around each replayed
+/// slice, as there once was (issues/check-module-delta-certificate-cost.md)
+/// — makes every declaration copy the module's layers so far. Counted here
+/// over a module of many declarations, elaborated and then slice-replayed;
+/// the persistent Ψ (`GlobalCtx`) and the committed world's handle struct
+/// copy in O(1) and are expected per commit.
+#[test]
+fn registry_layers_are_not_copied_per_declaration() {
+    const N: usize = 60;
+    let items: Vec<String> = (0..N)
+        .map(|i| format!("fn f{i}(n: Nat) -> Nat {{ add(n, {i}) }}\n\ntheorem t{i}(): f{i}(0) = {i} {{ refl }}"))
+        .collect();
+    let src = module(&[&[ADD.to_string()], items.as_slice()].concat().iter().map(String::as_str).collect::<Vec<_>>());
+    let layer_copies = |sites: &str| -> u64 {
+        sites
+            .lines()
+            .filter(|line| !matches!(line.split('\t').nth(2), Some("GlobalCtx" | "CommittedWorld")))
+            .filter_map(|line| line.split('\t').next()?.parse::<u64>().ok())
+            .sum()
+    };
+    heather_elab::stats::take_cow_sites();
+    let (_, previous) = fresh(1, &src);
+    let elaborated = heather_elab::stats::take_cow_sites();
+    let edited = src.clone() + "\nfn appended() -> Nat { 0 }\n";
+    let (_, _, report) = sliced(1, &previous, &edited);
+    let replayed = heather_elab::stats::take_cow_sites();
+    assert_eq!(report.replayed, 2 * N + 1, "everything before the append replays");
+    for (pass, sites) in [("elaboration", &elaborated), ("slice replay", &replayed)] {
+        assert!(layer_copies(sites) < N as u64 / 2, "{pass} copied registry layers per declaration:\n{sites}");
+    }
+}

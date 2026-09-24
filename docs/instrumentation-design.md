@@ -276,6 +276,18 @@ Cache:
   the one thing on the gate path that costs real time.
 - `merkle_walk` — the interface-closure walk.
 
+Elaborator state:
+
+- `cow` / `cow_copies` — writes to a copy-on-write registry (`Rc::make_mut`
+  through `stats::make_mut`) that actually copied, because a clone, checkpoint
+  or semantic image still held the value. A copy is usually of a
+  current-module layer, so one per declaration makes a module quadratic with
+  no other column moving; twice that was found only by a profiler
+  (`issues/check-module-delta-certificate-cost.md`). A `--timings` file gets a
+  `*.cow-sites.txt` beside it naming the write site that paid, costliest
+  first. Healthy is one copy per registry per module boundary, plus the
+  persistent `GlobalCtx` push on every commit, which is cheap.
+
 Suite:
 
 - `scripts/run-test-targets.mjs` **appends** to

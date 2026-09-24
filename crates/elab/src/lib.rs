@@ -519,8 +519,9 @@ impl<T> Deref for Shared<T> {
 }
 
 impl<T: Clone> DerefMut for Shared<T> {
+    #[track_caller]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Rc::make_mut(&mut self.0)
+        stats::make_mut(&mut self.0)
     }
 }
 
@@ -690,8 +691,9 @@ impl Deref for Elaborator {
 }
 
 impl DerefMut for Elaborator {
+    #[track_caller]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Rc::make_mut(&mut self.committed)
+        stats::make_mut(&mut self.committed)
     }
 }
 

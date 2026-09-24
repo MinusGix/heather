@@ -70,7 +70,7 @@ impl Provenance {
         if self.current.entries.is_empty() {
             return;
         }
-        Rc::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
+        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
         self.current = Rc::new(ProvenanceLayer::default());
     }
 
@@ -124,7 +124,7 @@ impl Provenance {
                 }
             }
         }
-        Rc::make_mut(&mut self.current).entries.insert(
+        crate::stats::make_mut(&mut self.current).entries.insert(
             key,
             Rc::new(Entry {
                 is_axiom,

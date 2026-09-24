@@ -1013,7 +1013,7 @@ impl Elaborator {
                 }
             }
             drop(body);
-            Rc::make_mut(&mut prefix).push(binding.clone());
+            crate::stats::make_mut(&mut prefix).push(binding.clone());
         }
         // Join even after a statement failure: the pool must be drained before
         // the caller moves on, and a body verdict is still a verdict. But only
