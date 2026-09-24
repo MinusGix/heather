@@ -269,3 +269,28 @@ fn a_shadowing_binder_is_still_the_binder() {
         "#,
     );
 }
+
+// `issues/record-partial-application-under-inferred-callee.md`: the relation's
+// parameter type mentions the callee's `A`, still a metavariable when
+// `Grammar(0)` is reached. It was refused there (read as the constructor) and
+// is what `calc_parser`'s `GrammarSpec` wrapper existed for. Literal and neutral
+// prefix, each inhabited, and transported against the wrapper's reading.
+#[test]
+fn the_callees_type_argument_may_still_be_inferred() {
+    elab(
+        r#"
+        record Grammar(level: Nat, value: Nat) { at_level: level = level, }
+        fn takes1<A>(rel: A -> Type, a: A) -> Type { rel(a) }
+        fn GrammarSpec(level: Nat, value: Nat) -> Type { Grammar(level, value) }
+
+        fn literal_prefix() -> Type { takes1(Grammar(0), 1) }
+        fn neutral_prefix(n: Nat) -> Type { takes1(Grammar(n), 1) }
+
+        theorem literal_inhabited(): takes1(Grammar(0), 1) { Grammar { at_level: refl } }
+        theorem neutral_inhabited(n: Nat): takes1(Grammar(n), 1) { Grammar { at_level: refl } }
+        theorem via_wrapper(): takes1(GrammarSpec(0), 1) { Grammar { at_level: refl } }
+        theorem agree(): takes1(Grammar(0), 1) { via_wrapper() }
+        theorem agree_back(): takes1(GrammarSpec(0), 1) { literal_inhabited() }
+        "#,
+    );
+}

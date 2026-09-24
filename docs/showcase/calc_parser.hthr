@@ -65,14 +65,6 @@ record Grammar(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), 
     yields: meaning(derivation) = value,
     span: rest(source,begin) = spelling(derivation) ++ rest(source,end),
 }
-// `Grammar(level)` fills a relation slot whose type arguments are written
-// (`Certified<PTok,Expr>(…)`), but a record's partial application is refused
-// where the callee's `<T, A>` are still being inferred, and a global's is not.
-// So this wrapper survives for the eight `forget_at`/`forget_post`/
-// `post_on_success`/`complete_sound` calls below, and nowhere else.
-fn GrammarSpec(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr) -> Type {
-    Grammar(level,source,begin,end,value)
-}
 // What a tier's parser returns: a certified `Expr` whose evidence is the
 // grammar at that tier, or a failure over the same source. Spelled out, this
 // type runs to sixty-nine columns and appears twenty-five times below.
@@ -290,27 +282,27 @@ fn checked_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Checked(2,so
     on decreasing inner := smaller;
 }
 fn parse_expr(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(0),checked_expr(source,begin))
+    forget_at(source,begin,Grammar(0),checked_expr(source,begin))
 }
 fn parse_factor(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(1),checked_factor(source,begin))
+    forget_at(source,begin,Grammar(1),checked_factor(source,begin))
 }
 fn parse_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(2),checked_atom(source,begin))
+    forget_at(source,begin,Grammar(2),checked_atom(source,begin))
 }
 fn grammar() -> Parser<PTok,Expr> { Parser(λ source begin => parse_expr(source,begin)) }
 fn grammar_sound() -> Sound<PTok,Expr>(grammar(),Grammar(0)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(0),checked_expr(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(0),checked_expr(source,begin)))
 }
 fn factor_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_factor(source,begin)),Grammar(1)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(1),checked_factor(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(1),checked_factor(source,begin)))
 }
 fn atom_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_atom(source,begin)),Grammar(2)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(2),checked_atom(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(2),checked_atom(source,begin)))
 }
 theorem expression_sound(source: List<PTok>, begin: Cursor<PTok>(source), s: Success<PTok,Expr>(source,begin), shape: parse_expr(source,begin) = Ok(s)):
     Grammar(0,source,begin,s.end,s.value) {
-    post_on_success(source,begin,GrammarSpec(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
+    post_on_success(source,begin,Grammar(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
 }
 fn error_code(expected: List<Nat>) -> Nat { match expected { Nil => 0, Cons(code,_) => code } }
 fn public_error(source: List<PTok>, error: ErrorView) -> ParseError {
@@ -353,7 +345,7 @@ fn parse(ts: List<PTok>) -> Result<Expr,ParseError> {
 }
 theorem parse_post(source: List<PTok>): ParsedGrammar(source,parse(source)) {
     public_reply_sound(source,complete(grammar(),3).run(source,Cursor::start(source)),
-        complete_sound(grammar(),3,GrammarSpec(0),grammar_sound()).law(source,Cursor::start(source)))
+        complete_sound(grammar(),3,Grammar(0),grammar_sound()).law(source,Cursor::start(source)))
 }
 theorem parse_sound(source: List<PTok>, value: Expr, success: parse(source) = Ok(value)):
     WholeGrammar(source,value) {

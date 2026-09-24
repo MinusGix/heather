@@ -46,3 +46,25 @@ comment, at the eight `forget_at`/`forget_post`/`post_on_success`/
 `complete_sound` calls. Acceptance: those calls take `Grammar(n)`, the wrapper
 goes, and the probe above checks. Follows [[record-type-partial-application]],
 whose tests all write the type arguments.
+
+## Log
+
+- 2026-09-24: **Probed: the showcase half is fixed, by a commit that did not name it; the bare
+  case is not.** `takes1(Grammar(0), 1)` checks at HEAD and is refused at the
+  commit that filed this issue (ee4b7f27). Bisected over the five commits
+  between: the fix is 9e7dc59f's third bullet — "a call-shaped argument that
+  fails inference at a domain still waiting on the outer call's implicits is
+  re-planned as a deferred argument". `Grammar(0)` is call-shaped, so it now
+  waits for `?A` and meets the type-former arm at a solved Π.
+
+  `takes(Grammar, 1)` (the probe's `inferred_bare`) is still refused, with the
+  same wrong advice: a bare name is not call-shaped, so it is not re-planned.
+  That is what is left here — widen the re-plan (or the type-former arm's
+  trigger) to a bare type-former name, and fix the message's "or an argument of
+  a declaration that expects one", which is still false for it.
+
+  Acceptance, as far as it is met: `calc_parser`'s eight calls take `Grammar(n)`
+  and `GrammarSpec` is gone from the file (no showcase defines it now), and
+  `crates/elab/tests/record_type_partial_application.rs::the_callees_type_argument_may_still_be_inferred`
+  pins the call-shaped case at a literal and a neutral prefix, each inhabited and
+  transported against the wrapper's reading.
