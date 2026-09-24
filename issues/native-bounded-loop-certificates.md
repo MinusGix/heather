@@ -4,7 +4,7 @@ status: open
 labels: [compiler,x86,proofs]
 blocked-by: [function-ir-bounded-readonly-loop, function-ir-recursive-structured-lowering]
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-09-24
 ---
 
 ## Scope
@@ -159,3 +159,5 @@ obligations here; they were not silently fixed by the semantic interface.
   relating the address to the Nat cursor, and complete bounded traces remain here.
 - 2026-09-20: Bounds-selected reads and cursor/address proofs are in progress under [[function-ir-bounds-address-composition]]. Budget control and complete bounded traces remain separate.
 - 2026-09-20: [[function-ir-bounds-address-composition]] is complete: actual bounds-selected access composition and word/Nat cursor/address proofs, with 196,628 native calls and a green full suite (2866 passed, 0 failed, 5 ignored). Next are budget selection, carried updates, backward edges, and complete bounded traces.
+- 2026-09-24: Design drafted for discussion: `docs/native-bounded-loops-design.md`. One exit observed from the guard flag, cursor and length; `AccessLoop` in `AccessCode` with an existential iteration count; `loop_trace` induction in the library; per-iteration glue generated. Search first; counting's Nat carry is slice C. Verification items V1–V5 (§8) come before building.
+- 2026-09-24: Probes V1–V5 done (design §8). Near branches are required (an iteration is ~270 bytes), and slice A0 adds `NearControl` to `x86_64_block`. In-place results are refused but not needed: updates go through scratch plus a copy, and the lowering improvement is [[structured-lowering-in-place-results]].

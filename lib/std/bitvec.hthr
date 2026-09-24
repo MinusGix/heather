@@ -1059,6 +1059,40 @@ theorem BitVec::iterate_increment_toNat(n: Nat): (x: BitVec(n)) →
     }
 }
 
+// The orbit closes after `2^n` increments: zero first, one doubled tail at a
+// time, then any vector by its place in zero's orbit. A backward branch's
+// target is this identity (`near_branch_returns` in x86_64_block).
+theorem BitVec::zero_iterate_period(n: Nat):
+        BitVec::zero(n := n).iterate_increment(Nat::pow(2, n)) = BitVec::zero() {
+    match n as λ k => BitVec::zero(n := k).iterate_increment(Nat::pow(2, k)) = BitVec::zero() {
+        Zero => refl,
+        Succ(k, ih) => trans(
+            BitVec::cong_iterate_increment_count(Succ(k), BitVec::zero(), BitVec::pow_two_succ_twice(k)),
+            trans(BitVec::iterate_increment_twice(k, BitVec::zero(), Nat::pow(2, k)),
+                BitVec::cons_bit_cong(k, refl, ih, a := False, b := False))),
+    }
+}
+
+theorem BitVec::iterate_increment_period(n: Nat, x: BitVec(n)):
+        x.iterate_increment(Nat::pow(2, n)) = x {
+    let v = x.toNat();
+    let p = Nat::pow(2, n);
+    calc {
+        x.iterate_increment(p)
+            = BitVec::zero(n := n).iterate_increment(v).iterate_increment(p) :=
+                BitVec::cong_iterate_increment(n, p, sym(BitVec::iterate_increment_toNat(n, x))),
+            = BitVec::zero(n := n).iterate_increment(v + p) :=
+                BitVec::iterate_increment_compose(n, BitVec::zero(), v, p),
+            = BitVec::zero(n := n).iterate_increment(p + v) :=
+                BitVec::cong_iterate_increment_count(n, BitVec::zero(), v.add_comm(p)),
+            = BitVec::zero(n := n).iterate_increment(p).iterate_increment(v) :=
+                sym(BitVec::iterate_increment_compose(n, BitVec::zero(), p, v)),
+            = BitVec::zero(n := n).iterate_increment(v) :=
+                BitVec::cong_iterate_increment(n, v, BitVec::zero_iterate_period(n)),
+            = x := BitVec::iterate_increment_toNat(n, x),
+    }
+}
+
 // Commutativity of the iterated form, by the `toNat` count. `add_comm` for the
 // canonical operation is this transported along `iter_add_eq_add`, below.
 theorem BitVec::iter_add_comm(n: Nat, left, right: BitVec(n)):

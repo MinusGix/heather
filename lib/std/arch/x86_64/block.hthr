@@ -409,6 +409,223 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
     refl
 }
 
+// Near (rel32) forms of the same two transfers, for edges a short branch
+// cannot reach: a bounded loop's exit and back edge span its whole body
+// (docs/native-bounded-loops-design.md §2). The displacement is little-endian
+// after the opcode, relative to the end of the instruction.
+inductive NearControl {
+    JumpZeroNear(displacement: BitVec(32)),
+    JumpNear(displacement: BitVec(32)),
+}
+
+fn rel16_bytes(value: BitVec(16)) → List<BitVec(8)> {
+    [value.take_low(8, 8), value.drop_low(8, 8)]
+}
+fn rel24_bytes(value: BitVec(24)) → List<BitVec(8)> {
+    Cons(value.take_low(8, 16), rel16_bytes(value.drop_low(8, 16)))
+}
+fn rel32_bytes(value: BitVec(32)) → List<BitVec(8)> {
+    Cons(value.take_low(8, 24), rel24_bytes(value.drop_low(8, 24)))
+}
+fn rel32_of_bytes(b0, b1, b2, b3: BitVec(8)) → BitVec(32) {
+    b0.concat(b1.concat(b2.concat(b3)))
+}
+
+fn near_control_bytes(control: NearControl) → List<BitVec(8)> {
+    match control {
+        JumpZeroNear(displacement) =>
+            Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), rel32_bytes(displacement))),
+        JumpNear(displacement) => Cons(BitVec::ofNat(0xe9), rel32_bytes(displacement)),
+    }
+}
+
+// Reading the four bytes back is `rebuild_imm32` spelled over the pieces.
+theorem rel32_round_trip(value: BitVec(32)):
+    rel32_of_bytes(value.take_low(8, 24), value.drop_low(8, 24).take_low(8, 16),
+        value.drop_low(8, 24).drop_low(8, 16).take_low(8, 8),
+        value.drop_low(8, 24).drop_low(8, 16).drop_low(8, 8)) = value
+{
+    rebuild_imm32_identity(value)
+}
+
+theorem rel16_bytes_of(b2, b3: BitVec(8)): rel16_bytes(b2.concat(b3)) = [b2, b3] {
+    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ low => [low, BitVec::drop_low(8, 8, b2.concat(b3))],
+            BitVec::split_concat_low(8, 8, b2, b3)),
+        cong_fn<BitVec(8), List<BitVec(8)>>(λ high => [b2, high], BitVec::split_concat_high(8, 8, b2, b3)))
+}
+
+theorem rel24_bytes_of(b1, b2, b3: BitVec(8)):
+    rel24_bytes(b1.concat(b2.concat(b3))) = [b1, b2, b3]
+{
+    let high = b2.concat(b3);
+    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ low => Cons(low, rel16_bytes(BitVec::drop_low(8, 16, b1.concat(high)))),
+            BitVec::split_concat_low(8, 16, b1, high)),
+        trans(cong_fn<BitVec(16), List<BitVec(8)>>(λ rest => Cons(b1, rel16_bytes(rest)),
+                BitVec::split_concat_high(8, 16, b1, high)),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(b1, tail), rel16_bytes_of(b2, b3))))
+}
+
+theorem rel32_bytes_of(b0, b1, b2, b3: BitVec(8)):
+    rel32_bytes(rel32_of_bytes(b0, b1, b2, b3)) = [b0, b1, b2, b3]
+{
+    let high = b1.concat(b2.concat(b3));
+    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ low => Cons(low, rel24_bytes(BitVec::drop_low(8, 24, b0.concat(high)))),
+            BitVec::split_concat_low(8, 24, b0, high)),
+        trans(cong_fn<BitVec(24), List<BitVec(8)>>(λ rest => Cons(b0, rel24_bytes(rest)),
+                BitVec::split_concat_high(8, 24, b0, high)),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(b0, tail), rel24_bytes_of(b1, b2, b3))))
+}
+
+record Rel32Decode(bytes: List<BitVec(8)>) {
+    displacement: BitVec(32),
+    decoding: bytes = rel32_bytes(displacement),
+}
+
+fn decode_rel32(bytes: List<BitVec(8)>) → Option<Rel32Decode(bytes)> {
+    match bytes as λ actual => Option<Rel32Decode(actual)> {
+        Nil => None,
+        Cons(b0, t0) => match t0 as λ r0 => Option<Rel32Decode(Cons(b0, r0))> {
+            Nil => None,
+            Cons(b1, t1) => match t1 as λ r1 => Option<Rel32Decode(Cons(b0, Cons(b1, r1)))> {
+                Nil => None,
+                Cons(b2, t2) => match t2 as λ r2 => Option<Rel32Decode(Cons(b0, Cons(b1, Cons(b2, r2))))> {
+                    Nil => None,
+                    Cons(b3, t3) => match t3 as λ r3 =>
+                            Option<Rel32Decode(Cons(b0, Cons(b1, Cons(b2, Cons(b3, r3)))))> {
+                        Cons(_, _) => None,
+                        Nil => Some(Rel32Decode(displacement := rel32_of_bytes(b0, b1, b2, b3),
+                            decoding := sym(rel32_bytes_of(b0, b1, b2, b3)))),
+                    },
+                },
+            },
+        },
+    }
+}
+
+record NearControlDecode(bytes: List<BitVec(8)>) {
+    control: NearControl,
+    decoding: bytes = near_control_bytes(control),
+}
+
+fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(bytes)> {
+    match bytes as λ actual => Option<NearControlDecode(actual)> {
+        Nil => None,
+        Cons(opcode, tail) => match opcode.eq_dec(BitVec::ofNat(0xe9)) {
+            Inl(exact) => match decode_rel32(tail) {
+                None => None,
+                Some(found) => Some(NearControlDecode(control := JumpNear(found.displacement),
+                    decoding := trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ first => Cons(first, tail), exact),
+                        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ rest => Cons(BitVec::ofNat(0xe9), rest), found.decoding)))),
+            },
+            Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x0f)) {
+                Inr(_) => None,
+                Inl(first_exact) => match tail as λ rest => Option<NearControlDecode(Cons(opcode, rest))> {
+                    Nil => None,
+                    Cons(second, rest) => match second.eq_dec(BitVec::ofNat(0x84)) {
+                        Inr(_) => None,
+                        Inl(second_exact) => match decode_rel32(rest) {
+                            None => None,
+                            Some(found) => Some(NearControlDecode(control := JumpZeroNear(found.displacement),
+                                decoding := trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ first => Cons(first, Cons(second, rest)), first_exact),
+                                    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), second_exact),
+                                        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), tail)),
+                                            found.decoding))))),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn erase_near_control_decode(bytes: List<BitVec(8)>,
+    decoded: Option<NearControlDecode(bytes)>) → Option<NearControl>
+{
+    match decoded { None => None, Some(result) => Some(result.control) }
+}
+
+fn NearControlDecodes(control: NearControl) → Type {
+    erase_near_control_decode(near_control_bytes(control),
+        decode_near_control(near_control_bytes(control))) = Some(control)
+}
+
+theorem decode_near_control_complete(control: NearControl): NearControlDecodes(control) {
+    match control as λ found => NearControlDecodes(found) {
+        JumpZeroNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpZeroNear(value)),
+            rel32_round_trip(displacement)),
+        JumpNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpNear(value)),
+            rel32_round_trip(displacement)),
+    }
+}
+
+theorem decode_near_control_rejects_truncated():
+    erase_near_control_decode([BitVec::ofNat(0xe9), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)],
+        decode_near_control([BitVec::ofNat(0xe9), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)])) = None
+{ refl }
+
+theorem decode_near_control_rejects_short_opcode():
+    erase_near_control_decode(
+        [BitVec::ofNat(0x0f), BitVec::ofNat(0x85), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)],
+        decode_near_control(
+            [BitVec::ofNat(0x0f), BitVec::ofNat(0x85), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)])) = None
+{ refl }
+
+fn near_branch_target(start: BitVec(64), length: Nat, displacement: BitVec(32)) → BitVec(64) {
+    next_rip(start, length).add(displacement.sign_extend(32))
+}
+
+fn near_control_rip<M>(control: NearControl, before: MachineState<M>) → BitVec(64) {
+    match control {
+        JumpZeroNear(displacement) => match before.flags.zf {
+            False => next_rip(before.rip, 6),
+            True => near_branch_target(before.rip, 6, displacement),
+        },
+        JumpNear(displacement) => near_branch_target(before.rip, 5, displacement),
+    }
+}
+
+fn execute_near_control<M>(control: NearControl, before: MachineState<M>) → MachineState<M> {
+    with_rip(before, near_control_rip(control, before))
+}
+
+theorem execute_near_control_preserves_gprs<M>(control: NearControl, before: MachineState<M>):
+    execute_near_control(control, before).gprs = before.gprs
+{
+    refl
+}
+
+// A forward edge: `reads` is a closed computation at a generated site.
+theorem near_branch_forward(start: BitVec(64), length, skip: Nat, displacement: BitVec(32),
+    reads: displacement.sign_extend(32).toNat() = skip):
+    near_branch_target(start, length, displacement) = next_rip(start, length + skip)
+{
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(start, length), displacement.sign_extend(32))),
+        trans(BitVec::cong_iterate_increment_count(64, next_rip(start, length), reads),
+            BitVec::iterate_increment_compose(64, start, length, skip)))
+}
+
+// A backward edge returns to `start` when the distance to the jump's end and
+// the displacement's unsigned reading complete one orbit of 2^64.
+theorem near_branch_returns(start: BitVec(64), offset, length: Nat, displacement: BitVec(32),
+    closes: offset + length + displacement.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    near_branch_target(next_rip(start, offset), length, displacement) = start
+{
+    let back = displacement.sign_extend(32).toNat();
+    calc {
+        near_branch_target(next_rip(start, offset), length, displacement)
+            = start.iterate_increment(offset).iterate_increment(length).iterate_increment(back) :=
+                sym(BitVec::iter_add_eq_add(64, next_rip(next_rip(start, offset), length),
+                    displacement.sign_extend(32))),
+            = start.iterate_increment(offset + length).iterate_increment(back) :=
+                BitVec::cong_iterate_increment(64, back, BitVec::iterate_increment_compose(64, start, offset, length)),
+            = start.iterate_increment(offset + length + back) :=
+                BitVec::iterate_increment_compose(64, start, offset + length, back),
+            = start.iterate_increment(Nat::pow(2, 64)) :=
+                BitVec::cong_iterate_increment_count(64, start, closes),
+            = start := BitVec::iterate_increment_period(64, start),
+    }
+}
+
 fn after_canonical_block(start: BitVec(64),
     instructions: List<Instruction>) → BitVec(64)
 {
