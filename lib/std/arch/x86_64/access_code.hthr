@@ -16,6 +16,12 @@ inductive AccessCode {
     AccessSequence(prefix: AccessCode, continuation: AccessCode),
     AccessBranch(register: Gpr, false_displacement: BitVec(8),
         join_displacement: BitVec(8), when_true: AccessCode, when_false: AccessCode),
+    // A bounded loop (docs/native-bounded-loops-design.md §3). A zero `flag`
+    // after the guard exits forward; after the body, a zero `step_flag`
+    // (Continue) jumps back to the guard and a set one (Break) falls through
+    // to the same exit. Both edges are near jumps.
+    AccessLoop(guard: AccessCode, flag: Gpr, exit_displacement: BitVec(32),
+        body: AccessCode, step_flag: Gpr, back_displacement: BitVec(32)),
 }
 fn access_bytes(code: AccessCode) → List<BitVec(8)> {
     match code {
@@ -25,6 +31,10 @@ fn access_bytes(code: AccessCode) → List<BitVec(8)> {
         AccessBranch(register, fd, jd, yes, no) =>
             canonical_bytes(TestRR(register, register)) ++ short_control_bytes(JumpZero(fd)) ++
             access_bytes(yes) ++ short_control_bytes(Jump(jd)) ++ access_bytes(no),
+        AccessLoop(guard, flag, ed, body, step, bd) =>
+            access_bytes(guard) ++ canonical_bytes(TestRR(flag, flag)) ++
+            near_control_bytes(JumpZeroNear(ed)) ++ access_bytes(body) ++
+            canonical_bytes(TestRR(step, step)) ++ near_control_bytes(JumpZeroNear(bd)),
     }
 }
 fn AccessLayout(code: AccessCode) → Type {
@@ -36,6 +46,15 @@ fn AccessLayout(code: AccessCode) → Type {
             ((start: BitVec(64)) → short_branch_target(start, fd) = next_rip(start, 2 + (access_bytes(yes).len() + 2))) ∧
             (((start: BitVec(64)) → short_branch_target(start, jd) = next_rip(start, 2 + access_bytes(no).len())) ∧
             (AccessLayout(yes) ∧ AccessLayout(no))),
+        // The exit edge skips the body, its TEST (3) and the back edge (6);
+        // the back edge, starting after the guard, the forward edge's TEST
+        // and JZ (9), the body and its TEST, returns to the loop's start.
+        AccessLoop(guard, _, ed, body, _, bd) =>
+            ((start: BitVec(64)) → near_branch_target(start, 6, ed) =
+                next_rip(start, 6 + (access_bytes(body).len() + 9))) ∧
+            (((start: BitVec(64)) → near_branch_target(
+                next_rip(start, access_bytes(guard).len() + 9 + access_bytes(body).len() + 3), 6, bd) = start) ∧
+            (AccessLayout(guard) ∧ AccessLayout(body))),
     }
 }
 // Generated layouts are stated through these over the children's codes and
@@ -54,6 +73,42 @@ theorem access_branch_layout(register: Gpr, fd, jd: BitVec(8), yes, no: AccessCo
     AccessLayout(AccessBranch(register, fd, jd, yes, no)) {
     ⟨false_target, ⟨join_target, ⟨yes_layout, no_layout⟩⟩⟩
 }
+theorem access_loop_layout(guard: AccessCode, flag: Gpr, ed: BitVec(32), body: AccessCode,
+    step: Gpr, bd: BitVec(32),
+    exit_target: (start: BitVec(64)) → near_branch_target(start, 6, ed) =
+        next_rip(start, 6 + (access_bytes(body).len() + 9)),
+    back_target: (start: BitVec(64)) → near_branch_target(
+        next_rip(start, access_bytes(guard).len() + 9 + access_bytes(body).len() + 3), 6, bd) = start,
+    guard_layout: AccessLayout(guard), body_layout: AccessLayout(body)):
+    AccessLayout(AccessLoop(guard, flag, ed, body, step, bd)) {
+    ⟨exit_target, ⟨back_target, ⟨guard_layout, body_layout⟩⟩⟩
+}
+
+// TEST then JZ rel32: the state either edge of a loop leaves.
+fn loop_edge<M>(register: Gpr, displacement: BitVec(32), before: MachineState<M>) → MachineState<M> {
+    execute_near_control(JumpZeroNear(displacement), structured_test(register, before))
+}
+
+// `n` counts the iterations that jump back; the last iteration stops, either
+// at the guard or by falling through after the body. The child relations are
+// arguments, so ExecuteAccess stays structural over the code tree.
+fn LoopRuns<M>(guard, body: MachineState<M> → MachineState<M> → Type, flag: Gpr,
+    exit: BitVec(32), step: Gpr, back: BitVec(32), n: Nat) → MachineState<M> → MachineState<M> → Type {
+    match n {
+        Zero => λ before after => Exists<MachineState<M>>(λ tested => guard(before, tested) ∧
+            match structured_test(flag, tested).flags.zf {
+                True => after = loop_edge(flag, exit, tested),
+                False => Exists<MachineState<M>>(λ done => body(loop_edge(flag, exit, tested), done) ∧
+                    ((structured_test(step, done).flags.zf = False) ∧ (after = loop_edge(step, back, done)))),
+            }),
+        Succ(k) => λ before after => Exists<MachineState<M>>(λ tested => guard(before, tested) ∧
+            ((structured_test(flag, tested).flags.zf = False) ∧
+            Exists<MachineState<M>>(λ done => body(loop_edge(flag, exit, tested), done) ∧
+                ((structured_test(step, done).flags.zf = True) ∧
+                LoopRuns(guard, body, flag, exit, step, back, k, loop_edge(step, back, done), after))))),
+    }
+}
+
 fn ExecuteAccess<M>(access: ByteReadAccess<M>, code: AccessCode) → MachineState<M> → MachineState<M> → Type {
     match code {
         AccessPure(pure) => λ before after => ExecuteStructured(pure, before, after),
@@ -67,7 +122,40 @@ fn ExecuteAccess<M>(access: ByteReadAccess<M>, code: AccessCode) → MachineStat
                     (after = execute_short_control(Jump(jd), middle))),
                 True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after),
             },
+        AccessLoop(guard, flag, ed, body, step, bd) => λ before after => Exists<Nat>(λ n =>
+            LoopRuns(ExecuteAccess(access, guard), ExecuteAccess(access, body), flag, ed, step, bd, n, before, after)),
     }
+}
+
+// The three ways an iteration ends, from the actual TEST flags.
+theorem loop_runs_exit<M>(guard, body: MachineState<M> → MachineState<M> → Type, flag: Gpr,
+    exit: BitVec(32), step: Gpr, back: BitVec(32), before, tested: MachineState<M>,
+    checked: guard(before, tested), selected: structured_test(flag, tested).flags.zf = True):
+    LoopRuns(guard, body, flag, exit, step, back, 0, before, loop_edge(flag, exit, tested)) {
+    Exists(tested, ⟨checked, j(sym(selected), λ zf _ => match zf {
+        True => loop_edge(flag, exit, tested) = loop_edge(flag, exit, tested),
+        False => Exists<MachineState<M>>(λ done => body(loop_edge(flag, exit, tested), done) ∧
+            ((structured_test(step, done).flags.zf = False) ∧ (loop_edge(flag, exit, tested) = loop_edge(step, back, done)))),
+    }, refl)⟩)
+}
+theorem loop_runs_break<M>(guard, body: MachineState<M> → MachineState<M> → Type, flag: Gpr,
+    exit: BitVec(32), step: Gpr, back: BitVec(32), before, tested, done: MachineState<M>,
+    checked: guard(before, tested), entered: structured_test(flag, tested).flags.zf = False,
+    stepped: body(loop_edge(flag, exit, tested), done), broke: structured_test(step, done).flags.zf = False):
+    LoopRuns(guard, body, flag, exit, step, back, 0, before, loop_edge(step, back, done)) {
+    Exists(tested, ⟨checked, j(sym(entered), λ zf _ => match zf {
+        True => loop_edge(step, back, done) = loop_edge(flag, exit, tested),
+        False => Exists<MachineState<M>>(λ last => body(loop_edge(flag, exit, tested), last) ∧
+            ((structured_test(step, last).flags.zf = False) ∧ (loop_edge(step, back, done) = loop_edge(step, back, last)))),
+    }, Exists(done, ⟨stepped, ⟨broke, refl⟩⟩))⟩)
+}
+theorem loop_runs_continue<M>(guard, body: MachineState<M> → MachineState<M> → Type, flag: Gpr,
+    exit: BitVec(32), step: Gpr, back: BitVec(32), k: Nat, before, tested, done, after: MachineState<M>,
+    checked: guard(before, tested), entered: structured_test(flag, tested).flags.zf = False,
+    stepped: body(loop_edge(flag, exit, tested), done), continued: structured_test(step, done).flags.zf = True,
+    rest: LoopRuns(guard, body, flag, exit, step, back, k, loop_edge(step, back, done), after)):
+    LoopRuns(guard, body, flag, exit, step, back, Succ(k), before, after) {
+    Exists(tested, ⟨checked, ⟨entered, Exists(done, ⟨stepped, ⟨continued, rest⟩⟩)⟩⟩)
 }
 
 // The selected equality comes from the actual TEST/JZ flags. Neither helper

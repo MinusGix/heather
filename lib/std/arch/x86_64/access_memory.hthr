@@ -28,6 +28,40 @@ theorem pure_structured_memory<M>(code: StructuredCode): (before: MachineState<M
                 pure_structured_memory(yes, structured_branch_entry(register, fd, before)), pure_structured_memory(no, structured_branch_entry(register, fd, before))),
     }
 }
+// Memory through any number of iterations, from the children's own laws.
+// Both edges are TEST and a jump, which touch neither memory nor registers.
+theorem loop_runs_memory<M>(guard, body: MachineState<M> → MachineState<M> → Type, flag: Gpr,
+    exit: BitVec(32), step: Gpr, back: BitVec(32),
+    guard_memory: (before, after: MachineState<M>) → guard(before, after) → after.memory = before.memory,
+    body_memory: (before, after: MachineState<M>) → body(before, after) → after.memory = before.memory):
+    (n: Nat) → (before, after: MachineState<M>) → LoopRuns(guard, body, flag, exit, step, back, n, before, after) →
+        after.memory = before.memory {
+    λ n => match n as λ k => (before, after: MachineState<M>) → LoopRuns(guard, body, flag, exit, step, back, k, before, after) →
+            after.memory = before.memory {
+        Zero => λ before after runs => {
+            let tested = runs.witness;
+            let checked = guard_memory(before, tested, runs.proof.left);
+            (match structured_test(flag, tested).flags.zf as λ zf =>
+                (match zf {
+                    True => after = loop_edge(flag, exit, tested),
+                    False => Exists<MachineState<M>>(λ done => body(loop_edge(flag, exit, tested), done) ∧
+                        ((structured_test(step, done).flags.zf = False) ∧ (after = loop_edge(step, back, done)))),
+                }) → after.memory = before.memory {
+                True => λ left => trans(j(sym(left), λ state _ => state.memory = tested.memory, refl), checked),
+                False => λ stepped => trans(j(sym(stepped.proof.right.right), λ state _ => state.memory = tested.memory,
+                    body_memory(loop_edge(flag, exit, tested), stepped.witness, stepped.proof.left)), checked),
+            })(runs.proof.right)
+        },
+        Succ(k, ih) => λ before after runs => {
+            let tested = runs.witness;
+            let stepped = runs.proof.right.right;
+            trans(ih(loop_edge(step, back, stepped.witness), after, stepped.proof.right.right),
+                trans(body_memory(loop_edge(flag, exit, tested), stepped.witness, stepped.proof.left),
+                    guard_memory(before, tested, runs.proof.left)))
+        },
+    }
+}
+
 theorem access_memory<M>(access: ByteReadAccess<M>, code: AccessCode):
     (before, after: MachineState<M>) → ExecuteAccess(access, code, before, after) → after.memory = before.memory {
     match code {
@@ -48,5 +82,8 @@ theorem access_memory<M>(access: ByteReadAccess<M>, code: AccessCode):
                     access_memory(access, yes, structured_branch_entry(register, fd, before), step.witness, step.proof.left)),
                 True => λ step => access_memory(access, no, structured_branch_entry(register, fd, before), after, step),
             }),
+        AccessLoop(guard, flag, ed, body, step, bd) => λ before after runs =>
+            loop_runs_memory(ExecuteAccess(access, guard), ExecuteAccess(access, body), flag, ed, step, bd,
+                access_memory(access, guard), access_memory(access, body), runs.witness, before, after, runs.proof),
     }
 }

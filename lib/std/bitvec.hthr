@@ -1773,6 +1773,36 @@ theorem BitVec::toNat_lt_pow(n: Nat): (x: BitVec(n)) → x.toNat() < Nat::pow(2,
     }
 }
 
+theorem BitVec::ofNat_zero(n: Nat): BitVec::ofNat(0, n := n) = BitVec::zero() {
+    match n as λ k => BitVec::ofNat(0, n := k) = BitVec::zero() {
+        Zero => refl,
+        Succ(k, ih) => BitVec::cons_bit_cong(k, refl, ih, a := False, b := False),
+    }
+}
+
+// A value below `2^n` has nothing above its low `n` bits. With n = 47 this is
+// how a Nat bound on an address becomes the machine's low-canonical premise.
+theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
+        x.toNat() < Nat::pow(2, n) → x.drop_low(n, m) = BitVec::zero() {
+    match n as λ k => (m: Nat) → (x: BitVec(m + k)) → x.toNat() < Nat::pow(2, k) →
+            x.drop_low(k, m) = BitVec::zero() {
+        Zero => λ m x h => {
+            let none = Nat::le_antisym(x.toNat(), 0, h, (x.toNat()).nonneg());
+            trans(sym(BitVec::ofNat_toNat(m, x)),
+                trans(j(none, λ v _ => BitVec::ofNat(x.toNat(), n := m) = BitVec::ofNat(v, n := m), refl),
+                    BitVec::ofNat_zero(m)))
+        },
+        Succ(k, ih) => λ m x h => {
+            let tail = (x.tail_bits()).toNat();
+            let p = Nat::pow(2, k);
+            let under = j(BitVec::pow_two_succ_twice(k), λ y _ => x.toNat() < y, h);
+            let twice = Succ(Nat::twice(tail)).le_trans(Succ(Nat::of_bit(x.head_bit()) + Nat::twice(tail)), Nat::twice(p),
+                Nat::le_add_r(Nat::of_bit(x.head_bit()), Nat::twice(tail)), under);
+            ih(m, x.tail_bits(), Nat::twice_lt_twice_iff(tail, p).mp(twice))
+        },
+    }
+}
+
 // Zero high columns preserve an incoming borrow, so unsigned comparison can
 // use a wider physical word without changing the narrow logical result.
 theorem BitVec::borrow_zero_columns(n: Nat): (borrow: Bool) →

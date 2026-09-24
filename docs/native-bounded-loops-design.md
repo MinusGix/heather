@@ -1,6 +1,6 @@
 # Native bounded-loop certificates — design
 
-Status: **design agreed 2026-09-24; probes done (§8); slice A0 in progress**. Owner:
+Status: **design agreed 2026-09-24; probes done (§8); slices A0 and A landed (§9)**. Owner:
 `issues/native-bounded-loop-certificates.md`, step 3 of
 `issues/native-shared-lowering-milestone.md`. Implementation state is in §9.
 
@@ -102,39 +102,52 @@ budget, carry, `g`, `d`), a carry representation `rep: BitVec(64) → C → Type
 client invariant `Inv: Nat → Nat → C → Type` (`True` for search;
 `count + budget < 2^64` for counting).
 
-`LoopHead(p, rep, access, buffer, needle, state, cursor, budget, carry)`
-means: base/length/cursor/budget registers are `LoopWord`s of their Nats,
-needle is placed, `rep(carry register, carry)`, the memory agrees with
-`buffer.read` (the `memory_agrees` shape of `loop_read_address`),
-`cursor ≤ length`, and `LoopAddressBound`.
+`LoopHead(p, rep, access, buffer, needle, state, cursor, budget, carry)` is
+a record: base/length/cursor/budget registers are `LoopWord`s of their Nats,
+the needle is placed, `rep(carry register, carry)`, the memory agrees with
+`buffer.read` (the `memory_agrees` shape of `loop_read_address`), and
+`cursor ≤ length`. It reads only registers and memory, so it holds
+definitionally across the TEST/JZ edges (`loop_edge`), and
+`loop_head_transport` moves it across any step that kept the six head
+registers and memory. `LoopAddressBound` and the canonical bound are fixed
+for the whole loop, so they are premises of the glue, not head fields.
 
 Two **per-iteration obligations**, over open states and values:
 
-- `GuardStep`: from `LoopHead(s, c, b, k)` the guard code executes to
-  `m` with `g` holding `ofBool(c <u len ∧ 0 <u b)` and the head registers
-  preserved.
-- `BodyStep`: from the head registers at the branch entry, plus
-  `Inv(c, Succ r, k)`, `c < len` and `ReadsByte(c, byte)`, the body executes
-  to `s'` with `d = disc(body(needle, c, byte, k))`, `rep(carry', payload)`,
-  cursor `~ Succ c`, budget `~ r`, `g`, base, length and needle preserved,
-  and `Inv(Succ c, r, payload)` when the step is `Continue`.
+- `LoopGuardStep`: from `LoopHead(s, c, b, k)` the guard code executes to
+  `m`, with `g` holding `loop_bit(loop_continues(len, c, b))` (not ended,
+  and `1 ≤ b`) and `LoopHead` at `m`.
+- `LoopBodyStep`: from `LoopHead(s, c, Succ r, k)`, `Inv(c, Succ r, k)`,
+  `len.leb(c) = False` and `ReadsByte(c, byte)`, the body executes to `s'`
+  with `LoopStepped`: `g` kept, and by the step `body(needle, c, byte, k)`
+  either `Continue(next)`: `d = loop_bit(False)`, `LoopHead(s', Succ c, r, next)`
+  and `Inv(Succ c, r, next)`; or `Break(result)`: `d = loop_bit(True)` and
+  `LoopHead(s', Succ c, r, result)`.
 
 The library theorem `loop_trace`, by induction on the budget and generalising
 the state, cursor and carry:
 
 ```text
 LoopHead(s, c, b, k) → Inv(c, b, k) → LoopReadable(b, region, buffer, needle, c, k)
-  → GuardStep → BodyStep → LayoutOf(loop)
+  → LoopGuardStep → LoopBodyStep
   → Exists(after, ExecuteAccess(access, AccessLoop(…), s, after)
                  ∧ LoopObserved(p, rep, after, loop_run(b, region, buffer, needle, c, k)))
 ```
 
+Layout is not a premise: as for every `AccessCode`, execution is structural,
+and the final artifact carries layout beside it. The outcome equations
+(`loop_run_end`, `loop_run_exhausted`, `loop_run_step`, `loop_run_denied`)
+unfold `loop_run` one decision at a time through `loop_after_guard`/`_read`/`_step`,
+so each rewrites a single scrutinee.
+
 `LoopReadable(Succ r, …)` with `c < len` unfolds to `match read {None =>
 False, Some(byte) => …}`. That supplies the byte for `ReadsByte` and the
 tail's readability, and is what the 09-20 contract was shaped for. The guard
-arithmetic is library lemmas: `0 <u b` iff `b ≠ 0` under `LoopWord`,
-`word ~ Succ r → word − 1 ~ r`, and `base + length ≤ 2^47 → canonical(base + cursor)`
-for the read adapter's low-canonical premise (V5).
+arithmetic is library lemmas in `function_ir_loop_x86`: `loop_guard_word`
+(the machine guard is `loop_continues`), `loop_cursor_increment`,
+`loop_budget_decrement` (`word ~ Succ r → word − 1 ~ r`), and
+`loop_address_canonical` (`base + length ≤ 2^47` gives the read adapter's
+low-canonical premise, through `BitVec::drop_low_zero_of_lt`).
 
 ## 5. The guard and the updates are library *source* functions
 
@@ -227,11 +240,16 @@ family) before any library work:
 
 ## 9. Slices
 
-- **A0 — near branches** (V1): `NearControl` in `x86_64_block`.
-- **A — library.** `AccessLoop` (bytes, layout, execution, memory) with near
-  edges, `LoopHead`/`LoopObserved`, `loop_trace`, the word lemmas, and the
-  guard, update and copy source functions. Check it with
-  a hand-instantiated loop in a test.
+- **A0 — near branches** (V1): `NearControl` in `x86_64_block`, landed 28d84281.
+- **A — library, landed.** `AccessLoop` in `x86_64_access_code` (bytes,
+  layout, `LoopRuns`, the exit/break/continue intro lemmas) and its
+  `access_memory` case; `lib/function_ir_loop_trace.hthr` (`LoopHead`, the two
+  obligations, `LoopObserved`, `loop_trace`); the word lemmas and the
+  `loop_guard`, `loop_next_cursor`, `loop_next_budget` and `loop_copy` source
+  functions in `function_ir_loop_x86`. `crates/elab/tests/function_ir_loop_trace.rs`
+  selects those functions through the shared generator and checks their
+  certificates, with refusal controls for the word lemmas. The first
+  instantiation of `loop_trace` against real certificates is slice B.
 - **B — generator + search.** `AccessFragment::looped`, glue emission,
   `generate_elaborated_loop_x86(elab, "clients::first_match", placement)`
   from the existing wrapper reflector, the controls, and the native test.

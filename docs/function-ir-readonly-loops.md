@@ -252,4 +252,6 @@ page byte and denied pointers on end paths. Refusal controls cover wrapped sums,
 signed/reversed bounds tests, swapped address operands, incorrect bytes, stale
 branch displacements, and unsupported branch spans. This is one bounds/read transition. Budget selection,
 carried-state updates, backward edges, outcome encoding, and bounded induction
-remain under `native-bounded-loop-certificates`.
+remain under `native-bounded-loop-certificates`. Their design is
+`docs/native-bounded-loops-design.md`, and `lib/function_ir_loop_trace.hthr`
+holds the bounded induction (`loop_trace`) over the `AccessLoop` code form.

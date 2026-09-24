@@ -1,6 +1,7 @@
-// Local word/cursor obligations for bounded read-only selection. Complete
-// loop traces and back edges are separate from this single-transition bridge.
+// Local word/cursor obligations for bounded read-only selection, and the
+// loop's own pure steps. The complete trace is function_ir_loop_trace.
 import function_ir_loop;
+import list;
 import bitvec_nat;
 import bitvec;
 import bool;
@@ -89,4 +90,81 @@ theorem loop_cursor_advance(width: Nat, cursor_word, length_word, one_word: BitV
     let bounded = j(lw, λ found _ => found < Nat::pow(2, width), BitVec::toNat_lt_pow(width, length_word));
     bitvec_nat::add_words(width, cursor_word, one_word, cursor, 1, cw, unit,
         Succ(Succ(cursor)).le_trans(Succ(length), Nat::pow(2, width), inside, bounded))
+}
+
+// The loop's own pure steps are ordinary source functions, reflected and
+// selected like a client's code (docs/native-bounded-loops-design.md §5); the
+// theorems below read their word results as loop_run's Nat decisions.
+fn loop_guard_from(below: Bool, positive: Bool) → Bool {
+    match below { True => positive, False => False }
+}
+fn loop_guard(cursor, length, budget: BitVec(64)) → Bool {
+    match cursor.unsigned_lt_bit(length) {
+        True => BitVec::ofNat(0, n := 64).unsigned_lt_bit(budget),
+        False => False,
+    }
+}
+fn loop_next_cursor(cursor: BitVec(64)) → BitVec(64) { cursor.add(BitVec::ofNat(1)) }
+fn loop_next_budget(budget: BitVec(64)) → BitVec(64) { budget.sub(BitVec::ofNat(1)) }
+// Moves a finished value into its head register. A certificate may not write
+// one of its own inputs (issues/structured-lowering-in-place-results.md).
+fn loop_copy(word: BitVec(64)) → BitVec(64) { word }
+
+theorem loop_guard_decides(ended: Bool, budget: Nat):
+    loop_guard_from(ended.not(), Nat::leb(1, budget)) = match ended { True => False, False => Nat::leb(1, budget) } {
+    match ended as λ e => loop_guard_from(e.not(), Nat::leb(1, budget)) = match e { True => False, False => Nat::leb(1, budget) } {
+        True => refl,
+        False => refl,
+    }
+}
+
+// The machine guard is loop_run's: not ended, and budget left.
+theorem loop_guard_word(cursor_word, length_word, budget_word: BitVec(64), cursor, length, budget: Nat,
+    cw: LoopWord(64, cursor_word, cursor), lw: LoopWord(64, length_word, length), bw: LoopWord(64, budget_word, budget)):
+    loop_guard(cursor_word, length_word, budget_word) =
+        match length.leb(cursor) { True => False, False => Nat::leb(1, budget) } {
+    let below = loop_bounds_test(64, cursor_word, length_word, cursor, length, cw, lw);
+    let positive = trans(bitvec_nat::unsigned_lt_nat(64, BitVec::ofNat(0, n := 64), budget_word),
+        cong_fn(λ (value: Nat) => Nat::leb(1, value), bw));
+    trans(cong_fn(λ (bit: Bool) => loop_guard_from(bit, BitVec::ofNat(0, n := 64).unsigned_lt_bit(budget_word)), below),
+        trans(cong_fn(λ (bit: Bool) => loop_guard_from(length.leb(cursor).not(), bit), positive),
+            loop_guard_decides(length.leb(cursor), budget)))
+}
+
+theorem loop_cursor_increment(cursor_word, length_word: BitVec(64), cursor, length: Nat,
+    cw: LoopWord(64, cursor_word, cursor), lw: LoopWord(64, length_word, length),
+    open: length.leb(cursor) = False):
+    LoopWord(64, loop_next_cursor(cursor_word), Succ(cursor)) {
+    loop_cursor_advance(64, cursor_word, length_word, BitVec::ofNat(1), cursor, length, cw, lw, refl,
+        trans(loop_bounds_test(64, cursor_word, length_word, cursor, length, cw, lw),
+            cong_fn(λ (bit: Bool) => bit.not(), open)))
+}
+
+// Only a Succ budget is decremented, so the word never wraps below zero.
+theorem loop_budget_decrement(word: BitVec(64), rest: Nat, placed: LoopWord(64, word, Succ(rest))):
+    LoopWord(64, loop_next_budget(word), rest) {
+    let bounded = Nat::le_of_lt(Succ(rest), Nat::pow(2, 64),
+        j(placed, λ value _ => value < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, word)));
+    let low = BitVec::zero(n := 64).iterate_increment(rest);
+    let low_value = trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), sym(BitVec::toNat_ofNat(64, rest, bounded))),
+        BitVec::iterate_increment_toNat(64, BitVec::ofNat(rest)));
+    let whole = trans(sym(BitVec::iterate_increment_toNat(64, word)),
+        trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), placed),
+            BitVec::iter_add_eq_add(64, low, BitVec::ofNat(1))));
+    trans(cong_fn(λ (w: BitVec(64)) => loop_next_budget(w).toNat(), whole),
+        trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), BitVec::add_sub_cancel(64, low, BitVec::ofNat(1))),
+            trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), low_value), BitVec::toNat_ofNat(64, rest, bounded))))
+}
+
+// A buffer ending at or below 2^47 is read only at low-canonical addresses.
+theorem loop_address_canonical(buffer: ReadonlyBytes, cursor: Nat, address: BitVec(64),
+    placed: LoopWord(64, address, buffer.base + cursor), open: buffer.length.leb(cursor) = False,
+    low: buffer.base + buffer.length <= Nat::pow(2, 47)):
+    address.drop_low(47, 17) = BitVec::zero() {
+    let selected = trans(bitvec_nat::strict_complement(cursor, buffer.length), cong_fn(λ (bit: Bool) => bit.not(), open));
+    let inside = Succ(cursor).leb_sound(buffer.length, j(sym(selected), λ bit _ => bit.IsTrue(), trivial));
+    BitVec::drop_low_zero_of_lt(47, 17, address,
+        j(sym(placed), λ value _ => value < Nat::pow(2, 47),
+            Succ(buffer.base + cursor).le_trans(buffer.base + buffer.length, Nat::pow(2, 47),
+                buffer.base.add_le_mono_l(Succ(cursor), buffer.length, inside), low)))
 }
