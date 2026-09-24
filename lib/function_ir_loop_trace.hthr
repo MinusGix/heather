@@ -35,6 +35,20 @@ theorem loop_bit_zf<M>(register: Gpr, state: MachineState<M>, bit: Bool,
         test_zero_extended_bool(bit))
 }
 
+// A Bool carry sits in its register as a placed bit; a loop with nothing to
+// keep invariant says so.
+fn loop_bool_rep(word: BitVec(64), bit: Bool) → Type { word = loop_bit(bit) }
+fn loop_no_invariant<C>(cursor, budget: Nat, carry: C) → Type { True }
+
+// A step's two ports, as the typed body certificate observes them: payload
+// first, then the discriminator (Continue is False).
+fn loop_step_payload<C>(step: LoopStep<C>) → C {
+    match step { Continue(next) => next, Break(result) => result }
+}
+fn loop_step_breaks<C>(step: LoopStep<C>) → Bool {
+    match step { Continue(_) => False, Break(_) => True }
+}
+
 // Where a loop keeps its values. `flag` is the guard's result and survives
 // the body, so at the exit it tells a Break from the other outcomes; `step`
 // is the body's Continue/Break discriminator.
@@ -81,6 +95,33 @@ theorem loop_head_transport<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Ty
             head.memory_agrees(word)))
 }
 
+// The invariant one iteration later: the fixed registers kept, the counters
+// and carry at their new words, memory unchanged.
+theorem loop_head_advance<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+    buffer: ReadonlyBytes, needle: BitVec(8), before, after: MachineState<M>, cursor, budget, rest: Nat, carry, next: C,
+    head: LoopHead<M, C>(p, rep, access, buffer, needle, before, cursor, budget, carry),
+    base: read_gpr(p.base, after.gprs) = read_gpr(p.base, before.gprs),
+    length: read_gpr(p.length, after.gprs) = read_gpr(p.length, before.gprs),
+    needle_kept: read_gpr(p.needle, after.gprs) = read_gpr(p.needle, before.gprs),
+    cursor_next: LoopWord(64, read_gpr(p.cursor, after.gprs), Succ(cursor)),
+    budget_next: LoopWord(64, read_gpr(p.budget, after.gprs), rest),
+    carry_next: rep(read_gpr(p.carry, after.gprs), next),
+    open: buffer.length.leb(cursor) = False,
+    memory: after.memory = before.memory):
+    LoopHead<M, C>(p, rep, access, buffer, needle, after, Succ(cursor), rest, next) {
+    let value = λ (word: BitVec(64)) => word.toNat();
+    LoopHead(
+        base_placed := trans(cong_fn(value, base), head.base_placed),
+        length_placed := trans(cong_fn(value, length), head.length_placed),
+        needle_placed := trans(needle_kept, head.needle_placed),
+        cursor_placed := cursor_next,
+        budget_placed := budget_next,
+        carry_placed := carry_next,
+        inside := loop_open_inside(buffer, cursor, open),
+        memory_agrees := λ word => trans(cong_fn(λ (state: M) => access.read(state, word), memory),
+            head.memory_agrees(word)))
+}
+
 // The two per-iteration obligations a compilation discharges (design §4).
 fn LoopGuardStep<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), guard: AccessCode) → Type {
@@ -100,6 +141,23 @@ fn LoopStepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat 
             (LoopHead<M, C>(p, rep, access, buffer, needle, done, Succ(cursor), rest, next) ∧ Inv(Succ(cursor), rest, next)),
         Break(result) => (read_gpr(p.step, done.gprs) = loop_bit(True)) ∧
             LoopHead<M, C>(p, rep, access, buffer, needle, done, Succ(cursor), rest, result),
+    }
+}
+
+// LoopStepped from the body's two observed ports, whichever the step was.
+theorem loop_stepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat → Nat → C → Type,
+    access: ByteReadAccess<M>, buffer: ReadonlyBytes, needle: BitVec(8), before, done: MachineState<M>,
+    cursor, rest: Nat, kept: read_gpr(p.flag, done.gprs) = read_gpr(p.flag, before.gprs)):
+    (step: LoopStep<C>) → read_gpr(p.step, done.gprs) = loop_bit(loop_step_breaks(step)) →
+    LoopHead<M, C>(p, rep, access, buffer, needle, done, Succ(cursor), rest, loop_step_payload(step)) →
+    Inv(Succ(cursor), rest, loop_step_payload(step)) →
+    LoopStepped<M, C>(p, rep, Inv, access, buffer, needle, before, done, cursor, rest, step) {
+    λ step => match step as λ s => read_gpr(p.step, done.gprs) = loop_bit(loop_step_breaks(s)) →
+            LoopHead<M, C>(p, rep, access, buffer, needle, done, Succ(cursor), rest, loop_step_payload(s)) →
+            Inv(Succ(cursor), rest, loop_step_payload(s)) →
+            LoopStepped<M, C>(p, rep, Inv, access, buffer, needle, before, done, cursor, rest, s) {
+        Continue(_) => λ stepped head inv => ⟨kept, ⟨stepped, ⟨head, inv⟩⟩⟩,
+        Break(_) => λ stepped head _ => ⟨kept, ⟨stepped, head⟩⟩,
     }
 }
 

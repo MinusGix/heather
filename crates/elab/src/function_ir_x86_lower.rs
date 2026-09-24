@@ -9,7 +9,7 @@ use std::fmt;
 mod encoding;
 pub use encoding::{encode_instructions, encode_structured, register_code};
 mod access;
-pub use access::AccessFragment;
+pub use access::{AccessFragment, near_loop_edges};
 mod data_read;
 pub use data_read::ByteLoad;
 mod structured;

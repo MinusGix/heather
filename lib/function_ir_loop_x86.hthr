@@ -104,6 +104,7 @@ fn loop_guard(cursor, length, budget: BitVec(64)) → Bool {
         False => False,
     }
 }
+fn loop_address(base, cursor: BitVec(64)) → BitVec(64) { base.add(cursor) }
 fn loop_next_cursor(cursor: BitVec(64)) → BitVec(64) { cursor.add(BitVec::ofNat(1)) }
 fn loop_next_budget(budget: BitVec(64)) → BitVec(64) { budget.sub(BitVec::ofNat(1)) }
 // Moves a finished value into its head register. A certificate may not write
@@ -156,13 +157,18 @@ theorem loop_budget_decrement(word: BitVec(64), rest: Nat, placed: LoopWord(64, 
             trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), low_value), BitVec::toNat_ofNat(64, rest, bounded))))
 }
 
+theorem loop_open_inside(buffer: ReadonlyBytes, cursor: Nat, open: buffer.length.leb(cursor) = False):
+    Succ(cursor) <= buffer.length {
+    let selected = trans(bitvec_nat::strict_complement(cursor, buffer.length), cong_fn(λ (bit: Bool) => bit.not(), open));
+    Succ(cursor).leb_sound(buffer.length, j(sym(selected), λ bit _ => bit.IsTrue(), trivial))
+}
+
 // A buffer ending at or below 2^47 is read only at low-canonical addresses.
 theorem loop_address_canonical(buffer: ReadonlyBytes, cursor: Nat, address: BitVec(64),
     placed: LoopWord(64, address, buffer.base + cursor), open: buffer.length.leb(cursor) = False,
     low: buffer.base + buffer.length <= Nat::pow(2, 47)):
     address.drop_low(47, 17) = BitVec::zero() {
-    let selected = trans(bitvec_nat::strict_complement(cursor, buffer.length), cong_fn(λ (bit: Bool) => bit.not(), open));
-    let inside = Succ(cursor).leb_sound(buffer.length, j(sym(selected), λ bit _ => bit.IsTrue(), trivial));
+    let inside = loop_open_inside(buffer, cursor, open);
     BitVec::drop_low_zero_of_lt(47, 17, address,
         j(sym(placed), λ value _ => value < Nat::pow(2, 47),
             Succ(buffer.base + cursor).le_trans(buffer.base + buffer.length, Nat::pow(2, 47),

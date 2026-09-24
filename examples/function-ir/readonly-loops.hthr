@@ -1,5 +1,7 @@
-// Source/IR clients, not native entry points yet. Both use the same bounded
-// loop interface; application-specific behavior is confined to the pure body.
+// Two clients of one bounded loop interface; application-specific behavior is
+// confined to the pure body. first_match also compiles to a native loop with a
+// complete certificate (function_ir_loop_trace.rs, native-bounded-loops-design).
+// count_occurrences waits on a Nat carry port.
 import function_ir_loop;
 import bitvec;
 import bool;

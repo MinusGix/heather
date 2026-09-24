@@ -9,7 +9,27 @@ pub struct AccessFragment {
     layout: String,
     imports: BTreeSet<String>,
 }
+/// TEST r64, r64 on one register: the selector every access edge reads.
+fn test_bytes(register: Gpr) -> [u8; 3] {
+    let r = register_code(register);
+    [0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
+}
+
+/// A loop's exit displacement (past the body, its TEST and the back edge),
+/// the offset where the back edge starts, and the back displacement, which
+/// with that offset and the edge's own six bytes completes a 2^32 orbit.
+pub fn near_loop_edges(guard: usize, body: usize) -> Result<(usize, usize, u64), String> {
+    let exit = body + 9;
+    let back_from = guard + 9 + body + 3;
+    let span = back_from + 6;
+    if exit > i32::MAX as usize || span > i32::MAX as usize { return Err("loop exceeds the near-branch range".into()); }
+    Ok((exit, back_from, (1u64 << 32) - span as u64))
+}
+
 impl AccessFragment {
+    /// The `AccessCode` term this fragment publishes, for proofs that name
+    /// its subtrees.
+    pub fn code(&self) -> &str { &self.code }
     /// The named structured certificate declarations must be in scope when
     /// checking publication. A mismatched plan/name fails the encoding proof.
     pub fn structured(prefix: &str, plan: &LoweredStructured) -> Self {
@@ -31,8 +51,8 @@ impl AccessFragment {
         let fd = yes.bytes.len().checked_add(2).filter(|n| *n <= 127).ok_or("access true arm exceeds short-branch range")?;
         let jd = no.bytes.len();
         if jd > 127 { return Err("access false arm exceeds short-branch range".into()); }
-        let r = register_code(register);
-        let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7), 0x74, fd as u8];
+        let mut bytes = test_bytes(register).to_vec();
+        bytes.extend([0x74, fd as u8]);
         bytes.extend(yes.bytes);
         bytes.extend([0xeb, jd as u8]);
         bytes.extend(no.bytes);
@@ -46,6 +66,30 @@ impl AccessFragment {
             layout: format!("access_branch_layout({}, {displacements}, {}, {}, {}, {}, {}, {})",
                 register.heather_name(), yes.code, no.code, target(fd), target(jd), yes.layout, no.layout),
         })
+    }
+    /// A bounded loop (docs/native-bounded-loops-design.md §3): the guard, a
+    /// near exit edge over the body, the body, and a near back edge to the
+    /// guard. Both displacements are resolved from child lengths here and
+    /// checked in the kernel by the layout proof.
+    pub fn looped(guard: Self, flag: Gpr, body: Self, step: Gpr) -> Result<Self, String> {
+        let (exit, back_from, back) = near_loop_edges(guard.bytes.len(), body.bytes.len())?;
+        let mut bytes = guard.bytes.clone();
+        bytes.extend(test_bytes(flag));
+        bytes.extend([0x0f, 0x84]);
+        bytes.extend((exit as u32).to_le_bytes());
+        bytes.extend(&body.bytes);
+        bytes.extend(test_bytes(step));
+        bytes.extend([0x0f, 0x84]);
+        bytes.extend((back as u32).to_le_bytes());
+        let imports = guard.imports.union(&body.imports).cloned().collect();
+        let exit_d = format!("@bitvec::BitVec::ofNat(32, {exit})");
+        let back_d = format!("@bitvec::BitVec::ofNat(32, {back})");
+        let code = format!("AccessLoop({}, {}, {exit_d}, {}, {}, {back_d})", guard.code, flag.heather_name(), body.code, step.heather_name());
+        let layout = format!("access_loop_layout({}, {}, {exit_d}, {}, {}, {back_d}, \
+            λ (start: BitVec(64)) => near_branch_forward(start, 6, {exit}, {exit_d}, refl), \
+            λ (start: BitVec(64)) => near_branch_returns(start, {back_from}, 6, {back_d}, refl), {}, {})",
+            guard.code, flag.heather_name(), body.code, step.heather_name(), guard.layout, body.layout);
+        Ok(Self { imports, bytes, code, layout })
     }
     pub fn publish(&self, prefix: &str) -> String {
         let mut module = Module::default();

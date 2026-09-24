@@ -1,6 +1,6 @@
 # Native bounded-loop certificates — design
 
-Status: **design agreed 2026-09-24; probes done (§8); slices A0 and A landed (§9)**. Owner:
+Status: **design agreed 2026-09-24; probes done (§8); slices A0, A and B landed (§9); C open**. Owner:
 `issues/native-bounded-loop-certificates.md`, step 3 of
 `issues/native-shared-lowering-milestone.md`. Implementation state is in §9.
 
@@ -180,6 +180,28 @@ first_match_native<M>(access, before, buffer, needle, budget, cursor, found,
         ∧ frame(before, after))
 ```
 
+The generator is `generate_elaborated_loop_x86` in
+`crates/elab/src/function_ir_source/loop_native.rs`, with a
+`NativeLoopPlacement` naming the eight head registers and the iteration's
+scratch (address, byte, payload, next cursor, next budget, plus `extra`
+temporaries). Its emission has two parts: `pieces` (the eight typed
+certificates and the reflector's source agreement, elaborated as
+`{prefix}_pieces`) and `text` (code, bytes, layout, the two iteration proofs
+and the final theorem). A change to the composition rechecks only the second.
+
+Two constraints turned up building it:
+
+- The glue must not reach a register or memory fact through a field of a
+  theorem-built record (`X_read_artifact(...).memory_preserved`): theorems are
+  opaque, so `.continuation.after` never reduces to the state the next piece
+  starts from. The glue uses the body certificate's own `_preserves`/`_memory`
+  lemmas with `byte_load_preserves`, and builds the `ByteLoadStep` directly.
+  The elaborator accepted the other spelling and the kernel refused it
+  unlocated (`issues/elab-accepts-projection-through-opaque-theorem.md`).
+- The guard and the step body select SETcc into a byte-addressable register,
+  so `Rax`/`Rbx`/`Rdx`-class registers must be among their temporaries. The
+  first placement therefore keeps the length in `Rbp`, not `Rdx`.
+
 The export premises are the explicit boundary: register placement,
 `LoopAddressBound`, the 2^47 canonical bound, `cursor ≤ length`, memory
 agreement, `Inv`, and `LoopReadable`. ABI entry, RET, fetch and host I/O stay
@@ -250,9 +272,18 @@ family) before any library work:
   selects those functions through the shared generator and checks their
   certificates, with refusal controls for the word lemmas. The first
   instantiation of `loop_trace` against real certificates is slice B.
-- **B — generator + search.** `AccessFragment::looped`, glue emission,
-  `generate_elaborated_loop_x86(elab, "clients::first_match", placement)`
-  from the existing wrapper reflector, the controls, and the native test.
+- **B — generator + search, landed.** `AccessFragment::looped` (with
+  `near_loop_edges`), `generate_elaborated_loop_x86`, and
+  `crates/elab/tests/function_ir_loop_trace.rs`.
+  `search_loop_certificate_checks` checks the whole `first_match` loop and
+  runs the published bytes natively. The run covers every needle, buffers up
+  to 48 bytes ending flush against a guard page, every start cursor, eight
+  budgets and both carries, each exit compared with a C reference of
+  `loop_run`. `slow_acceptance_search_loop_refusals` refuses a shifted back
+  edge, a shifted exit edge, a flag, counter or carry placement that
+  disagrees with the code, and a step function edited after compilation. The
+  library side added `loop_address`, `loop_open_inside`, `loop_bool_rep`,
+  `loop_head_advance` and `loop_stepped`.
 - **C — Nat carry + counting.** A Nat port with a `LoopWord` representation
   and a bound premise in typed certificates (`Succ(count)` → `add 1`), the
   counting `Inv`, and `count_occurrences` through the same generator. The
