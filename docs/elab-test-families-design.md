@@ -9,8 +9,8 @@ the lever ranking: `issues/rust-edit-loop-build-bound.md`.
 binary. Every one of them statically links the whole compiler, and every one
 builds at `opt-level = 3` (the `heather-elab` package override covers its test
 targets too). A Rust edit to elab or the kernel therefore rebuilds and relinks
-about 180 binaries. That costs about 300 CPU-s and leaves about 40 MB of
-executable per binary in `target/debug/deps`.
+about 180 binaries. Link work and disk both scale with the binary count, not
+with the tests.
 
 ## Goal and non-goals
 
@@ -209,13 +209,7 @@ implementation departs from the sections above as follows:
     family runs as one process under one rail. The focused path doesn't
     shard.
   - `instrumentation.rs` builds its re-exec names from `module_path!()`.
-- **Build, same box and same edits, before → after:**
-
-  | edit | wall | summed unit time |
-  |---|---|---|
-  | elab body | 37.5 → 29.1 s | 263 → 92 unit-s |
-  | kernel body | 28.8 → 9.2 s | 356 → 68 unit-s |
-
-  The elab test executables went from 8.64 GB to 0.86 GB. Cargo doesn't
-  delete the old per-file executables, so an existing target dir keeps them
-  until it's cleaned.
+- **Build.** Link work and executable disk now scale with the family count
+  instead of the file count. The dated numbers are in the owner issue's log.
+  Cargo doesn't delete the old per-file executables, so an existing target
+  dir keeps them until it's cleaned.

@@ -14,7 +14,7 @@ autobins = false
 # dev-dependency to one target: `heather-elab` dev-depends on `heather-cli`
 # (for its integration tests and bench), which depends on `heather-elab`, so
 # its `--lib` test build could not start until the elab → cli chain was
-# built, and at ~40 s it was then the whole build's critical path
+# built, and it was then the whole build's critical path
 # (issues/elab-unit-tests-wait-on-cli-dev-dependency.md). With no
 # dev-dependencies here it compiles beside the elab lib instead of after it.
 # Run with `scripts/test -p heather-elab-unit --lib`.
