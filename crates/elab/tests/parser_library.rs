@@ -1,7 +1,7 @@
 //! Checked representation and composition prototype for the parser library.
 use heather_elab::{Elaborator, SemanticImage};
 use std::sync::OnceLock;
-mod support;
+use crate::support;
 const MODULES: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),
     ("bool", include_str!("../../../lib/std/bool.hthr")),

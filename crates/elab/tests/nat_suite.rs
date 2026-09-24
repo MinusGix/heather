@@ -15,7 +15,7 @@
 use heather_elab::{ElabError, Elaborator};
 use heather_kernel::term::GlobalBinding;
 
-mod support;
+use crate::support;
 use support::NAT_SUITE;
 
 #[test]

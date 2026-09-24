@@ -10,7 +10,7 @@
 //! The negatives beside each positive are what say the arithmetic is exact
 //! and not merely fast: one off in the answer is `NotConvertible`.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

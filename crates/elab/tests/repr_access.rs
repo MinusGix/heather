@@ -14,7 +14,7 @@
 
 use heather_elab::Elaborator;
 
-mod support;
+use crate::support;
 use support::{BIN_MIN, BIN_REPR};
 
 fn ok(src: &str) -> Elaborator {

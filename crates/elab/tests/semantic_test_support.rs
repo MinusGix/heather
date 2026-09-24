@@ -1,6 +1,6 @@
 //! Controls for the shared semantic test-fixture boundary.
 
-mod support;
+use crate::support;
 
 fn temp() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(

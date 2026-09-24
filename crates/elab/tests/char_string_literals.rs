@@ -7,7 +7,7 @@
 //! user carrier through its class, a literal at a carrier with no instance,
 //! and a literal in inference position.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

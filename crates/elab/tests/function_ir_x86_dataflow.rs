@@ -6,8 +6,7 @@
 //! control-region groups keep their own binaries: their suffixes are the
 //! kernel-bound linked-conditional items ([`common::run_conditional_tests`]),
 //! and the model group replays a different prefix length.
-#[path = "function_ir_x86.rs"]
-mod common;
+use crate::common;
 
 #[test]
 fn function_ir_x86_dataflow() {

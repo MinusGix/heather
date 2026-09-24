@@ -14,7 +14,7 @@
 //! is proof content that either checks or does not. Cheap — under a second of
 //! the suite's budget.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

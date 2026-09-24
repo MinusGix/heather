@@ -6,7 +6,7 @@
 //! type stays open, and the tree is neutral. That is the control a linear list
 //! fold cannot provide.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

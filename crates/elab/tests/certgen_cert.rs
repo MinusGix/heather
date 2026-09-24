@@ -23,7 +23,7 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
-mod support;
+use crate::support;
 
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");

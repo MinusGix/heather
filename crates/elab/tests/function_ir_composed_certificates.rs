@@ -1,8 +1,6 @@
-#[path = "function_ir_x86.rs"]
-mod common;
+use crate::common;
 
-#[path = "support/structured_composition.rs"]
-mod composed_fixture;
+use crate::composed_fixture;
 
 #[test]
 fn composed_multiple_result_certificates_check() {

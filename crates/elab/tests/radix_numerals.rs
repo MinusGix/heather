@@ -10,7 +10,7 @@
 use heather_elab::{ElabError, Elaborator};
 use std::sync::Mutex;
 
-mod support;
+use crate::support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 

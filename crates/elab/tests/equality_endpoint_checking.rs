@@ -4,7 +4,7 @@
 
 use heather_elab::Elaborator;
 
-mod support;
+use crate::support;
 
 fn base() -> Elaborator {
     support::semantic_test_base(&[

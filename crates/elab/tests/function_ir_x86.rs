@@ -2,7 +2,7 @@
 //! relational execution.
 #![allow(dead_code)]
 
-mod support;
+use crate::support;
 
 use heather_elab::function_ir_cert::{
     self as cert, BlockArgument, ConditionalJoinRegion, ControlRegion, Node, Port, Region,

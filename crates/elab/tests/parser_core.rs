@@ -1,6 +1,6 @@
 //! Checked representation and composition prototype for the parser library.
 use heather_elab::Elaborator;
-mod support;
+use crate::support;
 fn base() -> Elaborator {
     support::semantic_test_base(&[
         ("logic", include_str!("../../../lib/std/logic.hthr")),

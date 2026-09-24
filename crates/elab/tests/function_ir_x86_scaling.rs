@@ -1,5 +1,4 @@
-#[path = "function_ir_x86.rs"]
-mod common;
+use crate::common;
 
 #[test]
 #[ignore = "20/100-node elaborated source-to-x86 scaling rail; run explicitly"]

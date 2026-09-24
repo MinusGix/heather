@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CPU_MARKER, collect, jobBounds, limitedCommand, parseArtifacts, parseCpu, parseResults, parseTestTimes, targetIncomplete, timedLibtestArgs } from "./run-test-targets.mjs";
+import { CPU_MARKER, collect, familyShards, jobBounds, limitedCommand, listingArgs, parseArtifacts, parseCpu, parseResults, parseTestTimes, shardTestName, targetIncomplete, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -12,6 +12,31 @@ test("artifact discovery keeps test-profile executables once", () => {
   const summary = { ...artifact, executable: "/tmp/summary",
     target: { name: "native_summary", kind: ["test"], src_path: "/work/crates/cli/tests/native_summary.rs" } };
   assert.equal(parseArtifacts(JSON.stringify(summary), "/work")[0].exclusive, true);
+});
+
+test("a family binary runs as one shard per member file, labelled as that file", () => {
+  const family = { executable: "/tmp/family", name: "family_library",
+    label: "crates/elab/tests/families/library.rs", exclusive: false };
+  // `lib_std_tree`'s only test was skipped at listing time, so it is absent
+  // here and gets no shard; `frontend_bench_smoke` keeps its exclusivity.
+  const listing = "lib_std_list::a: test\nlib_std_list::nested::b: test\n" +
+    "frontend_bench_smoke::smoke: test\nlib_std_int::c: test\nlib_std_list::d: bench\n\n";
+  assert.deepEqual(familyShards(family, listing), [
+    { executable: "/tmp/family", name: "lib_std_list", label: "crates/elab/tests/lib_std_list.rs",
+      exclusive: false, family: "family_library", args: ["--exact", "lib_std_list::a", "lib_std_list::nested::b"] },
+    { executable: "/tmp/family", name: "frontend_bench_smoke", label: "crates/elab/tests/frontend_bench_smoke.rs",
+      exclusive: true, family: "family_library", args: ["--exact", "frontend_bench_smoke::smoke"] },
+    { executable: "/tmp/family", name: "lib_std_int", label: "crates/elab/tests/lib_std_int.rs",
+      exclusive: false, family: "family_library", args: ["--exact", "lib_std_int::c"] },
+  ]);
+  assert.throws(() => familyShards(family, "stray: test\n"), /not in a member module/);
+  // Only the skips decide the listing; under `--exact` they would match
+  // whole names only.
+  assert.deepEqual(listingArgs(["--format", "terse", "--skip", "slow_acceptance_", "--skip", "x"]),
+    ["--skip", "slow_acceptance_", "--skip", "x"]);
+  const shard = familyShards(family, listing)[0];
+  assert.equal(shardTestName(shard, "lib_std_list::nested::b"), "nested::b");
+  assert.equal(shardTestName({ name: "surface" }, "surface::x"), "surface::x");
 });
 
 test("libtest summaries aggregate exactly", () => {

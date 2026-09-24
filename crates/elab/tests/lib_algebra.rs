@@ -35,7 +35,7 @@ use std::cell::OnceCell;
 
 use heather_elab::{ElabError, Elaborator};
 
-mod support;
+use crate::support;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");

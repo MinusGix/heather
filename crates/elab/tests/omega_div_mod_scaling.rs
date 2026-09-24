@@ -8,7 +8,7 @@
 //! prefix safely replays from the shared semantic test-image store;
 //! `omega_div_mod.rs` remains the source-only suite backstop.
 
-mod support;
+use crate::support;
 
 use heather_elab::{ElabError, Elaborator};
 

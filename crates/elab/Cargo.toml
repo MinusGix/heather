@@ -7,6 +7,12 @@ license.workspace = true
 # is one (the suite is a directory of modules, not a file per benchmark) —
 # same shape as the kernel's.
 autobenches = false
+# Integration tests are declared below, not discovered: most of
+# tests/*.rs are members of a family binary that mounts them by path
+# (docs/elab-test-families-design.md), so a file per binary no longer holds.
+# scripts/check-elab-test-families.mjs fails the suite on a file no target
+# builds.
+autotests = false
 
 [lib]
 name = "heather_elab"
@@ -44,6 +50,61 @@ heather-cli = { path = "../cli" }
 name = "frontend"
 path = "benches/frontend/main.rs"
 harness = false
+
+# One binary per family; the runner still runs each member file in a process
+# of its own (docs/elab-test-families-design.md). The families mount their
+# members from tests/*.rs, so every file keeps its path.
+[[test]]
+name = "family_certgen"
+path = "tests/families/certgen.rs"
+[[test]]
+name = "family_function_ir"
+path = "tests/families/function_ir.rs"
+[[test]]
+name = "family_indexed"
+path = "tests/families/indexed.rs"
+[[test]]
+name = "family_library"
+path = "tests/families/library.rs"
+[[test]]
+name = "family_literals"
+path = "tests/families/literals.rs"
+[[test]]
+name = "family_logic"
+path = "tests/families/logic.rs"
+[[test]]
+name = "family_matching"
+path = "tests/families/matching.rs"
+[[test]]
+name = "family_omega"
+path = "tests/families/omega.rs"
+[[test]]
+name = "family_session"
+path = "tests/families/session.rs"
+[[test]]
+name = "family_surface"
+path = "tests/families/surface.rs"
+[[test]]
+name = "family_traits"
+path = "tests/families/traits.rs"
+[[test]]
+name = "family_types"
+path = "tests/families/types.rs"
+[[test]]
+name = "family_x86"
+path = "tests/families/x86.rs"
+
+# Standalone on purpose: the bench smoke times itself and runs exclusively,
+# and scripts/test runs the two warm-ups by name, before the parallel phase.
+[[test]]
+name = "frontend_bench_smoke"
+path = "tests/frontend_bench_smoke.rs"
+[[test]]
+name = "semantic_omega_warmup"
+path = "tests/semantic_omega_warmup.rs"
+[[test]]
+name = "semantic_x86_warmup"
+path = "tests/semantic_x86_warmup.rs"
 
 [lints]
 workspace = true

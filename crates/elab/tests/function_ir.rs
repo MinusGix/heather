@@ -1,7 +1,7 @@
 //! FunctionIR's stable-ID regions, compact validity certificates,
 //! graph-relational semantics, and modular `add64`.
 
-mod support;
+use crate::support;
 
 use heather_elab::function_ir_cert::{
     self as cert, BlockArgument, ConditionalJoinRegion, ControlRegion, Node, Port, Region,

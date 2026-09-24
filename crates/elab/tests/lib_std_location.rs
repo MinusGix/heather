@@ -1,6 +1,6 @@
 //! Total location laws at open carriers, plus a concrete nested-record probe.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

@@ -6,7 +6,7 @@
 //! position, with a negative control beside it. A closed scrutinee alone hid
 //! three of the five defects that document was written about.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

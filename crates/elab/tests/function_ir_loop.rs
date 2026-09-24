@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),

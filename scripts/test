@@ -37,6 +37,9 @@ cd "$(dirname "$0")/.."
 # compiler keywords or fixed symbols drift away from the editor manifest.
 suite_started=$SECONDS
 node scripts/check-tree-sitter-inventory.js
+# crates/elab declares its test targets instead of discovering them (family
+# binaries mount their member files by path), so check no file fell out.
+node scripts/check-elab-test-families.mjs
 node --test scripts/test-target-runner.test.mjs
 
 # The kernel's `value-metrics` feature is off in every test target — it is the
@@ -52,12 +55,6 @@ TEST_ARGS=()
 CARGO_FLAGS=()
 TEST_LANE=full
 HAS_LIBTEST_SEPARATOR=false
-for a in "$@"; do
-  if [[ "$a" == -- ]]; then
-    HAS_LIBTEST_SEPARATOR=true
-    break
-  fi
-done
 if [[ "${1:-}" == --fast ]]; then
   shift
   TEST_LANE=fast
@@ -114,6 +111,32 @@ elif [[ "${1:-}" == --long ]]; then
   echo "long lane: every kernel self-check runs on every occasion (target/long)"
 fi
 
+# `--test <file>` keeps meaning that file's tests when the file is a member of
+# an elab family binary (docs/elab-test-families-design.md §D4): the helper
+# rewrites it to `--test <family>` with a `<file>::` filter, or `<file>::<name>`
+# when a filter was given. The warm-up choice below reads the args as the
+# caller wrote them.
+requested=" $* "
+# Named directly, a family is one process under one rail: allowed, and a
+# rail kill reads INCOMPLETE rather than red. Per-file rails are what the
+# member spelling or the plain suite (which shards families by file) give.
+if [[ "$requested" =~ (--test[=\ ]family_[a-z0-9_]+) ]]; then
+  echo "${BASH_REMATCH[1]}: the family runs as one process under one rail; \`--test <file>\` or the plain suite runs each member file under its own"
+fi
+if (( $# > 0 )); then
+  rewritten_args=$(mktemp)
+  node scripts/check-elab-test-families.mjs --rewrite-args -- "$@" > "$rewritten_args" || exit 2
+  mapfile -d '' rewritten < "$rewritten_args"
+  rm -f "$rewritten_args"
+  set -- "${rewritten[@]}"
+fi
+for a in "$@"; do
+  if [[ "$a" == -- ]]; then
+    HAS_LIBTEST_SEPARATOR=true
+    break
+  fi
+done
+
 # Keep libtest's compact dot output while leaving Cargo itself non-quiet: the
 # latter is what prints `Running tests/foo.rs`, which the timing table needs.
 # Respect a caller-supplied `--`; otherwise introduce the separator here.
@@ -168,7 +191,6 @@ if (( $# == 0 )); then
     native_warmup
   fi
 else
-  requested=" $* "
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
   fi
@@ -183,7 +205,8 @@ else
   # modules; the function_ir_x86 family extends it) shares that store.
   if $whole_elab || [[ "$requested" == *"--test x86_64"* ]] ||
      [[ "$requested" == *"--test lib_std_bitvec"* ]] ||
-     [[ "$requested" == *"--test function_ir_x86"* ]]; then
+     [[ "$requested" == *"--test function_ir_x86"* ]] ||
+     [[ "$requested" =~ --test[=\ ]family_(library|function_ir|x86)\  ]]; then
     semantic_warmup semantic_x86_warmup
   fi
   # `--test omega` also matches every `omega_*` target, including
@@ -194,7 +217,8 @@ else
      [[ "$requested" == *"--test omega_div_mod_scaling"* ]] ||
      [[ "$requested" == *"--test mutual_recursion"* ]] ||
      [[ "$requested" == *"--test termination_measures"* ]] ||
-     [[ "$requested" == *"--test decreases_unfolding"* ]]; then
+     [[ "$requested" == *"--test decreases_unfolding"* ]] ||
+     [[ "$requested" =~ --test[=\ ]family_omega\  ]]; then
     semantic_warmup semantic_omega_warmup
   fi
 fi

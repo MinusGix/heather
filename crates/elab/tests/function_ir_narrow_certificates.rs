@@ -1,5 +1,4 @@
-#[path = "function_ir_x86.rs"]
-mod common;
+use crate::common;
 
 use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
 use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements};

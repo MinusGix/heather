@@ -29,7 +29,7 @@
 //! (the negative control the reservation exists for), and
 //! `a_declaration_installs_each_spelling_once` (§5.2 over both namespaces).
 
-mod support;
+use crate::support;
 use std::cell::OnceCell;
 
 use heather_elab::{ElabError, Elaborator};

@@ -33,7 +33,7 @@
 //! `the_concrete_carrier_refusal_names_the_designations` (item 8 — the
 //! regression this round decided to *keep*, pinned positively).
 
-mod support;
+use crate::support;
 use std::cell::OnceCell;
 
 use heather_elab::{ElabError, Elaborator};

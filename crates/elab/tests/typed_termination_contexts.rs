@@ -1,6 +1,6 @@
 //! Inferred local types and dependent telescopes in decrease obligations.
 use heather_elab::Elaborator;
-mod support;
+use crate::support;
 fn base() -> Elaborator {
     support::semantic_test_base(&[
         ("logic", include_str!("../../../lib/std/logic.hthr")),

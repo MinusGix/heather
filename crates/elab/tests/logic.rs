@@ -16,7 +16,7 @@
 //! `And<nat::Nat::Le(p,q), And<nat::Nat::Le(q,r), nat::Nat::Le(p,r)>>` and the left-nested rival is refused
 //! beside it.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");

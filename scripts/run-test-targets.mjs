@@ -4,10 +4,10 @@
 // workspace runs. Keep policy (limits, lanes, doctests) there; this file owns
 // scheduling, buffered output, and exact result accounting.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { normalize, resolve } from "node:path";
+import { dirname, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Per-child address-space cap (`ulimit -v`): the machine-protection rail.
@@ -60,6 +60,71 @@ export function parseArtifacts(text, root = process.cwd()) {
 }
 
 export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke", "native_summary"]);
+
+// A family binary (`family_*`, crates/elab/Cargo.toml) links several test
+// files into one executable to save the links, not to share a process: it
+// runs as one shard per member file, and a shard is scheduled, railed,
+// timed and labelled exactly as that file's own binary was
+// (docs/elab-test-families-design.md §D3). The member is the test name's
+// first `::` segment, because the family mounts each file as a module named
+// after its stem, next to the family's own directory.
+//
+// `listing` is the binary's `--list --format terse` output under the lane's
+// own `--skip`s, so a member whose every test is skipped yields no shard (its
+// binary used to run and report 0 passed). The shard then selects its tests
+// by `--exact` name: a `member::` substring filter would also catch another
+// member's nested module of the same name. Under `--exact` libtest matches
+// `--skip` exactly too, which is why the skips are applied at listing time.
+export function familyShards(artifact, listing) {
+  const groups = new Map();
+  for (const line of listing.split("\n")) {
+    const m = /^(\S+): test$/.exec(line);
+    if (!m) continue;
+    const cut = m[1].indexOf("::");
+    if (cut < 0) throw new Error(`${artifact.label}: test \`${m[1]}\` is not in a member module`);
+    const member = m[1].slice(0, cut);
+    if (!groups.has(member)) groups.set(member, []);
+    groups.get(member).push(m[1]);
+  }
+  const dir = dirname(dirname(artifact.label));
+  return [...groups].map(([member, names]) => ({
+    executable: artifact.executable,
+    name: member,
+    label: `${dir}/${member}.rs`,
+    exclusive: EXCLUSIVE_TARGETS.has(member),
+    family: artifact.name,
+    args: ["--exact", ...names],
+  }));
+}
+
+export function isFamily(artifact) {
+  return artifact.name.startsWith("family_");
+}
+
+// libtest options that decide which tests exist for a listing: the lane's
+// skips. Everything else (`--format`, thread counts) is for the run.
+export function listingArgs(libtestArgs) {
+  const out = [];
+  for (let i = 0; i < libtestArgs.length; i++) {
+    if (libtestArgs[i] === "--skip" && i + 1 < libtestArgs.length) out.push("--skip", libtestArgs[++i]);
+  }
+  return out;
+}
+
+function expandFamilies(artifacts, libtestArgs) {
+  return artifacts.flatMap((artifact) => {
+    if (!isFamily(artifact)) return [artifact];
+    const listing = execFileSync(artifact.executable, ["--list", "--format", "terse", ...listingArgs(libtestArgs)],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    return familyShards(artifact, listing);
+  });
+}
+
+// A shard's per-test rows keep the names its file's own binary reported, so
+// test-times history stays continuous across the merge.
+export function shardTestName(target, name) {
+  return target.family && name.startsWith(`${target.name}::`) ? name.slice(target.name.length + 2) : name;
+}
 
 export function parseResults(text) {
   const total = { passed: 0, failed: 0, ignored: 0, duration: 0, resultLines: 0 };
@@ -288,9 +353,10 @@ async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) 
         active++;
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
+        const args = [...libtestArgs, ...(target.args ?? [])];
         const command = TEST_TIMES
-          ? limitedCommand(target.executable, timedLibtestArgs(libtestArgs), { RUSTC_BOOTSTRAP: "1", ...extraEnv })
-          : limitedCommand(target.executable, libtestArgs, extraEnv);
+          ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv })
+          : limitedCommand(target.executable, args, extraEnv);
         collect(command).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
@@ -337,13 +403,14 @@ async function main() {
   const bounds = jobBounds(jobsRequested, meminfo, availableParallelism(), cgroupMax, cgroupCurrent);
   const jobs = bounds.jobs;
   const history = loadHistory(timingsPath);
-  const targets = parseArtifacts(readFileSync(manifest, "utf8"));
+  const artifacts = parseArtifacts(readFileSync(manifest, "utf8"));
+  const targets = expandFamilies(artifacts, libtestArgs);
   targets.sort((a, b) => {
     if (a.exclusive !== b.exclusive) return a.exclusive ? 1 : -1;
     return (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label);
   });
   if (!targets.length) throw new Error("Cargo manifest contained no test executables");
-  console.log(`\n== test targets: ${targets.length} binaries, ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
+  console.log(`\n== test targets: ${targets.length} (${artifacts.length} binaries), ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
   const reserveGib = (bounds.reserveKib / 1024 / 1024).toFixed(1);
   if (bounds.automatic) {
     console.log(`automatic bound: memory ${bounds.memoryJobs}, CPU ${bounds.cpuJobs}; reserving ${reserveGib} GiB for the host`);
@@ -422,9 +489,9 @@ async function main() {
     const testsPath = timingsPath.includes("test-target-timings-")
       ? timingsPath.replace("test-target-timings-", "test-times-") : `${timingsPath}.tests`;
     const rows = runs.flatMap((run) => run.tests.map(([name, seconds, status]) =>
-      `${runId}\t${run.target.label}\t${name}\t${seconds === null ? "" : seconds.toFixed(3)}\t${status}`));
+      `${runId}\t${run.target.label}\t${shardTestName(run.target, name)}\t${seconds === null ? "" : seconds.toFixed(3)}\t${status}`));
     writeFileSync(testsPath, "run\ttarget\ttest\tseconds\tstatus\n" + rows.join("\n") + "\n");
-    const slowest = runs.flatMap((run) => run.tests.filter(([, s]) => s !== null).map(([name, s]) => [s, `${run.target.label}::${name}`]))
+    const slowest = runs.flatMap((run) => run.tests.filter(([, s]) => s !== null).map(([name, s]) => [s, `${run.target.label}::${shardTestName(run.target, name)}`]))
       .sort((a, b) => b[0] - a[0]).slice(0, 15);
     if (slowest.length) {
       console.log(`== slowest tests (seconds inside their binary; all ${rows.length} in ${testsPath}) ==`);

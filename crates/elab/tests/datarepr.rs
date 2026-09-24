@@ -12,7 +12,7 @@
 
 use heather_elab::Elaborator;
 
-mod support;
+use crate::support;
 use support::{BIN_ADD, BIN_MIN, BIN_REPR as BIN};
 
 fn ok(src: &str) -> Elaborator {

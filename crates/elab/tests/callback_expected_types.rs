@@ -2,7 +2,7 @@
 //! still need the enclosing application's expected result for constructors
 //! and collection literals in checking-only positions.
 use heather_elab::Elaborator;
-mod support;
+use crate::support;
 
 fn base() -> Elaborator {
     support::semantic_test_base(&[

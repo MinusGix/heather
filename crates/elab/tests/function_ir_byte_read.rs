@@ -1,5 +1,4 @@
-#[path = "function_ir_x86.rs"]
-mod common;
+use crate::common;
 use heather_elab::function_ir_source::generate_elaborated_read_x86;
 use heather_elab::function_ir_x86_lower::{ByteLoad, Gpr, Placements};
 

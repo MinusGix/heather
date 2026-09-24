@@ -18,7 +18,7 @@
 //! here: a tupled recursion that slid its window the wrong way still checks,
 //! still computes, and answers `half(7) = 4`.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

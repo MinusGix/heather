@@ -11,8 +11,8 @@ echo "== measure start $(date -u +%FT%TZ) rev=$(git rev-parse --short HEAD 2>/de
 ( ulimit -v 16777216 -t 3600
   if [ -n "${DUMP:-}" ]; then export HEATHER_FUNCTION_IR_X86_DUMP="$DUMP"; fi
   HEATHER_FUNCTION_IR_X86_NODES=5 HEATHER_TIMINGS=- HEATHER_FUNCTION_IR_X86_VALUE_METRICS=1 \
-  cargo test -p heather-elab --features value-metrics --test function_ir_x86_scaling \
-    slow_acceptance_generated_20_node_mixed_binary_alu_dag_checks -- --nocapture --exact 2>&1 )
+  cargo test -p heather-elab --features value-metrics --test family_x86 \
+    function_ir_x86_scaling::slow_acceptance_generated_20_node_mixed_binary_alu_dag_checks -- --nocapture --exact 2>&1 )
 echo "exit=$?"
 echo "== measure end $(date -u +%FT%TZ) =="
 if [ -n "${DUMP:-}" ]; then echo "== dump =="; cat "$DUMP"; echo "== dump end =="; fi

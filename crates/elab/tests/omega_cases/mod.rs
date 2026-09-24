@@ -1,8 +1,9 @@
 //! End-to-end acceptance for the kernel-certified Omega vertical slice,
 //! including the low-level `omega::dot` boundary and ordinary affine syntax.
 
-// Each integration-test binary selects one rail-sized suite below, so the
-// other two suites are intentionally dormant in that binary.
+// Each member file (omega.rs, omega_logic.rs, omega_reconstruction.rs) runs
+// one rail-sized suite below, in a process of its own; a binary that mounts
+// fewer than all three leaves the others dormant.
 #![allow(dead_code)]
 
 use std::cell::OnceCell;

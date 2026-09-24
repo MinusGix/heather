@@ -2,7 +2,7 @@
 //! is untrusted: every emitted theorem is checked against the actual Heather
 //! region, and a deliberately stale model is rejected.
 
-mod support;
+use crate::support;
 
 use heather_elab::function_ir_cert::{self as cert, Node, Port, Region};
 use heather_elab::{ElabError, Elaborator};

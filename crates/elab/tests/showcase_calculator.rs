@@ -2,7 +2,7 @@
 //! documentation snippets that can drift away from the language.
 use heather_elab::Elaborator;
 
-mod support;
+use crate::support;
 
 const STD: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),

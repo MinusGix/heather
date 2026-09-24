@@ -1,7 +1,10 @@
 //! Shared fixtures for the integration tests.
 //!
-//! Included by `mod support;` in more than one test target, and each target
-//! uses a different part of it, so unused-item warnings here are expected.
+//! Mounted once by each family binary (tests/families/) and `use`d by its
+//! member files as `crate::support` — never re-declared with `mod support;`,
+//! which would give the member a private copy of every `OnceLock` here
+//! (docs/elab-test-families-design.md). Each family uses a different part of
+//! it, so unused-item warnings here are expected.
 //!
 //! Orientation, so nobody greps for these twice (finding the prelude took a
 //! four-call hunt in one session, 2026-08-11):

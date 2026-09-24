@@ -11,7 +11,7 @@
 
 use heather_elab::{Elaborator, ModuleDelta, ModuleDependencyIdentity, SliceReport};
 
-mod support;
+use crate::support;
 
 const ADD: &str = "fn add(m: Nat, n: Nat) -> Nat {
     match m {

@@ -1,6 +1,6 @@
 //! `lib/std/certified_lookup.hthr` — generic proof-carrying finite lookup.
 
-mod support;
+use crate::support;
 use heather_elab::Elaborator;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

@@ -1,7 +1,7 @@
 //! `lib/std/bounded_list.hthr` — capacity-bounded lists, their stack API, and
 //! the first ordinary client of propositional truncation.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use heather_elab::{Elaborator, SemanticImage};
 
-mod support;
+use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/logic.hthr")),

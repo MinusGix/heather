@@ -1,6 +1,6 @@
 //! Source-driven recursive selection regressions. Physical certificate and
 //! native publication gates live in their own acceptance targets.
-mod support;
+use crate::support;
 
 use std::collections::BTreeMap;
 use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
@@ -444,8 +444,7 @@ fn helper_expansion_has_a_structural_depth_bound() {
     assert!(reflect_elaborated_structured(&elab, "helper32").unwrap_err().to_string().contains("deep helper"));
 }
 
-#[path = "support/structured_composition.rs"]
-mod composed_fixture;
+use crate::composed_fixture;
 
 #[test]
 fn composed_multiple_results_execute_and_protect_each_other() {

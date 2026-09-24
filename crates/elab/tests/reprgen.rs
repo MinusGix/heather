@@ -15,7 +15,7 @@
 
 use heather_elab::Elaborator;
 
-mod support;
+use crate::support;
 use support::{BIN_CANON, BIN_MIN, BIN_REPR, UNARY_CANON};
 
 fn ok(src: &str) -> Elaborator {

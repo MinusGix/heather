@@ -22,7 +22,7 @@
 use heather_elab::Elaborator;
 use heather_kernel::term::GlobalCtx;
 
-mod support;
+use crate::support;
 use support::{NAT_SUITE, psi_hash};
 
 /// Elaborate the prelude + the Nat suite from scratch, returning Ψ.

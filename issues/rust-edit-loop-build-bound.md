@@ -49,3 +49,4 @@ The test phase's CPU (native certificate size) comes after these.
 ## Log
 
 - 2026-09-24: Lever 1 landed ([[elab-unit-tests-wait-on-cli-dev-dependency]]): build after an elab body edit 77 → 53 s, kernel body edit 61 → 49 s. Lever 2's design: docs/elab-test-families-design.md.
+- 2026-09-24: Lever 2 landed ([[elab-integration-test-binaries-merge]]): 178 elab test binaries → 13 families + 3 standalone. Same box, same edits: elab body edit 37.5 → 29.1 s wall (263 → 92 unit-s), kernel body edit 28.8 → 9.2 s (356 → 68 unit-s); full suite 2922 passed, tests 64 s warm. Next: [[elab-rebuild-floor]], re-measured first.

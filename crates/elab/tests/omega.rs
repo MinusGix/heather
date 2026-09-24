@@ -1,7 +1,6 @@
 //! Core search and reflection half of the kernel-certified Omega acceptance.
 
-mod omega_cases;
-mod support;
+use crate::omega_cases;
 
 #[test]
 fn omega_core_suite() {

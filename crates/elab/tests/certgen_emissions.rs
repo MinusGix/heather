@@ -35,7 +35,7 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
-mod support;
+use crate::support;
 
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// The library's one import (docs/modules-design.md §7). Elaborated whole,

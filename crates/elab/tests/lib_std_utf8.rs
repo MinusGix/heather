@@ -13,7 +13,7 @@ use heather_elab::{ElabError, Elaborator, SemanticImage};
 use std::cell::OnceCell;
 use std::sync::Mutex;
 
-mod support;
+use crate::support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 

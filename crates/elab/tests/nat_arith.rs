@@ -24,7 +24,7 @@
 //! against a `max` that returned its second argument, and the controls are
 //! what rule that out.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

@@ -291,6 +291,10 @@ def suite_decls(d: Path, run: str, lane: dict):
         if len(parts) != 3:
             continue
         exe, thread, _n = parts
+        # A family binary's thread is `<member file>::<test>`; the member is
+        # the target the runner labelled (docs/elab-test-families-design.md).
+        if exe.startswith("family_") and "::" in thread:
+            exe, thread = thread.split("::", 1)
         label = labels.get(exe, exe)
         t = Timings(f)
         rows = t.scoped("item")

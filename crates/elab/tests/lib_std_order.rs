@@ -1,6 +1,6 @@
 //! `lib/std/order.hthr` — mathematical orders without decidability.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");

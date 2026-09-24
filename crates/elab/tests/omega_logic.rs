@@ -1,7 +1,6 @@
 //! Logical and natural-arithmetic half of the kernel-certified Omega acceptance.
 
-mod omega_cases;
-mod support;
+use crate::omega_cases;
 
 #[test]
 fn omega_logic_suite() {

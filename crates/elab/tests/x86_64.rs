@@ -1,7 +1,7 @@
 //! First x86-64 vertical slice: decoded register MOV/ADD/SUB/CMP/TEST, flags, opaque
 //! memory preservation, and length-derived RIP fallthrough.
 
-mod support;
+use crate::support;
 
 use heather_elab::{ElabError, Elaborator, stats};
 

@@ -1,6 +1,6 @@
 ---
 title: Merge elab's 178 integration-test binaries into families
-status: open
+status: closed
 labels: [testing,performance,build]
 created: 2026-09-24
 updated: 2026-09-24
@@ -32,3 +32,4 @@ Do after [[elab-unit-tests-wait-on-cli-dev-dependency]].
 ## Log
 
 - 2026-09-24: Design written: docs/elab-test-families-design.md (families by #[path] with files in place, runner shards a family by module so rails/fixtures/timing labels are unchanged, a pilot family measured before the rest).
+- 2026-09-24: Landed per the design: 178 elab test binaries → 13 families (`crates/elab/tests/families/`) + 3 standalone; the runner shards each family by member file, `scripts/test --test <file>` is rewritten to the family, `scripts/check-elab-test-families.mjs` lints the layout. Same edits, same box, `cargo test --workspace --no-run --timings`: elab body edit 37.5 → 29.1 s wall, 263 → 92 unit-s; kernel body edit 28.8 → 9.2 s, 356 → 68 unit-s; elab test executables 8.64 → 0.86 GB. Suite counts unchanged (full 2922, fast 2765).

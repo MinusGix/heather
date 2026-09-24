@@ -11,7 +11,7 @@
 //! second exists because a law that is deleted rather than broken is a change
 //! the first test cannot see — the file would still check, with less in it.
 
-mod support;
+use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
