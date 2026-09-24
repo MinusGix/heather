@@ -7,11 +7,15 @@
 //! elaborator typechecks". The mismatch is *recorded* during checking and read
 //! only by the kernel gate, only when the gate itself rejects — so nothing is
 //! reported that the kernel did not refuse, and a more specific diagnostic
-//! raised further down the same declaration still wins the message. Four of the
-//! ten tests below are the controls that pin that boundary: a mismatch the
-//! display cannot state, a type that converts only after δ and β, a `refl`
-//! whose sides likewise meet only after δ and β, and a kernel refusal of
-//! another class, which keeps the kernel's own report.
+//! raised further down the same declaration still wins the message. The
+//! controls pin that boundary: a phantom argument the display will not guess,
+//! a type that converts only after δ and β, a `refl` whose sides likewise meet
+//! only after δ and β, a projection that converts only through a `fn`, and a
+//! kernel refusal of another class, which keeps the kernel's own report.
+//!
+//! A mismatch the conversion decides but the display cannot state keeps the
+//! gate's report and moves it to the expression, the way a `refl` note does
+//! (`issues/elab-accepts-projection-through-opaque-theorem.md`).
 //!
 //! `refl` joined the same mechanism in
 //! `issues/elab-refl-accepts-match-eta-kernel-rejects.md`, one step short of
@@ -275,4 +279,70 @@ theorem three(): dbl(1) = 3 { refl }
         };
         assert_eq!(&refl[span.start as usize..span.end as usize], "refl");
     }
+}
+
+const WITNESS: &str = "
+record W { after: Nat, pres: after = 0 }
+";
+
+/// A field projection in checking position synthesizes, and was the one
+/// synthesizing arm that returned without recording what it synthesized
+/// (`issues/elab-accepts-projection-through-opaque-theorem.md`). A theorem is
+/// opaque, so `mk_w().after` is stuck and `mk_w().pres` does not prove `0 = 0`;
+/// the gate's refusal used to land on the declaration with nothing named.
+#[test]
+fn a_projection_at_the_wrong_type_reports_at_the_projection() {
+    for body in ["mk_w().pres", "let w = mk_w(); w.pres"] {
+        let src = format!(
+            "{WITNESS}theorem mk_w(): W {{ W(after := 0, pres := refl) }}\n\
+             theorem t(): 0 = 0 {{ {body} }}\n"
+        );
+        let r = reject(&src);
+        let rendered = r.render(&src);
+        assert!(
+            rendered.contains("but `0 = 0` is expected here"),
+            "{body}: {rendered}"
+        );
+        let ElabError::Elab { span, .. } = r else { panic!("expected an elaborator error: {r}") };
+        assert!(src[span.start as usize..span.end as usize].ends_with(".pres"), "{rendered}");
+    }
+}
+
+/// **Control for the projection note.** The same projection through a `fn`,
+/// which unfolds, converts and is accepted: the note is a record, and only
+/// the gate's refusal reads it.
+#[test]
+fn a_projection_that_converts_is_still_accepted() {
+    ok(&format!(
+        "{WITNESS}fn mk_w() -> W {{ W(after := 0, pres := refl) }}\n\
+         theorem t(): 0 = 0 {{ mk_w().pres }}\n"
+    ));
+}
+
+/// A mismatch the conversion decides but the display cannot state: the
+/// hypothesis is spelled per arm (`match r { … => dbl(p) … }`), the goal
+/// outside the match (`dbl(payload(r))`), and the kernel has no commuting
+/// conversion between the two. Neither the claim nor silence: the verdict
+/// stays the gate's, its span moves to the expression, and the note shows the
+/// side that spells (the second instance in
+/// `issues/elab-accepts-projection-through-opaque-theorem.md`).
+#[test]
+fn an_unspellable_mismatch_moves_the_kernel_report_to_the_site() {
+    let src = "
+inductive Step { Go(next: Nat), Stop(result: Nat) }
+fn payload(s: Step) -> Nat { match s { Go(p) => p, Stop(p) => p } }
+fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }): w = dbl(payload(r)) {
+    h
+}
+";
+    let r = reject(src);
+    let rendered = r.render(src);
+    assert!(rendered.contains("the kernel rejected `t`: NotConvertible"), "{rendered}");
+    assert!(
+        rendered.contains("does not convert to `w = dbl(payload(r))`"),
+        "{rendered}"
+    );
+    let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "h");
 }

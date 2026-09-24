@@ -1,6 +1,6 @@
 ---
 title: The elaborator accepts a field of a theorem-built record as if the theorem unfolded; the kernel then refuses with an unlocated NotConvertible
-status: open
+status: closed
 labels: [elaboration,kernel,diagnostics]
 created: 2026-09-24
 updated: 2026-09-24
@@ -36,3 +36,4 @@ the diagnostic cost an hour.
 ## Log
 
 - 2026-09-24: Second instance, 2026-09-24 (slice C). The elaborator accepted `match r { Continue(p) => word_of_nat(64, p), Break(p) => word_of_nat(64, p) }` where `word_of_nat(64, loop_step_payload(r))` was expected, for a neutral `r` (a commuting conversion). The kernel refused it, unlocated. The same symptom might have a different cause, since no theorem is involved here. So the question is broader: which elaborator conversion rules does the kernel lack?
+- 2026-09-24: Audit done. The title's premise was wrong: the elaborator has no conversion rule of its own. It records inferred/expected pairs and the kernel judges (`note_check_mismatch`, lib.rs); every conversion it does run goes through kernel conversion over a Ψ where theorems have no body. Both instances were diagnostic gaps. (1) The `.f` checking arm returned four paths (bare projection, and the three `apply_implicit`/`apply_projection` results) without recording the pair; they record now. (2) The commuting-conversion case was recorded and decided `NotConvertible`, then dropped because a `match` does not spell ("readable or silent"). A decided mismatch that does not spell now keeps the gate's verdict and moves its span to the site, as a `refl` note does (`MismatchNote::Located`). Precedence: a note spelling both types, then a `refl` note, then a located-only note (the full suite's two wrong-unit controls caught the other order). Tests: `check_reports_mismatch.rs` (three new). The kernel-side sub-term report is residue for terms with no checking site: [[kernel-refusal-without-a-checking-site]].

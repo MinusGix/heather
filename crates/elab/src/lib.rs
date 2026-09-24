@@ -700,6 +700,16 @@ impl DerefMut for Elaborator {
     }
 }
 
+/// What a probed checking mismatch can say
+/// ([`Elaborator::probed_check_note`]).
+enum MismatchNote {
+    /// Both types, in surface: the message replaces the kernel's report.
+    Spelled(String),
+    /// The site, and what can be shown of the types: the kernel's verdict
+    /// stays and the span moves here, as a `refl` note's does.
+    Located(String),
+}
+
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
 enum DotResolution {
     /// An already inferred intrinsic selected by its receiver.
@@ -4666,7 +4676,7 @@ impl Elaborator {
                                     );
                                 if prefix > 0 && !suppress {
                                     let mask = vec![true; prefix];
-                                    let (t, _, _) = application::apply_implicit(
+                                    let (t, got, _) = application::apply_implicit(
                                         self,
                                         cx,
                                         name,
@@ -4683,13 +4693,17 @@ impl Elaborator {
                                         false,
                                         e.span,
                                     )?;
+                                    self.note_check_mismatch(cx, &got, expected, lvl, e.span);
                                     return Ok(t);
                                 }
                             }
+                            // A projection synthesizes; its field type is
+                            // compared at the gate like any inferred type's.
+                            self.note_check_mismatch(cx, &ty, expected, lvl, e.span);
                             Ok(t)
                         }
                         Some(args) => {
-                            let (t, _, _) = self.apply_projection(
+                            let (t, got, _) = self.apply_projection(
                                 cx,
                                 name,
                                 t,
@@ -4701,6 +4715,7 @@ impl Elaborator {
                                 Some(expected),
                                 e.span,
                             )?;
+                            self.note_check_mismatch(cx, &got, expected, lvl, e.span);
                             Ok(t)
                         }
                     },
@@ -4708,7 +4723,7 @@ impl Elaborator {
                     // takes the applied route unconditionally — there is no
                     // bare form (§4 rule 7).
                     DotResolution::Dispatch(t, ty, l, fskel, dargs) => {
-                        let (t, _, _) = self.apply_projection(
+                        let (t, got, _) = self.apply_projection(
                             cx,
                             name,
                             t,
@@ -4720,6 +4735,7 @@ impl Elaborator {
                             Some(expected),
                             e.span,
                         )?;
+                        self.note_check_mismatch(cx, &got, expected, lvl, e.span);
                         Ok(t)
                     }
                     DotResolution::Method(m) => self
@@ -4858,7 +4874,7 @@ impl Elaborator {
     /// walk that contains the site — and now that the probe runs only on
     /// rejection, the column reads as what it always meant: on a successful
     /// module it is zero.
-    fn probed_check_note(&self, note: &CheckNote) -> Option<(String, Span)> {
+    fn probed_check_note(&self, note: &CheckNote) -> Option<(MismatchNote, Span)> {
         stats::count(stats::Counter::DiagNotes);
         let _phase = stats::guard(stats::Timer::DiagNote);
         let CheckNote {
@@ -4875,43 +4891,82 @@ impl Elaborator {
         {
             return None;
         }
-        // **Readable or silent.** This message makes a claim about two types,
-        // and a claim the reader cannot check is worse than no claim: below the
-        // bar, the gate's crisp `NotConvertible` at the declaration says less
-        // but says it honestly. So both types must spell *entirely* in surface
-        // — no raw node anywhere — and they must not spell **alike**. The
+        // **Readable, or located.** This message makes a claim about two
+        // types, and a claim the reader cannot check is worse than no claim:
+        // so the claim is made only when both types spell *entirely* in
+        // surface — no raw node anywhere — and do not spell **alike**. The
         // look-alike case is real and is where the display's own limit shows:
         // `And<…>` against `And<…>`, whose type arguments are the whole
-        // difference ([[display-inductive-type-arguments]]). Both filters are
-        // silence, not error: the declaration is still rejected, by the gate.
+        // difference ([[display-inductive-type-arguments]]).
+        //
+        // Below that bar the conversion was still *decided* here, so the site
+        // is known, and it used to be dropped with the claim: a stuck `match`
+        // in an inferred type (a commuting conversion the kernel does not
+        // have) came back as a bare `NotConvertible` at the declaration and
+        // was found by bisecting a generated proof by hand
+        // (issues/elab-accepts-projection-through-opaque-theorem.md). So the
+        // gate's verdict stays, as [`Self::note_refl_mismatch`]'s does, the
+        // span moves to the site, and the note says only what it can show.
+        //
         // A receiver placed into a type-owned member's unmarked first
         // parameter says more than the two types do: the declaration forgot
         // `self` (issues/type-member-missing-self-diagnostic.md).
         if let Some(msg) = self.unmarked_receiver_note(cx, *span, got) {
-            return Some((msg, *span));
+            return Some((MismatchNote::Spelled(msg), *span));
         }
-        let got_s = self.display_type_clean(cx, got)?;
-        let want_s = self.display_type_clean(cx, expected)?;
-        if got_s == want_s {
-            return None;
-        }
-        Some((
-            format!("this has type `{got_s}`, but `{want_s}` is expected here"),
-            *span,
-        ))
+        let got_s = self.display_type_clean(cx, got);
+        let want_s = self.display_type_clean(cx, expected);
+        let note = match (got_s, want_s) {
+            (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
+                "this has type `{g}`, but `{w}` is expected here"
+            )),
+            (Some(g), Some(_)) => MismatchNote::Located(format!(
+                "this has type `{g}` where a type that displays the same is expected; \
+                 they differ in something the display does not show"
+            )),
+            (None, Some(w)) => MismatchNote::Located(format!(
+                "the type of this expression does not convert to `{w}` \
+                 (its own type has no surface spelling)"
+            )),
+            (Some(g), None) => MismatchNote::Located(format!(
+                "this has type `{g}`, which does not convert to the type expected here \
+                 (that type has no surface spelling)"
+            )),
+            (None, None) => MismatchNote::Located(
+                "the type of this expression does not convert to the type expected here \
+                 (neither has a surface spelling)"
+                    .to_string(),
+            ),
+        };
+        Some((note, *span))
     }
 
     /// The first recorded checking mismatch that has something to say, probed
-    /// in the order the sites were met.
+    /// in the order the sites were met: the first *spelled* one, else the
+    /// first one that is only located.
     ///
     /// Recording order plus "stop at the first" is exactly the eager version's
     /// "the first note to fill the slot wins": the same candidates are tried in
     /// the same order and the same one answers. What changed is that the ones
     /// after it are never run — and that on a declaration the gate accepts,
-    /// none of them is.
-    fn pending_mismatch(&self) -> Option<(String, Span)> {
+    /// none of them is. A located note does not stop the search: it used to be
+    /// silence, and a later site that names both types (or a `refl` note,
+    /// which [`Self::kernel_error`] tries before it) says more.
+    fn pending_mismatch(&self) -> Option<(MismatchNote, Span)> {
         let notes = self.attempt.check_notes.borrow();
-        notes.iter().find_map(|n| self.probed_check_note(n))
+        let mut located = None;
+        for note in notes.iter() {
+            match self.probed_check_note(note) {
+                Some((MismatchNote::Spelled(msg), at)) => {
+                    return Some((MismatchNote::Spelled(msg), at));
+                }
+                Some(found) => {
+                    located.get_or_insert(found);
+                }
+                None => {}
+            }
+        }
+        located
     }
 
     /// [`Self::note_check_mismatch`] at the one checking form that compares
@@ -6559,7 +6614,9 @@ impl Elaborator {
     /// way: it neither replaces the report nor merely annotates the
     /// declaration. The verdict stays the kernel's, and the *span* becomes the
     /// `refl` that stands for it — the one expression in the body that claimed
-    /// the conversion the gate refused.
+    /// the conversion the gate refused. A checking mismatch whose types do not
+    /// both spell travels the same way ([`MismatchNote::Located`]), when no
+    /// `refl` note has more to say.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
         if e == TypeError::NotConvertible
             && let Some((note, at)) = self.refused_decide()
@@ -6571,18 +6628,24 @@ impl Elaborator {
                 note: Some(note),
             };
         }
-        if e == TypeError::NotConvertible
-            && let Some((msg, at)) = self.pending_mismatch()
-        {
-            let msg = match self.operator_fallback_note() {
-                Some(note) => format!("{msg} (note: {note})"),
-                None => msg,
-            };
-            return ElabError::Elab { msg, span: at };
-        }
+        let mismatch = (e == TypeError::NotConvertible)
+            .then(|| self.pending_mismatch())
+            .flatten();
+        let located = match mismatch {
+            Some((MismatchNote::Spelled(msg), at)) => {
+                let msg = match self.operator_fallback_note() {
+                    Some(note) => format!("{msg} (note: {note})"),
+                    None => msg,
+                };
+                return ElabError::Elab { msg, span: at };
+            }
+            Some((MismatchNote::Located(msg), at)) => Some((msg, at)),
+            None => None,
+        };
         let refl = (e == TypeError::NotConvertible)
             .then(|| self.pending_refl_note())
-            .flatten();
+            .flatten()
+            .or(located);
         let (span, refl_note) = match refl {
             Some((msg, at)) => (at, Some(msg)),
             None => (span, None),

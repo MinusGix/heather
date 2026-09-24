@@ -252,7 +252,9 @@ fn a_neighbouring_field_does_not_prove_this_law() {
         theorem swapped(): Rp::abs(Rp::mk_Nil()) = Nil {{ RpV().Nil_inv }}
         "#
     ));
-    assert!(e.contains("swapped"), "{e}");
+    // Reported at the projection, which records what it synthesized
+    // (issues/elab-accepts-projection-through-opaque-theorem.md).
+    assert!(e.contains("is expected here") && e.contains("abs(mk_Nil) = Nil"), "{e}");
 }
 
 // The record has no field by that name, at any size.
