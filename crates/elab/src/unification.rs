@@ -53,6 +53,11 @@ pub(crate) struct DeferredArg<'a> {
     /// lambda's body can still be checking-only, so expected-type solving
     /// and ready obligations run before this fallback.
     pub(crate) fallback_infer: bool,
+    /// Deferred only because its inference failed while this domain waited
+    /// on the call's implicits ([`crate::application::apply_implicit`]'s
+    /// re-plan). If the domain never resolves, the fallback's error is about
+    /// the implicit nothing pinned, not the argument.
+    pub(crate) replanned: bool,
 }
 
 /// Per-slot state of one [`crate::application::apply_implicit`] scratch world

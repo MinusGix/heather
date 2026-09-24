@@ -647,6 +647,15 @@ nothing or gave up, so every call that elaborated before takes the same path.
    is forced at most once. If its domain never resolves, the fallback
    re-infers and reports the original error, so failing programs keep their
    messages. This is what `zero().iterate_increment(3).band(y)` needed.
+   Widened the same day to a bare name (`ExprKind::Var`), the same case with
+   no arguments: `List::first_then(Nil, 3)`
+   (`issues/nullary-ctor-argument-not-deferred.md`) and a record type former
+   passed as a relation, `takes(Grammar, 1)`
+   (`issues/record-partial-application-under-inferred-callee.md`). "Its
+   original error" gained a note there: when the domain never resolves, the
+   error is followed by the callee's implicit that left it open, since the
+   inner error's own advice ("an argument of a declaration that expects one")
+   is already met at that position.
 
 What the sweep left, and why: `issues/unify-through-constructor-values.md`
 (`byte_cons_cong`'s endpoints inside `Cons` values, plus a goal side that has

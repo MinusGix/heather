@@ -269,7 +269,15 @@ pub(crate) fn retry_obligations(
                     obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld)
                 })
             {
-                let (term, ty, _) = elab.infer_application_argument(cx, obligation.expr)?;
+                let (term, ty, _) = match elab.infer_application_argument(cx, obligation.expr) {
+                    Err(ElabError::Elab { msg, span: at }) if obligation.replanned => {
+                        return Err(ElabError::Elab {
+                            msg: unpinned_domain_message(name, params, slot_param, sols, obligation.param, &msg),
+                            span: at,
+                        });
+                    }
+                    other => other?,
+                };
                 elab.unify_application_argument_type(cx, &obligation.dom, &ty, n, sols, span);
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 continue;
@@ -277,6 +285,42 @@ pub(crate) fn retry_obligations(
             return Ok(());
         }
     }
+}
+
+/// The error for a re-planned argument whose domain never resolved. The
+/// argument is already where the inference error's advice would put it, so
+/// the note names the cause that advice cannot: the callee's implicit that
+/// nothing in the call pinned
+/// (issues/record-partial-application-under-inferred-callee.md).
+fn unpinned_domain_message(
+    name: &str,
+    params: &[ParamMeta],
+    slot_param: &[usize],
+    sols: &[Sol],
+    param: usize,
+    inner: &str,
+) -> String {
+    let unpinned: Vec<String> = slot_param
+        .iter()
+        .enumerate()
+        .filter(|&(slot, _)| matches!(sols.get(slot), Some(Sol::Unsolved)))
+        .filter_map(|(_, &p)| params.get(p))
+        .filter(|p| p.implicit && p.solver.is_none())
+        .map(|p| format!("`{}`", p.name))
+        .collect();
+    let what = match unpinned.as_slice() {
+        [] => "an implicit argument".to_string(),
+        [one] => format!("the implicit {one}"),
+        many => format!("the implicits {}", many.join(", ")),
+    };
+    let param = params.get(param).map_or("its parameter".to_string(), |p| format!("`{}`", p.name));
+    // The inner error leads: an unbound name is still read first. The note
+    // is true wherever this runs — the domain never resolved.
+    format!(
+        "{inner}. Here the argument is checked against {param}'s type in `{name}`, and \
+         that type still mentions {what}, which nothing in the call determines: \
+         write it (`{name}<…>(…)`) or pass an argument that fixes it"
+    )
 }
 
 /// The implicitness skeleton of a surface-written function type
@@ -748,6 +792,7 @@ fn apply_implicit_planned(
                         dom_level: dom_level.clone(),
                         param: parameter,
                         fallback_infer: class.fallback_infer,
+                        replanned: forced_at(argument),
                     });
                     meta_doms.push((*dom).clone());
                     meta_lvls.push(dom_level.clone());
@@ -767,11 +812,16 @@ fn apply_implicit_planned(
                     // on this failure path only, so a call that elaborates
                     // today is never re-planned
                     // (issues/nested-uninferable-argument-under-checking.md).
+                    // A bare name is the same case with no arguments: a
+                    // record's type former read at `?A -> Type` infers as its
+                    // constructor and fails, and only the solved domain picks
+                    // the type former — `takes(Grammar, 1)`
+                    // (issues/record-partial-application-under-inferred-callee.md).
                     let (inferred, inferred_ty, _) = match inferred {
                         Err(e @ ElabError::Elab { .. })
                             if matches!(
                                 argument.kind,
-                                ExprKind::App { .. } | ExprKind::Dot { .. }
+                                ExprKind::App { .. } | ExprKind::Dot { .. } | ExprKind::Var(_)
                             ) =>
                         {
                             restart.set(args.iter().position(|a| std::ptr::eq(a, argument)));
@@ -1250,6 +1300,7 @@ mod tests {
             dom_level: Level::Zero,
             param: 1,
             fallback_infer: false,
+            replanned: false,
         }];
         let mut sols = [Sol::Withheld, Sol::Withheld];
 

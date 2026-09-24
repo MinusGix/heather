@@ -65,14 +65,6 @@ record Grammar(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), 
     yields: meaning(derivation) = value,
     span: rest(source,begin) = spelling(derivation) ++ rest(source,end),
 }
-// `Grammar(level)` fills a relation slot whose type arguments are written
-// (`Certified<PTok,Expr>(…)`), but a record's partial application is refused
-// where the callee's `<T, A>` are still being inferred, and a global's is not.
-// So this wrapper survives for the eight `forget_at`/`forget_post`/
-// `post_on_success`/`complete_sound` calls below, and nowhere else.
-fn GrammarSpec(level: Nat, source: List<PTok>, begin,end: Cursor<PTok>(source), value: Expr) -> Type {
-    Grammar(level,source,begin,end,value)
-}
 // What a tier's parser returns: a certified `Expr` whose evidence is the
 // grammar at that tier, or a failure over the same source. Spelled out, this
 // type runs to sixty-nine columns and appears twenty-five times below.
@@ -93,8 +85,19 @@ fn TokenSpan(token: PTok, source: List<PTok>, begin,end: Cursor<PTok>(source), i
 }
 theorem span_join(xs,ys,first,middle,last: List<PTok>, a: first = xs ++ middle, b: middle = ys ++ last):
     first = (xs ++ ys) ++ last {
-    trans(a,trans(j(b,λ tail q => xs ++ middle = xs ++ tail,refl),sym(xs.append_assoc(ys, last))))
+    calc {
+        first
+            = xs ++ middle         := a,
+            = xs ++ (ys ++ last)   := xs.cong_append_r(b),
+            = (xs ++ ys) ++ last   := sym(xs.append_assoc(ys, last)),
+    }
 }
+// `span_join` above is a `calc` chain; the three grammars below call it with
+// every endpoint written, so a chain there would restate each one a second
+// time (the same reason `calc_text`'s span towers stay towers). Their `yields`
+// keep the nested `j`: `= Plus(left, …) := cong(l.yields)` is refused, the two
+// written `Plus` spellings differing in an annotation the surface drops
+// (issues/elaborator-canonical-type-spelling.md).
 fn sum_grammar(source: List<PTok>, begin,middle,next,end: Cursor<PTok>(source), left,right: Expr,
     l: Grammar(1,source,begin,middle,left), op: TokenSpan(TPlusSym,source,middle,next,0),
     r: Grammar(0,source,next,end,right)) -> Grammar(0,source,begin,end,Plus(left,right)) {
@@ -132,7 +135,12 @@ fn number_grammar(source: List<PTok>, begin,end: Cursor<PTok>(source), value: Ex
     let head = recognized_head(number,source,begin,end,value,proof);
     let selected = number_selected(head.head,value,head.selected);
     Grammar(Number(selected.witness),trivial,refl,selected.proof.right,
-        trans(head.suffix,j(selected.proof.left,λ token q => Cons(head.head,rest(source,end)) = Cons(token,rest(source,end)),refl)))
+        calc {
+            rest(source,begin)
+                = Cons(head.head,rest(source,end))              := head.suffix,
+                = Cons(TNum(selected.witness),rest(source,end)) :=
+                    j(selected.proof.left,λ token q => Cons(head.head,rest(source,end)) = Cons(token,rest(source,end)),refl),
+        })
 }
 theorem plus_selected(token: PTok, value: Nat): plus(token) = Some(value) -> token = TPlusSym {
     match token { TPlusSym => λ h => refl, TNum(_) => λ h => absurd(h), TStarSym => λ h => absurd(h), TOpen => λ h => absurd(h), TClose => λ h => absurd(h) }
@@ -151,7 +159,11 @@ fn symbol_span(pick: PTok -> Option<Nat>, token: PTok,
     source: List<PTok>, begin,end: Cursor<PTok>(source), value: Nat,
     proof: Recognized<PTok,Nat>(pick,source,begin,end,value)) -> TokenSpan(token,source,begin,end,value) {
     let head = recognized_head(pick,source,begin,end,value,proof);
-    trans(head.suffix,j(selects(head.head,value,head.selected),λ t q => Cons(head.head,rest(source,end)) = Cons(t,rest(source,end)),refl))
+    calc {
+        rest(source,begin)
+            = Cons(head.head,rest(source,end)) := head.suffix,
+            = Cons(token,rest(source,end))     := cong(selects(head.head,value,head.selected)),
+    }
 }
 
 fn sum_finish(source: List<PTok>, begin,middle,next: Cursor<PTok>(source), forward: begin.offset.Le(next.offset),
@@ -270,27 +282,27 @@ fn checked_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Checked(2,so
     on decreasing inner := smaller;
 }
 fn parse_expr(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(0),checked_expr(source,begin))
+    forget_at(source,begin,Grammar(0),checked_expr(source,begin))
 }
 fn parse_factor(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(1),checked_factor(source,begin))
+    forget_at(source,begin,Grammar(1),checked_factor(source,begin))
 }
 fn parse_atom(source: List<PTok>, begin: Cursor<PTok>(source)) -> Reply<PTok,Expr>(source,begin) {
-    forget_at(source,begin,GrammarSpec(2),checked_atom(source,begin))
+    forget_at(source,begin,Grammar(2),checked_atom(source,begin))
 }
 fn grammar() -> Parser<PTok,Expr> { Parser(λ source begin => parse_expr(source,begin)) }
 fn grammar_sound() -> Sound<PTok,Expr>(grammar(),Grammar(0)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(0),checked_expr(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(0),checked_expr(source,begin)))
 }
 fn factor_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_factor(source,begin)),Grammar(1)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(1),checked_factor(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(1),checked_factor(source,begin)))
 }
 fn atom_sound() -> Sound<PTok,Expr>(Parser(λ source begin => parse_atom(source,begin)),Grammar(2)) {
-    Sound(λ source begin => forget_post(source,begin,GrammarSpec(2),checked_atom(source,begin)))
+    Sound(λ source begin => forget_post(source,begin,Grammar(2),checked_atom(source,begin)))
 }
 theorem expression_sound(source: List<PTok>, begin: Cursor<PTok>(source), s: Success<PTok,Expr>(source,begin), shape: parse_expr(source,begin) = Ok(s)):
     Grammar(0,source,begin,s.end,s.value) {
-    post_on_success(source,begin,GrammarSpec(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
+    post_on_success(source,begin,Grammar(0),parse_expr(source,begin),grammar_sound().law(source,begin),s,shape)
 }
 fn error_code(expected: List<Nat>) -> Nat { match expected { Nil => 0, Cons(code,_) => code } }
 fn public_error(source: List<PTok>, error: ErrorView) -> ParseError {
@@ -310,8 +322,13 @@ fn whole_grammar(source: List<PTok>, end: Cursor<PTok>(source), value: Expr,
     proof: CompleteSpec<PTok,Expr>(Grammar(0),source,Cursor::start(source),end,value)) -> WholeGrammar(source,value) {
     let g = proof.left;
     WholeGrammar(g.derivation,g.valid,g.at_level,g.yields,
-        sym(trans(sym(initial_rest(source)),trans(g.span,
-            trans(j(proof.right,λ suffix q => spelling(g.derivation) ++ rest(source,end) = spelling(g.derivation) ++ suffix,refl),spelling(g.derivation).append_nil())))))
+        sym(calc {
+            source
+                = rest(source,Cursor::start(source))         := sym(initial_rest(source)),
+                = spelling(g.derivation) ++ rest(source,end) := g.span,
+                = spelling(g.derivation) ++ Nil<PTok>        := spelling(g.derivation).cong_append_r(proof.right),
+                = spelling(g.derivation)                     := spelling(g.derivation).append_nil(),
+        }))
 }
 fn public_reply(source: List<PTok>, r: Reply<PTok,Expr>(source,Cursor::start(source))) -> Result<Expr,ParseError> {
     match r { Err(e) => Err(public_error(source,e.error_view(source))), Ok(s) => Ok(s.value) }
@@ -328,7 +345,7 @@ fn parse(ts: List<PTok>) -> Result<Expr,ParseError> {
 }
 theorem parse_post(source: List<PTok>): ParsedGrammar(source,parse(source)) {
     public_reply_sound(source,complete(grammar(),3).run(source,Cursor::start(source)),
-        complete_sound(grammar(),3,GrammarSpec(0),grammar_sound()).law(source,Cursor::start(source)))
+        complete_sound(grammar(),3,Grammar(0),grammar_sound()).law(source,Cursor::start(source)))
 }
 theorem parse_sound(source: List<PTok>, value: Expr, success: parse(source) = Ok(value)):
     WholeGrammar(source,value) {

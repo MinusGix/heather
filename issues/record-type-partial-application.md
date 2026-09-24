@@ -1,9 +1,9 @@
 ---
 title: An indexed record's type cannot be partially applied, so clients declare do-nothing fn wrappers
-status: open
+status: closed
 labels: [frontend,elaboration,syntax,ergonomics]
 created: 2026-09-18
-updated: 2026-09-19
+updated: 2026-09-24
 ---
 
 An indexed record's type cannot be partially applied, so every client that
@@ -105,3 +105,11 @@ has to step over.
   make `RunSpec` and `OpRun` records, then remove all five wrappers at once and
   measure the cold check before and after. Filed as
   [[showcase-spec-relations-as-records]].
+- 2026-09-24: **Closed.** The last wrapper this issue was filed against, `calc_parser`'s
+  `GrammarSpec`, is gone: its eight calls sat where the callee's type argument
+  was still being inferred, and 9e7dc59f's deferred re-plan of call-shaped
+  arguments made `Grammar(n)` check there. No showcase declares a do-nothing
+  relation wrapper now. The issue's own repro (`takes_relation(Grammar)`) checks.
+  The one remaining refusal — a *bare* record name under an inferred callee — is
+  [[record-partial-application-under-inferred-callee]]'s, and its cost side is
+  [[record-relation-structural-comparison-cost]].

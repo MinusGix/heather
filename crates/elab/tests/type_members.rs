@@ -336,18 +336,25 @@ fn the_receiver_of_a_method_chain_is_owned_by_the_inner_members_result() {
 
 // A constructor with no written type arguments names its inductive: the gate
 // on written type arguments is lifted on this path. `Nil` at an **open**
-// element type reaches `List::rev`, and then fails exactly as `List::rev(Nil)`
-// does (issues/nullary-ctor-argument-not-deferred.md) — not as an unbound
-// name.
+// element type reaches `List::rev` and, like `List::rev(Nil)`, waits for the
+// declared result to pin `A` (issues/nullary-ctor-argument-not-deferred.md).
+// The control: with nothing to pin it, both fail the same honest way — not as
+// an unbound name.
 #[test]
 fn a_bare_constructor_receiver_names_its_inductive() {
     for body in ["Nil.rev()", "List::rev(Nil)"] {
-        let e = bad(&format!(
+        ok(&format!(
             "{LIST}
              fn List::rev<A>(self xs: List<A>) -> List<A> {{ xs }}
              fn e<A>() -> List<A> {{ {body} }}"
         ));
+        let e = bad(&format!(
+            "{LIST}
+             fn List::rev<A>(self xs: List<A>) -> List<A> {{ xs }}
+             fn e() -> Nat {{ let x = {body}; 0 }}"
+        ));
         assert!(e.contains("cannot infer the type argument `A` of `List`"), "{e}");
+        assert!(!e.contains("unbound name"), "{e}");
     }
 }
 

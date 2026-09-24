@@ -193,14 +193,22 @@ theorem idempotent(n: Nat): max_of(n, n) = n { max_of_self(n) }");
 /// `False`-coexistence rules (`issues/false-collides-with-bools-constructor.md`)
 /// are two shrinks: a **type** position never considers a constructor, and an
 /// expected type that is a known inductive never considers a type name.
-/// `max_of(False, True)` is neither — the expected type is `A`, the class's
-/// unsolved carrier — so both readings survive and the elaborator says so by
-/// name instead of guessing. Correct, and it only bites where `logic` and
-/// `bool` are imported into one file.
+/// `max_of(False, False)` is neither — the expected type is `A`, the class's
+/// carrier, and nothing in the call solves it — so both readings survive and
+/// the elaborator says so by name instead of guessing. Correct, and it only
+/// bites where `logic` and `bool` are imported into one file.
+///
+/// `max_of(False, True)` is *not* this case, in either order: a bare `False`
+/// waits for the arguments after it
+/// (issues/nullary-ctor-argument-not-deferred.md), `True` names only `bool`'s
+/// constructor in a term position and pins `A := Bool`, and `False` is then
+/// checked at a known inductive — the second shrink.
 #[test]
 fn a_bare_false_at_an_unsolved_carrier_is_ambiguous() {
-    let e = bad("theorem t(): max_of(False, True) = True { refl }");
+    let e = bad("fn t() -> Nat { let x = max_of(False, False); 0 }");
     assert!(e.contains("ambiguous") && e.contains("logic") && e.contains("bool"), "{e}");
+    ok("theorem t(): max_of(False, True) = True { refl }
+theorem u(): max_of(True, False) = True { refl }");
 }
 
 /// The rename that is the content of §3: the hypothesis is the RELATION, not

@@ -395,6 +395,53 @@ fn a_nested_call_that_does_not_infer_waits_for_its_domain() {
 }
 
 #[test]
+fn a_bare_nullary_constructor_waits_for_its_domain() {
+    // The same re-plan for an argument with no arguments of its own: `Nil`
+    // and `None` cannot say their `A`, and a later argument or the expected
+    // type can (issues/nullary-ctor-argument-not-deferred.md). `Nat` and an
+    // open element type; a checking position (a declared result) and an
+    // inference one (an equation's side); a receiver; and the order that
+    // always worked, as the reference.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        inductive Option<A> { None, Some(v: A) }
+        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        fn List::first_then<A>(self xs: List<A>, d: A) -> A { match xs { Nil => d, Cons(h, _) => h } }
+        fn then_first<A>(d: A, xs: List<A>) -> A { match xs { Nil => d, Cons(h, _) => h } }
+        fn Option::or<A>(self o: Option<A>, d: A) -> A { match o { None => d, Some(v) => v } }
+
+        fn checked() -> Nat { List::first_then(Nil, 3) }
+        fn open_checked<A>(a: A) -> A { List::first_then(Nil, a) }
+        fn by_result<A>() -> Option<A> { None }
+        theorem later(): List::first_then(Nil, 3) = 3 { refl }
+        theorem earlier(): then_first(3, Nil) = 3 { refl }
+        theorem receiver(n: Nat): Nil.first_then(n) = n { refl }
+        theorem open_later<A>(a: A): Option::or(None, a) = a { refl }
+        theorem option_later(): Option::or(None, 7) = 7 { refl }
+        "#,
+    )
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: nothing ever pins `A`. Still refused, with the
+    // constructor's own error first and the implicit that stayed open after.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+        fn List::len<A>(self xs: List<A>) -> Nat { match xs { Nil => 0, Cons(_, t) => 1 } }
+        fn open() -> Nat { List::len(Nil) }
+        "#,
+    );
+    match r {
+        Err(ElabError::Elab { msg, .. }) => {
+            assert!(msg.contains("cannot infer the type argument `A` of `List`"), "{msg}");
+            assert!(msg.contains("still mentions the implicit `A`"), "{msg}");
+        }
+        other => panic!("an unpinned element type must be refused, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_congruence_lemma_solves_from_the_constructor_values_of_its_goal() {
     // `Cons(?l, ?lt) = Cons(?r, ?rt)` against a goal: the implicits sit
     // inside constructor values — a `supf` whose label is an injection into
