@@ -609,3 +609,53 @@ but the rule is the rule).
   messages only where implicit machinery is involved
   (`issues/cli-check-diagnostics.md` / `issues/diagnostics-name-the-written-form.md`
   own the general story).
+
+## 10. The 2026-09-24 slice: what the library's `@` sites were waiting on
+
+Three learn-only additions, chartered from the probe of the `@` sites left
+after the std namespacing refactor (`docs/receiver-member-resolution-design.md`
+is the companion round). Each one runs only where the previous code learned
+nothing or gave up, so every call that elaborated before takes the same path.
+
+1. **A successor pattern against a subject that computes to one**
+   (`issues/unify-succ-under-addition.md`). `Succ(?n) ≟ m + Succ(k)` had
+   nothing to align. `unify_tm` now asks `U::nat_head` for the subject's weak
+   head, only when the pattern is `Succ(…)` and the subject is syntactically
+   neither a successor nor a numeral, and it keeps the reduct only if it is
+   one of those. The oracle's stuck-spelling budget bounds the reduction.
+   A record's field sits under its lowering's Σ binders (a `BitVec`'s length
+   is at `d = 1`), so the subject is strengthened to `Γ`, reduced there, and
+   weakened back by `embed(Γ, d)`. That is the scope reasoning of §6, applied
+   to a subject instead of a solution. Reduction is rigid-side only: a meta
+   on the pattern side of `+` (`56 + Succ(?n) ≟ 64`) still learns nothing.
+2. **A collection literal's counted length**
+   (`issues/vector-literal-length-pins-implicit.md`). A literal is
+   checking-only, but its length is known without elaboration. At a `Vec`
+   domain that is not yet zonked, `apply_implicit` unifies the domain against
+   `[elem; k]` before the §3 deferral decision. This needs the element type
+   solved already, because the counted type is built in the committed world.
+   An open `[?A; ?n]` stays deferred.
+3. **A nested call that does not infer waits for its domain**
+   (`issues/nested-uninferable-argument-under-checking.md`). §3.1 said
+   cross-call postponement was not needed, because "a nested call elaborates
+   to completion (or errors)". It errors exactly when its implicit waits on
+   the outer call. The fix is not a queue. When a call-shaped argument (`App`
+   or `Dot`) fails inference at a domain that still has unsolved metas,
+   `apply_implicit` re-plans the whole call with that argument reserved a
+   deferred slot, with the inference fallback. The scratch world's size is
+   fixed by the plan, hence the restart instead of a late slot. Each argument
+   is forced at most once. If its domain never resolves, the fallback
+   re-infers and reports the original error, so failing programs keep their
+   messages. This is what `zero().iterate_increment(3).band(y)` needed.
+
+What the sweep left, and why: `issues/unify-through-constructor-values.md`
+(`byte_cons_cong`'s endpoints inside `Cons` values, plus a goal side that has
+to unfold) and the `Decide` instance heads
+(`issues/instance-binder-occurrence-through-binder-types.md`). The lines with
+`@` in `lib/` and the showcases went from 42 to 18. Eight of those are in
+`lib/function_ir_x86.hthr`, which is generated: the lowering writes
+`@bitvec::BitVec::add(64, …)`, and a golden test pins its output. The plain
+spelling checks by hand, so dropping the width is a generator change, not a
+feature. `cons_bit_cong`'s sites
+keep `a := …, b := …`, because a `refl` for `ph` carries no endpoints and the
+goals need δ on both sides.

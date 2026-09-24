@@ -34,13 +34,13 @@ import string;
 // the payload back; at these literal widths both are `concat`/`take_low` on a
 // known spine, so every one of the round trips below is `refl`.
 
-fn ascii_byte(p: BitVec(7)) → BitVec(8) { @BitVec::concat(7, 1, p, BitVec::from_bits([False])) }
-fn lead2_byte(p: BitVec(5)) → BitVec(8) { @BitVec::concat(5, 3, p, BitVec::from_bits([False, True, True])) }
-fn lead3_byte(p: BitVec(4)) → BitVec(8) { @BitVec::concat(4, 4, p, BitVec::from_bits([False, True, True, True])) }
+fn ascii_byte(p: BitVec(7)) → BitVec(8) { p.concat(BitVec::from_bits([False])) }
+fn lead2_byte(p: BitVec(5)) → BitVec(8) { p.concat(BitVec::from_bits([False, True, True])) }
+fn lead3_byte(p: BitVec(4)) → BitVec(8) { p.concat(BitVec::from_bits([False, True, True, True])) }
 fn lead4_byte(p: BitVec(3)) → BitVec(8) {
-    @BitVec::concat(3, 5, p, BitVec::from_bits([False, True, True, True, True]))
+    p.concat(BitVec::from_bits([False, True, True, True, True]))
 }
-fn cont_byte(p: BitVec(6)) → BitVec(8) { @BitVec::concat(6, 2, p, BitVec::from_bits([False, True])) }
+fn cont_byte(p: BitVec(6)) → BitVec(8) { p.concat(BitVec::from_bits([False, True])) }
 
 fn ascii_payload(b: BitVec(8)) → BitVec(7) { b.take_low(7, 1) }
 fn lead2_payload(b: BitVec(8)) → BitVec(5) { b.take_low(5, 3) }
@@ -614,26 +614,26 @@ fn Header(cl: Class, b: BitVec(8)) → Type {
 }
 
 theorem header_1(b: BitVec(8), e7: bit7(b) = False): b.drop_low(7, 1) = BitVec::from_bits([False]) {
-    j(sym(e7), λ y _ => @BitVec::from_bits(1, [y]) = BitVec::from_bits([False]), refl)
+    j(sym(e7), λ y _ => BitVec::from_bits([y]) = BitVec::from_bits([False]), refl)
 }
 
 theorem header_2(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = False):
         b.drop_low(5, 3) = BitVec::from_bits([False, True, True]) {
-    j(sym(e5), λ y _ => @BitVec::from_bits(3, [y, bit6(b), bit7(b)]) = BitVec::from_bits([False, True, True]),
-        j(sym(e6), λ y _ => @BitVec::from_bits(3, [False, y, bit7(b)]) = BitVec::from_bits([False, True, True]),
-            j(sym(e7), λ y _ => @BitVec::from_bits(3, [False, True, y]) = BitVec::from_bits([False, True, True]),
+    j(sym(e5), λ y _ => BitVec::from_bits([y, bit6(b), bit7(b)]) = BitVec::from_bits([False, True, True]),
+        j(sym(e6), λ y _ => BitVec::from_bits([False, y, bit7(b)]) = BitVec::from_bits([False, True, True]),
+            j(sym(e7), λ y _ => BitVec::from_bits([False, True, y]) = BitVec::from_bits([False, True, True]),
                 refl)))
 }
 
 theorem header_3(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
         e4: bit4(b) = False): b.drop_low(4, 4) = BitVec::from_bits([False, True, True, True]) {
-    j(sym(e4), λ y _ => @BitVec::from_bits(4, [y, bit5(b), bit6(b), bit7(b)])
+    j(sym(e4), λ y _ => BitVec::from_bits([y, bit5(b), bit6(b), bit7(b)])
             = BitVec::from_bits([False, True, True, True]),
-        j(sym(e5), λ y _ => @BitVec::from_bits(4, [False, y, bit6(b), bit7(b)])
+        j(sym(e5), λ y _ => BitVec::from_bits([False, y, bit6(b), bit7(b)])
                 = BitVec::from_bits([False, True, True, True]),
-            j(sym(e6), λ y _ => @BitVec::from_bits(4, [False, True, y, bit7(b)])
+            j(sym(e6), λ y _ => BitVec::from_bits([False, True, y, bit7(b)])
                     = BitVec::from_bits([False, True, True, True]),
-                j(sym(e7), λ y _ => @BitVec::from_bits(4, [False, True, True, y])
+                j(sym(e7), λ y _ => BitVec::from_bits([False, True, True, y])
                         = BitVec::from_bits([False, True, True, True]),
                     refl))))
 }
@@ -641,15 +641,15 @@ theorem header_3(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(
 theorem header_4(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
         e4: bit4(b) = True, e3: bit3(b) = False):
         b.drop_low(3, 5) = BitVec::from_bits([False, True, True, True, True]) {
-    j(sym(e3), λ y _ => @BitVec::from_bits(5, [y, bit4(b), bit5(b), bit6(b), bit7(b)])
+    j(sym(e3), λ y _ => BitVec::from_bits([y, bit4(b), bit5(b), bit6(b), bit7(b)])
             = BitVec::from_bits([False, True, True, True, True]),
-        j(sym(e4), λ y _ => @BitVec::from_bits(5, [False, y, bit5(b), bit6(b), bit7(b)])
+        j(sym(e4), λ y _ => BitVec::from_bits([False, y, bit5(b), bit6(b), bit7(b)])
                 = BitVec::from_bits([False, True, True, True, True]),
-            j(sym(e5), λ y _ => @BitVec::from_bits(5, [False, True, y, bit6(b), bit7(b)])
+            j(sym(e5), λ y _ => BitVec::from_bits([False, True, y, bit6(b), bit7(b)])
                     = BitVec::from_bits([False, True, True, True, True]),
-                j(sym(e6), λ y _ => @BitVec::from_bits(5, [False, True, True, y, bit7(b)])
+                j(sym(e6), λ y _ => BitVec::from_bits([False, True, True, y, bit7(b)])
                         = BitVec::from_bits([False, True, True, True, True]),
-                    j(sym(e7), λ y _ => @BitVec::from_bits(5, [False, True, True, True, y])
+                    j(sym(e7), λ y _ => BitVec::from_bits([False, True, True, True, y])
                             = BitVec::from_bits([False, True, True, True, True]),
                         refl)))))
 }
@@ -711,8 +711,8 @@ theorem cont_marked_spec(b: BitVec(8), rest: List<BitVec(8)>, e7: bit7(b) = True
             ContSpec(b, rest, match x { True => None, False => Some(Pair(cont_payload(b), rest)) }) {
         True => λ _ => trivial,
         False => λ e6 => And(refl,
-            j(sym(e6), λ y _ => @BitVec::from_bits(2, [y, bit7(b)]) = BitVec::from_bits([False, True]),
-                j(sym(e7), λ y _ => @BitVec::from_bits(2, [False, y]) = BitVec::from_bits([False, True]), refl))),
+            j(sym(e6), λ y _ => BitVec::from_bits([y, bit7(b)]) = BitVec::from_bits([False, True]),
+                j(sym(e7), λ y _ => BitVec::from_bits([False, y]) = BitVec::from_bits([False, True]), refl))),
     }(refl)
 }
 

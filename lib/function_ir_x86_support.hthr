@@ -382,7 +382,7 @@ theorem bit_value_placed_condition<M>(values: Valuation(), id: Nat,
     machine_condition(register, state) = values(1, id).head_bit()
 {
     j(placed,
-        λ actual _ => @BitVec::head_bit(63, actual) =
+        λ actual _ => actual.head_bit() =
             values(1, id).head_bit(), refl)
 }
 

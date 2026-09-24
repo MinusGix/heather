@@ -264,8 +264,7 @@ theorem increment_decrement_step(n: Nat, bit: Bool, value: BitVec(n),
     value.cons_bit(bit).decrement().increment() = value.cons_bit(bit)
 {
     match bit {
-        False => BitVec::cons_bit_cong(n, refl, tail_law, a := False, b := False,
-            xs := value.decrement().increment(), ys := value),
+        False => BitVec::cons_bit_cong(n, refl, tail_law, a := False, b := False),
         True => refl,
     }
 }

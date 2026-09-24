@@ -1,6 +1,6 @@
 ---
 title: A vector literal's length does not pin a width implicit; the argument is deferred instead
-status: open
+status: closed
 labels: [frontend,elaboration,inference,bitvec]
 created: 2026-09-24
 updated: 2026-09-24
@@ -30,3 +30,7 @@ Found by the 2026-09-24 probe of the remaining `@` sites: ~20 of the 80
 (`@BitVec::from_bits` ×15 in `lib/std/utf8.hthr`'s bit proofs, `@BitVec::concat`
 ×5). Slice #1b with [[unify-succ-under-addition]], under
 [[elab-unifier-completeness]]. Sibling shape: [[nullary-ctor-argument-not-deferred]].
+
+## Log
+
+- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.

@@ -318,11 +318,17 @@ fn the_receiver_of_a_method_chain_is_owned_by_the_inner_members_result() {
     ok(&format!(
         "{REC} theorem t(n: Nat): R::mk(n := n).bump().bump() = R::bump(R::bump(R::mk(n := n))) {{ refl }}"
     ));
-    // Pinned only by the goal, the chain now reaches `R::bump` at both
-    // levels and fails exactly as the qualified spelling does — the nested
-    // uninferable argument is the unifier's, not member resolution's.
+    // Pinned only by the goal, the chain reaches `R::bump` at both levels
+    // and checks as the qualified spelling does: the nested uninferable
+    // argument waits for its domain
+    // (issues/nested-uninferable-argument-under-checking.md).
     for body in ["R::mk().bump().bump()", "R::bump(R::bump(R::mk()))"] {
-        let e = bad(&format!("{REC} fn c(n: Nat) -> R(n) {{ {body} }}"));
+        ok(&format!("{REC} fn c(n: Nat) -> R(n) {{ {body} }}"));
+    }
+    // Pinned by nothing, both spellings still report the call that owns the
+    // width, never an unbound name.
+    for body in ["R::get(R::mk().bump().bump())", "R::get(R::bump(R::bump(R::mk())))"] {
+        let e = bad(&format!("{REC} fn c() -> Nat {{ {body} }}"));
         assert!(e.contains("could not infer the implicit argument `n` of `R::mk`"), "{e}");
         assert!(!e.contains("unbound name"), "{e}");
     }

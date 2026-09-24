@@ -118,9 +118,18 @@ impl Sol {
 /// §6.2) does not, so [`matching_value_spine`] asks here for those. `None`
 /// is "cannot read it", and the spine is then not a matching value spine,
 /// which is the refusal the rule already gave a head it could not read.
+///
+/// `nat_head` is the one reduction the unifier may ask for: the weak head of
+/// a rigid subject term, `d` binders past `gamma`, returned only when it is a
+/// successor or a numeral. `Succ(?n)` against `m + Succ(k)` has nothing to
+/// align until `Nat::add` takes its step to `Succ(m + k)`
+/// (issues/unify-succ-under-addition.md). Asked only where a `Succ` pattern
+/// meets a subject that is syntactically neither, so every pairing that
+/// learned before learns the same without it.
 pub(super) struct U<'a> {
     pub(super) gamma: &'a LocalCtx,
     pub(super) type_args: &'a dyn Fn(&Term, u32) -> Option<Vec<bool>>,
+    pub(super) nat_head: &'a dyn Fn(&Term, u32) -> Option<Term>,
 }
 
 impl<'a> U<'a> {
@@ -128,7 +137,7 @@ impl<'a> U<'a> {
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
     pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
-        U { gamma, type_args: &|_, _| None }
+        U { gamma, type_args: &|_, _| None, nat_head: &|_, _| None }
     }
 }
 
@@ -374,6 +383,20 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         (Term::NatLit(k), Term::Succ(b)) if *k > 0 => {
             unify_tm(u, &Term::NatLit(k - 1), b, n, d, sols)
+        }
+        // A successor pattern against a subject that has to compute before
+        // it is one: `BitVec(Succ(?n))` at `x: BitVec(m + Succ(k))` or
+        // `BitVec(k + 1)`. The subject is committed-world and rigid, so its
+        // reduct is the same term; learn from that, and from nothing else.
+        // A record's length sits under its lowering's Σ binders, so the
+        // subject is strengthened to `gamma` (a solution has to be anyway),
+        // reduced there, and weakened back — `embed(Γ, d)` is that weakening.
+        (Term::Succ(_), s) if !matches!(s, Term::Succ(_) | Term::NatLit(_)) => {
+            if let Some(s0) = strengthen_tm(u.gamma, s, d)
+                && let Some(w) = (u.nat_head)(&s0, 0)
+            {
+                unify_tm(u, pat, &w.apply_local(&embed(u.gamma, d)), n, d, sols);
+            }
         }
         // Either spelling on either side: `app` and `app@` are one former
         // (`docs/app-by-head-type-design.md` §6.2), and this congruence

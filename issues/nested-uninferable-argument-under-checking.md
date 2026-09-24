@@ -1,6 +1,6 @@
 ---
 title: An uninferable call nested in argument position is refused even when the checking position pins it
-status: open
+status: closed
 labels: [frontend,elaboration,inference,unification]
 created: 2026-09-24
 updated: 2026-09-24
@@ -28,3 +28,7 @@ round (docs/receiver-member-resolution-design.md §7) could only bring to an
 honest error. Unifier territory: a candidate for the #1b slice beside
 [[vector-literal-length-pins-implicit]] and [[unify-succ-under-addition]], under
 [[elab-unifier-completeness]].
+
+## Log
+
+- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.

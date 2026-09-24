@@ -575,8 +575,64 @@ pub(crate) fn apply_implicit(
     promote_unsolved: bool,
     span: Span,
 ) -> R<(Term, Type, Level)> {
+    // Arguments re-planned as deferrable after their inference failed at a
+    // domain still waiting on this call's implicits. Each argument is added
+    // at most once, so the restarts are bounded by the argument count, and a
+    // call none of whose arguments fails this way runs exactly once.
+    let mut forced: Vec<usize> = Vec::new();
+    loop {
+        let restart = std::cell::Cell::new(None);
+        match apply_implicit_planned(
+            elab,
+            cx,
+            name,
+            Rc::clone(&params),
+            value_head,
+            param_offset,
+            bare_ref,
+            head.clone(),
+            callee_ty.clone(),
+            callee_lvl.clone(),
+            args,
+            mask,
+            expected,
+            promote_unsolved,
+            span,
+            &forced,
+            &restart,
+        ) {
+            Err(e) => match restart.get() {
+                Some(i) if !forced.contains(&i) => forced.push(i),
+                _ => return Err(e),
+            },
+            done => return done,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_implicit_planned(
+    elab: &impl ImplicitApplicationElab,
+    cx: &Cx,
+    name: &str,
+    params: Rc<Vec<ParamMeta>>,
+    value_head: bool,
+    param_offset: usize,
+    bare_ref: bool,
+    head: Term,
+    callee_ty: Type,
+    callee_lvl: Level,
+    args: &[Expr],
+    mask: &[bool],
+    expected: Option<&Type>,
+    promote_unsolved: bool,
+    span: Span,
+    forced: &[usize],
+    restart: &std::cell::Cell<Option<usize>>,
+) -> R<(Term, Type, Level)> {
+    let forced_at = |arg: &Expr| forced.iter().any(|&i| std::ptr::eq(&args[i], arg));
     let plan = ImplicitPlan::new(mask, args, |arg| {
-        elab.classify_application_argument(cx, arg).checking_only
+        elab.classify_application_argument(cx, arg).checking_only || forced_at(arg)
     });
     let n = plan.scratch_len();
     let mut term = head.shift_global(n);
@@ -631,7 +687,35 @@ pub(crate) fn apply_implicit(
                 msg: format!("`{name}` is applied to too few arguments"),
                 span,
             })?;
-            let class = elab.classify_application_argument(cx, argument);
+            let mut class = elab.classify_application_argument(cx, argument);
+            // Re-planned after its inference failed: deferred, and inferred
+            // again (reporting its own error) only if its domain never
+            // resolves.
+            if forced_at(argument) {
+                class.checking_only = true;
+                class.fallback_infer = true;
+            }
+            // A collection literal is checking-only, but its *length* is not
+            // inferred — it is counted. At a vector domain whose length is
+            // still a meta, `[a, b, c]` teaches `len := 3` before the deferral
+            // decision below, so `from_bits([y, False, True])` checks where
+            // nothing else pins the width
+            // (issues/vector-literal-length-pins-implicit.md). The literal's
+            // type is built in the committed world, so this needs the element
+            // type solved already; learn-only, and the kernel judges.
+            if class.checking_only
+                && let ExprKind::CollectionLit(items) = &argument.kind
+                && let Type::Vec { level, elem, .. } = &*dom
+                && zonked(&dom, n, &sols).is_none()
+                && let Some(elem) = zonked(elem, n, &sols)
+            {
+                let counted = Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(elem),
+                    len: Rc::new(Term::NatLit(items.len() as u64)),
+                };
+                elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, span);
+            }
             match zonked(&dom, n, &sols) {
                 Some(real_dom) => {
                     let hint = params
@@ -672,8 +756,29 @@ pub(crate) fn apply_implicit(
                     Rc::new(meta)
                 }
                 None => {
-                    let (inferred, inferred_ty, _) =
-                        elab.infer_application_argument(cx, argument)?;
+                    let inferred = elab.infer_application_argument(cx, argument);
+                    // A call that does not infer on its own may only be
+                    // missing what this position's domain will say once a
+                    // later argument, or the expected type, has pinned it:
+                    // `band(iterate_increment(zero(), 3), y)`, where `y` fixes
+                    // the width `zero()` needs. The scratch world's size is
+                    // fixed by the plan, so the call is re-planned with this
+                    // argument deferrable ([`apply_implicit`]'s restart) —
+                    // on this failure path only, so a call that elaborates
+                    // today is never re-planned
+                    // (issues/nested-uninferable-argument-under-checking.md).
+                    let (inferred, inferred_ty, _) = match inferred {
+                        Err(e @ ElabError::Elab { .. })
+                            if matches!(
+                                argument.kind,
+                                ExprKind::App { .. } | ExprKind::Dot { .. }
+                            ) =>
+                        {
+                            restart.set(args.iter().position(|a| std::ptr::eq(a, argument)));
+                            return Err(e);
+                        }
+                        other => other?,
+                    };
                     elab.unify_application_argument_type(
                         cx,
                         &dom,

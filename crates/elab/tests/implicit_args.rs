@@ -278,3 +278,118 @@ fn a_numeral_index_solves_a_successor_pattern() {
     );
     assert!(r.is_err(), "a zero-length vector has no first element, got {r:?}");
 }
+
+// `add` recursing on its second argument, as `Nat::add` does in lib/std:
+// `m + Succ(k)` reduces to `Succ(m + k)`, `Succ(k) + m` is stuck on `m`.
+const ADD: &str = r#"
+fn add(m: Nat, n: Nat) -> Nat {
+    match n { Zero => m, Succ(k, ih) => Succ(ih) }
+}
+"#;
+
+#[test]
+fn a_successor_pattern_meets_a_sum_that_computes_to_one() {
+    // `Succ(?n) ≟ add(m, Succ(k))` has nothing to align until the subject
+    // takes its δι step (issues/unify-succ-under-addition.md). A bare vector
+    // and a record's field under its lowering's Σ binder, a neutral and a
+    // literal summand, an open element type, and computation through the
+    // solved length.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!(
+        r#"{ADD}
+        fn first<A>({{n: Nat}}, v: [A; Succ(n)]) -> A {{ v[0] }}
+        fn rest_len<A>({{n: Nat}}, v: [A; Succ(n)]) -> Nat {{ n }}
+        fn at_sum<A>(m: Nat, k: Nat, v: [A; add(m, Succ(k))]) -> A {{ first(v) }}
+        fn at_plus_one<A>(k: Nat, v: [A; add(k, 1)]) -> A {{ first(v) }}
+        record W(n: Nat) {{ bits: [Nat; n] }}
+        fn W::head({{n: Nat}}, self w: W(Succ(n))) -> Nat {{ w.bits[0] }}
+        fn wrapped(k: Nat, w: W(add(k, 1))) -> Nat {{ w.head() }}
+        theorem length_computes(v: [Nat; add(2, 1)]): rest_len(v) = 2 {{ refl }}
+        "#
+    ))
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: `add(Succ(k), m)` is stuck on `m`, so there is no
+    // successor to learn from and the implicit stays unsolved.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(&format!(
+        r#"{ADD}
+        fn first<A>({{n: Nat}}, v: [A; Succ(n)]) -> A {{ v[0] }}
+        fn stuck<A>(m: Nat, k: Nat, v: [A; add(Succ(k), m)]) -> A {{ first(v) }}
+        "#
+    ));
+    assert!(r.is_err(), "a sum stuck on its second summand exposes no successor, got {r:?}");
+}
+
+#[test]
+fn a_collection_literal_counts_its_length_into_a_vector_domain() {
+    // A literal is checking-only, but its length is counted, not inferred
+    // (issues/vector-literal-length-pins-implicit.md): at `[Nat; ?n]` it
+    // teaches `?n` before the deferral decision. A statement that pins
+    // nothing else, a literal beside an argument that pins a second length,
+    // and computation.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!(
+        r#"{ADD}
+        fn vlen({{n: Nat}}, v: [Nat; n]) -> Nat {{ n }}
+        fn cat({{m: Nat}}, {{k: Nat}}, lo: [Nat; m], hi: [Nat; k]) -> Nat {{ add(k, m) }}
+        fn statement(y: Nat) -> Type {{ vlen([y, 2, 3]) = vlen([1, 2, 3]) }}
+        fn wide(lo: [Nat; 2]) -> Nat {{ cat(lo, [9]) }}
+        theorem counts(): vlen([4, 5, 6]) = 3 {{ refl }}
+        theorem sums(lo: [Nat; 2]): wide(lo) = 3 {{ refl }}
+        "#
+    ))
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: an open element type is not solved by the count, so
+    // a literal at `[?A; ?n]` with nothing else to pin `?A` stays refused.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        fn plen<A>({n: Nat}, v: [A; n]) -> Nat { n }
+        fn open() -> Type { plen([1, 2]) = plen([3, 4]) }
+        "#,
+    );
+    assert!(r.is_err(), "the count alone does not solve an open element type, got {r:?}");
+}
+
+#[test]
+fn a_nested_call_that_does_not_infer_waits_for_its_domain() {
+    // `and(inc(mk()), y)`: `mk()`'s width is fixed only once `y` has pinned
+    // `and`'s, so the argument is re-planned as deferred instead of failing
+    // in inference (issues/nested-uninferable-argument-under-checking.md).
+    // Pinned by a later argument, by the expected type through two levels,
+    // and as a method chain.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        record W(n: Nat) { x: Nat, p: x = n }
+        fn W::mk({n: Nat}) -> W(n) { W(x := n, p := refl) }
+        fn W::inc({n: Nat}, self w: W(n)) -> W(n) { w }
+        fn W::and({n: Nat}, self a: W(n), b: W(n)) -> W(n) { a }
+        fn W::get({n: Nat}, self w: W(n)) -> Nat { w.x }
+        fn by_later(n: Nat, y: W(n)) -> W(n) { W::and(W::inc(W::mk()), y) }
+        fn by_expected(n: Nat) -> W(n) { W::inc(W::inc(W::mk())) }
+        fn chained(n: Nat, y: W(n)) -> W(n) { W::mk().inc().and(y) }
+        theorem computes(y: W(3)): W::get(W::and(W::inc(W::mk()), y)) = 3 { refl }
+        "#,
+    )
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: nothing pins the width, and the deferred argument's
+    // fallback reports the inner call's own error, as before.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        record W(n: Nat) { x: Nat, p: x = n }
+        fn W::mk({n: Nat}) -> W(n) { W(x := n, p := refl) }
+        fn W::inc({n: Nat}, self w: W(n)) -> W(n) { w }
+        fn W::get({n: Nat}, self w: W(n)) -> Nat { w.x }
+        fn open() -> Nat { W::get(W::inc(W::mk())) }
+        "#,
+    );
+    match r {
+        Err(ElabError::Elab { msg, .. }) => assert!(
+            msg.contains("`n` of `W::mk`"),
+            "the unpinned width is reported at the call that owns it, got: {msg}"
+        ),
+        other => panic!("an unpinned width must be refused, got {other:?}"),
+    }
+}

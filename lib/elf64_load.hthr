@@ -15,7 +15,7 @@ import logic;
 // The profile fits inside a single 64-KiB address window. Splitting the
 // address avoids unary subtraction of the 0x400000 mapping base.
 fn static_elf64_address(offset: BitVec(16)) → BitVec(64) {
-    offset.concat(@BitVec::ofNat(48, 64))
+    offset.concat(BitVec::ofNat(64, n := 48))
 }
 
 fn static_elf64_entry() → BitVec(64) {

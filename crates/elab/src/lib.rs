@@ -7052,11 +7052,25 @@ impl Elaborator {
         Some(out)
     }
 
+    /// [`unification::U::nat_head`]: the weak head of a rigid Nat term, when
+    /// reduction exposes a successor or a numeral. Under the stuck-spelling
+    /// budget, since the answer is discarded whenever it is neither, and
+    /// `None` under binders, whose types are not in `cx.gamma` — the same
+    /// scope [`Self::spine_type_args`] reads.
+    fn nat_head(&self, cx: &Cx, t: &Term, d: u32) -> Option<Term> {
+        if d != 0 {
+            return None;
+        }
+        let w = self.semantic_oracle().whnf_term_bounded(&cx.gamma, t).ok()?;
+        matches!(w, Term::Succ(_) | Term::NatLit(_)).then_some(w)
+    }
+
     /// The unifier's context for a root attempt in `cx`: the scope, and
     /// [`Self::spine_type_args`] for the `app@` nodes of a subject.
     fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], span: Span) {
         let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
-        let u = unification::U { gamma: &cx.gamma, type_args: &type_args };
+        let nat_head = |t: &Term, d: u32| self.nat_head(cx, t, d);
+        let u = unification::U { gamma: &cx.gamma, type_args: &type_args, nat_head: &nat_head };
         unify_ty_root(&u, pat, subj, n, 0, sols);
     }
 
