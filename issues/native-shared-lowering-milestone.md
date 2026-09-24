@@ -1,6 +1,6 @@
 ---
 title: Demonstrate shared native lowering with independent bounded buffer loops
-status: open
+status: closed
 labels: [compiler,x86,architecture]
 created: 2026-09-20
 updated: 2026-09-24
