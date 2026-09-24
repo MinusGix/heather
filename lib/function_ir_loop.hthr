@@ -53,6 +53,23 @@ fn loop_run<C>(budget: Nat) → ReadonlyLoop<C> → ReadonlyBytes → BitVec(8) 
     }
 }
 
+// A step's two observations, payload then discriminator (Continue is False),
+// in the order typed machine certificates publish them.
+fn loop_step_payload<C>(step: LoopStep<C>) → C {
+    match step { Continue(next) => next, Break(result) => result }
+}
+fn loop_step_breaks<C>(step: LoopStep<C>) → Bool {
+    match step { Continue(_) => False, Break(_) => True }
+}
+
+// A counting step's representability obligation: the count grows by at most
+// one per byte, so count + budget bounds every count the loop reaches. A
+// client proves it about its own step; native lowering relies on it.
+fn LoopAdvancesByAtMostOne(region: ReadonlyLoop<Nat>) → Type {
+    (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (count: Nat) →
+        loop_step_payload(region.body(needle, cursor, byte, count)) <= Succ(count)
+}
+
 // Source entry point: one resolved combinator, with an ordinary checked pure
 // step definition. Reflection recovers this interface, not recursion encodings.
 fn bounded_readonly<C>(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat,

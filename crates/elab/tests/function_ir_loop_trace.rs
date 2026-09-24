@@ -62,7 +62,7 @@ const CLIENT_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x
 
 fn search_certificate() -> (heather_elab::Elaborator, heather_elab::Elaborator, heather_elab::function_ir_source::LoopX86Emission) {
     let (library, mut elab) = with_clients();
-    let emission = generate_elaborated_loop_x86(&elab, "search", "readonly_loops::first_match", &search_placement())
+    let emission = generate_elaborated_loop_x86(&elab, "search", "readonly_loops::first_match", &search_placement(), None)
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("search_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
     (library, elab, emission)
@@ -76,11 +76,26 @@ fn search_loop_certificate_checks() {
     let (_, mut elab, emission) = search_certificate();
     elab.elab_module_source("search_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-    native_search(&emission.bytes);
+    native_loop(&emission.bytes, false);
+}
+
+// The second client: counting, through the same generator and placement. It
+// adds its source, and one fact about its step (count_body_advances), and no
+// machine model (docs/native-shared-lowering-milestone).
+#[test]
+fn count_loop_certificate_checks() {
+    let (_, mut elab) = with_clients();
+    let emission = generate_elaborated_loop_x86(&elab, "count", "readonly_loops::count_occurrences", &search_placement(),
+        Some("readonly_loops::count_body_advances")).unwrap_or_else(|e| panic!("{e:?}"));
+    elab.elab_module_source("count_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    elab.elab_module_source("count_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
+    assert!(generate_elaborated_loop_x86(&elab, "count", "readonly_loops::count_occurrences", &search_placement(), None).is_err());
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    native_loop(&emission.bytes, true);
 }
 
 #[test]
-fn slow_acceptance_search_loop_refusals() {
+fn slow_acceptance_loop_refusals() {
     let (library, elab, emission) = search_certificate();
     let back = u32::from_le_bytes(emission.bytes[emission.bytes.len() - 4..].try_into().unwrap());
     let exit = {
@@ -109,13 +124,26 @@ fn slow_acceptance_search_loop_refusals() {
     stale.elab_module_source("loop_clients", CLIENT_CONTEXT).unwrap();
     let error = stale.elab_module_source("search_pieces", &emission.pieces).expect_err("stale source").render(&emission.pieces);
     assert!(!error.contains("unbound") && !error.contains("ambiguous"), "stale: {error}");
+    // Counting's one obligation is about its own step: the same fact proved
+    // of another step does not stand in for it.
+    let (_, mut elab) = with_clients();
+    let other = "import function_ir_loop; import readonly_loops; import bitvec; import nat; \
+        fn keep_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), count: Nat) → LoopStep<Nat> { Continue(count) } \
+        theorem keep_advances(): LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(keep_body)) { λ needle cursor byte count => count.le_succ_r(count, count.le_refl()) }";
+    elab.elab_module_source("other_step", other).unwrap_or_else(|e| panic!("{}", e.render(other)));
+    elab.elab_module_source("loop_clients", &format!("{CLIENT_CONTEXT} import other_step;")).unwrap();
+    let emission = generate_elaborated_loop_x86(&elab, "count", "readonly_loops::count_occurrences", &search_placement(),
+        Some("other_step::keep_advances")).unwrap_or_else(|e| panic!("{e:?}"));
+    elab.elab_module_source("count_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let error = elab.elab_module_source("count_native", &emission.text).expect_err("another step's advance").render(&emission.text);
+    assert!(!error.contains("unbound") && !error.contains("ambiguous"), "advance: {error}");
 }
 
-// The published bytes against first_match's outcomes, through a test-only
+// The published bytes against the source loop's outcomes, through a test-only
 // trampoline that loads the head registers from a struct and stores the exit
 // registers back (not an ABI; design §7). A guard page follows the buffer.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-fn native_search(bytes: &[u8]) {
+fn native_loop(bytes: &[u8], counting: bool) {
     use std::process::Command;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("heather-loop-{}-{nonce}", std::process::id()));
@@ -161,7 +189,8 @@ search_run:
 #include <assert.h>
 typedef struct { const uint8_t *base; uint64_t length, needle, cursor, budget, carry, flag; } Loop;
 extern void search_run(Loop *);
-// loop_run for first_match: end first, then budget, then the read.
+// loop_run for first_match or count_occurrences: end first, then budget,
+// then the read.
 static void expect(const uint8_t *p, uint64_t len, uint64_t needle, uint64_t c, uint64_t b, uint64_t k) {
     Loop run = { p, len, needle, c, b, k, 7 };
     uint64_t flag = 0;
@@ -170,7 +199,11 @@ static void expect(const uint8_t *p, uint64_t len, uint64_t needle, uint64_t c, 
         if (b == 0) break;
         uint8_t byte = p[c];
         c++; b--;
+#ifdef COUNTING
+        if (byte == needle) k++;
+#else
         if (byte == needle) { k = 1; flag = 1; break; }
+#endif
     }
     search_run(&run);
     assert(run.flag == flag && run.cursor == c && run.budget == b && run.carry == k);
@@ -191,16 +224,29 @@ int main(void) {
         for (uint64_t len = 0; len <= N; len += (len < 4 ? 1 : 11))
             for (uint64_t c = 0; c <= len; c++)
                 for (unsigned bi = 0; bi < sizeof budgets / sizeof *budgets; bi++)
-                    for (uint64_t k = 0; k < 2; k++)
-                        expect(p + (N - len), len, needle, c, budgets[bi], k);
+                    for (unsigned ki = 0; ki < 3; ki++)
+                        expect(p + (N - len), len, needle, c, budgets[bi], ki < 2 ? ki : 1000);
     assert(munmap(m, page*2) == 0);
 }
 "#).unwrap();
-    let output = Command::new("cc").args(["-O1", "-Wall", "-Wextra", "-Werror"]).arg(dir.join("driver.c")).arg(dir.join("code.s"))
+    let output = Command::new("cc").args(["-O1", "-Wall", "-Wextra", "-Werror"]).args(counting.then_some("-DCOUNTING"))
+        .arg(dir.join("driver.c")).arg(dir.join("code.s"))
         .arg("-o").arg(dir.join("run")).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(Command::new(dir.join("run")).status().unwrap().success());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// A consumed Nat: the count is a word port, Succ is an add, and the typed
+// certificate states both results against count_body itself.
+#[test]
+fn count_body_carries_its_count_as_a_word() {
+    let (_, mut elab) = with_clients();
+    let emission = generate_elaborated_typed_x86(&elab, "count", "readonly_loops::count_body",
+        &Placements::from([(0, Gpr::Rcx), (2, Gpr::R9), (3, Gpr::R11)]),
+        &[Gpr::Rax, Gpr::Rbx, Gpr::Rdx, Gpr::R8, Gpr::R10, Gpr::R14, Gpr::R15],
+        &Placements::from([(4, Gpr::Rax), (5, Gpr::Rbx)])).unwrap_or_else(|e| panic!("{e:?}"));
+    elab.elab_module_source("count_typed", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
 }
 
 // Controls for the word bridges: each must refuse the wrapping or reversed case.

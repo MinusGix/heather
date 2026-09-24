@@ -30,10 +30,12 @@ pub struct LoopX86Emission {
     pub text: String,
 }
 
-/// One loop, generated and composed. The carry is Bool until typed
-/// certificates have a Nat port (design §9 slice C).
-pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, source: &str, p: &NativeLoopPlacement)
-    -> Result<LoopX86Emission, SourceError>
+/// One loop, generated and composed. A Nat carry is counted: its certificate
+/// keeps `loop_fits` (carry + budget < 2^64), and `advance` names the client's
+/// `LoopAdvancesByAtMostOne` theorem about the step (design §9a). A Bool
+/// carry needs neither.
+pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, source: &str, p: &NativeLoopPlacement,
+    advance: Option<&str>) -> Result<LoopX86Emission, SourceError>
 {
     let mut registers = vec![p.base, p.length, p.needle, p.cursor, p.budget, p.carry, p.flag, p.step,
         p.address, p.byte, p.payload, p.next_cursor, p.next_budget];
@@ -42,7 +44,14 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         return unsupported("loop registers must be distinct");
     }
     let reflected = reflect_elaborated_readonly_loop(elaborator, source)?;
-    if reflected.carry != LoopCarry::Boolean { return unsupported("native loops take a Bool carry until Nat ports exist"); }
+    let counted = reflected.carry == LoopCarry::Natural;
+    let advance = match (counted, advance) {
+        (true, Some(name)) => name,
+        (true, None) => return unsupported("a Nat carry needs its step's LoopAdvancesByAtMostOne theorem"),
+        (false, _) => "",
+    };
+    let (carry_type, rep_name, invariant) = if counted { ("Nat", "loop_nat_rep", "loop_fits") }
+        else { ("Bool", "loop_bool_rep", "loop_no_invariant<Bool>") };
     let step_body = reflect_elaborated_structured(elaborator, &reflected.body_name)?;
     let [payload_port, step_port] = step_body.region.outputs() else {
         return unsupported("a loop step observes exactly a payload and a discriminator");
@@ -104,11 +113,11 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         format!("read_gpr({}, before.gprs)", reg(p.length)), format!("read_gpr({}, before.gprs)", reg(p.budget)));
     let kept = [p.base, p.length, p.needle, p.cursor, p.budget, p.carry].map(|r| format!("{g}_preserves({}, before, trivial)", reg(r))).join(", ");
     module.declaration(Declaration::theorem(name("guard_step"),
-        HeatherExpr::raw(format!("LoopGuardStep<M, Bool>({placement}(), loop_bool_rep, access, buffer, needle, {guard_code})")),
+        HeatherExpr::raw(format!("LoopGuardStep<M, {carry_type}>({placement}(), {rep_name}, access, buffer, needle, {guard_code})")),
         Block::expression(HeatherExpr::raw(format!("λ before cursor budget carry head => Exists({g}_after(before), ⟨refl, ⟨\
             trans({g}_typed_correct({cw}, {lw}, {bw}, before, refl, refl, refl), cong_fn<Bool, BitVec(64)>(loop_bit, \
             loop_guard_word({cw}, {lw}, {bw}, cursor, buffer.length, budget, head.cursor_placed, head.length_placed, head.budget_placed))), \
-            loop_head_transport({placement}(), loop_bool_rep, access, buffer, needle, before, {g}_after(before), cursor, budget, carry, head, \
+            loop_head_transport({placement}(), {rep_name}, access, buffer, needle, before, {g}_after(before), cursor, budget, carry, head, \
             {kept}, {g}_memory(before))⟩⟩)")))).generic("M").parameters(vec![
         Parameter::explicit("access", HeatherExpr::raw("ByteReadAccess<M>")),
         Parameter::explicit("buffer", HeatherExpr::name("ReadonlyBytes")),
@@ -150,7 +159,9 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
             loop_read_address(access, s0.memory, buffer, cursor, read_gpr({addr}, s1.gprs), byte, head.memory_agrees, address_word, present))", addr = reg(p.address))),
         ("canonical", format!("loop_address_canonical(buffer, cursor, read_gpr({}, s1.gprs), address_word, open, low)", reg(p.address))),
         ("placed_needle", format!("sym(trans({}, head.needle_placed))", kept_by(p.needle, 0))),
-        ("placed_carry", format!("sym(trans({}, head.carry_placed))", kept_by(p.carry, 0))),
+        ("placed_carry", if counted {
+            format!("trans(loop_nat_placed(read_gpr({c}, s0.gprs), carry, head.carry_placed), sym({}))", kept_by(p.carry, 0), c = reg(p.carry))
+        } else { format!("sym(trans({}, head.carry_placed))", kept_by(p.carry, 0)) }),
         ("payload", format!("{st}_read_correct({observed})")),
         ("stepped", format!("{st}_output_{step_port}_read_correct({observed})")),
         ("loaded", format!("byte_load_after({st}_load(), byte, s1)")),
@@ -171,23 +182,31 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         ("budget_next", format!("trans(cong_fn(value, trans({kb}_typed_correct(read_gpr({nbr}, s6.gprs), s6, refl), \
             trans({}, {nb}_typed_correct(read_gpr({bud}, s3.gprs), s3, refl)))), loop_budget_decrement(read_gpr({bud}, s3.gprs), rest, budget_word))",
             chain(p.next_budget, 4, 6), nbr = reg(p.next_budget), bud = reg(p.budget))),
-        ("carry_next", format!("trans({}, trans({kc}_typed_correct(read_gpr({pay}, s4.gprs), s4, refl), trans({}, payload)))",
+        ("carry_word", format!("trans({}, trans({kc}_typed_correct(read_gpr({pay}, s4.gprs), s4, refl), trans({}, payload)))",
             chain(p.carry, 5, 7), chain(p.payload, 2, 4), pay = reg(p.payload))),
         ("step_reg", format!("trans({}, stepped)", chain(p.step, 2, 7))),
         ("memory", format!("trans({kb}_memory(s6), trans({kcur}_memory(s5), trans({kc}_memory(s4), trans({nb}_memory(s3), \
             trans({nc}_memory(s2), trans({st}_body_memory(loaded), {a}_memory(s0)))))))")),
         ("step", format!("{region}.body(needle, cursor, byte, carry)")),
-        ("next_head", format!("loop_head_advance({placement}(), loop_bool_rep, access, buffer, needle, s0, s7, cursor, Succ(rest), rest, carry, \
+        // A counted carry is read back as its Nat under the invariant the
+        // step keeps; a Bool carry is its placed bit already.
+        ("next_invariant", if counted {
+            format!("loop_fits_step(cursor, rest, carry, loop_step_payload(step), inv, {advance}()(needle, cursor, byte, carry))")
+        } else { "trivial".to_string() }),
+        ("carry_next", if counted {
+            format!("loop_nat_word(read_gpr({}, s7.gprs), loop_step_payload(step), carry_word, loop_fits_bound(Succ(cursor), rest, loop_step_payload(step), next_invariant))", reg(p.carry))
+        } else { "carry_word".to_string() }),
+        ("next_head", format!("loop_head_advance({placement}(), {rep_name}, access, buffer, needle, s0, s7, cursor, Succ(rest), rest, carry, \
             loop_step_payload(step), head, {}, {}, {}, cursor_next, budget_next, carry_next, open, memory)",
             chain7(p.base), chain7(p.length), chain7(p.needle))),
         ("execution", execution),
     ];
     let lets = lets.iter().map(|(name, value)| format!("let {name} = {value};")).collect::<Vec<_>>().join("\n        ");
     module.declaration(Declaration::theorem(name("body_step"),
-        HeatherExpr::raw(format!("LoopBodyStep<M, Bool>({placement}(), loop_bool_rep, loop_no_invariant<Bool>, access, buffer, needle, {region}, {body_code}())")),
+        HeatherExpr::raw(format!("LoopBodyStep<M, {carry_type}>({placement}(), {rep_name}, {invariant}, access, buffer, needle, {region}, {body_code}())")),
         Block::expression(HeatherExpr::raw(format!("λ s0 cursor rest carry byte head inv open present => {{\n        {lets}\n        \
-            Exists(s7, ⟨execution, loop_stepped({placement}(), loop_bool_rep, loop_no_invariant<Bool>, access, buffer, needle, s0, s7, cursor, rest, \
-            {}, step, step_reg, next_head, trivial)⟩)\n    }}", chain7(p.flag))))).generic("M").parameters(vec![
+            Exists(s7, ⟨execution, loop_stepped({placement}(), {rep_name}, {invariant}, access, buffer, needle, s0, s7, cursor, rest, \
+            {}, step, step_reg, next_head, next_invariant)⟩)\n    }}", chain7(p.flag))))).generic("M").parameters(vec![
         Parameter::explicit("access", HeatherExpr::raw("ByteReadAccess<M>")),
         Parameter::explicit("buffer", HeatherExpr::name("ReadonlyBytes")),
         Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
@@ -199,14 +218,15 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     // and the reads the chosen path makes. ABI entry, RET and fetch are outside.
     let exit = format!("@bitvec::BitVec::ofNat(32, {exit})");
     let back = format!("@bitvec::BitVec::ofNat(32, {back})");
-    let observed = |outcome: &str| format!("LoopObserved<M, Bool>({placement}(), loop_bool_rep, {outcome})");
+    let observed = |outcome: &str| format!("LoopObserved<M, {carry_type}>({placement}(), {rep_name}, {outcome})");
+    let invariant_proof = if counted { "fits" } else { "trivial" };
     module.declaration(Declaration::theorem(name("native"),
         HeatherExpr::raw(format!("Exists<MachineState<M>>(λ after => AccessArtifact<M>(access, {prefix}_code(), {prefix}_bytes(), before, after) ∧ \
             {})", observed(&format!("after, {}(buffer, needle, budget, cursor, carry)", reflected.source_name)))),
         Block::expression(HeatherExpr::raw(format!("{{
-        let traced = loop_trace({placement}(), loop_bool_rep, loop_no_invariant<Bool>, access, buffer, needle, {region}, \
+        let traced = loop_trace({placement}(), {rep_name}, {invariant}, access, buffer, needle, {region}, \
             {guard_code}, {body_code}(), {exit}, {back}, {prefix}_guard_step(access, buffer, needle), \
-            {prefix}_body_step(access, buffer, needle, bounded, low), budget, before, cursor, carry, head, trivial, readable);
+            {prefix}_body_step(access, buffer, needle, bounded, low), budget, before, cursor, carry, head, {invariant_proof}, readable);
         Exists(traced.witness, ⟨AccessArtifact(encoding := {prefix}_encoding(), layout := {prefix}_layout(), execution := traced.proof.left), \
             j({}_source_agreement(buffer, needle, budget, cursor, carry), λ outcome _ => {}, traced.proof.right)⟩)
     }}", name("loop"), observed("traced.witness, outcome"))))).generic("M").parameters(vec![
@@ -216,11 +236,12 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
         Parameter::explicit("budget", HeatherExpr::name("Nat")),
         Parameter::explicit("cursor", HeatherExpr::name("Nat")),
-        Parameter::explicit("carry", HeatherExpr::name("Bool")),
+        Parameter::explicit("carry", HeatherExpr::name(carry_type)),
         Parameter::explicit("bounded", HeatherExpr::raw("LoopAddressBound(64, buffer)")),
         Parameter::explicit("low", HeatherExpr::raw("buffer.base + buffer.length <= nat::Nat::pow(2, 47)")),
-        Parameter::explicit("head", HeatherExpr::raw(format!("LoopHead<M, Bool>({placement}(), loop_bool_rep, access, buffer, needle, before, cursor, budget, carry)"))),
-        Parameter::explicit("readable", HeatherExpr::raw(format!("LoopReadable(budget, {region}, buffer, needle, cursor, carry)")))]));
+        Parameter::explicit("head", HeatherExpr::raw(format!("LoopHead<M, {carry_type}>({placement}(), {rep_name}, access, buffer, needle, before, cursor, budget, carry)"))),
+        Parameter::explicit("readable", HeatherExpr::raw(format!("LoopReadable(budget, {region}, buffer, needle, cursor, carry)")))]
+        .into_iter().chain(counted.then(|| Parameter::explicit("fits", HeatherExpr::raw("loop_fits(cursor, budget, carry)")))).collect::<Vec<_>>()));
     Ok(LoopX86Emission { bytes: looped.bytes, pieces, text: stitch_imports(&module.render()) })
 }
 

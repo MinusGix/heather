@@ -3,7 +3,7 @@ title: Demonstrate shared native lowering with independent bounded buffer loops
 status: open
 labels: [compiler,x86,architecture]
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-09-24
 ---
 
 ## Scope
@@ -136,3 +136,4 @@ from commit 4db435c and is not retained as active compiler infrastructure.
   relating the address to the Nat cursor, and complete bounded traces remain here.
 - 2026-09-20: The next shared access-composition checkpoint is [[function-ir-bounds-address-composition]], connecting a compiled bounds guard and address ADD to the typed read body.
 - 2026-09-20: [[function-ir-bounds-address-composition]] is complete; shared access composition now connects compiled bounds/address code to typed read bodies. Plain full suite: 2866 passed, 0 failed, 5 ignored. Complete bounded-loop selection remains open.
+- 2026-09-24: Steps 3 and 4 are met in substance (2026-09-24). Occurrence counting and first-match search compile through one generator (`generate_elaborated_loop_x86`) at one placement, with complete source/execution/byte certificates in an explicit export boundary, native runs against guard pages, and refusals at local boundaries. The second client added its source and one source-level fact about its step (`count_body_advances`), and no machine model, IP-theorem family or native template. See [[native-bounded-loop-certificates]] (closed) and `docs/native-bounded-loops-design.md`. Left open for the user to close.

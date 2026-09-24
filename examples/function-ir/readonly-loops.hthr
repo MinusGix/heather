@@ -1,7 +1,7 @@
 // Two clients of one bounded loop interface; application-specific behavior is
-// confined to the pure body. first_match also compiles to a native loop with a
-// complete certificate (function_ir_loop_trace.rs, native-bounded-loops-design).
-// count_occurrences waits on a Nat carry port.
+// confined to the pure body. Both compile to native loops with complete
+// certificates (function_ir_loop_trace.rs, native-bounded-loops-design);
+// counting's one extra obligation is count_body_advances.
 import function_ir_loop;
 import bitvec;
 import bool;
@@ -16,6 +16,14 @@ fn byte_equal(left, right: BitVec(8)) → Bool {
 
 fn count_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), count: Nat) → LoopStep<Nat> {
     match byte_equal(needle, byte) { False => Continue(count), True => Continue(Succ(count)) }
+}
+
+theorem count_body_advances(): LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(count_body)) {
+    λ needle cursor byte count => match byte_equal(needle, byte) as λ equal =>
+            loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) }) <= Succ(count) {
+        False => count.le_succ_r(count, count.le_refl()),
+        True => Succ(count).le_refl(),
+    }
 }
 
 fn search_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), found: Bool) → LoopStep<Bool> {

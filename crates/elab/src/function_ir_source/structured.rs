@@ -9,14 +9,19 @@ pub use publication::generate_elaborated_typed_x86;
 
 /// Source types remain distinct even when their FunctionIR ports have the same
 /// width: Bool is represented by BitVec(1), but is not a BitVec(1) parameter.
-/// Natural parameters have no port: they may be erased only when the body does
-/// not consume them, and source agreement still quantifies over their values.
+/// A Natural parameter the body does not consume has no port, and source
+/// agreement still quantifies over its value. One it consumes is `NatWord`: a
+/// 64-bit port holding `bitvec_nat::word_of_nat(64, n)`, the modular image,
+/// so every equality stays unconditional and reading the word back as the Nat
+/// is its consumer's bound (docs/native-bounded-loops-design.md §9a).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StructuredSourceType { Word(u64), Boolean, Natural }
+pub enum StructuredSourceType { Word(u64), Boolean, Natural, NatWord }
 impl StructuredSourceType {
-    fn width(self) -> Option<u64> { match self { Self::Word(width) => Some(width), Self::Boolean => Some(1), Self::Natural => None } }
+    fn width(self) -> Option<u64> { match self { Self::Word(width) => Some(width), Self::Boolean => Some(1), Self::Natural => None, Self::NatWord => Some(64) } }
     fn scalar_width(self) -> Result<u64, SourceError> { self.width().ok_or_else(|| SourceError::Unsupported("Nat values need a representation proof before lowering".into())) }
-    fn name(self) -> String { match self { Self::Word(width) => format!("BitVec({width})"), Self::Boolean => "Bool".into(), Self::Natural => "Nat".into() } }
+    fn name(self) -> String { match self { Self::Word(width) => format!("BitVec({width})"), Self::Boolean => "Bool".into(), Self::Natural | Self::NatWord => "Nat".into() } }
+    /// A Nat in a result position is always carried.
+    fn carried(self) -> Self { if self == Self::Natural { Self::NatWord } else { self } }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +64,6 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
         term = body;
     }
     let (result, choice) = result_type(elaborator, caller, result)?;
-    let operations = OperationGlobals::resolve(elaborator)?;
     let comparison = elaborator.global_abs("bitvec::BitVec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
     let payload = |slot| elaborator.lookup_inductive("bool::Bool")
         .and_then(|ind| elaborator.types.gdefs().abs_for(&crate::gendefs::GenDef::PayloadCode(ind.tag, slot)))
@@ -67,13 +71,24 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
     let boolean_payloads = [payload(0)?, payload(1)?];
     let output = Port { id: parameters.len() as u64, width: result.scalar_width()? };
     let exit = choice.as_ref().map(|_| Port { id: output.id + 1, width: 1 });
-    let bindings = parameters.iter().enumerate().map(|(id, ty)| (*ty, ty.width().map(|width| Port { id: id as u64, width }))).collect();
-    let mut builder = Builder { elaborator, caller, operations, comparison, boolean_payloads,
-        inputs: interface(&parameters), bindings, result, output, exit, stack: vec![caller],
-        next_id: output.id + 1 + u64::from(exit.is_some()) };
-    let region = builder.region(term, 0)?;
-    cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
-    Ok(ReflectedStructuredFunction { source_name, parameters, result, region, choice })
+    // Every Nat starts erased; one the body turns out to consume gets a port
+    // and the reflection runs again.
+    loop {
+        let bindings = parameters.iter().enumerate().map(|(id, ty)| (*ty, ty.width().map(|width| Port { id: id as u64, width }))).collect();
+        let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, boolean_payloads,
+            inputs: interface(&parameters), bindings, result, output, exit, stack: vec![caller],
+            next_id: output.id + 1 + u64::from(exit.is_some()), needs_port: None };
+        match builder.region(term, 0) {
+            Ok(region) => {
+                cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
+                return Ok(ReflectedStructuredFunction { source_name, parameters, result, region, choice });
+            }
+            Err(error) => match builder.needs_port {
+                Some(index) if parameters[index] == StructuredSourceType::Natural => parameters[index] = StructuredSourceType::NatWord,
+                _ => return Err(error),
+            },
+        }
+    }
 }
 
 fn source_code(elaborator: &Elaborator, caller: usize, tm: &Term) -> Result<StructuredSourceType, SourceError> {
@@ -99,6 +114,7 @@ fn source_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<Stru
 }
 fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(StructuredSourceType, Option<StructuredSourceChoice>), SourceError> {
     if let Ok(scalar) = source_type(elaborator, caller, ty) {
+        let scalar = scalar.carried();
         scalar.scalar_width()?;
         return Ok((scalar, None));
     }
@@ -111,7 +127,7 @@ fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(Str
         || !ind.ctors.iter().all(|ctor| ctor.fields.len() == 1 && matches!(&ctor.fields[0].1.kind, TyKind::Named { name, args } if name == &ind.params[0] && args.is_empty())) {
         return unsupported("choice results require two single-field constructors with the same scalar type parameter");
     }
-    let scalar = source_code(elaborator, caller, args[0])?;
+    let scalar = source_code(elaborator, caller, args[0])?.carried();
     scalar.scalar_width()?;
     let qualify = |name: &str| if ind.scope.module.is_empty() { name.to_string() } else { format!("{}::{name}", ind.scope.module) };
     Ok((scalar, Some(StructuredSourceChoice { type_name: qualify(&ind.name), constructors: [qualify(&ind.ctors[0].name), qualify(&ind.ctors[1].name)] })))
@@ -130,6 +146,9 @@ struct Builder<'a> {
     exit: Option<Port>,
     next_id: u64,
     stack: Vec<usize>,
+    /// Set when the body consumes an erased Nat parameter: reflection retries
+    /// with that parameter carried.
+    needs_port: Option<usize>,
 }
 
 // Local interning preserves DAG sharing. There is no parallel source AST;
@@ -175,6 +194,10 @@ impl Builder<'_> {
         if let Term::Var(LocalVar(index)) = term {
             let index = index.checked_sub(depth).and_then(|index| self.bindings.len().checked_sub(index as usize + 1))
                 .ok_or_else(|| SourceError::Unsupported("source expression uses a match payload or an unbound input".into()))?;
+            if self.bindings[index].0 == StructuredSourceType::Natural && expected == StructuredSourceType::NatWord {
+                self.needs_port = Some(index);
+                return unsupported("a consumed Nat parameter needs a port");
+            }
             if self.bindings[index].0 != expected { return unsupported("source operand has the wrong type"); }
             let input = self.bindings[index].1.ok_or_else(|| SourceError::Unsupported("used Nat parameter requires a representation proof".into()))?;
             return if let Some(output) = target {
@@ -194,6 +217,19 @@ impl Builder<'_> {
                 Term::InrAt { .. } => return self.constant(dag, 1, 1, target),
                 _ => {}
             }
+        }
+        if expected == StructuredSourceType::NatWord {
+            return match term {
+                Term::Zero => self.constant(dag, 64, 0, target),
+                Term::NatLit(value) => self.constant(dag, 64, *value, target),
+                Term::Succ(inner) => {
+                    let inner = self.expression(inner, depth, expected, dag, None)?.id;
+                    let one = self.constant(dag, 64, 1, None)?.id;
+                    let add = SourceBinaryOperation::Add;
+                    self.node(dag, DagKey::Binary(add, 64, inner, one), 64, target, |output| add.node_at_width(64, output, inner, one))
+                }
+                _ => unsupported("a carried Nat must be a parameter, Zero, a literal, or Succ of one"),
+            };
         }
         let (head, args) = application_spine(term);
         let abs = absolute(head, self.caller).ok_or_else(|| SourceError::Unsupported("source value must use a resolved pure operation".into()))?;
@@ -256,7 +292,7 @@ impl Builder<'_> {
         let mut nested = Builder { elaborator: self.elaborator, caller: callee,
             operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison,
             boolean_payloads: self.boolean_payloads, inputs: inputs.clone(), bindings,
-            result: StructuredSourceType::Boolean, output, exit: None, next_id: self.next_id, stack };
+            result: StructuredSourceType::Boolean, output, exit: None, next_id: self.next_id, stack, needs_port: None };
         let region = nested.region(body, 0)?;
         self.next_id = nested.next_id;
         Ok((Some(if arguments.nodes.is_empty() { region } else {
@@ -316,6 +352,7 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     }
     let mut module = Module::default();
     module.raw("import bitvec;\nimport bool;");
+    if reflected.carries_nat() { module.raw("import bitvec_nat;"); }
     if let Some((owner, _)) = reflected.source_name.rsplit_once("::") { module.raw(format!("import {owner};")); }
     if let Some(choice) = &reflected.choice {
         if let Some((owner, _)) = choice.type_name.rsplit_once("::") {
@@ -326,10 +363,10 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let arguments: Vec<_> = (0..parameters.len()).map(|i| HeatherExpr::name(format!("arg{i}"))).collect();
     let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| {
         let width = ty.width()?;
-        let expression = if *ty == StructuredSourceType::Boolean { HeatherExpr::call("bitvec::BitVec::ofBool", [arguments[id].clone()]) } else { arguments[id].clone() };
-        Some((id as u64, (width, expression)))
+        Some((id as u64, (width, HeatherExpr::raw(publication::vector(*ty, &arguments[id].render())))))
     }).collect();
-    let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref() };
+    let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
+        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new() };
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.choice.as_ref().map_or_else(|| reflected.result.name(), |choice| format!("{}<{}>", choice.type_name, reflected.result.name()));
@@ -348,6 +385,23 @@ struct Expansion<'a> {
     arguments: &'a [HeatherExpr],
     result: StructuredSourceType,
     choice: Option<&'a StructuredSourceChoice>,
+    /// For each port carrying a Nat: its source expression, and a proof that
+    /// `word_of_nat(64, expression)` is the port's word (`None`: definitional).
+    /// Port IDs are unique, and a branch reads its result right after writing
+    /// it, so one map serves every arm.
+    naturals: BTreeMap<u64, (HeatherExpr, Option<HeatherExpr>)>,
+    constants: BTreeMap<u64, u64>,
+}
+
+impl ReflectedStructuredFunction {
+    fn carries_nat(&self) -> bool {
+        self.result == StructuredSourceType::NatWord || self.parameters.contains(&StructuredSourceType::NatWord)
+    }
+}
+
+fn natural_inputs(parameters: &[StructuredSourceType]) -> BTreeMap<u64, (HeatherExpr, Option<HeatherExpr>)> {
+    parameters.iter().enumerate().filter(|(_, ty)| **ty == StructuredSourceType::NatWord)
+        .map(|(id, _)| (id as u64, (HeatherExpr::name(format!("arg{id}")), None))).collect()
 }
 type Expressions = BTreeMap<u64, (u64, HeatherExpr)>;
 fn operand(values: &Expressions, id: u64, width: u64) -> Result<HeatherExpr, SourceError> {
@@ -375,12 +429,41 @@ impl Expansion<'_> {
                 }
                 _ => return unsupported("unsupported source expansion node"),
             };
+            self.track_natural(node);
             let name = format!("{}_value_{}", self.prefix, self.next_name);
             self.next_name += 1;
             self.module.declaration(Declaration::function(&name, HeatherExpr::raw(format!("BitVec({width})")), Block::expression(expression)).parameters(self.parameters.to_vec()));
             values.insert(id, (width, HeatherExpr::call(name.as_str(), self.arguments.to_vec())));
         }
         Ok(())
+    }
+    /// Follow a Nat through the only nodes a carried Nat reflects to: `Succ` as
+    /// `Add(n, 1)`, and a passthrough as `BitOr(0, n)`.
+    fn track_natural(&mut self, node: &Node) {
+        match *node {
+            Node::Const { width: 64, output, value } => { self.constants.insert(output, value); }
+            Node::Add { width: 64, output, left, right } if self.constants.get(&right) == Some(&1) => {
+                if let Some((natural, proof)) = self.naturals.get(&left).cloned() {
+                    let succ = format!("bitvec_nat::word_of_nat_succ({})", natural.render());
+                    let proof = match proof {
+                        None => succ,
+                        Some(inner) => format!("trans({succ}, cong_fn<BitVec(64), BitVec(64)>(λ word => @bitvec::BitVec::add(64, word, @bitvec::BitVec::ofNat(64, 1)), {}))", inner.render()),
+                    };
+                    self.naturals.insert(output, (HeatherExpr::raw(format!("Succ({})", natural.render())), Some(HeatherExpr::raw(proof))));
+                }
+            }
+            Node::BitOr { width: 64, output, left, right } if self.constants.get(&left) == Some(&0) => {
+                if let Some(carried) = self.naturals.get(&right).cloned() { self.naturals.insert(output, carried); }
+            }
+            _ => {}
+        }
+    }
+    /// The Nat a result port carries. A literal's proof is definitional (a
+    /// closed computation, linear in the literal).
+    fn natural(&self, id: u64) -> Result<(HeatherExpr, Option<HeatherExpr>), SourceError> {
+        if let Some(found) = self.naturals.get(&id) { return Ok(found.clone()); }
+        self.constants.get(&id).map(|value| (HeatherExpr::nat(*value), None))
+            .ok_or_else(|| SourceError::Unsupported(format!("result {id} carries no Nat the source names")))
     }
     fn region(&mut self, region: &StructuredRegion, mut values: Expressions) -> Result<HeatherExpr, SourceError> {
         values.retain(|id, _| region.inputs().iter().any(|port| port.id == *id));
@@ -390,7 +473,11 @@ impl Expansion<'_> {
                 self.dataflow(body, &mut values)?;
                 if body.outputs.len() != 1 + usize::from(self.choice.is_some()) { return unsupported("source expansion result arity differs from source interface"); }
                 let value = operand(&values, body.outputs[0].id, self.result.scalar_width()?)?;
-                let value = if self.result == StructuredSourceType::Boolean { HeatherExpr::explicit_call("bitvec::BitVec::head_bit", [HeatherExpr::nat(0), value]) } else { value };
+                let value = match self.result {
+                    StructuredSourceType::Boolean => HeatherExpr::explicit_call("bitvec::BitVec::head_bit", [HeatherExpr::nat(0), value]),
+                    StructuredSourceType::NatWord => self.natural(body.outputs[0].id)?.0,
+                    _ => value,
+                };
                 if let Some(choice) = self.choice {
                     let tag = operand(&values, body.outputs[1].id, 1)?;
                     Ok(HeatherExpr::raw(format!("match @bitvec::BitVec::head_bit(0, {}) {{ False => {}<{}>({}), True => {}<{}>({}) }}", tag.render(), choice.constructors[0], self.result.name(), value.render(), choice.constructors[1], self.result.name(), value.render())))

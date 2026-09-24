@@ -5,6 +5,7 @@
 import function_ir_loop;
 import function_ir_loop_x86;
 import function_ir_x86_support;
+import bitvec_nat;
 import x86_64;
 import x86_64_block;
 import x86_64_structured_block;
@@ -40,13 +41,38 @@ theorem loop_bit_zf<M>(register: Gpr, state: MachineState<M>, bit: Bool,
 fn loop_bool_rep(word: BitVec(64), bit: Bool) → Type { word = loop_bit(bit) }
 fn loop_no_invariant<C>(cursor, budget: Nat, carry: C) → Type { True }
 
-// A step's two ports, as the typed body certificate observes them: payload
-// first, then the discriminator (Continue is False).
-fn loop_step_payload<C>(step: LoopStep<C>) → C {
-    match step { Continue(next) => next, Break(result) => result }
+// A Nat carry sits in its register as its word (docs/native-bounded-loops-design.md
+// §9a). Reading it back needs a bound, which the counting invariant keeps:
+// carry and remaining budget together fit in a word, so no count can wrap.
+// A step keeps it when it advances by at most one (LoopAdvancesByAtMostOne,
+// function_ir_loop).
+fn loop_nat_rep(word: BitVec(64), count: Nat) → Type { LoopWord(64, word, count) }
+fn loop_fits(cursor, budget, carry: Nat) → Type { carry + budget < Nat::pow(2, 64) }
+
+theorem loop_fits_bound(cursor, budget, carry: Nat, fits: loop_fits(cursor, budget, carry)):
+    carry < Nat::pow(2, 64) {
+    Succ(carry).le_trans(Succ(carry + budget), Nat::pow(2, 64), carry.le_add_l(budget), fits)
 }
-fn loop_step_breaks<C>(step: LoopStep<C>) → Bool {
-    match step { Continue(_) => False, Break(_) => True }
+
+theorem loop_fits_step(cursor, rest, carry, next: Nat, fits: loop_fits(cursor, Succ(rest), carry),
+    advance: next <= Succ(carry)):
+    loop_fits(Succ(cursor), rest, next) {
+    let grown = Nat::add_le_mono_r(rest, next, Succ(carry), advance);
+    let shifted = j(Nat::add_succ_left(carry, rest), λ total _ => next + rest <= total, grown);
+    Succ(next + rest).le_trans(Succ(carry + Succ(rest)), Nat::pow(2, 64), shifted, fits)
+}
+
+// The typed certificate's Nat premise from the head's word, and the head's
+// word from the certificate's result under the bound.
+theorem loop_nat_placed(word: BitVec(64), count: Nat, placed: LoopWord(64, word, count)):
+    bitvec_nat::word_of_nat(64, count) = word {
+    trans(sym(j(placed, λ value _ => bitvec_nat::word_of_nat(64, word.toNat()) = bitvec_nat::word_of_nat(64, value), refl)),
+        bitvec_nat::word_of_nat_toNat(64, word))
+}
+theorem loop_nat_word(word: BitVec(64), count: Nat, computed: word = bitvec_nat::word_of_nat(64, count),
+    bounded: count < Nat::pow(2, 64)):
+    LoopWord(64, word, count) {
+    j(sym(computed), λ found _ => found.toNat() = count, bitvec_nat::toNat_word_of_nat(64, count, bounded))
 }
 
 // Where a loop keeps its values. `flag` is the guard's result and survives

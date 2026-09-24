@@ -1,6 +1,6 @@
 # Native bounded-loop certificates — design
 
-Status: **design agreed 2026-09-24; probes done (§8); slices A0, A and B landed (§9); C open**. Owner:
+Status: **design agreed 2026-09-24; probes done (§8); slices A0, A, B and C landed (§9)**. Owner:
 `issues/native-bounded-loop-certificates.md`, step 3 of
 `issues/native-shared-lowering-milestone.md`. Implementation state is in §9.
 
@@ -284,11 +284,62 @@ family) before any library work:
   disagrees with the code, and a step function edited after compilation. The
   library side added `loop_address`, `loop_open_inside`, `loop_bool_rep`,
   `loop_head_advance` and `loop_stepped`.
-- **C — Nat carry + counting.** A Nat port with a `LoopWord` representation
-  and a bound premise in typed certificates (`Succ(count)` → `add 1`), the
-  counting `Inv`, and `count_occurrences` through the same generator. The
-  milestone's rule applies: the second client adds source, spec and tests,
-  and nothing machine-specific.
+- **C — Nat carry + counting, landed.** Design in §9a.
+  - `StructuredSourceType::NatWord` and the reflector's retry.
+  - Nat tracking in the expansion (`track_natural`, with a per-port proof).
+  - `bitvec_nat::word_of_nat` and its three lemmas.
+  - `loop_fits`, `loop_fits_step`, `loop_nat_placed` and `loop_nat_word`.
+  - `LoopAdvancesByAtMostOne` in `function_ir_loop`.
+  - The generator's `advance` argument.
+
+  `count_occurrences` compiles through the same generator and placement as
+  `first_match`. Its certificate checks, and its bytes run natively against a
+  C counting reference. The client added its source and `count_body_advances`
+  and nothing machine-specific. The slow lane also refuses the same fact
+  proved of another step.
+
+## 9a. Slice C design: a Nat the body consumes
+
+**Representation.** A Nat parameter or result the step body consumes gets a
+64-bit port holding `word_of_nat(64, n) = zero.iterate_increment(n)`, the
+modular image of `n` (`bitvec_nat`). A Nat the body never reads stays erased,
+as `cursor` does. The reflector finds out which by retry: it reflects with
+every Nat unported, and when the body consumes one, that parameter gets a
+port and reflection runs again.
+
+**Why the modular image.** With it, every equality the typed certificates
+already state stays unconditional:
+
+- `Succ(e)` reflects to `Add(e, 1)`, and `word_of_nat(Succ n) = word_of_nat(n).add(1)`
+  is one lemma (`word_of_nat_succ`, through `iter_add_eq_add`).
+- A passthrough, `bor(0, x)`, is definitional at literal width 64.
+- The typed premise is `word_of_nat(64, n) = read_gpr(r)`, and the result is
+  `read_gpr(out) = word_of_nat(64, observe(source(…)))`.
+
+So the source-expansion and observation pipeline keeps its shape. It tracks
+the Nat expression of each Nat-carrying port beside its word, and a leaf's
+proof is built from those lemmas in place of `refl`.
+
+**Where the bound goes.** No Nat operation needs a bound until a word is read
+back as a Nat, and that happens only in the loop (`LoopWord`). The counting
+invariant is `loop_fits: carry + budget < 2^64`. Preserving it needs one fact
+about the step: its payload is at most `Succ(carry)`
+(`LoopAdvancesByAtMostOne(region)`). That is a property of the source, not of
+the machine, and the client proves it beside its step function (the review's
+"any nontrivial semantic invariant" row). The generator takes the theorem's
+name for a Nat carry. `loop_fits_step` turns it into the next invariant and
+the `< 2^64` bound that `toNat_word_of_nat` needs.
+
+Supported Nat forms in a body: parameter, `Succ`, `Zero`, literals. Addition of
+two Nats, and Nat helpers, are later work.
+
+One constraint surfaced building it. The payload observer for a carried Nat
+must apply `word_of_nat` *outside* its match on the step:
+`word_of_nat(64, match r { Continue(p) => p, Break(p) => p })`. The loop layer
+states `word_of_nat(64, loop_step_payload(step))`, and for a neutral step that
+is not definitionally the per-arm spelling. As in slice B, the elaborator
+accepted the per-arm spelling and the kernel refused it unlocated
+(`issues/elab-accepts-projection-through-opaque-theorem.md`, second instance).
 
 ## 10. Decisions for discussion
 

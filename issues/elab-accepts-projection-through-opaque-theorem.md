@@ -32,3 +32,7 @@ here (a let-bound value's type, or the record projection's reduction)? And
 could a kernel NotConvertible at least name the first mismatching
 sub-terms? The kernel is the gate, so this is not a soundness problem, but
 the diagnostic cost an hour.
+
+## Log
+
+- 2026-09-24: Second instance, 2026-09-24 (slice C). The elaborator accepted `match r { Continue(p) => word_of_nat(64, p), Break(p) => word_of_nat(64, p) }` where `word_of_nat(64, loop_step_payload(r))` was expected, for a neutral `r` (a commuting conversion). The kernel refused it, unlocated. The same symptom might have a different cause, since no theorem is involved here. So the question is broader: which elaborator conversion rules does the kernel lack?

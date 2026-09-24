@@ -7,7 +7,11 @@ pub(super) fn encode(width: u64, value: &str) -> String {
 }
 fn bit(value: &str) -> String { format!("@bitvec::BitVec::head_bit(0, {value})") }
 pub(super) fn vector(ty: StructuredSourceType, value: &str) -> String {
-    if ty == StructuredSourceType::Boolean { format!("bitvec::BitVec::ofBool({value})") } else { value.into() }
+    match ty {
+        StructuredSourceType::Boolean => format!("bitvec::BitVec::ofBool({value})"),
+        StructuredSourceType::NatWord => format!("bitvec_nat::word_of_nat(64, {value})"),
+        _ => value.into(),
+    }
 }
 
 // A width-indexed valuation must return the original neutral argument at its
@@ -35,7 +39,16 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             expansion.dataflow(body, &mut values)?;
             let payload = operand(&values, body.outputs[0].id, expansion.result.scalar_width()?)?.render();
             let observed = if expansion.result.scalar_width()? == 1 { bit(&payload) } else { payload.clone() };
-            let scalar = if expansion.result == StructuredSourceType::Boolean { bit(&payload) } else { payload };
+            // A carried Nat's leaf is not refl: word_of_nat of the source Nat
+            // equals the port's word by the tracked proof.
+            let (scalar, leaf) = match expansion.result {
+                StructuredSourceType::Boolean => (bit(&payload), "refl".to_string()),
+                StructuredSourceType::NatWord => {
+                    let (natural, proof) = expansion.natural(body.outputs[0].id)?;
+                    (natural.render(), proof.map_or_else(|| "refl".into(), |proof| proof.render()))
+                }
+                _ => (payload, "refl".to_string()),
+            };
             if let Some(choice) = expansion.choice {
                 let tag = bit(&operand(&values, body.outputs[1].id, 1)?.render());
                 let yes = format!("{}<{}>({scalar})", choice.constructors[1], expansion.result.name());
@@ -43,11 +56,12 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
                 let expression = format!("match {tag} {{ False => {no}, True => {yes} }}");
                 let proofs = observers.iter().enumerate().map(|(i, observer)| {
                     let rhs = if i == 0 { observed.clone() } else { "selected".into() };
-                    format!("match {tag} as λ selected => {observer}(match selected {{ False => {no}, True => {yes} }}) = {rhs} {{ False => refl, True => refl }}")
+                    let leaf = if i == 0 { leaf.as_str() } else { "refl" };
+                    format!("match {tag} as λ selected => {observer}(match selected {{ False => {no}, True => {yes} }}) = {rhs} {{ False => {leaf}, True => {leaf} }}")
                 }).collect();
                 Ok(Observed { expression, values: vec![observed, tag], proofs })
             } else {
-                Ok(Observed { expression: scalar, values: vec![observed], proofs: vec!["refl".into()] })
+                Ok(Observed { expression: scalar, values: vec![observed], proofs: vec![leaf] })
             }
         }
         StructuredRegion::Sequence { prefix, continuation } => {
@@ -103,16 +117,29 @@ pub fn generate_elaborated_typed_x86(
     let observers: Vec<_> = ports.iter().map(|port| format!("{prefix}_observe_{}", port.id)).collect();
     let observation_types: Vec<String> = ports.iter().map(|port| if port.width == 1 { "Bool".into() } else { format!("BitVec({})", port.width) }).collect();
     for (i, observer) in observers.iter().enumerate() {
-        let payload = if reflected.result == StructuredSourceType::Word(1) { bit("payload") } else { "payload".into() };
-        let body = if let Some(choice) = &reflected.choice {
-            format!("match result {{ {}(payload) => {}, {}(payload) => {} }}", choice.constructors[0].rsplit("::").next().unwrap(), if i == 0 { &payload } else { "False" }, choice.constructors[1].rsplit("::").next().unwrap(), if i == 0 { &payload } else { "True" })
-        } else if reflected.result == StructuredSourceType::Word(1) { bit("result") } else { "result".into() };
+        let observe = |value: &str| match reflected.result {
+            StructuredSourceType::Word(1) => bit(value),
+            StructuredSourceType::NatWord => vector(StructuredSourceType::NatWord, value),
+            _ => value.into(),
+        };
+        let payload = observe("payload");
+        let names = reflected.choice.as_ref().map(|choice| choice.constructors.clone().map(|name| name.rsplit("::").next().unwrap().to_string()));
+        let body = match &names {
+            // A carried Nat's word wraps the whole selection, so the observer
+            // is `word_of_nat` of the payload and a consumer can state it
+            // without knowing which constructor the step chose.
+            Some([no, yes]) if i == 0 && reflected.result == StructuredSourceType::NatWord =>
+                observe(&format!("match result {{ {no}(payload) => payload, {yes}(payload) => payload }}")),
+            Some([no, yes]) => format!("match result {{ {no}(payload) => {}, {yes}(payload) => {} }}", if i == 0 { &payload } else { "False" }, if i == 0 { &payload } else { "True" }),
+            None => observe("result"),
+        };
         module.declaration(Declaration::function(observer, HeatherExpr::raw(&observation_types[i]), Block::expression(HeatherExpr::raw(body)))
             .parameters(vec![Parameter::explicit("result", HeatherExpr::raw(&result_type))]));
     }
     let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| ty.width().map(|width|
         (id as u64, (width, HeatherExpr::raw(vector(*ty, &format!("arg{id}"))))))).collect();
-    let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref() };
+    let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
+        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {

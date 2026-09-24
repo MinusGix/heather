@@ -1,6 +1,6 @@
 ---
 title: Generate native bounded-loop certificates from shared structured selection
-status: open
+status: closed
 labels: [compiler,x86,proofs]
 blocked-by: [function-ir-bounded-readonly-loop, function-ir-recursive-structured-lowering]
 created: 2026-09-20
@@ -163,3 +163,4 @@ obligations here; they were not silently fixed by the semantic interface.
 - 2026-09-24: Probes V1–V5 done (design §8). Near branches are required (an iteration is ~270 bytes), and slice A0 adds `NearControl` to `x86_64_block`. In-place results are refused but not needed: updates go through scratch plus a copy, and the lowering improvement is [[structured-lowering-in-place-results]].
 - 2026-09-24: Slice A (library) written: `AccessLoop` in `x86_64_access_code` with its `access_memory` case, `lib/function_ir_loop_trace.hthr` (`loop_trace`, induction on the budget), the word lemmas and the loop's source functions in `function_ir_loop_x86`, and `crates/elab/tests/function_ir_loop_trace.rs`. Details in design §4 and §9. Next is slice B: the generator, glue, and search end to end.
 - 2026-09-24: Slice B landed: `generate_elaborated_loop_x86` compiles `first_match` to a native loop whose certificate states the machine exit against the source function. Controls and a native run with a guard page are in `function_ir_loop_trace.rs` (design §6, §9). Filed on the way: [[elab-accepts-projection-through-opaque-theorem]]. Slice C (Nat carry, counting) remains.
+- 2026-09-24: Slice C landed: counting compiles through the same generator. A consumed Nat is carried as `word_of_nat(64, n)` (design §9a), and the client supplies `count_body_advances`. Every acceptance item is now met: loop selection through shared regions; near edges resolved and checked; a bounded induction schema (`loop_trace`) with the word/Nat invariants; the exit, frame and published bytes stated against the source function; the export boundary explicit. Refusals cover edges, placements, stale source and the step obligation. Closing.

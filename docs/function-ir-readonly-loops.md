@@ -140,8 +140,9 @@ node and is also tested with an unrelated family carrying `BitVec(8)`. The
 source renderer currently accepts one result from each composed prefix.
 
 The unused Nat cursor has no machine port but remains universally quantified in
-the source certificate. Consuming a Nat still requires a representation proof;
-`count_body` therefore remains unsupported. The search certificate checks the
+the source certificate. A consumed Nat is carried as a 64-bit word, its
+modular image `word_of_nat(64, n)`, so `count_body` reflects too
+(`docs/native-bounded-loops-design.md` §9a). The search certificate checks the
 whole body against its actual source definition, including helper meaning;
 stale helpers, swapped constructors, and changed payloads are rejected.
 

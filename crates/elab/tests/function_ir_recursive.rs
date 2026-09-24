@@ -263,6 +263,7 @@ fn shared(a, b: BitVec(8)) → BitVec(8) {
 fn too_wide(a: BitVec(128)) → BitVec(128) { a }
 fn dynamic(width: Nat, value: BitVec(width)) → BitVec(width) { value }
 fn natural(value: Nat) → Nat { value }
+fn natural_match(a: Nat) → Nat { match a { Zero => 0, Succ(k) => k } }
 fn unsupported_helper(a: BitVec(8)) → BitVec(8) { @bitvec::BitVec::neg(8, a) }
 inductive CounterfeitBool { Off, On }
 fn other_sum() → Bool { match Off { Off => False, On => True } }
@@ -288,7 +289,16 @@ fn typed_structured_interfaces_and_source_agreement() {
     let shared = reflect_elaborated_structured(&elab, "shared").unwrap();
     let StructuredRegion::Dataflow(body) = &shared.region else { panic!() };
     assert_eq!(body.nodes.len(), 2, "repeated subexpressions must share their DAG node");
-    for name in ["too_wide", "dynamic", "natural", "unsupported_helper", "other_sum", "shadowed_compare"] {
+    // A consumed Nat is carried as its word (docs/native-bounded-loops-design.md
+    // §9a); a match on a Nat is not a supported Nat form.
+    let natural = reflect_elaborated_structured(&elab, "natural").unwrap();
+    assert_eq!(natural.result, heather_elab::function_ir_source::StructuredSourceType::NatWord);
+    let bitvec_nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+    elab.elab_module_source("bitvec_nat", bitvec_nat).unwrap_or_else(|e| panic!("{}", e.render(bitvec_nat)));
+    elab.elab_module_source("typed_source_again", "import typed_source; import bitvec; import bool; import nat;").unwrap();
+    let text = generate_structured_source_expansion("natural", &natural).unwrap();
+    elab.elab_module_source("natural_agreement", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    for name in ["too_wide", "dynamic", "natural_match", "unsupported_helper", "other_sum", "shadowed_compare"] {
         assert!(reflect_elaborated_structured(&elab, name).is_err(), "must decline {name}");
     }
     assert!(heather_elab::function_ir_source::generate_elaborated_structured_x86(&elab, "mixed_native", "mixed", [Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
@@ -327,9 +337,14 @@ fn loop_byte_predicate_uses_shared_structured_frontend() {
     let text = generate_structured_source_expansion("wrong_byte", &wrong).unwrap();
     heather_syntax::parse_file(&text).unwrap();
     assert!(image.elaborator().elab_module_source("wrong_byte", &text).is_err());
-    // Nat carries still need representation proofs; the Boolean body now
-    // lowers completely, while its cursor remains universally quantified.
-    assert!(reflect_elaborated_structured(&elab, "readonly_loops::count_body").is_err());
+    // A consumed Nat is carried as a word; an unconsumed one stays erased and
+    // universally quantified (docs/native-bounded-loops-design.md §9a).
+    {
+        use heather_elab::function_ir_source::StructuredSourceType::{Natural, NatWord};
+        let count = reflect_elaborated_structured(&elab, "readonly_loops::count_body").unwrap();
+        assert_eq!(count.parameters, [Word(8), Natural, Word(8), NatWord]);
+        assert_eq!(count.region.inputs(), [Port { id: 0, width: 8 }, Port { id: 2, width: 8 }, Port { id: 3, width: 64 }]);
+    }
     let body = reflect_elaborated_structured(&elab, "readonly_loops::search_body").unwrap();
     assert_eq!(body.parameters[1], heather_elab::function_ir_source::StructuredSourceType::Natural);
     assert_eq!(body.region.inputs(), [Port { id: 0, width: 8 }, Port { id: 2, width: 8 }, Port { id: 3, width: 1 }]);

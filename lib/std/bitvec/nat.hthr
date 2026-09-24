@@ -53,3 +53,24 @@ theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
         j(b_word, λ y _ => a.toNat() + b.toNat() = a.toNat() + y, refl));
     trans(toNat_add(n, a, b, j(sym(same), λ total _ => total < Nat::pow(2, n), bounded)), same)
 }
+
+// The modular image of a Nat at a width: `value` increments from zero. It is
+// how typed machine certificates carry a Nat (docs/native-bounded-loops-design.md
+// §9a): every equality about it is unconditional, and a bound is needed only
+// to read the word back as the Nat (`toNat_word_of_nat`).
+fn word_of_nat(n: Nat, value: Nat) → BitVec(n) { BitVec::zero().iterate_increment(value) }
+
+theorem word_of_nat_succ(value: Nat):
+    word_of_nat(64, Succ(value)) = word_of_nat(64, value).add(BitVec::ofNat(1)) {
+    BitVec::iter_add_eq_add(64, word_of_nat(64, value), BitVec::ofNat(1))
+}
+
+theorem word_of_nat_toNat(n: Nat, word: BitVec(n)): word_of_nat(n, word.toNat()) = word {
+    BitVec::iterate_increment_toNat(n, word)
+}
+
+theorem toNat_word_of_nat(n, value: Nat, bounded: value < Nat::pow(2, n)): word_of_nat(n, value).toNat() = value {
+    let same = trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), sym(BitVec::toNat_ofNat(n, value, bounded))),
+        BitVec::iterate_increment_toNat(n, BitVec::ofNat(value)));
+    j(sym(same), λ word _ => word.toNat() = value, BitVec::toNat_ofNat(n, value, bounded))
+}
