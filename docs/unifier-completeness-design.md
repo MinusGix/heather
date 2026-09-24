@@ -652,10 +652,11 @@ What the sweep left, and why: `issues/unify-through-constructor-values.md`
 (`byte_cons_cong`'s endpoints inside `Cons` values, plus a goal side that has
 to unfold) and the `Decide` instance heads
 (`issues/instance-binder-occurrence-through-binder-types.md`). The lines with
-`@` in `lib/` and the showcases went from 42 to 18. Eight of those are in
-`lib/function_ir_x86.hthr`, which is generated: the lowering writes
-`@bitvec::BitVec::add(64, …)`, and a golden test pins its output. The plain
-spelling checks by hand, so dropping the width is a generator change, not a
-feature. `cons_bit_cong`'s sites
+`@` in `lib/` and the showcases went from 42 to 10. The last eight were in
+the generated `lib/function_ir_x86.hthr`. The lowering's three binary-operation
+templates (`crates/elab/src/function_ir_x86_lower.rs`) now write
+`bitvec::BitVec::add(a, b)` and `add(·, ·)`, whose operands pin the width. The
+lowering's other `@`s (`ofNat(64, imm)`, `zero_extend`, the structured
+certificate's) have no operand to pin it and stay. `cons_bit_cong`'s sites
 keep `a := …, b := …`, because a `refl` for `ph` carries no endpoints and the
 goals need δ on both sides.

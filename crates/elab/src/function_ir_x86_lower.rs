@@ -3681,7 +3681,7 @@ fn emit_placement_proofs(
                                 format!("{prefix}_node_{}_commuted_equation", plan.node_index,);
                             text.push_str(&format!(
                                 "theorem {commuted_name}<M>({parameters}):\n\
-                     \x20   values(64, {}) = @{}(64, values(64, {}), values(64, {}))\n\
+                     \x20   values(64, {}) = {}(values(64, {}), values(64, {}))\n\
                      {{\n\
                      \x20   trans({equation}, {}(64, values(64, {}), values(64, {})))\n\
                      }}\n",
@@ -3703,7 +3703,7 @@ fn emit_placement_proofs(
                         }
                     };
                 let placement_head = format!(
-                    "placed_after_binary(values, {}, {}, {}, @{}(64, ·, ·)",
+                    "placed_after_binary(values, {}, {}, {}, {}(·, ·)",
                     node.output,
                     machine_left_value,
                     machine_right_value,
@@ -3984,7 +3984,7 @@ fn render_binary_result(
     (
         destination,
         format!(
-            "@{}(64, read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
+            "{}(read_gpr({}, state.gprs), read_gpr({}, state.gprs))",
             operation.semantic_function(),
             destination.heather_name(),
             source.heather_name(),

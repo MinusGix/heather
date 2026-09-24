@@ -116,7 +116,7 @@ theorem add64_x86_step_0_result<M>(state: MachineState<M>):
 { refl }
 theorem add64_x86_step_1_result<M>(state: MachineState<M>):
     read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, Rsi)), state).gprs) =
-        @bitvec::BitVec::add(64, read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
+        bitvec::BitVec::add(read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
 { refl }
 theorem add64_x86_value_0_moved_for_node_0<M>(values: Valuation(),
     before: MachineState<M>,
@@ -134,7 +134,7 @@ theorem add64_x86_value_2_after_node_0<M>(values: Valuation(),
     context: add64_x86_Context<M>(values, before)):
     ValuePlaced(values, 2, Rax, add64_x86_state_2(before))
 {
-    placed_after_binary(values, 2, 0, 1, @bitvec::BitVec::add(64, ·, ·), Rax, Rsi, Rax,
+    placed_after_binary(values, 2, 0, 1, bitvec::BitVec::add(·, ·), Rax, Rsi, Rax,
         add64_x86_state_1(before), add64_x86_state_2(before),
         add64_x86_graph_0(values, before, context).left, add64_x86_value_0_moved_for_node_0(values, before, context), trans(context.input_1_placed, equality_refl(read_gpr(Rsi, before.gprs))),
         add64_x86_step_1_result(
@@ -377,7 +377,7 @@ theorem sum4_x86_step_0_result<M>(state: MachineState<M>):
 { refl }
 theorem sum4_x86_step_1_result<M>(state: MachineState<M>):
     read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, Rsi)), state).gprs) =
-        @bitvec::BitVec::add(64, read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
+        bitvec::BitVec::add(read_gpr(Rax, state.gprs), read_gpr(Rsi, state.gprs))
 { refl }
 theorem sum4_x86_value_0_moved_for_node_0<M>(values: Valuation(),
     before: MachineState<M>,
@@ -395,7 +395,7 @@ theorem sum4_x86_value_4_after_node_0<M>(values: Valuation(),
     context: sum4_x86_Context<M>(values, before)):
     ValuePlaced(values, 4, Rax, sum4_x86_state_2(before))
 {
-    placed_after_binary(values, 4, 0, 1, @bitvec::BitVec::add(64, ·, ·), Rax, Rsi, Rax,
+    placed_after_binary(values, 4, 0, 1, bitvec::BitVec::add(·, ·), Rax, Rsi, Rax,
         sum4_x86_state_1(before), sum4_x86_state_2(before),
         sum4_x86_graph_0(values, before, context).left, sum4_x86_value_0_moved_for_node_0(values, before, context), trans(context.input_1_placed, equality_refl(read_gpr(Rsi, before.gprs))),
         sum4_x86_step_1_result(
@@ -407,7 +407,7 @@ theorem sum4_x86_step_2_result<M>(state: MachineState<M>):
 { refl }
 theorem sum4_x86_step_3_result<M>(state: MachineState<M>):
     read_gpr(R8, execute_normal(decoded_canonical(AddRR(R8, Rcx)), state).gprs) =
-        @bitvec::BitVec::add(64, read_gpr(R8, state.gprs), read_gpr(Rcx, state.gprs))
+        bitvec::BitVec::add(read_gpr(R8, state.gprs), read_gpr(Rcx, state.gprs))
 { refl }
 theorem sum4_x86_value_2_moved_for_node_1<M>(values: Valuation(),
     before: MachineState<M>,
@@ -425,7 +425,7 @@ theorem sum4_x86_value_5_after_node_1<M>(values: Valuation(),
     context: sum4_x86_Context<M>(values, before)):
     ValuePlaced(values, 5, R8, sum4_x86_state_4(before))
 {
-    placed_after_binary(values, 5, 2, 3, @bitvec::BitVec::add(64, ·, ·), R8, Rcx, R8,
+    placed_after_binary(values, 5, 2, 3, bitvec::BitVec::add(·, ·), R8, Rcx, R8,
         sum4_x86_state_3(before), sum4_x86_state_4(before),
         sum4_x86_graph_1(values, before, context).left, sum4_x86_value_2_moved_for_node_1(values, before, context), trans(context.input_3_placed, equality_refl(read_gpr(Rcx, before.gprs))),
         sum4_x86_step_3_result(
@@ -447,14 +447,14 @@ theorem sum4_x86_value_4_after_node_1_step_2<M>(values: Valuation(),
     context: sum4_x86_Context<M>(values, before)): values(64, 4) = read_gpr(Rax, sum4_x86_state_4(before).gprs) { trans(sum4_x86_value_4_after_node_1_step_1(values, before, context), sym(sum4_x86_step_3_preserves_Rax(sum4_x86_state_3(before)))) }
 theorem sum4_x86_step_4_result<M>(state: MachineState<M>):
     read_gpr(Rax, execute_normal(decoded_canonical(AddRR(Rax, R8)), state).gprs) =
-        @bitvec::BitVec::add(64, read_gpr(Rax, state.gprs), read_gpr(R8, state.gprs))
+        bitvec::BitVec::add(read_gpr(Rax, state.gprs), read_gpr(R8, state.gprs))
 { refl }
 theorem sum4_x86_value_6_after_node_2<M>(values: Valuation(),
     before: MachineState<M>,
     context: sum4_x86_Context<M>(values, before)):
     ValuePlaced(values, 6, Rax, sum4_x86_state_5(before))
 {
-    placed_after_binary(values, 6, 4, 5, @bitvec::BitVec::add(64, ·, ·), Rax, R8, Rax,
+    placed_after_binary(values, 6, 4, 5, bitvec::BitVec::add(·, ·), Rax, R8, Rax,
         sum4_x86_state_4(before), sum4_x86_state_5(before),
         sum4_x86_graph_2(values, before, context).left, sum4_x86_value_4_after_node_1_step_2(values, before, context), sum4_x86_value_5_after_node_1(values, before, context),
         sum4_x86_step_4_result(
