@@ -120,3 +120,11 @@ where the fallbacks are paid for.
 
   The elaborator side of (2): `El (D#tycode^δ)` now reduces to the named slot pair, which no structural reader sees a tag through, so `Elaborator::whnf` unspells it back to the registry's inline copy (`unspell_wf_slots`, beside `unspell_sum_components`; declines unless both slots are the same declaration's). Found by the first full run (`el_reader_audit`'s `T() -> Type { Tree }` reader, and `wf::tycode`'s decode test, which pinned the old reduct and now pins the new one; a swapped-pair negative added). Full `scripts/test`: 2906 passed, 0 failed. **Suite-wide, against the full run just before (same box, same lane): summed target time 1698 s → 921 s, CPU 1857 → 1088 s, wall 279 → 174 s**, no target slower — `function_ir_guarded_read` 82 → 15 s, `native_multi_stack_save` 160 → 109 s, `native_stack_save` 145 → 94 s, `function_ir_bounds` 36 → 2 s, `function_ir_search_certificates` 42 → 9 s, `native_branches` 39 → 9 s.
 - 2026-09-24: 2026-09-24: A first reader-side step, in the unifier: an `El(app(D#tycode_fn; ?A))` pattern against D's inline lowering re-spells the subject through the registry and aligns the references (docs/unifier-completeness-design.md §10.2). It is limited to patterns that still have an unsolved meta to learn.
+- 2026-09-24: A surface-visible consequence, from [[showcases-predate-their-ergonomics]]
+  round 2: in `calc_parser`, two hand-written `Plus(…)` applications at `Expr` —
+  both sides of one calc step, neither taken from the pinned head — elaborate
+  with different annotations on the constructor payload (`True` against `El`), so
+  terse `cong` declines under its structural witness test. Both calculators keep
+  nested `j` towers with hand-written motives for their `yields` fields because of
+  it. A canonical spelling would retire that workaround, which is a
+  readability payoff in addition to the kernel-cost one this issue is about.

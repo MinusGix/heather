@@ -1,9 +1,9 @@
 ---
 title: Both calculator showcases use none of the proof ergonomics the language grew for exactly their shapes
-status: open
+status: closed
 labels: [showcase,ergonomics,proofs,syntax,stdlib]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-24
 ---
 
 The two calculator showcases are the language's shop window, and they are
@@ -150,3 +150,33 @@ itself ([[perf-ab-source-patch]]).
 - 2026-09-19: The "in **no test**" note above, plus the ~95 s/4:24 recheck tax, are now
   [[showcase-harness]]'s to fix — a manifest, a release-CLI gate for `calc_text` in the
   `--fast`-skipped tier, and the cacheability question measured rather than chased.
+- 2026-09-24: **Round 2: `calc_parser` gets its chains, and the issue closes.** Round 1
+  converted `calc_parser`'s `And(` towers to `⟨⟩` but left its 14 `trans(` / 10
+  `j(` alone. Ranked by round 1's rule — does the tower's lemma already name its
+  endpoints? — four sites pay and now read as `calc`: `span_join` (with
+  `xs.cong_append_r(b)` in place of a `j` with a hand-written motive),
+  `symbol_span` (terse `cong` accepted), `number_grammar` and `whole_grammar` (the
+  same four-step shape as `calc_text`'s `finish_text`). `sum_grammar`,
+  `product_grammar` and `paren_grammar` keep their `span_join(…)` calls, which
+  write every endpoint already — the file now says so above them, as `calc_text`
+  does.
+
+  Two refusals, both re-measured on today's elaborator rather than carried over:
+
+  - **The `yields` fields still refuse terse `cong`**, in both files, with round
+    1's `True` against `El` under `constructor value ▸ inr ▸ inl ▸ pair ▸ pair`.
+    New datum: it holds even when **both** sides of the step are written by hand
+    — a leading `meaning(Sum(…)) = Plus(meaning(l…), meaning(r…)) := refl` step,
+    so the `cong` step's left side is not the pinned head — so it is not the calc
+    head's spelling. Two written `Plus(…)` applications elaborate with different
+    annotations on the constructor payload; that is
+    [[elaborator-canonical-type-spelling]]'s territory, and the nested `j` stays.
+  - **`number_grammar`'s `cong(selected.proof.left)` is refused**, `fst` against
+    `inl`: the witness projection against the constructor the pattern produced,
+    round 1's "pattern-derived constructor against a written one" family. Its
+    step keeps a `j` inside the chain, as `checked_run`'s does in `calc_text`.
+
+  `calc_parser` checks by hand (`scripts/showcase check calc_parser`) and in
+  `crates/elab/tests/showcase_calculator.rs`. Nothing in either calculator now
+  wants `⟨⟩` or `calc` and does not have it for a reason this tracker does not
+  already hold.
