@@ -393,3 +393,46 @@ fn a_nested_call_that_does_not_infer_waits_for_its_domain() {
         other => panic!("an unpinned width must be refused, got {other:?}"),
     }
 }
+
+#[test]
+fn a_congruence_lemma_solves_from_the_constructor_values_of_its_goal() {
+    // `Cons(?l, ?lt) = Cons(?r, ?rt)` against a goal: the implicits sit
+    // inside constructor values — a `supf` whose label is an injection into
+    // a pair tower — so the unifier walks those, in either spelling
+    // (issues/unify-through-constructor-values.md). A recursive inductive
+    // (`Cons` and `Nil`, both injections), a record's pair tower, a goal
+    // stated syntactically, and one whose side is behind a definition that
+    // has to unfold before it shows a constructor.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        inductive L { N, C(h: Nat, t: L) }
+        theorem cc({l, r: Nat}, {lt, rt: L}, h: l = r, t: lt = rt): C(l, lt) = C(r, rt) {
+            j(t, λ z _ => C(l, lt) = C(r, z), j(h, λ z _ => C(l, lt) = C(z, lt), refl))
+        }
+        fn two() -> L { C(1, C(2, N)) }
+        theorem syntactic(): C(1, C(2, N)) = C(1, C(2, N)) { cc(refl, cc(refl, refl)) }
+        theorem behind_a_definition(): C(1, C(2, N)) = two() { cc(refl, cc(refl, refl)) }
+        record P { a: Nat, b: Nat }
+        theorem pc({a1, a2, b1, b2: Nat}, p: a1 = a2, q: b1 = b2): P(a1, b1) = P(a2, b2) {
+            j(q, λ z _ => P(a1, b1) = P(a2, z), j(p, λ z _ => P(a1, b1) = P(z, b1), refl))
+        }
+        fn one_two() -> P { P(1, 2) }
+        theorem record_value(): P(1, 2) = one_two() { pc(refl, refl) }
+        "#,
+    )
+    .unwrap_or_else(|err| panic!("{err:?}"));
+    // Negative control: a goal whose sides are different constructors has
+    // no congruence to learn from, and the lemma is refused.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        inductive L { N, C(h: Nat, t: L) }
+        theorem cc({l, r: Nat}, {lt, rt: L}, h: l = r, t: lt = rt): C(l, lt) = C(r, rt) {
+            j(t, λ z _ => C(l, lt) = C(r, z), j(h, λ z _ => C(l, lt) = C(z, lt), refl))
+        }
+        theorem mismatched(): C(1, N) = N { cc(refl, refl) }
+        "#,
+    );
+    assert!(r.is_err(), "a Cons against a Nil is no congruence, got {r:?}");
+}

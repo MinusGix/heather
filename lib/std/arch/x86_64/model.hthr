@@ -1523,21 +1523,9 @@ theorem rr_encoding_exact(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr,
                                     opcode, rm, reg) →
                                     Cons(rex, Cons(op, Cons(modrm, rest))) =
                                         rr_bytes(opcode, rm, reg) {
-                                Nil => λ exact => @byte_cons_cong(
-                                    rex, rex_w_rr(rm, reg),
-                                    Cons(op, Cons(modrm, Nil)),
-                                    Cons(BitVec::ofNat(opcode),
-                                        Cons(modrm_rr(rm, reg), Nil)),
-                                    exact.left,
-                                    @byte_cons_cong(
-                                        op, BitVec::ofNat(opcode),
-                                        Cons(modrm, Nil),
-                                        Cons(modrm_rr(rm, reg), Nil),
-                                        exact.right.left,
-                                        @byte_cons_cong(
-                                            modrm, modrm_rr(rm, reg),
-                                            Nil, Nil, exact.right.right,
-                                            refl))),
+                                Nil => λ exact => byte_cons_cong(exact.left,
+                                    byte_cons_cong(exact.right.left,
+                                        byte_cons_cong(exact.right.right, refl))),
                                 Cons(_, _) => λ impossible =>
                                     false_elim(impossible),
                             })(third),

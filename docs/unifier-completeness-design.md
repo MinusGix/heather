@@ -660,3 +660,27 @@ lowering's other `@`s (`ofNat(64, imm)`, `zero_extend`, the structured
 certificate's) have no operand to pin it and stay. `cons_bit_cong`'s sites
 keep `a := …, b := …`, because a `refl` for `ph` carries no endpoints and the
 goals need δ on both sides.
+
+### 10.1 Constructor values (2026-09-24, later)
+
+`issues/unify-through-constructor-values.md`: a congruence lemma whose
+implicits sit inside constructor values (`Cons(?l, ?lt) = Cons(?r, ?rt)`)
+could not be solved even from its own conclusion. `unify_tm` gains
+congruence through the forms a constructor value is built from: `supf`/`sup`
+(label and children), pairs and injections in both spellings (`pair`/`pair@`,
+`inl`/`inl@`, `inr`/`inr@`; an injection only against the same side), and
+`λ` bodies at `d + 1`. Like `app`/`app@`, the congruence never reads the
+annotations.
+
+The reduction of item 1 is generalised to match: `U::nat_head` becomes
+`U::canonical_head`. It is asked when any canonical pattern (a successor,
+`sup`, pair or injection) meets a subject that is not canonical and is headed
+by a global, the only head δ can unfold. The reduct is kept only if it is
+canonical. That is what `byte_cons_cong`'s goal needed: its right side is
+`rr_bytes(opcode, rm, reg)`, which shows `Cons` only after it unfolds. A
+variable-headed subject is never reduced, so the added work is bounded to
+pairings that learned nothing before.
+
+The three `@byte_cons_cong` calls in `x86_64/model.hthr` are now
+`byte_cons_cong(exact.left, …)`. What is left in `lib/` is the seven
+`Decide` instance-head lines.

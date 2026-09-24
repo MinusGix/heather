@@ -1,6 +1,6 @@
 ---
 title: The unifier learns nothing through constructor values: a Cons-congruence cannot solve from its own goal
-status: open
+status: closed
 labels: [frontend,elaboration,inference,unification,inductives]
 created: 2026-09-24
 updated: 2026-09-24
@@ -34,3 +34,7 @@ here may want both.
 Direction: congruence through the constructor-value forms, keyed by the same
 head reading `matching_value_spine` uses. Learn-only like every case, so the
 kernel still judges. Under [[elab-unifier-completeness]].
+
+## Log
+
+- 2026-09-24: 2026-09-24: Landed (docs/unifier-completeness-design.md §10.1): congruence through supf/sup, pairs and injections in both spellings, and λ bodies; the rigid-side reduction generalised to canonical_head, so a goal side behind a definition unfolds to its constructor. The three byte_cons_cong calls write no endpoints. Test in crates/elab/tests/implicit_args.rs; full suite 2943 passed.
