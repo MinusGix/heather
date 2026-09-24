@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kernel", "crates/syntax", "crates/elab", "crates/cache", "crates/cli", "crates/lsp"]
+members = ["crates/kernel", "crates/syntax", "crates/elab", "crates/elab-unit", "crates/cache", "crates/cli", "crates/lsp"]
 
 [workspace.package]
 version = "0.0.1"
@@ -27,6 +27,11 @@ debug = "line-tables-only"
 opt-level = 3
 
 [profile.dev.package.heather-elab]
+opt-level = 3
+
+# The same sources as heather-elab, compiled for its unit tests
+# (crates/elab-unit/Cargo.toml).
+[profile.dev.package.heather-elab-unit]
 opt-level = 3
 
 [profile.dev.package.heather-syntax]

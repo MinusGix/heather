@@ -10,6 +10,9 @@ autobenches = false
 
 [lib]
 name = "heather_elab"
+# The unit tests in src/ build and run as the `heather-elab-unit` package
+# (crates/elab-unit/Cargo.toml), which has none of the dev-dependencies below.
+test = false
 
 [features]
 value-metrics = ["heather-kernel/value-metrics"]

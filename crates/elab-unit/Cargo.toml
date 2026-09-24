@@ -1,0 +1,34 @@
+[package]
+name = "heather-elab-unit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+autobenches = false
+autoexamples = false
+autobins = false
+
+# `heather-elab`'s in-crate unit tests, compiled from that crate's own
+# sources. They live in a package of their own because Cargo cannot scope a
+# dev-dependency to one target: `heather-elab` dev-depends on `heather-cli`
+# (for its integration tests and bench), which depends on `heather-elab`, so
+# its `--lib` test build could not start until the elab → cli chain was
+# built, and at ~40 s it was then the whole build's critical path
+# (issues/elab-unit-tests-wait-on-cli-dev-dependency.md). With no
+# dev-dependencies here it compiles beside the elab lib instead of after it.
+# Run with `scripts/test -p heather-elab-unit --lib`.
+[lib]
+name = "heather_elab_unit"
+path = "../elab/src/lib.rs"
+doctest = false
+
+[features]
+value-metrics = ["heather-kernel/value-metrics"]
+
+[dependencies]
+heather-kernel = { path = "../kernel" }
+heather-syntax = { path = "../syntax" }
+
+[lints]
+workspace = true

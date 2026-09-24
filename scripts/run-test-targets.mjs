@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { resolve } from "node:path";
+import { normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Per-child address-space cap (`ulimit -v`): the machine-protection rail.
@@ -39,9 +39,10 @@ export function parseArtifacts(text, root = process.cwd()) {
     if (msg.reason !== "compiler-artifact" || !msg.executable || !msg.profile?.test) continue;
     if (seen.has(msg.executable)) continue;
     seen.add(msg.executable);
-    const src = msg.target.src_path.startsWith(`${root}/`)
-      ? msg.target.src_path.slice(root.length + 1)
-      : msg.target.src_path;
+    // Normalized: crates/elab-unit's lib is `../elab/src/lib.rs` from its
+    // own manifest directory, and the label should name the file.
+    const srcPath = normalize(msg.target.src_path);
+    const src = srcPath.startsWith(`${root}/`) ? srcPath.slice(root.length + 1) : srcPath;
     const packageName = String(msg.package_id).split("#").at(-1).split("@")[0];
     artifacts.push({
       executable: msg.executable,

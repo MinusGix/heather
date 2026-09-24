@@ -86,6 +86,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "heather-elab-unit"
+version = "0.0.1"
+dependencies = [
+ "heather-kernel",
+ "heather-syntax",
+]
+
+[[package]]
 name = "heather-kernel"
 version = "0.0.1"
 dependencies = [

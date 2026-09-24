@@ -1277,7 +1277,11 @@ mod tests {
         }
 
         let mut violations = Vec::new();
-        inspect(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").as_path(), &mut violations);
+        // `../elab/src` rather than `src`: these tests compile as the
+        // `heather-elab-unit` package (crates/elab-unit), whose manifest
+        // directory is a sibling of this crate's.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../elab/src");
+        inspect(src.as_path(), &mut violations);
         assert!(
             violations.is_empty(),
             "semantic registry commits bypass ModuleDelta's centralized commit sink:\n{}",

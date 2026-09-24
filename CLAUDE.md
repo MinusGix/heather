@@ -23,6 +23,11 @@
     the ulimit) and the counts are partial, not a smaller green suite.
   - Run the full suite **in the background** and do doc/bookkeeping work while
     it runs; don't sleep-poll it.
+- **elab's unit tests (`crates/elab/src`) build and run as the
+  `heather-elab-unit` package** (`scripts/test -p heather-elab-unit --lib`),
+  not `-p heather-elab --lib`: a package of their own keeps their compile off
+  the heather-cli dev-dependency chain
+  (`issues/elab-unit-tests-wait-on-cli-dev-dependency.md`).
 - **Cap every direct `heather` run too**: deep conversion workloads are
   memory-superlinear. `(ulimit -v 8388608 -t 120 -c 0; target/release/heather
   check <file>)`, loosening deliberately per run — never uncapped. Keep
