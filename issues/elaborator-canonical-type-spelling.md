@@ -3,7 +3,7 @@ title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
 created: 2026-09-06
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 
 Filed from the 2026-09-06 x86 kernel round. Exact first-difference excerpts
@@ -119,3 +119,4 @@ where the fallbacks are paid for.
   Probe (`inductive One { OneK(x: Instruction) }` and siblings), kernel steps before → after: `OneK(x)` 13,536 → 31; record literal 13,538 → 33; `match` on it 13,528 → 21; two-constructor `match` 14,245 → 159; recursive constructor 26,580 → 54; recursive over `List<Instruction>` 33,763 → 52. On `function_ir_guarded_read`'s modules (old generator, same files): misses identical on every row, steps −97 % to −99.9 % — `whole_layout` 3,876,504 → 35,156, `LinkedConditionalDecodes` 1,508,504 → 21,103, the `linked_control_*` family 161 K → ~160 each, `whole_code` 347,604 → 1,086; the whole check 39 s → 12 s. Same queries, cheaper — the signature of a spelling fix.
 
   The elaborator side of (2): `El (D#tycode^δ)` now reduces to the named slot pair, which no structural reader sees a tag through, so `Elaborator::whnf` unspells it back to the registry's inline copy (`unspell_wf_slots`, beside `unspell_sum_components`; declines unless both slots are the same declaration's). Found by the first full run (`el_reader_audit`'s `T() -> Type { Tree }` reader, and `wf::tycode`'s decode test, which pinned the old reduct and now pins the new one; a swapped-pair negative added). Full `scripts/test`: 2906 passed, 0 failed. **Suite-wide, against the full run just before (same box, same lane): summed target time 1698 s → 921 s, CPU 1857 → 1088 s, wall 279 → 174 s**, no target slower — `function_ir_guarded_read` 82 → 15 s, `native_multi_stack_save` 160 → 109 s, `native_stack_save` 145 → 94 s, `function_ir_bounds` 36 → 2 s, `function_ir_search_certificates` 42 → 9 s, `native_branches` 39 → 9 s.
+- 2026-09-24: 2026-09-24: A first reader-side step, in the unifier: an `El(app(D#tycode_fn; ?A))` pattern against D's inline lowering re-spells the subject through the registry and aligns the references (docs/unifier-completeness-design.md §10.2). It is limited to patterns that still have an unsolved meta to learn.

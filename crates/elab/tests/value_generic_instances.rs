@@ -256,6 +256,29 @@ fn by_resolution(m: Mag<Bool2>(pick<Bool2>) := infer) -> Nat { m.tag }
 }
 
 #[test]
+fn a_binder_reached_through_an_inserted_implicit_is_recovered() {
+    // `n` is in no written class argument, but `LeqV(a, b)` elaborates to
+    // `LeqV(n, a, b)` — the call's implicit — and that elaborated head is
+    // what candidate unification solves against the goal
+    // (issues/instance-binder-occurrence-through-binder-types.md). Declared,
+    // resolved at an open carrier in checking position, and computing at a
+    // literal one.
+    const V: &str = r#"
+record V(n: Nat) { x: Nat, p: x = n }
+fn mk(k: Nat) -> V(k) { V(x := k, p := refl) }
+fn LeqV({n: Nat}, a: V(n), b: V(n)) -> Type { Leq(a.x, b.x) }
+fn leqv_dec({n: Nat}, a: V(n), b: V(n)) -> Sum<LeqV(a, b), Neg(LeqV(a, b))> { leq_dec(a.x)(b.x) }
+instance(n: Nat, a, b: V(n)) Dec<LeqV(a, b)> { d := leqv_dec(a, b) }
+"#;
+    ok(&format!(
+        r#"{KIT}{V}
+fn open(k: Nat, a, b: V(k)) -> Sum<LeqV(a, b), Neg(LeqV(a, b))> {{ dec_of() }}
+theorem closed(): dec_of<LeqV(mk(1), mk(1))>() = L(tt) {{ refl }}
+"#
+    ));
+}
+
+#[test]
 fn a_binder_absent_from_the_head_is_refused() {
     // There is exactly one route by which a value binder is determined, and a
     // binder the head does not mention is a metavariable nothing can solve.

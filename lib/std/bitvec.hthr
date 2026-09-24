@@ -831,16 +831,16 @@ fn BitVec::signed_le_dec({n: Nat}, self a, b: BitVec(n)) → a.signed_le(b) ∨ 
     Int::le_dec(a.toInt(), b.toInt())
 }
 
-instance(n: Nat, a, b: BitVec(n)) Decide<@BitVec::unsigned_lt(n, a, b)> {
-    dec := @BitVec::unsigned_lt_dec(n, a, b)
+instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::unsigned_lt(a, b)> {
+    dec := a.unsigned_lt_dec(b)
 }
-instance(n: Nat, a, b: BitVec(n)) Decide<@BitVec::unsigned_le(n, a, b)> {
-    dec := @BitVec::unsigned_le_dec(n, a, b)
+instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::unsigned_le(a, b)> {
+    dec := a.unsigned_le_dec(b)
 }
-instance(n: Nat, a, b: BitVec(n)) Decide<@BitVec::signed_lt(n, a, b)> {
-    dec := @BitVec::signed_lt_dec(n, a, b)
+instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_lt(a, b)> {
+    dec := a.signed_lt_dec(b)
 }
-instance(n: Nat, a, b: BitVec(n)) Decide<@BitVec::signed_le(n, a, b)> {
+instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_le(a, b)> {
     dec := a.signed_le_dec(b)
 }
 

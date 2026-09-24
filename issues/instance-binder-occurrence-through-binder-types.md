@@ -1,9 +1,9 @@
 ---
 title: An instance's type parameter reached only through a value binder's type is refused
-status: open
+status: closed
 labels: [frontend, elaboration, traits, stdlib]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-24
 ---
 
 The value-generic equality bridge a polymorphic container wants,
@@ -64,3 +64,4 @@ head-absent refusal still fires for a binder nothing determines
 
 - 2026-09-18: Filed from the `Char`/`String` rework, whose generic list
   equality is its first customer.
+- 2026-09-24: 2026-09-24: Landed. The occurrence rule and Paterson's variable condition now consult the elaborated head when the written one lacks a binder (docs/value-generic-instances-design.md §4.4), and the unifier re-spells an inline lowering against a code reference (docs/unifier-completeness-design.md §10.2). lib/std/list.hthr has the generic instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>; decide answers at List<Nat>, List<Char> and List<List<Nat>> (crates/elab/tests/char_string_literals.rs). bitvec's four order instances drop their @. Full suite 2945 passed.

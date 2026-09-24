@@ -132,6 +132,13 @@ pub(super) struct U<'a> {
     pub(super) gamma: &'a LocalCtx,
     pub(super) type_args: &'a dyn Fn(&Term, u32) -> Option<Vec<bool>>,
     pub(super) canonical_head: &'a dyn Fn(&Term, u32) -> Option<Term>,
+    /// A rigid subject type re-spelled as a registered declaration's
+    /// reference (`El(app(D#tycode_fn; …))`), for a pattern written through
+    /// that reference while the subject arrived as the inline lowering — an
+    /// equation's endpoint type inferred from a constructor value is the
+    /// usual one (issues/instance-binder-occurrence-through-binder-types.md,
+    /// issues/elaborator-canonical-type-spelling.md). `None` declines.
+    pub(super) respell: &'a dyn Fn(&Type) -> Option<Type>,
 }
 
 impl<'a> U<'a> {
@@ -139,7 +146,7 @@ impl<'a> U<'a> {
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
     pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
-        U { gamma, type_args: &|_, _| None, canonical_head: &|_, _| None }
+        U { gamma, type_args: &|_, _| None, canonical_head: &|_, _| None, respell: &|_| None }
     }
 }
 
@@ -288,6 +295,25 @@ pub(super) fn unify_ty(
         }
         (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
             unify_tm(u, t1, t2, n, d, sols);
+        }
+        // A pattern spelled through a declaration's code, `El(app(D#code;
+        // ?A))`, against the inline lowering of the same declaration: the
+        // two spellings share nothing structural to align. Re-spell the
+        // subject as the reference the pattern uses and align those. Only
+        // while the pattern still has something to learn — its code mentions
+        // an unsolved meta — and only for a committed code at the head, never
+        // a flex one. Scoped like the term reduction: strengthened to
+        // `gamma`, re-spelled there, weakened back.
+        (Type::El { tm, .. }, s)
+            if !matches!(s, Type::El { .. })
+                && committed_head(tm, n)
+                && zonked_tm(tm, n, sols).is_none() =>
+        {
+            if let Some(s0) = strengthen_ty(u.gamma, s, d)
+                && let Some(r @ Type::El { .. }) = (u.respell)(&s0)
+            {
+                unify_ty(u, pat, &r.apply_local(&embed(u.gamma, d)), n, d, sols);
+            }
         }
         // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
         // learn. A mismatch is not an error here — this function only ever
@@ -618,6 +644,15 @@ fn canonical_pattern(t: &Term) -> bool {
     matches!(t, Term::Succ(_) | Term::Supf { .. } | Term::Sup { .. })
         || pair_of(t).is_some()
         || injection_of(t).is_some()
+}
+
+/// Is the spine's head a **committed** global — in the pattern's scratch
+/// world, one at index `n` or above, never a metavariable?
+fn committed_head(mut t: &Term, n: u32) -> bool {
+    while let Some((fun, _)) = spelling::app_of(t) {
+        t = fun;
+    }
+    matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
 }
 
 /// Is the spine's head a global, the one head δ can unfold?

@@ -2918,9 +2918,14 @@ impl Elaborator {
                  (issues/instance-binder-occurrence.md)"
             )
         };
+        // A binder the written head does not name may still be in what the
+        // resolver unifies: [`Self::binder_in_elaborated_head`].
+        let determined_by_elaboration = |k: usize| self.binder_in_elaborated_head(d, k);
         // Type parameters: arguments or index, either determines.
-        for t in &d.tyvars {
-            if head_var_count(&d.class, &t.name) + index_var_count(&d.class, &t.name) == 0 {
+        for (k, t) in d.tyvars.iter().enumerate() {
+            if head_var_count(&d.class, &t.name) + index_var_count(&d.class, &t.name) == 0
+                && !determined_by_elaboration(k)
+            {
                 return err(routes("type parameter", &t.name), d.class.span);
             }
         }
@@ -2938,11 +2943,35 @@ impl Elaborator {
             if d.valparams[..i].iter().any(|q| q.name == p.name) {
                 return err(format!("duplicate value binder `{}`", p.name), p.span);
             }
-            if head_var_count(&d.class, &p.name) + index_var_count(&d.class, &p.name) == 0 {
+            if head_var_count(&d.class, &p.name) + index_var_count(&d.class, &p.name) == 0
+                && !determined_by_elaboration(d.tyvars.len() + i)
+            {
                 return err(routes("value binder", &p.name), p.span);
             }
         }
         Ok(())
+    }
+
+    /// Does binder `k` of the instance's telescope (type parameters, then
+    /// value binders) occur in the **elaborated** class arguments? What the
+    /// resolver unifies against a goal is the elaborated head, and
+    /// elaboration writes binders the source does not: the endpoint type of
+    /// an equation (`Decide<xs = ys>` at `xs: List<A>` carries `List<A>`) and
+    /// a call's inserted implicits (`Decide<BitVec::unsigned_lt(a, b)>` at
+    /// `a, b: BitVec(n)` is `unsigned_lt(n, a, b)`)
+    /// (issues/instance-binder-occurrence-through-binder-types.md). Asked
+    /// only after the written head's count came out zero, so a head that
+    /// names its binders is never elaborated here. The index is not
+    /// consulted: it joins the registry key as a spelling.
+    fn binder_in_elaborated_head(&self, d: &InstanceDecl, k: usize) -> bool {
+        let Ok(cx) = self.instance_head_cx(d) else {
+            return false;
+        };
+        let m = (d.tyvars.len() + d.valparams.len()) as u32;
+        d.class.args.iter().any(|a| {
+            self.elab_ty(&cx, a)
+                .is_ok_and(|(t, _)| crate::unification::mentions_binder(&t, m, m - 1 - k as u32))
+        })
     }
 
     /// Structural decrease of the `requires` subgoals against the instance
@@ -2993,8 +3022,17 @@ impl Elaborator {
             };
             // The variable condition first: where both fail it is the more
             // specific complaint, and it is the one a reader can act on.
-            for v in &vars {
-                if ty_var_count(&p.ty, v) > d.class.args.iter().map(|a| ty_var_count(a, v)).sum() {
+            for (k, v) in vars.iter().enumerate() {
+                let written: usize = d.class.args.iter().map(|a| ty_var_count(a, v)).sum();
+                // A binder the written head reaches only through elaboration
+                // counts once: a lower bound on its elaborated occurrences,
+                // so this can only refuse more than the true count would.
+                let in_head = if written == 0 && self.binder_in_elaborated_head(d, k) {
+                    1
+                } else {
+                    written
+                };
+                if ty_var_count(&p.ty, v) > in_head {
                     refuse(format!("mentions `{v}` more often than the head does"))?;
                 }
             }

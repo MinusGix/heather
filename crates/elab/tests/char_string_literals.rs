@@ -172,3 +172,23 @@ fn inferred() -> Tag { let c = 'x'; c }
     );
     assert!(msg.contains("Char") && msg.contains("Tag"), "{msg}");
 }
+
+#[test]
+fn decide_answers_a_list_equation_at_any_decidable_element_type() {
+    // `instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>`: `A` is in no
+    // written class argument, only in the elaborated equation's endpoint type
+    // (issues/instance-binder-occurrence-through-binder-types.md). The goal's
+    // endpoint type is inferred from constructor values, so it arrives as the
+    // inline lowering and the instance's `List<A>` as the declaration's
+    // reference; resolution meets them through the re-spelling. `Nat` (the
+    // one instance there was before), `Char`, a nested list, and a refuted
+    // equation.
+    check(
+        r#"
+theorem nats(): Cons(1, Cons(2, Nil)) = Cons(1, Cons(2, Nil)) { decide }
+theorem chars(): Cons('a', Cons('b', Nil)) = Cons('a', Cons('b', Nil)) { decide }
+theorem nested(): Cons(Cons(1, Nil), Nil) = Cons(Cons(1, Nil), Nil) { decide }
+theorem differ(): ¬(Cons('a', Nil) = Cons('b', Nil)) { decide }
+"#,
+    );
+}

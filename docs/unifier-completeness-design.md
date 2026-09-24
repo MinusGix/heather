@@ -684,3 +684,29 @@ pairings that learned nothing before.
 The three `@byte_cons_cong` calls in `x86_64/model.hthr` are now
 `byte_cons_cong(exact.left, …)`. What is left in `lib/` is the seven
 `Decide` instance-head lines.
+
+### 10.2 A reference against an inline lowering (2026-09-24, later)
+
+A pattern spelled through a declaration's code, `El(app(List#tycode_fn;
+?A))`, cannot align against the same declaration's *inline* lowering: they
+share no structure. That is the pairing when an equation's endpoint type is
+inferred from constructor values (`Cons(1, Nil) = …`) and the pattern is an
+instance's written `List<A>`. `unify_ty` now answers that mismatch by
+re-spelling the subject through the registry (`U::respell`, which is
+`Elaborator::respell_ty`: a closed reference, or a code function's instance
+recovered by hole-matching and proved by re-lowering), and aligning the two
+`El`s.
+
+It fires only when all of these hold:
+
+- the pattern is `El` of a spine with a **committed** global at its head, so
+  a flex head never triggers it;
+- that spine still mentions an **unsolved** meta, so there is something to
+  learn;
+- the subject is not already an `El`.
+
+Under binders it strengthens and weakens as §10 item 1 does. It is the
+elaborator-side instance of the invariant
+`issues/elaborator-canonical-type-spelling.md` asks for, which is to make
+readers see through names rather than make emitters guess, applied to the
+one reader that learns implicits.

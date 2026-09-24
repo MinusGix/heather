@@ -182,6 +182,41 @@ directly instead. This gives collection-literal lengths and operation indices
 one uniform policy and avoids unbounded global growth at the cost of optional
 sharing only.
 
+### 4.4 Amendment (2026-09-24): occurrence in the *elaborated* head
+
+§4's rule counted a binder's name in the **written** class arguments. What
+candidate unification actually matches against a goal is the **elaborated**
+head, and elaboration writes binders the source does not name:
+
+- an equation's endpoint type: `Decide<xs = ys>` at `xs, ys: List<A>` is
+  `Id(List<A>, xs, ys)`, so `A` is recovered with `xs` and `ys`;
+- a call's inserted implicits: `Decide<BitVec::unsigned_lt(a, b)>` at
+  `a, b: BitVec(n)` is `unsigned_lt(n, a, b)`.
+
+The rule now accepts a binder that is absent from the written head but
+present in the elaborated class arguments (`binder_in_elaborated_head` in
+`crates/elab/src/traits.rs`). It runs only when the written count is zero,
+so a head that names its binders is never elaborated by the check. The index
+is still not consulted, because it joins the key as a spelling.
+`instance<Q> Dec<Top>` and `instance(k: Nat) Dec<Top>` are still refused,
+since nothing determines `Q` or `k` in either head.
+
+§5's variable condition had the same blind spot: `requires DecEq<A>` against
+a head that names `A` only through elaboration read as "mentions `A` more
+often than the head does". A binder the check finds only in the elaborated
+head now counts once there. That is a lower bound on its true occurrences,
+so the condition can only refuse more than an exact count would, never
+accept more.
+
+This made two library rows expressible. `lib/std/list.hthr` now has
+`instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>` in place of the
+`List<Nat>`-only instance, and `lib/std/bitvec.hthr`'s four order instances
+drop their `@`. The list instance also needed a unifier change: the goal's
+endpoint type, inferred from constructor values, is the *inline* lowering,
+while the instance's `List<A>` is the declaration's reference.
+`docs/unifier-completeness-design.md` §10.2 is that change.
+(`issues/instance-binder-occurrence-through-binder-types.md`.)
+
 ## 5. Termination: Paterson's condition counts value binders
 
 `check_decrease` (layer 2 §6) enforces that each `requires` subgoal is

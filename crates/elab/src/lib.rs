@@ -7070,10 +7070,12 @@ impl Elaborator {
     fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], span: Span) {
         let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
         let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
+        let respell = |t: &Type| self.respell_ty(cx, t);
         let u = unification::U {
             gamma: &cx.gamma,
             type_args: &type_args,
             canonical_head: &canonical_head,
+            respell: &respell,
         };
         unify_ty_root(&u, pat, subj, n, 0, sols);
     }
