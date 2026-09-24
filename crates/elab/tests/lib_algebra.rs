@@ -708,7 +708,7 @@ fn slow_acceptance_the_library_projects_from_its_types() {
 // open, which is where `A.unit` lives in the library: the binder in scope
 // pins the index and the projection is an ordinary field read.
 theorem the_empty_fold_is_the_projected_unit<A: Monoid(o)>(o: A -> A -> A):
-  mconcat(Nil<A>, o) = A.unit { refl }
+  mconcat(Nil, o) = A.unit { refl }
 // concrete, through the index-bearing spelling `T::C(args)` — an indexed
 // class has no shorter one at a carrier with two structures.
 theorem the_unit_is_the_same_value(): Nat::Monoid(Nat::add).unit = 0 { refl }

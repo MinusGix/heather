@@ -195,7 +195,11 @@ amending the section named:
   qualified spelling fails identically on master. They are tested as such:
   - `zero().iterate_increment(3).band(y)`: a nested uninferable call in
     argument position, `issues/nested-uninferable-argument-under-checking.md`;
-  - `Nil.rev()`: `issues/nullary-ctor-argument-not-deferred.md`.
+  - `Nil.rev()`: `issues/nullary-ctor-argument-not-deferred.md`. Since
+    closed: a bare name is re-planned like a call
+    (`docs/unifier-completeness-design.md` §10 item 3), so under a declared
+    `List<A>` both spellings now check, and the honest error is pinned where
+    nothing gives `A`.
 - **Sweep.** The `@` lines in `lib/` and the showcases went from 90 to 42.
   - `cons_bit_cong` / `cong_ripple_add` take the named-implicit rung
     (`a :=`, `xs :=`, …), because the plain call fails wherever the goal needs

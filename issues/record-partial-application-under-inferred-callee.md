@@ -1,6 +1,6 @@
 ---
 title: A partially applied record type is refused where the callee's type argument is still being inferred
-status: open
+status: closed
 labels: [frontend,elaboration,inference,records,diagnostics]
 created: 2026-09-24
 updated: 2026-09-24
@@ -68,3 +68,31 @@ whose tests all write the type arguments.
   `crates/elab/tests/record_type_partial_application.rs::the_callees_type_argument_may_still_be_inferred`
   pins the call-shaped case at a literal and a neutral prefix, each inhabited and
   transported against the wrapper's reading.
+- 2026-09-24: **Landed: the bare case, and the message.** `takes(Grammar, 1)` checks. The
+  fix is one pattern: 9e7dc59f's re-plan fired only for `App`/`Dot` arguments,
+  and a bare name is the same case with no arguments — its inference fails
+  (the name reads as the constructor), and only the solved domain picks the type
+  former. `ExprKind::Var` joins the pattern in `apply_implicit_planned`
+  (`crates/elab/src/application.rs`). Still failure-path only: a call that
+  elaborated before is never re-planned.
+
+  The advice. When a re-planned argument's domain *never* resolves, the fallback
+  inference's error said to put the expression in "an argument of a declaration
+  that expects one" — which it already was. `DeferredArg` gains `replanned`, and
+  that fallback now appends what actually left the domain open:
+
+  > cannot infer the value argument(s) of `Grammar` here — … Here the argument
+  > is checked against `rel`'s type in `only`, and that type still mentions the
+  > implicit `A`, which nothing in the call determines: write it
+  > (`only<…>(…)`) or pass an argument that fixes it
+
+  The inner error leads on purpose: an unbound name at such a position (now also
+  re-planned) still reads `unbound name `NoSuch`` first, with the note after —
+  tried the other order and it buried the typo behind a paragraph.
+
+  Tests, in `crates/elab/tests/record_type_partial_application.rs`:
+  `a_bare_record_waits_for_the_callees_type_argument` — the bare case inhabited
+  and transported against the wrapper's reading, plus two controls (an unbound
+  name still leads with itself; a never-pinned domain still errors, and names
+  `A`). Acceptance from the body is met: the probe checks in full, and
+  `calc_parser`'s eight calls take `Grammar(n)` (32f408a7).

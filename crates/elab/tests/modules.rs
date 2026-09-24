@@ -660,17 +660,26 @@ fn an_argument_is_checking_position_exactly_when_its_parameter_type_is_concrete(
              theorem b(): mono2(None) = 8 { refl }",
         ),
     ]);
-    // …while a **type parameter** puts its argument in inference position —
-    // that is where `A` comes from — so there is no expected type to be
-    // evidence and invariant 1 applies unchanged. Not a gap in the route: an
-    // argument that is the *source* of the instantiation cannot also be
-    // checked against it.
+    // …and so is one whose type parameter a *later* argument pins: the bare
+    // name waits for `9` (issues/nullary-ctor-argument-not-deferred.md) and is
+    // then checked at `Option<Nat>`, the same route as `mono(None)`.
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;\nimport opt2;\ntheorem g(): unwrap_or(None, 9) = 9 { refl }",
+        ),
+    ]);
+    // A type parameter nothing pins leaves no expected type to be evidence,
+    // so invariant 1 applies unchanged: the argument is the only possible
+    // *source* of the instantiation and cannot also be checked against it.
     let e = bad(&[
         ("opt", OPT),
         ("opt2", OPT2),
         (
             "user",
-            "import opt;\nimport opt2;\nfn g() -> Nat { unwrap_or(None, 9) }",
+            "import opt;\nimport opt2;\nfn drop<A>(x: A) -> Nat { 0 }\nfn g() -> Nat { drop(None) }",
         ),
     ]);
     assert!(e.contains("ambiguous"), "{e}");

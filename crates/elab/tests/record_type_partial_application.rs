@@ -294,3 +294,41 @@ fn the_callees_type_argument_may_still_be_inferred() {
         "#,
     );
 }
+
+// The same with no prefix: a bare name is not call-shaped, and was refused
+// after the call-shaped case was fixed. The controls: an unbound name still
+// reports itself, and a bare record whose domain nothing ever pins still gets
+// the constructor reading's error rather than a guess — followed by the
+// implicit that left the domain open, since the error's own advice ("an
+// argument of a declaration that expects one") is already met.
+#[test]
+fn a_bare_record_waits_for_the_callees_type_argument() {
+    elab(
+        r#"
+        record Grammar(level: Nat, value: Nat) { at_level: level = level, }
+        fn takes<A>(rel: Nat -> A -> Type, a: A) -> Type { rel(0, a) }
+        fn GrammarSpec(level: Nat, value: Nat) -> Type { Grammar(level, value) }
+
+        fn bare() -> Type { takes(Grammar, 1) }
+        theorem inhabited(): takes(Grammar, 1) { Grammar { at_level: refl } }
+        theorem via_wrapper(): takes(GrammarSpec, 1) { Grammar { at_level: refl } }
+        theorem agree(): takes(Grammar, 1) { via_wrapper() }
+        "#,
+    );
+    let unbound = elab_err(
+        r#"
+        fn takes<A>(rel: Nat -> A -> Type, a: A) -> Type { rel(0, a) }
+        fn bad() -> Type { takes(NoSuchName, 1) }
+        "#,
+    );
+    assert!(unbound.starts_with("unbound name `NoSuchName`"), "{unbound}");
+    let unpinned = elab_err(
+        r#"
+        record Grammar(level: Nat, value: Nat) { at_level: level = level, }
+        fn only<A>(rel: Nat -> A -> Type) -> Type { Nat }
+        fn bad() -> Type { only(Grammar) }
+        "#,
+    );
+    assert!(unpinned.contains("`Grammar`"), "{unpinned}");
+    assert!(unpinned.contains("still mentions the implicit `A`"), "{unpinned}");
+}
