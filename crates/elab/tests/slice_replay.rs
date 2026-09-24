@@ -370,3 +370,42 @@ fn a_forced_item_is_elaborated_and_the_rest_replays() {
     assert_eq!(report, SliceReport { replayed: 5, elaborated: 0, forced: 0 });
     assert!(met.is_empty());
 }
+
+/// A gate that vouches for nothing: every binding is kernel-checked, and a
+/// slice replay takes the gated path through `recheck_extension`, as it does
+/// under `heather check --cache`, whose verdict store is always installed.
+struct VouchesForNothing;
+
+impl heather_elab::gate::KernelGate for VouchesForNothing {
+    fn admits(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) -> bool {
+        false
+    }
+    fn accepted(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) {}
+}
+
+/// A proof the elaborator lets through and the kernel refuses, edited into
+/// the prefix, with the items after it replayable. At width > 1 its body is
+/// queued on the pool; a slice replayed later in the same pass must not
+/// consume that pending verdict. It once did — the replay's recheck joined
+/// the module's pool, took the rejection as its own failure, elaborated its
+/// item instead, and the module's join found nothing: the refused proof
+/// checked.
+#[test]
+fn a_refused_proof_before_a_replayed_slice_still_refuses_the_module() {
+    let (_, previous) = fresh(1, &base());
+    let refused = "theorem add_zero(n: Nat): add(n, 0) = n { refl }";
+    let edited = module(&[ADD, DOUBLE, refused, DOUBLE_ZERO, TRIPLE]);
+    for workers in [1usize, 4] {
+        let mut e = elaborator(workers);
+        e.set_gate(std::sync::Arc::new(VouchesForNothing));
+        let errors = e
+            .check_module_delta_from("m", &edited, ModuleDependencyIdentity::default(), &previous)
+            .err()
+            .unwrap_or_else(|| panic!("width {workers}: a module with a refused proof checked"));
+        assert!(
+            errors.iter().any(|err| matches!(err, heather_elab::ElabError::Kernel { decl, .. } if decl == "add_zero")),
+            "width {workers}: the refused declaration is named: {}",
+            errors.iter().map(|err| err.render(&edited)).collect::<Vec<_>>().join("\n"),
+        );
+    }
+}

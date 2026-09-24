@@ -767,12 +767,14 @@ impl Elaborator {
         let Some(old) = previous.items.get(index).filter(|old| old.source == source) else {
             return false;
         };
-        let replayed = self.session_transaction(|me| {
-            me.replay_slice(&previous, old, start).map_err(|e| ElabError::Elab {
-                msg: format!("stored slice for item {index} does not replay: {e}"),
-                span: heather_syntax::Span { start: 0, end: 0 },
-            })
-        });
+        // Not in a `session_transaction`: `replay_slice` fails only before its
+        // first write, so a refused slice leaves nothing to roll back. A
+        // checkpoint would be worse than redundant — holding the committed
+        // world makes the slice's first write copy every registry's current
+        // module layer, so each replayed item cost O(module) and a large
+        // module replayed slower than it elaborated
+        // (issues/check-module-delta-certificate-cost.md).
+        let replayed = self.replay_slice(&previous, old, start);
         let plan = self.slice_plan.as_mut().expect("checked above");
         match replayed {
             Ok(()) => {
@@ -793,6 +795,10 @@ impl Elaborator {
         }
     }
 
+    /// Every fallible step — the recheck, the relocation, the preflight
+    /// checks — comes before the first write, so a refused slice leaves the
+    /// elaborator as it found it; [`Self::try_replay_slice`] relies on that
+    /// instead of a checkpoint. Keep it so.
     fn replay_slice(
         &mut self,
         previous: &ModuleDelta,
@@ -1010,8 +1016,13 @@ impl Elaborator {
             Rc::make_mut(&mut prefix).push(binding.clone());
         }
         // Join even after a statement failure: the pool must be drained before
-        // the caller moves on, and a body verdict is still a verdict.
-        let outcomes = self.kernel_pool.join();
+        // the caller moves on, and a body verdict is still a verdict. But only
+        // what this call queued — nothing, when inline. A slice replay runs
+        // inside a module pass whose own deferred bodies are on the pool, and
+        // a join here took *their* outcomes: a rejected proof before the slice
+        // became this replay's failure, the item was elaborated instead, and
+        // the pass's own join found nothing to refuse the module with.
+        let outcomes = if inline { Vec::new() } else { self.kernel_pool.join() };
         let mut body = Ok(());
         for outcome in &outcomes {
             // The workers' counters fold into the module row as the gate's do;
