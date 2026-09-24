@@ -15,6 +15,7 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod calls;
+mod order;
 
 mod support;
 use support::SUPPORT;
@@ -213,10 +214,22 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         "x86_64_control_block", "x86_64_control_flow", "x86_64_structured_block", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
         proof.raw(format!("import {name};"));
     }
+    // The same certificate at other inputs, generated only to tell which
+    // declarations depend on the inputs (`native/order.rs`); never checked.
+    // A probe that fails to generate just leaves the order alone.
+    let input = |i: usize| inputs.get(i).copied().unwrap_or(0);
+    let probe_inputs = [[!input(0), !input(1)],
+        [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
+    let mut probes = Some(Vec::new());
     let (image, body_bytes) = if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
-        (Some(calls::generate(&elab, &mut proof, &prefix, &format!("{root_name}::{symbol}"),
-            &format!("{root_name}::{callee}"), [inputs[0], inputs[1]], callable_caller)?), None)
+        let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
+            &format!("{root_name}::{symbol}"), &format!("{root_name}::{callee}"), inputs, callable_caller);
+        for at in probe_inputs {
+            let mut other = proof.clone();
+            probes = probes.zip(generate(&mut other, at).ok()).map(|(mut all, _)| { all.push(other.render()); all });
+        }
+        (Some(generate(&mut proof, [inputs[0], inputs[1]])?), None)
     } else if !executable && function_ir_source::reflect_elaborated(&elab, &format!("{root_name}::{symbol}")).is_err() {
         let emission = function_ir_source::generate_elaborated_structured_x86(
             &elab, &prefix, &format!("{root_name}::{symbol}"),
@@ -243,11 +256,19 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             Block::expression(Expr::name("refl")),
         ));
         let image = if executable {
+            for at in probe_inputs {
+                let mut other = proof.clone();
+                probes = probes.zip(elf::certify(&mut other, &prefix, &emission, at, &bytes).ok())
+                    .map(|(mut all, _)| { all.push(other.render()); all });
+            }
             Some(elf::certify(&mut proof, &prefix, &emission, [inputs[0], inputs[1]], &bytes)?)
         } else { None };
         (image, Some(bytes))
     };
-    let proof = proof.render();
+    let proof = match probes.filter(|all| !all.is_empty()) {
+        Some(probes) => order::inputs_last(&proof.render(), &probes),
+        None => proof.render(),
+    };
     eprintln!("checking source refinement, exported bytes, and execution certificate");
     let certificate_module = format!("{prefix}_certificate");
     // The certificate is a module like any other, and goes through the

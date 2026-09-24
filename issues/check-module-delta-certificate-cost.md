@@ -45,3 +45,19 @@ Next step: `--timings` of the same certificate through both paths and diff `decl
 - 2026-09-23: Suite effect. A full `scripts/test` right after a compiler change is all certificate misses and costs what it did (89 s tests wall, 796 CPU-s, green). A second run at the same compiler replays every native build's certificate: 69–79 s wall, 567–619 CPU-s across two runs, and the eight two-build native acceptance tests (33–41 s each before) drop out of the slowest list. What leads now: the composed-summary fixtures in `callable.rs` (in-process, `elab_module_source` over forks, untouched here) and `cli_showcase_calc_text`.
 
   `crates/cli/tests/native.rs::source_to_native_binary` asserted an item row per certificate declaration, which a replayed certificate does not have; it now accepts a replayed module row (decode and recheck both non-zero) as the whole account, and checks per-declaration coverage whenever the certificate was elaborated. Both paths run: warm against `target/native-test-images`, and once against an emptied one.
+- 2026-09-23: Input-dependent declarations last (`crates/cli/src/native/order.rs`). The certificate is generated twice more at unrelated inputs (`!inputs`, and the inputs plus two odd constants); a declaration whose text differs from either probe's, or that a probe lacks, is a seed, and the seeds with everything that refers to them (and anything a moved item refers to later in the module) move to the end in order. On `stack_save --callable-caller`: 1,780 of 5,109 declarations move; 3,315 stay in a prefix a build at other inputs replays. One probe was not enough — `word_2` was needed by (MAX, 1) and its lone probe but not by (20, 22), stayed in the prefix, and broke it at item ~530.
+
+  That alone made other-inputs builds *slower* (16 → 17–18 s): the 3,315 replayed slices cost 19 s against 12 s to elaborate them cold. Same shape as the journal: `try_replay_slice` wrapped each slice in `session_transaction`, whose checkpoint holds the committed world, so the slice's first write copy-on-wrote every registry's current-module layer (names, AST) — O(module) per replayed item. `replay_slice` fails only before its first write, so the transaction was redundant; removed, with the invariant on `replay_slice`'s doc. The 3,315 slices then replay in 0.2 s.
+
+  Profiling that path also turned up a fail-open at width > 1 under a verdict gate: a replayed slice's recheck joined the module pass's pool and swallowed its deferred rejections. Fixed with a regression test: issues/slice-replay-join-swallows-deferred-rejection.md.
+
+  Interleaved A/B, previous commit (session routing, no reorder) vs this, two samples, release, width one, fresh cache per sample:
+
+  | run | before | after |
+  |---|---|---|
+  | cold (20, 22) | 30.6 / 30.3 s | 32.2 / 30.7 s |
+  | then (MAX, 1) | 16.2 / 15.4 s | 9.6 / 9.5 s |
+  | then (5, 7) | 16.1 / 15.4 s | 9.4 / 9.4 s |
+  | then (20, 22) again | 1.33 / 1.26 s | 1.56 / 1.47 s |
+
+  The repeat pays the two probe generations (~0.2 s) before the image hits. What an other-inputs build still elaborates is the input-dependent 1,780 declarations and the library replay.
