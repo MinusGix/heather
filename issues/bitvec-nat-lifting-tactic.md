@@ -1,6 +1,7 @@
 ---
 title: A certified word-to-Nat lifting tactic (bv_omega-style) for no-overflow word arithmetic
-status: open
+status: blocked
+blocked-by: [omega-constants-beyond-u64]
 labels: [proofs,bitvec,metaprogramming,ergonomics]
 created: 2026-09-25
 updated: 2026-09-25
@@ -45,3 +46,21 @@ term the kernel checks, so it adds nothing to the trusted base.
   words whose facts are arithmetic.
 - **[[tactic-composition-ergonomics]]** owns how the tactic composes with
   others.
+- **[[omega-constants-beyond-u64]]** owns omega's constants at 2^64 and
+  above. Assumed here: that omega can state and use `x.toNat() < 2^64`.
+  Today it can't, so this issue waits on that one.
+- **[[omega-respells-atoms-without-implicits]]** owns spelling atoms such as
+  `toNat(ofNat(…))`. Assumed here: that omega accepts word facts in its
+  context, which the tactic adds on every call.
+
+## Log
+
+- 2026-09-25: Sequencing, from probes of the workarounds in `lib/decimal_line.hthr`. Two of
+  its comments are stale. "vectors of different lengths" and the kernel
+  refusing `v + v = 2 * v` were both the `coeffs_source` trailing-zero defect,
+  fixed the same day (see [[omega-respells-atoms-without-implicits]]'s log).
+  Neither reproduces now, in a Nat context or with a `BitVec` fact in scope.
+  The 2^60 cap is real and has a new owner, [[omega-constants-beyond-u64]]:
+  omega can't print a constant of 2^64 or more, and it reads `pow(2, 64)` as an
+  atom. Fix that and the respelling issue first, then measure how much of the
+  word section is still hand work before building the tactic.
