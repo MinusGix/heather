@@ -11,8 +11,6 @@ mod support;
 mod match_equation_split;
 #[path = "../match_recursion.rs"]
 mod match_recursion;
-#[path = "../recursion_meaning.rs"]
-mod recursion_meaning;
 #[path = "../nested_match_patterns.rs"]
 mod nested_match_patterns;
 #[path = "../named_patterns.rs"]

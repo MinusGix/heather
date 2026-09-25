@@ -46,6 +46,9 @@ pub enum Lint {
     RedundantMatchMotive,
     /// A finite `Cons`/`Nil` construction can use `[…]`.
     ManualListConstruction,
+    /// A `fn`'s recursive `match` reads its own parameter, so the `fn` is
+    /// compiled by measure (issues/fn-recursion-means-the-function.md).
+    RecursionByMeasure,
 }
 
 impl Lint {
@@ -61,6 +64,7 @@ impl Lint {
             Self::OperatorFallback => "operator-fallback",
             Self::RedundantMatchMotive => "redundant-match-motive",
             Self::ManualListConstruction => "manual-list-construction",
+            Self::RecursionByMeasure => "recursion-by-measure",
         }
     }
 }

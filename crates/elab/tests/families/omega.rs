@@ -27,6 +27,8 @@ mod module_delta_omega_bench;
 mod mutual_recursion;
 #[path = "../termination_measures.rs"]
 mod termination_measures;
+#[path = "../recursion_meaning.rs"]
+mod recursion_meaning;
 #[path = "../termination_local_evidence.rs"]
 mod termination_local_evidence;
 #[path = "../decreases_unfolding.rs"]

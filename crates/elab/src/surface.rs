@@ -654,7 +654,11 @@ pub(crate) fn strengthen_global(t: &Term, g: u32) -> Term {
 /// before course-of-values existed, never a wrong term.
 pub(super) fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
-    let mut go = |e: &Expr| walk_expr(e, f);
+    for_each_child(e, &mut |c| walk_expr(c, f));
+}
+
+/// The immediate subexpressions [`walk_expr`] descends into, in source order.
+pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
     match &e.kind {
         ExprKind::App {
             head, args, named, ..

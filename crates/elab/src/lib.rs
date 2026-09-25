@@ -612,6 +612,11 @@ pub struct Elaborator {
     /// item, which is a cost no ordinary check should pay to say nothing
     /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
     review_lints: bool,
+    /// The declaration being elaborated, if its recursion plan is
+    /// [`recursion::RecursionPlan::Misplaced`]: its recursion name, the
+    /// parameter, and the refusal a self-call lowered on it raises
+    /// (issues/fn-recursion-means-the-function.md). `None` everywhere else.
+    misplaced_recursion: RefCell<Option<(String, usize, String)>>,
     /// Backchaining depth, for the recursion cap. A `Cell` because resolution
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
@@ -1111,6 +1116,13 @@ impl recursion::SelfCallElab for Elaborator {
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>> {
         self.params_of(name)
     }
+
+    fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)> {
+        match &*self.misplaced_recursion.borrow() {
+            Some((owner, dec, msg)) if owner == name => Some((*dec, msg.clone())),
+            _ => None,
+        }
+    }
 }
 
 impl vec::SurfaceVecElab for Elaborator {
@@ -1526,6 +1538,7 @@ impl Elaborator {
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
             review_lints: false,
+            misplaced_recursion: RefCell::new(None),
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
@@ -3011,7 +3024,111 @@ impl Elaborator {
         if decl.decreases.is_some() {
             return self.session_transaction(|me| me.elab_measure_decl(decl));
         }
+        // A `fn` whose structural lowering would not mean its source is
+        // lowered by measure, or refused where that has no unfolding equation
+        // either (issues/fn-recursion-means-the-function.md).
+        if decl.kind == DeclKind::Fn {
+            let self_ref = recursion::SelfRef::of_decl(decl);
+            match recursion::plan(&self_ref, &decl.body) {
+                recursion::RecursionPlan::Structural => {}
+                recursion::RecursionPlan::ByMeasure { dec, read, name } => {
+                    return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name);
+                }
+                recursion::RecursionPlan::Misplaced { dec, msg } => {
+                    *self.misplaced_recursion.borrow_mut() = Some((self_ref.name.clone(), dec, msg));
+                    let result = self.elab_decl_one(decl, None);
+                    *self.misplaced_recursion.borrow_mut() = None;
+                    return result;
+                }
+            }
+        }
         self.elab_decl_one(decl, None)
+    }
+
+    /// A `fn` whose recursive `match` reads its own parameter, lowered as if
+    /// it had been written `decreases p` (`p.len()` for a list), which gives
+    /// the source's meaning (issues/fn-recursion-means-the-function.md). The
+    /// measure's obligations are left to `omega`, the route's own default, so
+    /// the route needs `nat` and `omega` in scope; without them, or at a type
+    /// with no measure, the reading is refused with what to write instead.
+    fn elab_recursion_by_measure(
+        &mut self,
+        decl: &Decl,
+        self_ref: &recursion::SelfRef,
+        dec: usize,
+        read: Span,
+        name: &str,
+    ) -> R<()> {
+        let fname = &self_ref.name;
+        let param = &self_ref.params[dec].0;
+        let what = if name == param {
+            format!("`{param}` is read inside its own recursive `match`")
+        } else {
+            format!("`{name}`, bound from `{param}` above the recursive `match`, is read inside it")
+        };
+        let refuse = |why: &str| {
+            err(
+                format!(
+                    "{what}: the structural lowering compiles the recursion at the `match`, \
+                     so there it would be the value `{fname}` was first called with, not this \
+                     level's. {why} Or name this level's value by its pattern (`Succ(k)`, \
+                     `Cons(h, t)`) (issues/fn-recursion-means-the-function.md)"
+                ),
+                read,
+            )
+        };
+        let measure = decl
+            .params
+            .get(dec - decl.tyvars.len())
+            .and_then(|p| match &p.ty.kind {
+                TyKind::Nat => Some(Expr { kind: ExprKind::Var(param.clone()), span: p.span }),
+                TyKind::Named { name, .. } if name.rsplit("::").next() == Some("List") => {
+                    Some(Expr {
+                        kind: ExprKind::Dot {
+                            recv: Box::new(Expr { kind: ExprKind::Var(param.clone()), span: p.span }),
+                            name: "len".into(),
+                            tyargs: Vec::new(),
+                            args: Some(Vec::new()),
+                            named: Vec::new(),
+                        },
+                        span: p.span,
+                    })
+                }
+                _ => None,
+            });
+        let Some(measure) = measure else {
+            return refuse(&format!(
+                "It would be lowered by a measure instead, but `{param}` is neither a `Nat` nor \
+                 a `List`: declare `decreases` with a measure on it yourself."
+            ));
+        };
+        let available = [
+            "nat::Nat::le_trans",
+            "omega::nat_le_of_not_not_le",
+            "int::Int::negsucc_lt_ofnat",
+        ]
+        .iter()
+        .all(|n| matches!(self.resolve_declared(n), NameRes::Found(_)));
+        if !available {
+            return refuse(
+                "It would be lowered by a measure on it instead, whose obligations `omega` \
+                 discharges: `import nat; import int; import omega;` for that.",
+            );
+        }
+        self.emit_lint(
+            Lint::RecursionByMeasure,
+            format!(
+                "{what}, so `{fname}` is compiled as if it had been declared `decreases`: it \
+                 computes what it says, but at a symbolic argument it no longer unfolds by \
+                 conversion; cite `{fname}_unfold` for that, or name this level's value by \
+                 its pattern to keep the structural lowering \
+                 (issues/fn-recursion-means-the-function.md)"
+            ),
+            read,
+        );
+        let mut by_measure = decl.clone();
+        by_measure.decreases = Some(measure);
+        self.session_transaction(|me| me.elab_measure_decl(&by_measure))
     }
 
     /// One ordinary declaration, with `obligations` the measure-obligation
@@ -3595,29 +3712,7 @@ impl Elaborator {
         // appearing only in its public statement (issues/axiom-provenance.md).
         self.attempt.direct_dependencies.borrow_mut().clear();
         if decl.kind != DeclKind::Axiom {
-            cx.selfref = Some(Rc::new(SelfRef {
-                // A member's base name is its canonical recursion name, and
-                // `SelfRef::matches` also accepts the declaration's qualified
-                // spelling. Both are checked before globals, so neither path
-                // publishes or calls a provisional global.
-                name: member.map_or_else(|| decl.name.clone(), |(_, base)| base.to_string()),
-                written_name: decl.name.clone(),
-                // Type parameters participate in guarded-call bookkeeping as
-                // implicit parameters (docs/surface-polymorphism.md §6.1).
-                params: decl
-                    .tyvars
-                    .iter()
-                    .map(|t| (t.name.clone(), true))
-                    .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
-                    .collect(),
-                n_tyvars: decl.tyvars.len(),
-                receiver_slot: decl
-                    .params
-                    .iter()
-                    .filter(|p| !p.implicit)
-                    .position(|p| p.is_self)
-                    .unwrap_or(0),
-            }));
+            cx.selfref = Some(Rc::new(SelfRef::of_decl(decl)));
         }
         // An axiom has no term to check. Ordinary definitions and theorems
         // elaborate their block exactly as before.
@@ -3634,13 +3729,6 @@ impl Elaborator {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
             debug_assert!(decl.decreases.is_none());
-            // A `fn` body's value is its meaning, so its recursion is held to
-            // the source's (issues/recursive-arm-reads-outer-scrutinee.md):
-            // the body starts on the tail spine.
-            if decl.kind == DeclKind::Fn {
-                cx.computes = true;
-                cx.tail = Some(Rc::new(Vec::new()));
-            }
             let body = statements::check_block(
                 self,
                 &cx,
@@ -4082,19 +4170,6 @@ impl Elaborator {
         skel: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
-        // As in `elab_infer_at`: the tail spine continues only through a
-        // block's result and a `match`'s arms.
-        if cx.tail.is_some() && !matches!(e.kind, ExprKind::Block(_) | ExprKind::Match { .. }) {
-            return self.elab_check_skel_slots(
-                &cx.off_tail(),
-                e,
-                expected,
-                lvl,
-                hint,
-                skel,
-                capture_slots,
-            );
-        }
         if capture_slots && has_free_slots(e) {
             let probe = self.clone();
             match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
@@ -4315,11 +4390,6 @@ impl Elaborator {
                 let (scrut_t, scrut_ty, scrut_lvl) = self
                     .elab_infer(cx, scrut)
                     .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
-                // The arms' context: on the tail spine if the `match` is, and
-                // guarded against reading the top call if it is the recursion
-                // (issues/recursive-arm-reads-outer-scrutinee.md).
-                let scoped = recursion::arm_scope(cx, &scrut_t, arms);
-                let cx = scoped.as_ref().unwrap_or(cx);
                 // A recursion whose self-calls vary a parameter generalizes it
                 // into the motive (docs/ih-generalization-design.md): the goal
                 // becomes a Π over the varied parameters, the arms are wrapped
@@ -5201,11 +5271,6 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
-        // Only a block's result and a `match`'s arms stay on a `fn` body's
-        // tail spine (`Cx::tail`); every other form is off it from here down.
-        if cx.tail.is_some() && !matches!(e.kind, ExprKind::Block(_) | ExprKind::Match { .. }) {
-            return self.elab_infer_at(&cx.off_tail(), e, expected);
-        }
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).
@@ -6045,11 +6110,6 @@ impl Elaborator {
                 generated,
             } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
-                // The arms' context: on the tail spine if the `match` is, and
-                // guarded against reading the top call if it is the recursion
-                // (issues/recursive-arm-reads-outer-scrutinee.md).
-                let scoped = recursion::arm_scope(cx, &scrut_t, arms);
-                let cx = scoped.as_ref().unwrap_or(cx);
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
                 // Route 2b's forded family (docs/inductive-fording-lowering.md
@@ -6187,20 +6247,6 @@ impl Elaborator {
                 eqbind: None,
                 generated,
             } => {
-                // Inference is never on a `fn` body's tail spine, so a match
-                // here that turns out to be the recursion is refused at its
-                // first self-call (issues/recursive-arm-reads-outer-scrutinee.md).
-                // Only a bare name can be the recursion, and resolving one twice
-                // is free of side effects.
-                let scoped = match &scrut.kind {
-                    ExprKind::Var(_) if cx.computes => self
-                        .elab_infer(cx, scrut)
-                        .ok()
-                        .and_then(|(scrut_t, _, _)| recursion::arm_scope(cx, &scrut_t, arms)),
-                    _ => None,
-                };
-                let outer = cx;
-                let cx = scoped.as_ref().unwrap_or(cx);
                 if *form == MatchForm::If {
                     match matching::infer_if_constant_motive(
                         self, cx, scrut, arms, *generated, e.span,
@@ -6216,18 +6262,6 @@ impl Elaborator {
                     matching::MotiveInference::Accepted(result) => return Ok(result),
                     matching::MotiveInference::Failed(error) => return Err(error),
                     matching::MotiveInference::Declined => {}
-                }
-                // A synthesis declines when a self-call in the arms is refused
-                // for sitting off the tail spine; say that, not "needs a motive"
-                // (issues/recursive-arm-reads-outer-scrutinee.md). Error path
-                // only, so the syntactic test cannot refuse anything itself.
-                if outer.computes
-                    && let (ExprKind::Var(_), Some(s)) = (&scrut.kind, outer.selfref.as_ref())
-                    && let Ok((scrut_t, _, _)) = self.elab_infer(outer, scrut)
-                    && let Some(dec) = recursion::descends_on_param(outer, &scrut_t)
-                    && recursion::recurses_on(s, arms, dec)
-                {
-                    return err(recursion::off_tail_message(&s.params[dec].0, &s.name), e.span);
                 }
                 err(
                     format!(
@@ -7685,14 +7719,6 @@ impl Elaborator {
         // rest, which is what compares the two here.
         let local_pos = cx.names.iter().rposition(|n| n == name);
         let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
-        if cx.recursion.is_some() {
-            let (local, alias) = match (local_pos, alias) {
-                (Some(pos), Some(a)) if a.depth <= pos => (Some(pos), None),
-                (_, Some(a)) => (None, Some(&**a)),
-                (pos, None) => (pos, None),
-            };
-            recursion::check_recursion_read(cx, name, local, alias, span)?;
-        }
         match (local_pos, alias) {
             (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
             (_, Some(a)) => {

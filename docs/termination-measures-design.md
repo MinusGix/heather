@@ -169,3 +169,43 @@ unlabeled `?decN` discharges remain supported. Automatic local evidence
 still applies when no manual proof is supplied. See
 `docs/stable-termination-labels-design.md` for attachment, scoping and
 validation rules.
+
+## 7. A structural `fn` that is compiled by measure (2026-09-25)
+
+The structural lowering compiles a recursion at its `match`: a self-call is
+the eliminator's hypothesis, which is *the `match` at the smaller value*, and
+everything outside the `match` runs once, in the top call. That is the
+function only when the recursive `match` is the body's result, under no
+branch that depends on its parameter, and its arms do not read the parameter
+from outside. Until 2026-09-25 the other shapes compiled silently to
+something else (`sum(2) = 4` by `refl` for a source that means 3;
+`issues/recursive-arm-reads-outer-scrutinee.md`).
+
+`recursion::plan` now decides, on the surface and before anything
+elaborates, which lowering a `fn` without `decreases` gets
+(`issues/fn-recursion-means-the-function.md`):
+
+- **Structural**, as before, when the lowering means the source.
+- **By measure**, when a recursive `match` reads its own parameter, or a
+  `let` or `have` bound from it above the `match`. The declaration is
+  lowered exactly as if it had been written `decreases p` (`decreases
+  p.len()` for a `List`), with the obligations left to `omega` (§2). That
+  has the source's meaning, and a usable `f_unfold`: every such shape was
+  probed with its equation cited at a symbolic argument. What it costs is
+  definitional unfolding at symbolic arguments, and a `recursion-by-measure`
+  note says so and names the spelling that keeps the structural lowering.
+  Without `nat`, `int` and `omega` in scope, or at a parameter that is
+  neither `Nat` nor `List`, the read is refused, with what to import or
+  write instead.
+- **Refused**, when the recursive `match` is not the body's result, or sits
+  under a branch on its parameter. §3 of the unfolding design excludes
+  exactly those shapes from `f_unfold`, so a measure fallback would give a
+  function nobody can reason about at a symbolic argument. The refusal is
+  raised at the first self-call the elaborator actually lowers under a guard
+  on that parameter, because the surface cannot tell a member of another
+  type (`contents.len()` in `Box::len`) from a self-call.
+
+A `match` is the recursion when a self-call in its arms passes, at the
+scrutinized parameter's position, anything but that parameter, so a branch
+on a parameter passed along unchanged is not one. Theorems are not
+planned: their meaning is their statement, which the kernel checks.

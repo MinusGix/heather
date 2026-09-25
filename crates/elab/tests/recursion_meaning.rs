@@ -1,114 +1,167 @@
-//! A structurally recursive `fn` means what its source means
-//! (issues/recursive-arm-reads-outer-scrutinee.md).
+//! A recursive `fn` means what its source means
+//! (issues/fn-recursion-means-the-function.md).
 //!
-//! The recursion is compiled at the `match`: a self-call is the eliminator's
-//! hypothesis, i.e. *the `match` at the smaller value*, and everything outside
-//! the `match` is evaluated once, by the top call. Each shape below used to
-//! elaborate and compute a different value from its source, pinned by `refl`
-//! (`sum(2) = 4` for a source that means 3); it is now refused by name. The
-//! accepted cases are the spellings the messages point at, and the
-//! near-misses that were never wrong: a parameter passed along unchanged, a
-//! varying accumulator, a `match` with no self-call, a theorem. That
-//! `decreases` recursion already computes the source's value is recorded in
-//! the issue's log; it needs `import nat`, which this harness does not load.
+//! The structural lowering compiles the recursion at the `match`: a self-call
+//! is the eliminator's hypothesis, i.e. *the `match` at the smaller value*,
+//! and everything outside the `match` is evaluated once, by the top call. Each
+//! shape below used to elaborate and compute a different value from its source
+//! (`sum(2) = 4` by `refl` for a source that means 3). Now:
+//!
+//! - a recursive `match` that **reads its own parameter** (directly, or through
+//!   a `let` or `have` bound from it above) is compiled by measure, which means
+//!   the source, with a `recursion-by-measure` note, and refused with what to
+//!   import where the measure route is not available;
+//! - a recursive `match` **off the body's result**, or under a branch on its
+//!   parameter, is refused at its recursive call. The measure route has no
+//!   unfolding equation for those shapes (docs/decreases-unfolding-design.md §3).
+//!
+//! Every accepted case is pinned by what it *computes*, at a literal (`refl`)
+//! and, for the fallback, through its unfolding equation at a symbolic one.
 
-use heather_elab::{ElabError, Elaborator};
+use std::cell::OnceCell;
+use std::sync::Mutex;
 
-const ADD: &str =
-    "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
+use heather_elab::{ElabError, Elaborator, Lint, SemanticImage};
 
-fn ok(src: &str) {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    if let Err(err) = e.elab_source(src) {
-        panic!("expected success, got: {}", err.render(src));
-    }
+use crate::support;
+
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/int.hthr");
+const OMEGA: &str = include_str!("../../../lib/std/omega.hthr");
+
+/// `termination_measures.rs`'s prefix, in its order, so the two share the
+/// on-disk image the warmup wrote.
+const MODULES: &[(&str, &str)] = &[
+    ("logic", LOGIC),
+    ("bool", BOOL),
+    ("nat", NAT),
+    ("option", OPTION),
+    ("pair", PAIR),
+    ("list", LIST),
+    ("algebra", ALGEBRA),
+    ("int", INT),
+    ("omega", OMEGA),
+];
+
+static PREFIX_LOAD: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
 }
 
-fn bad(src: &str) -> String {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    match e.elab_source(src) {
-        Ok(()) => panic!("expected a rejection, but it elaborated:\n{src}"),
-        Err(ElabError::Elab { msg, .. }) => msg,
-        Err(ElabError::Parse(p)) => p.msg,
-        Err(other) => format!("{other}"),
-    }
+fn base() -> Elaborator {
+    BASE.with(|base| {
+        base.get_or_init(|| {
+            let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            support::semantic_test_base(MODULES).semantic_image()
+        })
+        .elaborator()
+    })
+}
+
+const IMPORTS: &str = "import logic;\nimport nat;\nimport list;\nimport int;\nimport omega;\n";
+
+const PLUS: &str =
+    "fn plus(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(plus(a, k)) } }\n";
+
+/// Check with the measure route available; return how many
+/// `recursion-by-measure` notes the module raised.
+fn ok(src: &str) -> usize {
+    let mut e = base();
+    e.elab_module_source("m", &format!("{IMPORTS}{PLUS}{src}"))
+        .unwrap_or_else(|err| panic!("expected this to check, got: {err}\n{src}"));
+    e.take_warnings().iter().filter(|w| w.lint == Lint::RecursionByMeasure).count()
 }
 
 fn refused(src: &str, needle: &str) {
-    let m = bad(&format!("{ADD}{src}"));
-    assert!(m.contains(needle), "wrong refusal for\n{src}\n---\n{m}");
-    assert!(m.contains("recursive-arm-reads-outer-scrutinee"), "{m}");
+    let mut e = base();
+    let msg = match e.elab_module_source("m", &format!("{IMPORTS}{PLUS}{src}")) {
+        Err(ElabError::Elab { msg, .. }) => msg,
+        Err(other) => format!("{other}"),
+        Ok(()) => panic!("expected a refusal:\n{src}"),
+    };
+    assert!(msg.contains(needle), "wrong refusal for\n{src}\n---\n{msg}");
+    assert!(msg.contains("fn-recursion-means-the-function"), "{msg}");
 }
 
-// -- M1: the parameter, read inside its own recursive `match` ----------------
+// -- Reading the parameter: compiled by measure --------------------------------
 
 #[test]
-fn the_parameter_in_its_own_arm_is_refused() {
-    refused(
-        "fn sum(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => add(sum(k), n) } }",
-        "`n` inside its own recursive `match`",
-    );
-    // The base arm too: it runs at the bottom level, where `n` is not zero.
-    refused(
-        "fn f(n: Nat) -> Nat { match n { Zero => n, Succ(k) => f(k) } }",
-        "`n` inside its own recursive `match`",
-    );
+fn the_parameter_in_its_own_arm_is_compiled_by_measure() {
+    let notes = ok("fn sum(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => plus(sum(k), n) } }
+         theorem sum_2(): sum(2) = 3 { refl }
+         theorem sum_step(k: Nat): sum(Succ(k)) = plus(sum(k), Succ(k)) { sum_unfold(Succ(k)) }");
+    assert_eq!(notes, 1);
+}
+
+#[test]
+fn every_way_of_reading_it_is_compiled_by_measure() {
+    // The base arm runs at the bottom level, where `n` is zero.
+    ok("fn z(n: Nat) -> Nat { match n { Zero => n, Succ(k) => z(k) } }
+        theorem z_3(): z(3) = 0 { refl }");
+    // Through a `let` and through a `have` bound above the `match`.
+    ok("fn g(n: Nat) -> Nat { let m = n; match n { Zero => 0, Succ(k) => plus(g(k), m) } }
+        theorem g_2(): g(2) = 3 { refl }");
+    ok("fn g(n: Nat) -> Nat { have m = n; match n { Zero => 0, Succ(k) => plus(g(k), m) } }
+        theorem g_2(): g(2) = 3 { refl }");
     // Two levels down, through the course-of-values chain.
-    refused(
-        "fn h(n: Nat) -> Nat {
-             match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => add(h(j), n) } }
-         }",
-        "`n` inside its own recursive `match`",
-    );
-    // Under a λ in the arm: still the top call's `n`.
-    refused(
-        "fn g(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => (\u{3bb} (x: Nat) => add(x, n))(g(k)) } }",
-        "`n` inside its own recursive `match`",
-    );
+    ok("fn h(n: Nat) -> Nat {
+            match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => plus(h(j), n) } }
+        }
+        theorem h_4(): h(4) = 6 { refl }");
+    // A list, measured by its length, at an open element type.
+    ok("fn w<A>(xs: List<A>) -> Nat { match xs { Nil => 0, Cons(_, t) => plus(w(t), xs.len()) } }
+        theorem w_2(): w<Nat>([7, 8]) = 3 { refl }");
 }
 
 #[test]
-fn a_binding_of_the_parameter_above_the_match_is_refused() {
-    refused(
-        "fn g(n: Nat) -> Nat { let m = n; match n { Zero => 0, Succ(k) => add(g(k), m) } }",
-        "`m` is bound from `n` above its recursive `match`",
+fn without_the_measure_route_a_read_is_refused_with_what_to_import() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = format!(
+        "{PLUS}fn sum(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => plus(sum(k), n) }} }}"
     );
-    refused(
-        "fn g(n: Nat) -> Nat { have m = n; match n { Zero => 0, Succ(k) => add(g(k), m) } }",
-        "`m` is a `have` bound above the recursive `match`",
-    );
+    let msg = match e.elab_source(&src) {
+        Err(ElabError::Elab { msg, .. }) => msg,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(msg.contains("`n` is read inside its own recursive `match`"), "{msg}");
+    assert!(msg.contains("import omega"), "{msg}");
 }
 
 #[test]
-fn a_declared_inductive_is_held_to_the_same_rule() {
-    let list = "inductive L { N, C(h: Nat, t: L) }
-                fn size(xs: L) -> Nat { match xs { N => 0, C(h, t) => Succ(size(t)) } }\n";
+fn a_parameter_with_no_measure_is_refused() {
     refused(
-        &format!("{list}fn w(xs: L) -> Nat {{ match xs {{ N => 0, C(h, t) => add(w(t), size(xs)) }} }}"),
-        "`xs` inside its own recursive `match`",
-    );
-    refused(
-        &format!("{list}fn v(xs: L) -> Nat {{ Succ(match xs {{ N => 0, C(h, t) => v(t) }}) }}"),
-        "is not the result of `v`",
+        "inductive T { Leaf, Node(l: T, r: T) }
+         fn leaves(t: T) -> Nat { match t { Leaf => 1, Node(l, r) => plus(leaves(l), leaves(t)) } }",
+        "neither a `Nat` nor a `List`",
     );
 }
 
-// -- M2: the recursive `match` is not the body's result ----------------------
+// -- The recursive `match` off the result: refused -----------------------------
 
 #[test]
-fn a_recursive_match_off_the_tail_is_refused() {
+fn a_recursive_match_off_the_result_is_refused() {
     refused(
-        "fn f(n: Nat) -> Nat { add(1, match n { Zero => 0, Succ(k) => f(k) }) }",
+        "fn f(n: Nat) -> Nat { plus(1, match n { Zero => 0, Succ(k) => f(k) }) }",
         "is not the result of `f`",
     );
     refused(
-        "fn e(n: Nat) -> Nat { add(match n { Zero => 0, Succ(k) => e(k) }, n) }",
+        "fn e(n: Nat) -> Nat { plus(match n { Zero => 0, Succ(k) => e(k) }, n) }",
         "is not the result of `e`",
     );
-    // A bound value is never the result.
     refused(
-        "fn e(n: Nat) -> Nat { let r = match n { Zero => 0, Succ(k) => e(k) }; add(r, 1) }",
-        "is not the result of `e`",
+        "fn l(n: Nat) -> Nat { let r: Nat = match n { Zero => 0, Succ(k) => l(k) }; plus(r, 1) }",
+        "is not the result of `l`",
+    );
+    refused(
+        "fn v(xs: List<Nat>) -> Nat { Succ(match xs { Nil => 0, Cons(_, t) => v(t) }) }",
+        "is not the result of `v`",
     );
 }
 
@@ -116,51 +169,51 @@ fn a_recursive_match_off_the_tail_is_refused() {
 fn a_recursive_match_under_a_branch_on_its_parameter_is_refused() {
     refused(
         "inductive B { T, F }
-         fn is_zero(n: Nat) -> B { match n { Zero => T, Succ(k) => F } }
+         fn is_zero(n: Nat) -> B { match n { Zero => T, Succ(_) => F } }
          fn f(n: Nat) -> Nat { match is_zero(n) { T => 7, F => match n { Zero => 0, Succ(k) => f(k) } } }",
         "sits under a branch that depends on `n`",
     );
 }
 
-// -- What stays accepted, and computes what it says --------------------------
+// -- What keeps the structural lowering ----------------------------------------
 
 #[test]
-fn the_spellings_the_messages_suggest_compute_the_source_value() {
-    ok(&format!(
-        "{ADD}
-         fn sum(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => add(sum(k), Succ(k)) }} }}
-         theorem sum_2(): sum(2) = 3 {{ refl }}
-         fn f(n: Nat) -> Nat {{ match n {{ Zero => 1, Succ(k) => add(1, f(k)) }} }}
-         theorem f_2(): f(2) = 3 {{ refl }}
-         fn g(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => {{ have m = Succ(k); add(g(k), m) }} }} }}
-         theorem g_2(): g(2) = 3 {{ refl }}"
-    ));
+fn the_structural_spellings_keep_definitional_unfolding() {
+    let notes = ok("fn tri(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => plus(tri(k), Succ(k)) } }
+         theorem tri_2(): tri(2) = 3 { refl }
+         theorem tri_step(k: Nat): tri(Succ(k)) = plus(tri(k), Succ(k)) { refl }
+         fn g(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { have m = Succ(k); plus(g(k), m) } } }
+         theorem g_2(): g(2) = 3 { refl }");
+    assert_eq!(notes, 0);
 }
 
 #[test]
 fn unchanged_and_varying_parameters_are_not_the_recursion() {
-    ok(&format!(
-        "{ADD}
-         inductive B {{ T, F }}
-         fn pick(n: Nat, b: B) -> Nat {{
-             match n {{ Zero => 0, Succ(k) => match b {{ T => Succ(pick(k, b)), F => pick(k, b) }} }}
-         }}
-         theorem pick_t(): pick(2, T) = 2 {{ refl }}
-         fn count(n: Nat, acc: Nat) -> Nat {{ match n {{ Zero => acc, Succ(k) => count(k, add(acc, 1)) }} }}
-         theorem count_2(): count(2, 5) = 7 {{ refl }}"
-    ));
+    let notes = ok("inductive B { T, F }
+         fn pick(n: Nat, b: B) -> Nat {
+             match n { Zero => 0, Succ(k) => match b { T => Succ(pick(k, b)), F => pick(k, b) } }
+         }
+         theorem pick_t(): pick(2, T) = 2 { refl }
+         fn count(n: Nat, acc: Nat) -> Nat { match n { Zero => acc, Succ(k) => count(k, plus(acc, 1)) } }
+         theorem count_2(): count(2, 5) = 7 { refl }");
+    assert_eq!(notes, 0);
+}
+
+/// A dot call on another type's member of the same name is not a self-call,
+/// which the syntax cannot see and the elaborator can: an off-result `match`
+/// whose only "self-call" is one of those is not refused.
+#[test]
+fn another_types_member_is_not_mistaken_for_the_recursion() {
+    ok("inductive Box<A> { Mk(contents: List<A>) }
+        fn Box::len<A>(self b: Box<A>) -> Nat { plus(1, match b { Mk(c) => c.len() }) }
+        theorem box_len(): Mk<Nat>([1, 2]).len() = 3 { refl }");
 }
 
 #[test]
 fn non_recursive_matches_and_theorems_are_untouched() {
-    // No self-call: the `match` runs once, so `n` in its arms is this call's.
-    // A theorem's body is not observable past its statement, so naming `n`
-    // in its own recursive arm changes which proof, not what is proved.
-    ok(&format!(
-        "{ADD}
-         fn once(n: Nat) -> Nat {{ add(1, match n {{ Zero => n, Succ(k) => n }}) }}
-         theorem walk(n: Nat): True {{
-             match n {{ Zero => trivial, Succ(k) => {{ let r = walk(k); let q: (n = n) = refl; trivial }} }}
-         }}"
-    ));
+    let notes = ok("fn once(n: Nat) -> Nat { plus(1, match n { Zero => n, Succ(_) => n }) }
+         theorem walk(n: Nat): True {
+             match n { Zero => trivial, Succ(k) => { let r = walk(k); let q: (n = n) = refl; trivial } }
+         }");
+    assert_eq!(notes, 0);
 }
