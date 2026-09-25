@@ -21,6 +21,7 @@ fn checker() -> heather_elab::Elaborator {
         ("x86_64_fetched_code", include_str!("../../../lib/std/arch/x86_64/fetched_code.hthr")),
         ("elf64", include_str!("../../../lib/elf64.hthr")),
         ("linux_x86_64_entry", include_str!("../../../lib/linux_x86_64_entry.hthr")),
+        ("x86_64_store", include_str!("../../../lib/std/arch/x86_64/store.hthr")),
         ("linux_x86_64_io", include_str!("../../../lib/linux_x86_64_io.hthr")),
         ("elf64_io", include_str!("../../../lib/elf64_io.hthr")),
     ] { elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source))); }

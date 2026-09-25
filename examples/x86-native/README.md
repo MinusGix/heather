@@ -259,9 +259,36 @@ Heather function; the program supplies it, the counting step, and one lemma
 the input. Everything machine-shaped comes from the shared generators and the
 library's read-once process theorem (`lib/elf64_read_loop.hthr`).
 
-The trace is deliberately basic (`lib/linux_x86_64_io.hthr`): successful reads
-and exit are the only syscalls with rules, so the claim says nothing about a
-run that meets a read error, and it covers only what the first read returns.
-A longer file is counted up to its first 4096 bytes. The proper syscall model
-is `issues/linux-syscall-trace-model.md`, and printing the count is the
-milestone's next slice (`docs/native-first-program-design.md`).
+The trace is deliberately basic (`lib/linux_x86_64_io.hthr`): successful reads,
+complete writes and exit are the only syscalls with rules, so the claim says
+nothing about a run that meets a read error or a short write, and it covers
+only what the first read returns. A longer file is counted up to its first
+4096 bytes. The proper syscall model is `issues/linux-syscall-trace-model.md`.
+
+### Printing the count
+
+Add `--print --bound wc_l_bounded` (and a fresh output path) and the program
+prints the count instead of exiting with it:
+
+```sh
+(ulimit -v 12582912 -t 3600 -c 0; target/release/heather build-x86 \
+  examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
+  --advance line_body_advances --spec wc_l --computes count_lines_input \
+  --print --bound wc_l_bounded -o target/x86-native/wc_l_print \
+  --cache-dir target/native-images)
+printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
+```
+
+Expected output: `3`, and exit status 0.
+
+The certificate's `count_lines_native_runs` now states the trace
+`[ReadEvent(0, bytes), WriteEvent(1, decimal_line(wc_l(bytes))), ExitEvent(0)]`.
+`decimal_line(n)` is `decimal(n) ++ [newline]`, and `decimal` is an ordinary
+function: the digits of `n / 10`, then `n % 10`. The line is computed by code the
+native compiler generates from `lib/decimal_line.hthr`'s source functions. The
+machine has no divide or multiply, so they use a restoring chain of
+subtract-if-fits steps. The library proves that for every count below 10000
+the stored word holds exactly that line past its leading zeros. `wc_l_bounded`
+is the program's one extra fact: a count of at most 4096 bytes is below
+10000. The word is stored with a `mov [r8], rax` (`lib/std/arch/x86_64/store.hthr`)
+and written with `write(1, …)` (`lib/elf64_read_print.hthr`).

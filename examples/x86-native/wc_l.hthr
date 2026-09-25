@@ -11,6 +11,7 @@ import list;
 import logic;
 import nat;
 import option;
+import omega;
 
 fn byte_equal(left, right: BitVec(8)) → Bool {
     match left.unsigned_lt_bit(right) {
@@ -97,4 +98,23 @@ theorem count_lines_input(bytes: List<BitVec(8)>, buffer: ReadonlyBytes, length:
         λ i byte present => j(sym(Nat::add_left_zero(i)), λ at _ => buffer.read(buffer.base + at) = Some(byte), reads(i, byte, present)));
     trans(counted, trans(cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, 0 + wc_l(bytes)), from_start),
         cong_fn<Nat, LoopOutcome<Nat>>(λ count => End(bytes.len(), 0, count), Nat::add_left_zero(wc_l(bytes)))))
+}
+
+// At most one line per byte.
+theorem wc_l_le_len(bytes: List<BitVec(8)>): wc_l(bytes) <= bytes.len() {
+    match bytes {
+        Nil => trivial,
+        Cons(byte, rest) => (match byte_equal(newline(), byte) as λ equal =>
+                (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) <= Succ(rest.len()) {
+            False => Nat::le_succ_r(wc_l(rest), rest.len(), wc_l_le_len(rest)),
+            True => wc_l_le_len(rest),
+        }),
+    }
+}
+
+// What the printing profile asks of its count (elf64_read_print): one read
+// returns at most 4096 bytes, so the count fits the line it prints.
+theorem wc_l_bounded(bytes: List<BitVec(8)>, fits: bytes.len() <= 4096): wc_l(bytes) < 10000 {
+    let most = wc_l_le_len(bytes);
+    omega
 }

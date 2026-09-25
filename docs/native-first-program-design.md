@@ -2,8 +2,9 @@
 
 Status: **slices A–C landed 2026-09-24 (§8): `wc -l` builds as a certified
 executable and runs.** Amendments from probing and building are folded into
-§3–§5 and listed in §8. **Slice 4, printing the count, is in progress (§10);
-its compiler part landed 2026-09-25 (§10.1).**
+§3–§5 and listed in §8. **Slice 4 landed 2026-09-25 (§10): `build-x86
+--read-loop --print` writes the count in decimal to stdout, and the
+certificate states that write.**
 Owner: `issues/native-first-program.md`. Follow-up owner for the syscall
 model's proper form: `issues/linux-syscall-trace-model.md`.
 
@@ -418,25 +419,83 @@ peeled `Succ` of the port id at a `BitVec(64)` result, whatever the entries
 are (the carry dispatches with `Nat::leb` over its entries instead; the
 dataflow valuations still peel). Both are logged on the anchor issue.
 
-### 10.2 Remaining pieces
+### 10.2 The formatter's meaning (landed)
 
-- **The formatter's meaning** (library, `lib/decimal_line.hthr`): `decimal(n)`,
-  and for `n < 10000` the stored word's bytes from offset `line_skip(n)`,
-  `line_length(n)` of them, are `decimal(n) ++ [10]`. Needs two general bitvec
-  facts the library lacks: `toNat` splits at `take_low`/`drop_low`, and `sub`
-  without borrow. The digit arithmetic is `omega`'s (literal multiples and
-  divisions).
-- **A word store** (`lib/std/arch/x86_64/store.hthr`, `x86_64_store`):
-  `mov qword [base], source` for a base that needs no SIB or displacement,
-  writing the source's eight bytes low first through the profile's write model.
-  `FetchedStep` stays the read-only bridge relation; the Linux profile's step
-  is `FetchedStep ∨ StoreStep`, and `LinuxRuns` runs over that step's closure,
-  with a lift from `FetchedSteps`.
-- **`WriteEvent(fd, bytes)`**: rax 1, rdi the descriptor, rdx the length, the
-  bytes readable at rsi; the run continues with rax the length (a short write
-  or an error has no rule) and RCX/R11 universal, as for read.
-- **The process theorem**: after the loop, three generated artifacts (the
-  word, the start address, the length), the store, the write, exit 0.
-- **CLI** `--print` on the read-loop profile, native tests against a reference
-  `wc -l`, and refusals of a wrong descriptor, write number and store base.
+`lib/decimal_line.hthr` holds both sides.
 
+- **The source functions the compiler emits.** `line_word(n)` is `n` moved
+  above bit 40 by five `times256` calls, each eight `double` calls. The move
+  is written as calls because a `let` copies its bound term into every use, so
+  a chain of `let x = y + y` would double the term at each step. Sixteen
+  `place` steps follow: while `r·2^40 + bytes` holds, subtract `c·2^40` when
+  it fits and add the digit's weight, with no mask needed. `leading_zeros(n)`
+  is `below(n, 10) + below(n, 100) + below(n, 1000)`, and `line_start` and
+  `line_length` follow from it. Those are flat sums of one-level comparisons,
+  because a three-deep tail tree ran out of byte registers.
+- **The meaning.** `decimal(n)` is the digits of `n / 10` then `n % 10`, with
+  explicit fuel (`decimal_digits(n, n)`): a `decreases` body matching on
+  `le_dec` gets no unfolding equation
+  (`issues/unfolding-computed-scrutinee.md`). For `n < 10000`:
+  - `line_word_bytes`: the word's eight bytes are `line_bytes(n)`;
+  - `line_start_value` and `line_length_value`: `0x401000 + line_skip(n)` and
+    `5 - line_skip(n)`;
+  - `line_in_word`: `decimal_line(n)` is those bytes from `line_skip(n)`, and
+    has that length.
+- **Proof shape.** The value goes through a generic `place_step`, where `q` is
+  whether the threshold fitted, and a generic `four_steps` per digit group.
+  All arithmetic is in Nat-only lemmas checked by `omega`. `bitvec_nat` gained
+  `toNat_sub` (no borrow) and `toNat_take_drop` (a value splits at its low
+  bits), and bytes read back through the second. `omega` dominates the
+  module's check, and its certificate grows with every atom in scope. So each
+  group's facts are a `GroupFacts` record, whose division laws come from
+  `Nat::div_mul_add_mod` and `Nat::mod_lt`, and `omega` is used only for
+  bounds and sums. Each digit also gets its own lemma, holding only the
+  hypotheses it uses.
+- **`omega` along the way.** A GCD-divided row was rendered without its
+  trailing zeros, so the kernel refused certificates over nested division.
+  That is fixed in `omega_cert.rs` by padding the row. `omega` also re-spells a
+  context atom without an implicit it needs, which is open as
+  `issues/omega-respells-atoms-without-implicits.md`; the proofs order their
+  facts around it. Nested truncated subtraction stays an atom: the proofs
+  state sums instead.
+
+### 10.3 Stores, the write event, the process (landed)
+
+- **`x86_64_store`.** `mov qword [base], source` for a base with no SIB byte or
+  displacement (`store_base_plain`), writing `word_bytes(value)` low byte
+  first through a `ByteWrites` model. `FetchedStep` stays the read-only bridge
+  relation. `LinuxStep` is `FetchedStep ∨ StoreStep` over the profile's
+  write model, and `LinuxRuns` runs over its closure. The fetched-step
+  constructors lift (`linux_steps_of_fetched`), so the read-once proofs are
+  unchanged.
+- **`WriteEvent(fd, bytes)`.** RAX is 1, RDI the descriptor, and RDX's value the
+  length. `LinuxWritesFrom` says every byte reads back at `rsi + i`, counted by
+  value. RAX returns the length, and RCX and R11 are universal. A short write
+  has no rule.
+- **The process.** `elf64_read_loop`'s setup and loop are factored into
+  `read_loop_counts`, which both profiles use. `lib/elf64_read_print.hthr`
+  lays out entry, read, setup, loop, the base in R8, the three formatter
+  artifacts (word to RAX, start to R9, length to R10, each keeping what later
+  steps read), the store, `write(1, R9, R10)`, and exit 0. `read_print_runs`
+  proves the trace of §10 from the program's `ReadLoopComputes` and one bound,
+  `spec(bytes) < 10000`.
+- **What made it check.** Three shapes were far past budget at first, and each
+  one is general:
+  - A `let` is inlined at every use, so a proof built as a long chain of
+    `let`s is checked as one term the size of the chain. `read_print_after_read`
+    split into `print_formats`, `print_sends` and `print_writes`, and its check
+    fell by two orders of magnitude.
+  - Deep `.right` projections through a large conjunction re-check the whole
+    conjunction at every step. Records with named fields replace them
+    (`GroupFacts`, `ReadPrintFormat`, `PrintFormatted`).
+  - A `refl` between two large Nat lengths exceeds the kernel's depth budget,
+    which is reported as `OutOfFuel`. The image's transported fields are
+    proved with `leb` in both directions and then `le_antisym`.
+  A fresh `--print` build costs more than the exit-status build, mostly in
+  `decimal_line`'s `omega` lemmas. It stays within one test process's CPU
+  rail, but only just, so the native print test is acceptance-class (skipped
+  by `scripts/test --fast`).
+- **CLI.** `--print --bound <theorem>` on the read-loop profile. The producer
+  generates the formatter with the typed generator at the fixed registers,
+  checks each artifact as its own module, and states the written file piece by
+  piece (`_code_written` through the formatters' `_bytes_are`).

@@ -78,7 +78,7 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             observe_tree(expansion, continuation, values, observers, result_type, observation_types)
         }
         StructuredRegion::Conditional { condition, when_true, when_false, .. } => {
-            let condition = bit(&operand(&values, *condition, 1)?.render());
+            let condition = expansion.test(&values, *condition)?;
             let yes = observe_tree(expansion, when_true, values.clone(), observers, result_type, observation_types)?;
             let no = observe_tree(expansion, when_false, values, observers, result_type, observation_types)?;
             let expression = format!("match {condition} {{ False => {}, True => {} }}", no.expression, yes.expression);
@@ -100,7 +100,7 @@ pub fn generate_elaborated_typed_x86(
     inputs: &x86::Placements, temporaries: &[Gpr], outputs: &x86::Placements,
 ) -> Result<x86::StructuredX86Emission, SourceError> {
     let reflected = reflect_elaborated_structured(elaborator, source_name)?;
-    let mut emission = x86::generate_structured_sourced(prefix, &reflected.region, &reflected.sources, inputs, temporaries, outputs).map_err(SourceError::Lowering)?;
+    let mut emission = x86::generate_structured_sourced(prefix, &reflected.region, &reflected.sources, &reflected.bodies, inputs, temporaries, outputs).map_err(SourceError::Lowering)?;
     let mut module = Module::default();
     module.raw("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;");
     module.raw(generate_structured_source_expansion(&format!("{prefix}_source"), &reflected)?
@@ -135,7 +135,7 @@ pub fn generate_elaborated_typed_x86(
     let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| ty.width().map(|width|
         (id as u64, (width, HeatherExpr::raw(vector(*ty, &format!("arg{id}"))))))).collect();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default() };
+        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {
@@ -165,7 +165,11 @@ pub fn generate_elaborated_typed_x86(
         let source_agreement = format!("trans(cong_fn<{result_type}, {}>({observer}, sym({prefix}_source_source_expands({args}))), {})", observation_types[i], observed.proofs[i]);
         module.declaration(Declaration::theorem(format!("{name}_source_observed"), HeatherExpr::raw(format!("{observed_value} = {}", observed.values[i])), Block::expression(HeatherExpr::raw(source_agreement))).parameters(parameters.clone()));
         // The physical fold and observation fold normalize one-bit branches alike.
-        let proof = format!("trans({name}_correct({vals}, before{placed_args}), sym(cong_fn<{}, BitVec(64)>(λ value => {}, {name}_source_observed({args}))))", observation_types[i], normalized("value"));
+        // A composed root reaches the observation through `_meaning`.
+        let correct = if emission.text.contains(&format!("theorem {name}_meaning(")) {
+            format!("trans({name}_correct({vals}, before{placed_args}), {name}_meaning({vals}))")
+        } else { format!("{name}_correct({vals}, before{placed_args})") };
+        let proof = format!("trans({correct}, sym(cong_fn<{}, BitVec(64)>(λ value => {}, {name}_source_observed({args}))))", observation_types[i], normalized("value"));
         artifacts.declaration(Declaration::theorem(format!("{name}_typed_correct"), HeatherExpr::raw(format!("read_gpr({}, {prefix}_after(before).gprs) = {expected}", outputs[&port.id].heather_name())), Block::expression(HeatherExpr::raw(proof))).generic("M").parameters(public.clone()));
         artifacts.declaration(Declaration::theorem(format!("{name}_typed_artifact"), HeatherExpr::raw(format!("StructuredArtifact<M>({prefix}_code(), before, {}, {expected}, {prefix}_Protected)", outputs[&port.id].heather_name())), Block::expression(HeatherExpr::raw(format!("StructuredArtifact(after := {prefix}_after(before), execution := refl, layout := {prefix}_layout(), decoding := {prefix}_decodes(before.rip), result_correct := {name}_typed_correct({call_args}), memory_preserved := {prefix}_memory(before), rip_correct := {prefix}_rip(before), registers_preserved := λ register protected => {prefix}_preserves(register, before, protected))")))).generic("M").parameters(public.clone()));
     }

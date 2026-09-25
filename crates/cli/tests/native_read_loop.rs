@@ -16,12 +16,37 @@ fn scratch(name: &str) -> PathBuf {
     directory
 }
 
-fn build(directory: &Path, needle: &str) -> Output {
+fn build(directory: &Path, needle: &str) -> Output { build_with(directory, needle, &[]) }
+
+fn build_with(directory: &Path, needle: &str, extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root()).env("PATH", directory)
         .args(["build-x86", "examples/x86-native/wc_l.hthr", "count_lines", "--read-loop", "--needle", needle,
-            "--advance", "line_body_advances", "--spec", "wc_l", "--computes", "count_lines_input", "-o"])
+            "--advance", "line_body_advances", "--spec", "wc_l", "--computes", "count_lines_input"]).args(extra).arg("-o")
         .arg(directory.join("wc_l")).args(["--cache-dir", "target/native-test-images"]).output().unwrap()
 }
+
+fn inputs() -> Vec<Vec<u8>> {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut random = |len: usize| -> Vec<u8> {
+        (0..len).map(|_| { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed >> 24) as u8 }).collect()
+    };
+    let mut inputs: Vec<Vec<u8>> = vec![
+        b"".to_vec(), b"hello".to_vec(), b"a\nb\nc\n".to_vec(), b"no newline at the end\nsecond".to_vec(),
+        vec![b'\n'; 255], vec![b'\n'; 256], vec![b'\n'; 257], vec![b'\n'; 4096], vec![b'x'; 4096],
+    ];
+    for len in [1, 17, 4095, 4096, 4097, 9000] { inputs.push(random(len)); }
+    // Newline at the last byte the read returns, and just past it.
+    let mut edge = vec![b'y'; 4097];
+    edge[4095] = b'\n';
+    edge[4096] = b'\n';
+    inputs.push(edge);
+    // A count of each width the line prints: 1, 2, 3 and 4 digits.
+    for count in [9, 10, 99, 100, 999, 1000] { inputs.push(vec![b'\n'; count]); }
+    inputs
+}
+
+// What `wc -l` prints for what the one read returned.
+fn newlines(input: &[u8]) -> usize { input.iter().take(4096).filter(|&&b| b == b'\n').count() }
 
 // What the certificate promises for a regular file: one read returns its
 // first min(len, 4096) bytes, and the status is their newline count's low byte.
@@ -39,21 +64,7 @@ fn wc_l_counts_what_the_read_returned() {
     for claim in ["_runs(", "_written(", "_file_correct(", "_loop_written("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
-    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
-    let mut random = |len: usize| -> Vec<u8> {
-        (0..len).map(|_| { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed >> 24) as u8 }).collect()
-    };
-    let mut inputs: Vec<Vec<u8>> = vec![
-        b"".to_vec(), b"hello".to_vec(), b"a\nb\nc\n".to_vec(), b"no newline at the end\nsecond".to_vec(),
-        vec![b'\n'; 255], vec![b'\n'; 256], vec![b'\n'; 257], vec![b'\n'; 4096], vec![b'x'; 4096],
-    ];
-    for len in [1, 17, 4095, 4096, 4097, 9000] { inputs.push(random(len)); }
-    // Newline at the last byte the read returns, and just past it.
-    let mut edge = vec![b'y'; 4097];
-    edge[4095] = b'\n';
-    edge[4096] = b'\n';
-    inputs.push(edge);
-    for (index, input) in inputs.iter().enumerate() {
+    for (index, input) in inputs().iter().enumerate() {
         let path = directory.join(format!("input-{index}"));
         std::fs::write(&path, input).unwrap();
         let status = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).status().unwrap();
@@ -79,3 +90,41 @@ fn a_needle_the_specification_does_not_count_is_refused() {
     assert!(!directory.join("wc_l").exists() && !directory.join("wc_l.certificate.hthr").exists());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+// With `--print`, the count is the output: its decimal digits and a newline
+// on stdout, as `decimal_line(wc_l(bytes))` states it, and the exit is 0.
+#[test]
+fn wc_l_prints_what_the_read_returned() {
+    let directory = scratch("read-print");
+    let output = build_with(&directory, "10", &["--print", "--bound", "wc_l_bounded"]);
+    assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let executable = directory.join("wc_l");
+    let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
+    for claim in ["_runs(", "WriteEvent(", "decimal_line(", "_code_written(", "_file_correct("] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    for (index, input) in inputs().iter().enumerate() {
+        let path = directory.join(format!("input-{index}"));
+        std::fs::write(&path, input).unwrap();
+        let run = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).output().unwrap();
+        assert_eq!(run.status.code(), Some(0), "input {index}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{}\n", newlines(input)), "input {index} ({} bytes)", input.len());
+    }
+    let mut child = Command::new(&executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(b"one\ntwo\n").unwrap();
+    let run = child.wait_with_output().unwrap();
+    assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(0), b"2\n".as_slice()));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+// `--print` needs the program's bound on its count, and the bound belongs to
+// `--print`.
+#[test]
+fn print_needs_its_bound() {
+    let directory = scratch("read-print-refused");
+    let output = build_with(&directory, "10", &["--print"]);
+    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--bound"));
+    assert!(!directory.join("wc_l").exists());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+

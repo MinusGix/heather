@@ -10,7 +10,22 @@ type Values = BTreeMap<u64, String>;
 /// by that name, and nothing compares the argument's expansion again.
 struct Crossings<'a> {
     values: &'a cert::SourceValues,
-    named: std::cell::RefCell<BTreeMap<u64, String>>,
+    bodies: &'a cert::SourceValues,
+    /// A crossing's name, with the scope it was named in: a continuation is
+    /// certified over its own valuation, so a name made inside one means
+    /// nothing outside it, and is spelled out in full there instead.
+    named: std::cell::RefCell<BTreeMap<u64, (String, u32)>>,
+    scope: std::cell::Cell<u32>,
+    scopes: std::cell::Cell<u32>,
+}
+
+impl Crossings<'_> {
+    /// A produced value as this scope has it: an input carried in, else a
+    /// name made here; `None` spells it out in full.
+    fn spelled(&self, incoming: &Values, port: Port) -> Option<String> {
+        if incoming.contains_key(&port.id) { return Some(val(incoming, port.id, port.width)); }
+        self.named.borrow().get(&port.id).filter(|(_, scope)| *scope == self.scope.get()).map(|(name, _)| name.clone())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,19 +46,19 @@ pub fn generate_structured_results(
     prefix: &str, region: &StructuredRegion, inputs: &Placements,
     temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<StructuredX86Emission, LoweringError> {
-    generate_structured_sourced(prefix, region, &cert::SourceValues::new(), inputs, temporaries, outputs)
+    generate_structured_sourced(prefix, region, &cert::SourceValues::new(), &cert::SourceValues::new(), inputs, temporaries, outputs)
 }
 
 /// As `generate_structured_results`, with the source value of each composed
 /// helper call (cert::SourceValue): those compositions cross at the call.
 pub fn generate_structured_sourced(
-    prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, inputs: &Placements,
+    prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, bodies: &cert::SourceValues, inputs: &Placements,
     temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<StructuredX86Emission, LoweringError> {
     let lowered = lower_structured_results(region, inputs, temporaries, outputs)?;
     let mut module = Module::default();
     let values = region.inputs().iter().map(|p| (p.id, format!("values(width, {})", p.id))).collect();
-    let crossings = Crossings { values: sources, named: Default::default() };
+    let crossings = Crossings { values: sources, bodies, named: Default::default(), scope: Default::default(), scopes: Default::default() };
     emit(prefix, region, &lowered, &values, &mut module, &crossings)?;
     Ok(StructuredX86Emission { lowered, text: module.render() })
 }
@@ -161,14 +176,8 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
         fun(m, name.clone(), false, vec![emitted_parameter("values", "Valuation()"), emitted_parameter("width", "Nat")], "BitVec(width)".into(), body);
         values.insert(output, format!("{name}(values, width)"));
     }
-    let last = *values.keys().max().unwrap();
-    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
-    for id in (0..=last).rev() {
-        let name = if id == 0 { "id".into() } else { format!("id_{id}") };
-        let v = values.get(&id).cloned().unwrap_or_else(|| "@bitvec::BitVec::zero(width)".into());
-        cases = format!("match {name} {{ Zero => {v}, Succ(id_{}) => {cases} }}", id + 1);
-    }
-    fun(m, format!("{n}_valuation"), false, logical(), "Valuation()".into(), format!("λ width id => {cases}"));
+    let entries: Vec<_> = values.iter().map(|(id, value)| (*id, value.clone())).collect();
+    fun(m, format!("{n}_valuation"), false, logical(), "Valuation()".into(), format!("λ width id => {}", valuation_body(&entries)));
     let mut witness = "trivial".to_string();
     for _ in &r.nodes { witness = format!("⟨refl, {witness}⟩"); }
     thm(m, format!("{n}_graph"), false, logical(), format!("RegionHolds({n}_raw(), {n}_valuation(values))"), witness);
@@ -315,7 +324,9 @@ fn finish(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Value
     for ((port, reg), proof) in p.outputs.iter().zip(proofs) {
         let name = format!("{n}{}", result_suffix(p, port.id));
         fun(m, format!("{name}_value"), false, vec![emitted_parameter("values", "Valuation()"), emitted_parameter("width", "Nat")], "BitVec(width)".into(), results[&port.id].clone());
-        exported.insert(port.id, format!("{name}_value(values, width)"));
+        // A comparison keeps its own spelling, so a branch on it reads the
+        // Boolean (`test_of`) rather than `head_bit` of this wrapper.
+        exported.insert(port.id, if test_of(&results[&port.id]).is_some() { results[&port.id].clone() } else { format!("{name}_value(values, width)") });
         fun(m, format!("{name}_result"), false, logical(), "BitVec(64)".into(), placed_value(&exported, *port));
         thm(m, format!("{name}_correct"), true, public.clone(), format!("read_gpr({}, {n}_after(before).gprs) = {name}_result(values)", reg.heather_name()), proof);
     }
@@ -378,6 +389,23 @@ fn emit_sequence(n: &str, r: &StructuredRegion, p: &LoweredStructured,
         Box::new(move |reg| format!("trans({fr}_preserves({}, {ff}_after(before), trivial), {ff}_preserves({}, before, trivial))", reg.heather_name(), reg.heather_name())))
 }
 
+/// A valuation's body over its populated entries (sorted by id), zero
+/// elsewhere. Dispatched by a balanced `Nat::leb` tree rather than by peeling
+/// the id: each case step at a `BitVec(width)` result costs in proportion to
+/// the width, so a lookup that walked the id would be linear in it
+/// (issues/valuation-lookup-case-step-cost.md).
+fn valuation_body(entries: &[(u64, String)]) -> String {
+    let zero = "@bitvec::BitVec::zero(width)";
+    match entries {
+        [] => zero.into(),
+        [(id, value)] => format!("match Nat::leb({id}, id) {{ False => {zero}, True => match id.leb({id}) {{ False => {zero}, True => {value} }} }}"),
+        _ => {
+            let (left, right) = entries.split_at(entries.len() / 2);
+            format!("match id.leb({}) {{ True => {}, False => {} }}", left.last().unwrap().0, valuation_body(left), valuation_body(right))
+        }
+    }
+}
+
 /// A width-indexed valuation entry: `value` at `width`, zero elsewhere, and
 /// the original neutral value at its own width rather than a numeral rebuilt
 /// from it.
@@ -403,35 +431,64 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
 ) -> Result<Values, LoweringError> {
     let first = format!("{n}_prefix"); let rest = format!("{n}_continuation");
     let port = prefix.outputs()[0];
+    let width = port.width;
     emit(&first, prefix, first_plan, incoming, m, sources)?;
-    let spelled = {
-        let named = sources.named.borrow();
-        value.render_named(cert::SourceType::Word(port.width), &|leaf: Port| val(incoming, leaf.id, leaf.width), &|produced: Port| named.get(&produced.id).cloned())
+    // A prefix that is itself a crossing produced its argument under a name.
+    let child = match prefix {
+        StructuredRegion::Compose { prefix: inner, .. } => inner.outputs().first().copied().filter(|q| sources.values.contains_key(&q.id)),
+        _ => None,
     };
-    fun(m, format!("{n}_source"), false, logical(), format!("BitVec({})", port.width), spelled);
+    let spell = |value: &cert::SourceValue, replace: Option<(u64, &str)>| {
+        value.render_named(cert::SourceType::Word(width), &|leaf: Port| val(incoming, leaf.id, leaf.width),
+            &|produced: Port| match replace { Some((id, name)) if id == produced.id => Some(name.to_string()), _ => sources.spelled(incoming, produced) })
+    };
+    fun(m, format!("{n}_source"), false, logical(), format!("BitVec({width})"), spell(value, None));
+    // What the prefix's own crossing computes from its child: the call when
+    // the child is its argument, else the helper body's result.
+    let meaning = child.and_then(|child| [Some(value), sources.bodies.get(&port.id)].into_iter().flatten()
+        .find(|meaning| meaning.produces(child.id)).map(|meaning| (child, meaning.clone())));
     let crossing = format!("{n}_source(values)");
-    sources.named.borrow_mut().insert(port.id, crossing.clone());
     let first_result = format!("{first}{}", result_suffix(first_plan, port.id));
-    thm(m, format!("{n}_link"), false, logical(), format!("{first_result}_result(values) = {}", placed_expression(port.width, &crossing)), "refl".into());
-    let own: Values = continuation.inputs().iter().map(|q| (q.id, format!("values(width, {})", q.id))).collect();
-    emit(&rest, continuation, next, &own, m, sources)?;
-    // Dispatched by comparison over the entries it has, not by peeling the
-    // id: each case step at a `BitVec(width)` result costs in proportion to
-    // the width, so a lookup that walks the id is linear in it.
-    let mut entries: Vec<_> = continuation.inputs().iter().map(|q|
-        (q.id, if q.id == port.id { at_width(q.width, &crossing, 0) } else { incoming[&q.id].clone() })).collect();
-    entries.sort_by_key(|(id, _)| *id);
-    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
-    for (id, v) in entries.into_iter().rev() {
-        cases = format!("match id.leb({id}) {{ False => {cases}, True => match Nat::leb({id}, id) {{ False => @bitvec::BitVec::zero(width), True => {v} }} }}");
+    let link = format!("{first_result}_result(values) = {}", placed_expression(width, &crossing));
+    match meaning {
+        // Stated over the argument as a variable, then used at its name: at
+        // the name itself, conversion would unfold the argument's whole
+        // computation before reducing the carry's lookup of it.
+        Some((child, meaning)) => {
+            let mut at = logical();
+            at.push(emitted_parameter("s", format!("BitVec({})", child.width)));
+            thm(m, format!("{n}_link_at"), false, at,
+                format!("{} = {}", placed_expression(width, &format!("{first}_continuation_value({first}_carry(values, s), {width})")), placed_expression(width, &spell(&meaning, Some((child.id, "s"))))),
+                "refl".into());
+            thm(m, format!("{n}_link"), false, logical(), link, format!("{n}_link_at(values, {first}_source(values))"));
+        }
+        None => thm(m, format!("{n}_link"), false, logical(), link, "refl".into()),
     }
-    fun(m, format!("{n}_carry"), false, logical(), "Valuation()".into(), format!("λ width id => {cases}"));
-    let carry = format!("{n}_carry(values)");
+    sources.named.borrow_mut().insert(port.id, (crossing.clone(), sources.scope.get()));
+    let own: Values = continuation.inputs().iter().map(|q| (q.id, format!("values(width, {})", q.id))).collect();
+    let outer = sources.scope.get();
+    sources.scopes.set(sources.scopes.get() + 1);
+    sources.scope.set(sources.scopes.get());
+    emit(&rest, continuation, next, &own, m, sources)?;
+    sources.scope.set(outer);
+    // The carry takes the crossing value as a parameter, and `_carry_at`
+    // reads it back over a variable; a lookup is never converted against
+    // the value's own name, which conversion would unfold first.
+    let mut entries: Vec<_> = continuation.inputs().iter().map(|q|
+        (q.id, if q.id == port.id { at_width(width, "s", 0) } else { incoming[&q.id].clone() })).collect();
+    entries.sort_by_key(|(id, _)| *id);
+    let mut carry_params = logical();
+    carry_params.push(emitted_parameter("s", format!("BitVec({width})")));
+    fun(m, format!("{n}_carry"), false, carry_params.clone(), "Valuation()".into(), format!("λ width id => {}", valuation_body(&entries)));
+    thm(m, format!("{n}_carry_at"), false, carry_params, format!("{n}_carry(values, s)({width}, {}) = s", port.id), "refl".into());
+    let carry = format!("{n}_carry(values, {crossing})");
     let arguments = args(r);
     let intermediate = format!("{first}_after(before)");
     let carried_proofs = continuation.inputs().iter().map(|q| {
         if q.id == port.id {
-            format!("sym(trans({first_result}_correct(values, before{arguments}), {n}_link(values)))")
+            let fact = format!("sym(trans({first_result}_correct(values, before{arguments}), {n}_link(values)))");
+            format!("j(sym({n}_carry_at(values, {crossing})), λ y _ => {} = read_gpr({}, {intermediate}.gprs), {fact})",
+                placed_expression(width, "y"), next.inputs[&q.id].heather_name())
         } else {
             format!("trans(placed_{}, sym({first}_preserves({}, before, trivial)))", q.id, p.inputs[&q.id].heather_name())
         }
@@ -441,13 +498,34 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     let span = trans(&format!("{rest}_span({intermediate})"), &trans(&congr_step(next.byte_length, &format!("{first}_span(before)")), &compose("before.rip", first_plan.byte_length, next.byte_length)));
     let memory = format!("trans({rest}_memory({intermediate}), {first}_memory(before))");
     let ff = first.clone(); let fr = rest.clone();
-    finish(n, r, p, incoming, m, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
+    let exported = finish(n, r, p, incoming, m, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
         format!("⟨{first}_layout(), {rest}_layout()⟩"),
         format!("⟨{first}_decodes(start), {}⟩", transported(&first, &format!("StructuredDecodes({rest}_code(), next_rip(start, y))"), &format!("{rest}_decodes(next_rip(start, {}))", first_plan.byte_length))),
         appended_length(&[(length_of(&first), format!("{first}_byte_length()"), first_plan.byte_length), (length_of(&rest), format!("{rest}_byte_length()"), next.byte_length)]),
         (format!("{first}_lit() ++ {rest}_lit()"), trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ {rest}_bytes(), {first}_bytes_are())"),
             &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {first}_lit() ++ ys, {rest}_bytes_are())"))),
-        Box::new(move |reg| format!("trans({fr}_preserves({}, {ff}_after(before), trivial), {ff}_preserves({}, before, trivial))", reg.heather_name(), reg.heather_name())))
+        Box::new(move |reg| format!("trans({fr}_preserves({}, {ff}_after(before), trivial), {ff}_preserves({}, before, trivial))", reg.heather_name(), reg.heather_name())))?;
+    // The result as the source computes it from the crossing value, stated
+    // over the value as a variable: what an exporter compares with the
+    // source, instead of converting through the carry at the value's name.
+    // After `finish`, which declares `_result`.
+    if let [(out, _)] = p.outputs.as_slice() {
+        if let Some(meaning) = sources.bodies.get(&out.id).filter(|meaning| meaning.produces(port.id)) {
+            let spell = |at: &str| {
+                meaning.render_named(cert::SourceType::Word(out.width), &|leaf: Port| val(incoming, leaf.id, leaf.width),
+                    &|produced: Port| if produced.id == port.id { Some(at.to_string()) } else { sources.spelled(incoming, produced) })
+            };
+            let mut at = logical();
+            at.push(emitted_parameter("s", format!("BitVec({width})")));
+            thm(m, format!("{n}_meaning_at"), false, at,
+                format!("{} = {}", placed_expression(out.width, &format!("{rest}{}_value({n}_carry(values, s), {})", result_suffix(next, out.id), out.width)), placed_expression(out.width, &spell("s"))),
+                "refl".into());
+            thm(m, format!("{n}_meaning"), false, logical(),
+                format!("{n}{}_result(values) = {}", result_suffix(p, out.id), placed_expression(out.width, &spell(&crossing))),
+                format!("{n}_meaning_at(values, {crossing})"));
+        }
+    }
+    Ok(exported)
 }
 
 fn emit_parts(n: &str, r: &StructuredRegion, p: &LoweredStructured, parts: &[(Region, LoweredDag)], incoming: &Values, m: &mut Module, sources: &Crossings) -> Result<Values, LoweringError> {

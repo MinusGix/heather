@@ -2104,13 +2104,16 @@ fn literal_int_nonzero(value: Z) -> Result<String, String> {
     Err("Omega requested a nonzero proof for zero".into())
 }
 
-fn coeffs_source(coeffs: &Coeffs) -> String {
-    coeffs
-        .as_slice()
-        .iter()
+/// A row at its atoms' full length. `Coeffs` drops trailing zeros, but the
+/// rows it is compared with (`basis`, `scale` of a parent) keep one entry per
+/// atom, and `dot` of a shorter row is not definitionally the same once a
+/// dropped atom is neutral (`0 * x` does not reduce).
+fn coeffs_source(coeffs: &Coeffs, atom_count: usize) -> String {
+    let values = coeffs.as_slice();
+    (0..atom_count.max(values.len()))
         .rev()
-        .fold("list::Nil".to_string(), |tail, coefficient| {
-            format!("list::Cons({}, {tail})", int(*coefficient))
+        .fold("list::Nil".to_string(), |tail, index| {
+            format!("list::Cons({}, {tail})", int(values.get(index).copied().unwrap_or(0)))
         })
 }
 
@@ -3191,7 +3194,7 @@ pub(crate) fn reconstruct(
                 divisor,
             } => {
                 let source = parent(&proofs, source)?;
-                let row_source = coeffs_source(&fact.coeffs);
+                let row_source = coeffs_source(&fact.coeffs, atom_count);
                 let nonnegative = format!("int::Int::zero_le_ofNat({divisor})");
                 let lower = match (source.interval.lower, fact.interval.lower) {
                     (Some(original), Some(rounded)) => {

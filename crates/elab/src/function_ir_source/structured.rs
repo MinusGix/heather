@@ -34,6 +34,8 @@ pub struct ReflectedStructuredFunction {
     pub choice: Option<StructuredSourceChoice>,
     /// Where a composition crosses at a helper call (cert::SourceValue).
     pub sources: cert::SourceValues,
+    /// A composed helper body's result, spelled inside the body.
+    pub bodies: cert::SourceValues,
 }
 
 /// Two constructors with the same scalar payload use a discriminator and a
@@ -80,11 +82,11 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
         let bindings = parameters.iter().enumerate().map(|(id, ty)| (*ty, ty.width().map(|width| Port { id: id as u64, width }))).collect();
         let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, boolean_payloads,
             inputs: interface(&parameters), bindings, result, output, exit, stack: vec![caller],
-            next_id: output.id + 1 + u64::from(exit.is_some()), needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new() };
+            next_id: output.id + 1 + u64::from(exit.is_some()), needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new() };
         match builder.region(term, 0) {
             Ok(region) => {
                 cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
-                return Ok(ReflectedStructuredFunction { source_name, parameters, result, region, choice, sources: builder.sources });
+                return Ok(ReflectedStructuredFunction { source_name, parameters, result, region, choice, sources: builder.sources, bodies: builder.bodies });
             }
             Err(error) => match builder.needs_port {
                 Some(index) if parameters[index] == StructuredSourceType::Natural => parameters[index] = StructuredSourceType::NatWord,
@@ -157,6 +159,10 @@ struct Builder<'a> {
     known: BTreeMap<usize, u64>,
     /// The source value of each composed producer's result.
     sources: cert::SourceValues,
+    /// A helper body's result as a call inside the body, by result port: what
+    /// a crossing's link reads when the helper's argument is plain but its
+    /// body composes (`times256(x) = double(double(…))`).
+    bodies: cert::SourceValues,
 }
 
 // Local interning preserves DAG sharing. There is no parallel source AST;
@@ -305,6 +311,7 @@ impl Builder<'_> {
         };
         let (head, args) = application_spine(term);
         let Some(callee) = absolute(head, self.caller) else { return Err(primitive_error); };
+        if let Some(produced) = self.primitive_over_helpers(callee, &args, depth, expected, target)? { return Ok(produced); }
         let Some(name) = self.elaborator.global_qualified_name_at(callee) else { return Err(primitive_error); };
         let Some((ty, body)) = self.elaborator.global_body(&name) else { return Err(primitive_error); };
         if self.stack.contains(&callee) || self.stack.len() >= 32 { return unsupported("recursive or excessively deep helper expansion"); }
@@ -370,10 +377,11 @@ impl Builder<'_> {
         let mut nested = Builder { elaborator: self.elaborator, caller: callee,
             operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison,
             boolean_payloads: self.boolean_payloads, inputs: inputs.clone(), bindings,
-            result: expected, output, exit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new() };
+            result: expected, output, exit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new() };
         let mut region = nested.region(body, 0)?;
         self.next_id = nested.next_id;
         self.sources.append(&mut nested.sources);
+        for (port, value) in std::mem::take(&mut nested.bodies) { self.bodies.entry(port).or_insert(value); }
         if !arguments.nodes.is_empty() {
             // Only the new argument values leave the prefix: what is already in
             // scope stays where it is rather than being copied.
@@ -386,6 +394,51 @@ impl Builder<'_> {
         }
         let value = call.map(|(arguments, result)| cert::SourceValue::Call { name, arguments, result });
         Ok((Some(region), output, value))
+    }
+    /// A word operation or comparison whose operands include a helper call:
+    /// those operands are produced first, as a helper argument is, and the
+    /// operation applies to their results.
+    fn primitive_over_helpers(&mut self, head: usize, args: &[&Term], depth: u32, expected: StructuredSourceType, target: Option<u64>)
+        -> Result<Option<(Option<StructuredRegion>, Port, Option<cert::SourceValue>)>, SourceError>
+    {
+        let operation = self.operations.operations.get(&head).copied();
+        if args.len() != 3 || (operation.is_none() && head != self.comparison) { return Ok(None); }
+        let Some(width) = nat_literal(args[0]).filter(|width| *width <= 64) else { return Ok(None); };
+        let fits = match operation { Some(_) => expected == StructuredSourceType::Word(width), None => expected == StructuredSourceType::Boolean };
+        if !fits { return Ok(None); }
+        let operand = StructuredSourceType::Word(width);
+        let outer = self.inputs.clone();
+        let mut dag = Dag::default();
+        let mut producers = Vec::new();
+        let mut produced = cert::SourceValues::new();
+        let mut ports = Vec::new();
+        for arg in &args[1..] {
+            let mut trial = dag.clone();
+            let port = match self.expression(arg, depth, operand, &mut trial, None) {
+                Ok(port) => { dag = trial; port }
+                Err(error) => {
+                    let (producer, port, value) = self.produce(arg, depth, operand, None).map_err(|_| error)?;
+                    if let Some(producer) = producer { producers.push((producer, port, value.clone())); }
+                    if let Some(value) = value { produced.insert(port.id, cert::SourceValue::Produced { port, value: Box::new(value) }); }
+                    self.inputs.push(port);
+                    port
+                }
+            };
+            ports.push(port);
+        }
+        let (left, right) = (ports[0].id, ports[1].id);
+        let port = match operation {
+            Some(operation) => self.node(&mut dag, DagKey::Binary(operation, width, left, right), width, target, |output| operation.node_at_width(width, output, left, right))?,
+            None => self.node(&mut dag, DagKey::UnsignedLessThan(width, left, right), 1, target, |output| Node::UnsignedLessThan { width, output, left, right })?,
+        };
+        let value = read_back(&dag.nodes, port, &produced).filter(|_| producers.iter().all(|(_, _, value)| value.is_some()));
+        let mut region = StructuredRegion::Dataflow(Region { inputs: self.inputs.clone(), nodes: dag.nodes, outputs: vec![port] });
+        self.inputs = outer;
+        for (producer, port, value) in producers.into_iter().rev() {
+            if let Some(value) = value { self.sources.insert(port.id, value); }
+            region = StructuredRegion::Compose { prefix: Box::new(producer), continuation: Box::new(region) };
+        }
+        Ok(Some((Some(region), port, value)))
     }
     fn region(&mut self, term: &Term, depth: u32) -> Result<StructuredRegion, SourceError> {
         let inputs = self.inputs.clone();
@@ -420,7 +473,10 @@ impl Builder<'_> {
                 self.expression(fst, depth, self.result, &mut dag, Some(self.output.id))?;
                 self.constant(&mut dag, 1, tag, Some(exit.id))?;
             } else {
-                let (producer, port, _) = self.produce(term, depth, self.result, Some(self.output.id))?;
+                let (producer, port, value) = self.produce(term, depth, self.result, Some(self.output.id))?;
+                // The innermost call keeps the entry: an enclosing helper whose
+                // body this is shares its result port.
+                if let (Some(StructuredRegion::Compose { .. }), Some(value)) = (&producer, value) { self.bodies.entry(port.id).or_insert(value); }
                 if let Some(producer) = producer { return Ok(producer); }
                 debug_assert_eq!(port, self.output);
             }
@@ -455,7 +511,7 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
         Some((id as u64, (width, HeatherExpr::raw(publication::vector(*ty, &arguments[id].render())))))
     }).collect();
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: BTreeSet::new() };
+        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: BTreeSet::new(), tests: BTreeMap::new() };
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.choice.as_ref().map_or_else(|| reflected.result.name(), |choice| format!("{}<{}>", choice.type_name, reflected.result.name()));
@@ -485,6 +541,10 @@ struct Expansion<'a> {
     /// Zero constants, any width: `x | 0` is spelled `x`, as the source
     /// spells a passthrough.
     zeros: BTreeSet<u64>,
+    /// A one-bit value's Boolean, where it has one (a comparison, a Bool
+    /// helper's call): a branch reads it rather than `head_bit` of the bit,
+    /// which conversion would evaluate, and through it everything below.
+    tests: BTreeMap<u64, String>,
 }
 
 impl ReflectedStructuredFunction {
@@ -507,15 +567,24 @@ fn operand(values: &Expressions, id: u64, width: u64) -> Result<HeatherExpr, Sou
 impl Expansion<'_> {
     /// A composed result's value is the helper call the source makes, over
     /// the expressions its inputs already have.
-    pub(super) fn crossing(&self, value: &cert::SourceValue, port: Port, values: &Expressions) -> Result<HeatherExpr, SourceError> {
+    pub(super) fn crossing(&mut self, value: &cert::SourceValue, port: Port, values: &Expressions) -> Result<HeatherExpr, SourceError> {
         let missing = std::cell::Cell::new(None);
-        let spelled = value.render(cert::SourceType::Word(port.width), &|leaf: Port| match operand(values, leaf.id, leaf.width) {
+        let leaf = |leaf: Port| match operand(values, leaf.id, leaf.width) {
             Ok(expression) => expression.render(),
             Err(_) => { missing.set(Some(leaf.id)); String::new() }
-        });
+        };
+        let spelled = value.render(cert::SourceType::Word(port.width), &leaf);
+        if port.width == 1 { let test = value.render(cert::SourceType::Boolean, &leaf); self.tests.insert(port.id, test); }
         match missing.get() {
             Some(id) => unsupported(&format!("composed result {} reads value {id}, which is not in scope", port.id)),
             None => Ok(HeatherExpr::raw(spelled)),
+        }
+    }
+    /// A branch's Boolean: the value's own, else `head_bit` of its bit.
+    pub(super) fn test(&self, values: &Expressions, id: u64) -> Result<String, SourceError> {
+        match self.tests.get(&id) {
+            Some(test) => Ok(test.clone()),
+            None => Ok(format!("@bitvec::BitVec::head_bit(0, {})", operand(values, id, 1)?.render())),
         }
     }
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
@@ -537,6 +606,7 @@ impl Expansion<'_> {
                         _ => unreachable!(),
                     };
                     let expression = HeatherExpr::explicit_call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
+                    if comparison { self.tests.insert(output, expression.render()); }
                     (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::BitVec::ofBool", [expression]) } else { expression })
                 }
                 _ => return unsupported("unsupported source expansion node"),
@@ -623,10 +693,10 @@ impl Expansion<'_> {
                 self.region(continuation, values)
             }
             StructuredRegion::Conditional { condition, when_true, when_false, .. } => {
-                let condition = operand(&values, *condition, 1)?;
+                let condition = self.test(&values, *condition)?;
                 let yes = self.region(when_true, values.clone())?;
                 let no = self.region(when_false, values)?;
-                Ok(HeatherExpr::raw(format!("match @bitvec::BitVec::head_bit(0, {}) {{ False => {}, True => {} }}", condition.render(), no.render(), yes.render())))
+                Ok(HeatherExpr::raw(format!("match {condition} {{ False => {}, True => {} }}", no.render(), yes.render())))
             }
         }
     }
@@ -643,7 +713,10 @@ pub fn generate_elaborated_structured_x86(
     }
     let placements = x86::Placements::from([(0, input_registers[0]), (1, input_registers[1])]);
     let outputs = x86::Placements::from([(reflected.region.outputs()[0].id, output)]);
-    let mut emission = x86::generate_structured_sourced(prefix, &reflected.region, &reflected.sources, &placements, temporaries, &outputs).map_err(SourceError::Lowering)?;
+    let mut emission = x86::generate_structured_sourced(prefix, &reflected.region, &reflected.sources, &reflected.bodies, &placements, temporaries, &outputs).map_err(SourceError::Lowering)?;
+    // A composed root reaches its expansion through `_meaning`, which states
+    // the result over its crossing value (structured_cert.rs).
+    let meaning = emission.text.contains(&format!("theorem {prefix}_meaning("));
     let mut module = Module::default();
     module.raw(generate_structured_source_expansion(prefix, &reflected)?
         .replace("import bitvec;\n", "").replace("import bool;\n", ""));
@@ -662,7 +735,8 @@ pub fn generate_elaborated_structured_x86(
     let before = || vec![Parameter::explicit("before", HeatherExpr::name("MachineState<M>"))];
     let values = || vec![Parameter::explicit("values", HeatherExpr::name("Valuation()"))];
     decl(&mut module, format!("{prefix}_result_expands"), false, values(),
-        format!("{prefix}_result(values) = {prefix}_expression(values(64, 0), values(64, 1))"), "refl".into(), true);
+        format!("{prefix}_result(values) = {prefix}_expression(values(64, 0), values(64, 1))"),
+        if meaning { format!("{prefix}_meaning(values)") } else { "refl".into() }, true);
     decl(&mut module, format!("{prefix}_denotes_source"), false, values(),
         format!("{prefix}_result(values) = {source}(values(64, 0), values(64, 1))"),
         format!("trans({prefix}_result_expands(values), {prefix}_source_expands(values(64, 0), values(64, 1)))"), true);

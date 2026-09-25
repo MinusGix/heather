@@ -157,6 +157,15 @@ impl SourceValue {
     pub fn render(&self, ty: SourceType, leaf: &dyn Fn(Port) -> String) -> String {
         self.render_named(ty, leaf, &|_| None)
     }
+    /// Whether the value reads `port`'s produced result.
+    pub fn produces(&self, port: u64) -> bool {
+        match self {
+            Self::Port(_) | Self::Constant { .. } => false,
+            Self::Binary { left, right, .. } | Self::Less { left, right, .. } => left.produces(port) || right.produces(port),
+            Self::Call { arguments, .. } => arguments.iter().any(|(_, value)| value.produces(port)),
+            Self::Produced { port: produced, value } => produced.id == port || value.produces(port),
+        }
+    }
     /// As `render`; `named` may spell a produced argument by a name its own
     /// crossing already gave it, so that nothing compares its expansion.
     pub fn render_named(&self, ty: SourceType, leaf: &dyn Fn(Port) -> String, named: &dyn Fn(Port) -> Option<String>) -> String {

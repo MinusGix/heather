@@ -53,7 +53,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut callee = None;
     let mut callable_caller = false;
     let mut read_loop = false;
-    let (mut needle, mut advance, mut spec, mut computes) = (None, None, None, None);
+    let mut print = false;
+    let (mut needle, mut advance, mut spec, mut computes, mut bound) = (None, None, None, None, None);
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -62,12 +63,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         match arg.as_str() {
             "--callable-caller" if executable => { callable_caller = true; }
             "--read-loop" if executable => { read_loop = true; }
-            "--needle" | "--advance" | "--spec" | "--computes" if executable => {
+            "--print" if executable => { print = true; }
+            "--needle" | "--advance" | "--spec" | "--computes" | "--bound" if executable => {
                 let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
                 match arg.as_str() {
                     "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
                     "--advance" => advance = Some(value),
                     "--spec" => spec = Some(value),
+                    "--bound" => bound = Some(value),
                     _ => computes = Some(value),
                 }
             }
@@ -100,19 +103,22 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
+    if print != bound.is_some() {
+        return Err("--print needs --bound <theorem>, the program's proof that its count stays below 10000, and --bound belongs to --print".into());
+    }
     if read_loop {
         if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
         if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() {
             return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function> and --computes <theorem>".into());
         }
-    } else if needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() {
-        return Err("--needle, --advance, --spec and --computes belong to --read-loop".into());
+    } else if print || needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() {
+        return Err("--needle, --advance, --spec, --computes and --print belong to --read-loop".into());
     } else if executable && inputs.len() != 2 {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem>) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> [--print --bound <theorem>]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -214,7 +220,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         elab.set_gate(Rc::clone(store) as Rc<dyn heather_elab::gate::KernelGate>);
     }
     let mut session = SemanticSession::new(cache);
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] }).copied().collect();
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
+        .chain(if print { read_loop::PRINT_SUPPORT } else { &[] }).copied().collect();
     for &(name, src) in &bundle {
         check_module(&mut elab, &mut session, &loader::Module {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
@@ -244,24 +251,40 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut probes = Some(Vec::new());
     let (image, body_bytes) = if read_loop {
         let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap() };
+            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), bound: bound.as_deref() };
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
             name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
         })?;
         let emission = read_loop::generate_loop(&elab, &prefix, &program)?;
+        // Generated where the context resolves names, before another module is checked.
+        let generated = if print { Some(read_loop::generate_format(&elab, &prefix)?) } else { None };
         // The loop's pieces are a module of their own, which its composition imports.
         let pieces = format!("{prefix}_pieces");
         check_module(&mut elab, &mut session, &loader::Module {
             name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
         })?;
+        // The formatter's three certificates, each a module of its own.
+        let format = if let Some(parts) = generated {
+            for part in &parts {
+                check_module(&mut elab, &mut session, &loader::Module {
+                    name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
+                })?;
+            }
+            Some(parts)
+        } else { None };
         proof = Module::default();
-        for name in read_loop::IMPORTS.iter().filter(|name| !emission.text.contains(&format!("import {name};"))) {
+        let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] });
+        for name in imports.filter(|name| !emission.text.contains(&format!("import {name};"))) {
             proof.raw(format!("import {name};"));
         }
+        for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
         proof.raw(emission.text.clone());
         probes = None;
-        (Some(read_loop::certify(&mut proof, &prefix, &program, &emission)?), None)
+        (Some(match &format {
+            Some(parts) => read_loop::certify_print(&mut proof, &prefix, &program, &emission, parts)?,
+            None => read_loop::certify(&mut proof, &prefix, &program, &emission)?,
+        }), None)
     } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
@@ -362,7 +385,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if read_loop {
+        if print {
+            println!("{}: {}-byte ELF64 executable; checked read-once process trace printing `{}` as a decimal line", output.display(), image.len(), spec.as_deref().unwrap());
+        } else if read_loop {
             println!("{}: {}-byte ELF64 executable; checked read-once process trace against `{}`", output.display(), image.len(), spec.as_deref().unwrap());
         } else {
             println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());

@@ -98,7 +98,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip native_encoder_is_checked_and_corruption_is_rejected
         --skip loaded_mapping_and_fetch_refusals
         --skip elf_header_mutations_are_rejected_by_heather
-        --skip call_stack_semantics_and_refusals)
+        --skip call_stack_semantics_and_refusals
+        --skip wc_l_prints_what_the_read_returned)
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long

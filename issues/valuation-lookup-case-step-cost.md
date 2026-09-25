@@ -35,3 +35,7 @@ lookup), which is a workaround at one site, not the fix.
   closed result type per step), or the generators use a lookup whose cost does
   not grow with the id. Say which, on evidence.
 - A bench family or test pinning the per-step cost flat in the id.
+
+## Log
+
+- 2026-09-25: The structured generator's valuations now avoid the cost (`valuation_body` in `structured_cert.rs`). They dispatch on the id through a balanced `Nat::leb` tree, so a lookup costs a logarithmic number of comparisons, not a step per `Succ`. The kernel cost itself remains, and so does the bench pinning it.

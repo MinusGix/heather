@@ -18,10 +18,12 @@ Design: `docs/native-first-program-design.md`.
 
 ## Current state
 
-Slices 1–3 landed 2026-09-24: `wc -l` builds with `build-x86 --read-loop` and runs, and
-its certificate states the process against `wc_l` (design §8). Slice 4, output to stdout, is in
-progress (design §10): the compiler part landed 2026-09-25 (§10.1); the formatter's meaning, the
-word store, the write event, the process theorem and the CLI remain (§10.2).
+Slices 1–4 landed. `wc -l` builds with `build-x86 --read-loop`, exits with
+its count, and its certificate states the process against `wc_l` (design §8).
+Since 2026-09-25, `--print --bound <theorem>` makes it print the count instead
+and exit 0, with the certificate stating the write (§10). What remains is
+acceptance hardening: kernel-refusal tests for the print profile, and the
+input-size bound as an argument rather than a fixed 4096.
 
 ## Slices
 
@@ -32,7 +34,7 @@ word store, the write event, the process theorem and the CLI remain (§10.2).
    Its proper form is [[linux-syscall-trace-model]].
 3. `wc -l` itself: spec, client lemma, process-shape theorem, `build-x86`
    profile, native and kernel-refusal tests.
-4. Output (next): program byte stores ([[byte-memory-access-model]]'s write
+4. Output (landed 2026-09-25): program byte stores ([[byte-memory-access-model]]'s write
    subset), decimal formatting as a writing loop, a write event.
 
 ## Acceptance
@@ -58,3 +60,4 @@ word store, the write event, the process theorem and the CLI remain (§10.2).
 - 2026-09-24: Probes V1–V5 held (design §7), with one amendment: the program gets its own memory view, `IoMemory`, which classifies addresses by value. Slices A–C landed (§8). A: `x86_64_fetched_code` proves `access_fetched`, so any loop or branch certificate runs fetched in a loaded image. B: the basic trace is in `linux_x86_64_io` and the memory view in `elf64_io`. C: the process theorem `elf64_read_loop::read_loop_runs`, `examples/x86-native/wc_l.hthr`, and `build-x86 --read-loop`. `wc -l` builds as a 625-byte certified executable in about 36 s and runs correctly on files and a pipe (`crates/cli/tests/native_read_loop.rs`). Six mutations of the process shape are refused (`crates/elab/tests/read_loop_process.rs`). Residency ended up proved by induction, not evaluated (§8 amendments). The exit-status slice is done; stdout output is next.
 - 2026-09-24: Filed along the way: [[let-bound-proposition-diagnostic]], an odd refusal of a type-valued `let`. The fuel measurements are logged on [[call-memory-read-file-walk]].
 - 2026-09-25: Slice 4 started. Its compiler part landed: word-valued helpers compose, and composed certificates cross at the helper call, so a 16-link decimal formatter certifies (1562 bytes, about 35 s) and agrees with C on every n below 10 000. Four generator fixes, attributed per item: design §10.1. Residues: a link still costs about 40K steps more per level (quadratic in depth, within fuel at 16), and valuation lookups peel the id at about 1.3K steps a level ([[valuation-lookup-case-step-cost]]). Remaining pieces: §10.2.
+- 2026-09-25: Slice 4 landed (design §10.2–§10.3). The new library modules are `x86_64_store` (word store), `decimal_line` (formatter source functions and their meaning below 10 000), and `elf64_read_print` (process theorem `read_print_runs`). `linux_x86_64_io` gains `WriteEvent`, and `LinuxRuns` now runs over `FetchedStep ∨ StoreStep`. The CLI flags are `--print --bound`, and `wc_l_bounded` is in the example. The built file is 2757 bytes and matches `wc -l` on every input width, a pipe included (`crates/cli/tests/native_read_loop.rs`). Scaling it into budget took three general lessons, recorded in design §10.3: `let` chains, projection chains, and `refl` on large Nats. A fresh print build sits close to the test process's CPU rail. Filed along the way: [[omega-respells-atoms-without-implicits]].

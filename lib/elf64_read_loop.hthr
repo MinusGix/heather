@@ -144,35 +144,43 @@ theorem read_loop_head(p: LoopPlacement, at: ReadLoopPlacement(p), needle: BitVe
         memory_agrees := λ word => io_buffer_agrees(state.memory, n, word))
 }
 
-// After the read returned `bytes`: set up, loop, exit with the count. The
-// state is the read's return, with the facts about it the rule fixes.
-theorem read_loop_after_read(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
+// After the read returned `bytes`: set up the loop's head and run the loop.
+// The count is in R11, memory is what the read left, and RIP is past the
+// loop; the setup and the loop are resident from `at_setup`.
+fn ReadLoopCounted(returned: MachineState<IoMemory>, stored: IoMemory, count: Nat, done_at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ done => FetchedSteps(io_fetch_access(), io_data_access(), returned, done) ∧
+        ((done.memory = stored) ∧ ((done.rip = done_at) ∧ (read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, count)))))
+}
+
+theorem read_loop_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
     source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
     computes: ReadLoopComputes(source, needle, spec),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_loop_code(needle, loop_bytes), BitVec::ofNat(0x4000e8)),
-    bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), returned: MachineState<IoMemory>,
+    bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), returned: MachineState<IoMemory>, at_setup: Nat,
     memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
-    rip_is: returned.rip = next_rip(BitVec::ofNat(0x4000e8), (0 + read_entry_len()) + 2),
-    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len())):
-    LinuxRuns(io_linux(), [ExitEvent(bitvec_nat::word_of_nat(64, spec(bytes)))], returned) {
+    rip_is: returned.rip = next_rip(BitVec::ofNat(0x4000e8), at_setup),
+    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
+    setup_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
+        canonical_block_bytes(read_setup_block(needle)), next_rip(BitVec::ofNat(0x4000e8), at_setup)),
+    loop_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
+        loop_bytes, next_rip(BitVec::ofNat(0x4000e8), at_setup + read_setup_len(needle)))):
+    ReadLoopCounted(returned, io_store_offset(IoMemory(file, page), 0, bytes), spec(bytes),
+        next_rip(BitVec::ofNat(0x4000e8), (at_setup + read_setup_len(needle)) + loop_bytes.len())) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let n = bytes.len();
     let capped: (n <= 4096) = fits;
     let stored = io_store_offset(IoMemory(file, page), 0, bytes);
-    let pieces = read_loop_resident(stored, needle, loop_bytes, resident(stored.page));
-    let at_setup = (0 + read_entry_len()) + 2;
     let at_loop = at_setup + read_setup_len(needle);
     let at_exit = at_loop + loop_bytes.len();
     // Set up the loop's head.
     let setup = block_fetched(fetch, data, read_setup_block(needle), returned, trivial,
         resident_state(fetch, canonical_block_bytes(read_setup_block(needle)), stored, next_rip(entry, at_setup),
-            returned, memory_is, rip_is, pieces.setup_at));
+            returned, memory_is, rip_is, setup_at));
     let ready = read_after_setup(needle, returned);
     let ready_memory: (ready.memory = stored) = trans(pure_block_memory(read_setup_block(needle), returned), memory_is);
     let ready_rip: (ready.rip = next_rip(entry, at_loop)) =
@@ -199,13 +207,45 @@ theorem read_loop_after_read(file: List<BitVec(8)>, page: Nat → BitVec(8), p: 
         read_loop_head(p, at, needle, bytes, fits, returned, length_word), readable, counted);
     let done = ran.witness;
     let looped = access_artifact_fetched(fetch, data, loop_code, loop_bytes, ready, done, ran.proof.left,
-        resident_state(fetch, loop_bytes, stored, next_rip(entry, at_loop), ready, ready_memory, ready_rip, pieces.loop_at));
+        resident_state(fetch, loop_bytes, stored, next_rip(entry, at_loop), ready, ready_memory, ready_rip, loop_at));
     let done_memory: (done.memory = stored) = trans(access_memory(data, loop_code, ready, done, ran.proof.left.execution), ready_memory);
     let done_rip: (done.rip = next_rip(entry, at_exit)) =
         trans(looped.right, rip_advance(entry, ready.rip, at_loop, loop_bytes.len(), ready_rip));
     let observed = j(computed, λ outcome _ => LoopObserved<IoMemory, Nat>(p, loop_nat_rep, done, outcome), ran.proof.right);
     let carried: (read_gpr(R11, done.gprs).toNat() = spec(bytes)) =
         j(at.carry, λ r _ => read_gpr(r, done.gprs).toNat() = spec(bytes), observed.right.right.right);
+    let word: (read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, spec(bytes))) =
+        trans(sym(bitvec_nat::word_of_nat_toNat(64, read_gpr(R11, done.gprs))),
+            cong_fn<Nat, BitVec(64)>(λ count => bitvec_nat::word_of_nat(64, count), carried));
+    Exists(done, ⟨fetched_steps_trans(fetch, data, returned, ready, done, setup.left, looped.left), ⟨done_memory, ⟨done_rip, word⟩⟩⟩)
+}
+
+// After the read returned `bytes`: set up, loop, exit with the count. The
+// state is the read's return, with the facts about it the rule fixes.
+theorem read_loop_after_read(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
+    region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
+    computes: ReadLoopComputes(source, needle, spec),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_loop_code(needle, loop_bytes), BitVec::ofNat(0x4000e8)),
+    bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), returned: MachineState<IoMemory>,
+    memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
+    rip_is: returned.rip = next_rip(BitVec::ofNat(0x4000e8), (0 + read_entry_len()) + 2),
+    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len())):
+    LinuxRuns(io_linux(), [ExitEvent(bitvec_nat::word_of_nat(64, spec(bytes)))], returned) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
+    let pieces = read_loop_resident(stored, needle, loop_bytes, resident(stored.page));
+    let at_exit = (((0 + read_entry_len()) + 2) + read_setup_len(needle)) + loop_bytes.len();
+    let counted = read_loop_counts(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native,
+        computes, bytes, fits, returned, (0 + read_entry_len()) + 2, memory_is, rip_is, length_word, pieces.setup_at, pieces.loop_at);
+    let done = counted.witness;
+    let done_memory = counted.proof.right.left;
+    let done_rip = counted.proof.right.right.left;
     // exit(count).
     let exited = block_fetched(fetch, data, read_exit_block(), done, trivial,
         resident_state(fetch, canonical_block_bytes(read_exit_block()), stored, next_rip(entry, at_exit), done,
@@ -217,13 +257,9 @@ theorem read_loop_after_read(file: List<BitVec(8)>, page: Nat → BitVec(8), p: 
     let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
         resident_state(fetch, linux_syscall_bytes(), stored, next_rip(entry, at_exit + read_exit_len()), last,
             last_memory, last_rip, pieces.exit_call_at)));
-    let status: (read_gpr(Rdi, last.gprs) = bitvec_nat::word_of_nat(64, spec(bytes))) =
-        trans(sym(bitvec_nat::word_of_nat_toNat(64, read_gpr(R11, done.gprs))),
-            cong_fn<Nat, BitVec(64)>(λ count => bitvec_nat::word_of_nat(64, count), carried));
     linux_runs_exit(io_linux(), returned, last, bitvec_nat::word_of_nat(64, spec(bytes)),
-        fetched_steps_trans(fetch, data, returned, ready, last, setup.left,
-            fetched_steps_trans(fetch, data, ready, done, last, looped.left, exited.left)),
-        call, refl, status)
+        fetched_steps_trans(fetch, data, returned, done, last, counted.proof.left, exited.left),
+        call, refl, counted.proof.right.right.right)
 }
 
 // The process claim: for every input a successful read may return, the file

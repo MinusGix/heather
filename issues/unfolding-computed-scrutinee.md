@@ -3,7 +3,7 @@ title: Unfolding equations for a decreases body that matches on a computed scrut
 status: open
 labels: [frontend,elaboration,proofs]
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-25
 ---
 
 
@@ -23,3 +23,7 @@ state the equation per outer arm. The first is the natural one.
 ## What it assumes from elsewhere
 - **[[decreases-unfolding-equations]]** owns the walk. Assumed here: only that
   a variable-scrutinee `match` is in the fragment and a computed one is not.
+
+## Log
+
+- 2026-09-25: Hit again by the decimal spec in lib/decimal_line.hthr: `decimal(n)` by `decreases` over `match Nat::le_dec(10, n)` gets no `decimal_unfold`, so the spec is written with explicit fuel (`decimal_digits(n, n)`) instead. That's worth revisiting once this lands: the `decreases` form reads better as a specification.
