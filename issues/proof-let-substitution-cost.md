@@ -90,3 +90,20 @@ bisection. The next large program will have longer chains.
     - **Kernel `let` former** (a definitional context entry with lazy ζ): the only option that fixes 1, 2 and 3 together, because sharing becomes syntax that survives shifting and serialization. It is a DeLaM decision: the Coq formalization is edited first, starting with the notions it shares.
   - **Answering the linked question**: [[frontend-large-proof-composition-cost]]'s staging gap is frontend-dominated (68.9 s frontend against 7.5 s kernel), and this item is 96% gate. It is the same family (sharing that does not survive), but a different consumer, so this issue does not give it its mechanism. Its closest cause here is 4.
   - **Acceptance correction**: a chain where each let uses the previous once is already linear (`lin`). The regression family has to fan out: `fan` for values and `dep` for the transparent case the redex cannot serve.
+- 2026-09-25: The `have` experiment (furnace, release, width one, `--cache`). The unsplit body was rewritten with chosen top-level lets bound as `(λ (x: T) => { rest })(v)`, the lowering an opaque `have` would use. Nothing else changed, and every variant checks:
+
+  | opaque bindings | queries | misses | eval steps | total | gate |
+  |---|---|---|---|---|---|
+  | none (unsplit) | 3,441,953 | 492,298 | 66.7M | 185.6 s | 177.4 s |
+  | `counted` | 535,855 | 97,502 | 11.1M | 10.1 s | 8.8 s |
+  | `counted`, `pieces` | 534,949 | 97,362 | 11.1M | 10.1 s | 8.8 s |
+  | `w`, `st`, `ln` | 66,100 | 9,219 | 0.54M | 1.35 s | 1.10 s |
+  | `counted`, `w`, `st`, `ln` | **30,804** | **4,285** | **0.22M** | **0.51 s** | 0.33 s |
+  | split into lemmas (4 items summed) | 66,235 | 9,348 | 1.15M | 1.14 s | 0.84 s |
+
+  - **Four `have`s beat the split** by about half on every count. Three on the formatter certificates alone already match it.
+  - The multiplier the split removed was mostly the **state chain**, not `counted`. `w = format.word_cert(s0, read_gpr(R11, s0.gprs), refl)` mentions `s0` twice, `st` mentions `s1` three times, and `s_{i+1} = cert.after`, so `s3` held ~12 copies of `s0`, and the whole write half is about `s3`. Opaque certificates make each `s_{i+1}` a projection of a variable.
+  - Every binding made opaque here is the result of a **neutral application**: a theorem, or a field of the parameter `format`. It had no reduct to lose, so nothing downstream needed its value. The state lets (`s1 = w.after`, …) stayed transparent aliases, and those are the ones later proofs *do* need, because `s1_memory: s1.memory = …` is `w.memory_preserved`'s type only when `s1 ≡ w.after`.
+  - `pieces` changed nothing: its uses are projections into argument positions, and nothing fans them out.
+
+  For the design, the lets worth `have` are the **certificate/lemma-result** lets that later **data** lets project from. That is also the rule a diagnostic can point at: the let with the largest path multiplier whose value is a neutral application.
