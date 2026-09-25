@@ -1,0 +1,12 @@
+// A file the kernel refuses with `OutOfFuel` after a deep conversion: checking
+// the `mul_comm` instance unfolds `rest * 2^40` on its literal. The refusal is
+// what `kernel_workers.rs` pins at every width; a thread with too little stack
+// aborts here instead (issues/kernel-worker-stack-below-depth-budget.md).
+import nat;
+import logic;
+
+theorem flip_sides(rest, s, c: Nat, lt: rest * 1099511627776 + s < c * 1099511627776 + 0):
+    1099511627776 * rest + s < 1099511627776 * c {
+    Nat::lt_congr_iff(rest * 1099511627776 + s, 1099511627776 * rest + s, c * 1099511627776 + 0, 1099511627776 * c,
+        Nat::cong(λ (x: Nat) => x + s, rest.mul_comm(1099511627776)), c.mul_comm(1099511627776)).mp(lt)
+}

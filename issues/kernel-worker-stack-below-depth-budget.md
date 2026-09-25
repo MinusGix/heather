@@ -1,6 +1,6 @@
 ---
 title: Kernel workers overflow their 2 MiB stack where the serial gate says OutOfFuel
-status: open
+status: closed
 labels: [kernel,diagnostics,parallelism]
 created: 2026-09-25
 updated: 2026-09-25
@@ -53,3 +53,7 @@ literal on the left (`2^40 * rest`) and costs nothing. Whether conversion
 should ever reach that unfolding belongs with
 the run-arithmetic classes of [[nat-run-algebra-primitives]], not
 here.
+
+## Log
+
+- 2026-09-25: Landed. `NATIVE_STACK_BYTES` (8 MiB) sits beside `NATIVE_DEPTH_LIMIT` in `crates/kernel/src/reduce.rs` as the stack the budget was measured against, and the pool spawns its workers with it (`Builder::stack_size`, `crates/elab/src/pool.rs`). The pool is the only thread spawn in the compiler. Plan item 1 took the one-line route. Deriving the budget from the actual stack is left undone: nothing else spawns a kernel thread, and the constant now names the pairing. Regression control: `kernel_workers.rs::a_deep_refusal_is_a_verdict_at_every_width` runs `fixtures/deep_refusal.hthr` (the repro above) at widths one and eight with `RUST_MIN_STACK` removed and asserts exit 1 with `OutOfFuel`. With the `stack_size` line commented out it fails at width eight, as the control should. The main thread still takes whatever `ulimit -s` gives it. That is 8 MiB by default on Linux, and a smaller one would bring the same abort back for width one. The open question below, why `flip_sides` is expensive at all, stays with [[nat-run-algebra-primitives]].

@@ -478,7 +478,7 @@ impl KernelPool {
     /// The pool **grows one worker per submission**, up to the configured
     /// width, so a run that queues nothing spawns nothing and a module with
     /// one proof obligation pays for one thread rather than for eight. A
-    /// thread is not free — it carries the process's whole configured stack,
+    /// thread is not free — it carries the kernel's whole native stack,
     /// and the dev loop is full of one- and two-declaration probe modules —
     /// while a module wide enough to use eight workers reaches eight by its
     /// eighth declaration, before any of them could have been the bottleneck.
@@ -506,9 +506,11 @@ impl KernelPool {
             let mine = Arc::clone(&shared);
             // A thread the OS will not give us is not a reason to fail a
             // check: the workers already running (or, with none, this thread)
-            // do the work.
+            // do the work. The stack is the one the kernel's depth budget was
+            // sized for, not the 2 MiB default a spawned thread gets.
             if let Ok(handle) = std::thread::Builder::new()
                 .name(format!("heather-kernel-{n}"))
+                .stack_size(heather_kernel::reduce::NATIVE_STACK_BYTES)
                 .spawn(move || mine.worker())
             {
                 self.handles.push(handle);
