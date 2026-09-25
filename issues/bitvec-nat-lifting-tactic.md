@@ -1,7 +1,6 @@
 ---
 title: A certified word-to-Nat lifting tactic (bv_omega-style) for no-overflow word arithmetic
-status: blocked
-blocked-by: [omega-constants-beyond-u64]
+status: open
 labels: [proofs,bitvec,metaprogramming,ergonomics]
 created: 2026-09-25
 updated: 2026-09-25

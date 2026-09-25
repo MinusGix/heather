@@ -1,6 +1,6 @@
 ---
 title: omega can't spell a constant of 2^64 or more in its certificate
-status: open
+status: closed
 labels: [omega,proofs,bitvec]
 created: 2026-09-25
 updated: 2026-09-25
@@ -68,3 +68,20 @@ in [[radix-numeric-literals]]. This issue doesn't need them.
   only that it stays, so omega must spell around it.
 - **[[bitvec-nat-lifting-tactic]]** is the motivating consumer, not a
   dependency.
+
+## Log
+
+- 2026-09-25: Landed. `nat_lit` (`omega_cert.rs`) is now the only place omega prints a
+  constant. Above a `u64` token it writes the value over its top word, one
+  `nat::Nat::add(nat::Nat::mul(x, 256), b)` per byte below it, and
+  `nat_lit_value` reads that back for the rounds that reflect omega's own facts.
+  A closed `nat::Nat::pow(a, b)` reflects as its value when `(a + 1) * b` is
+  within `POWER_EVALUATION_STEPS`; the kernel checks the value by evaluation, and
+  a larger power stays an atom. Acceptance and the controls are in
+  `crates/elab/tests/omega_wide_constants.rs`: every repro, `pow(2, 64)`, the
+  full-width carry, three refusals at the bound, and a power past the budget
+  staying an atom. The design note is in
+  docs/certifying-arithmetic-substrate-design.md §4. CLI probes with `BitVec`
+  facts and `x.toNat() < pow(2, 64)` also check. Out of scope: constants past
+  `i128` (refused with omega's overflow message), and truncated `-`, which is
+  still an atom.

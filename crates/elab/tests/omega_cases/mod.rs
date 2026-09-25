@@ -1,9 +1,9 @@
 //! End-to-end acceptance for the kernel-certified Omega vertical slice,
 //! including the low-level `omega::dot` boundary and ordinary affine syntax.
 
-// Each member file (omega.rs, omega_logic.rs, omega_reconstruction.rs) runs
-// one rail-sized suite below, in a process of its own; a binary that mounts
-// fewer than all three leaves the others dormant.
+// Each member file (omega.rs, omega_logic.rs, omega_reconstruction.rs,
+// omega_wide_constants.rs) runs one rail-sized suite below, in a process of
+// its own; a binary that mounts fewer than all four leaves the others dormant.
 #![allow(dead_code)]
 
 use std::cell::OnceCell;
@@ -759,6 +759,57 @@ theorem member_atoms_two(xs, ys: List<Int>, h: nat::Nat::Le(xs.len(), ys.len()))
         .unwrap_or_else(|error| {
             panic!("a certificate over a member atom did not check: {}", message(error))
         });
+}
+
+/// issues/omega-constants-beyond-u64.md: a numeral token is a `u64`, but a
+/// word's arithmetic reaches 2^64 — as a bound, a carry, or a step of the
+/// search nobody wrote. Each goal below needs a constant past the token
+/// somewhere in its certificate, and a closed power is read as its value.
+fn spells_constants_past_a_numeral_token() {
+    let source = format!(
+        r#"{PREFIX}
+theorem intermediate(x: Nat, h: x < 1152921504606846976): x + 1 <= 18446744073709551615 {{ omega }}
+theorem combined(x, y: Nat, hx: x < 18446744073709551615, hy: y < 18446744073709551615):
+    x + y < 18446744073709551615 + 18446744073709551615 {{ omega }}
+theorem split(v, r, h: Nat, value: v = 1099511627776 * r + h, low: h < 1099511627776,
+    fits: v < 18446744073709551615): r < 16777216 {{ omega }}
+theorem as_sum(x: Nat, h: x < 1152921504606846976): x < nat::Nat::add(18446744073709551615, 1) {{ omega }}
+theorem wide_scale(v, r: Nat, value: v = 18446744073709551615 * r,
+    fits: v < 18446744073709551615 + 18446744073709551615): r <= 1 {{ omega }}
+theorem power(x: Nat, h: x < 1152921504606846976): x < nat::Nat::pow(2, 64) {{ omega }}
+theorem carry(a, b, s: Nat, ha: a < nat::Nat::pow(2, 64), hb: b < nat::Nat::pow(2, 64),
+    sum: a + b = s + nat::Nat::pow(2, 64)): nat::Nat::pow(2, 64) <= a + b {{ omega }}
+theorem small_powers(x: Nat, h: x < 5): x < nat::Nat::pow(10, 18) + nat::Nat::pow(0, 0) {{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("a constant past the numeral token did not check: {}", message(error)));
+}
+
+/// The controls for the above, one module each: false at the word bound
+/// itself, and a power past the evaluation budget stays an atom.
+fn refuses_at_the_word_bound() {
+    for goal in [
+        "theorem edge(x: Nat, h: x < nat::Nat::pow(2, 64)): x + 1 < nat::Nat::pow(2, 64)",
+        "theorem edge_literal(x: Nat, h: x <= 18446744073709551615): x + 1 <= 18446744073709551615",
+        "theorem no_carry(a, b, s: Nat, ha: a < nat::Nat::pow(2, 64), hb: b < nat::Nat::pow(2, 64), sum: a + b = s): nat::Nat::pow(2, 64) <= a + b",
+    ] {
+        let source = format!("{PREFIX}\n{goal} {{ omega }}\n");
+        let error = elaborator()
+            .elab_module_source("probe", &source)
+            .expect_err(goal);
+        let message = message(error);
+        assert!(message.contains("real shadow found no contradiction"), "{goal}: {message}");
+    }
+    let source = format!("{PREFIX}\ntheorem costly_power(x: Nat, h: x < 5): x < nat::Nat::pow(1099511627776, 3) {{ omega }}\n");
+    let message = message(elaborator().elab_module_source("probe", &source).expect_err("costly power"));
+    assert!(message.contains("atoms [x, nat::Nat::pow(1099511627776, 3)]"), "{message}");
+}
+
+pub fn omega_wide_constants_suite() {
+    spells_constants_past_a_numeral_token();
+    refuses_at_the_word_bound();
 }
 
 pub fn omega_reconstruction_suite() {

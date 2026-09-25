@@ -574,6 +574,9 @@ fn integer_source(source: &str) -> Option<Z> {
     if let Ok(value) = compact.parse() {
         return Some(value);
     }
+    if let Some(value) = nat_lit_value(&compact) {
+        return Some(value);
+    }
     // `nat_term_source` deliberately preserves kernel constructors instead
     // of asking the surface printer to turn a numeral back into decimal.
     // Keep that stable spelling usable as a literal too: otherwise a
@@ -595,13 +598,13 @@ fn integer_source(source: &str) -> Option<Z> {
         .strip_prefix("OfNat(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        return inner.parse().ok();
+        return nat_lit_value(inner);
     }
     if let Some(inner) = compact
         .strip_prefix("NegSucc(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let payload: Z = inner.parse().ok()?;
+        let payload = nat_lit_value(inner)?;
         return payload.checked_add(1)?.checked_neg();
     }
     None
@@ -658,19 +661,41 @@ impl<'a> ListParser<'a> {
         })?
     }
 
+    /// A [`nat_lit`] spelling up to the parenthesis that closes its
+    /// constructor, which is left for the caller.
+    fn nat_lit(&mut self) -> Option<Z> {
+        let start = self.cursor;
+        let mut depth = 0usize;
+        while let Some(&byte) = self.input.get(self.cursor) {
+            match byte {
+                b'(' => depth += 1,
+                b')' if depth == 0 => break,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            self.cursor += 1;
+        }
+        let compact: String = std::str::from_utf8(&self.input[start..self.cursor])
+            .ok()?
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        nat_lit_value(&compact)
+    }
+
     fn integer(&mut self) -> Option<Z> {
         if self.token(b"OfNat") || self.token(b"int::OfNat") {
             self.token(b"(").then_some(())?;
-            let value = self.signed_number()?;
-            if value < 0 || !self.token(b")") {
+            let value = self.nat_lit()?;
+            if !self.token(b")") {
                 return None;
             }
             return Some(value);
         }
         if self.token(b"NegSucc") || self.token(b"int::NegSucc") {
             self.token(b"(").then_some(())?;
-            let payload = self.signed_number()?;
-            if payload < 0 || !self.token(b")") {
+            let payload = self.nat_lit()?;
+            if !self.token(b")") {
                 return None;
             }
             return payload.checked_add(1)?.checked_neg();
@@ -982,6 +1007,29 @@ fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
         .ok_or_else(|| "Omega could not spell a natural expression".to_string())
 }
 
+/// The most kernel steps a closed power may cost to be read as its value.
+const POWER_EVALUATION_STEPS: Z = 4096;
+
+/// The value of `pow(a, b)` at literal `a` and `b`, which is how a word's
+/// bound is written (`pow(2, 64)`). The certificate states the value and the
+/// kernel checks it by evaluation: `b` steps of the exponent, each a
+/// multiplication recursing `a` times, so a power past
+/// [`POWER_EVALUATION_STEPS`] stays an atom.
+fn closed_power(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Z> {
+    let args = named_args(elab, tm, "nat::Nat::pow")?;
+    let [base, exponent] = args.as_slice() else {
+        return None;
+    };
+    let literal = |arg: &Rc<Term>| {
+        integer_source(&nat_term_source(elab, cx, arg).ok()?).filter(|value| *value >= 0)
+    };
+    let (base, exponent) = (literal(base)?, literal(exponent)?);
+    if base.checked_add(1)?.checked_mul(exponent)? > POWER_EVALUATION_STEPS {
+        return None;
+    }
+    base.checked_pow(u32::try_from(exponent).ok()?)
+}
+
 fn nat_affine_syntax(
     elab: &Elaborator,
     cx: &Cx,
@@ -1002,7 +1050,10 @@ fn nat_affine_syntax_within(
     depth: u32,
 ) -> Result<AffineSyntax, String> {
     let nat_source = nat_term_source(elab, cx, tm)?;
-    if let Some(value) = integer_source(&nat_source).filter(|value| *value >= 0) {
+    if let Some(value) = integer_source(&nat_source)
+        .filter(|value| *value >= 0)
+        .or_else(|| closed_power(elab, cx, tm))
+    {
         return Ok(AffineSyntax::Const {
             value,
             source: int(value),
@@ -1915,11 +1966,11 @@ fn reflect_ordinary(
             (
                 format!(
                     "omega::nat_div_lower({}, {})",
-                    division.dividend_source, divisor_pred
+                    division.dividend_source, nat_lit(divisor_pred)
                 ),
                 format!(
                     "omega::nat_div_upper({}, {})",
-                    division.dividend_source, divisor_pred
+                    division.dividend_source, nat_lit(divisor_pred)
                 ),
             )
         } else {
@@ -2092,14 +2143,14 @@ fn int(value: Z) -> String {
 
 fn literal_int_nonzero(value: Z) -> Result<String, String> {
     if value > 0 {
-        return Ok(format!("omega::positive_int_nonzero({})", value - 1));
+        return Ok(format!("omega::positive_int_nonzero({})", nat_lit(value - 1)));
     }
     if value < 0 {
         let payload = value
             .checked_neg()
             .and_then(|magnitude| magnitude.checked_sub(1))
             .ok_or("Omega cannot reconstruct the minimum `i128` divisor")?;
-        return Ok(format!("omega::negative_int_nonzero({payload})"));
+        return Ok(format!("omega::negative_int_nonzero({})", nat_lit(payload)));
     }
     Err("Omega requested a nonzero proof for zero".into())
 }
@@ -2140,11 +2191,45 @@ fn affine_source(affine: &Affine, atom_sources: &[String]) -> String {
 
 fn int_ctor(value: Z) -> String {
     if value >= 0 {
-        format!("int::OfNat({value})")
+        format!("int::OfNat({})", nat_lit(value))
     } else {
         let payload = value.checked_neg().unwrap_or(Z::MAX) - 1;
-        format!("int::NegSucc({payload})")
+        format!("int::NegSucc({})", nat_lit(payload))
     }
+}
+
+/// A natural constant as source. A numeral token is a `u64`, so a larger
+/// value is spelled over its top word, one byte at a time below it:
+/// `nat::Nat::add(nat::Nat::mul(x, 256), b)`. `mul` recurses on its second
+/// argument, so the kernel pays 256 steps a byte, and [`nat_lit_value`]
+/// reads the spelling back when a later round reflects it.
+fn nat_lit(value: Z) -> String {
+    debug_assert!(value >= 0, "a natural constant is nonnegative");
+    if value <= Z::from(u64::MAX) {
+        return value.to_string();
+    }
+    let mut shift = 0;
+    while value >> shift > Z::from(u64::MAX) {
+        shift += 8;
+    }
+    (0..shift / 8).rev().fold((value >> shift).to_string(), |out, byte| {
+        format!("nat::Nat::add(nat::Nat::mul({out}, 256), {})", (value >> (8 * byte)) & 0xff)
+    })
+}
+
+/// The value of a [`nat_lit`] spelling with its whitespace removed: a
+/// decimal numeral, or the byte form over one.
+fn nat_lit_value(source: &str) -> Option<Z> {
+    if let Ok(value) = source.parse::<u64>() {
+        return Some(Z::from(value));
+    }
+    let inner = source
+        .strip_prefix("nat::Nat::add(nat::Nat::mul(")?
+        .strip_suffix(')')?;
+    let (high, byte) = inner.rsplit_once("),")?;
+    let high = nat_lit_value(high.strip_suffix(",256")?)?;
+    let byte: u8 = byte.parse().ok()?;
+    high.checked_mul(256)?.checked_add(Z::from(byte))
 }
 
 fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
@@ -2156,7 +2241,7 @@ fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
     if lower >= 0 {
         return Ok(format!(
             "omega::nat_lt_to_int({}, {}, trivial)",
-            lower, upper
+            nat_lit(lower), nat_lit(upper)
         ));
     }
     let lower_payload = lower
@@ -2166,7 +2251,7 @@ fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
     if upper >= 0 {
         return Ok(format!(
             "int::Int::negsucc_lt_ofnat({}, {})",
-            lower_payload, upper
+            nat_lit(lower_payload), nat_lit(upper)
         ));
     }
     let upper_payload = upper
@@ -2175,7 +2260,7 @@ fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
         .ok_or("Omega cannot reconstruct the minimum `i128` literal")?;
     Ok(format!(
         "int::Int::negsucc_lt_of_lt({}, {}, trivial)",
-        lower_payload, upper_payload
+        nat_lit(lower_payload), nat_lit(upper_payload)
     ))
 }
 
@@ -3195,7 +3280,7 @@ pub(crate) fn reconstruct(
             } => {
                 let source = parent(&proofs, source)?;
                 let row_source = coeffs_source(&fact.coeffs, atom_count);
-                let nonnegative = format!("int::Int::zero_le_ofNat({divisor})");
+                let nonnegative = format!("int::Int::zero_le_ofNat({})", nat_lit(divisor));
                 let lower = match (source.interval.lower, fact.interval.lower) {
                     (Some(original), Some(rounded)) => {
                         let before = rounded
@@ -3412,7 +3497,7 @@ pub(crate) fn reconstruct(
                 bindings.push(format!(
                     "let {lower_name} = omega::lower_upper_combo({}, {}, {}, {}, {}, {}, {}, int::Int::zero_le_ofNat({}), int::Int::zero_le_ofNat({}), {}, {});",
                     int(left_scale), int(magnitude), left.row_source, right.row_source,
-                    atoms_source, int(left_lower), int(right_upper), left_scale, magnitude,
+                    atoms_source, int(left_lower), int(right_upper), nat_lit(left_scale), nat_lit(magnitude),
                     left.lower.as_ref().ok_or("Omega two-sided combination lost its left lower proof")?,
                     right.upper.as_ref().ok_or("Omega two-sided combination lost its right upper proof")?,
                 ));
@@ -3420,7 +3505,7 @@ pub(crate) fn reconstruct(
                 bindings.push(format!(
                     "let {upper_name} = omega::lower_upper_upper_combo({}, {}, {}, {}, {}, {}, {}, int::Int::zero_le_ofNat({}), int::Int::zero_le_ofNat({}), {}, {});",
                     int(left_scale), int(magnitude), left.row_source, right.row_source,
-                    atoms_source, int(right_lower), int(left_upper), left_scale, magnitude,
+                    atoms_source, int(right_lower), int(left_upper), nat_lit(left_scale), nat_lit(magnitude),
                     left.upper.as_ref().ok_or("Omega two-sided combination lost its left upper proof")?,
                     right.lower.as_ref().ok_or("Omega two-sided combination lost its right lower proof")?,
                 ));
@@ -3474,7 +3559,7 @@ pub(crate) fn reconstruct(
                 bindings.push(format!(
                     "let {lower_name} = omega::upper_lower_lower_combo({}, {}, {}, {}, {}, {}, {}, int::Int::zero_le_ofNat({}), int::Int::zero_le_ofNat({}), {}, {});",
                     int(magnitude), int(right_scale), left.row_source, right.row_source,
-                    atoms_source, int(right_lower), int(left_upper), magnitude, right_scale,
+                    atoms_source, int(right_lower), int(left_upper), nat_lit(magnitude), nat_lit(right_scale),
                     left.upper.as_ref().ok_or("Omega two-sided combination lost its left upper proof")?,
                     right.lower.as_ref().ok_or("Omega two-sided combination lost its right lower proof")?,
                 ));
@@ -3482,7 +3567,7 @@ pub(crate) fn reconstruct(
                 bindings.push(format!(
                     "let {upper_name} = omega::upper_lower_combo({}, {}, {}, {}, {}, {}, {}, int::Int::zero_le_ofNat({}), int::Int::zero_le_ofNat({}), {}, {});",
                     int(magnitude), int(right_scale), left.row_source, right.row_source,
-                    atoms_source, int(left_lower), int(right_upper), magnitude, right_scale,
+                    atoms_source, int(left_lower), int(right_upper), nat_lit(magnitude), nat_lit(right_scale),
                     left.lower.as_ref().ok_or("Omega two-sided combination lost its left lower proof")?,
                     right.upper.as_ref().ok_or("Omega two-sided combination lost its right upper proof")?,
                 ));
@@ -3538,8 +3623,8 @@ pub(crate) fn reconstruct(
                     atoms_source,
                     int(l),
                     int(u),
-                    left_scale,
-                    magnitude,
+                    nat_lit(left_scale),
+                    nat_lit(magnitude),
                     lower,
                     upper,
                 );
@@ -3599,8 +3684,8 @@ pub(crate) fn reconstruct(
                     atoms_source,
                     int(l),
                     int(u),
-                    right_scale,
-                    magnitude,
+                    nat_lit(right_scale),
+                    nat_lit(magnitude),
                     lower,
                     upper,
                 );
@@ -3657,8 +3742,8 @@ pub(crate) fn reconstruct(
                     atoms_source,
                     int(l),
                     int(u),
-                    magnitude,
-                    right_scale,
+                    nat_lit(magnitude),
+                    nat_lit(right_scale),
                     lower,
                     upper,
                 );
@@ -3702,7 +3787,7 @@ pub(crate) fn reconstruct(
                     int(a), int(b), left.row_source, right.row_source, atoms_source,
                     int(left.interval.upper.ok_or("Omega negative combination lost its left upper value")?),
                     int(right.interval.upper.ok_or("Omega negative combination lost its right upper value")?),
-                    a, b,
+                    nat_lit(a), nat_lit(b),
                     left.upper.as_ref().ok_or("Omega negative combination lost its left upper proof")?,
                     right.upper.as_ref().ok_or("Omega negative combination lost its right upper proof")?,
                 ));
@@ -3712,7 +3797,7 @@ pub(crate) fn reconstruct(
                     int(a), int(b), left.row_source, right.row_source, atoms_source,
                     int(left.interval.lower.ok_or("Omega negative combination lost its left lower value")?),
                     int(right.interval.lower.ok_or("Omega negative combination lost its right lower value")?),
-                    a, b,
+                    nat_lit(a), nat_lit(b),
                     left.lower.as_ref().ok_or("Omega negative combination lost its left lower proof")?,
                     right.lower.as_ref().ok_or("Omega negative combination lost its right lower proof")?,
                 ));
@@ -3751,7 +3836,7 @@ pub(crate) fn reconstruct(
                     int(a), int(b), left.row_source, right.row_source, atoms_source,
                     int(left.interval.upper.ok_or("Omega negative combination lost its left upper value")?),
                     int(right.interval.upper.ok_or("Omega negative combination lost its right upper value")?),
-                    a, b,
+                    nat_lit(a), nat_lit(b),
                     left.upper.as_ref().ok_or("Omega negative combination lost its left upper proof")?,
                     right.upper.as_ref().ok_or("Omega negative combination lost its right upper proof")?,
                 ));
@@ -3790,7 +3875,7 @@ pub(crate) fn reconstruct(
                     int(a), int(b), left.row_source, right.row_source, atoms_source,
                     int(left.interval.lower.ok_or("Omega negative combination lost its left lower value")?),
                     int(right.interval.lower.ok_or("Omega negative combination lost its right lower value")?),
-                    a, b,
+                    nat_lit(a), nat_lit(b),
                     left.lower.as_ref().ok_or("Omega negative combination lost its left lower proof")?,
                     right.lower.as_ref().ok_or("Omega negative combination lost its right lower proof")?,
                 ));
@@ -3843,8 +3928,8 @@ pub(crate) fn reconstruct(
                     atoms_source,
                     int(l),
                     int(r),
-                    left_scale,
-                    right_scale,
+                    nat_lit(left_scale),
+                    nat_lit(right_scale),
                     left_lower,
                     right_lower,
                 );
@@ -3898,8 +3983,8 @@ pub(crate) fn reconstruct(
                     atoms_source,
                     int(l),
                     int(r),
-                    left_scale,
-                    right_scale,
+                    nat_lit(left_scale),
+                    nat_lit(right_scale),
                     left_upper,
                     right_upper,
                 );
@@ -4122,6 +4207,31 @@ mod tests {
         assert_eq!(coefficient_source("Nil"), Some(vec![]));
         assert_eq!(coefficient_source("Cons(x, Nil)"), None);
         assert_eq!(coefficient_source("Cons(1, Nil) junk"), None);
+    }
+
+    #[test]
+    fn a_constant_past_a_numeral_token_is_spelled_in_bytes_and_read_back() {
+        let word = Z::from(u64::MAX);
+        assert_eq!(nat_lit(word), "18446744073709551615");
+        assert_eq!(
+            nat_lit(word + 1),
+            "nat::Nat::add(nat::Nat::mul(72057594037927936, 256), 0)"
+        );
+        for value in [0, 7, word, word + 1, word * 3 + 5, Z::MAX - 1, Z::MAX / 3] {
+            let compact: String = nat_lit(value).chars().filter(|c| !c.is_whitespace()).collect();
+            assert_eq!(nat_lit_value(&compact), Some(value), "{value}");
+            assert_eq!(integer_source(&int_ctor(value)), Some(value), "{value}");
+            assert_eq!(integer_source(&int_ctor(-value - 1)), Some(-value - 1), "{value}");
+            assert_eq!(
+                coefficient_source(&format!("list::Cons({}, list::Cons({}, list::Nil))", int_ctor(value), int_ctor(-value - 1))),
+                Some(vec![value, -value - 1]),
+                "{value}"
+            );
+        }
+        // The byte form is read only over a numeral, a byte, and 256.
+        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(x,256),0)"), None);
+        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(1,256),256)"), None);
+        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(1,255),0)"), None);
     }
 
     #[test]
