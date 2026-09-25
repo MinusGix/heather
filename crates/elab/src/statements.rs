@@ -245,6 +245,7 @@ fn elaborate_have(elab: &impl StatementElab, cx: &Cx, have: &Stmt) -> R<(Cx, Hav
     {
         inner.dicts.push(Rc::new(dictionary));
     }
+    inner.haves.push(inner.names.len());
     inner.push_skel(name.clone(), ty.clone(), level.clone(), skeleton);
     Ok((
         inner,
@@ -288,6 +289,8 @@ fn let_value(
     annotation: Option<&Ty>,
     expression: &Expr,
 ) -> R<(Term, Type, Level, Option<Rc<Skel>>)> {
+    // A bound value is never the block's result, so never on the tail spine.
+    let cx = &*cx.off_tail();
     Ok(match annotation {
         Some(annotation) => {
             let (ty, level) = elab.lower_let_annotation(cx, annotation)?;
@@ -323,7 +326,7 @@ fn elaborate_record_let(
     expression: &Expr,
     span: Span,
 ) -> R<()> {
-    let (term, record_type, _) = elab.infer_statement_expression(cx, expression)?;
+    let (term, record_type, _) = elab.infer_statement_expression(&cx.off_tail(), expression)?;
     let Some(record) = elab.record_for_destructuring(cx, &record_type, span) else {
         return err("a `let { … }` pattern needs a record on the right", span);
     };

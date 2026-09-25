@@ -7,7 +7,7 @@ use heather_kernel::term::{LocalCtx, LocalVar, Term, Type};
 use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::application::{self, ExplicitArgElab, ParamMeta};
-use crate::{Cx, R, err, matching};
+use crate::{Alias, Cx, R, err, matching};
 
 /// Semantic capabilities needed by guarded self-call lowering.
 ///
@@ -30,6 +30,208 @@ pub(crate) fn descends_on_param(cx: &Cx, scrut: &Term) -> Option<usize> {
     };
     let pos = cx.names.len() - 1 - *i as usize;
     (pos < s.params.len()).then_some(pos)
+}
+
+/// The arms of a `match` in a `fn` that syntactically looks like the
+/// recursion (issues/recursive-arm-reads-outer-scrutinee.md). What would make
+/// its compiled meaning differ from the source is **recorded** here, and
+/// reported only once a self-call is actually lowered under it
+/// ([`confirm_recursion`]): the syntax cannot tell `contents.size()` on
+/// another type's member from a self-call, and a `match` that turns out not to
+/// recurse runs once, so nothing about it is wrong.
+pub(crate) struct RecursionScope {
+    pub(crate) dec: usize,
+    pub(crate) depth: usize,
+    /// `cx.aliases.len()` at the `match`: the aliases bound above it. A
+    /// field of the arm's own pattern is an alias too, bound at the same
+    /// depth, and is this level's value.
+    pub(crate) aliases_before: usize,
+    /// Why this `match` is not where a recursion may sit, if it is not.
+    pub(crate) placement: Option<String>,
+    /// Whether a self-call has been lowered under this `match`.
+    pub(crate) recursed: std::sync::atomic::AtomicBool,
+    /// The first read of the top call's value in the arms, with its span.
+    pub(crate) read: std::sync::Mutex<Option<(String, Span)>>,
+}
+
+/// Does a self-call in `arms` pass, at parameter `dec`'s position, anything
+/// but that parameter itself? That is what makes a `match` on `dec` the
+/// recursion rather than a branch on a parameter passed along unchanged
+/// (`match b { … f(k, b) … }` inside the recursion on `n`). Syntactic, so it
+/// answers the same on every speculative re-elaboration of the arms.
+pub(crate) fn recurses_on(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec: usize) -> bool {
+    let own = &self_ref.params[dec].0;
+    let mut found = false;
+    for arm in arms {
+        crate::surface::walk_expr(&arm.body, &mut |e| {
+            let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
+            // The written slots skip value implicits unless `@`-marked.
+            let slot = (self_ref.n_tyvars..self_ref.params.len())
+                .filter(|&p| explicit || !self_ref.params[p].1)
+                .position(|p| p == dec);
+            if let Some(slot) = slot
+                && let Some(arg) = args.get(slot)
+                && !matches!(&arg.kind, ExprKind::Var(v) if v == own)
+            {
+                found = true;
+            }
+        });
+    }
+    found
+}
+
+/// The context a `match`'s arms elaborate in: on the tail spine if the
+/// `match` is, and watched ([`RecursionScope`]) if it looks like the recursion
+/// of a `fn`. `None` when the arms see `cx` itself.
+///
+/// The recursion is compiled at the `match`: a self-call becomes the
+/// eliminator's hypothesis, which is *the `match` at the smaller value*, and
+/// everything outside the `match` is evaluated once, by the top call. That is
+/// the function only when the `match` is the body's result under branches
+/// that do not depend on its parameter, and when its arms do not read that
+/// parameter from outside (issues/recursive-arm-reads-outer-scrutinee.md).
+pub(crate) fn arm_scope(cx: &Cx, scrut: &Term, arms: &[heather_syntax::Arm]) -> Option<Cx> {
+    if !cx.computes {
+        return None;
+    }
+    let recursive = match (cx.selfref.as_ref(), descends_on_param(cx, scrut)) {
+        (Some(s), Some(dec)) if recurses_on(s, arms, dec) => Some((s, dec)),
+        _ => None,
+    };
+    if cx.tail.is_none() && recursive.is_none() {
+        return None;
+    }
+    let mut arms_cx = cx.clone();
+    if let Some((s, dec)) = recursive {
+        let param = &s.params[dec].0;
+        let placement = match &cx.tail {
+            None => Some(off_tail_message(param, &s.name)),
+            Some(spine)
+                if spine
+                    .iter()
+                    .any(|(outer, depth)| mentions_local(outer, (depth - 1 - dec) as u32)) =>
+            {
+                Some(format!(
+                    "this recursive `match` on `{param}` sits under a branch that depends \
+                     on `{param}`: the recursion is compiled at the `match`, so the branch \
+                     is decided once, by the top call, and not again at each level. \
+                     Branch inside the arms instead, or declare `decreases {param}` \
+                     (issues/recursive-arm-reads-outer-scrutinee.md)"
+                ))
+            }
+            Some(_) => None,
+        };
+        arms_cx.recursion = Some(Rc::new(RecursionScope {
+            dec,
+            depth: cx.names.len(),
+            aliases_before: cx.aliases.len(),
+            placement,
+            recursed: false.into(),
+            read: std::sync::Mutex::new(None),
+        }));
+    }
+    if let Some(spine) = &cx.tail {
+        let mut spine = (**spine).clone();
+        spine.push((Rc::new(scrut.clone()), cx.names.len()));
+        arms_cx.tail = Some(Rc::new(spine));
+    }
+    Some(arms_cx)
+}
+
+/// Why a recursive `match` off a `fn` body's tail spine is refused.
+pub(crate) fn off_tail_message(param: &str, name: &str) -> String {
+    format!(
+        "this recursive `match` on `{param}` is not the result of `{name}`: the recursion \
+         is compiled at the `match`, so a recursive call in its arms means the `match` \
+         alone at the smaller value, without the code around it. Make the `match` the \
+         body's result and move the surrounding code into each arm, or declare \
+         `decreases {param}` (issues/recursive-arm-reads-outer-scrutinee.md)"
+    )
+}
+
+/// A self-call was lowered under `cx`'s recursion scope, if it has one that
+/// descends on `dec`: now the recorded placement and reads are errors. A
+/// self-call under no watched `match` is left alone. Every `match` the
+/// expression dispatcher elaborates is watched, and the paths that are not
+/// (a type-valued body's) are not judged here.
+pub(crate) fn confirm_recursion(cx: &Cx, dec: usize, span: Span) -> R<()> {
+    let Some(scope) = cx.recursion.as_ref().filter(|scope| scope.dec == dec) else {
+        return Ok(());
+    };
+    scope.recursed.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(msg) = &scope.placement {
+        return err(msg.clone(), span);
+    }
+    if let Some((msg, at)) = scope.read.lock().expect("unpoisoned").clone() {
+        return err(msg, at);
+    }
+    Ok(())
+}
+
+/// Inside a watched `match` ([`RecursionScope`]), a name that reads the top
+/// call's value: the parameter the recursion descends on, a `let` bound from
+/// it above the `match`, or a `have` bound above the `match`
+/// (conservatively: its value is computed once either way). Recorded, and an
+/// error at once if the `match` has already recursed. `local` is the binder
+/// position the name resolved to; `alias` the alias.
+pub(crate) fn check_recursion_read(
+    cx: &Cx,
+    name: &str,
+    local: Option<usize>,
+    alias: Option<&Alias>,
+    span: Span,
+) -> R<()> {
+    let (Some(scope), Some(s)) = (cx.recursion.as_ref(), cx.selfref.as_ref()) else {
+        return Ok(());
+    };
+    let fname = &s.name;
+    let param = &s.params[scope.dec].0;
+    let why = format!(
+        "the recursion is compiled at the `match` on `{param}`, so everything bound \
+         outside it is the top call's value at every level of `{fname}` \
+         (issues/recursive-arm-reads-outer-scrutinee.md)"
+    );
+    let above = |a: &Alias| cx.aliases[..scope.aliases_before].iter().any(|b| std::ptr::eq(&**b, a));
+    let msg = if local == Some(scope.dec) {
+        format!(
+            "`{param}` inside its own recursive `match` is the value `{fname}` was first \
+             called with, not this level's: {why}. Name this level's value by its pattern \
+             (`Succ(k)`, or `C(h, t)`), or declare `decreases {param}`"
+        )
+    } else if let Some(pos) = local
+        && pos < scope.depth
+        && cx.haves.contains(&pos)
+    {
+        format!(
+            "`{name}` is a `have` bound above the recursive `match` on `{param}`: {why}. \
+             Bind it inside the arms, or declare `decreases {param}`"
+        )
+    } else if let Some(a) = alias
+        && above(a)
+        && mentions_local(&a.term, (a.depth - 1 - scope.dec) as u32)
+    {
+        format!(
+            "`{name}` is bound from `{param}` above its recursive `match`: {why}. Bind it \
+             inside the arms from this level's pattern, or declare `decreases {param}`"
+        )
+    } else {
+        return Ok(());
+    };
+    if scope.recursed.load(std::sync::atomic::Ordering::Relaxed) {
+        return err(msg, span);
+    }
+    let mut read = scope.read.lock().expect("unpoisoned");
+    if read.is_none() {
+        *read = Some((msg, span));
+    }
+    Ok(())
+}
+
+/// Does `t` mention local variable `index` (free, at `t`'s own depth)?
+pub(crate) fn mentions_local(t: &Term, index: u32) -> bool {
+    Type::El { level: Level::Zero, tm: Rc::new(t.clone()) }
+        .abstract_local(&Term::Var(LocalVar(index)))
+        .is_some()
 }
 
 /// Validate the written type arguments of a self-call
@@ -401,6 +603,9 @@ pub(crate) fn elab_self_call(
             }
         }
     };
+    // The call is the recursion's: what the watched `match` recorded against
+    // its meaning is now an error (issues/recursive-arm-reads-outer-scrutinee.md).
+    confirm_recursion(cx, guard.dec, span)?;
     // The ih is a Π over the generalized parameters (in position order, which
     // is `varied`'s order); the ordinary application engine checks each
     // argument against its domain, so a varied argument at the wrong type is

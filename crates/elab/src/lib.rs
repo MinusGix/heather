@@ -3634,6 +3634,13 @@ impl Elaborator {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
             debug_assert!(decl.decreases.is_none());
+            // A `fn` body's value is its meaning, so its recursion is held to
+            // the source's (issues/recursive-arm-reads-outer-scrutinee.md):
+            // the body starts on the tail spine.
+            if decl.kind == DeclKind::Fn {
+                cx.computes = true;
+                cx.tail = Some(Rc::new(Vec::new()));
+            }
             let body = statements::check_block(
                 self,
                 &cx,
@@ -4075,6 +4082,19 @@ impl Elaborator {
         skel: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
+        // As in `elab_infer_at`: the tail spine continues only through a
+        // block's result and a `match`'s arms.
+        if cx.tail.is_some() && !matches!(e.kind, ExprKind::Block(_) | ExprKind::Match { .. }) {
+            return self.elab_check_skel_slots(
+                &cx.off_tail(),
+                e,
+                expected,
+                lvl,
+                hint,
+                skel,
+                capture_slots,
+            );
+        }
         if capture_slots && has_free_slots(e) {
             let probe = self.clone();
             match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
@@ -4295,6 +4315,11 @@ impl Elaborator {
                 let (scrut_t, scrut_ty, scrut_lvl) = self
                     .elab_infer(cx, scrut)
                     .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
+                // The arms' context: on the tail spine if the `match` is, and
+                // guarded against reading the top call if it is the recursion
+                // (issues/recursive-arm-reads-outer-scrutinee.md).
+                let scoped = recursion::arm_scope(cx, &scrut_t, arms);
+                let cx = scoped.as_ref().unwrap_or(cx);
                 // A recursion whose self-calls vary a parameter generalizes it
                 // into the motive (docs/ih-generalization-design.md): the goal
                 // becomes a Π over the varied parameters, the arms are wrapped
@@ -5176,6 +5201,11 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        // Only a block's result and a `match`'s arms stay on a `fn` body's
+        // tail spine (`Cx::tail`); every other form is off it from here down.
+        if cx.tail.is_some() && !matches!(e.kind, ExprKind::Block(_) | ExprKind::Match { .. }) {
+            return self.elab_infer_at(&cx.off_tail(), e, expected);
+        }
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).
@@ -6015,6 +6045,11 @@ impl Elaborator {
                 generated,
             } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
+                // The arms' context: on the tail spine if the `match` is, and
+                // guarded against reading the top call if it is the recursion
+                // (issues/recursive-arm-reads-outer-scrutinee.md).
+                let scoped = recursion::arm_scope(cx, &scrut_t, arms);
+                let cx = scoped.as_ref().unwrap_or(cx);
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
                 // Route 2b's forded family (docs/inductive-fording-lowering.md
@@ -6152,6 +6187,20 @@ impl Elaborator {
                 eqbind: None,
                 generated,
             } => {
+                // Inference is never on a `fn` body's tail spine, so a match
+                // here that turns out to be the recursion is refused at its
+                // first self-call (issues/recursive-arm-reads-outer-scrutinee.md).
+                // Only a bare name can be the recursion, and resolving one twice
+                // is free of side effects.
+                let scoped = match &scrut.kind {
+                    ExprKind::Var(_) if cx.computes => self
+                        .elab_infer(cx, scrut)
+                        .ok()
+                        .and_then(|(scrut_t, _, _)| recursion::arm_scope(cx, &scrut_t, arms)),
+                    _ => None,
+                };
+                let outer = cx;
+                let cx = scoped.as_ref().unwrap_or(cx);
                 if *form == MatchForm::If {
                     match matching::infer_if_constant_motive(
                         self, cx, scrut, arms, *generated, e.span,
@@ -6167,6 +6216,18 @@ impl Elaborator {
                     matching::MotiveInference::Accepted(result) => return Ok(result),
                     matching::MotiveInference::Failed(error) => return Err(error),
                     matching::MotiveInference::Declined => {}
+                }
+                // A synthesis declines when a self-call in the arms is refused
+                // for sitting off the tail spine; say that, not "needs a motive"
+                // (issues/recursive-arm-reads-outer-scrutinee.md). Error path
+                // only, so the syntactic test cannot refuse anything itself.
+                if outer.computes
+                    && let (ExprKind::Var(_), Some(s)) = (&scrut.kind, outer.selfref.as_ref())
+                    && let Ok((scrut_t, _, _)) = self.elab_infer(outer, scrut)
+                    && let Some(dec) = recursion::descends_on_param(outer, &scrut_t)
+                    && recursion::recurses_on(s, arms, dec)
+                {
+                    return err(recursion::off_tail_message(&s.params[dec].0, &s.name), e.span);
                 }
                 err(
                     format!(
@@ -7624,6 +7685,14 @@ impl Elaborator {
         // rest, which is what compares the two here.
         let local_pos = cx.names.iter().rposition(|n| n == name);
         let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        if cx.recursion.is_some() {
+            let (local, alias) = match (local_pos, alias) {
+                (Some(pos), Some(a)) if a.depth <= pos => (Some(pos), None),
+                (_, Some(a)) => (None, Some(&**a)),
+                (pos, None) => (pos, None),
+            };
+            recursion::check_recursion_read(cx, name, local, alias, span)?;
+        }
         match (local_pos, alias) {
             (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
             (_, Some(a)) => {

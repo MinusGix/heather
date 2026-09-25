@@ -51,11 +51,17 @@ fn insert_expected(code: Nat, expected: List<Nat>) → List<Nat> {
     match expected {
         Nil => [code],
         Cons(head, tail) => match Nat::eq_dec(code, head) {
-            Inl(_) => expected,
+            Inl(_) => Cons(head, tail),
             Inr(_) => Cons(head, insert_expected(code, tail)),
         }
     }
 }
+
+// A code already present deeper in the list leaves the list as it was. Until
+// 2026-09-25 the arm said `expected`, which the structural lowering read as the
+// top call's list at every level (issues/recursive-arm-reads-outer-scrutinee.md),
+// so this computed [1, 1, 2, 3]; the elaborator now refuses that spelling.
+theorem insert_expected_present_deeper(): insert_expected(2, [1, 2, 3]) = [1, 2, 3] { refl }
 
 // Add the right-hand expectations to the left, suppressing newly introduced duplicates.
 fn merge_expected(left, right: List<Nat>) → List<Nat> {

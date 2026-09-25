@@ -80,6 +80,28 @@ pub(crate) struct Cx {
     /// argument is why), so a layer predicate is constantly false. "Under a
     /// quotation" is the property §2.2 actually needs.
     pub(crate) quoted: bool,
+    /// Set for a `fn` body, whose value is its meaning; a theorem's is not
+    /// observable past its statement. Gates the recursion-meaning checks
+    /// (issues/recursive-arm-reads-outer-scrutinee.md): only a `fn` can compute
+    /// a wrong answer from them.
+    pub(crate) computes: bool,
+    /// `Some` while the expression being elaborated is in **tail position** of
+    /// a `fn` body — the body's result, a block's result, an arm of a `match`
+    /// on that spine — holding the scrutinee of each tail `match` passed
+    /// through, with the depth it is scoped at. `None` everywhere else. A
+    /// structurally recursive `match` must sit on this spine, and under no
+    /// scrutinee that depends on its parameter: the recursion is compiled at
+    /// the `match`, so a self-call means the `match` alone at the smaller
+    /// value, without anything around it.
+    pub(crate) tail: Option<Rc<Vec<(Rc<Term>, usize)>>>,
+    /// Inside the arms of a `match` in a `fn` that looks like its recursion
+    /// ([`crate::recursion::RecursionScope`]). There, the parameter it descends
+    /// on, and anything bound from it above the `match`, is the top call's
+    /// value at every level: name resolution records such a read, and the
+    /// first self-call lowered under the `match` turns it into an error.
+    pub(crate) recursion: Option<Rc<crate::recursion::RecursionScope>>,
+    /// Positions (into `names`) of the binders `have` introduced.
+    pub(crate) haves: Vec<usize>,
 }
 
 /// One type parameter, bound to the type it is instantiated at
@@ -136,7 +158,23 @@ impl Cx {
             op_locals: vec![],
             meta: None,
             quoted: false,
+            computes: false,
+            tail: None,
+            recursion: None,
+            haves: vec![],
         }
+    }
+
+    /// This context out of tail position: what every subexpression that is
+    /// not a block's result or a `match` arm is elaborated in. Clones only
+    /// while on the spine, which is the body's result path and nothing else.
+    pub(crate) fn off_tail(&self) -> std::borrow::Cow<'_, Cx> {
+        if self.tail.is_none() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut cx = self.clone();
+        cx.tail = None;
+        std::borrow::Cow::Owned(cx)
     }
 
     pub(crate) fn push(&mut self, name: String, ty: Type, level: Level) {
@@ -157,6 +195,11 @@ impl Cx {
         out.names.truncate(n);
         out.gamma.entries = self.gamma.entries.prefix(n);
         out.skels.truncate(n);
+        // The recursion-meaning state is positional and belongs to the
+        // expression being elaborated, not to an inspection of a prefix.
+        out.tail = None;
+        out.recursion = None;
+        out.haves.retain(|&p| p < n);
         out
     }
 

@@ -1,6 +1,6 @@
 ---
 title: Structural recursion compiles the match, not the function, so a fn can compute a wrong answer
-status: open
+status: closed
 labels: [elaboration,correctness,recursion]
 created: 2026-09-25
 updated: 2026-09-25
@@ -74,3 +74,19 @@ independent of `let` and `have`.
   3. **The principled lowering:** put the eliminator at the function's root, and elaborate the whole body once per constructor with the parameter aliased to that constructor. A `match` on a now-known constructor then selects its arm statically, and self-calls take the hypothesis. This fixes M1, M2 and the `have` case together, at the price of elaboration and term size scaled by the constructor count around the match, and a rework of every route (`Nat`, `Wf`, indexed, forded, mutual, course of values, the generalization wrapper).
 
   Recommendation: 1 now, so nothing can silently compute the wrong thing, together with the one-line `insert_expected` fix and a `refl` pin on it. Then 2 for `Nat`, where M1 is the common way to write it. 3 only if the tail restriction proves annoying in practice. Until then, `decreases` is the escape hatch that already has the right meaning.
+- 2026-09-25: LANDED, option 1 (refusal) plus the library fix. Full suite 2987 passed, 0 failed.
+  - **What is refused, in a `fn` body only** (a theorem's meaning is its statement, which the kernel checks):
+    - the decreasing parameter read inside its recursive `match`, directly, through a `let` bound from it above, or through a `have` bound above;
+    - a recursive `match` that is not the body's result;
+    - a recursive `match` under a branch that depends on its parameter.
+
+    Each message names the rewrite: this level's pattern, moving the code into the arms, or `decreases`. The tests are in `crates/elab/tests/recursion_meaning.rs`.
+  - **Mechanism** (all in `recursion.rs` apart from the hooks):
+    - `Cx::tail` is the body's result spine. It is cleared at the expression dispatcher for anything other than a block or a match, and at bound values; it records each tail scrutinee.
+    - `arm_scope` gives the arms of a match that syntactically looks recursive a `RecursionScope`.
+    - Name resolution **records** a top-level read there.
+    - `confirm_recursion` in `elab_self_call` turns the recorded placement or read into an error only once a self-call is actually lowered. Reads after that point error at once.
+
+    Deferring the report is what the method-call case needs. The syntax cannot tell `contents.size()` on `List` from `Box::size`'s self-call; the first version refused `type_members`' `Box::size` for that reason. An arm's own pattern fields are aliases too, so a read only counts for aliases bound before the match (`aliases_before`). `Cx::prefix` drops the positional state.
+  - **Library:** `parser_diagnostics::insert_expected` now returns `Cons(head, tail)`, pinned by `insert_expected_present_deeper` (`[1, 2, 3]` stays `[1, 2, 3]`). The full suite found no other library or test source the refusal rejects. My scanner's other two hits were a false positive and a theorem.
+  - **Residue:** making the refused spellings legal (substitution for `Nat`, then the function-level lowering) and the type-valued `fn` gap go to [[fn-recursion-means-the-function]].
