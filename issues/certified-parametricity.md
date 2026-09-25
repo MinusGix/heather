@@ -3,7 +3,7 @@ title: Automatically prove parametricity of supported functions
 status: open
 labels: [metaprogramming,relations,proofs,design]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-24
 ---
 
 Treat parametricity as a property that a certifying program can automatically
@@ -39,3 +39,4 @@ pure-type-system result is background, not a theorem about Heather.
 ## Log
 
 - 2026-09-04: Filed from the setoid and general transfer design discussion.
+- 2026-09-24: Two leads (2026-09-24). (1) Beyond per-function certificates there is a *layer* question: code at layers c/p cannot observe code (□ and the recursors are layer m), so free theorems plausibly hold for every layer-p definition as a metatheorem, with only layer-m definitions needing per-function certificates. If true, it would tell the generator which definitions need no evidence at all; it is a ch. 07-style argument, not a generator feature. (2) Altenkirch, Chamoun, Kaposi, Shulman, *Internal Parametricity, without an Interval*, POPL 2024 (`docs/2307.06448.pdf`): parametricity as a small MLTT extension. Background for what an internal statement would look like, not a proposal to adopt it.

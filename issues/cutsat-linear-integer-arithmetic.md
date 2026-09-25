@@ -4,7 +4,7 @@ status: open
 labels: [proofs,elaboration,arithmetic,solver,design]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-09-24
 ---
 
 Implement the staged design in
@@ -95,3 +95,4 @@ not the integer-specific Cooper search.
   runner's resource ceiling, so cached/named sharing of learned inequalities
   and branch closures is the next reconstruction slice rather than accepting
   exponential source duplication.
+- 2026-09-24: Sibling filed 2026-09-24: [[lrat-certified-bitvector-decision]] — bit-level goals via bit-blasting, an external SAT solver and a kerneltime LRAT checker, the part of the certifying-solver story that linear arithmetic does not reach.
