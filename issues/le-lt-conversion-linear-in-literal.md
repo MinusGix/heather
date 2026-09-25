@@ -3,7 +3,7 @@ title: Converting `k < Succ(n)` against `k <= n` costs a step per unit of the li
 status: open
 labels: [kernel,conversion,performance]
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-25
 ---
 
 Converting `k < Succ(n)` against `k <= n` at a *literal* `k` and a neutral
@@ -38,3 +38,4 @@ pathology is filed rather than worked around further.
 ## Log
 
 - 2026-09-18: Coordinator repro 2026-09-18 on the release binary at the default kernel width: the `0xD800` case aborts the checker with a kernel-worker stack overflow rather than `OutOfFuel`, so the cost is a deep recursion, not only a long one.
+- 2026-09-25: The worker-stack abort above is its own defect, filed as [[kernel-worker-stack-below-depth-budget]]: pool threads get Rust's 2 MiB default stack while the depth budget assumes 8 MiB. With `RUST_MIN_STACK=8388608` the same kind of item answers `OutOfFuel` at width eight.

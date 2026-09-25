@@ -56,3 +56,7 @@ CPU rail under suite load ([[native-print-test-cpu-margin]]).
   lemmas, a different question: this one is about the cost per call site.
 - **[[nat-div-mod-lemma-kit]]** takes the digit customers off `omega`
   entirely. This issue remains for the goals that legitimately need it.
+
+## Log
+
+- 2026-09-25: [[nat-div-mod-lemma-kit]] landed. `decimal_line` no longer sends any goal with a `div`/`mod` atom to `omega`, so the table's `units_arith` and digit-lemma rows are gone from the library (the `*_arith` lemmas went from 9–11 s to 15 ms). The table's goals stay this issue's customers as standalone `omega` probes. No library item depends on them now.
