@@ -64,3 +64,22 @@ in its own arm would still compute the wrong type.
 - **[[recursive-arm-reads-outer-scrutinee]]** owns the diagnosis and the
   refusal. Assumed here: only that the refusal is the current behaviour, and
   that `Cx::recursion` marks the arms of the recursive `match`.
+
+## Log
+
+- 2026-09-25: Probe (debug and release CLI; the probe files are in the session scratchpad): can the refused shapes fall back to `decreases` instead of being refused, and do they then get a usable `f_unfold` (docs/decreases-unfolding-design.md)? Each shape was written with `decreases <param>` (or `decreases xs.len()`). The test was that it computes by `refl` at a literal and that its `f_unfold` can be cited at a symbolic argument (`sum_unfold(Succ(k))` against `sum(Succ(k)) = plus(sum(k), Succ(k))`).
+
+  | Shape | Computes | `f_unfold` |
+  |---|---|---|
+  | parameter in its own arm (`plus(sum(k), n)`) | ✓ | ✓ |
+  | parameter in the base arm (`Zero => n`) | ✓ | ✓ |
+  | `let m = n` above the match | ✓ | ✓ |
+  | `have m = n` above the match | ✓ | ✓ |
+  | two levels down (course of values, `omega` obligation) | ✓ | ✓ |
+  | list, `decreases xs.len()`, `List<Nat>` and `List<A>` | ✓ | ✓ |
+  | match inside an expression (`plus(1, match n {…})`, `plus(match n {…}, n)`) | ✓ | **✗** "a `match` holding a recursive call inside an argument" |
+  | let-bound match (`let r: Nat = match n {…}; plus(r, 1)`) | ✓ | **✗** "a recursive call in a `let` right-hand side" |
+
+  So **every M1 shape** (reading the top call's parameter) falls back cleanly: right meaning, and an unfolding equation to reason with. **Every M2 shape** (the match not at the root) computes correctly but gets no equation. The generator's §3 fragment excludes exactly those, so a fallback there would give a function nobody can prove anything about at a symbolic argument. Evaluation cost is a constant factor: `tri(60)` by `refl` takes 431 evaluation steps structurally and 1,766 under `decreases` (release, width one).
+
+  The fallback therefore fits M1 (in place of its refusal). M2 either stays refused, or waits for the generator to accept a match holding a self-call in an argument position or a `let` right-hand side. That is its own extension of docs/decreases-unfolding-design.md §3, or step 2 above, which fixes M2 by construction.
