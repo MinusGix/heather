@@ -141,6 +141,11 @@ pub enum SourceType { Word(u64), Boolean }
 /// Keyed by the composed producer's result port.
 pub type SourceValues = std::collections::BTreeMap<u64, SourceValue>;
 
+/// A helper body's result as a call inside the body, by result port. Nested
+/// helpers share their result port (`raise` → `times256` → `double`), so a
+/// port keeps every layer's body, innermost first.
+pub type SourceBodies = std::collections::BTreeMap<u64, Vec<SourceValue>>;
+
 impl SourceValue {
     fn natural(&self) -> SourceType {
         match self {

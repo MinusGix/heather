@@ -3,7 +3,7 @@ title: Flesh out the Linux syscall trace beyond read-once and exit
 status: open
 labels: [x86,semantics,runtime,design]
 created: 2026-09-24
-updated: 2026-09-24
+updated: 2026-09-25
 ---
 
 ## Scope
@@ -36,3 +36,4 @@ process's interaction with Linux.
 ## Log
 
 - 2026-09-24: On the "Shape" bullet: `docs/interaction-trees-fit.md` §6.1 sketches the trace as the `is_trace_of` set of a machine denotation over a syscall event container. That makes determinism structural (one tree, a function of the responses), turns error returns into response types, and models the world as a history-indexed oracle with no coinduction. Owned by [[interaction-trees-container-model]]; the boundary-as-interface view is [[open-component-refinement]].
+- 2026-09-25: Took over from [[native-first-program]] (closed): the read size is fixed at 4096, one RW page. Reading until end of input in a syscall loop, under 'Syscalls inside loops' above, makes the input size independent of the buffer, so the bound is not turned into an argument first.

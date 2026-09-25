@@ -417,8 +417,16 @@ the continuation's instantiation walks the chain once (quadratic overall, 432K
 at the root, within fuel); and a valuation lookup costs about 1.3K steps per
 peeled `Succ` of the port id at a `BitVec(64)` result, whatever the entries
 are. Every valuation now dispatches with a balanced `Nat::leb` tree instead
-(`issues/valuation-lookup-case-step-cost.md`). The link residue is owned by
-`issues/crossing-link-quadratic-cost.md`.
+(`issues/valuation-lookup-case-step-cost.md`), and with it the per-level
+growth went: a link costs the same at every depth, to 32 and beyond. Port ids
+grow with depth, so the growth was most likely the lookup's (the 40K figure
+predates the tree; the old binary was not re-measured). One link still
+unfolded a whole helper. Nested helpers (`raise` → `times256` → `double`)
+share their result port, and only the innermost body was kept for it, so the
+`raise` crossing had no meaning over its child and compared all 40 doublings
+by one `refl`. A port now keeps every layer's body (`SourceBodies`), and the
+crossing reads the one over its child
+(`issues/crossing-link-quadratic-cost.md`, closed).
 
 ### 10.2 The formatter's meaning (landed)
 

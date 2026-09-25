@@ -35,7 +35,7 @@ pub struct ReflectedStructuredFunction {
     /// Where a composition crosses at a helper call (cert::SourceValue).
     pub sources: cert::SourceValues,
     /// A composed helper body's result, spelled inside the body.
-    pub bodies: cert::SourceValues,
+    pub bodies: cert::SourceBodies,
 }
 
 /// Two constructors with the same scalar payload use a discriminator and a
@@ -162,7 +162,7 @@ struct Builder<'a> {
     /// A helper body's result as a call inside the body, by result port: what
     /// a crossing's link reads when the helper's argument is plain but its
     /// body composes (`times256(x) = double(double(…))`).
-    bodies: cert::SourceValues,
+    bodies: cert::SourceBodies,
 }
 
 // Local interning preserves DAG sharing. There is no parallel source AST;
@@ -381,7 +381,7 @@ impl Builder<'_> {
         let mut region = nested.region(body, 0)?;
         self.next_id = nested.next_id;
         self.sources.append(&mut nested.sources);
-        for (port, value) in std::mem::take(&mut nested.bodies) { self.bodies.entry(port).or_insert(value); }
+        for (port, values) in std::mem::take(&mut nested.bodies) { self.bodies.entry(port).or_default().extend(values); }
         if !arguments.nodes.is_empty() {
             // Only the new argument values leave the prefix: what is already in
             // scope stays where it is rather than being copied.
@@ -474,9 +474,9 @@ impl Builder<'_> {
                 self.constant(&mut dag, 1, tag, Some(exit.id))?;
             } else {
                 let (producer, port, value) = self.produce(term, depth, self.result, Some(self.output.id))?;
-                // The innermost call keeps the entry: an enclosing helper whose
-                // body this is shares its result port.
-                if let (Some(StructuredRegion::Compose { .. }), Some(value)) = (&producer, value) { self.bodies.entry(port.id).or_insert(value); }
+                // An enclosing helper whose body this is shares its result
+                // port, and adds its own body after this one.
+                if let (Some(StructuredRegion::Compose { .. }), Some(value)) = (&producer, value) { self.bodies.entry(port.id).or_default().push(value); }
                 if let Some(producer) = producer { return Ok(producer); }
                 debug_assert_eq!(port, self.output);
             }

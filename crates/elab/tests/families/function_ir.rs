@@ -10,6 +10,8 @@ mod support;
 mod common;
 #[path = "../support/structured_composition.rs"]
 mod composed_fixture;
+#[path = "../support/read_loop.rs"]
+mod read_loop_fixture;
 
 #[path = "../function_ir.rs"]
 mod function_ir;
@@ -29,6 +31,10 @@ mod function_ir_loop;
 mod function_ir_loop_trace;
 #[path = "../read_loop_process.rs"]
 mod read_loop_process;
+#[path = "../read_print_process.rs"]
+mod read_print_process;
+#[path = "../crossing_link_cost.rs"]
+mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]
 mod function_ir_narrow_certificates;
 #[path = "../function_ir_recursive.rs"]
