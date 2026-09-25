@@ -3,7 +3,7 @@ title: Preserve arithmetic certificate DAG sharing through elaboration
 status: open
 labels: [proofs,elaboration,arithmetic,performance]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-09-25
 ---
 
 Materialize shared arithmetic derivations once instead of recursively spelling
@@ -55,3 +55,4 @@ details, and every materialized proof still passes the ordinary kernel gate.
   Next slice: reconstruct those terminal linear certificates directly or
   materialize them as named parameterized proofs; do not hide the gap with an
   ignored/slow test.
+- 2026-09-25: The plan's "prefer scoped local proof bindings" does not preserve a DAG today. A surface `let` is an alias, and the kernel gate, shifts under binders and the module image all walk the result as a tree: a chain where each let uses the previous twice costs 2^k ([[proof-let-substitution-cost]], 2026-09-25). A local binding shares only once that issue's fix lands (a kernel `let` or a typing memo on node identity); a β-redex binding shares today but is opaque.

@@ -37,3 +37,7 @@ return, and a person should not meet a quadratic when reading one.
 - A family: a `k`-fold conjunction projected to its last component, at
   growing `k`. The cost is recorded and made linear, or its shape is
   explained.
+
+## Log
+
+- 2026-09-25: [[proof-let-substitution-cost]] diagnosed its mechanism (2026-09-25): the kernel's typing has no memo keyed on node identity, so a shared `let` value is re-checked on every path to it. That is plausibly the half of this cost that comes from re-inferring the receiver `facts`; the per-level `And` type computation is separate. A typing memo on node identity would fix both. Untested here.
