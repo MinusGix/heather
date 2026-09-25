@@ -2,7 +2,8 @@
 
 Status: **slices A–C landed 2026-09-24 (§8): `wc -l` builds as a certified
 executable and runs.** Amendments from probing and building are folded into
-§3–§5 and listed in §8.
+§3–§5 and listed in §8. **Slice 4, printing the count, is in progress (§10);
+its compiler part landed 2026-09-25 (§10.1).**
 Owner: `issues/native-first-program.md`. Follow-up owner for the syscall
 model's proper form: `issues/linux-syscall-trace-model.md`.
 
@@ -349,3 +350,93 @@ Amendments made while building:
 4. A failed read has no rule, so the theorem is silent about it, rather than a
    modelled error path the program must handle. The trace issue owns errors,
    and a program that checks `rax` is a branch we can already compile.
+
+## 10. Slice 4: printing the count
+
+The program's output becomes `wc -l`'s: the count in decimal and a newline on
+stdout, then exit 0. The claim:
+
+```text
+LinuxRuns(io_linux(), [ReadEvent(0, bytes), WriteEvent(1, decimal(wc_l(bytes)) ++ [10]),
+    ExitEvent(0)], io_initial(F, page, gprs, flags))
+```
+
+`decimal(n)` is an ordinary Heather function (digits by division by ten).
+
+### 10.1 Compiler: word-valued helpers and crossing certificates (landed)
+
+The model has no multiply, divide or shift, so the digits come from a
+restoring chain: 16 steps `place(state, threshold, weight)`, each subtracting a
+threshold (8000, 4000, … 1) from the value left in the state's low 16 bits
+when it fits and adding the digit's weight to the ASCII bytes above. Written
+as source, that is 16 nested calls of a branching helper. Two things were
+missing, and both are general:
+
+- **Word-valued helpers.** The reflector composed only Bool helpers (a match
+  scrutinee). It now composes any scalar helper, as the result or as another
+  helper's argument; a structured argument is produced first and bound for the
+  ones after it, and a literal argument is substituted into the body rather
+  than taking a register. Lowering prefers non-byte registers for wide
+  composed results, leaving `SETcc` its byte registers.
+- **Certificates that cost what their links cost.** A 16-link chain's
+  certificate ran out of kernel fuel at every level from about the sixth.
+  Attributed item by item (probes under `probes/dec`), there were four
+  mechanisms, each fixed at the generator:
+  1. A comparison's one-bit value was spelled `cons_bit(k, lt(…), zero(k))`
+     where `NodeHolds` says `ofBool(lt(…))`; reconciling the two evaluated the
+     comparison and, through it, the chain below (graph checks doubled per
+     level). Spelled as `ofBool` at width one, and a branch reads the
+     comparison's own Boolean (`_test_N`).
+  2. A passthrough `0 | x` was compared with the source's `x`; the kernel
+     decides that bit by bit, forcing `x`. Passthroughs are spelled `x` in
+     both the certificate and the source expansion.
+  3. Source agreement was one `refl` between two independently built
+     expansions of the whole chain, exponential in depth. Now each composed
+     helper call records its source spelling (`function_ir_cert::SourceValue`,
+     `ReflectedStructuredFunction::sources`), and a composition **crosses** at
+     it: the continuation is certified over its own valuation, and used at
+     `{n}_carry(values)`, which carries `{n}_source(values) = helper(args)`;
+     `{n}_link` equates the prefix's result with that call by one `refl`, the
+     one place the helper's body meets the machine code. A produced argument
+     is spelled by its own crossing's name, so no link compares an expansion.
+     The source expansion and the typed observation cross at the same call.
+  4. Byte lengths, decodes and branch layout converted
+     `structured_bytes(subtree).len()` to a literal at every level, evaluating
+     every encoding below. Lengths now compose from the children's
+     `_byte_length` lemmas (`List::len_append`), and facts at a literal length
+     are transported along them (`j`); `{n}_rip` gives the artifact's
+     `rip_correct`. The exported bytes are the leaves' literal pieces in the
+     code's shape (`{n}_lit`, `{n}_bytes_are`), since one comparison against a
+     flat 1.5 KB literal also exceeds the fuel.
+
+The formatter (`place` ×16, 1562 bytes) compiles and certifies with
+`compile-x86` in about 35 s, and agrees with a C reference on every n below
+10 000. Two residues: a link still costs about 40K steps more per level, since
+the continuation's instantiation walks the chain once (quadratic overall, 432K
+at the root, within fuel); and a valuation lookup costs about 1.3K steps per
+peeled `Succ` of the port id at a `BitVec(64)` result, whatever the entries
+are (the carry dispatches with `Nat::leb` over its entries instead; the
+dataflow valuations still peel). Both are logged on the anchor issue.
+
+### 10.2 Remaining pieces
+
+- **The formatter's meaning** (library, `lib/decimal_line.hthr`): `decimal(n)`,
+  and for `n < 10000` the stored word's bytes from offset `line_skip(n)`,
+  `line_length(n)` of them, are `decimal(n) ++ [10]`. Needs two general bitvec
+  facts the library lacks: `toNat` splits at `take_low`/`drop_low`, and `sub`
+  without borrow. The digit arithmetic is `omega`'s (literal multiples and
+  divisions).
+- **A word store** (`lib/std/arch/x86_64/store.hthr`, `x86_64_store`):
+  `mov qword [base], source` for a base that needs no SIB or displacement,
+  writing the source's eight bytes low first through the profile's write model.
+  `FetchedStep` stays the read-only bridge relation; the Linux profile's step
+  is `FetchedStep ∨ StoreStep`, and `LinuxRuns` runs over that step's closure,
+  with a lift from `FetchedSteps`.
+- **`WriteEvent(fd, bytes)`**: rax 1, rdi the descriptor, rdx the length, the
+  bytes readable at rsi; the run continues with rax the length (a short write
+  or an error has no rule) and RCX/R11 universal, as for read.
+- **The process theorem**: after the loop, three generated artifacts (the
+  word, the start address, the length), the store, the write, exit 0.
+- **CLI** `--print` on the read-loop profile, native tests against a reference
+  `wc -l`, and refusals of a wrong descriptor, write number and store base.
+

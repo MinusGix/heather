@@ -124,13 +124,24 @@ expansion certificate. The certificate renderer folds that same IR and retains
 DAG sharing. There is no additional predicate AST or loop-specific node family.
 
 The complete `search_body` now follows this path too. Transparent monomorphic
-Boolean helpers are reflected into shared regions, including their conditional
+helpers are reflected into shared regions, including their conditional
 bodies and scalar argument computations. `Compose(prefix, continuation)` lets a
 structured producer feed a later region while retaining inherited inputs by
 port ID. Its validity requires continuation inputs to be available from the
 prefix interface; its semantic contract composes both regions under the same
 valuation. Helper expansion declines cycles or depth beyond 32 functions and
 allocates fresh values only below ID 16384.
+
+Since 2026-09-25 a helper may return a word as well as a Bool, and its
+arguments may be helper calls in turn, so a chain `f(g(h(x)))` of branching
+helpers compiles as nested compositions (a literal argument is substituted,
+not passed in a register). The certificates cross each composition at the
+helper call itself (`function_ir_cert::SourceValue`): the continuation is
+certified over its own valuation and used at one that carries `{n}_source` =
+`helper(args)`, and `{n}_link` checks the helper's body against the machine
+code once. Checking a chain costs what its links cost; before, each level's
+checks evaluated the whole chain beneath it
+(`docs/native-first-program-design.md` §10.1).
 
 Results from a nonrecursive two-constructor family with one common scalar type
 parameter and one field per constructor use two ordinary result ports: payload,

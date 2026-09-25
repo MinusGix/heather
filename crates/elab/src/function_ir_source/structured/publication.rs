@@ -14,16 +14,7 @@ pub(super) fn vector(ty: StructuredSourceType, value: &str) -> String {
     }
 }
 
-// A width-indexed valuation must return the original neutral argument at its
-// declared width, without turning it into a numeral and reconstructing it.
-fn at_width(width: u64, value: &str, depth: u64) -> String {
-    let index = if depth == 0 { "width".into() } else { format!("w{depth}") };
-    let succ = |s: String| (0..depth).fold(s, |s, _| format!("Succ({s})"));
-    let zero = if depth == width { value.into() } else { format!("@bitvec::BitVec::zero({depth})") };
-    let rest = if depth == width { format!("@bitvec::BitVec::zero({})", succ(format!("Succ(w{})", depth + 1))) }
-        else { at_width(width, value, depth + 1) };
-    format!("match {index} as λ n => BitVec({}) {{ Zero => {zero}, Succ(w{}) => {rest} }}", succ("n".into()), depth + 1)
-}
+use x86::at_width;
 
 struct Observed {
     expression: String,
@@ -71,6 +62,11 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
         StructuredRegion::Compose { prefix, continuation } => {
             if prefix.outputs().len() != 1 { return unsupported("typed source composition requires one prefix result"); }
             let port = prefix.outputs()[0];
+            if let Some(value) = expansion.sources.get(&port.id) {
+                let crossing = expansion.crossing(value, port, &values)?;
+                values.insert(port.id, (port.width, crossing));
+                return observe_tree(expansion, continuation, values, observers, result_type, observation_types);
+            }
             let saved_result = expansion.result;
             let saved_choice = expansion.choice.take();
             expansion.result = if port.width == 1 { StructuredSourceType::Boolean } else { StructuredSourceType::Word(port.width) };
@@ -104,7 +100,7 @@ pub fn generate_elaborated_typed_x86(
     inputs: &x86::Placements, temporaries: &[Gpr], outputs: &x86::Placements,
 ) -> Result<x86::StructuredX86Emission, SourceError> {
     let reflected = reflect_elaborated_structured(elaborator, source_name)?;
-    let mut emission = x86::generate_structured_results(prefix, &reflected.region, inputs, temporaries, outputs).map_err(SourceError::Lowering)?;
+    let mut emission = x86::generate_structured_sourced(prefix, &reflected.region, &reflected.sources, inputs, temporaries, outputs).map_err(SourceError::Lowering)?;
     let mut module = Module::default();
     module.raw("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;");
     module.raw(generate_structured_source_expansion(&format!("{prefix}_source"), &reflected)?
@@ -139,7 +135,7 @@ pub fn generate_elaborated_typed_x86(
     let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| ty.width().map(|width|
         (id as u64, (width, HeatherExpr::raw(vector(*ty, &format!("arg{id}"))))))).collect();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new() };
+        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {
@@ -171,7 +167,7 @@ pub fn generate_elaborated_typed_x86(
         // The physical fold and observation fold normalize one-bit branches alike.
         let proof = format!("trans({name}_correct({vals}, before{placed_args}), sym(cong_fn<{}, BitVec(64)>(λ value => {}, {name}_source_observed({args}))))", observation_types[i], normalized("value"));
         artifacts.declaration(Declaration::theorem(format!("{name}_typed_correct"), HeatherExpr::raw(format!("read_gpr({}, {prefix}_after(before).gprs) = {expected}", outputs[&port.id].heather_name())), Block::expression(HeatherExpr::raw(proof))).generic("M").parameters(public.clone()));
-        artifacts.declaration(Declaration::theorem(format!("{name}_typed_artifact"), HeatherExpr::raw(format!("StructuredArtifact<M>({prefix}_code(), before, {}, {expected}, {prefix}_Protected)", outputs[&port.id].heather_name())), Block::expression(HeatherExpr::raw(format!("StructuredArtifact(after := {prefix}_after(before), execution := refl, layout := {prefix}_layout(), decoding := {prefix}_decodes(before.rip), result_correct := {name}_typed_correct({call_args}), memory_preserved := {prefix}_memory(before), rip_correct := {prefix}_span(before), registers_preserved := λ register protected => {prefix}_preserves(register, before, protected))")))).generic("M").parameters(public.clone()));
+        artifacts.declaration(Declaration::theorem(format!("{name}_typed_artifact"), HeatherExpr::raw(format!("StructuredArtifact<M>({prefix}_code(), before, {}, {expected}, {prefix}_Protected)", outputs[&port.id].heather_name())), Block::expression(HeatherExpr::raw(format!("StructuredArtifact(after := {prefix}_after(before), execution := refl, layout := {prefix}_layout(), decoding := {prefix}_decodes(before.rip), result_correct := {name}_typed_correct({call_args}), memory_preserved := {prefix}_memory(before), rip_correct := {prefix}_rip(before), registers_preserved := λ register protected => {prefix}_preserves(register, before, protected))")))).generic("M").parameters(public.clone()));
     }
     module.raw(emission.text);
     module.raw(artifacts.render());

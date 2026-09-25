@@ -389,12 +389,10 @@ fn composed_helpers_and_generic_choice_results_check() {
     let reflected = reflect_elaborated_structured(&elab, "relay").unwrap();
     assert_eq!(reflected.region.outputs(), [Port { id: 4, width: 8 }, Port { id: 5, width: 1 }]);
     let image = elab.semantic_image();
-    let stale_text = generate_structured_source_expansion("stale_helper", &reflected).unwrap();
-    let changed_helper = COMPOSED_SOURCE.replace("@bitvec::BitVec::unsigned_lt_bit(8, a, b)", "@bitvec::BitVec::unsigned_lt_bit(8, b, a)");
-    assert_ne!(changed_helper, COMPOSED_SOURCE);
-    let mut changed = source_elaborator();
-    changed.elab_module_source("composed_source", &changed_helper).unwrap_or_else(|e| panic!("{}", e.render(&changed_helper)));
-    reject_structured(&changed.semantic_image(), "stale_helper", &stale_text);
+    // The expansion crosses a composition at the helper call itself, so it
+    // holds whatever the helper's body is; the body is checked against the
+    // machine code at the certificate's `_link` (the stale-helper control in
+    // function_ir_typed_publication.rs).
     let mut swapped = reflected.clone();
     swapped.choice.as_mut().unwrap().constructors.swap(0, 1);
     reject_structured(&image, "swapped_constructors", &generate_structured_source_expansion("swapped", &swapped).unwrap());

@@ -3,7 +3,7 @@ title: First real program: wc -l as a certified static executable
 status: open
 labels: [compiler,x86,elf,milestone]
 created: 2026-09-24
-updated: 2026-09-24
+updated: 2026-09-25
 ---
 
 ## Scope
@@ -19,7 +19,9 @@ Design: `docs/native-first-program-design.md`.
 ## Current state
 
 Slices 1–3 landed 2026-09-24: `wc -l` builds with `build-x86 --read-loop` and runs, and
-its certificate states the process against `wc_l` (design §8). Slice 4, output to stdout, is next.
+its certificate states the process against `wc_l` (design §8). Slice 4, output to stdout, is in
+progress (design §10): the compiler part landed 2026-09-25 (§10.1); the formatter's meaning, the
+word store, the write event, the process theorem and the CLI remain (§10.2).
 
 ## Slices
 
@@ -55,3 +57,4 @@ its certificate states the process against `wc_l` (design §8). Slice 4, output 
 
 - 2026-09-24: Probes V1–V5 held (design §7), with one amendment: the program gets its own memory view, `IoMemory`, which classifies addresses by value. Slices A–C landed (§8). A: `x86_64_fetched_code` proves `access_fetched`, so any loop or branch certificate runs fetched in a loaded image. B: the basic trace is in `linux_x86_64_io` and the memory view in `elf64_io`. C: the process theorem `elf64_read_loop::read_loop_runs`, `examples/x86-native/wc_l.hthr`, and `build-x86 --read-loop`. `wc -l` builds as a 625-byte certified executable in about 36 s and runs correctly on files and a pipe (`crates/cli/tests/native_read_loop.rs`). Six mutations of the process shape are refused (`crates/elab/tests/read_loop_process.rs`). Residency ended up proved by induction, not evaluated (§8 amendments). The exit-status slice is done; stdout output is next.
 - 2026-09-24: Filed along the way: [[let-bound-proposition-diagnostic]], an odd refusal of a type-valued `let`. The fuel measurements are logged on [[call-memory-read-file-walk]].
+- 2026-09-25: Slice 4 started. Its compiler part landed: word-valued helpers compose, and composed certificates cross at the helper call, so a 16-link decimal formatter certifies (1562 bytes, about 35 s) and agrees with C on every n below 10 000. Four generator fixes, attributed per item: design §10.1. Residues: a link still costs about 40K steps more per level (quadratic in depth, within fuel at 16), and valuation lookups peel the id at about 1.3K steps a level ([[valuation-lookup-case-step-cost]]). Remaining pieces: §10.2.

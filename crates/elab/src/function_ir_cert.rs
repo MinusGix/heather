@@ -117,6 +117,71 @@ pub enum StructuredRegion {
     },
 }
 
+/// A composed producer's result as the source spells it: a helper call whose
+/// arguments are expressions over the producer's inputs. A composition that
+/// crosses at this value checks each helper body against its source once, at
+/// its own link; nothing after it unfolds the helper again, so a chain of
+/// helpers costs what its links cost.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceValue {
+    Port(Port),
+    Constant { width: u64, value: u64 },
+    /// `operation` names the `bitvec::BitVec` function: add, sub, band, bor, bxor.
+    Binary { operation: &'static str, width: u64, left: Box<SourceValue>, right: Box<SourceValue> },
+    Less { width: u64, left: Box<SourceValue>, right: Box<SourceValue> },
+    Call { name: String, arguments: Vec<(SourceType, SourceValue)>, result: SourceType },
+    /// An argument another composed producer computed, at its result port.
+    Produced { port: Port, value: Box<SourceValue> },
+}
+
+/// The source types a crossing value is spelled at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceType { Word(u64), Boolean }
+
+/// Keyed by the composed producer's result port.
+pub type SourceValues = std::collections::BTreeMap<u64, SourceValue>;
+
+impl SourceValue {
+    fn natural(&self) -> SourceType {
+        match self {
+            Self::Port(port) => SourceType::Word(port.width),
+            Self::Constant { width, .. } | Self::Binary { width, .. } => SourceType::Word(*width),
+            Self::Less { .. } => SourceType::Boolean,
+            Self::Call { result, .. } => *result,
+            Self::Produced { value, .. } => value.natural(),
+        }
+    }
+    /// Spell the value at `ty`. `leaf` spells a port's value as a bitvector of
+    /// the port's width; a one-bit word and a Boolean meet through
+    /// `head_bit`/`ofBool`.
+    pub fn render(&self, ty: SourceType, leaf: &dyn Fn(Port) -> String) -> String {
+        self.render_named(ty, leaf, &|_| None)
+    }
+    /// As `render`; `named` may spell a produced argument by a name its own
+    /// crossing already gave it, so that nothing compares its expansion.
+    pub fn render_named(&self, ty: SourceType, leaf: &dyn Fn(Port) -> String, named: &dyn Fn(Port) -> Option<String>) -> String {
+        let word = |value: &SourceValue, width: u64| value.render_named(SourceType::Word(width), leaf, named);
+        let spelled = match self {
+            Self::Port(port) => leaf(*port),
+            Self::Constant { width, value } => format!("@bitvec::BitVec::ofNat({width}, {value})"),
+            Self::Binary { operation, width, left, right } =>
+                format!("@bitvec::BitVec::{operation}({width}, {}, {})", word(left, *width), word(right, *width)),
+            Self::Less { width, left, right } =>
+                format!("@bitvec::BitVec::unsigned_lt_bit({width}, {}, {})", word(left, *width), word(right, *width)),
+            Self::Call { name, arguments, .. } => {
+                let arguments = arguments.iter().map(|(ty, value)| value.render_named(*ty, leaf, named)).collect::<Vec<_>>().join(", ");
+                format!("{name}({arguments})")
+            }
+            Self::Produced { port, value } => named(*port).unwrap_or_else(|| value.render_named(value.natural(), leaf, named)),
+        };
+        match (self.natural(), ty) {
+            (SourceType::Word(1), SourceType::Boolean) => format!("@bitvec::BitVec::head_bit(0, {spelled})"),
+            (SourceType::Boolean, SourceType::Word(1)) => format!("bitvec::BitVec::ofBool({spelled})"),
+            _ => spelled,
+        }
+    }
+}
+
 /// The selected arms and their explicit transfers into one shared block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConditionalJoinRegion {

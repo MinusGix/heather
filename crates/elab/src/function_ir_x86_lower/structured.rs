@@ -112,7 +112,10 @@ fn select_here(
             let mut prefix_outputs = Placements::new();
             let mut free = temporaries.iter().copied().filter(|r| !destinations.contains(r)).collect::<Vec<_>>();
             for port in prefix.outputs() {
-                let index = free.iter().position(|r| port.width != 1 || LowByteGpr::from_gpr(*r).is_some())
+                // A comparison bit needs a byte register; a wide value leaves
+                // those to the comparisons downstream when it can.
+                let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some()) }
+                    else { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| (!free.is_empty()).then_some(0)) }
                     .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() + prefix_outputs.len() })?;
                 prefix_outputs.insert(port.id, free.remove(index));
             }
@@ -170,9 +173,9 @@ fn select_here(
             }
             // Reserve the final result register for the continuation. A low
             // byte register is preferred for a materialized comparison bit.
-            let prefix_register = temporaries.iter().copied()
-                .filter(|r| !destinations.contains(r))
-                .find(|r| prefix.outputs[0].width != 1 || LowByteGpr::from_gpr(*r).is_some())
+            let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
+            let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::from_gpr(*r).is_some()) }
+                else { candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next()) }
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let dag = lower_dag(prefix, &registers, temporaries, prefix_register)?;
             let mut carried = inputs.clone();

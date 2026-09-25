@@ -27,3 +27,34 @@ fn typed_search_publication_checks() {
 
 }
 
+const COMPOSED: &str = r#"
+import bitvec; import bool;
+fn below(a, b: BitVec(64)) → Bool { @bitvec::BitVec::unsigned_lt_bit(64, a, b) }
+fn step(state, limit: BitVec(64)) → BitVec(64) {
+    match below(state, limit) { False => @bitvec::BitVec::sub(64, state, limit), True => state }
+}
+fn chain(x: BitVec(64)) → BitVec(64) { step(step(step(x, @bitvec::BitVec::ofNat(64, 40)), @bitvec::BitVec::ofNat(64, 20)), @bitvec::BitVec::ofNat(64, 10)) }
+"#;
+
+// Word- and Bool-valued helpers compose, each crossing at its source call
+// (cert::SourceValue). A certificate generated against one helper body is
+// refused under another: the body meets the machine code at a `_link`, or in
+// the expansion when the call is the function's own result.
+#[test]
+fn composed_helpers_cross_at_the_call() {
+    use heather_elab::function_ir_source::generate_elaborated_typed_x86;
+    let mut elab = checker();
+    elab.elab_module_source("composed", COMPOSED).unwrap_or_else(|e| panic!("{}", e.render(COMPOSED)));
+    let emission = generate_elaborated_typed_x86(&elab, "chain", "composed::chain",
+        &Placements::from([(0, Gpr::Rdi)]), &[Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::R9, Gpr::R10], &Placements::from([(1, Gpr::Rax)])).unwrap();
+    let text = emission.text;
+    assert!(text.contains("_link(") && text.contains("_source(values)"), "compositions must cross at the call");
+    elab.semantic_image().elaborator().elab_module_source("typed_chain", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let changed = COMPOSED.replace("@bitvec::BitVec::sub(64, state, limit)", "@bitvec::BitVec::sub(64, limit, state)");
+    assert_ne!(changed, COMPOSED);
+    let mut stale = checker();
+    stale.elab_module_source("composed", &changed).unwrap_or_else(|e| panic!("{}", e.render(&changed)));
+    let error = stale.semantic_image().elaborator().elab_module_source("typed_chain", &text).expect_err("a stale helper body must be refused").render(&text);
+    assert!(error.contains("kernel rejected") && !error.contains("unbound"), "{error}");
+}
+

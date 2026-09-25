@@ -278,10 +278,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         ).map_err(|e| e.to_string())?;
         let bytes = encode_structured(&emission.lowered);
         proof.raw(emission.text);
-        byte_chain(&mut proof, &format!("{prefix}_published"), &bytes);
+        // Published as the certificate's own literal pieces, in the code's
+        // shape (`_lit`): one comparison of the whole literal would evaluate
+        // past the per-declaration fuel on a long body.
+        proof.declaration(Declaration::function(format!("{prefix}_published"), Expr::raw("List<BitVec(8)>"),
+            Block::expression(Expr::call(format!("{prefix}_lit"), []))));
         proof.declaration(Declaration::theorem(format!("{prefix}_exported_bytes"),
             Expr::equal(Expr::nullary(format!("{prefix}_bytes")), Expr::nullary(format!("{prefix}_published"))),
-            Block::expression(Expr::name("refl"))));
+            Block::expression(Expr::call(format!("{prefix}_bytes_are"), []))));
         (None, Some(bytes))
     } else {
         let emission = function_ir_source::generate_elaborated_x86(
