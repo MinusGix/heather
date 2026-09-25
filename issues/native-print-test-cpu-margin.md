@@ -40,3 +40,7 @@ above).
 
 - The print test runs at least 30% under the rail in a full suite run, and
   the margin is recorded in this issue's log.
+
+## Log
+
+- 2026-09-25: Measured in [[nat-div-mod-lemma-kit]]'s full suite: `wc_l_prints_what_the_read_returned` took 170 s under suite load, down from 283 s. `decimal_line` went from 106 to 32 CPU-s standalone at width eight, and nothing in it sends a `div`/`mod` goal to `omega` any more. Option 1 above is done for `decimal_line`. Whether the rest now leaves enough margin is this issue's call.

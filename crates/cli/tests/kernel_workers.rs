@@ -74,3 +74,26 @@ fn a_zero_width_is_a_usage_error() {
         String::from_utf8_lossy(&result.stderr),
     );
 }
+
+/// A deep refusal is a verdict at every width. The depth budget is sized for
+/// an 8 MiB stack, and a worker thread spawned with Rust's 2 MiB default once
+/// aborted here while the serial gate answered `OutOfFuel`
+/// (issues/kernel-worker-stack-below-depth-budget.md). `scripts/test` sets
+/// `RUST_MIN_STACK`, which masked that, so this child runs without it, as a
+/// user's shell would.
+#[test]
+fn a_deep_refusal_is_a_verdict_at_every_width() {
+    let std_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib/std");
+    for width in ["1", "8"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_heather"))
+            .current_dir(fixtures())
+            .args(["check", "-L", std_dir, "--kernel-workers", width, "deep_refusal.hthr"])
+            .env_remove("HEATHER_KERNEL_WORKERS")
+            .env_remove("RUST_MIN_STACK")
+            .output()
+            .expect("run heather");
+        assert_code(&result, 1, &format!("--kernel-workers {width} did not refuse cleanly"));
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains("OutOfFuel"), "--kernel-workers {width}: stderr: {stderr}");
+    }
+}

@@ -941,6 +941,140 @@ theorem Nat::scaled_le(self a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r 
 }
 
 // ---------------------------------------------------------------------------
+// The division kit. Everything here is `div_mod_unique` read at a
+// decomposition it names, so a proof about digits or place values cites a
+// lemma instead of asking `omega` to expand every `div` and `mod` into a
+// quotient, a remainder and their bounds (issues/nat-div-mod-lemma-kit.md).
+
+theorem Nat::add_mul_distr(self a, b, c: Nat): (a + b) * c = a * c + b * c {
+    calc {
+        (a + b) * c
+            = c * (a + b)   := (a + b).mul_comm(c),
+            = c * a + c * b := c.mul_add_distr(a, b),
+            = a * c + c * b := cong(c.mul_comm(a)),
+            = a * c + b * c := cong(c.mul_comm(b)),
+    }
+}
+
+theorem Nat::add_left_cancel(self k, n, m: Nat, h: k + n = k + m): n = m {
+    n.le_antisym(m,
+        k.le_of_add_le_add_l(n, m, j(h, λ y _ => k + n <= y, (k + n).le_refl())),
+        k.le_of_add_le_add_l(m, n, j(h, λ y _ => y <= k + n, (k + n).le_refl())))
+}
+
+// A quotient and remainder that rebuild `n`, with the remainder below the
+// divisor, are `div` and `mod`: a larger or smaller quotient would put `n`
+// strictly on one side of itself (`scaled_lt`).
+theorem Nat::div_mod_unique(self n, divisor, q, r: Nat, parts: q * divisor + r = n, bound: r < divisor):
+    (n.div(divisor) = q) ∧ (n.mod(divisor) = r)
+{
+    let whole: (n.div(divisor) * divisor + n.mod(divisor) = n) = n.div_mul_add_mod(divisor);
+    let below: (n.mod(divisor) < divisor) = n.mod_lt(divisor, (1).le_trans(Succ(r), divisor, trivial, bound));
+    let same: (n.div(divisor) = q) = match n.div(divisor).lt_trichotomy(q) {
+        Inl(smaller) => false_elim(n.lt_irrefl(Nat::lt_congr_iff(
+            n.div(divisor) * divisor + n.mod(divisor), n, q * divisor + r, n, whole, parts).mp(
+                n.div(divisor).scaled_lt(q, n.mod(divisor), r, divisor, smaller, below)))),
+        Inr(rest) => match rest {
+            Inl(equal) => equal,
+            Inr(larger) => false_elim(n.lt_irrefl(Nat::lt_congr_iff(
+                q * divisor + r, n, n.div(divisor) * divisor + n.mod(divisor), n, parts, whole).mp(
+                    q.scaled_lt(n.div(divisor), r, n.mod(divisor), divisor, larger, bound)))),
+        },
+    };
+    And(same, (q * divisor).add_left_cancel(n.mod(divisor), r,
+        trans(trans(sym(Nat::cong(λ (x: Nat) => x * divisor + n.mod(divisor), same)), whole), sym(parts))))
+}
+
+theorem Nat::div_of_lt(self n, divisor: Nat, h: n < divisor): n.div(divisor) = 0 {
+    n.div_mod_unique(divisor, 0, n,
+        trans(Nat::cong(λ (x: Nat) => x + n, divisor.mul_left_zero()), n.add_left_zero()), h).left
+}
+
+theorem Nat::mod_of_lt(self n, divisor: Nat, h: n < divisor): n.mod(divisor) = n {
+    n.div_mod_unique(divisor, 0, n,
+        trans(Nat::cong(λ (x: Nat) => x + n, divisor.mul_left_zero()), n.add_left_zero()), h).right
+}
+
+theorem Nat::div_one(self n: Nat): n.div(1) = n { n.div_mod_unique(1, n, 0, n.add_left_zero(), trivial).left }
+
+theorem Nat::mod_one(self n: Nat): n.mod(1) = 0 { n.div_mod_unique(1, n, 0, n.add_left_zero(), trivial).right }
+
+// A quotient bounded through its divisor: `n < d * k` leaves fewer than `k`
+// whole `d`s in `n`. No positivity premise: at `d = 0` the bound is false.
+theorem Nat::div_lt_of_lt_mul(self n, d, k: Nat, h: n < d * k): n.div(d) < k {
+    match k.le_dec(n.div(d)) {
+        Inl(enough) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * k, n, h,
+            (d * k).le_trans(n.div(d) * d, n,
+                j(d.mul_comm(n.div(d)), λ y _ => d * k <= y, d.mul_le_mono_l(k, n.div(d), enough)),
+                j(n.div_mul_add_mod(d), λ y _ => n.div(d) * d <= y, (n.div(d) * d).le_add_l(n.mod(d))))))),
+        Inr(short) => n.div(d).lt_of_not_le(k, short),
+    }
+}
+
+// The converse direction: `k` whole `d`s fit in `n` when `d * k` does.
+theorem Nat::le_div_of_mul_le(self n, d, k: Nat, pd: 0 < d, h: d * k <= n): k <= n.div(d) {
+    match k.le_dec(n.div(d)) {
+        Inl(fits) => fits,
+        Inr(short) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * Succ(n.div(d)), n,
+            j(n.div_mul_add_mod(d), λ y _ => Succ(y) <= d * n.div(d) + d,
+                j(n.div(d).mul_comm(d), λ y _ => Succ(n.div(d) * d + n.mod(d)) <= y + d,
+                    (n.div(d) * d).add_le_mono_l(Succ(n.mod(d)), d, n.mod_lt(d, pd)))),
+            (d * Succ(n.div(d))).le_trans(d * k, n, d.mul_le_mono_l(Succ(n.div(d)), k, n.div(d).lt_of_not_le(k, short)), h)))),
+    }
+}
+
+// Dividing by `a` and then by `b` is dividing by `a * b`, and what the
+// larger divisor leaves is both remainders, the outer one scaled by `a`. The
+// three nesting laws after it are this pair read one way each.
+theorem Nat::div_mul_parts(self n, a, b: Nat, pa: 0 < a, pb: 0 < b):
+    (n.div(a * b) = n.div(a).div(b)) ∧ (n.mod(a * b) = n.div(a).mod(b) * a + n.mod(a))
+{
+    n.div_mod_unique(a * b, n.div(a).div(b), n.div(a).mod(b) * a + n.mod(a),
+        calc {
+            n.div(a).div(b) * (a * b) + (n.div(a).mod(b) * a + n.mod(a))
+                = (n.div(a).div(b) * (a * b) + n.div(a).mod(b) * a) + n.mod(a) :=
+                    sym((n.div(a).div(b) * (a * b)).add_assoc(n.div(a).mod(b) * a, n.mod(a))),
+                = (n.div(a).div(b) * (b * a) + n.div(a).mod(b) * a) + n.mod(a) := cong(a.mul_comm(b)),
+                = ((n.div(a).div(b) * b) * a + n.div(a).mod(b) * a) + n.mod(a) :=
+                    cong(sym(n.div(a).div(b).mul_assoc(b, a))),
+                = (n.div(a).div(b) * b + n.div(a).mod(b)) * a + n.mod(a) :=
+                    cong(sym((n.div(a).div(b) * b).add_mul_distr(n.div(a).mod(b), a))),
+                = n.div(a) * a + n.mod(a) := cong(n.div(a).div_mul_add_mod(b)),
+                = n := n.div_mul_add_mod(a),
+        },
+        Nat::lt_congr_iff(n.div(a).mod(b) * a + n.mod(a), n.div(a).mod(b) * a + n.mod(a), b * a + 0, a * b,
+            refl, b.mul_comm(a)).mp(
+                n.div(a).mod(b).scaled_lt(b, n.mod(a), 0, a, n.div(a).mod_lt(b, pb), n.mod_lt(a, pa))))
+}
+
+theorem Nat::div_div(self n, a, b: Nat, pa: 0 < a, pb: 0 < b): n.div(a).div(b) = n.div(a * b) {
+    sym(n.div_mul_parts(a, b, pa, pb).left)
+}
+
+// Reducing modulo a multiple of `a` first changes nothing modulo `a`.
+theorem Nat::mod_mul_mod(self n, a, b: Nat, pa: 0 < a, pb: 0 < b): n.mod(a * b).mod(a) = n.mod(a) {
+    trans(Nat::cong(λ (x: Nat) => x.mod(a), n.div_mul_parts(a, b, pa, pb).right),
+        (n.div(a).mod(b) * a + n.mod(a)).div_mod_unique(a, n.div(a).mod(b), n.mod(a), refl, n.mod_lt(a, pa)).right)
+}
+
+// A middle digit, read either end first.
+theorem Nat::div_mod_eq_mod_div(self n, a, b: Nat, pa: 0 < a, pb: 0 < b): n.div(a).mod(b) = n.mod(a * b).div(a) {
+    sym(trans(Nat::cong(λ (x: Nat) => x.div(a), n.div_mul_parts(a, b, pa, pb).right),
+        (n.div(a).mod(b) * a + n.mod(a)).div_mod_unique(a, n.div(a).mod(b), n.mod(a), refl, n.mod_lt(a, pa)).left))
+}
+
+// Place value: the count of `c`s in `n` is `k` for every whole `c * k`, plus
+// the `c`s in what is left of it.
+theorem Nat::div_split(self n, c, k: Nat, pc: 0 < c, pk: 0 < k): n.div(c) = n.div(c * k) * k + n.mod(c * k).div(c) {
+    calc {
+        n.div(c)
+            = n.div(c).div(k) * k + n.div(c).mod(k) := sym(n.div(c).div_mul_add_mod(k)),
+            = n.div(c * k) * k + n.div(c).mod(k) := cong(n.div_div(c, k, pc, pk)),
+            = n.div(c * k) * k + n.mod(c * k).div(c) := cong(n.div_mod_eq_mod_div(c, k, pc, pk)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 fn Nat::max(self a: Nat) → Nat → Nat {
     match a {

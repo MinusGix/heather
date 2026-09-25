@@ -68,6 +68,14 @@ pub struct OutOfFuel;
 /// this number without re-reading them will break one end or the other.
 pub const NATIVE_DEPTH_LIMIT: u32 = 1024;
 
+/// The native stack [`NATIVE_DEPTH_LIMIT`] was measured against, for a thread
+/// that runs the kernel. A thread with less aborts on a stack overflow where
+/// this one answers `OutOfFuel`, and a SIGABRT is not a verdict. Rust gives a
+/// spawned thread 2 MiB unless `RUST_MIN_STACK` says otherwise, and only
+/// `scripts/test` says otherwise, so a thread that runs the kernel asks for
+/// this size itself (issues/kernel-worker-stack-below-depth-budget.md).
+pub const NATIVE_STACK_BYTES: usize = 8 << 20;
+
 // ---------------------------------------------------------------------------
 // δ: definition unfolding, and the layer that owns it
 // ---------------------------------------------------------------------------
