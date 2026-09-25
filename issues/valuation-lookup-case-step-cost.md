@@ -39,3 +39,4 @@ lookup), which is a workaround at one site, not the fix.
 ## Log
 
 - 2026-09-25: The structured generator's valuations now avoid the cost (`valuation_body` in `structured_cert.rs`). They dispatch on the id through a balanced `Nat::leb` tree, so a lookup costs a logarithmic number of comparisons, not a step per `Succ`. The kernel cost itself remains, and so does the bench pinning it.
+- 2026-09-25: The same round's other residue, the per-link cost in depth, is owned by [[crossing-link-quadratic-cost]].

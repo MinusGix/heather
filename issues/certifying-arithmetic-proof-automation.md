@@ -3,7 +3,7 @@ title: Certifying arithmetic and bitvector proof automation
 status: open
 labels: [proofs,elaboration,metaprogramming,stdlib,ergonomics]
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-09-25
 ---
 
 The proof of executable carry correspondence is the right refinement theorem
@@ -133,3 +133,4 @@ unary closed computations is compatible with that division.
   rather than teaching Omega about `twice`. The historical design and metrics
   remain useful evidence; [[arith-compact-additive-certificates]] is closed as
   superseded rather than implemented against deleted machinery.
+- 2026-09-25: Customer from certified wc -l's formatter (lib/decimal_line.hthr): most of its hand work is word-to-Nat plumbing. That slice is filed as [[bitvec-nat-lifting-tactic]], and the Nat division lemmas it cites as [[nat-div-mod-lemma-kit]].

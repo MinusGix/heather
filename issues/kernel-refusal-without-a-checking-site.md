@@ -17,6 +17,7 @@ declaration.
 The issue's second question stands for that case: could the kernel's
 conversion report the first mismatching pair of sub-terms (a path, under the
 budget-bounded `Debug` of `crates/kernel/src/fmt.rs`)? It is a kernel change,
-so weigh it against [[verified-fancy-kernel-later]]. A report-only path that
+so weigh it against keeping the kernel un-fancy until it is verified. A
+report-only path that
 re-runs conversion after a refusal would keep the checking path untouched.
 Not urgent: no instance is known today that the site notes miss.

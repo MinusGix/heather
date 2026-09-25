@@ -416,8 +416,9 @@ The formatter (`place` ×16, 1562 bytes) compiles and certifies with
 the continuation's instantiation walks the chain once (quadratic overall, 432K
 at the root, within fuel); and a valuation lookup costs about 1.3K steps per
 peeled `Succ` of the port id at a `BitVec(64)` result, whatever the entries
-are (the carry dispatches with `Nat::leb` over its entries instead; the
-dataflow valuations still peel). Both are logged on the anchor issue.
+are. Every valuation now dispatches with a balanced `Nat::leb` tree instead
+(`issues/valuation-lookup-case-step-cost.md`). The link residue is owned by
+`issues/crossing-link-quadratic-cost.md`.
 
 ### 10.2 The formatter's meaning (landed)
 
