@@ -6,7 +6,11 @@ shares source reflection, instruction selection, and source-to-x86
 certification with `compile-x86`, which remains the assembly/FFI export path.
 
 The separate [call profile](x86-64-calls.md), selected with `--callee`, adds
-three code fragments and an owned writable stack page. The profile below
+three code fragments and an owned writable stack page. The read-once profile,
+selected with `--read-loop`, reuses that image with the page as an input
+buffer: it reads stdin once, runs a certified counting loop and exits with the
+count, and its claim is a Linux trace over fetched execution
+([its design](native-first-program-design.md)). The profile below
 describes the default inline build.
 
 ## First executable profile

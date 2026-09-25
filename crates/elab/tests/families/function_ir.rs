@@ -27,6 +27,8 @@ mod function_ir_guarded_read;
 mod function_ir_loop;
 #[path = "../function_ir_loop_trace.rs"]
 mod function_ir_loop_trace;
+#[path = "../read_loop_process.rs"]
+mod read_loop_process;
 #[path = "../function_ir_narrow_certificates.rs"]
 mod function_ir_narrow_certificates;
 #[path = "../function_ir_recursive.rs"]

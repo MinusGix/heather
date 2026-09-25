@@ -20,6 +20,23 @@ impl Op {
 #[derive(Clone)]
 struct Fragment { name: String, ops: Vec<Op> }
 struct Layout { bytes: Vec<u8>, symbols: BTreeMap<String, u64>, placed: BTreeMap<u64, (Op, Vec<u8>, String)> }
+// The call profile's file: the fixed RX profile's header, with its entry
+// after the third program header and a zero-filled RW PT_LOAD at 0x401000.
+// The read-once profile (read_loop.rs) uses the same image.
+pub(super) fn image(code: &[u8]) -> Result<Vec<u8>, String> {
+    if ENTRY + code.len() as u64 > 0x401000 { return Err("code overlaps the owned page".into()); }
+    let mut file = super::elf::image(code)?;
+    let size = HEADER + code.len();
+    file.truncate(176);
+    file[24..32].copy_from_slice(&ENTRY.to_le_bytes());
+    file[56..58].copy_from_slice(&3u16.to_le_bytes());
+    file[96..104].copy_from_slice(&(size as u64).to_le_bytes());
+    file[104..112].copy_from_slice(&(size as u64).to_le_bytes());
+    file.extend(1u32.to_le_bytes()); file.extend(6u32.to_le_bytes());
+    for n in [0x1000u64, 0x401000, 0x401000, 0, 0x1000, 0x1000] { file.extend(n.to_le_bytes()); }
+    file.extend(code);
+    Ok(file)
+}
 fn displacement(start: u64, target: u64) -> Result<i32, String> {
     let next = start.checked_add(5).ok_or("relative call address overflow")?;
     i32::try_from(i128::from(target) - i128::from(next)).map_err(|_| "relative call displacement exceeds signed 32 bits".into())
@@ -386,17 +403,8 @@ pub(super) fn generate(elab: &Elaborator, module: &mut Module, prefix: &str, cal
     ];
     if twice { fragments.insert(2, Fragment { name: "leaf_again".into(), ops: leaf_ops }); }
     let layout = layout(&fragments)?;
-    let mut file = super::elf::image(&layout.bytes)?;
-    // Extend the existing fixed profile with a zero-filled RW PT_LOAD.
     let size = HEADER + layout.bytes.len();
-    file.truncate(176);
-    file[24..32].copy_from_slice(&ENTRY.to_le_bytes());
-    file[56..58].copy_from_slice(&3u16.to_le_bytes());
-    file[96..104].copy_from_slice(&(size as u64).to_le_bytes());
-    file[104..112].copy_from_slice(&(size as u64).to_le_bytes());
-    file.extend(1u32.to_le_bytes()); file.extend(6u32.to_le_bytes());
-    for n in [0x1000u64, 0x401000, 0x401000, 0, 0x1000, 0x1000] { file.extend(n.to_le_bytes()); }
-    file.extend(&layout.bytes);
+    let file = image(&layout.bytes)?;
     for name in ["x86_64_calls", "x86_64_call_frame", "x86_64_call_summary", "elf64_calls"] { module.raw(format!("import {name};")); }
     module.raw(leaf.text.clone());
     emit_leaf_summary(module, &leaf_prefix, &leaf, local && !twice, twice);

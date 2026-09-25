@@ -16,6 +16,7 @@ use heather_cli::{loader, semantic::SemanticSession};
 mod elf;
 mod calls;
 mod order;
+mod read_loop;
 
 mod support;
 use support::SUPPORT;
@@ -51,6 +52,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut cache = None;
     let mut callee = None;
     let mut callable_caller = false;
+    let mut read_loop = false;
+    let (mut needle, mut advance, mut spec, mut computes) = (None, None, None, None);
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -58,6 +61,16 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--callable-caller" if executable => { callable_caller = true; }
+            "--read-loop" if executable => { read_loop = true; }
+            "--needle" | "--advance" | "--spec" | "--computes" if executable => {
+                let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
+                match arg.as_str() {
+                    "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
+                    "--advance" => advance = Some(value),
+                    "--spec" => spec = Some(value),
+                    _ => computes = Some(value),
+                }
+            }
             "--callee" if executable => {
                 callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
             }
@@ -87,12 +100,19 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
-    if executable && inputs.len() != 2 {
+    if read_loop {
+        if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
+        if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() {
+            return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function> and --computes <theorem>".into());
+        }
+    } else if needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() {
+        return Err("--needle, --advance, --spec and --computes belong to --read-loop".into());
+    } else if executable && inputs.len() != 2 {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function> [--callable-caller]] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem>) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -194,13 +214,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         elab.set_gate(Rc::clone(store) as Rc<dyn heather_elab::gate::KernelGate>);
     }
     let mut session = SemanticSession::new(cache);
-    for &(name, src) in SUPPORT {
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] }).copied().collect();
+    for &(name, src) in &bundle {
         check_module(&mut elab, &mut session, &loader::Module {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
         })?;
     }
     for module in &sources {
-        if let Some((_, bundled)) = SUPPORT.iter().find(|(name, _)| *name == module.name) {
+        if let Some((_, bundled)) = bundle.iter().find(|(name, _)| *name == module.name) {
             if module.src != *bundled {
                 return Err(format!("source module `{}` differs from the compiler's bundled proof library", module.name));
             }
@@ -221,7 +242,27 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
-    let (image, body_bytes) = if let Some(callee) = callee {
+    let (image, body_bytes) = if read_loop {
+        let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
+            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap() };
+        let context = format!("{prefix}_context");
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
+        })?;
+        let emission = read_loop::generate_loop(&elab, &prefix, &program)?;
+        // The loop's pieces are a module of their own, which its composition imports.
+        let pieces = format!("{prefix}_pieces");
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
+        })?;
+        proof = Module::default();
+        for name in read_loop::IMPORTS.iter().filter(|name| !emission.text.contains(&format!("import {name};"))) {
+            proof.raw(format!("import {name};"));
+        }
+        proof.raw(emission.text.clone());
+        probes = None;
+        (Some(read_loop::certify(&mut proof, &prefix, &program, &emission)?), None)
+    } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
             &format!("{root_name}::{symbol}"), &format!("{root_name}::{callee}"), inputs, callable_caller);
@@ -317,7 +358,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
+        if read_loop {
+            println!("{}: {}-byte ELF64 executable; checked read-once process trace against `{}`", output.display(), image.len(), spec.as_deref().unwrap());
+        } else {
+            println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
+        }
         println!("Linux loading and syscall delivery remain environment assumptions");
     } else {
         let bytes = body_bytes.expect("assembly path has a certified body");

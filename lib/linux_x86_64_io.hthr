@@ -1,0 +1,107 @@
+// The basic Linux trace (docs/native-first-program-design.md §4): a run of a
+// process is fetched steps between syscalls, and each syscall is an event.
+// Two syscalls have rules: a successful read, whose bytes the event names,
+// and exit. Everything else, including a failed read, has no rule, so a
+// claim over this relation says nothing about a run that meets one. The
+// proper model is issues/linux-syscall-trace-model.md. As for exit today,
+// syscall delivery and Linux itself are environment assumptions, not
+// theorems here.
+import linux_x86_64_entry;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import bitvec;
+import bitvec_nat;
+import list;
+import logic;
+import nat;
+
+// The exit status is the full request word, as LinuxExitRequest states it;
+// the parent observes its low eight bits.
+inductive LinuxEvent {
+    ReadEvent(fd: BitVec(64), bytes: List<BitVec(8)>),
+    ExitEvent(status: BitVec(64)),
+}
+
+// What the environment needs to know about a memory: how code is fetched and
+// data read, which spans the kernel may write, and what writing them does.
+record LinuxIo<M> {
+    fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>,
+    writable: M → BitVec(64) → Nat → Type,
+    store: M → BitVec(64) → List<BitVec(8)> → M,
+}
+
+// After a successful read: the bytes are stored at RSI, RAX holds their count,
+// and RIP is past the SYSCALL. RCX and R11 hold whatever the rule was given:
+// the rule quantifies over them, so a run can't depend on their values.
+fn linux_read_return<M>(io: LinuxIo<M>, state: MachineState<M>, bytes: List<BitVec(8)>,
+    rcx, r11: BitVec(64)) → MachineState<M> {
+    MachineState(
+        gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx,
+            write_gpr(Rax, bitvec_nat::word_of_nat(64, bytes.len()), state.gprs))),
+        flags := state.flags,
+        rip := next_rip(state.rip, 2),
+        memory := io.store(state.memory, read_gpr(Rsi, state.gprs), bytes))
+}
+
+fn LinuxSyscallAt<M>(io: LinuxIo<M>, state: MachineState<M>) → Type {
+    FetchedFrom(io.fetch, state.memory, InstructionBytes(state.rip, linux_syscall_bytes()))
+}
+
+// A run producing exactly `events`, ending at an exit.
+fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> → Type {
+    match events {
+        Nil => λ state => False,
+        Cons(event, rest) => λ state => Exists<MachineState<M>>(λ at =>
+            FetchedSteps(io.fetch, io.data, state, at) ∧ (LinuxSyscallAt(io, at) ∧
+            match event as λ _ => Type {
+                ReadEvent(fd, bytes) =>
+                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧
+                    ((read_gpr(Rdi, at.gprs) = fd) ∧
+                    ((bytes.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
+                    (io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()) ∧
+                    ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11)))))),
+                ExitEvent(status) =>
+                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧
+                    ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
+            })),
+    }
+}
+
+// Fetched steps before a run are part of it.
+theorem linux_runs_after_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,
+    steps: FetchedSteps(io.fetch, io.data, before, middle), runs: LinuxRuns(io, events, middle)):
+    LinuxRuns(io, events, before) {
+    (match events as λ list => LinuxRuns(io, list, middle) → LinuxRuns(io, list, before) {
+        Nil => λ never => never,
+        Cons(_, _) => λ found => Exists(found.witness,
+            ⟨fetched_steps_trans(io.fetch, io.data, before, middle, found.witness, steps, found.proof.left), found.proof.right⟩),
+    })(runs)
+}
+
+theorem linux_runs_exit<M>(io: LinuxIo<M>, before, at: MachineState<M>, status: BitVec(64),
+    steps: FetchedSteps(io.fetch, io.data, before, at), syscall: LinuxSyscallAt(io, at),
+    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(60), code: read_gpr(Rdi, at.gprs) = status):
+    LinuxRuns(io, [ExitEvent(status)], before) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨code, refl⟩⟩⟩⟩)
+}
+
+theorem linux_runs_read<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
+    rest: List<LinuxEvent>, steps: FetchedSteps(io.fetch, io.data, before, at), syscall: LinuxSyscallAt(io, at),
+    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(0), descriptor: read_gpr(Rdi, at.gprs) = fd,
+    capacity: bytes.len() <= read_gpr(Rdx, at.gprs).toNat(),
+    writable: io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()),
+    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11))):
+    LinuxRuns(io, Cons(ReadEvent(fd, bytes), rest), before) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨capacity, ⟨writable, after⟩⟩⟩⟩⟩⟩)
+}
+
+// The exit-only profile's request is this relation's exit event.
+theorem linux_exit_request_runs<M>(io: LinuxIo<M>, state: MachineState<M>, result: BitVec(64),
+    syscall: LinuxSyscallAt(io, state), request: LinuxExitRequest<M>(state, result)):
+    LinuxRuns(io, [ExitEvent(result)], state) {
+    linux_runs_exit(io, state, state, result, fetched_steps_refl(io.fetch, io.data, state), syscall,
+        request.number, request.status)
+}

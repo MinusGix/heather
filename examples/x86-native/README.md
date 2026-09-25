@@ -233,3 +233,35 @@ using two distinct words in a 24-byte frame that preserves call alignment. Run i
 18446744073709551615 and 1 exit 253. Checked disjointness preserves each live
 saved word through writes to the other slot and the child return word, and
 protects the parent return word.
+
+## A program with input: `wc -l`
+
+`wc_l.hthr` is a whole program: it reads stdin once into a 4096-byte page,
+counts the newlines with a certified loop, and exits with the count.
+
+```sh
+cargo build --release -p heather-cli
+(ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
+  examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
+  --advance line_body_advances --spec wc_l --computes count_lines_input \
+  -o target/x86-native/wc_l --cache-dir target/native-images)
+printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
+```
+
+Expected output: `3`.
+
+The certificate's `count_lines_native_runs` states the whole process against
+the source. For every input one successful read may return (at most 4096
+bytes), the written file has a run that reads it and exits with
+`wc_l(bytes)`, and the parent sees the low eight bits. `wc_l` is an ordinary
+Heather function; the program supplies it, the counting step, and one lemma
+(`count_lines_input`) saying its loop computes `wc_l` over a buffer holding
+the input. Everything machine-shaped comes from the shared generators and the
+library's read-once process theorem (`lib/elf64_read_loop.hthr`).
+
+The trace is deliberately basic (`lib/linux_x86_64_io.hthr`): successful reads
+and exit are the only syscalls with rules, so the claim says nothing about a
+run that meets a read error, and it covers only what the first read returns.
+A longer file is counted up to its first 4096 bytes. The proper syscall model
+is `issues/linux-syscall-trace-model.md`, and printing the count is the
+milestone's next slice (`docs/native-first-program-design.md`).
