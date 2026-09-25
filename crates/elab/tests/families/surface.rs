@@ -29,6 +29,8 @@ mod named_arguments;
 mod overapplication;
 #[path = "../let_and_blocks.rs"]
 mod let_and_blocks;
+#[path = "../have.rs"]
+mod have;
 #[path = "../operators.rs"]
 mod operators;
 #[path = "../sequent_binders.rs"]

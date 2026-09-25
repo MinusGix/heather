@@ -6,3 +6,5 @@ theorem id_eq<A>(x: A): id(x) = x { refl }
 
 designation prefix ! at Bool := bool::not
 theorem reflected_not(b: Bool): ⟦!b⟧ { ?proof }
+
+fn opaque_twice(n: Nat) -> Nat { have m: Nat = n; have k = m; let have = k; have }

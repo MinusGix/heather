@@ -222,13 +222,19 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat($.let_statement), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
     ),
     let_statement: $ => seq(
       'let', choice(field('name', $.identifier), $.destructure_pattern),
+      optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
+    ),
+    // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
+    // pattern. `have` stays a contextual word, so `have(x)` is still a call.
+    have_statement: $ => seq(
+      'have', field('name', $.identifier),
       optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
     ),
     destructure_pattern: $ => seq(
@@ -526,6 +532,7 @@ module.exports = grammar({
       alias('apply', $.identifier),
       alias('give', $.identifier),
       alias('refl', $.identifier),
+      alias('have', $.identifier),
     ),
     // Keep plain and namespace-qualified names lexically disjoint. Declaration
     // name positions alias either spelling to the stable qualified-name node.

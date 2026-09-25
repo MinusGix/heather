@@ -1165,6 +1165,7 @@ fn let_alias(name: &str, col: &str, span: Span) -> Stmt {
             span,
         },
         span,
+        opaque: false,
     }
 }
 

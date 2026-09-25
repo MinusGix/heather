@@ -35,7 +35,7 @@ impl Elaborator {
         let stmts = facts.into_iter().enumerate().map(|(i, expr)| {
             let mut name = format!("__dec_fact_{i}");
             while scope.iter().any(|b| b.name == name) { name.push('_'); }
-            Stmt::Let { name, ty: None, expr, span }
+            Stmt::Let { name, ty: None, expr, span, opaque: false }
         }).collect();
         let body = Block { stmts, result: Box::new(Expr { kind: ExprKind::Var("omega".into()), span }),
             ons: Vec::new(), span };

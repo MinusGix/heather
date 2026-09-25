@@ -313,6 +313,12 @@ impl Elaborator {
         for stmt in &decl.body.stmts {
             let (name, expr) = match stmt {
                 Stmt::LetCode { name, expr, .. } => (name, expr),
+                // Refused by name: this loop only aliases, and aliasing a
+                // `have` would drop the one thing it asks for
+                // (docs/have-design.md §2).
+                Stmt::Let { opaque: true, span, .. } => {
+                    return err("`have` is not part of the meta slice; use `let`", *span);
+                }
                 Stmt::Let {
                     name,
                     ty: None,

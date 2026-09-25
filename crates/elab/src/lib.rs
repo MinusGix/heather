@@ -3634,10 +3634,16 @@ impl Elaborator {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
             debug_assert!(decl.decreases.is_none());
-            let body = {
-                let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
-                self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?
-            };
+            let body = statements::check_block(
+                self,
+                &cx,
+                &decl.body,
+                &res_ty,
+                &res_lvl,
+                None,
+                None,
+                true,
+            )?;
             self.solve_goals(&decl.body.ons, &decl.name)?;
             Some(body)
         };

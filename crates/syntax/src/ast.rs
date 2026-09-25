@@ -429,7 +429,12 @@ pub enum Stmt {
     /// `let x = e;` or `let x: T = e;`. The annotation is what puts the
     /// right-hand side in *checking* position, so `let p: a = b = ?g;` is how
     /// a hole gets bound to a name.
-    Let { name: String, ty: Option<Ty>, expr: Expr, span: Span },
+    ///
+    /// `opaque` is `have x = e;` (docs/have-design.md): the rest of the block
+    /// sees `x : T` and not its value, and elaboration binds it by a β-redex
+    /// instead of an alias. One variant, not two, so that every walker that
+    /// only cares what a statement binds treats the two alike.
+    Let { name: String, ty: Option<Ty>, expr: Expr, span: Span, opaque: bool },
     /// `let { unit := u, op } = m;` — record destructuring
     /// (docs/named-patterns-by-field-design.md §2). Each right-hand binder is
     /// aliased to the selected projection, so this remains sugar over

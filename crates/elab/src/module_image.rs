@@ -1116,8 +1116,10 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
 
 fn put_stmt(w: &mut Writer, stmt: &Stmt) {
     match stmt {
-        Stmt::Let { name, ty, expr, span } => {
-            w.byte(0); w.string(name); w.option(ty.as_ref(), put_ty); put_expr(w, expr); put_span(w, *span);
+        // A `have` is its own tag (docs/have-design.md §5) rather than a
+        // flag byte, so an image written before `have` existed still reads.
+        Stmt::Let { name, ty, expr, span, opaque } => {
+            w.byte(if *opaque { 3 } else { 0 }); w.string(name); w.option(ty.as_ref(), put_ty); put_expr(w, expr); put_span(w, *span);
         }
         Stmt::LetRecord { fields, expr, span } => {
             w.byte(1); w.vec(fields, |w, field| {
@@ -1132,8 +1134,9 @@ fn put_stmt(w: &mut Writer, stmt: &Stmt) {
 
 fn get_stmt(r: &mut Reader<'_>) -> Result<Stmt, ModuleImageDecodeError> {
     match r.byte()? {
-        0 => Ok(Stmt::Let {
+        tag @ (0 | 3) => Ok(Stmt::Let {
             name: r.string()?, ty: r.option(get_ty)?, expr: get_expr(r)?, span: get_span(r)?,
+            opaque: tag == 3,
         }),
         1 => Ok(Stmt::LetRecord {
             fields: r.vec(|r| Ok(RecordPatField {
@@ -2201,6 +2204,8 @@ instance Mag<Z> { op := zop }
 designation + at Z := zop
 meta fn zero_code(g: Ctx) -> Code(g |- Nat) { code { 0 } }
 datarepr NatN for Nat := repr::naive();
+fn twice<A>(a: A, f: A -> A) -> A { have b: A = f(a); let c = f(b); c }
+fn twice_zero(f: Z -> Z) -> Z { twice(Z0, f) }
 "#,
                 identity.clone(),
             )

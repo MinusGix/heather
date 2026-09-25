@@ -2002,7 +2002,7 @@ impl Parser {
                 span,
             });
         }
-        while self.at_kw("let") {
+        while self.at_stmt() {
             stmts.push(self.let_stmt()?);
         }
         // Goal combinators are statement-shaped: `split_all` replaces the
@@ -2058,7 +2058,7 @@ impl Parser {
         if self.at_sequent_binders() {
             let (binders, start, turnstile) = self.sequent_binders()?;
             let mut body_stmts = Vec::new();
-            while self.at_kw("let") {
+            while self.at_stmt() {
                 body_stmts.push(self.let_stmt()?);
             }
             let (body_result, ons) = self.block_result_and_ons()?;
@@ -2142,7 +2142,7 @@ impl Parser {
             None
         };
         let mut end = self.expect(&TokKind::Semi, "`;` to end the `split`")?;
-        if self.at_kw("let") {
+        if self.at_stmt() {
             return self.err(
                 "a `split` is the last statement of its block: its arms are the \
                  block's result, so nothing follows them but `on`",
@@ -2195,6 +2195,9 @@ impl Parser {
     /// the escape hatch `no_eq`'s doc comment promises and `atom`'s `(` arm
     /// now delivers.
     fn let_stmt(&mut self) -> R<Stmt> {
+        if self.at_kw("have") {
+            return self.have_stmt();
+        }
         let start = self.bump().span; // `let`
         // `let { unit := u, op } = m;` — record destructuring
         // (docs/named-patterns-by-field-design.md §2). Unambiguous against
@@ -2246,7 +2249,33 @@ impl Parser {
         self.expect_eq("`let` binding")?;
         let expr = self.expr()?;
         let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
-        Ok(Stmt::Let { name, ty, expr, span: start.join(end) })
+        Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false })
+    }
+
+    /// A block statement starts here: `let`, or `have` followed by a name.
+    /// `have` is contextual the way `let code x` is (docs/have-design.md §2):
+    /// `have x` was never an expression, so a value named `have` keeps
+    /// working everywhere, the head of a block's result included.
+    fn at_stmt(&self) -> bool {
+        self.at_kw("let") || (self.at_kw("have") && matches!(self.nth(1), TokKind::Ident(_)))
+    }
+
+    /// `have x = e;` / `have x: T = e;` — [`Self::let_stmt`]'s single-name
+    /// form, binding opaquely (docs/have-design.md). The annotation is read
+    /// under `no_eq` for the same reason as a `let`'s.
+    fn have_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span; // `have`
+        let (name, _) = self.binder_ident("`have` binding name")?;
+        let ty = if matches!(self.peek(), TokKind::Colon) {
+            self.bump();
+            Some(self.with_eq(true, |p| p.ty())?)
+        } else {
+            None
+        };
+        self.expect_eq("`have` binding")?;
+        let expr = self.expr()?;
+        let end = self.expect(&TokKind::Semi, "`;` to end the `have`")?;
+        Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: true })
     }
 
     fn on_stmt(&mut self) -> R<OnStmt> {
@@ -4353,6 +4382,7 @@ impl Parser {
                         span: cspan,
                     },
                     span: cspan,
+                    opaque: false,
                 },
             );
         }

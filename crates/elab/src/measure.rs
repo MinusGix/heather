@@ -1536,6 +1536,7 @@ impl Rewrite<'_> {
                     })),
                     expr: closer.clone(),
                     span,
+                    opaque: false,
                 }],
                 result: Box::new(self.scale(c, args, raw, span)),
                 ons: on.clone().into_iter().collect(),
@@ -1877,7 +1878,7 @@ impl Rewrite<'_> {
                         **scrut = var(&name, span);
                     }
                     return self.expr(&Expr { kind: ExprKind::Block(Box::new(Block {
-                        stmts: vec![Stmt::Let { name, ty: Some(ty), expr: (**scrut).clone(), span }],
+                        stmts: vec![Stmt::Let { name, ty: Some(ty), expr: (**scrut).clone(), span, opaque: false }],
                         result: Box::new(matched), ons: Vec::new(), span,
                     })), span });
                 }
@@ -2070,6 +2071,7 @@ impl Rewrite<'_> {
                 ty,
                 expr,
                 span,
+                opaque,
             } => {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
@@ -2081,6 +2083,7 @@ impl Rewrite<'_> {
                     ty: ty.clone(),
                     expr,
                     span: *span,
+                    opaque: *opaque,
                 }
             }
             Stmt::LetRecord { fields, expr, span } => {
@@ -2351,6 +2354,7 @@ fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) -> Expr {
                         ty,
                         expr,
                         span,
+                        opaque,
                     } => {
                         let expr = go(expr, bound);
                         bound.push(name.clone());
@@ -2359,6 +2363,7 @@ fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) -> Expr {
                             ty: ty.clone(),
                             expr,
                             span: *span,
+                            opaque: *opaque,
                         });
                     }
                     // Not substituted into, but what they bind still shadows.
@@ -2922,6 +2927,7 @@ impl Respell<'_> {
                     span,
                 },
                 span,
+                opaque: false,
             });
             acc = subst(&acc, &[(eq.as_str(), &var(&name, span))], &mut Vec::new());
         }
@@ -2933,6 +2939,7 @@ impl Respell<'_> {
             ty: Some(lt_ty(at_args.clone(), m.clone(), span)),
             expr: acc,
             span,
+            opaque: false,
         });
         let ys: Vec<Expr> = args.iter().map(|a| self.sigma_apply(a)).collect();
         let trans = |bound: Expr, hyp: Expr| {

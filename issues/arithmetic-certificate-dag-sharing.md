@@ -56,3 +56,4 @@ details, and every materialized proof still passes the ordinary kernel gate.
   materialize them as named parameterized proofs; do not hide the gap with an
   ignored/slow test.
 - 2026-09-25: The plan's "prefer scoped local proof bindings" does not preserve a DAG today. A surface `let` is an alias, and the kernel gate, shifts under binders and the module image all walk the result as a tree: a chain where each let uses the previous twice costs 2^k ([[proof-let-substitution-cost]], 2026-09-25). A local binding shares only once that issue's fix lands (a kernel `let` or a typing memo on node identity); a β-redex binding shares today but is opaque.
+- 2026-09-25: `have` (docs/have-design.md, 2026-09-25) is the local binding that shares today: opaque, so the kernel checks each bound derivation once. A reconstructor can emit its DAG nodes as `have`s in topological order. Derivation nodes are never unfolded, so the opacity costs nothing ([[proof-let-substitution-cost]]).

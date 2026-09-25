@@ -898,11 +898,13 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
                     ty,
                     expr,
                     span,
+                    opaque,
                 } => Stmt::Let {
                     name: name.clone(),
                     ty: ty.as_ref().map(|t| rename_ty(m, t)),
                     expr: rename_expr(m, expr),
                     span: *span,
+                    opaque: *opaque,
                 },
                 Stmt::LetRecord { fields, expr, span } => Stmt::LetRecord {
                     fields: fields.clone(),
@@ -2849,6 +2851,7 @@ impl Elaborator {
                                 ty: Some(root_ty),
                                 expr: root_value,
                                 span,
+                                opaque: false,
                             }],
                             result: Box::new(alit),
                             ons: Vec::new(),

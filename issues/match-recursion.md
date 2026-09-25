@@ -3,7 +3,7 @@ title: "Unified match: termination checking, IH = self-call"
 status: closed
 labels: [frontend,elaboration,syntax]
 created: 2026-07-23
-updated: 2026-08-17
+updated: 2026-09-25
 ---
 
 The strong unification decided in docs/sketches/surface-v1.md §1
@@ -46,3 +46,4 @@ Deferred (the one real limitation, diagnosed rather than left to the kernel): a 
 - 2026-08-17: The strict rule this issue chose — 'self-calls only on the immediate predecessor variable(s) bound by the enclosing match, and widen only with evidence' — has been widened, on the evidence it asked for: [[recursion-at-deeper-subterms]] (closed 2026-08-17, docs/course-of-values-recursion-design.md). A self-call may now descend to a predecessor's predecessor, provided a nested `match` on the chain actually binds it.
 
 What did NOT change is the part this issue was careful about. The analysis still compares binder positions and can still only reject; the widening is an elaboration strategy — the recursion carries its last `d` values as a Σ-tuple through one `elim_Nat` — so a wrong analysis still produces a term the kernel refuses. The safety property stated here is untouched, and the deliberate strictness was right: it was the *message* that misled, by reading as a check when the gap was in what could be emitted.
+- 2026-09-25: Wrong-answer defect found 2026-09-25: a Succ arm that names its own scrutinee computes with the outermost value at every level (`sum(2) = 4` by `refl`). Filed as [[recursive-arm-reads-outer-scrutinee]].

@@ -789,6 +789,10 @@
           "named": true
         },
         {
+          "type": "have_statement",
+          "named": true
+        },
+        {
           "type": "let_statement",
           "named": true
         },
@@ -2649,6 +2653,42 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "have_statement",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -5843,6 +5883,10 @@
   },
   {
     "type": "give",
+    "named": false
+  },
+  {
+    "type": "have",
     "named": false
   },
   {
