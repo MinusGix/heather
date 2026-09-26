@@ -202,3 +202,60 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
   (constraints as Nat forms `P ≤ Q`, combination by `form_*` steps; also removes
   Int evaluation). Next: profile a list-heavy check before choosing.
 - 2026-09-26: List profile: the per-call overhead is omega certificates re-spelling their atom list (177 copies of a six-atom list, ~145k of 152k kernel steps on one small goal); owner [[omega-certificate-atom-list-repetition]]. Per-constructor costs: `Nil` ~43, `Cons` ~85, an Int literal ~44; a list literal lowers through a `Vec` fold, ~430 steps whatever its length.
+- 2026-09-26: Attribution after the atom list was named (c26e5d46).
+
+  **Elaboration** (`bv_raise_value`, ~450 ms of body outside every omega timer).
+  Two probe sessions that elaborated each fact's word a second time, in a
+  cloned `Elaborator`, whose clone also copies the attempt's notes:
+  - Operator dispatch (`op_carrier_head`) infers an operator's left operand in
+    a probe to find its carrier, and in `t.toNat() + Q` that operand is a whole
+    word. `bv_omega` now spells its arithmetic as qualified calls
+    (`nat::Nat::add`, `mul`, `Lt`, `Le`), as `omega`'s certificates already
+    do. Refusals still quote the operator spelling (`Obligation::shown`).
+    `logic::And(…)` does not read as a type, so `∧` stays; it is type syntax,
+    not dispatch.
+  - An equation's direction probe (`type_endpoint_may_need_checking`) walked
+    into an application's head. A bare `bitvec::BitVec::toNat` has a leading
+    implicit, so it counted as checking-only and sent every fact over a
+    `toNat` to the semantic probe on both endpoints. The walk now skips
+    application heads; the application is judged whole, as `is_checking_only`
+    already does. Skipping heads alone broke `lib/elf64_io.hthr`: an equation
+    whose left side is a motive-less `match` had been checked right to left
+    only because the walk tripped on `Some`'s head. A motive-less `match` now
+    counts as may-need-checking in its own right, and the probe decides.
+
+  Kernel counts identical, so the terms are unchanged. `scripts/perf ab`
+  (width 1, 3 samples, loaded machine): per item every sample separates,
+  `bv_raise_value` 686–963 → 250–353 ms, `bv_line_state_start_value` 771–902 →
+  293–332 ms; the `bv_` rows sum 3.8–5.4 → 2.5–3.2 s. The file totals overlap
+  (−21% median, not a result). Suite: 2998 passed.
+
+  **Gate.** `bv_place_step`'s 268k steps are mostly its ~12 `omega`
+  certificates. In one certificate (the 24k-step `om1` item), one conversion is
+  53.8 ms of the ~78 ms gate. It is the last step, `le_trans(lower,
+  dot(ROW, A), upper, …)`, where `ROW` is the root fact's row and the lower
+  bound's proof states its row as the whole derivation, `scale(-1, combo(…))`.
+  Equal as coefficient lists, spelled apart, so the checker evaluates the
+  derivation's row. Probe: `ROW = derived` by `refl`, no atoms involved, is
+  13.6k steps and 60 ms alone. So the cost is evaluating roughly ten nested
+  `combo`/`scale`/`add_coeffs` over six-element rows: in-language Int
+  arithmetic over the encoded `Int`, tens of steps per operation (a lone
+  `Int::mul` of literals, with its literal types, ~300 steps per theorem; Nat
+  literal arithmetic is native, ~20). A derivation that is a DAG is spelled as
+  a tree, so shared rows are evaluated once per occurrence.
+
+  Refuted along the way, each with a probe: negative combination scales spelled
+  `NegSucc` against the lemmas' `-b` (no change in misses); strict facts
+  converted `Lt` against `Le` (−1.3% steps; 13 such steps cost 0.1 ms each);
+  a literal against a computed bound (4.5 ms gate for 13, either way).
+
+  Levers, by where the cost is:
+  1. **Cheaper Int evaluation**: kernel-native Int literals and operations,
+     as Nat has. The biggest lever, and a kernel change.
+  2. **Rows evaluated once**: `have`-bind each derived row's literal
+     coefficient list with a `refl` proof, so the final comparison is between
+     literal rows. Last time literal rows doubled the cost through list
+     checking; with the atom list named that may no longer hold, since a row
+     is now the list the checker meets.
+  3. **Rows as Nat pairs or forms**, the list-free certificate idea: no Int at
+     all.

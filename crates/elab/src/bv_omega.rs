@@ -34,8 +34,30 @@ pub(crate) struct Generated {
 
 #[derive(Clone)]
 pub(crate) struct Obligation {
+    /// As generated source: qualified calls, like the rest of the proof.
     pub statement: String,
+    /// As the refusal quotes it, with operators.
+    pub shown: String,
     pub why: String,
+}
+
+// Generated arithmetic is spelled as qualified calls, never operators: an
+// operator's dispatch infers its left operand in a probe session to find its
+// carrier, and a fact's left operand is a whole word.
+fn add(a: &str, b: &str) -> String {
+    format!("nat::Nat::add({a}, {b})")
+}
+
+fn mul(a: &str, b: &str) -> String {
+    format!("nat::Nat::mul({a}, {b})")
+}
+
+fn lt(a: &str, b: &str) -> String {
+    format!("nat::Nat::Lt({a}, {b})")
+}
+
+fn le(a: &str, b: &str) -> String {
+    format!("nat::Nat::Le({a}, {b})")
 }
 
 /// A Nat inside `ofNat(…)`, as the reifier read it (§3).
@@ -406,6 +428,15 @@ impl<'w, 'a> Emitter<'w, 'a> {
     fn spell(&self, f: &Form) -> String {
         let mut out = f.k.to_string();
         for &(a, c) in f.terms.iter().rev() {
+            out = add(&mul(&c.to_string(), &self.atom(a)), &out);
+        }
+        out
+    }
+
+    /// A form as a refusal quotes it: `c₁ * a₁ + (… + k)`.
+    fn shown(&self, f: &Form) -> String {
+        let mut out = f.k.to_string();
+        for &(a, c) in f.terms.iter().rev() {
             out = format!("{c} * {} + ({out})", self.atom(a));
         }
         out
@@ -419,20 +450,20 @@ impl<'w, 'a> Emitter<'w, 'a> {
             (Some(&(a, c)), Some(&(b, d))) if a == b => {
                 let (x, y) = (rest(f), rest(g));
                 let r = merge_forms(&x, &y);
-                format!("trans(bitvec_omega::form_step({c}, {d}, {}, {}, {}), @cong(λ (t: Nat) => {} * {} + t, ({}) + ({}), {}, {}))",
-                    self.atom(a), self.spell(&x), self.spell(&y), c + d, self.atom(a), self.spell(&x), self.spell(&y), self.spell(&r), self.merge_proof(&x, &y))
+                format!("trans(bitvec_omega::form_step({c}, {d}, {}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), self.spell(&y), add(&mul(&(c + d).to_string(), &self.atom(a)), "t"), add(&self.spell(&x), &self.spell(&y)), self.spell(&r), self.merge_proof(&x, &y))
             }
             (Some(&(a, c)), next) if next.is_none_or(|&(b, _)| a < b) => {
                 let x = rest(f);
                 let r = merge_forms(&x, g);
-                format!("trans(bitvec_omega::form_left({c}, {}, {}, {}), @cong(λ (t: Nat) => {c} * {} + t, ({}) + ({}), {}, {}))",
-                    self.atom(a), self.spell(&x), self.spell(g), self.atom(a), self.spell(&x), self.spell(g), self.spell(&r), self.merge_proof(&x, g))
+                format!("trans(bitvec_omega::form_left({c}, {}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), self.spell(g), add(&mul(&c.to_string(), &self.atom(a)), "t"), add(&self.spell(&x), &self.spell(g)), self.spell(&r), self.merge_proof(&x, g))
             }
             (_, Some(&(b, d))) => {
                 let y = rest(g);
                 let r = merge_forms(f, &y);
-                format!("trans(bitvec_omega::form_right({}, {d}, {}, {}), @cong(λ (t: Nat) => {d} * {} + t, ({}) + ({}), {}, {}))",
-                    self.spell(f), self.atom(b), self.spell(&y), self.atom(b), self.spell(f), self.spell(&y), self.spell(&r), self.merge_proof(f, &y))
+                format!("trans(bitvec_omega::form_right({}, {d}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
+                    self.spell(f), self.atom(b), self.spell(&y), add(&mul(&d.to_string(), &self.atom(b)), "t"), add(&self.spell(f), &self.spell(&y)), self.spell(&r), self.merge_proof(f, &y))
             }
             _ => unreachable!(),
         }
@@ -445,8 +476,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
             Some(&(a, c)) => {
                 let x = Form { terms: f.terms[1..].to_vec(), k: f.k };
                 let r = Form { terms: x.terms.iter().map(|&(b, d)| (b, d * k)).collect(), k: x.k * k };
-                format!("trans(bitvec_omega::form_scale({k}, {c}, {}, {}), @cong(λ (t: Nat) => {} * {} + t, {k} * ({}), {}, {}))",
-                    self.atom(a), self.spell(&x), k * c, self.atom(a), self.spell(&x), self.spell(&r), self.scale_proof(k, &x))
+                format!("trans(bitvec_omega::form_scale({k}, {c}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), add(&mul(&(k * c).to_string(), &self.atom(a)), "t"), mul(&k.to_string(), &self.spell(&x)), self.spell(&r), self.scale_proof(k, &x))
             }
         }
     }
@@ -461,13 +492,13 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 let (fx, fy) = (Self::syn_form(&self.forms, x), Self::syn_form(&self.forms, y));
                 let (px, py) = (self.reify(x, xs), self.reify(y, ys));
                 let _ = source;
-                format!("trans(trans(@cong(λ (t: Nat) => t + ({ys}), {xs}, {}, {px}), @cong(λ (t: Nat) => ({}) + t, {ys}, {}, {py})), {})",
-                    self.spell(&fx), self.spell(&fx), self.spell(&fy), self.merge_proof(&fx, &fy))
+                format!("trans(trans(@cong(λ (t: Nat) => {}, {xs}, {}, {px}), @cong(λ (t: Nat) => {}, {ys}, {}, {py})), {})",
+                    add("t", ys), self.spell(&fx), add(&self.spell(&fx), "t"), self.spell(&fy), self.merge_proof(&fx, &fy))
             }
             NatSyn::Scale(k, on_left, x, xs) => {
                 let fx = Self::syn_form(&self.forms, x);
                 let px = self.reify(x, xs);
-                let left = format!("trans(@cong(λ (t: Nat) => {k} * t, {xs}, {}, {px}), {})", self.spell(&fx), self.scale_proof(*k, &fx));
+                let left = format!("trans(@cong(λ (t: Nat) => {}, {xs}, {}, {px}), {})", mul(&k.to_string(), "t"), self.spell(&fx), self.scale_proof(*k, &fx));
                 if *on_left { left } else { format!("trans(nat::Nat::mul_comm({xs}, {k}), {left})") }
             }
         }
@@ -477,8 +508,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
         format!("nat::Nat::pow(2, {})", self.walk.nodes[n].width)
     }
 
-    fn obligation(&mut self, statement: String, why: String) -> usize {
-        self.obligations.push(Obligation { statement, why });
+    fn obligation(&mut self, statement: String, shown: String, why: String) -> usize {
+        self.obligations.push(Obligation { statement, shown, why });
         self.obligations.len() - 1
     }
 
@@ -498,14 +529,15 @@ impl<'w, 'a> Emitter<'w, 'a> {
             from
         } else {
             let (p, q) = self.forms[n].clone();
-            let statement = format!("{} < {} + ({})", self.spell(&p), self.top(n), self.spell(&q));
+            let statement = lt(&self.spell(&p), &add(&self.top(n), &self.spell(&q)));
+            let shown = format!("{} < {} + ({})", self.shown(&p), self.top(n), self.shown(&q));
             let node = &self.walk.nodes[n];
             let why = if let Kind::Value(..) = node.kind {
                 format!("`{}` does not fit {} bits", node.word, node.width)
             } else {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
-            BoundFrom::Obligation(self.obligation(statement, why))
+            BoundFrom::Obligation(self.obligation(statement, shown, why))
         };
         self.bound_from[n] = Some(from);
         match from {
@@ -543,9 +575,10 @@ impl<'w, 'a> Emitter<'w, 'a> {
             }
             Kind::Sub(a, b) => {
                 let (p, q) = self.forms[n].clone();
-                let statement = format!("{} <= {}", self.spell(&q), self.spell(&p));
+                let statement = le(&self.spell(&q), &self.spell(&p));
+                let shown = format!("{} <= {}", self.shown(&q), self.shown(&p));
                 let why = format!("`{}` may borrow", self.walk.nodes[n].word);
-                let i = self.obligation(statement, why);
+                let i = self.obligation(statement, shown, why);
                 self.fits.insert(n, i);
                 self.plan(a, seen);
                 self.plan(b, seen);
@@ -585,9 +618,9 @@ impl<'w, 'a> Emitter<'w, 'a> {
         };
         let (p, q) = self.forms[n].clone();
         let (pl, pr, ql, qr) = if sub { (&ap, &bq, &aq, &bp) } else { (&ap, &bp, &aq, &bq) };
-        let line = format!("have {mp}: (({}) + ({}) = {}) = {};", self.spell(pl), self.spell(pr), self.spell(&p), self.merge_proof(pl, pr));
+        let line = format!("have {mp}: ({} = {}) = {};", add(&self.spell(pl), &self.spell(pr)), self.spell(&p), self.merge_proof(pl, pr));
         self.emit(mp.clone(), line);
-        let line = format!("have {mq}: (({}) + ({}) = {}) = {};", self.spell(ql), self.spell(qr), self.spell(&q), self.merge_proof(ql, qr));
+        let line = format!("have {mq}: ({} = {}) = {};", add(&self.spell(ql), &self.spell(qr)), self.spell(&q), self.merge_proof(ql, qr));
         self.emit(mq.clone(), line);
         (mp, mq)
     }
@@ -624,7 +657,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 }
             }
         };
-        let line = format!("have {name}: (bitvec::BitVec::toNat({word}) + ({}) = {}) = {proof};", self.spell(&q), self.spell(&p));
+        let line = format!("have {name}: ({} = {}) = {proof};", add(&format!("bitvec::BitVec::toNat({word})"), &self.spell(&q)), self.spell(&p));
         self.emit(name, line)
     }
 
@@ -660,7 +693,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
             }
         };
         let (p, q) = &self.forms[n];
-        let line = format!("have {name}: ({} < {top} + ({})) = {proof};", self.spell(p), self.spell(q));
+        let line = format!("have {name}: ({}) = {proof};", lt(&self.spell(p), &add(&top, &self.spell(q))));
         self.emit(name, line)
     }
 
@@ -686,7 +719,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 _ => unreachable!("only a subtraction gives a word a nonzero `Q`"),
             }
         };
-        let line = format!("have {name}: ({} <= {}) = {proof};", self.spell(&q), self.spell(&p));
+        let line = format!("have {name}: ({}) = {proof};", le(&self.spell(&q), &self.spell(&p)));
         self.emit(name, line)
     }
 }
@@ -781,7 +814,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
         }
         for &n in &subjects {
             let (p, q) = &e.forms[n];
-            binders.push_str(&format!("(__bv_h{n}: __bv_w{n} + ({}) = {}) → ", e.spell(q), e.spell(p)));
+            binders.push_str(&format!("(__bv_h{n}: {} = {}) → ", add(&format!("__bv_w{n}"), &e.spell(q)), e.spell(p)));
             names.push(format!("__bv_h{n}"));
         }
         // Rebinding a fact under its own name hides the original from the
@@ -836,10 +869,8 @@ fn prelude(walk: &Walk) -> String {
     let mut out = Vec::new();
     for (i, node) in walk.nodes.iter().enumerate() {
         if let Kind::Leaf = node.kind {
-            out.push(format!(
-                "have __bv_range_{i}: (bitvec::BitVec::toNat({}) < nat::Nat::pow(2, {})) = bitvec::BitVec::toNat_lt_pow({}, {});",
-                node.word, node.width, node.width, node.word
-            ));
+            let statement = lt(&format!("bitvec::BitVec::toNat({})", node.word), &format!("nat::Nat::pow(2, {})", node.width));
+            out.push(format!("have __bv_range_{i}: ({statement}) = bitvec::BitVec::toNat_lt_pow({}, {});", node.width, node.word));
         }
     }
     out.join("\n")

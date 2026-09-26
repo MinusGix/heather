@@ -755,9 +755,20 @@ impl expr::StructuralTypeElab for Elaborator {
     }
 
     fn type_endpoint_may_need_checking(&self, cx: &Cx, expression: &Expr) -> bool {
+        // An application's head is not a bare reference: `toNat(w)` fills
+        // the implicit a bare `toNat` would leave to checking, and the
+        // application is judged as a whole. A `match` with no motive infers
+        // only when a constant motive does, so it is left to the probe.
+        let mut heads = std::collections::HashSet::new();
         let mut found = false;
         surface::walk_expr(expression, &mut |part| {
-            if !found && self.is_checking_only(cx, part) {
+            if let ExprKind::App { head, .. } = &part.kind {
+                heads.insert(&**head as *const Expr);
+            }
+            if !found
+                && (matches!(part.kind, ExprKind::Match { motive: None, .. })
+                    || !heads.contains(&(part as *const Expr)) && self.is_checking_only(cx, part))
+            {
                 found = true;
             }
         });
@@ -4795,7 +4806,7 @@ impl Elaborator {
                             ))?;
                             if let Err(side) = self.generated_scope(|me| me.elab_infer(cx, &probe)) {
                                 return err(
-                                    format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{side}", obligation.why, obligation.statement),
+                                    format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{side}", obligation.why, obligation.shown),
                                     e.span,
                                 );
                             }
