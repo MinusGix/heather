@@ -1594,7 +1594,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Δ); it is off the hot path and the design keeps Δ syntactic (§3.4).
     fn whnf_ty_syntax(&mut self, t: &Rc<Type>, gamma: &LocalCtx) -> Res<Rc<Type>> {
         let mut cur = Rc::clone(t);
-        while let Some(next) = step_type_delta(&cur, gamma, self.defs) {
+        while let Some(next) = step_type_delta(&cur, gamma, self.defs)? {
             self.spend()?;
             cur = Rc::new(next);
         }

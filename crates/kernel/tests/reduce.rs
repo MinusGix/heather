@@ -11,12 +11,22 @@ use std::sync::Arc as Rc;
 use common::*;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::{
-    is_neutral_term, is_whnf_term, is_whnf_type, step_term, step_type, whnf_term,
+    is_neutral_term, is_whnf_term, is_whnf_type, whnf_term,
 };
 use heather_kernel::term::{
     Branches, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
     Term, Type,
 };
+
+/// The single-step relation, for terms far inside the frame budget.
+fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
+    heather_kernel::reduce::step_term(t, gamma).expect("a test term steps within the frame budget")
+}
+
+/// The single-step relation, for types far inside the frame budget.
+fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
+    heather_kernel::reduce::step_type(t, gamma).expect("a test type steps within the frame budget")
+}
 
 // -------------------------------------------------------------------------
 // Construction helpers
@@ -284,6 +294,23 @@ fn beta_app() {
     // survives the binder's disappearance.
     let gamma = nil_ctx(1);
     assert_eq!(step_term(&app2(lam(v(1)), Term::Zero), &gamma), Some(v(0)));
+}
+
+/// A step stands on one native frame per blocked head above its redex, and
+/// fuel never sees those (a closed `pow(3, 5000)` stood on thousands). Past
+/// `NATIVE_DEPTH_LIMIT` the step answers `OutOfFuel`; under it, the same
+/// spine steps as before.
+#[test]
+fn a_step_below_the_frame_budget_is_out_of_fuel() {
+    use heather_kernel::reduce::{OutOfFuel, NATIVE_DEPTH_LIMIT};
+    // `((λx. x) (λx. x)) (λx. x) …`: the redex is at the bottom of the spine.
+    let spine = |heads: u32| (0..heads).fold(lam(v(0)), |f, _| app2(f, lam(v(0))));
+    let gamma = nil_ctx(0);
+    let shallow = spine(NATIVE_DEPTH_LIMIT - 1);
+    assert!(matches!(heather_kernel::reduce::step_term(&shallow, &gamma), Ok(Some(_))));
+    let deep = spine(NATIVE_DEPTH_LIMIT + 1);
+    assert_eq!(heather_kernel::reduce::step_term(&deep, &gamma), Err(OutOfFuel));
+    assert_eq!(whnf_term(&deep, &gamma, 64), Err(OutOfFuel));
 }
 
 #[test]

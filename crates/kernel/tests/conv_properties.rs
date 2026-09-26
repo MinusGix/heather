@@ -113,7 +113,7 @@ fn type_reduction_preserves_level() {
         let (ty, l) = gen_wt_type(&env, &mut r, BUDGET);
         let mut cur = (*ty).clone();
         for _ in 0..16 {
-            let Some(next) = step_type(&cur, &env.gamma) else { break };
+            let Some(next) = step_type(&cur, &env.gamma).expect("a generated type steps within the frame budget") else { break };
             let res = check_type(&env.psi, env.univs, env.layer, &env.gamma, &next, &l, FUEL);
             assert!(res.is_ok(), "seed {seed}: type preservation violated: {res:?}");
             cur = next;
@@ -129,7 +129,7 @@ fn reduction_preserves_type() {
         let (t, ty, l) = gen_wt_term(&env, &mut r, BUDGET);
         let mut cur = (*t).clone();
         for _ in 0..16 {
-            let Some(next) = step_term(&cur, &env.gamma) else { break };
+            let Some(next) = step_term(&cur, &env.gamma).expect("a generated term steps within the frame budget") else { break };
             let res =
                 check_term(&env.psi, env.univs, env.layer, &env.gamma, &next, &ty, &l, FUEL);
             // Reduction can create a meta-level β-redex whose body is a bare
@@ -210,7 +210,7 @@ fn identity_recursor_is_identity_on_code_of_terms() {
             // Blocked on box (u^δ); only the type annotation may have
             // stepped, so compare against the term's own WHNF fixpoint by
             // checking it no longer steps and stays convertible.
-            assert!(step_term(&w, &env.gamma).is_none(), "seed {seed}: neutral still steps");
+            assert!(matches!(step_term(&w, &env.gamma), Ok(None)), "seed {seed}: neutral still steps");
         } else {
             law!(seed, w, Term::BoxTm(code));
         }

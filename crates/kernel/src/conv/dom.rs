@@ -54,13 +54,13 @@ use std::sync::Arc as Rc;
 
 use crate::level::Level;
 use crate::rec;
-use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta};
+use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, OutOfFuel};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, Branches, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
-use super::{Conv, Env, R, NC};
+use super::{Conv, ConvError, Env, R, NC};
 
 pub(super) mod values;
 
@@ -891,7 +891,7 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Rc<Term>> {
         let mut cur = t.clone();
-        while let Some(next) = step_term(&cur, &env.gamma) {
+        while let Some(next) = stepped(step_term(&cur, &env.gamma))? {
             cv.spend()?;
             cur = next;
         }
@@ -917,7 +917,7 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
         let defs = cv.defs(env);
-        let Some(first) = step_type_delta(w, &env.gamma, defs) else {
+        let Some(first) = stepped(step_type_delta(w, &env.gamma, defs))? else {
             return Ok(w.clone());
         };
         cv.spend()?;
@@ -927,7 +927,7 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> R<Rc<Term>> {
         let defs = cv.defs(env);
-        let Some(first) = step_term_delta(w, &env.gamma, defs) else {
+        let Some(first) = stepped(step_term_delta(w, &env.gamma, defs))? else {
             return Ok(Rc::clone(w));
         };
         cv.spend()?;
@@ -1990,14 +1990,20 @@ thread_local! {
 /// step. A form that does not step is returned by handle: the rewriter's
 /// normal forms are shared, not copied, which matters because most
 /// sub-structures conversion reaches are already normal.
+/// A step past its frame budget leaves the check without a verdict, as
+/// spent fuel does.
+fn stepped<T>(next: Result<Option<T>, OutOfFuel>) -> R<Option<T>> {
+    next.map_err(|OutOfFuel| ConvError::OutOfFuel)
+}
+
 fn step_ty<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Type,
-    step: impl Fn(&Type, &LocalCtx) -> Option<Type>,
+    step: impl Fn(&Type, &LocalCtx) -> Result<Option<Type>, OutOfFuel>,
 ) -> R<Type> {
     let mut cur = t.clone();
-    while let Some(next) = step(&cur, &env.gamma) {
+    while let Some(next) = stepped(step(&cur, &env.gamma))? {
         cv.spend()?;
         cur = next;
     }
@@ -2008,13 +2014,13 @@ fn step_tm<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Rc<Term>,
-    step: impl Fn(&Term, &LocalCtx) -> Option<Term>,
+    step: impl Fn(&Term, &LocalCtx) -> Result<Option<Term>, OutOfFuel>,
 ) -> R<Rc<Term>> {
-    let Some(mut cur) = step(t, &env.gamma) else {
+    let Some(mut cur) = stepped(step(t, &env.gamma))? else {
         return Ok(Rc::clone(t));
     };
     cv.spend()?;
-    while let Some(next) = step(&cur, &env.gamma) {
+    while let Some(next) = stepped(step(&cur, &env.gamma))? {
         cv.spend()?;
         cur = next;
     }

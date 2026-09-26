@@ -48,7 +48,7 @@ fn step_once() -> Family {
             // rule has no reason to touch.
             let t = add(num(1), num(m));
             let go = move || {
-                heather_kernel::reduce::step_term(&t, &gamma).is_some() as u64
+                matches!(heather_kernel::reduce::step_term(&t, &gamma), Ok(Some(_))) as u64
             };
             assert!(go() == 1, "elim_Nat on su 0 did not step");
             Case::new(m, 1, go)
@@ -97,7 +97,7 @@ fn step_into_closed() -> Family {
                 step: rt(add(num(n), v(0))),
                 scrut: rt(num(1)),
             };
-            let go = move || heather_kernel::reduce::step_term(&t, &gamma).is_some() as u64;
+            let go = move || matches!(heather_kernel::reduce::step_term(&t, &gamma), Ok(Some(_))) as u64;
             assert!(go() == 1, "elim_Nat on su 0 did not step");
             Case::new(n, 1, go)
         })

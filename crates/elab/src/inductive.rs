@@ -413,8 +413,8 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
         let next = match &*cur {
             Type::El { tm, .. } if is_code_former(tm) => {
                 match heather_kernel::reduce::step_type(&cur, &empty) {
-                    Some(next) => next,
-                    None => break,
+                    Ok(Some(next)) => next,
+                    Ok(None) | Err(_) => break,
                 }
             }
             _ => break,

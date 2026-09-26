@@ -28,10 +28,20 @@ use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{
-    is_neutral_term, is_neutral_type, is_whnf_term, is_whnf_type, step_term, step_type, whnf_type,
+    is_neutral_term, is_neutral_type, is_whnf_term, is_whnf_type, whnf_type,
 };
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalCtx, Term, Type};
+
+/// The single-step relation, for terms far inside the frame budget.
+fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
+    heather_kernel::reduce::step_term(t, gamma).expect("a test term steps within the frame budget")
+}
+
+/// The single-step relation, for types far inside the frame budget.
+fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
+    heather_kernel::reduce::step_type(t, gamma).expect("a test type steps within the frame budget")
+}
 use heather_kernel::typing::{check_term, check_type, infer_term, TypeError};
 
 const CASES: u64 = 300;

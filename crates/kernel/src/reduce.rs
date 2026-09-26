@@ -4,7 +4,7 @@
 //! - Reduction is **untyped** and fires on head *shape* only: level
 //!   annotations never gate a β-rule (they are forced by typing;
 //!   preservation is the paper's job, not this function's).
-//! - [`step_term`]/[`step_type`] are the single-step relation; `None` means
+//! - [`step_term`]/[`step_type`] are the single-step relation; `Ok(None)` means
 //!   no rule applies — true for WHNFs and neutrals, but also for ill-typed
 //!   stuck terms (e.g. `elim_Nat` on a λ), which the classification
 //!   predicates deliberately do not cover.
@@ -243,7 +243,7 @@ pub fn whnf_type_delta(
     mut fuel: u64,
 ) -> Result<Type, OutOfFuel> {
     let mut cur = t.clone();
-    while let Some(next) = step_type_delta(&cur, gamma, defs) {
+    while let Some(next) = step_type_delta(&cur, gamma, defs)? {
         if fuel == 0 {
             return Err(OutOfFuel);
         }
@@ -268,7 +268,7 @@ pub fn whnf_term_delta(
     mut fuel: u64,
 ) -> Result<Term, OutOfFuel> {
     let mut cur = t.clone();
-    while let Some(next) = step_term_delta(&cur, gamma, defs) {
+    while let Some(next) = step_term_delta(&cur, gamma, defs)? {
         if fuel == 0 {
             return Err(OutOfFuel);
         }
@@ -284,13 +284,70 @@ pub fn whnf_term_delta(
 
 /// Single-step type reduction `T ⇝ T'`: the `El` decode rules plus
 /// congruence into the encoding.
-pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
+pub fn step_type(t: &Type, gamma: &LocalCtx) -> Result<Option<Type>, OutOfFuel> {
     step_type_delta(t, gamma, Defs::opaque())
 }
 
 /// [`step_type`] with a δ-environment. Type-level bindings have no bodies —
 /// a `U^δ` is opaque at every layer — so δ reaches types only through `El`.
-pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Type> {
+pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Option<Type>, OutOfFuel> {
+    let frames = Frames::default();
+    let next = step_type_in(t, gamma, defs, &frames);
+    frames.answer(next)
+}
+
+/// The native frames one step stands on. A step steps the head or scrutinee
+/// it is blocked on first, so its recursion is as deep as the nesting of
+/// blocked heads, and fuel, which counts steps, never sees it: the first step
+/// of `x < pow(3, 5000)` stands on thousands of frames. Past
+/// [`NATIVE_DEPTH_LIMIT`] a step gives up; every `None` above it is then
+/// discarded, and the step answers [`OutOfFuel`] rather than "no rule
+/// applies".
+#[derive(Default)]
+struct Frames {
+    depth: std::cell::Cell<u32>,
+    exhausted: std::cell::Cell<bool>,
+}
+
+impl Frames {
+    fn enter(&self) -> bool {
+        let depth = self.depth.get();
+        if depth >= NATIVE_DEPTH_LIMIT {
+            self.exhausted.set(true);
+            return false;
+        }
+        self.depth.set(depth + 1);
+        true
+    }
+
+    fn leave(&self) {
+        self.depth.set(self.depth.get() - 1);
+    }
+
+    fn answer<T>(&self, next: Option<T>) -> Result<Option<T>, OutOfFuel> {
+        if self.exhausted.get() { Err(OutOfFuel) } else { Ok(next) }
+    }
+}
+
+fn step_type_in(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
+    if !frames.enter() {
+        return None;
+    }
+    let next = step_type_frame(t, gamma, defs, frames);
+    frames.leave();
+    next
+}
+
+fn step_term_in(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+    if !frames.enter() {
+        return None;
+    }
+    let next = step_term_frame(t, gamma, defs, frames);
+    frames.leave();
+    next
+}
+
+fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
     match t {
         Type::El { level, tm } => match &**tm {
             // El^0 Nat ⇝ Nat
@@ -364,7 +421,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
                 shape: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(shape) }),
                 arity: Rc::clone(arity),
             }),
-            _ => step_term_delta(tm, gamma, defs)
+            _ => step_term_in(tm, gamma, defs, frames)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
         // Vec^l(T; 0) ⇝ Unit^l, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
@@ -400,7 +457,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
                     }),
                 })
             }
-            _ => step_term_delta(len, gamma, defs).map(|len| Type::Vec {
+            _ => step_term_in(len, gamma, defs, frames).map(|len| Type::Vec {
                 level: level.clone(),
                 elem: Rc::clone(elem),
                 len: Rc::new(len),
@@ -425,7 +482,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
                     len: Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) }),
                 }),
             }),
-            _ => step_term_delta(len, gamma, defs).map(|len| Type::Fin { len: Rc::new(len) }),
+            _ => step_term_in(len, gamma, defs, frames).map(|len| Type::Fin { len: Rc::new(len) }),
         },
         _ => None,
     }
@@ -433,7 +490,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
 
 /// Single-step term reduction `t ⇝ t'`: β for all elimination forms plus
 /// congruence at head positions.
-pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
+pub fn step_term(t: &Term, gamma: &LocalCtx) -> Result<Option<Term>, OutOfFuel> {
     step_term_delta(t, gamma, Defs::opaque())
 }
 
@@ -441,7 +498,13 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
 /// `u^δ ⇝ t[δ]` when `u` is a definition of `defs` (extension). It needs no
 /// arm of its own anywhere else — every congruence below already steps its
 /// head/scrutinee, so a defined global unblocks the whole spine.
-pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Term> {
+pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Option<Term>, OutOfFuel> {
+    let frames = Frames::default();
+    let next = step_term_in(t, gamma, defs, &frames);
+    frames.answer(next)
+}
+
+fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
     match t {
         // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
         // where `defs` is `Defs::opaque()` — see [`Defs`].
@@ -477,7 +540,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                     .extended(Rc::new(rec));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimNat {
+            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimNat {
                 level: level.clone(),
                 motive: Rc::clone(motive),
                 base: Rc::clone(base),
@@ -489,7 +552,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             match &**proof {
                 // J … refl ⇝ c   (extension; fires on head shape only)
                 Term::Refl { .. } => Some((**case).clone()),
-                _ => step_term_delta(proof, gamma, defs).map(|p| Term::J {
+                _ => step_term_in(proof, gamma, defs, frames).map(|p| Term::J {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
                     ty: Rc::clone(ty),
@@ -508,7 +571,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 // canonicity; the neutral-proof case belongs to conv.rs's
                 // strip rule, never to reduction. docs/sprop-design.md §5.1)
                 Term::SRefl { .. } => Some((**tm).clone()),
-                _ => step_term_delta(proof, gamma, defs).map(|p| Term::Transp {
+                _ => step_term_in(proof, gamma, defs, frames).map(|p| Term::Transp {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
                     ty: Rc::clone(ty),
@@ -528,7 +591,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             // component form). This is why the checked spellings need no
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
-            _ => step_term_delta(pair, gamma, defs).map(|p| Term::Fst {
+            _ => step_term_in(pair, gamma, defs, frames).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -555,13 +618,13 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 // projection on a neutral pair is neutral, and exposing the
                 // Σ is the *typing* rule's business (`Tc::view`), not
                 // reduction's.
-                _ => step_term_delta(pair, gamma, defs).map(|p| rebuild(Rc::new(p))),
+                _ => step_term_in(pair, gamma, defs, frames).map(|p| rebuild(Rc::new(p))),
             }
         }
         // elim_Empty has no β rule (Empty has no constructors); it only ever
         // steps its scrutinee, staying neutral when the scrutinee is.
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-            step_term_delta(scrut, gamma, defs).map(|s| Term::ElimEmpty {
+            step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimEmpty {
                 level: level.clone(),
                 scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
@@ -570,7 +633,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         }
         // elim_sEmpty likewise (extension; docs/sprop-design.md §5.1).
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-            step_term_delta(scrut, gamma, defs).map(|s| Term::ElimSEmpty {
+            step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimSEmpty {
                 level: level.clone(),
                 scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
@@ -583,7 +646,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                     let delta = LocalSubst::id(gamma).extended(Rc::clone(tm));
                     Some(case.apply_local(&delta))
                 }
-                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimSquash {
+                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimSquash {
                     src_level: src_level.clone(),
                     dst_level: dst_level.clone(),
                     src_ty: Rc::clone(src_ty),
@@ -614,7 +677,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 Some(case_r.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
             }
-            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::Case {
+            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::Case {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
                 motive_level: motive_level.clone(),
@@ -629,7 +692,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
-            _ => step_term_delta(pair, gamma, defs).map(|p| Term::Snd {
+            _ => step_term_in(pair, gamma, defs, frames).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -708,7 +771,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimW {
+            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimW {
                 shape_level: shape_level.clone(),
                 pos_level: pos_level.clone(),
                 motive_level: motive_level.clone(),
@@ -778,7 +841,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimWf {
+            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimWf {
                 level: level.clone(),
                 motive_level: motive_level.clone(),
                 shape: Rc::clone(shape),
@@ -793,7 +856,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             Term::Lam { body, .. } => {
                 Some(body.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg))))
             }
-            _ => step_term_delta(fun, gamma, defs).map(|f| Term::App {
+            _ => step_term_in(fun, gamma, defs, frames).map(|f| Term::App {
                 fun: Rc::new(f),
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
@@ -809,7 +872,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             Term::Lam { body, .. } => {
                 Some(body.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg))))
             }
-            _ => step_term_delta(fun, gamma, defs)
+            _ => step_term_in(fun, gamma, defs, frames)
                 .map(|f| Term::AppAt { fun: Rc::new(f), arg: Rc::clone(arg) }),
         },
         Term::UApp { fun, levels } => match &**fun {
@@ -820,7 +883,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 Some(body.inst_univ(&phi))
             }
             Term::ULam { .. } => None, // arity mismatch: ill-typed, stuck
-            _ => step_term_delta(fun, gamma, defs)
+            _ => step_term_in(fun, gamma, defs, frames)
                 .map(|f| Term::UApp { fun: Rc::new(f), levels: levels.clone() }),
         },
         Term::CtxApp { fun, ctx } => match &**fun {
@@ -828,7 +891,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             Term::CtxLam { body, .. } => {
                 Some(body.apply_global(&GlobalSubst::single(GlobalEntry::Ctx(ctx.clone()))))
             }
-            _ => step_term_delta(fun, gamma, defs)
+            _ => step_term_in(fun, gamma, defs, frames)
                 .map(|f| Term::CtxApp { fun: Rc::new(f), ctx: ctx.clone() }),
         },
         Term::TyApp { fun, arg } => match &**fun {
@@ -836,7 +899,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             Term::TyLam { body, .. } => {
                 Some(body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(arg)))))
             }
-            _ => step_term_delta(fun, gamma, defs)
+            _ => step_term_in(fun, gamma, defs, frames)
                 .map(|f| Term::TyApp { fun: Rc::new(f), arg: Rc::clone(arg) }),
         },
         Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
@@ -845,7 +908,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 Term::BoxTy(code) => Some(
                     body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(code)))),
                 ),
-                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::LetBoxTy {
+                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::LetBoxTy {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
                     ctx: ctx.clone(),
@@ -861,7 +924,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 Term::BoxTm(code) => Some(
                     body.apply_global(&GlobalSubst::single(GlobalEntry::Tm(Rc::clone(code)))),
                 ),
-                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::LetBoxTm {
+                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::LetBoxTm {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
                     ctx: ctx.clone(),
@@ -884,7 +947,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             let rec = Rec { ty_motive_level, tm_motive_level, motives, branches };
             match &**scrut {
                 Term::BoxTy(code) => beta_elim_ty(&rec, ctx, code, gamma),
-                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimCodeTy {
+                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimCodeTy {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
                     motives: Rc::clone(motives),
@@ -907,7 +970,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
         } => {
             // Fixed order: the type annotation (scoped in Δ, not Γ) reduces
             // to weak head normal form first, then the scrutinee.
-            if let Some(ty) = step_type_delta(ty, ctx, defs) {
+            if let Some(ty) = step_type_in(ty, ctx, defs, frames) {
                 return Some(Term::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
@@ -922,7 +985,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
             let rec = Rec { ty_motive_level, tm_motive_level, motives, branches };
             match &**scrut {
                 Term::BoxTm(code) => beta_elim_tm(&rec, ctx, ty, code_level, code, gamma),
-                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimCodeTm {
+                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
                     motives: Rc::clone(motives),

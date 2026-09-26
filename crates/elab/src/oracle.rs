@@ -296,7 +296,8 @@ impl Iterator for TermReducts<'_> {
             &self.current,
             self.gamma,
             Defs::transparent(&self.oracle.world),
-        )?;
+        )
+        .ok()??;
         self.current = next.clone();
         Some(next)
     }
@@ -320,7 +321,7 @@ impl DiagnosticOracle<'_> {
         let defs = Defs::transparent(self.world);
         let mut head = ty.clone();
         for _ in 0..self.steps {
-            head = reduce::step_type_delta(&head, gamma, defs)?;
+            head = reduce::step_type_delta(&head, gamma, defs).ok()??;
             if !matches!(head, Type::El { .. }) {
                 return Some(head);
             }

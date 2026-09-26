@@ -63,7 +63,7 @@ fn decode(t: &Type) -> Type {
     let empty = LocalCtx::nil();
     let mut cur = t.clone();
     while is_literal(&cur) {
-        match step_type(&cur, &empty) {
+        match step_type(&cur, &empty).expect("a code literal decodes within the frame budget") {
             Some(next) => cur = next,
             None => break,
         }

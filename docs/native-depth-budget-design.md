@@ -187,3 +187,32 @@ version is a `Reason` on `OutOfFuel` and its own round.
   callers to trade the invariant for a workload, and there is no caller that
   needs to. The tests exercise a small effective budget through
   `Eval::reserve_depth`, which is the mechanism conversion already uses.
+
+## 7. The small-step reducer
+
+`reduce::step_term_delta` and `step_type_delta` walk syntax too, and §6's
+argument for leaving such walks unbounded does not reach them. A step recurses
+into the head or scrutinee it is blocked on, so its depth is the depth of the
+term, and that term is one reduction built. δ-unfolding a closed
+`pow(3, 5000)` nests a blocked `mul`/`add` per level of the exponent. The
+first step of `x < pow(3, 5000)` stood on about 2,000 frames and aborted. The
+oracle's step budget could not stop it (`SemanticOracle::whnf_type`, where
+the value machine had answered "stuck" and the reducer was only asked to spell
+it), because fuel counts steps and this was one step.
+
+The reducer now keeps its own account against the same
+`NATIVE_DEPTH_LIMIT`. It is private to `reduce.rs`: a `Frames` cell per public
+step, taken on entry to each recursive step and given back on the way out.
+Past the bound a step returns `None` upward, marks itself exhausted, and the
+public entry points answer `Err(OutOfFuel)`. So every answer given past
+exhaustion is discarded, including a later congruence that stepped something
+else, and exhaustion never reads as "no rule applies". The public signatures
+changed from `Option` to `Result<Option, OutOfFuel>` for exactly that reason.
+Every caller either propagates the error (`whnf_*`, `eval`, the syntactic
+conversion domain) or already treated "no answer" as best-effort (the
+oracle's reduct iterator and diagnostics, `inductive`'s decoded view).
+
+The account is per step and not shared with `Eval::depth`. The one place the
+reducer runs inside the machine, `elim^Trm`'s Δ-scoped annotation, can in
+principle stand on both budgets at once. That annotation is small syntax, the
+same argument §6 makes, and it is not what aborted.

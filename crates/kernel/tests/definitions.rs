@@ -23,7 +23,7 @@ use heather_kernel::conv::{conv_term, conv_type, ConvError};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{
-    is_neutral_term, step_term, whnf_term, whnf_term_delta, whnf_type_delta, Defs,
+    is_neutral_term, whnf_term, whnf_term_delta, whnf_type_delta, Defs,
 };
 use heather_kernel::term::{
     Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst,
@@ -51,6 +51,11 @@ fn c(n: u64) -> Level {
 
 fn v(i: u32) -> Term {
     Term::Var(LocalVar(i))
+}
+
+/// The single-step relation, for terms far inside the frame budget.
+fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
+    heather_kernel::reduce::step_term(t, gamma).expect("a test term steps within the frame budget")
 }
 
 fn nil_ctx(n: u32) -> LocalCtx {
