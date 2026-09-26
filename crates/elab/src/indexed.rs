@@ -186,7 +186,7 @@ fn read_tag_code(t: &Term) -> Option<u32> {
     fn index(t: &Term) -> Option<u32> {
         match t {
             Term::Zero => Some(0),
-            Term::NatLit(k) if *k > 0 => u32::try_from(*k).ok(),
+            Term::NatLit(k) if !k.is_zero() => k.as_u64().and_then(|k| u32::try_from(k).ok()),
             _ => None,
         }
     }

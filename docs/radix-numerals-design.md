@@ -24,7 +24,8 @@ digits  := digit ( "_"? digit )*
   `0o7` lex as `0` followed by an invalid digit — a diagnostic about a form
   the language deliberately lacks is more design than the arm.
 
-The token stays `TokKind::Num(u64)` and the AST stays `ExprKind::Num(u64)`.
+The token is `TokKind::Num` and the AST `ExprKind::Num`, both carrying the value (a
+`Numeral` since 2026-09-26, `docs/wide-numerals-design.md`).
 A radix form is a *spelling*: carrier choice (`Nat`, `Fin`, `Numeral<A>` via
 `ofNat`; `docs/carrier-directed-numerals-design.md`), the emitted kernel
 term, and every diagnostic downstream see only the value, so `0x48` and `72`
@@ -37,12 +38,11 @@ written.
 
 ## The bound
 
-The value is bounded by `u64`, in every radix, with the message the decimal
-form always had (`numeral out of range: <as written>`). This is the token's
-bound, not a carrier's: `bitvec::ofNat` wraps `0x12c` at width 8 exactly as
-it wraps `300`, and the kernel's `NatLit` is `u64` already, so the lexer
-adds no limit that was not there. A numeral wider than 64 bits is a
-separate decision (a bignum literal term), not this round's.
+*Superseded 2026-09-26* (`docs/wide-numerals-design.md`): numerals are
+unbounded in every radix. What this section said still holds of carriers:
+the bound was the token's, not a carrier's — `bitvec::ofNat` wraps `0x12c`
+at width 8 exactly as it wraps `300` — and a position that needs a machine
+integer now refuses a larger numeral itself.
 
 ## Controls
 

@@ -756,7 +756,7 @@ fn apply_implicit_planned(
                 let counted = Type::Vec {
                     level: level.clone(),
                     elem: Rc::new(elem),
-                    len: Rc::new(Term::NatLit(items.len() as u64)),
+                    len: Rc::new(Term::NatLit((items.len() as u64).into())),
                 };
                 elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, span);
             }
@@ -1220,7 +1220,7 @@ mod tests {
             cod: Rc::new(Type::Nat),
         };
         let arg = Expr {
-            kind: heather_syntax::ExprKind::Num(0),
+            kind: heather_syntax::ExprKind::Num(0u64.into()),
             span: Span { start: 4, end: 5 },
         };
         let (term, ty, level) = apply_explicit(
@@ -1248,7 +1248,7 @@ mod tests {
             span: Span { start: 0, end: 1 },
         };
         let ordinary = Expr {
-            kind: heather_syntax::ExprKind::Num(0),
+            kind: heather_syntax::ExprKind::Num(0u64.into()),
             span: Span { start: 2, end: 3 },
         };
         let plan = ImplicitPlan::new(&[true, false, true, false], &[checking, ordinary], |arg| {
@@ -1357,7 +1357,7 @@ mod tests {
             },
         ]);
         let argument = Expr {
-            kind: ExprKind::Num(0),
+            kind: ExprKind::Num(0u64.into()),
             span: Span { start: 2, end: 3 },
         };
         let elab = FakeImplicitElab::default();

@@ -2467,12 +2467,15 @@ impl Parser {
             return Ok(Some((0, start)));
         }
         self.bump(); // `<`
-        let &TokKind::Num(n) = self.peek() else {
+        let TokKind::Num(n) = self.peek() else {
             return self.err(
                 "a universe level must be a numeral: levels cannot be quantified over \
                  at the surface (universe polymorphism is layer m) and joins are \
                  computed rather than written",
             );
+        };
+        let Some(n) = n.as_u64() else {
+            return self.err("a universe level must fit in 64 bits");
         };
         self.bump();
         let end = self.expect(&TokKind::Gt, "`>` to close a universe level")?;
@@ -3507,7 +3510,7 @@ impl Parser {
                         return self.err("`decreasing` labels a recursive call: write `f(args) decreasing label`");
                     };
                     named.push(NamedArg { name: format!("#decreasing:{label}"), name_span: end,
-                        expr: Expr { kind: ExprKind::Num(0), span: end }, span: start.join(end) });
+                        expr: Expr { kind: ExprKind::Num(Numeral::ZERO), span: end }, span: start.join(end) });
                     e.span = e.span.join(end);
                 }
                 TokKind::Hole(None) if self.tight(self.pos) => {
@@ -5077,7 +5080,7 @@ mod tests {
             head.kind,
             ExprKind::OpSymbol { symbol, fixity: OpFixity::Prefix } if symbol == "-"
         ));
-        assert!(matches!(args.as_slice(), [Expr { kind: ExprKind::Num(3), .. }]));
+        assert!(matches!(args.as_slice(), [Expr { kind: ExprKind::Num(__n), .. }] if __n.as_u64() == Some(3)));
     }
 
     #[test]

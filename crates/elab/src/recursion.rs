@@ -1085,7 +1085,7 @@ mod tests {
                         })?;
                     Term::Var(LocalVar((cx.names.len() - 1 - position) as u32))
                 }
-                heather_syntax::ExprKind::Num(0) => Term::Zero,
+                heather_syntax::ExprKind::Num(__n) if __n.as_u64() == Some(0) => Term::Zero,
                 _ => return err("unsupported test expression", argument.span),
             };
             Ok((term, Type::Nat, Level::Zero))
@@ -1183,7 +1183,7 @@ mod tests {
                 span: SPAN,
             },
             Expr {
-                kind: heather_syntax::ExprKind::Num(0),
+                kind: heather_syntax::ExprKind::Num(0u64.into()),
                 span: SPAN,
             },
         ];

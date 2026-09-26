@@ -62,6 +62,7 @@ version = "0.0.1"
 dependencies = [
  "heather-elab",
  "heather-kernel",
+ "heather-numeral",
  "sha2",
 ]
 
@@ -72,6 +73,7 @@ dependencies = [
  "heather-cache",
  "heather-elab",
  "heather-kernel",
+ "heather-numeral",
  "heather-syntax",
 ]
 
@@ -82,6 +84,7 @@ dependencies = [
  "heather-cache",
  "heather-cli",
  "heather-kernel",
+ "heather-numeral",
  "heather-syntax",
 ]
 
@@ -90,6 +93,7 @@ name = "heather-elab-unit"
 version = "0.0.1"
 dependencies = [
  "heather-kernel",
+ "heather-numeral",
  "heather-syntax",
 ]
 
@@ -97,6 +101,7 @@ dependencies = [
 name = "heather-kernel"
 version = "0.0.1"
 dependencies = [
+ "heather-numeral",
  "typed-arena",
 ]
 
@@ -111,8 +116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "heather-numeral"
+version = "0.0.1"
+
+[[package]]
 name = "heather-syntax"
 version = "0.0.1"
+dependencies = [
+ "heather-numeral",
+]
 
 [[package]]
 name = "itoa"

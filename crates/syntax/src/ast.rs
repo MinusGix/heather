@@ -1,4 +1,5 @@
 //! The surface AST. Names, not de Bruijn; nothing here is trusted.
+pub use heather_numeral::Numeral;
 
 /// Byte range into the source, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -860,7 +861,7 @@ pub enum ExprKind {
     /// bridge (docs/surface-universe.md §4).
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
-    Num(u64),
+    Num(Numeral),
     /// `'x'` — a character literal, carrying the scalar value the lexer read
     /// (docs/string-char-design.md §3). At `Char` it elaborates to
     /// `char::ofNat(code, decide)`; at another carrier it resolves

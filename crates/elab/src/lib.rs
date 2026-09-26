@@ -4833,7 +4833,7 @@ impl Elaborator {
             // reading at every other expected type.
             ExprKind::Num(t) => match self
                 .expr_elab()
-                .check_builtin_numeral(cx, *t, expected, e.span)
+                .check_builtin_numeral(cx, t, expected, e.span)
             {
                 Some(result) => result,
                 None => self.elab_overloaded_num_check(cx, e, expected, lvl, e.span),
@@ -6151,8 +6151,11 @@ impl Elaborator {
                 if name == "inj" && !self.shadowed(cx, name) {
                     let (k, arg) = match args.as_slice() {
                         [arg] => (0, arg),
-                        [arg, k] => match k.kind {
-                            ExprKind::Num(k) => (k as usize, arg),
+                        [arg, k] => match &k.kind {
+                            ExprKind::Num(n) => match n.as_u64() {
+                                Some(n) => (n as usize, arg),
+                                None => return err("`inj`'s field index must fit in 64 bits", k.span),
+                            },
                             _ => return err("`inj`'s field index must be a numeral", k.span),
                         },
                         _ => return err("`inj` takes `(proof)` or `(proof, field)`", e.span),

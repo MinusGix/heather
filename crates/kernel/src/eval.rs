@@ -1114,12 +1114,9 @@ impl<'a, 'v> Eval<'a, 'v> {
 
             // -- data --
             Term::Zero => Val::Zero,
-            Term::NatLit(0) => Val::Zero,
+            Term::NatLit(n) if n.is_zero() => Val::Zero,
             Term::NatLit(n) => Val::NatRun {
-                program: ContextProgram::run(
-                    (),
-                    NonZeroU64::new(*n).expect("nonzero NatLit arm"),
-                ),
+                program: nat_lit_program(n),
                 tail: self.arena.tm(TmClo::val(Rc::new(Val::Zero))),
             },
             Term::Succ(p) => Val::Succ(tclo(env, p)),
@@ -2228,6 +2225,31 @@ pub fn whnf_value_ty<'v>(
     ev.delta_whnf_ty(v)
 }
 
+/// The run program a nonzero literal evaluates to
+/// (`docs/wide-numerals-design.md` §2): one saturated run up to `u64::MAX`;
+/// above it, the value's bits from the top by doubling and incrementing.
+/// [`ContextProgram::append`] merges runs while their counts add in a `u64`
+/// and composes them, shared, past that, so the top 64 bits become one run
+/// and each further bit adds a node — `O(bits)`, the shape arithmetic that
+/// overflows a run already produces.
+fn nat_lit_program(n: &crate::term::Numeral) -> Rc<ContextProgram<()>> {
+    if let Some(count) = n.as_u64() {
+        return ContextProgram::run((), NonZeroU64::new(count).expect("a nonzero literal"));
+    }
+    let one = || ContextProgram::run((), NonZeroU64::MIN);
+    let mut acc: Option<Rc<ContextProgram<()>>> = None;
+    for i in (0..n.bits()).rev() {
+        acc = acc.map(|a| ContextProgram::append(Rc::clone(&a), a));
+        if n.bit(i) {
+            acc = Some(match acc {
+                None => one(),
+                Some(a) => ContextProgram::append(one(), a),
+            });
+        }
+    }
+    acc.expect("a nonzero literal has a set bit")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Elim, Eval};
@@ -2319,12 +2341,27 @@ mod tests {
         let arena = ValueArena::new();
         let env = Env::empty();
         let mut ev = Eval::new(1, Defs::opaque(), CtxBase::Nil, &arena);
-        let value = ev.eval_tm_ref(&Term::NatLit(u64::MAX), &env).unwrap();
+        let value = ev.eval_tm_ref(&Term::NatLit(u64::MAX.into()), &env).unwrap();
         assert!(matches!(&*value,
             Val::NatRun { program, tail }
                 if matches!(&**program,
                     ContextProgram::Run { count, .. } if count.get() == u64::MAX)
                 && matches!(tail, TmClo::Val(z) if matches!(&**z, Val::Zero))));
+    }
+
+    /// A literal past a machine word (docs/wide-numerals-design.md) denotes
+    /// exactly its value, in a program of `O(bits)` shared nodes.
+    #[test]
+    fn a_wide_literal_enters_the_value_domain_as_its_exact_count() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        for n in [1u128 << 64, (1u128 << 64) + 1, (1u128 << 100) + 12345, u128::MAX] {
+            let mut ev = Eval::new(1, Defs::opaque(), CtxBase::Nil, &arena);
+            let value = ev.eval_tm_ref(&Term::NatLit(crate::term::Numeral::from_u128(n)), &env).unwrap();
+            let Val::NatRun { program, tail } = &*value else { panic!("{n}: not a run: {value:?}") };
+            assert!(matches!(tail, TmClo::Val(z) if matches!(&**z, Val::Zero)), "{n}");
+            assert_eq!(exact_count(program), n, "{n}");
+        }
     }
 
     #[test]

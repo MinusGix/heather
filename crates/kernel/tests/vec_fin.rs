@@ -557,7 +557,7 @@ fn unit() -> Type {
 }
 
 fn lit(n: u64) -> Term {
-    if n == 0 { Term::Zero } else { Term::NatLit(n) }
+    if n == 0 { Term::Zero } else { Term::NatLit(n.into()) }
 }
 
 #[test]

@@ -101,7 +101,6 @@ fn malformed_radix_numerals_render_the_lexer_message() {
         ("fn f() -> Nat { 0x }", "`0x` needs at least one hexadecimal digit"),
         ("fn f() -> Nat { 0b102 }", "invalid digit `2` in a binary numeral"),
         ("fn f() -> Nat { 0x1_ }", "must sit between two digits"),
-        ("fn f() -> Nat { 0x1_0000_0000_0000_0000 }", "numeral out of range: 0x1_0000_0000_0000_0000"),
     ] {
         let mut elaborator = Elaborator::with_prelude().expect("prelude");
         let error = elaborator.elab_source(source).expect_err(source);

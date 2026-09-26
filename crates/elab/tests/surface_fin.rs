@@ -509,7 +509,7 @@ fn vector_literal_tail_lengths_are_packed_numerals() {
     let e = elab("fn three() -> [Nat; 3] { [1, 2, 3] }");
     let (_, body) = last_binding(&e);
     let mut at = &body;
-    for expected in [Term::NatLit(2), Term::NatLit(1), Term::Zero] {
+    for expected in [Term::NatLit(2u64.into()), Term::NatLit(1u64.into()), Term::Zero] {
         let Term::Pair { snd_ty, snd, .. } = at else { panic!("expected a pair, found {at:?}") };
         let Type::Vec { len, .. } = &**snd_ty else { panic!("expected a Vec tail type, found {snd_ty:?}") };
         assert_eq!(**len, expected, "tail length spelled {len:?}");

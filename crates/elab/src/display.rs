@@ -33,7 +33,6 @@ use std::sync::Arc as Rc;
 use heather_kernel::term::{CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
 
 use crate::diagnostics::DISPLAY_DECODE_STEPS;
-use crate::inductive::nat_value;
 use crate::{Cx, Elaborator, dress_true, show_level};
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
@@ -373,7 +372,7 @@ impl Speller<'_> {
             && let Some(source) = self.source_instance(&ind, &args, d)
         { return source; }
         // `3`, not `S(S(S(0)))`.
-        if let Some(k) = nat_value(t) {
+        if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();
         }
         match t {

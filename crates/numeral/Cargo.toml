@@ -1,0 +1,13 @@
+[package]
+name = "heather-numeral"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "heather_numeral"
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,12 +1,13 @@
 //! Hand-rolled lexer. `//` line comments; identifiers, numerals, and the
 //! fixed punctuation set of the stage-1 grammar.
 
+use heather_numeral::Numeral;
 use crate::ast::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokKind {
     Ident(String),
-    Num(u64),
+    Num(Numeral),
     /// `'x'` — one Unicode scalar value (docs/string-char-design.md §3). The
     /// payload is Rust's `char`, which *is* the scalar-value type: the lexer
     /// refuses a surrogate escape, so nothing downstream has to re-check that
@@ -157,19 +158,18 @@ pub struct LexError {
 /// letter, or `_`; a letter or `_` that cannot continue it is an error
 /// rather than the start of the next token, so `0b12`, `0xfg`, `12abc`
 /// and `1_` are all refused with the offending character named. The
-/// value is bounded by `u64` exactly as the decimal form always was; the
-/// bound is the token's, not any carrier's (a numeral above it is refused
-/// in every radix with the same message).
-fn lex_numeral(src: &str, start: usize) -> Result<(u64, usize), LexError> {
+/// value has no bound (docs/wide-numerals-design.md): a position that needs
+/// a machine integer refuses a larger numeral itself, where it knows why.
+fn lex_numeral(src: &str, start: usize) -> Result<(Numeral, usize), LexError> {
     let bytes = src.as_bytes();
     let (radix, name, mut i) = match (bytes[start], bytes.get(start + 1)) {
-        (b'0', Some(b'x')) => (16u64, "hexadecimal", start + 2),
+        (b'0', Some(b'x')) => (16u32, "hexadecimal", start + 2),
         (b'0', Some(b'o')) => (8, "octal", start + 2),
         (b'0', Some(b'b')) => (2, "binary", start + 2),
         _ => (10, "decimal", start),
     };
     let digits_start = i;
-    let mut value: u64 = 0;
+    let mut value = Numeral::ZERO;
     let mut digits = 0usize;
     let mut previous_was_separator = false;
     while i < bytes.len() {
@@ -194,7 +194,7 @@ fn lex_numeral(src: &str, start: usize) -> Result<(u64, usize), LexError> {
             break;
         }
         let digit = match (b as char).to_digit(36) {
-            Some(d) if u64::from(d) < radix => u64::from(d),
+            Some(d) if d < radix => u64::from(d),
             _ => {
                 let bad = b as char;
                 let msg = if radix == 10 && digits > 0 {
@@ -207,20 +207,7 @@ fn lex_numeral(src: &str, start: usize) -> Result<(u64, usize), LexError> {
                 return Err(LexError { msg, span: Span { start: i, end: i + 1 } });
             }
         };
-        value = value
-            .checked_mul(radix)
-            .and_then(|v| v.checked_add(digit))
-            .ok_or_else(|| {
-                // Run to the numeral's end so the span covers all of it.
-                let mut end = i;
-                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
-                    end += 1;
-                }
-                LexError {
-                    msg: format!("numeral out of range: {}", &src[start..end]),
-                    span: Span { start, end },
-                }
-            })?;
+        value = value.mul_add(u64::from(radix), digit);
         digits += 1;
         previous_was_separator = false;
         i += 1;
@@ -629,9 +616,9 @@ mod tests {
     fn num(src: &str) -> u64 {
         let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
         assert_eq!(toks.len(), 2, "{src}: one numeral then Eof, got {toks:?}");
-        let TokKind::Num(n) = toks[0].kind else { panic!("{src}: not a numeral: {:?}", toks[0]) };
+        let TokKind::Num(n) = &toks[0].kind else { panic!("{src}: not a numeral: {:?}", toks[0]) };
         assert_eq!(toks[0].span, Span { start: 0, end: src.len() });
-        n
+        n.as_u64().expect("a numeral that fits in 64 bits")
     }
 
     fn refused(src: &str) -> String {
@@ -691,21 +678,26 @@ mod tests {
         assert!(refused("0x)").starts_with("`0x` needs"));
     }
 
+    /// A numeral has no bound (docs/wide-numerals-design.md): `u64::MAX` and
+    /// one past it read the same way in every radix.
     #[test]
-    fn the_token_bound_is_the_same_in_every_radix() {
+    fn a_numeral_past_a_machine_word_reads_in_every_radix() {
         assert_eq!(num("18446744073709551615"), u64::MAX);
         assert_eq!(num("0xFFFF_FFFF_FFFF_FFFF"), u64::MAX);
         assert_eq!(num("0b1111111111111111111111111111111111111111111111111111111111111111"), u64::MAX);
         assert_eq!(num("0o1777777777777777777777"), u64::MAX);
+        let two64 = Numeral::from_limbs(vec![0, 1]);
         for src in [
             "18446744073709551616",
             "0x1_0000_0000_0000_0000",
             "0b10000000000000000000000000000000000000000000000000000000000000000",
             "0o2000000000000000000000",
         ] {
-            let msg = refused(src);
-            assert_eq!(msg, format!("numeral out of range: {src}"), "{src}");
+            let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+            assert!(matches!(&toks[0].kind, TokKind::Num(n) if *n == two64), "{src}: {toks:?}");
         }
+        let toks = lex("340282366920938463463374607431768211456").unwrap();
+        assert!(matches!(&toks[0].kind, TokKind::Num(n) if n.to_string() == "340282366920938463463374607431768211456"));
     }
 
     fn chr(src: &str) -> char {
@@ -790,14 +782,14 @@ mod tests {
         let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
         assert!(matches!(kinds[2], TokKind::Char('a')), "{kinds:?}");
         assert!(matches!(kinds[4], TokKind::Str(s) if s == "bc"), "{kinds:?}");
-        assert!(matches!(kinds[6], TokKind::Num(1)), "{kinds:?}");
+        assert!(matches!(&kinds[6], TokKind::Num(n) if n.as_u64() == Some(1)), "{kinds:?}");
     }
 
     #[test]
     fn a_numeral_ends_at_punctuation() {
         let toks = lex("f(0x48, 0b1)").unwrap();
         let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
-        assert!(matches!(kinds[2], TokKind::Num(72)), "{kinds:?}");
-        assert!(matches!(kinds[4], TokKind::Num(1)), "{kinds:?}");
+        assert!(matches!(&kinds[2], TokKind::Num(n) if n.as_u64() == Some(72)), "{kinds:?}");
+        assert!(matches!(&kinds[4], TokKind::Num(n) if n.as_u64() == Some(1)), "{kinds:?}");
     }
 }

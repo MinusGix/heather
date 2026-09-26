@@ -82,7 +82,7 @@ fn term(source: &str, e: &Expr) -> Out {
     match &e.kind {
         ExprKind::Var(name) => atom(name),
         ExprKind::OpSymbol { symbol, .. } => atom(symbol),
-        ExprKind::Num(n) => Out::nat(*n),
+        ExprKind::Num(n) => Out::nat(n.clone()),
         ExprKind::TyApp { head, args } => atom(&format!(
             "{}<{}>",
             term(source, head).render(),

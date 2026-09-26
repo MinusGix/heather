@@ -888,13 +888,13 @@ mod tests {
             default: false,
             binders: Vec::new(),
             body: Expr {
-                kind: ExprKind::Num(0),
+                kind: ExprKind::Num(0u64.into()),
                 span: SPAN,
             },
             span: SPAN,
         };
         let scrutinee = Expr {
-            kind: ExprKind::Num(0),
+            kind: ExprKind::Num(0u64.into()),
             span: SPAN,
         };
 
@@ -966,7 +966,7 @@ mod tests {
                 span: SPAN,
             }],
             body: Expr {
-                kind: ExprKind::Num(0),
+                kind: ExprKind::Num(0u64.into()),
                 span: SPAN,
             },
             span: SPAN,
@@ -1028,7 +1028,7 @@ mod tests {
             default: false,
             binders: Vec::new(),
             body: Expr {
-                kind: ExprKind::Num(0),
+                kind: ExprKind::Num(0u64.into()),
                 span: SPAN,
             },
             span: SPAN,

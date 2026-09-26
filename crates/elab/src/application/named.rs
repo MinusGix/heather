@@ -324,7 +324,7 @@ mod tests {
 
     fn expression(value: u64) -> Expr {
         Expr {
-            kind: ExprKind::Num(value),
+            kind: ExprKind::Num(value.into()),
             span: SPAN,
         }
     }
@@ -392,9 +392,9 @@ mod tests {
         )
         .expect("named call")
         .expect("normalization");
-        assert!(matches!(arguments[0].kind, ExprKind::Num(0)));
-        assert!(matches!(arguments[1].kind, ExprKind::Num(1)));
-        assert!(matches!(arguments[2].kind, ExprKind::Num(2)));
+        assert!(matches!(&arguments[0].kind, ExprKind::Num(__n) if __n.as_u64() == Some(0)));
+        assert!(matches!(&arguments[1].kind, ExprKind::Num(__n) if __n.as_u64() == Some(1)));
+        assert!(matches!(&arguments[2].kind, ExprKind::Num(__n) if __n.as_u64() == Some(2)));
         assert_eq!(mask, [false, false, false]);
     }
 
@@ -405,7 +405,7 @@ mod tests {
         let written = [("right", &second, SPAN), ("left", &first, SPAN)];
         let ordered = permute_by_name("Pair", "field", &["left", "right"], &[], &written, SPAN)
             .expect("field permutation");
-        assert!(matches!(ordered[0].kind, ExprKind::Num(1)));
-        assert!(matches!(ordered[1].kind, ExprKind::Num(2)));
+        assert!(matches!(&ordered[0].kind, ExprKind::Num(__n) if __n.as_u64() == Some(1)));
+        assert!(matches!(&ordered[1].kind, ExprKind::Num(__n) if __n.as_u64() == Some(2)));
     }
 }

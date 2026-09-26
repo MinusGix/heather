@@ -25,6 +25,7 @@ value-metrics = ["heather-kernel/value-metrics"]
 
 [dependencies]
 heather-kernel = { path = "../kernel" }
+heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 
 # First-party only, and no Criterion: the frontend suite reuses the kernel

@@ -93,7 +93,7 @@ fn verdict(r: R) -> &'static str {
 fn maximum_nat_literals_compare_by_run_fragments() {
     let psi = GlobalCtx::new(vec![]);
     let gamma = LocalCtx::nil();
-    let maximum = Term::NatLit(u64::MAX);
+    let maximum = Term::NatLit(u64::MAX.into());
     assert_eq!(
         conv_term(
             &psi,
@@ -113,7 +113,7 @@ fn maximum_nat_literals_compare_by_run_fragments() {
             &gamma,
             Layer::Prog,
             &maximum,
-            &Term::NatLit(u64::MAX - 1),
+            &Term::NatLit((u64::MAX - 1).into()),
             &Type::Nat,
             &Level::Zero,
             8,

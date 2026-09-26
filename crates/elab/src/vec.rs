@@ -908,7 +908,7 @@ mod tests {
             normalized_length: Rc::clone(&length),
         };
         let expression = Expr {
-            kind: heather_syntax::ExprKind::Num(0),
+            kind: heather_syntax::ExprKind::Num(0u64.into()),
             span: SPAN,
         };
 

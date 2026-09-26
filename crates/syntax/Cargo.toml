@@ -8,6 +8,7 @@ license.workspace = true
 name = "heather_syntax"
 
 [dependencies]
+heather-numeral = { path = "../numeral" }
 
 [lints]
 workspace = true

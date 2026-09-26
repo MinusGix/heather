@@ -330,6 +330,16 @@ by a definition whose reduction cost matches its meaning, or by
 reflection, never by a kernel case for that definition — and what is not
 accelerated is refused with `OutOfFuel`, never a process abort.
 
+**Numerals of any size** (2026-09-26, `docs/wide-numerals-design.md`).
+`Term::NatLit` is a compact spelling of `Succ^n(Zero)` whose one-step view
+is `Succ(NatLit(n - 1))`; it carries a `heather_numeral::Numeral`, an
+arbitrary-precision natural, rather than a `u64`. Evaluation builds a
+literal past `u64::MAX` as a shared run program from its bits
+(`eval::nat_lit_program`), the shape arithmetic that overflows a run
+already produces. The numeral crate is first-party, dependency-free and
+`unsafe`-free; what the kernel's judgments rely on from it is `is_zero`,
+`pred` and `limbs` (`issues/dependency-policy.md`).
+
 **Native bitvector values** (`issues/kernel-native-bitvector-values.md`,
 `docs/native-bitvector-values-design.md`). The second representation change
 of the runs kind. A `Vec^l(T; n)` whose element type `T` has exactly two

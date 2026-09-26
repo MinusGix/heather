@@ -17,7 +17,7 @@ pub struct Expr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ExprKind {
     Atom(String),
-    Nat(u64),
+    Nat(heather_kernel::term::Numeral),
     Call {
         callee: Box<Expr>,
         arguments: Vec<Argument>,
@@ -53,9 +53,9 @@ impl Expr {
         }
     }
 
-    pub fn nat(value: u64) -> Self {
+    pub fn nat(value: impl Into<heather_kernel::term::Numeral>) -> Self {
         Self {
-            kind: ExprKind::Nat(value),
+            kind: ExprKind::Nat(value.into()),
         }
     }
 

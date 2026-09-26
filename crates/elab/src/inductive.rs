@@ -348,7 +348,7 @@ pub(crate) fn tag_type(k: u32) -> Type {
 fn tag_index(t: &Term) -> Option<u32> {
     match t {
         Term::Zero => Some(0),
-        Term::NatLit(k) if *k > 0 => u32::try_from(*k).ok(),
+        Term::NatLit(k) if !k.is_zero() => k.as_u64().and_then(|k| u32::try_from(k).ok()),
         _ => None,
     }
 }
@@ -674,7 +674,7 @@ pub(crate) fn inject_at(
 pub(crate) fn nat_value(t: &Term) -> Option<usize> {
     match t {
         Term::Zero => Some(0),
-        Term::NatLit(n) => usize::try_from(*n).ok(),
+        Term::NatLit(n) => n.as_u64().and_then(|n| usize::try_from(n).ok()),
         Term::Succ(p) => nat_value(p).map(|k| k + 1),
         _ => None,
     }
@@ -689,15 +689,24 @@ pub(crate) enum NatHead {
     Neutral,
 }
 
+/// A closed numeral's value at any size: `Zero`, a literal, or successors of
+/// one (docs/wide-numerals-design.md). [`nat_value`] is this capped at a
+/// `usize`, for the readers that index with it.
+pub(crate) fn nat_numeral(t: &Term) -> Option<heather_kernel::term::Numeral> {
+    match t {
+        Term::Zero => Some(heather_kernel::term::Numeral::ZERO),
+        Term::NatLit(n) => Some(n.clone()),
+        Term::Succ(p) => nat_numeral(p).map(|n| n.succ()),
+        _ => None,
+    }
+}
+
 pub(crate) fn nat_head(t: &Term) -> NatHead {
     match t {
-        Term::Zero | Term::NatLit(0) => NatHead::Zero,
+        Term::Zero => NatHead::Zero,
+        Term::NatLit(n) if n.is_zero() => NatHead::Zero,
         Term::Succ(pred) => NatHead::Succ(Rc::clone(pred)),
-        Term::NatLit(n) => NatHead::Succ(Rc::new(if *n == 1 {
-            Term::Zero
-        } else {
-            Term::NatLit(n - 1)
-        })),
+        Term::NatLit(n) => NatHead::Succ(Rc::new(heather_kernel::term::nat_lit_pred(n))),
         _ => NatHead::Neutral,
     }
 }
@@ -708,7 +717,7 @@ pub(crate) fn nat_head(t: &Term) -> NatHead {
 /// unary and the annotated term quadratic in the literal
 /// (`issues/elf-mutation-test-shape.md`).
 pub(crate) fn nat_lit(k: usize) -> Term {
-    if k == 0 { Term::Zero } else { Term::NatLit(k as u64) }
+    if k == 0 { Term::Zero } else { Term::NatLit((k as u64).into()) }
 }
 
 /// The tag's inhabitant: `srefl⁰(Nat; k)`. Which inhabitant hardly matters —
@@ -3200,7 +3209,7 @@ fn parse_result_index<'a>(
         return decl_index_pattern(c, idx, ity, k, iargs);
     }
     match &idx.kind {
-        ExprKind::Num(0) if matches!(ity, IdxTy::Nat) => Ok(IdxPat {
+        ExprKind::Num(n) if n.is_zero() && matches!(ity, IdxTy::Nat) => Ok(IdxPat {
             ctor: 0,
             vars: vec![],
         }),

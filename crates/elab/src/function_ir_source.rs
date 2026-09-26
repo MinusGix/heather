@@ -459,7 +459,7 @@ pub fn reflect_call_expression(elaborator: &Elaborator, source: &str, callee: &s
 fn nat_literal(term: &Term) -> Option<u64> {
     match term {
         Term::Zero => Some(0),
-        Term::NatLit(value) => Some(*value),
+        Term::NatLit(value) => value.as_u64(),
         Term::Succ(predecessor) => nat_literal(predecessor)?.checked_add(1),
         _ => None,
     }
@@ -1237,9 +1237,9 @@ fn is_bitvec_64(ty: &Ty) -> bool {
         && matches!(
             args.as_slice(),
             [Expr {
-                kind: ExprKind::Num(64),
+                kind: ExprKind::Num(width),
                 ..
-            }]
+            }] if width.as_u64() == Some(64)
         )
 }
 
@@ -1259,7 +1259,7 @@ fn binary_call(body: &Expr) -> Result<(SourceBinaryOperation, &Expr, &Expr), Sou
     if !named.is_empty() || args.len() != 3 {
         return unsupported("the BitVec operation must have width, left, and right arguments");
     }
-    if !matches!(args[0].kind, ExprKind::Num(64)) {
+    if !matches!(&args[0].kind, ExprKind::Num(width) if width.as_u64() == Some(64)) {
         return unsupported("the initial fragment supports only width 64");
     }
     Ok((operation, &args[1], &args[2]))

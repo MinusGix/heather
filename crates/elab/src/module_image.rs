@@ -12,7 +12,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
-use heather_kernel::term::{
+use heather_kernel::term::{Numeral, 
     Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     Motives, SubstTail, Term, Type,
 };
@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x08";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x07";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x09";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x08";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -145,6 +145,14 @@ impl Writer {
         self.u64(value as u64);
     }
 
+    /// A numeral of any size: its limb count, then its little-endian limbs.
+    fn numeral(&mut self, value: &Numeral) {
+        self.len(value.limbs().len());
+        for &limb in value.limbs() {
+            self.u64(limb);
+        }
+    }
+
     fn len(&mut self, value: usize) {
         self.u64(value as u64);
     }
@@ -231,6 +239,15 @@ impl<'a> Reader<'a> {
 
     fn usize(&mut self) -> Result<usize, ModuleImageDecodeError> {
         usize::try_from(self.u64()?).map_err(|_| ModuleImageDecodeError::SequenceTooLong)
+    }
+
+    fn numeral(&mut self) -> Result<Numeral, ModuleImageDecodeError> {
+        let len = self.len()?;
+        let mut limbs = Vec::with_capacity(len);
+        for _ in 0..len {
+            limbs.push(self.u64()?);
+        }
+        Ok(Numeral::from_limbs(limbs))
     }
 
     fn len(&mut self) -> Result<usize, ModuleImageDecodeError> {
@@ -655,7 +672,7 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::ElimCodeTm { ty_motive_level, tm_motive_level, motives, branches, code_level, ctx, ty, scrut } => {
             w.byte(52); put_level(w, ty_motive_level); put_level(w, tm_motive_level); put_motives(w, motives); put_branches(w, branches); put_level(w, code_level); put_ctx(w, ctx); put_type(w, ty); put_term(w, scrut);
         }
-        Term::NatLit(n) => { w.byte(53); w.u64(*n); }
+        Term::NatLit(n) => { w.byte(53); w.numeral(n); }
         // The checked spellings (docs/intro-by-type-design.md). New tags, so
         // an older reader refuses the byte rather than mis-decoding it; the
         // image's `SemanticsIdentity` already changes with the kernel's
@@ -732,7 +749,7 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         50 => Term::LetBoxTm { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), body: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
         51 => Term::ElimCodeTy { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, scrut: Rc::new(get_term(r)?) },
         52 => Term::ElimCodeTm { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
-        53 => Term::NatLit(r.u64()?),
+        53 => Term::NatLit(r.numeral()?),
         54 => Term::PairAt { ty: Some(Rc::new(get_type(r)?)), fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
         55 => Term::InlAt { ty: Some(Rc::new(get_type(r)?)), val: Rc::new(get_term(r)?) },
         56 => Term::InrAt { ty: Some(Rc::new(get_type(r)?)), val: Rc::new(get_term(r)?) },
@@ -1007,7 +1024,7 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::Var(name) => { w.byte(0); w.string(name); }
         ExprKind::OpSymbol { symbol, fixity } => { w.byte(1); w.string(symbol); put_fixity(w, *fixity); }
         ExprKind::Univ { level } => { w.byte(2); w.u64(*level); }
-        ExprKind::Num(value) => { w.byte(3); w.u64(*value); }
+        ExprKind::Num(value) => { w.byte(3); w.numeral(value); }
         ExprKind::ArgSlot(slot) => { w.byte(4); w.option(slot.as_ref(), |w, n| w.u64(*n)); }
         ExprKind::App { head, args, named, explicit, goal_oriented } => {
             w.byte(5); put_expr(w, head); w.vec(args, put_expr); w.vec(named, put_named_arg);
@@ -1059,7 +1076,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             0 => ExprKind::Var(r.string()?),
             1 => ExprKind::OpSymbol { symbol: r.string()?, fixity: get_fixity(r)? },
             2 => ExprKind::Univ { level: r.u64()? },
-            3 => ExprKind::Num(r.u64()?),
+            3 => ExprKind::Num(r.numeral()?),
             4 => ExprKind::ArgSlot(r.option(Reader::u64)?),
             5 => ExprKind::App {
                 head: Box::new(get_expr(r)?), args: r.vec(get_expr)?, named: r.vec(get_named_arg)?,

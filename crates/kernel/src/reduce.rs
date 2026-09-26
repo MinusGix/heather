@@ -433,7 +433,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // nullary constructor of a level-`l` `Wf` uninhabitable — the defect
         // route (a) exists to close (docs/unit-empty-level-indexing.md §1).
         Type::Vec { level, elem, len } => match &**len {
-            Term::Zero | Term::NatLit(0) => Some(Type::Unit { level: level.clone() }),
+            t if crate::term::is_nat_zero(t) => Some(Type::Unit { level: level.clone() }),
             Term::Succ(pred) => Some(Type::Sigma {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -445,7 +445,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 }),
             }),
             Term::NatLit(n) => {
-                let pred = if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) };
+                let pred = crate::term::nat_lit_pred(n);
                 Some(Type::Sigma {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
@@ -467,7 +467,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // `Fin` is declared at level 0, so both reducts land there and it
         // needs nothing from the level-indexing round.
         Type::Fin { len } => match &**len {
-            Term::Zero | Term::NatLit(0) => Some(Type::Empty { level: Level::Zero }),
+            t if crate::term::is_nat_zero(t) => Some(Type::Empty { level: Level::Zero }),
             Term::Succ(pred) => Some(Type::Sum {
                 lhs_level: Level::Zero,
                 rhs_level: Level::Zero,
@@ -479,7 +479,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 rhs_level: Level::Zero,
                 lhs: Rc::new(Type::Unit { level: Level::Zero }),
                 rhs: Rc::new(Type::Fin {
-                    len: Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) }),
+                    len: Rc::new(crate::term::nat_lit_pred(n)),
                 }),
             }),
             _ => step_term_in(len, gamma, defs, frames).map(|len| Type::Fin { len: Rc::new(len) }),
@@ -511,7 +511,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         Term::GlobalTm { var, subst } => Some(defs.body(*var)?.apply_local(subst)),
         Term::ElimNat { level, motive, base, step, scrut } => match &**scrut {
             // elim_Nat … ze ⇝ s
-            Term::Zero | Term::NatLit(0) => Some((**base).clone()),
+            t if crate::term::is_nat_zero(t) => Some((**base).clone()),
             // elim_Nat … (su t) ⇝ s'[t/x, elim_Nat … t/y]
             Term::Succ(pred) => {
                 let rec = Term::ElimNat {
@@ -527,7 +527,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 Some(step.apply_local(&delta))
             }
             Term::NatLit(n) => {
-                let pred = Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) });
+                let pred = Rc::new(crate::term::nat_lit_pred(n));
                 let rec = Term::ElimNat {
                     level: level.clone(),
                     motive: Rc::clone(motive),
@@ -1414,7 +1414,7 @@ pub(crate) fn beta_elim_tm(
             ))
         }
         // (g. t_ze)
-        Term::Zero | Term::NatLit(0) => Some(fire(
+        t if crate::term::is_nat_zero(t) => Some(fire(
             &b.tm_zero,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
@@ -1438,7 +1438,7 @@ pub(crate) fn beta_elim_tm(
             ))
         }
         Term::NatLit(n) => {
-            let pred = Rc::new(if *n == 1 { Term::Zero } else { Term::NatLit(n - 1) });
+            let pred = Rc::new(crate::term::nat_lit_pred(n));
             let s_pred = rec.elim_tm(
                 Level::Zero,
                 delta.clone(),

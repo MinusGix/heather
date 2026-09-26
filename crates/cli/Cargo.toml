@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 heather-kernel = { path = "../kernel" }
+heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 heather-elab = { path = "../elab" }
 heather-cache = { path = "../cache" }

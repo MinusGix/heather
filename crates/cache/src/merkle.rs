@@ -242,6 +242,9 @@ mod tag {
     pub const E_FST_AT: u8 = 0x79;
     pub const E_SND_AT: u8 = 0x7a;
     pub const E_APP_AT: u8 = 0x7b;
+    /// A literal past `u64` (docs/wide-numerals-design.md): its own tag, so a
+    /// literal that fits keeps the hash it always had.
+    pub const E_NATLIT_WIDE: u8 = 0x7c;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -647,11 +650,21 @@ impl<'a> Walk<'a> {
                 self.term(arity);
             }
             Term::Zero => self.tag(tag::E_ZERO),
-            Term::NatLit(n) => {
-                self.tag(tag::E_NATLIT);
-                self.u32(*n as u32);
-                self.u32((n >> 32) as u32);
-            }
+            Term::NatLit(n) => match n.as_u64() {
+                Some(n) => {
+                    self.tag(tag::E_NATLIT);
+                    self.u32(n as u32);
+                    self.u32((n >> 32) as u32);
+                }
+                None => {
+                    self.tag(tag::E_NATLIT_WIDE);
+                    self.u32(n.limbs().len() as u32);
+                    for &limb in n.limbs() {
+                        self.u32(limb as u32);
+                        self.u32((limb >> 32) as u32);
+                    }
+                }
+            },
             Term::Succ(t) => {
                 self.tag(tag::E_SUCC);
                 self.term(t);

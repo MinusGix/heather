@@ -75,7 +75,7 @@ impl Elaborator {
         let intro = self.key_of(CHAR_INTRO)?;
         let yes = self.key_of(DECIDE_YES)?;
         let code = Expr {
-            kind: ExprKind::Num(u64::from(u32::from(c))),
+            kind: ExprKind::Num(u64::from(u32::from(c)).into()),
             span,
         };
         let proof = call(var(&yes, span), vec![Expr { kind: ExprKind::Refl, span }], span);

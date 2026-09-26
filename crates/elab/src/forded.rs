@@ -1334,7 +1334,7 @@ impl Elaborator {
         let kids = ctor.arity();
         let e = self.res_expr(ind, k);
         match &e.kind {
-            ExprKind::Num(0) if kids == 0 => Form::AZero,
+            ExprKind::Num(n) if n.is_zero() && kids == 0 => Form::AZero,
             ExprKind::Var(v) if v == "Zero" && kids == 0 => Form::AZero,
             ExprKind::App { head, args, .. }
                 if kids == 1 && matches!(&head.kind, ExprKind::Var(s) if s == "Succ") =>

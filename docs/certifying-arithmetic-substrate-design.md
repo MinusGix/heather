@@ -173,14 +173,14 @@ string assembly toward a shared certificate builder that can:
 The builder is infrastructure, not a reflected proof checker. Omega and CutSat
 remain responsible for mapping their typed derivations to theorem applications.
 
-**Constants past a numeral token.** Coefficients are checked `i128`, but a
-source numeral is a `u64` token, and word arithmetic reaches 2^64 in bounds,
-carries, and search steps nobody wrote. `nat_lit` (`omega_cert.rs`) is the one
-place a constant becomes source. A constant above the token is spelled over its
-top word, one byte at a time below it, as `nat::Nat::add(nat::Nat::mul(x, 256),
-b)`. `mul` recurses on its second argument, so the kernel pays a constant
-amount per byte. `nat_lit_value` reads that spelling back, because a later
-round reflects the certificate's own facts. For the same reason, a closed
+**Constants past a machine word.** Coefficients are checked `i128`, and word
+arithmetic reaches 2^64 in bounds, carries, and search steps nobody wrote.
+`nat_lit` (`omega_cert.rs`) is the one place a constant becomes source, and it
+spells the numeral it is: numerals are unbounded since 2026-09-26
+(`docs/wide-numerals-design.md`). Before that a constant above a `u64` token
+was spelled over its top word one byte at a time. `nat_lit_value` reads the
+spelling back, because a later round reflects the certificate's own facts.
+For the same reason, a closed
 `nat::Nat::pow(a, b)` reflects as its value when `(a + 1) * b` is within
 `POWER_EVALUATION_STEPS`, and the kernel checks the value by evaluation. A
 larger power stays an atom (issues/omega-constants-beyond-u64.md).

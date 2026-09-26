@@ -590,7 +590,7 @@ mod inequality_render_tests {
     fn only_the_surface_not_equality_shape_renders_as_inequality() {
         let equation = expr(ExprKind::Eq(
             Box::new(expr(ExprKind::Var("x".into()))),
-            Box::new(expr(ExprKind::Num(0))),
+            Box::new(expr(ExprKind::Num(0u64.into()))),
         ));
         let call = |name: &str| {
             expr(ExprKind::App {
@@ -733,7 +733,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             fixity: *fixity,
         },
         Univ { level } => Univ { level: *level },
-        Num(n) => Num(*n),
+        Num(n) => Num(n.clone()),
         Char(c) => Char(*c),
         Str(text) => Str(text.clone()),
         ArgSlot(index) => ArgSlot(*index),

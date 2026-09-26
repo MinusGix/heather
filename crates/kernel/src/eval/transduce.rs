@@ -1628,7 +1628,7 @@ mod tests {
     /// first in every constructor (`docs/inductive-tier0-lowering.md` §3.3) —
     /// proof-irrelevant, one value, and not `Unit` itself.
     fn tag() -> Rc<Type> {
-        let k = Rc::new(Term::NatLit(7));
+        let k = Rc::new(Term::NatLit(7u64.into()));
         Rc::new(Type::SEq { level: Level::Zero, ty: Rc::new(Type::Nat), lhs: Rc::clone(&k), rhs: k })
     }
 
@@ -1636,7 +1636,7 @@ mod tests {
         Rc::new(Term::SRefl {
             level: Level::Zero,
             ty: Rc::new(Type::Nat),
-            tm: Rc::new(Term::NatLit(7)),
+            tm: Rc::new(Term::NatLit(7u64.into())),
         })
     }
 
@@ -1998,8 +1998,8 @@ mod tests {
                 Rc::new(Type::SEq {
                     level: Level::Zero,
                     ty: Rc::new(Type::Nat),
-                    lhs: Rc::new(Term::NatLit(a)),
-                    rhs: Rc::new(Term::NatLit(b)),
+                    lhs: Rc::new(Term::NatLit(a.into())),
+                    rhs: Rc::new(Term::NatLit(b.into())),
                 }),
             ))
         };

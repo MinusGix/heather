@@ -496,7 +496,7 @@ mod tests {
         let arena = ValueArena::new();
         let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
         let half = || {
-            let k = Rc::new(Term::NatLit(5));
+            let k = Rc::new(Term::NatLit(5u64.into()));
             Rc::new(Type::Sigma {
                 fst_level: Level::Zero,
                 snd_level: Level::Zero,

@@ -1032,6 +1032,7 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
 pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
     match &**tm {
         Term::Zero => return Ok("0".into()),
+        Term::NatLit(n) => return Ok(n.to_string()),
         Term::Succ(inner) => {
             return Ok(format!("Succ({})", nat_term_source(elab, cx, inner)?));
         }
@@ -2377,38 +2378,17 @@ fn int_ctor(value: Z) -> String {
     }
 }
 
-/// A natural constant as source. A numeral token is a `u64`, so a larger
-/// value is spelled over its top word, one byte at a time below it:
-/// `nat::Nat::add(nat::Nat::mul(x, 256), b)`. `mul` recurses on its second
-/// argument, so the kernel pays 256 steps a byte, and [`nat_lit_value`]
-/// reads the spelling back when a later round reflects it.
+/// A natural constant as source: the numeral it is, at any size
+/// (docs/wide-numerals-design.md). Before numerals were unbounded, a value
+/// past a `u64` was spelled over its top word one byte at a time.
 fn nat_lit(value: Z) -> String {
     debug_assert!(value >= 0, "a natural constant is nonnegative");
-    if value <= Z::from(u64::MAX) {
-        return value.to_string();
-    }
-    let mut shift = 0;
-    while value >> shift > Z::from(u64::MAX) {
-        shift += 8;
-    }
-    (0..shift / 8).rev().fold((value >> shift).to_string(), |out, byte| {
-        format!("nat::Nat::add(nat::Nat::mul({out}, 256), {})", (value >> (8 * byte)) & 0xff)
-    })
+    value.to_string()
 }
 
-/// The value of a [`nat_lit`] spelling with its whitespace removed: a
-/// decimal numeral, or the byte form over one.
+/// The value of a [`nat_lit`] spelling with its whitespace removed.
 fn nat_lit_value(source: &str) -> Option<Z> {
-    if let Ok(value) = source.parse::<u64>() {
-        return Some(Z::from(value));
-    }
-    let inner = source
-        .strip_prefix("nat::Nat::add(nat::Nat::mul(")?
-        .strip_suffix(')')?;
-    let (high, byte) = inner.rsplit_once("),")?;
-    let high = nat_lit_value(high.strip_suffix(",256")?)?;
-    let byte: u8 = byte.parse().ok()?;
-    high.checked_mul(256)?.checked_add(Z::from(byte))
+    source.parse::<Z>().ok().filter(|value| *value >= 0)
 }
 
 fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
@@ -4451,13 +4431,10 @@ mod tests {
     }
 
     #[test]
-    fn a_constant_past_a_numeral_token_is_spelled_in_bytes_and_read_back() {
+    fn a_constant_past_a_numeral_token_is_spelled_as_its_numeral_and_read_back() {
         let word = Z::from(u64::MAX);
         assert_eq!(nat_lit(word), "18446744073709551615");
-        assert_eq!(
-            nat_lit(word + 1),
-            "nat::Nat::add(nat::Nat::mul(72057594037927936, 256), 0)"
-        );
+        assert_eq!(nat_lit(word + 1), "18446744073709551616");
         for value in [0, 7, word, word + 1, word * 3 + 5, Z::MAX - 1, Z::MAX / 3] {
             let compact: String = nat_lit(value).chars().filter(|c| !c.is_whitespace()).collect();
             assert_eq!(nat_lit_value(&compact), Some(value), "{value}");
@@ -4469,10 +4446,9 @@ mod tests {
                 "{value}"
             );
         }
-        // The byte form is read only over a numeral, a byte, and 256.
-        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(x,256),0)"), None);
-        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(1,256),256)"), None);
-        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(1,255),0)"), None);
+        // A spelling that is not a numeral is not a constant.
+        assert_eq!(nat_lit_value("nat::Nat::add(nat::Nat::mul(1,256),0)"), None);
+        assert_eq!(nat_lit_value("-1"), None);
     }
 
     #[test]

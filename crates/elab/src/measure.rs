@@ -772,7 +772,7 @@ pub(crate) struct GroupMember<'a> {
 fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
     let span = e.span;
     let num = |k: usize| Expr {
-        kind: ExprKind::Num(k as u64),
+        kind: ExprKind::Num((k as u64).into()),
         span,
     };
     app(
@@ -1399,7 +1399,7 @@ impl Rewrite<'_> {
     /// rank-lowering call) is over literals, so `trivial` computes it.
     fn scale(&self, c: &Clean, args: &Expr, raw: &Expr, span: Span) -> Expr {
         let num = |k: usize| Expr {
-            kind: ExprKind::Num(k as u64),
+            kind: ExprKind::Num((k as u64).into()),
             span,
         };
         app(

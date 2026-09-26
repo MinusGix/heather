@@ -263,7 +263,7 @@ impl Builder<'_> {
         if expected == StructuredSourceType::NatWord {
             return match term {
                 Term::Zero => self.constant(dag, 64, 0, target),
-                Term::NatLit(value) => self.constant(dag, 64, *value, target),
+                Term::NatLit(value) if value.as_u64().is_some() => self.constant(dag, 64, value.as_u64().expect("guarded"), target),
                 Term::Succ(inner) => {
                     let inner = self.expression(inner, depth, expected, dag, None)?.id;
                     let one = self.constant(dag, 64, 1, None)?.id;

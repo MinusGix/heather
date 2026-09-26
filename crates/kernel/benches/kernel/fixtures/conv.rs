@@ -176,7 +176,7 @@ fn vec_literal() -> Family {
         }
     }
     fn vec(elem: Type, len: u64) -> Type {
-        let len = if len == 0 { Term::Zero } else { Term::NatLit(len) };
+        let len = if len == 0 { Term::Zero } else { Term::NatLit(len.into()) };
         Type::Vec { level: Level::Zero, elem: Rc::new(elem), len: Rc::new(len) }
     }
     let mut elem = unit();

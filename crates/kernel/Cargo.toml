@@ -17,6 +17,7 @@ value-metrics = []
 long-checks = []
 
 [dependencies]
+heather-numeral = { path = "../numeral" }
 typed-arena = "=2.0.2"
 
 # Run through scripts/bench (ulimit), not `cargo bench` directly —

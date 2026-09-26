@@ -441,7 +441,7 @@ mod tests {
             motive: Rc::new(Type::Nat),
             base: Rc::new(Term::Var(LocalVar(0))),
             step: Rc::new(Term::Var(LocalVar(0))),
-            scrut: Rc::new(Term::NatLit(n)),
+            scrut: Rc::new(Term::NatLit(n.into())),
         }
     }
 
@@ -480,7 +480,7 @@ mod tests {
             (Term::Succ(Rc::new(Term::Zero)), Type::Unit { level: Level::Zero }),
             // The literal steps through `Succ` only in the reducer; the
             // value machine runs it as a program. Same former either way.
-            (Term::NatLit(1000), Type::Unit { level: Level::Zero }),
+            (Term::NatLit(1000u64.into()), Type::Unit { level: Level::Zero }),
         ] {
             let ty = p_of(arg);
             assert_eq!(oracle.whnf_type(&one_nat(), &ty).unwrap(), want);
@@ -532,7 +532,7 @@ mod tests {
             motive: Rc::new(Type::Nat),
             base: Rc::new(Term::Zero),
             step: Rc::new(Term::Var(LocalVar(0))),
-            scrut: Rc::new(Term::NatLit(1000)),
+            scrut: Rc::new(Term::NatLit(1000u64.into())),
         };
         assert_eq!(oracle.whnf_term(&one_nat(), &closed).unwrap(), Term::Zero);
         // Cheaply stuck: the reducer's spelling.

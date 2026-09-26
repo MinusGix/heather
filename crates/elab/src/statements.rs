@@ -478,7 +478,7 @@ mod tests {
                 name: "x".into(),
                 ty: None,
                 expr: Expr {
-                    kind: ExprKind::Num(1),
+                    kind: ExprKind::Num(1u64.into()),
                     span: SPAN,
                 },
                 span: SPAN,
@@ -512,7 +512,7 @@ mod tests {
                             span: SPAN,
                         }],
                         body: Box::new(Expr {
-                            kind: ExprKind::Num(0),
+                            kind: ExprKind::Num(0u64.into()),
                             span: SPAN,
                         }),
                     },
@@ -548,7 +548,7 @@ mod tests {
             name: name.into(),
             ty: None,
             expr: Expr {
-                kind: ExprKind::Num(1),
+                kind: ExprKind::Num(1u64.into()),
                 span: SPAN,
             },
             span: SPAN,
@@ -566,7 +566,7 @@ mod tests {
         let statement = Stmt::LetCode {
             name: "code".into(),
             expr: Expr {
-                kind: ExprKind::Num(0),
+                kind: ExprKind::Num(0u64.into()),
                 span: SPAN,
             },
             span: SPAN,

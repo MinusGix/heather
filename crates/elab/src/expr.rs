@@ -9,7 +9,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::reduce::OutOfFuel;
-use heather_kernel::term::{LocalVar, Term, Type};
+use heather_kernel::term::{LocalVar, Numeral, Term, Type};
 use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
 use crate::application::{Skel, SkelBinder, has_implicit_mark, skel_of_ty};
@@ -201,8 +201,8 @@ pub(crate) struct ExprElab<'a> {
 }
 
 impl<'a> ExprElab<'a> {
-    fn natural_literal(n: u64) -> Term {
-        if n == 0 { Term::Zero } else { Term::NatLit(n) }
+    fn natural_literal(n: &Numeral) -> Term {
+        if n.is_zero() { Term::Zero } else { Term::NatLit(n.clone()) }
     }
 
     pub(crate) fn new(
@@ -530,7 +530,7 @@ impl<'a> ExprElab<'a> {
                  or write the call fully explicitly (`@f(a, b, ?p)`)",
                 e.span,
             )),
-            ExprKind::Num(n) => Some(Ok((Self::natural_literal(*n), Type::Nat, Level::Zero))),
+            ExprKind::Num(n) => Some(Ok((Self::natural_literal(n), Type::Nat, Level::Zero))),
             // A type in term position is its kernel code at the next universe.
             ExprKind::Eq(..) | ExprKind::TyLit(..) => Some((|| {
                 let ty = expression_as_type(e).expect("classified as type syntax");
@@ -663,13 +663,16 @@ impl<'a> ExprElab<'a> {
     pub(crate) fn check_builtin_numeral(
         &self,
         cx: &Cx,
-        numeral: u64,
+        numeral: &Numeral,
         expected: &Type,
         span: Span,
     ) -> Option<R<Term>> {
         match &*crate::inductive::decoded(expected) {
             Type::Nat => Some(Ok(Self::natural_literal(numeral))),
             Type::Fin { len } => Some((|| {
+                let Some(numeral) = numeral.as_u64() else {
+                    return err(format!("`{numeral}` is not an index of this `Fin`: it does not fit in 64 bits"), span);
+                };
                 // Peel `numeral + 1` successors off the length; the residue
                 // is the folded base used by the kernel's canonical schema.
                 let mut base = Rc::clone(len);
@@ -1098,7 +1101,7 @@ mod tests {
                 .set(self.deepest_tyvars.get().max(cx.tyvars.len()));
             match &expression.kind {
                 ExprKind::Num(n) => {
-                    self.inferred_numerals.borrow_mut().push(*n);
+                    self.inferred_numerals.borrow_mut().push(n.as_u64().expect("a small numeral"));
                     Ok((Term::Zero, Type::Nat, Level::Zero))
                 }
                 ExprKind::Var(name) if name == "code" => {
@@ -1130,10 +1133,10 @@ mod tests {
             self.deepest_context
                 .set(self.deepest_context.get().max(cx.names.len()));
             assert_eq!((expected, level), (&Type::Nat, &Level::Zero));
-            let ExprKind::Num(n) = expression.kind else {
+            let ExprKind::Num(n) = &expression.kind else {
                 panic!("the fixture only checks numerals");
             };
-            self.checked_numerals.borrow_mut().push(n);
+            self.checked_numerals.borrow_mut().push(n.as_u64().expect("a small numeral"));
             Ok(Term::Zero)
         }
     }
@@ -1248,15 +1251,15 @@ mod tests {
         let cx = Cx::empty();
 
         let numeral = Expr {
-            kind: ExprKind::Num(2),
+            kind: ExprKind::Num(2u64.into()),
             span: SPAN,
         };
         let fake = StructuralFake::default();
         let (term, ty, level) = expr.infer_form(&fake, &cx, &numeral).unwrap().unwrap();
-        assert_eq!(term, Term::NatLit(2));
+        assert_eq!(term, Term::NatLit(2u64.into()));
         assert_eq!((ty, level), (Type::Nat, Level::Zero));
 
-        assert_eq!(ExprElab::natural_literal(u64::MAX), Term::NatLit(u64::MAX));
+        assert_eq!(ExprElab::natural_literal(&u64::MAX.into()), Term::NatLit(u64::MAX.into()));
 
         let trivial = Expr {
             kind: ExprKind::Var("trivial".into()),
@@ -1341,11 +1344,11 @@ mod tests {
         let equation = Ty {
             kind: TyKind::Eq(
                 Box::new(Expr {
-                    kind: ExprKind::Num(3),
+                    kind: ExprKind::Num(3u64.into()),
                     span: SPAN,
                 }),
                 Box::new(Expr {
-                    kind: ExprKind::Num(4),
+                    kind: ExprKind::Num(4u64.into()),
                     span: SPAN,
                 }),
             ),
@@ -1418,7 +1421,7 @@ mod tests {
         );
 
         let numeral = Expr {
-            kind: ExprKind::Num(7),
+            kind: ExprKind::Num(7u64.into()),
             span: SPAN,
         };
         assert!(matches!(
@@ -1504,11 +1507,11 @@ mod tests {
         let literal = Expr {
             kind: ExprKind::CollectionLit(vec![
                 Expr {
-                    kind: ExprKind::Num(3),
+                    kind: ExprKind::Num(3u64.into()),
                     span: SPAN,
                 },
                 Expr {
-                    kind: ExprKind::Num(4),
+                    kind: ExprKind::Num(4u64.into()),
                     span: SPAN,
                 },
             ]),
@@ -1537,13 +1540,13 @@ mod tests {
         ));
 
         assert!(matches!(
-            expr.check_builtin_numeral(&cx, 0, &Type::Nat, SPAN)
+            expr.check_builtin_numeral(&cx, &Numeral::ZERO, &Type::Nat, SPAN)
                 .unwrap()
                 .unwrap(),
             Term::Zero
         ));
         assert!(matches!(
-            expr.check_builtin_numeral(&cx, 0, &fin_ty, SPAN)
+            expr.check_builtin_numeral(&cx, &Numeral::ZERO, &fin_ty, SPAN)
                 .unwrap()
                 .unwrap(),
             Term::Inl { .. }
@@ -1584,7 +1587,7 @@ mod tests {
             span: SPAN,
         };
         let body = Expr {
-            kind: ExprKind::Num(4),
+            kind: ExprKind::Num(4u64.into()),
             span: SPAN,
         };
         let expected = Type::Pi {
@@ -1627,7 +1630,7 @@ mod tests {
             span: SPAN,
         };
         let body = Expr {
-            kind: ExprKind::Num(1),
+            kind: ExprKind::Num(1u64.into()),
             span: SPAN,
         };
         assert!(

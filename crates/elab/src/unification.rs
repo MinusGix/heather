@@ -411,11 +411,11 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         // A numeral is `Succ^k(Zero)` (kernel `NatLit`), so `Succ(?n) ≟ 8`
         // learns `?n := 7` — the width a method on `BitVec(Succ(n))` needs
         // at a literal-width receiver. Learn-only, like every case here.
-        (Term::Succ(a), Term::NatLit(k)) if *k > 0 => {
-            unify_tm(u, a, &Term::NatLit(k - 1), n, d, sols)
+        (Term::Succ(a), Term::NatLit(k)) if !k.is_zero() => {
+            unify_tm(u, a, &heather_kernel::term::nat_lit_pred(k), n, d, sols)
         }
-        (Term::NatLit(k), Term::Succ(b)) if *k > 0 => {
-            unify_tm(u, &Term::NatLit(k - 1), b, n, d, sols)
+        (Term::NatLit(k), Term::Succ(b)) if !k.is_zero() => {
+            unify_tm(u, &heather_kernel::term::nat_lit_pred(k), b, n, d, sols)
         }
         // Either spelling on either side: `app` and `app@` are one former
         // (`docs/app-by-head-type-design.md` §6.2), and this congruence

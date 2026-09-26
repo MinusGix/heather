@@ -15,6 +15,7 @@
 //! deliberate (ch. 04): annotations are sub-structures so the code recursors
 //! can recurse into them.
 
+pub use heather_numeral::Numeral;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc as Rc;
 
@@ -314,11 +315,12 @@ pub enum Term {
 
     // ---- natural numbers ----
     Zero,
-    /// A closed natural-number literal. This is observationally the same
+    /// A closed natural-number literal, of any size
+    /// (`docs/wide-numerals-design.md`). This is observationally the same
     /// constructor spine as `Succ^value(Zero)` (and `NatLit(0)` is `Zero`),
     /// but keeps source numerals compact until evaluation can hand them to the
     /// generic context-program representation.
-    NatLit(u64),
+    NatLit(Numeral),
     Succ(Rc<Term>),
     /// `elim_Nat^l (x. M) s (x, y. s') t`; `motive` binds one local variable
     /// (the Nat), `step` binds two (predecessor, recursive result).
@@ -1693,6 +1695,22 @@ impl From<Vec<GlobalBinding>> for GlobalCtx {
     fn from(bindings: Vec<GlobalBinding>) -> GlobalCtx {
         GlobalCtx::new(bindings)
     }
+}
+
+/// Whether `t` is the literal zero: `Zero`, or a `NatLit` of zero.
+pub fn is_nat_zero(t: &Term) -> bool {
+    match t {
+        Term::Zero => true,
+        Term::NatLit(n) => n.is_zero(),
+        _ => false,
+    }
+}
+
+/// A nonzero literal's predecessor, in the spelling its one-step view uses:
+/// `Zero` at one, a smaller literal above (`Term::NatLit`'s contract).
+pub fn nat_lit_pred(n: &Numeral) -> Term {
+    let pred = n.pred().expect("only a nonzero literal has a predecessor");
+    if pred.is_zero() { Term::Zero } else { Term::NatLit(pred) }
 }
 
 // ---------------------------------------------------------------------------
