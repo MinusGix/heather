@@ -38,6 +38,10 @@ struct Goal {
     // Optional diagnostic spelling supplied from the original, unreduced type.
     // Never parsed or used for checking; the kernel goal remains `ty`.
     statement_spelling: Option<String>,
+    /// A tactic's proof lifted into a lemma of its own: solved when
+    /// allocated, never reported, and committed at the gate as a global in
+    /// its context rather than substituted in (`docs/bv-omega-design.md` §7).
+    proved: bool,
 }
 
 /// All goal state whose lifetime is one ordinary declaration.
@@ -234,6 +238,7 @@ impl GoalArena {
                     source,
                     solution: None,
                     statement_spelling: None,
+                    proved: false,
                 });
                 spans.insert(span_key, k);
                 k
@@ -243,6 +248,59 @@ impl GoalArena {
             var: GlobalVar(self.base - 1 - k as u32),
             subst: LocalSubst::id(&cx.gamma),
         })
+    }
+
+    /// Lift `proof : ty` in `cx` into a slot of its own, returning the slot's
+    /// reference. `None` keeps the proof inline: no capacity reserved, a
+    /// frozen arena, an open context, or the same site met again in another
+    /// context.
+    pub(super) fn allocate_proved(&self, cx: &Cx, ty: Type, level: Level, proof: Term, span: Span) -> Option<Term> {
+        if self.frozen.get() || !matches!(cx.gamma.base, CtxBase::Nil) {
+            return None;
+        }
+        let mut goals = self.entries.borrow_mut();
+        let mut spans = self.spans.borrow_mut();
+        let key = (span.start, span.end, Some("#proved".to_string()));
+        let k = match spans.get(&key) {
+            Some(&k) if goals[k].proved && goals[k].cx.gamma == cx.gamma && goals[k].ty == ty => k,
+            Some(_) => return None,
+            None => {
+                let k = goals.len();
+                if k as u32 >= self.base {
+                    return None;
+                }
+                goals.push(Goal {
+                    name: format!("#proved{k}"),
+                    cx: cx.clone(),
+                    ty,
+                    level,
+                    span,
+                    origin: None,
+                    source: None,
+                    solution: Some(Rc::new(proof)),
+                    statement_spelling: None,
+                    proved: true,
+                });
+                spans.insert(key, k);
+                k
+            }
+        };
+        Some(Term::GlobalTm {
+            var: GlobalVar(self.base - 1 - k as u32),
+            subst: LocalSubst::id(&cx.gamma),
+        })
+    }
+
+    /// The lifted proofs, by slot: context, statement, level and proof, all
+    /// scoped in the goal world.
+    pub(super) fn proved(&self) -> Vec<(usize, LocalCtx, Type, Level, Rc<Term>)> {
+        self.entries
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, goal)| goal.proved)
+            .map(|(k, goal)| (k, goal.cx.gamma.clone(), goal.ty.clone(), goal.level.clone(), goal.solution.clone().expect("a proved slot is solved")))
+            .collect()
     }
 
     pub(super) fn freeze(&self) {

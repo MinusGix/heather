@@ -1632,6 +1632,15 @@ impl LocalCtx {
         map_ctx(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
     }
 
+    /// [`Self::shift_global`] between existing bindings: the innermost
+    /// `cutoff` stay fixed. See [`Type::shift_global_above`].
+    pub fn shift_global_above(&self, by: u32, cutoff: u32) -> LocalCtx {
+        if by == 0 {
+            return self.clone(); // see §Shifting by zero
+        }
+        map_ctx(self, &mut ShiftGlobal { by, changes: 0 }, Depths { global: cutoff, ..Depths::default() })
+    }
+
     pub fn shift_univ(&self, by: u32) -> LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero

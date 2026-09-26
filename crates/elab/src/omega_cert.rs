@@ -729,11 +729,14 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
+// A hidden binder (`#ih`, a `match`'s induction hypothesis) is left out: a
+// certificate is source, and source cannot name it.
 pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
     let mut seen = std::collections::HashSet::new();
     cx.names
         .iter()
         .chain(cx.aliases.iter().map(|alias| &alias.name))
+        .filter(|name| !name.starts_with('#'))
         .filter(|name| seen.insert((*name).clone()))
         .filter_map(|name| {
             elab.resolve(cx, name, heather_syntax::Span { start: 0, end: 0 })
@@ -809,6 +812,12 @@ fn affine_syntax(
             value,
             source: int_ctor(value),
         });
+    }
+    // An Int `OfNat(e)` is read through the Nat side, which is how a Nat fact
+    // arrives: otherwise `OfNat(x)` in an Int fact and `x` in a Nat fact are
+    // two unrelated atoms, and nothing links them.
+    if let Some(inner) = of_nat_payload(elab, tm) {
+        return nat_affine_syntax(elab, cx, inner, atoms);
     }
     if let Some(args) = named_args(elab, tm, "int::Int::add") {
         if let [left, right] = args.as_slice() {
@@ -959,6 +968,24 @@ fn affine_syntax(
         },
     );
     Ok(AffineSyntax::Atom { index, source })
+}
+
+/// The Nat `e` of an Int constructor value `OfNat(e)`.
+fn of_nat_payload<'a>(elab: &Elaborator, tm: &'a Term) -> Option<&'a Rc<Term>> {
+    let ind = match tm {
+        Term::Inl { lhs, .. } => elab.display_tag_of(lhs)?,
+        Term::InlAt { ty, .. } => elab.display_tag_of(ty.as_deref()?)?,
+        _ => return None,
+    };
+    if ind.ctors.len() != 2 || ind.ctors[0].name != "OfNat" || ind.ctors[1].name != "NegSucc" {
+        return None;
+    }
+    let Some((true, val)) = crate::spelling::inj_of(tm) else {
+        return None;
+    };
+    let (_, payload) = crate::spelling::pair_of(val)?;
+    let (inner, _) = crate::spelling::pair_of(payload)?;
+    Some(inner)
 }
 
 fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
@@ -3074,7 +3101,7 @@ pub(crate) fn reconstruct(
         let left = int_term_source(elab, cx, left)?;
         let right = int_term_source(elab, cx, right)?;
         let source = format!(
-            "int::Int::lt_of_not_le({}, {}, (__omega_negated_goal: {} <= {}) ⊢ omega)",
+            "int::Int::lt_of_not_le({}, {}, (__omega_negated_goal: int::Int::Le({}, {})) ⊢ omega)",
             left, right, right, left,
         );
         return Ok(Certificate {
@@ -3088,9 +3115,10 @@ pub(crate) fn reconstruct(
         let right = int_term_source(elab, cx, right)?;
         // `right < left` is definitionally `right + 1 <= left`. Writing the
         // latter lets the recursive `omega` invocation use the same affine
-        // `Le` frontend as ordinary hypotheses.
+        // `Le` frontend as ordinary hypotheses. Spelled qualified, as the
+        // `lt` case above: a module need not import `int` for its operators.
         let source = format!(
-            "int::Int::le_of_not_lt({}, {}, (__omega_negated_goal: {} + int::OfNat(1) <= {}) ⊢ omega)",
+            "int::Int::le_of_not_lt({}, {}, (__omega_negated_goal: int::Int::Le(int::Int::add({}, int::OfNat(1)), {})) ⊢ omega)",
             right, left, right, left,
         );
         return Ok(Certificate {

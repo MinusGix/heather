@@ -1,0 +1,308 @@
+// bv_omega's perf fixture (issues/bv-omega-check-cost.md): decimal_line's
+// word facts proved by hand, as the library proves them, and by `bv_omega`.
+// Compare a `bv_` row against its hand row plus the helpers only it uses.
+// The two line facts take the leading zeros' value as a hypothesis, in both
+// versions, to leave out the part neither proves with word arithmetic.
+import bitvec;
+import bool;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+
+
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+
+
+fn raise(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(times256(n))))) }
+
+
+fn place(state, threshold, weight: BitVec(64)) → BitVec(64) {
+    match state.unsigned_lt_bit(threshold) {
+        True => state,
+        False => state.sub(threshold).add(weight),
+    }
+}
+
+fn below(n, limit: BitVec(64)) → BitVec(64) {
+    match n.unsigned_lt_bit(limit) {
+        True => BitVec::ofNat(1),
+        False => BitVec::ofNat(0),
+    }
+}
+
+fn leading_zeros(n: BitVec(64)) → BitVec(64) {
+    below(n, BitVec::ofNat(10)).add(below(n, BitVec::ofNat(100))).add(below(n, BitVec::ofNat(1000)))
+}
+
+fn line_start(base, n: BitVec(64)) → BitVec(64) { base.add(leading_zeros(n)) }
+
+
+fn line_length(n: BitVec(64)) → BitVec(64) { BitVec::ofNat(5).sub(leading_zeros(n)) }
+
+
+fn below_nat(n, limit: Nat) → Nat { match Succ(n).leb(limit) { True => 1, False => 0 } }
+
+fn line_skip(n: Nat) → Nat { below_nat(n, 10) + below_nat(n, 100) + below_nat(n, 1000) }
+
+
+fn line_state_start(n: Nat) → BitVec(64) { raise(bitvec_nat::word_of_nat(64, n)).add(BitVec::ofNat(43758137392)) }
+
+
+theorem leb_yes(a, b: Nat, h: a <= b): a.leb(b) = True { bool::eq_true_of_is_true(a.leb(b), a.leb_complete(b, h)) }
+
+theorem leb_no(a, b: Nat, h: b < a): a.leb(b) = False {
+    (match a.leb(b) as λ found => (a.leb(b) = found) → found = False {
+        True => λ yes => {
+            let wrong: (a <= b) = a.leb_sound(b, j(sym(yes), λ f _ => f.IsTrue(), trivial));
+            let never: False = omega;
+            false_elim(never)
+        },
+        False => λ _ => refl,
+    })(refl)
+}
+
+theorem below_word(x: Nat, h: x < 1152921504606846976): x < Nat::pow(2, 64) { omega }
+
+
+theorem double_value(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: v + v < 1152921504606846976):
+    double(y).toNat() = v + v {
+    bitvec_nat::add_words(64, y, y, v, v, value, value, below_word(v + v, bound))
+}
+
+theorem double_scaled(y: BitVec(64), v, k: Nat, value: y.toNat() = v * k, bound: v * k + v * k < 1152921504606846976):
+    double(y).toNat() = v * (k + k) {
+    trans(double_value(y, v * k, value, bound), sym(Nat::mul_add_distr(v, k, k)))
+}
+
+theorem doubling_bounds(v: Nat, bound: v * 256 < 1152921504606846976):
+    (v * 1 + v * 1 < 1152921504606846976) ∧ ((v * 2 + v * 2 < 1152921504606846976) ∧ ((v * 4 + v * 4 < 1152921504606846976) ∧
+    ((v * 8 + v * 8 < 1152921504606846976) ∧ ((v * 16 + v * 16 < 1152921504606846976) ∧ ((v * 32 + v * 32 < 1152921504606846976) ∧
+    ((v * 64 + v * 64 < 1152921504606846976) ∧ (v * 128 + v * 128 < 1152921504606846976))))))) {
+    ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, omega⟩⟩⟩⟩⟩⟩⟩
+}
+
+theorem times256_value(y: BitVec(64), v: Nat, value: y.toNat() = v * 1, bound: v * 256 < 1152921504606846976):
+    times256(y).toNat() = v * 256 {
+    let b = doubling_bounds(v, bound);
+    let y1 = double(y);
+    let y2 = double(y1);
+    let y3 = double(y2);
+    let y4 = double(y3);
+    let y5 = double(y4);
+    let y6 = double(y5);
+    let y7 = double(y6);
+    let e1: (y1.toNat() = v * 2) = double_scaled(y, v, 1, value, b.left);
+    let e2: (y2.toNat() = v * 4) = double_scaled(y1, v, 2, e1, b.right.left);
+    let e3: (y3.toNat() = v * 8) = double_scaled(y2, v, 4, e2, b.right.right.left);
+    let e4: (y4.toNat() = v * 16) = double_scaled(y3, v, 8, e3, b.right.right.right.left);
+    let e5: (y5.toNat() = v * 32) = double_scaled(y4, v, 16, e4, b.right.right.right.right.left);
+    let e6: (y6.toNat() = v * 64) = double_scaled(y5, v, 32, e5, b.right.right.right.right.right.left);
+    let e7: (y7.toNat() = v * 128) = double_scaled(y6, v, 64, e6, b.right.right.right.right.right.right.left);
+    double_scaled(y7, v, 128, e7, b.right.right.right.right.right.right.right)
+}
+
+theorem raise_bounds(n: Nat, small: n < 16384):
+    (n < 1152921504606846976) ∧ ((n * 256 < 1152921504606846976) ∧ (((n * 256) * 256 < 1152921504606846976) ∧
+    (((n * 65536) * 256 < 1152921504606846976) ∧ (((n * 16777216) * 256 < 1152921504606846976) ∧
+    ((n * 4294967296) * 256 < 1152921504606846976))))) {
+    ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, omega⟩⟩⟩⟩⟩
+}
+
+theorem raise_value(n: Nat, small: n < 16384): raise(bitvec_nat::word_of_nat(64, n)).toNat() = n * 1099511627776 {
+    let b = raise_bounds(n, small);
+    let x = bitvec_nat::word_of_nat(64, n);
+    let xv: (x.toNat() = n * 1) = trans(bitvec_nat::toNat_word_of_nat(64, n, below_word(n, b.left)), sym(Nat::add_left_zero(n)));
+    let t1: (times256(x).toNat() = n * 256) = times256_value(x, n, xv, b.right.left);
+    let t2: (times256(times256(x)).toNat() = n * 65536) =
+        trans(times256_value(times256(x), n * 256, trans(t1, sym(Nat::add_left_zero(n * 256))), b.right.right.left), Nat::mul_assoc(n, 256, 256));
+    let t3: (times256(times256(times256(x))).toNat() = n * 16777216) =
+        trans(times256_value(times256(times256(x)), n * 65536, trans(t2, sym(Nat::add_left_zero(n * 65536))), b.right.right.right.left), Nat::mul_assoc(n, 65536, 256));
+    let t4: (times256(times256(times256(times256(x)))).toNat() = n * 4294967296) =
+        trans(times256_value(times256(times256(times256(x))), n * 16777216, trans(t3, sym(Nat::add_left_zero(n * 16777216))), b.right.right.right.right.left), Nat::mul_assoc(n, 16777216, 256));
+    trans(times256_value(times256(times256(times256(times256(x)))), n * 4294967296, trans(t4, sym(Nat::add_left_zero(n * 4294967296))), b.right.right.right.right.right),
+        Nat::mul_assoc(n, 4294967296, 256))
+}
+
+theorem low_part(h, w: Nat, low: h + w < 1099511627776): h < 1099511627776 {
+    Succ(h).le_trans(Succ(h + w), 1099511627776, h.le_add_l(w), low)
+}
+
+theorem kept_under(sv, r, h, c, rest: Nat, value: sv = 1099511627776 * r + h, low: h < 1099511627776,
+    parts: r = c * 0 + rest, remainder: rest < c): Succ(sv) <= 1099511627776 * c { omega }
+
+theorem kept_value(sv, r, h, c, w, rest: Nat, value: sv = 1099511627776 * r + h, parts: r = c * 0 + rest):
+    sv = 1099511627776 * rest + (h + w * 0) { omega }
+
+theorem taken_over(sv, r, h, c, rest: Nat, value: sv = 1099511627776 * r + h, parts: r = c * 1 + rest):
+    1099511627776 * c < Succ(sv) { omega }
+
+theorem taken_fit(sv, r, h, c, rest: Nat, value: sv = 1099511627776 * r + h, parts: r = c * 1 + rest):
+    1099511627776 * c <= sv { omega }
+
+theorem taken_left(sv, r, h, c, rest, t: Nat, value: sv = 1099511627776 * r + h, parts: r = c * 1 + rest,
+    back: t + 1099511627776 * c = sv): t = 1099511627776 * rest + h { omega }
+
+theorem taken_room(r, h, c, w, rest: Nat, fits: 1099511627776 * r + h < 1152921504606846976, low: h + w < 1099511627776,
+    parts: r = c * 1 + rest): 1099511627776 * rest + h + w < 1152921504606846976 { omega }
+
+theorem taken_value(h, w, rest: Nat): 1099511627776 * rest + h + w = 1099511627776 * rest + (h + w * 1) { omega }
+
+theorem weight_small(h, w: Nat, low: h + w < 1099511627776): w < 1152921504606846976 { omega }
+
+
+theorem place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
+    value: s.toNat() = 1099511627776 * r + h, low: h + w < 1099511627776,
+    parts: r = c * q + rest, remainder: rest < c, one: q <= 1,
+    fits: 1099511627776 * r + h < 1152921504606846976, c_fits: 1099511627776 * c < 1152921504606846976):
+    place(s, BitVec::ofNat(1099511627776 * c), BitVec::ofNat(w)).toNat() = 1099511627776 * rest + (h + w * q) {
+    let big = BitVec::ofNat(1099511627776 * c, n := 64);
+    let weight = BitVec::ofNat(w, n := 64);
+    let big_value: (big.toNat() = 1099511627776 * c) = BitVec::toNat_ofNat(64, 1099511627776 * c, below_word(1099511627776 * c, c_fits));
+    let weight_value: (weight.toNat() = w) = BitVec::toNat_ofNat(64, w, below_word(w, weight_small(h, w, low)));
+    let test: (s.unsigned_lt_bit(big) = Succ(s.toNat()).leb(big.toNat())) = bitvec_nat::unsigned_lt_nat(64, s, big);
+    (match q as λ k => (r = c * k + rest) → (k <= 1) →
+        place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * k) {
+        Zero => λ parts one => {
+            let under: (Succ(s.toNat()) <= big.toNat()) = j(sym(big_value), λ t _ => Succ(s.toNat()) <= t,
+                kept_under(s.toNat(), r, h, c, rest, value, low_part(h, w, low), parts, remainder));
+            let kept: (s.unsigned_lt_bit(big) = True) = trans(test, leb_yes(Succ(s.toNat()), big.toNat(), under));
+            let same: (place(s, big, weight) = s) =
+                j(sym(kept), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s, refl);
+            trans(@cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s, same), kept_value(s.toNat(), r, h, c, w, rest, value, parts))
+        },
+        Succ(k) => (match k as λ k2 => (r = c * Succ(k2) + rest) → (Succ(k2) <= 1) →
+            place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * Succ(k2)) {
+            Zero => λ parts one => {
+                let over: (big.toNat() < Succ(s.toNat())) = j(sym(big_value), λ t _ => t < Succ(s.toNat()),
+                    taken_over(s.toNat(), r, h, c, rest, value, parts));
+                let taken: (s.unsigned_lt_bit(big) = False) = trans(test, leb_no(Succ(s.toNat()), big.toNat(), over));
+                let stepped: (place(s, big, weight) = s.sub(big).add(weight)) =
+                    j(sym(taken), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s.sub(big).add(weight), refl);
+                let fit: (big.toNat() <= s.toNat()) = j(sym(big_value), λ t _ => t <= s.toNat(), taken_fit(s.toNat(), r, h, c, rest, value, parts));
+                let less: (s.sub(big).toNat() = s.toNat() -big.toNat()) = bitvec_nat::toNat_sub(64, s, big, fit);
+                let fit_nat: (1099511627776 * c <= s.toNat()) = taken_fit(s.toNat(), r, h, c, rest, value, parts);
+                let difference: (s.sub(big).toNat() = s.toNat() -1099511627776 * c) =
+                    trans(less, @cong(λ (t: Nat) => s.toNat() -t, big.toNat(), 1099511627776 * c, big_value));
+                let left: (s.sub(big).toNat() = 1099511627776 * rest + h) = trans(difference,
+                    taken_left(s.toNat(), r, h, c, rest, s.toNat() -1099511627776 * c, value, parts,
+                        Nat::sub_add_cancel(1099511627776 * c, s.toNat(), fit_nat)));
+                let added: (s.sub(big).add(weight).toNat() = (1099511627776 * rest + h) + w) =
+                    bitvec_nat::add_words(64, s.sub(big), weight, 1099511627776 * rest + h, w, left, weight_value,
+                        below_word(1099511627776 * rest + h + w, taken_room(r, h, c, w, rest, fits, low, parts)));
+                trans(@cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s.sub(big).add(weight), stepped), trans(added, taken_value(h, w, rest)))
+            },
+            Succ(_) => λ parts one => false_elim(one),
+        }),
+    })(parts, one)
+}
+
+theorem below_nat_le(n, c: Nat): below_nat(n, c) <= 1 {
+    match Succ(n).leb(c) as λ b => (match b { True => 1, False => 0 }) <= 1 { True => trivial, False => trivial }
+}
+
+theorem line_skip_le(n: Nat): line_skip(n) <= 3 {
+    let a = below_nat_le(n, 10);
+    let b = below_nat_le(n, 100);
+    let c = below_nat_le(n, 1000);
+    let r: (below_nat(n, 10) + below_nat(n, 100) + below_nat(n, 1000) <= 3) = omega;
+    r
+}
+
+// ---------------------------------------------------------------------------
+// Hand: the start state's value, as `line_word_value` proves it inline.
+
+theorem line_state_start_value(n: Nat, small: n < 10000): line_state_start(n).toNat() = 1099511627776 * n + 43758137392 {
+    let small16: (n < 16384) = omega;
+    let base_small: (43758137392 < 1152921504606846976) = omega;
+    let fits: (1099511627776 * n + 43758137392 < 1152921504606846976) = omega;
+    let x = bitvec_nat::word_of_nat(64, n);
+    let base_value: (BitVec::ofNat(43758137392, n := 64).toNat() = 43758137392) = BitVec::toNat_ofNat(64, 43758137392, below_word(43758137392, base_small));
+    let sum: (line_state_start(n).toNat() = n * 1099511627776 + 43758137392) = bitvec_nat::add_words(64, raise(x), BitVec::ofNat(43758137392), n * 1099511627776, 43758137392, raise_value(n, small16), base_value,
+        below_word(n * 1099511627776 + 43758137392, j(sym(Nat::mul_comm(n, 1099511627776)), λ t _ => t + 43758137392 < 1152921504606846976, fits)));
+    trans(sum, @cong(λ (t: Nat) => t + 43758137392, n * 1099511627776, 1099511627776 * n, Nat::mul_comm(n, 1099511627776)))
+}
+
+theorem line_start_value(n: Nat, small: n < 10000, zeros: leading_zeros(bitvec_nat::word_of_nat(64, n)).toNat() = line_skip(n)):
+    line_start(BitVec::ofNat(0x401000), bitvec_nat::word_of_nat(64, n)).toNat() = 0x401000 + line_skip(n) {
+    let skip = line_skip_le(n);
+    let room: (0x401000 + line_skip(n) < 1152921504606846976) = omega;
+    let base_small: (0x401000 < 1152921504606846976) = omega;
+    let base_value: (BitVec::ofNat(0x401000, n := 64).toNat() = 0x401000) = BitVec::toNat_ofNat(64, 0x401000, below_word(0x401000, base_small));
+    bitvec_nat::add_words(64, BitVec::ofNat(0x401000), leading_zeros(bitvec_nat::word_of_nat(64, n)), 0x401000, line_skip(n),
+        base_value, zeros, below_word(0x401000 + line_skip(n), room))
+}
+
+theorem line_length_value(n: Nat, small: n < 10000, zv: leading_zeros(bitvec_nat::word_of_nat(64, n)).toNat() = line_skip(n)):
+    line_length(bitvec_nat::word_of_nat(64, n)).toNat() = 5 -line_skip(n) {
+    let skip = line_skip_le(n);
+    let five_small: (5 < 1152921504606846976) = omega;
+    let five: (BitVec::ofNat(5, n := 64).toNat() = 5) = BitVec::toNat_ofNat(64, 5, below_word(5, five_small));
+    let zeros = leading_zeros(bitvec_nat::word_of_nat(64, n));
+    let fits: (zeros.toNat() <= BitVec::ofNat(5, n := 64).toNat()) =
+        j(sym(five), λ t _ => zeros.toNat() <= t, j(sym(zv), λ t _ => t <= 5, Nat::le_trans(line_skip(n), 3, 5, skip, trivial)));
+    trans(bitvec_nat::toNat_sub(64, BitVec::ofNat(5), zeros, fits),
+        trans(@cong(λ (t: Nat) => t -zeros.toNat(), BitVec::ofNat(5, n := 64).toNat(), 5, five), @cong(λ (t: Nat) => 5 -t, zeros.toNat(), line_skip(n), zv)))
+}
+
+// ---------------------------------------------------------------------------
+// bv_omega.
+
+theorem bv_times256_value(y: BitVec(64), v: Nat, value: y.toNat() = v * 1, bound: v * 256 < 1152921504606846976):
+    times256(y).toNat() = v * 256 { bv_omega }
+
+theorem bv_raise_value(n: Nat, small: n < 16384): raise(bitvec_nat::word_of_nat(64, n)).toNat() = n * 1099511627776 { bv_omega }
+
+theorem bv_line_state_start_value(n: Nat, small: n < 10000): line_state_start(n).toNat() = 1099511627776 * n + 43758137392 { bv_omega }
+
+theorem bv_line_start_value(n: Nat, small: n < 10000, zeros: leading_zeros(bitvec_nat::word_of_nat(64, n)).toNat() = line_skip(n)):
+    line_start(BitVec::ofNat(0x401000), bitvec_nat::word_of_nat(64, n)).toNat() = 0x401000 + line_skip(n) {
+    let skip = line_skip_le(n);
+    bv_omega
+}
+
+theorem bv_line_length_value(n: Nat, small: n < 10000, zeros: leading_zeros(bitvec_nat::word_of_nat(64, n)).toNat() = line_skip(n)):
+    line_length(bitvec_nat::word_of_nat(64, n)).toNat() = 5 -line_skip(n) {
+    let skip = line_skip_le(n);
+    let r: (line_length(bitvec_nat::word_of_nat(64, n)).toNat() + line_skip(n) = 5) = bv_omega;
+    let back = Nat::sub_add_cancel(line_skip(n), 5, Nat::le_trans(line_skip(n), 3, 5, skip, trivial));
+    omega
+}
+
+theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
+    value: s.toNat() = 1099511627776 * r + h, low: h + w < 1099511627776,
+    parts: r = c * q + rest, remainder: rest < c, one: q <= 1,
+    fits: 1099511627776 * r + h < 1152921504606846976, c_fits: 1099511627776 * c < 1152921504606846976):
+    place(s, BitVec::ofNat(1099511627776 * c), BitVec::ofNat(w)).toNat() = 1099511627776 * rest + (h + w * q) {
+    let big = BitVec::ofNat(1099511627776 * c, n := 64);
+    let weight = BitVec::ofNat(w, n := 64);
+    let test: (s.unsigned_lt_bit(big) = Succ(s.toNat()).leb(big.toNat())) = bitvec_nat::unsigned_lt_nat(64, s, big);
+    (match q as λ k => (r = c * k + rest) → (k <= 1) →
+        place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * k) {
+        Zero => λ parts one => {
+            let under: (Succ(s.toNat()) <= big.toNat()) = bv_omega;
+            let kept: (s.unsigned_lt_bit(big) = True) = trans(test, leb_yes(Succ(s.toNat()), big.toNat(), under));
+            let same: (place(s, big, weight) = s) =
+                j(sym(kept), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s, refl);
+            let moved: (place(s, big, weight).toNat() = s.toNat()) = @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s, same);
+            bv_omega
+        },
+        Succ(k) => (match k as λ k2 => (r = c * Succ(k2) + rest) → (Succ(k2) <= 1) →
+            place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * Succ(k2)) {
+            Zero => λ parts one => {
+                let over: (big.toNat() < Succ(s.toNat())) = bv_omega;
+                let taken: (s.unsigned_lt_bit(big) = False) = trans(test, leb_no(Succ(s.toNat()), big.toNat(), over));
+                let stepped: (place(s, big, weight) = s.sub(big).add(weight)) =
+                    j(sym(taken), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s.sub(big).add(weight), refl);
+                let moved: (place(s, big, weight).toNat() = s.sub(big).add(weight).toNat()) =
+                    @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s.sub(big).add(weight), stepped);
+                let sum: (s.sub(big).add(weight).toNat() = 1099511627776 * rest + (h + w * 1)) = bv_omega;
+                trans(moved, sum)
+            },
+            Succ(_) => λ parts one => false_elim(one),
+        }),
+    })(parts, one)
+}

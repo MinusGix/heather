@@ -25,7 +25,7 @@ const MODULES: &[(&str, &str)] = &[
     ("bitvec_omega", include_str!("../../../lib/std/bitvec/omega.hthr")),
 ];
 
-const PREFIX: &str = "import logic;\nimport nat;\nimport list;\nimport omega;\nimport bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\n\n\
+const PREFIX: &str = "import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\n\n\
 fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }\n\
 fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }\n";
 
@@ -63,6 +63,7 @@ fn bv_omega_suite() {
     lifts_at_an_open_width();
     lifts_in_other_positions();
     lifts_a_deep_word();
+    lifts_proofs_into_lemmas();
     unfolds_only_what_no_fact_states();
     refuses_naming_the_side_condition();
 }
@@ -118,6 +119,40 @@ fn lifts_in_other_positions() {
 fn lifts_a_deep_word() {
     checks("thirty-nine doublings",
         "theorem t(n: Nat, small: n < 16384): double(double(double(double(double(double(double(times256(times256(times256(times256(bitvec_nat::word_of_nat(64, n)))))))))))).toNat() = 549755813888 * n { bv_omega }");
+}
+
+/// Each `bv_omega` proof is checked as a lemma of its own
+/// (`docs/bv-omega-design.md` §7). The sites here are the ones the lifting has
+/// to get right: one site met in several contexts (only the first lifts), a
+/// later proof that reaches an earlier one through a `let`, a lifted proof
+/// beside a written hole, and a branch of a `match` on an equation.
+fn lifts_proofs_into_lemmas() {
+    checks("one site in several branches",
+        "theorem t(b: bool::Bool, y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000): double(y).toNat() = v + v {\n\
+             split_all;\n\
+             all_goals { bv_omega }\n\
+         }");
+    checks("a proof over an earlier one",
+        "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000): y.add(BitVec::ofNat(2)).add(BitVec::ofNat(1)).toNat() = v + 3 {\n\
+             let first: (y.add(BitVec::ofNat(2)).toNat() = v + 2) = bv_omega;\n\
+             let moved: (y.add(BitVec::ofNat(2)).toNat() + 1 = v + 3) = Nat::cong(λ (x: Nat) => x + 1, first);\n\
+             bv_omega\n\
+         }");
+    checks("a lifted proof beside a hole",
+        "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000): (double(y).toNat() = v + v) ∧ (v <= v + 1) {\n\
+             ⟨bv_omega, ?rest⟩\n\
+             on ?rest := omega;\n\
+         }");
+    // A `match` arm's hidden induction hypothesis (`#ih`) is no fact for a
+    // certificate to cite: source cannot name it.
+    checks("`omega` in an arm with a hidden hypothesis",
+        "theorem t(y: BitVec(64), v, q: Nat, value: y.toNat() = v, small: v < 1000): y.toNat() + y.toNat() = v + v {\n\
+             match q { Zero => omega, Succ(_) => omega }\n\
+         }");
+    checks("a branch",
+        "theorem t(y: BitVec(64), v, q: Nat, value: y.toNat() = v, small: v < 1000, one: q <= 1): double(y).toNat() = v + v {\n\
+             match q { Zero => bv_omega, Succ(_) => bv_omega }\n\
+         }");
 }
 
 /// A word whose `toNat` a fact states is a leaf, not unfolded past what the

@@ -106,3 +106,84 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
 }
 
 ```
+
+## Log
+
+- 2026-09-26: Perf round opened (with the user): the bar is every re-proof within 1.5× its
+  hand proof and the whole fixture at or below the hand total, at which point
+  `decimal_line` adopts the tactic. Fixture: `perf/fixtures/bv_omega/`
+  (`stage.sh` copies the fixture beside the two harness-named modules). Before,
+  width 1: hand ~4.9 s, `bv_omega` ~35.3 s.
+
+  Attribution (temporary per-call dump, not landed):
+  - Chains are paying for the number of calls. `bv_raise_value` makes 82 `omega`
+    calls (the hand proof about 14), each about as costly as a hand one. The
+    certificates in the gate and in elaboration are ~62% of its 9.3 s. Fact
+    elaboration is ~29%, from spelled words that grow with depth.
+  - `place_step` is paying for its context. An `omega` inline in its body costs
+    ~2× the same `omega` as a lemma (753 against 372 ms), and a `bv_omega` call
+    costs the same multiple (1.27 s in context, 0.67 s alone, 0.56 s for plain
+    Nat `omega`). Reflection alone is 1.5 s there.
+  - Gap found: a word that appears only in a fact in scope gets side conditions,
+    and one that genuinely borrows in the current branch sinks the call. Its
+    side conditions must be optional.
+
+  Order: normalisation by computation and root-only bounds (the call count),
+  then omega's reflection sized to the connected facts (the context), then fact
+  elaboration.
+- 2026-09-26: Step 1 (call count) landed in the tree, uncommitted. Facts are now `t + Q = P`
+  over Nat *forms* `c₁ * a₁ + (… + k)`. Forms merge by one `form_*` lemma per
+  atom, with literal coefficients the checker adds, so there are no
+  normalisation obligations. Bounds pass down by Nat lemmas; only roots and each
+  `sub`'s borrow go to `omega`. Two rejected intermediates, measured: Omega rows
+  (`dot` over Int lists) cost 12–21k kernel steps per lemma application, against
+  20 for Nat; Nat-list rows 2.5–3k. List literals in types are what the checker
+  pays for. Found and fixed on the way: omega read an Int `OfNat(e)` as an atom
+  unrelated to the Nat `e` (now read through the Nat side); omega's Int
+  certificates spelled a bare `<=`/`+` that needs `int` imported.
+
+  Fixture, width 1, total ms (before → after): raise 9,305 → 1,266;
+  line_state_start 10,128 → 1,284; times256 2,285 → 717; line_start 753 → 746;
+  line_length 1,027 → 1,414; place_step 11,773 → 18,564. The chains now beat
+  their hand proofs.
+
+  `place_step` is kernel term handling, not `omega`. A `perf` profile is flat
+  across allocation, `Arc` drops and `sub_tm` shifts and substitutions
+  (`LocalSubst::id`, `Env::identity`). The same call gates in 0.38 s at a
+  shallow depth and in ~2.5 s inside `place_step`'s binders; the hand proof pays
+  5 ms because its arithmetic lives in top-level lemmas. The fix is structural:
+  check the tactic's proof as a generated auxiliary lemma over only the
+  variables and facts it uses. That is open for discussion.
+- 2026-09-26: Scoped: lifting a tactic's proof into an auxiliary lemma. Measured by lifting
+  `place_step`'s four calls by hand, width 1: the family costs 4.97 s against
+  18.6 s inline (hand ~5.2 s). Closing over all of `place_step`'s parameters
+  instead of a chosen few costs +1.0 s on the largest call.
+
+  Mechanism: the kernel already has contextual globals (`GlobalBinding::Tm { ctx
+  }`, referenced as `GlobalTm { var, subst }`), and proof holes use them
+  (`goals.rs` `allocate`, `world`, substitution at the gate). Pushing onto Ψ
+  mid-body is ruled out (lib.rs:593; every built term would shift). Proposed: a
+  "proved slot" in the goal arena with Δ = `cx.gamma`, capacity from the
+  existing restart loop. At the gate each slot is checked as its own opaque,
+  cached item, pushed as `decl#aux_N`, and substituted as a reference rather than
+  inlined. Risks: the composed renumbering at the gate, interaction with holes
+  and the restart loop, and cache identity. Next: a spike for `bv_omega` only.
+- 2026-09-26: Spike: lifted proofs as proved goal slots (uncommitted). `bv_omega` stores its
+  checked proof in a goal-arena slot over `cx.gamma`, reserved by
+  `count_holes`, so there is no restart. At the gate, `lift_proved` moves each
+  slot out of the goal world into Ψ plus the earlier lifted proofs (an earlier
+  one is referred to, since a `let` bound to one is inlined into what follows).
+  It kernel-checks the context, statement and proof, pushes each as an opaque
+  contextual global via `PendingDecl.aux`, and substitutes the slot by
+  `u^id(Δ)`. The declaration's committed globals shift up past the lifted ones
+  first (`shift_global_above`; a `LocalCtx` version was added to the kernel's
+  subst.rs, a traversal only). The spike checks a lifted declaration inline and
+  asks no cache.
+
+  Fixture, width 1: `bv_place_step` 18,564 → 6,791 ms. The chains lost a
+  little: raise 746, line_state_start 778, times256 586, line_start 539,
+  line_length 651. Whole fixture ~10.1 s against the hand ~4.9 s. Default width
+  and `--cache` cold and warm replay are green. Probes: `split_all` branches
+  (one site, many contexts, inline after the first), a lifted proof beside a
+  hole, and two lifted proofs in one body. Found beside it:
+  [[omega-combo-derivation-unreconstructed]].

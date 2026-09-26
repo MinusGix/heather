@@ -476,6 +476,9 @@ struct OperatorFallbackUse {
 /// Committing one only assigns its absolute Ψ position and updates the lookup
 /// registries; it performs no elaboration and cannot fail.
 struct PendingDecl {
+    /// Lifted tactic proofs the binding refers to, pushed just before it
+    /// (`docs/bv-omega-design.md` §7).
+    aux: Vec<GlobalBinding>,
     binding: GlobalBinding,
     registration: GlobalRegistration,
     is_axiom: bool,
@@ -3452,11 +3455,17 @@ impl Elaborator {
         // rebuild that follows them (`docs/instrumentation-design.md` §5).
         let _commit = stats::guard(stats::Timer::DeclCommit);
         let PendingDecl {
+            aux,
             binding,
             registration,
             is_axiom,
             direct_dependencies,
         } = pending;
+        // A lifted proof has no name to register: like a key-less generated
+        // definition, it travels in the module's Ψ suffix.
+        for lemma in aux {
+            self.psi.push(lemma);
+        }
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
         self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
@@ -3743,7 +3752,9 @@ impl Elaborator {
             self.solve_goals(&decl.body.ons, &decl.name)?;
             Some(body)
         };
-        let sigma = self.goal_subst();
+        let (sigma, aux, lifted_world) = self.lift_proved(&decl.name, decl.span)?;
+        let lifted = aux.len() as u32;
+        let goal_base = self.attempt.goal_arena.base();
         drop(decl_body);
 
         // Close over the telescope: statement = Π…, proof/body = λ….
@@ -3802,8 +3813,13 @@ impl Elaborator {
         // One global substitution fills every goal and renumbers the committed
         // globals back down out of the goal world (`GlobalSubst`'s
         // instantiation semantics). With no holes it is the identity.
-        let term = term.map(|term| term.apply_global(&sigma));
-        let stmt = stmt.apply_global(&sigma);
+        // With lifted proofs, their globals sit between Ψ and the goal
+        // prefix: shift the committed globals up past them first.
+        let term = term.map(|term| term.shift_global_above(lifted, goal_base).apply_global(&sigma));
+        let stmt = stmt.shift_global_above(lifted, goal_base).apply_global(&sigma);
+        // The declaration is checked in the world its lifted proofs extend.
+        // The spike checks it inline and asks no cache.
+        let lifted_psi = lifted_world.unwrap_or_else(|| Rc::clone(&self.psi.0));
         drop(decl_emit);
 
         // The emission audit, on exactly the pair the kernel is about to be
@@ -3824,77 +3840,8 @@ impl Elaborator {
         // default; `heather check --cache` is the only caller today.
         let empty = LocalCtx::nil();
         if let Some(term) = term.as_ref() {
-            let item = gate::GateItem {
-                name: &decl.name,
-                ctx: &empty,
-                ty: &stmt,
-                level: &stmt_lvl,
-                body: &term,
-                opaque: matches!(decl.kind, DeclKind::Theorem),
-                layer: Layer::Code,
-                lands_in_psi: true,
-            };
-            let admitted = self
-                .gate
-                .as_ref()
-                .is_some_and(|g| g.admits(&self.psi, &item));
-            let opaque = item.opaque;
-            drop(item);
-            if !admitted {
-                // The statement is checked here, synchronously, whatever the
-                // pool is doing: every dependent needs it, and it is the cheap
-                // half (`docs/parallel-kernel-gate-design.md` §2).
-                stats::time_kernel(|| {
-                    self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
-                })
-                .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
-                if self.gate_is_inline() {
-                    let item = gate::GateItem {
-                        name: &decl.name,
-                        ctx: &empty,
-                        ty: &stmt,
-                        level: &stmt_lvl,
-                        body: term,
-                        opaque,
-                        layer: Layer::Code,
-                        lands_in_psi: true,
-                    };
-                    // A serial replay may already hold this exact obligation's
-                    // verdict, earned by a worker of the pass it replaces
-                    // (`docs/parallel-kernel-gate-design.md` §5.2). `None` —
-                    // which is every ordinary run — asks the kernel.
-                    let verdict = match self.kernel_replay.reuse(
-                        self.psi.bindings.len(),
-                        self.fuel,
-                        &item,
-                    ) {
-                        Some(verdict) => verdict,
-                        None => stats::time_kernel(|| {
-                            self.kernel_check_term(
-                                &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
-                            )
-                        }),
-                    };
-                    verdict.map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
-                    if let Some(g) = self.gate.as_ref() {
-                        g.accepted(&self.psi, &item);
-                    }
-                } else {
-                    // Queued against the Ψ the binding is about to extend;
-                    // `accepted` travels with it and is replayed at the join.
-                    self.defer_kernel_term(
-                        &decl.name,
-                        decl.span,
-                        &empty,
-                        &stmt,
-                        &stmt_lvl,
-                        term,
-                        opaque,
-                        Layer::Code,
-                        true,
-                    );
-                }
-            }
+            let opaque = matches!(decl.kind, DeclKind::Theorem);
+            self.gate_bodied(&lifted_psi, &decl.name, decl.span, &empty, &stmt, &stmt_lvl, term, opaque)?;
         } else {
             // Axioms extend the trusted assumptions, but their statements are
             // still required to be well-formed kernel types.
@@ -3960,6 +3907,7 @@ impl Elaborator {
             .cloned()
             .collect();
         Ok(PendingDecl {
+            aux,
             binding,
             is_axiom: decl.kind == DeclKind::Axiom,
             direct_dependencies,
@@ -3971,6 +3919,133 @@ impl Elaborator {
                 surface,
             },
         })
+    }
+
+    /// The kernel gate for one bodied global in `psi`: the cache oracle, then
+    /// the statement here, then the body here or on the pool. Shared by a
+    /// declaration and the tactic proofs it lifts, which extend Ψ before it
+    /// (`docs/bv-omega-design.md` §7).
+    #[allow(clippy::too_many_arguments)]
+    fn gate_bodied(
+        &mut self,
+        psi: &Rc<GlobalCtx>,
+        name: &str,
+        span: Span,
+        ctx: &LocalCtx,
+        ty: &Type,
+        level: &Level,
+        body: &Term,
+        opaque: bool,
+    ) -> R<()> {
+        let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
+        if self.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
+            return Ok(());
+        }
+        // The statement is checked here, synchronously, whatever the pool is
+        // doing: every dependent needs it, and it is the cheap half
+        // (`docs/parallel-kernel-gate-design.md` §2).
+        stats::time_kernel(|| self.kernel_check_type(psi, Layer::Prog, ctx, ty, level))
+            .map_err(|e| self.kernel_error(name, span, e))?;
+        if self.gate_is_inline() {
+            // A serial replay may already hold this exact obligation's
+            // verdict, earned by a worker of the pass it replaces
+            // (`docs/parallel-kernel-gate-design.md` §5.2). `None` — which is
+            // every ordinary run — asks the kernel.
+            let verdict = match self.kernel_replay.reuse(psi.bindings.len(), self.fuel, &item) {
+                Some(verdict) => verdict,
+                None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
+            };
+            verdict.map_err(|e| self.kernel_error(name, span, e))?;
+            if let Some(g) = self.gate.as_ref() {
+                g.accepted(psi, &item);
+            }
+        } else {
+            // Queued against the Ψ the binding is about to extend;
+            // `accepted` travels with it and is replayed at the join.
+            drop(item);
+            stats::count(stats::Counter::DeclsGated);
+            self.kernel_pool.submit(pool::Deferred {
+                name: name.to_string(),
+                span,
+                psi: Rc::clone(psi),
+                ctx: ctx.clone(),
+                ty: ty.clone(),
+                level: level.clone(),
+                body: body.clone(),
+                opaque,
+                layer: Layer::Code,
+                lands_in_psi: true,
+                fuel: self.fuel,
+                row: stats::current_item(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The declaration's goal substitution, with every lifted tactic proof
+    /// (`docs/bv-omega-design.md` §7) kernel-checked as a global of its own,
+    /// in its own context, and substituted as a reference to it. Returns the
+    /// substitution, the lifted globals in order, and the world they extend
+    /// Ψ to (`None` when nothing was lifted). The substitution's payloads are
+    /// scoped in that world: a caller shifts its term's committed globals up
+    /// past the lifted ones before applying it.
+    fn lift_proved(&mut self, name: &str, span: Span) -> R<(GlobalSubst, Vec<GlobalBinding>, Option<Rc<GlobalCtx>>)> {
+        let mut sigma = self.goal_subst();
+        let proved = self.attempt.goal_arena.proved();
+        if proved.is_empty() {
+            return Ok((sigma, Vec::new(), None));
+        }
+        let base = self.attempt.goal_arena.base();
+        let m = proved.len() as u32;
+        for entry in sigma.entries.iter_mut() {
+            if let heather_kernel::subst::GlobalEntry::Tm(t) = entry {
+                *t = Rc::new(t.shift_global(m));
+            }
+        }
+        // Out of the goal world, into Ψ and the lifted proofs before this
+        // one: an earlier lifted proof is referred to (a `let` bound to one
+        // is inlined into what follows it), and any other goal is refused,
+        // which the two dummies would disagree about.
+        let mut world: GlobalCtx = (*self.psi).clone();
+        let mut aux = Vec::new();
+        let mut earlier: HashMap<usize, (usize, LocalCtx)> = HashMap::new();
+        for (j, (k, gamma, ty, level, proof)) in proved.into_iter().enumerate() {
+            let out = |dummy: Term| GlobalSubst {
+                entries: (0..base as usize)
+                    .map(|slot| {
+                        heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&slot) {
+                            Some((i, delta)) => Term::GlobalTm { var: GlobalVar((j - 1 - i) as u32), subst: LocalSubst::id(delta) },
+                            None => dummy.clone(),
+                        }))
+                    })
+                    .collect(),
+            };
+            let (zero, one) = (out(Term::Zero), out(Term::Succ(Rc::new(Term::Zero))));
+            let into = |sigma: &GlobalSubst| (
+                gamma.shift_global_above(j as u32, base).apply_global(sigma),
+                ty.shift_global_above(j as u32, base).apply_global(sigma),
+                proof.shift_global_above(j as u32, base).apply_global(sigma),
+            );
+            let (gamma, ty, proof) = into(&zero);
+            if (gamma.clone(), ty.clone(), proof.clone()) != into(&one) {
+                return err("internal: a lifted proof mentions a goal", span);
+            }
+            // Its context is checked here too: a declaration's own gate never
+            // sees a nonempty one.
+            let at = Rc::new(world.clone());
+            stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.fuel))
+                .map_err(|e| self.kernel_error(&format!("{name}#aux{j}"), span, e))?;
+            self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &level, &proof, true)?;
+            let binding = GlobalBinding::Tm { ctx: gamma.clone(), layer: Layer::Code, ty: Rc::new(ty), level, body: None };
+            world.push(binding.clone());
+            aux.push(binding);
+            earlier.insert(k, (j, gamma.clone()));
+            sigma.entries[k] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::GlobalTm {
+                var: GlobalVar(m - 1 - j as u32),
+                subst: LocalSubst::id(&gamma),
+            }));
+        }
+        Ok((sigma, aux, Some(Rc::new(world))))
     }
 
     // -- goals --------------------------------------------------------------
@@ -4626,7 +4701,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                if self.key_of("bitvec_omega::add_affine").is_none() {
+                if self.key_of("bitvec_omega::add_form").is_none() {
                     return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
                 }
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
@@ -4642,7 +4717,15 @@ impl Elaborator {
                 };
                 let expr = parse(&generated.source)?;
                 match self.generated_scope(|me| me.elab_check(cx, &expr, expected, lvl)) {
-                    Ok(term) => Ok(term),
+                    // Lifted into a lemma of its own where the declaration
+                    // reserved a slot (docs/bv-omega-design.md §7): the
+                    // kernel checks it once, in its context, and the body
+                    // carries only a reference.
+                    Ok(term) => Ok(self
+                        .attempt
+                        .goal_arena
+                        .allocate_proved(cx, expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .unwrap_or(term)),
                     Err(error) => {
                         // Name the side condition that failed, not only the goal
                         // (§5): each one alone, in the context the bundle had.

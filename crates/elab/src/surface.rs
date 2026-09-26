@@ -589,6 +589,25 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
     }
     stmts(&decl.body.stmts, &mut n);
     expr(&decl.body.result, &mut n);
+    // Every `bv_omega` may lift its proof into a slot of its own
+    // (`docs/bv-omega-design.md` §7). Counted here so the slot is reserved up
+    // front: a slot discovered mid-body would restart the declaration.
+    let mut lifted = 0u32;
+    let mut count_lifts = |e: &Expr| {
+        walk_expr(e, &mut |x| {
+            if matches!(&x.kind, ExprKind::Var(v) if v == "bv_omega") {
+                lifted += 1;
+            }
+        })
+    };
+    for s in &decl.body.stmts {
+        if let heather_syntax::Stmt::Let { expr, .. } | heather_syntax::Stmt::LetRecord { expr, .. } = s {
+            count_lifts(expr);
+        }
+    }
+    count_lifts(&decl.body.result);
+    decl.body.ons.iter().for_each(|o| count_lifts(&o.expr));
+    n += lifted;
     // Under `decreases`, every recursive call owes one obligation hole
     // (measure.rs); calls are counted by name, which over-counts a shadowed
     // name — an upper bound, as required. The hole itself is raised in the
