@@ -41,12 +41,30 @@ up:
   *sign* `Q <= P` (free when `Q` is zero; a `sub`'s no-borrow otherwise);
 - a `sub`'s subtrahend gets its bound from the no-borrow and the minuend's
   bound;
+- a word whose value a fact in scope bounds by a literal within the width,
+  `x < k` or `x <= k` with `x` of the word's form `P` and `Q` zero, gets its
+  bound from that fact (`below_top`, `below_top_le`): the writer stated it,
+  as `c_fits: 1099511627776 * c < 1152921504606846976` does for
+  `ofNat(1099511627776 * c)`;
 - every other word's bound, the outermost words' and a `sub`'s minuend's, is
   a side condition for `omega`. So is each `sub`'s no-borrow, `Q <= P`.
 
-The goal is proved over Nat variables: `(w: Nat) → w + Q = P → GOAL[w]`, by
-`omega`, before any fact exists. A fact in scope over a word the walk takes
-apart is restated the same way, under its own name so the original is hidden.
+A side condition over no atoms (`5 < 2^64 + 0`) is a comparison of literals,
+proved by `trivial`: the kernel decides `Le` of literals, `pow` included.
+
+When the goal is a word's fact itself, it is read off the fact with no search:
+`toNat(t) = r` where `r` reads as the form `P` and `Q` is zero
+(`fact_value`), or `toNat(t) = a - b` where `a` and `b` read as `P` and `Q`
+(`fact_diff`), either way round. Otherwise the goal is proved over Nat
+variables: `(w: Nat) → w + Q = P → GOAL[w]`, by `omega`, before any fact
+exists. A fact in scope over a word the walk takes apart is restated the same
+way, under its own name so the original is hidden.
+
+Each `omega` costs a floor of its own (reflection, a certificate elaborated
+and gated), and a problem as small as a single bound pays mostly that floor.
+So the shapes above exist to make no call where the answer is already
+written down: in `decimal_line`'s word facts, all but `place_step`'s calls
+now make at most one.
 
 Shapes that were tried and measured against, with the reason each lost:
 
@@ -91,19 +109,31 @@ A word whose `toNat` a fact in scope mentions is not unfolded. The writer
 stated what they know at that level: `leading_zeros(x).toNat() = line_skip(n)`
 is about the whole word. A known head is still taken apart.
 
+Such a leaf *defined* by a fact, `toNat(t) = v` or `v = toNat(t)`, is stated
+over `v` instead of over its own `toNat` (`leaf_value`): its form is `v`'s, as
+the reader reads `v`, and its bound is still its range. So a goal over
+`line_skip(n)` meets a fact over `line_skip(n)`, not over
+`leading_zeros(…).toNat()`, and the two forms compare equal without `omega`.
+It is still a leaf for the goal over Nat variables: its `toNat` stays an atom
+there, beside the fact that defines it. A cycle of definitions ends in a
+plain leaf.
+
 The reader inside `ofNat(c)` understands literals, `+`, `Succ`, a literal
 factor on either side, and the `toNat` of a word with no subtraction below it
 (its fact then states its value). Anything else is a Nat atom. Coefficients
 are spelled on the left (`4 * a`): `mul` recurses on its second argument.
 
 A word that appears only in a fact in scope, not in the goal, is optional: it
-may overflow or borrow where the goal's words do not. Its new side conditions
-are tried first, and the fact is left alone if one fails.
+may overflow or borrow where the goal's words do not. The first attempt
+restates every such fact untried; only if the checker refuses the proof does
+the careful attempt (§5) try each fact's new side conditions first and leave
+the fact alone when one fails. Trying them first had cost an `omega` per new
+side condition on every call, and the bundle then proved each one again.
 
 ## 4. Scope
 
-- Goals: whatever `omega` accepts, over the lifted atoms. Truncated Nat `-` is
-  an atom to `omega`, so a goal about a difference is stated as a sum.
+- Goals: whatever `omega` accepts, over the lifted atoms, and a word's fact
+  itself, including as a truncated difference `P - Q` (§2).
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, and definitions that step
   to them. Byte extraction, `unsigned_lt_bit` and word equality goals are
   `issues/bv-omega-bytes-and-comparisons.md`; splitting a `match` stuck on a
@@ -111,8 +141,12 @@ are tried first, and the fact is left alone if one fails.
 
 ## 5. Failure
 
-If the generated proof fails, `bv_omega` re-checks the side conditions one at
-a time and reports the first one `omega` refuses, with the word it came from:
+The first proof is optimistic: a goal read off a word's fact, and facts
+restated without trying their side conditions. If the checker refuses it,
+`bv_omega` writes the careful proof — the goal by `omega`, optional facts
+tried first — and checks that; a proof that would have succeeded carefully
+still succeeds. If the careful proof fails, `bv_omega` re-checks the side
+conditions one at a time and reports the first one `omega` refuses, with the word it came from:
 "`double(y)` may overflow 64 bits; `omega` could not prove `…`", then omega's
 own residual. If every side condition checks, the goal step failed, and its
 error is reported with the generated proof.

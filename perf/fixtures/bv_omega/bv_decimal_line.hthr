@@ -267,9 +267,7 @@ theorem bv_line_start_value(n: Nat, small: n < 10000, zeros: leading_zeros(bitve
 theorem bv_line_length_value(n: Nat, small: n < 10000, zeros: leading_zeros(bitvec_nat::word_of_nat(64, n)).toNat() = line_skip(n)):
     line_length(bitvec_nat::word_of_nat(64, n)).toNat() = 5 -line_skip(n) {
     let skip = line_skip_le(n);
-    let r: (line_length(bitvec_nat::word_of_nat(64, n)).toNat() + line_skip(n) = 5) = bv_omega;
-    let back = Nat::sub_add_cancel(line_skip(n), 5, Nat::le_trans(line_skip(n), 3, 5, skip, trivial));
-    omega
+    bv_omega
 }
 
 theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,

@@ -30,6 +30,9 @@ pub(crate) struct Generated {
     pub prelude: String,
     /// Each side condition and the word it came from, in bundle order.
     pub obligations: Vec<Obligation>,
+    /// Whether a careful attempt differs from this one: the goal was read
+    /// off a word's fact, or a fact was restated untried.
+    pub retry: bool,
 }
 
 #[derive(Clone)]
@@ -39,6 +42,8 @@ pub(crate) struct Obligation {
     /// As the refusal quotes it, with operators.
     pub shown: String,
     pub why: String,
+    /// Over no atoms: a comparison of literals, which `trivial` decides.
+    pub closed: bool,
 }
 
 // Generated arithmetic is spelled as qualified calls, never operators: an
@@ -81,6 +86,10 @@ enum Kind {
     Value(&'static str, String, NatSyn),
     Add(usize, usize),
     Sub(usize, usize),
+    /// A leaf whose value a fact in scope states (`toNat(w) = v`): the
+    /// fact's proof (as `toNat(w) = v`), `v` spelled, and `v` read. Its bound
+    /// is still its range.
+    Defined(String, String, NatSyn),
 }
 
 #[derive(Clone)]
@@ -89,6 +98,13 @@ struct Node {
     word: String,
     width: String,
     kind: Kind,
+}
+
+impl Node {
+    /// Not taken apart: a leaf, or one whose value a fact states.
+    fn is_leaf(&self) -> bool {
+        matches!(self.kind, Kind::Leaf | Kind::Defined(..))
+    }
 }
 
 #[derive(Clone)]
@@ -105,6 +121,11 @@ struct Walk<'a> {
     /// Words whose `toNat` a fact in scope mentions. They are not unfolded:
     /// the writer stated what they know at that level (§3).
     stated: HashSet<String>,
+    /// Words a fact in scope gives a value, `toNat(w) = v` either way round:
+    /// the fact's proof as `toNat(w) = v`, and `v`.
+    defined: HashMap<String, (String, Rc<Term>)>,
+    /// The defined words being read, so a cycle of definitions ends in a leaf.
+    defining: HashSet<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -166,7 +187,7 @@ impl<'a> Walk<'a> {
         match &self.nodes[n].kind {
             Kind::Sub(..) => true,
             Kind::Add(a, b) => self.subtracts(*a) || self.subtracts(*b),
-            Kind::Value(_, _, syn) => self.syn_subtracts(syn),
+            Kind::Value(_, _, syn) | Kind::Defined(_, _, syn) => self.syn_subtracts(syn),
             Kind::Leaf => false,
         }
     }
@@ -236,7 +257,7 @@ impl<'a> Walk<'a> {
                 let c_source = nat_term_source(self.elab, self.cx, &c)?;
                 Kind::Value(lemma, c_source, self.nat(&c)?)
             }
-            Shape::Leaf => Kind::Leaf,
+            Shape::Leaf => self.defined_kind(&spelled)?,
         };
         if let Kind::Leaf = kind {
             self.atom(format!("bitvec::BitVec::toNat({spelled})"));
@@ -245,6 +266,20 @@ impl<'a> Walk<'a> {
         self.node_index.insert(spelled.clone(), index);
         self.nodes.push(Node { word: spelled, width: w, kind });
         Ok(Some(index))
+    }
+
+    /// A leaf's value from the fact that states it, if one does.
+    fn defined_kind(&mut self, spelled: &str) -> Result<Kind, String> {
+        let Some((proof, value)) = self.defined.get(spelled).cloned() else {
+            return Ok(Kind::Leaf);
+        };
+        if !self.defining.insert(spelled.to_string()) {
+            return Ok(Kind::Leaf);
+        }
+        let read = nat_term_source(self.elab, self.cx, &value).and_then(|source| Ok((source, self.nat(&value)?)));
+        self.defining.remove(spelled);
+        let (source, syn) = read?;
+        Ok(Kind::Defined(proof, source, syn))
     }
 
     /// How a word is taken apart: by its own head, or by the head its
@@ -327,10 +362,56 @@ enum BoundFrom {
     AddParent { parent: usize, left: bool },
     /// Its parent `sub`'s no-borrow and the minuend's bound.
     SubParent { parent: usize },
+    /// A fact in scope that bounds its value by a literal: stated bound `i`.
+    Stated(usize),
+}
+
+/// A fact in scope `x < k` (or `x <= k`, `strict` false) with `k` a literal.
+#[derive(Clone)]
+struct StatedBound {
+    fact: String,
+    strict: bool,
+    x: String,
+    syn: NatSyn,
+    k: i128,
+}
+
+impl StatedBound {
+    /// Whether `k` is within a word of `width` bits: `x < 2^width` follows.
+    fn fits(&self, width: &str) -> bool {
+        let Ok(width) = width.parse::<u32>() else { return false };
+        if width >= 127 {
+            return true;
+        }
+        let top = 1i128 << width;
+        if self.strict { self.k <= top } else { self.k < top }
+    }
+}
+
+/// The literal bounds facts in scope state: `x < k` or `x <= k`.
+fn stated_bounds(walk: &mut Walk, facts: &[(String, Type)]) -> Vec<StatedBound> {
+    let mut out = Vec::new();
+    for (name, ty) in facts {
+        let Type::El { tm, .. } = ty else { continue };
+        for (relation, strict) in [("nat::Nat::Lt", true), ("nat::Nat::Le", false)] {
+            if let Some(args) = named_args(walk.elab, tm, relation)
+                && let [x, k] = args.as_slice()
+                && let Some(k) = walk.literal(k)
+                && let Ok(source) = nat_term_source(walk.elab, walk.cx, x)
+                && integer_source(&source).is_none()
+                && let Ok(syn) = walk.nat(x)
+            {
+                out.push(StatedBound { fact: name.clone(), strict, x: source, syn, k });
+            }
+        }
+    }
+    out
 }
 
 struct Emitter<'w, 'a> {
     walk: &'w Walk<'a>,
+    /// Bounds the facts in scope state (`BoundFrom::Stated`).
+    stated: Vec<StatedBound>,
     /// Per node, `P` and `Q` of its fact `toNat + Q = P`.
     forms: Vec<(Form, Form)>,
     parents: Vec<Vec<usize>>,
@@ -374,13 +455,13 @@ fn merge_forms(f: &Form, g: &Form) -> Form {
 }
 
 impl<'w, 'a> Emitter<'w, 'a> {
-    fn new(walk: &'w Walk<'a>) -> Self {
+    fn new(walk: &'w Walk<'a>, stated: &[StatedBound]) -> Self {
         let mut forms: Vec<(Form, Form)> = Vec::new();
         let mut parents = vec![Vec::new(); walk.nodes.len()];
         for (i, node) in walk.nodes.iter().enumerate() {
             let pq = match &node.kind {
                 Kind::Leaf => (Form::atom(walk.atom_index[&format!("bitvec::BitVec::toNat({})", node.word)]), Form::default()),
-                Kind::Value(_, _, syn) => (Self::syn_form(&forms, syn), Form::default()),
+                Kind::Value(_, _, syn) | Kind::Defined(_, _, syn) => (Self::syn_form(&forms, syn), Form::default()),
                 Kind::Add(a, b) => {
                     parents[*a].push(i);
                     parents[*b].push(i);
@@ -396,6 +477,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
         }
         Emitter {
             walk,
+            stated: stated.to_vec(),
             forms,
             parents,
             bound_from: vec![None; walk.nodes.len()],
@@ -508,8 +590,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
         format!("nat::Nat::pow(2, {})", self.walk.nodes[n].width)
     }
 
-    fn obligation(&mut self, statement: String, shown: String, why: String) -> usize {
-        self.obligations.push(Obligation { statement, shown, why });
+    fn obligation(&mut self, statement: String, shown: String, why: String, closed: bool) -> usize {
+        self.obligations.push(Obligation { statement, shown, why, closed });
         self.obligations.len() - 1
     }
 
@@ -519,7 +601,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
         if self.bound_from[n].is_some() {
             return;
         }
-        let from = if matches!(self.walk.nodes[n].kind, Kind::Leaf) {
+        let from = if matches!(self.walk.nodes[n].kind, Kind::Leaf | Kind::Defined(..)) {
             BoundFrom::Range
         } else if let Some(from) = self.parents[n].iter().find_map(|&p| match self.walk.nodes[p].kind {
             Kind::Add(a, _) => Some(BoundFrom::AddParent { parent: p, left: a == n }),
@@ -527,6 +609,11 @@ impl<'w, 'a> Emitter<'w, 'a> {
             _ => None,
         }) {
             from
+        } else if let Some(i) = self.stated.iter().position(|b| {
+            let (p, q) = &self.forms[n];
+            q.is_zero() && Self::syn_form(&self.forms, &b.syn) == *p && b.fits(&self.walk.nodes[n].width)
+        }) {
+            BoundFrom::Stated(i)
         } else {
             let (p, q) = self.forms[n].clone();
             let statement = lt(&self.spell(&p), &add(&self.top(n), &self.spell(&q)));
@@ -537,7 +624,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
             } else {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
-            BoundFrom::Obligation(self.obligation(statement, shown, why))
+            let closed = p.terms.is_empty() && q.terms.is_empty();
+            BoundFrom::Obligation(self.obligation(statement, shown, why, closed))
         };
         self.bound_from[n] = Some(from);
         match from {
@@ -564,6 +652,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
         }
         match self.walk.nodes[n].kind.clone() {
             Kind::Leaf => {}
+            Kind::Defined(_, _, syn) => self.plan_syn(&syn, seen),
             Kind::Value(_, _, syn) => {
                 self.plan_bound(n, seen);
                 self.plan_syn(&syn, seen);
@@ -578,7 +667,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 let statement = le(&self.spell(&q), &self.spell(&p));
                 let shown = format!("{} <= {}", self.shown(&q), self.shown(&p));
                 let why = format!("`{}` may borrow", self.walk.nodes[n].word);
-                let i = self.obligation(statement, shown, why);
+                let closed = p.terms.is_empty() && q.terms.is_empty();
+                let i = self.obligation(statement, shown, why, closed);
                 self.fits.insert(n, i);
                 self.plan(a, seen);
                 self.plan(b, seen);
@@ -636,6 +726,10 @@ impl<'w, 'a> Emitter<'w, 'a> {
         let (p, q) = self.forms[n].clone();
         let proof = match &node.kind {
             Kind::Leaf => format!("bitvec_omega::form_leaf(bitvec::BitVec::toNat({word}))"),
+            Kind::Defined(given, v, syn) => {
+                let r = self.reify(syn, v);
+                format!("bitvec_omega::leaf_value(bitvec::BitVec::toNat({word}), {v}, {}, {given}, {r})", self.spell(&p))
+            }
             Kind::Value(lemma, c, syn) => {
                 let lemma = if *lemma == "ofNat_row" { "ofNat_form" } else { "word_of_nat_form" };
                 let r = self.reify(syn, c);
@@ -676,6 +770,12 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 format!("bitvec_omega::range({}, {}, {}, {}, {f})", self.walk.nodes[n].width, self.walk.nodes[n].word, self.spell(q), self.spell(p))
             }
             BoundFrom::Obligation(i) => self.paths[i].clone(),
+            BoundFrom::Stated(i) => {
+                let b = self.stated[i].clone();
+                let hx = self.reify(&b.syn, &b.x);
+                let lemma = if b.strict { "below_top" } else { "below_top_le" };
+                format!("bitvec_omega::{lemma}({}, {}, {}, {top}, {}, {hx}, trivial)", b.x, self.spell(&self.forms[n].0), b.k, b.fact)
+            }
             BoundFrom::AddParent { parent, left } => {
                 let Kind::Add(a, b) = self.walk.nodes[parent].kind else { unreachable!() };
                 let pb = self.bound(parent);
@@ -725,8 +825,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
 }
 
 /// The side conditions a set of words needs, planned on a copy.
-fn plan_for(walk: &Walk, nodes: &[usize]) -> Vec<Obligation> {
-    let mut e = Emitter::new(walk);
+fn plan_for(walk: &Walk, stated: &[StatedBound], nodes: &[usize]) -> Vec<Obligation> {
+    let mut e = Emitter::new(walk, stated);
     let mut seen = HashSet::new();
     for &n in nodes {
         e.plan(n, &mut seen);
@@ -734,8 +834,61 @@ fn plan_for(walk: &Walk, nodes: &[usize]) -> Vec<Obligation> {
     e.obligations
 }
 
-/// The proof `bv_omega` offers at `expected`, as source (§2).
-pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Generated, String> {
+/// What the goal's other side is, when the goal is a word's fact itself.
+enum Target {
+    /// `toNat(w) = r`, `r` of the fact's form `P` (its `Q` zero).
+    Whole(NatSyn, String),
+    /// `toNat(w) = a - b`, `a` of the form `P` and `b` of the form `Q`.
+    Diff(NatSyn, String, NatSyn, String),
+}
+
+/// The goal as a word's fact, when it is one: `toNat(w) = r` (or `r =
+/// toNat(w)`) where `r` reads as the forms the walk computed for `w`. The
+/// goal's node, whether the equation is flipped, and `r`.
+fn direct_goal(walk: &mut Walk, expected: &Type) -> Option<(usize, bool, Target)> {
+    let Type::Id { ty, lhs, rhs, .. } = expected else { return None };
+    if walk.elab.display_type(walk.cx, ty) != "Nat" {
+        return None;
+    }
+    for (flipped, side, other) in [(false, lhs, rhs), (true, rhs, lhs)] {
+        let Some(args) = named_args(walk.elab, side, "bitvec::BitVec::toNat") else { continue };
+        let [_, word] = args.as_slice() else { continue };
+        let Some(spelled) = walk.elab.spell_term_source(walk.cx, word) else { continue };
+        let Some(&n) = walk.node_index.get(&spelled) else { continue };
+        if matches!(walk.nodes[n].kind, Kind::Leaf) {
+            continue;
+        }
+        let saved = walk.clone();
+        let mut read = |walk: &mut Walk, t: &Rc<Term>| -> Option<(NatSyn, String)> {
+            Some((walk.nat(t).ok()?, nat_term_source(walk.elab, walk.cx, t).ok()?))
+        };
+        let target = match named_args(walk.elab, other, "nat::Nat::sub").as_deref() {
+            Some([a, b]) => read(walk, a).zip(read(walk, b)).map(|((sa, a), (sb, b))| Target::Diff(sa, a, sb, b)),
+            _ => read(walk, other).map(|(syn, source)| Target::Whole(syn, source)),
+        };
+        let matches = target.as_ref().is_some_and(|target| {
+            let e = Emitter::new(walk, &[]);
+            let (p, q) = &e.forms[n];
+            match target {
+                Target::Whole(syn, _) => q.is_zero() && Emitter::syn_form(&e.forms, syn) == *p,
+                Target::Diff(sa, _, sb, _) => Emitter::syn_form(&e.forms, sa) == *p && Emitter::syn_form(&e.forms, sb) == *q,
+            }
+        });
+        if matches {
+            return Some((n, flipped, target?));
+        }
+        *walk = saved;
+    }
+    None
+}
+
+/// The proof `bv_omega` offers at `expected`, as source (§2). The first
+/// attempt is not `careful`: it reads a goal that is a word's fact off the
+/// fact, and restates every fact over a word it takes apart without trying
+/// the side conditions that adds. Where the checker refuses that proof, the
+/// careful one proves the goal with `omega` and leaves alone a fact whose
+/// side conditions fail.
+pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool) -> Result<Generated, String> {
     let mut walk = Walk {
         elab,
         cx,
@@ -745,22 +898,32 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
         node_index: HashMap::new(),
         found: Vec::new(),
         stated: Default::default(),
+        defined: HashMap::new(),
+        defining: HashSet::new(),
     };
     let facts_in_scope = local_facts(elab, cx);
-    for (_, ty) in &facts_in_scope {
+    for (name, ty) in &facts_in_scope {
         stated_words(elab, cx, ty, &mut walk.stated);
+        if let Some((word, proof, value)) = definition(elab, cx, name, ty) {
+            walk.defined.entry(word).or_insert((proof, value));
+        }
     }
     walk.scan_type(expected)?;
     let mut subjects: Vec<usize> = std::mem::take(&mut walk.found);
     if walk.nodes.is_empty() {
         return Err("found no `toNat` of a word in the goal; use `omega`".into());
     }
+    let stated = stated_bounds(&mut walk, &facts_in_scope);
+    if !careful && let Some((n, flipped, target)) = direct_goal(&mut walk, expected) {
+        return Ok(generate_direct(&walk, &stated, n, flipped, &target));
+    }
     // A fact in scope over a word the walk takes apart is restated over the
     // word's value, like the goal. Its words are optional: a word that
-    // appears only there may overflow or borrow where the goal's do not, so
-    // its new side conditions are tried first, and the fact is left alone
-    // when one fails.
+    // appears only there may overflow or borrow where the goal's do not.
+    // Carefully, its new side conditions are tried first, and the fact is
+    // left alone when one fails.
     let mut restated: Vec<(String, Type)> = Vec::new();
+    let mut optimistic = false;
     for (name, ty) in facts_in_scope {
         if !is_nat_relation(elab, cx, &ty) {
             continue;
@@ -768,27 +931,31 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
         let before = walk.clone();
         walk.scan_type(&ty)?;
         let found = std::mem::take(&mut walk.found);
-        if !found.iter().any(|&n| !matches!(walk.nodes[n].kind, Kind::Leaf)) {
+        if !found.iter().any(|&n| !walk.nodes[n].is_leaf()) {
             walk = before;
             continue;
         }
-        let old: HashSet<String> = plan_for(&before, &subjects).into_iter().map(|o| o.statement).collect();
+        let old: HashSet<String> = plan_for(&before, &stated, &subjects).into_iter().map(|o| o.statement).collect();
         let mut all = subjects.clone();
         all.extend(found.iter().copied());
-        let new: Vec<Obligation> = plan_for(&walk, &all).into_iter().filter(|o| !old.contains(&o.statement)).collect();
-        if new.iter().all(|o| holds(elab, cx, &walk, o)) {
+        let new: Vec<Obligation> = plan_for(&walk, &stated, &all).into_iter().filter(|o| !old.contains(&o.statement)).collect();
+        optimistic |= !careful && !new.is_empty();
+        if !careful || new.iter().all(|o| holds(elab, cx, &walk, o)) {
             subjects.extend(found);
             restated.push((name, ty));
         } else {
             walk = before;
         }
     }
-    subjects.retain(|&n| !matches!(walk.nodes[n].kind, Kind::Leaf));
+    // A leaf a fact defines is still a leaf here: its `toNat` stays an atom
+    // for `omega`, beside the fact that defines it, rather than a variable
+    // restating that fact.
+    subjects.retain(|&n| !walk.nodes[n].is_leaf());
     subjects.sort_unstable();
     subjects.dedup();
 
     let prelude = prelude(&walk);
-    let mut e = Emitter::new(&walk);
+    let mut e = Emitter::new(&walk, &stated);
     let mut seen = HashSet::new();
     for &n in &subjects {
         e.plan(n, &mut seen);
@@ -826,16 +993,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
         }
         source.push_str(&format!("have __bv_goal: ({binders}{goal}) = λ {} => omega;\n", names.join(" ")));
     }
-    // Every side condition is one leaf of a *balanced* conjunction, proved
-    // by `omega` in the entry context, where no fact is in scope (§2).
-    let count = e.obligations.len();
-    let mut paths = vec![String::new(); count];
-    if count > 0 {
-        let statements: Vec<&str> = e.obligations.iter().map(|o| o.statement.as_str()).collect();
-        let (statement, proof) = balanced(&statements, 0, &mut paths, String::new());
-        source.push_str(&format!("have __bv_obligations: ({statement}) = {proof};\n"));
-    }
-    e.paths = paths.iter().map(|p| format!("__bv_obligations{p}")).collect();
+    let count = bundle(&mut e, &mut source);
     let mut arguments = Vec::new();
     for &n in &subjects {
         arguments.push(format!("bitvec::BitVec::toNat({})", walk.nodes[n].word));
@@ -860,7 +1018,80 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
     } else {
         source.push_str(&format!("__bv_goal({})\n}}", arguments.join(", ")));
     }
-    Ok(Generated { source, prelude, obligations: e.obligations })
+    Ok(Generated { source, prelude, obligations: e.obligations, retry: optimistic })
+}
+
+/// Every side condition as one leaf of a *balanced* conjunction, proved in
+/// the entry context, where no fact is in scope (§2); sets each one's path.
+fn bundle(e: &mut Emitter, source: &mut String) -> usize {
+    let count = e.obligations.len();
+    let mut paths = vec![String::new(); count];
+    if count > 0 {
+        let parts: Vec<&Obligation> = e.obligations.iter().collect();
+        let (statement, proof) = balanced(&parts, 0, &mut paths, String::new());
+        source.push_str(&format!("have __bv_obligations: ({statement}) = {proof};\n"));
+    }
+    e.paths = paths.iter().map(|p| format!("__bv_obligations{p}")).collect();
+    count
+}
+
+/// The goal is node `n`'s fact: its side conditions, its fact, and the
+/// lemma that reads the goal off it.
+fn generate_direct(walk: &Walk, stated: &[StatedBound], n: usize, flipped: bool, target: &Target) -> Generated {
+    let prelude = prelude(walk);
+    let mut e = Emitter::new(walk, stated);
+    let mut seen = HashSet::new();
+    e.plan(n, &mut seen);
+    match target {
+        Target::Whole(syn, _) => e.plan_syn(syn, &mut seen),
+        Target::Diff(sa, _, sb, _) => {
+            e.plan_syn(sa, &mut seen);
+            e.plan_syn(sb, &mut seen);
+        }
+    }
+    let mut source = format!("{{\n{prelude}\n");
+    let count = bundle(&mut e, &mut source);
+    let fact = e.fact(n);
+    let (p, q) = e.forms[n].clone();
+    let value = format!("bitvec::BitVec::toNat({})", walk.nodes[n].word);
+    let proof = match target {
+        Target::Whole(syn, r) => {
+            let hr = e.reify(syn, r);
+            format!("bitvec_omega::fact_value({value}, {}, {r}, {fact}, {hr})", e.spell(&p))
+        }
+        Target::Diff(sa, a, sb, b) => {
+            let (ha, hb) = (e.reify(sa, a), e.reify(sb, b));
+            format!("bitvec_omega::fact_diff({value}, {}, {}, {a}, {b}, {fact}, {ha}, {hb})", e.spell(&q), e.spell(&p))
+        }
+    };
+    for line in &e.lines {
+        source.push_str(line);
+        source.push('\n');
+    }
+    if count > 0 {
+        source.push_str("have __bv_obligations = trivial;\n");
+    }
+    source.push_str(&if flipped { format!("sym({proof})\n}}") } else { format!("{proof}\n}}") });
+    Generated { source, prelude, obligations: e.obligations, retry: true }
+}
+
+/// A fact that gives a word's value: `toNat(w) = v` or `v = toNat(w)`, with
+/// the word spelled, the fact's proof as `toNat(w) = v`, and `v`.
+fn definition(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<(String, String, Rc<Term>)> {
+    let Type::Id { ty, lhs, rhs, .. } = ty else { return None };
+    if elab.display_type(cx, ty) != "Nat" {
+        return None;
+    }
+    for (flipped, side, other) in [(false, lhs, rhs), (true, rhs, lhs)] {
+        if let Some(args) = named_args(elab, side, "bitvec::BitVec::toNat")
+            && let [_, word] = args.as_slice()
+            && let Some(spelled) = elab.spell_term_source(cx, word)
+        {
+            let proof = if flipped { format!("sym({name})") } else { name.to_string() };
+            return Some((spelled, proof, Rc::clone(other)));
+        }
+    }
+    None
 }
 
 /// The bindings before any side condition: each leaf's range, for `omega`
@@ -868,7 +1099,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type) -> Result<Ge
 fn prelude(walk: &Walk) -> String {
     let mut out = Vec::new();
     for (i, node) in walk.nodes.iter().enumerate() {
-        if let Kind::Leaf = node.kind {
+        if let Kind::Leaf | Kind::Defined(..) = node.kind {
             let statement = lt(&format!("bitvec::BitVec::toNat({})", node.word), &format!("nat::Nat::pow(2, {})", node.width));
             out.push(format!("have __bv_range_{i}: ({statement}) = bitvec::BitVec::toNat_lt_pow({}, {});", node.width, node.word));
         }
@@ -880,15 +1111,21 @@ fn prelude(walk: &Walk) -> String {
 fn holds(elab: &Elaborator, cx: &Cx, walk: &Walk, o: &Obligation) -> bool {
     let source = format!("{{\n{}\nhave __bv_side: ({}) = omega;\n__bv_side\n}}", prelude(walk), o.statement);
     let Ok(expr) = parse_generated_expr(&source) else { return false };
-    elab.generated_scope(|me| me.elab_infer(cx, &expr)).is_ok()
+    // A probe: its named atom lists are not the proof's.
+    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let holds = elab.generated_scope(|me| me.elab_infer(cx, &expr)).is_ok();
+    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.attempt.goal_arena.rollback(mark.1);
+    holds
 }
 
 /// The conjunction of `parts` as a balanced tree, with its proof (`omega` at
-/// every leaf); records each leaf's projection path from the root.
-fn balanced(parts: &[&str], first: usize, paths: &mut [String], path: String) -> (String, String) {
+/// every leaf, `trivial` at a closed one); records each leaf's projection
+/// path from the root.
+fn balanced(parts: &[&Obligation], first: usize, paths: &mut [String], path: String) -> (String, String) {
     if let [one] = parts {
         paths[first] = path;
-        return (one.to_string(), "omega".into());
+        return (one.statement.clone(), if one.closed { "trivial" } else { "omega" }.into());
     }
     let half = parts.len() / 2;
     let (ls, lp) = balanced(&parts[..half], first, paths, format!("{path}.left"));

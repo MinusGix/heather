@@ -4775,18 +4775,32 @@ impl Elaborator {
                     return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
                 }
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
-                let generated = bv_omega::generate(self, cx, expected).map_err(|detail| ElabError::Elab {
-                    msg: format!("`bv_omega` got stuck: {detail}"),
-                    span: e.span,
-                })?;
+                let generate = |careful| {
+                    bv_omega::generate(self, cx, expected, careful).map_err(|detail| ElabError::Elab {
+                        msg: format!("`bv_omega` got stuck: {detail}"),
+                        span: e.span,
+                    })
+                };
+                let mut generated = generate(false)?;
                 let parse = |source: &str| {
                     omega_cert::parse_generated_expr(source).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` wrote a proof that does not parse: {detail}\n  generated: {source}"),
                         span: e.span,
                     })
                 };
-                let expr = parse(&generated.source)?;
-                match self.generated_scope(|me| me.elab_check(cx, &expr, expected, lvl)) {
+                let mark = (self.warnings.borrow().len(), self.attempt.goal_arena.mark());
+                let mut checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
+                // The first proof is optimistic (a goal read off a word's
+                // fact, facts restated untried); where it is refused, the
+                // careful one is the answer, and its failure the diagnosis.
+                // The refused attempt's named atom lists go with it.
+                if checked.is_err() && generated.retry {
+                    self.warnings.borrow_mut().truncate(mark.0);
+                    self.attempt.goal_arena.rollback(mark.1);
+                    generated = generate(true)?;
+                    checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
+                }
+                match checked {
                     // Lifted into a lemma of its own where the declaration
                     // reserved a slot (docs/bv-omega-design.md §7): the
                     // kernel checks it once, in its context, and the body

@@ -44,6 +44,29 @@ theorem form_atom(a: Nat): a = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
 // computing the word before it met the one-step side.
 theorem form_leaf(a: Nat): a + 0 = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
 
+// A leaf whose value a fact in scope states, `a = v`, as a fact over `v`'s
+// form.
+theorem leaf_value(a, v, p: Nat, h: a = v, hv: v = p): a + 0 = p { trans(h, hv) }
+
+// The goal is a word's fact itself: `x = r` where `r` has the fact's form,
+// or `x = a - b` where `a` and `b` have its two forms. No search.
+theorem fact_value(x, p, r: Nat, f: x + 0 = p, hr: r = p): x = r { trans(f, sym(hr)) }
+
+theorem fact_diff(x, q, p, a, b: Nat, f: x + q = p, ha: a = p, hb: b = q): x = a -b {
+    sym(trans(@cong(λ (t: Nat) => t -b, a, x + q, trans(ha, sym(f))),
+        trans(@cong(λ (t: Nat) => (x + q) -t, b, q, hb), Nat::add_sub_cancel(x, q))))
+}
+
+// A bound the writer stated, `x < k` or `x <= k` with `k` a literal within
+// the word's range, as a word's bound.
+theorem below_top(x, p, k, top: Nat, h: x < k, hx: x = p, small: k <= top): p < top + 0 {
+    j(hx, λ t _ => t < top + 0, Nat::le_trans(Succ(x), k, top, h, small))
+}
+
+theorem below_top_le(x, p, k, top: Nat, h: x <= k, hx: x = p, small: k < top): p < top + 0 {
+    j(hx, λ t _ => t < top + 0, Nat::le_trans(Succ(x), Succ(k), top, h, small))
+}
+
 // ---------------------------------------------------------------------------
 // The arithmetic behind the word lemmas, once, over variables, from the Nat
 // kit: `omega` proves each in a few hundred milliseconds, and every prefix

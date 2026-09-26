@@ -67,6 +67,7 @@ fn bv_omega_suite() {
     unfolds_only_what_no_fact_states();
     refuses_naming_the_side_condition();
     names_atom_lists();
+    proves_what_is_written_down_without_search();
 }
 
 /// The respelling issue's acceptance: an atom whose implicit nothing written
@@ -198,5 +199,42 @@ fn names_atom_lists() {
     checks("two calls over one list", "theorem t(v, w: Nat, small: v < w): (v + 1 <= w) ∧ (v < w + 1) { omega }");
     checks("under binders", "theorem t(v: Nat): (w: Nat) → v < w → v + 1 <= w { λ w h => omega }");
     let message = refused("a false goal over a named list", "theorem t(v, w: Nat, small: v < w): w + 1 <= v { omega }");
+    assert!(message.contains("no contradiction"), "{message}");
+}
+
+/// Calls that need no `omega` (docs/bv-omega-design.md §2–§3): a goal that
+/// is a word's fact, as a value or a truncated difference, either way round,
+/// at a literal and an open width; a leaf a fact defines, either way round,
+/// and a cycle of definitions; a bound a fact states, strict and not; a
+/// closed side condition. Then the optimistic first proof refused and the
+/// careful one accepted, and the controls.
+fn proves_what_is_written_down_without_search() {
+    checks("a goal that is a word's fact",
+        "theorem t(n: Nat, small: n < 16384): double(bitvec_nat::word_of_nat(64, n)).toNat() = n * 2 { bv_omega }");
+    checks("flipped", "theorem t(n: Nat, small: n < 16384): 2 * n = double(bitvec_nat::word_of_nat(64, n)).toNat() { bv_omega }");
+    checks("a truncated difference over a defined leaf",
+        "theorem t(z: BitVec(64), k: Nat, zv: z.toNat() = k, small: k <= 3): BitVec::ofNat(5, n := 64).sub(z).toNat() = 5 -k { bv_omega }");
+    checks("a truncated difference at an open width",
+        "theorem t(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a.sub(b).toNat() = a.toNat() -b.toNat() { bv_omega }");
+    checks("a leaf defined the other way round",
+        "theorem t(y: BitVec(64), v: Nat, value: v = y.toNat(), small: v < 1000): y.add(BitVec::ofNat(5)).toNat() = v + 5 { bv_omega }");
+    checks("a cycle of definitions",
+        "theorem t(a, b: BitVec(64), ab: a.toNat() = b.toNat(), ba: b.toNat() = a.toNat(), small: a.toNat() < 10):\n\
+         a.add(BitVec::ofNat(1)).toNat() = b.toNat() + 1 { bv_omega }");
+    checks("a stated strict bound", "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: v * 256 < 1152921504606846976): times256(y).toNat() = v * 256 { bv_omega }");
+    checks("a stated bound, not strict", "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: 4 * v <= 1000): double(double(y)).toNat() = 4 * v { bv_omega }");
+    checks("a closed side condition", "theorem t(): BitVec::ofNat(5, n := 64).add(BitVec::ofNat(7, n := 64)).toNat() = 12 { bv_omega }");
+    // The optimistic proof restates `other`, whose sum overflows; refused,
+    // the careful one leaves `other` alone.
+    checks("an optional fact that overflows",
+        "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000,\n\
+             other: double(y).add(BitVec::ofNat(18446744073709551615)).toNat() = 3): double(y).toNat() < 2001 { bv_omega }");
+    // Controls: a stated bound past the width bounds nothing, and a goal of
+    // a fact's shape with the wrong constant is still refused.
+    let message = refused("a stated bound past the width",
+        "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: v < 36893488147419103232): double(y).toNat() = 2 * v { bv_omega }");
+    assert!(message.contains("may overflow 64 bits"), "{message}");
+    let message = refused("a difference off by one",
+        "theorem t(z: BitVec(64), k: Nat, zv: z.toNat() = k, small: k <= 3): BitVec::ofNat(5, n := 64).sub(z).toNat() = 6 -k { bv_omega }");
     assert!(message.contains("no contradiction"), "{message}");
 }
