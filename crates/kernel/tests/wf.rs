@@ -238,6 +238,15 @@ fn not_conv(gamma: &LocalCtx, a: &Term, b: &Term, ty: &Type, level: Level) {
 /// each branch the arity is a literal and `Vec`/`Fin` reduce. That is the
 /// shape the generated recursor will emit.
 fn mirror(scrut: Term) -> Term {
+    elim_tree(scrut, None)
+}
+
+/// [`mirror`]'s eliminator, or — with `pick = Some(j)` — the same one whose
+/// Node arm returns `ih' j` for a `j` bound *outside* the elimination (at
+/// `v(6)` in the arm: Γ's innermost entry under `a, cs, ih, y, cs', ih'`).
+/// The generated recursors only ever apply the ih at literal indices; this
+/// applies it at a neutral one.
+fn elim_tree(scrut: Term, pick: Option<Term>) -> Term {
     // Case motive, binds z at (…, a, cs, ih, z):
     //   Π(cs' : Vec(Tree; arity z)). Π(ih' : Π(i : Fin (arity z)). Tree). Tree
     let cmot = Type::Pi {
@@ -296,7 +305,10 @@ fn mirror(scrut: Term) -> Term {
                 dom: rty(fin(nat(2))),
                 cod: rty(tree()),
             }),
-            body: rt(node(ih_at(idx(true)), ih_at(idx(false)))),
+            body: rt(match pick {
+                Some(j) => ih_at(j),
+                None => node(ih_at(idx(true)), ih_at(idx(false))),
+            }),
         }),
     };
     // Step at (Γ, a = 2, cs = 1, ih = 0).
@@ -451,6 +463,50 @@ fn nth_projects_out_of_a_neutral_tuple() {
     ck(&g2, &l, &tree(), c(0));
     ck(&g2, &r, &tree(), c(0));
     not_conv(&g2, &l, &r, &tree(), c(0));
+}
+
+/// The evaluator holds the ih an `elim_Wf` β hands its step natively
+/// (`Val::WfIh`) and builds the λ it stands for only when applying it
+/// natively is not possible. Both fallbacks must mean what the λ means: a
+/// canonical constructor over a *neutral* tuple (`nth` projects it)…
+#[test]
+fn the_ih_over_a_neutral_tuple_is_the_recursive_call_on_its_projections() {
+    let g = ext(&ext(&nil_ctx(), Type::Unit { level: Level::Zero }, c(0)), vec_tree(nat(2)), c(0));
+    let lhs = mirror(supf(inj(true, v(1)), v(0)));
+    let rhs = node(
+        mirror(nth_tree(nat(2), v(0), idx(true))),
+        mirror(nth_tree(nat(2), v(0), idx(false))),
+    );
+    ck(&g, &lhs, &tree(), c(0));
+    conv(&g, &lhs, &rhs, &tree(), c(0));
+    not_conv(&g, &lhs, &node(rhs_child(true), rhs_child(true)), &tree(), c(0));
+}
+
+fn rhs_child(one: bool) -> Term {
+    mirror(nth_tree(nat(2), v(0), idx(one)))
+}
+
+/// …and an ih applied at a *neutral* index, where `nth` stalls on the index
+/// and the recursive call is stuck on that.
+#[test]
+fn the_ih_at_a_neutral_index_is_the_recursive_call_on_nth() {
+    // Γ = (l r : Tree, j : Fin 2).
+    let g = ext(&ext(&ext(&nil_ctx(), tree(), c(0)), tree(), c(0)), fin(nat(2)), c(0));
+    let j_in_arm = v(6);
+    let lhs = elim_tree(node(v(2), v(1)), Some(j_in_arm.clone()));
+    let rhs = elim_tree(nth_tree(nat(2), pair2(v(2), v(1)), v(0)), Some(j_in_arm));
+    ck(&g, &lhs, &tree(), c(0));
+    conv(&g, &lhs, &rhs, &tree(), c(0));
+    // At a literal index the same term is the recursive call on that child.
+    let at = |one: bool| {
+        let cl = elim_tree(node(v(2), v(1)), Some(idx(one)));
+        let child = if one { v(1) } else { v(2) };
+        (cl, elim_tree(child, Some(idx(one))))
+    };
+    for one in [false, true] {
+        let (l, r) = at(one);
+        conv(&g, &l, &r, &tree(), c(0));
+    }
 }
 
 #[test]

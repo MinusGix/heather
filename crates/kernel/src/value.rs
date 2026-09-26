@@ -1476,6 +1476,23 @@ pub enum Val<'v> {
     },
 
     // -- functions --
+    /// The induction hypothesis an `elim_Wf` β hands its step,
+    /// `λ i. elim_Wf(e; nth(Wf; n[a/x]; cs; i))`, held as the eliminator and
+    /// the children it was fired on instead of as that λ's syntax
+    /// (`Eval::fire_elim_wf`). Building the syntax shifts the eliminator's
+    /// whole motive and step under three binders, and the next β shifts that
+    /// copy again, so every node of a structural recursion paid for a fresh
+    /// copy of the recursor and no memo keyed on syntax identity ever hit
+    /// twice. Applied to a canonical index over a canonical tuple it selects
+    /// the child and fires `elim` on it directly, which is what the λ's body
+    /// reduces to; applied to anything else, and wherever it is inspected
+    /// rather than applied, it is first built as the λ it stands for
+    /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
+    WfIh {
+        elim: Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
     Lam {
         dom_level: Level,
         cod_level: Level,
@@ -2061,6 +2078,7 @@ impl fmt::Debug for Val<'_> {
             Val::Sup { label, children, .. } => write!(f, "sup({label:?}; {children:?})"),
             Val::Supf { label, children, .. } => write!(f, "sup_f({label:?}; {children:?})"),
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
+            Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),
             Val::CtxLam { body, .. } => write!(f, "Λ(g). {body:?}"),
             Val::TyLam { body, .. } => write!(f, "Λ(U). {body:?}"),

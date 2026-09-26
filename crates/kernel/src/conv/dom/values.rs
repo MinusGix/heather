@@ -802,6 +802,7 @@ impl<'v> Dom<'v> for Values {
             // exactly as `Val::Pair` is, with the Σ-η arm doing the work
             // (`docs/native-bitvector-values-design.md` §3.3).
             Val::Lam { .. }
+            | Val::WfIh { .. }
             | Val::BitRun { .. }
             | Val::NatSync { .. }
             | Val::BitFold { .. }

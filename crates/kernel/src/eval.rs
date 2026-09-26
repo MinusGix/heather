@@ -1732,6 +1732,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (body, arg) = (*body, *arg);
                 Ok(Work::Apply1(body, arg))
             }
+            (Val::WfIh { elim, label, children }, Elim::App { .. }) => {
+                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                self.wf_ih_apply(&head, &elim, label, children, e)
+            }
             (Val::ULam { num_vars, body, .. }, Elim::UApp { levels })
                 if *num_vars as usize == levels.len() =>
             {
@@ -1995,24 +1999,52 @@ impl<'a, 'v> Eval<'a, 'v> {
         )))
     }
 
-    /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λ i. elim_Wf(…; nth … cs i)]`.
-    /// [`fire_elim_w`](Eval::fire_elim_w)'s construction, with the child
-    /// reached through the shared [`nth`] schema instead of an application.
+    /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λ i. elim_Wf(…; nth … cs i)]`,
+    /// with the ih held as [`Val::WfIh`] rather than built as that λ's
+    /// syntax. The syntax guards are [`wf_ih_lam`](Eval::wf_ih_lam)'s, kept
+    /// here so the β fires exactly when it did while the λ was eager.
     fn fire_elim_wf(
         &mut self,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
     ) -> Res<Option<Work<'v>>> {
+        let Elim::ElimWf { shape, arity, motive, step, .. } = e else {
+            return Ok(None);
+        };
+        if step.as_syn().is_none()
+            || arity.as_syn().is_none()
+            || shape.as_syn().is_none()
+            || motive.as_syn().is_none()
+        {
+            return Ok(None);
+        }
+        let ih = Rc::new(Val::WfIh { elim: Rc::new(e.clone()), label, children });
+        let step = *step;
+        Ok(Some(Work::Apply(
+            step,
+            vec![label, children, self.vclo(ih)],
+        )))
+    }
+
+    /// The λ a [`Val::WfIh`] stands for, built as syntax:
+    /// [`fire_elim_w`](Eval::fire_elim_w)'s construction, with the child
+    /// reached through the shared [`nth`] schema instead of an application.
+    /// Only the fallback of [`wf_ih_apply`](Eval::wf_ih_apply) and the
+    /// readers that inspect a function without applying it pay for this.
+    fn wf_ih_lam(
+        &mut self,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Option<Rc<Val<'v>>> {
         let Elim::ElimWf { level, motive_level, shape, arity, motive, step, env } = e else {
-            return Ok(None);
+            return None;
         };
-        let Some((_, step_body)) = step.as_syn() else { return Ok(None) };
-        let Some((_, arity_body)) = arity.as_syn() else { return Ok(None) };
-        let (Some((_, shape_body)), Some((_, motive_body))) = (shape.as_syn(), motive.as_syn())
-        else {
-            return Ok(None);
-        };
+        let (_, step_body) = step.as_syn()?;
+        let (_, arity_body) = arity.as_syn()?;
+        let (_, shape_body) = shape.as_syn()?;
+        let (_, motive_body) = motive.as_syn()?;
         let rho_acs = env.push(self.arena, label).push(self.arena, children);
         let wf_syn = Type::Wf {
             level: level.clone(),
@@ -2050,7 +2082,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             step: st3,
             scrut: Rc::new(child),
         };
-        let ih = Rc::new(Val::Lam {
+        Some(Rc::new(Val::Lam {
             dom_level: Level::Zero,
             cod_level: motive_level.clone(),
             dom: self.arena.ty(TyClo::new(
@@ -2058,12 +2090,56 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Rc::new(Type::Fin { len: Rc::new(arity_body.shift_local(1)) }),
             )),
             body: self.arena.tm(TmClo::syn(rho_acs, Rc::new(rec))),
-        });
-        let step = *step;
-        Ok(Some(Work::Apply(
-            step,
-            vec![label, children, self.vclo(ih)],
-        )))
+        }))
+    }
+
+    /// `ih i` for a [`Val::WfIh`]: when the index is a canonical `Fin` value
+    /// and the tuple a canonical chain of pairs, `nth` is the projections it
+    /// reduces to (`inl _` is the head, `inr j` the `j`th of the tail), and
+    /// the eliminator fires on that child, the λ's body without its syntax.
+    /// Anything else — a neutral index, a stuck or glued tuple — applies the
+    /// λ itself, so what `nth` does there (project a neutral tuple, stall on
+    /// a neutral index) is exactly what it did. One unit of fuel per
+    /// projection, never more than the `nth` reduction charged.
+    fn wf_ih_apply(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        elim: &Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: Elim<'v>,
+    ) -> Res<Work<'v>> {
+        let Elim::App { arg, .. } = &e else {
+            return Ok(Work::Val(stuck(self.arena, head, &e)));
+        };
+        let arg = *arg;
+        let mut cs = self.force(children)?;
+        let mut i = self.force(arg)?;
+        loop {
+            let Val::Pair { fst, snd, .. } = &*cs else { break };
+            let (fst, snd) = (*fst, *snd);
+            match &*i {
+                Val::Inl { .. } => {
+                    self.spend()?;
+                    self.frames.push(Frame::Elim(Rc::clone(elim)));
+                    return Ok(Work::Force(fst));
+                }
+                Val::Inr { val, .. } => {
+                    let val = *val;
+                    self.spend()?;
+                    cs = self.force(snd)?;
+                    i = self.force(val)?;
+                }
+                _ => break,
+            }
+        }
+        match self.wf_ih_lam(label, children, elim).as_deref() {
+            Some(Val::Lam { body, .. }) => {
+                self.spend()?;
+                Ok(Work::Apply1(*body, arg))
+            }
+            _ => Ok(Work::Val(stuck(self.arena, head, &e))),
+        }
     }
 
     /// `elim^Typ … (box code)`: the fired branch comes from the *shared*

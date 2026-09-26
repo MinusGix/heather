@@ -643,6 +643,11 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },
+        Val::WfIh { elim, label, children } => Val::WfIh {
+            elim: Rc::new(elimination(elim, o)),
+            label: tm_clo(label, o),
+            children: tm_clo(children, o),
+        },
         Val::Lam { dom_level, cod_level, dom, body } => Val::Lam {
             dom_level: level(dom_level, o),
             cod_level: level(cod_level, o),

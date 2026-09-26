@@ -131,7 +131,18 @@ phase-1 of the `Wf` former (`docs/wf-former-design.md`).
 `(a : S, cs : Vec(Wf; n[a/x]), ih : Π(i : Fin n[a/x]). M[nth … i/z])`, and β
 synthesizes the ih λ around the recursive call like `elim_W`'s — but over a
 `Fin` index, so the ih is *transient*: applied at literal indices after the
-generated recursor cases on the tag, never stored and never compared. `nth`
+generated recursor cases on the tag, never stored and never compared. The
+evaluator exploits exactly that (2026-09-26,
+`issues/wf-ih-rebuilt-per-node.md`): it holds the ih as `Val::WfIh` — the
+eliminator and the children it fired on — and applying it at a canonical
+index over a canonical tuple fires the eliminator on the selected child
+directly. Building the λ as syntax shifted the whole motive and step under
+three binders, and the next β shifted that copy again, so each node of a
+structural recursion allocated a fresh copy of the recursor and no memo keyed
+on syntax identity hit twice; that was most of the gate time of list-heavy
+proofs. A neutral index, a stuck tuple, or any reader that inspects the
+function instead of applying it gets the λ built as before, so this is a
+strategy change with no semantic content (tests/wf.rs pins both fallbacks). `nth`
 is not a former; it is a fixed `elim_Nat` schema materialized by the rules
 (`term::nth`), and the step telescope is built once in
 `term::wf_step_telescope` and shared verbatim by `typing.rs` and `conv.rs`
