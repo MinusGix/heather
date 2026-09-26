@@ -1,9 +1,9 @@
 ---
 title: omega spells a context atom without an implicit it needs, and its certificate fails
-status: open
+status: closed
 labels: [omega,proofs,elaboration]
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 ## Scope
@@ -48,3 +48,12 @@ the general one: other generators spell terms the same way.
   fails the same way, for example
   `fact: BitVec::ofNat(5, n := 64).toNat() = n ⊢ BitVec::ofNat(5, n := 64).toNat() < 20`.
   The spelling itself remains this issue's.
+- 2026-09-26: Fixed in the speller (`display.rs`, `Speller::call`). When it spells for
+  re-parsing, it keeps an implicit argument that no later explicit parameter's
+  domain mentions: `BitVec::ofNat(5, n := 64)`. A leading type parameter the
+  call does not determine is written in `<…>` (`empty<Nat>()`). Named arguments
+  follow the positional ones. `bv_omega` needed this at its first `ofNat`
+  ([[bitvec-nat-lifting-tactic]]). Acceptance: `crates/elab/tests/bv_omega.rs`,
+  `respelled_atoms_elaborate` (the one-liner, the goal-uses-the-atom case, a
+  type argument, and a false bound over the respelled atom that is still
+  refused).

@@ -41,3 +41,5 @@ mod decreases_unfolding;
 mod stable_termination_labels;
 #[path = "../typed_termination_contexts.rs"]
 mod typed_termination_contexts;
+#[path = "../bv_omega.rs"]
+mod bv_omega;

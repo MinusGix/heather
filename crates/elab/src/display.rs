@@ -586,12 +586,26 @@ impl Speller<'_> {
             },
             _ => return self.raw_tm(t),
         };
-        let shown: Vec<String> = args
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !implicit.get(*i).copied().unwrap_or(false))
-            .map(|(_, a)| self.tm(a, d + 1))
-            .collect();
+        // Named arguments follow every positional one, as the parser requires.
+        // Type parameters are written `<…>`, all of them once any one is.
+        let mut shown: Vec<String> = Vec::new();
+        let mut named: Vec<String> = Vec::new();
+        let mut types: Vec<String> = Vec::new();
+        let written_types = implicit.iter().any(|s| matches!(s, Shown::Type(true)));
+        for (i, a) in args.iter().enumerate() {
+            match implicit.get(i) {
+                Some(Shown::Hidden) => {}
+                Some(Shown::Type(_)) => {
+                    if written_types {
+                        types.push(self.tm(a, d + 1));
+                    }
+                }
+                Some(Shown::Named(name)) => named.push(format!("{name} := {}", self.tm(a, d + 1))),
+                Some(Shown::Explicit) | None => shown.push(self.tm(a, d + 1)),
+            }
+        }
+        shown.extend(named);
+        let name = if types.is_empty() { name } else { format!("{name}<{}>", types.join(", ")) };
         if shown.is_empty() {
             name
         } else {
@@ -609,12 +623,12 @@ impl Speller<'_> {
         names.get(pos).cloned()
     }
 
-    /// A global's written name and its parameters' implicitness. Declines for
-    /// a substituted global (a top-level declaration has a nil context, so its
-    /// substitution carries no terms — anything else is not a plain reference)
-    /// and for a binding `globals` does not name, which is every generated
-    /// definition.
-    fn global(&self, var: GlobalVar, subst: &LocalSubst) -> Option<(String, Vec<bool>)> {
+    /// A global's written name and how each of its parameters is shown.
+    /// Declines for a substituted global (a top-level declaration has a nil
+    /// context, so its substitution carries no terms — anything else is not a
+    /// plain reference) and for a binding `globals` does not name, which is
+    /// every generated definition.
+    fn global(&self, var: GlobalVar, subst: &LocalSubst) -> Option<(String, Vec<Shown>)> {
         if !subst.terms.is_empty() {
             return None;
         }
@@ -627,8 +641,73 @@ impl Speller<'_> {
         if self.qualified && !self.el.base_name_resolves_to(&name, abs) {
             name = self.el.global_qualified_name_at(abs)?;
         }
-        let implicit = self.el.params_at(abs).iter().map(|p| p.implicit).collect();
-        Some((name, implicit))
+        let params = self.el.params_at(abs);
+        // Spelling for re-parsing keeps an implicit that nothing written
+        // determines: `BitVec::ofNat(5)` alone cannot say its width, so it is
+        // spelled `BitVec::ofNat(5, n := 64)`
+        // (`issues/omega-respells-atoms-without-implicits.md`). A resolved
+        // (`requires`) parameter is left to resolution, as it was written.
+        let determined = if self.qualified { self.el.implicits_determined(abs, params.len()) } else { Vec::new() };
+        let shown = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if !p.implicit {
+                    Shown::Explicit
+                } else if p.is_type {
+                    Shown::Type(self.qualified && !determined.get(i).copied().unwrap_or(true))
+                } else if !self.qualified || p.solver.is_some() || determined.get(i).copied().unwrap_or(true) {
+                    Shown::Hidden
+                } else {
+                    Shown::Named(p.name.clone())
+                }
+            })
+            .collect();
+        Some((name, shown))
+    }
+}
+
+/// How a call spells one of its head's parameters.
+enum Shown {
+    Explicit,
+    /// An implicit the call's written arguments determine.
+    Hidden,
+    /// An implicit they do not, written as a named argument.
+    Named(String),
+    /// A leading type parameter; `true` when the call does not determine it.
+    Type(bool),
+}
+
+impl Elaborator {
+    /// For each of the first `count` parameters of the global at `abs`,
+    /// whether a later **explicit** parameter's domain mentions it, so that
+    /// elaborating the written arguments infers it. An explicit parameter
+    /// answers `true`; so does every parameter when the type is not a plain
+    /// Π telescope, the conservative side (the call then spells as before).
+    fn implicits_determined(&self, abs: usize, count: usize) -> Vec<bool> {
+        let params = self.params_at(abs);
+        let Some(heather_kernel::term::GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(abs) else {
+            return vec![true; count];
+        };
+        let mut ty: &Type = ty;
+        if let Type::UPi { body, .. } = ty {
+            ty = body;
+        }
+        let mut doms: Vec<&Type> = Vec::new();
+        while doms.len() < count {
+            let Type::Pi { dom, cod, .. } = ty else { return vec![true; count] };
+            doms.push(dom);
+            ty = cod;
+        }
+        (0..count)
+            .map(|i| {
+                !params.get(i).is_some_and(|p| p.implicit)
+                    || (i + 1..count).any(|j| {
+                        !params.get(j).is_some_and(|p| p.implicit)
+                            && crate::unification::mentions_binder(doms[j], j as u32, (j - 1 - i) as u32)
+                    })
+            })
+            .collect()
     }
 }
 

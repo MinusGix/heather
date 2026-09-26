@@ -48,7 +48,7 @@ pub(crate) struct Certificate {
     pub report: OmegaReport,
 }
 
-fn parse_generated_expr(source: &str) -> Result<Expr, String> {
+pub(crate) fn parse_generated_expr(source: &str) -> Result<Expr, String> {
     timed(|p| &mut p.parse_ns, crate::stats::Timer::OmegaParse, || {
         parse_generated_expr_untimed(source)
     })
@@ -426,7 +426,7 @@ struct BoundProof {
     exact: Option<String>,
 }
 
-fn named_args<'a>(elab: &Elaborator, t: &'a Term, wanted: &str) -> Option<Vec<&'a Rc<Term>>> {
+pub(crate) fn named_args<'a>(elab: &Elaborator, t: &'a Term, wanted: &str) -> Option<Vec<&'a Rc<Term>>> {
     let mut args = Vec::new();
     let mut head = t;
     while let Some((fun, arg)) = crate::spelling::app_of(head) {
@@ -568,7 +568,7 @@ fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc
     Some((coeffs, atoms))
 }
 
-fn integer_source(source: &str) -> Option<Z> {
+pub(crate) fn integer_source(source: &str) -> Option<Z> {
     let source = source.strip_prefix("int::").unwrap_or(source);
     let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
     if let Ok(value) = compact.parse() {
@@ -729,7 +729,7 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
-fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
+pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
     let mut seen = std::collections::HashSet::new();
     cx.names
         .iter()
@@ -984,7 +984,7 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
         .ok_or_else(|| "Omega could not spell an integer expression".to_string())
 }
 
-fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
+pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
     match &**tm {
         Term::Zero => return Ok("0".into()),
         Term::Succ(inner) => {

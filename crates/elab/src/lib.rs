@@ -82,6 +82,7 @@ mod attempt;
 pub mod cutsat;
 pub mod omega;
 mod omega_cert;
+mod bv_omega;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
@@ -4616,6 +4617,53 @@ impl Elaborator {
                 cert.report.phases = phases;
                 self.omega_reports.borrow_mut().push(cert.report);
                 Ok(term)
+            }
+            // `bv_omega` lifts word arithmetic to Nat (docs/bv-omega-design.md):
+            // it writes a proof from the bridge lemmas and `omega`, and this
+            // arm checks it at the goal like any other source.
+            ExprKind::Var(name)
+                if name == "bv_omega"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                if self.key_of("bitvec_omega::add_affine").is_none() {
+                    return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
+                }
+                let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
+                let generated = bv_omega::generate(self, cx, expected).map_err(|detail| ElabError::Elab {
+                    msg: format!("`bv_omega` got stuck: {detail}"),
+                    span: e.span,
+                })?;
+                let parse = |source: &str| {
+                    omega_cert::parse_generated_expr(source).map_err(|detail| ElabError::Elab {
+                        msg: format!("`bv_omega` wrote a proof that does not parse: {detail}\n  generated: {source}"),
+                        span: e.span,
+                    })
+                };
+                let expr = parse(&generated.source)?;
+                match self.generated_scope(|me| me.elab_check(cx, &expr, expected, lvl)) {
+                    Ok(term) => Ok(term),
+                    Err(error) => {
+                        // Name the side condition that failed, not only the goal
+                        // (§5): each one alone, in the context the bundle had.
+                        for obligation in &generated.obligations {
+                            let probe = parse(&format!(
+                                "{{\n{}\nhave __bv_side: ({}) = omega;\n__bv_side\n}}",
+                                generated.prelude, obligation.statement
+                            ))?;
+                            if let Err(side) = self.generated_scope(|me| me.elab_infer(cx, &probe)) {
+                                return err(
+                                    format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{side}", obligation.why, obligation.statement),
+                                    e.span,
+                                );
+                            }
+                        }
+                        Err(ElabError::Elab {
+                            msg: format!("{error}\n  generated `bv_omega` proof: {}", generated.source),
+                            span: e.span,
+                        })
+                    }
+                }
             }
             ExprKind::App { .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))

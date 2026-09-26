@@ -1,9 +1,9 @@
 ---
 title: A certified word-to-Nat lifting tactic (bv_omega-style) for no-overflow word arithmetic
-status: open
+status: closed
 labels: [proofs,bitvec,metaprogramming,ergonomics]
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 Most of `lib/decimal_line.hthr`'s hand work is not about decimals. It moves
@@ -86,3 +86,46 @@ term the kernel checks, so it adds nothing to the trusted base.
   times (width 1), so the tactic can send each side condition to `omega` in place. The
   remaining target is the 25 bridge uses, 15 side conditions and 23 transports
   counted above.
+- 2026-09-26: Design verdicts (with the user; do not relitigate). `bv_omega` is a
+  checking-position leaf beside `omega`. It emits one flat `let` per word
+  subterm (`t.toNat()` in terms of its children's, by the bridge lemmas), each
+  side condition its own `omega` so a refusal names it, then `omega`. Unfolds
+  non-recursive user definitions by one δ-step when the head is not a known word
+  operation, spelling facts at the call. First slice does arithmetic leaves only:
+  splitting a `match` stuck on `unsigned_lt_bit` is a follow-up. Step 0 is
+  [[omega-respells-atoms-without-implicits]]'s speller fix.
+- 2026-09-26: First slice landed: `bv_omega` (docs/bv-omega-design.md;
+  `crates/elab/src/bv_omega.rs`, lemmas in `lib/std/bitvec/omega.hthr`, tests in
+  `crates/elab/tests/bv_omega.rs`). Step 0 closed
+  [[omega-respells-atoms-without-implicits]]. The emission shape changed three
+  times under probes (design §2 gives the reason for each): facts over leaves,
+  not children (chained facts made each `omega` pay for the chain); `have`, not
+  `let` (2^depth kernel paths: 82 s → 2.4 s at eight doublings); a balanced
+  bundle plus the goal over Nat variables (a Π per side condition, or omega's
+  atom fallback reducing `toNat(double(…))`, ran out of kernel depth near 39
+  doublings).
+
+  Acceptance, against `decimal_line` (probes; width 8, total ms from
+  `--timings`; "hand" is the item plus the helpers it alone uses):
+
+  | fact | hand | `bv_omega` |
+  |---|---|---|
+  | `times256_value` (+ `doubling_bounds`, `double_*`) | ~750 | 2,600 |
+  | `raise_value` (+ `raise_bounds`, the above) | ~1,100 | 9,700 |
+  | `line_state_start`'s value, one call | (inside `line_word_value`) | 10,500 |
+  | `line_start_value` | 62 | 670 |
+  | `line_length_value` | 27 | 1,080 |
+  | `place_step` (+ 9 `kept_*`/`taken_*` helpers) | ~5,200 | 14,100 |
+
+  Size: the raise chain (about 45 lines over six lemmas) becomes one line.
+  `place_step` keeps its `match` on `q` and its branch selection, and loses the
+  nine Nat helpers, `below_word` and every transport. A too-weak bound is refused
+  naming the side condition ("`double(y)` may overflow 64 bits").
+
+  Verdict: correct everywhere, and 3–40× the hand proofs' check time, so the
+  library keeps its hand proofs and the re-proofs stay probes. Residue, each
+  with an owner: the cost, and whether `decimal_line` adopts the tactic once it
+  drops → [[bv-omega-check-cost]]; byte extraction, `unsigned_lt_bit` and word
+  equality goals → [[bv-omega-bytes-and-comparisons]]; splitting `place`'s
+  match → [[bv-omega-split-stuck-comparison]]. Found on the way:
+  [[omega-shadowed-binder-certificate]].
