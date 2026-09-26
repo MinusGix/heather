@@ -259,3 +259,29 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
      is now the list the checker meets.
   3. **Rows as Nat pairs or forms**, the list-free certificate idea: no Int at
      all.
+- 2026-09-26: Probe of lever 2 (rows evaluated once): refuted. Each derived row
+  named by a transparent slot holding its literal coefficient list; each bound
+  moved onto the name by `lower_along`/`upper_along`/`exact_along` with a
+  `refl` (env-gated, reverted). On the 24k-step `om1` item the single 57 ms
+  final conversion disappears, but ~30 `refl` steps at 5–8 ms take its place.
+  Conversion-miss time is unchanged (63.6 → 64.4 ms), and kernel steps double
+  (24.3k → 47.3k) with the literal lists' own checking. The derivation was
+  never evaluated twice: the cost is per operation.
+
+  The heaviest `refl` involved no big coefficients: `sub_coeffs` of a
+  normalised fact's rows, a handful of list operations over six elements of 0
+  and 1. Scaling probe, `sub_coeffs(x, y) = z` by `refl` over literal rows:
+  6/12/24/300 elements cost 1.5k/3.0k/5.8k/72k kernel steps, ~245 per element
+  (two `Int::mul`, one `Int::add` and the list matches), ~0.65 ms per element.
+  δ-unfolds are ~15 per element, selections 0. Checking a literal
+  300-element `List<Int>` is itself ~126 steps per element. Profile of the
+  300-element case: conversion's normalisation of values *with their types*
+  (`tm_nf`/`ty_nf`/`ty_root` over the encoded constructors' annotations),
+  η-projections on Σ-encoded children, local shifting, and the allocation and
+  dropping of the terms and types that produces. So an encoded `match` or
+  constructor costs tens of steps, whatever the numbers.
+
+  This makes the kernel lever the next one, and a general one: cheap evaluation
+  and comparison of encoded inductive values (constructor annotations not
+  re-normalised per node, children not η-expanded per projection), which
+  `Int` and `List` would both get, not an `Int`-only primitive.
