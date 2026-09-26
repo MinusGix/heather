@@ -635,7 +635,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
         let (w, word) = (&node.width, &node.word);
         let (p, q) = self.forms[n].clone();
         let proof = match &node.kind {
-            Kind::Leaf => format!("bitvec_omega::form_atom(bitvec::BitVec::toNat({word}))"),
+            Kind::Leaf => format!("bitvec_omega::form_leaf(bitvec::BitVec::toNat({word}))"),
             Kind::Value(lemma, c, syn) => {
                 let lemma = if *lemma == "ofNat_row" { "ofNat_form" } else { "word_of_nat_form" };
                 let r = self.reify(syn, c);

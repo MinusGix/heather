@@ -37,6 +37,13 @@ theorem form_scale(k, c, a, x: Nat): k * (c * a + x) = (k * c) * a + k * x {
 // An atom as a form.
 theorem form_atom(a: Nat): a = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
 
+// A word as a leaf fact, in the facts' own shape `a + q = p`. Stated with the
+// `+ 0` rather than proved from `form_atom` at the use: `a + 0` reduces to `a`
+// in one step, but at a leaf `a` is `toNat` of a word, a newer definition than
+// `+`, and conversion unfolds the newer side first, so the use site paid for
+// computing the word before it met the one-step side.
+theorem form_leaf(a: Nat): a + 0 = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
+
 // ---------------------------------------------------------------------------
 // The arithmetic behind the word lemmas, once, over variables, from the Nat
 // kit: `omega` proves each in a few hundred milliseconds, and every prefix
