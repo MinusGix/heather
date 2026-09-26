@@ -164,27 +164,25 @@ theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel
 // ---------------------------------------------------------------------------
 // The formatter's word, as a number.
 
-// Every value here stays below 2^60, which `omega` can still write down.
-theorem below_word(x: Nat, h: x < 1152921504606846976): x < Nat::pow(2, 64) {
-    Nat::lt_trans(x, 1152921504606846976, Nat::pow(2, 64), h, Nat::leb_sound(Succ(1152921504606846976), Nat::pow(2, 64), trivial))
-}
+// Every value here stays below 2^60, well inside the word.
+theorem below_word(x: Nat, h: x < 1152921504606846976): x < Nat::pow(2, 64) { omega }
 
 theorem double_value(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: v + v < 1152921504606846976):
     double(y).toNat() = v + v {
     bitvec_nat::add_words(64, y, y, v, v, value, value, below_word(v + v, bound))
 }
 
-// A doubling at scale `k`, restated as scale `k + k`. Done by the
-// distributive law: `omega`'s certificate for `v + v = 2 * v` is refused by
-// the kernel.
+// A doubling at scale `k`, restated as scale `k + k` by the distributive
+// law. `omega` proves each literal instance too, but only in the caller's
+// context, where it reflects every word fact in scope and costs far more.
 theorem double_scaled(y: BitVec(64), v, k: Nat, value: y.toNat() = v * k, bound: v * k + v * k < 1152921504606846976):
     double(y).toNat() = v * (k + k) {
     trans(double_value(y, v * k, value, bound), sym(Nat::mul_add_distr(v, k, k)))
 }
 
-// The doublings' bounds, proved where `omega` sees nothing else: with other
-// atoms in its context its certificate here is refused (vectors of
-// different lengths).
+// The doublings' bounds, proved where `omega` sees nothing else: it reflects
+// every fact in scope, so the same goals inside `times256_value` cost it
+// several times more each.
 theorem doubling_bounds(v: Nat, bound: v * 256 < 1152921504606846976):
     (v * 1 + v * 1 < 1152921504606846976) ∧ ((v * 2 + v * 2 < 1152921504606846976) ∧ ((v * 4 + v * 4 < 1152921504606846976) ∧
     ((v * 8 + v * 8 < 1152921504606846976) ∧ ((v * 16 + v * 16 < 1152921504606846976) ∧ ((v * 32 + v * 32 < 1152921504606846976) ∧

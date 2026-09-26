@@ -60,3 +60,7 @@ CPU rail under suite load ([[native-print-test-cpu-margin]]).
 ## Log
 
 - 2026-09-25: [[nat-div-mod-lemma-kit]] landed. `decimal_line` no longer sends any goal with a `div`/`mod` atom to `omega`, so the table's `units_arith` and digit-lemma rows are gone from the library (the `*_arith` lemmas went from 9–11 s to 15 ms). The table's goals stay this issue's customers as standalone `omega` probes. No library item depends on them now.
+- 2026-09-25: The relevance-filter question now has its own owner,
+  [[omega-relevant-facts-only]]. Its evidence involves no `div`/`mod`: inline
+  `omega` in `times256_value` costs about 375 ms a call, against about 45 ms in
+  a small lemma.

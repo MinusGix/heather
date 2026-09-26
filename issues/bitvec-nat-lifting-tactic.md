@@ -1,6 +1,7 @@
 ---
 title: A certified word-to-Nat lifting tactic (bv_omega-style) for no-overflow word arithmetic
-status: open
+status: blocked
+blocked-by: [omega-relevant-facts-only]
 labels: [proofs,bitvec,metaprogramming,ergonomics]
 created: 2026-09-25
 updated: 2026-09-25
@@ -63,3 +64,21 @@ term the kernel checks, so it adds nothing to the trusted base.
   omega can't print a constant of 2^64 or more, and it reads `pow(2, 64)` as an
   atom. Fix that and the respelling issue first, then measure how much of the
   word section is still hand work before building the tactic.
+- 2026-09-25: Re-measured `decimal_line` after [[omega-constants-beyond-u64]] landed.
+  Retired: `below_word`'s hand bridge to `pow(2, 64)`, now one `omega`, and the
+  two stale comments. `double_scaled` and `doubling_bounds` stay. `omega` can
+  now prove their goals inline, but in `times256_value`'s context that costs
+  6.0 s against 31 ms, because omega reflects every fact in scope
+  ([[omega-relevant-facts-only]]). What remains is the tactic's real target:
+  - 25 bridge-lemma uses: `toNat_ofNat` 6, `add_words` 6, `toNat_take_drop` 7,
+    `toNat_sub` 2, `unsigned_lt_nat` 2, `toNat_word_of_nat` 2;
+  - 15 `below_word` side conditions;
+  - 23 transports under `toNat`: 21 `j(sym(…))` and 2 `cong`.
+
+  A further 8 Nat-only helpers (`kept_*`, `taken_*`, `weight_small`) exist
+  because of [[omega-respells-atoms-without-implicits]]. Fixing respelling alone
+  won't retire them profitably, since inlined they'd pay the whole context.
+
+  Design consequence: the tactic must hand `omega` only the facts each side
+  condition needs. So it waits on [[omega-relevant-facts-only]], or does that
+  slicing itself.
