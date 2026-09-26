@@ -10,7 +10,7 @@ type Values = BTreeMap<u64, String>;
 /// by that name, and nothing compares the argument's expansion again.
 struct Crossings<'a> {
     values: &'a cert::SourceValues,
-    bodies: &'a cert::SourceValues,
+    bodies: &'a cert::SourceBodies,
     /// A crossing's name, with the scope it was named in: a continuation is
     /// certified over its own valuation, so a name made inside one means
     /// nothing outside it, and is spelled out in full there instead.
@@ -46,13 +46,13 @@ pub fn generate_structured_results(
     prefix: &str, region: &StructuredRegion, inputs: &Placements,
     temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<StructuredX86Emission, LoweringError> {
-    generate_structured_sourced(prefix, region, &cert::SourceValues::new(), &cert::SourceValues::new(), inputs, temporaries, outputs)
+    generate_structured_sourced(prefix, region, &cert::SourceValues::new(), &cert::SourceBodies::new(), inputs, temporaries, outputs)
 }
 
 /// As `generate_structured_results`, with the source value of each composed
 /// helper call (cert::SourceValue): those compositions cross at the call.
 pub fn generate_structured_sourced(
-    prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, bodies: &cert::SourceValues, inputs: &Placements,
+    prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, bodies: &cert::SourceBodies, inputs: &Placements,
     temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<StructuredX86Emission, LoweringError> {
     let lowered = lower_structured_results(region, inputs, temporaries, outputs)?;
@@ -445,7 +445,7 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     fun(m, format!("{n}_source"), false, logical(), format!("BitVec({width})"), spell(value, None));
     // What the prefix's own crossing computes from its child: the call when
     // the child is its argument, else the helper body's result.
-    let meaning = child.and_then(|child| [Some(value), sources.bodies.get(&port.id)].into_iter().flatten()
+    let meaning = child.and_then(|child| std::iter::once(value).chain(sources.bodies.get(&port.id).into_iter().flatten())
         .find(|meaning| meaning.produces(child.id)).map(|meaning| (child, meaning.clone())));
     let crossing = format!("{n}_source(values)");
     let first_result = format!("{first}{}", result_suffix(first_plan, port.id));
@@ -510,7 +510,7 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     // source, instead of converting through the carry at the value's name.
     // After `finish`, which declares `_result`.
     if let [(out, _)] = p.outputs.as_slice() {
-        if let Some(meaning) = sources.bodies.get(&out.id).filter(|meaning| meaning.produces(port.id)) {
+        if let Some(meaning) = sources.bodies.get(&out.id).and_then(|bodies| bodies.iter().find(|meaning| meaning.produces(port.id))) {
             let spell = |at: &str| {
                 meaning.render_named(cert::SourceType::Word(out.width), &|leaf: Port| val(incoming, leaf.id, leaf.width),
                     &|produced: Port| if produced.id == port.id { Some(at.to_string()) } else { sources.spelled(incoming, produced) })
