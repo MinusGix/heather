@@ -23,6 +23,8 @@ mod omega_measure_reduction;
 mod omega_reconstruction;
 #[path = "../omega_wide_constants.rs"]
 mod omega_wide_constants;
+#[path = "../omega_relevance.rs"]
+mod omega_relevance;
 #[path = "../module_delta_omega_bench.rs"]
 mod module_delta_omega_bench;
 #[path = "../mutual_recursion.rs"]

@@ -1765,14 +1765,35 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
     }
 }
 
-fn reflect_ordinary(
+/// What an ordinary reflection read, before any of it is rendered: one
+/// relation per local that states one, the local's name beside it, over one
+/// atom table.
+struct Collected {
+    atoms: AtomTable<ReflectedAtom>,
+    relations: Vec<ReflectedConstraint<AffineSyntax, String>>,
+    names: Vec<String>,
+}
+
+/// An ordinary reflection, rendered: the facts, the atom list's source, the
+/// atoms' labels, and each atom's own source for CutSat.
+type Reflection = (Vec<InitialAssumption>, String, Vec<String>, Option<Vec<String>>);
+
+/// The relations among the locals, or only among those `keep` names.
+/// `None` when a local is already a reflected `dot` row (the explicit
+/// frontend's input) or no local states a relation.
+fn collect_ordinary(
     elab: &Elaborator,
     cx: &Cx,
-) -> Result<Option<(Vec<InitialAssumption>, String, Vec<String>, Vec<String>)>, String> {
+    keep: Option<&std::collections::HashSet<String>>,
+) -> Result<Option<Collected>, String> {
     let mut atoms = AtomTable::default();
     let mut relations = Vec::new();
+    let mut names = Vec::new();
     for (name, ty) in local_facts(elab, cx) {
         if name.starts_with("__cutsat_nat_eq_") || name.starts_with("__cutsat_int_eq_") {
+            continue;
+        }
+        if keep.is_some_and(|keep| !keep.contains(&name)) {
             continue;
         }
         let decoded_ty = crate::inductive::decoded(&ty);
@@ -1936,10 +1957,119 @@ fn reflect_ordinary(
             rhs: right,
             evidence: proof,
         });
+        names.push(name);
     }
     if relations.is_empty() {
         return Ok(None);
     }
+    Ok(Some(Collected { atoms, relations, names }))
+}
+
+/// How many times [`relevant_layers`] widens past the goal's own atoms
+/// before the caller falls back to every fact.
+const RELEVANCE_WIDENINGS: usize = 3;
+
+/// The locals worth refuting the goal with, as widening layers, each fewer
+/// than all of them (issues/omega-relevant-facts-only.md).
+///
+/// The goal is the negated-goal local every relation goal reduces to. The
+/// first layer is the facts over the goal's atoms alone; each next layer
+/// takes in the atoms of every fact that touches the previous layer's atoms,
+/// then the facts over those. A division atom brings its dividend's atoms,
+/// since its bounds are stated over them. A fact with no atoms is in every
+/// layer, since `1 < 0` refutes anything.
+///
+/// Layers are an order of attempts, not a claim: a system can need a fact
+/// no layer reaches (its contradiction among facts away from the goal, or a
+/// chain longer than [`RELEVANCE_WIDENINGS`]), so the caller ends with every
+/// fact. What they buy is the common case, a goal about a few atoms in a
+/// context full of facts that share one of them (every word equation in a
+/// proof mentions the same `v`), which connectivity alone keeps whole.
+fn relevant_layers(collected: &Collected) -> Vec<std::collections::HashSet<String>> {
+    use std::collections::HashSet;
+    fn atoms_of(syntax: &AffineSyntax, out: &mut Vec<usize>) {
+        match syntax {
+            AffineSyntax::Atom { index, .. } => out.push(index.index()),
+            AffineSyntax::Mod { expanded: inner, .. }
+            | AffineSyntax::NatMod { expanded: inner, .. }
+            | AffineSyntax::ModZero { dividend: inner, .. }
+            | AffineSyntax::NatModZero { dividend: inner, .. }
+            | AffineSyntax::Neg { inner }
+            | AffineSyntax::NatScale { inner, .. }
+            | AffineSyntax::Scale { inner, .. } => atoms_of(inner, out),
+            AffineSyntax::Add { left, right } | AffineSyntax::NatAdd { left, right, .. } => {
+                atoms_of(left, out);
+                atoms_of(right, out);
+            }
+            AffineSyntax::Const { .. }
+            | AffineSyntax::DivZero { .. }
+            | AffineSyntax::NatDivZero { .. } => {}
+        }
+    }
+
+    let Some(goal) = collected.names.iter().position(|name| name == "__omega_negated_goal") else {
+        return Vec::new();
+    };
+    // Each atom with the atoms its division bounds bring along, closed.
+    let atom_count = collected.atoms.iter().len();
+    let mut brings: Vec<Vec<usize>> = vec![Vec::new(); atom_count];
+    for (index, atom) in collected.atoms.iter_with_ids() {
+        if let Some(division) = &atom.division {
+            atoms_of(&division.dividend, &mut brings[index.index()]);
+        }
+    }
+    let close = |seed: Vec<usize>| {
+        let mut closed: HashSet<usize> = HashSet::new();
+        let mut work = seed;
+        while let Some(atom) = work.pop() {
+            if closed.insert(atom) {
+                work.extend(brings[atom].iter().copied());
+            }
+        }
+        closed
+    };
+    let facts: Vec<HashSet<usize>> = collected
+        .relations
+        .iter()
+        .map(|relation| {
+            let mut atoms = Vec::new();
+            atoms_of(&relation.lhs, &mut atoms);
+            atoms_of(&relation.rhs, &mut atoms);
+            close(atoms)
+        })
+        .collect();
+
+    let mut layers = Vec::new();
+    let mut reach = facts[goal].clone();
+    for _ in 0..=RELEVANCE_WIDENINGS {
+        let layer: HashSet<String> = facts
+            .iter()
+            .zip(&collected.names)
+            .filter(|(atoms, _)| atoms.is_subset(&reach))
+            .map(|(_, name)| name.clone())
+            .collect();
+        if layer.len() == collected.names.len() {
+            break;
+        }
+        if layers.last().is_none_or(|last: &HashSet<String>| last.len() < layer.len()) {
+            layers.push(layer);
+        }
+        let wider: HashSet<usize> = facts
+            .iter()
+            .filter(|atoms| !atoms.is_disjoint(&reach))
+            .flat_map(|atoms| atoms.iter().copied())
+            .collect();
+        if wider.is_subset(&reach) {
+            break;
+        }
+        reach.extend(wider);
+    }
+    layers
+}
+
+/// Render collected relations as Omega's initial facts over their atom list.
+fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
+    let Collected { atoms, mut relations, .. } = collected;
     let divisions = atoms
         .iter_with_ids()
         .filter_map(|(index, atom)| atom.division.clone().map(|division| (index, division)))
@@ -2134,7 +2264,7 @@ fn reflect_ordinary(
         })
         .collect();
     let atom_sources = atoms.iter().map(|atom| atom.source.clone()).collect();
-    Ok(Some((facts, atoms_source, atom_labels, atom_sources)))
+    Ok((facts, atoms_source, atom_labels, Some(atom_sources)))
 }
 
 fn int(value: Z) -> String {
@@ -3002,13 +3132,30 @@ pub(crate) fn reconstruct(
         ));
     }
 
-    let (reflected, atoms_source, atom_labels, cut_atom_sources) =
-        if let Some(ordinary) = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
-            reflect_ordinary(elab, cx)
-        })? {
-            let (facts, atoms_source, atom_labels, atom_sources) = ordinary;
-            (facts, atoms_source, atom_labels, Some(atom_sources))
-        } else {
+    let ordinary = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
+        collect_ordinary(elab, cx, None)
+    })?;
+    let flags = (allow_disequality_split, allow_connective_split, allow_cutsat);
+    let reflection = if let Some(all) = ordinary {
+        // The facts nearest the goal first, widening; every fact only if no
+        // layer refutes it (see `relevant_layers`). Only the last attempt
+        // records a failure: it is the one that answers.
+        for keep in relevant_layers(&all) {
+            let Some(relevant) = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
+                collect_ordinary(elab, cx, Some(&keep))
+            })?
+            else {
+                continue;
+            };
+            let reflection = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
+                reflect_collected(relevant)
+            })?;
+            if let Ok(certificate) = refute(elab, cx, flags, reflection, false) {
+                return Ok(certificate);
+            }
+        }
+        timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || reflect_collected(all))?
+    } else {
             let mut explicit = Vec::new();
             for (name, ty) in local_facts(elab, cx) {
                 // A hypothesis this renderer cannot spell is one Omega cannot
@@ -3056,6 +3203,19 @@ pub(crate) fn reconstruct(
             let atom_count = reflected_atom_count(&facts);
             (facts, atoms_source, indexed_atom_labels(atom_count), None)
         };
+    refute(elab, cx, flags, reflection, true)
+}
+
+/// Omega's search and certificate over one reflection, with the splits it
+/// falls back to. `record_failure` is off for an attempt that has a retry
+/// behind it.
+fn refute(
+    elab: &Elaborator,
+    cx: &Cx,
+    (allow_disequality_split, allow_connective_split, allow_cutsat): (bool, bool, bool),
+    (reflected, atoms_source, atom_labels, cut_atom_sources): Reflection,
+    record_failure: bool,
+) -> Result<Certificate, String> {
     let atom_count = atom_labels.len();
 
     let mut problem = Problem::new();
@@ -3142,20 +3302,22 @@ pub(crate) fn reconstruct(
             .collect::<Vec<_>>()
             .join(", ");
         let total_derivations = problem.dag.nodes().len();
-        elab.record_omega_failure_report(OmegaReport {
-            atoms: atom_count,
-            atom_labels: atom_labels.clone(),
-            assumptions: reflected.len(),
-            reachable_derivations: 0,
-            total_derivations,
-            discarded_derivations: total_derivations,
-            logical_splits: 0,
-            stats: *stats,
-            used_lemmas: Vec::new(),
-            residual,
-            cutsat: None,
-            phases: OmegaPhases::default(),
-        });
+        if record_failure {
+            elab.record_omega_failure_report(OmegaReport {
+                atoms: atom_count,
+                atom_labels: atom_labels.clone(),
+                assumptions: reflected.len(),
+                reachable_derivations: 0,
+                total_derivations,
+                discarded_derivations: total_derivations,
+                logical_splits: 0,
+                stats: *stats,
+                used_lemmas: Vec::new(),
+                residual,
+                cutsat: None,
+                phases: OmegaPhases::default(),
+            });
+        }
         return Err(format!(
             "Omega's real shadow found no contradiction; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
             atom_labels.join(", "),

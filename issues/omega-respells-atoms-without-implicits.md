@@ -43,3 +43,8 @@ the general one: other generators spell terms the same way.
   dropped atom is neutral (`0 * x` doesn't reduce), so the kernel refused
   certificates such as `n.div(10).div(10) = n.div(100)` and `v + v = 2 * v` in
   a context with other atoms. Rows are now padded to the atom count.
+- 2026-09-25: The repro above now checks: [[omega-relevant-facts-only]] leaves out the
+  fact, since the goal is not over its atom. A goal that uses the atom still
+  fails the same way, for example
+  `fact: BitVec::ofNat(5, n := 64).toNat() = n ⊢ BitVec::ofNat(5, n := 64).toNat() < 20`.
+  The spelling itself remains this issue's.

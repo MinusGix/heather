@@ -2,8 +2,9 @@
 //! including the low-level `omega::dot` boundary and ordinary affine syntax.
 
 // Each member file (omega.rs, omega_logic.rs, omega_reconstruction.rs,
-// omega_wide_constants.rs) runs one rail-sized suite below, in a process of
-// its own; a binary that mounts fewer than all four leaves the others dormant.
+// omega_wide_constants.rs, omega_relevance.rs) runs one rail-sized suite
+// below, in a process of its own; a binary that mounts fewer than all five
+// leaves the others dormant.
 #![allow(dead_code)]
 
 use std::cell::OnceCell;
@@ -805,6 +806,59 @@ fn refuses_at_the_word_bound() {
     let source = format!("{PREFIX}\ntheorem costly_power(x: Nat, h: x < 5): x < nat::Nat::pow(1099511627776, 3) {{ omega }}\n");
     let message = message(elaborator().elab_module_source("probe", &source).expect_err("costly power"));
     assert!(message.contains("atoms [x, nat::Nat::pow(1099511627776, 3)]"), "{message}");
+}
+
+/// issues/omega-relevant-facts-only.md: `omega` refutes a goal with the
+/// facts over the goal's own atoms first, widening one hop at a time, and
+/// only then with every fact. A fact that shares an atom with the goal is not
+/// thereby needed: here `wide` mentions `x` and the goal needs `h` alone.
+fn reflects_only_the_facts_near_the_goal() {
+    let source = format!(
+        r#"{PREFIX}
+theorem near(x, y, z: Nat, h: x < 3, wide: y = x + z, far: z <= y + 7): x < 5 {{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("a goal near its facts did not check: {}", message(error)));
+    let reports = elab.take_omega_reports();
+    let labels: Vec<_> = reports.iter().filter(|report| report.atoms > 0).map(|report| report.atom_labels.clone()).collect();
+    assert_eq!(labels, [["x"]], "{reports:#?}");
+}
+
+/// A goal whose facts reach it only through others widens until they do,
+/// and a contradiction among facts away from the goal is still found by the
+/// last attempt over every fact.
+fn widens_and_falls_back() {
+    let source = format!(
+        r#"{PREFIX}
+theorem chain(a, b, c, d, e: Nat, ab: a <= b, bc: b <= c, cd: c <= d, de: d < e): a < e {{ omega }}
+theorem apart(x, y, z: Nat, bad: y + 1 <= y, h: x < 5): x < z {{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("widening or the fallback did not check: {}", message(error)));
+}
+
+/// A goal no attempt refutes reports one failure, from the attempt over
+/// every fact, not one per layer.
+fn a_stuck_goal_reports_one_failure() {
+    let source = format!("{PREFIX}\ntheorem stuck(x, y, z: Nat, h: x < 5, other: y <= 3): x < z {{ omega }}\n");
+    let mut elab = elaborator();
+    let error = elab.elab_module_source("probe", &source).expect_err("x < z does not follow");
+    assert!(message(error).contains("real shadow found no contradiction"));
+    let failures = elab.take_omega_failure_reports();
+    let [failure] = failures.as_slice() else {
+        panic!("expected one failed-search report, got {failures:#?}")
+    };
+    assert_eq!(failure.atom_labels, ["x", "y", "z"]);
+}
+
+pub fn omega_relevance_suite() {
+    reflects_only_the_facts_near_the_goal();
+    widens_and_falls_back();
+    a_stuck_goal_reports_one_failure();
 }
 
 pub fn omega_wide_constants_suite() {

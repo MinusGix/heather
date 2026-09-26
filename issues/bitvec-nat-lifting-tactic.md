@@ -1,7 +1,6 @@
 ---
 title: A certified word-to-Nat lifting tactic (bv_omega-style) for no-overflow word arithmetic
-status: blocked
-blocked-by: [omega-relevant-facts-only]
+status: open
 labels: [proofs,bitvec,metaprogramming,ergonomics]
 created: 2026-09-25
 updated: 2026-09-25
@@ -82,3 +81,8 @@ term the kernel checks, so it adds nothing to the trusted base.
   Design consequence: the tactic must hand `omega` only the facts each side
   condition needs. So it waits on [[omega-relevant-facts-only]], or does that
   slicing itself.
+- 2026-09-25: Unblocked: [[omega-relevant-facts-only]] landed. An inline `omega` in
+  `times256_value` now costs about 1.6 times the lemma form, not about 5.5
+  times (width 1), so the tactic can send each side condition to `omega` in place. The
+  remaining target is the 25 bridge uses, 15 side conditions and 23 transports
+  counted above.

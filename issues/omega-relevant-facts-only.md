@@ -1,6 +1,6 @@
 ---
 title: omega reflects every fact in scope; reflect only those connected to the goal
-status: open
+status: closed
 labels: [omega,performance,proofs]
 created: 2026-09-25
 updated: 2026-09-25
@@ -55,3 +55,35 @@ atom-free fact, since `1 < 0` in scope refutes anything.
   atoms. This issue owns the filter, and that one keeps its attribution.
 - **[[omega-local-proof-aliases]]** owns which local facts are visible at
   all. Assumed here: only that the filter runs after that collection.
+
+## Log
+
+- 2026-09-25: Landed, with one change of design: widening layers, not connectivity.
+  Connectivity dropped nothing where it mattered. Every equation in
+  `times256_value` mentions `v`, so its context is one component, and the
+  component filter moved that item only 6%. `relevant_layers` (`omega_cert.rs`)
+  tries first the facts over the negated goal's own atoms, then up to
+  `RELEVANCE_WIDENINGS` (3) layers, each adding the atoms of facts touching the
+  last, then every fact. Division atoms bring their dividend's atoms, and
+  atom-free facts are in every layer. Each attempt collects again over only its
+  facts, so the atom list and the certificate's rows shrink too. Only the last
+  attempt records a failure.
+
+  `scripts/perf ab` against 2ff39a56 (width 1, 3 cold samples; the box was
+  loaded, but every seconds verdict below separated, and the counters are
+  exact):
+  - `lib/decimal_line.hthr` as committed: wall −21%, gate −27%; conv_misses
+    −30%, eval_steps −25%, unify_calls −57%. `leading_zeros_value` went from
+    3.33 s to 0.17 s.
+  - The inline rewrite (the issue's acceptance): `times256_value` went from
+    1.15 s to 0.35 s and `raise_value` from 0.42 s to 0.17 s, against about
+    0.21 s for the lemma form, so within a small factor. File wall −33%.
+  - `calc_parser` showcase control: seconds unchanged; `delta_body_rescopes`
+    +2% from the extra collections.
+
+  Tests: `crates/elab/tests/omega_relevance.rs`. A goal's report lists only its
+  own atom although the context shares it. A chain needs the widening. An
+  unrelated contradiction is found by the fallback. A stuck goal records one
+  failure. The respelling repro in [[omega-respells-atoms-without-implicits]]
+  now checks, and a goal that uses the misspelled atom still fails (that
+  issue's). Design note: docs/certifying-arithmetic-substrate-design.md §1.

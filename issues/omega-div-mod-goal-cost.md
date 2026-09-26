@@ -64,3 +64,6 @@ CPU rail under suite load ([[native-print-test-cpu-margin]]).
   [[omega-relevant-facts-only]]. Its evidence involves no `div`/`mod`: inline
   `omega` in `times256_value` costs about 375 ms a call, against about 45 ms in
   a small lemma.
+- 2026-09-25: [[omega-relevant-facts-only]] landed. `decimal_line::leading_zeros_value`
+  went from 3.33 s to 0.17 s, and the `line_*` group items dropped 25–36%.
+  The table above predates it and should be re-taken before attributing.

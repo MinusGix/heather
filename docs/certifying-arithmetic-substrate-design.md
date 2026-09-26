@@ -106,6 +106,25 @@ CutSat, or linarith. The first extraction should retain checked `i128` and its
 structured overflow refusal; arbitrary-precision coefficients are a later,
 separable representation change.
 
+**Which facts are reflected.** Omega reads every local, but it refutes with
+the nearest ones first (`relevant_layers`, `omega_cert.rs`). The first
+attempt uses only the facts over the negated goal's own atoms. Each further
+layer adds the atoms of every fact touching the last one, and the facts over
+those, up to `RELEVANCE_WIDENINGS` layers. The last attempt uses every fact.
+A division atom brings its dividend's atoms, and a fact with no atoms is in
+every layer. Each attempt collects again over only its facts, so the atom
+list, and with it every row of the certificate, has only the atoms in play.
+Layers are an order, not a claim, so the attempt over every fact still finds
+a contradiction among facts away from the goal. Only that last attempt
+records a failure report.
+
+Connectivity alone keeps too much. In a proof about machine words, every
+equation mentions the same `v`, so the whole context is one component. The
+facts *over* the goal's atoms are what a side condition like `v * 2 + v * 2 <
+2^60` needs. The filter also spares omega from spelling atoms of unrelated
+facts, which is where a misspelled atom used to fail
+(issues/omega-relevant-facts-only.md).
+
 For future nonlinear tactics, commutative-ring normalization may intern a
 canonical monomial as an `AtomId`. That lets linear solvers reason about
 relations among monomials without pretending that they understand nonlinear
