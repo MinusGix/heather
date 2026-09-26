@@ -166,7 +166,7 @@ use names::{
 use recursion::SelfRef;
 use representations::Representations;
 use slots::{Ingredient, Slot};
-pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
+pub(crate) use surface::{count_holes, count_holes_expr, count_tactic_slots, strengthen_global};
 use surface::{
     expression_as_type, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
@@ -3588,7 +3588,7 @@ impl Elaborator {
         // (shifted) world as the body.
         self.attempt
             .goal_arena
-            .configure(count_holes(decl), reserved_goals);
+            .configure(count_holes(decl) + count_tactic_slots(decl), reserved_goals);
         self.refresh_delta_psi();
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
@@ -3752,6 +3752,10 @@ impl Elaborator {
             self.solve_goals(&decl.body.ons, &decl.name)?;
             Some(body)
         };
+        // A capacity restart discards this attempt: none of it is gated.
+        if self.attempt.goal_arena.restart_requested() {
+            return err("internal: restarting declaration for goal capacity", decl.span);
+        }
         let (sigma, aux, lifted_world) = self.lift_proved(&decl.name, decl.span)?;
         let lifted = aux.len() as u32;
         let goal_base = self.attempt.goal_arena.base();
@@ -3991,29 +3995,30 @@ impl Elaborator {
     /// past the lifted ones before applying it.
     fn lift_proved(&mut self, name: &str, span: Span) -> R<(GlobalSubst, Vec<GlobalBinding>, Option<Rc<GlobalCtx>>)> {
         let mut sigma = self.goal_subst();
-        let proved = self.attempt.goal_arena.proved();
-        if proved.is_empty() {
+        let lifted = self.attempt.goal_arena.lifted();
+        if lifted.is_empty() {
             return Ok((sigma, Vec::new(), None));
         }
         let base = self.attempt.goal_arena.base();
-        let m = proved.len() as u32;
+        let m = lifted.len() as u32;
         for entry in sigma.entries.iter_mut() {
             if let heather_kernel::subst::GlobalEntry::Tm(t) = entry {
                 *t = Rc::new(t.shift_global(m));
             }
         }
-        // Out of the goal world, into Ψ and the lifted proofs before this
-        // one: an earlier lifted proof is referred to (a `let` bound to one
-        // is inlined into what follows it), and any other goal is refused,
-        // which the two dummies would disagree about.
+        // Out of the goal world, into Ψ and the lifted slots before this
+        // one: an earlier lifted proof or value is referred to (a `let`
+        // bound to one is inlined into what follows it, and `omega` names
+        // its atom list), and any other goal is refused, which the two
+        // dummies would disagree about.
         let mut world: GlobalCtx = (*self.psi).clone();
         let mut aux = Vec::new();
         let mut earlier: HashMap<usize, (usize, LocalCtx)> = HashMap::new();
-        for (j, (k, gamma, ty, level, proof)) in proved.into_iter().enumerate() {
+        for (j, slot) in lifted.into_iter().enumerate() {
             let out = |dummy: Term| GlobalSubst {
                 entries: (0..base as usize)
-                    .map(|slot| {
-                        heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&slot) {
+                    .map(|k| {
+                        heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&k) {
                             Some((i, delta)) => Term::GlobalTm { var: GlobalVar((j - 1 - i) as u32), subst: LocalSubst::id(delta) },
                             None => dummy.clone(),
                         }))
@@ -4022,12 +4027,12 @@ impl Elaborator {
             };
             let (zero, one) = (out(Term::Zero), out(Term::Succ(Rc::new(Term::Zero))));
             let into = |sigma: &GlobalSubst| (
-                gamma.shift_global_above(j as u32, base).apply_global(sigma),
-                ty.shift_global_above(j as u32, base).apply_global(sigma),
-                proof.shift_global_above(j as u32, base).apply_global(sigma),
+                slot.gamma.shift_global_above(j as u32, base).apply_global(sigma),
+                slot.ty.shift_global_above(j as u32, base).apply_global(sigma),
+                slot.body.shift_global_above(j as u32, base).apply_global(sigma),
             );
-            let (gamma, ty, proof) = into(&zero);
-            if (gamma.clone(), ty.clone(), proof.clone()) != into(&one) {
+            let (gamma, ty, body) = into(&zero);
+            if (gamma.clone(), ty.clone(), body.clone()) != into(&one) {
                 return err("internal: a lifted proof mentions a goal", span);
             }
             // Its context is checked here too: a declaration's own gate never
@@ -4035,12 +4040,18 @@ impl Elaborator {
             let at = Rc::new(world.clone());
             stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.fuel))
                 .map_err(|e| self.kernel_error(&format!("{name}#aux{j}"), span, e))?;
-            self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &level, &proof, true)?;
-            let binding = GlobalBinding::Tm { ctx: gamma.clone(), layer: Layer::Code, ty: Rc::new(ty), level, body: None };
+            self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &slot.level, &body, !slot.transparent)?;
+            let binding = GlobalBinding::Tm {
+                ctx: gamma.clone(),
+                layer: Layer::Code,
+                ty: Rc::new(ty),
+                level: slot.level,
+                body: slot.transparent.then(|| Rc::new(body)),
+            };
             world.push(binding.clone());
             aux.push(binding);
-            earlier.insert(k, (j, gamma.clone()));
-            sigma.entries[k] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::GlobalTm {
+            earlier.insert(slot.slot, (j, gamma.clone()));
+            sigma.entries[slot.slot] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::GlobalTm {
                 var: GlobalVar(m - 1 - j as u32),
                 subst: LocalSubst::id(&gamma),
             }));
@@ -4682,11 +4693,59 @@ impl Elaborator {
                 // generator spells a list is the generator's problem, not the
                 // reader's. Same rule as datarepr emissions (`emit_lint`).
                 let check_guard = stats::guard(stats::Timer::OmegaCheck);
+                // The certificate names its atom list rather than spelling it
+                // at every row: elaborated once here, and a transparent slot
+                // of the declaration's where there is one, so the kernel
+                // checks one list per certificate, not one per use.
+                let named;
+                let cx = match &cert.atoms {
+                    Some(literal) => {
+                        let (list_ty, parsed) = omega_cert::parse_atom_list(literal).map_err(|detail| ElabError::Elab {
+                            msg: format!("`omega` wrote an atom list that does not parse: {detail}\n  generated: {literal}"),
+                            span: e.span,
+                        })?;
+                        let checked = self.generated_scope(|me| {
+                            let (ty, level) = me.elab_ty(cx, &list_ty)?;
+                            let atoms = me.elab_check(cx, &parsed, &ty, &level)?;
+                            Ok((atoms, ty, level))
+                        });
+                        let (atoms, ty, level) = checked.map_err(|error: ElabError| ElabError::Elab {
+                            msg: format!("{error}\n  generated Omega atom list: {literal}"),
+                            span: e.span,
+                        })?;
+                        let term = self
+                            .attempt
+                            .goal_arena
+                            .allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone());
+                        let term = match term {
+                            goals::Named::Slot(reference) => reference,
+                            goals::Named::Inline => atoms,
+                            goals::Named::Restart => {
+                                return err("internal: restarting declaration to reserve a slot for `omega`'s atoms", e.span);
+                            }
+                        };
+                        let mut inner = cx.clone();
+                        inner.aliases.push(Rc::new(Alias {
+                            name: omega_cert::ATOMS.to_string(),
+                            depth: cx.names.len(),
+                            term: Rc::new(term),
+                            ty,
+                            level,
+                            skel: None,
+                        }));
+                        named = inner;
+                        &named
+                    }
+                    None => cx,
+                };
                 let checked = self
                     .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
                 phases.check_ns = check_guard.finish();
                 let term = checked.map_err(|error| ElabError::Elab {
-                    msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
+                    msg: match &cert.atoms {
+                        Some(atoms) => format!("{error}\n  generated Omega certificate: {}\n  where {} = {atoms}", cert.source, omega_cert::ATOMS),
+                        None => format!("{error}\n  generated Omega certificate: {}", cert.source),
+                    },
                     span: e.span,
                 })?;
                 cert.report.phases = phases;
@@ -7948,6 +8007,9 @@ impl Elaborator {
     /// Semantic operations in the expression world's δ context, including
     /// any dynamic meta binders currently in scope.
     fn semantic_oracle(&self) -> oracle::SemanticOracle {
+        if let Some(world) = self.attempt.goal_arena.delta_world(&self.delta_psi) {
+            return oracle::SemanticOracle::with_dynamic(&world, &self.meta_pushed.borrow(), self.fuel);
+        }
         oracle::SemanticOracle::with_dynamic(&self.delta_psi, &self.meta_pushed.borrow(), self.fuel)
     }
 
@@ -8057,6 +8119,7 @@ impl Elaborator {
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
+        self.attempt.goal_arena.invalidate_delta_world();
         if self.global_padding() == 0 {
             self.delta_psi = self.psi.clone();
             return;

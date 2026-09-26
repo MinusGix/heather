@@ -147,3 +147,39 @@ the same for itself:
 
 The lemma closes over the whole context. What that costs, and a relevance
 filter, are `issues/bv-omega-check-cost.md`'s.
+
+### 6.1 Named values: `omega`'s atom list
+
+The same arena holds *transparent* slots, for a value a tactic would
+otherwise spell at every use. `omega` is the one user. Its certificate
+mentions its atom list in every `basis(i, atoms)`, `zeros(atoms)` and lemma
+argument, and each literal copy costs the checker a full list check: on a
+small goal the copies were essentially the whole kernel cost. The certificate
+instead names the list `__omega_atoms`. The `omega` arm then works in three
+steps:
+
+- It elaborates the literal once, checked at `list::List<int::Int>`, since an
+  empty list infers nothing.
+- It stores the value in a transparent slot (`allocate_transparent`). The
+  same value in the same context shares one slot.
+- It checks the certificate with the name bound as an alias to the slot's
+  reference.
+
+A transparent slot is a definition in both worlds:
+
+- **While the declaration elaborates**, conversion must compute
+  `basis(i, atoms)` and the rows built from it. The semantic oracle's δ world
+  and the goal world therefore carry the slot's body, scoped in committed Ψ.
+  A value or context that mentions a goal cannot be scoped there and stays
+  inline.
+- **At the gate**, `lift_proved` lifts transparent slots alongside proved
+  ones, in slot order, as definitions (`body: Some`). A proof lifted after
+  one refers to it like an earlier proof.
+
+Capacity is reserved up front by `count_tactic_slots`: two slots per
+`omega`, since an equality goal is two calls, and a few per `bv_omega`, for
+the `omega` calls in the proof it writes. An allocation past the reservation
+requests a restart with double the capacity and aborts the attempt. A
+declaration with a restart pending is never gated: the attempt is discarded
+whatever it returns, and gating it had cost a full check of the inline
+certificate. Where restarts are off, the list stays inline, as it was.

@@ -40,8 +40,42 @@ struct Goal {
     statement_spelling: Option<String>,
     /// A tactic's proof lifted into a lemma of its own: solved when
     /// allocated, never reported, and committed at the gate as a global in
-    /// its context rather than substituted in (`docs/bv-omega-design.md` §7).
+    /// its context rather than substituted in (`docs/bv-omega-design.md` §6).
     proved: bool,
+    /// A value a tactic names instead of spelling it at every use
+    /// (`omega`'s atom list): solved when allocated, and a *definition* both
+    /// while the declaration elaborates and once lifted, so conversion sees
+    /// through it. Holds the value scoped in committed Ψ; its context and
+    /// type there are `psi_cx` and `psi_ty`.
+    transparent: Option<Transparent>,
+}
+
+#[derive(Clone)]
+struct Transparent {
+    psi_cx: LocalCtx,
+    psi_ty: Rc<Type>,
+    psi_body: Rc<Term>,
+}
+
+/// Where [`GoalArena::allocate_transparent`] put a value.
+pub(super) enum Named {
+    /// The slot's reference.
+    Slot(Term),
+    /// Nowhere: the caller keeps it inline.
+    Inline,
+    /// Nowhere, and the declaration will restart with more capacity.
+    Restart,
+}
+
+/// A slot committed at the gate as a global of its own (`GoalArena::lifted`).
+pub(super) struct Lifted {
+    pub(super) slot: usize,
+    pub(super) gamma: LocalCtx,
+    pub(super) ty: Type,
+    pub(super) level: Level,
+    pub(super) body: Rc<Term>,
+    /// A definition (`true`) rather than an opaque lemma.
+    pub(super) transparent: bool,
 }
 
 /// All goal state whose lifetime is one ordinary declaration.
@@ -55,6 +89,10 @@ pub(super) struct GoalArena {
     requested_base: Cell<u32>,
     restart_enabled: Cell<bool>,
     frozen: Cell<bool>,
+    /// The padded δ world with every transparent slot's body in place, built
+    /// on demand from the elaborator's padded Ψ and dropped whenever a slot
+    /// or that Ψ changes (`Self::delta_world`).
+    delta_world: RefCell<Option<GlobalCtx>>,
 }
 
 /// The one goal effect expression leaves may perform.
@@ -96,6 +134,13 @@ impl GoalArena {
         self.entries.get_mut().clear();
         self.spans.get_mut().clear();
         self.frozen.set(false);
+        self.delta_world.get_mut().take();
+    }
+
+    /// The elaborator's padded Ψ moved: the δ world is rebuilt from the new
+    /// one on next use.
+    pub(super) fn invalidate_delta_world(&mut self) {
+        self.delta_world.get_mut().take();
     }
 
     pub(super) fn finish(&mut self) {
@@ -130,7 +175,7 @@ impl GoalArena {
         self.promoted_seen.set(total);
         let needed = self.written_base + total;
         if needed > self.base {
-            self.requested_base.set(needed);
+            self.requested_base.set(self.requested_base.get().max(needed));
             PromotionCapacity::Restart
         } else {
             PromotionCapacity::Ready
@@ -144,7 +189,11 @@ impl GoalArena {
 
     /// Discard every goal allocated after `mark`, including its source key.
     pub(super) fn rollback(&self, mark: usize) {
-        self.entries.borrow_mut().truncate(mark);
+        let mut entries = self.entries.borrow_mut();
+        if entries[mark.min(entries.len())..].iter().any(|goal| goal.transparent.is_some()) {
+            self.delta_world.borrow_mut().take();
+        }
+        entries.truncate(mark);
         self.spans.borrow_mut().retain(|_, index| *index < mark);
     }
 
@@ -239,6 +288,7 @@ impl GoalArena {
                     solution: None,
                     statement_spelling: None,
                     proved: false,
+                    transparent: None,
                 });
                 spans.insert(span_key, k);
                 k
@@ -280,6 +330,7 @@ impl GoalArena {
                     solution: Some(Rc::new(proof)),
                     statement_spelling: None,
                     proved: true,
+                    transparent: None,
                 });
                 spans.insert(key, k);
                 k
@@ -291,15 +342,122 @@ impl GoalArena {
         })
     }
 
-    /// The lifted proofs, by slot: context, statement, level and proof, all
+    /// Name `value : ty` in `cx` by a transparent slot of its own, returning
+    /// the slot's reference; the same value in the same context is named
+    /// once. `Inline` keeps the value where it is: a frozen arena, an open
+    /// context, a value or context that mentions a goal (a definition's body
+    /// must be scoped in committed Ψ), or no capacity left where restarts
+    /// are off. Where they are on, running out requests one with more.
+    pub(super) fn allocate_transparent(&self, cx: &Cx, ty: Type, level: Level, value: Term) -> Named {
+        if self.frozen.get() || !matches!(cx.gamma.base, CtxBase::Nil) {
+            return Named::Inline;
+        }
+        let mut goals = self.entries.borrow_mut();
+        if let Some(k) = goals.iter().position(|goal| {
+            goal.transparent.is_some()
+                && goal.solution.as_deref() == Some(&value)
+                && goal.ty == ty
+                && goal.cx.gamma == cx.gamma
+        }) {
+            return Named::Slot(self.reference(k, &cx.gamma));
+        }
+        let k = goals.len();
+        if k as u32 >= self.base {
+            if !self.restart_enabled.get() {
+                return Named::Inline;
+            }
+            // Doubling: the attempt stops at the first slot it cannot have,
+            // so the ones after it are not counted yet.
+            self.requested_base.set(self.requested_base.get().max(2 * self.base + 1));
+            return Named::Restart;
+        }
+        // Out of the goal world into committed Ψ: any goal reference would
+        // tell the two dummies apart.
+        let out = |dummy: Term| GlobalSubst { entries: (0..self.base).map(|_| GlobalEntry::Tm(Rc::new(dummy.clone()))).collect() };
+        let (zero, one) = (out(Term::Zero), out(Term::Succ(Rc::new(Term::Zero))));
+        let into = |sigma: &GlobalSubst| (cx.gamma.apply_global(sigma), ty.apply_global(sigma), value.apply_global(sigma));
+        let (psi_cx, psi_ty, psi_body) = into(&zero);
+        if (psi_cx.clone(), psi_ty.clone(), psi_body.clone()) != into(&one) {
+            return Named::Inline;
+        }
+        goals.push(Goal {
+            name: format!("#named{k}"),
+            cx: cx.clone(),
+            ty,
+            level,
+            span: Span { start: 0, end: 0 },
+            origin: None,
+            source: None,
+            solution: Some(Rc::new(value)),
+            statement_spelling: None,
+            proved: false,
+            transparent: Some(Transparent { psi_cx, psi_ty: Rc::new(psi_ty), psi_body: Rc::new(psi_body) }),
+        });
+        self.delta_world.borrow_mut().take();
+        Named::Slot(self.reference(k, &cx.gamma))
+    }
+
+    /// A restart has been requested: this attempt is discarded whatever it
+    /// returns, so it need not reach the kernel.
+    pub(super) fn restart_requested(&self) -> bool {
+        self.requested_base.get() > self.base
+    }
+
+    fn reference(&self, k: usize, gamma: &LocalCtx) -> Term {
+        Term::GlobalTm { var: GlobalVar(self.base - 1 - k as u32), subst: LocalSubst::id(gamma) }
+    }
+
+    /// Slot `k`'s binding as a definition, scoped in committed Ψ followed by
+    /// the `k` slots before it.
+    fn definition(&self, k: usize, level: &Level, named: &Transparent) -> GlobalBinding {
+        GlobalBinding::Tm {
+            ctx: named.psi_cx.shift_global(k as u32),
+            layer: Layer::Code,
+            ty: Rc::new(named.psi_ty.shift_global(k as u32)),
+            level: level.clone(),
+            body: Some(Rc::new(named.psi_body.shift_global(k as u32))),
+        }
+    }
+
+    /// `padded` (committed Ψ followed by one placeholder per slot) with each
+    /// transparent slot's definition in place, or `None` when there is none.
+    pub(super) fn delta_world(&self, padded: &GlobalCtx) -> Option<GlobalCtx> {
+        if let Some(world) = self.delta_world.borrow().as_ref() {
+            return Some(world.clone());
+        }
+        let goals = self.entries.borrow();
+        if goals.iter().all(|goal| goal.transparent.is_none()) {
+            return None;
+        }
+        let mut bindings = padded.bindings.to_vec();
+        let committed = bindings.len() - self.base as usize;
+        for (k, goal) in goals.iter().enumerate() {
+            if let Some(named) = &goal.transparent {
+                bindings[committed + k] = self.definition(k, &goal.level, named);
+            }
+        }
+        let world = GlobalCtx::new(bindings);
+        *self.delta_world.borrow_mut() = Some(world.clone());
+        Some(world)
+    }
+
+    /// The slots committed at the gate as globals of their own, in slot
+    /// order: the lifted proofs and the transparent values. Everything is
     /// scoped in the goal world.
-    pub(super) fn proved(&self) -> Vec<(usize, LocalCtx, Type, Level, Rc<Term>)> {
+    pub(super) fn lifted(&self) -> Vec<Lifted> {
         self.entries
             .borrow()
             .iter()
             .enumerate()
-            .filter(|(_, goal)| goal.proved)
-            .map(|(k, goal)| (k, goal.cx.gamma.clone(), goal.ty.clone(), goal.level.clone(), goal.solution.clone().expect("a proved slot is solved")))
+            .filter(|(_, goal)| goal.proved || goal.transparent.is_some())
+            .map(|(slot, goal)| Lifted {
+                slot,
+                gamma: goal.cx.gamma.clone(),
+                ty: goal.ty.clone(),
+                level: goal.level.clone(),
+                body: goal.solution.clone().expect("a lifted slot is solved"),
+                transparent: goal.transparent.is_some(),
+            })
             .collect()
     }
 
@@ -411,6 +569,7 @@ impl GoalArena {
         let mut bindings = psi.bindings.to_vec();
         for k in 0..self.base as usize {
             bindings.push(match goals.get(k) {
+                Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
                 Some(goal) => GlobalBinding::Tm {
                     ctx: goal.cx.gamma.clone(),
                     layer: Layer::Code,

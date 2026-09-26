@@ -46,12 +46,30 @@ pub(crate) struct Certificate {
     pub expr: Expr,
     pub source: String,
     pub report: OmegaReport,
+    /// The atom list `source` names [`ATOMS`] for, spelled out: the caller
+    /// binds it once, so the checker meets one list rather than one per row.
+    /// `None` when `source` does not use the name.
+    pub atoms: Option<String>,
 }
+
+/// The name a certificate uses for its atom list (`Certificate::atoms`).
+pub(crate) const ATOMS: &str = "__omega_atoms";
 
 pub(crate) fn parse_generated_expr(source: &str) -> Result<Expr, String> {
     timed(|p| &mut p.parse_ns, crate::stats::Timer::OmegaParse, || {
         parse_generated_expr_untimed(source)
     })
+}
+
+/// A certificate's atom list (`Certificate::atoms`) and the type it is
+/// checked at: an empty list infers no element type.
+pub(crate) fn parse_atom_list(literal: &str) -> Result<(heather_syntax::Ty, Expr), String> {
+    let wrapper = format!("theorem __omega_generated(): list::List<int::Int> {{ {literal} }}");
+    let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
+    let Some(Item::Decl(decl)) = file.items.pop() else {
+        return Err("the generated Omega atom list did not parse".into());
+    };
+    Ok((decl.result, *decl.body.result))
 }
 
 fn parse_generated_expr_untimed(source: &str) -> Result<Expr, String> {
@@ -1803,7 +1821,10 @@ struct Collected {
 
 /// An ordinary reflection, rendered: the facts, the atom list's source, the
 /// atoms' labels, and each atom's own source for CutSat.
-type Reflection = (Vec<InitialAssumption>, String, Vec<String>, Option<Vec<String>>);
+/// The facts, the atom list's spelling in them, the atom labels, the atom
+/// sources a CutSat fallback needs, and the literal list when the spelling
+/// is [`ATOMS`].
+type Reflection = (Vec<InitialAssumption>, String, Vec<String>, Option<Vec<String>>, Option<String>);
 
 /// The relations among the locals, or only among those `keep` names.
 /// `None` when a local is already a reflected `dot` row (the explicit
@@ -2179,7 +2200,8 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
             evidence: upper_proof,
         });
     }
-    let atoms_source = atom_list_source(&atoms);
+    let atoms_literal = atom_list_source(&atoms);
+    let atoms_source = ATOMS.to_string();
     let mut facts = Vec::with_capacity(relations.len());
     for reflected in relations {
         let left = normalize_syntax(&reflected.lhs, &atoms_source)?;
@@ -2291,7 +2313,7 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
         })
         .collect();
     let atom_sources = atoms.iter().map(|atom| atom.source.clone()).collect();
-    Ok((facts, atoms_source, atom_labels, Some(atom_sources)))
+    Ok((facts, atoms_source, atom_labels, Some(atom_sources), Some(atoms_literal)))
 }
 
 fn int(value: Z) -> String {
@@ -2473,6 +2495,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
             left, right, left, right, right, left,
         );
         return Ok(Some(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -2511,6 +2534,7 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
             _ => continue,
         };
         return Ok(Some(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -3040,6 +3064,7 @@ pub(crate) fn reconstruct(
     {
         let source = "logic::And(left := omega, right := omega)".to_string();
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("logic::And", 0),
@@ -3054,6 +3079,7 @@ pub(crate) fn reconstruct(
             remainder
         );
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3065,6 +3091,7 @@ pub(crate) fn reconstruct(
         let remainder = format!("nat::Nat::mod({dividend}, {divisor})");
         let source = format!("nat::Nat::le_antisym({}, 0, omega, omega)", remainder);
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3080,6 +3107,7 @@ pub(crate) fn reconstruct(
         // kernel-checks its own contradiction under the opposite strict bound.
         let source = format!("int::Int::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3092,6 +3120,7 @@ pub(crate) fn reconstruct(
         let right = nat_term_source(elab, cx, right)?;
         let source = format!("nat::Nat::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3105,6 +3134,7 @@ pub(crate) fn reconstruct(
             left, right, right, left,
         );
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::lt_of_not_le", 0),
@@ -3122,6 +3152,7 @@ pub(crate) fn reconstruct(
             right, left, right, left,
         );
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_of_not_lt", 0),
@@ -3135,6 +3166,7 @@ pub(crate) fn reconstruct(
             left, right, left, right,
         );
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_lt_of_not_not_lt", 0),
@@ -3148,6 +3180,7 @@ pub(crate) fn reconstruct(
             left, right, left, right,
         );
         return Ok(Certificate {
+            atoms: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_le_of_not_not_le", 0),
@@ -3229,7 +3262,7 @@ pub(crate) fn reconstruct(
                 })
                 .collect();
             let atom_count = reflected_atom_count(&facts);
-            (facts, atoms_source, indexed_atom_labels(atom_count), None)
+            (facts, atoms_source, indexed_atom_labels(atom_count), None, None)
         };
     refute(elab, cx, flags, reflection, true)
 }
@@ -3240,8 +3273,23 @@ pub(crate) fn reconstruct(
 fn refute(
     elab: &Elaborator,
     cx: &Cx,
+    flags: (bool, bool, bool),
+    (reflected, atoms_source, atom_labels, cut_atom_sources, atoms_literal): Reflection,
+    record_failure: bool,
+) -> Result<Certificate, String> {
+    let mut certificate =
+        refute_spelled(elab, cx, flags, (reflected, atoms_source, atom_labels, cut_atom_sources), record_failure)?;
+    if certificate.source.contains(ATOMS) {
+        certificate.atoms = atoms_literal;
+    }
+    Ok(certificate)
+}
+
+fn refute_spelled(
+    elab: &Elaborator,
+    cx: &Cx,
     (allow_disequality_split, allow_connective_split, allow_cutsat): (bool, bool, bool),
-    (reflected, atoms_source, atom_labels, cut_atom_sources): Reflection,
+    (reflected, atoms_source, atom_labels, cut_atom_sources): (Vec<InitialAssumption>, String, Vec<String>, Option<Vec<String>>),
     record_failure: bool,
 ) -> Result<Certificate, String> {
     let atom_count = atom_labels.len();
@@ -3277,6 +3325,7 @@ fn refute(
                 .map_err(|error| format!("{error}\n  generated CutSat source: {source}"))?;
             let used_lemmas = reconstruction_lemmas(&source);
             return Ok(Certificate {
+                atoms: None,
                 expr,
                 source,
                 report: OmegaReport {
@@ -4275,6 +4324,7 @@ fn refute(
             .map_err(|error| format!("{error}\n  generated Omega source: {source}"))?;
         let used_lemmas = reconstruction_lemmas(&source);
         return Ok(Certificate {
+            atoms: None,
             expr,
             source,
             report: OmegaReport {
@@ -4344,6 +4394,7 @@ fn refute(
         .map_err(|error| format!("{error}\n  generated Omega source: {source}"))?;
     let used_lemmas = reconstruction_lemmas(&source);
     Ok(Certificate {
+        atoms: None,
         expr,
         source,
         report: OmegaReport {

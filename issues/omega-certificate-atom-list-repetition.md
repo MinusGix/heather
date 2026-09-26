@@ -89,3 +89,61 @@ fraction of the size.
   arithmetic, not constructor typing. The ~145k-steps-from-lists figure was an
   estimate (per-literal cost × copies), never measured against `omega` itself.
   Omega's certificate cost needs its own attribution before another round.
+- 2026-09-26: Attribution round (width 1, one `omega` item: five facts, six atoms).
+
+  - Phases: reflection, search and reconstruction together take under 2 ms;
+    elaborating the certificate 158 ms; the kernel gate 374 ms. All of the cost
+    is checking the certificate.
+  - Kernel: a declaration holding just 177 `have`-bound copies of the item's
+    atom list costs 150.6k steps and 518 ms of gate, against the item's own
+    151.6k steps. The copies are essentially the whole kernel cost.
+  - Per copy: a six-element `List<Int>` costs 851 steps. `Nil` costs 94, each
+    element ~126, of which `int::OfNat(x)` alone is ~90 (4 conversion misses)
+    and the `Cons` ~36. A six-element `List<Nat>` costs 302.
+  - The Int constructor's check goes through the checked-spelling path
+    (`InlAt`, conversion via `conv_ity`), which has no memo. Interning its
+    spine annotations and re-anchoring `Sum`/`GlobalTy` in `conv_ty`'s memo
+    changed nothing, and were reverted.
+  - Negative control: `have`-binding every derived bound at a literal row
+    (`coeffs_source`) doubled the kernel steps (151.6k → 308.3k): more literal
+    lists, each checked.
+
+  Levers, by where the cost is: the per-Int-constructor check (~70% of an
+  element), e.g. a memo on the checked-spelling conversion path; the number of
+  copies (177 per certificate), omega-side; list-free certificates, which
+  remove both. Not yet attributed: the 158 ms of elaboration.
+- 2026-09-26: Lever 2, the atom list named once. Probe first: the one `omega` item above, with its 177 literal lists
+  replaced by a call to a top-level `fn omega_atoms(sv, r, …)`, fell from
+  151.6k to 23.5k kernel steps and 482 → 121 ms. So the copies were the cost,
+  and a reference to one definition removes it.
+
+  Built as a *transparent slot* of the declaration's goal arena
+  (docs/bv-omega-design.md §6.1):
+  - The certificate names its atoms `__omega_atoms`.
+  - The `omega` arm elaborates the literal once, stores it in a slot that is a
+    definition both while the declaration elaborates and once lifted, and
+    checks the certificate with the name bound as an alias to the slot's
+    reference.
+
+  Capacity: `count_tactic_slots` reserves two slots per `omega` and five per
+  `bv_omega`. An overflow doubles the reservation and restarts. The first
+  build gated the restarted attempt anyway, and paid the inline certificate's
+  full check (175.9k steps, more than before). An attempt with a restart
+  pending is now never gated.
+
+  Result, same item at width 1: 151.6k → 24.3k kernel steps, 521 → 98 ms
+  total, with one restart. On the `bv_omega` fixture, kernel steps fall
+  50–84% on every `omega`-bearing item: `bv_place_step` 1.56M → 268k,
+  `taken_left` 223k → 36k, omega's own `cutsat_*` lemmas 60–77%. The
+  fixture's hand side and `bv_` side sum to 1.0 s and 3.5 s at width 1. What
+  remains on the `bv_` side is `bv_omega`'s own proofs: their lifted lemmas'
+  gates (100–536 ms each) and, on `raise`/`line_state_start`, ~450 ms of
+  elaborating the generated forms. Both belong to [[bv-omega-check-cost]].
+
+  `scripts/perf ab --base 86de9b67` (width 1, 3 cold samples, every verdict
+  separate): `lib/std/omega.hthr` total −41%, gate −41%, RSS −12%, its
+  `cutsat_*` lemmas −50–68%. The `bv_omega` fixture: total −58%, gate −63%,
+  RSS −44%, conversion misses −83%, eval steps −68%, `bv_place_step`'s gate
+  4.8 s → 1.3 s. Full suite: 2998 passed. The acceptance's "an order of
+  magnitude" is met on the fixture's hand-side items (−67–73%), and not quite
+  on the probe item (6×): its remaining steps are the certificate's own rows.

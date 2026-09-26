@@ -572,6 +572,41 @@ pub(crate) fn count_holes_expr(e: &Expr) -> u32 {
     n
 }
 
+/// Slots an `omega` reserves for atom lists: an equality goal is two calls,
+/// one per side of its antisymmetry.
+const OMEGA_ATOM_SLOTS: u32 = 2;
+
+/// Slots a `bv_omega` reserves beyond its own, for the atom lists of the
+/// `omega` calls in the proof it writes (side conditions that share a
+/// context and atoms share a slot).
+const BV_OMEGA_ATOM_SLOTS: u32 = 4;
+
+/// Slots a declaration's tactics may fill besides its goals: a `bv_omega`
+/// lifts its proof into one (`docs/bv-omega-design.md` §6) and every `omega`
+/// names its atom list by one. Reserved up front, since a slot discovered
+/// mid-body restarts the declaration; an over-count costs an unused slot.
+pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
+    if decl.kind == heather_syntax::DeclKind::Axiom {
+        return 0;
+    }
+    let mut n = 0u32;
+    let mut count = |e: &Expr| {
+        walk_expr(e, &mut |x| match &x.kind {
+            ExprKind::Var(v) if v == "omega" => n += OMEGA_ATOM_SLOTS,
+            ExprKind::Var(v) if v == "bv_omega" => n += 1 + BV_OMEGA_ATOM_SLOTS,
+            _ => {}
+        })
+    };
+    for s in &decl.body.stmts {
+        if let Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } = s {
+            count(expr);
+        }
+    }
+    count(&decl.body.result);
+    decl.body.ons.iter().for_each(|o| count(&o.expr));
+    n
+}
+
 /// Syntactic upper bound on the goals a declaration can raise: every `?` in
 /// it. An *upper* bound, not the count — `calc` clones sub-expressions into
 /// its `@trans` spine (parser.rs) and the elaborator visits some expressions
@@ -589,25 +624,6 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
     }
     stmts(&decl.body.stmts, &mut n);
     expr(&decl.body.result, &mut n);
-    // Every `bv_omega` may lift its proof into a slot of its own
-    // (`docs/bv-omega-design.md` §7). Counted here so the slot is reserved up
-    // front: a slot discovered mid-body would restart the declaration.
-    let mut lifted = 0u32;
-    let mut count_lifts = |e: &Expr| {
-        walk_expr(e, &mut |x| {
-            if matches!(&x.kind, ExprKind::Var(v) if v == "bv_omega") {
-                lifted += 1;
-            }
-        })
-    };
-    for s in &decl.body.stmts {
-        if let heather_syntax::Stmt::Let { expr, .. } | heather_syntax::Stmt::LetRecord { expr, .. } = s {
-            count_lifts(expr);
-        }
-    }
-    count_lifts(&decl.body.result);
-    decl.body.ons.iter().for_each(|o| count_lifts(&o.expr));
-    n += lifted;
     // Under `decreases`, every recursive call owes one obligation hole
     // (measure.rs); calls are counted by name, which over-counts a shadowed
     // name — an upper bound, as required. The hole itself is raised in the

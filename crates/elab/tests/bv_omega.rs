@@ -66,6 +66,7 @@ fn bv_omega_suite() {
     lifts_proofs_into_lemmas();
     unfolds_only_what_no_fact_states();
     refuses_naming_the_side_condition();
+    names_atom_lists();
 }
 
 /// The respelling issue's acceptance: an atom whose implicit nothing written
@@ -180,4 +181,22 @@ fn refuses_naming_the_side_condition() {
     assert!(message.contains("no contradiction"), "{message}");
     let message = refused("no word", "theorem t(n: Nat, h: n < 3): n < 5 { bv_omega }");
     assert!(message.contains("found no `toNat` of a word"), "{message}");
+}
+
+/// `omega` names its atom list by a transparent slot (docs/bv-omega-design.md
+/// §6.1): an empty list, more `omega` calls than the declaration reserved
+/// (one written call, copied into every branch, restarts it), two calls that
+/// share a list, a list inside `bv_omega`'s proof, and a refusal.
+fn names_atom_lists() {
+    checks("no atoms", "theorem t(): 5 < nat::Nat::pow(2, 64) + 0 { omega }");
+    checks("a literal word", "theorem t(): BitVec::ofNat(5, n := 64).toNat() = 5 { bv_omega }");
+    checks("more calls than reserved",
+        "theorem t(a, b: bool::Bool, v: Nat, small: v < 1000): v + v = 2 * v {\n\
+             split_all;\n\
+             all_goals { omega }\n\
+         }");
+    checks("two calls over one list", "theorem t(v, w: Nat, small: v < w): (v + 1 <= w) ∧ (v < w + 1) { omega }");
+    checks("under binders", "theorem t(v: Nat): (w: Nat) → v < w → v + 1 <= w { λ w h => omega }");
+    let message = refused("a false goal over a named list", "theorem t(v, w: Nat, small: v < w): w + 1 <= v { omega }");
+    assert!(message.contains("no contradiction"), "{message}");
 }
