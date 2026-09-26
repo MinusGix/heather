@@ -2247,11 +2247,22 @@ impl Elaborator {
         // what keeps the kernel's `Sum`-against-`Sum` query a `==`.
         let wf_slots = match &expected {
             Type::Wf { shape, arity, .. } if ind.recursive => {
-                Some(match self.wf_slot_refs(cx, shape, arity) {
-                    Some((s, a)) => (Rc::new(s), Rc::new(a)),
-                    None => self
-                        .emit_wf_slots(cx, shape, arity, 0)
-                        .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
+                let depth = cx.gamma.entries.len();
+                let known = self
+                    .attempt
+                    .wf_slot_annotations
+                    .borrow()
+                    .iter()
+                    .find(|(ty, d, _)| *d == depth && *ty == expected)
+                    .map(|(_, _, pair)| pair.clone());
+                Some(match known {
+                    Some(pair) => pair,
+                    None => match self.wf_slot_refs(cx, shape, arity) {
+                        Some((s, a)) => (Rc::new(s), Rc::new(a)),
+                        None => self
+                            .emit_wf_slots(cx, shape, arity, 0)
+                            .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
+                    },
                 })
             }
             _ => None,
@@ -2314,6 +2325,20 @@ impl Elaborator {
                     .emit_wf_slots(cx, shape, arity, 0)
                     .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
             },
+        };
+        // Shared across the declaration, like the children's annotation
+        // (`wf.rs`'s `children_annotation`): the kernel's memo is keyed by
+        // allocation identity.
+        let (shape_e, arity_e) = {
+            let depth = cx.gamma.entries.len();
+            let mut seen = self.attempt.wf_slot_annotations.borrow_mut();
+            match seen.iter().find(|(ty, d, _)| *d == depth && *ty == expected) {
+                Some((_, _, (s, a))) => (Rc::clone(s), Rc::clone(a)),
+                None => {
+                    seen.push((expected.clone(), depth, (Rc::clone(&shape_e), Rc::clone(&arity_e))));
+                    (shape_e, arity_e)
+                }
+            }
         };
         Ok(Term::Supf {
             level: level.clone(),

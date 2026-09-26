@@ -187,3 +187,18 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
   (one site, many contexts, inline after the first), a lifted proof beside a
   hole, and two lifted proofs in one body. Found beside it:
   [[omega-combo-derivation-unreconstructed]].
+- 2026-09-26: Landed on `bv-omega` (02b771d5): forms, bounds passed down, lifting hardened
+  through the ordinary gate, cache and pool; `bitvec_omega` hand-proved. Suite
+  green. Fixture, width 1: `bv_` rows total ~10 s against ~4.9 s hand.
+
+  What is left is `omega`'s own certificates. Literals, kernel steps (width 1):
+  `List<Nat>` 1 element ~430, 50 elements ~580; `List<Int>` 1 element ~700,
+  50 elements ~4,200; a lone Int literal 44; a Nat literal 0. An identity lemma
+  applied to variable lists costs 0 steps, to literal lists ~3k. So a list costs
+  a fixed amount per occurrence (probably decoding `List`'s encoded type each
+  time, unconfirmed), and omega's certificates carry about ten literals per
+  lemma application. Two ways, complementary: make `List` literals cheap (a
+  kernel memo of the decoded type; general), or list-free omega certificates
+  (constraints as Nat forms `P ≤ Q`, combination by `form_*` steps; also removes
+  Int evaluation). Next: profile a list-heavy check before choosing.
+- 2026-09-26: List profile: the per-call overhead is omega certificates re-spelling their atom list (177 copies of a six-atom list, ~145k of 152k kernel steps on one small goal); owner [[omega-certificate-atom-list-repetition]]. Per-constructor costs: `Nil` ~43, `Cons` ~85, an Int literal ~44; a list literal lowers through a `Vec` fold, ~430 steps whatever its length.

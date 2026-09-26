@@ -383,7 +383,7 @@ impl Elaborator {
         let _ = span;
         // Emitted tuple annotations use the same naming policy as matches;
         // structural checking below still reads d_ty.
-        let emit = self.annotation_type(cx, d_ty, 0);
+        let (emit, emit_under) = self.children_annotation(cx, d_ty);
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
         // so the two are one code path (docs/container-fields.md §3.4).
@@ -416,13 +416,13 @@ impl Elaborator {
             acc = Term::Pair {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
-                fst_ty: Rc::new(emit.clone()),
+                fst_ty: Rc::clone(&emit),
                 // `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)` and a Σ's second
                 // component *binds*, so the tail type sits one level deeper
                 // than the ambient (§5).
                 snd_ty: Rc::new(Type::Vec {
                     level: level.clone(),
-                    elem: Rc::new(emit.shift_local(1)),
+                    elem: Rc::clone(&emit_under),
                     len: Rc::new(tail.shift_local(1)),
                 }),
                 fst: Rc::new(child),
@@ -431,6 +431,30 @@ impl Elaborator {
             tail_len = Term::Succ(Rc::new(tail_len));
         }
         Ok(acc)
+    }
+
+    /// The children tuple's annotation for `d_ty` and its copy one binder
+    /// down, shared across the declaration: every value of one type then
+    /// carries the same allocations, which is what lets the kernel answer
+    /// its repeated conversion queries from its memo (the memo is keyed by
+    /// allocation identity).
+    fn children_annotation(&self, cx: &Cx, d_ty: &Type) -> (Rc<Type>, Rc<Type>) {
+        let depth = cx.gamma.entries.len();
+        let at = self.emits_at_forms(cx);
+        if let Some((_, _, _, emit, under)) = self
+            .attempt
+            .children_annotations
+            .borrow()
+            .iter()
+            .find(|(ty, d, a, _, _)| *d == depth && *a == at && ty == d_ty)
+        {
+            return (Rc::clone(emit), Rc::clone(under));
+        }
+        let emit = self.annotation_type(cx, d_ty, 0);
+        let under = Rc::new(emit.shift_local(1));
+        let emit = Rc::new(emit);
+        self.attempt.children_annotations.borrow_mut().push((d_ty.clone(), depth, at, Rc::clone(&emit), Rc::clone(&under)));
+        (emit, under)
     }
 
     // -- match (§6) ---------------------------------------------------------

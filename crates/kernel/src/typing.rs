@@ -913,6 +913,11 @@ enum TypeAnchor {
     None,
     Type(RcIdentity<Type>),
     Term(RcIdentity<Term>),
+    /// A type code headed by a global: its index, not its allocation. Such a
+    /// term carries a local weakening that every substitution under a binder
+    /// rewrites, so no two occurrences share an allocation, and an identity
+    /// anchor would put each repeat of one query in a bucket of its own.
+    Global(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -3510,16 +3515,27 @@ fn type_anchor(ty: &Type) -> TypeAnchor {
     match ty {
         Type::Pi { dom, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(dom))),
         Type::UPi { body, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(body))),
-        Type::El { tm, .. } => TypeAnchor::Term(RcIdentity::new(Rc::clone(tm))),
+        Type::El { tm, .. } => {
+            let mut head: &Term = tm;
+            while let Term::App { fun, .. } | Term::AppAt { fun, .. } = head {
+                head = fun;
+            }
+            match head {
+                Term::GlobalTm { var, .. } => TypeAnchor::Global(var.0),
+                _ => TypeAnchor::Term(RcIdentity::new(Rc::clone(tm))),
+            }
+        }
         Type::Id { ty, .. } | Type::SEq { ty, .. } | Type::Squash { ty, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(ty)))
         }
-        Type::Sigma { fst, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(fst))),
+        // A tuple and a vector anchor on their first element's type, which
+        // is where a children tuple's repeated queries agree.
+        Type::Sigma { fst, .. } => type_anchor(fst),
         Type::Sum { lhs, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(lhs))),
         Type::W { shape, .. } | Type::Wf { shape, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(shape)))
         }
-        Type::Vec { elem, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(elem))),
+        Type::Vec { elem, .. } => type_anchor(elem),
         Type::Fin { len } => TypeAnchor::Term(RcIdentity::new(Rc::clone(len))),
         Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(body)))

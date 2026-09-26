@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
+use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, Term, Type};
@@ -60,6 +61,15 @@ pub(super) struct DeclAttempt {
     /// Stable goal identities and their temporary Ψ prefix.
     pub(super) goal_arena: GoalArena,
 
+    /// Constructor-value annotations built once per declaration and shared
+    /// by every value of the same type, so repeated values carry the same
+    /// allocations and the kernel's conversion memo and pointer-equality
+    /// shortcuts answer their repeated queries. Keyed by the type (compared
+    /// structurally), the context length and whether code emits `@`-forms.
+    pub(super) children_annotations: RefCell<Vec<(Type, usize, bool, Rc<Type>, Rc<Type>)>>,
+    /// The same for a `sup_f`'s shape and arity slots, keyed by the `Wf`.
+    pub(super) wf_slot_annotations: RefCell<Vec<(Type, usize, (Rc<Type>, Rc<Term>))>>,
+
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,
     /// Prevents nested motive-less match speculation.
@@ -82,6 +92,8 @@ impl DeclAttempt {
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
+        self.children_annotations.get_mut().clear();
+        self.wf_slot_annotations.get_mut().clear();
         self.goal_arena.prepare();
     }
 
@@ -93,6 +105,8 @@ impl DeclAttempt {
     /// Restore the declaration-independent state after success or failure.
     pub(super) fn finish(&mut self) {
         self.goal_arena.finish();
+        self.children_annotations.get_mut().clear();
+        self.wf_slot_annotations.get_mut().clear();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
