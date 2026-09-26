@@ -311,61 +311,54 @@ pub(crate) struct Spine {
     pub tails: Vec<(Rc<Type>, Level)>,
 }
 
-/// The nominal tag *type* for declaration `k` (§3.3): the binary digits of
-/// `k`, as a right-nested Σ of `Unit`s — `Unit` for a 0 digit, `Σ(Unit).Unit`
-/// for a 1, terminated by `Unit`.
+/// The nominal tag *type* for declaration `k` (§3.3): the strict equality
+/// `sEq⁰(Nat; k; k)`, with `k` spelled by [`nat_lit`] and nothing else.
 ///
-/// Two properties, and the tag needs both:
+/// Three properties, and the tag needs all of them:
 ///
-/// - **Distinct per declaration.** Type conversion is structural, so different
-///   digit strings are different types (minimal binary representations are
-///   distinct as strings, so the encoding is injective).
-/// - **Proof-irrelevant.** Built only from `Unit` and `Σ`, both of which have
-///   η in `conv.rs`, so *any* two inhabitants are convertible. This is what a
-///   dependent motive needs: an arm's binder `x : ⟦c_i⟧` is neutral, and the
-///   motive puts it back together as `inl x`, which must still be convertible
-///   with the canonical `inl (pair tag ⟨⟩)`. An `Id`-based tag fails exactly
-///   here — `Id` has no η, so a neutral `fst x` is not convertible with
-///   `refl`, and `match`ing a variable under a dependent motive stops
-///   typechecking.
+/// - **Distinct per declaration.** Type conversion compares an `sEq`'s
+///   endpoints, and irrelevance collapses proofs, never endpoints
+///   (docs/sprop-design.md §7), so different `k` are different types.
+/// - **Proof-irrelevant.** Any two terms at an `sEq` type are convertible
+///   (the `conv.rs` irrelevance arm). This is what a dependent motive needs:
+///   an arm's binder `x : ⟦c_i⟧` is neutral, and the motive puts it back
+///   together as `inl x`, which must still be convertible with the canonical
+///   `inl (pair srefl ⟨⟩)`. An `Id`-based tag fails exactly here — `Id` has no
+///   η, so a neutral `fst x` is not convertible with `refl`.
+/// - **One spelling.** Boxed code compares syntactically, so a tag spelled
+///   `Succ^k(Zero)` in one place and `NatLit(k)` in another would give one
+///   declaration two codes. [`nat_lit`] is the only spelling, and
+///   [`read_tag`] reads no other.
+///
+/// Until 2026-09-26 the tag was `k`'s binary digits as a right-nested Σ of
+/// `Unit`s, irrelevant by *derivation*: Σ-η projected its way down the nest
+/// on every comparison of two values, which was most of what comparing
+/// declared-inductive data cost (`issues/nominal-tag-conversion-cost.md`).
 pub(crate) fn tag_type(k: u32) -> Type {
-    if k == 0 {
-        return Type::Unit { level: Level::Zero };
+    let k = Rc::new(nat_lit(k as usize));
+    Type::SEq {
+        level: Level::Zero,
+        ty: Rc::new(Type::Nat),
+        lhs: Rc::clone(&k),
+        rhs: k,
     }
-    let digit = if k & 1 == 0 {
-        Type::Unit { level: Level::Zero }
-    } else {
-        Type::Sigma {
-            fst_level: Level::Zero,
-            snd_level: Level::Zero,
-            fst: Rc::new(Type::Unit { level: Level::Zero }),
-            snd: Rc::new(Type::Unit { level: Level::Zero }),
-        }
-    };
-    Type::Sigma {
-        fst_level: Level::Zero,
-        snd_level: Level::Zero,
-        fst: Rc::new(digit),
-        snd: Rc::new(tag_type(k >> 1)),
+}
+
+/// A tag index as [`tag_type`] spells it: `Zero` or a compact literal.
+fn tag_index(t: &Term) -> Option<u32> {
+    match t {
+        Term::Zero => Some(0),
+        Term::NatLit(k) if *k > 0 => u32::try_from(*k).ok(),
+        _ => None,
     }
 }
 
 /// Read a tag type back to its declaration index — the inverse of [`tag_type`].
 fn read_tag(t: &Type) -> Option<u32> {
     match &*decoded(t) {
-        Type::Unit { .. } => Some(0),
-        Type::Sigma { fst, snd, .. } => {
-            let digit = match &*decoded(fst) {
-                Type::Unit { .. } => 0,
-                Type::Sigma { fst, snd, .. }
-                    if matches!(*decoded(fst), Type::Unit { .. })
-                        && matches!(*decoded(snd), Type::Unit { .. }) =>
-                {
-                    1
-                }
-                _ => return None,
-            };
-            read_tag(snd)?.checked_mul(2)?.checked_add(digit)
+        Type::SEq { ty, lhs, rhs, .. } if matches!(*decoded(ty), Type::Nat) => {
+            let k = tag_index(lhs)?;
+            (tag_index(rhs)? == k).then_some(k)
         }
         _ => None,
     }
@@ -718,29 +711,22 @@ pub(crate) fn nat_lit(k: usize) -> Term {
     if k == 0 { Term::Zero } else { Term::NatLit(k as u64) }
 }
 
-/// The tag's inhabitant: nested `⟨⟩`s matching the tag type's shape. Which
-/// inhabitant hardly matters — the type is proof-irrelevant — but it has to be
-/// *an* inhabitant for the kernel to accept the constructor.
+/// The tag's inhabitant: `srefl⁰(Nat; k)`. Which inhabitant hardly matters —
+/// the type is proof-irrelevant — but it has to be *an* inhabitant for the
+/// kernel to accept the constructor.
+///
+/// Rebuilt from the index rather than copied off `t`: a tag type that arrived
+/// as *code* decodes (through [`decoded`], docs/types-as-expressions.md) to an
+/// `sEq` whose element type is still `El ⌜Nat⌝`, and copying that would put a
+/// quote in every constructor value's annotation slot.
 pub(crate) fn tag_value(t: &Type) -> Term {
-    // Through [`decoded`]: the tag type of a type that arrived as *code* is
-    // `El` of a `Σ` code, and reading it as anything else emits `⟨⟩` where a
-    // pair is needed — which the kernel rejects as `NotConvertible` for every
-    // declaration whose tag is not 0 (docs/types-as-expressions.md).
-    match &*decoded(t) {
-        Type::Sigma {
-            fst_level,
-            snd_level,
-            fst,
-            snd,
-        } => Term::Pair {
-            fst_level: fst_level.clone(),
-            snd_level: snd_level.clone(),
-            fst_ty: Rc::clone(fst),
-            snd_ty: Rc::clone(snd),
-            fst: Rc::new(tag_value(fst)),
-            snd: Rc::new(tag_value(snd)),
+    match read_tag(t) {
+        Some(k) => Term::SRefl {
+            level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            tm: Rc::new(nat_lit(k as usize)),
         },
-        _ => Term::Triv { level: Level::Zero },
+        None => Term::Triv { level: Level::Zero },
     }
 }
 
@@ -2407,8 +2393,8 @@ impl Elaborator {
             }
             return err("internal: malformed constructor encoding", span);
         };
-        // The tag's inhabitant is `refl`, with the annotations read off the
-        // encoding's own `Id` rather than rebuilt.
+        // The tag's inhabitant is `srefl`, with the annotations read off the
+        // encoding's own `sEq` rather than rebuilt.
         let (value, rest, skels_rest) = if tag {
             (tag_value(&fst), args, skels)
         } else {

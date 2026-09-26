@@ -280,8 +280,8 @@ Constructor values arrive, per the tier-0 lowering, as
 `inr^i(inl(Pair(<nominal tag>, Triv)))`. The last constructor of an `n`-ary
 sum has no trailing `inl`, and a **one**-constructor enum is the bare payload
 with no sum at all. The nominal tag (`docs/inductive-tier0-lowering.md` §3.3)
-is **not** a bare `Triv`: it is the declaration index's binary digits as a
-`Pair`-spine of `Triv`s, which the first implementation got wrong and a
+is **not** a bare `Triv`: it was the declaration index's binary digits as a
+`Pair`-spine of `Triv`s (since 2026-09-26, `srefl` at `sEq(Nat; k; k)`), which the first implementation got wrong and a
 session with more than one declared inductive immediately exposed. So the
 recognizer's test is "the first component contains no value", not "the first
 component is `Triv`".

@@ -2511,6 +2511,10 @@ fn mark(
         Term::Triv { level } => Term::Triv {
             level: level.clone(),
         },
+        // The nominal tag's proof (docs/inductive-tier0-lowering.md §3.3):
+        // closed, its endpoint a literal, and read by the walker as pure
+        // without looking inside — so it rides through whole, like `Triv`.
+        Term::SRefl { .. } => t.clone(),
         // The checked spellings ride through the same way: one annotation
         // carried untouched instead of two (`docs/intro-by-type-design.md`
         // §4.2 — a shape-only walk adds the arm and reads nothing).

@@ -13,8 +13,8 @@ use crate::inductive::Inductive;
 use crate::names::qkey;
 
 /// The syntax-owned prelude class must not renumber every user nominal type.
-/// Tags are encoded in binary (`inductive::tag_type`), so this reserved value
-/// costs 17 nodes while staying far outside the sequential space.
+/// A tag is one literal (`inductive::tag_type`), so this reserved value costs
+/// nothing over a small one while staying far outside the sequential space.
 pub(crate) const COLLECTION_LITERAL_TAG: u32 = 1 << 16;
 
 #[derive(Clone, Default)]

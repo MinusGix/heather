@@ -94,7 +94,10 @@ fn same_source_elaborates_identically() {
 /// form, so it moves whenever Ψ does.
 /// Moved 2026-09-22 by `docs/app-by-head-type-design.md`: every emitted
 /// application is `app@(f; a)` now, with no annotations.
-const NAT_SUITE_GOLDEN: u64 = 0x67f02d6ccda1f6af;
+/// Moved 2026-09-26 by the nominal tag becoming `sEq⁰(Nat; k; k)`
+/// (`docs/inductive-tier0-lowering.md` §3.3): every lowered type and
+/// constructor value carries it.
+const NAT_SUITE_GOLDEN: u64 = 0x2ef98e0fad48b1e2;
 
 #[test]
 fn nat_suite_golden_hash() {

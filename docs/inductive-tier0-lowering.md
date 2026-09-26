@@ -179,7 +179,7 @@ field record, no tag, which is the right answer for structs.
 
 Levels: `level(⟦D⟧) = ⊔_i level(⟦c_i⟧)`.
 
-### 3.3 The nominal tag (decided 2026-07-24)
+### 3.3 The nominal tag (decided 2026-07-24; `sEq` since 2026-09-26)
 
 Structurally identical declarations must not share a kernel type (§8.1), so
 every constructor's field spine is prefixed with a per-declaration tag:
@@ -205,20 +205,66 @@ with `refl`. The proof is rejected. (This is the same η obligation that
 rules out a single tag at the top of the sum spine, one level up; the first
 draft of this document caught it there and missed it here.)
 
-So the tag is built from formers that *do* have η — `Unit` and `Σ`, both
-proof-irrelevant in `conv.rs` — while still being structurally distinct per
-declaration, since **type** conversion is structural and only **term**
-conversion is η-driven. `Tag_D` is the binary representation of `id_D` as a
-right-nested Σ: digit 0 is `Unit`, digit 1 is `Σ(Unit).Unit`, terminated by
-`Unit`. Minimal binary representations are distinct as digit strings, so the
-encoding is injective; the inhabitant is the matching nest of `⟨⟩`s, and
-which inhabitant hardly matters, since any two are convertible.
+So the tag must be irrelevant *in terms* while distinct *as a type*.
+**Since 2026-09-26 it is the strict equality**
 
-Three consequences, all accepted:
+```
+Tag_D = sEq⁰(Nat; k_D; k_D)          inhabited by  srefl⁰(Nat; k_D)
+```
 
-- **Cost.** One Σ node per constructor plus `O(log id_D)` nodes for the tag
-  itself, and one extra `snd` per field projection. Free in conversion: η
-  means the tag component is never actually compared.
+with `k_D` the declaration's index, spelled `Zero` or a compact `NatLit`
+and nothing else. Both properties come from `sEq`'s own rules
+(`docs/sprop-design.md`): any two terms at an `sEq` type are convertible
+(the irrelevance arm), so the dependent motive's `fst x ≡ tag` holds; and
+type conversion compares an `sEq`'s endpoints — irrelevance collapses
+proofs, never endpoints (sprop-design §7) — so different `k_D` are
+different types.
+
+What it means. The tag is a `Unit` with a number written on it:
+`sEq(Nat; k; k)` is always inhabited, by one proof up to conversion, so no
+equality is being asserted *between* anything. Nominal distinctness is
+purely judgmental — `Bool` and a structurally identical `Direction` are
+definitionally distinct, and the two conversion functions between them are
+still writable. That was equally true of the encoding this replaced.
+
+Three obligations it carries, stated so nobody relearns them:
+
+- **One spelling of `k_D`.** Boxed code compares by syntactic `==`
+  (ch. 05's static-code lemma), so a tag written `Succ^k(Zero)` in one place
+  and `NatLit(k)` in another would give one declaration two codes that are
+  convertible as types and unequal as code. `inductive::tag_type` is the
+  only producer, and `read_tag`/`read_tag_code` read no other spelling.
+- **No casts along a tag.** Nothing emits `transp` at a tag type, which
+  keeps the strip rule's known gap at canonical indices (sprop-design §5.4)
+  out of reach. Keep it that way.
+- **The evaluator's finite-type readers know the tag.** A two-constructor
+  nullary declaration is a machine-word element type, and any small
+  declared enumeration a finite transducer state
+  (`docs/native-bitvector-values-design.md`), only because
+  `eval/bits.rs::unit_inhabitant` and `eval/transduce.rs::enumerate` read
+  `sEq(Nat; k; k)` as one value (`seq_is_unit`: both endpoints the same
+  closed literal — at unequal endpoints the type is empty). Without the
+  second, the first full suite on the new tag ran the x86 certificates'
+  register folds bit by bit, past their fuel.
+
+**The encoding it replaced (2026-07-24 to 2026-09-26),** kept because the
+reasoning about it was wrong in an instructive way. `Tag_D` was `k_D`'s
+binary digits as a right-nested Σ — digit 0 `Unit`, digit 1 `Σ(Unit).Unit`,
+terminated by `Unit` — built only from formers with η, and inhabited by the
+matching nest of `⟨⟩`s. This section called it "free in conversion: η means
+the tag component is never actually compared". It was the opposite: Σ-η
+*projects* its way down the nest, so every comparison of two values walked
+all `O(log k_D)` levels — with the library loaded, most of the conversion
+work on declared-inductive data (`issues/nominal-tag-conversion-cost.md`).
+Irrelevance derived through η costs the derivation each time; irrelevance
+by a former's own arm costs one call. `sEq` postdates this section by four
+days, which is why it was not the first choice.
+
+Consequences, all accepted:
+
+- **Cost.** One Σ node per constructor for the tag, one `srefl` per
+  construction, one extra `snd` per field projection, and one conversion
+  call per comparison of two tags.
 - **Placement is per-constructor, not per-type.** A single tag above the
   sum spine would make `match` case on `snd t`, whose motive obligation
   `t ≡ pair (fst t) (snd t)` is again η — fine for this `Tag_D`, but it
@@ -524,7 +570,9 @@ checked against the wrong family. This is the first thing the tests pin.
    Chosen: **(b)**, the per-constructor tag — cheap, mechanical,
    kernel-enforced, invisible to users, and revisitable, since it is a
    single prefix in one scheme. Written up as §3.3; §5.1's projection index
-   shifts by one accordingly.
+   shifts by one accordingly. Revisited 2026-09-26: the tag's *type* is now
+   `sEq⁰(Nat; k_D; k_D)` (§3.3); a dedicated kernel label former remains
+   the alternative if borrowing a proposition ever costs more than it saves.
 2. **Dependent-field injectivity** (§6.2) — a field whose type mentions an
    earlier field of the same constructor is diagnosed, not derived. (This
    replaces the level-0 restriction the first draft carried: the constant

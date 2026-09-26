@@ -180,25 +180,13 @@ impl IndexedFam {
 
 /// The nominal tag of a *code* spine: `read_tag` (`inductive.rs` §3.3) with
 /// every former replaced by its code. Walks to the leftmost `TmSum` summand,
-/// expects a `TmSigma` whose first component is the tag's code, and decodes
-/// the binary digits.
+/// expects a `TmSigma` whose first component is the tag's code
+/// `⌜sEq⁰(Nat; k; k)⌝`, and reads `k`.
 fn read_tag_code(t: &Term) -> Option<u32> {
-    fn digits(t: &Term) -> Option<u32> {
+    fn index(t: &Term) -> Option<u32> {
         match t {
-            Term::TmUnit { .. } => Some(0),
-            Term::TmSigma { fst, snd, .. } => {
-                let d = match &**fst {
-                    Term::TmUnit { .. } => 0,
-                    Term::TmSigma { fst, snd, .. }
-                        if matches!(**fst, Term::TmUnit { .. })
-                            && matches!(**snd, Term::TmUnit { .. }) =>
-                    {
-                        1
-                    }
-                    _ => return None,
-                };
-                digits(snd)?.checked_mul(2)?.checked_add(d)
-            }
+            Term::Zero => Some(0),
+            Term::NatLit(k) if *k > 0 => u32::try_from(*k).ok(),
             _ => None,
         }
     }
@@ -209,7 +197,14 @@ fn read_tag_code(t: &Term) -> Option<u32> {
     let Term::TmSigma { fst, .. } = cur else {
         return None;
     };
-    digits(fst)
+    let Term::TmSEq { ty, lhs, rhs, .. } = &**fst else {
+        return None;
+    };
+    if !matches!(**ty, Term::TmNat) {
+        return None;
+    }
+    let k = index(lhs)?;
+    (index(rhs)? == k).then_some(k)
 }
 
 /// The nominal tag of a family node, from whichever branch carries one. An

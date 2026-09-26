@@ -285,3 +285,4 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
   and comparison of encoded inductive values (constructor annotations not
   re-normalised per node, children not η-expanded per projection), which
   `Int` and `List` would both get, not an `Int`-only primitive.
+- 2026-09-26: The generic per-value cost found while costing a kernel mechanism for `Int`-shaped values was the nominal tag, not the kernel: a Σ-of-`Unit` binary nest that Σ-η walked on every comparison of declared-inductive data. It is now `sEq⁰(Nat; k; k)` ([[nominal-tag-conversion-cost]]). This fixture: eval_steps −30.9%, gate −11.9% (`bv_place_step` 1.101 → 0.971 s at width 8); `lib/std/omega` gate −15.4%. The bar is still not met; what remains per element is evaluation of the encoded operations (`match` on `Int`, the `fst(snd^j)` projections, `List` cells), which is where a packed-constructor representation would act.

@@ -119,8 +119,10 @@ impl<'v> Eval<'_, 'v> {
         Ok(Some(self.arena.bit_ty(BitTy { elem, zero, one })))
     }
 
-    /// The canonical inhabitant of a *unit-like* type — `Unit`, or a Σ-nest
-    /// ending in `Unit` — and `None` for anything else. The Σ's tail is
+    /// The canonical inhabitant of a *unit-like* type — `Unit`, a strict
+    /// equality (whose canonical proof is `srefl` at its left endpoint: the
+    /// nominal tag a declared inductive's constructors carry), or a Σ-nest of
+    /// those — and `None` for anything else. The Σ's tail is
     /// instantiated at the first component's own inhabitant, which is what
     /// makes the reading total for a dependent nest as well as a constant
     /// one; the pair keeps the **uninstantiated** tail as its annotation,
@@ -139,6 +141,13 @@ impl<'v> Eval<'_, 'v> {
             VTy::Unit { level } => {
                 let level = level.clone();
                 Ok(Some(self.vclo(Rc::new(Val::Triv { level }))))
+            }
+            VTy::SEq { level, ty, lhs, rhs } => {
+                let (level, ty, tm, rhs) = (level.clone(), *ty, *lhs, *rhs);
+                if !self.seq_is_unit(tm, rhs)? {
+                    return Ok(None);
+                }
+                Ok(Some(self.vclo(Rc::new(Val::SRefl { level, ty, tm }))))
             }
             VTy::Sigma { fst_level, snd_level, fst, snd } => {
                 let (fst_level, snd_level, fst, snd) =
@@ -166,6 +175,50 @@ impl<'v> Eval<'_, 'v> {
         }
     }
 
+    /// Whether a strict equality `sEq(I; lhs; rhs)` is unit-like: both
+    /// endpoints the **same closed natural number**, which is the nominal
+    /// tag's shape (`docs/inductive-tier0-lowering.md` §3.3). Then `srefl` is
+    /// its one inhabitant up to conversion. An `sEq` at unequal endpoints is
+    /// *empty*, and one at open or non-`Nat` endpoints is not decided here
+    /// (that would be conversion's job), so both answer `false` and the type
+    /// is simply not unit-like — never a guess.
+    pub(crate) fn seq_is_unit(&mut self, lhs: &'v TmClo<'v>, rhs: &'v TmClo<'v>) -> Res<bool> {
+        let (Some(a), Some(b)) = (self.closed_nat(lhs)?, self.closed_nat(rhs)?) else {
+            return Ok(false);
+        };
+        Ok(a == b)
+    }
+
+    /// A closed natural number's value, when it is one and fits a `u64`:
+    /// `Zero`, successors and saturated runs, walked through their tails.
+    /// `None` for anything open, stuck or larger.
+    fn closed_nat(&mut self, c: &'v TmClo<'v>) -> Res<Option<u64>> {
+        let mut total = 0u64;
+        let mut v = self.force(c)?;
+        loop {
+            let next = match &*v {
+                Val::Zero => return Ok(Some(total)),
+                Val::Succ(pred) => {
+                    let Some(t) = total.checked_add(1) else { return Ok(None) };
+                    total = t;
+                    *pred
+                }
+                Val::NatRun { program, tail } => {
+                    let Some(n) = crate::value::program::ContextProgram::repetition_count_up_to(
+                        program,
+                        u64::MAX - total,
+                    ) else {
+                        return Ok(None);
+                    };
+                    total += n;
+                    *tail
+                }
+                _ => return Ok(None),
+            };
+            v = self.force(next)?;
+        }
+    }
+
     /// The bit a *bit value* stands for: `Inl`/`Inr` over the canonical
     /// inhabitant of its half. Requiring the payload to be canonical is what
     /// makes unpacking reproduce the same value rather than a merely
@@ -190,7 +243,11 @@ impl<'v> Eval<'_, 'v> {
         }
         let v = self.force(c)?;
         Ok(match &*v {
-            Val::Triv { .. } => true,
+            // `srefl`'s endpoint is not an observation: well-typedness fixes
+            // it up to conversion, every consumer of a strict-equality proof
+            // is `transp`, whose β ignores it, and conversion at `sEq` is
+            // irrelevant.
+            Val::Triv { .. } | Val::SRefl { .. } => true,
             Val::Pair { fst, snd, .. } => {
                 self.is_canonical_unit(fst, depth - 1)?
                     && self.is_canonical_unit(snd, depth - 1)?
@@ -425,6 +482,52 @@ mod tests {
                 let taken = 64 - prefix.left_bits.leading_zeros().min(63);
                 assert!(taken <= differ.trailing_zeros() + 1, "seed {case}");
             }
+        }
+    }
+
+    /// What a declared two-constructor nullary inductive lowers to: each half
+    /// is its nominal tag `sEq⁰(Nat; k; k)` followed by the `Unit` terminator
+    /// (`docs/inductive-tier0-lowering.md` §3.3). The tag's proof is part of
+    /// the canonical payload, so the criterion must read `srefl` as unit-like
+    /// or no declared enum would ever pack.
+    #[test]
+    fn a_strictly_tagged_two_constructor_type_meets_the_criterion() {
+        use crate::term::Term;
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+        let half = || {
+            let k = Rc::new(Term::NatLit(5));
+            Rc::new(Type::Sigma {
+                fst_level: Level::Zero,
+                snd_level: Level::Zero,
+                fst: Rc::new(Type::SEq {
+                    level: Level::Zero,
+                    ty: Rc::new(Type::Nat),
+                    lhs: Rc::clone(&k),
+                    rhs: k,
+                }),
+                snd: Rc::new(Type::Unit { level: Level::Zero }),
+            })
+        };
+        let elem = arena.ty(TyClo::new(
+            Env::empty(),
+            Rc::new(Type::Sum {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                lhs: half(),
+                rhs: half(),
+            }),
+        ));
+        for bits in [0b0110u64, 0b1001] {
+            let Some(Val::BitRun { level, ty, width, bits: b, tail_len, tail }) =
+                ev.closed_bit_run(&Level::Zero, elem, 4, bits).expect("fuel")
+            else {
+                panic!("a strictly tagged enum meets the criterion")
+            };
+            let pair = Val::bit_run_unpack(&arena, &level, ty, width, b, tail_len, tail);
+            let Val::Pair { fst, .. } = pair else { unreachable!() };
+            let head = ev.force(fst).expect("fuel");
+            assert_eq!(ev.bit_of(&head).expect("fuel"), Some(bits & 1 == 1));
         }
     }
 

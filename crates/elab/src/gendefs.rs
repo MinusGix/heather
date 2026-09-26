@@ -2557,10 +2557,12 @@ impl Elaborator {
     /// [`Self::closed_type_ref`], found by a scan over the registered components.
     /// `None` is the cue to keep the inline spelling.
     ///
-    /// **Not** a fallback of [`Self::respell_ty`], deliberately: a nullary
-    /// payload of the declaration with nominal tag 0 is `Σ(Unit). Unit`, which
-    /// is also the digit-1 component of every other declaration's *tag type*
-    /// — so a scan reached from a deep walk spelled the tag types inside
+    /// **Not** a fallback of [`Self::respell_ty`], deliberately: a scan
+    /// matches components by value, not by position, and while the tag was a
+    /// binary Σ-nest (until 2026-09-26) the nullary payload `Σ(Unit). Unit` of
+    /// the declaration with nominal tag 0 was also the digit-1 component of
+    /// every other declaration's *tag type* — so a scan reached from a deep
+    /// walk spelled the tag types inside
     /// every later lowering as `El (Bool#payload₀^δ)`, convertible and
     /// unreadable (81 failures on the 2026-09-06 full suite). Only
     /// [`Self::spine_refs_by_position`] hands these out at emission, where

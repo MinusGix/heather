@@ -899,6 +899,16 @@ impl<'a, 'v> Eval<'a, 'v> {
         let w = self.delta_whnf_ty(w)?;
         let out = match &*w {
             VTy::Unit { .. } => vec![EnumVal::Triv],
+            // A unit-like strict equality — the nominal tag inside every
+            // declared constructor — is one value, like `Unit`; its proof is
+            // irrelevant, so the shape is all there is to keep.
+            VTy::SEq { lhs, rhs, .. } => {
+                let (lhs, rhs) = (*lhs, *rhs);
+                if !self.seq_is_unit(lhs, rhs)? {
+                    return Ok(None);
+                }
+                vec![EnumVal::Triv]
+            }
             VTy::Sum { lhs, rhs, .. } => {
                 let (lhs, rhs) = (*lhs, *rhs);
                 let (Some(l), Some(r)) =
@@ -946,6 +956,11 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let level = level.clone();
                 Some(self.vclo(Rc::new(Val::Triv { level })))
             }
+            // Reached only through `enumerate`'s unit-like check.
+            (VTy::SEq { level, ty, lhs, .. }, EnumVal::Triv) => {
+                let (level, ty, tm) = (level.clone(), *ty, *lhs);
+                Some(self.vclo(Rc::new(Val::SRefl { level, ty, tm })))
+            }
             (VTy::Sum { lhs_level, rhs_level, lhs, rhs }, EnumVal::Inl(v) | EnumVal::Inr(v)) => {
                 let (lhs_level, rhs_level, lhs, rhs) =
                     (lhs_level.clone(), rhs_level.clone(), *lhs, *rhs);
@@ -985,7 +1000,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Ok(None);
         }
         Ok(match &**v {
-            Val::Triv { .. } => Some(EnumVal::Triv),
+            Val::Triv { .. } | Val::SRefl { .. } => Some(EnumVal::Triv),
             Val::Inl { val, .. } | Val::Inr { val, .. } => {
                 let right = matches!(&**v, Val::Inr { .. });
                 let inner = self.force(val)?;
@@ -1609,13 +1624,20 @@ mod tests {
         })
     }
 
-    /// `Tag_D`: a Σ-nest of `Unit`s, proof-irrelevant and not `Unit` itself.
+    /// `Tag_D`: the nominal tag `sEq⁰(Nat; k; k)` the tier-0 lowering puts
+    /// first in every constructor (`docs/inductive-tier0-lowering.md` §3.3) —
+    /// proof-irrelevant, one value, and not `Unit` itself.
     fn tag() -> Rc<Type> {
-        sigma(unit_ty(), unit_ty())
+        let k = Rc::new(Term::NatLit(7));
+        Rc::new(Type::SEq { level: Level::Zero, ty: Rc::new(Type::Nat), lhs: Rc::clone(&k), rhs: k })
     }
 
     fn tag_value() -> Rc<Term> {
-        pair(unit_ty(), unit_ty(), triv(), triv())
+        Rc::new(Term::SRefl {
+            level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            tm: Rc::new(Term::NatLit(7)),
+        })
     }
 
     /// A nullary constructor's field spine.
@@ -1961,6 +1983,32 @@ mod tests {
             Val::BitRun { width, bits, .. } => (*width, *bits),
             other => panic!("not a run: {other:?}"),
         }
+    }
+
+    /// A strict equality is one state only when it is the tag's shape — both
+    /// endpoints the same closed literal. At unequal endpoints it is empty,
+    /// and enumerating `srefl` there would invent a state that cannot occur.
+    #[test]
+    fn a_strict_equality_is_one_state_only_at_equal_literals() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+        let seq = |a: u64, b: u64| {
+            arena.ty(TyClo::new(
+                Env::empty(),
+                Rc::new(Type::SEq {
+                    level: Level::Zero,
+                    ty: Rc::new(Type::Nat),
+                    lhs: Rc::new(Term::NatLit(a)),
+                    rhs: Rc::new(Term::NatLit(b)),
+                }),
+            ))
+        };
+        let one = ev.enumerate(seq(7, 7), UNIT_NEST_LIMIT).expect("fuel");
+        assert_eq!(one.map(|v| v.len()), Some(1));
+        assert!(ev.enumerate(seq(3, 4), UNIT_NEST_LIMIT).expect("fuel").is_none());
+        // And a declared two-constructor type built on it is two states.
+        let b = arena.ty(TyClo::new(Env::empty(), bool_ty()));
+        assert_eq!(ev.enumerate(b, UNIT_NEST_LIMIT).expect("fuel").map(|v| v.len()), Some(2));
     }
 
     #[test]

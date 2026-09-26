@@ -56,12 +56,12 @@
 //    so the three agree by construction rather than by comment.
 //
 //    The NOMINAL TAG (docs/inductive-tier0-lowering.md §3.3) is *not* a bare
-//    `Triv`: it is the declaration index's binary digits as a `Pair`-spine of
-//    `Triv`s, so it is only recognizable as "a value with no field in it".
-//    That is what `TPure` is, and why the payload test is "the first
-//    component is pure" rather than "the first component is `Triv`" — a fact
-//    about the lowering that only shows up once a session declares more than
-//    one inductive.
+//    `Triv`: it is `srefl` at the strict equality `sEq(Nat; k; k)` naming
+//    the declaration, so it is only recognizable as "a value with no field in
+//    it". That is what `TPure` is — `Triv`, `srefl`, and `Pair`s of them —
+//    and why the payload test is "the first component is pure" rather than
+//    "the first component is `Triv`" — a fact about the lowering that only
+//    shows up once a session declares more than one inductive.
 //
 //    The tag and the fields are told apart by POSITION, which is the whole
 //    trick: the second component of a `Pair` is always the rest of the field
@@ -533,8 +533,8 @@ fn ta_app(arity: Nat, f: TA, a: TA) → TA {
 // and names are the rim's (design §6).
 
 // `Triv` is the leaf of every field-free value: the END of a field chain (so
-// the empty chain), a digit of the nominal tag, and the whole payload of a
-// nullary constructor.
+// the empty chain) and the whole payload of a nullary constructor. The
+// nominal tag's `srefl` answers the same state (the `tm_srefl` arm).
 fn ta_triv() → TA { TPure }
 
 // One field onto a chain, and the only place two compiled sub-expressions meet
@@ -550,8 +550,8 @@ fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) → TA {
     }
 }
 
-// A `Pair` over the EMPTY chain (`Triv`). A pure first component is a
-// nominal-tag digit or a field-free payload — the same term, deliberately not
+// A `Pair` over the EMPTY chain (`Triv`). A pure first component is the
+// nominal tag or a field-free payload — the same state, deliberately not
 // told apart — and anything else is the chain's last field.
 fn ta_pair_end(a: TA) → TA {
     match a {
@@ -785,10 +785,9 @@ fn ta_finish(arity: Nat, t: TA) → TOut {
 
 // The walk's accumulator, one state per shape the fragment signature is made
 // of. `SNat` is the one leaf that is a `Nat`; `SPure` is anything built from
-// `Unit` and Σ alone — which covers `Unit` itself, the NOMINAL TAG type
-// (`docs/inductive-tier0-lowering.md` §3.3: the declaration index's binary
-// digits, so not a bare `Unit` in general), and a whole field-free payload
-// `Σ(<tag>). Unit`. `SFlds` is a Σ chain of `Nat`s — a constructor's FIELD
+// `Unit`, `sEq` and Σ alone — which covers `Unit` itself, the NOMINAL TAG
+// type (`docs/inductive-tier0-lowering.md` §3.3: `sEq(Nat; k; k)` for the
+// declaration index `k`), and a whole field-free payload `Σ(<tag>). Unit`. `SFlds` is a Σ chain of `Nat`s — a constructor's FIELD
 // spine, and (once its tag is consumed) a payload with fields; it mirrors the
 // term side's `TFlds` exactly, position for position. `SEnum(k)` is a
 // right-nested sum of `k` payloads — the lowering of a tier-0 enumeration with
@@ -1107,8 +1106,9 @@ theorem ctor_third_of_three():
     = TYes(LetCon(2, RNil, Ret(RCons(0, RNil))))
 { refl }
 
-// …and the nominal tag is a `Pair`-spine of `Triv`s, not a bare `Triv`, so the
-// same constructor at a later declaration index reads exactly the same.
+// …and a pure first component reads as the tag whatever its shape — a
+// `Pair`-spine of `Triv`s, which is how the tag was spelled until 2026-09-26,
+// reads exactly as `srefl` does now.
 theorem ctor_at_a_nonzero_nominal_tag():
     ta_finish(1, ta_inr(ta_pair(ta_pair(ta_pair(ta_triv(), ta_triv()), ta_triv()),
                                 ta_triv())))
@@ -1378,8 +1378,8 @@ theorem sig_higher_order_declines():
     sig_pi(sig_pi(SNat, SNat), SNat) = SNo
 { refl }
 
-// A NOMINAL TAG type is a Σ-spine of `Unit`s and `Σ(Unit).Unit` digits, so it
-// reads `SPure` — and so does a payload with no fields, which is why the two
+// A Σ-spine of pure types reads `SPure` — the nominal tag's type did until
+// 2026-09-26, and a payload with no fields still does, which is why the two
 // are deliberately not told apart.
 theorem sig_tag_is_pure():
     sig_sigma(sig_sigma(SPure, SPure), SPure) = SPure
@@ -1556,6 +1556,9 @@ meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
         // and ignored — this shell analyses terms, and a constructor's
         // summand annotations say nothing its index does not.
         tm_triv                   => ta_triv(),
+        // The nominal tag's proof: pure, like `Triv`. Its endpoint's result
+        // is bound and never consulted.
+        tm_srefl(sty, t)          => ta_triv(),
         tm_pair(fty, sty, a, b)   => ta_pair(a, b),
         tm_inl(lty, rty, v)       => ta_inl(v),
         tm_inr(lty, rty, v)       => ta_inr(v),
@@ -1578,6 +1581,9 @@ meta fn check_sig(g: Ctx, sig: TyCode(g))
     sig_finish(match code sig as SA {
         ty_nat           => SNat,
         ty_unit          => SPure,
+        // The nominal tag's type (§3.3 of the tier-0 lowering): no field in
+        // it, like `Unit`.
+        ty_seq(ss, sl, sr) => SPure,
         ty_pi(ds, dt)    => sig_pi(ds, dt),
         ty_sigma(ss, st) => sig_sigma(ss, st),
         ty_sum(sl, sr)   => sig_sum(sl, sr),

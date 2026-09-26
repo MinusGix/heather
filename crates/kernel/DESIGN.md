@@ -323,7 +323,9 @@ accelerated is refused with `OutOfFuel`, never a process abort.
 `docs/native-bitvector-values-design.md`). The second representation change
 of the runs kind. A `Vec^l(T; n)` whose element type `T` has exactly two
 canonical inhabitants with proof-irrelevant payloads — which is what a
-tier-0 two-constructor nullary inductive lowers to — has canonical values
+tier-0 two-constructor nullary inductive lowers to; a payload is `Unit`,
+an `sEq` at one closed literal on both sides (the nominal tag,
+`docs/inductive-tier0-lowering.md` §3.3), or a Σ of those — has canonical values
 that are right-nested Σ-pairs of injections, one pair node and one injection
 per bit. `Val::BitRun` holds a closed prefix of such a chain as a machine
 word: an element type, a width, `u64` bits, and a tail, standing for the

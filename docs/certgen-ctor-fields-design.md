@@ -109,8 +109,9 @@ inr^i(inl(Pair(<nominal tag>, Pair(f₁, … Pair(f_k, Triv)))))
 
 with the last constructor missing its `inl` and a one-constructor enumeration
 missing the sum entirely. The nominal tag is the declaration index's binary
-digits as a `Pair`-spine of `Triv`s (§3.3), so it is recognizable only as *a
-value with no field in it* — which is what the field-free stage's `TPure`
+digits as a `Pair`-spine of `Triv`s (§3.3; since 2026-09-26 it is `srefl` at
+`sEq(Nat; k; k)`, which the walker's `tm_srefl` arm reads the same way), so it
+is recognizable only as *a value with no field in it* — which is what the field-free stage's `TPure`
 already is.
 
 **The tag and the fields are told apart by position**, and that is the whole
