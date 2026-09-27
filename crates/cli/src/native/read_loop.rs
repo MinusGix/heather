@@ -31,6 +31,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
 // For `--print`: the formatter's source and meaning, and the process shape
 // that writes the line (docs/native-first-program-design.md §10).
 pub(super) const PRINT_SUPPORT: &[(&str, &str)] = &[
+    ("bitvec_omega", include_str!("../../../../lib/std/bitvec/omega.hthr")),
     ("decimal_line", include_str!("../../../../lib/decimal_line.hthr")),
     ("elf64_read_print", include_str!("../../../../lib/elf64_read_print.hthr")),
 ];

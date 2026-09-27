@@ -3,7 +3,7 @@ title: bv_omega costs several times the hand proofs it replaces
 status: open
 labels: [performance,proofs,bitvec,omega]
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 `bv_omega` checks the word facts of `lib/decimal_line.hthr`, but it costs
@@ -34,7 +34,7 @@ Three costs, in the order the probes point at:
 
 - `scripts/perf ab` on the `decimal_line` re-proofs (the probe set in the
   parent's log) shows the whole-workload total moving, not only named rows.
-- `decimal_line` adopts the tactic for the facts where it is then within the hand proofs' cost (the table in the parent's log is the baseline).
+- `decimal_line` adopts the tactic for the facts where it is then within the hand proofs' cost (the table in the parent's log is the baseline). Amended 2026-09-27: it adopted the tactic for every row, `place_step` included, as a matter of dogfooding. This issue now owns the remaining gap, not the adoption.
 
 ## The probe set
 
@@ -308,3 +308,9 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
 
   Bar, width 1, min of two runs, new fixture: times256 0.25×, raise 1.46×, line_state_start 1.31×, line_start 1.32×, line_length 1.37×, place_step 2.18×; rows total 1.48×. Five of six rows meet 1.5×. place_step does not, and it is no longer `omega`: its six calls cost about what they cost as standalone lemmas (context-free probes: no in-context premium). A frame-pointer profile of that declaration alone puts about a third of it in substitution — application spines instantiating the whole remaining Π per argument over the word lemmas' 15 spelled-form arguments, and `subst_ck` on every in-context slot reference — filed as [[application-spine-substitution-cost]].
 - 2026-09-26: [[application-spine-substitution-cost]] landed: fixture wall −27%, gate −33% at width 1, but the hand side fell with the bv_ side, so the bar is where it was — five rows within 1.5×, place_step ~2×. What separates place_step from its hand proof is now neither omega calls nor substitution; re-attribute before the next round.
+- 2026-09-27: `place_step` attributed once more (width 1, fixture, two runs within 5%; temporary per-call and per-`omega` prints, reverted). `bv_place_step` 243 ms against 122 ms for the hand `place_step` plus the twelve helpers it uses (2.0×). By phase the gap is `decl_body` +50 ms, gate +39, the `omega_*` phases +21, `elab_whnf` +7. Per `bv_omega` call (elaboration, inclusive): `under` 13 ms, the kept branch's goal 22, `over` 12, `sum` 53. The outermost `omega` checks sum to 68 ms over six calls, against 43 ms over the hand side's nine.
+
+  Why each `omega` costs more: every hand helper states only the facts its one `omega` needs, so its problems have 5–6 atoms and 8–10 assumptions. `bv_omega`'s calls run in the declaration's context, with 7–8 atoms and 17–20 assumptions. The certificates are already pruned: `kept_under`'s uses `value`, `low`, `parts`, `remainder`, and `bv_omega`'s first call uses the same four plus its own `__bv_h1`. So the cost is not unused facts. It is the width of every coefficient vector (one entry per atom, `w` included because `low` needs it) and the extra equation per generalised word (`__bv_w1`, `__bv_h1: w1 + 0 = P`). There is also duplicated work: calls 1–3 each rebuild the same fact for `ofNat(1099511627776 * c)` (`below_top`, `ofNat_form`, the form chain).
+
+  Levers, not taken: (a) where a word's `Q` is zero, put its form `P` straight into `omega`'s goal instead of generalising it. That saves one atom and one equation per such word, at the price of transporting the goal along the fact. (b) Share word facts between the `bv_omega` calls of one declaration (a slot, like `omega`'s atom list). (c) Pruning atoms that are reachable only through unused facts does not help here. Together, (a) and (b) would recover part of the gap. The rest is structural: a hand proof split into single-purpose lemmas gives `omega` minimal contexts, which a tactic working in place does not get. Verdict: `place_step` stays at about 2×, and the library switches to `bv_omega` anyway (dogfooding over hand proofs). The levers above are this issue's remaining work.
+- 2026-09-27: `lib/decimal_line.hthr` switched. `times256_value`, `raise_value`, `line_start_value`, `line_length_value`, `place_step` and a new `line_state_start_value` (split out of `line_word_value`) are now `bv_omega`, and 12 helpers are gone (`double_value`, `double_scaled`, `doubling_bounds`, `raise_bounds`, `kept_*`, `taken_*`, `weight_small`). `bitvec_omega` is bundled before `decimal_line` in `PRINT_SUPPORT` and in `read_print_process.rs`. A trap found on the way: `line_state_start_value` with no fact in scope took `raise` apart down to its 40 doublings (161 ms). With `raise_value`'s fact in scope, `raise(x)` is a defined leaf (15 ms). So state a proved sub-word's value before calling `bv_omega`. Staged standalone check at width 1, per-module item totals over two runs each: `decimal_line` 1.45 s → 1.69 s (+17%), gate 0.57 → 0.64 s; `bitvec_omega` itself 16 ms. Largest remaining row: `raise_value` (~150 ms, forty doublings taken apart). Full suite 3010 passed; `wc_l_prints_what_the_read_returned` 50 s wall with the library half cold.

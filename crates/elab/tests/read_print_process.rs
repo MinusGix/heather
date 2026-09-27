@@ -4,6 +4,7 @@ use crate::read_loop_fixture::checker;
 // and beside read_loop_process's tests they passed the CPU rail.
 const PROCESS: &str = include_str!("../../../lib/elf64_read_loop.hthr");
 const PRINT: &str = include_str!("../../../lib/elf64_read_print.hthr");
+const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 
 // The print profile (design §10.3), refused the same way: the claim can't be
@@ -14,6 +15,7 @@ const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 fn slow_acceptance_read_print_refusals() {
     let mut elab = checker();
     elab.elab_module_source("elf64_read_loop", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
+    elab.elab_module_source("bitvec_omega", BV_OMEGA).unwrap_or_else(|e| panic!("{}", e.render(BV_OMEGA)));
     elab.elab_module_source("decimal_line", DECIMAL).unwrap_or_else(|e| panic!("{}", e.render(DECIMAL)));
     let library = elab.semantic_image();
     library.elaborator().elab_module_source("elf64_read_print", PRINT).unwrap_or_else(|e| panic!("{}", e.render(PRINT)));
