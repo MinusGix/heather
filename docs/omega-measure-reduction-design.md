@@ -226,6 +226,17 @@ today.
 
 Nothing in this round changes `AtomTable` or `intern_by`.
 
+**Since 2026-09-27** (issues/omega-atoms-up-to-computation.md) a spelling is
+no longer the whole of atom identity. A Nat atom whose spelling is new is
+first evaluated under a small budget and, if it computes to a numeral, becomes
+that constant (`of_bit(True)` is `1`); after this document's reduction it is
+compared by bounded conversion against the table's atoms of the same head and
+arity, and joins one it converts to (`f(append(Nil, Nil))` is `f(Nil)`). The
+table still records the first spelling met, the certificate still spells each
+occurrence as written, and the checker's conversion redoes the computation.
+The hazard above is unchanged: nothing is re-spelled, so no atom is split or
+renamed; a pair differing only in distinct variables is never asked.
+
 ## 6. Which hand discharges become removable
 
 - **`tail_lt`** (`mutual_recursion.rs`, cited by all three showcase-parser

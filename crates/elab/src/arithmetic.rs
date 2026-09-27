@@ -277,6 +277,10 @@ impl<T> AtomTable<T> {
         }
     }
 
+    pub fn find(&self, equivalent: impl FnMut(&T) -> bool) -> Option<AtomId> {
+        self.entries.iter().position(equivalent).map(AtomId)
+    }
+
     pub fn get(&self, id: AtomId) -> &T {
         &self.entries[id.0]
     }

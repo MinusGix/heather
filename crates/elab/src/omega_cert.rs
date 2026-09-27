@@ -1250,6 +1250,27 @@ fn nat_affine_syntax_within(
             return Ok(AffineSyntax::Atom { index, source });
         }
     }
+    let source = format!("int::OfNat({nat_source})");
+    // An atom already met under this spelling was already asked everything
+    // below, and answered "atom".
+    if let Some(index) = atoms.find(|atom| atom.nat_source.as_deref() == Some(nat_source.as_str())) {
+        return Ok(AffineSyntax::Atom { index, source });
+    }
+    // A term that computes to a numeral is that constant
+    // (issues/omega-atoms-up-to-computation.md): `of_bit(True)` is `1`. The
+    // certificate still spells the term, and the checker's conversion
+    // computes it again.
+    if head_is_global(tm)
+        && let Some(value) = elab
+            .goal_oracle()
+            .nat_value(&cx.gamma, tm, ATOM_COMPUTATION_STEPS)
+            .and_then(|value| Z::try_from(value).ok())
+    {
+        return Ok(AffineSyntax::Const {
+            value,
+            source: int(value),
+        });
+    }
     // The atom fallback (docs/omega-measure-reduction-design.md §2): before a
     // measure at a constructor pattern becomes an opaque atom, ask whether
     // reduction reaches arithmetic, and name the reduct's leaves by conversion
@@ -1259,7 +1280,9 @@ fn nat_affine_syntax_within(
     {
         return nat_affine_syntax_within(elab, cx, &named, atoms, depth - 1);
     }
-    let source = format!("int::OfNat({nat_source})");
+    if let Some(index) = convertible_atom(elab, cx, tm, atoms) {
+        return Ok(AffineSyntax::Atom { index, source });
+    }
     let index = atoms.intern_by(
         |atom| atom.nat_source.as_deref() == Some(nat_source.as_str()),
         || ReflectedAtom {
@@ -1270,6 +1293,51 @@ fn nat_affine_syntax_within(
         },
     );
     Ok(AffineSyntax::Atom { index, source })
+}
+
+/// Evaluation steps an atom may spend proving it is a numeral, or that it
+/// converts to an atom already in the table
+/// (issues/omega-atoms-up-to-computation.md). Atoms are reflected per
+/// hypothesis, so this is a probe's budget: past it, the atom stays opaque.
+const ATOM_COMPUTATION_STEPS: u64 = 256;
+
+fn head_is_global(tm: &Rc<Term>) -> bool {
+    matches!(app_spine(tm).0, Term::GlobalTm { .. })
+}
+
+/// A plain Nat atom already in the table that `tm` converts to: the same head
+/// at the same arity, differing in arguments that may compute
+/// (`f(append(Nil, Nil))` against `f(Nil)`). Arguments that are distinct
+/// variables on both sides cannot meet by computation, so a pair differing
+/// only there is never asked — every `toNat(w)` against `toNat(v)` in a word
+/// proof.
+fn convertible_atom(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    atoms: &AtomTable<ReflectedAtom>,
+) -> Option<AtomId> {
+    let (head, args) = app_spine(tm);
+    if args.is_empty() {
+        return None;
+    }
+    let oracle = elab.goal_oracle().bounded(ATOM_COMPUTATION_STEPS);
+    atoms.find(|atom| {
+        if atom.nat_source.is_none() || atom.division.is_some() {
+            return false;
+        }
+        let (other_head, other_args) = app_spine(&atom.term);
+        if *other_head != *head || other_args.len() != args.len() {
+            return false;
+        }
+        let may_meet = args.iter().zip(&other_args).any(|(a, b)| {
+            a != b && !matches!((&***a, &***b), (Term::Var(_), Term::Var(_)))
+        });
+        may_meet
+            && oracle
+                .convert_term(&cx.gamma, Layer::Prog, tm, &atom.term, &Type::Nat, &Level::Zero)
+                .is_ok()
+    })
 }
 
 /// Re-entries the atom fallback may spend on a reduct

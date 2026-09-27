@@ -19,6 +19,8 @@ mod omega_div_mod_scaling;
 mod omega_logic;
 #[path = "../omega_measure_reduction.rs"]
 mod omega_measure_reduction;
+#[path = "../omega_atoms_computation.rs"]
+mod omega_atoms_computation;
 #[path = "../omega_reconstruction.rs"]
 mod omega_reconstruction;
 #[path = "../omega_wide_constants.rs"]

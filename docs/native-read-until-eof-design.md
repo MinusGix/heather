@@ -116,7 +116,8 @@ The loop's `loop_fits(0, n, c)` is `c + n < 2^64`. With `c ≤ total` and
 - **`omega` along the way** (dogfooding, see the issue log). It keeps closed
   `of_bit(True)` as an atom, and it treats `spec(Nil ++ Nil)`,
   `spec(eof_input(Nil))` and `spec(Nil)` as three atoms. Each needed an
-  annotated restatement. In `eof_from`'s context it also failed with "could
+  annotated restatement (gone since issues/omega-atoms-up-to-computation.md
+  made atoms equal up to computation). In `eof_from`'s context it also failed with "could
   not spell a natural expression", so `eof_room`/`eof_later` hold that
   arithmetic.
 

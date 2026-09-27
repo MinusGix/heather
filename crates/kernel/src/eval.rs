@@ -2211,6 +2211,48 @@ pub fn whnf_value<'v>(
     ev.delta_whnf(v)
 }
 
+/// The number a natural-number term computes to, read δ-transparently in the
+/// identity environment of `gamma` under one `fuel` budget: `Zero`,
+/// successors and saturated runs, each tail forced to its δ-transparent head.
+/// `None` for anything stuck (open, or waiting on a neutral) or past `u64`.
+/// A reader for the elaborator's reflection, not a judgement: whatever it
+/// answers is re-checked by conversion when the certificate is.
+pub fn nat_value(
+    t: &Rc<Term>,
+    gamma: &LocalCtx,
+    defs: Defs<'_>,
+    fuel: u64,
+) -> Result<Option<u64>, OutOfFuel> {
+    let arena = ValueArena::new();
+    let mut ev = Eval::new(fuel, defs, gamma.base, &arena);
+    let env = Env::identity(&arena, gamma.entries.len() as u32);
+    let mut v = ev.eval_tm(t, &env)?;
+    let mut total = 0u64;
+    loop {
+        v = ev.delta_whnf(v)?;
+        let next = match &*v {
+            Val::Zero => return Ok(Some(total)),
+            Val::Succ(pred) => {
+                let Some(t) = total.checked_add(1) else { return Ok(None) };
+                total = t;
+                *pred
+            }
+            Val::NatRun { program, tail } => {
+                let Some(n) = crate::value::program::ContextProgram::repetition_count_up_to(
+                    program,
+                    u64::MAX - total,
+                ) else {
+                    return Ok(None);
+                };
+                total += n;
+                *tail
+            }
+            _ => return Ok(None),
+        };
+        v = ev.force(next)?;
+    }
+}
+
 /// [`whnf_value`] for types.
 pub fn whnf_value_ty<'v>(
     arena: &'v ValueArena<'v>,

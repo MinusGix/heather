@@ -164,6 +164,24 @@ impl SemanticOracle {
         .whnf_term(gamma, term)
     }
 
+    /// The number a natural-number term computes to within `steps` of
+    /// δ-transparent evaluation ([`eval::nat_value`]); `None` for a stuck
+    /// term, a value past `u64`, or a budget spent.
+    pub(crate) fn nat_value(&self, gamma: &LocalCtx, term: &Rc<Term>, steps: u64) -> Option<u64> {
+        let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
+        let defs = Defs::transparent(&self.world);
+        eval::nat_value(term, gamma, defs, self.fuel.min(steps)).ok().flatten()
+    }
+
+    /// This oracle with its fuel capped at `steps`, for a speculative
+    /// question whose "no" is as good as a spent budget.
+    pub(crate) fn bounded(&self, steps: u64) -> Self {
+        Self {
+            world: self.world.clone(),
+            fuel: self.fuel.min(steps),
+        }
+    }
+
     /// Normalize without δ. Some structural encodings deliberately preserve
     /// global neutrals while reducing only their local computation.
     pub(crate) fn whnf_term_opaque(

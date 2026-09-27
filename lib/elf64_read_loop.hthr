@@ -431,7 +431,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let spec_nil: (spec(Nil) = 0) = { let twice: (spec(Nil) = spec(Nil) + spec(Nil)) = adds(Nil, Nil); omega };
+    let spec_nil: (spec(Nil) = 0) = { let twice = adds(Nil, Nil); omega };
     match chunks as λ cs => EofChunks(cs) → (page: Nat → BitVec(8)) → (carry: Nat) → (state: MachineState<IoMemory>) →
             state.rip = eof_rip(eof_at_read()) → state.memory = IoMemory(file, page) →
             read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → carry + spec(eof_input(cs)) = total →
@@ -474,7 +474,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let ended_rip: (ended.rip = eof_rip(eof_at_done(needle, loop_bytes))) =
                         trans(near_taken_rip(ed, tested, set),
                             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, ed), tested_rip), exit_target));
-                    let finished: (carry = total) = { let c: (carry + spec(Nil) = total) = counted; omega };
+                    let finished: (carry = total) = { omega };
                     let kept: (read_gpr(R13, ended.gprs) = bitvec_nat::word_of_nat(64, total)) =
                         trans(carry_word, cong_fn<Nat, BitVec(64)>(λ n => bitvec_nat::word_of_nat(64, n), finished));
                     linux_runs_after_steps(io_linux(), tail_events, returned, ended,

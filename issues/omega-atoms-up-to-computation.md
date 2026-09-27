@@ -1,6 +1,6 @@
 ---
 title: omega keys atoms by spelling: atoms equal by computation stay separate
-status: open
+status: closed
 labels: [omega,proofs,elaboration,ergonomics]
 created: 2026-09-27
 updated: 2026-09-27
@@ -42,3 +42,16 @@ constructor-headed arguments).
 
 - Both one-liners above check.
 - A negative control: `f(Cons(0, Nil))` and `f(Nil)` stay distinct atoms.
+
+## Log
+
+- 2026-09-27: Done. Nat atoms whose spelling is new are (1) evaluated under
+  `ATOM_COMPUTATION_STEPS` by a new kernel reader `eval::nat_value` (only for
+  global heads) and become a constant when they compute to a numeral, then (2)
+  after the measure-reduction fallback, compared by bounded conversion with the
+  table's atoms of the same head and arity, skipping pairs that differ only in
+  distinct variables. Both one-liners check; `f(Cons(0, Nil))` against
+  `f(Nil)` stays two atoms (`crates/elab/tests/omega_atoms_computation.rs`).
+  `lib/elf64_read_loop.hthr` drops both restatements. Design note:
+  docs/omega-measure-reduction-design.md §5. Int-valued atoms are residue:
+  [[omega-int-atoms-up-to-computation]].
