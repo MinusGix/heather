@@ -236,6 +236,11 @@ table still records the first spelling met, the certificate still spells each
 occurrence as written, and the checker's conversion redoes the computation.
 The hazard above is unchanged: nothing is re-spelled, so no atom is split or
 renamed; a pair differing only in distinct variables is never asked.
+Int-valued atoms get the same two questions
+(issues/omega-int-atoms-up-to-computation.md): a global-headed atom whose
+bounded weak head is `OfNat(n)` or `NegSucc(n)` with a numeral `n` is that
+constant, and Int atoms of one head are compared at `int::Int`, elaborated
+from its name only when a pair passes the syntactic gates.
 
 ## 6. Which hand discharges become removable
 

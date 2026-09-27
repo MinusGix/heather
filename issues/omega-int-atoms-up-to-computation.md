@@ -1,6 +1,6 @@
 ---
 title: omega keys Int atoms by spelling: the Nat side's computation step is not mirrored
-status: open
+status: closed
 labels: [omega,proofs,elaboration,ergonomics]
 created: 2026-09-27
 updated: 2026-09-27
@@ -34,3 +34,13 @@ through the Int constructor to `nat_value`.
   stay two atoms.
 
 No real Int proof has met this yet; it is the Nat fix's symmetric half.
+
+## Log
+
+- 2026-09-27: Done. `affine_syntax`'s fallback mirrors the Nat side: spelling lookup, then
+  `int_value` (bounded whnf to an `OfNat`/`NegSucc` constructor, payload read by
+  `nat_value`), then `convertible_atom` with a `Carrier::Int`, whose type is
+  elaborated from `int::Int` lazily, once a pair passes the syntactic gates.
+  The one-liner checks; a closed atom on each side of zero reflects as its
+  constant; both controls stay two atoms (`omega_atoms_computation.rs`). Design
+  note: docs/omega-measure-reduction-design.md §5.

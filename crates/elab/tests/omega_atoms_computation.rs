@@ -1,4 +1,5 @@
-//! Acceptance for issues/omega-atoms-up-to-computation.md: an atom that
+//! Acceptance for issues/omega-atoms-up-to-computation.md and its Int half,
+//! issues/omega-int-atoms-up-to-computation.md: an atom that
 //! computes to a numeral is that constant, and an atom that converts to one
 //! already in the table is that atom, instead of each spelling being a
 //! variable of its own. The positives are the issue's two one-liners (a
@@ -6,7 +7,9 @@
 //! computes), plus the same argument computing inside an **open** element
 //! type and a closed atom met in a *checking* position. The controls pin what
 //! computation must not merge: arguments that compute to different values
-//! stay two atoms, and so do distinct variables.
+//! stay two atoms, and so do distinct variables. The Int rows repeat the
+//! same positives and controls at an Int-valued head, with a closed atom on
+//! each side of zero.
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -106,4 +109,35 @@ fn distinct_variables_stay_two_atoms() {
     let msg = elab_err("theorem apart(f: Nat → Nat, x, y: Nat, h: f(x) = f(y) + 1): False { omega }");
     assert!(msg.contains("got stuck"), "{msg}");
     assert!(msg.contains("f(x)") && msg.contains("f(y)"), "{msg}");
+}
+
+const SIGN: &str = "import bool;\n\
+    fn sign(b: Bool) → int::Int { match b { False => int::NegSucc(0), True => int::OfNat(1) } }\n";
+
+#[test]
+fn a_closed_int_atom_is_its_numeral_on_either_side_of_zero() {
+    ok(&format!(
+        "{SIGN}theorem closed_int(x: int::Int, h: sign(True) + x = int::OfNat(0)): x = sign(False) {{ omega }}"
+    ));
+}
+
+#[test]
+fn an_int_argument_that_computes_meets_the_atom_it_computes_to() {
+    ok("theorem int_side(g: List<Nat> → int::Int, h: g(list::List::append(Nil, Nil)) = g(Nil) + int::OfNat(1)): False { omega }");
+}
+
+#[test]
+fn int_arguments_computing_to_different_values_stay_two_atoms() {
+    let msg = elab_err(
+        "theorem int_apart(g: List<Nat> → int::Int, h: g(Cons(0, Nil)) = g(list::List::append(Nil, Nil)) + int::OfNat(1)): False { omega }",
+    );
+    assert!(msg.contains("got stuck"), "{msg}");
+    assert!(msg.contains("g(Cons(0, Nil))"), "{msg}");
+}
+
+#[test]
+fn distinct_int_variables_stay_two_atoms() {
+    let msg = elab_err("theorem int_vars(g: Nat → int::Int, x, y: Nat, h: g(x) = g(y) + int::OfNat(1)): False { omega }");
+    assert!(msg.contains("got stuck"), "{msg}");
+    assert!(msg.contains("g(x)") && msg.contains("g(y)"), "{msg}");
 }

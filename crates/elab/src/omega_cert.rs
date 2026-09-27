@@ -976,6 +976,20 @@ fn affine_syntax(
         }
     }
 
+    // The Nat side's two questions (issues/omega-int-atoms-up-to-computation.md),
+    // asked only of a spelling the table has not met.
+    if let Some(index) = atoms.find(|atom| *atom.term == **tm || atom.source == source) {
+        return Ok(AffineSyntax::Atom { index, source });
+    }
+    if let Some(value) = int_value(elab, cx, tm) {
+        return Ok(AffineSyntax::Const {
+            value,
+            source: int_ctor(value),
+        });
+    }
+    if let Some(index) = convertible_atom(elab, cx, tm, atoms, Carrier::Int) {
+        return Ok(AffineSyntax::Atom { index, source });
+    }
     let index = atoms.intern_by(
         |atom| *atom.term == **tm || atom.source == source,
         || ReflectedAtom {
@@ -988,22 +1002,54 @@ fn affine_syntax(
     Ok(AffineSyntax::Atom { index, source })
 }
 
+/// The integer a global-headed Int term computes to: its bounded weak head
+/// is a constructor whose Nat payload computes to a numeral
+/// ([`SemanticOracle::nat_value`](crate::oracle::SemanticOracle::nat_value)).
+fn int_value(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Z> {
+    if !head_is_global(tm) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let head = oracle.bounded(ATOM_COMPUTATION_STEPS).whnf_term(&cx.gamma, tm).ok()?;
+    let (of_nat, payload) = int_ctor_payload(elab, &head)?;
+    let n = Z::try_from(oracle.nat_value(&cx.gamma, payload, ATOM_COMPUTATION_STEPS)?).ok()?;
+    if of_nat { Some(n) } else { n.checked_add(1)?.checked_neg() }
+}
+
+/// `int::Int` as a kernel type, for comparing Int atoms by conversion: a
+/// `Le`/`Lt` fact does not carry its carrier, so it is elaborated from its
+/// name, and only once a comparison has passed every syntactic gate.
+fn int_carrier(elab: &Elaborator, cx: &Cx) -> Option<(Type, Level)> {
+    let file = parse_file("theorem __omega_generated(): int::Int { 0 }").ok()?;
+    let Some(Item::Decl(decl)) = file.items.last() else {
+        return None;
+    };
+    elab.elab_ty(cx, &decl.result).ok()
+}
+
 /// The Nat `e` of an Int constructor value `OfNat(e)`.
 fn of_nat_payload<'a>(elab: &Elaborator, tm: &'a Term) -> Option<&'a Rc<Term>> {
+    match int_ctor_payload(elab, tm)? {
+        (true, inner) => Some(inner),
+        (false, _) => None,
+    }
+}
+
+/// An Int constructor value's side and Nat payload: `(true, e)` for
+/// `OfNat(e)`, `(false, e)` for `NegSucc(e)`.
+fn int_ctor_payload<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(bool, &'a Rc<Term>)> {
     let ind = match tm {
-        Term::Inl { lhs, .. } => elab.display_tag_of(lhs)?,
-        Term::InlAt { ty, .. } => elab.display_tag_of(ty.as_deref()?)?,
+        Term::Inl { lhs, .. } | Term::Inr { lhs, .. } => elab.display_tag_of(lhs)?,
+        Term::InlAt { ty, .. } | Term::InrAt { ty, .. } => elab.display_tag_of(ty.as_deref()?)?,
         _ => return None,
     };
     if ind.ctors.len() != 2 || ind.ctors[0].name != "OfNat" || ind.ctors[1].name != "NegSucc" {
         return None;
     }
-    let Some((true, val)) = crate::spelling::inj_of(tm) else {
-        return None;
-    };
+    let (of_nat, val) = crate::spelling::inj_of(tm)?;
     let (_, payload) = crate::spelling::pair_of(val)?;
     let (inner, _) = crate::spelling::pair_of(payload)?;
-    Some(inner)
+    Some((of_nat, inner))
 }
 
 fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
@@ -1280,7 +1326,7 @@ fn nat_affine_syntax_within(
     {
         return nat_affine_syntax_within(elab, cx, &named, atoms, depth - 1);
     }
-    if let Some(index) = convertible_atom(elab, cx, tm, atoms) {
+    if let Some(index) = convertible_atom(elab, cx, tm, atoms, Carrier::Nat) {
         return Ok(AffineSyntax::Atom { index, source });
     }
     let index = atoms.intern_by(
@@ -1305,7 +1351,7 @@ fn head_is_global(tm: &Rc<Term>) -> bool {
     matches!(app_spine(tm).0, Term::GlobalTm { .. })
 }
 
-/// A plain Nat atom already in the table that `tm` converts to: the same head
+/// A plain atom of `carrier` already in the table that `tm` converts to: the same head
 /// at the same arity, differing in arguments that may compute
 /// (`f(append(Nil, Nil))` against `f(Nil)`). Arguments that are distinct
 /// variables on both sides cannot meet by computation, so a pair differing
@@ -1316,14 +1362,16 @@ fn convertible_atom(
     cx: &Cx,
     tm: &Rc<Term>,
     atoms: &AtomTable<ReflectedAtom>,
+    carrier: Carrier,
 ) -> Option<AtomId> {
     let (head, args) = app_spine(tm);
     if args.is_empty() {
         return None;
     }
     let oracle = elab.goal_oracle().bounded(ATOM_COMPUTATION_STEPS);
+    let mut carrier_ty: Option<Option<(Type, Level)>> = None;
     atoms.find(|atom| {
-        if atom.nat_source.is_none() || atom.division.is_some() {
+        if atom.nat_source.is_some() != (carrier == Carrier::Nat) || atom.division.is_some() {
             return false;
         }
         let (other_head, other_args) = app_spine(&atom.term);
@@ -1333,11 +1381,28 @@ fn convertible_atom(
         let may_meet = args.iter().zip(&other_args).any(|(a, b)| {
             a != b && !matches!((&***a, &***b), (Term::Var(_), Term::Var(_)))
         });
-        may_meet
-            && oracle
-                .convert_term(&cx.gamma, Layer::Prog, tm, &atom.term, &Type::Nat, &Level::Zero)
-                .is_ok()
+        if !may_meet {
+            return false;
+        }
+        let Some((ty, level)) = carrier_ty
+            .get_or_insert_with(|| match carrier {
+                Carrier::Nat => Some((Type::Nat, Level::Zero)),
+                Carrier::Int => int_carrier(elab, cx),
+            })
+            .as_ref()
+        else {
+            return false;
+        };
+        oracle.convert_term(&cx.gamma, Layer::Prog, tm, &atom.term, ty, level).is_ok()
     })
+}
+
+/// Which side of the table an atom lives on: a Nat atom carries its Nat
+/// spelling, an Int atom does not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Carrier {
+    Nat,
+    Int,
 }
 
 /// Re-entries the atom fallback may spend on a reduct
